@@ -22,8 +22,8 @@ workspace can also own one independent ChatGPT/Grok sign-in ahead of its shared
 accounts. **Use shared sign-in** removes that independent override.
 
 Workspace overrides apply to Pi Durable. Usage uses global accounts.
-**Usage → Usage limits** shows a separate card for each saved account, plus providers
-that need sign-in. Use **Manage accounts** to add or reconnect an account.
+**Usage → Limits** shows separate rows for each saved account, plus a line naming
+providers that need sign-in. Use **Manage subscriptions and keys** to add or reconnect an account.
 Device analytics imports Woven Matter and local harness history without account
 setup, provider enable switches, or Keychain access. It excludes account-wide
 OpenRouter API history from device totals and includes all OpenCode billing routes.

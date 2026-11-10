@@ -66,15 +66,44 @@ last edited it, including the agent for changes made through Calendar tools.
 
 ## Usage
 
-**Usage analytics** combines Woven Matter records and local harness activity.
-It needs no account setup or provider switches. OpenCode activity includes all
-billing routes; account-wide API activity is excluded from device totals.
+**Usage** has two pages. **Analytics** covers all your history from every linked
+device. It needs no account setup or provider switches. OpenCode activity includes
+all billing routes; account-wide API activity is excluded from device totals.
 
-**Usage limits** shows each saved account, its sign-in state, and the limits the
-provider makes available. Use **Manage accounts** to add or manage accounts
-in **Settings → Subscriptions & API Keys**. These accounts are shared with Pi Durable. Providers
-without a supported limits response link to their usage dashboard; unavailable
-data is never shown as zero usage or a full allowance.
+Woven Matter keeps its own lasting record of usage, including Codex's compressed
+archives, so history stays even after a harness deletes old transcripts. The first
+full import can take a few minutes and runs in the background, newest usage first:
+the last 24 hours appear within moments, followed by 7, 30, and 90 days, then the rest.
+
+Other Macs, remote workspaces, and iPhones and iPads appear under **Devices**. Click
+a device to show or hide its usage. Devices share only token counts, model and billing
+labels, session IDs, and folder names, never prompts, responses, or file paths. A
+remote workspace reports all usage for its account on that host, including command
+line runs outside Woven Matter. It needs a service update in **Settings** before its
+usage can appear, and a device that can't report says so rather than showing zero.
+If you added the same host separately on two Macs, it appears as two devices and counts
+twice, so hide one of them.
+
+Use the column on the left to search, choose a time range up to **All**, and narrow by
+model, harness, or reasoning level. Click a provider to show or hide it.
+**Clear filters** resets everything except the range. The graph shows lines or bars.
+Long ranges scroll sideways and open on the latest days; use the arrows below the
+graph or scroll to see earlier ones. Hover over the graph for each provider's figures.
+
+Switch the graph from **Tokens** to **API estimate** to see what the same usage would
+cost at public API list prices. This is an estimate for comparison, not your bill, and
+it applies even when a subscription pays for the usage. Turning it on downloads
+[LiteLLM's public price list](https://github.com/BerriAI/litellm) and keeps a copy
+for a day. No usage, account, or device data is sent. Models with no known price show
+as **Unpriced**. Direct spend from OpenRouter and OpenCode Go stays separate.
+
+**Limits** shows each saved account, its sign-in state, and the limits the provider
+makes available. Bars show what is left, and the tick marks where even spending would
+be. A bar shorter than its tick means you are ahead of pace. Providers without an
+account share one line. Use **Manage subscriptions and keys** to add or manage
+accounts in **Settings → Subscriptions & API Keys**. These accounts are shared with Pi Durable. Providers without a
+supported limits response link to their usage dashboard; unavailable data is never
+shown as zero usage or a full allowance.
 
 Saved keys use Apple Keychain. Allow access under Saved sign-ins in
 **Settings → Permissions & Access**.

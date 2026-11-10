@@ -739,7 +739,10 @@ struct WorkspaceView: View {
                 case .databases:
                     DashboardDatabasesView(model: model)
                 case .usage:
-                    DashboardUsageView(model: model)
+                    DashboardUsageView(
+                        model: model,
+                        reservesRailControlSpace: showLeftRailButton || showRightRailButton
+                    )
                 case .settings:
                     SettingsView(
                         model: model,

@@ -374,6 +374,19 @@ final class PairedMacSyncController {
         nextAttempt[route.deviceID] = .distantPast
     }
 
+    /// Reads one page of another Mac's usage with this Mac's existing grant for it.
+    func requestUsage(route: PairedMacRoute, request: UsageDeviceExportRequest) async throws -> UsageDeviceExportPage {
+        guard let credential = try loadCredentials().first(where: { $0.route.deviceID == route.deviceID && $0.isCompleted }) else {
+            throw CompanionAPIError(code: "unauthorized", message: "\(route.name) has no completed pairing with this Mac.")
+        }
+        do {
+            return try await network.request(route.endpoint, path: "v1/peers/usage", token: credential.token,
+                body: JSONEncoder().encode(request))
+        } catch let error as CompanionAPIError where error.code == "not_found" {
+            throw UsageDeviceCollectionError.updateRequired
+        }
+    }
+
     func handle(_ request: CompanionHTTPRequest) async -> CompanionHTTPResponse? {
         let path = request.target.replacingOccurrences(of: "/wovenmatter/", with: "/")
         guard path.hasPrefix("/v1/peers/") else { return nil }
@@ -460,6 +473,13 @@ final class PairedMacSyncController {
                 let name = await authentication.rosterName(for: enrollment.deviceID) ?? "Device"
                 return try .json(try await host.provisionDelegatedExecution(id: enrollment.workspaceID, deviceID: enrollment.deviceID,
                     name: name, provisionedBy: principal.id))
+            }
+            if path == "/v1/peers/usage", request.method == "POST", request.body.count <= 4096 {
+                guard let model = host.model else {
+                    return .error("unavailable", "This Mac is not ready to synchronize.", status: 503)
+                }
+                return try .json(try await model.exportDeviceUsage(
+                    try JSONDecoder().decode(UsageDeviceExportRequest.self, from: request.body)))
             }
             if path == "/v1/peers/files", request.method == "POST", request.body.count <= 4096 {
                 let cursor = try JSONDecoder().decode(String.self, from: request.body)

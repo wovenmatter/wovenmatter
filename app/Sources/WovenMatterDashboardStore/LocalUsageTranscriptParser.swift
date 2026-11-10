@@ -320,7 +320,7 @@ enum LocalUsageTranscriptParser {
     URL(fileURLWithPath: path).lastPathComponent.nilIfEmpty ?? path
   }
 
-  private static func billingRoute(
+  static func billingRoute(
     _ rawProvider: String
   ) -> (provider: ProviderKind, billingProvider: String, billingRoute: String) {
     let provider = rawProvider.lowercased()

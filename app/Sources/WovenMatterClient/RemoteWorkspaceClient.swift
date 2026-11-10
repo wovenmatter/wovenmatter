@@ -1175,6 +1175,14 @@ public struct RemoteWorkspaceServiceClient: Sendable {
         try await request(path: "v1/task-gateway/schedules", method: "GET", body: nil)
     }
 
+    /// Counts only, built on the host from its own harness history.
+    public func usageExport(_ request: UsageDeviceExportRequest) async throws -> UsageDeviceExportPage {
+        try await self.request(path: "v1/usage/export", method: "GET", body: nil, queryItems: [
+            URLQueryItem(name: "since", value: String(request.since)),
+            URLQueryItem(name: "offset", value: String(request.offset)),
+        ])
+    }
+
     public func taskGatewayResults(after cursor: String = "0") async throws -> RemoteTaskGatewayResults {
         try await request(path: "v1/task-gateway/results", method: "GET", body: nil,
                           queryItems: [URLQueryItem(name: "after", value: cursor)])
@@ -1527,6 +1535,9 @@ public struct RemoteWorkspaceServiceClient: Sendable {
                     ? "Update this workspace in Settings → Workspaces to remove accounts from here."
                     : "The account couldn't be removed. Reconnect to the workspace and try again."
                 )
+            }
+            if path == "v1/usage/export", (response as? HTTPURLResponse)?.statusCode == 404 {
+                throw UsageDeviceCollectionError.updateRequired
             }
             if path.hasPrefix("v1/task-gateway") {
                 throw RemoteWorkspaceClientError.invalidResponse(

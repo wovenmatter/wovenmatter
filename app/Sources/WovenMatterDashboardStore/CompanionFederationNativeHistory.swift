@@ -92,6 +92,42 @@ extension WorkspaceDatabaseConnection {
       contentMode: "snapshot", textContent: String(decoding: searchBytes, as: UTF8.self)))
   }
 
+  func companionNativeRecordsLocked(workspaceID: String, format: String, maximumBytes: Int64) throws -> [CompanionStoredNativeRecord] {
+    try withLock {
+      let statement = try prepareUnlocked("""
+        SELECT n.record_id,n.conversation_id,p.bytes FROM companion_native_history n
+        JOIN companion_native_history_parts p ON p.workspace_id=n.workspace_id AND p.record_id=n.record_id
+        WHERE n.workspace_id=? AND n.format=? AND n.complete=1 AND n.byte_count<=?
+        ORDER BY n.rowid,p.part_index
+        """)
+      defer { sqlite3_finalize(statement) }
+      try bind(workspaceID, at: 1, to: statement)
+      try bind(format, at: 2, to: statement)
+      sqlite3_bind_int64(statement, 3, maximumBytes)
+      var records: [CompanionStoredNativeRecord] = []
+      var current: (recordID: String, conversationID: String, data: Data)?
+      while true {
+        let code = sqlite3_step(statement)
+        if code == SQLITE_DONE { break }
+        guard code == SQLITE_ROW else { throw stepError() }
+        let recordID = try text(statement, column: 0)
+        if current?.recordID != recordID {
+          if let current {
+            records.append(.init(recordID: current.recordID, conversationID: current.conversationID, data: current.data))
+          }
+          current = (recordID, try text(statement, column: 1), Data())
+        }
+        if let bytes = sqlite3_column_blob(statement, 2) {
+          current?.data.append(bytes.assumingMemoryBound(to: UInt8.self), count: Int(sqlite3_column_bytes(statement, 2)))
+        }
+      }
+      if let current {
+        records.append(.init(recordID: current.recordID, conversationID: current.conversationID, data: current.data))
+      }
+      return records
+    }
+  }
+
   public func companionNativeHistoryPart(workspaceID: String, recordID: String, partIndex: Int) throws -> CompanionNativeRecordPart? {
     try withLock {
       let statement = try prepareUnlocked("SELECT n.format,n.part_count,n.byte_count,n.sha256,p.bytes FROM companion_native_history n JOIN companion_native_history_parts p ON p.workspace_id=n.workspace_id AND p.record_id=n.record_id WHERE n.workspace_id=? AND n.record_id=? AND n.complete=1 AND p.part_index=?")
@@ -106,7 +142,25 @@ extension WorkspaceDatabaseConnection {
   }
 }
 
+public struct CompanionStoredNativeRecord: Sendable {
+  public let recordID: String
+  public let conversationID: String
+  public let data: Data
+}
+
 extension WorkspaceDatabase {
+  /// Complete records of one format from one workspace, oldest first. A record
+  /// over `maximumBytes` is skipped so one bad row can't exhaust memory.
+  public func companionNativeRecords(
+    workspaceID: String,
+    format: String,
+    maximumBytes: Int64 = 32 * 1_024 * 1_024
+  ) async throws -> [CompanionStoredNativeRecord] {
+    try await read { database in
+      try database.companionNativeRecordsLocked(workspaceID: workspaceID, format: format, maximumBytes: maximumBytes)
+    }
+  }
+
   public func companionNativeHistoryPart(workspaceID: String, recordID: String, partIndex: Int) async throws -> CompanionNativeRecordPart? {
     try await read { try $0.companionNativeHistoryPart(workspaceID: workspaceID, recordID: recordID, partIndex: partIndex) }
   }

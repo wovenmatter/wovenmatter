@@ -16,6 +16,8 @@ actor UsageRunRecorder {
     let workspace: String?
     let tokens: UsageTokenCounts
     let costUSD: Double?
+    /// The remote workspace that ran this turn. Those runs belong to that device, not this Mac.
+    var remoteWorkspaceID: String? = nil
   }
 
   private let store: AsyncUsageStore
@@ -29,7 +31,7 @@ actor UsageRunRecorder {
       // Allocate from the durable cursor on the same lane as ingestion. Actor
       // calls can reach an async store in a different order after suspension.
       let wallClock = Int64(Date().timeIntervalSince1970 * 1_000_000)
-      let persisted = try connection.runtimeSyncState(endpoint: "wovenmatter://local")
+      let persisted = try connection.runtimeSyncState(endpoint: Self.endpoint(for: observation))
         .flatMap { Int64($0.cursor) } ?? 0
       let next = max(wallClock, persisted).addingReportingOverflow(1)
       guard !next.overflow else {
@@ -54,7 +56,9 @@ actor UsageRunRecorder {
       harness: observation.runtimeKind.displayName,
       application: "Woven Matter",
       agent: observation.agent,
-      workspace: observation.workspace,
+      workspace: observation.remoteWorkspaceID == nil
+        ? observation.workspace
+        : observation.workspace.map { URL(fileURLWithPath: $0).lastPathComponent },
       sessionID: observation.sessionID,
       runID: observation.runID,
       tokens: observation.tokens,
@@ -64,11 +68,11 @@ actor UsageRunRecorder {
       dedupeKey: "\(observation.sessionID):\(observation.runID)"
     )
     let source = UsageIngestionSource(
-      id: "wovenmatter:local",
+      id: observation.remoteWorkspaceID.map(UsageDeviceSource.liveRunsSourceID) ?? "wovenmatter:local",
       displayName: "Woven Matter live runs",
       kind: .wovenMatter,
-      location: "This Mac",
-      installationID: "wovenmatter-local"
+      location: observation.remoteWorkspaceID == nil ? "This Mac" : "Remote workspace",
+      installationID: observation.remoteWorkspaceID ?? "wovenmatter-local"
     )
     try store.ingest(
       page: UsageIngestionPage(
@@ -78,9 +82,14 @@ actor UsageRunRecorder {
         hasMore: false,
         generatedAt: observation.timestamp
       ),
-      endpoint: "wovenmatter://local",
+      endpoint: Self.endpoint(for: observation),
       importedAt: observation.timestamp
     )
+  }
+
+  /// Each source keeps its own cursor, because a page may only advance its own sequence.
+  private static func endpoint(for observation: Observation) -> String {
+    observation.remoteWorkspaceID.map { "wovenmatter://remote/\($0)" } ?? "wovenmatter://local"
   }
 
   private static func route(

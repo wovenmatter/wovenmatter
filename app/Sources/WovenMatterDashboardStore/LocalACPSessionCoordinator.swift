@@ -644,7 +644,8 @@ public actor LocalACPSessionCoordinator {
                         agent: nil,
                         workspace: workspace.rootURL.path,
                         tokens: tokens,
-                        costUSD: nil
+                        costUSD: nil,
+                        remoteWorkspaceID: descriptor.remoteWorkspaceID?.uuidString.lowercased()
                     ))
                 }
             })

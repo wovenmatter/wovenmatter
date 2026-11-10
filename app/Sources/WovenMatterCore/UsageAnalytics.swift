@@ -7,6 +7,7 @@ public enum UsageTimeRange: String, CaseIterable, Codable, Identifiable, Sendabl
   case last7Days
   case last30Days
   case last90Days
+  case allTime
 
   public var id: String { rawValue }
 
@@ -18,6 +19,7 @@ public enum UsageTimeRange: String, CaseIterable, Codable, Identifiable, Sendabl
     case .last7Days: "7 days"
     case .last30Days: "30 days"
     case .last90Days: "90 days"
+    case .allTime: "All time"
     }
   }
 
@@ -29,12 +31,13 @@ public enum UsageTimeRange: String, CaseIterable, Codable, Identifiable, Sendabl
     case .last7Days: "7D"
     case .last30Days: "30D"
     case .last90Days: "90D"
+    case .allTime: "All"
     }
   }
 
   public var duration: TimeInterval? {
     switch self {
-    case .today, .yesterday: nil
+    case .today, .yesterday, .allTime: nil
     case .last24Hours: 24 * 60 * 60
     case .last7Days: 7 * 24 * 60 * 60
     case .last30Days: 30 * 24 * 60 * 60
@@ -58,6 +61,8 @@ public enum UsageTimeRange: String, CaseIterable, Codable, Identifiable, Sendabl
       let yesterday = calendar.date(byAdding: .day, value: -1, to: today)
         ?? today.addingTimeInterval(-24 * 60 * 60)
       return DateInterval(start: yesterday, end: today)
+    case .allTime:
+      return DateInterval(start: .usageHistoryStart, end: max(date, .usageHistoryStart))
     case .last24Hours, .last7Days, .last30Days, .last90Days:
       return DateInterval(
         start: date.addingTimeInterval(-(duration ?? 0)),
@@ -66,6 +71,29 @@ public enum UsageTimeRange: String, CaseIterable, Codable, Identifiable, Sendabl
     }
   }
 
+}
+
+/// How far a full history import has reached. History is read newest first in widening
+/// batches, so recent usage appears within moments and older usage follows.
+public struct UsageHistoryImportProgress: Codable, Equatable, Sendable {
+  public static let stages: [UsageTimeRange] = [.last24Hours, .last7Days, .last30Days, .last90Days]
+
+  /// The widest period fully read so far. Nil before the first batch finishes.
+  public let covered: UsageTimeRange?
+
+  public init(covered: UsageTimeRange?) {
+    self.covered = covered
+  }
+
+  public func covers(_ range: UsageTimeRange, now: Date = Date(), calendar: Calendar = .current) -> Bool {
+    guard let duration = covered?.duration else { return false }
+    return range.interval(relativeTo: now, calendar: calendar).start >= now.addingTimeInterval(-duration)
+  }
+}
+
+public extension Date {
+  /// Earlier than any usage record, so All time and full imports cover everything.
+  static let usageHistoryStart = Date(timeIntervalSince1970: 0)
 }
 
 public enum UsageAttributionConfidence: String, Codable, Sendable {
@@ -439,6 +467,90 @@ public struct UsageAnalyticsSnapshot: Codable, Equatable, Sendable {
   }
 }
 
+extension UsageAnalyticsSnapshot {
+  /// Combines model calls that the Usage page cannot tell apart, so a long range
+  /// stays small enough to send to the window and fast to filter. Every field the
+  /// page filters, searches or attributes by stays separate, as does the period the
+  /// graph draws it in. Totals, sessions, calls and costs are unchanged.
+  public func compactedForDisplay(calendar: Calendar = .current) -> UsageAnalyticsSnapshot {
+    compacted(by: range.usesHourlyBuckets ? .hour : .day, calendar: calendar)
+  }
+
+  /// `unit` is the shortest period a viewer of this data can still tell apart.
+  public func compacted(by unit: Calendar.Component, calendar: Calendar = .current) -> UsageAnalyticsSnapshot {
+    struct Key: Hashable {
+      let period: Date
+      let sourceID: String
+      let sessionID: String
+      let provider: ProviderKind
+      let model: String
+      let billingProvider: String
+      let billingRoute: String
+      let accountLabel: String
+      let reasoningLevel: String?
+      let harness: String
+      let application: String
+      let agent: String?
+      let workspace: String?
+      // A reported cost replaces list prices, so it must not spread to unreported calls.
+      let hasCost: Bool
+    }
+    var groups: [Key: [UsageSample]] = [:]
+    for sample in samples {
+      let key = Key(
+        period: calendar.dateInterval(of: unit, for: sample.timestamp)?.start ?? sample.timestamp,
+        sourceID: sample.sourceID,
+        sessionID: sample.sessionID,
+        provider: sample.provider,
+        model: sample.model,
+        billingProvider: sample.billingProvider,
+        billingRoute: sample.billingRoute,
+        accountLabel: sample.accountLabel,
+        reasoningLevel: sample.reasoningLevel,
+        harness: sample.harness,
+        application: sample.application,
+        agent: sample.agent,
+        workspace: sample.workspace,
+        hasCost: sample.costUSD != nil
+      )
+      groups[key, default: []].append(sample)
+    }
+    let compacted = groups.values.compactMap { group -> UsageSample? in
+      guard group.count > 1 else { return group.first }
+      guard let latest = group.max(by: { $0.timestamp < $1.timestamp }) else { return nil }
+      let costs = group.compactMap(\.costUSD)
+      return UsageSample(
+        id: latest.id,
+        provider: latest.provider,
+        timestamp: latest.timestamp,
+        sessionID: latest.sessionID,
+        accountLabel: latest.accountLabel,
+        model: latest.model,
+        billingProvider: latest.billingProvider,
+        billingRoute: latest.billingRoute,
+        reasoningLevel: latest.reasoningLevel,
+        harness: latest.harness,
+        application: latest.application,
+        agent: latest.agent,
+        workspace: latest.workspace,
+        tokens: group.reduce(.zero) { $0 + $1.tokens },
+        requestCount: group.reduce(0) { saturatedAdd($0, $1.requestCount) },
+        costUSD: costs.isEmpty ? nil : costs.reduce(0, +),
+        attributionConfidence: latest.attributionConfidence,
+        granularity: .sessionAggregate,
+        sourceID: latest.sourceID,
+        sourceEventID: latest.sourceEventID
+      )
+    }
+    return UsageAnalyticsSnapshot(
+      range: range,
+      generatedAt: generatedAt,
+      samples: compacted.sorted { $0.timestamp > $1.timestamp },
+      sources: sources
+    )
+  }
+}
+
 public struct UsageAnalyticsSummary: Equatable, Sendable {
   public let tokens: UsageTokenCounts
   public let sessions: Int
@@ -473,6 +585,8 @@ public struct UsageBreakdownRow: Equatable, Identifiable, Sendable {
 
 public struct UsageModelRollup: Equatable, Identifiable, Sendable {
   public let family: String
+  /// The provider carrying the most tokens for this model, which sets its color.
+  public let provider: ProviderKind
   public let tokens: UsageTokenCounts
   public let requests: Int
   public let sessions: Int
@@ -485,6 +599,17 @@ public struct UsageModelRollup: Equatable, Identifiable, Sendable {
 
   public init(family: String, samples: [UsageSample]) {
     self.family = family
+    var tokensByProvider: [ProviderKind: Int64] = [:]
+    for sample in samples {
+      tokensByProvider[sample.provider] = saturatedAdd(
+        tokensByProvider[sample.provider] ?? 0,
+        sample.tokens.totalTokens
+      )
+    }
+    let dominant = tokensByProvider.max { lhs, rhs in
+      lhs.value == rhs.value ? lhs.key.rawValue > rhs.key.rawValue : lhs.value < rhs.value
+    }
+    provider = dominant?.key ?? .unknown
     tokens = samples.reduce(.zero) { $0 + $1.tokens }
     requests = samples.reduce(0) { saturatedAdd($0, $1.requestCount) }
     sessions = Set(samples.map { "\($0.sourceID):\($0.sessionID)" }).count
@@ -596,66 +721,5 @@ public struct LocalUsageSnapshot: Codable, Equatable, Sendable {
     self.analytics = analytics
     self.limits = limits
     self.hasOpenRouterCredential = hasOpenRouterCredential
-  }
-}
-
-extension UsageAnalyticsSnapshot {
-  /// The same analytics with samples merged per session, model, route and hour.
-  /// Totals, request counts and session counts are unchanged; only per-call
-  /// timing inside an hour is dropped. Used where the snapshot crosses a
-  /// process boundary, so a busy month stays a small message.
-  public func mergingSamplesByHour() -> UsageAnalyticsSnapshot { mergingSamples(bucket: 3600) }
-
-  /// Hourly merging, falling back to whole days when the hourly result is still
-  /// larger than `limit` samples, so the snapshot stays bounded by sessions x days.
-  public func mergingSamplesForTransport(limit: Int = 20_000) -> UsageAnalyticsSnapshot {
-    let hourly = mergingSamples(bucket: 3600)
-    return hourly.samples.count <= limit ? hourly : mergingSamples(bucket: 86_400)
-  }
-
-  private func mergingSamples(bucket: TimeInterval) -> UsageAnalyticsSnapshot {
-    struct Key: Hashable {
-      let provider: ProviderKind, sessionID: String, accountLabel: String, model: String
-      let billingProvider: String, billingRoute: String, reasoningLevel: String?
-      let harness: String, application: String, agent: String?, workspace: String?
-      let confidence: UsageAttributionConfidence, granularity: UsageGranularity, sourceID: String
-      let hour: Int64
-    }
-    var order: [Key] = []
-    var groups: [Key: [UsageSample]] = [:]
-    for sample in samples {
-      let key = Key(provider: sample.provider, sessionID: sample.sessionID, accountLabel: sample.accountLabel,
-                    model: sample.model, billingProvider: sample.billingProvider, billingRoute: sample.billingRoute,
-                    reasoningLevel: sample.reasoningLevel, harness: sample.harness, application: sample.application,
-                    agent: sample.agent, workspace: sample.workspace, confidence: sample.attributionConfidence,
-                    granularity: sample.granularity, sourceID: sample.sourceID,
-                    hour: Int64((sample.timestamp.timeIntervalSince1970 / bucket).rounded(.down)))
-      if groups[key] == nil { order.append(key) }
-      groups[key, default: []].append(sample)
-    }
-    let merged = order.map { key -> UsageSample in
-      let group = groups[key] ?? []
-      let first = group[0]
-      guard group.count > 1 else { return first }
-      let costs = group.compactMap(\.costUSD)
-      let reported = group.map(\.tokens.reportedTotalTokens)
-      let tokens = UsageTokenCounts(
-        inputTokens: group.reduce(0) { $0 &+ $1.tokens.inputTokens },
-        cachedInputTokens: group.reduce(0) { $0 &+ $1.tokens.cachedInputTokens },
-        cacheCreationTokens: group.reduce(0) { $0 &+ $1.tokens.cacheCreationTokens },
-        outputTokens: group.reduce(0) { $0 &+ $1.tokens.outputTokens },
-        reasoningTokens: group.reduce(0) { $0 &+ $1.tokens.reasoningTokens },
-        reportedTotalTokens: reported.contains(nil) ? nil : reported.reduce(0) { $0 &+ ($1 ?? 0) })
-      return UsageSample(
-        id: first.id + "+\(group.count)", provider: first.provider,
-        timestamp: group.map(\.timestamp).max() ?? first.timestamp, sessionID: first.sessionID,
-        accountLabel: first.accountLabel, model: first.model, billingProvider: first.billingProvider,
-        billingRoute: first.billingRoute, reasoningLevel: first.reasoningLevel, harness: first.harness,
-        application: first.application, agent: first.agent, workspace: first.workspace, tokens: tokens,
-        requestCount: group.reduce(0) { $0 &+ $1.requestCount },
-        costUSD: costs.isEmpty ? nil : costs.reduce(0, +), attributionConfidence: first.attributionConfidence,
-        granularity: first.granularity, sourceID: first.sourceID, sourceEventID: first.sourceEventID, dedupeKey: nil)
-    }
-    return UsageAnalyticsSnapshot(range: range, generatedAt: generatedAt, samples: merged, sources: sources)
   }
 }

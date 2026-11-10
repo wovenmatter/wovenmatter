@@ -333,6 +333,13 @@ final class ApplicationModel {
     private let usage: ApplicationUsageModel
     func sharedConnectionsChanged() async { await usage.sharedConnectionsChanged() }
     var localUsage: LocalUsageSnapshot? { usage.localUsage }
+    var usagePrices: UsagePriceState { usage.usagePrices }
+    var usageDevices: [UsageDeviceSummary] { usage.usageDevices }
+    var usageHistoryImport: UsageHistoryImportProgress? { usage.usageHistoryImport }
+    func exportDeviceUsage(_ request: UsageDeviceExportRequest) async throws -> UsageDeviceExportPage {
+        try await usage.exportDeviceUsage(request, relaying: managedRemoteUsageDevices)
+    }
+    func loadUsagePrices(force: Bool = false) async { await usage.loadUsagePrices(force: force) }
     var localUsageError: String? { usage.localUsageError }
     var isRefreshingUsageLimits: Bool { usage.isRefreshingUsageLimits }
     var isAuthorizingUsageCredential: Bool { usage.isAuthorizingUsageCredential }
@@ -757,6 +764,8 @@ final class ApplicationModel {
                 refreshLimits: false,
                 reason: .startup
             )
+            usage.usageDeviceEndpoints = { [weak self] in await self?.usageDeviceEndpoints() ?? [] }
+            usage.startDeviceCollection()
         } catch {
             guard !Task.isCancelled else { return }
             state = .failed(error.localizedDescription)
