@@ -45,7 +45,13 @@ struct BackendRPCTests {
     }
 
     private func endpoint() -> URL {
-        URL(fileURLWithPath: "/private/tmp/wm-rpc-" + UUID().uuidString.prefix(8)).appending(path: "control.sock")
+        // /tmp is a symlink on macOS, which the endpoint refuses; Linux has no /private.
+        #if os(macOS)
+        let base = "/private/tmp/wm-rpc-"
+        #else
+        let base = "/tmp/wm-rpc-"
+        #endif
+        return URL(fileURLWithPath: base + UUID().uuidString.prefix(8)).appending(path: "control.sock")
     }
 
 }

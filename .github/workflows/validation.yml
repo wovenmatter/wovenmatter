@@ -178,6 +178,8 @@ jobs:
 
       - name: Build the standalone Executor runtime
         run: |
+          # The version comes from the broker, which imports default-agent's packages.
+          npm ci --prefix default-agent --omit=dev --ignore-scripts --no-audit --no-fund
           wm_executor_version="$(node --input-type=module -e 'import { latestExecutorVersion } from "./default-agent/src/executor/broker.mjs"; console.log(await latestExecutorVersion());')"
           docker build --pull --no-cache --build-arg "EXECUTOR_VERSION=$wm_executor_version" \
             --file remote/Executor.Dockerfile --tag wovenmatter-executor:ci remote
@@ -188,7 +190,6 @@ jobs:
             wovenmatter-executor:ci /tmp/test-executor-image.sh
       - name: Verify unchanged Executor scopes, approvals and cancellation in Linux
         run: |
-          npm ci --prefix default-agent --omit=dev --ignore-scripts --no-audit --no-fund
           docker run --rm --entrypoint node --volume "$PWD:/workspace:ro" \
             wovenmatter-executor:ci /workspace/scripts/test-support/test-executor-runtime.mjs \
             /opt/executor/native/executor
