@@ -198,11 +198,11 @@ final class CompanionCommandService: CompanionCommandServing {
             else { throw CommandError.unknownProvider }
             let id: String?
             if providerID.hasPrefix("local:") {
-                id = await model.createLocalACPSession(runtimeKind: runtime, requestedConversationID: UUID(uuidString: requestedID), folderID: command.folderID)
+                id = await model.createLocalACPSession(runtimeKind: runtime, requestedConversationID: UUID(uuidString: requestedID), initialTitle: command.title, folderID: command.folderID)
             } else if let target = model.remoteWorkspaces.readyChatTargets.first(where: {
                 "remote:\($0.configuration.id.uuidString.lowercased()):\($0.harness.id.rawValue)" == providerID
             }) {
-                id = await model.createRemoteACPSession(target: target, requestedConversationID: UUID(uuidString: requestedID), folderID: command.folderID)
+                id = await model.createRemoteACPSession(target: target, requestedConversationID: UUID(uuidString: requestedID), initialTitle: command.title, folderID: command.folderID)
             } else { throw CommandError.unknownProvider }
             guard let id else { throw CommandError.creationFailed(model.localRunError ?? "The Mac could not create this conversation.") }
             receipt.conversationID = id

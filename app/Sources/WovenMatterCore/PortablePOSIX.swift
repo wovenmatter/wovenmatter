@@ -75,6 +75,21 @@ public enum PortablePOSIX {
     #endif
   }
 
+  /// One read of whatever bytes are available, up to `maximum`. An empty
+  /// result is end of file. `FileHandle.read(upToCount:)` on a Darwin pipe
+  /// waits to fill its whole count, so a short line from a live child never
+  /// arrives; `availableData` raises instead of throwing on a closed handle.
+  public static func readAvailable(_ handle: FileHandle, maximum: Int = 65_536) throws -> Data {
+    precondition(maximum > 0)
+    var buffer = [UInt8](repeating: 0, count: maximum)
+    while true {
+      let count = buffer.withUnsafeMutableBytes { Darwin.read(handle.fileDescriptor, $0.baseAddress, $0.count) }
+      if count >= 0 { return Data(buffer.prefix(count)) }
+      if errno == EINTR { continue }
+      throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+    }
+  }
+
   public static func unixAddress(path: String) -> sockaddr_un? {
     var address = sockaddr_un()
     let bytes = Array(path.utf8) + [0]

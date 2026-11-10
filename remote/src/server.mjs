@@ -148,6 +148,8 @@ const clientExecution = runningAsService ? createClientExecution({
   workspaceBrowser,
   library: library ? { client: library.client, available: library.available } : null,
   onTimersChanged: () => timers?.kick(),
+  // Without it the host runs only bots; with it, bots wait for its enrollment.
+  workspaceRole: () => configuration.workspaceEnabled !== false,
   members: memberTransport ? { transport: memberTransport, deviceID: () => memberIdentityRecord?.deviceID ?? null,
     hasMac: () => library.available() && knownMacMember() } : null,
   runtime: createClientExecutionRuntime({defaultAgent,durableACP,catalog,workspaceRoot,harnessStatus,

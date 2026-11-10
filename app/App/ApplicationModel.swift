@@ -349,6 +349,9 @@ final class ApplicationModel {
     private(set) var dashboardStore: DashboardStore?
     @ObservationIgnored
     var federatedExecutionClient: CentralExecutionClient?
+    /// A Dev snapshot's copied conversations are read-only history; its own
+    /// sessions run. Test seam: fixtures exercise the snapshot rule.
+    @ObservationIgnored var readsCopiedHistoryOnly = DevelopmentLaunch.isSnapshot
     @ObservationIgnored var federatedAdoptionTasks: [String: Task<Void, any Error>] = [:]
     @ObservationIgnored var adoptedExecutionConversations: Set<String> = []
     var federatedExecutionSnapshots: [String: FederatedExecutionSnapshot] = [:]
@@ -690,6 +693,9 @@ final class ApplicationModel {
                     throw RemoteWorkspaceClientError.invalidResponse("This host is no longer in the workspace registry.")
                 }
                 return try await self.companionHost.hostAdministration(for: workspace)
+            }
+            remoteWorkspaces.onHostInstalled = { [weak self] configuration in
+                self?.companionHost.setUpLinuxHost(configuration, restart: true)
             }
             remoteWorkspaces.onRuntimeMaintenanceChanged = { [weak self] in
                 await self?.synchronizeRemoteAgentCatalog()
@@ -3008,6 +3014,13 @@ final class ApplicationModel {
         return conversationID.uuidString.lowercased()
     }
 
+    /// A requested title names the session from its creation; without one the
+    /// session is "New <harness> chat" until its first message titles it.
+    nonisolated static func initialSessionTitle(_ requested: String?, harness: String) -> String {
+        let title = requested?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return title.isEmpty ? "New \(harness) chat" : String(title.prefix(256))
+    }
+
     func createLocalACPSession(
         runtimeKind: AgentRuntimeKind,
         requestedConversationID: UUID? = nil,
@@ -3057,7 +3070,7 @@ final class ApplicationModel {
             }
             let conversationID = try await dashboardStore.createLocalACPSession(
                 runtimeKind: runtimeKind,
-                title: "New \(runtimeKind.displayName) chat",
+                title: Self.initialSessionTitle(initialTitle, harness: runtimeKind.displayName),
                 requestedConversationID: requestedConversationID,
                 allowMissingCalendarFolder: calendarExecutionRoot != nil,
                 executionRoot: try await sessionCreationRoot(folderID: folderID, workspaceID: nil, root: resolvedRoot)
@@ -3133,7 +3146,7 @@ final class ApplicationModel {
                 runtimeKind: target.harness.id,
                 remoteWorkspaceID: target.configuration.id,
                 remoteWorkspaceName: target.configuration.name,
-                title: "New \(target.harness.displayName) chat",
+                title: Self.initialSessionTitle(initialTitle, harness: target.harness.displayName),
                 requestedConversationID: requestedConversationID,
                 allowMissingCalendarFolder: calendarExecutionRoot != nil,
                 executionRoot: try await sessionCreationRoot(folderID: folderID, workspaceID: target.configuration.id, root: resolvedRoot)

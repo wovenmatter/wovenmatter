@@ -87,6 +87,9 @@ struct MemberReachTests {
         #expect(created.success)
         #expect(created.result?.objectValue?["session"]?.objectValue?["workspace"]?.stringValue == workspace.id)
         #expect(linux.commands.map(\.kind) == [.createSession, .workspace, .send])
+        // The title names the session as it is created; the rename is for older destinations.
+        #expect(linux.commands.first?.title == "Build it")
+        #expect(linux.commands.dropFirst().allSatisfy { $0.title == nil })
         #expect(linux.commands.last?.text == "Start here")
         #expect(linux.commands.allSatisfy { $0.deviceID == signer.deviceID })
         // A retry replays the destination's receipts instead of creating again.
@@ -97,6 +100,57 @@ struct MemberReachTests {
         await #expect(throws: WorkspaceToolError.self) {
             _ = try await macA.model.createMemberToolSession(sourceID: source, requestID: UUID().uuidString.lowercased(),
                 workspace: workspace, runtime: .claudeCode, title: "No", text: "Not ready")
+        }
+    }
+
+    /// A Dev snapshot runs signed member sessions on the workspaces it knows
+    /// live, and refuses only the owners it copied (`retainedHistory`): they are
+    /// no agent destination, never signed for, and their chats read as saved history.
+    @Test func aSnapshotReachesLiveMembersAndRefusesOnlyCopiedOwners() async throws {
+        let macA = try await FacadeFixture(); defer { macA.remove() }
+        macA.model.readsCopiedHistoryOnly = true
+        let identity = try await macA.database.companionLibraryIdentity()
+        let signer = MemberIdentity(deviceID: identity.hostDeviceID, kind: .mac, key: .init())
+        let linux = ReachLinuxHost(prefix: "/wovenmatter-execution/linux-l", workspaceID: UUID().uuidString.lowercased(),
+                                   libraryID: identity.libraryID, members: [signer.deviceID: signer.publicKey])
+        let live = try await macA.database.receiveSyncedWorkspace(linux.descriptor)
+        // As dev-build.py leaves a copied owner, here even with an address that answers.
+        var row = linux.descriptor
+        row.id = UUID().uuidString.lowercased(); row.ownerDeviceID = UUID().uuidString.lowercased()
+        row.kind = .mac; row.name = "James's MacBook Air"; row.retainedHistory = true
+        let copied = try await macA.database.receiveSyncedWorkspace(row)
+        final class Signed { var ids: [String] = [] }; let signed = Signed()
+        macA.model.federatedExecutionClient = try CentralExecutionClient(database: macA.database,
+            commandJournalURL: macA.directory.appending(path: "commands.json"),
+            provision: { _ in throw CompanionAPIError(code: "unauthorized", message: "No grants in this test.") },
+            loadCredential: { _ in nil }, saveCredential: { _ in },
+            makeSignedTransport: { workspace in
+                signed.ids.append(workspace.id)
+                return try SignedExecutionWorkspaceTransport(workspace: workspace, signer: signer.signer, audience: linux.memberID, send: linux.send)
+            })
+
+        let (_, others) = try await macA.model.agentToolWorkspaces()
+        #expect(others.map(\.id) == [live.id])
+        do {
+            _ = try await macA.model.resolveAgentToolDestination(copied.id, callerWorkspace: nil)
+            Issue.record("A copied owner must not be a destination.")
+        } catch let error as WorkspaceToolError { #expect(error.localizedDescription.contains("copied history")) }
+        let rows = try await macA.model.agentToolHarnessRows()
+        #expect(!rows.contains { $0.objectValue?["workspace"]?.stringValue == copied.id })
+
+        let created = try await macA.model.createMemberToolSession(sourceID: UUID().uuidString.lowercased(), requestID: UUID().uuidString.lowercased(),
+            workspace: live, runtime: .codex, title: "Snapshot work", text: "Start here")
+        #expect(created.success)
+        #expect(linux.created.count == 1)
+
+        let client = try macA.model.centralExecutionClient()
+        await #expect(throws: CompanionAPIError.self) { _ = try await client.providers(workspace: copied) }
+        #expect(!signed.ids.contains(copied.id))
+        // A conversation with no live owner here is saved history, readable but not controllable.
+        let history = try await macA.model.performFederatedExecution(.refresh(conversationID: UUID().uuidString.lowercased()))
+        #expect(history.workspace.id == "snapshot-history" && !history.online)
+        await #expect(throws: WorkspaceToolError.self) {
+            _ = try await macA.model.performFederatedExecution(.stop(conversationID: UUID().uuidString.lowercased(), runID: UUID().uuidString.lowercased()))
         }
     }
 

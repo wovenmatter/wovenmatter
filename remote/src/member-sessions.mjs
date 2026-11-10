@@ -27,11 +27,12 @@ const own = Symbol('this workspace')
  * command}) is this workspace's own execution API, used for bots, which have
  * no conversation to coordinate from. `db` keeps the sessions each caller created.
  */
-export function createMemberSessions({ transport, identity, deviceID, localProviders, db = null, local = null, probeTimeout = 5000 }) {
+export function createMemberSessions({ transport, identity, deviceID, localProviders, db = null, local = null, probeTimeout = 5000, workspaceRole = () => true }) {
   db?.exec('CREATE TABLE IF NOT EXISTS member_sessions (id TEXT PRIMARY KEY, caller TEXT NOT NULL, workspace TEXT NOT NULL, created_at TEXT NOT NULL)')
   const headers = workspace => ({ 'x-woven-protocol': '3', 'x-woven-library': workspace.libraryID, 'x-woven-workspace': workspace.id, 'x-woven-device': deviceID() })
-  // A bots-only host has no workspace of its own (`identity` throws until one
-  // is enrolled); its bots still reach every other workspace.
+  // A bots-only host has no workspace of its own, and a workspace host has
+  // none until its Mac enrolls it (`identity` throws until then); its bots
+  // still reach every other workspace.
   const enrolled = () => { try { return identity() } catch { return null } }
   const targets = async () => { const self = enrolled(); return (await transport.workspaces()).filter(item => item.kind !== 'ios' && item.id !== self?.id) }
 
@@ -64,7 +65,9 @@ export function createMemberSessions({ transport, identity, deviceID, localProvi
     if (workspace === own) {
       if (!local) throw fail(503, 'This workspace cannot run sessions for this caller.')
       const self = enrolled()
-      if (!self) throw fail(409, 'This machine runs only bots and has no workspace of its own. Name another workspace by ID; woven_sessions_harnesses lists them.')
+      if (!self) throw fail(409, workspaceRole()
+        ? 'This machine\'s workspace is not enrolled yet: the Mac that manages it enrolls it as soon as it reaches this machine. Until then, name another workspace by ID; woven_sessions_harnesses lists them.'
+        : 'This machine runs only bots and has no workspace of its own. Name another workspace by ID; woven_sessions_harnesses lists them.')
       return { ...local, workspace: { ...self, kind: self.kind ?? 'linux' },
         command: body => local.command({ ...body, deviceID: self.executionDeviceID, libraryID: self.libraryID, workspaceID: self.id }) }
     }
@@ -105,7 +108,8 @@ export function createMemberSessions({ transport, identity, deviceID, localProvi
     const provider = Array.isArray(providers) ? providers.find(item => item.runtimeKind === kind && item.available !== false && item.canStart !== false) : null
     if (!provider) throw fail(409, `${kind} is not ready on ${client.workspace.name}. Call woven_sessions_harnesses to see what it offers.`)
     const folder = input.folder && !['all', 'ungrouped'].includes(input.folder) ? { folderID: input.folder } : {}
-    const created = await command(client, { commandID: stableID(base + ':create'), kind: 'createSession', conversationID, providerID: provider.id, runtimeKind: kind, ...folder }, signal)
+    const title = typeof input.title === 'string' && input.title.trim() ? { title: input.title.trim().slice(0, 256) } : {}
+    const created = await command(client, { commandID: stableID(base + ':create'), kind: 'createSession', conversationID, providerID: provider.id, runtimeKind: kind, ...title, ...folder }, signal)
     if (!['accepted', 'completed'].includes(created.status)) throw fail(409, created.message ?? `${client.workspace.name} could not create the session.`)
     db?.prepare('INSERT OR IGNORE INTO member_sessions VALUES (?,?,?,?)').run(conversationID, callerID, client.workspace.id, new Date().toISOString())
     // A failed rename leaves a working session; the first message still goes.

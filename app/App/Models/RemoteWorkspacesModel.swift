@@ -61,6 +61,9 @@ final class RemoteWorkspacesModel {
     private(set) var browserSelfTests: [UUID: RemoteBrowserSelfTest] = [:]
     private(set) var harnesses: [UUID: [RemoteHarnessStatus]] = [:]
     var onRuntimeMaintenanceChanged: (@MainActor () async -> Void)?
+    /// A Linux host was installed (workspace or bots-only) or gained its
+    /// workspace: the Mac adopts it as a member and enrolls its workspace.
+    var onHostInstalled: (@MainActor (RemoteWorkspaceConfiguration) -> Void)?
     private var browserFeeds: [UUID: RemoteBrowserFrameFeed] = [:]
     private var credentialEpoch = UUID()
     private var authorizingWorkspaceIDs: Set<UUID> = []
@@ -1456,6 +1459,7 @@ final class RemoteWorkspacesModel {
         requestHarnessSetup(configuration.id)
         await onRuntimeMaintenanceChanged?()
         await refreshService(resolved)
+        onHostInstalled?(resolved)
     }
 
     private func provision(
@@ -1474,6 +1478,7 @@ final class RemoteWorkspacesModel {
         requestHarnessSetup(configuration.id)
         await onRuntimeMaintenanceChanged?()
         await refreshService(resolved)
+        onHostInstalled?(resolved)
     }
 
     @discardableResult
@@ -1592,6 +1597,7 @@ final class RemoteWorkspacesModel {
             let resolved = recordStatus(status, for: configuration)
             workspaces.sort { $0.createdAt < $1.createdAt }
             save()
+            onHostInstalled?(resolved)
             return resolved
         } catch {
             try? await credentials.deleteToken(for: configuration.id, allowInteraction: false)

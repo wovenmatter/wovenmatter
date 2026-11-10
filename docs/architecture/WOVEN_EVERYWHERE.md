@@ -92,6 +92,18 @@ same commit.
     sync): its anchor must already be a standing Mac with the key this host
     trusts (else 400 `already_adopted`), and it never adds or replaces an
     anchor. Later member changes reach the host by peer sync.
+  - When: the Mac that manages a Linux host over SSH sets it up as soon as it
+    installs the host, installs it bots-only, or adds the workspace to a
+    bots-only host, and again on each launch (`CompanionHostController.setUpLinuxHost`).
+    Setup is the adoption above, then, for a host with a workspace, exposing
+    and enrolling it (`provisionCentralExecutionWorkspace`: Tailscale Serve
+    for its execution API, then the grant that registers the row's
+    `endpoint` and `executionDeviceID`). Neither step waits for the other or
+    for an earlier enrollment. A step that fails (the host's library still
+    starting, the host offline) is retried after 5 seconds, doubling to at
+    most 10 minutes, until both succeed; a bots-only host is only adopted.
+    The trust rules above are unchanged: the installer's bearer still adopts
+    only a host that was never adopted.
   - Upgrade: Macs paired before members existed (a key pinned by a signed
     join) are converted into members on launch. Phones and Linux hosts pair
     again. Library content is never touched.
@@ -753,14 +765,20 @@ hands them to the macOS job, which checks them with
   execution API with signed requests, so it works with every other Mac
   offline: `GET <endpoint>/v1/execution/providers`, then `POST
   <endpoint>/v1/execution/commands` with `createSession` (the destination's
-  saved defaults apply), a `workspace` rename to the title (kept by the
-  first message), and `send`. `deviceID` is the caller's member device ID,
+  saved defaults apply; its `title`, trimmed to 256 characters, names the
+  session as it is created and is kept by the first message), a `workspace`
+  rename to the same title (for destinations older than `title`), and
+  `send`. A session created on its own Mac (Woven MCP or the backend RPC
+  `createSession`) takes its `title` the same way; without one it is
+  "New <harness> chat" until its first message. `deviceID` is the caller's member device ID,
   and `libraryID`/`workspaceID` are the destination's. Command IDs derive
   from the caller, request ID and destination, so a retry replays receipts.
   The reply is `{session: {id, title, harness, workspace, workspaceName,
   workspaceKind}, independent: true, receipt}`: the caller does not
   coordinate it. Linux: `remote/src/member-sessions.mjs`; Mac:
-  `ApplicationModel+MemberSessions.swift`.
+  `ApplicationModel+MemberSessions.swift`. A copied owner (`retainedHistory`)
+  is never a destination or listed by `woven_sessions_harnesses`, as on the
+  iPhone; the Mac never signs, grants or enrolls for one.
 - **Managing them (Linux and Mac).** The Linux server remembers each session a caller
   created on another workspace (`member_sessions` in its execution database;
   on a Mac, the local, unsynced `member_tool_sessions` table of its library),
@@ -796,9 +814,11 @@ hands them to the macOS job, which checks them with
   sessions on its own machine's workspace go through that workspace's own
   execution commands, as another member's would; coordination tools
   (`manage`, `release`, `notifications`, `receipts`) bind a conversation and
-  stay unavailable to bots. On a bots-only host (no workspace enrolled) the
-  same tools reach only other workspaces: `_harnesses` lists theirs, and a
-  session without `workspace` is refused. A Mac's bots, which are app-wide callers there,
+  stay unavailable to bots. On a host with no workspace enrolled the same
+  tools reach only other workspaces: `_harnesses` lists theirs, and a
+  session without `workspace` is refused, saying either that the machine
+  runs only bots or, when it has the workspace role, that its workspace is
+  not enrolled yet (its Mac enrolls it on reaching the host). A Mac's bots, which are app-wide callers there,
   get the same tools from the Mac; `woven_sessions_list` without `workspace`
   lists a bot's sessions on other workspaces.
 - The iPhone connects directly to every Mac and Linux workspace with its own

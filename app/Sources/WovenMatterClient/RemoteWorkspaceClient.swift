@@ -1703,7 +1703,7 @@ enum RemoteWorkspaceProcess {
             guard let errorReader, let onStandardError else { return }
             // Progress is best-effort; a transient read failure must not orphan SSH.
             // The complete stderr file is still read on command failure below.
-            while let chunk = try? errorReader.read(upToCount: 65536), !chunk.isEmpty { onStandardError(chunk) }
+            while let chunk = try? PortablePOSIX.readAvailable(errorReader), !chunk.isEmpty { onStandardError(chunk) }
         }
         var inputURL: URL?
         var inputHandle: FileHandle?
