@@ -203,7 +203,7 @@ private final class WovenBrowserActionProcess {
                     Thread { [weak self] in
                         var pending = Data()
                         do {
-                            while let bytes = try output.read(upToCount: 65536), !bytes.isEmpty {
+                            while case let bytes = try PortablePOSIX.readAvailable(output), !bytes.isEmpty {
                                 pending.append(bytes)
                                 guard pending.count <= 8 * 1024 * 1024 else { throw WorkspaceToolError.invalid("Browser protocol response exceeds 8 MiB.") }
                                 while let newline = pending.firstIndex(of: 10) {
