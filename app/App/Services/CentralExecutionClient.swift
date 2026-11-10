@@ -126,17 +126,6 @@ final class CentralExecutionClient {
         }
     }
 
-    /// This Mac's execution grant for another member's workspace, provisioned as a
-    /// command would be. Bots on that machine use it until member auth replaces it.
-    func directCredential(for workspace: CompanionExecutionWorkspace) async throws -> DirectWorkspaceCredential {
-        _ = try await transport(for: workspace)
-        let identity = try await database.companionLibraryIdentity()
-        let account = CentralExecutionCredentialVault.account(libraryID: workspace.libraryID, workspaceID: workspace.id, deviceID: identity.hostDeviceID)
-        guard let saved = try loadCredential(account), saved.endpoint == workspace.endpoint else {
-            throw CompanionAPIError(code: "unauthorized", message: "This Mac has no access to \(workspace.name) yet.")
-        }
-        return saved
-    }
 
     private func transport(for workspace: CompanionExecutionWorkspace) async throws -> any ExecutionWorkspaceTransport {
         if let transport = transports[workspace.id], transportEndpoints[workspace.id] == workspace.endpoint { return transport }
@@ -153,8 +142,9 @@ final class CentralExecutionClient {
                 transports[workspace.id] = signed; transportEndpoints[workspace.id] = workspace.endpoint
                 return signed
             } catch MobileConnectionError.revoked {
-                // An older peer, or one that has not synchronized this Mac's
-                // membership yet: a grant it already issued still works.
+                // No grant stands in for a member: the peer has not synchronized
+                // this Mac's membership yet, or it removed this Mac.
+                throw CompanionAPIError(code: "unauthorized", message: "\(workspace.name) does not recognize this Mac yet. It does once the two devices synchronize their member list.")
             }
         }
         let identity = try await database.companionLibraryIdentity()

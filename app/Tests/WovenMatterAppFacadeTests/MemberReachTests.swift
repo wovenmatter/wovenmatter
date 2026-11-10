@@ -100,6 +100,34 @@ struct MemberReachTests {
         }
     }
 
+    /// The sidebar lists another Mac's agents, including those for a Linux host that Mac
+    /// added. Starting a chat with one goes straight to that host, signed by this Mac.
+    @Test func aChatWithAnAgentAnotherMacAddedStartsOnItsHostSigned() async throws {
+        let macB = try await FacadeFixture(); defer { macB.remove() }
+        let identity = try await macB.database.companionLibraryIdentity()
+        let signer = MemberIdentity(deviceID: identity.hostDeviceID, kind: .mac, key: .init())
+        let linux = ReachLinuxHost(prefix: "/wovenmatter-execution/linux-l", workspaceID: UUID().uuidString.lowercased(),
+                                   libraryID: identity.libraryID, members: [signer.deviceID: signer.publicKey])
+        let workspace = try await macB.database.receiveSyncedWorkspace(linux.descriptor)
+        macB.model.federatedExecutionClient = try CentralExecutionClient(database: macB.database,
+            commandJournalURL: macB.directory.appending(path: "commands.json"),
+            provision: { _ in throw CompanionAPIError(code: "unauthorized", message: "No grants in this test.") },
+            loadCredential: { _ in nil }, saveCredential: { _ in },
+            makeSignedTransport: { workspace in try SignedExecutionWorkspaceTransport(workspace: workspace, signer: signer.signer, send: linux.send) })
+        // Mac A's agent for the host, as peer sync delivers it.
+        let macA = UUID()
+        let agentID = try await macB.database.ensureRemoteHarnessAgent(runtimeKind: .codex, remoteWorkspaceID: try #require(UUID(uuidString: workspace.id)),
+                                                                       remoteWorkspaceName: "Linux L", ownerDeviceID: macA)
+        try await macB.database.write { db in
+            try db.toolsExecuteUnlocked("INSERT OR REPLACE INTO paired_agent_owners VALUES(?,?)", [agentID.uuidString.lowercased(), macA.uuidString.lowercased()])
+        }
+        #expect(try await macB.database.pairedAgentWorkspaces()[agentID]?.id == workspace.id)
+        let conversation = UUID()
+        #expect(try await macB.model.createPairedMacSession(agentID: agentID, conversationID: conversation, folderID: nil) == conversation.uuidString.lowercased())
+        #expect(linux.created.map(\.conversationID) == [conversation.uuidString.lowercased()])
+        #expect(linux.created.first?.deviceID == signer.deviceID && linux.created.first?.runtimeKind == "codex")
+    }
+
     @Test func anotherMacManagesALinuxHostItDidNotAdd() async throws {
         let macB = try await FacadeFixture(); defer { macB.remove() }
         let identity = try await macB.database.companionLibraryIdentity()
@@ -161,11 +189,11 @@ struct MemberReachTests {
             authentication: try CompanionAuthentication(fileURL: fixture.directory.appending(path: "mcp-devices.json")),
             commands: fixture.model.companionCommands, isActive: { true }, members: mac)
         let message = Data(#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#.utf8)
-        func call(_ signer: MemberIdentity) async throws -> (Int, String?) {
+        func call(_ signer: MemberIdentity, conversation: String = UUID().uuidString.lowercased()) async throws -> (Int, String?) {
             var headers = try signer.signer.headers(method: "POST", target: "/wovenmatter/mcp/workspace", body: message, audience: device)
             headers["X-Woven-Protocol"] = String(CompanionProtocol.version)
             headers["X-Woven-Workspace-ID"] = workspace.id
-            headers["X-Woven-Conversation-ID"] = UUID().uuidString.lowercased()
+            headers["X-Woven-Conversation-ID"] = conversation
             headers["X-Woven-Enabled-Groups"] = "timers"
             let lowered = Dictionary(uniqueKeysWithValues: headers.map { ($0.key.lowercased(), $0.value) })
             let response = await api.handle(.init(method: "POST", target: "/wovenmatter/mcp/workspace", headers: lowered, body: message))
@@ -178,6 +206,20 @@ struct MemberReachTests {
         #expect(wrong.1?.contains("does not execute") == true, "\(wrong)")
         let stranger = try await call(MemberIdentity(deviceID: UUID().uuidString.lowercased(), kind: .linux, key: .init()))
         #expect(stranger.0 == 401)
+
+        // This Mac did not add the host (the workspace's owner is another Mac). Once the
+        // session's row arrives by peer sync, as the Linux library publishes it, the
+        // host's own conversation is served here like on any other Mac.
+        let session = UUID().uuidString.lowercased()
+        let row = CompanionConversation(id: session, title: "Linux session", providerID: "local:codex", routeID: "local:codex",
+                                        runtimeKind: "codex", libraryID: workspace.libraryID, workspaceID: workspace.id)
+        try await fixture.database.write { db in
+            try db.toolsExecuteUnlocked("INSERT INTO companion_execution_conversations(id,workspace_id,conversation) VALUES(?,?,?)",
+                                        [session, workspace.id, String(decoding: try JSONEncoder().encode(row), as: UTF8.self)])
+        }
+        let served = try await call(linux, conversation: session)
+        #expect(served.0 == 200, "\(served)")
+        #expect(try await call(other, conversation: session).1?.contains("does not execute") == true)
     }
 
     /// Bots on a Linux host another Mac added: this Mac lists it from the registry, reads its

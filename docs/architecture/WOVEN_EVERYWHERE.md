@@ -147,10 +147,8 @@ same commit.
   request from any member gets what a device grant had: execution and
   inference routes, `GET /v1/bots/status|resources` and `GET /v1/bots/ws`. A
   `mac` member is also an administrator, like the installing Mac's bearer:
-  every administrator route, the bots changes and `/v1/host/*`. During the
-  transition the installer's API bearer and existing device grants keep
-  working beside signatures; the runtime host API (`/v1/bots-host/*`) and
-  session MCP (`/mcp`) keep their own bearers.
+  every administrator route, the bots changes and `/v1/host/*`. The bearers
+  it still accepts are listed under "Bearers that remain".
 - Swift (`shared/…/MemberRequestSignature.swift`): `MemberRequestSigner`
   (`headers(method:target:body:audience:)`, or `bodySHA256:` for a hashed
   body) and `MemberRequestVerifier(audience:…)` (own device ID, nonce cache,
@@ -165,18 +163,21 @@ same commit.
   `mac`), `/v1/execution/*` (`mac`, `ios`, `linux`; no execution grant
   needed), `/mcp/workspace` and `/mcp/workspace/prepare` (`linux`, in place
   of the single-Mac library grant; see "Sessions across devices") and
-  `/v1/bots/*` (`mac`, `ios`). Bearer grants keep working beside them until
-  every phone pairs as a member.
+  `/v1/bots/*` (`mac`, `ios`; signed only, no grant). The inference host
+  takes signed `ios` and `mac` members too ("iPhone reach"). Grants for
+  phones paired before members keep working on the mobile, execution and
+  inference routes.
 - Swift clients sign with `MemberSignedHTTPClient(endpoint:signer:audience:)`
   (`app/Sources/WovenMatterClient`): the target is the exact path sent, so a
   Mac endpoint (`https://<mac>.<tailnet>.ts.net:<port>/wovenmatter`, no
   trailing slash) signs `/wovenmatter/…` and a Linux execution endpoint
   (`…/wovenmatter-execution/<id>/`) signs its full path. The Mac app's
   `SignedExecutionWorkspaceTransport` replaces execution grants for every
-  other Mac and Linux workspace; `CentralExecutionClient` falls back to a
-  saved grant only when an older peer answers 401/403, and nothing is
-  provisioned (`/v1/peers/credential` no longer requires the workspace's
-  owner Mac). A phone grant for a Linux workspace is issued by that host
+  other Mac and Linux workspace with a known `executionDeviceID`; a signed
+  refusal is final ("does not recognize this Mac yet" until the member lists
+  synchronize), with no saved-grant fallback, and nothing is provisioned
+  (`/v1/peers/credential` no longer requires the workspace's owner Mac). A
+  workspace without an `executionDeviceID` still uses a saved grant. A phone grant for a Linux workspace is issued by that host
   (signed `POST /v1/execution/devices`) from any Mac.
 - Node signs through its library host: `POST /v1/members/sign` on the
   library socket returns the headers for one request, so the Linux private
@@ -198,8 +199,36 @@ same commit.
   Linux hosts") and manages it with these signed routes
   (`RemoteHostAdministrationClient`): status, logs, restart, bots-configure
   and update, which uploads this Mac's host bundle and polls `GET
-  /v1/host/update`. Nothing says which Mac added a host.
+  /v1/host/update`. Nothing says which Mac added a host. "Update everything"
+  (`BotUpdatePlan.Step.linuxHost`) updates every Linux host in the registry
+  this way (`RemoteWorkspacesModel.runSharedHost(_:.update)`); SSH is only
+  the fallback for a host this Mac added. A Linux host's sessions use any
+  Mac's `/mcp/workspace` once the session's `companion_execution_conversations`
+  row has synchronized there, whichever Mac added the host. On a Mac, other
+  Macs' agents (including those for Linux hosts they added) sync as peer
+  agents (`pairedAgentWorkspaces`), and a new chat with one is created on its
+  workspace with signed requests (`createPairedMacSession`).
 - Bots are not members. Each bot has its own Woven MCP key (see Bots).
+- **Bearers that remain**, and why:
+  - The installer's API bearer, through the SSH tunnel of the Mac that added
+    a host: first install, the first member adoption (before the host knows
+    any Mac), the SSH update fallback, that Mac's own management link
+    (`RemoteWorkspaceServiceClient`) and a bots-only host that is not in the
+    registry.
+  - Outside-client and session MCP bearers (`/mcp`, agent tool sessions),
+    bot MCP keys (bots are not members), the runtime host API
+    (`/v1/bots-host/*`) and runtime token, and the library socket's local
+    bearer: none of these is a call between members.
+  - Grants for phones paired before members: the Mac's mobile API pairing
+    credential and execution and inference grants
+    (`CompanionExecutionAuthentication`), Linux device grants
+    (`POST /v1/execution/devices`, issued from any Mac), and the phone's
+    saved grants for workspaces too old for signatures.
+  - The Linux host's single-Mac library MCP grant and publisher grant, issued
+    by the Mac that added it: only a fallback for a host without a library
+    host or with no Mac member answering.
+  - A Mac's saved execution grant for a workspace with no `executionDeviceID`
+    (a library client's secondary execution workspace).
 
 ## Library on every surface
 
@@ -1149,8 +1178,7 @@ every connection attempt (`BotsCommand.signSocket(url:audience:)`, which signs o
 member's `…/v1/bots/ws` on a `.ts.net` address), and `PiBotClient(authorize:)` sends
 them instead of a bearer. A Linux host this Mac added that is not in the registry (a
 bots-only server) is still reached through its SSH tunnel with the installer's
-bearer. A Mac's server keeps accepting a current execution grant beside signatures
-for phones paired before members.
+bearer. A Mac's server accepts only signed members on `/v1/bots/*`.
 
 **Linux bots-only install.** The Mac runs `remote-host.sh prepare AUTHORIZED
 <access-mode> bots`, then `remote-host.sh install <workspace-id> <port> <access-mode>
