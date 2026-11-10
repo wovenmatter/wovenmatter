@@ -184,8 +184,10 @@ public struct WovenVMController: Sendable {
     }
 
     private func raw(_ method: String, _ path: String, body: Data?) async throws -> Data {
-        let socketPath = controlSocket.path
+        let socketPath = controlSocket.path, directory = paths.socketDirectory
         return try await Self.background {
+            // Only talk to a helper listening in this user's own private directory.
+            try WovenVMPaths.preparePrivateDirectory(directory, create: false)
             let (status, reply) = try Self.exchange(socketPath: socketPath, method: method, path: path, body: body ?? Data())
             guard (200..<300).contains(status) else {
                 let message = (try? JSONDecoder().decode(WovenVMControlHTTP.ErrorBody.self, from: reply))?.error

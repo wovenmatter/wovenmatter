@@ -311,7 +311,8 @@ struct NotePane: View {
   @ObservationIgnored private var expectedCaret: NSRange?
   @ObservationIgnored private var typingBlock: String?
   @ObservationIgnored private var lastTypedAt: ContinuousClock.Instant?
-  @ObservationIgnored private var pendingFocus: (caret: RichDocumentEditing.Caret, typingRun: NoteTextRun?, raisesKeyboard: Bool)?
+  @ObservationIgnored private var pendingFocus: (caret: RichDocumentEditing.Caret, typingRun: NoteTextRun?, raisesKeyboard: Bool, request: Int)?
+  @ObservationIgnored private var focusRequests = 0
   private(set) var activeBlockID: String?
   private(set) var canUndo = false
   private(set) var canRedo = false
@@ -351,20 +352,44 @@ struct NotePane: View {
   func expectCaret(_ range: NSRange) { expectedCaret = range }
   /// A structural edit names the block and offset where typing continues once that block renders.
   func focus(_ caret: RichDocumentEditing.Caret, typingRun: NoteTextRun?, raisesKeyboard: Bool = true) {
-    pendingFocus = (caret, typingRun, raisesKeyboard); activeBlockID = caret.blockID
+    focusRequests += 1
+    pendingFocus = (caret, typingRun, raisesKeyboard, focusRequests); activeBlockID = caret.blockID
   }
   func claimFocus(_ view: UITextView, blockID: String) {
     // A view not yet in a window retries from didMoveToWindow.
     guard let pending = pendingFocus, pending.caret.blockID == blockID, view.window != nil else { return }
-    pendingFocus = nil
     // Defer focus changes out of SwiftUI's update pass.
     DispatchQueue.main.async { [weak self, weak view] in
-      guard let self, let view, view.window != nil else { return }
-      if pending.raisesKeyboard, !view.isFirstResponder { view.becomeFirstResponder() }
-      view.selectedRange = NSRange(location: min(pending.caret.location, view.attributedText.length), length: 0)
-      self.activate(view, blockID: blockID)
-      if let run = pending.typingRun { self.setTypingRun(run) }
+      self?.completeFocus(view, blockID: blockID, request: pending.request, retries: 60)
     }
+  }
+  /// iOS 27 keeps a removed paragraph's view in the window, hidden, and can
+  /// show it again for a recreated paragraph only after updating it. A hidden
+  /// view either refuses the keyboard, dropping the caret, or takes it out of
+  /// sight, so the caret waits until the view is shown.
+  private func completeFocus(_ view: UITextView?, blockID: String, request: Int, retries: Int) {
+    guard let view, view.window != nil, let pending = pendingFocus, pending.request == request, pending.caret.blockID == blockID else { return }
+    guard Self.isShown(view) else {
+      if retries > 0 {
+        DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(16)) { [weak self, weak view] in
+          self?.completeFocus(view, blockID: blockID, request: request, retries: retries - 1)
+        }
+      }
+      return
+    }
+    pendingFocus = nil
+    if pending.raisesKeyboard, !view.isFirstResponder { view.becomeFirstResponder() }
+    view.selectedRange = NSRange(location: min(pending.caret.location, view.attributedText.length), length: 0)
+    activate(view, blockID: blockID)
+    if let run = pending.typingRun { setTypingRun(run) }
+  }
+  static func isShown(_ view: UIView) -> Bool {
+    var current: UIView? = view
+    while let ancestor = current {
+      if ancestor.isHidden || ancestor.alpha < 0.01 { return false }
+      current = ancestor.superview
+    }
+    return view.window != nil
   }
   func clearTypingRun() { typingRun = nil }
   func setTypingRun(_ run: NoteTextRun) {

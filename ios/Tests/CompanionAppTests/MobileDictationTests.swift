@@ -183,9 +183,19 @@ import CompanionClient
   /// delegate and undo manager UIKit uses for keys, shake and the edit menu.
   @MainActor private struct LiveNote {
     let window: UIWindow, previous: UIWindow?, model: CompanionModel
-    func editors() -> [MobileNoteTextView] {
+    /// Every note text view in the window, including views iOS 27 keeps hidden
+    /// for reuse after their paragraph is removed.
+    func allEditors() -> [MobileNoteTextView] {
       func collect(_ view: UIView) -> [MobileNoteTextView] { (view as? MobileNoteTextView).map { [$0] } ?? view.subviews.flatMap(collect) }
-      return collect(window).sorted { $0.convert($0.bounds, to: nil).minY < $1.convert($1.bounds, to: nil).minY }
+      return collect(window)
+    }
+    /// The paragraphs on screen, top to bottom.
+    func editors() -> [MobileNoteTextView] {
+      allEditors().filter(MobileNoteEditorController.isShown)
+        .sorted { $0.convert($0.bounds, to: nil).minY < $1.convert($1.bounds, to: nil).minY }
+    }
+    func describe() -> String {
+      editors().map { "\($0.text ?? "")\($0.isFirstResponder ? " (keyboard)" : "")" }.joined(separator: " | ")
     }
     func content() -> String { model.draftContents[model.selectedNoteID ?? ""] ?? model.selectedNote?.content ?? "" }
     func close() { window.isHidden = true; previous?.makeKeyAndVisible() }
@@ -201,12 +211,12 @@ import CompanionClient
     window.makeKeyAndVisible()
     return LiveNote(window: window, previous: previous, model: model)
   }
-  private func settle(_ condition: () -> Bool) async throws {
+  private func settle(_ note: LiveNote? = nil, line: UInt = #line, _ condition: () -> Bool) async throws {
     for _ in 0..<300 {
       if condition() { return }
       try await Task.sleep(for: .milliseconds(10))
     }
-    XCTFail("The editor did not settle")
+    XCTFail("The editor did not settle: \(note?.describe() ?? "")", line: line)
   }
   /// Types as the keyboard does: the delegate admits the edit, then UIKit inserts it unless the editor applied it.
   private func type(_ text: String, into view: UITextView) {
@@ -221,25 +231,56 @@ import CompanionClient
     XCTAssertTrue(first.becomeFirstResponder())
     type("Plan", into: first)
     type("\n", into: first)
-    try await settle { note.editors().count == 2 && note.editors()[1].isFirstResponder }
+    try await settle(note) { note.editors().count == 2 && note.editors()[1].isFirstResponder }
     let second = note.editors()[1]
     XCTAssertTrue(second.undoManager === first.undoManager, "Every paragraph shares the note's history")
 
     // UIKit's own path: the focused text view's undo manager, not the toolbar.
     second.undoManager?.undo()
-    try await settle { note.editors().count == 1 && note.editors()[0].isFirstResponder }
+    try await settle(note) { note.editors().count == 1 && note.editors()[0].isFirstResponder }
     XCTAssertEqual(note.editors()[0].text, "Plan")
+    XCTAssertEqual(note.allEditors().filter(\.isFirstResponder), [note.editors()[0]], "No hidden leftover holds the keyboard")
 
     note.editors()[0].undoManager?.redo()
-    try await settle { note.editors().count == 2 && note.editors()[1].isFirstResponder }
+    try await settle(note) { note.editors().count == 2 && note.editors()[1].isFirstResponder }
     type("Details", into: note.editors()[1])
     XCTAssertEqual(note.editors().map(\.text), ["Plan", "Details"], "Typing continues after redo without a tap")
 
     note.editors()[1].undoManager?.undo() // typing
     note.editors()[1].undoManager?.undo() // Return
-    try await settle { note.editors().count == 1 && note.editors()[0].isFirstResponder }
+    try await settle(note) { note.editors().count == 1 && note.editors()[0].isFirstResponder }
     type("!", into: note.editors()[0])
     XCTAssertEqual(note.editors()[0].text, "Plan!", "Typing continues after undo at the restored caret")
+  }
+
+  /// iOS 27 keeps a removed paragraph's view hidden in the window and shows
+  /// it again when redo recreates the paragraph, after SwiftUI has updated it.
+  /// The caret waits for the view to be shown instead of being dropped.
+  func testCaretWaitsForAHiddenReusedParagraphToBeShown() async throws {
+    let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+    let previous = scene.windows.first(where: \.isKeyWindow)
+    let window = UIWindow(windowScene: scene)
+    defer { window.isHidden = true; previous?.makeKeyAndVisible() }
+    window.rootViewController = UIViewController()
+    let controller = MobileNoteEditorController()
+    let host = UIView(frame: CGRect(x: 0, y: 0, width: 300, height: 50)), view = MobileNoteTextView(history: controller.history)
+    view.frame = host.bounds; view.text = "Restored"
+    host.addSubview(view); window.rootViewController?.view.addSubview(host)
+    window.makeKeyAndVisible()
+    host.isHidden = true; host.alpha = 0
+
+    controller.focus(.init(blockID: "B", location: 3), typingRun: nil)
+    controller.claimFocus(view, blockID: "B")
+    try await Task.sleep(for: .milliseconds(100))
+    XCTAssertFalse(view.isFirstResponder, "A hidden paragraph does not take the keyboard out of sight")
+    XCTAssertEqual(controller.selection, NSRange(location: 3, length: 0), "The caret is still waiting")
+
+    host.isHidden = false; host.alpha = 1
+    for _ in 0..<300 where !view.isFirstResponder { try await Task.sleep(for: .milliseconds(10)) }
+    XCTAssertTrue(view.isFirstResponder, "Editing continues once the paragraph is shown")
+    XCTAssertEqual(view.selectedRange, NSRange(location: 3, length: 0))
+    XCTAssertEqual(controller.activeBlockID, "B")
+    view.resignFirstResponder()
   }
 
   /// One undo reverses one dictation, whether it inserted text in place or

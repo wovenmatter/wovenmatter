@@ -51,6 +51,13 @@ public struct RemoteHostAdministrationClient: Sendable {
         try await client.request("v1/host/update")
     }
 
+    /// Replaces the host's installer bearer, so a removed Mac that installed it
+    /// can no longer administer it over Tailscale SSH. The new value is never
+    /// sent to a signed caller.
+    public func rotateInstallerBearer() async throws {
+        let _: GatewayJSONValue = try await client.request("v1/host/installer-bearer", method: "POST")
+    }
+
     /// Hands the host the signed member records (`LibraryMemberAdoption`).
     public func adoptMembers(_ adoption: Data) async throws -> GatewayJSONValue {
         try await client.request("v1/host/members/adopt", method: "POST", body: adoption)

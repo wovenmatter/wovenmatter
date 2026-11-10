@@ -101,6 +101,30 @@ struct WovenVMTests {
         #expect(long.disk.path.hasSuffix("/snapshot/WovenVM/disk.img"))
     }
 
+    @Test func theSocketDirectoryMustBeAPrivateDirectoryOfThisUser() throws {
+        let base = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: base) }
+        let fresh = base.appending(path: "fresh", directoryHint: .isDirectory)
+        #expect(throws: WovenVMError.self) { try WovenVMPaths.preparePrivateDirectory(fresh, create: false) }
+        try WovenVMPaths.preparePrivateDirectory(fresh)
+        var info = stat()
+        #expect(lstat(fresh.path, &info) == 0 && info.st_mode & 0o777 == 0o700 && info.st_uid == getuid())
+        // An existing directory of this user is tightened; anything else is refused.
+        let open = base.appending(path: "open", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: open, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o777])
+        chmod(open.path, 0o777)
+        try WovenVMPaths.preparePrivateDirectory(open)
+        #expect(lstat(open.path, &info) == 0 && info.st_mode & 0o777 == 0o700)
+        let link = base.appending(path: "link")
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: fresh)
+        #expect(throws: WovenVMError.self) { try WovenVMPaths.preparePrivateDirectory(link) }
+        let file = base.appending(path: "file")
+        try Data().write(to: file)
+        #expect(throws: WovenVMError.self) { try WovenVMPaths.preparePrivateDirectory(file) }
+        // A directory another user owns: /private/tmp itself is root's.
+        #expect(throws: WovenVMError.self) { try WovenVMPaths.preparePrivateDirectory(URL(fileURLWithPath: "/private/tmp"), create: false) }
+    }
+
     @Test func launchAgentRestartsOnlyUnexpectedExits() throws {
         let plist = WovenVMLaunchAgent.propertyList(label: "wovenmatter.desktop.vm",
             helper: URL(fileURLWithPath: "/Applications/Woven Matter.app/Contents/Helpers/WovenMatterVMHelper"),

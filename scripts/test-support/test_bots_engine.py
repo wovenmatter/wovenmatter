@@ -66,6 +66,15 @@ class Rendering(unittest.TestCase):
         self.assertIn(f'oifname "{bridge}" drop',rules,'nothing outside connects into the bridge')
         self.assertIn('masquerade',rules)
         self.assertTrue(rules.startswith('table inet wovenmatter_bots {}\ndelete table inet wovenmatter_bots\n'),'reloads replace the table atomically')
+        # Bot containers cannot reach each other: frames bridged between two
+        # ports of the bot bridge are dropped in its own bridge table.
+        self.assertIn('table bridge wovenmatter_bots {}\ndelete table bridge wovenmatter_bots\n',rules)
+        self.assertIn(f'meta ibrname "{bridge}" meta obrname "{bridge}" drop',rules)
+        self.assertNotIn('docker0',rules)
+        self.assertNotIn(f'iifname != "{bridge}" oifname != "{bridge}" drop',rules)
+        owned=engine.render_ruleset(self.layout,self.config,drop_foreign=True)
+        self.assertIn(f'iifname != "{bridge}" oifname != "{bridge}" drop',owned,'non-bot forwarding is dropped when the engine enabled it')
+        self.assertNotIn('icc',engine.render_daemon(self.layout,self.config),'dockerd refuses icc=false without iptables')
     def test_units_apply_pool_and_mount_only_with_a_disk_cap(self):
         units=engine.render_units(self.layout,self.config,'/usr/bin/python3')
         self.assertIn('MemoryMax=8589934592',units[self.layout.slice])
@@ -131,6 +140,31 @@ class Requests(unittest.TestCase):
         self.assertIn(f'iptables -w -N {self.layout.chain}',joined)
         self.assertIn(f'iptables -w -I FORWARD 1 -j {self.layout.chain}',joined)
         self.assertTrue(all(self.layout.bridge in call or 'FORWARD' in call or '-N' in call or '-F' in call or '-S' in call for call in joined))
+    def firewall_with(self,forwarding,iptables=True):
+        path=Path(self.temp.name)/'ip_forward'; path.write_text(forwarding+'\n'); self.engine.forwarding_path=path
+        rendered=[]
+        self.engine.host.which=lambda name:('/usr/sbin/'+name) if iptables or name!='iptables' else None
+        original=engine.render_ruleset
+        with mock.patch.object(engine,'render_ruleset',side_effect=lambda *a,**k: rendered.append(k.get('drop_foreign')) or original(*a,**k)):
+            self.engine.firewall()
+        return path,rendered,[' '.join(call) for call in self.host.calls]
+    def test_forwarding_enabled_by_the_engine_drops_other_forwarding(self):
+        path,rendered,calls=self.firewall_with('0')
+        self.assertEqual(path.read_text(),'1\n'); self.assertIn('iptables -w -P FORWARD DROP',calls); self.assertEqual(rendered,[False])
+        self.assertTrue((self.layout.run/'forwarding-enabled').exists())
+        self.assertEqual(json.loads(self.layout.state.read_text())['forwardPolicy'],'iptables')
+        # A later reload in the same boot keeps the policy it owns.
+        self.host.calls.clear(); path,rendered,calls=self.firewall_with('1')
+        self.assertIn('iptables -w -P FORWARD DROP',calls)
+    def test_forwarding_that_was_already_on_is_left_to_its_owner(self):
+        path,rendered,calls=self.firewall_with('1')
+        self.assertFalse(any('-P FORWARD' in call for call in calls),'the user’s Docker or VPN owns the policy')
+        self.assertEqual(rendered,[False]); self.assertFalse((self.layout.run/'forwarding-enabled').exists())
+        self.assertIsNone(json.loads(self.layout.state.read_text())['forwardPolicy'])
+    def test_without_iptables_the_engine_table_drops_other_forwarding(self):
+        path,rendered,calls=self.firewall_with('0',iptables=False)
+        self.assertEqual(rendered,[True]); self.assertFalse(any(call.startswith('iptables') for call in calls))
+        self.assertEqual(json.loads(self.layout.state.read_text())['forwardPolicy'],'nftables')
     def test_commands_and_owner_checks(self):
         with self.assertRaises(engine.Failure): engine.main(['--instance','wmtest','bogus'])
         with self.assertRaises(engine.Failure): engine.main(['--instance','wmtest','install','--user','x'])
