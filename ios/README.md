@@ -249,18 +249,19 @@ builds of the same version may not need a full review.
    - Sign-in required: no. The app has no Woven Matter account.
    - Review notes, for example:
 
-     > Woven Matter works without a Mac. Notes are stored on the device and work
-     > offline. Quick Chat needs a model provider connection: in Settings, add the
-     > provider API key below, then start a Quick Chat and ask a question or ask
-     > it to create a note. Pairing with a Mac is optional and is not needed to
-     > review the app.
+     > Woven Matter works on its own; pairing with a Mac is optional and not
+     > needed to review the app. Notes, folders, calendar and timers are stored
+     > on the device. To try Quick Chat: Settings → iPhone Connections → Claude ·
+     > API key (or OpenAI · API key), paste the test key below, then open Chats
+     > and ask a question, or ask it to create a note or a timer. Web search is
+     > optional: Settings → iPhone Connections → Web search.
      >
      > Test provider key: (paste here)
 
      Put the test key only in this App Store Connect field, never in the
      repository. Use a key with a low spending limit that you revoke after
-     review. Check the exact Settings path in the build you submit; the no-Mac
-     reviewer flow is still being finished.
+     review. Tapping "Sign in to a model provider to use Quick Chat" in an
+     empty chat opens the same Connections page.
 2. TestFlight → External Testing → **+**: create a group and add the build. It is
    sent to Beta App Review.
 3. After approval, add testers by email, or turn on the group's **public link**
