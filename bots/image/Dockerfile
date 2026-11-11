@@ -20,11 +20,11 @@ RUN apt-get update \
 
 # Node from the official archive, checksum-verified. Keep in step with
 # remote/host/runtime-versions.json (dependency maintenance updates both).
-ARG NODE_VERSION=26.13.0
+ARG NODE_VERSION=26.13.1
 RUN set -eu; \
     case "$(dpkg --print-architecture)" in \
-      amd64) arch=x64; sum=5848553868b402d3fabb5b09270649977780a390f832155721025a08b5104455 ;; \
-      arm64) arch=arm64; sum=439e9c438acdf6a6ffe47418da709153d66c4bed812e30a473faacb107dd2791 ;; \
+      amd64) arch=x64; sum=518674de2b621728a5e4486f5fb3b7d2900bb3cc4aa97969edaa463db99f9778 ;; \
+      arm64) arch=arm64; sum=80a330b35415382878df18d41afbd106ea89bfb3be0087d6608e289a14c5cc7d ;; \
       *) echo "unsupported architecture" >&2; exit 1 ;; \
     esac; \
     curl -fsSLo /tmp/node.tar.gz "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-${arch}.tar.gz"; \
