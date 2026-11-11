@@ -28,7 +28,8 @@ struct ConversationResponse: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             ConversationResponseText(content: content, document: document, isStreaming: isStreaming) { url in
-                if let linkHandler { linkHandler(url) } else { pendingExternalURL = url }
+                // Page links only work where a handler routes them (bot chats).
+                if let linkHandler { linkHandler(url) } else if WovenAppLink(url) == nil { pendingExternalURL = url }
             }
             .frame(maxWidth: 680, alignment: .leading)
 
@@ -276,7 +277,7 @@ final class ConversationResponseNativeTextView: NSTextView, NSTextViewDelegate {
 
     func textView(_ textView: NSTextView, clickedOnLink link: Any, at charIndex: Int) -> Bool {
         let url = (link as? URL) ?? (link as? String).flatMap(URL.init(string:))
-        if let url, ConversationMarkdownDocument.isSafeExternalLink(url) { onOpenLink?(url) }
+        if let url, ConversationMarkdownDocument.isLiveLink(url) { onOpenLink?(url) }
         // Always consume the click; opening still requires the existing confirmation.
         return true
     }
@@ -397,7 +398,7 @@ final class ConversationResponseNativeTextView: UITextView, UITextViewDelegate {
     }
     func textView(_ textView: UITextView, shouldInteractWith URL: URL, in characterRange: NSRange,
                   interaction: UITextItemInteraction) -> Bool {
-        if ConversationMarkdownDocument.isSafeExternalLink(URL) { onOpenLink?(URL) }
+        if ConversationMarkdownDocument.isLiveLink(URL) { onOpenLink?(URL) }
         return false
     }
 }
@@ -577,7 +578,7 @@ private enum ConversationResponseAttributedText {
                 var attributes: [NSAttributedString.Key: Any] = [.font: runFont, .foregroundColor: foreground]
                 if intent.contains(.code) { attributes[.backgroundColor] = DashboardColors.primary.withAlphaComponent(0.075) }
                 if intent.contains(.strikethrough) { attributes[.strikethroughStyle] = NSUnderlineStyle.single.rawValue }
-                if let link = run.link, ConversationMarkdownDocument.isSafeExternalLink(link) { attributes[.link] = link }
+                if let link = run.link, ConversationMarkdownDocument.isLiveLink(link) { attributes[.link] = link }
                 result.append(NSAttributedString(string: String(text.rendered[run.range].characters), attributes: attributes))
             }
             return result

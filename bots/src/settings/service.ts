@@ -3,7 +3,7 @@ import { parseModelRef } from "../config.ts";
 import { LIMIT_LABELS, type LimitEntry, type LimitKind } from "../limits.ts";
 import { type ModelAccess, type ModelPricing, modelAccess, modelFacts } from "../model-info.ts";
 import { TITLE_REASONING } from "../titles.ts";
-import { ACCOUNTS, SEARCH_PROVIDERS, SUGGESTED_MODELS, type SearchProviderId } from "./catalog.ts";
+import { ACCOUNTS, SEARCH_PROVIDERS, type SearchProviderId } from "./catalog.ts";
 import type { SettingsStore } from "./store.ts";
 
 export type AccountStatus = {
@@ -117,8 +117,6 @@ export class SettingsService {
   /** Models of providers with a working connection, and the title model. */
   async modelCatalog(): Promise<{
     providers: ProviderModels[];
-    /** Connected `SUGGESTED_MODELS`, best first: what the first-run chooser offers. */
-    suggested: string[];
     roles: Roles;
     reasoningLevels: readonly string[];
   }> {
@@ -161,13 +159,7 @@ export class SettingsService {
           : {}),
       });
     }
-    const refs = new Set(available.map((model) => `${model.provider}/${model.id}`));
-    return {
-      providers: [...byProvider.values()],
-      suggested: SUGGESTED_MODELS.filter((ref) => refs.has(ref)),
-      roles: this.roles(),
-      reasoningLevels: TITLE_REASONING,
-    };
+    return { providers: [...byProvider.values()], roles: this.roles(), reasoningLevels: TITLE_REASONING };
   }
 
   roles(): Roles {

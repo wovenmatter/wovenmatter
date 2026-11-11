@@ -932,6 +932,15 @@ struct WorkspaceView: View {
 
     /// Links from a bot open beside it, the same way a chat's browser tabs do.
     private func openBotLink(_ url: URL, from panelID: DashboardChatPanelID) {
+        if let page = WovenAppLink(url) {
+            switch page {
+            case .accounts: model.pendingConnectionsScope = "global"
+            case .botProfiles:
+                model.pendingBotProfilesMachine = chatPanels.panel(id: panelID)?.botTarget?.machineID
+                openBotSettings()
+            }
+            return
+        }
         guard assets.openBrowser(url: url.absoluteString) != nil else {
             NSWorkspace.shared.open(url)
             return

@@ -117,15 +117,10 @@ struct PiBotConversationStateTests {
 
 @Suite("Pi Bot models and profiles")
 struct PiBotModelFactsTests {
-    @Test func suggestionsKeepOrderAndSkipModelsNotInTheCatalog() throws {
-        let catalog = try JSONDecoder().decode(PiBotModelCatalog.self, from: Data(#"""
-        {"providers":[{"id":"openai-codex","name":"ChatGPT","models":[{"id":"gpt-6.1-sol","name":"GPT-6.1 Sol","reasoning":true,"contextWindow":1}]}],
-         "suggested":["claude-subscription/claude-opus-5-5","openai-codex/gpt-6.1-sol"],
-         "roles":{"titles":"","titlesReasoning":"high"},"reasoningLevels":["high"]}
-        """#.utf8))
-        #expect(catalog.suggestions.map(\.ref) == ["openai-codex/gpt-6.1-sol"])
-        #expect(catalog.suggestions.first?.provider.name == "ChatGPT")
-        #expect(catalog.roles.titles.isEmpty)
+    @Test func modelsSortNewestFirst() {
+        let ids = ["gpt-5.6-luna", "gpt-6.1-terra", "gpt-6-sol", "gpt-6.1-sol", "claude-opus-4-5", "claude-opus-5-5", "chat-latest"]
+        let sorted = PiBotModelCatalog.newestFirst(ids.map { PiBotModelOption(id: $0, name: $0) }).map(\.id)
+        #expect(sorted == ["gpt-6.1-sol", "gpt-6.1-terra", "gpt-6-sol", "gpt-5.6-luna", "claude-opus-5-5", "claude-opus-4-5", "chat-latest"])
     }
 
     @Test func pricesKeepTheCatalogValues() {

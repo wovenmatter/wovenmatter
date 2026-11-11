@@ -3,14 +3,16 @@ import WovenMatterClient
 
 /// First run on a machine: bots use the accounts in Woven's settings, so setup is
 /// signing in there, then choosing Admin Bot's model, which becomes the default for
-/// new bots. Nothing is chosen for the user: a suggestion is only preselected.
+/// new bots. Every model of every signed-in provider is listed, newest first.
 struct BotOnboardingView: View {
     @Bindable var bots: BotMachineSession
     let onOpenConnections: () -> Void
     @State private var state: BotSettingsState
     @State private var catalog: PiBotModelCatalog?
     @State private var selection: String?
-    @State private var showsAllModels = false
+    @State private var search = ""
+    /// Open provider sections; nil until the user toggles one (the selected model's is open).
+    @State private var expanded: Set<String>?
 
     init(bots: BotMachineSession, onOpenConnections: @escaping () -> Void) {
         self.bots = bots; self.onOpenConnections = onOpenConnections
@@ -83,28 +85,38 @@ struct BotOnboardingView: View {
         }.accessibilityLabel("\(number). \(label)\(done ? ", complete" : current ? ", current step" : "")")
     }
 
+    /// Lists longer than this get a search field and scroll in place.
+    private static let longList = 15
+    private static let rowHeight: CGFloat = 28
+
     private var modelCard: some View {
         SettingsSection(title: "No model selected yet for Admin Bot",
                         detail: "Choose a model to default to; you can change it anytime by asking Admin Bot or in Settings.") {
             if let catalog {
                 if catalog.providers.isEmpty { SettingsEmpty("Sign in to a model provider first.") }
                 else {
-                    let suggestions = catalog.suggestions
-                    if !suggestions.isEmpty {
-                        VStack(alignment: .leading, spacing: 2) {
-                            ForEach(suggestions) { suggestion in
-                                suggestionRow(suggestion.ref, model: suggestion.model.name,
-                                              provider: suggestion.provider.name, catalog: catalog)
+                    let providers = listed(catalog)
+                    if catalog.providers.reduce(0, { $0 + $1.models.count }) > Self.longList {
+                        DashboardSearchField(text: $search, prompt: "Search models")
+                    }
+                    if providers.isEmpty {
+                        SettingsEmpty("No models match.")
+                    } else if catalog.providers.count == 1, let provider = providers.first {
+                        modelList(provider)
+                    } else {
+                        VStack(alignment: .leading, spacing: 4) {
+                            ForEach(providers) { provider in
+                                DisclosureGroup(isExpanded: isExpanded(provider.id, catalog: catalog)) {
+                                    modelList(provider).padding(.leading, 4)
+                                } label: {
+                                    HStack(spacing: 6) {
+                                        Text(provider.name).font(.settingsBody.weight(.medium))
+                                        Text("\(provider.models.count)").font(.settingsSecondary)
+                                            .foregroundStyle(DashboardPalette.mutedForeground)
+                                    }
+                                }
                             }
                         }
-                    }
-                    if suggestions.isEmpty || showsAllModels {
-                        SettingsRow(title: suggestions.isEmpty ? "Model" : "Another model") {
-                            BotSettingsModelPicker(providers: catalog.providers, selection: Binding(
-                                get: { selectedModel(catalog) }, set: { selection = $0 }), label: "Model")
-                        }
-                    } else {
-                        Button("Show all models") { showsAllModels = true }
                     }
                     Button("Use this model") {
                         Task {
@@ -122,32 +134,69 @@ struct BotOnboardingView: View {
         }.disabled(state.disabled)
     }
 
-    private func suggestionRow(_ ref: String, model: String, provider: String, catalog: PiBotModelCatalog) -> some View {
-        let selected = selectedModel(catalog) == ref
+    /// Each provider's models, newest first, narrowed by the search.
+    private func listed(_ catalog: PiBotModelCatalog) -> [PiBotProviderModels] {
+        let terms = search.lowercased().split(separator: " ").map(String.init)
+        return catalog.providers.compactMap { provider in
+            let models = PiBotModelCatalog.newestFirst(provider.models).filter { model in
+                terms.allSatisfy { model.name.lowercased().contains($0) || model.id.lowercased().contains($0) }
+            }
+            return models.isEmpty ? nil : PiBotProviderModels(id: provider.id, name: provider.name,
+                                                               access: provider.access, models: models)
+        }
+    }
+
+    /// Short lists show in full; long ones show about 15 rows and scroll, rows loading as they come into view.
+    @ViewBuilder private func modelList(_ provider: PiBotProviderModels) -> some View {
+        let rows = ForEach(provider.models) { model in
+            modelRow("\(provider.id)/\(model.id)", name: model.name)
+        }
+        if provider.models.count > Self.longList {
+            ScrollView { LazyVStack(alignment: .leading, spacing: 0) { rows } }
+                .frame(height: Self.rowHeight * CGFloat(Self.longList))
+                .scrollIndicators(.visible)
+        } else {
+            VStack(alignment: .leading, spacing: 0) { rows }
+        }
+    }
+
+    private func modelRow(_ ref: String, name: String) -> some View {
+        let selected = selection == ref || (selection == nil && catalog.map(selectedModel) == ref)
         return Button { selection = ref } label: {
             HStack(spacing: 10) {
                 Image(systemName: selected ? "largecircle.fill.circle" : "circle")
                     .font(.system(size: 13))
                     .foregroundStyle(selected ? DashboardPalette.primary : DashboardPalette.mutedForeground)
                     .accessibilityHidden(true)
-                Text(model).font(.settingsBody.weight(.medium))
-                Text(provider).font(.settingsSecondary).foregroundStyle(DashboardPalette.mutedForeground)
+                Text(name).font(.settingsBody.weight(.medium))
                 Spacer(minLength: 0)
             }
-            .padding(.vertical, 5)
+            .frame(height: Self.rowHeight)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .accessibilityLabel("\(model), \(provider)")
+        .accessibilityLabel(name)
         .accessibilityAddTraits(selected ? [.isButton, .isSelected] : .isButton)
     }
 
-    /// The user's pick, else Admin Bot's current model, else the best suggestion. Only preselected.
+    /// Searching opens every section; otherwise the selected model's section starts open.
+    private func isExpanded(_ id: String, catalog: PiBotModelCatalog) -> Binding<Bool> {
+        let opened = { expanded ?? Set([selectedModel(catalog).split(separator: "/").first.map(String.init) ?? ""]) }
+        return Binding(
+            get: { !search.isEmpty || opened().contains(id) },
+            set: { open in
+                var next = opened()
+                if open { next.insert(id) } else { next.remove(id) }
+                expanded = next
+            })
+    }
+
+    /// The user's pick, else Admin Bot's current model, else the newest model listed first.
     private func selectedModel(_ catalog: PiBotModelCatalog) -> String {
         if let selection { return selection }
         if let current = bots.onboarding?.mainModel, catalog.isKnown(current) { return current }
-        if let suggested = catalog.suggestions.first { return suggested.ref }
-        guard let provider = catalog.providers.first, let model = provider.models.first else { return "" }
+        guard let provider = catalog.providers.first,
+              let model = PiBotModelCatalog.newestFirst(provider.models).first else { return "" }
         return "\(provider.id)/\(model.id)"
     }
 

@@ -157,7 +157,13 @@ export class Bot {
    * as Woven titles a conversation from its first prompt. While the bot runs a fallback main model,
    * the stored input starts with the fallback note (the chat hides it).
    */
-  async send(text: string, conversationId?: number, round = 0, context?: string) {
+  async send(
+    text: string,
+    conversationId?: number,
+    round = 0,
+    context?: string,
+    options: { readonly hidden?: boolean } = {},
+  ) {
     if (!this.#hasModel()) throw new Error(NO_MODEL_MESSAGE);
     const conversation = await this.conversation(conversationId);
     const note = this.#note();
@@ -168,7 +174,8 @@ export class Bot {
           .filter(Boolean)
           .join("\n\n"),
         whenBusy: "followUp",
-        entry: { kind: "pibot.input", data: { round } },
+        // Hidden inputs reach the model but never the chat (transcript.ts).
+        entry: { kind: "pibot.input", data: options.hidden ? { round, hidden: true } : { round } },
       },
       ctx,
     );
@@ -302,6 +309,20 @@ export class Bot {
       }
       cursor = page.next;
     } while (cursor !== undefined);
+  }
+
+  /**
+   * Admin Bot's first turn right after the user picks its model in first-run setup, so its
+   * greeting arrives without the user writing first. Only while its main channel is empty: it
+   * happens once, never for other bots. Returns whether it started.
+   */
+  async greet(): Promise<boolean> {
+    if (this.record.kind !== "admin") return false;
+    const main = await this.main();
+    const page = await main.entries({ order: "descending" }, 1, undefined, ctx);
+    if (page.items.length > 0) return false;
+    await this.send(GREETING_PROMPT, undefined, 0, undefined, { hidden: true });
+    return true;
   }
 
   /** The newest entry id across the main channel and threads (0 for an empty bot). */
@@ -456,6 +477,10 @@ export type PurgeResult = {
 
 /** How long a `returned` status is reported after the switch back. */
 export const RETURNED_STATUS_MS = 10 * 60_000;
+
+/** The hidden input that starts Admin Bot's first conversation (`Bot.greet`). */
+export const GREETING_PROMPT =
+  "[Automatic message from Woven Matter, not written by the user] The user just chose your model in first-run setup and opened this chat. Start your first conversation now, as your instructions describe.";
 
 /** Why a bot can't take a message: its profile has no main model yet. */
 export const NO_MODEL_MESSAGE =

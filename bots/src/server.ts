@@ -367,6 +367,8 @@ class Connection {
         const store = profiles();
         const profile = store.resolve(manager.assignedProfile(admin.id));
         const saved = await store.save({ ...profile, main: request.model });
+        // Saving waits for the model to reach Admin Bot, so its greeting runs on it.
+        await (await manager.get(admin.id)).greet();
         return { profile: describeProfile(saved, store.defaultId) };
       }
       case "profiles.list":

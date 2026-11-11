@@ -229,32 +229,26 @@ public struct PiBotRoles: Codable, Equatable, Sendable {
     public init(titles: String, titlesReasoning: String) { self.titles = titles; self.titlesReasoning = titlesReasoning }
 }
 
-/// A connected model the first-run chooser offers first.
-public struct PiBotModelSuggestion: Equatable, Identifiable, Sendable {
-    public let ref: String
-    public let provider: PiBotProviderModels
-    public let model: PiBotModelOption
-    public var id: String { ref }
-}
-
 public struct PiBotModelCatalog: Codable, Equatable, Sendable {
     public var providers: [PiBotProviderModels]
-    /// Connected models the first-run chooser offers first, best first (`provider/model`).
-    public var suggested: [String]?
     public var roles: PiBotRoles
     public var reasoningLevels: [String]
-    public init(providers: [PiBotProviderModels], suggested: [String]? = nil, roles: PiBotRoles, reasoningLevels: [String]) {
-        self.providers = providers; self.suggested = suggested; self.roles = roles; self.reasoningLevels = reasoningLevels
-    }
-
-    /// Suggested models that are in the catalog, with their provider, best first.
-    public var suggestions: [PiBotModelSuggestion] {
-        (suggested ?? []).compactMap { ref in
-            Self.find(providers, ref).map { PiBotModelSuggestion(ref: ref, provider: $0.provider, model: $0.model) }
-        }
+    public init(providers: [PiBotProviderModels], roles: PiBotRoles, reasoningLevels: [String]) {
+        self.providers = providers; self.roles = roles; self.reasoningLevels = reasoningLevels
     }
 
     public func isKnown(_ ref: String) -> Bool { Self.find(providers, ref) != nil }
+
+    /// Newest first: the version numbers in a model's id, highest first (GPT-6.1 before GPT-6
+    /// before GPT-5.6), then by name. Ids without numbers go last.
+    public static func newestFirst(_ models: [PiBotModelOption]) -> [PiBotModelOption] {
+        func version(_ id: String) -> [Int] { id.split { !$0.isNumber }.compactMap { Int($0) } }
+        return models.sorted { a, b in
+            let x = version(a.id), y = version(b.id)
+            if x != y { return y.lexicographicallyPrecedes(x) }
+            return a.name.localizedStandardCompare(b.name) == .orderedAscending
+        }
+    }
 
     static func find(_ providers: [PiBotProviderModels], _ ref: String) -> (provider: PiBotProviderModels, model: PiBotModelOption)? {
         for provider in providers {

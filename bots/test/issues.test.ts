@@ -1,9 +1,6 @@
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { describe, expect, it } from "vitest";
-import { parseModelRef } from "../src/config.ts";
 import { errorIssue } from "../src/issues.ts";
-import { createBotModels } from "../src/models.ts";
-import { SUGGESTED_MODELS } from "../src/settings/catalog.ts";
 import { displayEntry } from "../src/transcript.ts";
 
 const failed = (errorMessage: string, extra: Record<string, unknown> = {}) =>
@@ -37,16 +34,5 @@ describe("errorIssue", () => {
       error: "Not logged in to Claude.",
       issue: "signIn",
     });
-  });
-});
-
-describe("SUGGESTED_MODELS", () => {
-  it("names real catalog models, without duplicates", () => {
-    const models = createBotModels({ read: async () => undefined } as never);
-    expect(new Set(SUGGESTED_MODELS).size).toBe(SUGGESTED_MODELS.length);
-    for (const ref of SUGGESTED_MODELS) {
-      const { provider, modelId } = parseModelRef(ref);
-      expect(models.getModel(provider, modelId), ref).toBeDefined();
-    }
   });
 });

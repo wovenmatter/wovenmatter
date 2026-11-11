@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createBotHarnessOptions } from "../src/agent.ts";
 import { BotManager, NO_MODEL_MESSAGE } from "../src/bots.ts";
 import { normalizeProfiles, profilesToRaw } from "../src/config.ts";
+import { displayEntry } from "../src/transcript.ts";
 import { ProfileError, ProfileStore } from "../src/profiles.ts";
 import { parseSettings, SettingsStore } from "../src/settings/store.ts";
 import { openSharedDatabase } from "../src/storage/database.ts";
@@ -151,7 +152,7 @@ describe("bot profiles", () => {
     await dir.cleanup();
   });
 
-  const open = async (path: string, profiles: ProfileStore) => {
+  const open = async (path: string, profiles: ProfileStore, ensureAdmin = false) => {
     const faux = fauxProvider({ models: [{ id: "faux-1" }, { id: "faux-2" }] });
     const models = createModels();
     models.setProvider(faux.provider);
@@ -159,6 +160,7 @@ describe("bot profiles", () => {
     const manager = await BotManager.open({
       db,
       profiles,
+      ensureAdmin,
       log: () => {},
       harnessOptions: (bot, self) =>
         createBotHarnessOptions({
@@ -240,6 +242,28 @@ describe("bot profiles", () => {
       await profiles.save({ id: "default", name: "Default", main: "faux/faux-1" });
       expect(await mainModel(t.manager, bot.id)).toEqual({ provider: "faux", modelId: "faux-1" });
       await expect(bot.send("hello")).resolves.toBeDefined();
+    } finally {
+      await t.close();
+    }
+  });
+
+  it("lets Admin Bot greet once, with its trigger hidden from the chat", async () => {
+    const profiles = new ProfileStore(parseTestSettings({}).modelProfiles);
+    const t = await open(join(dir.path, "db.sqlite"), profiles, true);
+    try {
+      await profiles.save({ id: "default", name: "Default", main: "faux/faux-1" });
+      const adminRecord = await t.manager.admin();
+      if (!adminRecord) throw new Error("no Admin Bot");
+      const admin = await t.manager.get(adminRecord.id);
+      const worker = await t.manager.get((await t.manager.create("Worker")).id);
+      expect(await worker.greet()).toBe(false);
+      expect(await admin.greet()).toBe(true);
+      expect(await admin.greet()).toBe(false);
+      const main = await admin.main();
+      const entries = [];
+      for await (const entry of admin.ownEntries(main.id)) entries.push(entry);
+      expect(entries.length).toBeGreaterThan(0);
+      expect(entries.map(displayEntry).filter((shown) => shown?.role === "user")).toEqual([]);
     } finally {
       await t.close();
     }

@@ -39,6 +39,17 @@ function messageText(message: Message): string {
 
 /** Chat-visible user and assistant messages; tool results and bookkeeping entries are skipped. */
 export function displayEntry(entry: EntryRecord): DisplayEntry | undefined {
+  // Hidden inputs (Admin Bot's greeting trigger) reach the model, never the chat.
+  const data = entry.data;
+  if (
+    entry.kind === "pibot.input" &&
+    data &&
+    typeof data === "object" &&
+    !Array.isArray(data) &&
+    data.hidden === true
+  ) {
+    return undefined;
+  }
   for (const message of entry.model ?? []) {
     if (message.role !== "user" && message.role !== "assistant") continue;
     const text = messageText(message);
