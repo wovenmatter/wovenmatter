@@ -26,6 +26,7 @@ for path in ['remote/src/server.mjs', 'remote/Dockerfile', 'remote/Executor.Dock
 assert active('.dockerignore') == {'service'}
 assert active('app/Updater/sparkle-version.json') == {'scripts'}
 assert active('scripts/test-support/test_ios_runner.py') == {'scripts'}
+assert active('ios/Config/PrivacyInfo.xcprivacy') == {'scripts'}
 assert active('.github/workflows/release-cache.yml') == {'scripts'}
 assert active('scripts/build-ios-pi-runtime.mjs') == {'pi', 'scripts'}
 assert active('scripts/build-ios-embedded-runtime.mjs') == {'embedded', 'scripts'}
