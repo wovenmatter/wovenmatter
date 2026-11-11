@@ -295,18 +295,18 @@ extension RuntimeBoundaryTests {
     for path in [node, npm] { try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: path.path) }
     let installer = LocalACPRuntimeInstaller(installPrefix: prefix, npmExecutableURL: npm, metadataFetcher: { url in
       if url.absoluteString.contains("@agentclientprotocol%2fsdk") {
-        return Data(#"{"dist-tags":{"latest":"2.1.0"},"versions":{"2.1.0":{},"2.5.0":{},"2.6.0":{"deprecated":"withdrawn"},"3.0.0-beta.1":{}}}"#.utf8)
+        return Data(#"{"dist-tags":{"latest":"2.1.0"},"versions":{"2.1.0":{},"2.6.0":{},"2.7.0":{"deprecated":"withdrawn"},"3.0.0-beta.1":{}}}"#.utf8)
       }
       #expect(url.absoluteString.contains("@openai%2fcodex"))
-      return Data(#"{"dist-tags":{"latest":"0.165.0"},"versions":{"0.165.0":{},"0.166.0":{},"0.167.0":{}}}"#.utf8)
+      return Data(#"{"dist-tags":{"latest":"0.165.0"},"versions":{"0.165.0":{},"0.166.0":{},"0.167.1":{}}}"#.utf8)
     })
     let executable = try await installer.installPackage("@agentclientprotocol/codex-acp", version: "2.6.0", executableName: "codex-acp")
     let arguments = try String(contentsOf: argumentsFile, encoding: .utf8).split(separator: "\n")
     #expect(arguments.count == 2)
     #expect(arguments[0].hasSuffix("harnesses/install-adapter.mjs"))
     let selection = try #require(JSONSerialization.jsonObject(with: Data(arguments[1].utf8)) as? [String: Any])
-    #expect(selection["engineVersion"] as? String == "0.167.0")
-    #expect(selection["protocolSDKVersion"] as? String == "2.5.0")
+    #expect(selection["engineVersion"] as? String == "0.167.1")
+    #expect(selection["protocolSDKVersion"] as? String == "2.6.0")
     #expect(selection["adapterVersion"] as? String == "2.6.0")
     #expect(selection["npm"] as? [String] == [npm.path])
     #expect(executable == prefix.appending(path: "bin/codex-acp"))

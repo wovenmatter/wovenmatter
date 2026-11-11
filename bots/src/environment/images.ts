@@ -1,4 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
+import { existsSync } from "node:fs";
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { DockerEngineAPI } from "./engine-api.ts";
 import { createTar, directoryEntries, type TarEntry } from "./tar.ts";
@@ -7,6 +10,7 @@ import { createTar, directoryEntries, type TarEntry } from "./tar.ts";
 export const IMAGE_DIR = fileURLToPath(new URL("../../image/", import.meta.url));
 export const HELPER_DIR = fileURLToPath(new URL("../../helper/", import.meta.url));
 export const NODE_MODULES_DIR = fileURLToPath(new URL("../../node_modules/", import.meta.url));
+const SOURCE_ROOT = fileURLToPath(new URL("../../../", import.meta.url));
 
 /** Where the helper volume mounts in every bot container. */
 export const HELPER_MOUNT = "/opt/woven-bot";
@@ -28,8 +32,22 @@ export function imageTag(name: string, context: Buffer): string {
   return last.includes(":") ? name : `${name}:${digest(context)}`;
 }
 
-export async function imageContext(dir = IMAGE_DIR): Promise<Buffer> {
-  return createTar(await directoryEntries(dir));
+export async function imageContext(dir = IMAGE_DIR, sourceRoot = SOURCE_ROOT): Promise<Buffer> {
+  const entries = await directoryEntries(dir);
+  // Signed app resources retain remote/npm-runtime; native host bundles put it
+  // at the release root. Include the canonical records in the content hash so
+  // a tooling refresh rebuilds the image without maintaining another copy.
+  const graph = existsSync(join(sourceRoot, "remote/npm-runtime")) ? "remote/npm-runtime" : "npm-runtime";
+  for (const [source, target] of [
+    ["harnesses/prepare-npm.mjs", "harnesses/prepare-npm.mjs"],
+    ["harnesses/install-adapter.mjs", "harnesses/install-adapter.mjs"],
+    ["harnesses/npm-version.json", "harnesses/npm-version.json"],
+    [`${graph}/package.json`, "npm-runtime/package.json"],
+    [`${graph}/package-lock.json`, "npm-runtime/package-lock.json"],
+  ] as const) {
+    entries.push({ path: `tooling/${target}`, data: await readFile(join(sourceRoot, source)) });
+  }
+  return createTar(entries);
 }
 
 /** The helper's files: its scripts and the runtime packages they import (no maps or typings). */

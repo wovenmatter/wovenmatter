@@ -123,7 +123,7 @@ Maintenance checks both for newer releases; recorded does not mean frozen.
   The workspace image retains the same reviewed current HTTP dispatcher across
   Mac and Linux tooling, with tuple-header redirect credential stripping covered
   by provider-free fixtures. It applies the independently locked security selection
-  in `remote/npm-runtime` (tested undici 8.12.4, ip-address 10.7.6 and minimatch 11.0.5), addressing CVE-2026-111997,
+  in `remote/npm-runtime` (tested undici 8.12.4, ip-address 10.7.6 and minimatch 11.0.7), addressing CVE-2026-111997,
   GHSA-xjj6-f33q-929c and the
   related denial-of-service advisories. npm ignores overrides for its bundled
   dependencies, so this replacement is explicit in the image definition.
@@ -149,8 +149,8 @@ Maintenance checks both for newer releases; recorded does not mean frozen.
   needs; do not install the workspace browser-library repairs into that smaller
   image without a runtime dependency.
   npm also vendors minimatch 10.2.5, affected by GHSA-g3hv-75wg-m249. The
-  same graph replaces minimatch with 11.0.5 and its locked dependency closure.
-  Mac, native Linux and both container paths copy and verify every graph module,
+  same graph replaces minimatch with 11.0.7 and its locked dependency closure.
+  Mac, native Linux and all container paths copy and verify every graph module,
   including scoped dependencies; npm's actual install/ci behavior and bounded
   glob-pattern fixtures validate this major migration. Keep this replacement
   until npm's bundled graph excludes affected minimatch releases.
@@ -163,6 +163,12 @@ Maintenance checks both for newer releases; recorded does not mean frozen.
   bundle dependency cache includes the private tooling provenance fingerprint,
   so an npm or vendor-repair refresh rebuilds that installation. No global npm
   or active Node tree changes.
+  Bot image builds consume the same npm archive, shared preparer and locked
+  vendor repairs before installing Playwright. Their build context carries
+  these canonical inputs from app resources or a native host bundle, so a
+  tooling change also changes the image content hash. Node archive npm remains
+  bootstrap-only in that path. Provider-free archive and npm fixtures validate
+  selection and integrity; a running Docker daemon is needed for image execution.
   Maintenance compares this npm record with current stable npm and validates
   actual registry installs, lockfiles, SDK updates and patched runtime APIs.
 - **CEF** is compiled and signed into the app. The newest stable build is
@@ -198,7 +204,7 @@ Maintenance checks both for newer releases; recorded does not mean frozen.
   0.x minors, and refreshes every record and notice together. Upstream currently
   marks even its numbered driver releases as GitHub prereleases to keep the
   monorepo Latest pointer separate. Its release notes identify plain SemVer
-  driver releases as stable; the current selection is 0.46.1.
+  driver releases as stable; the current selection is 0.47.5.
   The driver is spawned directly by the signed GUI, without a Node SDK or
   additional native libraries. Woven negotiates MCP 2025-06-18 and refuses an
   unsupported initialize response before dispatching desktop tools.
@@ -249,8 +255,8 @@ Maintenance checks both for newer releases; recorded does not mean frozen.
   peer validation. Real local WebSocket streaming/cancellation fixtures and the
   Chord/Durable suites validate this selection; review it on each Chord refresh.
   Pi AI 1.5.2 also pins older provider clients. Consumer-scoped minimum-only
-  overrides select the tested OpenAI 7.55.0, Anthropic 1.7.0, Google GenAI 3.0.0,
-  Bedrock Runtime and token providers 3.1165.0, and Smithy Node HTTP handler
+  overrides select the tested OpenAI 7.55.0, Anthropic 1.8.0, Google GenAI 3.1.0,
+  Bedrock Runtime and token providers 3.1166.0, and Smithy Node HTTP handler
   4.14.2 releases without
   changing vendor manifests. Keeping these clients current is required for
   provider API and transport compatibility, including Anthropic's 2026-10-21
@@ -276,7 +282,7 @@ Maintenance checks both for newer releases; recorded does not mean frozen.
   exact versioned paths, streaming tools/usage, and cancellation with GenAI 3.
   Pi Coding Agent 1.5.2 now selects minimatch 11.0.3, which includes the
   GHSA-g3hv-75wg-m249 repair. The consumer-scoped floor advances to the current
-  `>=11.0.5` patch without changing the named matching API. Provider-free
+  `>=11.0.7` patch without changing the named matching API. Provider-free
   model-scope matching and bounded adversarial-pattern fixtures validate this
   selection; review the override on every refresh and remove it when Pi itself
   selects the current tested release.
@@ -330,22 +336,22 @@ an older configured channel. OpenCode and Executor retain the documented v2 API 
 maintenance must review a newer stable API major and implement its migration.
 
 `harnesses/catalog.json` records tested connector and engine minimums separately:
-Codex ACP 2.6.0 with Codex 0.167.0, and Claude ACP 0.104.0 with Claude SDK 0.3.322
+Codex ACP 2.6.0 with Codex 0.167.1, and Claude ACP 0.106.0 with Claude SDK 0.3.322
 (native Claude Code 2.1.322). The standalone Codex and Claude sign-in CLIs use their
 official current stable release channels. Codex ACP's `^0.166.0` engine range
 otherwise keeps its chat engine behind; its `~2.4.0` ACP TypeScript SDK range
-also excludes the current 2.5.0. Claude ACP 0.104.0 still pins SDK 0.3.321;
+also excludes the current 2.6.0. Claude ACP 0.106.0 pins SDK 0.3.322;
 the consumer-scoped override selects SDK 0.3.322 independently so engine-only updates
 remain eligible when the connector's pin lags. Transcript-write loss
 invalidates the native resume marker and refuses tool dispatch/continuation commits;
 config-only write loss leaves a valid response intact. Provider-free persistence
 fixtures verify canonical replay after recovery. Claude's connector selects protocol SDK
-2.5.0 directly. The catalog's independent ACP SDK floor is 2.5.0. Mac and native
+2.6.0 directly. The catalog's independent ACP SDK floor is 2.6.0. Mac and native
 Linux/container explicit updates resolve its newest nondeprecated stable
 publication independently, retain the vendor manifests, and verify the exact
 consumer graph and ACP v1 handshake before activation. SDK-only updates appear
 in inventory even when connector and engine are current. Failed candidates
-leave the active generation intact. The 2.5 SDK retains stable v1;
+leave the active generation intact. The 2.6 SDK retains stable v1;
 its v2 changes remain experimental and do not change Woven Matter's wire API.
 The consumer graph created by `harnesses/install-adapter.mjs` therefore declares
 the independently selected engine and scopes an npm override to that connector.
