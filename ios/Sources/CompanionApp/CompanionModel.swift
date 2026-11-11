@@ -299,7 +299,7 @@ import CompanionInference
         #endif
       }
     }
-    if let store { await analytics.configure(store.analytics, transport: transport) }
+    if let store { await analytics.configure(store.analytics, transport: await analyticsTransport()) }
     if !fixture && UIApplication.shared.applicationState == .active { startDeviceScheduler() }
     await maintainConnections()
   }
@@ -345,6 +345,7 @@ import CompanionInference
           try await acceptPairing(pending, allowingLibraryChange: true) { try MobileCredentialVault.save($0) }
           await completeMemberPairing(endpoint: payload.endpoint, hostDeviceID: pending.hostDeviceID)
           pairingText = ""
+          await analytics.configure(store.analytics, transport: await analyticsTransport())
           await refresh(); await refreshExecutionWorkspaces(force: true)
           return
         } catch MobileConnectionError.revoked {
@@ -380,6 +381,8 @@ import CompanionInference
       // replica to it the way a first pairing does.
       if keepLibrary, membership?.memberRequestsAccepted == false { try await store.prepareForPairing(paired.workspaceID) }
       pairingText = ""
+      // Analytics start with the new pairing, not at the next launch.
+      await analytics.configure(store.analytics, transport: await analyticsTransport())
       await refresh()
       await refreshExecutionWorkspaces(force: true)
     } catch { pairingError = error.localizedDescription }
@@ -789,6 +792,20 @@ import CompanionInference
       await reload(); return true
     } catch { errorMessage = error.localizedDescription; return false }
   }
+  /// Deletes a note that lives only on this device (no paired library), with
+  /// the same durable store path an editor uses. Pairing later never sees it.
+  func deleteLocalNote(_ id: String) async -> Bool {
+    guard isStandalone, let store else { return false }
+    await flushLocalWrites()
+    await reload()
+    guard let note = state.notes[id] else { return true }
+    do {
+      try await store.deleteWorkspaceNote(id: id, base: note)
+      if selectedNoteID == id { selectedNoteID = nil }
+      await analytics.record(.active)
+      await reload(); return true
+    } catch { errorMessage = error.localizedDescription; return false }
+  }
   func canonicalNoteForAction(_ id: String) async throws -> CompanionNote {
     guard online, let engine, let store else { throw MobileConnectionError.offline }
     await flushLocalWrites()
@@ -816,6 +833,18 @@ import CompanionInference
 
   private func seedFixture() async {
     guard let store else { return }
+    // A fresh install that was never paired: nothing seeded, no library host.
+    if Self.uiScenario?.hasPrefix("standalone") == true {
+      if Self.uiScenario == "standalone-timer" {
+        // The timer Quick Chat's tool creates, through the same local tool path.
+        let at = ISO8601DateFormatter().string(from: Date().addingTimeInterval(3_600))
+        let response = await store.executeLocalTool(.init(arguments: ["timers", "create", "--text", "Stretch", "--at", at],
+          requestID: UUID().uuidString.lowercased()), context: .init(sessionID: "standalone-quick-chat", workspaceID: state.deviceID, enabled: [.timers]))
+        if response.success { _ = try? await store.reconcileTimerReminders(sessionIDs: ["standalone-quick-chat"], now: Date()) }
+        calendarRevision &+= 1
+      }
+      tab = Tab(rawValue: Self.uiTab ?? "Home") ?? .home; return
+    }
     do {
       if state.notes.isEmpty {
         let note = CompanionNote(id: "11111111-1111-4111-8111-111111111111", folderID: "inbox", title: "Launch Plan", content: try NoteDocument(blocks: [

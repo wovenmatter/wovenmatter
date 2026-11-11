@@ -14,6 +14,9 @@ extension CompanionModel {
   /// Paired before members existed (or with a Mac that is too old): one more
   /// pairing makes this phone reach every device directly.
   var needsMemberPairing: Bool { credential != nil && !memberMode }
+  /// Never paired (or unpaired): everything runs on this device. Pairing a Mac
+  /// adds workspaces, agents on your computers and sync; it keeps local data.
+  var isStandalone: Bool { credential == nil && state.workspaceID == nil }
   /// The Mac or Linux host this phone synced with last. Its own sessions are
   /// the "central" route; every other device's sessions go to that device.
   var libraryHostDeviceID: String? { membership?.currentHost?.deviceID ?? membership?.pairedHostDeviceID }

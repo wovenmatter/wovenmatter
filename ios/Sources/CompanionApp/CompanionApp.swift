@@ -237,7 +237,8 @@ struct HomePane: View {
           }
           if groups.allSatisfy({ $0.id == "local" }) { noConnectedWorkspaces }
           Divider().padding(.horizontal, 14).padding(.vertical, 18)
-          ForEach([CompanionModel.Tab.calendar, .scheduledTasks, .library, .databases, .usage], id: \.self) { tab in
+          // Scheduled tasks and databases live on a Mac or Linux workspace.
+          ForEach(model.isStandalone ? [CompanionModel.Tab.calendar, .library, .usage] : [CompanionModel.Tab.calendar, .scheduledTasks, .library, .databases, .usage], id: \.self) { tab in
             SettingsNavigationRow(title: tab.rawValue, icon: tab.icon) { destination(tab) }
               .accessibilityIdentifier("open-" + tab.rawValue.lowercased().replacingOccurrences(of: " ", with: "-"))
           }
@@ -248,7 +249,9 @@ struct HomePane: View {
   @ViewBuilder private var noConnectedWorkspaces: some View {
     if model.credential == nil {
       SettingsNavigationRow(title: "Connect your Mac", icon: .monitor) { PairingPane(model: model) }
-      homeCaption("Pair once over Tailscale to use your Mac and Linux workspaces. Authorized Linux workspaces remain available when the Mac is offline.")
+        .accessibilityIdentifier("home-connect-mac")
+      homeCaption("Pair with Woven Matter on your Mac to use its workspaces and agents here and sync your notes and chats. Everything on this iPhone is kept.")
+        .accessibilityIdentifier("home-connect-mac-caption")
     } else {
       if model.needsMemberPairing {
         SettingsNavigationRow(title: "Pair again", icon: .monitor) { PairingPane(model: model) }
@@ -344,7 +347,8 @@ struct FoldersPane: View {
                   .padding(.top, 12)
                 if isExpanded("remote") {
                   if !groups.contains(where: { !$0.isLocal }) {
-                    Text("No paired Mac or Linux workspace is reachable right now. Its folders stay in All Workspaces.").font(.caption)
+                    Text(model.isStandalone ? "Pair with your Mac in Settings → Device Connections to see its workspaces and folders here."
+                      : "No paired Mac or Linux workspace is reachable right now. Its folders stay in All Workspaces.").font(.caption)
                       .foregroundStyle(DashboardPalette.mutedForeground)
                       .frame(maxWidth: .infinity, alignment: .leading).padding(14)
                       .accessibilityIdentifier("folders-remote-empty")
@@ -594,7 +598,10 @@ struct GeneralSettingsPane: View {
       }
       Section("Product analytics") {
         Toggle("Share product analytics",isOn:Binding(get:{model.analytics.enabled},set:{value in Task { await model.analytics.setEnabled(value) } }))
-        Text("App opens and active use are sampled at most once every six hours. No content or action details are sent. This choice applies to your whole central library; offline devices receive changes when they reconnect.").font(.caption).foregroundStyle(.secondary)
+        Text(model.credential == nil
+          ? "Nothing is sent while this iPhone isn’t paired. Once paired, app opens and active use are sampled at most once every six hours and sent through your Mac. No content or action details are sent."
+          : "App opens and active use are sampled at most once every six hours and sent through your Mac. No content or action details are sent. This choice applies to your whole central library; offline devices receive changes when they reconnect.")
+          .font(.caption).foregroundStyle(.secondary).accessibilityIdentifier("analytics-explanation")
         if model.analytics.state.pendingEnabled != nil { Text("Preference waiting to sync.").font(.caption).foregroundStyle(.secondary) }
         Link("Privacy policy",destination:ProductAnalyticsPolicy.url).foregroundStyle(DashboardPalette.success)
         if let error=model.analytics.errorMessage { Text(error).foregroundStyle(.red) }

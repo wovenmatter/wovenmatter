@@ -186,8 +186,8 @@ final class MobileSyncEngineTests: XCTestCase {
 
   /// Everything made on a phone that was never paired reaches the library
   /// once when it pairs later: notes with their latest writing (a note deleted
-  /// before pairing never appears), folders, Quick Chat history, calendar events
-  /// and timer reminders. A second pass sends nothing again. Analytics start
+  /// before pairing never appears), folders, Quick Chat history, calendar events,
+  /// timer reminders and dictations. A second pass sends nothing again. Analytics start
   /// only once a Mac is paired.
   func testStandaloneWritingUploadsOnceWhenPairedLater() async throws {
     let store = try MobileStore(file: file()), mac = FakeMac()
@@ -213,6 +213,8 @@ final class MobileSyncEngineTests: XCTestCase {
       context: .init(sessionID: "quick-chat", workspaceID: device, enabled: [.timers]))
     XCTAssertTrue(timer.success)
     _ = try await store.reconcileTimerReminders(sessionIDs: ["quick-chat"], now: Date())
+    let dictation = DictationRecord(text: "Buy stamps")
+    try await store.dictations.save(dictation)
     try await store.analytics.record(.appOpened, platform: "ios")
     let unsent = await mac.analyticsEvents
     XCTAssertTrue(unsent.isEmpty, "A standalone phone has nowhere to send analytics")
@@ -242,6 +244,9 @@ final class MobileSyncEngineTests: XCTestCase {
     XCTAssertTrue(calendar.contains { $0.event.draft.title == "Dentist" })
     XCTAssertTrue(calendar.contains { $0.id == MobileStore.reminderEventID(timerID: timerID) })
     XCTAssertEqual(calendar.count, Set(calendar.map(\.id)).count)
+
+    let dictations = await mac.dictations
+    XCTAssertEqual(dictations, [dictation])
 
     let local = await store.snapshot()
     XCTAssertEqual(local.workspaceID, "mac-a")
