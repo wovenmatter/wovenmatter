@@ -248,7 +248,7 @@ describe("fetch_url", () => {
       response.end("pinned");
     });
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-    const agent = createPinnedWebAgent("127.0.0.1", 4);
+    const agent = createPinnedWebAgent([{ address: "127.0.0.1", family: 4 }]);
     try {
       const port = (server.address() as AddressInfo).port;
       const response = await fetch(`http://rebinding.invalid:${port}/`, {
@@ -256,6 +256,26 @@ describe("fetch_url", () => {
       } as RequestInit);
       expect(await response.text()).toBe("pinned");
       expect(requestedHost).toBe(`rebinding.invalid:${port}`);
+    } finally {
+      await agent.destroy();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
+  it("falls back to another validated address when the first cannot be reached", async () => {
+    // The server listens on IPv4 loopback only, so the IPv6 address listed first refuses.
+    const server = createServer((_request, response) => response.end("fallback"));
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const agent = createPinnedWebAgent([
+      { address: "::1", family: 6 },
+      { address: "127.0.0.1", family: 4 },
+    ]);
+    try {
+      const port = (server.address() as AddressInfo).port;
+      const response = await fetch(`http://dual-stack.invalid:${port}/`, {
+        dispatcher: agent,
+      } as RequestInit);
+      expect(await response.text()).toBe("fallback");
     } finally {
       await agent.destroy();
       await new Promise<void>((resolve) => server.close(() => resolve()));

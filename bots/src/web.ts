@@ -29,7 +29,7 @@ const TIMEOUT_MS = 20_000;
 const MAX_RESULTS = 10;
 const SNIPPET_CHARS = 300;
 const SEARCH_CHARS = 8_000;
-/** Bytes read from a fetched page at most; the rest is never downloaded. */
+/** Bytes read from a fetched page or a search response at most; the rest is never downloaded. */
 const MAX_BYTES = 2_000_000;
 const DEFAULT_PAGE_CHARS = 20_000;
 const MAX_PAGE_CHARS = 100_000;
@@ -271,11 +271,14 @@ export function isBlockedAddress(address: string): boolean {
 const defaultLookup = async (hostname: string): Promise<string[]> =>
   (await dnsLookup(hostname, { all: true, verbatim: true })).map((entry) => entry.address);
 
-/** Refuse non-http(s) URLs and hosts that are, or resolve to, a blocked address. */
-async function checkTarget(
-  url: URL,
-  options: WebToolsOptions,
-): Promise<{ address: string; family: 4 | 6 }> {
+/** An address that passed the blocked-address check. */
+export type CheckedAddress = { readonly address: string; readonly family: 4 | 6 };
+
+/**
+ * Refuse non-http(s) URLs and hosts that are, or resolve to, a blocked address. Returns every
+ * address of the host: all of them passed the check.
+ */
+async function checkTarget(url: URL, options: WebToolsOptions): Promise<CheckedAddress[]> {
   if (url.protocol !== "http:" && url.protocol !== "https:") {
     throw new Error(`only http and https URLs can be fetched, not ${url.protocol}`);
   }
@@ -296,17 +299,25 @@ async function checkTarget(
       `refusing to fetch ${url.host}: it is a loopback, private, link-local or tailnet address`,
     );
   }
-  const address = addresses[0];
-  if (!address) throw new Error(`could not resolve ${host}`);
-  return { address, family: isIP(address) as 4 | 6 };
+  return addresses.map((address) => ({ address, family: isIP(address) as 4 | 6 }));
 }
 
-/** Connect to the checked address while HTTP Host and TLS SNI remain the URL host. */
-export function createPinnedWebAgent(address: string, family: 4 | 6): Agent {
+/**
+ * Connect only to the checked addresses while HTTP Host and TLS SNI remain the URL host: the host
+ * name is never resolved again. Node is given every checked address, so a host whose first address
+ * is unreachable (IPv6 on an IPv4-only network) still connects through another one.
+ */
+export function createPinnedWebAgent(addresses: readonly CheckedAddress[]): Agent {
+  const [first] = addresses;
+  if (!first) throw new Error("no checked address to connect to");
   return new Agent({
     connect: {
-      autoSelectFamily: false,
-      lookup: (_hostname, _lookupOptions, callback) => callback(null, address, family),
+      autoSelectFamily: true,
+      // Node asks for all addresses when it may try several in turn, and for one otherwise.
+      lookup: (_hostname, lookupOptions, callback) => {
+        if (lookupOptions.all) callback(null, addresses.map((entry) => ({ ...entry })));
+        else callback(null, first.address, first.family);
+      },
     },
   });
 }
@@ -410,10 +421,10 @@ export async function fetchUrl(
   const fetch = options.fetch ?? globalThis.fetch;
   const signal = AbortSignal.timeout(options.timeoutMs ?? TIMEOUT_MS);
   for (let hop = 0; ; hop++) {
-    const pinned = await checkTarget(url, options);
-    // The production connection must use the address that passed the check.
+    const checked = await checkTarget(url, options);
+    // The production connection must use the addresses that passed the check.
     // A fresh dispatcher for each hop also prevents cross-request socket reuse.
-    const dispatcher = options.fetch ? undefined : createPinnedWebAgent(pinned.address, pinned.family);
+    const dispatcher = options.fetch ? undefined : createPinnedWebAgent(checked);
     try {
       let response: Response;
       try {
