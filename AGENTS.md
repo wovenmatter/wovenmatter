@@ -26,6 +26,8 @@
   remain isolated. Never copy another client's credentials or silently substitute
   a snapshot when a client connection fails. Use `--instance NAME` for another instance
   of one worktree or a fresh snapshot; existing snapshots retain their edits.
+  `--fresh` replaces an instance's snapshot in place and keeps its macOS
+  permissions (same bundle ID); prefer it over a new name for a clean start.
 - For UI work, follow [the style guide](docs/STYLE_GUIDE.md).
 - Validate: `scripts/test-changes.sh`; use `--all` for changes spanning components.
   Use `--ci` for CI-only changes. Automatic PR CI is one portable Linux check;

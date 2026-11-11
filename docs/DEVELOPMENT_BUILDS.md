@@ -34,6 +34,7 @@ scripts/build_and_run.sh --mode client
 scripts/build_and_run.sh --mode live
 scripts/build_and_run.sh --mode snapshot --instance chat-ui
 scripts/build_and_run.sh --mode snapshot --instance migration-check
+scripts/build_and_run.sh --mode snapshot --instance chat-ui --fresh
 scripts/build_and_run.sh --plan
 ```
 
@@ -169,8 +170,14 @@ it never synchronizes back to production.
 
 Snapshots are disposable development environments. They never merge changes back
 into the source library, and all their data may be discarded when the instance is
-removed. Subsequent launches reuse the same instance; use a new `--instance` for a
-fresh snapshot. Existing snapshots are not repaired or migrated by the launcher.
+removed. Subsequent launches reuse the same instance. `--fresh` replaces an
+instance's snapshot in place: it stops the app (refusing while its background
+server runs), moves the snapshot folder, bots and their VM included, to the
+Trash, deletes the instance's preferences and Keychain items (provider sign-ins,
+pairing keys), and takes a new snapshot. The bundle ID stays the same, so macOS
+keeps the privacy permissions it granted; a new `--instance` name is a new app to
+macOS and asks for them again. Existing snapshots are not repaired or migrated by
+the launcher.
 The launcher refuses to overwrite an existing snapshot. It publishes a newly
 created snapshot only after backup, isolation, asset-copy, and integrity checks
 succeed. Symlinked assets and overlapping source/destination paths are rejected.
