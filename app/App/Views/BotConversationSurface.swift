@@ -4,8 +4,6 @@ import UniformTypeIdentifiers
 import WovenMatterClient
 import WovenMatterCore
 
-/// A bot's channel or thread in a chat panel. The bot's runtime owns the conversation; this
-/// is Woven's own chat UI over its protocol, with Pi Bot's thread behavior.
 /// Where a failed reply's fix lives: provider sign-ins and keys, or the bot's model settings.
 struct BotIssueActions {
     var openConnections: () -> Void = {}
@@ -41,6 +39,8 @@ private struct BotIssueButtons: View {
     }
 }
 
+/// A bot's channel or thread in a chat panel. The bot's runtime owns the conversation; this
+/// is Woven's own chat UI over its protocol, with Pi Bot's thread behavior.
 struct BotConversationSurface: View {
     @Bindable var bots: BotsModel
     let panelID: DashboardChatPanelID

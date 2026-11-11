@@ -78,11 +78,16 @@ class FreshSnapshotTests(unittest.TestCase):
             for path in (production, client, dev_root):
                 with self.assertRaises(ValueError):
                     dev.reset(path, self.bundle, dev_root=dev_root, trash=root / "Trash", run=security)
-            with self.assertRaises(ValueError):
-                dev.reset(unmarked, self.bundle, dev_root=dev_root, trash=root / "Trash", run=security)
+            with self.assertRaises(ValueError):  # right bundle ID, but not a development snapshot
+                dev.reset(unmarked, "wovenmatter.desktop.dev.x.snapshot", dev_root=dev_root, trash=root / "Trash", run=security)
             self.assertTrue(unmarked.exists())
             with self.assertRaises(ValueError):
                 dev.reset(unmarked, "wovenmatter.desktop", dev_root=dev_root, trash=root / "Trash", run=security)
+            marked = dev_root / "x" / "snapshot"
+            (marked / "development-snapshot.json").write_text("{}")
+            with self.assertRaises(ValueError):  # another instance's bundle ID
+                dev.reset(marked, self.bundle, dev_root=dev_root, trash=root / "Trash", run=security)
+            self.assertTrue(marked.exists())
             self.assertEqual(security.calls, [])
 
 

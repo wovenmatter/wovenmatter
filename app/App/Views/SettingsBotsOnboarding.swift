@@ -90,7 +90,8 @@ struct BotOnboardingView: View {
     private static let rowHeight: CGFloat = 28
 
     private var modelCard: some View {
-        SettingsSection(title: "No model selected yet for Admin Bot",
+        SettingsSection(title: (bots.onboarding?.mainModel ?? "").isEmpty ? "No model selected yet for Admin Bot"
+                                                                       : "Admin Bot's model isn't signed in",
                         detail: "Choose a model to default to; you can change it anytime by asking Admin Bot or in Settings.") {
             if let catalog {
                 if catalog.providers.isEmpty { SettingsEmpty("Sign in to a model provider first.") }
@@ -128,7 +129,10 @@ struct BotOnboardingView: View {
                         }
                     }
                     .buttonStyle(DashboardPrimaryButtonStyle())
-                    .disabled(!catalog.isKnown(selectedModel(catalog)))
+                    // Only what's on screen: a search that hides the selection can't submit it.
+                    .disabled(!providers.contains { provider in
+                        provider.models.contains { "\(provider.id)/\($0.id)" == selectedModel(catalog) }
+                    })
                 }
             } else { SettingsEmpty("Loading…") }
         }.disabled(state.disabled)
@@ -154,7 +158,7 @@ struct BotOnboardingView: View {
         if provider.models.count > Self.longList {
             ScrollView { LazyVStack(alignment: .leading, spacing: 0) { rows } }
                 .frame(height: Self.rowHeight * CGFloat(Self.longList))
-                .scrollIndicators(.visible)
+                .scrollIndicators(.never)
         } else {
             VStack(alignment: .leading, spacing: 0) { rows }
         }
@@ -164,10 +168,12 @@ struct BotOnboardingView: View {
         let selected = selection == ref || (selection == nil && catalog.map(selectedModel) == ref)
         return Button { selection = ref } label: {
             HStack(spacing: 10) {
-                Image(systemName: selected ? "largecircle.fill.circle" : "circle")
-                    .font(.system(size: 13))
-                    .foregroundStyle(selected ? DashboardPalette.primary : DashboardPalette.mutedForeground)
-                    .accessibilityHidden(true)
+                ZStack {
+                    Circle().strokeBorder(selected ? DashboardPalette.primary : DashboardPalette.mutedForeground, lineWidth: 1.5)
+                    if selected { Circle().fill(DashboardPalette.primary).padding(3.5) }
+                }
+                .frame(width: 14, height: 14)
+                .accessibilityHidden(true)
                 Text(name).font(.settingsBody.weight(.medium))
                 Spacer(minLength: 0)
             }

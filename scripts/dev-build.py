@@ -316,6 +316,8 @@ def reset(support, bundle, *, dev_root=None, trash=None, run=subprocess.run, now
     dev_root = Path(dev_root or Path.home() / "Library/Application Support/Woven Matter Dev").expanduser().resolve()
     if dev_root not in support.parents or support.name != "snapshot":
         raise ValueError("Only a Dev snapshot under Woven Matter Dev can be reset.")
+    if bundle != f"wovenmatter.desktop.dev.{support.parent.name}.snapshot":
+        raise ValueError(f"{bundle} is not the bundle ID of {support}.")
     roots = keychain_services(bundle)
     if support.exists():
         if not (support / "development-snapshot.json").is_file():

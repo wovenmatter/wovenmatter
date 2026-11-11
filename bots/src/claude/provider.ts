@@ -499,7 +499,7 @@ export class ClaudeAgentStream {
       message.pibotCompaction = { summary, preTokens: boundary.compact_metadata?.pre_tokens };
       return;
     }
-    if (failure && (assistantError === "authentication_failed" || NOT_LOGGED_IN.test(failure))) {
+    if (assistantError === "authentication_failed" || (failure && NOT_LOGGED_IN.test(failure))) {
       message.pibotIssue = "signIn";
       throw new ClaudeAgentError("Not logged in to Claude.");
     }

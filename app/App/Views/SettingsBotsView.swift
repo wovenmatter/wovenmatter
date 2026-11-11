@@ -375,8 +375,8 @@ enum BotMachineText {
         }
     }
 
-    /// The operating system bots run on, and how many bots once it is ready. Bots ship with the
-    /// app, so no version is shown.
+    /// The operating system bots run on, and how many bots once it is ready. No versions: a
+    /// machine that needs updating says so in its status and the "Update everything" notice.
     @MainActor
     static func summary(_ machine: BotMachine, bots: BotsModel) -> String {
         var parts = [machine.kind == .linux ? "Linux" : "Mac"]

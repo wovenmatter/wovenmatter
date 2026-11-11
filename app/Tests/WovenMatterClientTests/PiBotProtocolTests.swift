@@ -121,6 +121,10 @@ struct PiBotModelFactsTests {
         let ids = ["gpt-5.6-luna", "gpt-6.1-terra", "gpt-6-sol", "gpt-6.1-sol", "claude-opus-4-5", "claude-opus-5-5", "chat-latest"]
         let sorted = PiBotModelCatalog.newestFirst(ids.map { PiBotModelOption(id: $0, name: $0) }).map(\.id)
         #expect(sorted == ["gpt-6.1-sol", "gpt-6.1-terra", "gpt-6-sol", "gpt-5.6-luna", "claude-opus-5-5", "claude-opus-4-5", "chat-latest"])
+        // Dates and parameter counts are not versions.
+        let dated = ["gpt-4o-2024-08-06", "gpt-4.1", "mistral-medium-2508", "llama-3.3-70b", "claude-haiku-4-5-20251001", "claude-haiku-5-5"]
+        #expect(PiBotModelCatalog.newestFirst(dated.map { PiBotModelOption(id: $0, name: $0) }).map(\.id)
+            == ["claude-haiku-5-5", "claude-haiku-4-5-20251001", "gpt-4.1", "gpt-4o-2024-08-06", "llama-3.3-70b", "mistral-medium-2508"])
     }
 
     @Test func pricesKeepTheCatalogValues() {

@@ -257,7 +257,8 @@ describe("bot profiles", () => {
       const admin = await t.manager.get(adminRecord.id);
       const worker = await t.manager.get((await t.manager.create("Worker")).id);
       expect(await worker.greet()).toBe(false);
-      expect(await admin.greet()).toBe(true);
+      // Two clients choosing at once still greet once.
+      expect((await Promise.all([admin.greet(), admin.greet()])).filter(Boolean)).toEqual([true]);
       expect(await admin.greet()).toBe(false);
       const main = await admin.main();
       const entries = [];

@@ -67,6 +67,8 @@ export class Bot {
   readonly #titles: ThreadTitles | undefined;
   readonly #note: () => string | undefined;
   readonly #hasModel: () => boolean;
+  /** Set before greet's first await: two setMainModel calls can't both greet. */
+  #greeting = false;
 
   constructor(
     record: BotRecord,
@@ -166,6 +168,8 @@ export class Bot {
   ) {
     if (!this.#hasModel()) throw new Error(NO_MODEL_MESSAGE);
     const conversation = await this.conversation(conversationId);
+    // A just-chosen model reaches each bot's conversations a moment after the profile saves.
+    if (!(await conversation.agent(ctx)).model) throw new Error(NO_MODEL_MESSAGE);
     const note = this.#note();
     const submission = await conversation.submit(
       {
@@ -317,12 +321,18 @@ export class Bot {
    * happens once, never for other bots. Returns whether it started.
    */
   async greet(): Promise<boolean> {
-    if (this.record.kind !== "admin") return false;
-    const main = await this.main();
-    const page = await main.entries({ order: "descending" }, 1, undefined, ctx);
-    if (page.items.length > 0) return false;
-    await this.send(GREETING_PROMPT, undefined, 0, undefined, { hidden: true });
-    return true;
+    if (this.record.kind !== "admin" || this.#greeting) return false;
+    this.#greeting = true;
+    try {
+      const main = await this.main();
+      const page = await main.entries({ order: "descending" }, 1, undefined, ctx);
+      if (page.items.length > 0) return false;
+      await this.send(GREETING_PROMPT, undefined, 0, undefined, { hidden: true });
+      return true;
+    } catch (error) {
+      this.#greeting = false;
+      throw error;
+    }
   }
 
   /** The newest entry id across the main channel and threads (0 for an empty bot). */

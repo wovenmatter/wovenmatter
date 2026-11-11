@@ -934,7 +934,9 @@ struct WorkspaceView: View {
     private func openBotLink(_ url: URL, from panelID: DashboardChatPanelID) {
         if let page = WovenAppLink(url) {
             switch page {
-            case .accounts: model.pendingConnectionsScope = "global"
+            case .accounts:
+                model.pendingConnectionsScope = "global"
+                compactDrawer = .none
             case .botProfiles:
                 model.pendingBotProfilesMachine = chatPanels.panel(id: panelID)?.botTarget?.machineID
                 openBotSettings()

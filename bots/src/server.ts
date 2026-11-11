@@ -367,8 +367,11 @@ class Connection {
         const store = profiles();
         const profile = store.resolve(manager.assignedProfile(admin.id));
         const saved = await store.save({ ...profile, main: request.model });
-        // Saving waits for the model to reach Admin Bot, so its greeting runs on it.
-        await (await manager.get(admin.id)).greet();
+        // Saving waits for the model to reach Admin Bot, so its greeting runs on it. Best-effort:
+        // the model is saved either way, and the user can still write first.
+        await (await manager.get(admin.id))
+          .greet()
+          .catch((error: unknown) => this.#server.log(`Admin Bot greeting: ${String(error)}`));
         return { profile: describeProfile(saved, store.defaultId) };
       }
       case "profiles.list":
@@ -690,6 +693,7 @@ class Server {
   };
   readonly #deliveries = new Map<string, Promise<unknown>>();
   readonly woven: WovenMCP | undefined;
+  log: (message: string) => void = () => {};
 
   constructor(
     manager: BotManager,
@@ -760,6 +764,7 @@ export async function startServer(
     options.onActivity,
     options.environment,
   );
+  if (options.log) state.log = options.log;
   const previews = options.previews;
   if (previews) {
     state.previewList = (botId) =>
