@@ -18,25 +18,15 @@ struct CalendarReplicaTests {
         task: owner ? .init(prompt: "Run here") : nil)), ownerDeviceID: owner ? device : nil))
   }
 
-  @Test func pairingSharesScheduledExecutionAndMigrationRemovesLegacyRestrictions() async throws {
+  @Test func pairingSharesScheduledExecution() async throws {
     let (database, directory) = try await fixture(); defer { directory.remove() }
     let identity = try await database.libraryIdentity()
     let workspace = try await database.registerExecutionWorkspace(.init(workspace: .init(
       id: UUID().uuidString.lowercased(), libraryID: identity.libraryID, ownerDeviceID: identity.hostDeviceID,
       kind: .mac, name: "Central Mac", executionDeviceID: identity.hostDeviceID)), deviceID: identity.hostDeviceID)
-    let device = device
-    try await database.write { connection in
-      try connection.executeUnlocked("CREATE TABLE companion_workspace_access(device_id TEXT,workspace_id TEXT,enabled INTEGER)")
-      try connection.toolsExecuteUnlocked("INSERT INTO companion_workspace_access VALUES (?,?,0)", [device, workspace.id])
-    }
     var request = mutation()
     request.record.event.draft.task = .init(prompt: "Shared central task")
     #expect(try await database.libraryCalendarMutate(request, deviceID: device).status == .accepted)
-    try await database.write { connection in
-      try connection.createFederationSchemaUnlocked()
-      let remaining = try connection.libraryIDsUnlocked("SELECT name FROM sqlite_master WHERE name='companion_workspace_access'", bindings: [])
-      #expect(remaining.isEmpty)
-    }
     #expect(try await database.libraryIdentity() == identity)
     #expect(try await database.libraryExecutionWorkspaces() == [workspace])
     #expect(try await database.libraryCalendarSnapshot().records.count == 1)

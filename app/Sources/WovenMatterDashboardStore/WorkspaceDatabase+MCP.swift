@@ -88,7 +88,7 @@ extension WorkspaceDatabaseConnection {
     try withLock {
       _ = try availableSessionExecutionRoot(id: sessionID)
       guard !(try historyRowsUnlocked("SELECT id FROM dashboard_conversations WHERE id=? AND deleted_at IS NULL AND is_archived=0", values: [sessionID])).isEmpty,
-            (try historyRowsUnlocked("SELECT conversation_id FROM companion_execution_adoptions WHERE conversation_id=?", values: [sessionID])).isEmpty else {
+            (try historyRowsUnlocked("SELECT conversation_id FROM library_execution_adoptions WHERE conversation_id=?", values: [sessionID])).isEmpty else {
         throw WorkspaceToolError.invalid("This MCP caller was archived, removed, or moved to another execution owner.")
       }
     }

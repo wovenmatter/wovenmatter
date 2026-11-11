@@ -165,6 +165,9 @@ struct WorkspaceNoteRecovery: View {
         case "before-agent-edit": "Before agent edit"
         case "restore": "Restored version"
         case "before-restore": "Before restoration"
+        case "device": "Edit from another device"
+        case "before-device-edit": "Before edit from another device"
+        case "before-device-delete": "Before deletion from another device"
         default: value
         }
     }

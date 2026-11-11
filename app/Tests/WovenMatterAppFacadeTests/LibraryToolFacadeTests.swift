@@ -8,7 +8,7 @@ import WovenMatterClient
 
 @MainActor @Suite(.serialized)
 struct LibraryToolFacadeTests {
-    @Test func pairedDeviceControlsEveryWorkspaceEvenWithLegacyDenials() async throws {
+    @Test func pairedDeviceControlsEveryWorkspace() async throws {
         let fixture = try await FacadeFixture(); defer { fixture.remove() }
         let caller = try await importPhone(fixture)
         let identity = try await fixture.database.libraryIdentity()
@@ -21,13 +21,6 @@ struct LibraryToolFacadeTests {
                 deviceID: identity.hostDeviceID)
         }
         let device = fixture.device
-        // A restored legacy table must never restrict an already paired device.
-        try await fixture.database.write { connection in
-            try connection.executeUnlocked("CREATE TABLE companion_workspace_access(device_id TEXT,workspace_id TEXT,enabled INTEGER)")
-            for id in [localID, remoteID] {
-                try connection.toolsExecuteUnlocked("INSERT INTO companion_workspace_access VALUES (?,?,0)", [device, id])
-            }
-        }
         try await fixture.database.requireLibraryAutomationAccess(callerID: caller)
         let localChat = try #require(await fixture.model.createLocalACPSession(runtimeKind: .codex))
         let remoteChat = try await fixture.createConversation()

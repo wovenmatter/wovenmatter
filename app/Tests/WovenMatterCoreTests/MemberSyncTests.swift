@@ -329,7 +329,7 @@ struct MemberSyncTests {
     func insert(_ workspace: ExecutionWorkspace, into member: Member) async throws {
       let payload = String(decoding: try JSONEncoder().encode(workspace), as: UTF8.self)
       try await member.database.write { connection in
-        try connection.toolsExecuteUnlocked("INSERT INTO companion_execution_workspaces(id,owner_device_id,revision,deleted,payload) VALUES(?,?,?,0,?) ON CONFLICT(id) DO UPDATE SET revision=excluded.revision,payload=excluded.payload",
+        try connection.toolsExecuteUnlocked("INSERT INTO library_execution_workspaces(id,owner_device_id,revision,deleted,payload) VALUES(?,?,?,0,?) ON CONFLICT(id) DO UPDATE SET revision=excluded.revision,payload=excluded.payload",
                                             [workspace.id, workspace.ownerDeviceID, String(workspace.revision), payload])
       }
     }

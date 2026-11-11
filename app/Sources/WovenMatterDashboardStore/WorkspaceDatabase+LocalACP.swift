@@ -521,7 +521,7 @@ extension WorkspaceDatabaseConnection {
     }
     return try transaction {
       _ = try availableSessionExecutionRoot(id: conversationID)
-      guard try libraryIDsUnlocked("SELECT workspace_id FROM companion_execution_conversations WHERE id=?", bindings: [conversationID]).isEmpty else {
+      guard try libraryIDsUnlocked("SELECT workspace_id FROM library_execution_conversations WHERE id=?", bindings: [conversationID]).isEmpty else {
         throw LibraryAPIError(code: "execution_owner", message: "This conversation is owned by its independent execution workspace. Reconnect it instead of starting a legacy attachment.")
       }
       let active = try prepareUnlocked("""

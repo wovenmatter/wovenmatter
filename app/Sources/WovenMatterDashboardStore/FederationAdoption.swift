@@ -18,9 +18,9 @@ extension WorkspaceDatabaseConnection {
             workspace.kind == .linux, workspace.ownerDeviceID == identity.hostDeviceID else {
         throw federationError("wrong_owner", "Only the central host may transfer one of its configured remote sessions.")
       }
-      if let saved = try federationValuesUnlocked("SELECT payload FROM companion_execution_adoptions WHERE conversation_id=?", bindings: [conversationID], as: ExecutionAdoption.self).first {
+      if let saved = try federationValuesUnlocked("SELECT payload FROM library_execution_adoptions WHERE conversation_id=?", bindings: [conversationID], as: ExecutionAdoption.self).first {
         guard saved.workspaceID == workspaceID,
-              try libraryIDsUnlocked("SELECT workspace_id FROM companion_execution_conversations WHERE id=?", bindings: [conversationID]).first == workspaceID else {
+              try libraryIDsUnlocked("SELECT workspace_id FROM library_execution_conversations WHERE id=?", bindings: [conversationID]).first == workspaceID else {
           throw federationError("wrong_owner", "This conversation was transferred to another execution workspace.")
         }
         // Retry the immutable original transfer even after the new owner has
@@ -51,14 +51,14 @@ extension WorkspaceDatabaseConnection {
         conversation = existing
       } else {
         conversation.workspaceID = workspaceID; conversation.libraryID = identity.libraryID
-        let statement = try prepareUnlocked("INSERT INTO companion_execution_conversations(id,workspace_id,conversation,transcript) VALUES (?,?,?,?)")
+        let statement = try prepareUnlocked("INSERT INTO library_execution_conversations(id,workspace_id,conversation,transcript) VALUES (?,?,?,?)")
         defer { sqlite3_finalize(statement) }
         try bind(conversationID, at: 1, to: statement); try bind(workspaceID, at: 2, to: statement)
         try bind(JSONEncoder().encode(conversation), at: 3, to: statement)
         try bind(JSONEncoder().encode(federationLegacyTranscriptUnlocked(conversationID)), at: 4, to: statement)
         try stepDone(statement)
         for runID in try libraryIDsUnlocked("SELECT id FROM dashboard_runs WHERE conversation_id=?", bindings: [conversationID]) {
-          try toolsExecuteUnlocked("INSERT INTO companion_execution_runs(id,workspace_id,conversation_id) VALUES (?,?,?)", [runID, workspaceID, conversationID])
+          try toolsExecuteUnlocked("INSERT INTO library_execution_runs(id,workspace_id,conversation_id) VALUES (?,?,?)", [runID, workspaceID, conversationID])
         }
         // Notify every client that control now belongs to the independent origin.
         try toolsExecuteUnlocked("UPDATE dashboard_conversations SET updated_at=? WHERE id=?", [Self.timestamp(Date()), conversationID])
@@ -67,7 +67,7 @@ extension WorkspaceDatabaseConnection {
         runtimeKind: text(session, column: 0), nativeSessionID: nativeID, model: optionalText(session, column: 2),
         thinking: optionalText(session, column: 3), permission: optionalText(session, column: 4),
         knownRunIDs: libraryIDsUnlocked("SELECT id FROM dashboard_runs WHERE conversation_id=? ORDER BY created_at,id", bindings: [conversationID]), nativeWorkingDirectory: root.rootPath, goal: transferredGoal)
-      let saved = try prepareUnlocked("INSERT INTO companion_execution_adoptions(conversation_id,workspace_id,payload) VALUES (?,?,?)")
+      let saved = try prepareUnlocked("INSERT INTO library_execution_adoptions(conversation_id,workspace_id,payload) VALUES (?,?,?)")
       defer { sqlite3_finalize(saved) }
       try bind(conversationID, at: 1, to: saved); try bind(workspaceID, at: 2, to: saved)
       try bind(JSONEncoder().encode(adoption), at: 3, to: saved); try stepDone(saved)
@@ -76,7 +76,7 @@ extension WorkspaceDatabaseConnection {
   }
 
   func federationLegacyTranscriptUnlocked(_ conversationID: String) throws -> LibraryTranscript {
-    let statement = try prepareUnlocked("SELECT id,run_id,role,content,status,created_at,COALESCE((SELECT kind FROM workspace_session_deliveries WHERE message_id=dashboard_messages.id),(SELECT kind FROM companion_message_provenance WHERE message_id=dashboard_messages.id)),COALESCE((SELECT source_id FROM workspace_session_deliveries WHERE message_id=dashboard_messages.id),(SELECT source_id FROM companion_message_provenance WHERE message_id=dashboard_messages.id)),COALESCE((SELECT source_title FROM workspace_session_deliveries WHERE message_id=dashboard_messages.id),(SELECT source_title FROM companion_message_provenance WHERE message_id=dashboard_messages.id)),COALESCE((SELECT source_agent FROM workspace_session_deliveries WHERE message_id=dashboard_messages.id),(SELECT source_agent FROM companion_message_provenance WHERE message_id=dashboard_messages.id)) FROM dashboard_messages WHERE conversation_id=? ORDER BY created_at,id")
+    let statement = try prepareUnlocked("SELECT id,run_id,role,content,status,created_at,COALESCE((SELECT kind FROM workspace_session_deliveries WHERE message_id=dashboard_messages.id),(SELECT kind FROM library_message_provenance WHERE message_id=dashboard_messages.id)),COALESCE((SELECT source_id FROM workspace_session_deliveries WHERE message_id=dashboard_messages.id),(SELECT source_id FROM library_message_provenance WHERE message_id=dashboard_messages.id)),COALESCE((SELECT source_title FROM workspace_session_deliveries WHERE message_id=dashboard_messages.id),(SELECT source_title FROM library_message_provenance WHERE message_id=dashboard_messages.id)),COALESCE((SELECT source_agent FROM workspace_session_deliveries WHERE message_id=dashboard_messages.id),(SELECT source_agent FROM library_message_provenance WHERE message_id=dashboard_messages.id)) FROM dashboard_messages WHERE conversation_id=? ORDER BY created_at,id")
     defer { sqlite3_finalize(statement) }
     try bind(conversationID, at: 1, to: statement)
     var transcript = LibraryTranscript(conversationID: conversationID)

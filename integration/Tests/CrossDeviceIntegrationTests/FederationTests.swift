@@ -223,7 +223,7 @@ struct FederationTests {
     let content = String(decoding: try JSONEncoder().encode(legacy), as: UTF8.self)
     try await db.write { connection in
       try connection.transaction {
-        try connection.toolsExecuteUnlocked("UPDATE companion_execution_conversations SET transcript=? WHERE id=?", [content, first.conversationID])
+        try connection.toolsExecuteUnlocked("UPDATE library_execution_conversations SET transcript=? WHERE id=?", [content, first.conversationID])
       }
     }
     let page = try #require(try await db.libraryFederatedTranscript(conversationID: first.conversationID))

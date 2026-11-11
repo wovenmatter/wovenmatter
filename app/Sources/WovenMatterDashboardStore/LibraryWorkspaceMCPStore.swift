@@ -74,11 +74,11 @@ extension WorkspaceDatabaseConnection {
         throw federationError("wrong_owner", "This run does not match a current schedule assigned to the execution workspace.")
       }
       let scheduledAt = Self.timestamp(incoming.scheduledAt)
-      let federationOwners = try libraryIDsUnlocked("SELECT workspace_id FROM companion_execution_conversations WHERE id=?", bindings: [incoming.sessionID])
+      let federationOwners = try libraryIDsUnlocked("SELECT workspace_id FROM library_execution_conversations WHERE id=?", bindings: [incoming.sessionID])
       guard federationOwners.isEmpty || federationOwners == [principal.workspaceID] else {
         throw federationError("wrong_owner", "The scheduled caller UUID is already owned by another execution workspace.")
       }
-      let existing = try historyRowsUnlocked("SELECT run_id,conversation_id,workspace_id,native_session_id FROM companion_scheduled_mcp_callers WHERE run_id=? OR (event_id=? AND scheduled_at=?)",
+      let existing = try historyRowsUnlocked("SELECT run_id,conversation_id,workspace_id,native_session_id FROM library_scheduled_mcp_callers WHERE run_id=? OR (event_id=? AND scheduled_at=?)",
         values: [incoming.id, incoming.eventID, scheduledAt]).first?.objectValue
       if let existing {
         guard existing["run_id"]?.stringValue == incoming.id,
@@ -107,7 +107,7 @@ extension WorkspaceDatabaseConnection {
       try importRemoteCalendarTranscriptUnlocked(receiptID: incoming.id, run: run, workspaceID: workspaceUUID,
         workspaceName: workspace.name, ownerDeviceID: deviceUUID, nativeSessionID: preparation.nativeSessionID,
         updates: [], error: nil, completedAt: incoming.scheduledAt, complete: false)
-      let insert = try prepareUnlocked("INSERT INTO companion_scheduled_mcp_callers(run_id,conversation_id,workspace_id,event_id,scheduled_at,native_session_id) VALUES (?,?,?,?,?,?) ON CONFLICT(run_id) DO UPDATE SET native_session_id=coalesce(companion_scheduled_mcp_callers.native_session_id,excluded.native_session_id)")
+      let insert = try prepareUnlocked("INSERT INTO library_scheduled_mcp_callers(run_id,conversation_id,workspace_id,event_id,scheduled_at,native_session_id) VALUES (?,?,?,?,?,?) ON CONFLICT(run_id) DO UPDATE SET native_session_id=coalesce(library_scheduled_mcp_callers.native_session_id,excluded.native_session_id)")
       defer { sqlite3_finalize(insert) }
       try bind(run.id, at: 1, to: insert); try bind(run.sessionID, at: 2, to: insert)
       try bind(principal.workspaceID, at: 3, to: insert); try bind(run.eventID, at: 4, to: insert)
@@ -131,7 +131,7 @@ extension WorkspaceDatabaseConnection {
       let url = endpoint.appending(path: "mcp/workspace").absoluteString
       let record = WorkspaceMCPRecord(grantID: UUID().uuidString.lowercased(), libraryID: identity.libraryID,
         workspaceID: workspaceID, executionDeviceID: executor, endpointURL: url)
-      let statement = try prepareUnlocked("INSERT INTO companion_workspace_mcp_grants(workspace_id,digest,payload) VALUES (?,?,?) ON CONFLICT(workspace_id) DO UPDATE SET digest=excluded.digest,payload=excluded.payload")
+      let statement = try prepareUnlocked("INSERT INTO library_workspace_mcp_grants(workspace_id,digest,payload) VALUES (?,?,?) ON CONFLICT(workspace_id) DO UPDATE SET digest=excluded.digest,payload=excluded.payload")
       defer { sqlite3_finalize(statement) }
       try bind(workspaceID, at: 1, to: statement)
       try bind(Data(SHA256.hash(data: Data(token.utf8))), at: 2, to: statement)
@@ -143,7 +143,7 @@ extension WorkspaceDatabaseConnection {
 
   public func libraryWorkspaceMCPMatches(workspaceID: String, grantID: String, endpoint: URL) throws -> Bool {
     try withLock {
-      guard let record = try federationValuesUnlocked("SELECT payload FROM companion_workspace_mcp_grants WHERE workspace_id=?",
+      guard let record = try federationValuesUnlocked("SELECT payload FROM library_workspace_mcp_grants WHERE workspace_id=?",
               bindings: [workspaceID], as: WorkspaceMCPRecord.self).first,
             let workspace = try federationWorkspaceUnlocked(workspaceID), !workspace.deleted else { return false }
       let libraryID = try libraryWorkspaceIDUnlocked()
@@ -154,7 +154,7 @@ extension WorkspaceDatabaseConnection {
   }
 
   func activeLibraryWorkspaceMCPGrantUnlocked(workspaceID: String, executionDeviceID: String) throws -> Bool {
-    guard let record = try federationValuesUnlocked("SELECT payload FROM companion_workspace_mcp_grants WHERE workspace_id=?",
+    guard let record = try federationValuesUnlocked("SELECT payload FROM library_workspace_mcp_grants WHERE workspace_id=?",
       bindings: [workspaceID], as: WorkspaceMCPRecord.self).first else { return false }
     let libraryID = try libraryWorkspaceIDUnlocked()
     return record.executionDeviceID == executionDeviceID && record.libraryID == libraryID
@@ -163,7 +163,7 @@ extension WorkspaceDatabaseConnection {
   public func authenticateLibraryWorkspaceMCP(bearer: String) throws -> LibraryWorkspaceMCPPrincipal {
     try withLock {
       guard (32...256).contains(bearer.utf8.count) else { throw federationError("unauthorized", "Invalid library MCP grant.") }
-      let statement = try prepareUnlocked("SELECT payload FROM companion_workspace_mcp_grants WHERE digest=?")
+      let statement = try prepareUnlocked("SELECT payload FROM library_workspace_mcp_grants WHERE digest=?")
       defer { sqlite3_finalize(statement) }
       try bind(Data(SHA256.hash(data: Data(bearer.utf8))), at: 1, to: statement)
       guard sqlite3_step(statement) == SQLITE_ROW else { throw federationError("unauthorized", "Invalid library MCP grant.") }
@@ -183,7 +183,7 @@ extension WorkspaceDatabaseConnection {
   /// just verified by signature against the current member list.
   func workspaceMCPPrincipalCurrentUnlocked(_ principal: LibraryWorkspaceMCPPrincipal) throws -> Bool {
     if principal.isMember { return principal.grantID == "member:" + principal.executionDeviceID }
-    return try federationValuesUnlocked("SELECT payload FROM companion_workspace_mcp_grants WHERE workspace_id=?",
+    return try federationValuesUnlocked("SELECT payload FROM library_workspace_mcp_grants WHERE workspace_id=?",
       bindings: [principal.workspaceID], as: WorkspaceMCPRecord.self).first?.grantID == principal.grantID
   }
 
@@ -208,7 +208,7 @@ extension WorkspaceDatabaseConnection {
       guard deviceID == (try libraryIdentityUnlocked()).hostDeviceID else {
         throw federationError("wrong_owner", "Only the central library host can revoke library MCP grants.")
       }
-      let statement = try prepareUnlocked("DELETE FROM companion_workspace_mcp_grants WHERE workspace_id=?")
+      let statement = try prepareUnlocked("DELETE FROM library_workspace_mcp_grants WHERE workspace_id=?")
       defer { sqlite3_finalize(statement) }
       try bind(workspaceID, at: 1, to: statement); try stepDone(statement)
     }
@@ -216,7 +216,7 @@ extension WorkspaceDatabaseConnection {
 
   public func authorizeLibraryWorkspaceMCPCaller(conversationID: String, principal: LibraryWorkspaceMCPPrincipal) throws {
     try withLock {
-      let owners = try libraryIDsUnlocked("SELECT workspace_id FROM companion_execution_conversations WHERE id=? AND deleted=0 UNION SELECT workspace_id FROM companion_scheduled_mcp_callers WHERE conversation_id=?", bindings: [conversationID, conversationID])
+      let owners = try libraryIDsUnlocked("SELECT workspace_id FROM library_execution_conversations WHERE id=? AND deleted=0 UNION SELECT workspace_id FROM library_scheduled_mcp_callers WHERE conversation_id=?", bindings: [conversationID, conversationID])
       guard federationID(conversationID), owners.count == 1, let owner = owners.first,
             owner == principal.workspaceID,
             let workspace = try federationWorkspaceUnlocked(owner), !workspace.deleted,

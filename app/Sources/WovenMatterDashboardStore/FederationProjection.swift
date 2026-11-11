@@ -9,7 +9,7 @@ import WovenMatterCore
 extension WorkspaceDatabaseConnection {
   /// Archive projection only. This path must never call a command dispatcher or runtime.
   func projectLibraryJournalUnlocked(_ entry: LibraryJournalEntry, workspace: ExecutionWorkspace) throws {
-    let ownership = try prepareUnlocked("SELECT workspace_id,deleted FROM companion_execution_conversations WHERE id = ?")
+    let ownership = try prepareUnlocked("SELECT workspace_id,deleted FROM library_execution_conversations WHERE id = ?")
     defer { sqlite3_finalize(ownership) }
     try bind(entry.conversationID, at: 1, to: ownership)
     let existingCode = sqlite3_step(ownership)
@@ -54,10 +54,10 @@ extension WorkspaceDatabaseConnection {
       }
       if let folderID = conversation.folderID, try libraryFolderUnlocked(id: folderID) == nil { conversation.folderID = nil }
       if entry.kind == .restoredConversation {
-        try toolsExecuteUnlocked("UPDATE companion_execution_conversations SET deleted=0 WHERE id=?", [entry.conversationID])
+        try toolsExecuteUnlocked("UPDATE library_execution_conversations SET deleted=0 WHERE id=?", [entry.conversationID])
         try toolsExecuteUnlocked("UPDATE dashboard_conversations SET deleted_at=NULL,is_archived=0 WHERE id=?", [entry.conversationID])
       }
-      let statement = try prepareUnlocked("INSERT INTO companion_execution_conversations(id,workspace_id,conversation) VALUES (?,?,?) ON CONFLICT(id) DO UPDATE SET conversation=excluded.conversation")
+      let statement = try prepareUnlocked("INSERT INTO library_execution_conversations(id,workspace_id,conversation) VALUES (?,?,?) ON CONFLICT(id) DO UPDATE SET conversation=excluded.conversation")
       defer { sqlite3_finalize(statement) }
       try bind(conversation.id, at: 1, to: statement); try bind(workspace.id, at: 2, to: statement)
       try bind(JSONEncoder().encode(conversation), at: 3, to: statement); try stepDone(statement)
@@ -75,7 +75,7 @@ extension WorkspaceDatabaseConnection {
             (incoming.removedMessageIDs ?? []).allSatisfy({ !$0.isEmpty && $0.utf8.count <= 256 }) else {
         throw federationError("invalid_event", "Transcript records must belong to their conversation and include explicit stable message identities.")
       }
-      var transcript = try federationValuesUnlocked("SELECT transcript FROM companion_execution_conversations WHERE id = ? AND transcript IS NOT NULL", bindings: [entry.conversationID], as: LibraryTranscript.self).first ?? LibraryTranscript(conversationID: entry.conversationID)
+      var transcript = try federationValuesUnlocked("SELECT transcript FROM library_execution_conversations WHERE id = ? AND transcript IS NOT NULL", bindings: [entry.conversationID], as: LibraryTranscript.self).first ?? LibraryTranscript(conversationID: entry.conversationID)
       // Retire exact legacy tool-only rows from this display projection. The
       // original dashboard messages and immutable native journal stay intact.
       // User input cannot be hidden by structured-tool migration.
@@ -127,7 +127,7 @@ extension WorkspaceDatabaseConnection {
                            workspace.ownerDeviceID, workspace.ownerDeviceID, message.createdAt.isEmpty ? now : message.createdAt, now])
         if let source = message.agentSourceID {
           try toolsExecuteUnlocked("""
-            INSERT INTO companion_message_provenance(message_id,source_id,source_title,source_agent,kind)
+            INSERT INTO library_message_provenance(message_id,source_id,source_title,source_agent,kind)
             VALUES (?,?,?,?,?) ON CONFLICT(message_id) DO NOTHING
             """, [message.id, source, message.senderSessionTitle, message.senderHarness, message.senderKind ?? "message"])
         }
@@ -193,14 +193,14 @@ extension WorkspaceDatabaseConnection {
         return left == right ? $0.offset < $1.offset : left < right
       }.map(\.element)
       transcript.activeRunID = activeRunID
-      let statement = try prepareUnlocked("UPDATE companion_execution_conversations SET transcript = ? WHERE id = ?")
+      let statement = try prepareUnlocked("UPDATE library_execution_conversations SET transcript = ? WHERE id = ?")
       defer { sqlite3_finalize(statement) }
       try bind(JSONEncoder().encode(transcript), at: 1, to: statement); try bind(entry.conversationID, at: 2, to: statement); try stepDone(statement)
       if var conversation = try federationConversationUnlocked(entry.conversationID) {
         conversation.activeRunID = activeRunID
         if let message = incoming.messages.last { conversation.preview = String(message.content.prefix(300)) }
         conversation.updatedAt = now
-        let update = try prepareUnlocked("UPDATE companion_execution_conversations SET conversation = ? WHERE id = ?")
+        let update = try prepareUnlocked("UPDATE library_execution_conversations SET conversation = ? WHERE id = ?")
         defer { sqlite3_finalize(update) }
         try bind(JSONEncoder().encode(conversation), at: 1, to: update); try bind(entry.conversationID, at: 2, to: update); try stepDone(update)
         try toolsExecuteUnlocked("UPDATE dashboard_conversations SET last_message_preview=?,updated_at=? WHERE id=?", [conversation.preview, now, entry.conversationID])
@@ -213,7 +213,7 @@ extension WorkspaceDatabaseConnection {
         throw federationError("invalid_event", "The archived command receipt must identify its execution workspace and conversation.")
       }
       if let runID = receipt.runID { try claimFederationRunUnlocked(runID, conversationID: entry.conversationID, workspaceID: workspace.id) }
-      let existing = try federationValuesUnlocked("SELECT payload FROM companion_execution_receipts WHERE workspace_id=? AND command_id=?", bindings: [workspace.id, receipt.commandID], as: LibraryCommandReceipt.self).first
+      let existing = try federationValuesUnlocked("SELECT payload FROM library_execution_receipts WHERE workspace_id=? AND command_id=?", bindings: [workspace.id, receipt.commandID], as: LibraryCommandReceipt.self).first
       if let existing {
         guard existing.deviceID == receipt.deviceID, existing.conversationID == receipt.conversationID,
               existing.runID == nil || existing.runID == receipt.runID,
@@ -221,7 +221,7 @@ extension WorkspaceDatabaseConnection {
           throw federationError("receipt_conflict", "The command receipt cannot change its owner or replace a settled outcome.")
         }
       }
-      let statement = try prepareUnlocked("INSERT INTO companion_execution_receipts(workspace_id,command_id,device_id,payload) VALUES (?,?,?,?) ON CONFLICT(workspace_id,command_id) DO UPDATE SET payload=excluded.payload")
+      let statement = try prepareUnlocked("INSERT INTO library_execution_receipts(workspace_id,command_id,device_id,payload) VALUES (?,?,?,?) ON CONFLICT(workspace_id,command_id) DO UPDATE SET payload=excluded.payload")
       defer { sqlite3_finalize(statement) }
       try bind(workspace.id, at: 1, to: statement); try bind(receipt.commandID, at: 2, to: statement)
       try bind(receipt.deviceID, at: 3, to: statement); try bind(JSONEncoder().encode(receipt), at: 4, to: statement); try stepDone(statement)
@@ -232,13 +232,13 @@ extension WorkspaceDatabaseConnection {
       try archiveLibraryNativeRecordUnlocked(part, entry: entry)
     case .deletedConversation:
       guard entry.conversation == nil, entry.transcript == nil, entry.receipt == nil, entry.nativeRecord == nil else { throw federationError("invalid_event", "A deletion event cannot contain executable or replacement data.") }
-      try toolsExecuteUnlocked("UPDATE companion_execution_conversations SET deleted=1 WHERE id=?", [entry.conversationID])
+      try toolsExecuteUnlocked("UPDATE library_execution_conversations SET deleted=1 WHERE id=?", [entry.conversationID])
       try toolsExecuteUnlocked("UPDATE dashboard_conversations SET deleted_at=?,updated_at=? WHERE id=?", [now, now, entry.conversationID])
     }
   }
   private func claimFederationRunUnlocked(_ runID: String, conversationID: String, workspaceID: String) throws {
     guard federationID(runID) else { throw federationError("invalid_event", "Runs require stable UUID identities.") }
-    let statement = try prepareUnlocked("SELECT workspace_id,conversation_id FROM companion_execution_runs WHERE id=?")
+    let statement = try prepareUnlocked("SELECT workspace_id,conversation_id FROM library_execution_runs WHERE id=?")
     defer { sqlite3_finalize(statement) }
     try bind(runID, at: 1, to: statement)
     let code = sqlite3_step(statement)
@@ -251,7 +251,7 @@ extension WorkspaceDatabaseConnection {
       guard try federationScalarUnlocked("SELECT COUNT(*) FROM dashboard_runs WHERE id=?", bindings: [runID]) == 0 else {
         throw federationError("wrong_owner", "An existing local run cannot be claimed by an execution archive.")
       }
-      try toolsExecuteUnlocked("INSERT INTO companion_execution_runs VALUES (?,?,?)", [runID, workspaceID, conversationID])
+      try toolsExecuteUnlocked("INSERT INTO library_execution_runs VALUES (?,?,?)", [runID, workspaceID, conversationID])
     }
   }
 }

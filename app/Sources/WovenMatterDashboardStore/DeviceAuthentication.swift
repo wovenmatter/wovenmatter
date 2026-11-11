@@ -74,6 +74,8 @@ public struct PendingMember: Equatable, Sendable {
 }
 
 public actor DeviceAuthentication {
+  /// Paired-device grants, in the Mac's support directory and a Linux host's library directory.
+  public static let fileName = "library-devices.json"
   private struct Approval: Codable {
     var request: PendingPairingRequest
     var proof: Data

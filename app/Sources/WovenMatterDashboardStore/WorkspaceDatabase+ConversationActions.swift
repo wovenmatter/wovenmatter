@@ -115,7 +115,7 @@ extension WorkspaceDatabaseConnection {
   func requireProtectedConversationMutationUnlocked(_ id: String) throws {
     if try locallyOwnsConversationUnlocked(id) { return }
     if try historyRowsUnlocked("""
-      SELECT 1 AS independent FROM companion_execution_conversations x JOIN companion_execution_workspaces w ON w.id=x.workspace_id
+      SELECT 1 AS independent FROM library_execution_conversations x JOIN library_execution_workspaces w ON w.id=x.workspace_id
       WHERE x.id=? AND w.deleted=0 AND json_extract(CAST(w.payload AS TEXT),'$.kind') IN ('linux','ios')
       """, values: [id]).isEmpty == false { return }
     throw try pairedForeignOwnerUnlocked(id) != nil ? WorkspaceConversationActionError.ownedByAnotherMac : WorkspaceConversationActionError.unavailable
@@ -124,7 +124,7 @@ extension WorkspaceDatabaseConnection {
   /// The paired Mac that owns this chat when it is not this Mac.
   func pairedForeignOwnerUnlocked(_ id: String) throws -> String? {
     try historyRowsUnlocked("""
-      SELECT o.device_id FROM paired_conversation_owners o JOIN companion_library_identity i ON i.singleton=1
+      SELECT o.device_id FROM paired_conversation_owners o JOIN library_identity i ON i.singleton=1
       WHERE o.id=? AND o.device_id<>i.host_device_id
       """, values: [id]).first?.objectValue?["device_id"]?.stringValue
   }

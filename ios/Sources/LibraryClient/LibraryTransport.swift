@@ -273,7 +273,7 @@ public final class HTTPSLibraryTransport: LibraryTransport, MobilePairingRequest
 }
 
 public enum MobileCredentialVault {
-  private static var service: String { ClientCredentialNamespace.service(LegacyStorageNames.centralPairingKeychainService) }
+  private static var service: String { ClientCredentialNamespace.service("com.wovenmatter.library.pairing") }
   public static func load() throws -> MobileCredential? {
     #if canImport(Security)
     var result: CFTypeRef?

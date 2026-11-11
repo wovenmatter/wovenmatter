@@ -82,7 +82,7 @@ public final class LibraryHost: @unchecked Sendable {
       mount(prefix: prefix) { await sync.handle($0) ?? .error("unauthorized", "Peer routes need a signed member request.", status: 401) }
     }
     // Bearer grants are never issued here; the store only backs the API.
-    let authentication = try DeviceAuthentication(fileURL: layout.library.appending(path: LegacyStorageNames.pairedDevicesFile))
+    let authentication = try DeviceAuthentication(fileURL: layout.library.appending(path: DeviceAuthentication.fileName))
     let api = await MainActor.run { [database, members, executor, sync, ownID = identity.deviceID] in
       LibraryWorkspaceAPI(database: database, authentication: authentication, commands: LibraryHostCommands(executor: executor),
                             isActive: { true }, members: members, syncStatus: { await sync.status() },

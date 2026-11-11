@@ -34,7 +34,7 @@ same commit.
   This generalizes today's paired-Mac identity (`PairedMacIdentity.swift`): a
   Mac's member key *is* its paired-Mac signing key, and a Mac's or Linux
   host's device ID is its library replica identity
-  (`companion_library_identity.host_device_id`, the sync clock's origin). On
+  (`library_identity.host_device_id`, the sync clock's origin). On
   Linux the key is `<library data root>/secrets/member-signing.key` (raw
   32-byte key, base64, created on first start).
 - The **member list** is a synced, signed record set. Each member entry names
@@ -263,7 +263,7 @@ same commit.
   (`BotUpdatePlan.Step.linuxHost`) updates every Linux host in the registry
   this way (`RemoteWorkspacesModel.runSharedHost(_:.update)`); SSH is only
   the fallback for a host this Mac added. A Linux host's sessions use any
-  Mac's `/mcp/workspace` once the session's `companion_execution_conversations`
+  Mac's `/mcp/workspace` once the session's `library_execution_conversations`
   row has synchronized there, whichever Mac added the host. On a Mac, other
   Macs' agents (including those for Linux hosts they added) sync as peer
   agents (`pairedAgentWorkspaces`), and a new chat with one is created on its
@@ -286,7 +286,7 @@ same commit.
     to it at once; the reply is `{rotated: true}`, plus `bearer` only for the
     installer on its own tunnel. A Mac that removes another Mac queues a
     rotation (durably, retried with pending revocations,
-    `LegacyStorageNames.pendingInstallerRotationsKey`) on every Linux host in
+    user-defaults key `library.execution.pending-installer-rotations`) on every Linux host in
     the registry whose `ownerDeviceID` is the removed Mac. Publisher and MCP
     grants at rest are keyed by `WOVENMATTER_SERVICE_SECRET`, the first
     install's bearer, which installs and rotations keep, so rotation never
@@ -388,7 +388,7 @@ among Macs that still stand; they never decide who wins a dispute.
     column as it was records nothing. Writers that run on a timer compare
     first: the Mac's 5-second registry refresh rewrites a
     `paired_remote_workspaces` configuration (stored as sorted-key JSON) or a
-    `companion_execution_workspaces` registration only when its decoded value
+    `library_execution_workspaces` registration only when its decoded value
     changed.
   - Triggers: a write that appends to the change log
     (`WorkspaceDatabase.observePeerChanges`) is announced, debounced 300 ms,
@@ -408,11 +408,11 @@ among Macs that still stand; they never decide who wins a dispute.
     against the sender. Member entries and removals are never deleted, must
     match their signed payload, never roll back to an older entry and never
     rewrite a removal (otherwise quarantined, or skipped when merely stale).
-    A Linux host (any sender but a Mac) writes `companion_execution_workspaces`
+    A Linux host (any sender but a Mac) writes `library_execution_workspaces`
     only for the workspace it serves itself (`MemberAudience.serving`, before
-    and after the change), `companion_execution_conversations` only for that
+    and after the change), `library_execution_conversations` only for that
     workspace's sessions, owner rows (`paired_*_owners`,
-    `companion_calendar_owners`, `companion_calendar_run_owners`) only naming
+    `library_calendar_owners`, `library_calendar_run_owners`) only naming
     itself, and never `paired_mac_routes` or `paired_remote_workspaces`. Other
     such rows it relays are skipped; they arrive from a Mac directly.
   - HTTP deadlines (both the Mac listener and `LibrarySocketHTTPServer`,
@@ -670,7 +670,7 @@ request never reached one or was refused before any effect (401, 403, 404,
 426, 503). The Mac accepts the call when the signer serves that non-deleted
 Linux workspace (its execution device, or the member `MemberAudience.serving`
 names) and the conversation belongs to it. A scheduled task's caller record
-(`companion_scheduled_mcp_callers`, written by `/mcp/workspace/prepare`) is not
+(`library_scheduled_mcp_callers`, written by `/mcp/workspace/prepare`) is not
 synced, so another Mac refuses the task's calls until the session's own row
 reaches it. The Node delegate therefore sends a task's calls to the Mac that
 last prepared it first, and prepares any other Mac (the same idempotent

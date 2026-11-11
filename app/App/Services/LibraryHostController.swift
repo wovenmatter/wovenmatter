@@ -96,8 +96,13 @@ final class LibraryHostController {
     }
     @ObservationIgnored var linuxHostSetupSteps: LinuxHostSetupSteps?
     private var revocationRetryInProgress = false
-    private static let pendingRevocationsKey = LegacyStorageNames.pendingExecutionRevocationsKey
-    private static let pendingInstallerRotationsKey = LegacyStorageNames.pendingInstallerRotationsKey
+    private static let pendingRevocationsKey = "library.execution.pending-revocations"
+    private static let pendingInstallerRotationsKey = "library.execution.pending-installer-rotations"
+    nonisolated static let appliedPeerRevocationsKey = "library.peers.applied-revocations"
+    /// Followed by the library workspace ID.
+    private static let httpsPortKeyPrefix = "library.https.port."
+    /// Followed by the library workspace ID.
+    nonisolated static let localExecutionIDKeyPrefix = "library.execution.local-id."
     private var server: LibraryHTTPServer?
     private var serve: TailscaleServe?
     private var stoppingExposures: [TailscaleServe] = []
@@ -203,7 +208,7 @@ final class LibraryHostController {
             let exposure = makeExposure()
             attemptExposure = exposure
             serve = exposure
-            let portKey = LegacyStorageNames.httpsPortKeyPrefix + (try await database.libraryWorkspaceID())
+            let portKey = Self.httpsPortKeyPrefix + (try await database.libraryWorkspaceID())
             // Only paired devices rely on a stable address. Before the first
             // pairing, an old occupied port must not prevent initial setup.
             let savedPort = pairedDevices.isEmpty ? nil : defaults.object(forKey: portKey) as? Int
@@ -515,7 +520,7 @@ final class LibraryHostController {
     @ObservationIgnored var remoteHostSend: MemberSignedHTTPClient.Send?
 
     private func localExecutionWorkspaceID(libraryID: String) -> String {
-        let key = LegacyStorageNames.localExecutionIDKeyPrefix + libraryID
+        let key = Self.localExecutionIDKeyPrefix + libraryID
         if let value = defaults.string(forKey: key), UUID(uuidString: value) != nil { return value.lowercased() }
         let value = UUID().uuidString.lowercased(); defaults.set(value, forKey: key); return value
     }
@@ -1096,7 +1101,7 @@ final class LibraryHostController {
 
     func applyPeerRevocations() async throws {
         guard let authentication else { return }
-        var processed = Set(defaults.stringArray(forKey: LegacyStorageNames.appliedPeerRevocationsKey) ?? [])
+        var processed = Set(defaults.stringArray(forKey: Self.appliedPeerRevocationsKey) ?? [])
         var failure: (any Error)?
         for (id, events) in await authentication.revokedDeviceContexts().sorted(by: { $0.key < $1.key }) {
             let key = id + ":" + events.joined(separator: ",")
@@ -1104,7 +1109,7 @@ final class LibraryHostController {
             // Mark applied only after local access is revoked; a transient
             // failure is retried on the next synchronization turn.
             do { try await performRevocation(id, recordsUnpair: false); processed.insert(key) } catch { failure = error }
-            defaults.set(Array(processed).sorted(), forKey: LegacyStorageNames.appliedPeerRevocationsKey)
+            defaults.set(Array(processed).sorted(), forKey: Self.appliedPeerRevocationsKey)
         }
         pairedDevices = await authentication.devices()
         if let failure { throw failure }
@@ -1120,7 +1125,7 @@ final class LibraryHostController {
 
     private func loadAuthentication() async throws {
         if authentication == nil {
-            let file = try (supportDirectory ?? ApplicationModel.dashboardSupportDirectory()).appendingPathComponent(LegacyStorageNames.pairedDevicesFile)
+            let file = try (supportDirectory ?? ApplicationModel.dashboardSupportDirectory()).appendingPathComponent(DeviceAuthentication.fileName)
             authentication = try DeviceAuthentication(fileURL: file)
         }
         pairedDevices = await authentication?.devices() ?? []

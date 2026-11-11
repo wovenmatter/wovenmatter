@@ -15,7 +15,7 @@ extension WorkspaceDatabaseConnection {
   public func applyLibraryMutation(_ request: LibraryMutation) throws -> LibraryMutationResult {
     try transaction {
       let fingerprint = try libraryFingerprint(request)
-      let lookup = try prepareUnlocked("SELECT request, response FROM companion_mutation_receipts WHERE device_id = ? AND operation_id = ?")
+      let lookup = try prepareUnlocked("SELECT request, response FROM library_mutation_receipts WHERE device_id = ? AND operation_id = ?")
       defer { sqlite3_finalize(lookup) }
       try bind(request.deviceID, at: 1, to: lookup); try bind(request.operationID, at: 2, to: lookup)
       let code = sqlite3_step(lookup)
@@ -34,7 +34,7 @@ extension WorkspaceDatabaseConnection {
       if var note = result.note {
         note.content = ""; note.contentIncluded = false; result.note = note
       }
-      let receipt = try prepareUnlocked("INSERT INTO companion_mutation_receipts(device_id, operation_id, request, response) VALUES (?, ?, ?, ?)")
+      let receipt = try prepareUnlocked("INSERT INTO library_mutation_receipts(device_id, operation_id, request, response) VALUES (?, ?, ?, ?)")
       defer { sqlite3_finalize(receipt) }
       try bind(request.deviceID, at: 1, to: receipt); try bind(request.operationID, at: 2, to: receipt)
       try bind(fingerprint, at: 3, to: receipt); try bind(JSONEncoder().encode(result), at: 4, to: receipt)
@@ -103,7 +103,7 @@ extension WorkspaceDatabaseConnection {
       }
       try toolsExecuteUnlocked("INSERT INTO notes(id, user_id, folder_id, title, content, snippet, position, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?)",
         [request.resourceID, operatorID, request.folderID, title, content, Self.noteSnippet(content), now, now])
-      try checkpointNoteUnlocked(id: request.resourceID, source: LegacyStorageNames.deviceNoteEditSource, force: true)
+      try checkpointNoteUnlocked(id: request.resourceID, source: "device", force: true)
       return try result(.accepted, note: libraryNoteUnlocked(id: request.resourceID))
     case .updateNote, .deleteNote:
       guard let note = try libraryNoteUnlocked(id: request.resourceID) else {
@@ -111,7 +111,7 @@ extension WorkspaceDatabaseConnection {
       }
       guard request.expectedRevision == note.revision else { return result(.conflict, "The note changed on another device or agent. Both versions are retained.", note: note) }
       if request.kind == .deleteNote {
-        try checkpointNoteUnlocked(id: request.resourceID, source: LegacyStorageNames.beforeDeviceNoteDeleteSource, force: true)
+        try checkpointNoteUnlocked(id: request.resourceID, source: "before-device-delete", force: true)
         try toolsExecuteUnlocked("UPDATE notes SET deleted_at = ?, updated_at = ? WHERE id = ? AND user_id = ?", [now, now, request.resourceID, operatorID])
         return result(.accepted)
       }
@@ -128,10 +128,10 @@ extension WorkspaceDatabaseConnection {
       if let folderID = request.folderID, try libraryFolderUnlocked(id: folderID) == nil {
         return result(.notFound, "The destination folder was deleted. Your writing is retained.", note: note)
       }
-      try checkpointNoteUnlocked(id: request.resourceID, source: LegacyStorageNames.beforeDeviceNoteEditSource, force: true)
+      try checkpointNoteUnlocked(id: request.resourceID, source: "before-device-edit", force: true)
       let updatedAt = try nextNoteUpdatedAtUnlocked(id: request.resourceID)
       try toolsExecuteUnlocked("UPDATE notes SET title = ?, content = ?, snippet = ?, folder_id = ?, updated_at = ? WHERE id = ? AND user_id = ? AND deleted_at IS NULL", [title, content, Self.noteSnippet(content), request.folderID, updatedAt, request.resourceID, operatorID])
-      try checkpointNoteUnlocked(id: request.resourceID, source: LegacyStorageNames.deviceNoteEditSource, force: true)
+      try checkpointNoteUnlocked(id: request.resourceID, source: "device", force: true)
       return try result(.accepted, note: libraryNoteUnlocked(id: request.resourceID))
     }
   }
@@ -151,7 +151,7 @@ extension WorkspaceDatabaseConnection {
   public func reserveLibraryCommand(_ request: LibraryCommand) throws -> LibraryCommandReservation {
     try transaction {
       let fingerprint = try libraryFingerprint(request)
-      let lookup = try prepareUnlocked("SELECT request, response FROM companion_command_receipts WHERE device_id = ? AND command_id = ?")
+      let lookup = try prepareUnlocked("SELECT request, response FROM library_command_receipts WHERE device_id = ? AND command_id = ?")
       defer { sqlite3_finalize(lookup) }
       try bind(request.deviceID, at: 1, to: lookup); try bind(request.commandID, at: 2, to: lookup)
       let code = sqlite3_step(lookup)
@@ -171,7 +171,7 @@ extension WorkspaceDatabaseConnection {
         return LibraryCommandReservation(receipt: LibraryCommandReceipt(commandID: request.commandID, deviceID: request.deviceID, status: .rejected, message: "Commands require UUID identities."), isNew: false)
       }
       let receipt = LibraryCommandReceipt(commandID: request.commandID, deviceID: request.deviceID, status: .accepted, conversationID: request.conversationID, runID: request.runID)
-      let insert = try prepareUnlocked("INSERT INTO companion_command_receipts(device_id, command_id, request, response) VALUES (?, ?, ?, ?)")
+      let insert = try prepareUnlocked("INSERT INTO library_command_receipts(device_id, command_id, request, response) VALUES (?, ?, ?, ?)")
       defer { sqlite3_finalize(insert) }
       try bind(request.deviceID, at: 1, to: insert); try bind(request.commandID, at: 2, to: insert)
       try bind(fingerprint, at: 3, to: insert); try bind(JSONEncoder().encode(receipt), at: 4, to: insert)
@@ -182,7 +182,7 @@ extension WorkspaceDatabaseConnection {
 
   public func finishLibraryCommand(_ receipt: LibraryCommandReceipt) throws {
     try transaction {
-      let update = try prepareUnlocked("UPDATE companion_command_receipts SET response = ? WHERE device_id = ? AND command_id = ?")
+      let update = try prepareUnlocked("UPDATE library_command_receipts SET response = ? WHERE device_id = ? AND command_id = ?")
       defer { sqlite3_finalize(update) }
       try bind(JSONEncoder().encode(receipt), at: 1, to: update)
       try bind(receipt.deviceID, at: 2, to: update); try bind(receipt.commandID, at: 3, to: update)
@@ -193,7 +193,7 @@ extension WorkspaceDatabaseConnection {
 
   public func libraryCommandReceipt(deviceID: String, commandID: String) throws -> LibraryCommandReceipt? {
     try withLock {
-      let statement = try prepareUnlocked("SELECT response FROM companion_command_receipts WHERE device_id = ? AND command_id = ?")
+      let statement = try prepareUnlocked("SELECT response FROM library_command_receipts WHERE device_id = ? AND command_id = ?")
       defer { sqlite3_finalize(statement) }
       try bind(deviceID, at: 1, to: statement); try bind(commandID, at: 2, to: statement)
       let code = sqlite3_step(statement)

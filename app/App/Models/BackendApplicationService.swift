@@ -55,18 +55,6 @@ enum BackendApplicationCommand: Codable, Sendable {
     case saveCalendar(draft: WorkspaceCalendarDraft, eventID: String?, expectedRevision: Int?, occurrence: Int?)
     case deleteCalendar(eventID: String, expectedRevision: Int, occurrence: Int?)
     case calendarMetadata(task: WorkspaceCalendarTask)
-
-    /// `libraryHost` keeps its legacy wire key so a frontend and backend of
-    /// different versions still agree during an update.
-    enum CodingKeys: String, CodingKey {
-        case saveDictation, libraryHost = "companion", federatedExecution, setIdleSleepPolicy
-        case setClosedLidPolicy, stageAttachments, toolsMutation, mcpAccess, bots, loadAgentDefaults
-        case saveAgentDefault, setAgentDefaultsSharing, workspaceMutation, exportConversation
-        case trashedConversations, trashedNotes, exportNote, sessionMetadata, createPeerSession, createSession
-        case sendMessageFenced, cancelSessionFenced, goalMutationFenced, configureSession, subagentHistory
-        case cancelSession, resolveSessionAccess, resolvePermission, resolveInteraction, saveCalendar
-        case deleteCalendar, calendarMetadata
-    }
 }
 
 struct BackendApplicationResult: Codable, Sendable {
@@ -90,14 +78,6 @@ struct BackendApplicationResult: Codable, Sendable {
     var history: GatewayJSONValue?
     var mcpAccess: WovenMCPAccessSnapshot?
     var bots: BotsCommandResult?
-
-    /// `libraryHost` keeps its legacy wire key; see `BackendApplicationCommand.CodingKeys`.
-    enum CodingKeys: String, CodingKey {
-        case libraryHost = "companion", federatedExecution, exportURL, trashedConversations, trashedNotes
-        case noteExport, surfaceProfile, accepted, entityID, noteResponse, conversationID, metadata
-        case selections, resolvedSelections, usesSharedDefaults, attachments, requiresTimerPauseConfirmation
-        case history, mcpAccess, bots
-    }
 }
 
 struct BackendApplicationReadiness: Codable, Sendable {

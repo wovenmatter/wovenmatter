@@ -14,8 +14,7 @@ import WovenMatterCore // Darwin-qualified calls; tests also compile this file o
 /// Headless helper mode of the app. The parent's heartbeat pipe is deliberately
 /// not inherited by Tailscale. EOF or helper termination reaps only our Serve child.
 public enum TailscaleServeSupervisor {
-  /// Legacy name kept for compatibility: installed helpers and running supervisors use it.
-  public static let argument = "--companion-serve-supervisor"
+  public static let argument = "--tailscale-serve-supervisor"
 
   /// Called before the app opens its workspace. The helper and the normal app
   /// share one executable, so only this explicit launch argument enters service mode.

@@ -20,7 +20,7 @@ struct LibraryWorkspaceTests {
       title: "Phone", content: try document("Offline writing"))
     #expect(try await db.applyLibraryMutation(mobileCreate).status == .accepted)
     let first = try await #require(db.noteAssetVersions(id: noteID).first)
-    #expect(first.revision == "1" && first.source == LegacyStorageNames.deviceNoteEditSource)
+    #expect(first.revision == "1" && first.source == "device")
     let draftID = UUID().uuidString.lowercased()
     _ = try await db.persistNoteDraft(id: noteID, title: "Desktop", content: document("Desktop writing"),
       expectedRevision: "1", operationID: draftID)
@@ -30,7 +30,7 @@ struct LibraryWorkspaceTests {
     #expect(accepted.status == .accepted && accepted.note?.revision == 3)
     let versions = try await db.noteAssetVersions(id: noteID)
     #expect(versions.map(\.revision) == ["3", "2", "1"])
-    #expect(versions[1].title == "Desktop" && versions[1].source == LegacyStorageNames.beforeDeviceNoteEditSource)
+    #expect(versions[1].title == "Desktop" && versions[1].source == "before-device-edit")
     #expect(try await db.workspaceOverview().notes.first(where: { $0.id == noteID })?.revision == "3")
     let restoreID = UUID().uuidString.lowercased()
     let restored = try await db.restoreNoteAssetVersion(noteID: noteID, versionID: first.id,

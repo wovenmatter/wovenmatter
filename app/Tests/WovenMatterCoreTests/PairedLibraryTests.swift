@@ -108,7 +108,7 @@ struct PairedLibraryTests {
     #expect(!tables.contains("desktop_local_acp_sessions"))
     #expect(!tables.contains("workspace_session_deliveries"))
     #expect(!tables.contains("workspace_session_timers"))
-    #expect(!tables.contains("companion_workspace_publishers"))
+    #expect(!tables.contains("library_workspace_publishers"))
     try await a.database.backUpBeforePeerSync()
     #expect(FileManager.default.fileExists(atPath: a.directory.appending(path: "Paired Mac Backups/before-peer-sync.sqlite").path))
     let route = PairedMacRoute(deviceID: a.id, libraryID: try await a.database.libraryWorkspaceID(), endpoint: URL(string: "https://air.example.ts.net:8443/wovenmatter")!, name: "Air")
@@ -160,13 +160,13 @@ extension PairedLibraryTests {
     let a = try await Mac(), b = try await Mac(); defer { a.remove(); b.remove() }
     let bytes = Data([0, 255, 0, 1, 128]), offset: Int64 = 9_007_199_254_740_993
     try await a.database.write { connection in
-      let query = try connection.prepareUnlocked("INSERT INTO companion_artifact_chunks VALUES('fixture',1,?,?)")
+      let query = try connection.prepareUnlocked("INSERT INTO library_artifact_chunks VALUES('fixture',1,?,?)")
       defer { sqlite3_finalize(query) }
       sqlite3_bind_int64(query, 1, offset); try connection.bind(bytes, at: 2, to: query); try connection.stepDone(query)
     }
     try await a.send(to: b)
     let result = try await b.database.read { connection -> (Int64, Data) in
-      let query = try connection.prepareUnlocked("SELECT offset,bytes FROM companion_artifact_chunks WHERE artifact_id='fixture'")
+      let query = try connection.prepareUnlocked("SELECT offset,bytes FROM library_artifact_chunks WHERE artifact_id='fixture'")
       defer { sqlite3_finalize(query) }
       guard sqlite3_step(query) == SQLITE_ROW else { throw WorkspaceDatabaseError.corruptRow }
       return (sqlite3_column_int64(query, 0), try connection.blob(query, column: 1))
@@ -508,11 +508,11 @@ extension PairedLibraryTests {
     try await a.send(to: b)
     #expect(try await b.database.libraryExecutionOwner(conversationID: session) == workspace.id)
     let marker = { () async throws -> String? in
-      try await b.database.read { try $0.historyRowsUnlocked("SELECT transcript FROM companion_execution_conversations WHERE id=?", values: [session]).first?.objectValue?["transcript"]?.stringValue }
+      try await b.database.read { try $0.historyRowsUnlocked("SELECT transcript FROM library_execution_conversations WHERE id=?", values: [session]).first?.objectValue?["transcript"]?.stringValue }
     }
     try await b.database.write { connection in
       try connection.executeUnlocked("UPDATE paired_library_clock SET applying=1")
-      try connection.toolsExecuteUnlocked("UPDATE companion_execution_conversations SET transcript=NULL WHERE id=?", [session])
+      try connection.toolsExecuteUnlocked("UPDATE library_execution_conversations SET transcript=NULL WHERE id=?", [session])
       try connection.executeUnlocked("UPDATE paired_library_clock SET applying=0")
     }
     try await a.send(to: b)
@@ -573,8 +573,8 @@ extension PairedLibraryTests {
     try await mac.database.write { connection in
       try connection.executeUnlocked("UPDATE paired_library_clock SET applying=1")
       try connection.executeUnlocked("DELETE FROM paired_calendar_owners; DELETE FROM paired_library_state WHERE name='owners.bootstrap'")
-      try connection.toolsExecuteUnlocked("INSERT INTO companion_calendar_execution_context(singleton,library_id,workspace_id) VALUES(1,?,?)", [try connection.libraryWorkspaceIDUnlocked(), context])
-      try connection.toolsExecuteUnlocked("INSERT INTO companion_calendar_owners(event_id,device_id) VALUES(?,?),(?,?)", [local, context, phone, phoneID])
+      try connection.toolsExecuteUnlocked("INSERT INTO library_calendar_execution_context(singleton,library_id,workspace_id) VALUES(1,?,?)", [try connection.libraryWorkspaceIDUnlocked(), context])
+      try connection.toolsExecuteUnlocked("INSERT INTO library_calendar_owners(event_id,device_id) VALUES(?,?),(?,?)", [local, context, phone, phoneID])
       try connection.executeUnlocked("UPDATE paired_library_clock SET applying=0")
     }
     let upgraded = try await WorkspaceDatabase(url: mac.database.fileURL)
@@ -592,7 +592,7 @@ extension PairedLibraryTests {
     return try await mac.database.registerExecutionWorkspace(.init(workspace: workspace), deviceID: mac.id)
   }
   private func projectedWorkspace(_ database: WorkspaceDatabase, _ id: String) async throws -> String? {
-    try await database.read { try $0.historyRowsUnlocked("SELECT workspace_id FROM companion_execution_conversations WHERE id=?", values: [id]).first?.objectValue?["workspace_id"]?.stringValue }
+    try await database.read { try $0.historyRowsUnlocked("SELECT workspace_id FROM library_execution_conversations WHERE id=?", values: [id]).first?.objectValue?["workspace_id"]?.stringValue }
   }
   private func insertRun(_ database: WorkspaceDatabase, _ id: String, conversation: String) async throws {
     try await database.write { try $0.toolsExecuteUnlocked("INSERT INTO dashboard_runs(id,conversation_id,status,created_at) VALUES(?,?,'completed',?)",
@@ -609,7 +609,7 @@ extension PairedLibraryTests {
     // An earlier build guessed routing from an editor's origin.
     try await b.database.write { connection in
       try connection.executeUnlocked("UPDATE paired_library_clock SET applying=1")
-      try connection.toolsExecuteUnlocked("UPDATE companion_execution_conversations SET workspace_id=? WHERE id=?", [wrong.id, session])
+      try connection.toolsExecuteUnlocked("UPDATE library_execution_conversations SET workspace_id=? WHERE id=?", [wrong.id, session])
       try connection.executeUnlocked("DELETE FROM paired_library_state WHERE name='projection.v2'; UPDATE paired_library_clock SET applying=0")
     }
     #expect(try await projectedWorkspace(b.database, session) == wrong.id)
@@ -812,8 +812,8 @@ extension PairedLibraryTests {
     _ = try await a.database.registerExecutionWorkspace(.init(workspace: linux), deviceID: a.id)
     // The chat is adopted into the Linux workspace on A.
     try await a.database.write { connection in
-      try connection.toolsExecuteUnlocked("INSERT INTO companion_execution_adoptions(conversation_id,workspace_id,payload) VALUES(?,?,x'7B7D')", [session, linux.id])
-      try connection.toolsExecuteUnlocked("INSERT OR REPLACE INTO companion_execution_conversations(id,workspace_id,conversation) VALUES(?,?,x'7B7D')", [session, linux.id])
+      try connection.toolsExecuteUnlocked("INSERT INTO library_execution_adoptions(conversation_id,workspace_id,payload) VALUES(?,?,x'7B7D')", [session, linux.id])
+      try connection.toolsExecuteUnlocked("INSERT OR REPLACE INTO library_execution_conversations(id,workspace_id,conversation) VALUES(?,?,x'7B7D')", [session, linux.id])
     }
     try await a.send(to: b)
     // Runtime updates from the new executor's history, relayed by B, apply on A.
@@ -833,8 +833,8 @@ extension PairedLibraryTests {
     _ = try #require(try await a.database.mutateGoal(sessionID: session, mutation: .set(objective: "Continue", tokenBudget: nil, turnBudget: nil)))
     // The chat and its goal arrive before its owner record and workspace.
     let records = try await journal(a.database)
-    let metadata = records.filter { ["paired_conversation_owners", "companion_execution_workspaces"].contains($0.table) }
-    try await deliver(records.filter { !["paired_conversation_owners", "companion_execution_workspaces"].contains($0.table) }, to: b.database, from: a.id)
+    let metadata = records.filter { ["paired_conversation_owners", "library_execution_workspaces"].contains($0.table) }
+    try await deliver(records.filter { !["paired_conversation_owners", "library_execution_workspaces"].contains($0.table) }, to: b.database, from: a.id)
     let before = try await lastChange(b.database)
     let goalValue = { try await b.database.read { try $0.historyRowsUnlocked("SELECT value FROM workspace_session_goals WHERE session_id=?", values: [session]).first?.objectValue?["value"]?.stringValue } }
     let originalGoal = try await goalValue()
@@ -864,8 +864,8 @@ extension PairedLibraryTests {
     // The chat is adopted into the Linux workspace; B's copy follows it there.
     try await b.database.write { connection in
       try connection.executeUnlocked("UPDATE paired_library_clock SET applying=1")
-      try connection.toolsExecuteUnlocked("INSERT OR REPLACE INTO companion_execution_conversations(id,workspace_id,conversation) VALUES(?,?,x'7B7D')", [session, linux.id])
-      try connection.toolsExecuteUnlocked("INSERT OR REPLACE INTO companion_execution_adoptions(conversation_id,workspace_id,payload) VALUES(?,?,x'7B7D')", [session, linux.id])
+      try connection.toolsExecuteUnlocked("INSERT OR REPLACE INTO library_execution_conversations(id,workspace_id,conversation) VALUES(?,?,x'7B7D')", [session, linux.id])
+      try connection.toolsExecuteUnlocked("INSERT OR REPLACE INTO library_execution_adoptions(conversation_id,workspace_id,payload) VALUES(?,?,x'7B7D')", [session, linux.id])
       try connection.executeUnlocked("UPDATE paired_library_clock SET applying=0")
     }
     // Routing resolves to the independent Linux workspace, never the old Mac,

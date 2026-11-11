@@ -13,19 +13,19 @@ import WovenMatterCore
 
 extension WorkspaceDatabaseConnection {
   public func librarySavedArtifacts() throws -> [LibraryArtifactManifest] {
-    try withLock { try federationValuesUnlocked("SELECT manifest FROM companion_saved_artifacts ORDER BY id", as: LibraryArtifactManifest.self) }
+    try withLock { try federationValuesUnlocked("SELECT manifest FROM library_saved_artifacts ORDER BY id", as: LibraryArtifactManifest.self) }
   }
   public func libraryArtifactTransfer(id: String) throws -> LibraryArtifactTransfer? {
     try withLock { try artifactTransferUnlocked(id: id) }
   }
   private func artifactTransferUnlocked(id: String) throws -> LibraryArtifactTransfer? {
-    if let manifest = try federationValuesUnlocked("SELECT manifest FROM companion_artifact_uploads WHERE id=?", bindings: [id], as: LibraryArtifactManifest.self).first {
-      return try LibraryArtifactTransfer(manifest: manifest, nextOffset: federationScalarUnlocked("SELECT next_offset FROM companion_artifact_uploads WHERE id=?", bindings: [id]), complete: false)
+    if let manifest = try federationValuesUnlocked("SELECT manifest FROM library_artifact_uploads WHERE id=?", bindings: [id], as: LibraryArtifactManifest.self).first {
+      return try LibraryArtifactTransfer(manifest: manifest, nextOffset: federationScalarUnlocked("SELECT next_offset FROM library_artifact_uploads WHERE id=?", bindings: [id]), complete: false)
     }
     return try committedArtifactUnlocked(id).map { LibraryArtifactTransfer(manifest: $0, nextOffset: $0.byteCount, complete: true) }
   }
   private func committedArtifactUnlocked(_ id: String) throws -> LibraryArtifactManifest? {
-    try federationValuesUnlocked("SELECT manifest FROM companion_saved_artifacts WHERE id=?", bindings: [id], as: LibraryArtifactManifest.self).first
+    try federationValuesUnlocked("SELECT manifest FROM library_saved_artifacts WHERE id=?", bindings: [id], as: LibraryArtifactManifest.self).first
   }
   public func registerLibraryArtifact(_ request: LibraryArtifactRegistration, deviceID: String) throws -> LibraryArtifactTransfer {
     try transaction {
@@ -57,10 +57,10 @@ extension WorkspaceDatabaseConnection {
           throw federationError("invalid_artifact", "A deletion must reference the committed artifact.")
         }
         try saveCommittedArtifactUnlocked(manifest)
-        try toolsExecuteUnlocked("DELETE FROM companion_artifact_chunks WHERE artifact_id=?", [manifest.id])
+        try toolsExecuteUnlocked("DELETE FROM library_artifact_chunks WHERE artifact_id=?", [manifest.id])
         return LibraryArtifactTransfer(manifest: manifest, nextOffset: manifest.byteCount, complete: true)
       }
-      let statement = try prepareUnlocked("INSERT INTO companion_artifact_uploads(id,revision,manifest) VALUES (?,?,?)")
+      let statement = try prepareUnlocked("INSERT INTO library_artifact_uploads(id,revision,manifest) VALUES (?,?,?)")
       defer { sqlite3_finalize(statement) }
       try bind(manifest.id, at: 1, to: statement); sqlite3_bind_int64(statement, 2, manifest.revision)
       try bind(JSONEncoder().encode(manifest), at: 3, to: statement); try stepDone(statement)
@@ -78,7 +78,7 @@ extension WorkspaceDatabaseConnection {
             Int64(chunk.data.count) <= transfer.manifest.byteCount - chunk.offset else {
         throw federationError("invalid_chunk", "The artifact chunk exceeds its declared bounds.")
       }
-      let lookup = try prepareUnlocked("SELECT bytes FROM companion_artifact_chunks WHERE artifact_id=? AND revision=? AND offset=?")
+      let lookup = try prepareUnlocked("SELECT bytes FROM library_artifact_chunks WHERE artifact_id=? AND revision=? AND offset=?")
       defer { sqlite3_finalize(lookup) }
       try bind(chunk.id, at: 1, to: lookup); sqlite3_bind_int64(lookup, 2, chunk.revision); sqlite3_bind_int64(lookup, 3, chunk.offset)
       let code = sqlite3_step(lookup)
@@ -88,12 +88,12 @@ extension WorkspaceDatabaseConnection {
       }
       guard code == SQLITE_DONE else { throw stepError() }
       guard !transfer.complete, chunk.offset == transfer.nextOffset else { throw federationError("chunk_gap", "Resume from the acknowledged next artifact offset.") }
-      let insert = try prepareUnlocked("INSERT INTO companion_artifact_chunks VALUES (?,?,?,?)")
+      let insert = try prepareUnlocked("INSERT INTO library_artifact_chunks VALUES (?,?,?,?)")
       defer { sqlite3_finalize(insert) }
       try bind(chunk.id, at: 1, to: insert); sqlite3_bind_int64(insert, 2, chunk.revision); sqlite3_bind_int64(insert, 3, chunk.offset)
       try bind(chunk.data, at: 4, to: insert); try stepDone(insert)
       let next = chunk.offset + Int64(chunk.data.count)
-      let update = try prepareUnlocked("UPDATE companion_artifact_uploads SET next_offset=? WHERE id=?")
+      let update = try prepareUnlocked("UPDATE library_artifact_uploads SET next_offset=? WHERE id=?")
       defer { sqlite3_finalize(update) }
       sqlite3_bind_int64(update, 1, next); try bind(chunk.id, at: 2, to: update); try stepDone(update)
       return LibraryArtifactTransfer(manifest: transfer.manifest, nextOffset: next, complete: false)
@@ -108,7 +108,7 @@ extension WorkspaceDatabaseConnection {
       if transfer.complete { return transfer.manifest }
       guard transfer.nextOffset == transfer.manifest.byteCount else { throw federationError("incomplete_artifact", "The saved artifact has not finished uploading.") }
       var hash = SHA256(); var offset: Int64 = 0
-      let statement = try prepareUnlocked("SELECT offset,bytes FROM companion_artifact_chunks WHERE artifact_id=? AND revision=? ORDER BY offset")
+      let statement = try prepareUnlocked("SELECT offset,bytes FROM library_artifact_chunks WHERE artifact_id=? AND revision=? ORDER BY offset")
       defer { sqlite3_finalize(statement) }
       try bind(request.id, at: 1, to: statement); sqlite3_bind_int64(statement, 2, request.revision)
       while true {
@@ -122,15 +122,15 @@ extension WorkspaceDatabaseConnection {
         throw federationError("artifact_digest", "The transferred artifact does not match its source digest. Your existing saved revision is preserved.")
       }
       try saveCommittedArtifactUnlocked(transfer.manifest)
-      try toolsExecuteUnlocked("DELETE FROM companion_artifact_uploads WHERE id=?", [request.id])
-      let cleanup = try prepareUnlocked("DELETE FROM companion_artifact_chunks WHERE artifact_id=? AND revision<>?")
+      try toolsExecuteUnlocked("DELETE FROM library_artifact_uploads WHERE id=?", [request.id])
+      let cleanup = try prepareUnlocked("DELETE FROM library_artifact_chunks WHERE artifact_id=? AND revision<>?")
       defer { sqlite3_finalize(cleanup) }
       try bind(request.id, at: 1, to: cleanup); sqlite3_bind_int64(cleanup, 2, request.revision); try stepDone(cleanup)
       return transfer.manifest
     }
   }
   private func saveCommittedArtifactUnlocked(_ manifest: LibraryArtifactManifest) throws {
-    let statement = try prepareUnlocked("INSERT INTO companion_saved_artifacts VALUES (?,?,?) ON CONFLICT(id) DO UPDATE SET revision=excluded.revision,manifest=excluded.manifest")
+    let statement = try prepareUnlocked("INSERT INTO library_saved_artifacts VALUES (?,?,?) ON CONFLICT(id) DO UPDATE SET revision=excluded.revision,manifest=excluded.manifest")
     defer { sqlite3_finalize(statement) }
     try bind(manifest.id, at: 1, to: statement); sqlite3_bind_int64(statement, 2, manifest.revision)
     try bind(JSONEncoder().encode(manifest), at: 3, to: statement); try stepDone(statement)
@@ -141,7 +141,7 @@ extension WorkspaceDatabaseConnection {
             revision == nil || revision == manifest.revision, offset >= 0, offset < manifest.byteCount else {
         throw federationError("not_found", "This saved artifact revision or offset is unavailable.")
       }
-      let statement = try prepareUnlocked("SELECT offset,bytes FROM companion_artifact_chunks WHERE artifact_id=? AND revision=? AND offset<=? ORDER BY offset DESC LIMIT 1")
+      let statement = try prepareUnlocked("SELECT offset,bytes FROM library_artifact_chunks WHERE artifact_id=? AND revision=? AND offset<=? ORDER BY offset DESC LIMIT 1")
       defer { sqlite3_finalize(statement) }
       try bind(id, at: 1, to: statement); sqlite3_bind_int64(statement, 2, manifest.revision); sqlite3_bind_int64(statement, 3, offset)
       guard sqlite3_step(statement) == SQLITE_ROW else { throw WorkspaceDatabaseError.corruptRow }

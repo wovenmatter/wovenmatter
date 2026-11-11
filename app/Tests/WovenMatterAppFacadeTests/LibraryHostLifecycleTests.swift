@@ -10,17 +10,6 @@ import WovenMatterCore
 @MainActor @Suite(.serialized)
 struct LibraryHostLifecycleTests {
 
-    /// A frontend and backend of different versions must agree on the legacy wire key.
-    @Test func libraryHostCommandsKeepTheirLegacyBackendKey() throws {
-        let command = try JSONSerialization.jsonObject(with: JSONEncoder().encode(BackendApplicationCommand.libraryHost(.status))) as? [String: Any]
-        #expect(command?.keys.sorted() == ["companion"])
-        let legacy = Data(#"{"companion":{"_0":{"status":{}}}}"#.utf8)
-        guard case .libraryHost(.status) = try JSONDecoder().decode(BackendApplicationCommand.self, from: legacy) else {
-            Issue.record("The legacy library host command did not decode"); return
-        }
-        #expect(BackendApplicationResult.CodingKeys.libraryHost.stringValue == "companion")
-    }
-
     @Test func restoredCancellationRetainsItsProofUntilTheMacAcknowledges() async throws {
         let identity = PairingDeviceIdentity(deviceID: UUID().uuidString.lowercased(), deviceName: "Fixture Mac", metadata: .init(kind: .mac))
         let request = PairingApprovalRequest(requestID: UUID().uuidString.lowercased(), requestSecret: String(repeating: "s", count: 43), identity: identity)
@@ -560,7 +549,7 @@ extension LibraryHostLifecycleTests {
         // (and fail the same way), so more than one attempt is legitimate.
         #expect(failures >= 1)
         // ...but is recorded as applied only once local revocation succeeds.
-        let applied = { air.defaults.stringArray(forKey: LegacyStorageNames.appliedPeerRevocationsKey) ?? [] }
+        let applied = { air.defaults.stringArray(forKey: LibraryHostController.appliedPeerRevocationsKey) ?? [] }
         #expect(!applied().contains { $0.hasPrefix(phoneID + ":") })
         air.host.beforeLocalRevocation = nil
         try await air.host.applyPeerRevocations()
