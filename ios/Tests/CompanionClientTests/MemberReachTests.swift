@@ -87,6 +87,40 @@ final class MemberReachTests: XCTestCase {
     XCTAssertEqual(state.candidates(registry: registry).first?.endpoint.absoluteString, "https://box.tail1.ts.net/wovenmatter")
   }
 
+  /// Only Macs record product analytics. Synced through a Linux host, the
+  /// phone sends them to its preferred Mac; with no Mac it sends nothing.
+  func testAnalyticsFollowTheCurrentMacAndSkipLinuxHosts() async throws {
+    let studio = "a0000000-0000-0000-0000-000000000001", mini = "a0000000-0000-0000-0000-000000000002"
+    let box = "a0000000-0000-0000-0000-000000000003"
+    var state = MobileMembershipState(deviceID: phoneID, pairedEndpoint: URL(string: "https://studio.tail1.ts.net/wovenmatter")!, pairedHostDeviceID: studio)
+    state.members = [
+      .init(deviceID: studio, kind: "mac", name: "Studio", endpoints: [URL(string: "https://studio.tail1.ts.net/wovenmatter")!]),
+      .init(deviceID: mini, kind: "mac", name: "Mini", endpoints: [URL(string: "https://mini.tail1.ts.net/wovenmatter")!]),
+      .init(deviceID: box, kind: "linux", name: "Box", endpoints: [URL(string: "https://box.tail1.ts.net/wovenmatter")!]),
+    ]
+    let linux = MobileLibraryHost(deviceID: box, kind: "linux", name: "Box", endpoint: URL(string: "https://box.tail1.ts.net/wovenmatter")!)
+    let other = MobileLibraryHost(deviceID: mini, kind: "mac", name: "Mini", endpoint: URL(string: "https://mini.tail1.ts.net/wovenmatter")!)
+    state.preferredHostDeviceID = box
+    XCTAssertEqual(state.analyticsHost(current: linux)?.name, "Studio", "A Linux host never takes analytics; the paired Mac does")
+    XCTAssertEqual(state.analyticsHost(current: other)?.name, "Mini", "The current Mac host takes them")
+    XCTAssertEqual(state.analyticsHost(current: nil)?.name, "Studio")
+    var linuxOnly = MobileMembershipState(deviceID: phoneID, pairedEndpoint: URL(string: "https://box.tail1.ts.net/wovenmatter")!, pairedHostDeviceID: box)
+    linuxOnly.members = [.init(deviceID: box, kind: "linux", name: "Box", endpoints: [URL(string: "https://box.tail1.ts.net/wovenmatter")!])]
+    XCTAssertNil(linuxOnly.analyticsHost(current: linux))
+
+    // The engine-facing transport reaches the chosen Mac, not the Linux connection it synced with.
+    let http = RecordingHTTP { _ in (200, Data("{}".utf8)) }
+    let identity = try MobileMemberKeyVault.loadOrCreate(deviceID: phoneID, storage: .memory())
+    let hosts = try MobileLibraryHosts(state: state, identity: identity, file: nil, performer: http)
+    let synced = try await hosts.transport(for: linux)
+    let chosen = await hosts.analyticsTransport(current: linux, connection: synced)
+    _ = try? await chosen?.analyticsPreference()
+    XCTAssertEqual(http.requests.last?.url?.host, "studio.tail1.ts.net")
+    let onMac = try await hosts.transport(for: other)
+    let same = await hosts.analyticsTransport(current: other, connection: onMac)
+    XCTAssertTrue(same === onMac, "Synced through a Mac, analytics reuse that connection")
+  }
+
   func testConnectFailsOverToTheNextOnlineHostAndRemembersIt() async throws {
     var state = MobileMembershipState(deviceID: phoneID, pairedEndpoint: URL(string: "https://studio.tail1.ts.net/wovenmatter")!)
     state.members = [.init(deviceID: "a0000000-0000-0000-0000-000000000003", kind: "linux", name: "Box", endpoints: [URL(string: "https://box.tail1.ts.net/wovenmatter/")!])]

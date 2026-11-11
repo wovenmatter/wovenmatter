@@ -99,6 +99,16 @@ extension CompanionModel {
     return true
   }
 
+  /// Analytics go to a Mac only: the paired Mac's grant, or in member mode
+  /// the current host when it is a Mac, else the preferred Mac. Nil while
+  /// unpaired, so a standalone phone sends nothing. Each synchronization
+  /// re-binds this as the host changes (`MobileSyncEngine`).
+  func analyticsTransport() async -> (any ProductAnalyticsTransport)? {
+    guard credential != nil else { return nil }
+    guard let hosts = libraryHosts else { return transport }
+    return await hosts.analyticsTransport(current: membership?.currentHost, connection: nil, registry: executionWorkspaces)
+  }
+
   /// After a synchronization: direct calls (note bodies, capabilities,
   /// receipts) go to the host it chose.
   func adoptCurrentLibraryHost(_ engine: MobileSyncEngine) async {

@@ -4,6 +4,7 @@ import WovenMatterCompanion
 
 private actor FakeMac: CompanionTransport, FederationTransport, CompanionCalendarTransport, CompanionDictationTransport {
   var dictations: [DictationRecord] = []
+  var analyticsEvents: [ProductAnalyticsEvent.Name] = []
   func publishDictation(_ record: DictationRecord) throws -> DictationRecord {
     if !dictations.contains(where: { $0.id == record.id }) { dictations.append(record) }
     return record
@@ -108,6 +109,17 @@ private actor FakeMac: CompanionTransport, FederationTransport, CompanionCalenda
   func receipt(_ id: String) async throws -> CompanionCommandReceipt? { receipts[id] }
 }
 
+extension FakeMac: ProductAnalyticsTransport {
+  func analyticsPreference() -> ProductAnalyticsPreference { .init(analyticsID: "mac-analytics") }
+  func setAnalyticsPreference(_ change: ProductAnalyticsPreferenceChange) -> ProductAnalyticsPreference {
+    .init(analyticsID: "mac-analytics", enabled: change.enabled, revision: change.expectedRevision + 1)
+  }
+  func sendAnalytics(_ batch: ProductAnalyticsBatch) -> ProductAnalyticsAcknowledgement {
+    analyticsEvents += batch.events.map(\.name)
+    return .init(acceptedEventIDs: batch.events.map(\.id), preference: analyticsPreference())
+  }
+}
+
 final class MobileSyncEngineTests: XCTestCase {
 
   func file() -> URL { FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).appendingPathComponent("library.json") }
@@ -169,6 +181,84 @@ final class MobileSyncEngineTests: XCTestCase {
     XCTAssertEqual(state.transcripts["older"]?.messages.map(\.id), ["old", "new"])
     XCTAssertNil(state.transcripts["older"]?.olderCursor)
     XCTAssertEqual(state.pinnedTranscriptIDs, ["older"])
+  }
+
+
+  /// Everything made on a phone that was never paired reaches the library
+  /// once when it pairs later: notes with their latest writing (a note deleted
+  /// before pairing never appears), folders, Quick Chat history, calendar events
+  /// and timer reminders. A second pass sends nothing again. Analytics start
+  /// only once a Mac is paired.
+  func testStandaloneWritingUploadsOnceWhenPairedLater() async throws {
+    let store = try MobileStore(file: file()), mac = FakeMac()
+    let device = await store.snapshot().deviceID
+    let unpaired = await store.snapshot().workspaceID
+    XCTAssertNil(unpaired)
+    let folder = try await store.createFolder(name: "Ideas")
+    let filed = try await store.createNote(folderID: folder.id, title: "Untitled note", content: content("first"))
+    try await store.editNote(id: filed.id, title: "Trip", content: content("second"), folderID: folder.id, base: filed)
+    let edited = await store.snapshot().notes[filed.id]!
+    try await store.editNote(id: filed.id, title: "Trip plan", content: content("final writing"), folderID: folder.id, base: edited)
+    let loose = try await store.createNote(folderID: nil, title: "Groceries", content: content("milk"))
+    let discarded = try await store.createNote(folderID: nil, title: "Scratch", content: content("delete me"))
+    try await store.deleteWorkspaceNote(id: discarded.id, base: discarded)
+    // Quick Chat history is journaled before this phone's workspace is registered anywhere.
+    try await store.journal.append(workspaceID: device, conversation: .init(id: "quick-chat", title: "Weekend", workspaceID: device),
+      transcript: .init(conversationID: "quick-chat", messages: [.init(id: "m1", conversationID: "quick-chat", role: "user", content: "Plan Saturday")]))
+    try await store.adoptExecution(conversation: .init(id: "quick-chat", title: "Weekend", workspaceID: device))
+    _ = try await store.calendar.save(expectedRevision: nil, draft: .init(title: "Dentist", startsAt: Date().addingTimeInterval(86_400), timeZoneID: "UTC"))
+    let timerID = UUID().uuidString.lowercased()
+    let timer = await store.executeLocalTool(.init(arguments: ["timers", "create", "--text", "Stretch", "--at",
+      ISO8601DateFormatter().string(from: Date().addingTimeInterval(3_600))], requestID: timerID),
+      context: .init(sessionID: "quick-chat", workspaceID: device, enabled: [.timers]))
+    XCTAssertTrue(timer.success)
+    _ = try await store.reconcileTimerReminders(sessionIDs: ["quick-chat"], now: Date())
+    try await store.analytics.record(.appOpened, platform: "ios")
+    let unsent = await mac.analyticsEvents
+    XCTAssertTrue(unsent.isEmpty, "A standalone phone has nowhere to send analytics")
+
+    // Pairing: the commit binds the library and the app registers this phone's workspace.
+    try await store.prepareForPairing("mac-a")
+    try await store.journal.upsertWorkspace(.init(id: device, libraryID: "mac-a", ownerDeviceID: device, kind: .ios, name: "Phone",
+      capabilities: ["quick-chat", "notes", "approvals", "questions"]))
+    let engine = MobileSyncEngine(store: store, transport: mac)
+    try await engine.synchronize()
+    try await engine.synchronize()
+
+    let notes = await mac.notes, folders = await mac.folders, mutations = await mac.mutations
+    XCTAssertEqual(Set(notes.keys), [filed.id, loose.id])
+    XCTAssertEqual(notes[filed.id]?.title, "Trip plan")
+    XCTAssertEqual(notes[filed.id]?.content, try content("final writing"))
+    XCTAssertEqual(notes[filed.id]?.folderID, folder.id)
+    XCTAssertEqual(folders[folder.id]?.name, "Ideas")
+    XCTAssertEqual(mutations.filter { $0.kind == .createNote }.count, 2, "Each note is created once, with its latest writing")
+    XCTAssertEqual(mutations.filter { $0.kind == .createFolder }.count, 1)
+    XCTAssertFalse(mutations.contains { $0.resourceID == discarded.id })
+    let uploads = await mac.journalUploads
+    XCTAssertEqual(Set(uploads.map(\.conversationID)), ["quick-chat"])
+    XCTAssertEqual(uploads.count, Set(uploads.map(\.eventID)).count, "No history entry is sent twice")
+    XCTAssertTrue(uploads.contains { $0.transcript?.messages.contains { $0.content == "Plan Saturday" } == true })
+    let calendar = await mac.calendarRecords
+    XCTAssertTrue(calendar.contains { $0.event.draft.title == "Dentist" })
+    XCTAssertTrue(calendar.contains { $0.id == MobileStore.reminderEventID(timerID: timerID) })
+    XCTAssertEqual(calendar.count, Set(calendar.map(\.id)).count)
+
+    let local = await store.snapshot()
+    XCTAssertEqual(local.workspaceID, "mac-a")
+    XCTAssertTrue(local.outbox.isEmpty)
+    XCTAssertEqual(Set(local.notes.keys), [filed.id, loose.id], "The phone keeps its notes, with no duplicates")
+    XCTAssertEqual(local.notes[filed.id]?.content, try content("final writing"))
+    XCTAssertNotNil(local.folders[folder.id])
+    XCTAssertEqual(local.conversations["quick-chat"]?.title, "Weekend")
+    let pendingCalendar = await store.calendar.pendingCount()
+    XCTAssertEqual(pendingCalendar, 0)
+
+    // Pairing bound analytics to the Mac: they flow now, and only through it.
+    for _ in 0..<50 { if await store.analytics.snapshot().preference != nil { break }; try await Task.sleep(for: .milliseconds(20)) }
+    try await store.analytics.record(.appOpened, platform: "ios")
+    for _ in 0..<50 { if !(await mac.analyticsEvents.isEmpty) { break }; try await Task.sleep(for: .milliseconds(20)) }
+    let sent = await mac.analyticsEvents
+    XCTAssertEqual(sent, [.appOpened])
   }
 
 }
