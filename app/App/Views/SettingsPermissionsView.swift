@@ -94,15 +94,8 @@ struct SettingsPermissionsView: View {
     @ViewBuilder
     private func row(_ item: MacAccessSetupModel.Item) -> some View {
         let access = macAccess.access(item)
-        // What each permission is for always shows; how to allow it is added until it is.
-        let next: String? = access == .allowed ? nil
-            : access == .needsReopen ? "Reopen Woven Matter so macOS applies it."
-            : item == .keychain && !isChecking(item) ? (model.credentialAccessStatus.flatMap { $0.hasPrefix("Keychain access needs attention") ? $0 : nil } ?? item.howToAllow)
-            : item.howToAllow
-        SettingsRow(
-            title: item.permissionTitle,
-            detail: [item.permissionDetail, next].compactMap { $0 }.joined(separator: "\n")
-        ) {
+        // Each row says only what the permission does; the button handles the rest.
+        SettingsRow(title: item.permissionTitle, detail: item.permissionDetail) {
             if access == .allowed {
                 MacPermissionStatusLabel(access: access)
             } else if isChecking(item) {
@@ -180,25 +173,15 @@ extension CompanionMacAccessStatus.Item {
         self == .keychain ? "Keychain" : displayName
     }
 
-    /// What the permission lets Woven Matter do, in one line.
+    /// What the permission does, in one line.
     var permissionDetail: String {
         switch self {
-        case .keychain: "Use the subscriptions, API keys, and website passwords you've saved in Woven Matter. They stay in your Mac's Keychain."
-        case .microphone: "Dictate instead of typing in chats and notes. Audio stays on this Mac."
-        case .automation: "Control Finder and System Events. Other apps ask the first time an agent uses them."
-        case .fullDiskAccess: "Open and change files anywhere on this Mac, including Desktop, Documents, and Downloads, without asking each time."
-        case .accessibility: "Click, type, and use menus in other apps for Computer Use."
-        case .screenRecording: "See windows and what's on the screen for Computer Use."
-        }
-    }
-
-    /// What to do when it isn't allowed yet, in one line.
-    var howToAllow: String {
-        switch self {
-        case .keychain: "When macOS asks, enter your Mac password and choose Always Allow."
-        case .fullDiskAccess: "Allow opens the list and shows this app in Finder. Drag it in, then switch it on."
-        case .accessibility, .screenRecording: "Allow opens System Settings. Switch this app on."
-        default: "Allow, then choose OK when macOS asks."
+        case .keychain: "Stores your credentials, API keys, and website passwords in your Mac's Keychain."
+        case .microphone: "Uses this Mac's microphone and its built-in dictation model for dictation."
+        case .automation: "Lets agents control Finder, System Events, and other apps on this Mac."
+        case .fullDiskAccess: "Lets agents open and edit files anywhere on this Mac, including Desktop, Documents, and Downloads."
+        case .accessibility: "Lets agents click, type, and use menus in other apps."
+        case .screenRecording: "Lets agents see windows and what's on the screen for Computer Use."
         }
     }
 

@@ -136,8 +136,8 @@ when an intentional design change is accepted.
   agents on this Mac or the user's other devices stop at a prompt here without
   these permissions. Everything is one section: a header with how many are not
   allowed yet and one **Allow all** button, then one row per permission with its
-  System Settings name, what it lets Woven Matter do, how to allow it while it isn't
-  allowed, and a quiet "Allowed" check or its own **Allow** button. Allow all brings up each prompt in turn with no steps, Skip or
+  System Settings name, one line saying only what it does (no instructions), and a
+  quiet "Allowed" check or its own **Allow** button. Allow all brings up each prompt in turn with no steps, Skip or
   Stop. A row shows **Reopen** only when macOS needs the app reopened. Other
   settings that depend on a permission (Dictation, Computer Use) show a one-line
   status with a Permissions & Access link instead of their own controls; the

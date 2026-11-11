@@ -17,8 +17,8 @@ Accessibility, and Screen Recording, one row each.
 | Microphone | Dictation (attended) | `AVCaptureDevice.requestAccess` | `AVCaptureDevice.authorizationStatus` |
 
 The page is one section. Each permission is one row with its System Settings name,
-what it lets Woven Matter do, how to allow it while it isn't allowed, and either a
-quiet "Allowed" check or its own **Allow** button,
+one line saying what it does, and either a quiet "Allowed" check or its own
+**Allow** button,
 which asks for that permission only (an in-app prompt for Keychain, Automation
 and Microphone; the System Settings pane for the rest). Rows refresh every two
 seconds while the page is open, so a grant made in System Settings shows without
