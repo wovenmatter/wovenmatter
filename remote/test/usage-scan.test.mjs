@@ -4,7 +4,7 @@ import { mkdtempSync, mkdirSync, rmSync, utimesSync, writeFileSync } from 'node:
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { zstdCompressSync } from 'node:zlib'
-import { aggregate, codexParser, createUsageScanner, parseClaudeLine, parseGrokLine, parseOpenCodeRow, toRecord } from '../src/usage-scan.mjs'
+import { aggregate, codexParser, createUsageScanner, lines, parseClaudeLine, parseGrokLine, parseOpenCodeRow, readPiDurableDatabase, toRecord } from '../src/usage-scan.mjs'
 
 const codexLines = (session, secret = 'secret prompt text') => [
   JSON.stringify({ type: 'session_meta', timestamp: '2026-02-04T12:00:00Z', payload: { id: session, cwd: '/home/me/private/project', originator: 'codex_cli' } }),
@@ -235,5 +235,76 @@ test('a host scan counts archived Codex chats once, Pi sessions, Pi Durable in e
     assert.ok(durable.every(record => record.application === 'Woven Matter'))
     assert.equal(page.records.filter(record => record.totalTokens >= 999).length, 0)
     assert.ok(!JSON.stringify(page.records).includes('private'))
+  } finally { rmSync(home, { recursive: true, force: true }) }
+})
+
+test('a compressed transcript that cannot be opened fails instead of waiting forever', async () => {
+  const home = mkdtempSync(join(tmpdir(), 'usage-scan-missing-'))
+  try {
+    const read = (async () => { for await (const line of lines(join(home, 'gone.jsonl.zst'))) void line })()
+    const outcome = await Promise.race([read.then(() => 'finished', () => 'failed'), new Promise(resolve => setTimeout(() => resolve('hung'), 2_000))])
+    assert.equal(outcome, 'failed')
+  } finally { rmSync(home, { recursive: true, force: true }) }
+})
+
+test('an unchanged Pi Durable store is not read again, and a new reply in it is', async () => {
+  const home = mkdtempSync(join(tmpdir(), 'usage-scan-stores-'))
+  try {
+    const path = join(home, 'workspace.sqlite'), quiet = 'wm_pi_' + 'c'.repeat(32) + '_', busy = 'wm_pi_' + 'd'.repeat(32) + '_'
+    await piDurableDatabase(path, { stores: [
+      { session: 'quiet', prefix: quiet, entries: [piEntry(1, 1, piReply(1_790_000_000_000, 10))] },
+      { session: 'busy', prefix: busy, entries: [piEntry(1, 1, piReply(1_790_000_000_000, 20))] },
+    ] })
+    const first = await readPiDurableDatabase(path)
+    assert.equal(first.events.length, 2)
+    const { DatabaseSync } = await import('node:sqlite')
+    const database = new DatabaseSync(path)
+    database.prepare(`INSERT INTO "${busy}entries" VALUES (2, 1, NULL, 2, ?)`).run(JSON.stringify(piEntry(2, 1, piReply(1_790_000_060_000, 30))))
+    database.close()
+    const second = await readPiDurableDatabase(path, first.stores)
+    assert.equal(second.events.length, 3)
+    // The quiet store's events are the ones already held, not a new read.
+    assert.equal(second.stores.get(quiet), first.stores.get(quiet))
+    assert.notEqual(second.stores.get(busy), first.stores.get(busy))
+  } finally { rmSync(home, { recursive: true, force: true }) }
+})
+
+test('a database that fails to read keeps what it reported before', async () => {
+  const home = mkdtempSync(join(tmpdir(), 'usage-scan-failed-'))
+  try {
+    const workspace = join(home, '.woven-matter'), path = join(workspace, '.wovenmatter/workspace.sqlite')
+    mkdirSync(join(workspace, '.wovenmatter'), { recursive: true })
+    await piDurableDatabase(path, { stores: [{ session: 's', prefix: 'wm_pi_' + 'e'.repeat(32) + '_', entries: [piEntry(1, 1, piReply(1_790_000_000_000, 10))] }] })
+    let clock = 0
+    const scanner = createUsageScanner({ env: {}, home, workspaceRoot: workspace, refreshMilliseconds: 1, now: () => clock })
+    assert.equal((await settle(scanner)).records.length, 1)
+    writeFileSync(path, 'not a database')
+    clock = 10
+    await scanner.start()
+    assert.equal((await scanner.page()).records.length, 1)
+  } finally { rmSync(home, { recursive: true, force: true }) }
+})
+
+test('one collection pages through one snapshot even when a scan finishes in between', async () => {
+  const home = mkdtempSync(join(tmpdir(), 'usage-scan-paging-'))
+  try {
+    const sessions = join(home, '.codex/sessions')
+    mkdirSync(sessions, { recursive: true })
+    for (let index = 0; index < 3; index += 1) writeFileSync(join(sessions, `rollout-${index}.jsonl`), codexLines(`s${index}`))
+    let clock = 0
+    const scanner = createUsageScanner({ env: {}, home, refreshMilliseconds: 1, now: () => clock, pageSize: 2 })
+    const first = await settle(scanner)
+    assert.equal(first.records.length, 2)
+    assert.equal(first.hasMore, true)
+    // Another rollout arrives and a scan completes while the first collection is still paging.
+    writeFileSync(join(sessions, 'rollout-new.jsonl'), codexLines('new'))
+    clock = 10
+    await scanner.start()
+    const later = await scanner.page({ since: 0, offset: 2 })
+    assert.equal(later.records.length, 1)
+    assert.equal(later.hasMore, false)
+    // The next collection sees the new rollout.
+    const next = await scanner.page({ since: 0, offset: 0 })
+    assert.equal((await scanner.page({ since: 0, offset: next.nextOffset })).records.length + next.records.length, 4)
   } finally { rmSync(home, { recursive: true, force: true }) }
 })

@@ -233,32 +233,43 @@ const SAFE_PREFIX = /^(wm_pi|pibot)_[0-9a-f]{32}_$/
 
 /// Pi Durable stores in one SQLite database: the default agent's (`wm_pi_runtime_stores`)
 /// and the bots runtime's (`pibot_bots`), each bot conversation its own session.
-async function readPiDurableDatabase(path) {
-  let database
+/// Entries are only ever appended, so a store whose row count and newest ID match
+/// `held` is not read again. Returns the events and each store's stamp for next time.
+export async function readPiDurableDatabase(path, held = new Map()) {
+  const { DatabaseSync } = await import('node:sqlite')
+  const database = new DatabaseSync(path, { readOnly: true, timeout: 1_000 })
   try {
-    const { DatabaseSync } = await import('node:sqlite')
-    database = new DatabaseSync(path, { readOnly: true })
     const has = name => !!database.prepare(`SELECT 1 FROM sqlite_master WHERE type='table' AND name=?`).get(name)
     const stores = []
     if (has('wm_pi_runtime_stores')) for (const row of database.prepare('SELECT session_id, schema_prefix FROM wm_pi_runtime_stores').all()) stores.push({ prefix: row.schema_prefix, session: { id: row.session_id }, bot: false })
     if (has('pibot_bots')) for (const row of database.prepare('SELECT id, name, schema_prefix FROM pibot_bots').all()) stores.push({ prefix: row.schema_prefix, session: { id: `bot:${row.id}`, agent: row.name ?? null }, bot: true })
-    const events = []
+    const events = [], read = new Map()
     for (const store of stores) {
       if (!SAFE_PREFIX.test(store.prefix) || !has(store.prefix + 'entries')) continue
-      const byConversation = new Map()
-      for (const row of database.prepare(`SELECT conversation_id AS conversation, record FROM "${store.prefix}entries" WHERE instr(record, '"usage"') > 0 ORDER BY id`).iterate()) {
-        const key = String(row.conversation)
-        if (!byConversation.has(key)) byConversation.set(key, [])
-        byConversation.get(key).push(row.record)
+      const table = `"${store.prefix}entries"`
+      const { count, last } = database.prepare(`SELECT count(*) AS count, coalesce(max(id), 0) AS last FROM ${table}`).get()
+      const stamp = `${count}:${last}:${store.session.agent ?? ''}`
+      let found = held.get(store.prefix)
+      if (found?.stamp !== stamp) {
+        const byConversation = new Map()
+        for (const row of database.prepare(`SELECT conversation_id AS conversation, record FROM ${table} WHERE instr(record, '"usage"') > 0 ORDER BY id`).iterate()) {
+          const key = String(row.conversation)
+          if (!byConversation.has(key)) byConversation.set(key, [])
+          byConversation.get(key).push(row.record)
+        }
+        const storeEvents = []
+        for (const [conversation, records] of byConversation) {
+          const session = store.bot ? { id: `${store.session.id}:${conversation}`, agent: store.session.agent } : store.session
+          for (const value of piDurableEvents(records, session)) storeEvents.push(value)
+          await nextTurn()
+        }
+        found = { stamp, events: storeEvents }
       }
-      for (const [conversation, records] of byConversation) {
-        const session = store.bot ? { id: `${store.session.id}:${conversation}`, agent: store.session.agent } : store.session
-        for (const value of piDurableEvents(records, session)) events.push(value)
-        await nextTurn()
-      }
+      read.set(store.prefix, found)
+      for (const value of found.events) events.push(value)
     }
-    return events
-  } catch { return [] } finally { try { database?.close() } catch {} }
+    return { events, stores: read }
+  } finally { database.close() }
 }
 
 /// Combines events in one hour that the Usage page cannot tell apart.
@@ -287,10 +298,15 @@ export function toRecord(value) {
   }
 }
 
-async function* lines(path) {
+export async function* lines(path) {
   const stream = createReadStream(path)
-  stream.on('error', () => {})
-  const input = path.endsWith(COMPRESSED) ? stream.pipe(createZstdDecompress()) : stream
+  let input = stream
+  if (path.endsWith(COMPRESSED)) {
+    // `pipe` doesn't pass on a read error, which would leave the decompressor waiting forever.
+    const decompress = createZstdDecompress()
+    stream.on('error', error => decompress.destroy(error))
+    input = stream.pipe(decompress)
+  }
   yield* createInterface({ input, crlfDelay: Infinity })
 }
 
@@ -327,11 +343,11 @@ async function readOpenCode(path) {
       if (++read % 500 === 0) await nextTurn()
     }
     return events
-  } catch { return [] } finally { try { database?.close() } catch {} }
+  } finally { try { database?.close() } catch {} }
 }
 
 export function createUsageScanner({ env = process.env, home = homedir(), refreshMilliseconds = 15 * 60_000, now = () => Date.now(),
-  workspaceRoot = env.WOVENMATTER_WORKSPACE || join(home, '.woven-matter'), botsDatabase = null } = {}) {
+  workspaceRoot = env.WOVENMATTER_WORKSPACE || join(home, '.woven-matter'), botsDatabase = null, pageSize = PAGE_SIZE } = {}) {
   const agentDirectories = [...new Set([join(workspaceRoot, '.wovenmatter/default-agent'), join(home, '.wovenmatter/default-agent')])]
   const roots = {
     codex: join(env.CODEX_HOME || join(home, '.codex'), 'sessions'),
@@ -345,32 +361,43 @@ export function createUsageScanner({ env = process.env, home = homedir(), refres
     grok: join(env.GROK_HOME || join(home, '.grok'), 'sessions'),
     opencode: join(home, '.local/share/opencode/opencode.db'),
   }
-  const cache = new Map()
+  let cache = new Map(), piStores = new Map(), visited = new Set()
   let snapshot = null, scannedAt = 0, running = null
+  // The snapshot each collection started paging, so a scan finishing mid-read can't shift its offsets.
+  const paging = new Map()
 
-  // Finished sessions don't change, so each file is only read again if it did.
-  async function cached(path, read) {
+  // Finished sessions don't change, so each file is only read again if it did. A failed
+  // read keeps what was read before rather than reporting the file as empty.
+  async function cached(path, read, stampOf = async info => `${info.mtimeMs}:${info.size}`) {
+    visited.add(path)
     const info = await fs.stat(path).catch(() => null)
     if (!info) return []
-    const stamp = `${info.mtimeMs}:${info.size}`
+    const stamp = await stampOf(info, path)
     const held = cache.get(path)
     if (held?.stamp === stamp) return held.events
-    const events = await read(path).catch(() => [])
-    cache.set(path, { stamp, events })
-    return events
+    try {
+      const events = await read(path)
+      cache.set(path, { stamp, events })
+      return events
+    } catch { return held?.events ?? [] }
   }
 
   // A database changes in its WAL first, so its stamp includes the WAL.
-  async function cachedDatabase(path, read) {
-    const main = await fs.stat(path).catch(() => null)
-    if (!main) return []
+  const databaseStamp = async (info, path) => {
     const wal = await fs.stat(path + '-wal').catch(() => null)
-    const stamp = `${main.mtimeMs}:${main.size}:${wal?.mtimeMs ?? 0}:${wal?.size ?? 0}`
-    const held = cache.get(path)
-    if (held?.stamp === stamp) return held.events
-    const events = await read(path).catch(() => [])
-    cache.set(path, { stamp, events })
-    return events
+    return `${info.mtimeMs}:${info.size}:${wal?.mtimeMs ?? 0}:${wal?.size ?? 0}`
+  }
+
+  // Each store keeps its own events, so only the stores that changed are read again.
+  async function piDurableDatabase(path) {
+    visited.add(path)
+    if (!await fs.stat(path).catch(() => null)) return []
+    const held = piStores.get(path)
+    try {
+      const { events, stores } = await readPiDurableDatabase(path, held?.stores)
+      piStores.set(path, { stores, events })
+      return events
+    } catch { return held?.events ?? [] }
   }
 
   async function readFile(path, parse) {
@@ -386,6 +413,7 @@ export function createUsageScanner({ env = process.env, home = homedir(), refres
   }
 
   async function scan() {
+    visited = new Set()
     const events = []
     // One source can hold more rows than a call can take as arguments.
     const add = found => { for (const value of found) events.push(value) }
@@ -406,7 +434,7 @@ export function createUsageScanner({ env = process.env, home = homedir(), refres
         return readFile(file, (line, number) => parseGrokLine(line, number, summary))
       }))
     }
-    add(await cached(roots.opencode, readOpenCode))
+    add(await cached(roots.opencode, readOpenCode, databaseStamp))
     // Reported as "Pi", which record IDs are built from; the desktop shows it as "Pi CLI".
     for (const path of await walk(roots.pi, file => file.endsWith('.jsonl'))) add(await cached(path, file => readFile(file, piSessionParser('Pi'))))
     for (const directory of agentDirectories) {
@@ -421,7 +449,7 @@ export function createUsageScanner({ env = process.env, home = homedir(), refres
         add(await cached(path, async file => piDurableEvents(await readFile(file, legacyPiDurableEntries), session)))
       }
     }
-    for (const path of roots.piDurable) add(await cachedDatabase(path, readPiDurableDatabase))
+    for (const path of roots.piDurable) add(await piDurableDatabase(path))
     // A resumed transcript repeats earlier messages, which must only count once.
     const seen = new Set()
     const unique = events.filter(value => {
@@ -433,6 +461,9 @@ export function createUsageScanner({ env = process.env, home = homedir(), refres
     }).map(value => ({ ...value, dedupeKey: null }))
     snapshot = aggregate(unique).map(toRecord).sort((a, b) => a.timestamp - b.timestamp)
     scannedAt = now()
+    // Files and databases that are gone no longer hold memory.
+    cache = new Map([...cache].filter(([path]) => visited.has(path)))
+    piStores = new Map([...piStores].filter(([path]) => visited.has(path)))
   }
 
   function start() {
@@ -452,9 +483,19 @@ export function createUsageScanner({ env = process.env, home = homedir(), refres
         return { state: 'scanning', generatedAt, records: [], hasMore: false, nextOffset: 0 }
       }
       if (now() - scannedAt >= refreshMilliseconds) start()
-      const records = snapshot.filter(record => record.timestamp >= since)
-      const start_ = Math.max(0, offset), page = records.slice(start_, start_ + PAGE_SIZE)
-      return { state: 'ready', generatedAt, records: page, hasMore: start_ + page.length < records.length, nextOffset: start_ + page.length }
+      const start_ = Math.max(0, offset)
+      let records = start_ > 0 ? paging.get(since) : undefined
+      if (!records) {
+        records = snapshot.filter(record => record.timestamp >= since)
+        paging.delete(since)
+        paging.set(since, records)
+        // A few collections at once at most; the oldest is dropped first.
+        while (paging.size > 8) paging.delete(paging.keys().next().value)
+      }
+      const page = records.slice(start_, start_ + pageSize)
+      const hasMore = start_ + page.length < records.length
+      if (!hasMore) paging.delete(since)
+      return { state: 'ready', generatedAt, records: page, hasMore, nextOffset: start_ + page.length }
     },
   }
 }

@@ -185,6 +185,18 @@ struct PiDurableUsageDatabase {
     }
   }
 
+  /// Entries are only ever appended, so a store's row count and newest ID say whether
+  /// it changed, without the whole file's (which changes with every write to the library).
+  func fingerprint(store: Store, check: @escaping @Sendable () throws -> Void = {}) throws -> String {
+    guard Self.isSafePrefix(store.prefix) else { return "unreadable" }
+    return try open(check: check) { database in
+      let table = store.prefix + "entries"
+      guard try hasTable(table, in: database) else { return "missing" }
+      let row = try rows(#"SELECT count(*), coalesce(max(id), 0) FROM "\#(table)""#, in: database, columns: 2).first
+      return [row?[0] ?? "0", row?[1] ?? "0", store.agent ?? ""].joined(separator: ":")
+    }
+  }
+
   private func open<T>(check: @escaping @Sendable () throws -> Void, _ body: (OpaquePointer) throws -> T) throws -> T {
     try check()
     var database: OpaquePointer?

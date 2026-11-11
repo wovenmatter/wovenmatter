@@ -204,7 +204,8 @@ struct UsageChart: View {
                     scale: scale,
                     width: contentWidth,
                     plotHeight: Self.plotHeight,
-                    gridColor: theme.palette.border
+                    gridColor: theme.palette.border,
+                    metric: metric
                 )
                 .equatable()
                 .padding(.top, Self.topInset)
@@ -389,6 +390,7 @@ private struct UsageChartPlot: View, Equatable {
     let width: CGFloat
     let plotHeight: CGFloat
     let gridColor: Color
+    let metric: UsageChartMetric
 
     var body: some View {
         // An if/else inside Chart requires a newer macOS than this app's minimum.
@@ -445,7 +447,7 @@ private struct UsageChartPlot: View, Equatable {
                 .foregroundStyle(provider.usageColor)
                 .lineStyle(StrokeStyle(lineWidth: 2, lineCap: .round, lineJoin: .round))
                 .accessibilityLabel(provider.usageName)
-                .accessibilityValue(column.start.formatted(date: .abbreviated, time: .omitted))
+                .accessibilityValue(accessibilityValue(column, value: column.values[provider] ?? 0))
             }
         }
         // A line needs two points, so a single period still shows as a dot.
@@ -482,6 +484,15 @@ private struct UsageChartPlot: View, Equatable {
         }
     }
 
+    /// The period and its figure, since the hover tooltip is pointer-only.
+    private func accessibilityValue(_ column: UsageChartColumn, value: Double) -> String {
+        let period = data.usesHourlyBuckets
+            ? column.start.formatted(date: .abbreviated, time: .shortened)
+            : column.start.formatted(date: .abbreviated, time: .omitted)
+        let figure = metric.valueLabel(value)
+        return "\(period), \(metric == .tokens ? "\(figure) tokens" : figure)"
+    }
+
     private struct Segment: Identifiable {
         let id: String
         let x: Double
@@ -510,7 +521,7 @@ private struct UsageChartPlot: View, Equatable {
                     end: end,
                     provider: provider,
                     isTop: isTop,
-                    label: column.start.formatted(date: .abbreviated, time: .omitted)
+                    label: accessibilityValue(column, value: value)
                 )
             }
         }

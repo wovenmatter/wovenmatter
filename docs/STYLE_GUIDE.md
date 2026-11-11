@@ -126,8 +126,8 @@ when an intentional design change is accepted.
   models opens the provider catalog with its filters and paging in a sheet. Guided
   setup opens that sheet after a successful sign-in or key addition.
 - **Usage:** account setup lives in Subscriptions & API Keys, linked from Limits. A
-  fixed header holds the title, the Analytics/Limits switch, and refresh. Device analytics never depends on
-  limits-account switches or credentials.
+  fixed header holds the title, the Analytics/Limits switch, and refresh. Device
+  analytics never depends on limits-account switches or credentials.
   No rule lines separate the header, filter column, and report; spacing does that.
   While a range has no data yet, the page keeps its full layout with muted placeholders
   and never reads as zero. Analytics keeps a fixed filter column to the left of its scrolling report: search,

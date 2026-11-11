@@ -550,6 +550,8 @@ struct DashboardSegmentedSelector<Option: Hashable>: View {
     let options: [Option]
     @Binding var selection: Option
     var accentSelection = false
+    /// A spoken name when the visible label is abbreviated.
+    var accessibilityLabel: ((Option) -> String)?
     let label: (Option) -> String
 
     var body: some View {
@@ -571,6 +573,7 @@ struct DashboardSegmentedSelector<Option: Hashable>: View {
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(DashboardSegmentButtonStyle(isSelected: isSelected, accentSelection: accentSelection))
+                .accessibilityLabel(accessibilityLabel?(option) ?? label(option))
                 .accessibilityAddTraits(isSelected ? .isSelected : [])
             }
         }

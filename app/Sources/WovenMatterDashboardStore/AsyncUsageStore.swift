@@ -49,10 +49,12 @@ final class AsyncUsageStore: Sendable {
     sourceID: String? = nil,
     limit: Int? = nil,
     offset: Int = 0,
-    excludingDevices: Bool = false
+    excludingDevices: Bool = false,
+    uniqueReplies: Bool = false
   ) async throws -> [UsageSample] {
     try await read {
-      try $0.samples(in: interval, sourceID: sourceID, limit: limit, offset: offset, excludingDevices: excludingDevices)
+      try $0.samples(in: interval, sourceID: sourceID, limit: limit, offset: offset,
+        excludingDevices: excludingDevices, uniqueReplies: uniqueReplies)
     }
   }
 

@@ -32,6 +32,8 @@ actor UsageTranscriptImporter {
   private(set) var importOutcomes: [String: Outcome]
   private var hadSourceFailures = false
   private var batch: Batch?
+  /// Set on routine refreshes: files last changed before it were already read.
+  private var filesChangedAfter: Date?
 
   /// Limits one pass to files last changed in this window. A file's whole history is
   /// read at once, so widening the window never reads the same file twice.
@@ -53,10 +55,12 @@ actor UsageTranscriptImporter {
     cutoff: Date,
     enabledProviders: Set<ProviderKind>,
     now: Date,
-    batch: Batch? = nil
+    batch: Batch? = nil,
+    filesChangedAfter: Date? = nil
   ) async throws -> Bool {
     hadSourceFailures = false
     self.batch = batch
+    self.filesChangedAfter = filesChangedAfter
     try await importLocalSources(store: store, cutoff: cutoff, enabledProviders: enabledProviders, now: now)
     importOutcomes.removeValue(forKey: "wovenmatter:index")
     // A failed or concurrently changed source must not advance range coverage.
@@ -256,7 +260,10 @@ actor UsageTranscriptImporter {
           providerFilterSignature: providerFilterSignature,
           store: store,
           cutoff: max(batch?.modifiedAfter ?? cutoff, cutoff),
-          now: now
+          now: now,
+          fingerprint: { check in
+            try PiDurableUsageDatabase(databaseURL: database, sourceID: sourceID).fingerprint(store: piStore, check: check)
+          }
         ) { indexedAfter, check in
           try PiDurableUsageDatabase(databaseURL: database, sourceID: sourceID)
             .samples(store: piStore, cutoff: indexedAfter, now: now, check: check).filter(enabled)
@@ -343,10 +350,11 @@ actor UsageTranscriptImporter {
     parser: @escaping @Sendable (URL, @escaping @Sendable () throws -> Void) throws -> [UsageSample]
   ) async throws -> Outcome {
     let batch = batch
+    let changedAfter = filesChangedAfter
     let files = try await prepare { check in
       try Self.files(
         root: root,
-        cutoff: batch?.modifiedAfter ?? cutoff,
+        cutoff: batch?.modifiedAfter ?? changedAfter.map { max($0, cutoff) } ?? cutoff,
         before: batch?.modifiedBefore,
         predicate: predicate,
         check: check
@@ -450,6 +458,7 @@ actor UsageTranscriptImporter {
     store: AsyncUsageStore,
     cutoff: Date,
     now: Date,
+    fingerprint: (@Sendable (@escaping @Sendable () throws -> Void) throws -> String)? = nil,
     reader: @escaping @Sendable (Date, @escaping @Sendable () throws -> Void) throws -> [UsageSample]
   ) async throws -> Outcome {
     try ownership.check()
@@ -457,7 +466,8 @@ actor UsageTranscriptImporter {
       let stored = try await store.source(sourceID)
       let prepared = try await prepare { check -> PreparedSource? in
         guard FileManager.default.fileExists(atPath: databaseURL.path) else { return nil }
-        let fingerprint = try Self.databaseFingerprint(databaseURL) + ":" + providerFilterSignature
+        let fingerprint = try (fingerprint.map { Self.parserVersion + ":" + (try $0(check)) }
+          ?? Self.databaseFingerprint(databaseURL)) + ":" + providerFilterSignature
         let indexedAfter = min(stored?.indexedAfter ?? cutoff, cutoff)
         guard stored?.fingerprint != fingerprint || stored?.indexedAfter == nil
           || (stored?.indexedAfter ?? .distantFuture) > cutoff else { return nil }

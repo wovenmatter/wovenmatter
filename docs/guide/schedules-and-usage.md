@@ -109,9 +109,9 @@ as **Unpriced**. Direct spend from OpenRouter and OpenCode Go stays separate.
 makes available. Bars show what is left, and the tick marks where even spending would
 be. A bar shorter than its tick means you are ahead of pace. Providers without an
 account share one line. Use **Manage subscriptions and keys** to add or manage
-accounts in **Settings → Subscriptions & API Keys**. These accounts are shared with Pi Durable. Providers without a
-supported limits response link to their usage dashboard; unavailable data is never
-shown as zero usage or a full allowance.
+accounts in **Settings → Subscriptions & API Keys**. These accounts are shared with
+Pi Durable. Providers without a supported limits response link to their usage
+dashboard; unavailable data is never shown as zero usage or a full allowance.
 
 Saved keys use Apple Keychain. Allow access under Saved sign-ins in
 **Settings → Permissions & Access**.

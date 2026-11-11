@@ -304,7 +304,10 @@ real-account execution require Trey's hands-on acceptance before merging.
 
 Usage is not a shared library table: each Mac keeps its own index and reads other
 devices over `/v1/peers/usage` with the same grant as library exchange. A Mac reports
-its own usage plus the remote workspaces it manages, as hourly counts and labels with
-folder names only, never transcript content or paths. Account-wide sources are left
-out, so they are not counted once per Mac. Other devices' rows stay on the Usage page;
-agent tools and phones keep reading only this Mac's records.
+its own usage plus the Linux machines it reads, as hourly counts and labels with
+folder names only, never transcript content or paths. A Linux machine's rows keep
+the host's own IDs when passed on, so a Mac that also reads that host directly keeps
+one copy. A Mac reports that it is still reading until its first full import ends.
+Account-wide sources are left out, so they are not counted once per Mac. Other
+devices' rows stay on the Usage page; agent tools and phones keep reading only this
+Mac's records.

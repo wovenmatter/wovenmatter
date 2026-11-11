@@ -21,18 +21,30 @@ struct UsageAnalyticsFilters: Equatable {
 
     /// Provider and device rows ignore their own filter so a hidden one still shows its total.
     func matches(_ sample: UsageSample, ignoringProviders: Bool = false, ignoringDevices: Bool = false) -> Bool {
+        matches(sample, query: searchQuery, ignoringProviders: ignoringProviders, ignoringDevices: ignoringDevices)
+    }
+
+    /// The matching samples, normalizing the search once rather than once per sample.
+    func filter(_ samples: [UsageSample], ignoringProviders: Bool = false, ignoringDevices: Bool = false) -> [UsageSample] {
+        let query = searchQuery
+        return samples.filter {
+            matches($0, query: query, ignoringProviders: ignoringProviders, ignoringDevices: ignoringDevices)
+        }
+    }
+
+    private var searchQuery: String { search.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
+
+    private func matches(_ sample: UsageSample, query: String, ignoringProviders: Bool, ignoringDevices: Bool) -> Bool {
         (ignoringProviders || !hiddenProviders.contains(sample.provider))
             && (ignoringDevices || !hiddenDevices.contains(sample.usageDeviceID))
             && (model == nil || sample.modelFamily == model)
             && (harness == nil || sample.harness == harness)
             && (reasoning == nil || (sample.reasoningLevel ?? Self.reasoningNotReported) == reasoning)
-            && matchesSearch(sample)
+            && (query.isEmpty || Self.searchText(sample).contains(query))
     }
 
-    private func matchesSearch(_ sample: UsageSample) -> Bool {
-        let query = search.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        guard !query.isEmpty else { return true }
-        return [
+    private static func searchText(_ sample: UsageSample) -> String {
+        [
             sample.provider.displayName,
             sample.model,
             sample.canonicalModel,
@@ -49,7 +61,6 @@ struct UsageAnalyticsFilters: Equatable {
         .compactMap { $0 }
         .joined(separator: " ")
         .lowercased()
-        .contains(query)
     }
 }
 
@@ -151,7 +162,7 @@ struct UsageAnalyticsPage: View {
 
     var body: some View {
         let table = chartMetric == .apiEstimate ? prices.table : nil
-        let unhidden = snapshot.samples.filter { filters.matches($0, ignoringProviders: true) }
+        let unhidden = filters.filter(snapshot.samples, ignoringProviders: true)
         let samples = unhidden.filter { !filters.hiddenProviders.contains($0.provider) }
         HStack(spacing: 0) {
             UsageFilterColumn(
@@ -197,7 +208,7 @@ private extension UsageAnalyticsPage {
         filters: UsageAnalyticsFilters,
         table: UsageRateTable?
     ) -> [String: String] {
-        Dictionary(grouping: samples.filter { filters.matches($0, ignoringDevices: true) }, by: \.usageDeviceID)
+        Dictionary(grouping: filters.filter(samples, ignoringDevices: true), by: \.usageDeviceID)
             .mapValues { group in
                 if let table {
                     let estimate = table.estimate(group)
@@ -231,11 +242,13 @@ private struct UsageFilterColumn: View {
                     VStack(spacing: 4) {
                         DashboardSegmentedSelector(
                             options: [.last7Days, .last30Days, .last90Days, .allTime],
-                            selection: $range
+                            selection: $range,
+                            accessibilityLabel: \.label
                         ) { $0.compactLabel }
                         DashboardSegmentedSelector(
                             options: [.last24Hours, .today, .yesterday],
-                            selection: $range
+                            selection: $range,
+                            accessibilityLabel: \.label
                         ) { $0 == .yesterday ? "Yest." : $0.compactLabel }
                     }
                 }
@@ -400,7 +413,7 @@ private struct UsageFilterToggleRow: View {
         .help(help)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(title)
-        .accessibilityValue([isOn ? "Shown" : "Hidden", detail].compactMap { $0 }.joined(separator: ", "))
+        .accessibilityValue([isOn ? "Shown" : "Hidden", value, detail].compactMap { $0 }.joined(separator: ", "))
         .accessibilityAddTraits(.isToggle)
     }
 }
@@ -654,14 +667,16 @@ private struct UsageAnalyticsReport: View {
         HStack(alignment: .firstTextBaseline, spacing: 6) {
             Text(
                 chartMetric == .apiEstimate
-                    ? (estimate.map { UsageFormat.usd($0.total) } ?? "–")
+                    ? (estimate.map { $0.hasPrice ? UsageFormat.usd($0.total) : "Unpriced" } ?? "–")
                     : UsageFormat.tokens(summary.tokens.totalTokens)
             )
             .font(.system(size: 28, weight: .semibold).monospacedDigit())
             .tracking(-0.4)
-            Text(chartMetric == .apiEstimate ? "est." : "tokens")
-                .font(.system(size: 12.5))
-                .foregroundStyle(DashboardPalette.mutedForeground)
+            if chartMetric != .apiEstimate || estimate?.hasPrice != false {
+                Text(chartMetric == .apiEstimate ? "est." : "tokens")
+                    .font(.system(size: 12.5))
+                    .foregroundStyle(DashboardPalette.mutedForeground)
+            }
         }
         .lineLimit(1)
         .fixedSize()
@@ -716,11 +731,9 @@ private struct UsageAnalyticsReport: View {
     private var footer: some View {
         VStack(alignment: .leading, spacing: 4) {
             if chartMetric == .apiEstimate, let fetchedAt = prices.fetchedAt {
-                HStack(spacing: 4) {
-                    Text("API estimates use public list prices from LiteLLM, updated")
-                    Text(fetchedAt, format: .relative(presentation: .named))
-                    Text("They are not your bill.")
-                }
+                Text(
+                    "API estimates use public list prices from LiteLLM, updated \(Text(fetchedAt, format: .relative(presentation: .named))). They are not your bill."
+                )
             }
             Text("Usage tracking saves totals and metadata, not prompts or chat contents.")
         }
@@ -736,7 +749,8 @@ private struct UsagePriceUnavailable: View {
 
     var body: some View {
         VStack(spacing: 8) {
-            if prices.isLoading {
+            // Before the first download starts there is nothing to report yet, so it reads as loading.
+            if prices.isLoading || prices.error == nil {
                 ProgressView().controlSize(.small)
                 Text("Loading model prices…")
                     .font(.system(size: 12))
@@ -775,16 +789,18 @@ private struct UsageBreakdownNumbers: View {
 
     private var entries: [Entry] {
         if let estimate {
+            // Unknown prices read Unpriced, never $0.
+            let usd = { (value: Double) in estimate.hasPrice ? UsageFormat.usd(value) : "Unpriced" }
             var entries = [
-                Entry(title: "Cached input", value: UsageFormat.usd(estimate.cacheRead), detail: nil, share: estimate.cacheRead, ink: 0.28),
-                Entry(title: "Uncached input", value: UsageFormat.usd(estimate.input), detail: nil, share: estimate.input, ink: 0.6),
-                Entry(title: "Cache writes", value: UsageFormat.usd(estimate.cacheWrite), detail: nil, share: estimate.cacheWrite, ink: 0.42),
-                Entry(title: "Output", value: UsageFormat.usd(estimate.output), detail: nil, share: estimate.output, ink: 1),
+                Entry(title: "Cached input", value: usd(estimate.cacheRead), detail: nil, share: estimate.cacheRead, ink: 0.28),
+                Entry(title: "Uncached input", value: usd(estimate.input), detail: nil, share: estimate.input, ink: 0.6),
+                Entry(title: "Cache writes", value: usd(estimate.cacheWrite), detail: nil, share: estimate.cacheWrite, ink: 0.42),
+                Entry(title: "Output", value: usd(estimate.output), detail: nil, share: estimate.output, ink: 1),
             ]
             if estimate.reported > 0 {
-                entries.append(Entry(title: "Reported", value: UsageFormat.usd(estimate.reported), detail: "Not split by type", share: estimate.reported, ink: 0.76))
+                entries.append(Entry(title: "Reported", value: usd(estimate.reported), detail: "Not split by type", share: estimate.reported, ink: 0.76))
             }
-            entries.append(Entry(title: "Cache savings", value: UsageFormat.usd(estimate.cacheSavings), detail: "vs. uncached"))
+            entries.append(Entry(title: "Cache savings", value: usd(estimate.cacheSavings), detail: "vs. uncached"))
             return entries
         }
         let tokens = summary.tokens

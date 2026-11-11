@@ -8,11 +8,9 @@ private struct UsagePlaceholderPulse: ViewModifier {
 
     func body(content: Content) -> some View {
         content
-            .opacity(isDimmed ? 0.5 : 1)
-            .onAppear {
-                guard !reduceMotion else { return }
-                withAnimation(.easeInOut(duration: 1).repeatForever(autoreverses: true)) { isDimmed = true }
-            }
+            .opacity(isDimmed && !reduceMotion ? 0.5 : 1)
+            .animation(reduceMotion ? nil : .easeInOut(duration: 1).repeatForever(autoreverses: true), value: isDimmed)
+            .onAppear { isDimmed = true }
     }
 }
 

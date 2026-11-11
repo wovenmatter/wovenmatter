@@ -13,7 +13,19 @@ struct UsageDeviceCollectionTests {
     let directory = FileManager.default.temporaryDirectory.appending(path: "usage-devices-\(UUID())")
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: directory) }
-    try await body(LocalUsageService(homeDirectory: directory, usageDatabaseURL: directory.appending(path: "usage.sqlite")))
+    try await body(Self.service(home: directory, database: directory.appending(path: "usage.sqlite")))
+  }
+
+  /// Each service gets its own import worker, so tests running side by side never fill one.
+  private static func service(home: URL, database: URL) -> LocalUsageService {
+    LocalUsageService(
+      homeDirectory: home,
+      fileManager: .default,
+      credentialStore: UsageNoCredentials(recordsAccess: true),
+      usageDatabaseURL: database,
+      sharedConnectionRevision: { 0 },
+      importPreparationWorker: DatabaseWorker(label: "usage.import.devices.fixture", capacity: 8)
+    )
   }
 
   private func analytics(_ service: LocalUsageService) async throws -> [UsageSample] {
@@ -152,20 +164,36 @@ struct UsageDeviceCollectionTests {
 
   @Test("a run watched from this Mac only counts until the host's history covers it")
   func coveredLiveRuns() {
-    func sample(_ id: String, source: String, harness: String) -> UsageSample {
-      UsageSample(id: id, provider: .codex, timestamp: Self.now, sessionID: id, accountLabel: "A", model: "m",
-        harness: harness, application: "a", tokens: UsageTokenCounts(inputTokens: 1), sourceID: source)
+    func sample(_ id: String, source: String, harness: String, hoursAgo: Double = 0, tokens: Int64 = 1) -> UsageSample {
+      UsageSample(id: id, provider: .codex, timestamp: Self.now.addingTimeInterval(-hoursAgo * 3_600), sessionID: id,
+        accountLabel: "A", model: "m", harness: harness, application: "a", tokens: UsageTokenCounts(inputTokens: tokens), sourceID: source)
     }
     let live = UsageDeviceSource.liveRunsSourceID(deviceID: "host-1")
-    let kept = LocalUsageService.droppingCoveredLiveRuns([
+    let kept = LocalUsageService.suppressWovenMatterEchoes([
       sample("watched-codex", source: live, harness: "Codex"),
-      sample("watched-pi", source: live, harness: "Pi Durable"),
+      sample("watched-pi", source: live, harness: "Pi Durable", tokens: 7),
+      // The host's history hasn't reached this turn yet (its report is behind), so it still counts.
+      sample("watched-earlier", source: live, harness: "Codex", hoursAgo: 5),
       sample("scanned", source: UsageDeviceSource.sourceID(deviceID: "host-1"), harness: "Codex"),
     ])
-    #expect(kept.map(\.id).sorted() == ["scanned", "watched-pi"])
+    #expect(kept.map(\.id).sorted() == ["scanned", "watched-earlier", "watched-pi"])
     #expect(sample("x", source: live, harness: "Codex").usageDeviceID == "host-1")
     #expect(sample("x", source: "wovenmatter:local", harness: "Codex").usageDeviceID == UsageDeviceSource.localDeviceID)
     #expect(!sample("x", source: "wovenmatter:local", harness: "Codex").isRemoteLiveRun)
+  }
+
+  @Test("a remote turn stored as this Mac's before this version gives way to the host's history")
+  func olderRemoteLiveRuns() {
+    func sample(_ id: String, session: String, source: String) -> UsageSample {
+      UsageSample(id: id, provider: .claude, timestamp: Self.now, sessionID: session, accountLabel: "A", model: "m",
+        harness: "Claude Code", application: "a", tokens: UsageTokenCounts(inputTokens: 1), sourceID: source)
+    }
+    let kept = LocalUsageService.droppingLiveRunsReportedElsewhere([
+      sample("old-remote", session: "remote-session", source: "wovenmatter:local"),
+      sample("local", session: "local-session", source: "wovenmatter:local"),
+      sample("host", session: "remote-session", source: UsageDeviceSource.sourceID(deviceID: "host-1")),
+    ])
+    #expect(kept.map(\.id).sorted() == ["host", "local"])
   }
 
   @Test("usage stays after a host deletes its old transcripts, while a Mac's report is complete")
@@ -208,10 +236,73 @@ struct UsageDeviceCollectionTests {
         reasoningLevel: nil, agent: nil, workspace: nil, tokens: UsageTokenCounts(inputTokens: 9), costUSD: nil
       ))
     }
-    let service = LocalUsageService(homeDirectory: directory, usageDatabaseURL: database)
+    let service = Self.service(home: directory, database: database)
+    _ = try await analytics(service)
     let since = hour.addingTimeInterval(30 * 60).timeIntervalSince1970
     let page = try await service.deviceExport(.init(since: since, offset: 0), now: Self.now)
     #expect(page.records.map(\.inputTokens) == [18])
+  }
+
+  @Test("a Mac reports that it is still reading until its first full import finishes")
+  func exportWaitsForFirstImport() async throws {
+    try await withService { service in
+      #expect(try await service.deviceExport(.init(since: 0, offset: 0), now: Self.now).state == .scanning)
+      _ = try await analytics(service)
+      #expect(try await service.deviceExport(.init(since: 0, offset: 0), now: Self.now).state == .ready)
+    }
+  }
+
+  @Test("an exported hour keeps its ID as more calls land in it")
+  func exportIDsAreStable() async throws {
+    let directory = FileManager.default.temporaryDirectory.appending(path: "usage-devices-\(UUID())")
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let database = directory.appending(path: "usage.sqlite")
+    let recorder = try await UsageRunRecorder(databaseURL: database)
+    let hour = try #require(Calendar.current.dateInterval(of: .hour, for: Self.now.addingTimeInterval(-7_200))).start
+    func run(_ id: String, minutes: Double) async throws {
+      try await recorder.record(.init(
+        runID: id, timestamp: hour.addingTimeInterval(minutes * 60), runtimeKind: .codex, sessionID: "s", model: "gpt-5.5",
+        reasoningLevel: nil, agent: nil, workspace: nil, tokens: UsageTokenCounts(inputTokens: 9), costUSD: nil
+      ))
+    }
+    let service = Self.service(home: directory, database: database)
+    try await run("first", minutes: 10)
+    _ = try await analytics(service)
+    let before = try await service.deviceExport(.init(since: 0, offset: 0), now: Self.now).records
+    try await run("second", minutes: 40)
+    let after = try await service.deviceExport(.init(since: 0, offset: 0), now: Self.now).records
+    #expect(before.count == 1)
+    #expect(after.map(\.id) == before.map(\.id))
+    #expect(after.map(\.inputTokens) == [18])
+  }
+
+  @Test("a host's rows passed on by a Mac keep the host's IDs, so a direct read replaces them")
+  func relayedRowsKeepHostIDs() async throws {
+    try await withService { service in
+      _ = try await analytics(service)
+      _ = await service.collectDeviceUsage(from: endpoint(Self.host) { _ in
+        .paged([self.record("hour-1", daysAgo: 10), self.record("hour-2")], request: .init(since: 0, offset: 0))
+      }, now: Self.now)
+      let direct = [record("hour-1", daysAgo: 10), record("hour-2")].map(\.id)
+      let relayed = try await service.deviceExport(.init(since: 0, offset: 0), relaying: [Self.host], now: Self.now)
+      #expect(relayed.records.map(\.id).sorted() == direct.sorted())
+      #expect(relayed.records.allSatisfy { $0.device == Self.host.id })
+    }
+  }
+
+  @Test("a host that lost part of an older hour can't shrink what was stored for it")
+  func olderHostRowsNeverShrink() async throws {
+    try await withService { service in
+      _ = await service.collectDeviceUsage(from: endpoint(Self.host) { _ in
+        .paged([self.record("old", tokens: 100, daysAgo: 10), self.record("recent", tokens: 100)], request: .init(since: 0, offset: 0))
+      }, now: Self.now)
+      _ = await service.collectDeviceUsage(from: endpoint(Self.host) { _ in
+        .paged([self.record("old", tokens: 40, daysAgo: 10), self.record("recent", tokens: 60)], request: .init(since: 0, offset: 0))
+      }, now: Self.now)
+      let tokens = Dictionary(uniqueKeysWithValues: try await analytics(service).map { ($0.sessionID, $0.tokens.inputTokens) })
+      #expect(tokens == ["session-old": 100, "session-recent": 60])
+    }
   }
 
   @Test("a record's ID is stable and never carries the transcript's path")
@@ -240,7 +331,7 @@ struct UsageDeviceCollectionTests {
       reasoningLevel: nil, agent: nil, workspace: nil, tokens: UsageTokenCounts(inputTokens: 9), costUSD: nil,
       remoteWorkspaceID: Self.host.id
     ))
-    let service = LocalUsageService(homeDirectory: directory, usageDatabaseURL: database)
+    let service = Self.service(home: directory, database: database)
     let recorded = try await service.recordedSamples(from: .usageHistoryStart, to: Self.now)
     #expect(recorded.map(\.sessionID) == ["s"])
   }
@@ -268,7 +359,8 @@ struct UsageDeviceCollectionTests {
       reasoningLevel: nil, agent: nil, workspace: "/srv/someone/private/client-project",
       tokens: UsageTokenCounts(inputTokens: 9), costUSD: nil
     ))
-    let service = LocalUsageService(homeDirectory: directory, usageDatabaseURL: database)
+    let service = Self.service(home: directory, database: database)
+    _ = try await analytics(service)
     _ = await service.collectDeviceUsage(from: endpoint { _ in
       .paged([self.record("from-peer"), self.record("from-host", device: "host-1")], request: .init(since: 0, offset: 0))
     }, now: Self.now)

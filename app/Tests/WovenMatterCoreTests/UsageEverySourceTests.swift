@@ -61,6 +61,25 @@ struct UsageEverySourceTests {
     )
   }
 
+  @Test("a Pi Durable store reads as changed only when it gains an entry, not when the library does")
+  func storeFingerprint() throws {
+    let home = FileManager.default.temporaryDirectory.appending(path: "usage-store-fingerprint-\(UUID())")
+    defer { try? FileManager.default.removeItem(at: home) }
+    let library = home.appending(path: "workspace.sqlite")
+    let prefix = "wm_pi_" + String(repeating: "f", count: 32) + "_"
+    try database(library, [
+      "CREATE TABLE \"\(prefix)entries\" \(Self.entriesTable)",
+      "CREATE TABLE other (value TEXT)",
+    ], rows: [(prefix + "entries", 1, 1, entry(1, conversation: 1, reply(0, input: 10)))])
+    let store = PiDurableUsageDatabase.Store(prefix: prefix, session: "s", agent: nil)
+    let reader = PiDurableUsageDatabase(databaseURL: library, sourceID: "")
+    let first = try reader.fingerprint(store: store)
+    try database(library, ["INSERT INTO other VALUES ('unrelated write')"])
+    #expect(try reader.fingerprint(store: store) == first)
+    try database(library, [], rows: [(prefix + "entries", 2, 1, entry(2, conversation: 1, reply(60_000, input: 20)))])
+    #expect(try reader.fingerprint(store: store) != first)
+  }
+
   @Test("archived Codex chats, Pi sessions, Pi Durable in every format and bots each count once")
   func everySourceOnce() async throws {
     let home = FileManager.default.temporaryDirectory.appending(path: "usage-every-source-\(UUID())")
@@ -124,6 +143,10 @@ struct UsageEverySourceTests {
     #expect(durable.allSatisfy { $0.application == "Woven Matter" })
     let listed = Set(snapshot.sources.map(\.id))
     #expect(listed.isSuperset(of: ["codex", "pi", "pi-durable"]))
+    // Agent tools and phones read rows, and each reply is one row there too.
+    let recorded = try await usage.recordedSamples(from: .usageHistoryStart, to: Self.now, limit: 201)
+    #expect(total(recorded.filter { $0.harness == "Codex" }) == 220)
+    #expect(total(recorded.filter { $0.sessionID == "durable-1" }) == 105)
 
     // A purged bot's tables are gone, but its usage already happened.
     try database(library.deletingLastPathComponent().appending(path: "Bots/data/bots.sqlite"), [

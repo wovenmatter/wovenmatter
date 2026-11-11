@@ -490,7 +490,14 @@ extension UsageAnalyticsSnapshot {
   }
 
   /// `unit` is the shortest period a viewer of this data can still tell apart.
-  public func compacted(by unit: Calendar.Component, calendar: Calendar = .current) -> UsageAnalyticsSnapshot {
+  /// With `stableIDs`, a period's ID comes from what it groups rather than its latest
+  /// call, so it stays the same as more calls land in it. Another device's own rows
+  /// keep their IDs.
+  public func compacted(
+    by unit: Calendar.Component,
+    calendar: Calendar = .current,
+    stableIDs: Bool = false
+  ) -> UsageAnalyticsSnapshot {
     struct Key: Hashable {
       let period: Date
       let sourceID: String
@@ -528,12 +535,20 @@ extension UsageAnalyticsSnapshot {
       )
       groups[key, default: []].append(sample)
     }
-    let compacted = groups.values.compactMap { group -> UsageSample? in
-      guard group.count > 1 else { return group.first }
+    let compacted = groups.compactMap { key, group -> UsageSample? in
       guard let latest = group.max(by: { $0.timestamp < $1.timestamp }) else { return nil }
+      let isDeviceReport = key.sourceID == UsageDeviceSource.sourceID(deviceID: latest.usageDeviceID)
+      if group.count == 1, !stableIDs || isDeviceReport { return latest }
+      let eventID = stableIDs
+        ? [
+          String(key.period.timeIntervalSince1970), key.sessionID, key.provider.rawValue, key.model,
+          key.billingProvider, key.billingRoute, key.accountLabel, key.reasoningLevel ?? "", key.harness,
+          key.application, key.agent ?? "", key.workspace ?? "", key.hasCost ? "cost" : "",
+        ].joined(separator: "\u{1F}")
+        : latest.sourceEventID
       let costs = group.compactMap(\.costUSD)
       return UsageSample(
-        id: latest.id,
+        id: stableIDs ? key.sourceID + ":" + eventID : latest.id,
         provider: latest.provider,
         timestamp: latest.timestamp,
         sessionID: latest.sessionID,
@@ -552,7 +567,8 @@ extension UsageAnalyticsSnapshot {
         attributionConfidence: latest.attributionConfidence,
         granularity: .sessionAggregate,
         sourceID: latest.sourceID,
-        sourceEventID: latest.sourceEventID
+        sourceEventID: eventID,
+        dedupeKey: group.count == 1 ? latest.dedupeKey : nil
       )
     }
     return UsageAnalyticsSnapshot(

@@ -392,7 +392,8 @@ final class UsageStore {
     device: UsageDeviceIdentity,
     since: Date,
     samples: [UsageSample],
-    importedAt: Date
+    importedAt: Date,
+    keepingOlder: Bool = false
   ) throws {
     let sourceID = UsageDeviceSource.sourceID(deviceID: device.id)
     try execute("BEGIN IMMEDIATE")
@@ -422,8 +423,8 @@ final class UsageStore {
       sqlite3_bind_double(deletion, 2, since.timeIntervalSince1970)
       try stepDone(deletion)
 
-      let insertion = try prepare("""
-        INSERT OR REPLACE INTO usage_events (
+      let columns = """
+        INTO usage_events (
           event_id, source_id, source_event_id, dedupe_key,
           provider, billing_provider, billing_route, account_label,
           model_raw, model_canonical, model_family, model_publisher,
@@ -436,10 +437,16 @@ final class UsageStore {
           ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
           ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
         )
-        """)
+        """
+      let insertion = try prepare("INSERT OR REPLACE " + columns)
       defer { sqlite3_finalize(insertion) }
+      // A device that reports only what it still holds may have lost some of an older
+      // hour's transcripts, so a row it already reported is never shrunk.
+      let addition = keepingOlder ? try prepare("INSERT OR IGNORE " + columns) : nil
+      defer { if let addition { sqlite3_finalize(addition) } }
       for sample in samples {
-        try bindUsageEvent(sample, eventID: "\(sourceID):\(sample.sourceEventID)", sourceID: sourceID, importedAt: importedAt, to: insertion)
+        let statement = sample.timestamp < since ? addition ?? insertion : insertion
+        try bindUsageEvent(sample, eventID: "\(sourceID):\(sample.sourceEventID)", sourceID: sourceID, importedAt: importedAt, to: statement)
       }
       try execute("COMMIT")
     } catch {
@@ -472,8 +479,23 @@ final class UsageStore {
     sourceID: String? = nil,
     limit: Int? = nil,
     offset: Int = 0,
-    excludingDevices: Bool = false
+    excludingDevices: Bool = false,
+    uniqueReplies: Bool = false
   ) throws -> [UsageSample] {
+    let filter = """
+      WHERE timestamp >= ? AND timestamp < ?
+      \(sourceID == nil ? "" : "AND source_id = ?")
+      \(excludingDevices ? "AND (source_id NOT LIKE 'device:%' OR source_id LIKE '%:wovenmatter:local')" : "")
+      """
+    // One reply kept in several places (an archived Codex rollout and its copy, a Pi
+    // Durable store and its commit log) is one row, as `LocalUsageService.duplicateKey` reads it.
+    let rows = uniqueReplies ? """
+      (SELECT *, ROW_NUMBER() OVER (
+        PARTITION BY provider, COALESCE(dedupe_key,
+          CASE WHEN source_id LIKE 'codex:file:%' THEN 'rollout:' || source_event_id END, event_id)
+        ORDER BY event_id) AS copy
+      FROM usage_events \(filter)) WHERE copy = 1
+      """ : "usage_events \(filter)"
     let statement = try prepare("""
       SELECT
         event_id, source_id, source_event_id, dedupe_key,
@@ -483,10 +505,7 @@ final class UsageStore {
         request_count, input_tokens, cached_input_tokens, cache_creation_tokens,
         output_tokens, reasoning_tokens, reported_total_tokens,
         cost_usd, attribution_confidence, granularity
-      FROM usage_events
-      WHERE timestamp >= ? AND timestamp < ?
-      \(sourceID == nil ? "" : "AND source_id = ?")
-      \(excludingDevices ? "AND (source_id NOT LIKE 'device:%' OR source_id LIKE '%:wovenmatter:local')" : "")
+      FROM \(rows)
       ORDER BY timestamp, event_id
       \(limit == nil ? "" : "LIMIT ? OFFSET ?")
       """)

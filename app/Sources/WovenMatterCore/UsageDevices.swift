@@ -90,7 +90,8 @@ public extension UsageSample {
     guard !aliases.isEmpty else { return samples }
     let current = Dictionary(aliases.map { (UsageDeviceSource.storedID($0.key), UsageDeviceSource.storedID($0.value)) },
                              uniquingKeysWith: { first, _ in first })
-    let reported = Dictionary(grouping: samples.filter { !$0.isRemoteLiveRun && Set(current.values).contains($0.usageDeviceID) },
+    let targets = Set(current.values)
+    let reported = Dictionary(grouping: samples.filter { !$0.isRemoteLiveRun && targets.contains($0.usageDeviceID) },
                               by: \.usageDeviceID).mapValues { Set($0.map(\.sessionID)) }
     return samples.compactMap { sample in
       guard let target = current[sample.usageDeviceID], target != sample.usageDeviceID else { return sample }
@@ -164,9 +165,15 @@ public struct UsageDeviceRecord: Codable, Equatable, Sendable {
   public let dedupeKey: String?
 
   public init(sample: UsageSample) {
-    // Hashed because a source ID can hold a transcript's full path.
-    id = SHA256.hash(data: Data((sample.sourceID + ":" + sample.sourceEventID).utf8))
-      .prefix(16).map { String(format: "%02x", $0) }.joined()
+    if sample.sourceID == UsageDeviceSource.sourceID(deviceID: sample.usageDeviceID) {
+      // Another device's row passed on by this Mac keeps that device's own ID, which
+      // holds no path, so the copy and the same row read directly are one row.
+      id = sample.sourceEventID
+    } else {
+      // Hashed because a source ID can hold a transcript's full path.
+      id = SHA256.hash(data: Data((sample.sourceID + ":" + sample.sourceEventID).utf8))
+        .prefix(16).map { String(format: "%02x", $0) }.joined()
+    }
     device = sample.usageDeviceID == UsageDeviceSource.localDeviceID ? nil : sample.usageDeviceID
     timestamp = sample.timestamp.timeIntervalSince1970
     provider = sample.provider.rawValue
