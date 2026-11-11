@@ -11,8 +11,8 @@ struct BotSettingsMemory: View {
     private var bot: PiBotSummary? { bots.first { $0.id == picked } ?? bots.first }
 
     var body: some View {
-        SettingsCard(title: "Memory", detail: "Durable facts a bot keeps from its conversations and sees on every turn. Changes here apply from its next reply.") {
-            SettingsField("Bot") {
+        SettingsSection(title: "Memory", detail: "Facts a bot keeps from its conversations and sees on every turn.") {
+            SettingsRow(title: "Bot", detail: "Changes apply from its next reply.") {
                 BotSettingsReferencePicker(selection: bot?.id ?? "", options: bots.map { .init($0.id, $0.name) },
                     label: "Bot whose memory to show") { picked = $0 }
             }
@@ -78,7 +78,7 @@ private struct BotSettingsFactRow: View {
     @State private var editing = false
 
     var body: some View {
-        SettingsInset {
+        Group {
             if editing {
                 BotSettingsFactForm(label: "Edit memory", action: "Save", initial: fact, onSave: { text in
                     let saved: Bool
@@ -88,12 +88,13 @@ private struct BotSettingsFactRow: View {
                     return saved
                 }, onCancel: { editing = false })
             } else {
-                HStack(alignment: .top) {
-                    Text(fact).font(.system(size: 13)).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
+                HStack(alignment: .center, spacing: 8) {
+                    Text(fact).font(.settingsText).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
                     Button("Edit") { editing = true }.accessibilityLabel("Edit memory: \(fact)")
                     Button(action: onDelete) { BotSettingsActionLabel(title: "Delete", glyph: .trash) }
                         .accessibilityLabel("Delete memory: \(fact)")
                 }
+                .frame(minHeight: SettingsMetrics.rowHeight)
             }
         }
     }
@@ -115,7 +116,7 @@ private struct BotSettingsFactForm: View {
     }
 
     var body: some View {
-        HStack {
+        HStack(spacing: 8) {
             TextField(onCancel == nil ? "Something this bot should remember" : "", text: $value)
                 .dashboardInput().accessibilityLabel(label).focused($focused)
                 .onChange(of: value) { _, text in if text.count > 1000 { value = String(text.prefix(1000)) } }

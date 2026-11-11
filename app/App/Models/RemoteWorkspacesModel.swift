@@ -1144,6 +1144,18 @@ final class RemoteWorkspacesModel {
         }
     }
 
+    /// Signs the harness out on the workspace with its own sign-out command.
+    func signOutHarness(_ kind: AgentRuntimeKind, configuration: RemoteWorkspaceConfiguration) {
+        if forwardToBackend(.signOut(configuration.id, kind)) { return }
+        performBusy(configuration, actionErrorRuntimeKind: kind) {
+            let client = try await self.serviceClient(for: configuration)
+            _ = try await client.signOut(harnessID: kind)
+            self.authenticationSessions[configuration.id] = nil
+            self.harnesses[configuration.id] = try await client.harnesses()
+            await self.refreshSignInStatus(configuration)
+        }
+    }
+
     func submitAuthorizationCode(
         _ code: String,
         configuration: RemoteWorkspaceConfiguration

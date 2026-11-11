@@ -49,11 +49,11 @@ struct BotSettingsTextEditor: View {
     var body: some View {
         ZStack(alignment: .topLeading) {
             if text.isEmpty, !placeholder.isEmpty {
-                Text(placeholder).font(.system(size: 12.5)).foregroundStyle(DashboardPalette.mutedForeground)
+                Text(placeholder).font(.settingsBody).foregroundStyle(DashboardPalette.mutedForeground)
                     .padding(.horizontal, 5).padding(.vertical, 8).allowsHitTesting(false)
             }
             TextEditor(text: $text)
-                .font(monospaced ? .system(size: 12, design: .monospaced) : .system(size: 13))
+                .font(monospaced ? .system(size: 12, design: .monospaced) : .settingsText)
                 .foregroundStyle(DashboardPalette.foreground)
                 .scrollContentBackground(.hidden)
                 .scrollIndicators(.never)
@@ -66,7 +66,7 @@ struct BotSettingsTextEditor: View {
     }
 }
 
-/// SettingsMenuPicker's string options cannot represent grouped model references.
+/// Models grouped by provider, styled like `SettingsPicker`, whose flat options cannot group them.
 struct BotSettingsModelPicker: View {
     let providers: [PiBotProviderModels]
     @Binding var selection: String
@@ -88,13 +88,20 @@ struct BotSettingsModelPicker: View {
     var body: some View {
         Button { presented.toggle() } label: {
             HStack(spacing: 8) {
-                Text(selectedLabel).lineLimit(1).truncationMode(.middle)
-                Spacer(minLength: 4)
-                DashboardLucideIcon(glyph: .chevronDown, size: 12)
+                Text(selectedLabel)
+                    .font(.settingsBody.weight(.medium))
+                    .foregroundStyle(DashboardPalette.foreground)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Image(systemName: "chevron.up.chevron.down")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(DashboardPalette.mutedForeground)
             }
-            .frame(maxWidth: .infinity, minHeight: 36, alignment: .leading)
+            .frame(maxWidth: 280, alignment: .leading)
+            .contentShape(RoundedRectangle(cornerRadius: DashboardMetrics.controlRadius, style: .continuous))
         }
         .buttonStyle(SettingsQuietButtonStyle(isActive: presented))
+        .fixedSize(horizontal: false, vertical: true)
         .accessibilityLabel(label)
         .accessibilityValue(selectedLabel)
         .popover(isPresented: $presented) {
@@ -104,7 +111,7 @@ struct BotSettingsModelPicker: View {
                     else if selection.isEmpty { option("Pick a model…", value: "") }
                     if !selection.isEmpty, !known { option("\(selection) (not signed in)", value: selection) }
                     ForEach(providers) { provider in
-                        Text(provider.name).font(.system(size: 11, weight: .semibold))
+                        Text(provider.name).font(.settingsSecondary.weight(.semibold))
                             .foregroundStyle(DashboardPalette.mutedForeground).padding(.top, 8).padding(.horizontal, 10)
                         ForEach(provider.models) { model in
                             option(model.name, value: "\(provider.id)/\(model.id)")
@@ -121,9 +128,13 @@ struct BotSettingsModelPicker: View {
     private func option(_ title: String, value: String) -> some View {
         Button { selection = value; presented = false } label: {
             HStack {
-                Text(title).font(.system(size: 13)).foregroundStyle(DashboardPalette.foreground)
+                Text(title).font(.settingsText).foregroundStyle(DashboardPalette.foreground)
                 Spacer()
-                if value == selection { DashboardLucideIcon(glyph: .check, size: 12) }
+                if value == selection {
+                    Image(systemName: "checkmark")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(DashboardPalette.primary)
+                }
             }.padding(.horizontal, 10).padding(.vertical, 6).contentShape(Rectangle())
         }.buttonStyle(SettingsMenuOptionButtonStyle())
     }
@@ -144,7 +155,7 @@ struct BotSettingsModelFacts: View {
     var body: some View {
         DisclosureGroup {
             VStack(alignment: .leading, spacing: 6) {
-                Text(model).font(.system(size: 11, design: .monospaced)).textSelection(.enabled)
+                Text(model).font(.system(size: 11.5, design: .monospaced)).textSelection(.enabled)
                 SettingsNote(PiBotModelFacts.text(providers, model))
                 ForEach(PiBotModelFacts.tierTexts(pricing), id: \.self) { SettingsNote($0) }
             }.padding(.vertical, 6)
@@ -152,7 +163,7 @@ struct BotSettingsModelFacts: View {
             HStack(spacing: 8) {
                 if let name { Text(name).fontWeight(.medium) }
                 Text("Model details").foregroundStyle(DashboardPalette.mutedForeground)
-            }.font(.system(size: 12.5))
+            }.font(.settingsBody)
         }
         .accessibilityLabel("Model details for \(name ?? model)")
     }
@@ -168,37 +179,11 @@ struct BotSettingsReferencePicker: View {
     let selection: String
     let options: [Option]
     let label: String
-    var width: CGFloat = 180
-    let onSelect: (String) -> Void
-    @State private var presented = false
+    let onSelect: @MainActor (String) -> Void
 
     var body: some View {
-        Button { presented.toggle() } label: {
-            HStack(spacing: 8) {
-                Text(options.first { $0.id == selection }?.title ?? selection)
-                    .lineLimit(1).truncationMode(.middle)
-                Spacer(minLength: 4)
-                DashboardLucideIcon(glyph: .chevronDown, size: 12)
-            }.frame(width: width - 24, height: 36)
-        }
-        .buttonStyle(SettingsQuietButtonStyle(isActive: presented))
-        .accessibilityLabel(label)
-        .popover(isPresented: $presented) {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 2) {
-                    ForEach(options) { option in
-                        Button { onSelect(option.id); presented = false } label: {
-                            HStack {
-                                Text(option.title).font(.system(size: 13))
-                                Spacer()
-                                if selection == option.id { DashboardLucideIcon(glyph: .check, size: 12) }
-                            }.foregroundStyle(DashboardPalette.foreground)
-                                .padding(.horizontal, 10).padding(.vertical, 6).contentShape(Rectangle())
-                        }.buttonStyle(SettingsMenuOptionButtonStyle())
-                    }
-                }.padding(6)
-            }.scrollIndicators(.never).frame(minWidth: width).frame(maxHeight: 380)
-                .onExitCommand { presented = false }
+        SettingsPicker(label, selection: Binding(get: { selection }, set: onSelect), options: options.map(\.id)) { id in
+            options.first { $0.id == id }?.title ?? id
         }
     }
 }

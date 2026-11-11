@@ -37,9 +37,9 @@ without a workspace. Adding the workspace later reuses the same server.
   online device over tailnet HTTPS (`*.ts.net`). No single Mac is required.
   The iPhone has no home Mac. It syncs with whichever Mac or Linux host
   answers first.
-- **Pairing.** Macs pair with each other on the Mac connections page, by link
+- **Pairing.** Macs pair with each other in Settings → Apple Devices, by link
   or nearby request. An iPhone pairs with any Mac. Linux hosts are added from
-  a Mac, under Settings > Remote workspaces.
+  a Mac, under Settings → Workspaces.
 
 ## Library
 

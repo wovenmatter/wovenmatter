@@ -16,7 +16,7 @@ same commit.
   It hosts the workspace, a full library copy, Woven MCP and, when enabled,
   bots. A Linux machine may run bots without being a workspace; adding the
   workspace later reuses the same server. A Mac must have the Woven Matter
-  desktop app installed by hand and be connected on the Mac connections page
+  desktop app installed by hand and be paired in Settings → Apple Devices
   before it can host bots.
 - **Full access by default** for every harness everywhere, including sessions
   agents start. Agent-started sessions use the destination workspace's own
@@ -255,8 +255,8 @@ same commit.
   run in a transient systemd user unit, because they stop the server. First
   install still runs over Tailscale SSH from the Mac that adds the machine,
   which also keeps SSH as its update fallback. Every other Mac lists every
-  Linux host in the synced registry (Settings > Remote workspaces, "More
-  Linux hosts") and manages it with these signed routes
+  Linux host in the synced registry (Settings → Workspaces, "From other
+  devices") and manages it with these signed routes
   (`RemoteHostAdministrationClient`): status, logs, restart, bots-configure
   and update, which uploads this Mac's host bundle and polls `GET
   /v1/host/update`. Nothing says which Mac added a host. "Update everything"
@@ -993,7 +993,7 @@ hands them to the macOS job, which checks them with
 - Woven MCP: each bot gets its own key from the machine's Woven server. The
   principal is `woven:bot:<machine-device-id>:<bot-id>`, with attribution,
   per-bot revoke and pause-all. The existing `WorkspaceToolSettings.botMCP`
-  toggles decide which tool groups bots get. Session management reaches only
+  toggles (Settings → Woven MCP → Bots) decide which tool groups bots get. Session management reaches only
   Woven workspaces, under those workspaces' own permissions. Bot schedules
   are Woven MCP timers delivered back to the bot.
 - Bot conversations are written into the machine's library copy as
@@ -1483,7 +1483,7 @@ answers); `PUT /v1/resources`; (optional forwards) `GET /v1/forwards`;
   (WebSocket, proxied to the runtime's `/ws` with the runtime token; any
   `Origin` header is refused, since only native apps connect: the Mac's
   `URLSessionWebSocketTask` sends none, which `PiBotHandshakeTests` checks).
-  Administrator only: `POST /v1/bots/resources {resources: {poolBytes?,
+  Administrator only: `POST /v1/bots/enabled {enabled}`, `POST /v1/bots/resources {resources: {poolBytes?,
   perBotBytes?, diskBytes?}}` (a missing field stays; a pool below per-bot
   RAM lowers it), `GET|POST /v1/bots/mcp {isEnabled?, groups?}` (the `GET`
   adds `revoked: [{botID, revokedAt}]`), `DELETE /v1/bots/mcp/keys/{botID}`
@@ -1602,7 +1602,7 @@ answers); `PUT /v1/resources`; (optional forwards) `GET /v1/forwards`;
 
 ### Discovery and UI
 
-- **Discover devices**, on the Bots page and on Mac connections, lists every
+- **Install on another device**, on the Bots page, lists every
   online Linux and macOS tailnet peer and its state:
   - a Linux machine with no server, or whose server has no bots: install bots
     (sudo once). A Woven server is not a bots host until it says so: for a host
@@ -1610,7 +1610,7 @@ answers); `PUT /v1/resources`; (optional forwards) `GET /v1/forwards`;
     (`bots_ready` is ready), for one another Mac added its `GET /v1/bots/status`
     `enabled`. A check that fails shows its error, with Install bots to retry;
   - a Mac without the app: "Install Woven Matter on this Mac first", with the
-    steps (download, open, connect on Mac connections, finish the setup card);
+    steps (download, open, pair in Apple Devices, finish the setup card);
   - ready.
 - **Install bots** (`installBots`) inspects the peer first. No server: `prepare`
   and `install` with the `bots` role, a new bots-only server this Mac records. A
@@ -1666,6 +1666,7 @@ under `/wovenmatter` when reached through Tailscale Serve:
 | `GET /v1/bots/status` | `{ machine: { deviceID, name, kind }, enabled, state, message?, versions: { app, runtime, protocol, fingerprint?, librarySchema? }, resources, capacity: { memoryBytes, diskTotalBytes, diskFreeBytes, diskUsedByBotsBytes? }, paused, updating?, engineUpdateFailure? }` (`updating` and `engineUpdateFailure`: a Mac's VM update) |
 | `POST /v1/bots/engine/update` (Macs) | starts the Mac's VM update and returns the status at once; follow `updating`, then `engineUpdateFailure` |
 | `POST /v1/bots/resources` `{ resources: { poolBytes, perBotBytes, diskBytes } }` | the status after applying; `null` is no cap (Linux also leaves a missing field as it is) |
+| `POST /v1/bots/enabled` `{ enabled }` | turns bots on or off on this machine and returns the status. Bots run on one machine: choosing one in Settings → Bots turns them off everywhere else. Bots, their files and conversations stay. A Linux host saves `botsOff` with its bots settings and refuses `enabled: true` until bots are installed |
 | `GET /v1/bots/ws` (WebSocket upgrade) | proxied to the runtime's `/ws` with the runtime's own bearer |
 
 A Mac reaches every other member's bots with signed requests

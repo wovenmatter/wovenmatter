@@ -8,12 +8,14 @@ struct LocalModelServerConnections: View {
     @State private var error: String?
     @State private var adding = false
     var body: some View {
-        SettingsCard(title: "Local models", detail: "Connect OpenAI Responses-compatible servers on this Mac or your Tailscale network.") {
+        VStack(alignment: .leading, spacing: 6) {
+            SettingsNote("Shared across workspaces. OpenAI Responses-compatible servers on this Mac or your Tailscale network.")
             ForEach(servers) { server in
-                LocalModelServerConnectionRow(agent: agent, server: server, changed: reload)
-                Divider()
+                SettingsSummaryRow(server.name, value: server.models.count == 1 ? "1 model" : "\(server.models.count) models") {
+                    LocalModelServerConnectionRow(agent: agent, server: server, changed: reload)
+                }
             }
-            if adding || servers.isEmpty {
+            if adding {
                 LocalModelServerConnectionRow(agent: agent, server: nil) { adding = false; reload() }
             } else if servers.count < LocalModelServerStore.maximumServers {
                 Button("Add model server") { adding = true }.buttonStyle(SettingsQuietButtonStyle())
@@ -42,7 +44,7 @@ private struct LocalModelServerConnectionRow: View {
                 .accessibilityLabel("Local model server URL")
                 .disabled(server != nil)
             if server != nil {
-                Text("Add a new connection to use a different server URL.").font(.caption).foregroundStyle(.secondary)
+                Text("Add a new connection to use a different server URL.").font(.settingsSecondary).foregroundStyle(DashboardPalette.mutedForeground)
             }
             SecureField(server == nil ? "API key" : "API key · leave empty to keep saved key", text: $key)
                 .dashboardInput().accessibilityLabel("Local model server API key")
@@ -51,7 +53,7 @@ private struct LocalModelServerConnectionRow: View {
                     .buttonStyle(SettingsQuietButtonStyle()).disabled(busy || url.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || (server == nil && key.isEmpty))
                 if let server {
                     Text(verified ? "Connected · \(server.models.count) models" : "Saved · \(server.models.count) models · checked \(server.verifiedAt.formatted(date: .abbreviated, time: .shortened))")
-                        .font(.caption).foregroundStyle(.secondary)
+                        .font(.settingsSecondary).foregroundStyle(DashboardPalette.mutedForeground)
                     Spacer()
                     Button("Remove") {
                         Task {

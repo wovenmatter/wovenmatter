@@ -725,7 +725,7 @@ struct DashboardUsageView: View {
         HStack {
             Text("Account limits").font(.headline)
             Spacer()
-            UsageSettingsLink()
+            ManageAccountsLink()
         }
         let accounts = ProviderKind.supportedAccounts.flatMap { provider -> [UsageLimitAccount] in
             let saved = snapshot.limits.filter { $0.provider == provider }
@@ -734,7 +734,7 @@ struct DashboardUsageView: View {
                 accountLabel: provider.displayName, status: unchecked ? .unavailable : .needsCredential, source: "Saved accounts",
                 detail: model.localUsageError != nil ? "Saved accounts could not be checked. Review the error above."
                     : model.isRefreshingUsageLimits ? "Checking saved accounts…"
-                    : "Not signed in. Add an account in Settings → Usage.", dashboardURL: provider.usageDashboardURL)] : saved
+                    : "Not signed in. Add an account in Settings → Subscriptions & API Keys.", dashboardURL: provider.usageDashboardURL)] : saved
         }
         ViewThatFits(in: .horizontal) {
             LazyVGrid(

@@ -16,12 +16,14 @@ struct BotSettingsProfileEditor: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            SettingsField("Name") { TextField("e.g. Coding", text: $draft.name).dashboardInput().accessibilityLabel("Name") }
+        VStack(alignment: .leading, spacing: 4) {
+            Text(profile.map { "Edit \($0.name)" } ?? "New profile").font(.settingsRow).padding(.top, 6)
+            SettingsRow(title: "Name") {
+                TextField("e.g. Coding", text: $draft.name).dashboardInput().frame(width: 260).accessibilityLabel("Name")
+            }
             if profile == nil {
-                SettingsField("Id") {
-                    SettingsNote("Lowercase letters, digits, - and _. Can't be changed.")
-                    TextField("e.g. coding", text: $draft.id).dashboardInput().accessibilityLabel("Id")
+                SettingsRow(title: "Id", detail: "Lowercase letters, digits, - and _. Can't be changed.") {
+                    TextField("e.g. coding", text: $draft.id).dashboardInput().frame(width: 260).accessibilityLabel("Id")
                 }
             }
             BotSettingsEditorSection(title: "Main model", summary: draft.main.isEmpty ? "Not set" : draft.main, open: true) {
@@ -36,7 +38,7 @@ struct BotSettingsProfileEditor: View {
                 BotSettingsTextEditor(text: $draft.guidance, label: "Model preferences",
                     placeholder: "e.g. Opus writes nicer code. Sol is thorough. Check Astra's work.")
             }
-            HStack {
+            HStack(spacing: 8) {
                 Button(saving ? "Saving…" : profile == nil ? "Create profile" : "Save profile") {
                     saving = true
                     Task { _ = await onSave(draft); saving = false }
@@ -45,7 +47,9 @@ struct BotSettingsProfileEditor: View {
                 .disabled(!draft.canSave(isNew: profile == nil))
                 Button("Cancel", action: onCancel)
             }
+            .padding(.top, 6)
         }
+        .padding(.bottom, 8)
         .disabled(saving)
         .accessibilityElement(children: .contain)
         .accessibilityLabel(profile.map { "Edit \($0.name)" } ?? "New profile")
@@ -56,7 +60,7 @@ struct BotSettingsProfileEditor: View {
             SettingsNote("Up to 5, tried in order when the main model hits a usage limit or runs out of credits. The bot switches back once it resets.")
             ForEach(Array(draft.fallbacks.enumerated()), id: \.element.id) { index, entry in
                 HStack(spacing: 6) {
-                    Text("\(index + 1).").font(.system(size: 11)).foregroundStyle(DashboardPalette.mutedForeground)
+                    Text("\(index + 1).").font(.settingsSecondary).foregroundStyle(DashboardPalette.mutedForeground)
                     BotSettingsModelPicker(providers: providers, selection: Binding(
                         get: { draft.fallbacks.first { $0.id == entry.id }?.model ?? "" },
                         set: { value in if let at = draft.fallbacks.firstIndex(where: { $0.id == entry.id }) { draft.fallbacks[at].model = value } }),
@@ -88,7 +92,7 @@ struct BotSettingsProfileEditor: View {
         BotSettingsEditorSection(title: "Model pool", summary: draft.poolModels.isEmpty ? "Main model only" : "Main model + " + draft.poolModels.joined(separator: ", ")) {
             SettingsNote("Additional models available for subagents. The main model can always spawn subagents using itself, even when this list is empty.")
             if !draft.main.isEmpty {
-                Text("Main model \(draft.main)").font(.system(size: 12.5))
+                Text("Main model \(draft.main)").font(.settingsBody)
                 BotSettingsModelFacts(providers: providers, model: draft.main)
             }
             ForEach(Array(draft.pool.enumerated()), id: \.element.id) { index, entry in
@@ -113,29 +117,23 @@ struct BotSettingsProfileEditor: View {
     }
 }
 
+/// One part of the editor: its current value, opened on request or when it has a problem.
 private struct BotSettingsEditorSection<Content: View>: View {
     let title: String
     let summary: String
     let problem: String?
+    let open: Bool
     @ViewBuilder let content: Content
-    @State private var expanded: Bool
 
     init(title: String, summary: String, problem: String? = nil, open: Bool = false,
          @ViewBuilder content: () -> Content) {
-        self.title = title; self.summary = summary; self.problem = problem; self.content = content()
-        _expanded = State(initialValue: open || problem != nil)
+        self.title = title; self.summary = summary; self.problem = problem; self.open = open; self.content = content()
     }
 
     var body: some View {
-        DisclosureGroup(isExpanded: $expanded) {
-            VStack(alignment: .leading, spacing: 8) { content }.padding(.vertical, 8)
-        } label: {
-            VStack(alignment: .leading, spacing: 3) {
-                Text(title).font(.system(size: 13, weight: .medium))
-                if let problem { SettingsError(problem) }
-                else { SettingsNote(summary).lineLimit(2) }
-            }.padding(.vertical, 4)
+        SettingsSummaryRow(title, value: problem ?? summary, tone: problem == nil ? nil : .warning,
+                           initiallyExpanded: open || problem != nil) {
+            content
         }
-        .onChange(of: problem) { _, value in if value != nil { expanded = true } }
     }
 }

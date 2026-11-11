@@ -47,7 +47,7 @@ separately; compilation does not prove UI, Tailscale or real-account acceptance.
    during setup, expired code, duplicate scan and pairing to a different database.
    Pending enrollment must not appear paired or grant data access. Local writing
    and device provider connections must survive interrupted setup and re-pairing.
-2. On a second Mac, pair from Settings → Apple Devices → Find devices (Pair, or
+2. On a second Mac, pair from Settings → Apple Devices → Pair a device → Find on your network (Pair, or
    Download & pair when Woven Matter is not installed there) or start pairing
    from the other Mac; test discovery, approval on the other Mac and the pairing
    link fallback. Discovery alone grants no access. Both Macs keep their full

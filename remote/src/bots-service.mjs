@@ -63,6 +63,11 @@ export function createBotsService({ configuration, mcp, defaultAgent, serverPort
   previews ??= createBotPreviews({ statePath: join(stateDirectory, 'previews.json') })
   let identity = machine ?? null, started = false, engineWatch = null
   const settings = () => readJSONFile(settingsPath, { botMemoryBytes: 4 * GB })
+  // Bots run on one machine at a time, so an installed bots role can be turned off.
+  // The choice is saved with the bots settings and read once at start.
+  let turnedOff = false
+  const loadedTurnedOff = settings().then(saved => { turnedOff = saved.botsOff === true }).catch(() => {})
+  const active = () => !!configuration.botsEnabled && !turnedOff
 
   // The machine's member identity (the library host's) names its bots; the
   // saved device-id file is the fallback while there is no library host.
@@ -88,7 +93,8 @@ export function createBotsService({ configuration, mcp, defaultAgent, serverPort
   runtime ??= packageRoot ? createBotsRuntime({ packageRoot, configPath: join(stateDirectory, 'runtime.json'), configuration: runtimeConfiguration, log }) : null
 
   async function start() {
-    if (started || !configuration.botsEnabled) return
+    await loadedTurnedOff
+    if (started || !active()) return
     started = true
     await mkdir(dataDirectory, { recursive: true, mode: 0o700 })
     await previews.recover().catch(error => log('Bot preview recovery failed: ' + error.message))
@@ -118,7 +124,8 @@ export function createBotsService({ configuration, mcp, defaultAgent, serverPort
   async function handleHost(request, response, url, { readJSON, json }) {
     if (!url.pathname.startsWith('/v1/bots-host/')) return false
     if (!hostAuthorized(request)) { json(response, 401, { error: 'unauthorized' }); return true }
-    if (!configuration.botsEnabled) { json(response, 409, { error: 'bots_disabled' }); return true }
+    await loadedTurnedOff
+    if (!active()) { json(response, 409, { error: 'bots_disabled' }); return true }
     const path = url.pathname, method = request.method
     if (path === '/v1/bots-host/mcp-keys' && method === 'POST') {
       const body = await readJSON(request, 16384)
@@ -167,18 +174,19 @@ export function createBotsService({ configuration, mcp, defaultAgent, serverPort
   // WOVEN_EVERYWHERE.md, "Woven server routes for bots"), plus this server's
   // own engine, runtime and settings detail.
   async function status() {
+    await loadedTurnedOff
     const [engineStatus, saved, identity] = await Promise.all([engine.status(), settings(), machineInfo()])
     const report = engineStatus.installed ? await engine.resources({ botMemoryBytes: saved.botMemoryBytes ?? null }).catch(() => null) : null
     const running = runtime?.status() ?? null
     let state = 'off', message
-    if (!configuration.botsEnabled) state = 'off'
+    if (!active()) state = 'off'
     else if (!runtime) { state = 'failed'; message = 'This release does not include the bots runtime. Update this host.' }
     else if (!engineStatus.installed) { state = 'starting'; message = 'Waiting for the bot engine.' }
     else if (running?.running && engineStatus.ready) state = 'ready'
     else { state = 'starting'; if (!engineStatus.ready) message = 'Waiting for the bot engine to answer.' }
     const memoryBytes = size(report?.memory?.totalBytes), diskTotalBytes = size(report?.disk?.totalBytes), diskFreeBytes = size(report?.disk?.freeBytes)
     return {
-      machine: { ...identity, kind: 'linux' }, enabled: !!configuration.botsEnabled, state, ...(message ? { message } : {}),
+      machine: { ...identity, kind: 'linux' }, enabled: active(), state, ...(message ? { message } : {}),
       // `app` is the Woven Matter version that shipped this host release; apps compare the
       // fingerprint (exact) and the library schema to tell an out-of-date host.
       versions: { ...releaseVersions(), runtime: await runtimeVersion, protocol: 1 },
@@ -217,7 +225,25 @@ export function createBotsService({ configuration, mcp, defaultAgent, serverPort
       if (botMemoryBytes !== saved.botMemoryBytes) {
         await writePrivateJSON(settingsPath, { ...saved, botMemoryBytes })
         // The runtime reads limits from its config at start; bots keep running.
-        if (runtime && configuration.botsEnabled) await runtime.restart()
+        if (runtime && active()) await runtime.restart()
+      }
+      json(response, 200, await status()); return true
+    }
+    if (path === '/v1/bots/enabled' && method === 'POST') {
+      // `{enabled}`: bots run on one machine, so the apps turn them off here when
+      // they move elsewhere. Bots, their files and conversations stay.
+      const enabled = (await readJSON(request, 1024))?.enabled
+      if (typeof enabled !== 'boolean') throw fail(400, 'Send {enabled: true} or {enabled: false}.')
+      if (enabled && !configuration.botsEnabled) throw fail(409, 'Install bots on this machine first.')
+      await loadedTurnedOff
+      if (turnedOff === !enabled) { json(response, 200, await status()); return true }
+      await writePrivateJSON(settingsPath, { ...(await settings()), botsOff: !enabled })
+      turnedOff = !enabled
+      if (enabled) await start()
+      else {
+        clearInterval(engineWatch); engineWatch = null
+        await runtime?.stop()
+        started = false
       }
       json(response, 200, await status()); return true
     }
@@ -248,7 +274,7 @@ export function createBotsService({ configuration, mcp, defaultAgent, serverPort
     return true
   }
   function proxySocket(request, socket, head, url, refuse) {
-    const target = configuration.botsEnabled ? runtime?.endpoint() : null
+    const target = active() ? runtime?.endpoint() : null
     if (!target) { refuse(503, 'Service Unavailable'); return true }
     if ((request.headers.upgrade ?? '').toLowerCase() !== 'websocket') { refuse(400, 'Bad Request'); return true }
     const upstream = connect(target.port, target.host, () => {
@@ -268,7 +294,7 @@ export function createBotsService({ configuration, mcp, defaultAgent, serverPort
   // A due timer reaches its bot as `message.send` with the occurrence's delivery
   // ID, which the runtime accepts once (docs: "Timers on a library host").
   function deliver({ botID, text, deliveryID }, { timeout = 30_000 } = {}) {
-    const target = configuration.botsEnabled ? runtime?.endpoint() : null
+    const target = active() ? runtime?.endpoint() : null
     if (!target) return Promise.reject(fail(503, 'The bots runtime is not running.'))
     if (!uuid(botID) || typeof text !== 'string' || !text || typeof deliveryID !== 'string') return Promise.reject(fail(400, 'Invalid bot delivery.'))
     return new Promise((resolve, reject) => {

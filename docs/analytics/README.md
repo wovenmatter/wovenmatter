@@ -34,7 +34,10 @@ limit attempts as well as successful signals, so a failure does not cause every
 subsequent edit to retry. Future eligible actions can make a new attempt.
 Companion sends do not block content synchronization or user actions.
 
-Privacy choices still persist and synchronize. Analytics default to on, with the toggle and explanation in General settings;
+Privacy choices persist and synchronize to every device: the preference row, with
+its library-wide analytics ID, is part of library sync between Macs and Linux hosts,
+and iPhones and iPads read it from the Mac they connect to. When devices chose
+differently while apart, opting out wins. Analytics default to on, with the toggle and explanation in General settings;
 there is no launch disclosure or acknowledgement step. Opt-out stops local collection and
 cancels outstanding requests; an already-sent request cannot be recalled. Offline
 opt-out reaches other devices on reconnection. Old opt-ins cannot override newer

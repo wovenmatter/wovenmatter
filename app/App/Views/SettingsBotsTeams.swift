@@ -14,10 +14,10 @@ struct BotSettingsBots: View {
     var body: some View {
         Group {
             if let live, let profiles {
-                botsCard(live, profiles: profiles)
+                botsSection(live, profiles: profiles)
                 BotSettingsMemory(state: state, bots: live)
-                rebuildCard(live)
-                if let deleted, !deleted.isEmpty { deletedCard(deleted) }
+                containersSection(live)
+                if let deleted, !deleted.isEmpty { deletedSection(deleted) }
             } else { SettingsEmpty("Loading…") }
         }
         .task(id: "\(state.bots.connection.rawValue):\(state.bots.settingsRevision)") {
@@ -49,51 +49,48 @@ struct BotSettingsBots: View {
         }
     }
 
-    private func botsCard(_ live: [PiBotSummary], profiles: [PiBotProfile]) -> some View {
+    private func botsSection(_ live: [PiBotSummary], profiles: [PiBotProfile]) -> some View {
         let layout = PiBotTeamLayout(live)
-        return SettingsCard(title: "Bots", detail: "Each bot's name, role, profile and team. Teams are optional and one level deep: a manager hands work to the bots on its team. An orchestrator is optional and oversees every bot and team. Admin Bot's name is fixed; rename any other bot here or by asking it or Admin Bot.") {
-            SettingsField("Orchestrator") {
-                SettingsNote("Optional. Sits above every team; Admin Bot stays apart.")
+        return SettingsSection(title: "Bots", detail: "Each bot's name, profile, and team. Teams are optional.") {
+            SettingsRow(title: "Orchestrator", detail: "Optional. Oversees every bot and team; Admin Bot stays apart.") {
                 BotSettingsReferencePicker(selection: live.first(where: \.orchestrator)?.id ?? "",
                     options: [.init("", "None")] + live.filter { !$0.isAdmin }.map { .init($0.id, $0.name) },
                     label: "Orchestrator") { id in act { try await $0.setOrchestrator(botID: id.isEmpty ? nil : id) } }
             }
-            ViewThatFits(in: .horizontal) {
-                HStack(spacing: 12) {
-                    Text("Bot").frame(minWidth: 160, maxWidth: .infinity, alignment: .leading)
-                    Text("Profile").frame(width: 180, alignment: .leading)
-                    Text("Team").frame(width: 180, alignment: .leading)
-                }.font(.system(size: 11, weight: .semibold)).foregroundStyle(DashboardPalette.mutedForeground)
-                EmptyView()
+            ForEach(layout.rows) { row in
+                botRow(row.bot, all: live, profiles: profiles).padding(.leading, row.isMember ? 16 : 0)
             }
-            VStack(alignment: .leading, spacing: 10) {
-                ForEach(layout.rows) { row in
-                    botRow(row.bot, all: live, profiles: profiles).padding(.leading, row.isMember ? 18 : 0)
-                }
-                if let admin = layout.admin { botRow(admin, all: live, profiles: profiles).padding(.top, 18) }
+            if let admin = layout.admin { botRow(admin, all: live, profiles: profiles) }
+            SettingsHelp {
+                SettingsNote("Teams are one level deep: a manager hands work to the bots on its team. An orchestrator sits above every team.")
+                SettingsNote("Admin Bot's name is fixed. Rename any other bot here, or by asking it or Admin Bot.")
             }
         }
     }
 
     private func botRow(_ bot: PiBotSummary, all: [PiBotSummary], profiles: [PiBotProfile]) -> some View {
-        SettingsInset {
-            ViewThatFits(in: .horizontal) {
-                HStack(alignment: .top, spacing: 12) {
-                    name(bot, all: all).frame(minWidth: 160, maxWidth: .infinity, alignment: .leading)
-                    profilePicker(bot, profiles: profiles)
-                    VStack(alignment: .leading, spacing: 4) {
-                        teamPicker(bot, all: all)
-                        handoffPicker(bot, all: all)
-                    }
+        SettingsSummaryRow(bot.name, value: botSummary(bot, all: all, profiles: profiles)) {
+            name(bot, all: all)
+            SettingsRow(title: "Profile") { profilePicker(bot, profiles: profiles) }
+            if bot.isAdmin {
+                SettingsRow(title: "Team") {
+                    Text("Never on a team").font(.settingsBody).foregroundStyle(DashboardPalette.mutedForeground)
                 }
-                VStack(alignment: .leading, spacing: 8) {
-                    name(bot, all: all)
-                    profilePicker(bot, profiles: profiles)
-                    teamPicker(bot, all: all)
-                    handoffPicker(bot, all: all)
-                }
+            } else {
+                SettingsRow(title: "Team") { teamPicker(bot, all: all) }
+                handoffPicker(bot, all: all)
             }
         }
+    }
+
+    private func botSummary(_ bot: PiBotSummary, all: [PiBotSummary], profiles: [PiBotProfile]) -> String {
+        let profile = bot.defaultProfile == true ? "Default profile"
+            : profiles.first { $0.id == bot.profileId }?.name ?? "Default profile"
+        var parts = [bot.role, profile]
+        if bot.orchestrator { parts.append("Orchestrator") }
+        else if bot.manager { parts.append("Manager") }
+        else if let manager = all.first(where: { $0.id == bot.managerId }) { parts.append("On \(manager.name)'s team") }
+        return parts.joined(separator: " · ")
     }
 
     private func name(_ bot: PiBotSummary, all: [PiBotSummary]) -> some View {
@@ -105,9 +102,11 @@ struct BotSettingsBots: View {
     @ViewBuilder private func handoffPicker(_ bot: PiBotSummary, all: [PiBotSummary]) -> some View {
         let members = all.filter { $0.managerId == bot.id }
         if !bot.isAdmin, bot.manager, !members.isEmpty {
-            BotSettingsReferencePicker(selection: "", options: [.init("", "Hand team to…")] + members.map { .init($0.id, $0.name) },
-                label: "Hand \(bot.name)'s team to") { id in
-                if !id.isEmpty { act { try await $0.replaceManager(managerID: bot.id, newManagerID: id) } }
+            SettingsRow(title: "Hand team to") {
+                BotSettingsReferencePicker(selection: "", options: [.init("", "Choose a member…")] + members.map { .init($0.id, $0.name) },
+                    label: "Hand \(bot.name)'s team to") { id in
+                    if !id.isEmpty { act { try await $0.replaceManager(managerID: bot.id, newManagerID: id) } }
+                }
             }
         }
     }
@@ -120,14 +119,11 @@ struct BotSettingsBots: View {
         }
     }
 
-    @ViewBuilder private func teamPicker(_ bot: PiBotSummary, all: [PiBotSummary]) -> some View {
-        if bot.isAdmin { SettingsNote("Never on a team").frame(width: 180, height: 36, alignment: .leading) }
-        else {
-            BotSettingsReferencePicker(selection: bot.placement,
-                options: [.init("none", "No team"), .init("manager", "Manager")]
-                    + all.filter { !$0.isAdmin && $0.manager && $0.id != bot.id && !bot.orchestrator }
-                        .map { .init($0.id, "On \($0.name)'s team") }, label: "Team for \(bot.name)") { place(bot, placement: $0) }
-        }
+    private func teamPicker(_ bot: PiBotSummary, all: [PiBotSummary]) -> some View {
+        BotSettingsReferencePicker(selection: bot.placement,
+            options: [.init("none", "No team"), .init("manager", "Manager")]
+                + all.filter { !$0.isAdmin && $0.manager && $0.id != bot.id && !bot.orchestrator }
+                    .map { .init($0.id, "On \($0.name)'s team") }, label: "Team for \(bot.name)") { place(bot, placement: $0) }
     }
 
     private func place(_ bot: PiBotSummary, placement: String) {
@@ -146,34 +142,26 @@ struct BotSettingsBots: View {
 
     /// Each bot's container: its state and previews, Stop, and Rebuild, which recreates it
     /// from a clean image and keeps its storage.
-    private func rebuildCard(_ live: [PiBotSummary]) -> some View {
-        SettingsCard(title: "Containers", detail: "A stopped bot starts again on its next tool call. Rebuild recreates a bot's container from a clean image; its files, restart list, browser profile, memory and conversations stay.") {
+    private func containersSection(_ live: [PiBotSummary]) -> some View {
+        SettingsSection(title: "Containers", detail: "A stopped bot starts again on its next tool call.") {
             ForEach(live.filter { !$0.isAdmin }) { bot in
-                SettingsInset {
-                    VStack(alignment: .leading, spacing: 6) {
-                        HStack {
-                            VStack(alignment: .leading, spacing: 3) {
-                                Text(bot.name).font(.system(size: 13, weight: .medium))
-                                if let environment = environments[bot.id] { SettingsNote(environment.stateText) }
-                            }
-                            Spacer()
-                            if environments[bot.id]?.state == "running" {
-                                Button { act { try await $0.stopBot(id: bot.id) } } label: { BotSettingsActionLabel(title: "Stop", glyph: .close) }
-                                    .accessibilityLabel("Stop \(bot.name)")
-                            }
-                            Button { rebuild(bot) } label: { BotSettingsActionLabel(title: "Rebuild", glyph: .rotate) }
-                                .accessibilityLabel("Rebuild \(bot.name)")
-                        }
-                        ForEach(environments[bot.id]?.previews ?? [], id: \.port) { preview in
-                            HStack(spacing: 8) {
-                                Text("Port \(preview.port)").font(.system(size: 12))
-                                Text(preview.url).font(.system(size: 12)).foregroundStyle(DashboardPalette.mutedForeground).textSelection(.enabled)
-                                Spacer()
-                                Button("Stop sharing") { act { try await $0.stopPreview(botID: bot.id, port: preview.port) } }
-                            }
-                        }
+                SettingsRow(title: bot.name, detail: environments[bot.id]?.stateText) {
+                    if environments[bot.id]?.state == "running" {
+                        Button { act { try await $0.stopBot(id: bot.id) } } label: { BotSettingsActionLabel(title: "Stop", glyph: .close) }
+                            .accessibilityLabel("Stop \(bot.name)")
                     }
+                    Button { rebuild(bot) } label: { BotSettingsActionLabel(title: "Rebuild", glyph: .rotate) }
+                        .accessibilityLabel("Rebuild \(bot.name)")
                 }
+                ForEach(environments[bot.id]?.previews ?? [], id: \.port) { preview in
+                    SettingsRow(title: "Port \(preview.port)", detail: preview.url) {
+                        Button("Stop sharing") { act { try await $0.stopPreview(botID: bot.id, port: preview.port) } }
+                    }
+                    .padding(.leading, 16)
+                }
+            }
+            SettingsHelp {
+                SettingsNote("Rebuild recreates a bot's container from a clean image. Its files, restart list, browser profile, memory, and conversations stay.")
             }
         }
         .task(id: "\(state.bots.connection.rawValue):\(state.bots.environmentRevision):\(refreshes)") {
@@ -190,23 +178,16 @@ struct BotSettingsBots: View {
         }
     }
 
-    private func deletedCard(_ deleted: [PiBotDeletedBot]) -> some View {
-        SettingsCard(title: "Deleted bots", detail: "Deleted bots keep their conversations and threads. Restore one to bring it back, or delete it permanently.") {
+    private func deletedSection(_ deleted: [PiBotDeletedBot]) -> some View {
+        SettingsSection(title: "Deleted bots", detail: "Deleted bots keep their conversations and threads until you delete them permanently.") {
             ForEach(deleted) { bot in
-                SettingsInset {
-                    HStack {
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text(bot.name).font(.system(size: 13, weight: .medium))
-                            SettingsNote("Deleted \(deletedDate(bot.deletedAt))")
-                        }
-                        Spacer()
-                        Button { purge(bot) } label: {
-                            BotSettingsActionLabel(title: purging == bot.id ? "Deleting…" : "Delete permanently", glyph: .trash)
-                        }.accessibilityLabel("Delete \(bot.name) permanently")
-                        Button { restore(bot) } label: {
-                            BotSettingsActionLabel(title: restoring == bot.id ? "Restoring…" : "Restore", glyph: .rotate)
-                        }.accessibilityLabel("Restore \(bot.name)")
-                    }
+                SettingsRow(title: bot.name, detail: "Deleted \(deletedDate(bot.deletedAt))") {
+                    Button { purge(bot) } label: {
+                        BotSettingsActionLabel(title: purging == bot.id ? "Deleting…" : "Delete permanently", glyph: .trash)
+                    }.accessibilityLabel("Delete \(bot.name) permanently")
+                    Button { restore(bot) } label: {
+                        BotSettingsActionLabel(title: restoring == bot.id ? "Restoring…" : "Restore", glyph: .rotate)
+                    }.accessibilityLabel("Restore \(bot.name)")
                 }
             }
         }
@@ -264,9 +245,9 @@ private struct BotSettingsBotName: View {
 
     var body: some View {
         if let draft, !bot.isAdmin {
-            HStack {
+            SettingsRow(title: "Name") {
                 TextField("", text: Binding(get: { self.draft ?? "" }, set: { self.draft = String($0.prefix(80)) }))
-                    .dashboardInput().accessibilityLabel("New name for \(bot.name)")
+                    .dashboardInput().frame(width: 220).accessibilityLabel("New name for \(bot.name)")
                     .focused($focused).onSubmit { save() }.onExitCommand { self.draft = nil }
                 Button("Save") { save() }.disabled(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 Button("Cancel") { self.draft = nil }
@@ -277,23 +258,12 @@ private struct BotSettingsBotName: View {
                 focused = true
             }
         } else {
-            VStack(alignment: .leading, spacing: 3) {
-                HStack {
-                    Text(bot.name).font(.system(size: 13, weight: .medium))
-                    SettingsPill(bot.role, tone: .neutral)
-                }
-                HStack(spacing: 5) {
-                    if let note {
-                        Text(note).font(.system(size: 12.5)).foregroundStyle(DashboardPalette.mutedForeground)
-                        if !bot.isAdmin { Text("·").foregroundStyle(DashboardPalette.mutedForeground) }
-                    }
-                    if !bot.isAdmin {
-                        Button("Rename") { draft = bot.name }
-                            .buttonStyle(.plain)
-                            .font(.system(size: 12, weight: .medium))
-                            .foregroundStyle(DashboardPalette.mutedForeground)
-                            .accessibilityLabel("Rename \(bot.name)")
-                    }
+            SettingsRow(title: "Name", detail: note) {
+                if bot.isAdmin {
+                    Text(bot.name).font(.settingsBody).foregroundStyle(DashboardPalette.mutedForeground)
+                } else {
+                    Button("Rename") { draft = bot.name }
+                        .accessibilityLabel("Rename \(bot.name)")
                 }
             }
         }

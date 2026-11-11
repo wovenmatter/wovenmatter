@@ -27,17 +27,20 @@ struct DevicePairingDiscoveryCard: View {
     var canPairWithCentral: Bool
     @State private var devices = MacDeviceSetupModel()
     var body: some View {
-        SettingsCard(title: "Find devices", detail: "Find other Macs on your Tailscale network, even when Woven Matter is closed.") {
+        SettingsSummaryRow("Find on your network") {
+            SettingsNote("Find other Macs on your Tailscale network, even when Woven Matter is closed.")
             MacTailnetDiscoveryView(devices: devices, pairing: pairing, host: host, canPairWithCentral: canPairWithCentral)
-            if let error = pairing.errorMessage { Text(error).font(.system(size: 12)).foregroundStyle(DashboardPalette.danger).textSelection(.enabled) }
         }
+        // Stays visible when the row above is collapsed.
+        if let error = pairing.errorMessage { SettingsError(error) }
     }
 }
 
 struct DevicePairingCodeCard: View {
     @Bindable var host: CompanionHostController
     var body: some View {
-        SettingsCard(title: "Pair with a QR code or link", detail: "Scan the QR code or paste its link on another device.") {
+        SettingsSummaryRow("Show a QR code or link") {
+            SettingsNote("Scan the QR code or paste its link on another device.")
             if let payload = host.pairingPayload {
                 HStack(alignment: .center, spacing: 24) {
                     if let qr = qrImage(payload.encodedURL.absoluteString) {
@@ -48,7 +51,7 @@ struct DevicePairingCodeCard: View {
                     VStack(alignment: .leading, spacing: 12) {
                         if let expiry = host.pairingExpiresAt {
                             Text("Expires at \(expiry.formatted(date: .omitted, time: .shortened))")
-                                .font(.system(size: 12)).foregroundStyle(DashboardPalette.mutedForeground)
+                                .font(.settingsBody).foregroundStyle(DashboardPalette.mutedForeground)
                         }
                         Button("Copy pairing link") {
                             NSPasteboard.general.clearContents()

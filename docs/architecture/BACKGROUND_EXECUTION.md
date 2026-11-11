@@ -82,11 +82,10 @@ quota failure and select another connection.
 
 ## Active work and display sleep
 
-General settings offers two levels of work sleep protection. **Keep working when
-the screen sleeps** controls the normal level, with independent **When connected
-to external power** and **When running on battery** switches. Both normal-level
-switches default to on, preserving existing behavior; explicit off choices persist.
-The higher **Keep working when the lid is closed** level is described below.
+Settings → Background Server offers two levels of work sleep protection. **When the screen
+sleeps** controls the normal level, choosing Never, On power, On battery, or Always.
+It defaults to Always, preserving existing behavior; explicit choices persist.
+The higher **When the lid is closed** level is described below.
 
 The execution owner holds a Foundation `ProcessInfo` activity with `.userInitiated`
 while work is active and either level selects the current power source. This
@@ -100,7 +99,7 @@ system sleep. This does not end the work or its dispatch leases.
 Both levels apply in development-host and backend modes; the frontend never owns an
 assertion. Preferences and actual protection state are published by the execution
 owner. Keeping the backend awake lets active work continue after the frontend quits.
-On a secondary Mac, General settings targets that Mac's local execution model
+On a secondary Mac, Background Server settings target that Mac's local execution model
 for both sleep levels, rather than its read-only central-library client model.
 
 A dispatch lease starts before asynchronous session preparation and ends on every
@@ -117,9 +116,8 @@ future scheduled tasks or makes a remote host stay awake.
 
 ### Optional closed-lid protection
 
-General settings contains **Keep working when the lid is closed**, with independent
-**When connected to external power** and **When running on battery** switches. Both
-default to off. Enabling both covers both sources; neither applies when work is
+Background Server settings contain **When the lid is closed**, with the same four
+choices. It defaults to Never. Always covers both power sources; no choice applies when work is
 idle. The higher level includes normal idle-sleep protection on its selected power
 sources even if the separate normal-level switch is off. It does not rewrite the
 normal-level preferences, so disabling the higher level restores the selected
@@ -137,7 +135,10 @@ sleep. The system-wide flag cannot distinguish Woven Matter from other software.
 The signed helper is bundled at `Contents/Library/LaunchServices/WovenMatterPowerHelper`
 with its daemon plist under `Contents/Library/LaunchDaemons`. It is registered only
 from an explicit settings action and requires macOS approval. Task execution,
-backend startup, building, and testing never register it. Ad-hoc builds cannot
+backend startup, building, and testing never register it. macOS may report a
+helper it has never registered as not found; when the plist is in the bundle,
+Settings treats that as not registered, so the user's explicit setup registers it
+and shows macOS's own error if registration fails. Ad-hoc builds cannot
 enable it. The daemon and client authenticate each other with XPC code-signing
 requirements for specific identifiers and the same Apple signing team; there is
 no sudoers change, shell execution, or general-purpose privileged command API.

@@ -3,7 +3,7 @@ import Observation
 import WovenMatterClient
 
 /// Bot settings that belong to one machine's runtime: profiles, bots and teams.
-/// Provider connections, search and sign-ins are Woven's own, in Settings → Connections.
+/// Provider accounts, search and sign-ins are Woven's own, in Settings → Subscriptions & API Keys.
 enum PiBotSettingsSection: String, CaseIterable, Identifiable, Sendable {
     case profiles, bots
     var id: String { rawValue }
@@ -32,26 +32,28 @@ struct SettingsBotsSectionPage: View {
     @Bindable var bots: BotMachineSession
     let section: PiBotSettingsSection
     var reservesRailControlSpace = false
+    var backTitle = "Bots"
     let onBack: () -> Void
     @State private var state: BotSettingsState
 
     init(bots: BotMachineSession, section: PiBotSettingsSection, reservesRailControlSpace: Bool = false,
-         onBack: @escaping () -> Void) {
+         backTitle: String = "Bots", onBack: @escaping () -> Void) {
         self.bots = bots; self.section = section
         self.reservesRailControlSpace = reservesRailControlSpace
+        self.backTitle = backTitle
         self.onBack = onBack
         _state = State(initialValue: BotSettingsState(bots: bots))
     }
 
     var body: some View {
         SettingsPage(title: section.title, detail: section.detail + " On \(bots.displayName).",
-                     reservesRailControlSpace: reservesRailControlSpace, backTitle: "Bots", onBack: onBack) {
+                     reservesRailControlSpace: reservesRailControlSpace, backTitle: backTitle, onBack: onBack) {
             BotSettingsErrorNotice(state: state)
             if !bots.isConnected { SettingsEmpty("Bots on \(bots.displayName) are not connected.") }
             sectionBody
                 .disabled(state.disabled)
         }
-        .font(.system(size: 13))
+        .font(.settingsText)
         .buttonStyle(SettingsQuietButtonStyle())
         .modifier(BotSettingsConfirmationPresenter(state: state))
     }

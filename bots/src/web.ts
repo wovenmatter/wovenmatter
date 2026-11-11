@@ -35,7 +35,7 @@ const MAX_PAGE_CHARS = 100_000;
 const MAX_REDIRECTS = 5;
 
 export const NO_SEARCH_KEY =
-  "Web search isn't set up: connect Exa, Brave or Firecrawl in Woven Matter Settings → Connections.";
+  "Web search isn't set up: connect Exa, Brave or Firecrawl in Woven Matter Settings → Subscriptions & API Keys.";
 
 type SearchResult = { title: string; url: string; date: string; snippet: string };
 
@@ -57,7 +57,7 @@ function reason(error: unknown): string {
 function httpError(who: string, status: number): Error {
   const why =
     status === 401 || status === 403
-      ? "the API key was rejected (check it in Woven Matter Settings → Connections)"
+      ? "the API key was rejected (check it in Woven Matter Settings → Subscriptions & API Keys)"
       : status === 402
         ? "the account is out of credits or needs a paid plan"
         : status === 429

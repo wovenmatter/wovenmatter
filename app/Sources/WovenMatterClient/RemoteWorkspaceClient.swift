@@ -1378,6 +1378,12 @@ public struct RemoteWorkspaceServiceClient: Sendable {
         )
     }
 
+    /// Runs the harness's own sign-out on the workspace and returns its new status.
+    public func signOut(harnessID: AgentRuntimeKind) async throws -> RemoteHarnessStatus {
+        try await request(path: "v1/harnesses/\(harnessID.rawValue)/sign-out", method: "POST",
+                          body: Data("{}".utf8))
+    }
+
     public func authenticationSession(
         id: UUID
     ) async throws -> RemoteHarnessAuthenticationSession {
@@ -1428,6 +1434,11 @@ public struct RemoteWorkspaceServiceClient: Sendable {
     /// The host's bots, if its server runs them (docs/architecture/WOVEN_EVERYWHERE.md).
     public func botsStatus() async throws -> BotsRemoteStatus {
         try await request(path: "v1/bots/status", method: "GET", body: nil)
+    }
+    /// Bots run on one machine, so a host's bots turn off when they move elsewhere.
+    public func setBotsEnabled(_ enabled: Bool) async throws -> BotsRemoteStatus {
+        try await request(path: "v1/bots/enabled", method: "POST",
+                          body: try JSONSerialization.data(withJSONObject: ["enabled": enabled]))
     }
     public func setBotsResources(_ resources: BotResourceSettings) async throws -> BotsRemoteStatus {
         struct Body: Encodable { let resources: BotResourceSettings }
@@ -1509,6 +1520,13 @@ public struct RemoteWorkspaceServiceClient: Sendable {
                 }
                 let detail = (try? JSONDecoder().decode([String: String].self, from: data))?["error"]
                 throw RemoteWorkspaceClientError.invalidResponse(detail ?? "SDK maintenance could not complete in this workspace.")
+            }
+            if path.hasPrefix("v1/harnesses/"), path.hasSuffix("/sign-out") {
+                throw RemoteWorkspaceClientError.invalidResponse(
+                    (response as? HTTPURLResponse)?.statusCode == 404
+                    ? "Update this workspace in Settings → Workspaces to remove accounts from here."
+                    : "The account couldn't be removed. Reconnect to the workspace and try again."
+                )
             }
             if path.hasPrefix("v1/task-gateway") {
                 throw RemoteWorkspaceClientError.invalidResponse(

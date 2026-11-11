@@ -168,6 +168,51 @@ struct BotsHostTests {
         #expect(await fixture.host.snapshot().machines.first?.state == .off)
     }
 
+    @Test func botsMoveBetweenMachinesThroughOneCommand() async throws {
+        var remote: [(String, Bool)] = []
+        let fixture = try HostFixture { $0.setRemoteEnabled = { machine, enabled in remote.append((machine, enabled)) } }
+        defer { fixture.remove() }
+        // This Mac uses its own switch; any other machine goes over its signed route.
+        _ = try await fixture.host.perform(.setMachineEnabled(machineID: "D3VICE-0001", true))
+        try await waitFor("runtime") { fixture.supervisor.phase == .running }
+        _ = try await fixture.host.perform(.setMachineEnabled(machineID: "linux-box", false))
+        #expect(remote.map(\.0) == ["linux-box"] && remote.map(\.1) == [false])
+        // Another member turns this Mac's bots off when they move elsewhere.
+        let off = await fixture.host.remoteRequest(try hostRequest("POST", "/v1/bots/enabled", token: "ignored", body: ["enabled": false]),
+                                                   path: "/v1/bots/enabled")
+        #expect(off.status == 200)
+        #expect(fixture.supervisor.phase == .stopped)
+        #expect(await fixture.host.snapshot().machines.first?.state == .off)
+    }
+
+    @Test func aFailedMoveLeavesBotsOnTheMachineRunningThem() async throws {
+        let bots = BotsModel()
+        var result = BotsCommandResult()
+        result.thisMachineID = "mac"
+        result.machines = [BotMachine(id: "mac", name: "Mac", kind: .thisMac, state: .ready),
+                           BotMachine(id: "box", name: "box", kind: .linux, state: .off)]
+        var sent: [String] = []
+        bots.perform = { command in
+            if case let .setMachineEnabled(id, enabled) = command {
+                sent.append("\(id):\(enabled)")
+                if id == "box" { throw BotsError.unavailable("Install bots on this machine first.") }
+            }
+            return result
+        }
+        await bots.refresh()
+        await bots.runBots(on: "box")
+        #expect(sent == ["box:true"])
+        #expect(bots.notice == "Install bots on this machine first.")
+        // A move that works turns the target on, then the old machine off.
+        sent = []
+        bots.perform = { command in
+            if case let .setMachineEnabled(id, enabled) = command { sent.append("\(id):\(enabled)") }
+            return result
+        }
+        await bots.runBots(on: "box")
+        #expect(sent == ["box:true", "mac:false"])
+    }
+
     @Test func resourcesAreClampedAppliedToTheEngineAndPassedToTheRuntime() async throws {
         let fixture = try HostFixture(); defer { fixture.remove() }
         _ = try await fixture.host.perform(.setEnabled(true))

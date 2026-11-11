@@ -3,9 +3,9 @@ import SwiftUI
 import WovenMatterClient
 import WovenMatterDashboardStore
 
-/// Discover devices: online Linux and macOS tailnet peers and what each needs before it
-/// can run bots. Shown on the Bots page and on Mac connections.
-struct BotsDiscoverDevicesCard: View {
+/// Install bots on another device: online Linux and macOS tailnet peers and what each
+/// needs before it can run bots. Closed on the Bots page until needed.
+struct BotsDiscoverDevicesRow: View {
     @Bindable var bots: BotsModel
     @State private var searching = false
     /// The install request being sent; the install itself runs in the background server
@@ -19,19 +19,34 @@ struct BotsDiscoverDevicesCard: View {
         starting != nil || bots.devices?.contains(where: \.isInstalling) == true
     }
 
+    private var failed: Bool {
+        bots.devices?.contains { if case .failed = $0.state { true } else { false } } == true
+    }
+
+    private var value: String? {
+        if failed { return "Needs attention" }
+        if installing { return "Installing…" }
+        guard let devices = bots.devices else { return nil }
+        let waiting = devices.filter { $0.state != .ready }.count
+        return waiting == 0 ? nil : waiting == 1 ? "1 device found" : "\(waiting) devices found"
+    }
+
     var body: some View {
-        SettingsCard(title: "Discover devices", detail: "Online Macs and Linux machines on your Tailscale network.") {
-            VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 6) {
+            // Opens on its own when an install is running or failed.
+            SettingsSummaryRow("Install on another device", value: value, tone: failed ? .warning : nil,
+                               initiallyExpanded: failed || installing) {
+                SettingsNote("Finds online Macs and Linux machines on your Tailscale network.")
                 Button(searching ? "Searching…" : "Find devices") { discover() }
                     .buttonStyle(SettingsQuietButtonStyle())
                     .disabled(searching || installing)
-                if let error { SettingsError(error) }
                 if let devices = bots.devices {
                     if devices.isEmpty { SettingsEmpty("No other Macs or Linux machines are online on your tailnet.") }
                     ForEach(devices) { device in row(device) }
                 }
             }
-            .font(.system(size: 13))
+            // Stays visible when the row is collapsed.
+            if let error { SettingsError(error) }
         }
         .confirmationDialog("Install bots on \(confirming?.displayName ?? "")?", isPresented: Binding(
             get: { confirming != nil }, set: { if !$0 { confirming = nil } }
@@ -44,48 +59,35 @@ struct BotsDiscoverDevicesCard: View {
     }
 
     @ViewBuilder private func row(_ device: BotDiscoveredDevice) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 10) {
-                DashboardLucideIcon(glyph: device.system == .linux ? .container : .monitor, size: 15).frame(width: 24, height: 24)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(device.displayName).font(.system(size: 13, weight: .medium))
-                    Text(summary(device)).font(.system(size: 11)).foregroundStyle(DashboardPalette.mutedForeground)
-                }
-                Spacer(minLength: 8)
+        VStack(alignment: .leading, spacing: 4) {
+            SettingsRow(title: device.displayName, detail: summary(device)) {
                 if starting == device.id || device.isInstalling { ProgressView().controlSize(.small) }
+                if device.state == .installBots { installControls(device) }
             }
-            Group {
-                switch device.state {
-                case .installBots: installControls(device)
-                case .installApp:
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("Install Woven Matter on this Mac first").font(.system(size: 12, weight: .medium))
-                        ForEach(Array(BotDiscoveredDevice.macSetupSteps.enumerated()), id: \.offset) { index, step in
-                            Text("\(index + 1). \(step)").font(.system(size: 12)).foregroundStyle(DashboardPalette.mutedForeground)
-                        }
+            switch device.state {
+            case .installApp:
+                VStack(alignment: .leading, spacing: 2) {
+                    SettingsNote("Install Woven Matter on \(device.displayName) first:")
+                    ForEach(Array(BotDiscoveredDevice.macSetupSteps.enumerated()), id: \.offset) { index, step in
+                        SettingsNote("\(index + 1). \(step)")
                     }
-                case .installing(let message): SettingsNote(message)
-                case .failed(let message):
-                    VStack(alignment: .leading, spacing: 8) {
-                        SettingsError(message)
-                        // A Linux machine can be tried again once the cause is fixed.
-                        if device.system == .linux { installControls(device) }
-                    }
-                case .ready: EmptyView()
                 }
+            case .installing(let message): SettingsNote(message)
+            case .failed(let message):
+                SettingsError(message)
+                // A Linux machine can be tried again once the cause is fixed.
+                if device.system == .linux { HStack(spacing: 8) { installControls(device) } }
+            case .installBots, .ready: EmptyView()
             }
-            .padding(.leading, 34)
         }
     }
 
-    private func installControls(_ device: BotDiscoveredDevice) -> some View {
-        HStack(spacing: 8) {
-            TextField("SSH user (optional)", text: Binding(get: { users[device.id] ?? "" }, set: { users[device.id] = $0 }))
-                .dashboardInput().frame(maxWidth: 200)
-            Button("Install bots") { confirming = device }
-                .buttonStyle(SettingsQuietButtonStyle())
-                .disabled(installing)
-        }
+    @ViewBuilder private func installControls(_ device: BotDiscoveredDevice) -> some View {
+        TextField("SSH user (optional)", text: Binding(get: { users[device.id] ?? "" }, set: { users[device.id] = $0 }))
+            .dashboardInput().frame(width: 170)
+        Button("Install bots") { confirming = device }
+            .buttonStyle(SettingsQuietButtonStyle())
+            .disabled(installing)
     }
 
     private func summary(_ device: BotDiscoveredDevice) -> String {
@@ -131,20 +133,43 @@ struct BotsVersionNotice: View {
     var body: some View {
         let report = bots.versionReport
         if report.needsUpdate || updater.running || !updater.failures.isEmpty {
-            SettingsCard(title: "Versions don't match", detail: report.message) {
-                VStack(alignment: .leading, spacing: 8) {
-                    ForEach(report.outdated) { part in
-                        SettingsValueRow(label: part.name, value: [part.current, part.expected].compactMap { $0 }.joined(separator: " → "))
+            SettingsSection(title: "Versions don't match", detail: report.message) {
+                ForEach(report.outdated) { part in
+                    SettingsRow(title: part.kind == .bots ? "Bots on \(part.name)" : part.name) {
+                        Text([part.current, part.expected].compactMap { $0 }.joined(separator: " → "))
+                            .font(.settingsBody)
+                            .foregroundStyle(DashboardPalette.mutedForeground)
+                            .textSelection(.enabled)
                     }
-                    HStack(spacing: 8) {
-                        Button(updater.running ? "Updating…" : "Update everything") { Task { await updater.updateEverything(bots: bots) } }
-                            .buttonStyle(DashboardPrimaryButtonStyle())
-                            .disabled(updater.running)
-                        if let step = updater.current { SettingsNote(step) }
-                    }
-                    ForEach(updater.failures, id: \.self) { SettingsError($0) }
                 }
-                .font(.system(size: 13))
+                HStack(spacing: 8) {
+                    Button(updater.running ? "Updating…" : "Update everything") { Task { await updater.updateEverything(bots: bots) } }
+                        .buttonStyle(DashboardPrimaryButtonStyle())
+                        .disabled(updater.running)
+                    if let step = updater.current { SettingsNote(step) }
+                }
+                ForEach(updater.failures, id: \.self) { SettingsError($0) }
+            }
+        }
+    }
+}
+
+/// Elsewhere in Settings, mismatched versions are one line that opens the Bots page.
+struct BotsVersionStatusLink: View {
+    @Bindable var bots: BotsModel
+    let onOpen: () -> Void
+    @State private var updater = BotsUpdateCoordinator.shared
+
+    var body: some View {
+        let report = bots.versionReport
+        if report.needsUpdate || updater.running || !updater.failures.isEmpty {
+            SettingsSection {
+                SettingsSummaryLink(
+                    title: "Versions don't match",
+                    value: updater.running ? "Updating…" : "Update everything on the Bots page",
+                    tone: .warning,
+                    action: onOpen
+                )
             }
         }
     }
@@ -220,7 +245,7 @@ final class BotsUpdateCoordinator {
         return "It did not finish in time."
     }
 
-    /// Other Macs update over the same Tailscale SSH path as Mac connections.
+    /// Other Macs update over the same Tailscale SSH path as pairing in Apple Devices.
     private func updateMac(named name: String) async -> String? {
         let setup = MacDeviceSetupModel()
         await setup.discover()

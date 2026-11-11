@@ -371,6 +371,26 @@ test('client routes read with device grants, change only as administrator, and r
   assert.equal((await f.call('/v1/bots/status', { token: 'device' })).body.settings.botMemoryBytes, 2 * 1024 ** 3)
 })
 
+test('bots turn off and on again as they move between machines, and the choice is saved', async t => {
+  const calls = []
+  const runtime = { start() { calls.push('start') }, stop: async () => { calls.push('stop') }, restart: async () => {}, endpoint: () => null, status: () => ({ running: false }) }
+  const f = await serviceFixture(t, { runtime })
+  await f.service.start()
+  assert.deepEqual(calls, ['start'])
+  assert.equal((await f.call('/v1/bots/enabled', { token: 'device', method: 'POST', body: { enabled: false } })).status, 403)
+  assert.equal((await f.call('/v1/bots/enabled', { token: 'admin', method: 'POST', body: {} })).status, 400)
+  const off = await f.call('/v1/bots/enabled', { token: 'admin', method: 'POST', body: { enabled: false } })
+  assert.equal(off.status, 200)
+  assert.equal(off.body.enabled, false); assert.equal(off.body.state, 'off')
+  assert.deepEqual(calls, ['start', 'stop'])
+  assert.equal((await f.call('/v1/bots-host/inference-credentials', { method: 'POST', body: { provider: 'anthropic' } })).status, 409, 'a turned-off host serves its runtime nothing')
+  const on = await f.call('/v1/bots/enabled', { token: 'admin', method: 'POST', body: { enabled: true } })
+  assert.equal(on.status, 200); assert.equal(on.body.enabled, true)
+  assert.deepEqual(calls, ['start', 'stop', 'start'])
+  await f.call('/v1/bots/enabled', { token: 'admin', method: 'POST', body: { enabled: false } })
+  assert.equal((await f.call('/v1/bots/status', { token: 'device' })).body.settings.botsOff, true, 'saved with the bots settings')
+})
+
 test('the bots status names the host release, its fingerprint and the library schema', async t => {
   const fingerprint = 'f'.repeat(64)
   const service = createBotsService({ configuration: { stateDirectory: temporary(t), dataRoot: temporary(t), serviceRoot: temporary(t), botsEnabled: false, workspaceEnabled: true,

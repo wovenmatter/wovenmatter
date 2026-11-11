@@ -30,6 +30,7 @@ struct DashboardLucideGlyph: Hashable, Sendable {
     static let trash = Self("trash-2")
     static let messageSquare = Self("message-square")
     static let keyRound = Self("key-round")
+    static let shieldCheck = Self("shield-check")
     static let brain = Self("brain")
     static let monitor = Self("monitor")
     static let smartphone = Self("smartphone")

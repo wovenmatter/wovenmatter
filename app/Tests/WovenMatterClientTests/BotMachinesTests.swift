@@ -149,6 +149,10 @@ struct BotMachinesTests {
         #expect(stopped.syncStopped && stopped.needsUpdate)
         #expect(stopped.message?.contains("sync stopped") == true)
         #expect(!BotVersionReport(thisMacVersion: "1.4.0", machines: [machine("this", kind: .thisMac)]).needsUpdate)
+        let both = BotVersionReport(thisMacVersion: "1.4.0",
+                                    machines: [machine("this", kind: .thisMac, runtime: "0.2.0"), machine("box", kind: .linux, app: "1.3.0", runtime: "0.1.0")])
+        #expect(both.outdated.map(\.id) == ["box", "bots:box"])
+        #expect(both.message?.hasPrefix("box runs a different version.") == true)
     }
 
     @Test func updateEverythingUpdatesOthersThenBotsThenThisMacLast() {

@@ -269,7 +269,7 @@ public struct BotDiscoveredDevice: Codable, Equatable, Identifiable, Sendable {
     public enum State: Codable, Equatable, Sendable {
         /// Linux without a Woven server: install the bots-only host (sudo once).
         case installBots
-        /// A Mac without the app, or not yet connected on Mac connections.
+        /// A Mac without the app, or not yet paired in Apple Devices.
         case installApp
         /// Its Woven server answers; its bots appear in the list.
         case ready
@@ -293,7 +293,7 @@ public struct BotDiscoveredDevice: Codable, Equatable, Identifiable, Sendable {
     public static let macSetupSteps = [
         "Download Woven Matter on that Mac from wovenmatter.com.",
         "Open it.",
-        "On this Mac, connect it in Settings → Apple Devices → Mac connections.",
+        "On this Mac, pair it in Settings → Apple Devices.",
         "Finish the setup card on that Mac.",
     ]
 }
@@ -346,7 +346,9 @@ public struct BotVersionReport: Equatable, Sendable {
         if syncStopped {
             return "Library sync stopped because your devices run different versions. Update everything to resume it."
         }
-        let names = outdated.map(\.name)
+        // A machine can be behind on its app and its bots; name it once.
+        var names: [String] = []
+        for part in outdated where !names.contains(part.name) { names.append(part.name) }
         let list = names.count <= 2 ? names.joined(separator: " and ") : names.dropLast().joined(separator: ", ") + " and " + names.last!
         return "\(list) \(names.count == 1 ? "runs" : "run") a different version. Update everything so every device matches."
     }

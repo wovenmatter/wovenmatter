@@ -4,16 +4,23 @@ Technical reference. For everyday setup, start with [Agent setup](guide/agents.m
 
 ## Runtime controls
 
-**Settings → Local Agent Workspace** shows the executable and components used
-by each harness. Missing components show **Install**; verified installations
-appear in the sidebar automatically. **Sign in…** opens the native harness's
-account flow in Terminal, and returning to Woven Matter refreshes its status.
+Each page under **Settings → Agents** shows the executable and components used
+by that harness. Missing components show **Install**; verified installations
+appear in the sidebar automatically. Codex, Claude Code, and Grok Build sign in
+inside Settings: the harness's own command runs in the background and its sign-in
+link and one-time code (`codex login --device-auth`, `grok login --device-auth`) or
+Claude's browser sign-in, with a field for the page's code, appear under the account.
+The account shows its name or email with **Remove account**, which runs the harness's
+own logout. OpenCode adds keys with its own picker in Terminal and removes each saved
+key individually (`opencode auth logout <integration> <label>`). Remote workspaces use
+the same panel with each harness's headless sign-in and a `/v1/harnesses/:id/sign-out`
+route.
 Opening settings refreshes the inventory and available versions, without a
-repeating timer. **Settings → General → Set up harnesses** reopens the first-launch
+repeating timer. **Settings → Agents → Set up harnesses** reopens the first-launch
 guide, including optional Pi Durable provider and Exa setup. The provider page
 contains only OpenAI, Anthropic, Grok, OpenRouter, and OpenCode; the web-search
-page contains the Exa key form. These focused pages are also available from
-**Settings → Pi Durable**.
+page contains the Exa key form. Both are also available from
+**Settings → Subscriptions & API Keys**.
 
 **Check for updates** reports available versions. **Update** installs an observed
 update. Network failures leave the latest version unknown. Both actions remain

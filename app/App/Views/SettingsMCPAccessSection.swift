@@ -7,42 +7,50 @@ struct SettingsMCPAccessSection: View {
     @State private var busy = false
     @State private var error: String?
 
+    private var exposedCount: Int {
+        WorkspaceToolGroup.configurableCases.filter { snapshot?.settings.groups.contains($0) == true }.count
+    }
+
     var body: some View {
-        SettingsCard(title: "Outside agents · Woven MCP",
-                     detail: "Expose Woven Matter to agents on your Tailnet. Any agent that can reach this endpoint can use the tools enabled here.") {
-            VStack(alignment: .leading, spacing: 14) {
-                HStack(alignment: .top, spacing: 10) {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("MCP endpoint").font(.system(size: 12.5, weight: .medium))
-                        if let snapshot {
-                            Text(snapshot.endpointURL).font(.system(size: 11.5, design: .monospaced)).textSelection(.enabled)
-                        } else { SettingsNote(busy ? "Loading…" : "Unavailable") }
-                    }
-                    Spacer(minLength: 8)
-                    Button("Refresh") { update(.status) }
-                        .buttonStyle(SettingsQuietButtonStyle()).disabled(busy)
+        SettingsSection(title: "Outside agents",
+                        detail: "Any agent that can reach this endpoint on your Tailnet can use the tools enabled here.") {
+            SettingsToggleRow(
+                title: "Expose Woven MCP",
+                detail: nil,
+                isOn: Binding(get: { snapshot?.settings.isEnabled ?? false }, set: { update(.setEnabled($0)) })
+            )
+            .disabled(busy || snapshot == nil)
+            SettingsRow(title: "MCP endpoint") {
+                if let snapshot {
+                    Text(snapshot.endpointURL)
+                        .font(.system(size: 11.5, design: .monospaced))
+                        .foregroundStyle(DashboardPalette.mutedForeground)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .textSelection(.enabled)
+                } else {
+                    Text(busy ? "Loading…" : "Unavailable")
+                        .font(.settingsSecondary)
+                        .foregroundStyle(DashboardPalette.mutedForeground)
                 }
-                Toggle("Expose Woven MCP", isOn: Binding(get: { snapshot?.settings.isEnabled ?? false },
-                    set: { update(.setEnabled($0)) }))
-                    .disabled(busy || snapshot == nil)
-                if let snapshot, snapshot.settings.isEnabled {
-                    VStack(alignment: .leading, spacing: 14) {
-                        ForEach(WorkspaceToolGroup.configurableCases) { group in
-                            Toggle(group.title, isOn: Binding(get: { self.snapshot?.settings.groups.contains(group) ?? false },
-                                set: { update(.setGroup(group, enabled: $0)) }))
-                        }
-                        .disabled(busy)
-                        SettingsNote("Goals and visual replies are included. Usage data is always read only.")
-                        if let exposureError = snapshot.exposureError {
-                            SettingsNote("Tailnet endpoint unavailable: " + exposureError)
-                        }
-                    }
-                    .padding(.leading, 38)
-                }
-                if let error { SettingsNote(error) }
+                Button("Refresh") { update(.status) }
+                    .buttonStyle(SettingsQuietButtonStyle())
+                    .disabled(busy)
             }
-            .font(.system(size: 13))
-            .toggleStyle(DashboardSwitchToggleStyle())
+            if let snapshot, snapshot.settings.isEnabled {
+                SettingsSummaryRow("Tools exposed", value: "\(exposedCount) of \(WorkspaceToolGroup.configurableCases.count)") {
+                    ForEach(WorkspaceToolGroup.configurableCases) { group in
+                        Toggle(group.title, isOn: Binding(get: { self.snapshot?.settings.groups.contains(group) ?? false },
+                            set: { update(.setGroup(group, enabled: $0)) }))
+                    }
+                    .disabled(busy)
+                    SettingsNote("Goals and visual replies are included. Usage data is always read only.")
+                }
+                if let exposureError = snapshot.exposureError {
+                    SettingsError("Tailnet endpoint unavailable: " + exposureError)
+                }
+            }
+            if let error { SettingsError(error) }
         }
         .task { await perform(.status) }
     }

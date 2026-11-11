@@ -11,6 +11,9 @@ enum BotsCommand: Codable, Sendable {
     case status
     /// Bots on this Mac: starts or stops the VM and the runtime.
     case setEnabled(Bool)
+    /// Bots run on one machine: turns them on or off on any machine, this Mac included.
+    /// Bots, their files and conversations stay where they are.
+    case setMachineEnabled(machineID: String, Bool)
     case setResources(machineID: String, BotResourceSettings)
     /// Pause-all for this Mac's bots: their Woven MCP keys stop working until resumed.
     case setPaused(Bool)
@@ -81,6 +84,10 @@ struct BotsHostDependencies {
     var inferenceCredential: @MainActor (_ provider: String) async throws -> BotsHostAPI.CredentialReply
     var remoteMachines: @MainActor (_ thisMacVersion: String?) async -> [BotMachine] = { _ in [] }
     var setRemoteResources: @MainActor (_ machineID: String, _ resources: BotResourceSettings) async throws -> Void = { _, _ in
+        throw BotsError.unavailable("That machine is unavailable.")
+    }
+    /// Another machine's `POST /v1/bots/enabled`.
+    var setRemoteEnabled: @MainActor (_ machineID: String, _ enabled: Bool) async throws -> Void = { _, _ in
         throw BotsError.unavailable("That machine is unavailable.")
     }
     var discover: @MainActor () async throws -> [BotDiscoveredDevice] = { [] }
@@ -198,6 +205,11 @@ final class BotsHostController {
             persisted.enabled = enabled
             try save()
             if enabled { bringUp() } else { await bringDown() }
+        case let .setMachineEnabled(machineID, enabled):
+            if try await isThisMac(machineID) {
+                return try await perform(.setEnabled(enabled))
+            }
+            try await dependencies.setRemoteEnabled(machineID, enabled)
         case let .setResources(machineID, settings):
             if try await isThisMac(machineID) {
                 let capacity = await dependencies.capacity(directory)
@@ -503,6 +515,11 @@ final class BotsHostController {
             case ("POST", "/v1/bots/engine/update"):
                 let identity = try await resolveIdentity()
                 _ = try await perform(.updateEngine(machineID: identity.deviceID))
+                return try .json(try await remoteStatus())
+            case ("POST", "/v1/bots/enabled"):
+                struct Body: Decodable { let enabled: Bool }
+                let body = try JSONDecoder().decode(Body.self, from: request.body)
+                _ = try await perform(.setEnabled(body.enabled))
                 return try .json(try await remoteStatus())
             case ("POST", "/v1/bots/resources"):
                 struct Body: Decodable { let resources: BotResourceSettings }

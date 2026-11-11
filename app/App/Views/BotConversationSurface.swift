@@ -1023,7 +1023,7 @@ struct BotsUnavailableView: View {
     }
 
     private var detail: String? {
-        guard let machine else { return "Connect it on Mac connections or Remote Workspaces, then try again." }
+        guard let machine else { return "Connect it in Settings → Apple Devices or Settings → Workspaces, then try again." }
         if machine.state == .ready, !compatible { return "Its bots runtime is older than this app can use." }
         if machine.state == .off, machine.kind == .thisMac { return "Turn them on in Settings → Bots." }
         return machine.message

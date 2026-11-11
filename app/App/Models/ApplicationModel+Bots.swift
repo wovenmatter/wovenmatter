@@ -94,6 +94,10 @@ extension ApplicationModel {
                 guard let self else { throw CancellationError() }
                 try await self.setRemoteBotResources(machineID: machineID, resources, directory: directory)
             },
+            setRemoteEnabled: { [weak self] machineID, enabled in
+                guard let self else { throw CancellationError() }
+                try await self.setRemoteBotsEnabled(machineID: machineID, enabled, directory: directory)
+            },
             discover: { [weak self] in try await self?.discoverBotDevices() ?? [] },
             installBots: { [weak self] hostName, userName, progress in
                 guard let self else { throw CancellationError() }
@@ -237,6 +241,22 @@ extension ApplicationModel {
         }
         if let configurationID = directory.linux[id], let configuration = remoteWorkspaces.configuration(id: configurationID) {
             _ = try await remoteWorkspaces.botsService(for: configuration).setBotsResources(resources)
+            return
+        }
+        throw BotsError.unavailable("That machine is unavailable.")
+    }
+
+    /// Turns bots on or off on another Mac or a Linux host, by member signature or,
+    /// for a bots-only host this Mac added, over its tunnel.
+    fileprivate func setRemoteBotsEnabled(machineID: String, _ enabled: Bool, directory: BotsRemoteDirectory) async throws {
+        let id = machineID.lowercased()
+        if let workspaceID = directory.members[id], let workspace = await memberBotWorkspaces().first(where: { $0.id == workspaceID }) {
+            let _: BotsRemoteStatus = try await botsClient(for: workspace).request("v1/bots/enabled", method: "POST",
+                body: JSONSerialization.data(withJSONObject: ["enabled": enabled]))
+            return
+        }
+        if let configurationID = directory.linux[id], let configuration = remoteWorkspaces.configuration(id: configurationID) {
+            _ = try await remoteWorkspaces.botsService(for: configuration).setBotsEnabled(enabled)
             return
         }
         throw BotsError.unavailable("That machine is unavailable.")

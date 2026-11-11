@@ -2,7 +2,7 @@ import SwiftUI
 import WovenMatterClient
 import WovenMatterCore
 
-struct OpenCodeSettingsCard: View {
+struct OpenCodeSettingsSection: View {
     @Environment(\.openURL) private var openURL
     @Bindable var model: OpenCodeModel
     var workspace: String
@@ -11,22 +11,20 @@ struct OpenCodeSettingsCard: View {
     @State private var loadingModels = false
     @State private var modelsError: String?
     var body: some View {
-        SettingsCard(title: "Server connection") {
-            SettingsValueRow(label: "Location", value: model.workspaceName)
-            if let configuration = model.remoteConfiguration {
-                SettingsValueRow(label: "Host", value: configuration.hostName)
-            }
-            HStack {
-                SettingsPill(model.isConnecting ? "Connecting…" : model.isReady ? "Ready" : "Not connected", tone: model.isReady ? .neutral : .warning)
-                Spacer()
-                if model.isReady && !model.isRemote {
-                    Button("Open in browser") {
-                        model.perform { openURL(try await model.browserURL()) }
+        VStack(alignment: .leading, spacing: 6) {
+            SettingsRow(title: model.workspaceName, detail: model.remoteConfiguration?.hostName) {
+                SettingsStatus(model.isConnecting ? "Connecting…" : model.isReady ? "Ready" : "Not connected", tone: model.isReady ? .good : .warning)
+                Button(model.isRemote || model.isInstalled ? "Connect" : model.isInstalling ? "Downloading…" : "Download") {
+                    model.perform {
+                        if model.isInstalled { try await model.connectLocal() }
+                        else { try await model.download() }
                     }
-                    .buttonStyle(SettingsQuietButtonStyle())
                 }
+                .buttonStyle(SettingsQuietButtonStyle())
+                .disabled(model.isConnecting || model.isReady || model.isInstalling || model.isControllingServer || (model.isRemote && !model.canConnect))
+            }
+            HStack(spacing: 8) {
                 Button("Manage models") { showingModels.toggle() }
-                    .buttonStyle(SettingsQuietButtonStyle())
                     .disabled(!model.isReady)
                     .popover(isPresented: $showingModels, arrowEdge: .bottom) {
                         modelPicker
@@ -38,38 +36,42 @@ struct OpenCodeSettingsCard: View {
                                 catch { modelsError = error.localizedDescription }
                             }
                     }
-                Button(model.isRemote || model.isInstalled ? "Connect" : model.isInstalling ? "Downloading…" : "Download") {
-                    model.perform {
-                        if model.isInstalled { try await model.connectLocal() }
-                        else { try await model.download() }
+                if model.isReady && !model.isRemote {
+                    Button("Open in browser") {
+                        model.perform { openURL(try await model.browserURL()) }
                     }
                 }
-                    .buttonStyle(SettingsQuietButtonStyle())
-                    .disabled(model.isConnecting || model.isReady || model.isInstalling || model.isControllingServer || (model.isRemote && !model.canConnect))
-            }
-            HStack(spacing: 8) {
-                Button("Stop server") { model.perform { try await model.stopServer() } }
-                    .disabled(model.isControllingServer || model.isConnecting || !model.hasServerRegistration)
                 Button("Restart server") { model.perform { try await model.restartServer() } }
                     .disabled(model.isControllingServer || model.isConnecting || !model.isInstalled || (model.isRemote && !model.canConnect))
+                Button("Stop server") { model.perform { try await model.stopServer() } }
+                    .disabled(model.isControllingServer || model.isConnecting || !model.hasServerRegistration)
                 if model.isControllingServer { ProgressView().controlSize(.small) }
             }
             .buttonStyle(SettingsQuietButtonStyle())
-            Toggle("Start OpenCode server when Woven Matter launches", isOn: $model.startServerOnLaunch)
-                .toggleStyle(DashboardSwitchToggleStyle())
-            Toggle("Stop OpenCode server when Woven Matter quits", isOn: $model.stopServerOnQuit)
-                .toggleStyle(DashboardSwitchToggleStyle())
-            Text("Stopping the server disconnects all its clients.")
-                .font(.caption).foregroundStyle(.secondary)
-            if !model.isRemote {
-                OpenCodeSessionLibrary(model: model)
+            SettingsSummaryRow("Server lifecycle", value: lifecycleSummary) {
+                Toggle("Start when Woven Matter launches", isOn: $model.startServerOnLaunch)
+                Toggle("Stop when Woven Matter quits", isOn: $model.stopServerOnQuit)
+                SettingsNote("Stopping the server disconnects all its clients.")
             }
-            if let error = model.error { Text(error).font(.callout).foregroundStyle(.red) }
+            if !model.isRemote {
+                SettingsSummaryRow("Shared sessions") { OpenCodeSessionLibrary(model: model) }
+            }
+            if let error = model.error { SettingsError(error) }
             if !model.canConnect {
-                Text(model.isRemote ? "Install and enable OpenCode in this remote workspace’s runtime settings to connect." : "Install OpenCode v2 to connect.").font(.caption).foregroundStyle(.secondary)
+                SettingsNote(model.isRemote ? "Install OpenCode in this remote workspace to connect." : "Install OpenCode v2 to connect.")
             }
         }
     }
+
+    private var lifecycleSummary: String {
+        switch (model.startServerOnLaunch, model.stopServerOnQuit) {
+        case (true, true): "Follows Woven Matter"
+        case (true, false): "Starts with Woven Matter"
+        case (false, true): "Stops with Woven Matter"
+        case (false, false): "Manual"
+        }
+    }
+
     private var sortedPickerModels: [OpenCodeValue] {
         let matching = model.settingsModels.filter {
             modelSearch.isEmpty || ($0["name"].text + " " + OpenCodeComposerMetadata.modelKey($0)).localizedCaseInsensitiveContains(modelSearch)
@@ -81,11 +83,11 @@ struct OpenCodeSettingsCard: View {
 
     private var modelPicker: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Models shown in Woven Matter").font(.headline)
+            Text("Models shown in Woven Matter").font(.settingsSection)
             TextField("Search models", text: $modelSearch)
-                .textFieldStyle(.roundedBorder)
+                .dashboardQuietTextInput()
             if loadingModels { ProgressView() }
-            if let modelsError { Text(modelsError).font(.caption).foregroundStyle(.red) }
+            if let modelsError { Text(modelsError).font(.settingsSecondary).foregroundStyle(DashboardPalette.danger) }
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 10) {
                     ForEach(sortedPickerModels, id: \.self) { option in
@@ -96,11 +98,10 @@ struct OpenCodeSettingsCard: View {
                         )) {
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(option["name"].string ?? option["id"].text)
-                                Text(option["providerID"].text).font(.caption).foregroundStyle(.secondary)
+                                Text(option["providerID"].text).font(.settingsSecondary).foregroundStyle(DashboardPalette.mutedForeground)
                             }
                             .frame(maxWidth: .infinity, alignment: .leading)
                         }
-                        .toggleStyle(DashboardSwitchToggleStyle())
                         .accessibilityLabel((option["name"].string ?? option["id"].text) + ", " + option["providerID"].text)
                     }
                 }
@@ -112,7 +113,7 @@ struct OpenCodeSettingsCard: View {
             .scrollIndicators(.never)
             .frame(height: 300)
             Text("Existing chats keep their selected model.")
-                .font(.caption).foregroundStyle(.secondary)
+                .font(.settingsSecondary).foregroundStyle(DashboardPalette.mutedForeground)
         }
         .padding(16)
         .frame(width: 360)
@@ -120,62 +121,48 @@ struct OpenCodeSettingsCard: View {
 
 }
 
-struct SettingsOpenCodeView: View {
+/// Each installed OpenCode service in the selected scope, on the agent page itself.
+struct SettingsOpenCodeInstances: View {
     @Bindable var model: ApplicationModel
-    var workspaceID: UUID?
-    var isWorkspaceScoped = false
-    var reservesRailControlSpace = false
-    var backTitle = "Settings"
-    var onBack: () -> Void
-    var onOpenAgent: (UUID?) -> Void
-    @State private var selectedScope = "local"
-    @State private var area: HarnessSettingsArea = .accounts
+    let scope: String
 
-    private var remoteConfigurations: [RemoteWorkspaceConfiguration] {
+    private var remotes: [RemoteWorkspaceConfiguration] {
         model.remoteWorkspaces.workspaces.filter {
-            selectedScope == "global" || $0.id.uuidString.lowercased() == selectedScope
+            (scope == "global" || $0.id.uuidString.lowercased() == scope)
+                && model.remoteOpenCodes[$0.id]?.isInstalled == true
         }
+    }
+    private var showsLocal: Bool {
+        (scope == "global" || scope == "local") && model.openCode?.isInstalled == true
     }
 
     var body: some View {
-        SettingsPage(title: "OpenCode", reservesRailControlSpace: reservesRailControlSpace, backTitle: backTitle, onBack: onBack) {
-            SettingsAgentDefaultsSection(model: model, runtime: .opencode, includesHarnessSetup: true,
-                initialScope: isWorkspaceScoped ? workspaceID?.uuidString.lowercased() ?? "local" : "global",
-                onScopeChange: { selectedScope = $0 }, onAreaChange: { area = $0 })
-            if area == .accounts {
-            SettingsCard(title: "OpenCode service settings") {
-                if selectedScope == "global" || selectedScope == "local" {
-                    if model.openCode?.isInstalled == true {
-                        agentLink("Local workspace", workspaceID: nil)
-                    }
-                }
-                ForEach(remoteConfigurations) { workspace in
-                    if model.remoteOpenCodes[workspace.id]?.isInstalled == true {
-                        agentLink(workspace.name, workspaceID: workspace.id)
-                    }
+        SettingsSection(title: "OpenCode service") {
+            if !showsLocal && remotes.isEmpty {
+                SettingsEmpty("Install OpenCode to manage its service.")
+            }
+            if showsLocal {
+                SettingsSummaryRow("Local workspace", value: statusLabel(model.openCode)) {
+                    OpenCodeInstanceSettings(model: model, workspaceID: nil)
                 }
             }
+            ForEach(remotes) { workspace in
+                SettingsSummaryRow(workspace.name, value: statusLabel(model.remoteOpenCodes[workspace.id])) {
+                    OpenCodeInstanceSettings(model: model, workspaceID: workspace.id)
+                }
             }
         }
-        .task {
-            selectedScope = workspaceID?.uuidString.lowercased() ?? "local"
-            await model.synchronizeRemoteOpenCodeInstances()
-        }
+        .task { await model.synchronizeRemoteOpenCodeInstances() }
     }
 
-    private func agentLink(_ name: String, workspaceID: UUID?) -> some View {
-        SettingsHarnessControlRow(title: name) {
-            Button("Open agent settings") { onOpenAgent(workspaceID) }
-                .buttonStyle(SettingsQuietButtonStyle())
-        }
+    private func statusLabel(_ instance: OpenCodeModel?) -> String {
+        instance?.isReady == true ? "Ready" : "Not connected"
     }
 }
 
-struct SettingsOpenCodeAgentView: View {
+private struct OpenCodeInstanceSettings: View {
     @Bindable var model: ApplicationModel
     let workspaceID: UUID?
-    var reservesRailControlSpace = false
-    var onBack: () -> Void
     @State private var agentID: UUID?
     @State private var name = ""
     @State private var error: String?
@@ -186,14 +173,15 @@ struct SettingsOpenCodeAgentView: View {
         if let configuration = instance?.remoteConfiguration { return model.remoteWorkspaces.remoteWorkspaceRoot(for: configuration) }
         return model.localACPWorkspaceAvailability.rootPath ?? FileManager.default.homeDirectoryForCurrentUser.appending(path: ".woven-matter").path
     }
+
     var body: some View {
-        SettingsPage(title: name.isEmpty ? "OpenCode" : name,
-            reservesRailControlSpace: reservesRailControlSpace, backTitle: "OpenCode", onBack: onBack) {
+        VStack(alignment: .leading, spacing: 6) {
             if let instance {
-                SettingsCard(title: "Woven Matter name", detail: "This name is shown only in Woven Matter.") {
-                    Text("Agent name").font(.system(size: 11, weight: .medium)).foregroundStyle(DashboardPalette.mutedForeground)
-                    TextField("Agent name", text: $name).textFieldStyle(.roundedBorder)
-                    Button("Save name") {
+                SettingsRow(title: "Name in Woven Matter") {
+                    TextField("Agent name", text: $name)
+                        .dashboardInput()
+                        .frame(width: 220)
+                    Button("Save") {
                         guard let agentID else { return }
                         Task {
                             saving = true; error = nil
@@ -201,10 +189,11 @@ struct SettingsOpenCodeAgentView: View {
                             do { try await model.renameOpenCodeAgent(agentID: agentID, displayName: name) }
                             catch { self.error = error.localizedDescription }
                         }
-                    }.buttonStyle(DashboardPrimaryButtonStyle())
-                        .disabled(agentID == nil || saving || name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    }
+                    .buttonStyle(SettingsQuietButtonStyle())
+                    .disabled(agentID == nil || saving || name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
-                OpenCodeSettingsCard(model: instance, workspace: workspace)
+                OpenCodeSettingsSection(model: instance, workspace: workspace)
             } else { SettingsEmpty("This agent is no longer available.") }
             if let error { SettingsError(error) }
         }
@@ -229,7 +218,6 @@ private struct OpenCodeSessionLibrary: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Shared OpenCode sessions").font(.headline)
             HStack {
                 Button("Refresh sessions") { load(page: 0) }
                     .buttonStyle(SettingsQuietButtonStyle(horizontalPadding: 8, minimumHeight: 26))
@@ -238,9 +226,9 @@ private struct OpenCodeSessionLibrary: View {
             ForEach(sessions, id: \.self) { session in
                 HStack {
                     VStack(alignment: .leading, spacing: 3) {
-                        Text(session["title"].string ?? "OpenCode session").font(.system(size: 13, weight: .medium))
+                        Text(session["title"].string ?? "OpenCode session").font(.settingsRow)
                         Text(session["location"]["directory"].text)
-                            .font(.system(size: 11, design: .monospaced))
+                            .font(.system(size: 11.5, design: .monospaced))
                             .foregroundStyle(DashboardPalette.mutedForeground).lineLimit(2)
                     }
                     Spacer()
@@ -260,7 +248,7 @@ private struct OpenCodeSessionLibrary: View {
             }
             HStack {
                 Button("Previous") { load(page: page - 1) }.disabled(page == 0)
-                Text("Page \(page + 1) of up to 10").font(.caption)
+                Text("Page \(page + 1) of up to 10").font(.settingsSecondary)
                 Button("Next") {
                     if let next {
                         cursors = Array(cursors.prefix(page + 1)) + [next]
@@ -269,7 +257,7 @@ private struct OpenCodeSessionLibrary: View {
                 }.disabled(next == nil || page >= 9)
             }
             .buttonStyle(SettingsQuietButtonStyle(horizontalPadding: 8, minimumHeight: 22))
-            if let feedback { Text(feedback).font(.system(size: 12)).textSelection(.enabled) }
+            if let feedback { Text(feedback).font(.settingsBody).textSelection(.enabled) }
         }
         .disabled(busy || !model.isReady)
     }

@@ -52,9 +52,8 @@
 		5E7A00000000000000000001 /* SettingsComponents.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E7A00000000000000000002 /* SettingsComponents.swift */; };
 		5E7A00000000000000000003 /* SettingsGeneralView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E7A00000000000000000004 /* SettingsGeneralView.swift */; };
 		A85FEEADAEA25A9757CBE5F6 /* SettingsDictationView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 013E364D3F71552BF924C602 /* SettingsDictationView.swift */; };
+		5E7A0000000000000000000D /* SettingsAccountsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E7A0000000000000000000E /* SettingsAccountsView.swift */; };
 		B7E2C41A9D3F4E5A6B7C8D90 /* SettingsPermissionsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B7E2C41A9D3F4E5A6B7C8D91 /* SettingsPermissionsView.swift */; };
-		5E7A00000000000000000007 /* SettingsLocalWorkspaceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E7A00000000000000000008 /* SettingsLocalWorkspaceView.swift */; };
-		5E7A0000000000000000000D /* SettingsUsageView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E7A0000000000000000000E /* SettingsUsageView.swift */; };
 		49BB9C77C988D34AA1B69E70 /* ApplicationModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A0B27571F91CCF38534BB90 /* ApplicationModel.swift */; };
 		5AECF7B494583F056FBE596C /* WovenMatterApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 624CEC46A7441DADEBBCE79E /* WovenMatterApp.swift */; };
 		5E64711B441F5A188A2862AC /* RootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 489A29D04369BF898400D045 /* RootView.swift */; };
@@ -76,7 +75,8 @@
 		E10000000000000000000001 /* NoteEditor.swift in Sources */ = {isa = PBXBuildFile; fileRef = E10000000000000000000002 /* NoteEditor.swift */; };
 		F10000000000000000000001 /* AgentDatabases.swift in Sources */ = {isa = PBXBuildFile; fileRef = F10000000000000000000002 /* AgentDatabases.swift */; };
 		A13000000000000000000001 /* RemoteWorkspacesModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = A13000000000000000000002 /* RemoteWorkspacesModel.swift */; };
-		A13000000000000000000003 /* SettingsRemoteWorkspacesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A13000000000000000000004 /* SettingsRemoteWorkspacesView.swift */; };
+		A13000000000000000000003 /* SettingsWorkspacesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A13000000000000000000004 /* SettingsWorkspacesView.swift */; };
+		A1300000000000000000F001 /* SettingsWovenMCPView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1300000000000000000F002 /* SettingsWovenMCPView.swift */; };
 		F10100000000000000000001 /* ArtifactEditor.swift in Sources */ = {isa = PBXBuildFile; fileRef = F10100000000000000000002 /* ArtifactEditor.swift */; };
 		F10200000000000000000001 /* DashboardDatabasesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F10200000000000000000002 /* DashboardDatabasesView.swift */; };
 		ADB35226B01C45F520411F2C /* DashboardConversationState.swift in Sources */ = {isa = PBXBuildFile; fileRef = FC6A850ACFC17DE4433439A7 /* DashboardConversationState.swift */; };
@@ -243,9 +243,8 @@
 		5E7A00000000000000000002 /* SettingsComponents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsComponents.swift; sourceTree = "<group>"; };
 		5E7A00000000000000000004 /* SettingsGeneralView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsGeneralView.swift; sourceTree = "<group>"; };
 		013E364D3F71552BF924C602 /* SettingsDictationView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsDictationView.swift; sourceTree = "<group>"; };
+		5E7A0000000000000000000E /* SettingsAccountsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsAccountsView.swift; sourceTree = "<group>"; };
 		B7E2C41A9D3F4E5A6B7C8D91 /* SettingsPermissionsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsPermissionsView.swift; sourceTree = "<group>"; };
-		5E7A00000000000000000008 /* SettingsLocalWorkspaceView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsLocalWorkspaceView.swift; sourceTree = "<group>"; };
-		5E7A0000000000000000000E /* SettingsUsageView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsUsageView.swift; sourceTree = "<group>"; };
 		DBB4B07F8994DA5A755EAF99 /* wovenmatter-macos */ = {isa = PBXFileReference; lastKnownFileType = folder; name = "wovenmatter-macos"; path = .; sourceTree = SOURCE_ROOT; };
 		D45100000000000000000002 /* DashboardDesign.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardDesign.swift; sourceTree = "<group>"; };
 		D57100000000000000000002 /* DashboardStyle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardStyle.swift; sourceTree = "<group>"; };
@@ -264,7 +263,8 @@
 		E10000000000000000000002 /* NoteEditor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NoteEditor.swift; sourceTree = "<group>"; };
 		F10000000000000000000002 /* AgentDatabases.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentDatabases.swift; sourceTree = "<group>"; };
 		A13000000000000000000002 /* RemoteWorkspacesModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteWorkspacesModel.swift; sourceTree = "<group>"; };
-		A13000000000000000000004 /* SettingsRemoteWorkspacesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsRemoteWorkspacesView.swift; sourceTree = "<group>"; };
+		A13000000000000000000004 /* SettingsWorkspacesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsWorkspacesView.swift; sourceTree = "<group>"; };
+		A1300000000000000000F002 /* SettingsWovenMCPView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsWovenMCPView.swift; sourceTree = "<group>"; };
 		F10100000000000000000002 /* ArtifactEditor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ArtifactEditor.swift; sourceTree = "<group>"; };
 		F10200000000000000000002 /* DashboardDatabasesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardDatabasesView.swift; sourceTree = "<group>"; };
 		FC6A850ACFC17DE4433439A7 /* DashboardConversationState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardConversationState.swift; sourceTree = "<group>"; };
@@ -584,12 +584,12 @@
 				FBC100000000000000000006 /* RuntimeInspectionInventoryView.swift */,
 				013E364D3F71552BF924C602 /* SettingsDictationView.swift */,
 				B7E2C41A9D3F4E5A6B7C8D91 /* SettingsPermissionsView.swift */,
-				5E7A00000000000000000008 /* SettingsLocalWorkspaceView.swift */,
-				A13000000000000000000004 /* SettingsRemoteWorkspacesView.swift */,
+				A13000000000000000000004 /* SettingsWorkspacesView.swift */,
+				A1300000000000000000F002 /* SettingsWovenMCPView.swift */,
 				A27AC6B860EE8FB41BD42099 /* RemoteHarnessSetupView.swift */,
 				56218A2E2939EE0C6739AF1A /* SettingsRemoteHarnessAccountView.swift */,
 				D92320EB212D9B05AEBB711C /* SettingsHarnessAccounts.swift */,
-				5E7A0000000000000000000E /* SettingsUsageView.swift */,
+				5E7A0000000000000000000E /* SettingsAccountsView.swift */,
 			);
 			path = Views;
 			sourceTree = "<group>";
@@ -865,7 +865,8 @@
 				F10000000000000000000001 /* AgentDatabases.swift in Sources */,
 				A13000000000000000000001 /* RemoteWorkspacesModel.swift in Sources */,
 				C28E61FFA047C5F1D80D55AB /* HarnessAccountPresentation.swift in Sources */,
-				A13000000000000000000003 /* SettingsRemoteWorkspacesView.swift in Sources */,
+				A13000000000000000000003 /* SettingsWorkspacesView.swift in Sources */,
+				A1300000000000000000F001 /* SettingsWovenMCPView.swift in Sources */,
 				D2446456FA6CA90EADAABF29 /* RemoteHarnessSetupView.swift in Sources */,
 				B9FFAB8DAB6312F403B44CAC /* SettingsRemoteHarnessAccountView.swift in Sources */,
 				908E8E08608BCD94835B9307 /* SettingsHarnessAccounts.swift in Sources */,
@@ -935,9 +936,8 @@
 				FBC100000000000000000001 /* SettingsBackgroundServerView.swift in Sources */,
 				FBC100000000000000000005 /* RuntimeInspectionInventoryView.swift in Sources */,
 				A85FEEADAEA25A9757CBE5F6 /* SettingsDictationView.swift in Sources */,
+				5E7A0000000000000000000D /* SettingsAccountsView.swift in Sources */,
 				B7E2C41A9D3F4E5A6B7C8D90 /* SettingsPermissionsView.swift in Sources */,
-				5E7A00000000000000000007 /* SettingsLocalWorkspaceView.swift in Sources */,
-				5E7A0000000000000000000D /* SettingsUsageView.swift in Sources */,
 				5AECF7B494583F056FBE596C /* WovenMatterApp.swift in Sources */,
 				A03000000000000000000001 /* DesktopUpdater.swift in Sources */,
 				AA1900000000000000000001 /* WovenMatterLifecycleDelegate.swift in Sources */,

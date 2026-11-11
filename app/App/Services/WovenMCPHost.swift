@@ -34,7 +34,7 @@ struct WovenBotNotification: Sendable {
 
 enum WovenBotKeyError: LocalizedError {
     case revoked
-    var errorDescription: String? { "This bot's Woven MCP key was revoked in Settings → Bots." }
+    var errorDescription: String? { "This bot's Woven MCP key was revoked in Settings → Woven MCP." }
 }
 
 /// Native bearers identify conversation callers. The optional private Tailnet

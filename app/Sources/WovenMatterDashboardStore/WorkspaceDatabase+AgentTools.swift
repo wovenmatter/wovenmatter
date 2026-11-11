@@ -318,7 +318,7 @@ extension WorkspaceDatabaseConnection {
   func requireToolUnlocked(_ group: WorkspaceToolGroup, sessionID: String, writesCalendar: Bool = false) throws {
     guard try sessionToolsUnlocked(sessionID).enabled.contains(group) else { throw WorkspaceToolError.disabled(group) }
     if group == .calendar, writesCalendar, !WovenMCPCaller.isAppWide(sessionID), try toolSettingsUnlocked().calendarAccess != .full {
-      throw WorkspaceToolError.invalid("Calendar is read only. Change its access in General settings.")
+      throw WorkspaceToolError.invalid("Calendar is read only. Change its access in Settings → Woven MCP.")
     }
   }
 

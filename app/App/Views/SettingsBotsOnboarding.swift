@@ -1,8 +1,8 @@
 import SwiftUI
 import WovenMatterClient
 
-/// First run on a machine: bots use the provider connections in Woven's settings, so
-/// setup is connecting one there, then choosing Admin Bot's model.
+/// First run on a machine: bots use the accounts in Woven's settings, so setup is
+/// adding one there, then choosing Admin Bot's model.
 struct BotOnboardingView: View {
     @Bindable var bots: BotMachineSession
     let onOpenConnections: () -> Void
@@ -49,13 +49,13 @@ struct BotOnboardingView: View {
             if bots.onboarding?.signedIn == true {
                 modelCard
             } else {
-                SettingsCard(title: "Connect a provider", detail: "Bots use the provider connections in Woven Matter. One is enough to start.") {
-                    Button("Open Connections", action: onOpenConnections)
+                SettingsSection(title: "Connect a provider", detail: "Bots use the subscriptions and API keys in Woven Matter. One is enough to start.") {
+                    Button("Open Subscriptions & API Keys", action: onOpenConnections)
                         .buttonStyle(DashboardPrimaryButtonStyle())
                 }
             }
         }
-        .font(.system(size: 13))
+        .font(.settingsText)
     }
 
     private var steps: some View {
@@ -74,19 +74,21 @@ struct BotOnboardingView: View {
                 Circle().fill(done || current ? DashboardPalette.primary.opacity(0.12) : DashboardPalette.muted)
                     .frame(width: 24, height: 24)
                 if done { DashboardLucideIcon(glyph: .check, size: 12).foregroundStyle(DashboardPalette.success) }
-                else { Text("\(number)").font(.system(size: 11, weight: .semibold)) }
+                else { Text("\(number)").font(.settingsSecondary.weight(.semibold)) }
             }.accessibilityHidden(true)
-            Text(label).font(.system(size: 12.5, weight: current ? .semibold : .regular))
+            Text(label).font(.settingsBody.weight(current ? .semibold : .regular))
         }.accessibilityLabel("\(number). \(label)\(done ? ", complete" : current ? ", current step" : "")")
     }
 
     private var modelCard: some View {
-        SettingsCard(title: "Choose Admin Bot's model", detail: "You can set up more models with Admin Bot later.") {
+        SettingsSection(title: "Choose Admin Bot's model", detail: "You can set up more models with Admin Bot later.") {
             if let catalog {
                 if catalog.providers.isEmpty { SettingsEmpty("Connect a model provider first.") }
                 else {
-                    BotSettingsModelPicker(providers: catalog.providers, selection: Binding(
-                        get: { selectedModel(catalog) }, set: { selection = $0 }), label: "Main model")
+                    SettingsRow(title: "Main model") {
+                        BotSettingsModelPicker(providers: catalog.providers, selection: Binding(
+                            get: { selectedModel(catalog) }, set: { selection = $0 }), label: "Main model")
+                    }
                     Button("Start chatting") {
                         Task {
                             await state.run { client in

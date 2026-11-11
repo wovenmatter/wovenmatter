@@ -193,7 +193,7 @@ describe("web_search", () => {
 
   it("turns provider HTTP errors into one line without the key or body", async () => {
     for (const [status, text] of [
-      [401, "the API key was rejected (check it in Woven Matter Settings → Connections) (HTTP 401)"],
+      [401, "the API key was rejected (check it in Woven Matter Settings → Subscriptions & API Keys) (HTTP 401)"],
       [402, "out of credits"],
       [429, "rate limited"],
       [503, "the service had an error"],

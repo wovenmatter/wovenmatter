@@ -562,6 +562,18 @@ const server = createServer({ maxHeaderSize: 16_384, headersTimeout: 10_000,
       return json(response, 201, authenticationSessionView(session))
     }
 
+    const signOutMatch = url.pathname.match(/^\/v1\/harnesses\/([^/]+)\/sign-out$/)
+    if (request.method === 'POST' && signOutMatch) {
+      const harness = requireHarness(signOutMatch[1])
+      const command = harness.authentication?.signOutCommand
+      if (!command) return json(response, 409, { error: 'sign_out_not_supported' })
+      if ([...authenticationSessions.values()].some(s => s.harness.id === harness.id && s.state === 'waiting_for_user')) {
+        return json(response, 409, { error: 'authentication_session_active' })
+      }
+      if (!await commandSucceeded(command, 20_000)) return json(response, 502, { error: 'sign_out_failed' })
+      return json(response, 200, await harnessStatus(harness))
+    }
+
     const authorizationCodeMatch = url.pathname.match(
       /^\/v1\/authentication-sessions\/([^/]+)\/authorization-code$/
     )

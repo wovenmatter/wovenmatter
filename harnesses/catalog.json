@@ -21,6 +21,7 @@
         "statusCommands": [
           "codex login status"
         ],
+        "signOutCommand": "codex logout",
         "discoveries": [
           {
             "displayName": "Codex account",
@@ -77,6 +78,7 @@
         "statusCommands": [
           "claude auth status --json >/dev/null"
         ],
+        "signOutCommand": "claude auth logout",
         "discoveries": [
           {
             "displayName": "Claude account",
@@ -135,6 +137,7 @@
         "statusCommands": [
           "grok models 2>/dev/null | grep -q '^You are logged in'"
         ],
+        "signOutCommand": "grok logout",
         "discoveries": [
           {
             "displayName": "Grok account",

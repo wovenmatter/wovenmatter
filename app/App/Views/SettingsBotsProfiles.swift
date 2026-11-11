@@ -13,9 +13,9 @@ struct BotSettingsProfiles: View {
     var body: some View {
         Group {
             if let profiles, let catalog {
-                profilesCard(profiles, providers: catalog.providers)
-                titlesCard(catalog)
-                availableCard(catalog.providers)
+                profilesSection(profiles, providers: catalog.providers)
+                titlesSection(catalog)
+                availableSection(catalog.providers)
             } else { SettingsEmpty("Loading…") }
         }
         .task(id: "\(state.bots.connection.rawValue):\(state.bots.settingsRevision)") {
@@ -37,19 +37,20 @@ struct BotSettingsProfiles: View {
         await state.bots.refreshOnboarding(onError: { state.error = $0 })
     }
 
-    private func profilesCard(_ profiles: [PiBotProfile], providers: [PiBotProviderModels]) -> some View {
-        SettingsCard(title: "Profiles", detail: "A profile is a main model for a bot's channel and threads, which can run subagents on itself or on the models in its pool. New bots get the default. Changes apply from each bot's next reply.") {
-            VStack(alignment: .leading, spacing: 12) {
-                ForEach(profiles) { profile in
-                    if editing == profile.id {
-                        editor(profile, providers: providers)
-                    } else { profileRow(profile) }
-                }
-                if editing == "" { editor(nil, providers: providers) }
-                else {
-                    Button { editing = "" } label: { BotSettingsActionLabel(title: "New profile", glyph: .plus) }
-                        .disabled(editing != nil)
-                }
+    private func profilesSection(_ profiles: [PiBotProfile], providers: [PiBotProviderModels]) -> some View {
+        SettingsSection(title: "Profiles", detail: "New bots use the default. Changes apply from each bot's next reply.") {
+            ForEach(profiles) { profile in
+                if editing == profile.id {
+                    editor(profile, providers: providers)
+                } else { profileRow(profile) }
+            }
+            if editing == "" { editor(nil, providers: providers) }
+            else {
+                Button { editing = "" } label: { BotSettingsActionLabel(title: "New profile", glyph: .plus) }
+                    .disabled(editing != nil)
+            }
+            SettingsHelp {
+                SettingsNote("A profile is a main model for a bot's channel and threads. The main model can run subagents on itself or on the models in its pool.")
             }
         }
     }
@@ -66,31 +67,28 @@ struct BotSettingsProfiles: View {
 
     private func profileRow(_ profile: PiBotProfile) -> some View {
         let users = live.filter { $0.profileId == profile.id }.map(\.name)
-        return SettingsInset {
-            VStack(alignment: .leading, spacing: 6) {
-                HStack {
-                    Text(profile.name).font(.system(size: 13, weight: .medium))
-                    if profile.isDefault { SettingsPill("Default", tone: .neutral) }
-                    Spacer()
-                    if !profile.isDefault {
-                        Button("Make default") {
-                            Task {
-                                await state.run { client in
-                                    profiles = try await client.setDefaultProfile(id: profile.id).profiles
-                                    try await refresh(client)
-                                }
+        let fallbacks = profile.fallbacks ?? []
+        return SettingsSummaryRow(profile.name, value: (profile.isDefault ? "Default · " : "") + profile.main) {
+            SettingsValueRow(label: "Fallbacks", value: fallbacks.isEmpty ? "None" : fallbacks.joined(separator: " → "))
+            SettingsValueRow(label: "Model pool", value: profile.pool.isEmpty ? "Main model only" : "Main model + " + profile.pool.map(\.model).joined(separator: ", "))
+            SettingsValueRow(label: "Memory extraction", value: profile.memoryModel ?? "Active main model")
+            SettingsValueRow(label: "Used by", value: users.isEmpty ? "No bots" : users.joined(separator: ", "))
+            HStack(spacing: 8) {
+                Button("Edit") { editing = profile.id }.disabled(editing != nil)
+                if !profile.isDefault {
+                    Button("Make default") {
+                        Task {
+                            await state.run { client in
+                                profiles = try await client.setDefaultProfile(id: profile.id).profiles
+                                try await refresh(client)
                             }
                         }
-                        Button { delete(profile) } label: { DashboardLucideIcon(glyph: .trash, size: 14) }
-                            .accessibilityLabel("Delete profile \(profile.name)")
                     }
-                    Button("Edit") { editing = profile.id }.disabled(editing != nil)
+                    Button { delete(profile) } label: { BotSettingsActionLabel(title: "Delete", glyph: .trash) }
+                        .accessibilityLabel("Delete profile \(profile.name)")
                 }
-                SettingsNote(profile.main + ((profile.fallbacks ?? []).isEmpty ? " · no fallbacks" : " → " + (profile.fallbacks ?? []).joined(separator: " → ")))
-                SettingsNote((profile.pool.isEmpty ? "Model pool: main model only" : "Model pool: main model + " + profile.pool.map(\.model).joined(separator: ", "))
-                    + " · Memory extraction: \(profile.memoryModel ?? "active main model") · "
-                    + (users.isEmpty ? "No bots" : "Used by " + users.joined(separator: ", ")))
             }
+            .padding(.top, 4)
         }
     }
 
@@ -107,22 +105,22 @@ struct BotSettingsProfiles: View {
         }
     }
 
-    private func titlesCard(_ catalog: PiBotModelCatalog) -> some View {
+    private func titlesSection(_ catalog: PiBotModelCatalog) -> some View {
         let roles = titleDraft ?? catalog.roles
-        return SettingsCard(title: "Thread titles", detail: "Names threads from their first message. One model for every bot; profiles don't change it.") {
-            SettingsField("Title model") {
+        return SettingsSection(title: "Thread titles", detail: "One model names every bot's threads from their first message.") {
+            SettingsRow(title: "Model") {
                 BotSettingsModelPicker(providers: catalog.providers, selection: Binding(
                     get: { (titleDraft ?? catalog.roles).titles },
                     set: { titleDraft = PiBotRoles(titles: $0, titlesReasoning: roles.titlesReasoning) }), label: "Title model")
             }
-            SettingsField("Title reasoning") {
-                SettingsMenuPicker(selection: roles.titlesReasoning + " reasoning",
-                    options: catalog.reasoningLevels.map { $0 + " reasoning" }) { value in
-                    titleDraft = PiBotRoles(titles: roles.titles, titlesReasoning: String(value.dropLast(" reasoning".count)))
-                }
+            SettingsRow(title: "Reasoning") {
+                SettingsPicker("Title reasoning", selection: Binding(
+                    get: { roles.titlesReasoning },
+                    set: { titleDraft = PiBotRoles(titles: roles.titles, titlesReasoning: $0) }
+                ), options: catalog.reasoningLevels) { $0.capitalized }
             }
             if roles != catalog.roles {
-                HStack {
+                HStack(spacing: 8) {
                     Button("Save") {
                         Task {
                             await state.run { client in
@@ -139,23 +137,17 @@ struct BotSettingsProfiles: View {
         }
     }
 
-    private func availableCard(_ providers: [PiBotProviderModels]) -> some View {
-        SettingsCard(title: "Available models") {
-            if providers.isEmpty { SettingsEmpty("No providers are connected. Connect one in Settings → Connections.") }
-            else {
+    private func availableSection(_ providers: [PiBotProviderModels]) -> some View {
+        SettingsSection(title: "Available models", detail: "From Settings → Subscriptions & API Keys.") {
+            if providers.isEmpty {
+                SettingsEmpty("No providers are connected.")
+                ManageAccountsLink()
+            } else {
                 ForEach(providers) { provider in
-                    DisclosureGroup {
-                        VStack(alignment: .leading, spacing: 8) {
-                            ForEach(provider.models) { model in
-                                BotSettingsModelFacts(providers: providers, model: "\(provider.id)/\(model.id)", name: model.name)
-                            }
+                    SettingsSummaryRow(provider.name, value: provider.models.count == 1 ? "1 model" : "\(provider.models.count) models") {
+                        ForEach(provider.models) { model in
+                            BotSettingsModelFacts(providers: providers, model: "\(provider.id)/\(model.id)", name: model.name)
                         }
-                    } label: {
-                        HStack {
-                            Text(provider.name)
-                            Spacer()
-                            Text(provider.models.count == 1 ? "1 model" : "\(provider.models.count) models").foregroundStyle(DashboardPalette.mutedForeground)
-                        }.font(.system(size: 13))
                     }
                 }
             }
