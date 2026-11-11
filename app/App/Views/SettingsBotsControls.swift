@@ -182,7 +182,7 @@ struct BotSettingsReferencePicker: View {
     let onSelect: @MainActor (String) -> Void
 
     var body: some View {
-        SettingsPicker(label, selection: Binding(get: { selection }, set: onSelect), options: options.map(\.id)) { id in
+        SettingsPicker(label, selection: Binding(get: { selection }, set: { onSelect($0) }), options: options.map(\.id)) { id in
             options.first { $0.id == id }?.title ?? id
         }
     }
