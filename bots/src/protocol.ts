@@ -290,7 +290,7 @@ export type ProfilesList = { defaultId: string; profiles: ProfileSummary[] };
 
 export type OnboardingStatus = {
   adminId: string;
-  /** Admin Bot's profile and its main model. */
+  /** Admin Bot's profile and its main model ("" until one is chosen). */
   profileId: string;
   mainModel: string;
   /** The main model belongs to a signed-in (or keyed) provider. */

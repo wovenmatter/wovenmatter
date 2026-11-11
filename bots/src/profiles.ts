@@ -9,7 +9,8 @@ export const MAX_FALLBACKS = 5;
 export type ProfileInput = {
   readonly id: string;
   readonly name: string;
-  readonly main: string;
+  /** Omitted or "": no main model yet. */
+  readonly main?: string;
   /** Ordered main-model fallbacks for usage limits, at most 5. */
   readonly fallbacks?: readonly string[];
   /** Memory extraction model; omitted, null or "": the active main model. */
@@ -128,11 +129,13 @@ export class ProfileStore {
       }
       this.#options.checkModel?.(ref);
     };
-    check(input.main);
+    const main = input.main?.trim() || undefined;
+    if (main) check(main);
     const fallbacks: string[] = [];
     for (const ref of input.fallbacks ?? []) {
+      if (!main) throw new ProfileError("choose a main model before adding fallbacks");
       check(ref);
-      if (ref === input.main) throw new ProfileError(`${ref} is the main model, not a fallback`);
+      if (ref === main) throw new ProfileError(`${ref} is the main model, not a fallback`);
       if (fallbacks.includes(ref)) throw new ProfileError(`fallbacks list ${ref} twice`);
       fallbacks.push(ref);
     }
@@ -155,7 +158,7 @@ export class ProfileStore {
     return {
       id,
       name,
-      main: input.main,
+      ...(main ? { main } : {}),
       ...(fallbacks.length ? { fallbacks } : {}),
       ...(memoryModel ? { memoryModel } : {}),
       ...(guidance ? { guidance } : {}),
@@ -178,12 +181,12 @@ export class ProfileStore {
   }
 }
 
-/** A profile as tools and clients see it. */
+/** A profile as tools and clients see it. `main` is "" until a main model is chosen. */
 export function describeProfile(profile: Profile, defaultId: string) {
   return {
     id: profile.id,
     name: profile.name,
-    main: profile.main,
+    main: profile.main ?? "",
     ...(profile.fallbacks?.length ? { fallbacks: [...profile.fallbacks] } : {}),
     ...(profile.memoryModel ? { memoryModel: profile.memoryModel } : {}),
     ...(profile.guidance ? { guidance: profile.guidance } : {}),

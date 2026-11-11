@@ -15,6 +15,7 @@ import {
 import { createProvider } from "@earendil-works/pi-ai/models";
 import { anthropicProvider } from "@earendil-works/pi-ai/providers/anthropic";
 import { getCurrentSystemPrompt, getCurrentTools } from "@earendil-works/pi-ai/utils/transcript";
+import type { ErrorIssue } from "../issues.ts";
 import { CLAUDE_AGENT_API } from "../compaction/native.ts";
 import { type ClaudeRateLimitInfo, claudeLimit, type LimitClass } from "../limits.ts";
 import {
@@ -47,7 +48,12 @@ export type ClaudeCompactedMessage = AssistantMessage & {
   pibotCompaction?: ClaudeCompaction;
   /** The usage limit Claude Code reported for a failed request (see limits.ts). */
   pibotLimit?: LimitClass;
+  /** Claude Code is not signed in (see issues.ts). */
+  pibotIssue?: ErrorIssue;
 };
+
+/** Claude Code's own sign-in failure ("Not logged in · Please run /login"), which bots can't run. */
+const NOT_LOGGED_IN = /not logged in|please run \/login/i;
 
 const zeroCost = () => ({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 });
 const zeroUsage = (): Usage => ({
@@ -445,9 +451,11 @@ export class ClaudeAgentStream {
         } else if (event.type === "result") {
           // A tool call ends the only allowed turn: Pi, not Claude Code, runs the tool.
           if (event.is_error && event.subtype !== "error_max_turns") {
-            failure = [event.api_error_status, event.result, ...(event.errors ?? [])]
+            const reported = [event.api_error_status, event.result, ...(event.errors ?? [])]
               .filter(Boolean)
               .join(" ");
+            // Keep the assistant's error text when the result carries nothing more.
+            failure = reported || failure || "";
           }
           break;
         } else if (event.type === "stream_event" && event.parent_tool_use_id == null) {
@@ -490,6 +498,10 @@ export class ClaudeAgentStream {
       }
       message.pibotCompaction = { summary, preTokens: boundary.compact_metadata?.pre_tokens };
       return;
+    }
+    if (assistantError === "authentication_failed" || (failure && NOT_LOGGED_IN.test(failure))) {
+      message.pibotIssue = "signIn";
+      throw new ClaudeAgentError("Not logged in to Claude.");
     }
     if (failure) throw new ClaudeAgentError(failure);
     if (reply.length === 0) throw new ClaudeAgentError("Claude Code stopped before replying.");

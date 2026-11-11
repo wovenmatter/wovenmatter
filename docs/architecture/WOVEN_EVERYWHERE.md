@@ -1094,6 +1094,19 @@ Changed:
 - `settings.accounts` is read-only: `{accounts: [{id, label, group, method,
   configured}], search: {provider, providers: [...]}}`, with Woven connection
   ids.
+- No model is assumed. A fresh profile set has a `default` profile with no main
+  model (`main: ""` on the wire) and no title model (titles then use the default
+  profile's main model). `onboarding.status` reports `needed` until Admin Bot's
+  profile has a signed-in main model; the app's chooser lists every connected
+  model, newest first, and saves the user's pick with `onboarding.setMainModel`,
+  which then starts Admin Bot's greeting once (a hidden input, only while its
+  main channel is empty). A bot whose profile has no main model refuses
+  `message.send`. Bot messages may link to `wovenmatter://settings/accounts` and
+  `wovenmatter://settings/bots/profiles`, which open those pages in the app.
+- Chat entries carry `issue` (`signIn` or `limit`) when a failed reply has a fix
+  in Settings; the app shows Subscriptions & API Keys and Change model there.
+  Claude subscription is offered to bots only while a Claude account is signed
+  in to Subscriptions & API Keys.
 
 Dropped: `credentials.set`, `credentials.remove`, `login.start`,
 `login.respond`, `login.cancel`, `config.get`, `config.validate`,

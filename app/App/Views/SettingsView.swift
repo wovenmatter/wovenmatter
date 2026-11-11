@@ -214,7 +214,10 @@ struct SettingsView: View {
 
     private func openPendingBotsSettings() {
         guard model.pendingBotsSettings else { return }
-        if route != .bots { open(.bots, .bots, from: .landing) }
+        if let machineID = model.pendingBotProfilesMachine {
+            route = .botsSection(machineID: machineID, .profiles)
+            model.pendingBotProfilesMachine = nil
+        } else if route != .bots { open(.bots, .bots, from: .landing) }
         model.pendingBotsSettings = false
     }
 

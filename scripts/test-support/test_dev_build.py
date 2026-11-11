@@ -13,6 +13,84 @@ dev = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(dev)
 
 
+class FakeSecurity:
+    """`defaults` and `security` for reset(): a Keychain of service names, no real calls."""
+    def __init__(self, services):
+        self.services = list(services)
+        self.calls = []
+
+    def __call__(self, command, **_):
+        self.calls.append(command)
+        if command[:2] == ["security", "dump-keychain"]:
+            out = "".join(f'    "svce"<blob>="{name}"\n' for name in self.services)
+            return subprocess.CompletedProcess(command, 0, out, "")
+        if command[:2] == ["security", "delete-generic-password"]:
+            name = command[command.index("-s") + 1]
+            if name in self.services:
+                self.services.remove(name)
+                return subprocess.CompletedProcess(command, 0, "", "")
+            return subprocess.CompletedProcess(command, 44, "", "")
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+
+class FreshSnapshotTests(unittest.TestCase):
+    bundle = "wovenmatter.desktop.dev.bot-test.snapshot"
+
+    def test_reset_trashes_the_snapshot_and_only_this_instances_keychain_items(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            dev_root = root / "Woven Matter Dev"
+            support = dev_root / "bot-test" / "snapshot"
+            (support / "WovenVM").mkdir(parents=True)
+            (support / "development-snapshot.json").write_text("{}")
+            keep = dev_root / "bot-test-2" / "snapshot"; keep.mkdir(parents=True)
+            security = FakeSecurity([
+                "Woven Matter.desktop.dev.bot-test.snapshot.default-agent",
+                "Woven Matter.desktop.dev.bot-test.snapshot.default-agent",
+                "wovenmatter.desktop.dev.bot-test.snapshot.paired-mac-signing",
+                "wovenmatter.desktop.dev.bot-test-2.snapshot.paired-mac-signing",
+                "Woven Matter.desktop.dev.bot-test-2.snapshot.default-agent",
+                "Woven Matter.desktop",
+            ])
+            dev.reset(support, self.bundle, dev_root=dev_root, trash=root / "Trash", run=security, now=lambda: 0)
+            self.assertFalse(support.exists())
+            self.assertTrue(keep.exists())
+            trashed = list((root / "Trash").iterdir())
+            self.assertEqual(len(trashed), 1)
+            self.assertTrue((trashed[0] / "WovenVM").is_dir())
+            self.assertEqual(security.services, [
+                "wovenmatter.desktop.dev.bot-test-2.snapshot.paired-mac-signing",
+                "Woven Matter.desktop.dev.bot-test-2.snapshot.default-agent",
+                "Woven Matter.desktop",
+            ])
+            self.assertIn(["defaults", "delete", self.bundle], security.calls)
+            # A second reset with nothing left is harmless.
+            dev.reset(support, self.bundle, dev_root=dev_root, trash=root / "Trash", run=security)
+
+    def test_reset_refuses_anything_but_a_dev_snapshot(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            dev_root = root / "Woven Matter Dev"
+            production = root / "Woven Matter"; production.mkdir()
+            unmarked = dev_root / "x" / "snapshot"; unmarked.mkdir(parents=True)
+            client = dev_root / "x" / "client"; client.mkdir(parents=True)
+            security = FakeSecurity([])
+            for path in (production, client, dev_root):
+                with self.assertRaises(ValueError):
+                    dev.reset(path, self.bundle, dev_root=dev_root, trash=root / "Trash", run=security)
+            with self.assertRaises(ValueError):  # right bundle ID, but not a development snapshot
+                dev.reset(unmarked, "wovenmatter.desktop.dev.x.snapshot", dev_root=dev_root, trash=root / "Trash", run=security)
+            self.assertTrue(unmarked.exists())
+            with self.assertRaises(ValueError):
+                dev.reset(unmarked, "wovenmatter.desktop", dev_root=dev_root, trash=root / "Trash", run=security)
+            marked = dev_root / "x" / "snapshot"
+            (marked / "development-snapshot.json").write_text("{}")
+            with self.assertRaises(ValueError):  # another instance's bundle ID
+                dev.reset(marked, self.bundle, dev_root=dev_root, trash=root / "Trash", run=security)
+            self.assertTrue(marked.exists())
+            self.assertEqual(security.calls, [])
+
+
 class DevelopmentBuildTests(unittest.TestCase):
     def test_backend_guard_matches_executable_aliases_without_matching_other_profiles(self):
         with tempfile.TemporaryDirectory() as tmp:

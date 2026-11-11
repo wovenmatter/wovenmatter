@@ -295,6 +295,60 @@ def snapshot(source, destination):
             shutil.rmtree(temporary)
 
 
+def keychain_services(bundle):
+    """Keychain service names one Dev instance owns: its bundle ID's, and the Woven Matter
+    service namespace derived from it (WovenMatterKeychainService). Exact name or a dotted child."""
+    if not bundle.startswith("wovenmatter.desktop.dev."):
+        raise ValueError("Only a Dev instance's Keychain items can be reset.")
+    return (bundle, "Woven Matter." + bundle[len("wovenmatter."):])
+
+
+def owned_service(service, roots):
+    return any(service == root or service.startswith(root + ".") for root in roots)
+
+
+def reset(support, bundle, *, dev_root=None, trash=None, run=subprocess.run, now=time.time):
+    """Clears one snapshot instance so the next launch takes a fresh snapshot under the same
+    bundle ID, which keeps the privacy permissions macOS ties to it. The data folder (bots and
+    their VM included) moves to the Trash; the instance's preferences and Keychain items
+    (provider sign-ins, pairing keys) are deleted. The caller stops the instance first."""
+    support = Path(support).expanduser().resolve()
+    dev_root = Path(dev_root or Path.home() / "Library/Application Support/Woven Matter Dev").expanduser().resolve()
+    if dev_root not in support.parents or support.name != "snapshot":
+        raise ValueError("Only a Dev snapshot under Woven Matter Dev can be reset.")
+    if bundle != f"wovenmatter.desktop.dev.{support.parent.name}.snapshot":
+        raise ValueError(f"{bundle} is not the bundle ID of {support}.")
+    roots = keychain_services(bundle)
+    if support.exists():
+        if not (support / "development-snapshot.json").is_file():
+            raise ValueError(f"{support} is not a development snapshot; refusing to reset it.")
+        trash = Path(trash or Path.home() / ".Trash")
+        trash.mkdir(parents=True, exist_ok=True)
+        stamp = time.strftime("%Y-%m-%d %H.%M.%S", time.localtime(now()))
+        target = trash / f"Woven Matter Dev {support.parent.name} {support.name} {stamp}"
+        suffix = 2
+        while target.exists():
+            target = trash / f"Woven Matter Dev {support.parent.name} {support.name} {stamp} {suffix}"
+            suffix += 1
+        shutil.move(str(support), str(target))
+        print(f"Moved the old snapshot to the Trash: {target}")
+    run(["defaults", "delete", bundle], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    # Attributes only (no -d): service names, never secrets.
+    dump = run(["security", "dump-keychain"], capture_output=True, text=True).stdout
+    services = sorted({name for name in re.findall(r'"svce"<blob>="([^"]*)"', dump) if owned_service(name, roots)})
+    removed, failed = 0, []
+    for service in services:
+        while run(["security", "delete-generic-password", "-s", service],
+                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0:
+            removed += 1
+        if service in re.findall(r'"svce"<blob>="([^"]*)"',
+                                 run(["security", "dump-keychain"], capture_output=True, text=True).stdout):
+            failed.append(service)
+    print(f"Removed {removed} Keychain item(s) and the preferences of {bundle}.")
+    if failed:
+        raise ValueError("Could not remove Keychain items for: " + ", ".join(failed) + ". Delete them in Keychain Access, then run this again.")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -309,6 +363,9 @@ def main():
     running.add_argument("--executable", type=Path, required=True)
     library = sub.add_parser("linux-library")
     library.add_argument("--root", type=Path, required=True)
+    fresh = sub.add_parser("reset")
+    fresh.add_argument("--support", type=Path, required=True)
+    fresh.add_argument("--bundle", required=True)
     args = parser.parse_args()
     if args.command == "profile":
         print(json.dumps(profile(args.root, args.instance, args.mode)))
@@ -316,6 +373,8 @@ def main():
         snapshot(args.source, args.destination)
     elif args.command == "linux-library":
         ensure_linux_library(args.root)
+    elif args.command == "reset":
+        reset(args.support, args.bundle)
     else:
         print("true" if backend_running(args.executable) else "false")
 

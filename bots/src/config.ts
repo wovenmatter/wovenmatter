@@ -155,7 +155,8 @@ export const settingsSchema = z.strictObject({
       z.string().regex(PROFILE_ID, "profile ids are lowercase letters, digits, - and _"),
       z.strictObject({
         name: z.string().trim().min(1).max(80),
-        main: modelRef,
+        // Unset until the user picks one: no model is assumed for a provider they may not have.
+        main: modelRef.optional(),
         fallbacks: z.array(modelRef).max(5, "at most 5 fallbacks").default([]),
         memoryModel: modelRef.optional(),
         guidance: z.string().max(4000).optional(),
@@ -168,14 +169,14 @@ export const settingsSchema = z.strictObject({
     .default({
       default: {
         name: "Default",
-        main: "claude-subscription/claude-opus-5-5",
         fallbacks: [],
         pool: [],
       },
     }),
   titles: z
     .strictObject({
-      model: modelRef.default("openai-codex/gpt-6-luna"),
+      // Unset: the default profile's main model titles threads.
+      model: modelRef.optional(),
       reasoning: z.enum(TITLE_REASONING).default("high"),
     })
     .prefault({}),
@@ -232,8 +233,8 @@ export type PoolModel = {
 export type Profile = {
   readonly id: string;
   readonly name: string;
-  /** `provider/model-id` of the main channel and every thread. */
-  readonly main: string;
+  /** `provider/model-id` of the main channel and every thread; unset until the user picks one. */
+  readonly main?: string;
   /** Ordered main-model fallbacks for usage limits (0–5); none: the bot pauses at a limit. */
   readonly fallbacks?: readonly string[];
   /** Memory extraction model. Unset: the main model the bot runs at that moment. */
@@ -249,7 +250,8 @@ export type ProfileSet = {
   readonly profiles: readonly Profile[];
 };
 
-function checkFallbacks(id: string, main: string, fallbacks: readonly string[]): string[] {
+function checkFallbacks(id: string, main: string | undefined, fallbacks: readonly string[]): string[] {
+  if (!main) throw new Error(`profiles.${id}.fallbacks: set a main model first`);
   const seen = new Set<string>([main]);
   for (const ref of fallbacks) {
     if (seen.has(ref)) {
@@ -264,7 +266,7 @@ export function normalizeProfiles(raw: RawSettings): ProfileSet {
   const profiles: Profile[] = Object.entries(raw.profiles).map(([id, value]) => ({
     id,
     name: value.name,
-    main: value.main,
+    ...(value.main ? { main: value.main } : {}),
     ...(value.fallbacks.length ? { fallbacks: checkFallbacks(id, value.main, value.fallbacks) } : {}),
     ...(value.memoryModel ? { memoryModel: value.memoryModel } : {}),
     ...(value.guidance?.trim() ? { guidance: value.guidance.trim() } : {}),
@@ -286,7 +288,7 @@ export function profilesToRaw(set: ProfileSet): Pick<RawSettings, "defaultProfil
         profile.id,
         {
           name: profile.name,
-          main: profile.main,
+          ...(profile.main ? { main: profile.main } : {}),
           fallbacks: [...(profile.fallbacks ?? [])],
           ...(profile.memoryModel ? { memoryModel: profile.memoryModel } : {}),
           ...(profile.guidance ? { guidance: profile.guidance } : {}),
