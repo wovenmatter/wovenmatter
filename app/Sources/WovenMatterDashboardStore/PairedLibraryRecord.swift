@@ -34,7 +34,26 @@ public struct PairedLibraryRecord: Codable, Equatable, Sendable {
     return result
   }
   static func winner(_ frontier: [Self]) -> Self? {
-    frontier.reduce(nil) { best, version in best.map { version.outranks($0) ? version : $0 } ?? version }
+    // Privacy: when devices chose differently while apart, opting out of analytics wins.
+    let candidates = frontier.contains(where: \.optsOutOfAnalytics) ? frontier.filter(\.optsOutOfAnalytics) : frontier
+    return candidates.reduce(nil) { best, version in best.map { version.outranks($0) ? version : $0 } ?? version }
+  }
+
+  /// A product analytics preference that turns collection off.
+  var optsOutOfAnalytics: Bool {
+    guard table == "product_analytics_preference", !deleted, let value = row["payload"], let text = value.value else { return false }
+    let data: Data?
+    if value.type == "blob" {
+      var bytes: [UInt8] = []
+      var index = text.startIndex
+      while index < text.endIndex, let next = text.index(index, offsetBy: 2, limitedBy: text.endIndex),
+            let byte = UInt8(text[index..<next], radix: 16) {
+        bytes.append(byte); index = next
+      }
+      data = index == text.endIndex ? Data(bytes) : nil
+    } else { data = Data(text.utf8) }
+    guard let data, let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return false }
+    return object["enabled"] as? Bool == false
   }
   public func dominates(_ other: Self) -> Bool {
     other.vector.allSatisfy { vector[$0.key, default: 0] >= $0.value }
@@ -86,6 +105,8 @@ enum PairedLibraryTables {
     "library_messages", "library_items", "library_locations", "paired_mac_routes", "paired_remote_workspaces",
     // Signed member entries and revocations; trust is resolved from signatures.
     "library_members", "library_member_revocations",
-    "bot_conversations", "bot_conversation_entries"
+    "bot_conversations", "bot_conversation_entries",
+    // The analytics choice and its library-wide ID apply to every device.
+    "product_analytics_preference"
   ]
 }

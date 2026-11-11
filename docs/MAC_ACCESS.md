@@ -3,9 +3,8 @@
 Sessions are often started from another device while nobody is at the Mac
 that runs them. Nothing a session does may wait on a dialog, Keychain prompt or
 password there. **Settings → Permissions & Access** (directly after General)
-sets everything up once. Its lead sentence: "Allow these once so agents can use
-this Mac without stopping at a macOS prompt, including agents you start from your
-other devices." It lists Keychain, Microphone, Automation, Full Disk Access,
+sets everything up once. Its lead: "Give agents the access they need on this Mac,
+so they don't stop for a prompt. You only need to allow each one once." It lists Keychain, Microphone, Automation, Full Disk Access,
 Accessibility, and Screen Recording, one row each.
 
 | Item | Why sessions need it | How it is granted | Detection |

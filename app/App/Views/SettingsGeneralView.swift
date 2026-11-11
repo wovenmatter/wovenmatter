@@ -58,13 +58,13 @@ struct SettingsGeneralView: View {
         SettingsSection(title: "Appearance") {
             SettingsRow(title: "Theme") {
                 DashboardSegmentedSelector(options: DashboardTheme.allCases, selection: themeBinding) { $0.title }
-                    .frame(maxWidth: 300)
+                    .frame(width: 300)
             }
             SettingsRow(title: "Sidebar layout", detail: sidebarStyleBinding.wrappedValue.detail) {
                 DashboardSegmentedSelector(options: DashboardSidebarStyle.allCases, selection: sidebarStyleBinding) { style in
                     style.title.replacingOccurrences(of: " Sidebar", with: "")
                 }
-                .frame(maxWidth: 300)
+                .frame(width: 300)
             }
             SettingsSummaryRow("Sidebar sections", detail: "Hide or show the workspace sections in the sidebar.") {
                 Toggle(DashboardWorkspaceSidebarVisibility.localWorkspace.title, isOn: $showsLocalWorkspace)

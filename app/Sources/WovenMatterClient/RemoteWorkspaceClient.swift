@@ -1435,6 +1435,11 @@ public struct RemoteWorkspaceServiceClient: Sendable {
     public func botsStatus() async throws -> BotsRemoteStatus {
         try await request(path: "v1/bots/status", method: "GET", body: nil)
     }
+    /// Bots run on one machine, so a host's bots turn off when they move elsewhere.
+    public func setBotsEnabled(_ enabled: Bool) async throws -> BotsRemoteStatus {
+        try await request(path: "v1/bots/enabled", method: "POST",
+                          body: try JSONSerialization.data(withJSONObject: ["enabled": enabled]))
+    }
     public func setBotsResources(_ resources: BotResourceSettings) async throws -> BotsRemoteStatus {
         struct Body: Encodable { let resources: BotResourceSettings }
         return try await request(path: "v1/bots/resources", method: "POST", body: JSONEncoder().encode(Body(resources: resources)))

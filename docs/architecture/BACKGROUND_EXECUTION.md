@@ -135,7 +135,10 @@ sleep. The system-wide flag cannot distinguish Woven Matter from other software.
 The signed helper is bundled at `Contents/Library/LaunchServices/WovenMatterPowerHelper`
 with its daemon plist under `Contents/Library/LaunchDaemons`. It is registered only
 from an explicit settings action and requires macOS approval. Task execution,
-backend startup, building, and testing never register it. Ad-hoc builds cannot
+backend startup, building, and testing never register it. macOS may report a
+helper it has never registered as not found; when the plist is in the bundle,
+Settings treats that as not registered, so the user's explicit setup registers it
+and shows macOS's own error if registration fails. Ad-hoc builds cannot
 enable it. The daemon and client authenticate each other with XPC code-signing
 requirements for specific identifiers and the same Apple signing team; there is
 no sudoers change, shell execution, or general-purpose privileged command API.

@@ -96,14 +96,17 @@ when an intentional design change is accepted.
   created. Thread dropdowns start closed. Everything about bots is native and uses the
   components regular chats and Settings use: the shared transcript text, user bubble and
   composer, and Settings sections and rows. A thread sits beside its bot's main channel
-  at 760 points and wider. Message actions appear on hover. **Settings → Bots** holds
-  this Mac's switch, the machine list, Install on another device, and version notices
-  with "Update everything". Each machine opens its own page: a status row with a Manage
-  menu, then summary links to Profiles, Bots and teams, and Resources. Profiles and
-  bots are summary rows that open for editing. Bots' Woven MCP access lives in
-  Settings → Woven MCP; Bots shows it as one summary link. Apple Devices shows only a
-  version status link to Bots. Bots use the accounts in Settings → Subscriptions & API Keys; there is
-  no separate bot sign-in.
+  at 760 points and wider. Message actions appear on hover. Bots run on one machine.
+  **Settings → Bots** holds one "Run bots on" choice (Off, This Mac, or another Mac or
+  Linux machine), the chosen machine's row, Install on another device, and version
+  notices with "Update everything". Choosing a machine asks first, then turns bots off
+  everywhere else; bots and their files stay where they were made. The machine opens
+  its own page: a status row with a Manage menu, then summary links to Profiles, Bots
+  and teams, Resources, and that machine's Subscriptions & API Keys. Profiles and bots
+  are summary rows that open for editing. Bots' Woven MCP access lives in Settings →
+  Woven MCP, with no pause switch; Bots shows it as one summary link. Apple Devices
+  shows only a version status link to Bots. Bots use Subscriptions & API Keys on the
+  machine they run on; there is no separate bot sign-in.
 - **Harness setup:** use compact rows grouped on the theme-whisper surface for
   both harness installation and Pi Durable setup, with the same typography,
   padding, inset dividers, and quiet actions. Keep provider setup limited to

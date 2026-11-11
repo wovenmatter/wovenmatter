@@ -3,9 +3,9 @@ import WovenMatterClient
 import WovenMatterCore
 import WovenMatterDashboardStore
 
-/// Settings → Bots: this Mac's switch, every machine that hosts bots, installing on
-/// another device, and version notices. Each machine opens its own page; what bots may
-/// do through Woven MCP lives in Settings → Woven MCP.
+/// Settings → Bots: the one machine bots run on, installing on another device, and
+/// version notices. The chosen machine opens its own page; what bots may do through
+/// Woven MCP lives in Settings → Woven MCP.
 struct SettingsBotsView: View {
     @Bindable var model: ApplicationModel
     var reservesRailControlSpace = false
@@ -17,7 +17,9 @@ struct SettingsBotsView: View {
     private var bots: BotsModel { model.bots }
     @State private var mcp: WovenMCPAccessSnapshot?
     @State private var mcpUnavailable = false
-    @State private var confirmation: BotsConfirmation?
+    /// A requested move, waiting for confirmation: the machine ID, or "" for off.
+    @State private var pendingHost: String?
+    @State private var moving = false
 
     var body: some View {
         SettingsPage(
@@ -28,8 +30,7 @@ struct SettingsBotsView: View {
             onBack: onBack
         ) {
             BotsVersionNotice(bots: bots)
-            thisMacSection
-            machinesSection
+            whereSection
             SettingsSection {
                 SettingsSummaryLink(title: "Woven MCP access", value: mcpSummary, action: onOpenWovenMCP)
             }
@@ -38,64 +39,96 @@ struct SettingsBotsView: View {
             await bots.refresh()
             do { mcp = try await model.controlMCPAccess(.status) } catch { mcpUnavailable = true }
         }
-        .modifier(BotsConfirmationPresenter(confirmation: $confirmation, bots: bots))
-    }
-
-    // MARK: This Mac
-
-    private var thisMacSection: some View {
-        SettingsSection(title: "This Mac") {
-            SettingsToggleRow(
-                title: "Run bots on this Mac",
-                detail: "Bots run in a virtual machine on this Mac.",
-                isOn: Binding(
-                    get: { bots.thisMachine.map { $0.state != .off } ?? false },
-                    set: { enabled in
-                        if enabled { Task { await bots.attempt(.setEnabled(true)) } }
-                        else {
-                            confirmation = .init(title: "Turn off bots on this Mac?", action: "Turn off",
-                                message: "Running work stops and the virtual machine shuts down. Bots, their files and conversations stay.",
-                                destructive: true, command: .setEnabled(false))
-                        }
-                    })
-            )
-            .disabled(bots.busy || bots.perform == nil)
+        .confirmationDialog(confirmationTitle, isPresented: Binding(
+            get: { pendingHost != nil }, set: { if !$0 { pendingHost = nil } }
+        ), titleVisibility: .visible) {
+            Button(pendingHost == "" ? "Turn off" : "Run bots there", role: pendingHost == "" ? .destructive : nil) {
+                let target = pendingHost
+                pendingHost = nil
+                moving = true
+                Task {
+                    await bots.runBots(on: target?.isEmpty == false ? target : nil)
+                    moving = false
+                }
+            }
+            Button("Cancel", role: .cancel) { pendingHost = nil }
+        } message: {
+            Text(confirmationMessage)
         }
     }
 
-    // MARK: Every machine
+    // MARK: Where bots run
 
-    private var listedMachines: [BotMachine] {
-        bots.machines.filter { $0.kind != .thisMac || $0.state != .off }
+    /// Bots run on one machine. Several running is left over from before that rule.
+    private var running: [BotMachine] {
+        bots.machines.filter { ![.off, .unreachable].contains($0.state) }
     }
 
-    private var machinesSection: some View {
-        SettingsSection(title: "Machines", detail: "Where your bots run.") {
-            if listedMachines.isEmpty {
-                SettingsEmpty(bots.machines.isEmpty ? bots.loadError ?? "Loading…" : "No machine runs bots yet.")
-            } else {
-                VStack(spacing: 2) {
-                    ForEach(listedMachines) { machine in
-                        SettingsDestinationRow(
-                            title: machine.displayName,
-                            detail: BotMachineText.summary(machine, bots: bots),
-                            status: BotMachineText.state(machine),
-                            statusTone: BotMachineText.tone(machine),
-                            icon: { DashboardLucideIcon(glyph: machine.kind == .linux ? .container : .monitor, size: 15) },
-                            action: { onOpenMachine(machine.id) }
-                        )
-                    }
+    private var host: BotMachine? {
+        running.first { $0.kind == .thisMac } ?? running.first
+    }
+
+    private var candidates: [BotMachine] {
+        let others = bots.machines.filter { $0.kind != .thisMac && ($0.state != .unreachable || $0.id == host?.id) }
+        return (bots.thisMachine.map { [$0] } ?? []) + others
+    }
+
+    private var whereSection: some View {
+        SettingsSection(title: "Where bots run", detail: "Bots run on one machine. Their files and conversations stay on the machine they were made on.") {
+            SettingsRow(title: "Run bots on") {
+                if moving { ProgressView().controlSize(.small) }
+                SettingsPicker("Run bots on", selection: Binding(
+                    get: { host?.id ?? "" },
+                    set: { pendingHost = $0 }
+                ), options: [""] + candidates.map(\.id)) { id in
+                    id.isEmpty ? "Off" : candidates.first { $0.id == id }.map(label) ?? id
                 }
+                .disabled(moving || bots.busy || bots.perform == nil)
+            }
+            if running.count > 1 {
+                SettingsNote("Bots are running on \(PermissionNames.list(running.map(\.displayName))). Choose one machine above; the others turn off.")
+            }
+            if let host {
+                SettingsDestinationRow(
+                    title: host.displayName,
+                    detail: BotMachineText.summary(host, bots: bots),
+                    status: BotMachineText.state(host),
+                    statusTone: BotMachineText.tone(host),
+                    icon: { DashboardLucideIcon(glyph: host.kind == .linux ? .container : .monitor, size: 15) },
+                    action: { onOpenMachine(host.id) }
+                )
+            } else if bots.machines.isEmpty, let error = bots.loadError {
+                SettingsError(error)
             }
             BotsDiscoverDevicesRow(bots: bots)
         }
+    }
+
+    private func label(_ machine: BotMachine) -> String {
+        machine.kind == .thisMac ? "This Mac" : machine.displayName + (machine.kind == .linux ? " (Linux)" : "")
+    }
+
+    private var confirmationTitle: String {
+        guard let pendingHost else { return "" }
+        if pendingHost.isEmpty { return "Turn off bots?" }
+        let name = candidates.first { $0.id == pendingHost }.map(label) ?? "this machine"
+        return host == nil ? "Run bots on \(name)?" : "Run bots on \(name) instead?"
+    }
+
+    private var confirmationMessage: String {
+        let current = running.map(\.displayName)
+        if pendingHost == "" {
+            return "Running work stops. Bots, their files and conversations stay."
+        }
+        if current.isEmpty { return "Bots start there. Bots you made on other machines stay on them." }
+        return "Bots on \(PermissionNames.list(current)) stop. Their files and conversations stay there."
     }
 
     private var mcpSummary: String {
         guard let settings = mcp?.botSettings else { return mcpUnavailable ? "Unavailable" : "Loading…" }
         guard settings.isEnabled else { return "Off" }
         let count = WorkspaceToolGroup.configurableCases.filter { settings.groups.contains($0) }.count
-        return bots.thisMachine?.paused == true ? "Paused" : "\(count) of \(WorkspaceToolGroup.configurableCases.count) tools"
+        return "\(count) of \(WorkspaceToolGroup.configurableCases.count) tools"
     }
 }
 
@@ -228,7 +261,7 @@ struct SettingsBotsMachineView: View {
 // MARK: - Woven MCP for bots
 
 /// Settings → Woven MCP → Bots: whether bots on this Mac reach Woven MCP, with which
-/// tools, a pause for all of them, and each bot's own key.
+/// tools, and each bot's own key.
 struct SettingsBotsMCPAccessSection: View {
     @Bindable var model: ApplicationModel
     @State private var snapshot: WovenMCPAccessSnapshot?
@@ -260,15 +293,15 @@ struct SettingsBotsMCPAccessSection: View {
                     SettingsNote("Goals and visual replies are included. Sessions reach only your Woven workspaces, under each workspace's own permissions.")
                 }
             }
-            // A pause or a revoked key outlasts turning access off, so both stay reachable.
-            if snapshot?.botSettings.isEnabled == true || bots.thisMachine?.paused == true {
-                SettingsToggleRow(
-                    title: "Pause for every bot on this Mac",
-                    isOn: Binding(get: { bots.thisMachine?.paused ?? false },
-                                  set: { paused in Task { await bots.attempt(.setPaused(paused)) } })
-                )
-                .disabled(bots.busy || bots.thisMachine == nil)
+            // The pause switch is gone; a pause set before then can still be lifted.
+            if bots.thisMachine?.paused == true {
+                SettingsRow(title: "Bots on this Mac are paused", detail: "They can't use Woven MCP until resumed.") {
+                    Button("Resume") { Task { await bots.attempt(.setPaused(false)) } }
+                        .buttonStyle(SettingsQuietButtonStyle())
+                        .disabled(bots.busy)
+                }
             }
+            // A revoked key outlasts turning access off, so keys stay reachable.
             if !callers.isEmpty { keysRow }
             SettingsHelp {
                 SettingsNote("Bots on other machines get their keys from that machine. Outside agents have their own access below.")

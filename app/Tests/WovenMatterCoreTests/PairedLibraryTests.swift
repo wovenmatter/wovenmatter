@@ -445,6 +445,28 @@ extension PairedLibraryTests {
     #expect(try Data(contentsOf: b.directory.appending(path: "library-files/" + otherHash)) == other)
   }
 
+  @Test func theAnalyticsChoiceReachesEveryMacAndOptingOutWinsWhileApart() async throws {
+    let a = try await Mac(), b = try await Mac(), c = try await Mac(); defer { a.remove(); b.remove(); c.remove() }
+    // Each Mac starts with its own random ID; after syncing they share one library ID.
+    try await a.send(to: b); try await b.send(to: a); try await b.send(to: c); try await c.send(to: a); try await a.send(to: b)
+    let shared = try await a.database.productAnalyticsPreference().analyticsID
+    #expect(try await b.database.productAnalyticsPreference().analyticsID == shared)
+    #expect(try await c.database.productAnalyticsPreference().analyticsID == shared)
+    // A choice made on one Mac reaches the others.
+    let before = try await a.database.productAnalyticsPreference()
+    _ = try await a.database.setProductAnalyticsPreference(.init(enabled: false, expectedRevision: before.revision))
+    try await a.send(to: b); try await b.send(to: c)
+    #expect(try await c.database.productAnalyticsPreference().enabled == false)
+    // While apart, one Mac opts back in and another opts out again: opting out wins everywhere.
+    let onB = try await b.database.productAnalyticsPreference()
+    _ = try await b.database.setProductAnalyticsPreference(.init(enabled: true, expectedRevision: onB.revision))
+    _ = try await c.database.setProductAnalyticsPreference(.init(enabled: false, expectedRevision: try await c.database.productAnalyticsPreference().revision))
+    try await b.send(to: c); try await c.send(to: b); try await b.send(to: a)
+    #expect(try await a.database.productAnalyticsPreference().enabled == false)
+    #expect(try await b.database.productAnalyticsPreference().enabled == false)
+    #expect(try await c.database.productAnalyticsPreference().enabled == false)
+  }
+
   @Test func outsideMCPExposureStaysOnItsMacWhileToolChoicesSynchronize() async throws {
     let a = try await Mac(), b = try await Mac(); defer { a.remove(); b.remove() }
     try await a.database.updateExternalMCP(enabled: true)

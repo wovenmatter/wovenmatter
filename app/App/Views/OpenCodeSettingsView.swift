@@ -180,7 +180,7 @@ private struct OpenCodeInstanceSettings: View {
                 SettingsRow(title: "Name in Woven Matter") {
                     TextField("Agent name", text: $name)
                         .dashboardInput()
-                        .frame(maxWidth: 220)
+                        .frame(width: 220)
                     Button("Save") {
                         guard let agentID else { return }
                         Task {

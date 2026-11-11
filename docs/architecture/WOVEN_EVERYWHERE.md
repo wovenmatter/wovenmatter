@@ -1483,7 +1483,7 @@ answers); `PUT /v1/resources`; (optional forwards) `GET /v1/forwards`;
   (WebSocket, proxied to the runtime's `/ws` with the runtime token; any
   `Origin` header is refused, since only native apps connect: the Mac's
   `URLSessionWebSocketTask` sends none, which `PiBotHandshakeTests` checks).
-  Administrator only: `POST /v1/bots/resources {resources: {poolBytes?,
+  Administrator only: `POST /v1/bots/enabled {enabled}`, `POST /v1/bots/resources {resources: {poolBytes?,
   perBotBytes?, diskBytes?}}` (a missing field stays; a pool below per-bot
   RAM lowers it), `GET|POST /v1/bots/mcp {isEnabled?, groups?}` (the `GET`
   adds `revoked: [{botID, revokedAt}]`), `DELETE /v1/bots/mcp/keys/{botID}`
@@ -1666,6 +1666,7 @@ under `/wovenmatter` when reached through Tailscale Serve:
 | `GET /v1/bots/status` | `{ machine: { deviceID, name, kind }, enabled, state, message?, versions: { app, runtime, protocol, fingerprint?, librarySchema? }, resources, capacity: { memoryBytes, diskTotalBytes, diskFreeBytes, diskUsedByBotsBytes? }, paused, updating?, engineUpdateFailure? }` (`updating` and `engineUpdateFailure`: a Mac's VM update) |
 | `POST /v1/bots/engine/update` (Macs) | starts the Mac's VM update and returns the status at once; follow `updating`, then `engineUpdateFailure` |
 | `POST /v1/bots/resources` `{ resources: { poolBytes, perBotBytes, diskBytes } }` | the status after applying; `null` is no cap (Linux also leaves a missing field as it is) |
+| `POST /v1/bots/enabled` `{ enabled }` | turns bots on or off on this machine and returns the status. Bots run on one machine: choosing one in Settings → Bots turns them off everywhere else. Bots, their files and conversations stay. A Linux host saves `botsOff` with its bots settings and refuses `enabled: true` until bots are installed |
 | `GET /v1/bots/ws` (WebSocket upgrade) | proxied to the runtime's `/ws` with the runtime's own bearer |
 
 A Mac reaches every other member's bots with signed requests

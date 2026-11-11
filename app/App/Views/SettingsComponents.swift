@@ -231,7 +231,8 @@ struct SettingsSection<Content: View>: View {
 }
 
 /// The one settings row: title and optional secondary line on the left, control on the right.
-/// When both cannot fit on one line, the control moves below the title so neither gets crushed.
+/// Long text wraps beside the control, which keeps its place on the right; only when even a
+/// narrow text column cannot fit does the control move below the title.
 struct SettingsRow<Accessory: View>: View {
     let title: String
     var detail: String? = nil
@@ -257,10 +258,10 @@ struct SettingsRow<Accessory: View>: View {
 
     var body: some View {
         ViewThatFits(in: .horizontal) {
-            HStack(alignment: .center, spacing: 12) {
-                label
-                Spacer(minLength: 12)
-                accessory
+            HStack(alignment: .center, spacing: 24) {
+                // A small ideal width lets this layout win, then the text takes what's left and wraps.
+                label.frame(minWidth: 160, idealWidth: 160, maxWidth: .infinity, alignment: .leading)
+                HStack(spacing: 8) { accessory }.fixedSize()
             }
             .frame(maxWidth: .infinity, minHeight: SettingsMetrics.rowHeight, alignment: .leading)
             VStack(alignment: .leading, spacing: 6) {

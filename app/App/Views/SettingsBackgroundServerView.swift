@@ -207,7 +207,7 @@ private struct SettingsKeepWorkingSection: View {
 
     @ViewBuilder private var lidStatus: some View {
         if closedLidHelperSetup == .unavailable {
-            SettingsNote("Closed-lid protection requires a signed Woven Matter build with its power helper.")
+            SettingsNote(ClosedLidHelperRegistration.unavailableReason)
         } else if lidSnapshot.policy.isEnabled {
             if closedLidHelperSetup == .approvalRequired {
                 SettingsRow(title: "Approval needed", detail: "Approve Woven Matter in macOS Login Items & Extensions to enable protection.") {

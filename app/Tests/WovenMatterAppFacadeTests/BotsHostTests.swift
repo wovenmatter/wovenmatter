@@ -168,6 +168,23 @@ struct BotsHostTests {
         #expect(await fixture.host.snapshot().machines.first?.state == .off)
     }
 
+    @Test func botsMoveBetweenMachinesThroughOneCommand() async throws {
+        var remote: [(String, Bool)] = []
+        let fixture = try HostFixture { $0.setRemoteEnabled = { machine, enabled in remote.append((machine, enabled)) } }
+        defer { fixture.remove() }
+        // This Mac uses its own switch; any other machine goes over its signed route.
+        _ = try await fixture.host.perform(.setMachineEnabled(machineID: "D3VICE-0001", true))
+        try await waitFor("runtime") { fixture.supervisor.phase == .running }
+        _ = try await fixture.host.perform(.setMachineEnabled(machineID: "linux-box", false))
+        #expect(remote.map(\.0) == ["linux-box"] && remote.map(\.1) == [false])
+        // Another member turns this Mac's bots off when they move elsewhere.
+        let off = await fixture.host.remoteRequest(try hostRequest("POST", "/v1/bots/enabled", token: "ignored", body: ["enabled": false]),
+                                                   path: "/v1/bots/enabled")
+        #expect(off.status == 200)
+        #expect(fixture.supervisor.phase == .stopped)
+        #expect(await fixture.host.snapshot().machines.first?.state == .off)
+    }
+
     @Test func resourcesAreClampedAppliedToTheEngineAndPassedToTheRuntime() async throws {
         let fixture = try HostFixture(); defer { fixture.remove() }
         _ = try await fixture.host.perform(.setEnabled(true))

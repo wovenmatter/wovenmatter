@@ -14,7 +14,7 @@ struct SettingsPermissionsView: View {
     @State private var macAccess = MacAccessSetupModel.shared
     @State private var showsCredentialDisclosure = false
 
-    static let lead = "Allow these once so agents can use this Mac without stopping at a macOS prompt, including agents you start from your other devices."
+    static let lead = "Give agents the access they need on this Mac, so they don't stop for a prompt. You only need to allow each one once."
 
     var body: some View {
         SettingsPage(
