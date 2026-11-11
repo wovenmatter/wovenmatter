@@ -238,6 +238,8 @@ final class ApplicationModel {
     let workspaceAssets: WorkspaceAssetSession
     let bots = BotsModel()
     var pendingBotsSettings = false
+    /// With `pendingBotsSettings`: open this bot machine's Profiles page instead of the Bots list.
+    var pendingBotProfilesMachine: String?
     var botsHost: BotsHostController?
     @ObservationIgnored var clientExecutionDirectory: URL?
     @ObservationIgnored var automationHost: WovenAutomationHost?

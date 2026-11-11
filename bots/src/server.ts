@@ -349,11 +349,11 @@ class Connection {
         const settings = this.#settings();
         const signedIn = await settings.signedIn();
         const profile = profiles().resolve(manager.assignedProfile(admin.id));
-        const mainModelAvailable = await settings.modelAvailable(profile.main);
+        const mainModelAvailable = profile.main ? await settings.modelAvailable(profile.main) : false;
         const status: OnboardingStatus = {
           adminId: admin.id,
           profileId: profile.id,
-          mainModel: profile.main,
+          mainModel: profile.main ?? "",
           mainModelAvailable,
           signedIn,
           needed: !signedIn || !mainModelAvailable,

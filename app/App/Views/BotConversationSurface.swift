@@ -6,6 +6,41 @@ import WovenMatterCore
 
 /// A bot's channel or thread in a chat panel. The bot's runtime owns the conversation; this
 /// is Woven's own chat UI over its protocol, with Pi Bot's thread behavior.
+/// Where a failed reply's fix lives: provider sign-ins and keys, or the bot's model settings.
+struct BotIssueActions {
+    var openConnections: () -> Void = {}
+    var openSettings: () -> Void = {}
+}
+
+extension EnvironmentValues {
+    @Entry var botIssueActions = BotIssueActions()
+}
+
+/// The fixes for a failed reply: sign in (Subscriptions & API Keys) or change the model (Bot settings).
+private struct BotIssueButtons: View {
+    enum Issue { case signIn, limit }
+    let issue: Issue
+    @Environment(\.botIssueActions) private var actions
+
+    var body: some View {
+        HStack(spacing: 8) {
+            switch issue {
+            case .signIn:
+                Button("Open Subscriptions & API Keys", action: actions.openConnections)
+                    .buttonStyle(DashboardPrimaryButtonStyle())
+                Button("Change model", action: actions.openSettings)
+                    .buttonStyle(SettingsQuietButtonStyle())
+            case .limit:
+                Button("Change model", action: actions.openSettings)
+                    .buttonStyle(DashboardPrimaryButtonStyle())
+                Button("Subscriptions & API Keys", action: actions.openConnections)
+                    .buttonStyle(SettingsQuietButtonStyle())
+            }
+        }
+        .font(.system(size: 12))
+    }
+}
+
 struct BotConversationSurface: View {
     @Bindable var bots: BotsModel
     let panelID: DashboardChatPanelID
@@ -24,6 +59,8 @@ struct BotConversationSurface: View {
     let onOpenLink: (URL) -> Void
     let onOpenSettings: () -> Void
     var onOpenConnections: () -> Void = {}
+    /// This machine's Profiles page, where a bot's model changes; Bot settings when unset.
+    var onOpenProfiles: (() -> Void)?
 
     private var session: BotMachineSession? { bots.session(for: target.machineID) }
     private var bot: PiBotSummary? { session?.bots.first { $0.id == target.botID } }
@@ -37,6 +74,8 @@ struct BotConversationSurface: View {
             }
         }
         .simultaneousGesture(TapGesture().onEnded { onActivate() })
+        .environment(\.botIssueActions, BotIssueActions(openConnections: onOpenConnections,
+                                                        openSettings: onOpenProfiles ?? onOpenSettings))
         // A provider connected in Settings, or by another client, ends first-run setup here.
         .task(id: target.botID) { await session?.refreshOnboarding() }
     }
@@ -289,7 +328,8 @@ private struct BotConversationPane: View {
         VStack(spacing: 0) {
             header
             if let status = bot.modelStatus, let statusKey = statusKey(status), statusKey != dismissedStatus {
-                BotModelStatusBanner(text: PiBotModelStatusText(status: status, botName: bot.name)) { dismissedStatus = statusKey }
+                BotModelStatusBanner(text: PiBotModelStatusText(status: status, botName: bot.name),
+                                     showsFixes: status.kind == "paused" || status.kind == "fallback") { dismissedStatus = statusKey }
                     .frame(maxWidth: 768)
                     .padding(.horizontal, 32)
                     .padding(.bottom, 8)
@@ -779,6 +819,8 @@ private struct BotMessageRow: View {
                 }
                 if let error = entry.error {
                     DashboardInlineError(text: error)
+                    if entry.needsSignIn { BotIssueButtons(issue: .signIn) }
+                    else if entry.hitLimit { BotIssueButtons(issue: .limit) }
                 }
                 if !replies.isEmpty {
                     BotThreadReplies(replies: replies, onOpen: onOpenThread)
@@ -922,6 +964,7 @@ private struct BotStreamingMessage: View {
 
 private struct BotModelStatusBanner: View {
     let text: PiBotModelStatusText
+    var showsFixes = false
     let onDismiss: () -> Void
 
     private var tint: Color {
@@ -945,6 +988,7 @@ private struct BotModelStatusBanner: View {
                         .foregroundStyle(DashboardPalette.mutedForeground)
                         .fixedSize(horizontal: false, vertical: true)
                 }
+                if showsFixes { BotIssueButtons(issue: .limit).padding(.top, 4) }
             }
             Spacer(minLength: 8)
             Button("Dismiss", action: onDismiss)

@@ -75,10 +75,10 @@ export class TitleError extends Error {
 export type TitleGeneratorOptions = {
   readonly models: Models | (() => Models);
   /**
-   * `[models.titles].model`, or its default when the file sets none: the one model that titles
-   * every bot's threads. Profiles (main, pool, memory model) never take part.
+   * `[models.titles].model`, or else the default profile's main model: the one model that titles
+   * every bot's threads. Undefined (nothing chosen yet): titling fails until a model is chosen.
    */
-  readonly model: ModelRef | (() => ModelRef);
+  readonly model: ModelRef | undefined | (() => ModelRef | undefined);
   /** `[models.titles].reasoning`. */
   readonly reasoning: TitleReasoning | (() => TitleReasoning);
   /** Per-request timeout; titles are best-effort. */
@@ -96,7 +96,7 @@ export class TitleGenerator {
     this.#options = options;
   }
 
-  get model(): ModelRef {
+  get model(): ModelRef | undefined {
     const model = this.#options.model;
     return typeof model === "function" ? model() : model;
   }
@@ -104,7 +104,9 @@ export class TitleGenerator {
   /** Title `firstPrompt` with the global title model (`[models.titles]`). */
   generate(firstPrompt: string, signal?: AbortSignal): Promise<string> {
     if (signal?.aborted) return Promise.reject(new TitleError("title request aborted"));
-    return this.#generateOn(this.model, firstPrompt, signal);
+    const model = this.model;
+    if (!model) return Promise.reject(new TitleError("no title model: choose a main model first"));
+    return this.#generateOn(model, firstPrompt, signal);
   }
 
   async #generateOn(ref: ModelRef, firstPrompt: string, signal?: AbortSignal): Promise<string> {

@@ -29,7 +29,7 @@ export function parseTestSettings(input: Record<string, unknown>) {
   return {
     ...settings,
     modelProfiles: normalizeProfiles(settings),
-    roles: { titles: parseModelRef(settings.titles.model) },
+    roles: { titles: settings.titles.model ? parseModelRef(settings.titles.model) : undefined },
   };
 }
 

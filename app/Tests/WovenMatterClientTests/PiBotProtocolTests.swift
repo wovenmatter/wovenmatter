@@ -27,6 +27,14 @@ struct PiBotConversationStateTests {
         #expect(PiBotStreamEvent(json: json(#"{"kind":"future"}"#)) == nil)
     }
 
+    @Test func aFailedReplyCarriesItsFix() {
+        let event = PiBotStreamEvent(json: json(#"{"kind":"entry","entry":{"id":5,"conversationId":1,"role":"assistant","text":"","error":"Not logged in to Claude.","issue":"signIn"}}"#))
+        guard case .entry(let entry) = event else { Issue.record("not an entry"); return }
+        #expect(entry.needsSignIn)
+        #expect(!entry.hitLimit)
+        #expect(!self.entry(6).needsSignIn)
+    }
+
     @Test func aFinalEntryReplacesTheStreamAndARunEndClearsIt() {
         var state = PiBotConversationState()
         state.apply(.run(started: true))
@@ -109,6 +117,17 @@ struct PiBotConversationStateTests {
 
 @Suite("Pi Bot models and profiles")
 struct PiBotModelFactsTests {
+    @Test func suggestionsKeepOrderAndSkipModelsNotInTheCatalog() throws {
+        let catalog = try JSONDecoder().decode(PiBotModelCatalog.self, from: Data(#"""
+        {"providers":[{"id":"openai-codex","name":"ChatGPT","models":[{"id":"gpt-6.1-sol","name":"GPT-6.1 Sol","reasoning":true,"contextWindow":1}]}],
+         "suggested":["claude-subscription/claude-opus-5-5","openai-codex/gpt-6.1-sol"],
+         "roles":{"titles":"","titlesReasoning":"high"},"reasoningLevels":["high"]}
+        """#.utf8))
+        #expect(catalog.suggestions.map(\.ref) == ["openai-codex/gpt-6.1-sol"])
+        #expect(catalog.suggestions.first?.provider.name == "ChatGPT")
+        #expect(catalog.roles.titles.isEmpty)
+    }
+
     @Test func pricesKeepTheCatalogValues() {
         #expect(PiBotModelFacts.usd(2.5) == "$2.5")
         #expect(PiBotModelFacts.usd(0.125) == "$0.125")

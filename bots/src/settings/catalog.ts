@@ -33,3 +33,24 @@ export const SEARCH_PROVIDERS: readonly (AccountSpec & { id: SearchProviderId })
 export function findAccount(id: string): AccountSpec | undefined {
   return ACCOUNTS.find((entry) => entry.id === id) ?? SEARCH_PROVIDERS.find((entry) => entry.id === id);
 }
+
+/**
+ * Models the first-run chooser offers first, in order of preference: subscriptions before API
+ * keys (an API key bills every message). The first one whose provider is connected is selected,
+ * never applied without the user. Only suggestions: any available model can be chosen. Review
+ * when providers ship new flagship models.
+ */
+export const SUGGESTED_MODELS: readonly string[] = [
+  "claude-subscription/claude-opus-5-5",
+  "openai-codex/gpt-6.1-sol",
+  "claude-subscription/claude-sonnet-5-5",
+  "openai-codex/gpt-6.1-terra",
+  "xai/grok-4.7",
+  "anthropic/claude-opus-5-5",
+  "openai/gpt-6.1-sol",
+  "anthropic/claude-sonnet-5-5",
+  "openai/gpt-6.1-terra",
+  "xai-api/grok-4.7",
+  "openrouter/anthropic/claude-opus-5.5",
+  "openrouter/openai/gpt-6.1-sol",
+];

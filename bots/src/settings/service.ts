@@ -3,7 +3,7 @@ import { parseModelRef } from "../config.ts";
 import { LIMIT_LABELS, type LimitEntry, type LimitKind } from "../limits.ts";
 import { type ModelAccess, type ModelPricing, modelAccess, modelFacts } from "../model-info.ts";
 import { TITLE_REASONING } from "../titles.ts";
-import { ACCOUNTS, SEARCH_PROVIDERS, type SearchProviderId } from "./catalog.ts";
+import { ACCOUNTS, SEARCH_PROVIDERS, SUGGESTED_MODELS, type SearchProviderId } from "./catalog.ts";
 import type { SettingsStore } from "./store.ts";
 
 export type AccountStatus = {
@@ -117,6 +117,8 @@ export class SettingsService {
   /** Models of providers with a working connection, and the title model. */
   async modelCatalog(): Promise<{
     providers: ProviderModels[];
+    /** Connected `SUGGESTED_MODELS`, best first: what the first-run chooser offers. */
+    suggested: string[];
     roles: Roles;
     reasoningLevels: readonly string[];
   }> {
@@ -159,16 +161,23 @@ export class SettingsService {
           : {}),
       });
     }
-    return { providers: [...byProvider.values()], roles: this.roles(), reasoningLevels: TITLE_REASONING };
+    const refs = new Set(available.map((model) => `${model.provider}/${model.id}`));
+    return {
+      providers: [...byProvider.values()],
+      suggested: SUGGESTED_MODELS.filter((ref) => refs.has(ref)),
+      roles: this.roles(),
+      reasoningLevels: TITLE_REASONING,
+    };
   }
 
   roles(): Roles {
     const titles = this.#options.store.current.titles;
-    return { titles: titles.model, titlesReasoning: titles.reasoning };
+    // "" when unset: threads are titled with the default profile's main model.
+    return { titles: titles.model ?? "", titlesReasoning: titles.reasoning };
   }
 
   async setRoles(roles: Partial<Roles>): Promise<Roles> {
-    if (roles.titles !== undefined) this.checkModel(roles.titles);
+    if (roles.titles) this.checkModel(roles.titles);
     if (
       roles.titlesReasoning !== undefined &&
       !(TITLE_REASONING as readonly string[]).includes(roles.titlesReasoning)
@@ -178,7 +187,7 @@ export class SettingsService {
     await this.#options.store.update((current) => ({
       ...current,
       titles: {
-        model: roles.titles ?? current.titles.model,
+        model: roles.titles === undefined ? current.titles.model : roles.titles || undefined,
         reasoning: (roles.titlesReasoning ?? current.titles.reasoning) as typeof current.titles.reasoning,
       },
     }));

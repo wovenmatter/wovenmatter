@@ -1649,7 +1649,11 @@ struct DashboardWorkspaceSurface: View {
                 onRoute: { onBotRoute($0, panelID) },
                 onOpenLink: { onOpenBotLink($0, panelID) },
                 onOpenSettings: onOpenBotSettings,
-                onOpenConnections: { model.pendingConnectionsScope = "global" }
+                onOpenConnections: { model.pendingConnectionsScope = "global" },
+                onOpenProfiles: {
+                    model.pendingBotProfilesMachine = target.machineID
+                    onOpenBotSettings()
+                }
             )
             if showNoteButton { compactAssetsButton }
         }

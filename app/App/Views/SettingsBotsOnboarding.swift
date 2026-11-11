@@ -2,13 +2,15 @@ import SwiftUI
 import WovenMatterClient
 
 /// First run on a machine: bots use the accounts in Woven's settings, so setup is
-/// adding one there, then choosing Admin Bot's model.
+/// signing in there, then choosing Admin Bot's model, which becomes the default for
+/// new bots. Nothing is chosen for the user: a suggestion is only preselected.
 struct BotOnboardingView: View {
     @Bindable var bots: BotMachineSession
     let onOpenConnections: () -> Void
     @State private var state: BotSettingsState
     @State private var catalog: PiBotModelCatalog?
     @State private var selection: String?
+    @State private var showsAllModels = false
 
     init(bots: BotMachineSession, onOpenConnections: @escaping () -> Void) {
         self.bots = bots; self.onOpenConnections = onOpenConnections
@@ -49,7 +51,8 @@ struct BotOnboardingView: View {
             if bots.onboarding?.signedIn == true {
                 modelCard
             } else {
-                SettingsSection(title: "Connect a provider", detail: "Bots use the subscriptions and API keys in Woven Matter. One is enough to start.") {
+                SettingsSection(title: "Sign in to get started",
+                                detail: "Admin Bot needs a subscription or API key from Subscriptions & API Keys; one is enough.") {
                     Button("Open Subscriptions & API Keys", action: onOpenConnections)
                         .buttonStyle(DashboardPrimaryButtonStyle())
                 }
@@ -60,7 +63,7 @@ struct BotOnboardingView: View {
 
     private var steps: some View {
         HStack(spacing: 20) {
-            step("Connect a provider", number: 1, done: bots.onboarding?.signedIn == true,
+            step("Sign in", number: 1, done: bots.onboarding?.signedIn == true,
                  current: bots.onboarding?.signedIn != true)
             step("Choose a model", number: 2,
                  done: bots.onboarding?.signedIn == true && bots.onboarding?.mainModelAvailable == true,
@@ -81,15 +84,29 @@ struct BotOnboardingView: View {
     }
 
     private var modelCard: some View {
-        SettingsSection(title: "Choose Admin Bot's model", detail: "You can set up more models with Admin Bot later.") {
+        SettingsSection(title: "No model selected yet for Admin Bot",
+                        detail: "Choose a model to default to; you can change it anytime by asking Admin Bot or in Settings.") {
             if let catalog {
-                if catalog.providers.isEmpty { SettingsEmpty("Connect a model provider first.") }
+                if catalog.providers.isEmpty { SettingsEmpty("Sign in to a model provider first.") }
                 else {
-                    SettingsRow(title: "Main model") {
-                        BotSettingsModelPicker(providers: catalog.providers, selection: Binding(
-                            get: { selectedModel(catalog) }, set: { selection = $0 }), label: "Main model")
+                    let suggestions = catalog.suggestions
+                    if !suggestions.isEmpty {
+                        VStack(alignment: .leading, spacing: 2) {
+                            ForEach(suggestions) { suggestion in
+                                suggestionRow(suggestion.ref, model: suggestion.model.name,
+                                              provider: suggestion.provider.name, catalog: catalog)
+                            }
+                        }
                     }
-                    Button("Start chatting") {
+                    if suggestions.isEmpty || showsAllModels {
+                        SettingsRow(title: suggestions.isEmpty ? "Model" : "Another model") {
+                            BotSettingsModelPicker(providers: catalog.providers, selection: Binding(
+                                get: { selectedModel(catalog) }, set: { selection = $0 }), label: "Model")
+                        }
+                    } else {
+                        Button("Show all models") { showsAllModels = true }
+                    }
+                    Button("Use this model") {
                         Task {
                             await state.run { client in
                                 try await client.setOnboardingMainModel(selectedModel(catalog))
@@ -105,9 +122,31 @@ struct BotOnboardingView: View {
         }.disabled(state.disabled)
     }
 
+    private func suggestionRow(_ ref: String, model: String, provider: String, catalog: PiBotModelCatalog) -> some View {
+        let selected = selectedModel(catalog) == ref
+        return Button { selection = ref } label: {
+            HStack(spacing: 10) {
+                Image(systemName: selected ? "largecircle.fill.circle" : "circle")
+                    .font(.system(size: 13))
+                    .foregroundStyle(selected ? DashboardPalette.primary : DashboardPalette.mutedForeground)
+                    .accessibilityHidden(true)
+                Text(model).font(.settingsBody.weight(.medium))
+                Text(provider).font(.settingsSecondary).foregroundStyle(DashboardPalette.mutedForeground)
+                Spacer(minLength: 0)
+            }
+            .padding(.vertical, 5)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("\(model), \(provider)")
+        .accessibilityAddTraits(selected ? [.isButton, .isSelected] : .isButton)
+    }
+
+    /// The user's pick, else Admin Bot's current model, else the best suggestion. Only preselected.
     private func selectedModel(_ catalog: PiBotModelCatalog) -> String {
         if let selection { return selection }
         if let current = bots.onboarding?.mainModel, catalog.isKnown(current) { return current }
+        if let suggested = catalog.suggestions.first { return suggested.ref }
         guard let provider = catalog.providers.first, let model = provider.models.first else { return "" }
         return "\(provider.id)/\(model.id)"
     }

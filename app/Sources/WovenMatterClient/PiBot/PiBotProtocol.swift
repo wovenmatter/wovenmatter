@@ -13,15 +13,22 @@ public struct PiBotDisplayEntry: Codable, Equatable, Identifiable, Sendable {
     public let role: String
     public let text: String
     public let error: String?
+    /// What the user can do about `error`: "signIn" or "limit" (Pi Bot's issues.ts).
+    public let issue: String?
     public let stopped: Bool?
 
-    public init(id: Int, conversationId: Int, role: String, text: String, error: String? = nil, stopped: Bool? = nil) {
+    public init(id: Int, conversationId: Int, role: String, text: String, error: String? = nil, issue: String? = nil,
+                stopped: Bool? = nil) {
         self.id = id; self.conversationId = conversationId; self.role = role; self.text = text
-        self.error = error; self.stopped = stopped
+        self.error = error; self.issue = issue; self.stopped = stopped
     }
 
     public var isUser: Bool { role == "user" }
     public var isStopped: Bool { stopped == true }
+    /// The model's provider isn't signed in, or its key was refused.
+    public var needsSignIn: Bool { issue == "signIn" }
+    /// The model hit a usage limit or ran out of credits.
+    public var hitLimit: Bool { issue == "limit" }
 }
 
 public struct PiBotConversationSnapshot: Decodable, Sendable {
@@ -222,12 +229,29 @@ public struct PiBotRoles: Codable, Equatable, Sendable {
     public init(titles: String, titlesReasoning: String) { self.titles = titles; self.titlesReasoning = titlesReasoning }
 }
 
+/// A connected model the first-run chooser offers first.
+public struct PiBotModelSuggestion: Equatable, Identifiable, Sendable {
+    public let ref: String
+    public let provider: PiBotProviderModels
+    public let model: PiBotModelOption
+    public var id: String { ref }
+}
+
 public struct PiBotModelCatalog: Codable, Equatable, Sendable {
     public var providers: [PiBotProviderModels]
+    /// Connected models the first-run chooser offers first, best first (`provider/model`).
+    public var suggested: [String]?
     public var roles: PiBotRoles
     public var reasoningLevels: [String]
-    public init(providers: [PiBotProviderModels], roles: PiBotRoles, reasoningLevels: [String]) {
-        self.providers = providers; self.roles = roles; self.reasoningLevels = reasoningLevels
+    public init(providers: [PiBotProviderModels], suggested: [String]? = nil, roles: PiBotRoles, reasoningLevels: [String]) {
+        self.providers = providers; self.suggested = suggested; self.roles = roles; self.reasoningLevels = reasoningLevels
+    }
+
+    /// Suggested models that are in the catalog, with their provider, best first.
+    public var suggestions: [PiBotModelSuggestion] {
+        (suggested ?? []).compactMap { ref in
+            Self.find(providers, ref).map { PiBotModelSuggestion(ref: ref, provider: $0.provider, model: $0.model) }
+        }
     }
 
     public func isKnown(_ ref: String) -> Bool { Self.find(providers, ref) != nil }

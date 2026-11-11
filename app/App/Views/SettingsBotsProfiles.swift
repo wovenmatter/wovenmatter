@@ -68,7 +68,7 @@ struct BotSettingsProfiles: View {
     private func profileRow(_ profile: PiBotProfile) -> some View {
         let users = live.filter { $0.profileId == profile.id }.map(\.name)
         let fallbacks = profile.fallbacks ?? []
-        return SettingsSummaryRow(profile.name, value: (profile.isDefault ? "Default · " : "") + profile.main) {
+        return SettingsSummaryRow(profile.name, value: (profile.isDefault ? "Default · " : "") + (profile.main.isEmpty ? "No model yet" : profile.main)) {
             SettingsValueRow(label: "Fallbacks", value: fallbacks.isEmpty ? "None" : fallbacks.joined(separator: " → "))
             SettingsValueRow(label: "Model pool", value: profile.pool.isEmpty ? "Main model only" : "Main model + " + profile.pool.map(\.model).joined(separator: ", "))
             SettingsValueRow(label: "Memory extraction", value: profile.memoryModel ?? "Active main model")
@@ -111,7 +111,8 @@ struct BotSettingsProfiles: View {
             SettingsRow(title: "Model") {
                 BotSettingsModelPicker(providers: catalog.providers, selection: Binding(
                     get: { (titleDraft ?? catalog.roles).titles },
-                    set: { titleDraft = PiBotRoles(titles: $0, titlesReasoning: roles.titlesReasoning) }), label: "Title model")
+                    set: { titleDraft = PiBotRoles(titles: $0, titlesReasoning: roles.titlesReasoning) }), label: "Title model",
+                    emptyLabel: "Default profile's main model")
             }
             SettingsRow(title: "Reasoning") {
                 SettingsPicker("Title reasoning", selection: Binding(

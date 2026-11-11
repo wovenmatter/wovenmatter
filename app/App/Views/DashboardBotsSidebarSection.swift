@@ -30,9 +30,16 @@ struct DashboardBotsSidebar: View {
     var body: some View {
         let sessions = bots.orderedSessions
         if sessions.isEmpty {
+            // Collapses like a machine's section, with its own key: there is no machine yet.
+            let key = "bots:section"
+            let expanded = DashboardAgentDisclosureStore.isExpanded(key, in: disclosureRaw)
             VStack(alignment: .leading, spacing: 0) {
-                DashboardDisclosureHeading(title: "Bots", expanded: true) {}
-                DashboardRailRow(icon: .plus, title: "Set up bots", hoverID: "bots:setup", action: onOpenSettings)
+                DashboardDisclosureHeading(title: "Bots", expanded: expanded) {
+                    DashboardAgentDisclosureStore.toggle(key, in: &disclosureRaw)
+                }
+                if expanded {
+                    DashboardRailRow(icon: .plus, title: "Set up bots", hoverID: "bots:setup", action: onOpenSettings)
+                }
             }
             .padding(.bottom, 10)
         } else {

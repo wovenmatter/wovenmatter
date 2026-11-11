@@ -5,7 +5,7 @@ import { createModels } from "@earendil-works/pi-ai/models";
 import { fauxProvider } from "@earendil-works/pi-ai/providers/faux";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createBotHarnessOptions } from "../src/agent.ts";
-import { BotManager } from "../src/bots.ts";
+import { BotManager, NO_MODEL_MESSAGE } from "../src/bots.ts";
 import { normalizeProfiles, profilesToRaw } from "../src/config.ts";
 import { ProfileError, ProfileStore } from "../src/profiles.ts";
 import { parseSettings, SettingsStore } from "../src/settings/store.ts";
@@ -216,6 +216,30 @@ describe("bot profiles", () => {
       expect(t.manager.assignedProfile(bot.id)).toBeUndefined();
       expect((await t.manager.registry.get(bot.id))?.profile).toBeUndefined();
       expect(await mainModel(t.manager, bot.id)).toEqual({ provider: "faux", modelId: "faux-1" });
+    } finally {
+      await t.close();
+    }
+  });
+
+  it("starts with no main model and refuses messages until one is chosen", async () => {
+    const fresh = parseTestSettings({});
+    expect(fresh.modelProfiles.profiles).toEqual([{ id: "default", name: "Default", pool: [] }]);
+    expect(fresh.titles.model).toBeUndefined();
+    expect(profilesToRaw(fresh.modelProfiles).profiles.default).not.toHaveProperty("main");
+    const profiles = new ProfileStore(fresh.modelProfiles);
+    await expect(
+      profiles.save({ id: "default", name: "Default", fallbacks: ["faux/faux-2"] }),
+    ).rejects.toThrow(/main model before/);
+    const t = await open(join(dir.path, "db.sqlite"), profiles);
+    try {
+      const bot = await t.manager.get((await t.manager.create("Worker")).id);
+      expect(await mainModel(t.manager, bot.id)).toBeUndefined();
+      expect(t.manager.memoryModels(bot.id)).toEqual([]);
+      await expect(bot.send("hello")).rejects.toThrow(NO_MODEL_MESSAGE);
+      // Choosing one applies it to the bot's existing conversations.
+      await profiles.save({ id: "default", name: "Default", main: "faux/faux-1" });
+      expect(await mainModel(t.manager, bot.id)).toEqual({ provider: "faux", modelId: "faux-1" });
+      await expect(bot.send("hello")).resolves.toBeDefined();
     } finally {
       await t.close();
     }

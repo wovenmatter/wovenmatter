@@ -1,6 +1,7 @@
 import type { AssistantMessage, Message } from "@earendil-works/pi-ai";
 import { contentText } from "@earendil-works/pi-ai";
 import type { EntryRecord } from "@earendil-works/pi-durable";
+import { type ErrorIssue, errorIssue } from "./issues.ts";
 import { stripFallbackNote } from "./limits.ts";
 import { stripContextNote } from "./message-context.ts";
 
@@ -12,6 +13,8 @@ export type DisplayEntry = {
   readonly role: "user" | "assistant";
   readonly text: string;
   readonly error?: string;
+  /** What the user can do about `error` (issues.ts); clients show the matching actions. */
+  readonly issue?: ErrorIssue;
   /** An assistant reply the user stopped part-way (`conversation.abort`). */
   readonly stopped?: true;
 };
@@ -45,12 +48,14 @@ export function displayEntry(entry: EntryRecord): DisplayEntry | undefined {
         ? ((message as AssistantMessage).errorMessage ?? "model error")
         : undefined;
     if (!text && !error) continue;
+    const issue = error ? errorIssue(message as AssistantMessage) : undefined;
     return {
       id: entry.id,
       conversationId: entry.conversationId,
       role: message.role,
       text,
       ...(error ? { error } : {}),
+      ...(issue ? { issue } : {}),
       ...(stopReason === "aborted" ? { stopped: true as const } : {}),
     };
   }
