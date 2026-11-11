@@ -75,7 +75,7 @@ public struct LibraryHostOptions: Equatable, Sendable {
         adopt = arguments[index]
       case "--name": name = try value("--name")
       case "--endpoint":
-        guard let url = URL(string: try value("--endpoint")), CompanionPairingPayload.isValidEndpoint(url) else {
+        guard let url = URL(string: try value("--endpoint")), PairingPayload.isValidEndpoint(url) else {
           throw LibraryHostError.usage("--endpoint must be an HTTPS tailnet URL.")
         }
         endpoints.append(url)

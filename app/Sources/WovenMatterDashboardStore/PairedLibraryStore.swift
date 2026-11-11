@@ -44,7 +44,7 @@ extension WorkspaceDatabaseConnection {
       return PeerTable(name: table, columns: names, types: types, keys: keys)
     }
   }
-  private func peerError(_ message: String) -> CompanionAPIError { .init(code: "peer_sync", message: message) }
+  private func peerError(_ message: String) -> LibraryAPIError { .init(code: "peer_sync", message: message) }
   private func peerJSON<T: Encodable>(_ value: T) throws -> String {
     let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
     return String(decoding: try encoder.encode(value), as: UTF8.self)
@@ -396,14 +396,14 @@ extension WorkspaceDatabaseConnection {
     }
     guard let sender, sender.kind != .mac else { return true }
     let own = sender.deviceID.lowercased()
-    func serves(_ workspace: CompanionExecutionWorkspace?) -> Bool {
+    func serves(_ workspace: ExecutionWorkspace?) -> Bool {
       workspace.map { MemberAudience.serving($0, members: sender.members) == own } ?? false
     }
     func servesWorkspace(_ id: String?) throws -> Bool { try serves(id.flatMap { try federationWorkspaceUnlocked($0) }) }
     switch record.table {
     case "companion_execution_workspaces":
       guard let id = column("id"), let payload = column("payload"),
-            let incoming = try? JSONDecoder().decode(CompanionExecutionWorkspace.self, from: Data(payload.utf8)), incoming.id == id else { return false }
+            let incoming = try? JSONDecoder().decode(ExecutionWorkspace.self, from: Data(payload.utf8)), incoming.id == id else { return false }
       let existing = try federationWorkspaceUnlocked(id)
       return serves(incoming) && (existing == nil || serves(existing))
     case "companion_execution_conversations":
@@ -824,8 +824,8 @@ extension WorkspaceDatabaseConnection {
   /// transcripts are not rewritten on every bounded synchronization turn.
   private func projectPairedConversationOwners(_ scope: ProjectionScope) throws {
     guard !scope.conversations.isEmpty || !scope.owners.isEmpty else { return }
-    let localID = try companionLibraryIdentityUnlocked().hostDeviceID
-    let workspaces = try companionExecutionWorkspaces()
+    let localID = try libraryIdentityUnlocked().hostDeviceID
+    let workspaces = try libraryExecutionWorkspaces()
     let rows = try historyRowsUnlocked("""
       SELECT id,device_id FROM paired_conversation_owners
       WHERE id IN (SELECT value FROM json_each(?)) OR device_id IN (SELECT value FROM json_each(?))
@@ -844,7 +844,7 @@ extension WorkspaceDatabaseConnection {
         continue
       }
       guard let workspace = workspaces.first(where: { $0.kind == .mac && $0.ownerDeviceID == owner && !$0.deleted }),
-            let conversation = try companionConversationUnlocked(id: id) else { continue }
+            let conversation = try libraryConversationUnlocked(id: id) else { continue }
       var projected = conversation; projected.workspaceID = workspace.id; projected.libraryID = workspace.libraryID
       if let current = try historyRowsUnlocked("SELECT title,folder_id,is_pinned FROM dashboard_conversations WHERE id=?", values: [id]).first?.objectValue {
         projected.title = current["title"]?.stringValue ?? projected.title

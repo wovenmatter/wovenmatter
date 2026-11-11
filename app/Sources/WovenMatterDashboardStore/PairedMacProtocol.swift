@@ -17,8 +17,8 @@ public struct PairedMacRoute: Codable, Equatable, Identifiable, Sendable {
   }
   public func validate() throws {
     guard UUID(uuidString: deviceID) != nil, UUID(uuidString: libraryID) != nil,
-          CompanionPairingPayload.isValidEndpoint(endpoint), !name.isEmpty, name.utf8.count <= 256 else {
-      throw CompanionAPIError(code: "invalid_peer", message: "Invalid paired Mac address or identity.")
+          PairingPayload.isValidEndpoint(endpoint), !name.isEmpty, name.utf8.count <= 256 else {
+      throw LibraryAPIError(code: "invalid_peer", message: "Invalid paired Mac address or identity.")
     }
   }
 }
@@ -107,8 +107,8 @@ extension WorkspaceDatabase {
   public func withdrawUnpairedMac(_ deviceID: String) async throws {
     try await write { connection in
       try connection.transaction {
-        guard deviceID != (try connection.companionLibraryIdentityUnlocked().hostDeviceID) else { return }
-        for var workspace in try connection.companionExecutionWorkspaces() where workspace.kind == .mac
+        guard deviceID != (try connection.libraryIdentityUnlocked().hostDeviceID) else { return }
+        for var workspace in try connection.libraryExecutionWorkspaces() where workspace.kind == .mac
             && workspace.ownerDeviceID == deviceID && !workspace.deleted
             && (workspace.endpoint != nil || workspace.retainedHistory != true) {
           workspace.endpoint = nil; workspace.retainedHistory = true; workspace.revision += 1

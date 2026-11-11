@@ -11,6 +11,6 @@ elif [[ "${1:-}" == "--device" ]]; then
   destination="platform=iOS,id=$WOVENMATTER_IOS_DEVICE_ID"
   signing=(CODE_SIGNING_ALLOWED=YES) # Use existing local signing assets; account setup is performed by the user.
 fi
-xcodebuild -project "$root/ios/WovenMatterCompanion.xcodeproj" -scheme WovenMatterCompanion \
+xcodebuild -project "$root/ios/WovenMatter.xcodeproj" -scheme WovenMatter \
   -configuration Debug -destination "$destination" -derivedDataPath "$build_dir" \
   "${signing[@]}" build

@@ -10,7 +10,7 @@ extension WorkspaceDatabase {
     let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
     try await write { connection in
       try connection.transaction {
-        let owner = try connection.companionLibraryIdentityUnlocked().hostDeviceID
+        let owner = try connection.libraryIdentityUnlocked().hostDeviceID
         let ids = Set(configurations.map { $0.id.uuidString.lowercased() })
         var stored: [String: RemoteWorkspaceConfiguration] = [:]
         for row in try connection.historyRowsUnlocked("SELECT id,configuration FROM paired_remote_workspaces WHERE owner_device_id=? AND deleted=0", values: [owner]) {

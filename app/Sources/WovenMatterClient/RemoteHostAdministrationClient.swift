@@ -65,8 +65,8 @@ public struct RemoteHostAdministrationClient: Sendable {
 
     /// A device grant issued by the host itself (Mac members administer every
     /// Linux host), for a phone that has no member key yet.
-    public func provisionExecutionDevice(workspace: CompanionExecutionWorkspace, deviceID: String, name: String,
-                                         scopes: [String] = ["execution", "inference"]) async throws -> CompanionExecutionCredential {
+    public func provisionExecutionDevice(workspace: ExecutionWorkspace, deviceID: String, name: String,
+                                         scopes: [String] = ["execution", "inference"]) async throws -> ExecutionCredential {
         struct Payload: Encodable {
             let libraryID: String; let workspaceID: String; let ownerDeviceID: String
             let deviceID: String; let name: String; let workspaceName: String; let endpoint: URL?; let scopes: [String]

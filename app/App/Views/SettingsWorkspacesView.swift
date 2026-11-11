@@ -24,14 +24,14 @@ struct SettingsWorkspacesView: View {
     @State private var pendingDeletion: RemoteWorkspaceConfiguration?
     @State private var browserWorkspace: RemoteWorkspaceConfiguration?
     @State private var logsWorkspace: RemoteWorkspaceConfiguration?
-    @State private var sharedLogsWorkspace: CompanionExecutionWorkspace?
+    @State private var sharedLogsWorkspace: ExecutionWorkspace?
 
     /// Workspaces this Mac did not add. Other paired devices own their Mac and iPhone or iPad
     /// workspaces; every Linux host without an SSH setup here is managed by signed request.
-    private var sharedWorkspaces: [CompanionExecutionWorkspace] {
+    private var sharedWorkspaces: [ExecutionWorkspace] {
         let configured = Set(model.workspaces.map { $0.id.uuidString.lowercased() })
-        let thisDevice = application.companionHost.peerIdentity?.deviceID
-        return application.companionHost.executionWorkspaces.filter {
+        let thisDevice = application.libraryHost.peerIdentity?.deviceID
+        return application.libraryHost.executionWorkspaces.filter {
             $0.isVisibleInConnections && !configured.contains($0.id)
                 && ($0.kind == .linux || $0.ownerDeviceID != thisDevice)
         }.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
@@ -40,8 +40,8 @@ struct SettingsWorkspacesView: View {
     /// A workspace another device added. Linux hosts without an SSH setup here are
     /// managed by signed request; other devices' Mac and iPhone or iPad workspaces are listed.
     @ViewBuilder
-    private func sharedWorkspaceRow(_ workspace: CompanionExecutionWorkspace) -> some View {
-        let addedOn = application.companionHost.connectedPeerRoutes.first(where: { $0.deviceID == workspace.ownerDeviceID })?.name
+    private func sharedWorkspaceRow(_ workspace: ExecutionWorkspace) -> some View {
+        let addedOn = application.libraryHost.connectedPeerRoutes.first(where: { $0.deviceID == workspace.ownerDeviceID })?.name
         let detail = [sharedWorkspaceKind(workspace.kind), addedOn.map { "Added on " + $0 }].compactMap { $0 }.joined(separator: " · ")
         if workspace.kind == .linux {
             let state = model.sharedHosts[workspace.id]
@@ -127,7 +127,7 @@ struct SettingsWorkspacesView: View {
             // Workspaces added on other paired devices arrive through host status.
             guard selectedWorkspaceID == nil, !addingWorkspace, !DevelopmentLaunch.isClient else { return }
             while !Task.isCancelled {
-                await application.companionHost.refreshStatus()
+                await application.libraryHost.refreshStatus()
                 do { try await Task.sleep(for: .seconds(2)) } catch { return }
             }
         }
@@ -360,7 +360,7 @@ struct SettingsWorkspacesView: View {
         return lines.isEmpty ? nil : lines.joined(separator: "\n")
     }
 
-    private func sharedWorkspaceKind(_ kind: CompanionExecutionWorkspace.Kind) -> String {
+    private func sharedWorkspaceKind(_ kind: ExecutionWorkspace.Kind) -> String {
         switch kind {
         case .mac: "Mac workspace"
         case .linux: "Linux workspace"

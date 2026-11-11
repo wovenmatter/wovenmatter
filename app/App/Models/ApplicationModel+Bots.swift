@@ -1,7 +1,7 @@
-import CompanionClient
+import LibraryClient
 import Foundation
 import WovenMatterClient
-import WovenMatterCompanion
+import WovenMatterShared
 import WovenMatterCore
 import WovenMatterDashboardStore
 
@@ -62,7 +62,7 @@ extension ApplicationModel {
         return BotsHostDependencies(
             identity: { [weak self] in
                 guard let database = self?.dashboardStore?.database else { throw ApplicationModelError.dashboardStoreUnavailable }
-                return (try await database.companionLibraryIdentity().hostDeviceID, DevelopmentLaunch.deviceName())
+                return (try await database.libraryIdentity().hostDeviceID, DevelopmentLaunch.deviceName())
             },
             appVersion: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String,
             issueKey: { [weak self] machineID, botID, name in
@@ -115,7 +115,7 @@ extension ApplicationModel {
                 let _: BotsRemoteStatus = try await self.botsClient(for: workspace).request("v1/bots/engine/update", method: "POST",
                                                                                             body: Data("{}".utf8))
             },
-            syncErrors: { [weak self] in self.map { Array($0.companionHost.peerSync.errors.values) + Self.libraryUpdateNotices($0.companionHost.peerSync.syncStatus) } ?? [] },
+            syncErrors: { [weak self] in self.map { Array($0.libraryHost.peerSync.errors.values) + Self.libraryUpdateNotices($0.libraryHost.peerSync.syncStatus) } ?? [] },
             signSocket: { [weak self] url, audience in
                 guard let self else { throw CancellationError() }
                 return try await self.signBotSocket(url: url, audience: audience)
@@ -162,7 +162,7 @@ extension ApplicationModel {
     }
 
     /// Another Mac or a Linux host from the registry, with signed requests and a signed socket.
-    private func memberBotMachine(_ workspace: CompanionExecutionWorkspace, thisMacVersion: String?, schema: String?,
+    private func memberBotMachine(_ workspace: ExecutionWorkspace, thisMacVersion: String?, schema: String?,
                                   directory: BotsRemoteDirectory) async -> BotMachine {
         let kind: BotMachine.Kind = workspace.kind == .linux ? .linux : .mac
         do {
@@ -191,31 +191,31 @@ extension ApplicationModel {
 
     /// Every other Mac and Linux workspace in the registry that can be addressed:
     /// an endpoint and the member that serves it, one workspace per member.
-    func memberBotTargets() async -> [(workspace: CompanionExecutionWorkspace, audience: String)] {
-        guard let database = dashboardStore?.database, let directory = try? await companionHost.peerSync.members(),
-              let workspaces = try? await database.companionExecutionWorkspaces() else { return [] }
-        var seen: Set<String> = [directory.identity.deviceID], targets: [(workspace: CompanionExecutionWorkspace, audience: String)] = []
+    func memberBotTargets() async -> [(workspace: ExecutionWorkspace, audience: String)] {
+        guard let database = dashboardStore?.database, let directory = try? await libraryHost.peerSync.members(),
+              let workspaces = try? await database.libraryExecutionWorkspaces() else { return [] }
+        var seen: Set<String> = [directory.identity.deviceID], targets: [(workspace: ExecutionWorkspace, audience: String)] = []
         for workspace in workspaces where (workspace.kind == .mac || workspace.kind == .linux) && workspace.isVisibleInConnections && workspace.endpoint != nil {
             guard let audience = await directory.audience(for: workspace), seen.insert(audience).inserted else { continue }
             targets.append((workspace, audience))
         }
         return targets
     }
-    func memberBotWorkspaces() async -> [CompanionExecutionWorkspace] { await memberBotTargets().map(\.workspace) }
+    func memberBotWorkspaces() async -> [ExecutionWorkspace] { await memberBotTargets().map(\.workspace) }
 
-    private func otherMacWorkspaces() async -> [CompanionExecutionWorkspace] {
+    private func otherMacWorkspaces() async -> [ExecutionWorkspace] {
         await memberBotWorkspaces().filter { $0.kind == .mac }
     }
 
     /// How this Mac reaches another member's `/v1/bots/*`: its own member signature,
     /// addressed to the workspace's execution device. Nothing is issued or stored.
-    func botsClient(for workspace: CompanionExecutionWorkspace) async throws -> MemberSignedHTTPClient {
-        let directory = try await companionHost.peerSync.members()
+    func botsClient(for workspace: ExecutionWorkspace) async throws -> MemberSignedHTTPClient {
+        let directory = try await libraryHost.peerSync.members()
         guard let endpoint = workspace.endpoint, let audience = await directory.audience(for: workspace) else {
             throw BotsError.unavailable("\(workspace.name)'s address or member identity has not reached this Mac yet.")
         }
         return try MemberSignedHTTPClient(endpoint: endpoint, signer: directory.identity.signer, audience: audience,
-                                          send: companionHost.remoteHostSend)
+                                          send: libraryHost.remoteHostSend)
     }
 
     /// Headers for one signed bots socket upgrade. Only `/v1/bots/ws` on a member's
@@ -228,7 +228,7 @@ extension ApplicationModel {
             throw BotsError.unavailable("That bots connection is not a member's.")
         }
         let target = components.percentEncodedPath + (components.percentEncodedQuery.map { "?" + $0 } ?? "")
-        return try await companionHost.memberSigner().headers(method: "GET", target: target, audience: audience)
+        return try await libraryHost.memberSigner().headers(method: "GET", target: target, audience: audience)
     }
 
     fileprivate func setRemoteBotResources(machineID: String, _ resources: BotResourceSettings, directory: BotsRemoteDirectory) async throws {
@@ -339,7 +339,7 @@ extension ApplicationModel {
     }
 
     /// The `GET /v1/bots/status` of a host another Mac added: bots are on when it says so.
-    private func memberBotsState(_ workspace: CompanionExecutionWorkspace) async -> BotDiscoveredDevice.State {
+    private func memberBotsState(_ workspace: ExecutionWorkspace) async -> BotDiscoveredDevice.State {
         do {
             let client = try await botsClient(for: workspace)
             let status: BotsRemoteStatus = try await botsTimeout { try await client.request("v1/bots/status", timeout: 10) }

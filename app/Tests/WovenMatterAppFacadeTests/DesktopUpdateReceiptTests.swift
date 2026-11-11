@@ -1,7 +1,7 @@
 import WorkspaceFixtures
 import Foundation
 import Testing
-import WovenMatterCompanion
+import WovenMatterShared
 import WovenMatterDashboardStore
 @testable import WovenMatterAppFacade
 

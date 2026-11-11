@@ -41,7 +41,7 @@ public actor PairedLibraryFiles {
   private let root: URL
   private let stores = ["library-files", "message-attachments/blobs", "paired-records"]
   public init(root: URL) { self.root = root }
-  private var invalid: CompanionAPIError { .init(code: "peer_file", message: "A shared file failed its size, offset or content check. The local original is retained.") }
+  private var invalid: LibraryAPIError { .init(code: "peer_file", message: "A shared file failed its size, offset or content check. The local original is retained.") }
   private func validate(_ file: PairedLibraryFile) throws -> URL {
     guard stores.contains(file.store), file.hash.wholeMatch(of: /[0-9a-f]{64}/) != nil,
           file.byteCount >= 0, file.byteCount <= 256 * 1_024 * 1_024 else { throw invalid }

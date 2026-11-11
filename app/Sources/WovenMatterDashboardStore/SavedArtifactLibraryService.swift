@@ -7,11 +7,11 @@ import Foundation
 import WovenMatterCore
 
 public struct SavedArtifactLibraryItem: Identifiable, Equatable, Sendable {
-  public let manifest: CompanionArtifactManifest
+  public let manifest: LibraryArtifactManifest
   public let workspaceName: String
   public var id: String { manifest.id }
 
-  public init(manifest: CompanionArtifactManifest, workspaceName: String) {
+  public init(manifest: LibraryArtifactManifest, workspaceName: String) {
     self.manifest = manifest
     self.workspaceName = workspaceName
   }
@@ -30,9 +30,9 @@ public actor SavedArtifactLibraryService {
   }
 
   public func items() async throws -> [SavedArtifactLibraryItem] {
-    let workspaces = try await database.companionExecutionWorkspaces()
+    let workspaces = try await database.libraryExecutionWorkspaces()
     let names = Dictionary(workspaces.map { ($0.id, $0.name) }, uniquingKeysWith: { first, _ in first })
-    return try await database.companionSavedArtifacts().filter { !$0.deleted }.map {
+    return try await database.librarySavedArtifacts().filter { !$0.deleted }.map {
       SavedArtifactLibraryItem(manifest: $0, workspaceName: names[$0.workspaceID] ?? "Unavailable workspace")
     }.sorted {
       let order = $0.manifest.title.localizedStandardCompare($1.manifest.title)
@@ -54,8 +54,8 @@ public actor SavedArtifactLibraryService {
     }
   }
 
-  private func current(id: String, revision: Int64) async throws -> CompanionArtifactManifest {
-    guard let manifest = try await database.companionSavedArtifacts().first(where: { $0.id == id }),
+  private func current(id: String, revision: Int64) async throws -> LibraryArtifactManifest {
+    guard let manifest = try await database.librarySavedArtifacts().first(where: { $0.id == id }),
       !manifest.deleted, manifest.revision == revision else {
       throw WorkspaceToolError.invalid("This saved artifact changed or was removed. Refresh the Library and try again.")
     }
@@ -87,9 +87,9 @@ public actor SavedArtifactLibraryService {
     var hash = SHA256()
     while offset < manifest.byteCount {
       try Task.checkCancellation()
-      let chunk = try await database.companionArtifactChunk(id: id, revision: revision, offset: offset)
+      let chunk = try await database.libraryArtifactChunk(id: id, revision: revision, offset: offset)
       guard chunk.id == id, chunk.revision == revision, chunk.offset == offset,
-        !chunk.data.isEmpty, chunk.data.count <= CompanionFederationProtocol.maximumArtifactChunkBytes,
+        !chunk.data.isEmpty, chunk.data.count <= FederationProtocol.maximumArtifactChunkBytes,
         Int64(chunk.data.count) <= manifest.byteCount - offset else { throw WorkspaceDatabaseError.corruptRow }
       try file.write(contentsOf: chunk.data)
       hash.update(data: chunk.data)
@@ -107,7 +107,7 @@ public actor SavedArtifactLibraryService {
     return destination
   }
 
-  private func verify(_ url: URL, manifest: CompanionArtifactManifest) throws -> Bool {
+  private func verify(_ url: URL, manifest: LibraryArtifactManifest) throws -> Bool {
     let values = try url.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey, .fileSizeKey])
     guard values.isRegularFile == true, values.isSymbolicLink != true,
       values.fileSize.map(Int64.init) == manifest.byteCount else { return false }
@@ -115,7 +115,7 @@ public actor SavedArtifactLibraryService {
     defer { try? file.close() }
     var hash = SHA256()
     var size: Int64 = 0
-    while let bytes = try file.read(upToCount: CompanionFederationProtocol.maximumArtifactChunkBytes), !bytes.isEmpty {
+    while let bytes = try file.read(upToCount: FederationProtocol.maximumArtifactChunkBytes), !bytes.isEmpty {
       try Task.checkCancellation()
       hash.update(data: bytes)
       size += Int64(bytes.count)
@@ -125,7 +125,7 @@ public actor SavedArtifactLibraryService {
   }
 
   private static func digest(_ data: Data) -> String { SHA256.hash(data: data).hexString }
-  private static func fileName(_ manifest: CompanionArtifactManifest) -> String {
+  private static func fileName(_ manifest: LibraryArtifactManifest) -> String {
     let forbidden = CharacterSet.controlCharacters.union(CharacterSet(charactersIn: "/:\\"))
     var name = String(String.UnicodeScalarView(manifest.title.unicodeScalars.filter { !forbidden.contains($0) }))
       .trimmingCharacters(in: .whitespacesAndNewlines)

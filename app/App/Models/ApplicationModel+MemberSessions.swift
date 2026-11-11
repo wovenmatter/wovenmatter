@@ -1,5 +1,5 @@
 import Foundation
-import CompanionClient
+import LibraryClient
 import WovenMatterCore
 import WovenMatterClient
 import WovenMatterDashboardStore
@@ -11,17 +11,17 @@ import WovenMatterDashboardStore
 enum AgentToolDestination: Equatable {
     case thisMac
     case configured(UUID)
-    case member(CompanionExecutionWorkspace)
+    case member(ExecutionWorkspace)
 }
 
 extension ApplicationModel {
     /// Every execution workspace agents may target, this Mac's first. A copied
     /// snapshot owner (`retainedHistory`) is history, never a destination, as
     /// on the iPhone.
-    func agentToolWorkspaces() async throws -> (own: CompanionExecutionWorkspace?, others: [CompanionExecutionWorkspace]) {
+    func agentToolWorkspaces() async throws -> (own: ExecutionWorkspace?, others: [ExecutionWorkspace]) {
         guard let database = dashboardStore?.database else { throw ApplicationModelError.dashboardStoreUnavailable }
-        let device = try await database.companionLibraryIdentity().hostDeviceID
-        let all = try await database.companionExecutionWorkspaces().filter { !$0.deleted && $0.kind != .ios && $0.retainedHistory != true }
+        let device = try await database.libraryIdentity().hostDeviceID
+        let all = try await database.libraryExecutionWorkspaces().filter { !$0.deleted && $0.kind != .ios && $0.retainedHistory != true }
         let own = all.first { $0.kind == .mac && $0.executionDeviceID == device }
         let others = all.filter { $0.id != own?.id }.sorted {
             ($0.kind == .mac ? 0 : 1, $0.name.lowercased()) < ($1.kind == .mac ? 0 : 1, $1.name.lowercased())
@@ -37,7 +37,7 @@ extension ApplicationModel {
         if let uuid = UUID(uuidString: id), remoteWorkspaces.configuration(id: uuid) != nil { return .configured(uuid) }
         if let member = others.first(where: { $0.id == id }) { return .member(member) }
         if let database = dashboardStore?.database,
-           let named = try await database.companionExecutionWorkspaces().first(where: { $0.id == id && !$0.deleted }) {
+           let named = try await database.libraryExecutionWorkspaces().first(where: { $0.id == id && !$0.deleted }) {
             if named.kind == .ios { throw WorkspaceToolError.invalid("An iPhone or iPad runs only its own Quick Chats. Choose a Mac or Linux workspace.") }
             if named.retainedHistory == true { throw WorkspaceToolError.invalid("\(named.name) is copied history in this snapshot and runs no sessions. Choose a Mac or Linux workspace.") }
         }
@@ -49,18 +49,18 @@ extension ApplicationModel {
     /// message. The destination applies its own saved defaults (model,
     /// permission, tools), exactly as for a session its own user starts. IDs
     /// derive from the caller and request, so a retry replays receipts.
-    func createMemberToolSession(sourceID: String, requestID: String, workspace: CompanionExecutionWorkspace,
+    func createMemberToolSession(sourceID: String, requestID: String, workspace: ExecutionWorkspace,
                                  runtime: AgentRuntimeKind, title: String, text: String) async throws -> WovenMatterToolResponse {
         let client = try centralExecutionClient()
         guard let database = dashboardStore?.database else { throw ApplicationModelError.dashboardStoreUnavailable }
-        let device = try await database.companionLibraryIdentity().hostDeviceID
+        let device = try await database.libraryIdentity().hostDeviceID
         let providers = try await client.providers(workspace: workspace)
         guard let provider = providers.first(where: { $0.runtimeKind == runtime.rawValue && $0.available && $0.canStart }) else {
             let ready = providers.filter { $0.available && $0.canStart }.map(\.runtimeKind)
             throw WorkspaceToolError.invalid("\(runtime.rawValue) is not ready on \(workspace.name)." + (ready.isEmpty ? "" : " Ready: " + ready.joined(separator: ", ") + "."))
         }
         let conversationID = Self.memberToolID(sourceID, requestID, "session")
-        func command(_ kind: CompanionCommand.Kind, _ suffix: String, text: String? = nil, action: CompanionWorkspaceAction? = nil) -> CompanionCommand {
+        func command(_ kind: LibraryCommand.Kind, _ suffix: String, text: String? = nil, action: LibraryWorkspaceAction? = nil) -> LibraryCommand {
             .init(commandID: Self.memberToolID(sourceID, requestID, suffix), deviceID: device, kind: kind, conversationID: conversationID,
                   providerID: kind == .createSession ? provider.id : nil, runtimeKind: kind == .createSession ? runtime.rawValue : nil,
                   text: text, workspaceAction: action, libraryID: workspace.libraryID, workspaceID: workspace.id,
@@ -185,7 +185,7 @@ extension ApplicationModel {
     /// The member workspace that runs session `id`: the one `named` names, or
     /// the one this Mac created it on. Nil for this Mac and the Linux hosts it
     /// manages over SSH, whose sessions are in this library.
-    private func memberSessionWorkspace(id: String, named: String?) async throws -> CompanionExecutionWorkspace? {
+    private func memberSessionWorkspace(id: String, named: String?) async throws -> ExecutionWorkspace? {
         if let named {
             if case .member(let workspace) = try await resolveAgentToolDestination(named, callerWorkspace: nil) { return workspace }
             return nil
@@ -200,8 +200,8 @@ extension ApplicationModel {
         return workspace
     }
 
-    private func memberConversation(_ client: CentralExecutionClient, _ workspace: CompanionExecutionWorkspace,
-                                    _ id: String) async throws -> CompanionConversation {
+    private func memberConversation(_ client: CentralExecutionClient, _ workspace: ExecutionWorkspace,
+                                    _ id: String) async throws -> LibraryConversation {
         guard UUID(uuidString: id) != nil else { throw WorkspaceToolError.invalid("Name the session by its ID.") }
         guard let found = try await client.conversations(workspace: workspace).first(where: { $0.id.lowercased() == id.lowercased() }) else {
             throw WorkspaceToolError.notFound("No session \(id) runs on \(workspace.name).")
@@ -209,7 +209,7 @@ extension ApplicationModel {
         return found
     }
 
-    nonisolated static func describeMemberSession(_ conversation: CompanionConversation, on workspace: CompanionExecutionWorkspace) -> [String: GatewayJSONValue] {
+    nonisolated static func describeMemberSession(_ conversation: LibraryConversation, on workspace: ExecutionWorkspace) -> [String: GatewayJSONValue] {
         var value: [String: GatewayJSONValue] = [
             "id": .string(conversation.id), "title": .string(conversation.title),
             "harness": conversation.runtimeKind.map(GatewayJSONValue.string) ?? .null,
@@ -226,7 +226,7 @@ extension ApplicationModel {
 
     /// State, pending questions and approvals, and the latest 20 messages
     /// (4000 characters each); `before` pages older ones.
-    private func memberSessionStatus(client: CentralExecutionClient, workspace: CompanionExecutionWorkspace,
+    private func memberSessionStatus(client: CentralExecutionClient, workspace: ExecutionWorkspace,
                                      id: String, before: String?) async throws -> WovenMatterToolResponse {
         let found = try await memberConversation(client, workspace, id)
         let transcript = try await client.transcript(workspace: workspace, conversationID: found.id, before: before)
@@ -257,29 +257,29 @@ extension ApplicationModel {
         return .init(result: .object(result))
     }
 
-    private func memberCommand(_ client: CentralExecutionClient, _ workspace: CompanionExecutionWorkspace, callerID: String,
-                               requestID: String, conversation: String, step: String, kind: CompanionCommand.Kind,
+    private func memberCommand(_ client: CentralExecutionClient, _ workspace: ExecutionWorkspace, callerID: String,
+                               requestID: String, conversation: String, step: String, kind: LibraryCommand.Kind,
                                runID: String? = nil, text: String? = nil, interactionID: String? = nil,
-                               response: CompanionInteractionResponse? = nil) async throws -> CompanionCommandReceipt {
+                               response: LibraryInteractionResponse? = nil) async throws -> LibraryCommandReceipt {
         guard let database = dashboardStore?.database else { throw ApplicationModelError.dashboardStoreUnavailable }
-        let device = try await database.companionLibraryIdentity().hostDeviceID
-        let command = CompanionCommand(commandID: Self.memberToolID(callerID, requestID, workspace.id + ":" + conversation + ":" + step),
+        let device = try await database.libraryIdentity().hostDeviceID
+        let command = LibraryCommand(commandID: Self.memberToolID(callerID, requestID, workspace.id + ":" + conversation + ":" + step),
             deviceID: device, kind: kind, conversationID: conversation, runID: runID, text: text, interactionID: interactionID,
             response: response, libraryID: workspace.libraryID, workspaceID: workspace.id)
         return try await client.submit(command, workspace: workspace)
     }
 
-    private static func receiptValue(_ receipt: CompanionCommandReceipt) -> GatewayJSONValue {
+    private static func receiptValue(_ receipt: LibraryCommandReceipt) -> GatewayJSONValue {
         var value: [String: GatewayJSONValue] = ["commandID": .string(receipt.commandID), "status": .string(receipt.status.rawValue)]
         if let run = receipt.runID { value["runID"] = .string(run) }
         return .object(value)
     }
 
     /// Sends to an idle session, or steers a running one when its harness can.
-    private func memberSessionSend(client: CentralExecutionClient, workspace: CompanionExecutionWorkspace, callerID: String,
+    private func memberSessionSend(client: CentralExecutionClient, workspace: ExecutionWorkspace, callerID: String,
                                    requestID: String, id: String, text: String) async throws -> WovenMatterToolResponse {
         let found = try await memberConversation(client, workspace, id)
-        let receipt: CompanionCommandReceipt
+        let receipt: LibraryCommandReceipt
         if let run = found.activeRunID {
             let capability = try? await client.capabilities(workspace: workspace, conversationID: found.id)
             guard capability?.canSteer == true else {
@@ -294,7 +294,7 @@ extension ApplicationModel {
         return .init(result: .object(["session": .object(Self.describeMemberSession(found, on: workspace)), "receipt": Self.receiptValue(receipt)]))
     }
 
-    private func memberSessionStop(client: CentralExecutionClient, workspace: CompanionExecutionWorkspace, callerID: String,
+    private func memberSessionStop(client: CentralExecutionClient, workspace: ExecutionWorkspace, callerID: String,
                                    requestID: String, id: String) async throws -> WovenMatterToolResponse {
         let found = try await memberConversation(client, workspace, id)
         let session = GatewayJSONValue.object(Self.describeMemberSession(found, on: workspace))
@@ -308,9 +308,9 @@ extension ApplicationModel {
     }
 
     /// Answers one pending question (or approval) of the session's current run.
-    private func memberSessionRespond(client: CentralExecutionClient, workspace: CompanionExecutionWorkspace, callerID: String,
+    private func memberSessionRespond(client: CentralExecutionClient, workspace: ExecutionWorkspace, callerID: String,
                                       requestID: String, id: String, interactionID: String,
-                                      response: CompanionInteractionResponse) async throws -> WovenMatterToolResponse {
+                                      response: LibraryInteractionResponse) async throws -> WovenMatterToolResponse {
         let found = try await memberConversation(client, workspace, id)
         guard let pending = try await client.pendingInteractions(workspace: workspace).first(where: {
             $0.id == interactionID && $0.conversationID.lowercased() == found.id.lowercased()
@@ -321,7 +321,7 @@ extension ApplicationModel {
         return .init(result: .object(["session": .object(Self.describeMemberSession(found, on: workspace)), "receipt": Self.receiptValue(receipt)]))
     }
 
-    nonisolated static func interactionResponse(_ command: WovenMatterToolCommand) throws -> CompanionInteractionResponse {
+    nonisolated static func interactionResponse(_ command: WovenMatterToolCommand) throws -> LibraryInteractionResponse {
         var answers: [String: [String]] = [:]
         if let raw = command.options["answers"] {
             guard let decoded = try? JSONDecoder().decode([String: [String]].self, from: Data(raw.utf8)) else {
@@ -332,7 +332,7 @@ extension ApplicationModel {
         return .init(optionID: command.options["option-id"], answers: answers, cancelled: command.options["cancelled"] != nil)
     }
 
-    nonisolated static func validate(_ response: CompanionInteractionResponse, for pending: CompanionPendingInteraction) throws {
+    nonisolated static func validate(_ response: LibraryInteractionResponse, for pending: PendingInteraction) throws {
         if !response.cancelled, pending.kind == .approval, !pending.options.contains(where: { $0.id == response.optionID }) {
             throw WorkspaceToolError.invalid("Choose one of the offered options.")
         }
@@ -340,7 +340,7 @@ extension ApplicationModel {
 
     /// Sessions on one member workspace: all of them with Conversation
     /// history, otherwise only those this caller created.
-    private func memberSessionList(callerID: String, workspace: CompanionExecutionWorkspace, readsAll: Bool,
+    private func memberSessionList(callerID: String, workspace: ExecutionWorkspace, readsAll: Bool,
                                    limit: Int) async throws -> WovenMatterToolResponse {
         guard let database = dashboardStore?.database else { throw ApplicationModelError.dashboardStoreUnavailable }
         let created = Set(try await database.memberToolSessions(callerID: callerID).map(\.id))
@@ -395,24 +395,24 @@ extension ApplicationModel {
         guard relationship.createdBy == callerID || relationship.coordinatorID == callerID else {
             throw WorkspaceToolError.invalid("Stop or answer only the sessions you created or coordinate.")
         }
-        let device = try await database.companionLibraryIdentity().hostDeviceID
+        let device = try await database.libraryIdentity().hostDeviceID
         let commandID = Self.memberToolID(callerID, request.requestID, "local:" + id + ":" + command.action)
         if command.action == "stop" {
             guard let run = await canonicalActiveRunID(conversationID: id) else {
                 return .init(result: .object(["id": .string(id), "stopped": .bool(false), "message": .string("The session is not running.")]))
             }
-            let receipt = try await companionCommands.execute(.init(commandID: commandID, deviceID: device, kind: .stop,
+            let receipt = try await libraryCommands.execute(.init(commandID: commandID, deviceID: device, kind: .stop,
                 conversationID: id, runID: run), deviceID: device)
             return .init(result: .object(["id": .string(id), "stopped": .bool([.accepted, .completed].contains(receipt.status)),
                                           "receipt": Self.receiptValue(receipt)]))
         }
         let interactionID = try command.required("interaction")
-        guard let pending = await companionCommands.pendingInteractions().first(where: {
+        guard let pending = await libraryCommands.pendingInteractions().first(where: {
             $0.id == interactionID && $0.conversationID.lowercased() == id.lowercased()
         }) else { throw WorkspaceToolError.invalid("That question is no longer pending. Read woven_sessions_status again.") }
         let response = try Self.interactionResponse(command)
         try Self.validate(response, for: pending)
-        let receipt = try await companionCommands.execute(.init(commandID: commandID, deviceID: device, kind: .respond,
+        let receipt = try await libraryCommands.execute(.init(commandID: commandID, deviceID: device, kind: .respond,
             conversationID: id, runID: pending.runID, interactionID: pending.id, response: response), deviceID: device)
         return .init(result: .object(["id": .string(id), "receipt": Self.receiptValue(receipt)]))
     }

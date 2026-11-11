@@ -69,7 +69,7 @@ conversation's private device files, as in the on-device command runtime. Phone
 SDK result metadata retains prepared HTML
 without returning the image bytes as model-visible tool text. Ordinary tool
 requests keep their existing limits; HTML requests and the underlying bounded
-RPC/companion transports accommodate prepared pages. The same canonical catalog
+RPC/library transports accommodate prepared pages. The same canonical catalog
 is generated for remote workspaces. Visual replies remain available with older
 saved tool selections; explicitly limited outside-client grants still apply.
 Publication is marked non-idempotent so adapters never automatically replay it

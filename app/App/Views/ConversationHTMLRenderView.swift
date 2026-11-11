@@ -5,7 +5,7 @@ import AppKit
 import WovenMatterCore
 #else
 import UIKit
-import WovenMatterCompanion
+import WovenMatterShared
 #endif
 
 /// Published pages are independent of the work disclosure and load full detail

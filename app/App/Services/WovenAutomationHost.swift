@@ -1,5 +1,5 @@
-#if COMPANION_FACADE_TESTS
-import CompanionBrowserTestBridge
+#if APP_FACADE_TESTS
+import FacadeBrowserTestBridge
 #endif
 import Foundation
 import WovenMatterClient
@@ -86,7 +86,7 @@ final class WovenAutomationHost {
                     let admit: @MainActor @Sendable () async throws -> Void = { @MainActor [database] in
                         try Task.checkCancellation()
                         try await database.requireAutomationRequest(group, callerID: invocation.callerID, requestID: id)
-                        try await database.requireCompanionAutomationAccess(callerID: invocation.callerID)
+                        try await database.requireLibraryAutomationAccess(callerID: invocation.callerID)
                         try Task.checkCancellation()
                     }
                     try await admit()

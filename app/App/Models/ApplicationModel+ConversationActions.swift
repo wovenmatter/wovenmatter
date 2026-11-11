@@ -62,18 +62,18 @@ extension ApplicationModel {
 
     /// The execution workspace of the paired Mac that runs this chat, when it
     /// is another Mac. Independent Linux and iOS workspaces are not included.
-    func pairedOwnerWorkspace(conversationID id: String) async throws -> CompanionExecutionWorkspace? {
+    func pairedOwnerWorkspace(conversationID id: String) async throws -> ExecutionWorkspace? {
         guard let database = dashboardStore?.database,
-              let workspace = try await database.companionConversationExecutionWorkspace(conversationID: id), workspace.kind == .mac,
-              try await workspace.ownerDeviceID != database.companionLibraryIdentity().hostDeviceID else { return nil }
+              let workspace = try await database.libraryConversationExecutionWorkspace(conversationID: id), workspace.kind == .mac,
+              try await workspace.ownerDeviceID != database.libraryIdentity().hostDeviceID else { return nil }
         return workspace
     }
 
     /// Sends a chat action to the Mac that runs it and surfaces its refusal.
-    func performOnOwner(conversationID id: String, action: CompanionWorkspaceAction) async throws {
+    func performOnOwner(conversationID id: String, action: LibraryWorkspaceAction) async throws {
         let receipt = try await centralExecutionClient().perform(conversationID: id, action: action)
         if receipt.status == .rejected {
-            throw CompanionAPIError(code: "rejected", message: receipt.message ?? WorkspaceConversationActionError.ownedByAnotherMac.localizedDescription)
+            throw LibraryAPIError(code: "rejected", message: receipt.message ?? WorkspaceConversationActionError.ownedByAnotherMac.localizedDescription)
         }
     }
 }

@@ -1,8 +1,8 @@
-#if canImport(CompanionClient) && os(macOS)
+#if canImport(LibraryClient) && os(macOS)
 import Foundation
 import Testing
-import CompanionClient
-import WovenMatterCompanion
+import LibraryClient
+import WovenMatterShared
 import WovenMatterCore
 import WovenMatterDashboardStore
 @testable import WovenMatterLibraryHost
@@ -10,7 +10,7 @@ import WovenMatterDashboardStore
 /// An in-process tailnet: each `host:port` routes to a Mac or Linux handler.
 /// A Linux host sits behind Tailscale Serve, which strips `/wovenmatter`.
 private final class Tailnet: MobileHTTPPerforming, @unchecked Sendable {
-  typealias Handler = @Sendable (CompanionHTTPRequest) async -> CompanionHTTPResponse
+  typealias Handler = @Sendable (LibraryHTTPRequest) async -> LibraryHTTPResponse
   private let lock = NSLock()
   private var routes: [String: (strip: Bool, handler: Handler)] = [:]
   private var down: Set<String> = []
@@ -18,7 +18,7 @@ private final class Tailnet: MobileHTTPPerforming, @unchecked Sendable {
   func setOnline(_ authority: String, _ online: Bool) { lock.withLock { if online { down.remove(authority) } else { down.insert(authority) } } }
 
   private static func authority(_ url: URL) -> String { (url.host ?? "") + (url.port.map { ":\($0)" } ?? "") }
-  func send(_ url: URL, _ request: CompanionHTTPRequest) async throws -> CompanionHTTPResponse {
+  func send(_ url: URL, _ request: LibraryHTTPRequest) async throws -> LibraryHTTPResponse {
     let authority = Self.authority(url)
     guard let route = lock.withLock({ down.contains(authority) ? nil : routes[authority] }) else { throw URLError(.cannotConnectToHost) }
     var target = request.target
@@ -46,17 +46,17 @@ private final class Tailnet: MobileHTTPPerforming, @unchecked Sendable {
 
 /// A Linux workspace's sessions (the Node server's role): signed member
 /// requests create sessions here with every Mac offline.
-@MainActor private final class LinuxSessions: CompanionCommandServing {
-  var created: [CompanionCommand] = []
-  var receipts: [String: CompanionCommandReceipt] = [:]
-  func providers() -> [CompanionProvider] { [.init(id: "local:default_agent", runtimeKind: "default_agent", displayName: "Agent", routeName: "Box", available: true)] }
-  func pendingInteractions() async -> [CompanionPendingInteraction] { [] }
-  func sessionCapabilities(conversationID: String) async throws -> CompanionProvider { providers()[0] }
-  func transcript(conversationID: String, before: String?) async throws -> CompanionTranscript { .init(conversationID: conversationID) }
-  func receipt(commandID: String, deviceID: String) async throws -> CompanionCommandReceipt? { receipts[commandID] }
-  func execute(_ command: CompanionCommand, deviceID: String) async throws -> CompanionCommandReceipt {
+@MainActor private final class LinuxSessions: LibraryCommandServing {
+  var created: [LibraryCommand] = []
+  var receipts: [String: LibraryCommandReceipt] = [:]
+  func providers() -> [LibraryProvider] { [.init(id: "local:default_agent", runtimeKind: "default_agent", displayName: "Agent", routeName: "Box", available: true)] }
+  func pendingInteractions() async -> [PendingInteraction] { [] }
+  func sessionCapabilities(conversationID: String) async throws -> LibraryProvider { providers()[0] }
+  func transcript(conversationID: String, before: String?) async throws -> LibraryTranscript { .init(conversationID: conversationID) }
+  func receipt(commandID: String, deviceID: String) async throws -> LibraryCommandReceipt? { receipts[commandID] }
+  func execute(_ command: LibraryCommand, deviceID: String) async throws -> LibraryCommandReceipt {
     created.append(command)
-    let receipt = CompanionCommandReceipt(commandID: command.commandID, deviceID: deviceID, status: .completed, conversationID: command.conversationID)
+    let receipt = LibraryCommandReceipt(commandID: command.commandID, deviceID: deviceID, status: .completed, conversationID: command.conversationID)
     receipts[command.commandID] = receipt
     return receipt
   }
@@ -73,8 +73,8 @@ private final class ReachWorld: @unchecked Sendable {
   let macDatabase: WorkspaceDatabase
   let macMembers: MemberDirectory
   let macSync: LibraryPeerSync
-  let pairing: CompanionAuthentication
-  let workspace: CompanionExecutionWorkspace
+  let pairing: DeviceAuthentication
+  let workspace: ExecutionWorkspace
   let sessions: LinuxSessions
 
   init(root: URL) async throws {
@@ -92,17 +92,17 @@ private final class ReachWorld: @unchecked Sendable {
     let macDatabase = macStore.database
     self.macDatabase = macDatabase
     let macMembers = MemberDirectory(database: macDatabase, identity: try MemberIdentity.loadOrCreate(file: root.appending(path: "mac.key"),
-      deviceID: try await macDatabase.companionLibraryIdentity().hostDeviceID, kind: .mac), cacheLifetime: 0)
+      deviceID: try await macDatabase.libraryIdentity().hostDeviceID, kind: .mac), cacheLifetime: 0)
     self.macMembers = macMembers
     try await macMembers.ensureSelf(name: "Studio", endpoints: [macURL])
     var configuration = LibraryPeerSync.Configuration(version: "test")
     configuration.presenceInterval = 1
     let macSync = LibraryPeerSync(directory: macMembers, transport: tailnet.peers, configuration: configuration)
     self.macSync = macSync
-    let pairing = try CompanionAuthentication(fileURL: root.appending(path: "mac-devices.json"))
+    let pairing = try DeviceAuthentication(fileURL: root.appending(path: "mac-devices.json"))
     self.pairing = pairing
     let api = await MainActor.run {
-      CompanionWorkspaceAPI(database: macDatabase, authentication: pairing, commands: LibraryHostCommands(executor: WorkspaceToolExecutor(database: macDatabase)),
+      LibraryWorkspaceAPI(database: macDatabase, authentication: pairing, commands: LibraryHostCommands(executor: WorkspaceToolExecutor(database: macDatabase)),
         isActive: { true }, members: macMembers, onMemberPaired: { id, name, key in
           _ = try? await macMembers.add(deviceID: id, kind: .ios, name: name, publicKey: key, endpoints: [])
         }, syncStatus: { await macSync.status() })
@@ -116,21 +116,21 @@ private final class ReachWorld: @unchecked Sendable {
     let token = try String(contentsOf: LibraryHostLayout(root: root.appending(path: "box")).defaultTokenFile, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines)
     let adopted = await linux.handleLocal(.init(method: "POST", target: "/v1/members/adopt", headers: ["authorization": "Bearer " + token],
                                                 body: try JSONEncoder().encode(await macMembers.adoption())))
-    guard adopted.status == 200 else { throw CompanionAPIError(code: "adopt", message: String(decoding: adopted.body, as: UTF8.self)) }
+    guard adopted.status == 200 else { throw LibraryAPIError(code: "adopt", message: String(decoding: adopted.body, as: UTF8.self)) }
     await linux.startSync(); await macSync.start()
 
     // The Linux workspace's execution endpoint, registered in the library.
-    let linuxLibrary = try await linux.database.companionLibraryIdentity()
-    let workspace = CompanionExecutionWorkspace(id: UUID().uuidString.lowercased(), libraryID: linuxLibrary.libraryID,
+    let linuxLibrary = try await linux.database.libraryIdentity()
+    let workspace = ExecutionWorkspace(id: UUID().uuidString.lowercased(), libraryID: linuxLibrary.libraryID,
       ownerDeviceID: linuxLibrary.hostDeviceID, kind: .linux, name: "Box", endpoint: URL(string: "https://box.tail1.ts.net:9443/wovenmatter")!,
       capabilities: ["execution.v1"], executionDeviceID: linuxLibrary.hostDeviceID)
     self.workspace = workspace
-    _ = try await linux.database.registerCompanionExecutionWorkspace(.init(workspace: workspace), deviceID: linuxLibrary.hostDeviceID)
+    _ = try await linux.database.registerExecutionWorkspace(.init(workspace: workspace), deviceID: linuxLibrary.hostDeviceID)
     let sessions = await MainActor.run { LinuxSessions() }
     self.sessions = sessions
     let execution = await MainActor.run {
-      CompanionMacExecutionAPI(database: linux.database, commands: sessions,
-        authentication: try! CompanionExecutionAuthentication(fileURL: root.appending(path: "box-execution.json")),
+      MacExecutionAPI(database: linux.database, commands: sessions,
+        authentication: try! ExecutionAuthentication(fileURL: root.appending(path: "box-execution.json")),
         descriptor: workspace, isActive: { true }, members: linux.members)
     }
     tailnet.route("box.tail1.ts.net:9443", strip: false) { await execution.handle($0) }
@@ -157,7 +157,7 @@ struct PhoneReachTests {
     let tailnet = world.tailnet, linux = world.linux, macDatabase = world.macDatabase, macMembers = world.macMembers
     let macSync = world.macSync, pairing = world.pairing, workspace = world.workspace, sessions = world.sessions
     let macURL = ReachWorld.macURL
-    let linuxLibrary = try await linux.database.companionLibraryIdentity()
+    let linuxLibrary = try await linux.database.libraryIdentity()
 
     // The phone pairs once with the Mac, presenting its member key.
     let store = try MobileStore(file: root.appending(path: "phone/library.json"))
@@ -165,7 +165,7 @@ struct PhoneReachTests {
     let keys = MobileMemberKeyStorage.memory()
     let identity = try MobileMemberKeyVault.loadOrCreate(deviceID: phoneID, storage: keys)
     let offer = try await pairing.createOffer(endpoint: macURL)
-    let paired = try await HTTPSCompanionTransport.pair(offer.payload, deviceID: phoneID, deviceName: "iPhone",
+    let paired = try await HTTPSLibraryTransport.pair(offer.payload, deviceID: phoneID, deviceName: "iPhone",
       metadata: .init(kind: .iPhone), memberPublicKey: identity.publicKey, performer: tailnet)
     #expect(await macMembers.member(phoneID)?.kind == .ios)
     // The pairing reply names the Mac's member device ID, which the phone's requests to it are addressed to.
@@ -184,8 +184,8 @@ struct PhoneReachTests {
     // Writing on the phone reaches the Mac, and peer sync takes it to Linux.
     let note = try await store.createNote(folderID: nil, title: "Groceries", content: try NoteDocument(blocks: [.richText(.init(id: "b", text: "milk"))]).encoded())
     try await engine.synchronize()
-    #expect(try await macDatabase.companionNote(id: note.id) != nil)
-    #expect(try await Self.waitUntil { try await linux.database.companionNote(id: note.id) != nil })
+    #expect(try await macDatabase.libraryNote(id: note.id) != nil)
+    #expect(try await Self.waitUntil { try await linux.database.libraryNote(id: note.id) != nil })
     // The Linux host learned the phone from the Mac's records.
     #expect(try await Self.waitUntil { await linux.members.member(phoneID) != nil })
 
@@ -201,15 +201,15 @@ struct PhoneReachTests {
     #expect(afterFailover.outbox.isEmpty, "\(afterFailover.outbox)")
     #expect(afterFailover.conflicts.isEmpty, "\(afterFailover.conflicts)")
     #expect(await engine.synchronizationStatus().libraryHost?.kind == "linux")
-    #expect(try await linux.database.companionNote(id: note.id)?.content == edited)
-    #expect(try await linux.database.companionNote(id: second.id) != nil)
+    #expect(try await linux.database.libraryNote(id: note.id)?.content == edited)
+    #expect(try await linux.database.libraryNote(id: second.id) != nil)
 
     // A session on the Linux workspace, signed by the phone, with every Mac offline.
     let client = WorkspaceClient(store: store, workspaceID: workspace.id,
       transport: try HTTPSExecutionWorkspaceTransport(workspace: workspace, identity: identity, performer: tailnet))
     #expect(try await client.providers().map(\.id) == ["local:default_agent"])
     let conversation = UUID().uuidString.lowercased()
-    var create = CompanionCommand(deviceID: phoneID, kind: .createSession, conversationID: conversation, providerID: "local:default_agent")
+    var create = LibraryCommand(deviceID: phoneID, kind: .createSession, conversationID: conversation, providerID: "local:default_agent")
     create.libraryID = workspace.libraryID
     let receipt = try await client.submit(create)
     #expect(receipt.status == .completed)
@@ -226,14 +226,14 @@ struct PhoneReachTests {
     _ = try await reopened.createNote(folderID: nil, title: "After restart", content: try NoteDocument(blocks: [.richText(.init(id: "d", text: "still here"))]).encoded())
     try await engine.synchronize()
     #expect(await reopened.snapshot().outbox.isEmpty)
-    #expect(try await linux.database.companionSnapshot().notes.contains { $0.title == "After restart" })
+    #expect(try await linux.database.librarySnapshot().notes.contains { $0.title == "After restart" })
 
     // The Mac returns and catches up from Linux; then Linux drops and the
     // phone fails back to the Mac, rebasing on the Mac's revisions.
     tailnet.setOnline("studio.tail1.ts.net", true)
     await macSync.start()
-    #expect(try await Self.waitUntil { try await macDatabase.companionNote(id: note.id)?.content == edited })
-    #expect(try await Self.waitUntil { try await macDatabase.companionSnapshot().notes.contains { $0.title == "After restart" } })
+    #expect(try await Self.waitUntil { try await macDatabase.libraryNote(id: note.id)?.content == edited })
+    #expect(try await Self.waitUntil { try await macDatabase.librarySnapshot().notes.contains { $0.title == "After restart" } })
     tailnet.setOnline("box.tail1.ts.net", false)
     let latest = try NoteDocument(blocks: [.richText(.init(id: "b", text: "milk, eggs, bread"))]).encoded()
     try await reopened.editNote(id: note.id, title: "Groceries", content: latest, folderID: nil)
@@ -241,9 +241,9 @@ struct PhoneReachTests {
     let back = await reopened.snapshot()
     #expect(back.workspaceID == paired.workspaceID)
     #expect(back.outbox.isEmpty && back.conflicts.isEmpty, "\(back.outbox) \(back.conflicts)")
-    #expect(try await macDatabase.companionNote(id: note.id)?.content == latest)
+    #expect(try await macDatabase.libraryNote(id: note.id)?.content == latest)
     // Nothing was duplicated by the moves.
-    #expect(try await macDatabase.companionSnapshot().notes.filter { $0.title == "Groceries" }.count == 1)
+    #expect(try await macDatabase.librarySnapshot().notes.filter { $0.title == "Groceries" }.count == 1)
     await macSync.stop()
   }
   /// Not a test: keeps the fake Mac and Linux host listening on loopback so a
@@ -261,13 +261,13 @@ struct PhoneReachTests {
     defer { world.linux.stop() }
     for (title, text) in [("Trip plan", "Book the train"), ("Ideas", "A garden bench")] {
       let content = try NoteDocument(blocks: [.richText(.init(id: "a", text: text))]).encoded()
-      _ = try await world.macDatabase.applyCompanionMutation(.init(deviceID: UUID().uuidString.lowercased(), kind: .createNote,
+      _ = try await world.macDatabase.applyLibraryMutation(.init(deviceID: UUID().uuidString.lowercased(), kind: .createNote,
         resourceID: UUID().uuidString.lowercased(), title: title, content: content))
     }
-    var servers: [CompanionSocketHTTPServer] = []
+    var servers: [LibrarySocketHTTPServer] = []
     for (authority, port) in [("studio.tail1.ts.net", 18431), ("box.tail1.ts.net", 18432), ("box.tail1.ts.net:9443", 18433)] {
       let tailnet = world.tailnet
-      let server = CompanionSocketHTTPServer { request in
+      let server = LibrarySocketHTTPServer { request in
         do { return try await tailnet.send(URL(string: "https://" + authority)!, request) }
         catch { return .error("unavailable", "offline", status: 503) }
       }

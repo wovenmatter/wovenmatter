@@ -38,17 +38,17 @@ def privacy_manifest():
 
 def make_app(directory, profile='distribution'):
     name, identifier = verifier.PROFILES[profile]
-    app = directory / 'WovenMatterCompanion.app'
+    app = directory / 'WovenMatter.app'
     app.mkdir(parents=True)
     write_plist(app / 'Info.plist', {
-        'CFBundleDisplayName': name, 'CFBundleIdentifier': identifier, 'CFBundleExecutable': 'WovenMatterCompanion',
+        'CFBundleDisplayName': name, 'CFBundleIdentifier': identifier, 'CFBundleExecutable': 'WovenMatter',
         'CFBundleShortVersionString': VERSION, 'CFBundleVersion': BUILD, 'UIDeviceFamily': [1, 2],
         'NSMicrophoneUsageDescription': 'Dictation.', 'NSCameraUsageDescription': 'Pairing.',
         'CFBundleIcons': {'CFBundlePrimaryIcon': {'CFBundleIconName': 'AppIcon'}},
         'ITSAppUsesNonExemptEncryption': False,
     })
     write_plist(app / 'PrivacyInfo.xcprivacy', privacy_manifest())
-    (app / 'WovenMatterCompanion').write_bytes(b'\xcf\xfa\xed\xfe release binary')
+    (app / 'WovenMatter').write_bytes(b'\xcf\xfa\xed\xfe release binary')
     (app / 'Assets.car').write_bytes(b'car')
     (app / 'LUCIDE_LICENSE.txt').write_text('ISC')
     return app

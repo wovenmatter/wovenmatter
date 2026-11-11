@@ -2,12 +2,12 @@ import Foundation
 import WovenMatterCore
 
 extension WorkspaceDatabase {
-  public func companionCalendarSnapshot() async throws -> CompanionCalendarSnapshot { try await read { try $0.companionCalendarSnapshot() } }
-  public func companionCalendarPublishRuns(_ runs: [CompanionCalendarRun], deviceID: String) async throws -> [String] {
-    try await write { try $0.companionCalendarPublishRuns(runs, deviceID: deviceID) }
+  public func libraryCalendarSnapshot() async throws -> LibraryCalendarSnapshot { try await read { try $0.libraryCalendarSnapshot() } }
+  public func libraryCalendarPublishRuns(_ runs: [LibraryCalendarRun], deviceID: String) async throws -> [String] {
+    try await write { try $0.libraryCalendarPublishRuns(runs, deviceID: deviceID) }
   }
-  public func companionCalendarMutate(_ mutation: CompanionCalendarMutation, deviceID: String) async throws -> CompanionCalendarReceipt {
-    try await write { try $0.companionCalendarMutate(mutation, deviceID: deviceID) }
+  public func libraryCalendarMutate(_ mutation: LibraryCalendarMutation, deviceID: String) async throws -> LibraryCalendarReceipt {
+    try await write { try $0.libraryCalendarMutate(mutation, deviceID: deviceID) }
   }
 }
 extension WorkspaceDatabaseConnection {
@@ -25,7 +25,7 @@ extension WorkspaceDatabaseConnection {
     if !columns.contains("tools_json") { try executeUnlocked("ALTER TABLE companion_calendar_owners ADD COLUMN tools_json TEXT") }
     try executeUnlocked("INSERT OR IGNORE INTO companion_calendar_run_owners(event_id,device_id) SELECT event_id,device_id FROM companion_calendar_owners")
   }
-  func companionCalendarSnapshot() throws -> CompanionCalendarSnapshot {
+  func libraryCalendarSnapshot() throws -> LibraryCalendarSnapshot {
     let owners = try calendarReplicaOwners()
     var selectedTools: [String: [String]] = [:]
     for row in try historyRowsUnlocked("SELECT event_id,tools_json FROM companion_calendar_owners WHERE tools_json IS NOT NULL", values: []) {
@@ -34,18 +34,18 @@ extension WorkspaceDatabaseConnection {
       }
     }
     let deleted = Set(try historyRowsUnlocked("SELECT id FROM dashboard_calendar_items WHERE deleted_at IS NOT NULL", values: []).compactMap { $0.objectValue?["id"]?.stringValue })
-    let runs = try historyRowsUnlocked("SELECT payload_json FROM companion_calendar_runs", values: []).compactMap { row -> CompanionCalendarRun? in
+    let runs = try historyRowsUnlocked("SELECT payload_json FROM companion_calendar_runs", values: []).compactMap { row -> LibraryCalendarRun? in
       guard let json = row.objectValue?["payload_json"]?.stringValue else { return nil }
-      return try JSONDecoder().decode(CompanionCalendarRun.self, from: Data(json.utf8))
+      return try JSONDecoder().decode(LibraryCalendarRun.self, from: Data(json.utf8))
     }
-    return .init(workspaceID: try companionWorkspaceID(), records: try calendarItemsUnlocked(includeDeleted: true).map {
+    return .init(workspaceID: try libraryWorkspaceID(), records: try calendarItemsUnlocked(includeDeleted: true).map {
       Self.calendarReplica($0, owner: owners[$0.id], deleted: deleted.contains($0.id), enabledTools: selectedTools[$0.id])
     }, runs: runs)
   }
   func replicaCalendarRuns() throws -> [WorkspaceCalendarRun] {
     try historyRowsUnlocked("SELECT payload_json FROM companion_calendar_runs", values: []).compactMap { row in
       guard let json = row.objectValue?["payload_json"]?.stringValue else { return nil }
-      let run = try JSONDecoder().decode(CompanionCalendarRun.self, from: Data(json.utf8))
+      let run = try JSONDecoder().decode(LibraryCalendarRun.self, from: Data(json.utf8))
       guard let runtime = AgentRuntimeKind(rawValue: run.task.runtime) else { return nil }
       let task = WorkspaceCalendarTask(prompt: run.task.prompt, configuration: .init(runtimeKind: runtime,
         workspaceID: run.task.workspaceID.flatMap(UUID.init), folderID: run.task.folderID, title: run.title,
@@ -60,19 +60,19 @@ extension WorkspaceDatabaseConnection {
       return (id, device)
     })
   }
-  func companionCalendarMutate(_ mutation: CompanionCalendarMutation, deviceID: String) throws -> CompanionCalendarReceipt {
+  func libraryCalendarMutate(_ mutation: LibraryCalendarMutation, deviceID: String) throws -> LibraryCalendarReceipt {
     guard mutation.deviceID == deviceID, UUID(uuidString: mutation.id) != nil, UUID(uuidString: mutation.record.id) != nil,
       mutation.record.ownerDeviceID == nil || mutation.record.event.draft.task?.workspaceID == nil || mutation.record.event.draft.task?.workspaceID == mutation.record.ownerDeviceID,
-      mutation.record.excludedOccurrences.allSatisfy({ $0 >= 0 }), mutation.record.excludedOccurrences.count <= 100_000 else { throw CompanionCalendarError.invalid }
+      mutation.record.excludedOccurrences.allSatisfy({ $0 >= 0 }), mutation.record.excludedOccurrences.count <= 100_000 else { throw LibraryCalendarError.invalid }
     let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
     let input = String(decoding: try encoder.encode(mutation), as: UTF8.self)
     return try transaction {
       if let existing = try historyRowsUnlocked("SELECT input_json,result_json FROM companion_calendar_receipts WHERE device_id=? AND mutation_id=?", values: [deviceID, mutation.id]).first?.objectValue {
-        guard existing["input_json"]?.stringValue == input, let result = existing["result_json"]?.stringValue else { throw CompanionCalendarError.requestMismatch }
-        return try JSONDecoder().decode(CompanionCalendarReceipt.self, from: Data(result.utf8))
+        guard existing["input_json"]?.stringValue == input, let result = existing["result_json"]?.stringValue else { throw LibraryCalendarError.requestMismatch }
+        return try JSONDecoder().decode(LibraryCalendarReceipt.self, from: Data(result.utf8))
       }
-      let before = try companionCalendarSnapshot().records.first { $0.id == mutation.record.id }
-      let result: CompanionCalendarReceipt
+      let before = try libraryCalendarSnapshot().records.first { $0.id == mutation.record.id }
+      let result: LibraryCalendarReceipt
       if before?.event.revision != mutation.expectedRevision || before?.deleted == true ||
         (before?.event.draft.task != nil && mutation.record.event.draft.task != nil && before?.ownerDeviceID != mutation.record.ownerDeviceID) ||
         (before == nil && mutation.record.ownerDeviceID != nil && mutation.record.ownerDeviceID != deviceID) {
@@ -86,12 +86,12 @@ extension WorkspaceDatabaseConnection {
           _ = try saveCalendarEvent(id: mutation.record.id, draft: native, creating: true, _transaction: false)
           try deleteCalendarEvent(id: mutation.record.id, _transaction: false)
         }
-        result = .init(mutationID: mutation.id, status: .accepted, record: try companionCalendarSnapshot().records.first { $0.id == mutation.record.id })
+        result = .init(mutationID: mutation.id, status: .accepted, record: try libraryCalendarSnapshot().records.first { $0.id == mutation.record.id })
       } else {
-        try CompanionCalendarSchedule.validate(mutation.record.event.draft)
+        try LibraryCalendarSchedule.validate(mutation.record.event.draft)
         let native = try Self.nativeCalendarDraft(mutation.record.event.draft)
         _ = try saveCalendarEvent(id: mutation.record.id, draft: native, creating: before == nil, expectedRevision: mutation.expectedRevision, _transaction: false)
-        guard let item = try calendarItemsUnlocked().first(where: { $0.id == mutation.record.id }) else { throw CompanionCalendarError.missing }
+        guard let item = try calendarItemsUnlocked().first(where: { $0.id == mutation.record.id }) else { throw LibraryCalendarError.missing }
         var details = item.calendar; details.excludedOccurrences = mutation.record.excludedOccurrences
         try toolsExecuteUnlocked("UPDATE dashboard_calendar_items SET calendar_json=? WHERE id=?", [try toolsJSON(details), item.id])
         if let owner = mutation.record.ownerDeviceID {
@@ -99,7 +99,7 @@ extension WorkspaceDatabaseConnection {
           try toolsExecuteUnlocked("INSERT INTO companion_calendar_owners(event_id,device_id,tools_json) VALUES(?,?,?) ON CONFLICT(event_id) DO UPDATE SET device_id=excluded.device_id,tools_json=excluded.tools_json", [item.id, owner, tools])
           try toolsExecuteUnlocked("INSERT OR IGNORE INTO companion_calendar_run_owners(event_id,device_id) VALUES(?,?)", [item.id, owner])
         } else { try toolsExecuteUnlocked("DELETE FROM companion_calendar_owners WHERE event_id=?", [item.id]) }
-        result = .init(mutationID: mutation.id, status: .accepted, record: try companionCalendarSnapshot().records.first { $0.id == item.id })
+        result = .init(mutationID: mutation.id, status: .accepted, record: try libraryCalendarSnapshot().records.first { $0.id == item.id })
       }
       if result.status == .accepted, before == nil {
         // An event may run and then be converted or deleted entirely offline.
@@ -111,21 +111,21 @@ extension WorkspaceDatabaseConnection {
       return result
     }
   }
-  func companionCalendarPublishRuns(_ runs: [CompanionCalendarRun], deviceID: String) throws -> [String] {
-    guard runs.count <= 200 else { throw CompanionCalendarError.invalid }
+  func libraryCalendarPublishRuns(_ runs: [LibraryCalendarRun], deviceID: String) throws -> [String] {
+    guard runs.count <= 200 else { throw LibraryCalendarError.invalid }
     return try transaction {
       let permittedEvents = Set(try historyRowsUnlocked("SELECT event_id FROM companion_calendar_run_owners WHERE device_id=?", values: [deviceID]).compactMap { $0.objectValue?["event_id"]?.stringValue })
       for run in runs {
         guard run.ownerDeviceID == deviceID, permittedEvents.contains(run.eventID),
           UUID(uuidString: run.id) != nil, UUID(uuidString: run.sessionID) != nil,
           run.occurrence >= 0, run.scheduledAt.timeIntervalSince1970.isFinite,
-          ["pending", "running", "completed", "failed", "cancelled", "accepted", "uncertain", "queued", "sending"].contains(run.status) else { throw CompanionCalendarError.invalid }
+          ["pending", "running", "completed", "failed", "cancelled", "accepted", "uncertain", "queued", "sending"].contains(run.status) else { throw LibraryCalendarError.invalid }
         if let json = try historyRowsUnlocked("SELECT payload_json FROM companion_calendar_runs WHERE id=?", values: [run.id]).first?.objectValue?["payload_json"]?.stringValue {
-          var old = try JSONDecoder().decode(CompanionCalendarRun.self, from: Data(json.utf8))
+          var old = try JSONDecoder().decode(LibraryCalendarRun.self, from: Data(json.utf8))
           let previousRevision = old.revision ?? 0
-          if previousRevision == (run.revision ?? 0), old != run { throw CompanionCalendarError.requestMismatch }
+          if previousRevision == (run.revision ?? 0), old != run { throw LibraryCalendarError.requestMismatch }
           old.status = run.status; old.error = run.error; old.revision = run.revision
-          guard old == run else { throw CompanionCalendarError.requestMismatch }
+          guard old == run else { throw LibraryCalendarError.requestMismatch }
           // A delayed network retry cannot regress a completed receipt to the
           // earlier running or pending status from the same device.
           if previousRevision > (run.revision ?? 0) { continue }
@@ -136,22 +136,22 @@ extension WorkspaceDatabaseConnection {
       return runs.map(\.id)
     }
   }
-  static func nativeCalendarDraft(_ value: CompanionCalendarDraft) throws -> WorkspaceCalendarDraft {
+  static func nativeCalendarDraft(_ value: LibraryCalendarDraft) throws -> WorkspaceCalendarDraft {
     var draft = WorkspaceCalendarDraft(title: value.title, details: value.details, startsAt: value.startsAt, endsAt: value.endsAt,
       allDay: value.allDay, timeZoneID: value.timeZoneID, showsOnCalendar: value.showsOnCalendar ?? true)
     if let unit = value.recurrenceUnit {
-      guard let native = WorkspaceCalendarRecurrence.Unit(rawValue: unit) else { throw CompanionCalendarError.invalid }
+      guard let native = WorkspaceCalendarRecurrence.Unit(rawValue: unit) else { throw LibraryCalendarError.invalid }
       draft.recurrence = .init(unit: native, interval: value.recurrenceInterval)
     }
     if let task = value.task {
-      guard let runtime = AgentRuntimeKind(rawValue: task.runtime), task.workspaceID == nil || UUID(uuidString: task.workspaceID!) != nil else { throw CompanionCalendarError.invalid }
+      guard let runtime = AgentRuntimeKind(rawValue: task.runtime), task.workspaceID == nil || UUID(uuidString: task.workspaceID!) != nil else { throw LibraryCalendarError.invalid }
       draft.task = .init(prompt: task.prompt, configuration: .init(runtimeKind: runtime, workspaceID: task.workspaceID.flatMap(UUID.init), folderID: task.folderID,
         title: value.title, model: task.model, thinking: task.thinking, permission: task.permission,
         tools: task.enabledTools.map { .init(enabled: Set($0.compactMap { WorkspaceToolGroup(rawValue: $0.replacingOccurrences(of: "wovenmatter_", with: "")) })) } ?? .init()), sessionMode: task.newSessionEachTime ? .new : .same)
     }
     return try draft.validated()
   }
-  static func calendarReplica(_ item: WorkspaceCalendarItemRecord, owner: String?, deleted: Bool, enabledTools: [String]? = nil) -> CompanionCalendarRecord {
+  static func calendarReplica(_ item: WorkspaceCalendarItemRecord, owner: String?, deleted: Bool, enabledTools: [String]? = nil) -> LibraryCalendarRecord {
     let draft = WorkspaceCalendarDraft(item)
     return .init(event: .init(id: item.id, revision: item.calendar.revision, draft: .init(title: draft.title, details: draft.details,
       startsAt: draft.startsAt, endsAt: draft.endsAt, allDay: draft.allDay, timeZoneID: draft.timeZoneID,

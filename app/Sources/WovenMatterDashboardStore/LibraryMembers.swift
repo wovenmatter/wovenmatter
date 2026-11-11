@@ -299,23 +299,23 @@ public struct MemberIdentity: Sendable {
       let staging = file.deletingLastPathComponent().appending(path: ".\(UUID().uuidString).key")
       let raw = Curve25519.Signing.PrivateKey().rawRepresentation.base64EncodedString()
       guard manager.createFile(atPath: staging.path, contents: Data((raw + "\n").utf8), attributes: [.posixPermissions: 0o600]) else {
-        throw CompanionAPIError(code: "identity_unavailable", message: "This machine's member key could not be written.")
+        throw LibraryAPIError(code: "identity_unavailable", message: "This machine's member key could not be written.")
       }
       // Never replace an existing key: another process may have created it.
       if (try? manager.linkItem(at: staging, to: file)) == nil, !manager.fileExists(atPath: file.path) {
         try? manager.removeItem(at: staging)
-        throw CompanionAPIError(code: "identity_unavailable", message: "This machine's member key could not be written.")
+        throw LibraryAPIError(code: "identity_unavailable", message: "This machine's member key could not be written.")
       }
       try? manager.removeItem(at: staging)
     }
     let attributes = try manager.attributesOfItem(atPath: file.path)
     guard (attributes[.type] as? FileAttributeType) == .typeRegular,
           ((attributes[.posixPermissions] as? NSNumber)?.intValue ?? 0o777) & 0o077 == 0 else {
-      throw CompanionAPIError(code: "identity_unavailable", message: "\(file.path) must be a regular file private to this user.")
+      throw LibraryAPIError(code: "identity_unavailable", message: "\(file.path) must be a regular file private to this user.")
     }
     let text = try String(contentsOf: file, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines)
     guard let raw = Data(base64Encoded: text), raw.count == 32 else {
-      throw CompanionAPIError(code: "identity_unavailable", message: "This machine's member key is unreadable.")
+      throw LibraryAPIError(code: "identity_unavailable", message: "This machine's member key is unreadable.")
     }
     return .init(deviceID: deviceID, kind: kind, key: try Curve25519.Signing.PrivateKey(rawRepresentation: raw))
   }

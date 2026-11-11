@@ -103,8 +103,8 @@ build-aware, signed full-update path.
   Apple notarization/Gatekeeper checks.
 - `scripts/test-app-termination.sh`: actual AppKit quit with deferred cleanup,
   including stopping a background backend on ordinary quit after extraction.
-- `scripts/test-changes.sh --companion-desktop`: shared protocol and macOS companion
-  integration for desktop package changes, without iOS simulator tests.
+- `scripts/test-changes.sh --cross-device-desktop`: shared protocol and macOS
+  cross-device integration for desktop package changes, without iOS simulator tests.
 - `scripts/test-changes.sh --desktop`: desktop source checks without simulators.
 
 Reference: [publishing](https://sparkle-project.org/documentation/publishing/).

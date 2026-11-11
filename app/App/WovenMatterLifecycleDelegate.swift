@@ -365,7 +365,7 @@ enum LocalExecutionRole: String {
     case developmentHost, frontend, backend
 
     nonisolated static let libraryClientPreferenceKey = "wovenmatter.library.client-mode"
-    #if COMPANION_FACADE_TESTS
+    #if APP_FACADE_TESTS
     // Test processes own explicitly injected, isolated stores and never connect
     // to or install the user's production server.
     static let current: LocalExecutionRole = .developmentHost

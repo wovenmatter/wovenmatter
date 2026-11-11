@@ -44,7 +44,7 @@ public enum OpenCodePermissionHandling {
     }
     /// Mobile can explicitly answer ordinary permission requests. Keep authentication
     /// and interactive forms on the Mac; native allow/ask/deny policies stay authoritative.
-    public static func companionRequestID(_ request: OpenCodeValue, sessionID: String) -> String? {
+    public static func libraryRequestID(_ request: OpenCodeValue, sessionID: String) -> String? {
         guard request["sessionID"].string == sessionID,
               let id = request["id"].string, id.hasPrefix("per"),
               let action = request["action"].string, !action.isEmpty,

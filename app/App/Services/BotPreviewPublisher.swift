@@ -14,14 +14,14 @@ struct BotPreview: Codable, Equatable, Sendable {
 
 @MainActor
 final class BotPreviewPublisher {
-    typealias MakeServe = @MainActor () -> CompanionTailscaleServe
+    typealias MakeServe = @MainActor () -> TailscaleServe
     private struct Key: Hashable { let botID: String; let port: Int }
-    private struct Published { var preview: BotPreview; let serve: CompanionTailscaleServe }
+    private struct Published { var preview: BotPreview; let serve: TailscaleServe }
     private let makeServe: MakeServe
     private var published: [Key: Published] = [:]
     static let maximumPreviews = 32
 
-    init(makeServe: @escaping MakeServe = { CompanionTailscaleServe() }) { self.makeServe = makeServe }
+    init(makeServe: @escaping MakeServe = { TailscaleServe() }) { self.makeServe = makeServe }
 
     /// Idempotent for the same bot and port; the runtime sends it again after a restart.
     func publish(botID: String, port: Int, containerPort: Int) async throws -> URL {

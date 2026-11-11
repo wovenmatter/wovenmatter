@@ -30,7 +30,7 @@ cat > "$app/Contents/Info.plist" <<'PLIST'
 <key>LSUIElement</key><true/>
 </dict></plist>
 PLIST
-xcrun swiftc -parse-as-library -swift-version 6 -D COMPANION_FACADE_TESTS \
+xcrun swiftc -parse-as-library -swift-version 6 -D APP_FACADE_TESTS \
   -module-cache-path "$cache_root/ModuleCache" \
   "$repo_root/app/App/WovenMatterLifecycleDelegate.swift" \
   "$repo_root/scripts/test-support/AppTerminationTests.swift" \

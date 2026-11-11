@@ -21,7 +21,7 @@ struct PendingLocalACPInteraction: Codable, Sendable, Equatable, Identifiable {
     let request: LocalACPInteractionRequest
 }
 
-struct CompanionRecoveredNoteDraft: Equatable, Identifiable {
+struct RecoveredNoteDraft: Equatable, Identifiable {
     let id: String
     let noteID: String
     let title: String
@@ -265,7 +265,7 @@ final class ApplicationModel {
     var noteActionIDs: Set<String> = []
     private var consumedBackendPrefills: [String: String] = [:]
     var pendingComposerPrefills: [String: String] = [:]
-    private(set) var companionRecoveredNoteDrafts: [CompanionRecoveredNoteDraft] = []
+    private(set) var recoveredNoteDrafts: [RecoveredNoteDraft] = []
     @ObservationIgnored
     private var recoveredNoteEntries: [String: DashboardNoteJournalEntry] = [:]
     private(set) var localACPSessionMetadata: [
@@ -362,14 +362,14 @@ final class ApplicationModel {
     @ObservationIgnored var federatedAdoptionTasks: [String: Task<Void, any Error>] = [:]
     @ObservationIgnored var adoptedExecutionConversations: Set<String> = []
     var federatedExecutionSnapshots: [String: FederatedExecutionSnapshot] = [:]
-    private(set) var peerAgentWorkspaces: [UUID: CompanionExecutionWorkspace] = [:]
+    private(set) var peerAgentWorkspaces: [UUID: ExecutionWorkspace] = [:]
     var federatedExecutionOwners: [String: String] = [:]
     /// The synced execution workspace registry, including iPhone and iPad Quick Chat workspaces.
-    var executionWorkspaceRegistry: [CompanionExecutionWorkspace] = []
+    var executionWorkspaceRegistry: [ExecutionWorkspace] = []
     @ObservationIgnored
-    lazy var companionCommands = CompanionCommandService(model: self)
+    lazy var libraryCommands = LibraryCommandService(model: self)
     @ObservationIgnored
-    lazy var companionHost = CompanionHostController(model: self)
+    lazy var libraryHost = LibraryHostController(model: self)
     private var noteWriteBehind: DashboardNoteWriteBehind?
     private(set) var noteEditingSuspended = false
     private var dashboardStoreStarted = false
@@ -454,14 +454,14 @@ final class ApplicationModel {
             closedLidPolicy: closedLidProtection.snapshot.policy,
             onWorkChanged: { [weak closedLidProtection] in closedLidProtection?.setWorking($0) })
         self.usage = ApplicationUsageModel(applicationDefaults: applicationDefaults, localUsageService: localUsageService ?? LocalUsageService(
-            homeDirectory: CompanionTestWorkspace.supportDirectory?.appending(path: "ProviderFixtureHome")
+            homeDirectory: IsolatedTestWorkspace.supportDirectory?.appending(path: "ProviderFixtureHome")
                 ?? FileManager.default.homeDirectoryForCurrentUser,
-            usageDatabaseURL: (CompanionTestWorkspace.supportDirectory ?? DevelopmentLaunch.supportDirectory)?
+            usageDatabaseURL: (IsolatedTestWorkspace.supportDirectory ?? DevelopmentLaunch.supportDirectory)?
                 .appending(path: "workspace.sqlite")))
         self.sessionSelectionPreferences = SessionSelectionPreferences(defaults: applicationDefaults)
         self.remoteWorkspaces = RemoteWorkspacesModel(defaults: applicationDefaults)
         self.localACPWorkspaceStore = LocalACPWorkspaceConfigurationStore(
-            homeDirectory: CompanionTestWorkspace.supportDirectory?.appending(path: "ProviderFixtureHome")
+            homeDirectory: IsolatedTestWorkspace.supportDirectory?.appending(path: "ProviderFixtureHome")
                 ?? DevelopmentLaunch.executionHome
                 ?? FileManager.default.homeDirectoryForCurrentUser,
             databasesDirectory: try? Self.dashboardSupportDirectory().appendingPathComponent("ManagedDatabases", isDirectory: true))
@@ -520,7 +520,7 @@ final class ApplicationModel {
             },
             committedRevision: { [database] entry in
                 guard let operationID = entry.mutationID else { return nil }
-                return try await database.companionDraftRevision(operationID: operationID)
+                return try await database.libraryDraftRevision(operationID: operationID)
             },
             completion: { [weak self] entry, result in
                 Task { @MainActor [weak self] in
@@ -530,17 +530,17 @@ final class ApplicationModel {
         )
     }
 
-    #if COMPANION_FACADE_TESTS
+    #if APP_FACADE_TESTS
     var runtimeMaintenanceFixture: (@Sendable (AgentRuntimeKind) async throws -> RuntimeInventory)?
     /// Facade fixtures launch remote harnesses without tailnet SSH options or MCP bridges.
-    var isCompanionFixture = false
+    var isFacadeFixture = false
 
     /// Installs explicit inert provider metadata while preserving real routing,
     /// session preferences, tools, persistence and note recovery.
-    func configureCompanionFixture(directory: URL) async throws {
+    func configureFacadeFixture(directory: URL) async throws {
         guard let dashboardStore else { throw ApplicationModelError.dashboardStoreUnavailable }
         titleGenerationSettings.isEnabled = false
-        isCompanionFixture = true
+        isFacadeFixture = true
         let runtimes = AgentRuntimeKind.allCases.filter { $0 != .opencode }
         localACPLaunchConfigurations = Dictionary(uniqueKeysWithValues: runtimes.map {
             ($0, LocalACPRuntimeLaunchConfiguration(runtimeKind: $0,
@@ -557,7 +557,7 @@ final class ApplicationModel {
                 database: dashboardStore.database)
         }
         if agentTools == nil { try await configureAgentTools(store: dashboardStore) }
-        agentTools?.companionFixtureMCPConnection = { _, local, _ in local }
+        agentTools?.facadeFixtureMCPConnection = { _, local, _ in local }
         await refreshWorkspace()
         state = .ready
     }
@@ -696,13 +696,13 @@ final class ApplicationModel {
             }
             remoteWorkspaces.sharedHostAdministration = { [weak self] id in
                 guard let self, let database = self.dashboardStore?.database,
-                      let workspace = try await database.companionExecutionWorkspaces().first(where: { $0.id == id && !$0.deleted }) else {
+                      let workspace = try await database.libraryExecutionWorkspaces().first(where: { $0.id == id && !$0.deleted }) else {
                     throw RemoteWorkspaceClientError.invalidResponse("This host is no longer in the workspace registry.")
                 }
-                return try await self.companionHost.hostAdministration(for: workspace)
+                return try await self.libraryHost.hostAdministration(for: workspace)
             }
             remoteWorkspaces.onHostInstalled = { [weak self] configuration in
-                self?.companionHost.setUpLinuxHost(configuration, restart: true)
+                self?.libraryHost.setUpLinuxHost(configuration, restart: true)
             }
             remoteWorkspaces.onRuntimeMaintenanceChanged = { [weak self] in
                 await self?.synchronizeRemoteAgentCatalog()
@@ -736,7 +736,7 @@ final class ApplicationModel {
                 try await writeBehind.replayAndFlush(recoveredEntries)
             } catch {
                 // Recovery conflicts preserve their journal entries but do not prevent
-                // unrelated conversations and the companion service from starting.
+                // unrelated conversations and device sharing from starting.
                 noteMutationError = error.localizedDescription
                 for entry in recoveredEntries {
                     noteDrafts[entry.noteID]?.fail(error.localizedDescription)
@@ -749,7 +749,7 @@ final class ApplicationModel {
             startBotsClient()
             startAgentToolRuntime()
             startDashboardStoreIfReady()
-            await companionHost.startForCentralDatabase()
+            await libraryHost.startForCentralDatabase()
             if DevelopmentLaunch.isLiveHost { try startDevelopmentConnectionService() }
             Task { [weak self] in
                 await self?.refreshDatabases()
@@ -1197,7 +1197,7 @@ final class ApplicationModel {
     }
 
     static func dashboardSupportDirectory() throws -> URL {
-        if let isolated = CompanionTestWorkspace.supportDirectory { return isolated }
+        if let isolated = IsolatedTestWorkspace.supportDirectory { return isolated }
         let fileManager = FileManager.default
         guard let applicationSupport = fileManager.urls(
             for: .applicationSupportDirectory,
@@ -1232,8 +1232,8 @@ final class ApplicationModel {
                 apply(snapshot)
             }
             guard self.dashboardStore === dashboardStore, generation == workspaceRefreshGeneration, !Task.isCancelled else { return }
-            federatedExecutionOwners = try await dashboardStore.database.companionExecutionOwners()
-            var registry = try await dashboardStore.database.companionExecutionWorkspaces()
+            federatedExecutionOwners = try await dashboardStore.database.libraryExecutionOwners()
+            var registry = try await dashboardStore.database.libraryExecutionWorkspaces()
             for workspace in liveLibraryClient?.executionWorkspaces ?? [] where !registry.contains(where: { $0.id == workspace.id }) { registry.append(workspace) }
             if executionWorkspaceRegistry != registry { executionWorkspaceRegistry = registry }
             for (id, owner) in backendReplica.owners { federatedExecutionOwners[id] = owner }
@@ -1989,7 +1989,7 @@ final class ApplicationModel {
             guard response.accepted else { throw ApplicationModelError.noteDraftSaveFailed }
         }, committedRevision: { entry in
             guard let id = entry.mutationID else { return nil }
-            return try await store.database.companionDraftRevision(operationID: id)
+            return try await store.database.libraryDraftRevision(operationID: id)
         }, completion: { [weak self] entry, result in
             Task { @MainActor [weak self] in await self?.completeNoteWrite(entry, result: result) }
         })
@@ -2020,7 +2020,7 @@ final class ApplicationModel {
             workspaceRefreshGeneration &+= 1
             noteRefreshTask?.cancel()
             if let operationID = entry.mutationID,
-               let committedRevision = try? await dashboardStore?.database.companionDraftRevision(operationID: operationID) {
+               let committedRevision = try? await dashboardStore?.database.libraryDraftRevision(operationID: operationID) {
                 guard let latest = noteDrafts[entry.noteID] else { return }
                 draft = latest
                 if entry.revision >= draft.persistedRevision {
@@ -2056,7 +2056,7 @@ final class ApplicationModel {
     private func refreshRecoveredNoteDrafts() {
         guard let entries = try? noteWriteBehind?.recoverableEntries() else { return }
         recoveredNoteEntries = [:]
-        companionRecoveredNoteDrafts = entries.map { entry in
+        recoveredNoteDrafts = entries.map { entry in
             let id = entry.mutationID ?? WorkspaceDatabase.recoveryCopyID(
                 sourceID: entry.noteID, title: entry.title, content: entry.content
             )
@@ -2064,7 +2064,7 @@ final class ApplicationModel {
             let error: String
             if case .failed(let message) = noteDrafts[entry.noteID]?.saveState { error = message }
             else { error = "Unsynced writing is preserved on this Mac." }
-            return CompanionRecoveredNoteDraft(id: id, noteID: entry.noteID, title: entry.title, error: error)
+            return RecoveredNoteDraft(id: id, noteID: entry.noteID, title: entry.title, error: error)
         }
     }
 
@@ -2073,7 +2073,7 @@ final class ApplicationModel {
     @discardableResult
     func preserveRecoveredNoteAsCopy(id: String) async throws -> String {
         guard let entry = recoveredNoteEntries[id], let dashboardStore, let noteWriteBehind else {
-            throw CompanionCommandService.CommandError.unavailable
+            throw LibraryCommandService.CommandError.unavailable
         }
         let copyID: String
         if isBackendFrontend {
@@ -2395,7 +2395,7 @@ final class ApplicationModel {
     private func stopBackendAgentDispatch(conversationID: String) async throws {
         await cancelAutomation(callerID: conversationID)
         guard !isBackendFrontend else { throw ApplicationModelError.dashboardStoreUnavailable }
-        if (try await dashboardStore?.database.companionExecutionOwner(conversationID: conversationID)) != nil {
+        if (try await dashboardStore?.database.libraryExecutionOwner(conversationID: conversationID)) != nil {
             let client = try centralExecutionClient()
             try await client.refresh(conversationID: conversationID)
             guard let runID = client.transcripts[conversationID]?.activeRunID else { return }
@@ -2531,9 +2531,9 @@ final class ApplicationModel {
             if let expectedNoteRevision {
                 guard await flushNoteDrafts() else { throw ApplicationModelError.noteDraftSaveFailed }
                 let noteID = note?.id ?? input.references.first(where: { $0.kind == .note })?.resourceID
-                guard let noteID, let canonical = try await dashboardStore.database.companionNote(id: noteID),
+                guard let noteID, let canonical = try await dashboardStore.database.libraryNote(id: noteID),
                       String(canonical.revision) == expectedNoteRevision else {
-                    throw CompanionCommandService.CommandError.noteRevisionChanged
+                    throw LibraryCommandService.CommandError.noteRevisionChanged
                 }
             }
         }
@@ -2781,7 +2781,7 @@ final class ApplicationModel {
             do { try await adoptRegisteredRemoteConversationIfNeeded(conversation) }
             catch { ensureConversationState(id: conversation.id).setError(error.localizedDescription); return }
         }
-        if (try? await dashboardStore?.database.companionExecutionOwner(conversationID: conversation.id)) != nil {
+        if (try? await dashboardStore?.database.libraryExecutionOwner(conversationID: conversation.id)) != nil {
             await refreshFederatedConversation(conversation.id); return
         }
         if isBackendFrontend {
@@ -3012,7 +3012,7 @@ final class ApplicationModel {
         guard let database = dashboardStore?.database,
               let workspace = try await database.pairedAgentWorkspaces()[agentID],
               let agent = try await database.dashboardAgents().first(where: { $0.id == agentID }) else {
-            throw CompanionAPIError(code: "unknown_workspace", message: "This paired workspace is unavailable. Reconnect its Mac to continue.")
+            throw LibraryAPIError(code: "unknown_workspace", message: "This paired workspace is unavailable. Reconnect its Mac to continue.")
         }
         let client = try centralExecutionClient()
         _ = try await client.createSession(workspace: workspace, runtimeKind: agent.runtimeKind,
@@ -3204,8 +3204,8 @@ final class ApplicationModel {
                 ?? FileManager.default.homeDirectoryForCurrentUser
 
             var sshOptions: @Sendable (String) throws -> [String] = RemoteWorkspaceTailnet.sshOptions
-            #if COMPANION_FACADE_TESTS
-            if isCompanionFixture { sshOptions = { _ in [] } }
+            #if APP_FACADE_TESTS
+            if isFacadeFixture { sshOptions = { _ in [] } }
             #endif
             return try RemoteHarnessLaunchResolver.resolve(
                 configuration: configuration,
@@ -3374,7 +3374,7 @@ final class ApplicationModel {
         Task {
             defer { installingLocalACPRuntimeKinds.remove(kind); updatingRuntimeKinds.remove(kind) }
             do {
-                #if COMPANION_FACADE_TESTS
+                #if APP_FACADE_TESTS
                 if let operation = runtimeMaintenanceFixture {
                     runtimeInventories[kind] = try await operation(kind)
                     checkedRuntimeKinds.insert(kind)
@@ -3539,7 +3539,7 @@ final class ApplicationModel {
         pendingSessionAccess.removeAll()
         for task in applyingSessionSelectionTasks.values { task.cancel() }
         applyingSessionSelectionTasks.removeAll()
-        companionHost.stop()
+        libraryHost.stop()
         let permissionIDs = pendingLocalACPPermissions.map(\.id)
         for permissionID in permissionIDs {
             resolveLocalACPPermission(id: permissionID, optionID: nil)
@@ -3629,7 +3629,7 @@ final class ApplicationModel {
     func canonicalActiveRunID(conversationID: String) async -> String? {
         guard let database = dashboardStore?.database else { return nil }
         do {
-            if try await database.companionExecutionOwner(conversationID: conversationID) != nil {
+            if try await database.libraryExecutionOwner(conversationID: conversationID) != nil {
                 let client = try centralExecutionClient()
                 try await client.refresh(conversationID: conversationID)
                 return client.transcripts[conversationID]?.activeRunID
@@ -3640,8 +3640,8 @@ final class ApplicationModel {
 
     func cancelCanonicalRun(conversationID: String, runID: String) async throws {
         guard let dashboardStore else { throw ApplicationModelError.dashboardStoreUnavailable }
-        if try await dashboardStore.database.companionExecutionOwner(conversationID: conversationID) != nil {
-            backendApplicationService?.recordCompanionStop(conversationID: conversationID)
+        if try await dashboardStore.database.libraryExecutionOwner(conversationID: conversationID) != nil {
+            backendApplicationService?.recordLibraryStop(conversationID: conversationID)
             cancelPendingAgentDispatch(conversationID: conversationID)
             let client = try centralExecutionClient()
             let barrier = agentStops.begin(conversationID: conversationID) {
@@ -3655,7 +3655,7 @@ final class ApplicationModel {
         }
         // Once the exact run is admitted, invalidate older preparation on every
         // surface and serialize native Stop before subsequent input.
-        backendApplicationService?.recordCompanionStop(conversationID: conversationID)
+        backendApplicationService?.recordLibraryStop(conversationID: conversationID)
         cancelPendingAgentDispatch(conversationID: conversationID)
         for pending in pendingLocalACPPermissions where pending.runID == runID {
             resolveLocalACPPermission(id: pending.id, optionID: nil)
@@ -4312,13 +4312,13 @@ extension ApplicationModel {
             if request.method == "development.disconnect" {
                 guard request.payload.count <= 4_096 else { throw BackendRPCError.invalidFrame }
                 let value = try JSONDecoder().decode(DevelopmentDisconnectRequest.self, from: request.payload)
-                try await companionHost.disconnectLocalDevelopment(value)
+                try await libraryHost.disconnectLocalDevelopment(value)
                 return .init(id: request.id)
             }
             if request.method == "development.connect" {
                 guard request.payload.count <= 4_096 else { throw BackendRPCError.invalidFrame }
                 let value = try JSONDecoder().decode(DevelopmentClientRequest.self, from: request.payload)
-                let connection = try await companionHost.connectLocalDevelopment(value)
+                let connection = try await libraryHost.connectLocalDevelopment(value)
                 return .init(id: request.id, result: try JSONEncoder().encode(connection))
             }
             if request.method == "analytics.preference" {
@@ -4427,7 +4427,7 @@ extension ApplicationModel {
                     for stop in stops { try await stop.value }
                     try await prepareOpenCodeInstancesToQuit()
                     if let client = liveLibraryClient { try await client.prepareForQuit() }
-                    try await companionHost.withdrawDevelopmentWorkspace()
+                    try await libraryHost.withdrawDevelopmentWorkspace()
                     developmentReplicaTask?.cancel()
                     agentTools?.stop()
                 } catch { backendStopping = false; throw error }

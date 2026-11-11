@@ -24,7 +24,7 @@ Claude Code and Grok Build bypassPermissions, OpenCode allow, Pi Durable full)
 on every workspace unless the user saved a different default; Ask stays
 available but is never the default.
 
-The new-chat chooser, sidebar creation actions, companion requests, and
+The new-chat chooser, sidebar creation actions, requests from the iOS app, and
 agent-created chats use these same creation methods. Agent-created chats use the
 destination workspace's saved defaults, including permission and tools, without
 capping them to the calling chat (Linux applies them in

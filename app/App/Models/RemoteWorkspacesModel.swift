@@ -187,13 +187,13 @@ final class RemoteWorkspacesModel {
         defaults.set(pendingHarnessSetupIDs.map(\.uuidString).sorted(), forKey: harnessSetupKey)
     }
 
-    #if COMPANION_FACADE_TESTS
-    private var companionFixtureWorkspaceIDs: Set<UUID> = []
-    func configureCompanionFixture(_ configuration: RemoteWorkspaceConfiguration,
+    #if APP_FACADE_TESTS
+    private var facadeFixtureWorkspaceIDs: Set<UUID> = []
+    func configureFacadeFixture(_ configuration: RemoteWorkspaceConfiguration,
                                    status: RemoteWorkspaceStatus, harnesses: [RemoteHarnessStatus],
                                    maintenance: [RemoteRuntimeMaintenance]) {
         // Captured readiness only: no credential authorization, clients or tunnels.
-        companionFixtureWorkspaceIDs.insert(configuration.id)
+        facadeFixtureWorkspaceIDs.insert(configuration.id)
         workspaces = [configuration]
         statuses = [configuration.id: status]
         self.harnesses = [configuration.id: harnesses]
@@ -1241,8 +1241,8 @@ final class RemoteWorkspacesModel {
         try await pending.task.value
     }
     func ensureDefaultAgent(_ configuration: RemoteWorkspaceConfiguration) async throws {
-        #if COMPANION_FACADE_TESTS
-        if companionFixtureWorkspaceIDs.contains(configuration.id) { return }
+        #if APP_FACADE_TESTS
+        if facadeFixtureWorkspaceIDs.contains(configuration.id) { return }
         #endif
         let identity = try requestIdentity(configuration)
         let payload = try await ProviderAccountCoordinator.shared.prepare(configuration.id.uuidString.lowercased())
@@ -1277,7 +1277,7 @@ final class RemoteWorkspacesModel {
     func provisionExecutionDevice(
         configuration: RemoteWorkspaceConfiguration, libraryID: String,
         ownerDeviceID: String, deviceID: String, deviceName: String
-    ) async throws -> CompanionExecutionCredential {
+    ) async throws -> ExecutionCredential {
         let identity = try requestIdentity(configuration)
         let client = try await serviceClient(for: configuration)
         try requireCurrent(identity)
@@ -1338,7 +1338,7 @@ final class RemoteWorkspacesModel {
         try requireCurrent(identity)
     }
 
-    func executionPublisherStatus(configuration: RemoteWorkspaceConfiguration) async throws -> CompanionWorkspacePublisherStatus {
+    func executionPublisherStatus(configuration: RemoteWorkspaceConfiguration) async throws -> LibraryWorkspacePublisherStatus {
         let identity = try requestIdentity(configuration)
         let client = try await serviceClient(for: configuration)
         try requireCurrent(identity)
@@ -1346,7 +1346,7 @@ final class RemoteWorkspacesModel {
         try requireCurrent(identity)
         return value
     }
-    func configureExecutionPublisher(configuration: RemoteWorkspaceConfiguration, grant: CompanionWorkspacePublisherGrant) async throws {
+    func configureExecutionPublisher(configuration: RemoteWorkspaceConfiguration, grant: LibraryWorkspacePublisherGrant) async throws {
         let identity = try requestIdentity(configuration)
         guard grant.workspaceID == configuration.id.uuidString.lowercased() else { throw RemoteWorkspaceClientError.invalidResponse("The publisher belongs to another execution workspace.") }
         let client = try await serviceClient(for: configuration)
@@ -1356,7 +1356,7 @@ final class RemoteWorkspacesModel {
         guard value.configured, value.grantID == grant.grantID else { throw RemoteWorkspaceClientError.invalidResponse("The execution owner did not save its publisher grant.") }
     }
 
-    func executionMCPLibraryStatus(configuration: RemoteWorkspaceConfiguration) async throws -> CompanionWorkspacePublisherStatus {
+    func executionMCPLibraryStatus(configuration: RemoteWorkspaceConfiguration) async throws -> LibraryWorkspacePublisherStatus {
         let identity = try requestIdentity(configuration)
         let client = try await serviceClient(for: configuration)
         try requireCurrent(identity)
@@ -1388,7 +1388,7 @@ final class RemoteWorkspacesModel {
         try requireCurrent(identity)
     }
 
-    func adoptExecutionConversation(configuration: RemoteWorkspaceConfiguration, adoption: CompanionExecutionAdoption) async throws -> CompanionConversation {
+    func adoptExecutionConversation(configuration: RemoteWorkspaceConfiguration, adoption: ExecutionAdoption) async throws -> LibraryConversation {
         let identity = try requestIdentity(configuration)
         guard adoption.workspaceID == configuration.id.uuidString.lowercased() else {
             throw RemoteWorkspaceClientError.invalidResponse("The adoption belongs to another execution workspace.")

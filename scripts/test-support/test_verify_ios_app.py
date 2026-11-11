@@ -61,7 +61,7 @@ def nested_binary(app, data):
 def mutations():
     info = lambda change: lambda app: edit_plist(app / 'Info.plist', change)
     yield 'wrong product', info(lambda v: v.update(CFBundleIdentifier='com.example.other'))
-    yield 'dev identity in Release', info(lambda v: v.update(CFBundleIdentifier='com.wovenmatter.companion.dev'))
+    yield 'dev identity in Release', info(lambda v: v.update(CFBundleIdentifier='com.wovenmatter.wovenmatter.dev'))
     yield 'dev name in Release', info(lambda v: v.update(CFBundleDisplayName='Woven Matter Dev'))
     yield 'unexpanded build setting', info(lambda v: v.update(CFBundleDisplayName='$(WOVENMATTER_DISPLAY_NAME)'))
     yield 'unexpanded version', info(lambda v: v.update(CFBundleVersion='$(CURRENT_PROJECT_VERSION)'))
@@ -78,7 +78,7 @@ def mutations():
     yield 'string export compliance', info(lambda v: v.update(ITSAppUsesNonExemptEncryption='NO'))
     yield 'wrong icon name', info(lambda v: v.update(CFBundleIcons={'CFBundlePrimaryIcon': {'CFBundleIconName': 'Other'}}))
     yield 'missing icon catalog', lambda app: (app / 'Assets.car').unlink()
-    yield 'missing executable', lambda app: (app / 'WovenMatterCompanion').unlink()
+    yield 'missing executable', lambda app: (app / 'WovenMatter').unlink()
     yield 'nested wasm', lambda app: ((app / 'Frameworks/Runtime.framework').mkdir(parents=True), (app / 'Frameworks/Runtime.framework/python.wasm').write_bytes(b'w'))
     yield 'nested embedded execution', lambda app: ((app / 'PlugIns').mkdir(), (app / 'PlugIns/EmbeddedExecution_Resources.bundle').mkdir())
     yield 'missing license', lambda app: (app / 'LUCIDE_LICENSE.txt').unlink()
@@ -98,11 +98,11 @@ def mutations():
     yield 'tracking data type', privacy(lambda v: collected(v)[0].update(NSPrivacyCollectedDataTypeTracking=True))
     yield 'analytics linked', privacy(lambda v: collected(v)[3].update(NSPrivacyCollectedDataTypeLinked=True))
     yield 'wrong purpose', privacy(lambda v: collected(v)[2].update(NSPrivacyCollectedDataTypePurposes=['NSPrivacyCollectedDataTypePurposeThirdPartyAdvertising']))
-    yield 'debug fixtures', lambda app: (app / 'WovenMatterCompanion').write_bytes(b'\xcf\xfa\xed\xfe WOVENMATTER_UI_FIXTURE binary')
-    yield 'fixture namespace lookup', lambda app: (app / 'WovenMatterCompanion').write_bytes(b'\xcf\xfa\xed\xfe WOVENMATTER_UI_FIXTURE_NAMESPACE\0binary')
-    yield 'fixture scenario lookup', lambda app: (app / 'WovenMatterCompanion').write_bytes(b'\xcf\xfa\xed\xfe WOVENMATTER_UI_SCENARIO\0binary')
-    yield 'fixture tab lookup', lambda app: (app / 'WovenMatterCompanion').write_bytes(b'\xcf\xfa\xed\xfe WOVENMATTER_UI_TAB\0binary')
-    yield 'development tailnet', lambda app: (app / 'WovenMatterCompanion').write_bytes(b'\xcf\xfa\xed\xfe WOVENMATTER_DEV_TAILNET\0')
+    yield 'debug fixtures', lambda app: (app / 'WovenMatter').write_bytes(b'\xcf\xfa\xed\xfe WOVENMATTER_UI_FIXTURE binary')
+    yield 'fixture namespace lookup', lambda app: (app / 'WovenMatter').write_bytes(b'\xcf\xfa\xed\xfe WOVENMATTER_UI_FIXTURE_NAMESPACE\0binary')
+    yield 'fixture scenario lookup', lambda app: (app / 'WovenMatter').write_bytes(b'\xcf\xfa\xed\xfe WOVENMATTER_UI_SCENARIO\0binary')
+    yield 'fixture tab lookup', lambda app: (app / 'WovenMatter').write_bytes(b'\xcf\xfa\xed\xfe WOVENMATTER_UI_TAB\0binary')
+    yield 'development tailnet', lambda app: (app / 'WovenMatter').write_bytes(b'\xcf\xfa\xed\xfe WOVENMATTER_DEV_TAILNET\0')
     yield 'fixtures in nested framework', lambda app: nested_binary(app, b' WOVENMATTER_UI_FIXTURE\0')
 
 
@@ -131,7 +131,7 @@ with tempfile.TemporaryDirectory() as temporary:
         expect_failure(run_cli(prefix, env, [str(valid), 'distribution', '--version', '0.1.0']), 'unexpected version')
         expect_failure(run_cli(prefix, env, [str(valid), 'distribution', '--build', '18']), 'unexpected build number')
     dev = make_app(base / 'dev', 'dev')
-    (dev / 'WovenMatterCompanion').write_bytes(b'\xcf\xfa\xed\xfe WOVENMATTER_UI_FIXTURE')
+    (dev / 'WovenMatter').write_bytes(b'\xcf\xfa\xed\xfe WOVENMATTER_UI_FIXTURE')
     if run_cli(*INTERPRETERS[1], [str(dev), 'dev']).returncode != 0:
         fail('a Debug bundle with fixtures was rejected for the dev profile')
     for index, (label, mutate) in enumerate(mutations()):
@@ -152,7 +152,7 @@ with tempfile.TemporaryDirectory() as temporary:
             for entry, data in entries:
                 archive.writestr(entry, data)
         return path
-    payload = [(f'Payload/WovenMatterCompanion.app/{path.relative_to(valid)}', path.read_bytes())
+    payload = [(f'Payload/WovenMatter.app/{path.relative_to(valid)}', path.read_bytes())
                for path in sorted(valid.rglob('*')) if path.is_file()]
     for label, entries in [
         ('zip traversal', payload + [('Payload/../escape.txt', b'x')]),

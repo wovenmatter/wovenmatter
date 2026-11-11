@@ -1,0 +1,113 @@
+import WorkspaceFixtures
+import Foundation
+import Testing
+import WovenMatterCore
+import WovenMatterClient
+@testable import WovenMatterDashboardStore
+@testable import WovenMatterAppFacade
+
+@MainActor @Suite(.serialized)
+struct LibraryWorkspaceFeaturesTests {
+    @Test func libraryDownloadPreservesFileExtensionForPreview() async throws {
+        let fixture = try await FacadeFixture(); defer { fixture.remove() }
+        let chat = try await fixture.database.createFixtureLocalACPSession(runtimeKind: .codex, title: "Budget", ownerDeviceID: UUID())
+        let source = fixture.directory.appending(path: "budget.csv")
+        let bytes = Data("Category,Amount\nTravel,120".utf8)
+        try bytes.write(to: source)
+        let run = try await fixture.database.beginLocalACPRun(conversationID: chat, input: .init(text: "Create a budget"))
+        try await fixture.database.replaceLocalACPAssistantMessage(runID: run.runID, content: "[Budget](./budget.csv)")
+        try await fixture.database.completeLocalACPRun(runID: run.runID)
+        try await fixture.store.library.synchronize(locations: [.init(conversationID: chat, name: "Local", root: fixture.directory.path)], remoteWorkspace: { _ in nil })
+        let id = WorkspaceLibraryItem.identifier(messageID: run.assistantMessageID, source: "./budget.csv")
+        guard case .file(let file) = try await fixture.model.libraryCommands.readWorkspace(.libraryFile(id: id)) else {
+            Issue.record("Missing retained download"); return
+        }
+        #expect(file.name == "Budget.csv")
+        #expect(file.data == bytes)
+        #expect(await fixture.recorder.deliveries.isEmpty)
+    }
+
+    @Test func goalControlsUseTheOwningSessionAndPublishStatus() async throws {
+        let fixture = try await FacadeFixture(); defer { fixture.remove() }
+        let id = try await fixture.createConversation()
+        let service = fixture.model.libraryCommands
+        let command = LibraryCommand(deviceID: fixture.device, kind: .workspace,
+            workspaceAction: .goal(id: id, mutation: .set(objective: "Verify owner work", tokenBudget: nil, turnBudget: 2)))
+        let receipt = try await service.execute(command, deviceID: fixture.device)
+        #expect(receipt.status == .completed, "\(receipt.message ?? "")")
+        #expect(try await service.execute(command, deviceID: fixture.device) == receipt)
+        guard case .session(let settings) = try await service.readWorkspace(.session(id: id)) else { Issue.record("Missing session status"); return }
+        let goal = try #require(settings.goal)
+        #expect(goal.sessionID == id && goal.status == .active)
+        try await service.performWorkspaceAction(.goal(id: id, mutation: .pause(id: goal.id)))
+        #expect(try await fixture.database.sessionGoals().first?.status == .paused)
+        try await service.performWorkspaceAction(.goal(id: id, mutation: .clear(id: goal.id)))
+        #expect(try await fixture.database.sessionGoals().isEmpty)
+        #expect(await fixture.recorder.deliveries.isEmpty)
+    }
+
+    @Test func managementExportsAndReplayPreserveCanonicalState() async throws {
+        let fixture = try await FacadeFixture(); defer { fixture.remove() }
+        let service = fixture.model.libraryCommands
+        let id = try await fixture.database.createNote(folderID: nil, title: "Original", content: NoteDocument(blocks: [.richText(.init(text: "Keep this writing"))]).encoded())
+        let revision = String(try #require(try await fixture.database.libraryNote(id: id)).revision)
+        let command = LibraryCommand(deviceID: fixture.device, kind: .workspace,
+            workspaceAction: .note(id: id, action: "rename", revision: revision, title: "Renamed", folderID: nil))
+        let result = try await service.execute(command, deviceID: fixture.device)
+        #expect(result.status == .completed, "\(result.message ?? "")")
+        #expect(try await service.execute(command, deviceID: fixture.device) == result)
+        #expect(try await fixture.database.libraryNote(id: id)?.title == "Renamed")
+        let stale = LibraryCommand(deviceID: fixture.device, kind: .workspace,
+            workspaceAction: .note(id: id, action: "trash", revision: revision, title: nil, folderID: nil))
+        #expect(try await service.execute(stale, deviceID: fixture.device).status == .rejected)
+        let current = String(try #require(try await fixture.database.libraryNote(id: id)).revision)
+        guard case .file(let file) = try await service.readWorkspace(.exportNote(id: id, format: "standard", revision: current)) else { Issue.record("Missing export"); return }
+        #expect(String(decoding: file.data, as: UTF8.self).contains("Keep this writing"))
+        try await service.performWorkspaceAction(.note(id: id, action: "trash", revision: current, title: nil, folderID: nil))
+        guard case .trash(let items) = try await service.readWorkspace(.trash) else { Issue.record("Missing trash"); return }
+        let deleted = try #require(items.first { $0.id == id })
+        try await service.performWorkspaceAction(.note(id: id, action: "restore", revision: try #require(deleted.revision), title: nil, folderID: nil))
+        #expect(try await fixture.database.libraryNote(id: id)?.title == "Renamed")
+    }
+
+    @Test func calendarSeriesRetainsOriginalStartAndRejectsStaleEdits() async throws {
+        let fixture = try await FacadeFixture(); defer { fixture.remove() }
+        let service = fixture.model.libraryCommands
+        let id = UUID().uuidString.lowercased(), start = Date().addingTimeInterval(86_400)
+        let draft = LibraryCalendarDraft(title: "Series", startsAt: start, recurrenceUnit: "day")
+        try await service.performWorkspaceAction(.saveCalendar(id: id, revision: nil, draft: draft))
+        guard case .calendar(let events) = try await service.readWorkspace(.calendar(from: start.addingTimeInterval(-1), to: start.addingTimeInterval(4 * 86_400))) else { Issue.record("Missing calendar"); return }
+        #expect(events.count >= 3)
+        #expect(events.allSatisfy { abs($0.draft.startsAt.timeIntervalSince(start)) < 1 })
+        #expect(events[1].startsAt > events[0].startsAt)
+        let revision = try #require(events.first?.revision)
+        var edited = draft; edited.title = "Updated series"
+        try await service.performWorkspaceAction(.saveCalendar(id: id, revision: revision, draft: edited))
+        await #expect(throws: (any Error).self) {
+            try await service.performWorkspaceAction(.saveCalendar(id: id, revision: revision, draft: draft))
+        }
+        let next = try #require(try await fixture.database.calendarItems().first)
+        try await service.performWorkspaceAction(.deleteCalendar(id: id, revision: next.calendar.revision, occurrence: nil))
+        #expect(try await fixture.database.calendarItems().isEmpty)
+        #expect(await fixture.recorder.deliveries.isEmpty)
+    }
+
+    @Test func settingsReadsNeverStartAgentAndInvalidToolsAreRejected() async throws {
+        let fixture = try await FacadeFixture(); defer { fixture.remove() }
+        let id = try await fixture.database.createFixtureLocalACPSession(runtimeKind: .defaultAgent, title: "Settings", ownerDeviceID: UUID())
+        let service = fixture.model.libraryCommands
+        guard case .session(let settings) = try await service.readWorkspace(.session(id: id)) else { Issue.record("Missing settings"); return }
+        #expect(settings.availableTools.map(\.id).contains("calendar"))
+        try await service.performWorkspaceAction(.sessionTools(id: id, enabled: ["notes", "library"], confirmPausingTimers: true))
+        #expect(try await fixture.database.sessionTools(id).enabled == [.notes, .library, .goals, .html])
+        // Enabling Executor must go through the desktop broker. An unconfigured
+        // broker cannot grant mobile authority by merely changing database flags.
+        await #expect(throws: (any Error).self) {
+            try await service.performWorkspaceAction(.sessionTools(id: id, enabled: ["notes", "library", "executor"], confirmPausingTimers: true))
+        }
+        #expect(try await fixture.database.sessionTools(id).enabled == [.notes, .library, .goals, .html])
+        await #expect(throws: (any Error).self) { try await service.performWorkspaceAction(.sessionTools(id: id, enabled: ["unknown"], confirmPausingTimers: false)) }
+        #expect(await fixture.recorder.deliveries.isEmpty)
+        #expect(await fixture.recorder.configurations.isEmpty)
+    }
+}

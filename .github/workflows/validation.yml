@@ -74,11 +74,11 @@ jobs:
         run: |
           mkdir -p "$WOVENMATTER_TEST_CACHE_DIR"
           scripts/test-changes.sh --native 2>&1 | tee "$WOVENMATTER_TEST_CACHE_DIR/desktop.log"
-      - name: Test companion integration on the same runner
+      - name: Test cross-device integration on the same runner
         shell: bash
         run: |
           mkdir -p "$WOVENMATTER_TEST_CACHE_DIR"
-          scripts/test-changes.sh --companion-desktop 2>&1 | tee "$WOVENMATTER_TEST_CACHE_DIR/companion.log"
+          scripts/test-changes.sh --cross-device-desktop 2>&1 | tee "$WOVENMATTER_TEST_CACHE_DIR/cross-device.log"
       - name: Verify signed full-only update round trip
         run: python3 scripts/test-full-updates.py
       - name: Preserve desktop failure diagnostics
@@ -137,8 +137,8 @@ jobs:
             ${{ env.WOVENMATTER_IOS_TEST_CACHE_DIR }}/modules
             ${{ env.WOVENMATTER_IOS_TEST_CACHE_DIR }}/xcode/Build/Intermediates.noindex
             ${{ env.WOVENMATTER_IOS_TEST_CACHE_DIR }}/xcode/SourcePackages
-          key: ios-v1-${{ runner.arch }}-${{ matrix.device }}-${{ steps.toolchain.outputs.key }}-${{ hashFiles('ios/Package.swift', 'shared/Package.swift', 'ios/WovenMatterCompanion.xcodeproj/project.pbxproj') }}-${{ github.sha }}
-          restore-keys: ios-v1-${{ runner.arch }}-${{ matrix.device }}-${{ steps.toolchain.outputs.key }}-${{ hashFiles('ios/Package.swift', 'shared/Package.swift', 'ios/WovenMatterCompanion.xcodeproj/project.pbxproj') }}-
+          key: ios-v1-${{ runner.arch }}-${{ matrix.device }}-${{ steps.toolchain.outputs.key }}-${{ hashFiles('ios/Package.swift', 'shared/Package.swift', 'ios/WovenMatter.xcodeproj/project.pbxproj') }}-${{ github.sha }}
+          restore-keys: ios-v1-${{ runner.arch }}-${{ matrix.device }}-${{ steps.toolchain.outputs.key }}-${{ hashFiles('ios/Package.swift', 'shared/Package.swift', 'ios/WovenMatter.xcodeproj/project.pbxproj') }}-
       - name: Test native mobile flows
         env:
           WOVENMATTER_IOS_SIMULATOR_DEVICE_TYPE: ${{ matrix.device == 'iPhone' && 'com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro' || 'com.apple.CoreSimulator.SimDeviceType.iPad-Pro-11-inch-M4-8GB' }}

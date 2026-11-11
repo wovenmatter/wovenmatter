@@ -1,4 +1,4 @@
-import CompanionClient
+import LibraryClient
 import Foundation
 import Testing
 import WovenMatterCore
@@ -10,15 +10,15 @@ import WovenMatterClient
 struct CentralExecutionClientTests {
     @Test func importedConversationRoutesThroughBackendAndRetainsLostAcknowledgement() async throws {
         let fixture = try await FacadeFixture(); defer { fixture.remove() }
-        let identity = try await fixture.database.companionLibraryIdentity()
-        let workspace = try await fixture.database.registerCompanionExecutionWorkspace(.init(workspace: .init(
+        let identity = try await fixture.database.libraryIdentity()
+        let workspace = try await fixture.database.registerExecutionWorkspace(.init(workspace: .init(
             id: UUID().uuidString.lowercased(), libraryID: identity.libraryID, ownerDeviceID: identity.hostDeviceID,
             kind: .linux, name: "Independent owner", endpoint: URL(string: "https://fixture.ts.net/wovenmatter"), executionDeviceID: UUID().uuidString.lowercased())), deviceID: identity.hostDeviceID)
-        let conversation = CompanionConversation(id: UUID().uuidString.lowercased(), title: "Remote", providerID: "pi-durable", routeID: workspace.id,
+        let conversation = LibraryConversation(id: UUID().uuidString.lowercased(), title: "Remote", providerID: "pi-durable", routeID: workspace.id,
             libraryID: identity.libraryID, workspaceID: workspace.id)
-        let origin = CompanionJournalEntry(workspaceID: workspace.id, originSequence: 1, conversationID: conversation.id,
+        let origin = LibraryJournalEntry(workspaceID: workspace.id, originSequence: 1, conversationID: conversation.id,
             kind: .conversation, conversation: conversation)
-        let publisher = try await fixture.database.issueCompanionWorkspacePublisher(workspaceID: workspace.id,
+        let publisher = try await fixture.database.issueLibraryWorkspacePublisher(workspaceID: workspace.id,
             endpoint: URL(string: "https://central.ts.net/wovenmatter")!, deviceID: identity.hostDeviceID)
         try await publish([origin], grant: publisher, database: fixture.database)
         let remote = CentralExecutionFixtureTransport(workspace: workspace, conversation: conversation, entries: [origin])
@@ -35,8 +35,8 @@ struct CentralExecutionClientTests {
         fixture.model.federatedExecutionClient = try make()
         await fixture.model.federatedExecutionClient?.refreshRegisteredWorkspaces()
         #expect(fixture.model.federatedExecutionClient?.transcripts[conversation.id]?.messages.map(\.content) == ["Exactly once"])
-        #expect(try await fixture.database.companionFederatedTranscript(conversationID: conversation.id)?.messages.isEmpty != false)
-        #expect(try await fixture.database.companionExecutionOriginCursor(workspaceID: workspace.id) == 1)
+        #expect(try await fixture.database.libraryFederatedTranscript(conversationID: conversation.id)?.messages.isEmpty != false)
+        #expect(try await fixture.database.libraryExecutionOriginCursor(workspaceID: workspace.id) == 1)
         let observer = try WorkspaceJournal(file: journal)
         #expect(await observer.snapshot().directCursors[workspace.id] == 2)
         #expect(await observer.snapshot().pendingEntries.isEmpty)
@@ -63,27 +63,27 @@ struct CentralExecutionClientTests {
         let state = try await fixture.model.performFederatedExecution(.refresh(conversationID: conversation.id))
         #expect(state.online)
         #expect(state.transcript?.messages.map(\.content) == ["Exactly once"])
-        #expect(try await fixture.database.companionExecutionOriginCursor(workspaceID: workspace.id) == 1)
+        #expect(try await fixture.database.libraryExecutionOriginCursor(workspaceID: workspace.id) == 1)
         #expect(await remote.requestedCursors.last == 2)
         try await publish(await remote.entries, grant: publisher, database: fixture.database)
-        #expect(try await fixture.database.companionFederatedTranscript(conversationID: conversation.id)?.messages.map(\.content) == ["Exactly once"])
-        #expect(try await fixture.database.companionExecutionOriginCursor(workspaceID: workspace.id) == 2)
+        #expect(try await fixture.database.libraryFederatedTranscript(conversationID: conversation.id)?.messages.map(\.content) == ["Exactly once"])
+        #expect(try await fixture.database.libraryExecutionOriginCursor(workspaceID: workspace.id) == 2)
     }
 
     @Test func malformedReplayCannotAdvanceAuthoritativeOrigin() async throws {
         let fixture = try await FacadeFixture(); defer { fixture.remove() }
-        let identity = try await fixture.database.companionLibraryIdentity()
-        let workspace = try await fixture.database.registerCompanionExecutionWorkspace(.init(workspace: .init(
+        let identity = try await fixture.database.libraryIdentity()
+        let workspace = try await fixture.database.registerExecutionWorkspace(.init(workspace: .init(
             id: UUID().uuidString.lowercased(), libraryID: identity.libraryID, ownerDeviceID: identity.hostDeviceID,
             kind: .linux, name: "Independent owner", endpoint: URL(string: "https://fixture.ts.net/wovenmatter"), executionDeviceID: UUID().uuidString.lowercased())), deviceID: identity.hostDeviceID)
-        let conversation = CompanionConversation(id: UUID().uuidString.lowercased(), title: "Remote", providerID: "pi-durable", routeID: workspace.id,
+        let conversation = LibraryConversation(id: UUID().uuidString.lowercased(), title: "Remote", providerID: "pi-durable", routeID: workspace.id,
             libraryID: identity.libraryID, workspaceID: workspace.id)
-        let origin = CompanionJournalEntry(workspaceID: workspace.id, originSequence: 1, conversationID: conversation.id,
+        let origin = LibraryJournalEntry(workspaceID: workspace.id, originSequence: 1, conversationID: conversation.id,
             kind: .conversation, conversation: conversation)
-        let publisher = try await fixture.database.issueCompanionWorkspacePublisher(workspaceID: workspace.id,
+        let publisher = try await fixture.database.issueLibraryWorkspacePublisher(workspaceID: workspace.id,
             endpoint: URL(string: "https://central.ts.net/wovenmatter")!, deviceID: identity.hostDeviceID)
         try await publish([origin], grant: publisher, database: fixture.database)
-        let history = CompanionJournalEntry(workspaceID: workspace.id, originSequence: 2, conversationID: conversation.id,
+        let history = LibraryJournalEntry(workspaceID: workspace.id, originSequence: 2, conversationID: conversation.id,
             kind: .transcript, transcript: .init(conversationID: conversation.id, messages: (0..<100).map { index in
                 .init(id: UUID().uuidString.lowercased(), conversationID: conversation.id, role: "user", content: "Saved \(index)")
             }))
@@ -94,7 +94,7 @@ struct CentralExecutionClientTests {
             provision: { _ in .init(workspace: workspace, deviceID: identity.hostDeviceID, token: "fixture-only") },
             makeTransport: { _ in remote }, loadCredential: { _ in nil }, saveCredential: { _ in })
         await #expect(throws: (any Error).self) { try await client.refresh(conversationID: conversation.id) }
-        #expect(try await fixture.database.companionExecutionOriginCursor(workspaceID: workspace.id) == 2)
+        #expect(try await fixture.database.libraryExecutionOriginCursor(workspaceID: workspace.id) == 2)
         #expect(client.onlineWorkspaces.isEmpty)
         let observer = try WorkspaceJournal(file: fixture.directory.appending(path: "commands.json"))
         #expect(await observer.snapshot().directCursors[workspace.id] == nil)
@@ -112,22 +112,22 @@ struct CentralExecutionClientTests {
         #expect(client.errors[workspace.id] != nil)
         #expect(await fixture.recorder.deliveries.isEmpty)
     }
-    private func publish(_ entries: [CompanionJournalEntry], grant: CompanionWorkspacePublisherGrant, database: WorkspaceDatabase) async throws {
+    private func publish(_ entries: [LibraryJournalEntry], grant: LibraryWorkspacePublisherGrant, database: WorkspaceDatabase) async throws {
         let path = "/v1/federation/publisher/journal"
-        let request = CompanionHTTPRequest(method: "POST", target: path,
+        let request = LibraryHTTPRequest(method: "POST", target: path,
             headers: ["authorization": "Bearer " + grant.token, "x-woven-workspace": grant.libraryID],
-            body: try JSONEncoder().encode(CompanionJournalBatch(libraryID: grant.libraryID, entries: entries)))
-        let response = try await CompanionWorkspacePublisherAPI.handle(request, path: path, database: database)
+            body: try JSONEncoder().encode(LibraryJournalBatch(libraryID: grant.libraryID, entries: entries)))
+        let response = try await LibraryWorkspacePublisherAPI.handle(request, path: path, database: database)
         #expect(response.status == 200)
     }
 
 }
 
 private actor CentralExecutionFixtureTransport: ExecutionWorkspaceTransport {
-    let workspace: CompanionExecutionWorkspace
-    let conversation: CompanionConversation
-    var entries: [CompanionJournalEntry]
-    var receipts: [String: CompanionCommandReceipt] = [:]
+    let workspace: ExecutionWorkspace
+    let conversation: LibraryConversation
+    var entries: [LibraryJournalEntry]
+    var receipts: [String: LibraryCommandReceipt] = [:]
     var executions = 0
     var eventRequests = 0
     var requestedCursors: [Int64] = []
@@ -135,28 +135,28 @@ private actor CentralExecutionFixtureTransport: ExecutionWorkspaceTransport {
     func setOffline(_ value: Bool) { offline = value }
     var lostACK = false
     var broken = false
-    init(workspace: CompanionExecutionWorkspace, conversation: CompanionConversation, entries: [CompanionJournalEntry]) {
+    init(workspace: ExecutionWorkspace, conversation: LibraryConversation, entries: [LibraryJournalEntry]) {
         self.workspace = workspace; self.conversation = conversation; self.entries = entries
     }
-    func identity() throws -> CompanionExecutionWorkspace { if offline { throw MobileConnectionError.offline }; return workspace }
-    func providers() -> [CompanionProvider] { [] }
-    func pending() -> [CompanionPendingInteraction] { [] }
-    func receipt(_ id: String) -> CompanionCommandReceipt? { receipts[id] }
-    func conversations() -> [CompanionConversation] { [conversation] }
-    func capabilities(_ id: String) -> CompanionProvider { .init(id: "pi-durable", runtimeKind: "defaultAgent", displayName: "Pi Durable", available: true, canSteer: true, canStop: true) }
-    func transcript(_ id: String) -> CompanionTranscript {
+    func identity() throws -> ExecutionWorkspace { if offline { throw MobileConnectionError.offline }; return workspace }
+    func providers() -> [LibraryProvider] { [] }
+    func pending() -> [PendingInteraction] { [] }
+    func receipt(_ id: String) -> LibraryCommandReceipt? { receipts[id] }
+    func conversations() -> [LibraryConversation] { [conversation] }
+    func capabilities(_ id: String) -> LibraryProvider { .init(id: "pi-durable", runtimeKind: "defaultAgent", displayName: "Pi Durable", available: true, canSteer: true, canStop: true) }
+    func transcript(_ id: String) -> LibraryTranscript {
         entries.last(where: { $0.transcript != nil })?.transcript ?? .init(conversationID: id)
     }
-    func events(after: Int64) throws -> CompanionJournalPage {
+    func events(after: Int64) throws -> LibraryJournalPage {
         if offline { throw MobileConnectionError.offline }
         eventRequests += 1; requestedCursors.append(after)
         let available = entries.filter { $0.originSequence > after }
         return .init(libraryID: workspace.libraryID, cursor: after + Int64(available.count) + (broken ? 1 : 0), entries: available)
     }
-    func command(_ command: CompanionCommand) throws -> CompanionCommandReceipt {
+    func command(_ command: LibraryCommand) throws -> LibraryCommandReceipt {
         if let saved = receipts[command.commandID] { return saved }
         executions += 1
-        let receipt = CompanionCommandReceipt(commandID: command.commandID, deviceID: command.deviceID,
+        let receipt = LibraryCommandReceipt(commandID: command.commandID, deviceID: command.deviceID,
             status: .completed, conversationID: conversation.id, workspaceID: workspace.id)
         receipts[command.commandID] = receipt
         entries.append(.init(workspaceID: workspace.id, originSequence: Int64(entries.count + 1), conversationID: conversation.id,

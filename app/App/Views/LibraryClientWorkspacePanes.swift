@@ -1,7 +1,7 @@
 import SwiftUI
 import QuickLook
-import CompanionClient
-import WovenMatterCompanion
+import LibraryClient
+import WovenMatterShared
 import WovenMatterCore
 
 struct LibraryClientPaneHeader<Actions: View>: View {
@@ -16,7 +16,7 @@ struct LibraryClientPaneHeader<Actions: View>: View {
 struct LibraryClientLibraryPane: View {
   @Environment(\.openDocumentPreview) private var openPreview
   @Bindable var model: CentralLibraryClientModel
-  @State private var items: [CompanionLibraryItem] = []
+  @State private var items: [LibraryEntry] = []
   @State private var search = ""
   @State private var kind = ""
   @State private var hasMore = false
@@ -78,7 +78,7 @@ struct LibraryClientLibraryPane: View {
       items = more ? items + values : values; hasMore = next
     } catch { if generation == loadGeneration, !Task.isCancelled { failure = error.localizedDescription } }
   }
-  private func open(_ item: CompanionLibraryItem) async {
+  private func open(_ item: LibraryEntry) async {
     do { openPreview?(try await model.exportFile(.libraryFile(id: item.id)), "library:" + item.id) }
     catch { model.errorMessage = error.localizedDescription }
   }
@@ -86,7 +86,7 @@ struct LibraryClientLibraryPane: View {
 
 struct LibraryClientTrashPane: View {
   @Bindable var model: CentralLibraryClientModel
-  @State private var items: [CompanionTrashedItem] = []
+  @State private var items: [LibraryTrashedItem] = []
   @State private var failure: String?
   var body: some View {
     VStack {
@@ -110,8 +110,8 @@ struct LibraryClientTrashPane: View {
     do { if case .trash(let items) = try await model.workspace(.trash) { self.items = items } }
     catch { failure = error.localizedDescription }
   }
-  private func restore(_ item: CompanionTrashedItem) async {
-    let action: CompanionWorkspaceAction
+  private func restore(_ item: LibraryTrashedItem) async {
+    let action: LibraryWorkspaceAction
     if item.kind == "note", let revision = item.revision { action = .note(id: item.id, action: "restore", revision: revision, title: nil, folderID: nil) }
     else { action = .conversation(id: item.id, action: "restore", title: nil, folderID: nil) }
     if await model.perform(action) { await load() }
@@ -165,7 +165,7 @@ struct LibraryClientItemManagementSheet: View {
   private func perform(_ action: String) async {
     guard !busy else { return }; busy = true; defer { busy = false }
     do {
-      let request: CompanionWorkspaceAction
+      let request: LibraryWorkspaceAction
       if isNote {
         let note = try await model.canonicalNote(id)
         request = .note(id: id, action: action, revision: String(note.revision), title: title, folderID: folderID.isEmpty ? nil : folderID)
@@ -176,7 +176,7 @@ struct LibraryClientItemManagementSheet: View {
   private func export(original: Bool) async {
     busy = true; defer { busy = false }
     do {
-      let request: CompanionWorkspaceRead
+      let request: LibraryWorkspaceRead
       if isNote {
         let note = try await model.canonicalNote(id)
         request = .exportNote(id: id, format: original ? "document" : "standard", revision: String(note.revision))
@@ -189,7 +189,7 @@ struct LibraryClientItemManagementSheet: View {
 struct LibraryClientSessionSettingsSheet: View {
   @Bindable var model: CentralLibraryClientModel
   let id: String
-  @State private var settings: CompanionSessionSettings?
+  @State private var settings: LibrarySessionSettings?
   @State private var selectedModel = ""
   @State private var thinking = ""
   @State private var permission = ""
@@ -231,7 +231,7 @@ struct LibraryClientSessionSettingsSheet: View {
         }
     }
   }
-  @ViewBuilder private func selection(_ title: String, value: Binding<String>, options: [CompanionSelection]) -> some View {
+  @ViewBuilder private func selection(_ title: String, value: Binding<String>, options: [LibrarySelection]) -> some View {
     if !options.isEmpty {
       Picker(title, selection: value) {
         Text("Keep current").tag("")
@@ -258,11 +258,11 @@ struct LibraryClientSessionSettingsSheet: View {
 
 struct LibraryClientNotePane: View {
   @Bindable var model: CentralLibraryClientModel
-  let note: CompanionNote
+  let note: LibraryNote
   @State private var editor = DashboardNoteEditorController()
   @State private var cache = DashboardNoteDocumentCache()
   @State private var details = false
-  private var source: CompanionNote { model.draftNotes[note.id] ?? model.state.notes[note.id] ?? note }
+  private var source: LibraryNote { model.draftNotes[note.id] ?? model.state.notes[note.id] ?? note }
   private var document: Binding<NoteDocument> {
     Binding(get: { cache.value(noteID: note.id, source: source.content) }, set: { document in
       do { model.editNote(source, content: try cache.encode(document, noteID: note.id)) }
@@ -334,10 +334,10 @@ struct LibraryClientNotePane: View {
 private struct LibraryClientLinkedPreview: View {
   @Environment(\.dashboardTheme) private var theme
   @Bindable var model: CentralLibraryClientModel
-  let note: CompanionNote
+  let note: LibraryNote
   let tableID: String?
   let html: String?
-  @State private var data: CompanionLinkedData?
+  @State private var data: LibraryLinkedData?
   @State private var error: String?
   @State private var loading = false
   private var requestKey: String { "\(note.id):\(note.revision):\(tableID ?? "document"):\(model.online)" }

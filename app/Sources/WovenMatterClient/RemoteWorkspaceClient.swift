@@ -6,7 +6,7 @@ import FoundationNetworking
 import Security
 #endif
 import WovenMatterCore
-import WovenMatterCompanion
+import WovenMatterShared
 
 /// Captures authorization and destination before suspension; stale responses must not apply.
 public struct RemoteWorkspaceRequestIdentity: Sendable, Equatable {
@@ -1111,7 +1111,7 @@ public struct RemoteWorkspaceServiceClient: Sendable {
 
     public func provisionExecutionDevice(libraryID: String, workspaceID: String, ownerDeviceID: String,
                                          deviceID: String, name: String, workspaceName: String, endpoint: URL,
-                                         scopes: [String] = ["execution", "inference"]) async throws -> CompanionExecutionCredential {
+                                         scopes: [String] = ["execution", "inference"]) async throws -> ExecutionCredential {
         struct Payload: Encodable {
             let libraryID: String; let workspaceID: String; let ownerDeviceID: String
             let deviceID: String; let name: String; let workspaceName: String; let endpoint: URL; let scopes: [String]
@@ -1135,25 +1135,25 @@ public struct RemoteWorkspaceServiceClient: Sendable {
         try await request(path: "v1/host/members/adopt", method: "POST", body: adoption, signer: signer.map { ($0, audience ?? "") })
     }
 
-    public func executionPublisherStatus() async throws -> CompanionWorkspacePublisherStatus {
+    public func executionPublisherStatus() async throws -> LibraryWorkspacePublisherStatus {
         try await request(path: "v1/execution/publisher", method: "GET", body: nil)
     }
-    public func configureExecutionPublisher(_ grant: CompanionWorkspacePublisherGrant) async throws -> CompanionWorkspacePublisherStatus {
+    public func configureExecutionPublisher(_ grant: LibraryWorkspacePublisherGrant) async throws -> LibraryWorkspacePublisherStatus {
         try await request(path: "v1/execution/publisher", method: "POST", body: JSONEncoder().encode(grant))
     }
 
-    public func executionMCPLibraryStatus() async throws -> CompanionWorkspacePublisherStatus {
+    public func executionMCPLibraryStatus() async throws -> LibraryWorkspacePublisherStatus {
         try await request(path: "v1/execution/mcp-library", method: "GET", body: nil)
     }
-    public func configureExecutionMCPLibrary(_ grant: GatewayJSONValue) async throws -> CompanionWorkspacePublisherStatus {
+    public func configureExecutionMCPLibrary(_ grant: GatewayJSONValue) async throws -> LibraryWorkspacePublisherStatus {
         try await request(path: "v1/execution/mcp-library", method: "POST", body: JSONEncoder().encode(grant))
     }
 
-    public func configureExecutionMCPSettings(_ settings: GatewayJSONValue) async throws -> CompanionWorkspacePublisherStatus {
+    public func configureExecutionMCPSettings(_ settings: GatewayJSONValue) async throws -> LibraryWorkspacePublisherStatus {
         try await request(path: "v1/execution/mcp-settings", method: "POST", body: JSONEncoder().encode(settings))
     }
 
-    public func adoptExecutionConversation(_ adoption: CompanionExecutionAdoption) async throws -> CompanionConversation {
+    public func adoptExecutionConversation(_ adoption: ExecutionAdoption) async throws -> LibraryConversation {
         try await request(path: "v1/execution/adopt", method: "POST", body: JSONEncoder().encode(adoption))
     }
 

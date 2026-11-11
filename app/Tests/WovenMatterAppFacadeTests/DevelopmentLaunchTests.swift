@@ -1,5 +1,5 @@
 import WorkspaceFixtures
-import CompanionClient
+import LibraryClient
 import Foundation
 import Testing
 import WovenMatterCore
@@ -19,7 +19,7 @@ struct DevelopmentLaunchTests {
     }
 
     @Test func connectionInventoryHidesHistoryAndStoppedDevelopmentRoutesButKeepsOfflineRealDevices() {
-        var workspace = CompanionExecutionWorkspace(id: "id", libraryID: "library", ownerDeviceID: "owner", kind: .mac, name: "Mac")
+        var workspace = ExecutionWorkspace(id: "id", libraryID: "library", ownerDeviceID: "owner", kind: .mac, name: "Mac")
         #expect(workspace.isVisibleInConnections)
         workspace.retainedHistory = true
         #expect(!workspace.isVisibleInConnections)

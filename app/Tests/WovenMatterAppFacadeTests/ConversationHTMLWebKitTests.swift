@@ -143,7 +143,7 @@ import WovenMatterCore
     }
 }
 
-/// A loopback-only CDN fixture. The production companion parser deliberately
+/// A loopback-only CDN fixture. The production library HTTP parser deliberately
 /// rejects browser origins, so resource/CORS testing uses its own small server.
 private final class HTMLResourceFixture: @unchecked Sendable {
     let listener: NWListener

@@ -153,7 +153,7 @@ struct WovenMCPHostTests {
         var settings = try await fixture.database.toolSettings()
         settings.externalMCP = .init(isEnabled: true, groups: [.timers])
         try await fixture.database.saveToolSettings(settings)
-        let discovery = CompanionHTTPRequest(method: "POST", target: "/mcp", headers: [:],
+        let discovery = LibraryHTTPRequest(method: "POST", target: "/mcp", headers: [:],
             body: Data(#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#.utf8))
         let response = try #require(await fixture.host.handle(discovery, allowOutside: true))
         let tools = try #require(JSONDecoder().decode(GatewayJSONValue.self, from: response.body).objectValue?["result"]?.objectValue?["tools"]?.arrayValue)
@@ -270,7 +270,7 @@ private struct MCPHostFixture {
     let host: WovenMCPHost
     let calls: MCPHostCalls
 
-    init(exposure: CompanionTailscaleServe = CompanionTailscaleServe()) async throws {
+    init(exposure: TailscaleServe = TailscaleServe()) async throws {
         persistence = try PersistenceFixture()
         database = try await persistence.openDatabase()
         caller = try await database.createFixtureLocalACPSession(runtimeKind: .codex, title: "MCP caller", ownerDeviceID: UUID())
@@ -295,7 +295,7 @@ private struct MCPHostFixture {
     }
 }
 
-private func mcpHostRequest(token: String?, name: String, arguments: [String: GatewayJSONValue] = [:], headers: [String: String] = [:]) throws -> CompanionHTTPRequest {
+private func mcpHostRequest(token: String?, name: String, arguments: [String: GatewayJSONValue] = [:], headers: [String: String] = [:]) throws -> LibraryHTTPRequest {
     let message: GatewayJSONValue = .object(["jsonrpc": .string("2.0"), "id": .string(UUID().uuidString),
         "method": .string("tools/call"), "params": .object(["name": .string(name), "arguments": .object(arguments)])])
     var headers = headers

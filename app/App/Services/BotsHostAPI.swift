@@ -68,7 +68,7 @@ struct BotsHostAPI: Sendable {
     private struct CredentialRequest: Decodable { let provider: String }
     private struct Done: Encodable { var ok = true }
 
-    func handle(_ request: CompanionHTTPRequest) async -> CompanionHTTPResponse {
+    func handle(_ request: LibraryHTTPRequest) async -> LibraryHTTPResponse {
         guard let bearer = request.bearer, Self.matches(bearer, token) else {
             return .error("unauthorized", "A valid bots host bearer is required.", status: 401)
         }
@@ -124,7 +124,7 @@ struct BotsHostAPI: Sendable {
         }
     }
 
-    private func decode<T: Decodable>(_ type: T.Type, _ request: CompanionHTTPRequest) throws -> T {
+    private func decode<T: Decodable>(_ type: T.Type, _ request: LibraryHTTPRequest) throws -> T {
         try JSONDecoder().decode(T.self, from: request.body)
     }
 

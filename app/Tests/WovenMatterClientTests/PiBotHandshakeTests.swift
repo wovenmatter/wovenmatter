@@ -22,7 +22,7 @@ struct PiBotHandshakeTests {
     }
 
     /// Another member's bots socket: the upgrade is signed for that member, with no
-    /// bearer, and verifies there (the Mac companion and the Linux server check it).
+    /// bearer, and verifies there (the Mac library host and the Linux server check it).
     @Test func aSignedBotsSocketUpgradeVerifiesAtItsMemberOnly() async throws {
         let key = Curve25519.Signing.PrivateKey(), device = UUID().uuidString.lowercased(), machine = UUID().uuidString.lowercased()
         let signer = MemberRequestSigner(deviceID: device, key: key)

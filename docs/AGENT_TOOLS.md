@@ -7,7 +7,7 @@ structured tools rather than shell commands. The former Woven Matter CLI and
 separate automation stdio server are removed.
 
 The shared catalog in
-[`WovenMCPCatalog.swift`](../shared/Sources/WovenMatterCompanion/WovenMCPCatalog.swift)
+[`WovenMCPCatalog.swift`](../shared/Sources/WovenMatterShared/WovenMCPCatalog.swift)
 defines tool names, descriptions, input schemas, and read-only annotations for
 Mac, Linux, and device adapters. Clients discover it with MCP `tools/list` and
 invoke tools with `tools/call`. Names use the `woven_` prefix; argument names use

@@ -6,12 +6,12 @@
 # create or update signing profiles only when that key is supplied.
 set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-project="$root/ios/WovenMatterCompanion.xcodeproj"
+project="$root/ios/WovenMatter.xcodeproj"
 export_options="$root/ios/Config/ExportOptions.plist"
 verify="$root/scripts/verify-ios-app.sh"
-scheme=WovenMatterCompanion
+scheme=WovenMatter
 team=3M84Q9NAMN
-product='Woven Matter / com.wovenmatter.companion'
+product='Woven Matter / com.wovenmatter.wovenmatter'
 
 usage() {
   printf '%s\n' 'usage: scripts/prepare-ios-testflight.sh --plan' \
@@ -111,7 +111,7 @@ archive_and_export() {
     -destination 'generic/platform=iOS' -onlyUsePackageVersionsFromResolvedFile \
     -archivePath "$output/WovenMatter.xcarchive" ${xcode_authentication[@]+"${xcode_authentication[@]}"} \
     CURRENT_PROJECT_VERSION="$build" archive
-  app="$output/WovenMatter.xcarchive/Products/Applications/WovenMatterCompanion.app"
+  app="$output/WovenMatter.xcarchive/Products/Applications/WovenMatter.app"
   "$verify" "$app" distribution --version "$version" --build "$build"
   step 'Exporting for App Store Connect'
   logged "$output/export.log" xcodebuild -exportArchive -archivePath "$output/WovenMatter.xcarchive" \
@@ -130,7 +130,7 @@ case "${1:-}" in
     problem="$(key_problem)"
     printf '%s\n' 'TestFlight plan (nothing is built, signed or uploaded)' \
       "  Product:        $product (Release)" \
-      '  Dev builds:     Woven Matter Dev / com.wovenmatter.companion.dev (Debug)' \
+      '  Dev builds:     Woven Matter Dev / com.wovenmatter.wovenmatter.dev (Debug)' \
       "  Version:        $version (MARKETING_VERSION in ios/project.yml)" \
       "  Build number:   stamped from the UTC clock at archive time; now it would be $(build_number)" \
       "  Team:           $team" \
@@ -152,7 +152,7 @@ case "${1:-}" in
       -destination 'generic/platform=iOS' -onlyUsePackageVersionsFromResolvedFile \
       -derivedDataPath "$output/DerivedData" CODE_SIGNING_ALLOWED=NO build
     step 'Verifying the Release bundle'
-    "$verify" "$output/DerivedData/Build/Products/Release-iphoneos/WovenMatterCompanion.app" distribution --version "$version"
+    "$verify" "$output/DerivedData/Build/Products/Release-iphoneos/WovenMatter.app" distribution --version "$version"
     printf '\n'; printf '%s\n' "Unsigned Release build verified in $output." \
       'It is not signed and cannot be installed or uploaded.'
     ;;

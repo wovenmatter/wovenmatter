@@ -19,6 +19,7 @@ func isFrontend(_ application: NSRunningApplication) -> Bool {
     process.waitUntilExit()
     guard process.terminationStatus == 0, let command = String(data: data, encoding: .utf8) else { return false }
     let arguments = command.split(whereSeparator: \.isWhitespace)
+    // TailscaleServeSupervisor.argument, a legacy name kept for installed helpers.
     return !arguments.contains("--backend") && !arguments.contains("--companion-serve-supervisor")
 }
 if CommandLine.arguments.contains("--wait") {

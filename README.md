@@ -153,8 +153,8 @@ scripts/test-changes.sh --all    # changes that span components
 scripts/test-changes.sh --ci     # the portable Linux check that PR CI runs
 ```
 
-Narrower options are `--desktop`, `--macos`, `--native`, `--companion`,
-`--companion-desktop`, `--remote`, and `--linux`. Use `scripts/test-container.sh`
+Narrower options are `--desktop`, `--macos`, `--native`, `--cross-device`,
+`--cross-device-desktop`, `--remote`, and `--linux`. Use `scripts/test-container.sh`
 for container lifecycle changes when Docker is available. Tests never call
 provider services.
 

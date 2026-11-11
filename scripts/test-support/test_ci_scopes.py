@@ -15,7 +15,7 @@ def active(*paths):
 for path in ['README.md', 'docs/guide/notes-and-data.md', 'app/App/Views/SettingsGeneralView.swift',
              'app/Sources/WovenMatterCore/Workspace.swift', 'app/Package.resolved',
              'shared/Sources/Protocol.swift', 'integration/Tests/ClientTests.swift',
-             'ios/App/Views/ConversationView.swift', 'ios/Sources/CompanionClient/Client.swift']:
+             'ios/App/Views/ConversationView.swift', 'ios/Sources/LibraryClient/Client.swift']:
     assert active(path) == set(), (path, active(path))
 for path in ['default-agent/src/runtime.mjs', 'default-agent/package-lock.json', 'harnesses/catalog.json']:
     assert active(path) == {'agent', 'service', 'pi'}, (path, active(path))
@@ -32,7 +32,7 @@ assert active('scripts/build-ios-pi-runtime.mjs') == {'pi', 'scripts'}
 assert active('scripts/build-ios-embedded-runtime.mjs') == {'embedded', 'scripts'}
 assert active('ios/Sources/EmbeddedExecution/Resources/provenance.json') == {'embedded'}
 assert active('ios/Sources/PiDurableRuntime/Resources/provenance.json') == {'pi'}
-assert active('ios/Sources/CompanionInference/PiSDKVersion.swift') == {'pi'}
+assert active('ios/Sources/MobileInference/PiSDKVersion.swift') == {'pi'}
 assert active('scripts/test-support/native-mcp.test.mjs') == {'agent', 'scripts'}
 assert active('README.md', 'remote/src/server.mjs', 'app/App/Views/SettingsGeneralView.swift') == {'service', 'scripts'}
 assert module.scopes(iter(['remote/src/server.mjs'])) == module.scopes(['remote/src/server.mjs'])

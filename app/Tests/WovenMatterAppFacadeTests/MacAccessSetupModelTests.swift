@@ -1,6 +1,6 @@
 import Foundation
 import Testing
-import WovenMatterCompanion
+import WovenMatterShared
 @testable import WovenMatterAppFacade
 
 /// Settings → Permissions & Access, driven by fake macOS probes: no real TCC
@@ -11,7 +11,7 @@ struct MacAccessSetupModelTests {
 
     /// Stands in for macOS: what each permission reads as, and what asking does.
     @MainActor final class FakeMac {
-        var states: [Item: CompanionMacAccessStatus.State] = [:]
+        var states: [Item: MacAccessStatus.State] = [:]
         var turnedOff: Set<Item> = []
         var requests: [Item] = []
         var grantsOnRequest: Set<Item> = []

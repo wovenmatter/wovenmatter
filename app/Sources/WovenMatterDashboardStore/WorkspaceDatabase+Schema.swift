@@ -304,7 +304,7 @@ extension WorkspaceDatabaseConnection {
       try createWorkspaceCacheTablesUnlocked()
       try addCurrentColumnsUnlocked()
       try createDashboardRevisionTrackingUnlocked()
-      try createCompanionSchemaUnlocked()
+      try createLibrarySchemaUnlocked()
       // Legacy transcripts have explicit read-only status; absence of ownership
       // is never used to make newly created sessions executable.
       try executeUnlocked("INSERT OR IGNORE INTO retained_execution_history SELECT id FROM dashboard_conversations WHERE desktop_owned=1 AND NOT EXISTS(SELECT 1 FROM session_execution_roots WHERE conversation_id=dashboard_conversations.id) AND NOT EXISTS(SELECT 1 FROM companion_execution_conversations WHERE id=dashboard_conversations.id)")

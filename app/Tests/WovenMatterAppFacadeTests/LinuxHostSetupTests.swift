@@ -15,14 +15,14 @@ struct LinuxHostSetupTests {
     }
 
     private func install(_ f: FacadeFixture, _ steps: Steps) {
-        let host = f.model.companionHost
+        let host = f.model.libraryHost
         host.linuxHostSetupRetry = .milliseconds(5)
         host.linuxHostSetupSteps = .init(
             adopt: { configuration in
                 steps.adopted.append(configuration.id.uuidString.lowercased())
                 if steps.adoptFailures > 0 {
                     steps.adoptFailures -= 1
-                    throw CompanionAPIError(code: "unavailable", message: "The host's library is starting.")
+                    throw LibraryAPIError(code: "unavailable", message: "The host's library is starting.")
                 }
             },
             enroll: { steps.enrolled.append($0) })
@@ -33,9 +33,9 @@ struct LinuxHostSetupTests {
         let steps = Steps(); steps.adoptFailures = 2
         install(f, steps)
         let id = f.remote.id.uuidString.lowercased()
-        try await f.model.companionHost.refreshExecutionRegistry()
+        try await f.model.libraryHost.refreshExecutionRegistry()
         // The row names no execution device yet; setup does not wait for one.
-        #expect(try await f.database.companionExecutionWorkspaces().first { $0.id == id }?.executionDeviceID == nil)
+        #expect(try await f.database.libraryExecutionWorkspaces().first { $0.id == id }?.executionDeviceID == nil)
         #expect(try await pollUntil(attempts: 500, interval: .milliseconds(5)) { steps.adopted.count == 3 && steps.enrolled.count == 3 })
         #expect(steps.adopted == [id, id, id])
         // Enrollment is tried on every attempt the row is not enrolled; a failed
@@ -43,12 +43,12 @@ struct LinuxHostSetupTests {
         #expect(steps.enrolled == [id, id, id])
 
         // Set up: later registry refreshes leave it alone for this launch.
-        try await f.model.companionHost.refreshExecutionRegistry()
+        try await f.model.libraryHost.refreshExecutionRegistry()
         try await Task.sleep(for: .milliseconds(50))
         #expect(steps.adopted.count == 3)
 
         // Adding the host again (it gained its workspace) sets it up at once.
-        f.model.companionHost.setUpLinuxHost(f.remote, restart: true)
+        f.model.libraryHost.setUpLinuxHost(f.remote, restart: true)
         #expect(try await pollUntil(attempts: 500, interval: .milliseconds(5)) { steps.adopted.count == 4 })
     }
 
@@ -58,9 +58,9 @@ struct LinuxHostSetupTests {
         install(f, steps)
         let bots = RemoteWorkspaceConfiguration(name: "bots.invalid", workspaceID: RemoteHostInstallMode.botsOnlyWorkspaceID,
             hostName: "bots.invalid", kind: .host)
-        f.model.remoteWorkspaces.configureCompanionFixture(bots, status: try #require(f.model.remoteWorkspaces.statuses[f.remote.id]),
+        f.model.remoteWorkspaces.configureFacadeFixture(bots, status: try #require(f.model.remoteWorkspaces.statuses[f.remote.id]),
             harnesses: [], maintenance: [])
-        f.model.companionHost.setUpLinuxHost(bots, restart: true)
+        f.model.libraryHost.setUpLinuxHost(bots, restart: true)
         #expect(try await pollUntil(attempts: 500, interval: .milliseconds(5)) { steps.adopted.count == 1 })
         try await Task.sleep(for: .milliseconds(50))
         #expect(steps.adopted == [bots.id.uuidString.lowercased()])

@@ -1523,7 +1523,7 @@ struct DashboardWorkspaceSurface: View {
                     HStack(spacing: 0) {
                         if noteOnLeft {
                             assetPane()
-                                .frame(minWidth: DashboardMetrics.companionMinimumWidth)
+                                .frame(minWidth: DashboardMetrics.assetPaneMinimumWidth)
                             splitSeparator(totalWidth: geometry.size.width)
                             chatPanel(.primary, showNoteButton: false)
                                 .frame(width: chatWidth(for: geometry.size.width))
@@ -1532,7 +1532,7 @@ struct DashboardWorkspaceSurface: View {
                                 .frame(width: chatWidth(for: geometry.size.width))
                             splitSeparator(totalWidth: geometry.size.width)
                             assetPane()
-                                .frame(minWidth: DashboardMetrics.companionMinimumWidth)
+                                .frame(minWidth: DashboardMetrics.assetPaneMinimumWidth)
                         }
                     }
                     .coordinateSpace(name: "dashboard-workspace-split")

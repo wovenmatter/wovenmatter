@@ -1,5 +1,5 @@
 import Foundation
-import WovenMatterCompanion
+import WovenMatterShared
 
 public enum WorkspaceCalendarAccess: String, CaseIterable, Codable, Sendable {
   case readOnly, full

@@ -190,7 +190,7 @@ enum DashboardPairedWorkspaceSidebarModel {
         return UUID(uuidString: value)?.uuidString.lowercased() ?? value
     }
 
-    static func workspaces(_ registry: [CompanionExecutionWorkspace]) -> [CompanionExecutionWorkspace] {
+    static func workspaces(_ registry: [ExecutionWorkspace]) -> [ExecutionWorkspace] {
         var seen = Set<String>()
         return registry
             .filter { $0.kind == .ios && !$0.deleted && seen.insert(canonicalID($0.id)).inserted }
@@ -202,7 +202,7 @@ enum DashboardPairedWorkspaceSidebarModel {
 
     /// Quick Chat history this workspace ran, newest first.
     static func history(
-        for workspace: CompanionExecutionWorkspace,
+        for workspace: ExecutionWorkspace,
         conversations: [WorkspaceConversationRecord],
         owners: [String: String]
     ) -> [WorkspaceConversationRecord] {
@@ -212,13 +212,13 @@ enum DashboardPairedWorkspaceSidebarModel {
             .sorted { ($0.lastMessageAt ?? "") > ($1.lastMessageAt ?? "") }
     }
 
-    static func folders(for workspace: CompanionExecutionWorkspace, in folders: [WorkspaceFolderRecord]) -> [WorkspaceFolderRecord] {
+    static func folders(for workspace: ExecutionWorkspace, in folders: [WorkspaceFolderRecord]) -> [WorkspaceFolderRecord] {
         let owner = canonicalID(workspace.id)
         return folders.filter { $0.executionWorkspaceID.map(canonicalID) == owner }
     }
 
     /// True when the conversation's execution owner is an iPhone or iPad.
-    static func isPhoneHistory(owner: String?, registry: [CompanionExecutionWorkspace]) -> Bool {
+    static func isPhoneHistory(owner: String?, registry: [ExecutionWorkspace]) -> Bool {
         guard let owner else { return false }
         let id = canonicalID(owner)
         return registry.contains { $0.kind == .ios && canonicalID($0.id) == id }

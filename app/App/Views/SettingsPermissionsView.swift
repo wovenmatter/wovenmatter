@@ -167,7 +167,7 @@ struct MacPermissionStatusLink: View {
     }
 }
 
-extension CompanionMacAccessStatus.Item {
+extension MacAccessStatus.Item {
     /// The name System Settings uses, so people can find it there.
     var permissionTitle: String {
         self == .keychain ? "Keychain" : displayName

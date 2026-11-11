@@ -1,7 +1,8 @@
-# Woven Matter for iPhone and iPad
+# Woven Matter iOS app
 
-Native clients share a central Woven Matter database. On the device, Quick Chat
-runs Pi Durable for notes, web search, simple questions, timers and reminders; Mac
+The Woven Matter iOS app runs on iPhone and iPad; the Mac app is the Woven Matter
+desktop app. Native clients share a central Woven Matter database. On the device,
+Quick Chat runs Pi Durable for notes, web search, simple questions, timers and reminders; Mac
 and Linux workspace agents handle everything else. Inference uses provider
 connections signed in on that device or an explicitly selected Tailscale host.
 See [Quick Chat](../docs/IOS_CONTINUED_EXECUTION.md).
@@ -24,19 +25,19 @@ scripts/test-ios.sh --package
 scripts/test-ios.sh --all-devices
 ```
 
-Open `WovenMatterCompanion.xcodeproj`, scheme `WovenMatterCompanion`, to run from
-Xcode. Device installation uses existing local signing assets. The generated
+Open `WovenMatter.xcodeproj`, scheme `WovenMatter` (app target `WovenMatter`),
+to run from Xcode. Device installation uses existing local signing assets. The generated
 project comes from `project.yml`; regenerate it with `xcodegen` in `ios/` and
 never edit `project.pbxproj` by hand. Tests use synthetic stores and provider
 fixtures, never personal accounts or inference services.
 
-Debug builds are **Woven Matter Dev** (`com.wovenmatter.companion.dev`), for the
+Debug builds are **Woven Matter Dev** (`com.wovenmatter.wovenmatter.dev`), for the
 simulator and occasional local device builds. Release builds are **Woven Matter**
-(`com.wovenmatter.companion`), the TestFlight app. The two install side by side.
+(`com.wovenmatter.wovenmatter`), the TestFlight app. The two install side by side.
 
 For the user's Mac acceptance build, use `scripts/build_and_run.sh` with its
 existing data. For a disposable Mac database, that same launcher accepts
-`WOVENMATTER_DEV_VARIANT=Companion` and a separate `WOVENMATTER_DEV_CACHE_DIR`.
+a separate instance (`--instance iphone-test`) and `WOVENMATTER_DEV_CACHE_DIR`.
 Do not substitute an empty variant for a requested personal dev build.
 Build/install does not authorize pairing, unpairing, or account sign-in.
 
@@ -49,9 +50,10 @@ covers it.
 
 ## Source layout
 
-- `CompanionApp`: SwiftUI/UIKit navigation, Quick Chat, timers and lifecycle.
-- `CompanionClient`: durable local data, offline mutations and owner journal.
-- `CompanionInference`: provider connections, credentials and streaming.
+- `MobileApp`: SwiftUI/UIKit navigation, Quick Chat, timers and lifecycle.
+- `LibraryClient`: durable local data, offline mutations and owner journal; the
+  Woven Matter desktop app uses it too when it is a client of another library host.
+- `MobileInference`: provider connections, credentials and streaming.
 - `PiDurableRuntime`: bundled SDK hosted by JavaScriptCore; see [runtime](Runtime/README.md).
 - `EmbeddedExecution`: confined Python/WASM test package, not linked in the app; see [execution](../docs/IOS_EMBEDDED_EXECUTION.md).
 - `../shared`: portable note types and versioned wire contracts.
@@ -152,10 +154,10 @@ encryption, change that key and answer the questions in App Store Connect.
 Do these once, in order. Steps 1 to 4 happen on Apple's websites or in Xcode;
 the script cannot do them.
 
-1. **Register the bundle ID.** At
+1. **Register the bundle ID.** (Done: `com.wovenmatter.wovenmatter` is registered.) At
    [developer.apple.com/account](https://developer.apple.com/account), open
    Certificates, Identifiers & Profiles → Identifiers → **+** → App IDs → App.
-   Description `Woven Matter`, explicit bundle ID `com.wovenmatter.companion`.
+   Description `Woven Matter`, explicit bundle ID `com.wovenmatter.wovenmatter`.
    No capabilities are needed. Register.
 
 2. **Create the app record.** In [App Store Connect](https://appstoreconnect.apple.com),
@@ -164,7 +166,7 @@ the script cannot do them.
    - Name: `Woven Matter` (it must be unused on the App Store; if it is taken,
      choose a variant here; the name under the home-screen icon stays Woven Matter)
    - Primary language: English (U.S.)
-   - Bundle ID: `com.wovenmatter.companion`
+   - Bundle ID: `com.wovenmatter.wovenmatter`
    - SKU: `wovenmatter-ios` (any private label; testers never see it)
    - User access: Full Access
 

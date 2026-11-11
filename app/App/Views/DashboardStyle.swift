@@ -383,7 +383,7 @@ enum DashboardMetrics {
     static let railWidth: CGFloat = 256
     static let workspaceMinimumWidth: CGFloat = 360
     static let chatMinimumWidth: CGFloat = 420
-    static let companionMinimumWidth: CGFloat = 360
+    static let assetPaneMinimumWidth: CGFloat = 360
     static let separatorWidth: CGFloat = 12
     static let shellInset: CGFloat = 8
     static let assetToolbarControlWidth: CGFloat = 28

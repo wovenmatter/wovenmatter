@@ -1,4 +1,4 @@
-import CompanionClient
+import LibraryClient
 import Foundation
 import WovenMatterCore
 import WovenMatterDashboardStore
@@ -9,25 +9,25 @@ import WovenMatterDashboardStore
 final class SecondaryMacExecutionHost {
     private(set) var endpoint: URL?
     var isRunning: Bool { endpoint != nil && exposure?.isRunning == true }
-    private(set) var managementGrant: CompanionExecutionManagementGrant?
+    private(set) var managementGrant: ExecutionManagementGrant?
     private let workspace: SecondaryMacExecutionWorkspace
     private let directory: URL
-    private var server: CompanionHTTPServer?
-    private var exposure: CompanionTailscaleServe?
-    private var stoppingExposures: [CompanionTailscaleServe] = []
-    private var inference: CompanionInferenceHost?
+    private var server: LibraryHTTPServer?
+    private var exposure: TailscaleServe?
+    private var stoppingExposures: [TailscaleServe] = []
+    private var inference: InferenceHost?
     private var starting = false
-    private var api: CompanionMacExecutionAPI?
-    private var management: CompanionExecutionAuthentication?
-    private var authentication: CompanionExecutionAuthentication?
+    private var api: MacExecutionAPI?
+    private var management: ExecutionAuthentication?
+    private var authentication: ExecutionAuthentication?
     private var managementDeviceIDs: Set<String> = []
     private var idleWaiters: [CheckedContinuation<Void, Never>] = []
-    private let makeExposure: @MainActor () -> CompanionTailscaleServe
+    private let makeExposure: @MainActor () -> TailscaleServe
     private let afterManagementAuthentication: @MainActor () async -> Void
     private var generation = UUID()
     private var awakeActivity: NSObjectProtocol?
     init(workspace: SecondaryMacExecutionWorkspace, directory: URL,
-         makeExposure: @escaping @MainActor () -> CompanionTailscaleServe = { CompanionTailscaleServe() },
+         makeExposure: @escaping @MainActor () -> TailscaleServe = { TailscaleServe() },
          afterManagementAuthentication: @escaping @MainActor () async -> Void = {}) {
         self.workspace = workspace; self.directory = directory
         self.makeExposure = makeExposure; self.afterManagementAuthentication = afterManagementAuthentication
@@ -35,17 +35,17 @@ final class SecondaryMacExecutionHost {
 
     func start(preferredHTTPSPort: Int? = nil) async throws {
         guard endpoint == nil else { return }
-        guard !starting else { throw CompanionAPIError(code: "starting", message: "Execution sharing is still starting or stopping. Retry shortly.") }
+        guard !starting else { throw LibraryAPIError(code: "starting", message: "Execution sharing is still starting or stopping. Retry shortly.") }
         starting = true
         generation = UUID(); let attempt = generation
         defer { starting = false; resumeIdleWaiters() }
         for previous in stoppingExposures { try await previous.waitUntilStopped() }
         stoppingExposures.removeAll()
         guard generation == attempt, !Task.isCancelled else { throw CancellationError() }
-        if authentication == nil { authentication = try CompanionExecutionAuthentication(fileURL: directory.appending(path: "execution-access.json")) }
-        if management == nil { management = try CompanionExecutionAuthentication(fileURL: directory.appending(path: "management-access.json")) }
+        if authentication == nil { authentication = try ExecutionAuthentication(fileURL: directory.appending(path: "execution-access.json")) }
+        if management == nil { management = try ExecutionAuthentication(fileURL: directory.appending(path: "management-access.json")) }
         guard let authentication, let management else { throw CancellationError() }
-        let server = CompanionHTTPServer(handler: requestHandler())
+        let server = LibraryHTTPServer(handler: requestHandler())
         self.server = server
         let exposure = makeExposure(); self.exposure = exposure
         do {
@@ -56,14 +56,14 @@ final class SecondaryMacExecutionHost {
             try await workspace.setEndpoint(endpoint)
             guard generation == attempt, !Task.isCancelled else { throw CancellationError() }
             let descriptor = workspace.descriptor
-            let api = CompanionMacExecutionAPI(database: workspace.database,
+            let api = MacExecutionAPI(database: workspace.database,
                 commands: SecondaryMacExecutionCommands(workspace: workspace), authentication: authentication,
                 descriptor: descriptor, isActive: { [weak self] in self?.generation == attempt && self?.endpoint != nil },
                 events: { [workspace] after in try await workspace.events(after: after) })
             self.api = api; self.endpoint = endpoint
             // The retired node host issues only its own central-scoped grants and
             // has no delegated provenance; token validity remains its authority.
-            inference = CompanionInferenceHost(authentication: authentication, descriptor: descriptor, directory: directory,
+            inference = InferenceHost(authentication: authentication, descriptor: descriptor, directory: directory,
                 isActive: { [weak self] in self?.generation == attempt && self?.endpoint != nil }, authorize: { _, _ in })
             let token = try await management.provision(deviceID: descriptor.libraryID, libraryID: descriptor.libraryID, workspaceID: descriptor.id)
             guard generation == attempt, !Task.isCancelled else {
@@ -104,14 +104,14 @@ final class SecondaryMacExecutionHost {
         let waiters = idleWaiters; idleWaiters.removeAll()
         for waiter in waiters { waiter.resume() }
     }
-    func requestHandler() -> @MainActor @Sendable (CompanionHTTPRequest) async -> CompanionHTTPResponse {
+    func requestHandler() -> @MainActor @Sendable (LibraryHTTPRequest) async -> LibraryHTTPResponse {
         let attempt = generation
         return { [weak self] request in
             guard let self else { return .error("unavailable", "Execution sharing stopped.", status: 503) }
             return await self.handle(request, attempt: attempt)
         }
     }
-    private func handle(_ request: CompanionHTTPRequest, attempt: UUID) async -> CompanionHTTPResponse {
+    private func handle(_ request: LibraryHTTPRequest, attempt: UUID) async -> LibraryHTTPResponse {
         guard generation == attempt, let api, endpoint != nil else { return .error("unavailable", "Execution sharing is starting or stopped.", status: 503) }
         let target = URLComponents(string: "http://localhost" + request.target)?.path ?? ""
         let path = target.hasPrefix("/wovenmatter/") ? String(target.dropFirst("/wovenmatter".count)) : target
@@ -119,7 +119,7 @@ final class SecondaryMacExecutionHost {
         if path.hasPrefix("/v1/inference/"), let inference { return await inference.handle(request) }
         guard path.hasPrefix("/v1/execution/manage/") else { return await api.handle(request) }
         do {
-            guard request.method == "POST", request.headers["x-woven-protocol"] == String(CompanionProtocol.version),
+            guard request.method == "POST", request.headers["x-woven-protocol"] == String(LibraryProtocol.version),
                   let bearer = request.bearer, let management else { return .error("unauthorized", "Missing management grant.", status: 401) }
             let scope = try await management.authenticate(bearer: bearer)
             let descriptor = workspace.descriptor
@@ -160,21 +160,21 @@ final class SecondaryMacExecutionHost {
 }
 
 @MainActor
-private final class SecondaryMacExecutionCommands: CompanionCommandServing {
+private final class SecondaryMacExecutionCommands: LibraryCommandServing {
     let workspace: SecondaryMacExecutionWorkspace
     init(workspace: SecondaryMacExecutionWorkspace) { self.workspace = workspace }
-    func providers() -> [CompanionProvider] { workspace.model.companionCommands.providers().filter { $0.id.hasPrefix("local:") } }
-    func pendingInteractions() async -> [CompanionPendingInteraction] { await workspace.model.companionCommands.pendingInteractions() }
-    func sessionCapabilities(conversationID: String) async throws -> CompanionProvider { try await workspace.capabilities(conversationID) }
-    func transcript(conversationID: String, before: String?) async throws -> CompanionTranscript {
-        try await workspace.model.companionCommands.transcript(conversationID: conversationID, before: before)
+    func providers() -> [LibraryProvider] { workspace.model.libraryCommands.providers().filter { $0.id.hasPrefix("local:") } }
+    func pendingInteractions() async -> [PendingInteraction] { await workspace.model.libraryCommands.pendingInteractions() }
+    func sessionCapabilities(conversationID: String) async throws -> LibraryProvider { try await workspace.capabilities(conversationID) }
+    func transcript(conversationID: String, before: String?) async throws -> LibraryTranscript {
+        try await workspace.model.libraryCommands.transcript(conversationID: conversationID, before: before)
     }
-    func receipt(commandID: String, deviceID: String) async throws -> CompanionCommandReceipt? {
-        try await workspace.model.companionCommands.receipt(commandID: commandID, deviceID: deviceID)
+    func receipt(commandID: String, deviceID: String) async throws -> LibraryCommandReceipt? {
+        try await workspace.model.libraryCommands.receipt(commandID: commandID, deviceID: deviceID)
     }
-    func execute(_ command: CompanionCommand, deviceID: String) async throws -> CompanionCommandReceipt {
+    func execute(_ command: LibraryCommand, deviceID: String) async throws -> LibraryCommandReceipt {
         guard command.deviceID == deviceID else { throw MobileConnectionError.revoked }
         return try await workspace.command(command)
     }
-    func readWorkspace(_ request: CompanionWorkspaceRead) async throws -> CompanionWorkspaceResult { try await workspace.readWorkspace(request) }
+    func readWorkspace(_ request: LibraryWorkspaceRead) async throws -> LibraryWorkspaceResult { try await workspace.readWorkspace(request) }
 }

@@ -1,8 +1,8 @@
 import AppKit
-import CompanionClient
+import LibraryClient
 import Foundation
 import Observation
-import WovenMatterCompanion
+import WovenMatterShared
 import WovenMatterCore
 
 /// A Dev client build owns a replica, never another copy of the authoritative database.
@@ -26,7 +26,7 @@ final class CentralLibraryClientModel {
     var selectedExecutionWorkspaceID = "central"
     private(set) var journal = WorkspaceJournalState()
     private(set) var directOnline: Set<String> = []
-    private(set) var artifacts: [CompanionArtifactManifest] = []
+    private(set) var artifacts: [LibraryArtifactManifest] = []
     private var directClients: [String: WorkspaceClient] = [:]
     /// Workspaces whose direct grant was rejected and not yet replaced. The IDs
     /// (no secrets) persist across launches, bound to this library and device,
@@ -67,8 +67,8 @@ final class CentralLibraryClientModel {
     private var localHost: SecondaryMacExecutionHost?
     private let makeLocalHost: @MainActor (SecondaryMacExecutionWorkspace, URL) -> SecondaryMacExecutionHost
     private var executionPreparedForTransition = false
-    private var publishedManagement: CompanionExecutionManagementGrant?
-    private(set) var draftNotes: [String: CompanionNote] = [:]
+    private var publishedManagement: ExecutionManagementGrant?
+    private(set) var draftNotes: [String: LibraryNote] = [:]
     private var writeTask: Task<Void, Never>?
     private var writeFailures: [String: String] = [:]
     private var noteWriteVersions: [String: Int] = [:]
@@ -90,9 +90,9 @@ final class CentralLibraryClientModel {
     private(set) var localSharingBusy = false
     private let store: MobileStore?
     private var engine: MobileSyncEngine?
-    private var transport: HTTPSCompanionTransport?
+    private var transport: HTTPSLibraryTransport?
 
-    init(store: MobileStore? = nil, transport: (any CompanionTransport)? = nil,
+    init(store: MobileStore? = nil, transport: (any LibraryTransport)? = nil,
          assets: WorkspaceAssetSession? = nil,
          executionDirectory: URL? = nil,
          makeLocalExecution: (@MainActor (URL, MobileStore) async throws -> SecondaryMacExecutionWorkspace)? = nil,
@@ -120,7 +120,7 @@ final class CentralLibraryClientModel {
             return
         }
         do {
-            let root = CompanionTestWorkspace.supportDirectory
+            let root = IsolatedTestWorkspace.supportDirectory
                 ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
                     .appending(path: WovenMatterWorkspacePaths.folderName, directoryHint: .isDirectory)
             self.store = try MobileStore(file: root.appending(path: "LibraryClient/library.json"))
@@ -130,11 +130,11 @@ final class CentralLibraryClientModel {
         }
     }
 
-    var folders: [CompanionFolder] { state.folders.values.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending } }
-    var notes: [CompanionNote] { state.notes.values.sorted { $0.updatedAt > $1.updatedAt } }
-    var conversations: [CompanionConversation] { state.conversations.values.sorted { $0.updatedAt > $1.updatedAt } }
-    var executionWorkspaces: [CompanionExecutionWorkspace] { journal.workspaces.values.filter { !$0.deleted }.sorted { $0.name < $1.name } }
-    @ObservationIgnored lazy var devicePairing = CompanionMacPairingController(identity: { [weak self] in
+    var folders: [LibraryFolder] { state.folders.values.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending } }
+    var notes: [LibraryNote] { state.notes.values.sorted { $0.updatedAt > $1.updatedAt } }
+    var conversations: [LibraryConversation] { state.conversations.values.sorted { $0.updatedAt > $1.updatedAt } }
+    var executionWorkspaces: [ExecutionWorkspace] { journal.workspaces.values.filter { !$0.deleted }.sorted { $0.name < $1.name } }
+    @ObservationIgnored lazy var devicePairing = MacPairingController(identity: { [weak self] in
         guard let self else { return .init(deviceID: "00000000-0000-4000-8000-000000000000", deviceName: "Mac", metadata: .init(kind: .mac)) }
         return .init(deviceID: self.state.deviceID, deviceName: DevelopmentLaunch.deviceName(),
             metadata: .init(kind: .mac, osVersion: ProcessInfo.processInfo.operatingSystemVersionString,
@@ -204,13 +204,13 @@ final class CentralLibraryClientModel {
         await initialize()
         await enableLocalExecution()
     }
-    func acceptPairing(endpoint: URL, response: CompanionPairResponse) async throws {
+    func acceptPairing(endpoint: URL, response: PairResponse) async throws {
         guard let store else { throw MobileStore.Failure.incompatibleStore }
-        guard response.protocolVersion == CompanionProtocol.version, response.deviceID == state.deviceID else {
+        guard response.protocolVersion == LibraryProtocol.version, response.deviceID == state.deviceID else {
             throw MobileConnectionError.invalidResponse
         }
         let value = MobileCredential(endpoint: endpoint, workspaceID: response.workspaceID, deviceID: response.deviceID, token: response.credential)
-        _ = try HTTPSCompanionTransport(credential: value)
+        _ = try HTTPSLibraryTransport(credential: value)
         try await store.bindWorkspace(response.workspaceID)
         try MobileCredentialVault.save(value)
         connectionGeneration = UUID(); credential = value
@@ -222,9 +222,9 @@ final class CentralLibraryClientModel {
     private func configureTransport() throws {
         guard let credential, let store else { return }
         guard credential.deviceID == state.deviceID else {
-            throw CompanionAPIError(code: "device_identity_changed", message: "Pair this Mac with the central database again. Its local replica has a different device identity.")
+            throw LibraryAPIError(code: "device_identity_changed", message: "Pair this Mac with the central database again. Its local replica has a different device identity.")
         }
-        let transport = try HTTPSCompanionTransport(credential: credential, metadata: CompanionMacPairingController.metadata)
+        let transport = try HTTPSLibraryTransport(credential: credential, metadata: MacPairingController.metadata)
         self.transport = transport; engine = MobileSyncEngine(store: store, transport: transport)
     }
     func reload() async {
@@ -242,18 +242,18 @@ final class CentralLibraryClientModel {
             await model.updateDevelopmentReplica(DevelopmentReplicaSnapshot(self))
         }
     }
-    func attachExecutionWorkspace(_ workspace: CompanionExecutionWorkspace, transport: any ExecutionWorkspaceTransport) async throws {
+    func attachExecutionWorkspace(_ workspace: ExecutionWorkspace, transport: any ExecutionWorkspaceTransport) async throws {
         guard let store else { throw MobileStore.Failure.incompatibleStore }
         let publisher = workspace.executionDeviceID ?? (workspace.kind == .linux ? nil : workspace.ownerDeviceID)
         try await store.journal.upsertWorkspace(workspace, pending: publisher == (await store.snapshot()).deviceID)
         directClients[workspace.id] = WorkspaceClient(store: store, workspaceID: workspace.id, transport: transport)
         await reload()
     }
-    func artifactURL(_ artifact: CompanionArtifactManifest) async throws -> URL {
+    func artifactURL(_ artifact: LibraryArtifactManifest) async throws -> URL {
         let local: URL
         if let cached = await store?.artifacts.localURL(id: artifact.id) { local = cached }
         else if let engine { local = try await engine.ensureArtifactCached(artifact.id) }
-        else { throw CompanionAPIError(code: "not_downloaded", message: "Reconnect to download this saved artifact.") }
+        else { throw LibraryAPIError(code: "not_downloaded", message: "Reconnect to download this saved artifact.") }
         let directory = FileManager.default.temporaryDirectory.appending(path: "WovenMatterClientPreview/" + UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
         let title = URL(fileURLWithPath: artifact.title).lastPathComponent
@@ -263,7 +263,7 @@ final class CentralLibraryClientModel {
     }
     private var executionDirectory: URL {
         if let executionDirectoryOverride { return executionDirectoryOverride }
-        let root = CompanionTestWorkspace.supportDirectory
+        let root = IsolatedTestWorkspace.supportDirectory
             ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appending(path: WovenMatterWorkspacePaths.folderName)
         return root.appending(path: "LibraryClient/Execution/" + state.deviceID)
     }
@@ -327,7 +327,7 @@ final class CentralLibraryClientModel {
     }
     func prepareForRoleChange() async throws {
         guard !localExecutionBusy, !localSharingBusy else {
-            throw CompanionAPIError(code: "operation_in_progress", message: "Wait for the current client operation to finish before restarting or quitting.")
+            throw LibraryAPIError(code: "operation_in_progress", message: "Wait for the current client operation to finish before restarting or quitting.")
         }
         preparingTransition = true
         do {
@@ -510,7 +510,7 @@ final class CentralLibraryClientModel {
     }
     func flushLocalWrites() async throws {
         await writeTask?.value
-        if let failure = writeFailures.values.first { throw CompanionAPIError(code: "local_write_failed", message: failure) }
+        if let failure = writeFailures.values.first { throw LibraryAPIError(code: "local_write_failed", message: failure) }
     }
     private func enqueueWrite(key: String, _ operation: @escaping @MainActor (MobileStore) async throws -> Void) {
         guard !preparingTransition, let store else { return }
@@ -521,7 +521,7 @@ final class CentralLibraryClientModel {
             catch { writeFailures[key] = error.localizedDescription; errorMessage = "Could not save locally: " + error.localizedDescription }
         }
     }
-    func editNote(_ note: CompanionNote, title: String? = nil, content: String? = nil, folderID: String? = nil) {
+    func editNote(_ note: LibraryNote, title: String? = nil, content: String? = nil, folderID: String? = nil) {
         guard !preparingTransition else { return }
         var draft = draftNotes[note.id] ?? note
         if let title { draft.title = title }; if let content { draft.content = content }
@@ -551,14 +551,14 @@ final class CentralLibraryClientModel {
         catch { /* The persisted transcript remains readable offline. */ }
     }
     private func launchConversation(_ requested: MobileLaunchRecord) async throws -> MobileLaunchRecord {
-        guard !preparingTransition else { throw CompanionAPIError(code: "stopping", message: "This client is restarting or quitting.") }
+        guard !preparingTransition else { throw LibraryAPIError(code: "stopping", message: "This client is restarting or quitting.") }
         let owner = requested.create.workspaceID ?? requested.create.routeID ?? "central"
         if owner == "central", let engine { return try await engine.startConversation(requested) }
         guard let client = directClients[owner] else { throw MobileConnectionError.offline }
         return try await client.startConversation(requested)
     }
-    private func submit(_ command: CompanionCommand, workspaceID: String) async throws -> CompanionCommandReceipt {
-        guard !preparingTransition else { throw CompanionAPIError(code: "stopping", message: "This client is restarting or quitting.") }
+    private func submit(_ command: LibraryCommand, workspaceID: String) async throws -> LibraryCommandReceipt {
+        guard !preparingTransition else { throw LibraryAPIError(code: "stopping", message: "This client is restarting or quitting.") }
         if workspaceID == "central", let engine { return try await engine.submit(command) }
         guard let client = directClients[workspaceID] else { throw MobileConnectionError.offline }
         var routed = command; routed.workspaceID = workspaceID
@@ -574,7 +574,7 @@ final class CentralLibraryClientModel {
 
     func desktopSend(id: String, text: String, beforeDispatch: () throws -> Void = {}) async throws {
         let snapshot = try await desktopExecution(.refresh(conversationID: id))
-        let command = CompanionCommand(deviceID: state.deviceID, kind: snapshot.transcript?.activeRunID == nil ? .send : .steer,
+        let command = LibraryCommand(deviceID: state.deviceID, kind: snapshot.transcript?.activeRunID == nil ? .send : .steer,
             conversationID: id, runID: snapshot.transcript?.activeRunID, text: text)
         try beforeDispatch()
         try requireAccepted(await submit(command, workspaceID: executionOwner(for: id) ?? "central"))
@@ -583,7 +583,7 @@ final class CentralLibraryClientModel {
 
     func desktopExecution(_ action: FederatedExecutionAction) async throws -> FederatedExecutionSnapshot {
         let id: String
-        var earlier: CompanionTranscript?
+        var earlier: LibraryTranscript?
         switch action {
         case .refresh(let value): id = value
         case .stop(let value, let run):
@@ -602,8 +602,8 @@ final class CentralLibraryClientModel {
             else { earlier = try await transport?.transcript(id, before: before) }
         }
         let owner = executionOwner(for: id) ?? "central"
-        var provider: CompanionProvider?
-        var interactions: [CompanionPendingInteraction] = []
+        var provider: LibraryProvider?
+        var interactions: [PendingInteraction] = []
         var refreshError: String?
         do {
         if owner == "central", let engine {
@@ -617,15 +617,15 @@ final class CentralLibraryClientModel {
         }
         } catch { refreshError = error.localizedDescription }
         await reload()
-        var settings: CompanionSessionSettings?
+        var settings: LibrarySessionSettings?
         if case .session(let value) = try? await workspace(.session(id: id)) { settings = value }
-        let descriptor = journal.workspaces[owner] ?? CompanionExecutionWorkspace(id: owner,
+        let descriptor = journal.workspaces[owner] ?? ExecutionWorkspace(id: owner,
             libraryID: state.workspaceID ?? "", ownerDeviceID: owner, kind: .mac, name: "Production", capabilities: ["execution.v1"])
         return .init(workspace: descriptor, transcript: earlier ?? state.transcripts[id] ?? journal.transcripts[id],
             capability: provider, interactions: interactions.filter { $0.conversationID == id }, session: settings,
             online: refreshError == nil && (owner == "central" ? online : directOnline.contains(owner)), error: refreshError)
     }
-    func workspace(_ read: CompanionWorkspaceRead) async throws -> CompanionWorkspaceResult {
+    func workspace(_ read: LibraryWorkspaceRead) async throws -> LibraryWorkspaceResult {
         if let store {
             switch read {
             case .calendar(let from, let to): return .calendar(try await store.calendar.events(from: from, to: to))
@@ -645,7 +645,7 @@ final class CentralLibraryClientModel {
         guard let engine else { throw MobileConnectionError.offline }
         return try await engine.readWorkspace(read)
     }
-    @discardableResult func perform(_ action: CompanionWorkspaceAction) async -> Bool {
+    @discardableResult func perform(_ action: LibraryWorkspaceAction) async -> Bool {
         let conversationID: String?
         switch action {
         case .goal(let id, _), .conversation(let id, _, _, _), .configureSession(let id, _, _, _), .sessionTools(let id, _, _): conversationID = id
@@ -658,18 +658,18 @@ final class CentralLibraryClientModel {
             await refresh(); return true
         } catch { errorMessage = error.localizedDescription; return false }
     }
-    func linkedData(note: CompanionNote, tableID: String? = nil) async throws -> CompanionLinkedData {
+    func linkedData(note: LibraryNote, tableID: String? = nil) async throws -> LibraryLinkedData {
         guard online, let engine else { throw MobileConnectionError.offline }
         let result = try await engine.linkedData(note: note, tableID: tableID)
         guard state.notes[note.id]?.revision == note.revision else { throw CancellationError() }
         return result
     }
-    func canonicalNote(_ id: String) async throws -> CompanionNote {
+    func canonicalNote(_ id: String) async throws -> LibraryNote {
         guard let engine, let store else { throw MobileStore.Failure.missingNote }
         try await flushLocalWrites()
         try await engine.synchronize(); await reload(); return try await store.canonicalNote(id: id)
     }
-    func exportFile(_ read: CompanionWorkspaceRead) async throws -> URL {
+    func exportFile(_ read: LibraryWorkspaceRead) async throws -> URL {
         guard case .file(let file) = try await workspace(read) else { throw MobileConnectionError.invalidResponse }
         let directory = FileManager.default.temporaryDirectory.appending(path: "WovenMatterClientPreview/" + UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
@@ -678,9 +678,9 @@ final class CentralLibraryClientModel {
         try file.data.write(to: output, options: .atomic)
         return output
     }
-    private func requireAccepted(_ receipt: CompanionCommandReceipt) throws {
+    private func requireAccepted(_ receipt: LibraryCommandReceipt) throws {
         guard receipt.status == .accepted || receipt.status == .completed else {
-            throw CompanionAPIError(code: "command_pending", message: receipt.message ?? "The command outcome is not confirmed. Check its receipt before retrying.")
+            throw LibraryAPIError(code: "command_pending", message: receipt.message ?? "The command outcome is not confirmed. Check its receipt before retrying.")
         }
     }
 }

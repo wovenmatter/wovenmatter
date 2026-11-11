@@ -111,7 +111,7 @@ struct MemberTrustTests {
   @Test func directoryRemovalReSignsWhatItKeepsAndReplacesAPhonesKey() async throws {
     let persistence = try PersistenceFixture(); defer { persistence.remove() }
     let database = try await persistence.openDatabase()
-    let own = MemberIdentity(deviceID: try await database.companionLibraryIdentity().hostDeviceID, kind: .mac, key: .init())
+    let own = MemberIdentity(deviceID: try await database.libraryIdentity().hostDeviceID, kind: .mac, key: .init())
     let directory = MemberDirectory(database: database, identity: own, cacheLifetime: 0, pinAfter: 0)
     try await directory.ensureSelf(name: "Own", endpoints: [])
     let x = Self.identity(.mac), phone = Self.identity(.ios), removedEarlier = Self.identity(.ios)
@@ -130,7 +130,7 @@ struct MemberTrustTests {
     #expect(list.members.first { $0.deviceID == removedEarlier.deviceID }?.revoked == true, "X's own removals are re-signed too")
     // The phone is restored from a backup with a new key and paired again here.
     let restored = Curve25519.Signing.PrivateKey().publicKey.rawRepresentation
-    await #expect(throws: CompanionAPIError.self) {
+    await #expect(throws: LibraryAPIError.self) {
       try await directory.add(deviceID: phone.deviceID, kind: .ios, name: "Phone", publicKey: restored, endpoints: [])
     }
     try await directory.checkAdd(deviceID: phone.deviceID, kind: .ios, publicKey: restored, replacingKey: true)
@@ -142,7 +142,7 @@ struct MemberTrustTests {
     try await directory.add(deviceID: phone.deviceID, kind: .ios, name: "Phone", publicKey: again, endpoints: [])
     #expect(try await directory.list().active(phone.deviceID)?.publicKey == again)
     // A Mac's key never changes.
-    await #expect(throws: CompanionAPIError.self) {
+    await #expect(throws: LibraryAPIError.self) {
       try await directory.add(deviceID: x.deviceID, kind: .mac, name: "X", publicKey: restored, endpoints: [], replacingKey: true)
     }
   }
@@ -150,7 +150,7 @@ struct MemberTrustTests {
   @Test func trustedMacsArePinnedOnlyAfterTheyStayTrusted() async throws {
     let persistence = try PersistenceFixture(); defer { persistence.remove() }
     let database = try await persistence.openDatabase()
-    let own = MemberIdentity(deviceID: try await database.companionLibraryIdentity().hostDeviceID, kind: .mac, key: .init())
+    let own = MemberIdentity(deviceID: try await database.libraryIdentity().hostDeviceID, kind: .mac, key: .init())
     let waiting = MemberDirectory(database: database, identity: own, cacheLifetime: 0)
     try await waiting.ensureSelf(name: "Own", endpoints: [])
     let a = Self.identity(.mac), b = Self.identity(.mac)
@@ -167,7 +167,7 @@ struct MemberTrustTests {
   @Test func laterAdoptionsNeverAddOrReplaceAnchors() async throws {
     let persistence = try PersistenceFixture(); defer { persistence.remove() }
     let database = try await persistence.openDatabase()
-    let host = MemberIdentity(deviceID: try await database.companionLibraryIdentity().hostDeviceID, kind: .linux, key: .init())
+    let host = MemberIdentity(deviceID: try await database.libraryIdentity().hostDeviceID, kind: .linux, key: .init())
     let directory = MemberDirectory(database: database, identity: host, cacheLifetime: 0)
     try await directory.ensureSelf(name: "Host", endpoints: [])
     #expect(try await directory.list().adopted == false)
@@ -177,10 +177,10 @@ struct MemberTrustTests {
     #expect(try await directory.list().adopted == true)
     // A stranger, even one that signed this host's key, is not let in.
     let planted = [try Self.entry(host, by: stranger, at: 20)]
-    await #expect(throws: CompanionAPIError.self) { _ = try await directory.adopt(.init(anchor: stranger.anchor, entries: planted, revocations: [])) }
+    await #expect(throws: LibraryAPIError.self) { _ = try await directory.adopt(.init(anchor: stranger.anchor, entries: planted, revocations: [])) }
     // A trusted Mac with another key cannot replace the installer's anchor.
     let forged = LibraryMemberAnchor(deviceID: installer.deviceID, kind: .mac, publicKey: stranger.publicKey)
-    await #expect(throws: CompanionAPIError.self) { _ = try await directory.adopt(.init(anchor: forged, entries: planted, revocations: [])) }
+    await #expect(throws: LibraryAPIError.self) { _ = try await directory.adopt(.init(anchor: forged, entries: planted, revocations: [])) }
     // Another trusted Mac only brings records.
     _ = try await directory.adopt(.init(anchor: other.anchor, entries: [], revocations: [try .signed(deviceID: stranger.deviceID, by: other, at: 30)]))
     let anchors = try await database.libraryMemberRecords().anchors

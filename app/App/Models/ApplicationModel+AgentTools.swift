@@ -414,7 +414,7 @@ extension ApplicationModel {
         case .configured(let id): workspaceID = id
         case .member: throw WorkspaceToolError.invalid("Sessions on other devices are created on that device.")
         }
-        let federatedSource = try await store.database.companionExecutionOwner(conversationID: source.id) != nil
+        let federatedSource = try await store.database.libraryExecutionOwner(conversationID: source.id) != nil
         if federatedSource, command.options["workspace"] == nil || command.options["harness"] == nil {
             throw WorkspaceToolError.invalid("Choose an explicit --workspace and --harness when creating a central session from another device.")
         }

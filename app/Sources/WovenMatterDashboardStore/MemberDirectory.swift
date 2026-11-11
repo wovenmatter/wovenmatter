@@ -79,7 +79,7 @@ public actor MemberDirectory {
 
   /// The member that serves `workspace`'s endpoint, the audience of signed
   /// requests to it (`MemberAudience.serving`); nil when it is not known yet.
-  public func audience(for workspace: CompanionExecutionWorkspace) async -> String? {
+  public func audience(for workspace: ExecutionWorkspace) async -> String? {
     guard let list = try? await list() else { return nil }
     return MemberAudience.serving(workspace, members: list.members.map {
       .init(deviceID: $0.deviceID, kind: $0.kind, endpoints: $0.endpoints, revoked: $0.revoked)
@@ -88,7 +88,7 @@ public actor MemberDirectory {
 
   /// Authenticates one signed request (any route: execution, mobile, bots
   /// WebSocket upgrade) and returns the current member that signed it.
-  public func authenticate(_ request: CompanionHTTPRequest, allowing kinds: Set<MemberKind> = Set(MemberKind.allCases)) async throws -> LibraryMember {
+  public func authenticate(_ request: LibraryHTTPRequest, allowing kinds: Set<MemberKind> = Set(MemberKind.allCases)) async throws -> LibraryMember {
     let key = try await verifier.verify(method: request.method, target: request.target, headers: request.headers, body: request.body, allowing: kinds)
     guard let member = await member(key.deviceID) else { throw MemberRequestError.unknown }
     return member
@@ -113,10 +113,10 @@ public actor MemberDirectory {
 
   private func plan(deviceID: String, kind: MemberKind, publicKey: Data, replacingKey: Bool) async throws -> (current: LibraryMember?, endsOldKey: Bool) {
     guard identity.kind == .mac else {
-      throw CompanionAPIError(code: "wrong_device", message: "Only a Mac adds devices.")
+      throw LibraryAPIError(code: "wrong_device", message: "Only a Mac adds devices.")
     }
     guard deviceID.lowercased() != identity.deviceID, publicKey.count == 32 else {
-      throw CompanionAPIError(code: "invalid_member", message: "This device cannot be added with that identity.")
+      throw LibraryAPIError(code: "invalid_member", message: "This device cannot be added with that identity.")
     }
     let current = try await list().members.first(where: { $0.deviceID == deviceID.lowercased() })
     guard let current, current.publicKey != publicKey else { return (current, false) }
@@ -124,7 +124,7 @@ public actor MemberDirectory {
     // phone's key changes only when the user pairs it again on a Mac. A Mac
     // is pinned by key on every device, so its key never changes.
     guard kind != .mac, current.kind != .mac, current.revoked || (replacingKey && current.kind == kind) else {
-      throw CompanionAPIError(code: "member_key_changed", message: "This device presented a different key from the one already added. Remove it first, then add it again.")
+      throw LibraryAPIError(code: "member_key_changed", message: "This device presented a different key from the one already added. Remove it first, then add it again.")
     }
     return (current, !current.revoked)
   }
@@ -158,7 +158,7 @@ public actor MemberDirectory {
   public func remove(_ deviceID: String) async throws -> LibraryMemberRevocation {
     let device = deviceID.lowercased()
     guard identity.kind == .mac || device == identity.deviceID else {
-      throw CompanionAPIError(code: "wrong_device", message: "Only a Mac removes other devices.")
+      throw LibraryAPIError(code: "wrong_device", message: "Only a Mac removes other devices.")
     }
     let records = try await database.libraryMemberRecords()
     let revocation = try LibraryMemberRevocation.signed(deviceID: device, by: identity, at: Self.after(records, device))
@@ -214,21 +214,21 @@ public actor MemberDirectory {
   /// the key it trusts, and never adds or replaces an anchor.
   public func adopt(_ adoption: LibraryMemberAdoption) async throws -> LibraryMemberList {
     guard adoption.anchor.kind == .mac, adoption.anchor.deviceID != identity.deviceID, adoption.anchor.publicKey.count == 32 else {
-      throw CompanionAPIError(code: "invalid_member", message: "Only a Mac can add this machine.")
+      throw LibraryAPIError(code: "invalid_member", message: "Only a Mac can add this machine.")
     }
     let records = try await database.libraryMemberRecords()
     let adopted = records.anchors.contains { $0.kind == .mac && $0.deviceID != identity.deviceID }
     if adopted {
       guard let member = try await list().active(adoption.anchor.deviceID), member.kind == .mac,
             member.publicKey == adoption.anchor.publicKey else {
-        throw CompanionAPIError(code: "already_adopted", message: "This machine already belongs to a library. Only one of its Macs can update it.")
+        throw LibraryAPIError(code: "already_adopted", message: "This machine already belongs to a library. Only one of its Macs can update it.")
       }
     } else {
       guard adoption.entries.contains(where: { entry in
         entry.deviceID == identity.deviceID && entry.addedBy == adoption.anchor.deviceID && entry.publicKey == identity.publicKey
           && entry.kind == identity.kind && entry.isWellFormed && entry.verifies(with: adoption.anchor.publicKey)
       }) else {
-        throw CompanionAPIError(code: "invalid_member", message: "The adding Mac did not sign this machine's current key.")
+        throw LibraryAPIError(code: "invalid_member", message: "The adding Mac did not sign this machine's current key.")
       }
     }
     try await database.saveLibraryMemberEntries(adoption.entries)

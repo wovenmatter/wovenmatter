@@ -16,11 +16,11 @@ import WovenMatterCore
 /// covers them; see docs/MAC_ACCESS.md.
 @MainActor @Observable
 final class MacAccessSetupModel {
-    typealias Item = CompanionMacAccessStatus.Item
-    typealias State = CompanionMacAccessStatus.State
+    typealias Item = MacAccessStatus.Item
+    typealias State = MacAccessStatus.State
 
     /// What the page shows for one permission. Local presentation only: the
-    /// published `CompanionMacAccessStatus` keeps its three wire states.
+    /// published `MacAccessStatus` keeps its three wire states.
     enum Access: Equatable, Sendable {
         case allowed
         case notAllowed
@@ -108,7 +108,7 @@ final class MacAccessSetupModel {
 
     /// Cheap, prompt-free checks plus saved results for checks that need an
     /// explicit action (Keychain, Automation). Safe in the background server.
-    static func current(keychainReady: Bool?, defaults: UserDefaults = .standard) -> CompanionMacAccessStatus {
+    static func current(keychainReady: Bool?, defaults: UserDefaults = .standard) -> MacAccessStatus {
         var items = saved(defaults: defaults).itemStates
         if let keychainReady { items[.keychain] = keychainReady ? .ready : .needsAttention }
         items[.fullDiskAccess] = fullDiskAccess()
@@ -119,7 +119,7 @@ final class MacAccessSetupModel {
         case .denied, .restricted: .needsAttention
         default: .unknown
         }
-        return CompanionMacAccessStatus(items: items, appName: appName)
+        return MacAccessStatus(items: items, appName: appName)
     }
 
     static func liveProbe(defaults: UserDefaults) -> Probe {
@@ -129,7 +129,7 @@ final class MacAccessSetupModel {
     }
 
     static var appName: String {
-        CompanionMacAccessStatus.appName(
+        MacAccessStatus.appName(
             displayName: Bundle.main.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String,
             bundleName: Bundle.main.object(forInfoDictionaryKey: "CFBundleName") as? String)
     }
@@ -322,13 +322,13 @@ final class MacAccessSetupModel {
         if let requested, granted.contains(requested) { self.requested = nil }
         guard next != states else { return }
         states = next
-        let status = CompanionMacAccessStatus(items: next, appName: Self.appName)
+        let status = MacAccessStatus(items: next, appName: Self.appName)
         if let data = try? JSONEncoder().encode(status) { defaults.set(data, forKey: Self.storageKey) }
     }
 
-    private static func saved(defaults: UserDefaults) -> CompanionMacAccessStatus {
-        defaults.data(forKey: storageKey).flatMap { try? JSONDecoder().decode(CompanionMacAccessStatus.self, from: $0) }
-            ?? CompanionMacAccessStatus(appName: appName)
+    private static func saved(defaults: UserDefaults) -> MacAccessStatus {
+        defaults.data(forKey: storageKey).flatMap { try? JSONDecoder().decode(MacAccessStatus.self, from: $0) }
+            ?? MacAccessStatus(appName: appName)
     }
 
     /// Apple Events consent per target app. Asking requires the target running;
@@ -366,7 +366,7 @@ final class MacAccessSetupModel {
     }
 }
 
-extension CompanionMacAccessStatus {
+extension MacAccessStatus {
     var itemStates: [Item: State] {
         Dictionary(uniqueKeysWithValues: items.compactMap { key, value in Item(rawValue: key).map { ($0, value) } })
     }
@@ -386,9 +386,9 @@ extension ApplicationModel {
         guard conversation.remoteWorkspaceID == nil, !conversation.isArchived else { return nil }
         let computerUse = agentTools?.sessionPolicies[conversation.id]?.enabled.contains(.computer) == true
         if let database = dashboardStore?.database,
-           let workspace = try? await database.companionConversationExecutionWorkspace(conversationID: conversation.id),
+           let workspace = try? await database.libraryConversationExecutionWorkspace(conversationID: conversation.id),
            workspace.kind == .mac,
-           let identity = try? await database.companionLibraryIdentity(),
+           let identity = try? await database.libraryIdentity(),
            workspace.executionDeviceID != identity.hostDeviceID {
             return workspace.macAccess?.sessionNotice(deviceName: workspace.name, isThisDevice: false, computerUse: computerUse)
                 .map { MacAccessSessionNotice(message: $0, isThisMac: false) }

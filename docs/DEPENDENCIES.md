@@ -420,7 +420,7 @@ refresh script has been removed. External maintenance jobs are configured separa
 `app/Package.resolved` remains the canonical combined SwiftPM/Xcode graph.
 Normal package tests use `--force-resolved-versions`, and native builds use
 `-onlyUsePackageVersionsFromResolvedFile`, so both consume that one snapshot
-without pruning each other's records or selecting new versions. The companion
+without pruning each other's records or selecting new versions. The cross-device
 integration package references the same file through a symlink, and its test
 command also freezes resolution; it has no independently selected graph.
 

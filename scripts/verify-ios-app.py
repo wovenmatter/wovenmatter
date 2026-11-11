@@ -17,8 +17,8 @@ import zipfile
 
 TEAM = '3M84Q9NAMN'
 PROFILES = {
-    'dev': ('Woven Matter Dev', 'com.wovenmatter.companion.dev'),
-    'distribution': ('Woven Matter', 'com.wovenmatter.companion'),
+    'dev': ('Woven Matter Dev', 'com.wovenmatter.wovenmatter.dev'),
+    'distribution': ('Woven Matter', 'com.wovenmatter.wovenmatter'),
 }
 # Apple's CFBundleVersion/CFBundleShortVersionString: one to three
 # period-separated integers, without leading zeros.

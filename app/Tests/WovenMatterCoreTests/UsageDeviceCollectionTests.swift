@@ -402,7 +402,7 @@ struct UsageDeviceCollectionTests {
 
   @Test("iPhone and iPad records become usage, keeping the newest revision of a message")
   func readsPiDurableRecords() throws {
-    func stored(_ id: String, input: Int) throws -> CompanionStoredNativeRecord {
+    func stored(_ id: String, input: Int) throws -> StoredNativeRecord {
       let root: [String: Any] = ["id": 1, "conversationId": 2, "model": [
         ["role": "user", "content": "private question"],
         ["role": "assistant", "provider": "openrouter", "model": "kimi-k2", "timestamp": 1_790_000_000_000.0,

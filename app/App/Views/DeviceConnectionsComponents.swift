@@ -1,10 +1,10 @@
 import AppKit
 import CoreImage.CIFilterBuiltins
 import SwiftUI
-import WovenMatterCompanion
+import WovenMatterShared
 
 struct DeviceConnectionIcon: View {
-    let kind: CompanionDeviceKind
+    let kind: DeviceKind
     var size: CGFloat = 20
     var body: some View {
         Group {
@@ -16,14 +16,14 @@ struct DeviceConnectionIcon: View {
             }
         }.frame(width: size + 4, height: size + 4).foregroundStyle(DashboardPalette.foreground)
     }
-    static func label(_ kind: CompanionDeviceKind) -> String {
+    static func label(_ kind: DeviceKind) -> String {
         switch kind { case .mac: "Mac"; case .iPhone: "iPhone"; case .iPad: "iPad"; case .unknown: "Device" }
     }
 }
 
 struct DevicePairingDiscoveryCard: View {
-    @Bindable var pairing: CompanionMacPairingController
-    @Bindable var host: CompanionHostController
+    @Bindable var pairing: MacPairingController
+    @Bindable var host: LibraryHostController
     var canPairWithCentral: Bool
     @State private var devices = MacDeviceSetupModel()
     var body: some View {
@@ -37,7 +37,7 @@ struct DevicePairingDiscoveryCard: View {
 }
 
 struct DevicePairingCodeCard: View {
-    @Bindable var host: CompanionHostController
+    @Bindable var host: LibraryHostController
     var body: some View {
         SettingsSummaryRow("Show a QR code or link") {
             SettingsNote("Scan the QR code or paste its link on another device.")
@@ -59,11 +59,11 @@ struct DevicePairingCodeCard: View {
                         }.buttonStyle(SettingsQuietButtonStyle())
                         Button("New code") { Task { await host.createPairingCode() } }.buttonStyle(SettingsQuietButtonStyle())
                     }
-                }.accessibilityIdentifier("companion.pairing-code")
+                }.accessibilityIdentifier("devices.pairing-code")
             } else {
                 Button("Create QR code or link") { Task { await host.createPairingCode() } }
                     .buttonStyle(SettingsQuietButtonStyle()).disabled(host.endpoint == nil || host.isStarting)
-                    .accessibilityIdentifier("companion.create-code")
+                    .accessibilityIdentifier("devices.create-code")
             }
         }
     }

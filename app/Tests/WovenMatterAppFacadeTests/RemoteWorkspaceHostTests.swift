@@ -48,7 +48,7 @@ private final class HostInspectionFixture: @unchecked Sendable {
         let status = try #require(fixture.model.remoteWorkspaces.statuses[host.id])
         let harnesses = try #require(fixture.model.remoteWorkspaces.harnesses[host.id])
         let maintenance = try #require(fixture.model.remoteWorkspaces.runtimeMaintenance[host.id])
-        fixture.model.remoteWorkspaces.configureCompanionFixture(host, status: status, harnesses: harnesses, maintenance: maintenance)
+        fixture.model.remoteWorkspaces.configureFacadeFixture(host, status: status, harnesses: harnesses, maintenance: maintenance)
         let scope = ApplicationModel.remoteDatabaseSourceID(host.id)
         fixture.model.sessionSelectionPreferences.saveDefaults(.init(permission: "read-only"), harness: "codex", workspace: scope)
         let target = RemoteHarnessChatTarget(configuration: host, harness: try #require(harnesses.first { $0.id == .codex }))
@@ -75,7 +75,7 @@ private final class HostInspectionFixture: @unchecked Sendable {
         #expect(try await fixture.model.folderWorkingDirectory(folderID: folderID, workspaceID: host.id).path == external)
 
         host.accessMode = .user
-        fixture.model.remoteWorkspaces.configureCompanionFixture(host, status: status, harnesses: harnesses, maintenance: maintenance)
+        fixture.model.remoteWorkspaces.configureFacadeFixture(host, status: status, harnesses: harnesses, maintenance: maintenance)
         #expect(fixture.model.calendarTaskDefaults(runtime: .codex, workspaceID: host.id).configuration.permission == "read-only")
     }
 

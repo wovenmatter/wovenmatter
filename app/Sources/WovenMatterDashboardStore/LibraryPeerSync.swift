@@ -70,7 +70,7 @@ public struct LibrarySyncStatus: Codable, Equatable, Sendable {
 /// Sends one signed request to a member endpoint. Production uses URLSession;
 /// tests route requests to in-process peers.
 public struct LibraryPeerTransport: Sendable {
-  public typealias Send = @Sendable (_ endpoint: URL, _ request: CompanionHTTPRequest) async throws -> CompanionHTTPResponse
+  public typealias Send = @Sendable (_ endpoint: URL, _ request: LibraryHTTPRequest) async throws -> LibraryHTTPResponse
   public let send: Send
   public init(send: @escaping Send) { self.send = send }
 
@@ -412,7 +412,7 @@ public actor LibraryPeerSync {
         guard response.status == 200 else { await failed(member, response); return }
         let reply = try JSONDecoder().decode(LibraryPeerExchange.self, from: response.body)
         guard reply.deviceID == member.deviceID, reply.after == page.cursor else {
-          throw CompanionAPIError(code: "wrong_peer", message: "The peer did not acknowledge this exact page.")
+          throw LibraryAPIError(code: "wrong_peer", message: "The peer did not acknowledge this exact page.")
         }
         if let data = reply.attachment, let attachments { try await attachments.incoming(data, member.deviceID) }
         // A removal learned meanwhile stops the exchange before its page.
@@ -445,16 +445,16 @@ public actor LibraryPeerSync {
       // A removal made during a transfer sends no further request.
       guard await directory.member(member.deviceID) != nil else { return true }
       let response = try await send(member, path: "v1/peers/files", body: JSONEncoder().encode(cursor))
-      guard response.status == 200 else { throw CompanionAPIError(code: "peer_file", message: "The peer did not list its files.") }
+      guard response.status == 200 else { throw LibraryAPIError(code: "peer_file", message: "The peer did not list its files.") }
       let page = try JSONDecoder().decode(PairedLibraryFilePage.self, from: response.body)
       for file in page.files {
         while let offset = try await files.nextOffset(file) {
           guard chunks < 64, !Task.isCancelled else { return false }
           guard await directory.member(member.deviceID) != nil else { return true }
           let reply = try await send(member, path: "v1/peers/file", body: JSONEncoder().encode(PairedLibraryFileRequest(file: file, offset: offset)))
-          guard reply.status == 200 else { throw CompanionAPIError(code: "peer_file", message: "The peer did not return a shared file.") }
+          guard reply.status == 200 else { throw LibraryAPIError(code: "peer_file", message: "The peer did not return a shared file.") }
           let chunk = try JSONDecoder().decode(PairedLibraryFileChunk.self, from: reply.body)
-          guard chunk.file == file, chunk.offset == offset else { throw CompanionAPIError(code: "peer_file", message: "Shared file identity changed.") }
+          guard chunk.file == file, chunk.offset == offset else { throw LibraryAPIError(code: "peer_file", message: "Shared file identity changed.") }
           try await files.receive(chunk); chunks += 1
         }
       }
@@ -481,20 +481,20 @@ public actor LibraryPeerSync {
     backoff[member.deviceID] = next
     nextPresence[member.deviceID] = Date().addingTimeInterval(next)
     update(member) { status in
-      status.state = error is URLError || (error as? CompanionAPIError)?.code == "peer_unavailable" ? .offline : .failing
+      status.state = error is URLError || (error as? LibraryAPIError)?.code == "peer_unavailable" ? .offline : .failing
       status.error = status.state == .offline ? nil : error.localizedDescription
     }
   }
 
-  private func failed(_ member: LibraryMember, _ response: CompanionHTTPResponse) {
+  private func failed(_ member: LibraryMember, _ response: LibraryHTTPResponse) {
     if response.status == 409, let mismatch = try? JSONDecoder().decode(LibraryPeerUpdateRequired.self, from: response.body),
        mismatch.code == "update_required" {
       nextPresence[member.deviceID] = Date().addingTimeInterval(configuration.presenceInterval)
       update(member) { $0.state = .updateRequired; $0.version = mismatch.version; $0.error = mismatch.message; $0.lastContact = Date() }
       return
     }
-    let error = (try? JSONDecoder().decode(CompanionAPIError.self, from: response.body))
-      ?? CompanionAPIError(code: "peer_sync", message: "The peer refused synchronization (HTTP \(response.status)).")
+    let error = (try? JSONDecoder().decode(LibraryAPIError.self, from: response.body))
+      ?? LibraryAPIError(code: "peer_sync", message: "The peer refused synchronization (HTTP \(response.status)).")
     offline(member, error)
   }
 
@@ -507,8 +507,8 @@ public actor LibraryPeerSync {
   /// Tries each advertised tailnet endpoint in order. The signature covers
   /// the exact target sent to that endpoint (minus any `/wovenmatter` prefix).
   /// An endpoint is self-advertised, so one outside the tailnet is never used.
-  private func send(_ member: LibraryMember, path: String, body: Data) async throws -> CompanionHTTPResponse {
-    var lastError: (any Error) = CompanionAPIError(code: "peer_unavailable", message: "\(member.name) has no tailnet address yet.")
+  private func send(_ member: LibraryMember, path: String, body: Data) async throws -> LibraryHTTPResponse {
+    var lastError: (any Error) = LibraryAPIError(code: "peer_unavailable", message: "\(member.name) has no tailnet address yet.")
     for endpoint in member.endpoints where configuration.allowEndpoint(endpoint) {
       var base = endpoint.path
       if !base.hasSuffix("/") { base += "/" }
@@ -516,7 +516,7 @@ public actor LibraryPeerSync {
       do {
         var headers = try directory.identity.signer.headers(method: "POST", target: target, body: body, audience: member.deviceID)
         headers["Content-Type"] = "application/json"
-        headers["X-Woven-Protocol"] = String(CompanionProtocol.version)
+        headers["X-Woven-Protocol"] = String(LibraryProtocol.version)
         headers["Host"] = endpoint.host ?? "localhost"
         return try await transport.send(endpoint, .init(method: "POST", target: target, headers: headers, body: body))
       } catch { lastError = error }
@@ -529,7 +529,7 @@ public actor LibraryPeerSync {
   /// Serves `/v1/peers/sync`, `/v1/peers/notify`, `/v1/peers/files` and
   /// `/v1/peers/file` to signed Mac and Linux members. Returns nil for any
   /// other path or an unsigned request, so older handlers can still answer.
-  public func handle(_ request: CompanionHTTPRequest) async -> CompanionHTTPResponse? {
+  public func handle(_ request: LibraryHTTPRequest) async -> LibraryHTTPResponse? {
     let target = MemberRequestSignature.canonicalTarget(request.target)
     let path = target.split(separator: "?", maxSplits: 1).first.map(String.init) ?? target
     guard ["/v1/peers/sync", "/v1/peers/notify", "/v1/peers/files", "/v1/peers/file"].contains(path),
@@ -599,7 +599,7 @@ public actor LibraryPeerSync {
         guard request.body.count <= 4_096 else { return .error("too_large", "Request too large.", status: 413) }
         return try .json(try await files.chunk(JSONDecoder().decode(PairedLibraryFileRequest.self, from: request.body)))
       }
-    } catch let error as CompanionAPIError {
+    } catch let error as LibraryAPIError {
       return .error(error.code, error.message, status: error.code == "unauthorized" ? 401 : 409)
     } catch {
       return .error("peer_sync", "Synchronization paused; all local writing is retained. " + error.localizedDescription, status: 409)

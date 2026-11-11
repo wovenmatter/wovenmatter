@@ -325,7 +325,7 @@ primary/quiet/icon buttons.
 Do not copy the icon catalog or introduce a parallel mobile palette. Desktop
 runtime metadata and window-specific controls remain in `DashboardDesign.swift`.
 
-The companion keeps Dynamic Type and a 44-point minimum for shared touch controls;
+The iOS app keeps Dynamic Type and a 44-point minimum for shared touch controls;
 desktop sizing is unchanged. Dark uses the same shared palette on both platforms. Native sheets, pickers, switches, QR scanning and share controls retain
 iOS behavior. SF Symbols used by desktop for spreadsheet/HTML/file kinds, text
 formatting, and status controls remain deliberate exceptions to Lucide.

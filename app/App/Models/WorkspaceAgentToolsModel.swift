@@ -66,8 +66,8 @@ final class WorkspaceAgentToolsModel {
     private(set) var hasOlderReceipts: Set<String> = []
     var error: String?
     private var mcpHost: WovenMCPHost?
-    #if COMPANION_FACADE_TESTS
-    @ObservationIgnored var companionFixtureMCPConnection: ((String, WovenMCPConnection, RemoteWorkspaceConfiguration?) async -> WovenMCPConnection)?
+    #if APP_FACADE_TESTS
+    @ObservationIgnored var facadeFixtureMCPConnection: ((String, WovenMCPConnection, RemoteWorkspaceConfiguration?) async -> WovenMCPConnection)?
     #endif
     private var remoteBridges: [String: WovenMCPRemoteBridge] = [:]
     private var remoteBridgeCredentials: [String: String] = [:]
@@ -387,7 +387,7 @@ final class WorkspaceAgentToolsModel {
         return snapshot
     }
 
-    func handleMCP(_ request: CompanionHTTPRequest) async -> CompanionHTTPResponse? {
+    func handleMCP(_ request: LibraryHTTPRequest) async -> LibraryHTTPResponse? {
         guard !passiveProjection, !stopped else { return nil }
         do { return await (try ensureMCPHost()).handle(request) }
         catch { return .error("unavailable", "Woven MCP is unavailable.", status: 503) }
@@ -395,8 +395,8 @@ final class WorkspaceAgentToolsModel {
 
     func mcpContext(sessionID: String, remote: RemoteWorkspaceConfiguration? = nil, captureID: String) async throws -> WovenMCPConnection {
         let local = try await ensureMCPHost().connection(sessionID: sessionID, captureID: captureID.isEmpty ? nil : captureID)
-        #if COMPANION_FACADE_TESTS
-        if let companionFixtureMCPConnection { return await companionFixtureMCPConnection(sessionID, local, remote) }
+        #if APP_FACADE_TESTS
+        if let facadeFixtureMCPConnection { return await facadeFixtureMCPConnection(sessionID, local, remote) }
         #endif
         guard let remote else { return local }
         let bridge: WovenMCPRemoteBridge

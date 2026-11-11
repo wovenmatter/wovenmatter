@@ -1,5 +1,5 @@
 import AppKit
-import CompanionClient
+import LibraryClient
 import CryptoKit
 import Foundation
 import Observation
@@ -26,8 +26,8 @@ struct PairedMacCredential: Codable, Sendable {
 struct PairedMacDeviceStorage {
     var loadCredentials: @MainActor () throws -> [PairedMacCredential]
     var saveCredentials: @MainActor ([PairedMacCredential]) throws -> Void
-    var loadClaim: (String) throws -> CompanionStoredPairingClaim?
-    var saveClaim: (CompanionStoredPairingClaim?, String) throws -> Void
+    var loadClaim: (String) throws -> StoredPairingClaim?
+    var saveClaim: (StoredPairingClaim?, String) throws -> Void
     var loadLegacyCredential: @MainActor () throws -> MobileCredential?
     var loadExecutionCredential: @MainActor (String) throws -> DirectWorkspaceCredential?
     var saveExecutionCredential: @MainActor (DirectWorkspaceCredential) throws -> Void
@@ -46,8 +46,8 @@ struct PairedMacDeviceStorage {
     }
     @MainActor static var keychain: Self {
         .init(loadCredentials: PairedMacCredentialVault.load, saveCredentials: PairedMacCredentialVault.save,
-              loadClaim: { try CompanionPendingPairingVault.load(deviceID: $0) },
-              saveClaim: { try CompanionPendingPairingVault.save($0, deviceID: $1) },
+              loadClaim: { try PendingPairingVault.load(deviceID: $0) },
+              saveClaim: { try PendingPairingVault.save($0, deviceID: $1) },
               loadLegacyCredential: { try MobileCredentialVault.load() },
               loadExecutionCredential: CentralExecutionCredentialVault.load,
               saveExecutionCredential: CentralExecutionCredentialVault.save,
@@ -56,7 +56,7 @@ struct PairedMacDeviceStorage {
     /// Isolated storage for fixtures. Nothing is shared with other instances.
     @MainActor static func memory(credentials: [PairedMacCredential] = [], legacy: MobileCredential? = nil) -> Self {
         final class Box: @unchecked Sendable {
-            var credentials: [PairedMacCredential] = []; var claims: [String: CompanionStoredPairingClaim] = [:]
+            var credentials: [PairedMacCredential] = []; var claims: [String: StoredPairingClaim] = [:]
             var execution: [String: DirectWorkspaceCredential] = [:]
             var signingKey: Data?
         }
@@ -75,7 +75,7 @@ struct PairedMacDeviceStorage {
 /// durable observations with peers. No host changes role when a peer leaves.
 @Observable @MainActor
 final class PairedMacSyncController {
-    private weak var host: CompanionHostController?
+    private weak var host: LibraryHostController?
     private let network: PairedMacNetwork
     private let loadCredentials: @MainActor () throws -> [PairedMacCredential]
     private let saveCredentials: @MainActor ([PairedMacCredential]) throws -> Void
@@ -97,11 +97,11 @@ final class PairedMacSyncController {
     private(set) var syncStatus: LibrarySyncStatus?
     @ObservationIgnored var peerTransport: LibraryPeerTransport = .urlSession()
     private var appliedMemberRemovals: Set<String> = []
-    init(host: CompanionHostController, network: PairedMacNetwork = .init(), storage: PairedMacDeviceStorage) {
+    init(host: LibraryHostController, network: PairedMacNetwork = .init(), storage: PairedMacDeviceStorage) {
         self.host = host; self.network = network; self.storage = storage; self.restoresPairing = storage.restoresPairing
         self.loadCredentials = storage.loadCredentials; self.saveCredentials = storage.saveCredentials
     }
-    @ObservationIgnored lazy var pairing = CompanionMacPairingController(identity: { [weak self] in
+    @ObservationIgnored lazy var pairing = MacPairingController(identity: { [weak self] in
         self?.host?.peerIdentity ?? .init(deviceID: "00000000-0000-4000-8000-000000000000", deviceName: "Mac", metadata: .init(kind: .mac))
     }, onPaired: { [weak self] endpoint, response in
         guard let self else { throw CancellationError() }
@@ -115,7 +115,7 @@ final class PairedMacSyncController {
     private var signingKey: Curve25519.Signing.PrivateKey?
     func identity() async throws -> PeerSelf {
         guard let host, let database = host.model?.dashboardStore?.database else { throw CancellationError() }
-        let library = try await database.companionLibraryIdentity()
+        let library = try await database.libraryIdentity()
         if signingKey == nil {
             if let raw = try storage.loadSigningKey() { signingKey = try Curve25519.Signing.PrivateKey(rawRepresentation: raw) }
             else {
@@ -166,7 +166,7 @@ final class PairedMacSyncController {
                 try await self.mergeMembership(membership)
                 // An unpair learned here ends the exchange before its page.
                 guard await authentication.isActiveMac(peer) else {
-                    throw CompanionAPIError(code: "unauthorized", message: "This Mac is no longer paired.")
+                    throw LibraryAPIError(code: "unauthorized", message: "This Mac is no longer paired.")
                 }
             })
             let sync = LibraryPeerSync(directory: directory, transport: peerTransport, configuration: .init(version: version), attachments: attachments)
@@ -267,41 +267,41 @@ final class PairedMacSyncController {
 
     func pairUsingLink(_ text: String) async throws {
         guard let url = URL(string: text.trimmingCharacters(in: .whitespacesAndNewlines)), let host else {
-            throw CompanionAPIError(code: "invalid_pairing", message: "Paste a current Woven Matter pairing link.")
+            throw LibraryAPIError(code: "invalid_pairing", message: "Paste a current Woven Matter pairing link.")
         }
-        let payload = try CompanionPairingPayload.parseURL(url)
+        let payload = try PairingPayload.parseURL(url)
         let own = try await host.peerRoute()
-        let advertisement: CompanionDiscoveryAdvertisement = try await network.request(payload.endpoint, path: "v1/discovery")
+        let advertisement: DiscoveryAdvertisement = try await network.request(payload.endpoint, path: "v1/discovery")
         guard advertisement.capabilities?.contains(Self.capability) == true, advertisement.identity.deviceID != own.deviceID else {
-            throw CompanionAPIError(code: "update_required", message: "Use a pairing link from another Mac that supports paired Mac synchronization.")
+            throw LibraryAPIError(code: "update_required", message: "Use a pairing link from another Mac that supports paired Mac synchronization.")
         }
-        let preview: CompanionPairingPreview = try await network.request(payload.endpoint, path: "v1/pair/preview",
-            body: JSONEncoder().encode(CompanionPairRequest(token: payload.token, deviceID: own.deviceID,
-                deviceName: own.name, metadata: .init(kind: .mac), requiresConfirmation: true, purpose: CompanionPairingPurpose.peerMac)))
-        let response: CompanionPairResponse = try await network.request(payload.endpoint, path: "v1/pair",
-            body: JSONEncoder().encode(CompanionPairRequest(token: payload.token, deviceID: own.deviceID,
+        let preview: PairingPreview = try await network.request(payload.endpoint, path: "v1/pair/preview",
+            body: JSONEncoder().encode(PairRequest(token: payload.token, deviceID: own.deviceID,
+                deviceName: own.name, metadata: .init(kind: .mac), requiresConfirmation: true, purpose: PairingPurpose.peerMac)))
+        let response: PairResponse = try await network.request(payload.endpoint, path: "v1/pair",
+            body: JSONEncoder().encode(PairRequest(token: payload.token, deviceID: own.deviceID,
                 deviceName: own.name, metadata: .init(kind: .mac), expectedWorkspaceID: preview.workspaceID, requiresConfirmation: true,
-                purpose: CompanionPairingPurpose.peerMac)))
+                purpose: PairingPurpose.peerMac)))
         guard response.workspaceID == preview.workspaceID, response.confirmationRequired == true else {
-            throw CompanionAPIError(code: "wrong_peer", message: "The pairing link returned a different library or confirmation contract.")
+            throw LibraryAPIError(code: "wrong_peer", message: "The pairing link returned a different library or confirmation contract.")
         }
         try await acceptPairing(endpoint: payload.endpoint, response: response)
     }
 
-    func acceptPairing(endpoint: URL, response: CompanionPairResponse) async throws {
+    func acceptPairing(endpoint: URL, response: PairResponse) async throws {
         guard let host else { throw CancellationError() }
         let own = try await host.peerRoute()
-        guard response.deviceID == own.deviceID else { throw CompanionAPIError(code: "wrong_device", message: "Pairing did not preserve this Mac's identity.") }
-        let advertisement: CompanionDiscoveryAdvertisement = try await network.request(endpoint, path: "v1/discovery")
+        guard response.deviceID == own.deviceID else { throw LibraryAPIError(code: "wrong_device", message: "Pairing did not preserve this Mac's identity.") }
+        let advertisement: DiscoveryAdvertisement = try await network.request(endpoint, path: "v1/discovery")
         guard advertisement.capabilities?.contains(Self.capability) == true else {
-            throw CompanionAPIError(code: "update_required", message: "Update both Macs to a version that supports paired Mac synchronization.")
+            throw LibraryAPIError(code: "update_required", message: "Update both Macs to a version that supports paired Mac synchronization.")
         }
         let route = PairedMacRoute(deviceID: advertisement.identity.deviceID, libraryID: response.workspaceID,
             endpoint: endpoint, name: advertisement.identity.deviceName)
         try route.validate()
         var credentials = try loadCredentials()
         let previous = credentials.first { $0.route.deviceID == route.deviceID && $0.token == response.credential }
-        let reciprocal = try (previous?.returnToken ?? CompanionMacPairingController.secret())
+        let reciprocal = try (previous?.returnToken ?? MacPairingController.secret())
         let credential = PairedMacCredential(route: route, deviceID: own.deviceID, token: response.credential, returnToken: reciprocal, needsJoin: true, confirmationPending: response.confirmationRequired)
         credentials.removeAll { $0.route.deviceID == route.deviceID }; credentials.append(credential)
         try saveCredentials(credentials)
@@ -318,7 +318,7 @@ final class PairedMacSyncController {
             struct Confirmation: Decodable, Sendable { let confirmed: Bool }
             let confirmation: Confirmation = try await network.request(route.endpoint, path: "v1/pair/confirm",
                 token: credential.token, libraryID: route.libraryID, body: Data("{}".utf8))
-            guard confirmation.confirmed else { throw CompanionAPIError(code: "pairing_pending", message: "Pairing confirmation is pending.") }
+            guard confirmation.confirmed else { throw LibraryAPIError(code: "pairing_pending", message: "Pairing confirmation is pending.") }
         }
         let authentication = try await host.peerAuthentication()
         let identity = try await identity()
@@ -332,7 +332,7 @@ final class PairedMacSyncController {
             let context: PairedMacJoinContext = try await network.request(route.endpoint, path: "v1/peers/join/prepare", token: credential.token,
                 body: Data("{}".utf8))
             guard context.route.deviceID == route.deviceID, context.route.libraryID == route.libraryID else {
-                throw CompanionAPIError(code: "wrong_peer", message: "The paired Mac changed its identity during pairing.")
+                throw LibraryAPIError(code: "wrong_peer", message: "The paired Mac changed its identity during pairing.")
             }
             let statement = PeerAdmission.subjectStatement(issuerDeviceID: route.deviceID, issuerLibraryID: route.libraryID,
                 subjectDeviceID: identity.deviceID, subjectLibraryID: identity.libraryID, subjectPublicKey: identity.publicKey,
@@ -349,7 +349,7 @@ final class PairedMacSyncController {
         let reply: PairedMacJoinReply
         do {
             reply = try await network.request(route.endpoint, path: "v1/peers/join", token: credential.token, body: JSONEncoder().encode(join))
-        } catch let error as CompanionAPIError where error.code == "revocation_context" {
+        } catch let error as LibraryAPIError where error.code == "revocation_context" {
             // Nothing was admitted; prepare again with the current context.
             var saved = try loadCredentials()
             if let index = saved.firstIndex(where: { $0.route.deviceID == route.deviceID && $0.token == credential.token }) {
@@ -358,7 +358,7 @@ final class PairedMacSyncController {
             throw error
         }
         guard reply.route.deviceID == route.deviceID, reply.route.libraryID == route.libraryID else {
-            throw CompanionAPIError(code: "wrong_peer", message: "The paired Mac changed its identity during pairing.")
+            throw LibraryAPIError(code: "wrong_peer", message: "The paired Mac changed its identity during pairing.")
         }
         try await authentication.enrollPeer(route: route, token: reciprocal, publicKey: reply.publicKey,
             subjectSignature: reply.subjectSignature, acknowledgedRevocations: join.reciprocalRevocations, own: identity)
@@ -377,17 +377,17 @@ final class PairedMacSyncController {
     /// Reads one page of another Mac's usage with this Mac's existing grant for it.
     func requestUsage(route: PairedMacRoute, request: UsageDeviceExportRequest) async throws -> UsageDeviceExportPage {
         guard let credential = try loadCredentials().first(where: { $0.route.deviceID == route.deviceID && $0.isCompleted }) else {
-            throw CompanionAPIError(code: "unauthorized", message: "\(route.name) has no completed pairing with this Mac.")
+            throw LibraryAPIError(code: "unauthorized", message: "\(route.name) has no completed pairing with this Mac.")
         }
         do {
             return try await network.request(route.endpoint, path: "v1/peers/usage", token: credential.token,
                 body: JSONEncoder().encode(request))
-        } catch let error as CompanionAPIError where error.code == "not_found" {
+        } catch let error as LibraryAPIError where error.code == "not_found" {
             throw UsageDeviceCollectionError.updateRequired
         }
     }
 
-    func handle(_ request: CompanionHTTPRequest) async -> CompanionHTTPResponse? {
+    func handle(_ request: LibraryHTTPRequest) async -> LibraryHTTPResponse? {
         let path = request.target.replacingOccurrences(of: "/wovenmatter/", with: "/")
         guard path.hasPrefix("/v1/peers/") else { return nil }
         if MemberRequestVerifier.isSigned(request.headers) {
@@ -398,7 +398,7 @@ final class PairedMacSyncController {
         }
         do {
             guard let host, let database = host.model?.dashboardStore?.database, !host.peerSyncPaused,
-                  request.headers["x-woven-protocol"] == String(CompanionProtocol.version) else {
+                  request.headers["x-woven-protocol"] == String(LibraryProtocol.version) else {
                 return .error("unavailable", "This Mac is not ready to synchronize.", status: 503)
             }
             let authentication = try await host.peerAuthentication()
@@ -462,7 +462,7 @@ final class PairedMacSyncController {
                 let enrollment = try JSONDecoder().decode(PairedWorkspaceEnrollment.self, from: request.body)
                 // Any Mac enrolls a device for any workspace it knows: Linux hosts
                 // issue grants to every Mac member, and a Mac issues its own.
-                guard try await database.companionExecutionWorkspaces().contains(where: { $0.id == enrollment.workspaceID && !$0.deleted && $0.kind != .ios }) else {
+                guard try await database.libraryExecutionWorkspaces().contains(where: { $0.id == enrollment.workspaceID && !$0.deleted && $0.kind != .ios }) else {
                     return .error("unknown_workspace", "This Mac does not know that workspace yet.", status: 404)
                 }
                 // A Mac enrolls itself directly. It may also enroll one of its own
@@ -520,7 +520,7 @@ final class PairedMacSyncController {
                 return try .json(reply)
             }
             return .error("not_found", "Unknown paired Mac endpoint.", status: 404)
-        } catch let error as CompanionAPIError { return .error(error.code, error.message, status: error.code == "unauthorized" ? 401 : 409) }
+        } catch let error as LibraryAPIError { return .error(error.code, error.message, status: error.code == "unauthorized" ? 401 : 409) }
         catch { return .error("peer_sync", "Synchronization paused; all local writing is retained. " + error.localizedDescription, status: 409) }
     }
 
@@ -542,14 +542,14 @@ final class PairedMacSyncController {
 
     /// Execution access comes directly from the Mac that manages the
     /// workspace, authenticated with this Mac's own target-local grant there.
-    func provision(workspace: CompanionExecutionWorkspace, deviceID: String) async throws -> CompanionExecutionCredential {
+    func provision(workspace: ExecutionWorkspace, deviceID: String) async throws -> ExecutionCredential {
         guard let host, let database = host.model?.dashboardStore?.database,
               let route = try await database.pairedMacRoutes().first(where: { $0.deviceID == workspace.ownerDeviceID }) else {
-            throw CompanionAPIError(code: "peer_unavailable", message: "Reconnect the Mac that added this workspace to finish device enrollment.")
+            throw LibraryAPIError(code: "peer_unavailable", message: "Reconnect the Mac that added this workspace to finish device enrollment.")
         }
         let authentication = try await host.peerAuthentication(), identity = try await identity()
         guard await authentication.isActiveMac(route.deviceID), let pin = await authentication.pin(for: route.deviceID), pin.libraryID == route.libraryID else {
-            throw CompanionAPIError(code: "peer_unavailable", message: "Pair with the Mac that added this workspace again to finish device enrollment.")
+            throw LibraryAPIError(code: "peer_unavailable", message: "Pair with the Mac that added this workspace again to finish device enrollment.")
         }
         var credential = try loadCredentials().first(where: { $0.route.deviceID == route.deviceID && $0.deviceID == identity.deviceID && $0.isCompleted })
         if credential == nil {
@@ -562,11 +562,11 @@ final class PairedMacSyncController {
         }
         guard let credential else { throw CancellationError() }
         try await network.verify(route, deviceID: identity.deviceID, token: credential.token, pin: pin)
-        let result: CompanionExecutionCredential = try await network.request(route.endpoint, path: "v1/peers/credential", token: credential.token,
+        let result: ExecutionCredential = try await network.request(route.endpoint, path: "v1/peers/credential", token: credential.token,
             body: JSONEncoder().encode(PairedWorkspaceEnrollment(workspaceID: workspace.id, deviceID: deviceID)))
         guard result.workspace.id == workspace.id, result.workspace.ownerDeviceID == workspace.ownerDeviceID,
               result.workspace.libraryID == workspace.libraryID, result.deviceID == deviceID else {
-            throw CompanionAPIError(code: "wrong_workspace", message: "The workspace returned a different execution identity.")
+            throw LibraryAPIError(code: "wrong_workspace", message: "The workspace returned a different execution identity.")
         }
         return result
     }
@@ -583,7 +583,7 @@ final class PairedMacSyncController {
 enum PairedMacCredentialVault {
     private static var signingQuery: [CFString: Any] {
         [kSecClass: kSecClassGenericPassword, kSecAttrService: (Bundle.main.bundleIdentifier ?? "com.wovenmatter") + ".paired-mac-signing",
-         kSecAttrAccount: CompanionTestWorkspace.supportDirectory?.path ?? DevelopmentLaunch.supportDirectory?.path ?? "production"]
+         kSecAttrAccount: IsolatedTestWorkspace.supportDirectory?.path ?? DevelopmentLaunch.supportDirectory?.path ?? "production"]
     }
     static func loadSigningKey() throws -> Data? {
         var q = signingQuery; q[kSecReturnData] = true; q[kSecMatchLimit] = kSecMatchLimitOne; q[kSecUseAuthenticationUI] = kSecUseAuthenticationUIFail
@@ -600,7 +600,7 @@ enum PairedMacCredentialVault {
     }
     private static var query: [CFString: Any] {
         [kSecClass: kSecClassGenericPassword, kSecAttrService: (Bundle.main.bundleIdentifier ?? "com.wovenmatter") + ".paired-macs",
-         kSecAttrAccount: CompanionTestWorkspace.supportDirectory?.path ?? DevelopmentLaunch.supportDirectory?.path ?? "production"]
+         kSecAttrAccount: IsolatedTestWorkspace.supportDirectory?.path ?? DevelopmentLaunch.supportDirectory?.path ?? "production"]
     }
     static func load() throws -> [PairedMacCredential] {
         var q = query; q[kSecReturnData] = true; q[kSecMatchLimit] = kSecMatchLimitOne; q[kSecUseAuthenticationUI] = kSecUseAuthenticationUIFail

@@ -92,7 +92,7 @@ extension WorkspaceDatabase {
                 !table.hasPrefix("workspace_history_search"), !sql.uppercased().contains("VIRTUAL TABLE") else { continue }
           let local = try connection.historyRowsUnlocked("PRAGMA main.table_info(\(WorkspaceDatabaseConnection.peerQuote(table)))", values: [])
           let incoming = try connection.historyRowsUnlocked("PRAGMA legacy_mac.table_info(\(WorkspaceDatabaseConnection.peerQuote(table)))", values: [])
-          guard local == incoming else { throw CompanionAPIError(code: "legacy_version", message: "The saved local workspace needs a compatible schema before it can be combined. Both originals are retained.") }
+          guard local == incoming else { throw LibraryAPIError(code: "legacy_version", message: "The saved local workspace needs a compatible schema before it can be combined. Both originals are retained.") }
           let generated = sql.uppercased().contains("AUTOINCREMENT")
             ? incoming.first(where: { $0.objectValue?["pk"]?.doubleValue == 1 })?.objectValue?["name"]?.stringValue : nil
           let names = incoming.compactMap { $0.objectValue?["name"]?.stringValue }.filter { $0 != generated }.map(WorkspaceDatabaseConnection.peerQuote).joined(separator: ",")
@@ -125,13 +125,13 @@ extension WorkspaceDatabase {
     guard UUID(uuidString: deviceID) != nil else { throw WorkspaceDatabaseError.corruptRow }
     try await write { connection in
       try connection.transaction {
-        let previous = try connection.companionLibraryIdentityUnlocked().hostDeviceID
+        let previous = try connection.libraryIdentityUnlocked().hostDeviceID
         guard previous != deviceID else { return }
         // This Mac's own advertised route may already exist from an earlier
         // launch; any other Mac means peer data may already carry this identity.
         guard try connection.historyRowsUnlocked("SELECT device_id FROM paired_mac_routes WHERE device_id<>?", values: [previous]).isEmpty,
               try connection.historyRowsUnlocked("SELECT peer_id FROM paired_library_cursors LIMIT 1", values: []).isEmpty else {
-          throw CompanionAPIError(code: "legacy_identity", message: "This library already has a paired Mac identity. Its saved legacy data is retained for recovery.")
+          throw LibraryAPIError(code: "legacy_identity", message: "This library already has a paired Mac identity. Its saved legacy data is retained for recovery.")
         }
         try connection.toolsExecuteUnlocked("DELETE FROM paired_mac_routes WHERE device_id=?", [previous])
         try connection.toolsExecuteUnlocked("UPDATE companion_library_identity SET host_device_id=?", [deviceID])

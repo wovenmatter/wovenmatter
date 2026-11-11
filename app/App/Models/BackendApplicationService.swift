@@ -1,5 +1,5 @@
 import Foundation
-import WovenMatterCompanion
+import WovenMatterShared
 import WovenMatterClient
 import WovenMatterCore
 import WovenMatterDashboardStore
@@ -23,7 +23,7 @@ struct BuiltInSubagentArchiveRequest: Codable, Sendable {
 
 enum BackendApplicationCommand: Codable, Sendable {
     case saveDictation(DictationRecord)
-    case companion(CompanionHostAction)
+    case libraryHost(LibraryHostAction)
     case federatedExecution(FederatedExecutionAction)
     case setIdleSleepPolicy(WorkPowerPolicy)
     case setClosedLidPolicy(WorkPowerPolicy)
@@ -55,10 +55,22 @@ enum BackendApplicationCommand: Codable, Sendable {
     case saveCalendar(draft: WorkspaceCalendarDraft, eventID: String?, expectedRevision: Int?, occurrence: Int?)
     case deleteCalendar(eventID: String, expectedRevision: Int, occurrence: Int?)
     case calendarMetadata(task: WorkspaceCalendarTask)
+
+    /// `libraryHost` keeps its legacy wire key so a frontend and backend of
+    /// different versions still agree during an update.
+    enum CodingKeys: String, CodingKey {
+        case saveDictation, libraryHost = "companion", federatedExecution, setIdleSleepPolicy
+        case setClosedLidPolicy, stageAttachments, toolsMutation, mcpAccess, bots, loadAgentDefaults
+        case saveAgentDefault, setAgentDefaultsSharing, workspaceMutation, exportConversation
+        case trashedConversations, trashedNotes, exportNote, sessionMetadata, createPeerSession, createSession
+        case sendMessageFenced, cancelSessionFenced, goalMutationFenced, configureSession, subagentHistory
+        case cancelSession, resolveSessionAccess, resolvePermission, resolveInteraction, saveCalendar
+        case deleteCalendar, calendarMetadata
+    }
 }
 
 struct BackendApplicationResult: Codable, Sendable {
-    var companion: CompanionHostSnapshot?
+    var libraryHost: LibraryHostSnapshot?
     var federatedExecution: FederatedExecutionSnapshot?
     var exportURL: URL?
     var trashedConversations: [WorkspaceTrashedConversation]?
@@ -78,6 +90,14 @@ struct BackendApplicationResult: Codable, Sendable {
     var history: GatewayJSONValue?
     var mcpAccess: WovenMCPAccessSnapshot?
     var bots: BotsCommandResult?
+
+    /// `libraryHost` keeps its legacy wire key; see `BackendApplicationCommand.CodingKeys`.
+    enum CodingKeys: String, CodingKey {
+        case libraryHost = "companion", federatedExecution, exportURL, trashedConversations, trashedNotes
+        case noteExport, surfaceProfile, accepted, entityID, noteResponse, conversationID, metadata
+        case selections, resolvedSelections, usesSharedDefaults, attachments, requiresTimerPauseConfirmation
+        case history, mcpAccess, bots
+    }
 }
 
 struct BackendApplicationReadiness: Codable, Sendable {
@@ -141,7 +161,7 @@ final class BackendApplicationService {
         return result
     }
 
-    func recordCompanionStop(conversationID: String) {
+    func recordLibraryStop(conversationID: String) {
         do { try dispatchAdmissions.prepareLegacyStop(conversationID: conversationID) }
         catch { dispatchAdmissions.refuseFurtherSends(conversationID: conversationID) }
     }
@@ -206,8 +226,8 @@ final class BackendApplicationService {
         switch command {
         case .federatedExecution(let action):
             return try await .init(federatedExecution: model.performFederatedExecution(action))
-        case .companion(let action):
-            let host = model.companionHost
+        case .libraryHost(let action):
+            let host = model.libraryHost
             switch action {
             case .status: await host.refreshStatus()
             case .pairAtEndpoint(let endpoint): await host.pairAtEndpoint(endpoint)
@@ -222,7 +242,7 @@ final class BackendApplicationService {
             case .createCode: await host.createPairingCode()
             case .revoke(let id): await host.revoke(id)
             }
-            return .init(companion: host.snapshot)
+            return .init(libraryHost: host.snapshot)
         case .setIdleSleepPolicy(let policy):
             model.activeWorkSleepPrevention.setPolicy(policy)
             return .init()

@@ -1,6 +1,6 @@
 import AppKit
 import Observation
-import WovenMatterCompanion
+import WovenMatterShared
 
 /// AppKit's caret/undo bridge around the same native session used on iPhone.
 @MainActor @Observable final class DictationModel {

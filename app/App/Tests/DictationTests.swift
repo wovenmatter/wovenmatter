@@ -3,7 +3,7 @@ import WorkspaceFixtures
 import AppKit
 import Foundation
 import Testing
-import WovenMatterCompanion
+import WovenMatterShared
 
 @MainActor private final class SpeechFixture: DictationEngine {
     let stream: AsyncThrowingStream<DictationSegment, any Error>

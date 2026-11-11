@@ -1,21 +1,21 @@
 import Foundation
 import WovenMatterCore
-import CompanionClient
+import LibraryClient
 import WovenMatterDashboardStore
 
 enum FederatedExecutionAction: Codable, Sendable {
     case refresh(conversationID: String)
-    case respond(CompanionPendingInteraction, CompanionInteractionResponse)
+    case respond(PendingInteraction, LibraryInteractionResponse)
     case stop(conversationID: String, runID: String)
-    case configure(conversationID: String, action: CompanionWorkspaceAction)
+    case configure(conversationID: String, action: LibraryWorkspaceAction)
     case earlier(conversationID: String, before: String)
 }
 struct FederatedExecutionSnapshot: Codable, Sendable {
-    var workspace: CompanionExecutionWorkspace
-    var transcript: CompanionTranscript?
-    var capability: CompanionProvider?
-    var interactions: [CompanionPendingInteraction]
-    var session: CompanionSessionSettings?
+    var workspace: ExecutionWorkspace
+    var transcript: LibraryTranscript?
+    var capability: LibraryProvider?
+    var interactions: [PendingInteraction]
+    var session: LibrarySessionSettings?
     var online: Bool
     var error: String?
 }
@@ -43,17 +43,17 @@ extension ApplicationModel {
         // The command journal lives beside the library it addresses, never in a
         // global directory a fixture or another instance could share.
         let directory = dashboardStore.database.supportDirectory
-        let storage = companionHost.peerStorage
+        let storage = libraryHost.peerStorage
         let client = try CentralExecutionClient(database: dashboardStore.database,
             commandJournalURL: directory.appending(path: "central-execution-commands.json"),
             provision: { [weak self] id in
                 guard let self else { throw CancellationError() }
-                return try await self.companionHost.provisionCentralExecutionWorkspace(id: id)
+                return try await self.libraryHost.provisionCentralExecutionWorkspace(id: id)
             }, loadCredential: storage.loadExecutionCredential, saveCredential: storage.saveExecutionCredential,
             makeSignedTransport: { [weak self] workspace in
                 // The iPhone is never an execution destination for signed calls.
                 // A workspace whose serving member is unknown cannot be addressed; its saved grant (if any) still works.
-                guard let self, workspace.kind != .ios, let directory = try? await self.companionHost.peerSync.members(),
+                guard let self, workspace.kind != .ios, let directory = try? await self.libraryHost.peerSync.members(),
                       let audience = await directory.audience(for: workspace) else { return nil }
                 return try SignedExecutionWorkspaceTransport(workspace: workspace, signer: directory.identity.signer, audience: audience)
             },
@@ -108,7 +108,7 @@ extension ApplicationModel {
             }
         }
         let id: String
-        var earlier: CompanionTranscript?
+        var earlier: LibraryTranscript?
         switch action {
         case .refresh(let conversationID): id = conversationID
         case .stop(let conversationID, let runID): id = conversationID; try await cancelCanonicalRun(conversationID: id, runID: runID)
@@ -116,9 +116,9 @@ extension ApplicationModel {
         case .configure(let conversationID, let command): id = conversationID; _ = try await client.perform(conversationID: id, action: command)
         case .earlier(let conversationID, let before): id = conversationID; earlier = try await client.earlierTranscript(conversationID: id, before: before)
         }
-        guard let workspace = try await client.workspace(conversationID: id) else { throw CompanionAPIError(code: "unknown_workspace", message: "This conversation has no execution workspace.") }
+        guard let workspace = try await client.workspace(conversationID: id) else { throw LibraryAPIError(code: "unknown_workspace", message: "This conversation has no execution workspace.") }
         try? await client.refresh(conversationID: id)
-        var session: CompanionSessionSettings?
+        var session: LibrarySessionSettings?
         if client.onlineWorkspaces.contains(workspace.id), case .session(let value) = try? await client.readWorkspace(conversationID: id, request: .session(id: id)) { session = value }
         let snapshot = FederatedExecutionSnapshot(workspace: workspace, transcript: earlier ?? client.transcripts[id],
             capability: client.capabilities[id], interactions: client.pending[workspace.id]?.filter { $0.conversationID == id } ?? [],
@@ -137,9 +137,9 @@ extension ApplicationModel {
         case .earlier(let value, let cursor): id = value; before = cursor
         default: throw WorkspaceToolError.invalid("Snapshot history is disconnected. Start a new session to test execution.")
         }
-        var transcript = try await database.companionFederatedTranscript(conversationID: id, before: before)
+        var transcript = try await database.libraryFederatedTranscript(conversationID: id, before: before)
         transcript?.activeRunID = nil
-        return .init(workspace: .init(id: "snapshot-history", libraryID: try await database.companionWorkspaceID(),
+        return .init(workspace: .init(id: "snapshot-history", libraryID: try await database.libraryWorkspaceID(),
             ownerDeviceID: "snapshot-history", kind: .mac, name: "Snapshot history"),
             transcript: transcript, capability: nil, interactions: [], session: nil, online: false, error: nil)
     }
@@ -155,19 +155,19 @@ extension ApplicationModel {
               let native = try? await store.database.localACPSession(conversationID: conversation.id),
               native.acpSessionID != nil else { return }
         let id = workspaceID.uuidString.lowercased()
-        guard try await store.database.companionExecutionWorkspaces().contains(where: { $0.id == id && !$0.deleted }) else { return }
+        guard try await store.database.libraryExecutionWorkspaces().contains(where: { $0.id == id && !$0.deleted }) else { return }
         if let pending = federatedAdoptionTasks[conversation.id] { try await pending.value; return }
         let task = Task { @MainActor in
-            let owner = try await store.database.companionExecutionOwner(conversationID: conversation.id)
+            let owner = try await store.database.libraryExecutionOwner(conversationID: conversation.id)
             if owner == nil {
                 // Leave a currently running legacy session on its current owner.
                 // Its next idle refresh will perform the transfer.
                 if try await store.database.activeRunID(conversationID: conversation.id) != nil { return }
-                _ = try await self.companionHost.provisionCentralExecutionWorkspace(id: id)
+                _ = try await self.libraryHost.provisionCentralExecutionWorkspace(id: id)
                 try await store.detachLocalACPForExecutionAdoption(conversationID: conversation.id)
             }
-            let identity = try await store.database.companionLibraryIdentity()
-            let adoption = try await store.database.prepareCompanionExecutionAdoption(conversationID: conversation.id,
+            let identity = try await store.database.libraryIdentity()
+            let adoption = try await store.database.prepareExecutionAdoption(conversationID: conversation.id,
                 workspaceID: id, deviceID: identity.hostDeviceID)
             self.federatedExecutionOwners[conversation.id] = id
             _ = try await self.remoteWorkspaces.adoptExecutionConversation(configuration: configuration, adoption: adoption)
@@ -188,7 +188,7 @@ extension ApplicationModel {
             // A primary-owner reservation can never become a foreign-owner send.
             // Adoption cancels this reservation; the new owner resumes its own goal.
             try await database.validateClaimedToolDelivery(id: id)
-            guard try await database.companionExecutionOwner(conversationID: conversationID) == nil else {
+            guard try await database.libraryExecutionOwner(conversationID: conversationID) == nil else {
                 throw WorkspaceToolError.invalid("This goal continuation belongs to the previous execution owner.")
             }
             return false
@@ -196,11 +196,11 @@ extension ApplicationModel {
         if let conversation = try await database.workspaceOverview().conversations.first(where: { $0.id == conversationID }) {
             try await adoptRegisteredRemoteConversationIfNeeded(conversation)
         }
-        guard try await database.companionExecutionOwner(conversationID: conversationID) != nil else { return false }
-        if try await database.companionConversationExecutionWorkspace(conversationID: conversationID)?.kind == .ios {
+        guard try await database.libraryExecutionOwner(conversationID: conversationID) != nil else { return false }
+        if try await database.libraryConversationExecutionWorkspace(conversationID: conversationID)?.kind == .ios {
             throw WorkspaceToolError.invalid(Self.quickChatReadOnlyMessage)
         }
-        guard input.files.isEmpty else { throw CompanionAPIError(code: "attachment_unavailable", message: "Save this file to the workspace before referencing it in this remote conversation.") }
+        guard input.files.isEmpty else { throw LibraryAPIError(code: "attachment_unavailable", message: "Save this file to the workspace before referencing it in this remote conversation.") }
         try await waitForAgentStop(conversationID: conversationID)
         try dispatchFence.check()
         let client = try centralExecutionClient()
