@@ -1,3 +1,4 @@
+import { createUsageScanner } from './usage-scan.mjs'
 import { existsSync } from 'node:fs'
 const defaultAgentModule = new URL('../default-agent/src/managed-service.mjs', import.meta.url)
 const { createManagedDefaultAgentService } = await import(existsSync(defaultAgentModule) ? defaultAgentModule.href : new URL('../../default-agent/src/managed-service.mjs', import.meta.url).href)
@@ -189,6 +190,8 @@ const bots = runningAsService && configuration.runtimeKind === 'host' && process
 const workspaceRoutes = ['/v1/execution/commands', '/v1/task-gateway', '/v1/durable-acp/', '/v1/default-agent/rpc', '/v1/default-agent/runs/',
   '/v1/projects', '/v1/scratch', '/v1/directories', '/v1/databases', '/v1/browser/', '/v1/harnesses/', '/v1/runtime-maintenance', '/v1/workspace-instances']
 const workspaceRoute = pathname => workspaceRoutes.some(prefix => pathname === prefix || pathname.startsWith(prefix.endsWith('/') ? prefix : prefix + '/'))
+// Usage on this machine: its harnesses, its Pi Durable agent and its bots.
+const usageScanner = createUsageScanner({ workspaceRoot, botsDatabase: resolve(configuration.botsData ?? resolve(configuration.dataRoot, 'bots'), 'bots.sqlite') })
 
 const server = createServer({ maxHeaderSize: 16_384, headersTimeout: 10_000,
   requestTimeout: 30_000, connectionsCheckingInterval: 1_000 }, async (request, response) => {
@@ -410,6 +413,10 @@ const server = createServer({ maxHeaderSize: 16_384, headersTimeout: 10_000,
       return json(response,200,await workspaceBrowser.forProfile(url.searchParams.get('profile') ?? body.profile ?? 'default').frame(body.tabID, body.previousFrameID))
     }
 
+    if (url.pathname === '/v1/usage/export' && request.method === 'GET') {
+      if (!administrator) return json(response,403,{error:'administrator_required'})
+      return json(response,200,await usageScanner.page({since:Number(url.searchParams.get('since'))||0,offset:Number(url.searchParams.get('offset'))||0}))
+    }
     if (url.pathname === '/v1/task-gateway' && request.method === 'GET') return json(response,200,taskGateway.status())
     if (url.pathname === '/v1/task-gateway' && request.method === 'PATCH') return json(response,200,await taskGateway.configure(await readJSON(request)))
     if (url.pathname === '/v1/task-gateway/schedules' && request.method === 'GET') return json(response,200,taskGateway.schedules())

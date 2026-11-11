@@ -125,8 +125,27 @@ when an intentional design change is accepted.
   chats, and More. Models holds the default model, In the composer, and Fallbacks. Add
   models opens the provider catalog with its filters and paging in a sheet. Guided
   setup opens that sheet after a successful sign-in or key addition.
-- **Usage:** limits show each saved account and signed-out providers, with Manage
-  accounts. Device analytics never depends on limits-account switches or credentials.
+- **Usage:** account setup lives in Subscriptions & API Keys, linked from Limits. A
+  fixed header holds the title, the Analytics/Limits switch, and refresh. Device
+  analytics never depends on limits-account switches or credentials.
+  No rule lines separate the header, filter column, and report; spacing does that.
+  While a range has no data yet, the page keeps its full layout with muted placeholders
+  and never reads as zero. Analytics keeps a fixed filter column to the left of its scrolling report: search,
+  range, device rows, provider rows, then compact Model, Harness, and Reasoning
+  dropdowns. Device and provider rows are an intentional exception to switches for
+  multi-select toggles: click a row to show or hide it; a hidden row keeps its place
+  with a hollow swatch and muted text. Provider rows are the graph's legend. A device
+  whose usage may be missing or old says why in its row, never showing zero. The report runs graph, breakdown
+  numbers, by provider, by model, sessions, then collapsed source coverage. Sections
+  stay borderless with hairline rows. Provider colors follow the provider, never rank;
+  neutral ink shows token types. Graphs default to layered lines with a Bars switch and
+  to Tokens with an API estimate switch. A period keeps a minimum width, so long ranges
+  scroll sideways under a fixed y-axis and open on the latest period, with edge fades
+  and earlier/later buttons in place of a scrollbar. Label estimates; never mix them
+  into direct spend. Unknown prices read Unpriced, never $0.
+  Limits uses one-column rows for each saved account: window, bar, amount left, reset.
+  Bars show what is left, with a tick where even spending would be. Signed-out providers
+  share one line. Unavailable data is never shown as zero usage or a full allowance.
 - **Tool defaults:** settings say Woven MCP and show effective defaults,
   rather than an off-looking inheritance switch. Composer controls retain Tools.
   **Settings → Woven MCP** holds tool defaults, connected apps, bots, and outside
