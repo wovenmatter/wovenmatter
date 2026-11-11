@@ -96,10 +96,10 @@ struct RuntimeMaintenanceTests {
         let sdk = try await RuntimeMaintenance.registryVersion("@anthropic-ai/claude-agent-sdk", executableRequired: false,
             fetch: { _ in Data(#"{"versions":{"0.3.312":{},"0.3.314":{}}}"#.utf8) })
         #expect(sdk == "0.3.314")
-        #expect(LocalACPRuntimeCatalog.definition(for: .codex)?.minimumEngineVersion == "0.167.0")
+        #expect(LocalACPRuntimeCatalog.definition(for: .codex)?.minimumEngineVersion == "0.167.1")
         #expect(LocalACPRuntimeCatalog.definition(for: .claudeCode)?.minimumEngineVersion == "0.3.322")
-        #expect(LocalACPRuntimeCatalog.definition(for: .codex)?.minimumProtocolSDKVersion == "2.5.0")
-        #expect(LocalACPRuntimeCatalog.definition(for: .claudeCode)?.minimumProtocolSDKVersion == "2.5.0")
+        #expect(LocalACPRuntimeCatalog.definition(for: .codex)?.minimumProtocolSDKVersion == "2.6.0")
+        #expect(LocalACPRuntimeCatalog.definition(for: .claudeCode)?.minimumProtocolSDKVersion == "2.6.0")
         #expect(LocalACPRuntimeCatalog.definition(for: .claudeCode)?.cliInstallerArguments == ["latest"])
     }
 

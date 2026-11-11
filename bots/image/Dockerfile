@@ -36,7 +36,16 @@ RUN set -eu; \
 # Playwright with Chromium (and its system libraries), usable by the bot user. Keep the version in
 # step with remote/host/runtime-versions.json.
 ARG PLAYWRIGHT_VERSION=1.65.0
-RUN npm install -g "playwright@${PLAYWRIGHT_VERSION}" --no-audit --no-fund \
+# Node's archive npm is bootstrap-only. Use the same integrity-verified private
+# npm and locked vendor repairs as managed CLI installs and SDK updates.
+# The container's bot user needs read/execute access; ownership stays with root.
+COPY tooling /opt/wovenmatter/tooling-source/
+RUN set -eu; \
+    npm_path="$(node /opt/wovenmatter/tooling-source/harnesses/prepare-npm.mjs '{"prefix":"/opt/wovenmatter/npm","node":"/usr/local/bin/node","bootstrap":["/usr/local/bin/node","/usr/local/lib/node_modules/npm/bin/npm-cli.js"],"securityGraph":"/opt/wovenmatter/tooling-source/npm-runtime"}')"; \
+    chmod -R a+rX /opt/wovenmatter/npm; \
+    ln -sf "$npm_path" /usr/local/bin/npm; \
+    ln -sf "${npm_path%/bin/npm}/lib/node_modules/npm/bin/npx-cli.js" /usr/local/bin/npx; \
+    npm install -g --prefix /usr/local "playwright@${PLAYWRIGHT_VERSION}" --no-audit --no-fund \
  && playwright install --with-deps chromium \
  && chmod -R a+rX /opt/ms-playwright \
  && rm -rf /var/lib/apt/lists/* /root/.npm

@@ -53,8 +53,8 @@
         "permissions",
         "attachments"
       ],
-      "minimumEngineVersion": "0.167.0",
-      "minimumProtocolSDKVersion": "2.5.0"
+      "minimumEngineVersion": "0.167.1",
+      "minimumProtocolSDKVersion": "2.6.0"
     },
     {
       "id": "claude_code",
@@ -64,7 +64,7 @@
       "arguments": [],
       "cliCommand": "claude",
       "adapterPackage": "@agentclientprotocol/claude-agent-acp",
-      "minimumAdapterVersion": "0.104.0",
+      "minimumAdapterVersion": "0.106.0",
       "install": {
         "kind": "official-script",
         "source": "https://claude.ai/install.sh",
@@ -111,7 +111,7 @@
         "attachments"
       ],
       "minimumEngineVersion": "0.3.322",
-      "minimumProtocolSDKVersion": "2.5.0"
+      "minimumProtocolSDKVersion": "2.6.0"
     },
     {
       "id": "grok_build",

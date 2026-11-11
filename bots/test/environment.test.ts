@@ -9,7 +9,7 @@ import { FileError } from "@earendil-works/pi-durable/env";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { runningWork } from "../src/environment/container.ts";
 import { EngineError, StreamDemuxer } from "../src/environment/engine-api.ts";
-import { BUILD_OUTPUT_TAIL_BYTES, ensureImage, helperArchive, imageTag } from "../src/environment/images.ts";
+import { BUILD_OUTPUT_TAIL_BYTES, ensureImage, helperArchive, imageContext, imageTag } from "../src/environment/images.ts";
 import { PreviewManager } from "../src/environment/previews.ts";
 import { AgentConnection, RemoteExecutionEnv } from "../src/environment/remote.ts";
 import { createTar } from "../src/environment/tar.ts";
@@ -306,6 +306,38 @@ describe("engine streams and archives", () => {
     expect(imageTag("woven-bots", Buffer.from("a"))).toMatch(/^woven-bots:[0-9a-f]{16}$/);
     expect(imageTag("woven-bots", Buffer.from("a"))).not.toBe(imageTag("woven-bots", Buffer.from("b")));
     expect(imageTag("registry:5000/woven-bots:pinned", Buffer.from("a"))).toBe("registry:5000/woven-bots:pinned");
+  });
+
+  it("packs identical verified npm inputs from app and native host layouts and rebuilds on repair changes", async () => {
+    const dir = await tempDir();
+    try {
+      const image = join(dir.path, "image");
+      await mkdir(image);
+      await writeFile(join(image, "Dockerfile"), "FROM fixture\n");
+      const inputs = ["harnesses/prepare-npm.mjs", "harnesses/install-adapter.mjs", "harnesses/npm-version.json",
+        "npm-runtime/package.json", "npm-runtime/package-lock.json"];
+      for (const layout of ["app", "host"]) {
+        for (const input of inputs) {
+          const path = join(dir.path, layout, layout === "app" && input.startsWith("npm-runtime/") ? `remote/${input}` : input);
+          await mkdir(join(path, ".."), { recursive: true });
+          await writeFile(path, input);
+        }
+      }
+      const app = await imageContext(image, join(dir.path, "app"));
+      const host = await imageContext(image, join(dir.path, "host"));
+      expect(app.equals(host)).toBe(true);
+      await writeFile(join(dir.path, "context.tar"), app);
+      await mkdir(join(dir.path, "out"));
+      await run("tar", ["-xf", join(dir.path, "context.tar"), "-C", join(dir.path, "out")]);
+      for (const input of inputs) expect(await readFile(join(dir.path, "out/tooling", input), "utf8")).toBe(input);
+      const before = imageTag("woven-bots", host);
+      await writeFile(join(dir.path, "host/npm-runtime/package-lock.json"), "new security graph");
+      expect(imageTag("woven-bots", await imageContext(image, join(dir.path, "host")))).not.toBe(before);
+      await rm(join(dir.path, "host/harnesses/npm-version.json"));
+      await expect(imageContext(image, join(dir.path, "host"))).rejects.toThrow(/ENOENT/);
+    } finally {
+      await dir.cleanup();
+    }
   });
 
   it("packs the helper with the env agent's packages and a completion marker last", async () => {
