@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Audit notes: ios/README.md, "Privacy manifest". scripts/verify-ios-app.py
+     requires these declarations in every Release bundle; update both together. -->
+<plist version="1.0"><dict>
+  <key>NSPrivacyTracking</key><false/>
+  <key>NSPrivacyTrackingDomains</key><array/>
+  <key>NSPrivacyCollectedDataTypes</key><array>
+    <!-- Quick Chat messages, history, notes and tool output, sent to the model provider the user connects. -->
+    <dict>
+      <key>NSPrivacyCollectedDataType</key><string>NSPrivacyCollectedDataTypeOtherUserContent</string>
+      <key>NSPrivacyCollectedDataTypeLinked</key><true/>
+      <key>NSPrivacyCollectedDataTypeTracking</key><false/>
+      <key>NSPrivacyCollectedDataTypePurposes</key><array><string>NSPrivacyCollectedDataTypePurposeAppFunctionality</string></array>
+    </dict>
+    <!-- Quick Chat web searches, sent to the search provider the user connects (Exa, Brave Search or Firecrawl). -->
+    <dict>
+      <key>NSPrivacyCollectedDataType</key><string>NSPrivacyCollectedDataTypeSearchHistory</string>
+      <key>NSPrivacyCollectedDataTypeLinked</key><true/>
+      <key>NSPrivacyCollectedDataTypeTracking</key><false/>
+      <key>NSPrivacyCollectedDataTypePurposes</key><array><string>NSPrivacyCollectedDataTypePurposeAppFunctionality</string></array>
+    </dict>
+    <!-- Product analytics, relayed only through a paired Mac: the random library analytics ID ... -->
+    <dict>
+      <key>NSPrivacyCollectedDataType</key><string>NSPrivacyCollectedDataTypeUserID</string>
+      <key>NSPrivacyCollectedDataTypeLinked</key><false/>
+      <key>NSPrivacyCollectedDataTypeTracking</key><false/>
+      <key>NSPrivacyCollectedDataTypePurposes</key><array><string>NSPrivacyCollectedDataTypePurposeAnalytics</string></array>
+    </dict>
+    <!-- ... and the generic app_opened / app_active signals. -->
+    <dict>
+      <key>NSPrivacyCollectedDataType</key><string>NSPrivacyCollectedDataTypeProductInteraction</string>
+      <key>NSPrivacyCollectedDataTypeLinked</key><false/>
+      <key>NSPrivacyCollectedDataTypeTracking</key><false/>
+      <key>NSPrivacyCollectedDataTypePurposes</key><array><string>NSPrivacyCollectedDataTypePurposeAnalytics</string></array>
+    </dict>
+  </array>
+  <key>NSPrivacyAccessedAPITypes</key><array>
+    <!-- App preferences (@AppStorage, UserDefaults.standard), read and written by this app only. -->
+    <dict>
+      <key>NSPrivacyAccessedAPIType</key><string>NSPrivacyAccessedAPICategoryUserDefaults</string>
+      <key>NSPrivacyAccessedAPITypeReasons</key><array><string>CA92.1</string></array>
+    </dict>
+    <!-- Metadata of files inside the app container: Pi Durable checkpoints, saved files, rendered images. -->
+    <dict>
+      <key>NSPrivacyAccessedAPIType</key><string>NSPrivacyAccessedAPICategoryFileTimestamp</string>
+      <key>NSPrivacyAccessedAPITypeReasons</key><array><string>C617.1</string></array>
+    </dict>
+    <!-- systemUptime backs performance.now() in the bundled Pi Durable runtime: elapsed time within the app. -->
+    <dict>
+      <key>NSPrivacyAccessedAPIType</key><string>NSPrivacyAccessedAPICategorySystemBootTime</string>
+      <key>NSPrivacyAccessedAPITypeReasons</key><array><string>35F9.1</string></array>
+    </dict>
+  </array>
+</dict></plist>

@@ -281,8 +281,11 @@ import CompanionInference
       booted = true
       defer { initialized = true }
       await reload()
-      if fixture { await seedFixture() }
-      else {
+      if fixture {
+        #if DEBUG
+        await seedFixture()
+        #endif
+      } else {
         do { try await store?.recoverPairingTransition(); await reload(); credential = try MobileCredentialVault.load() }
         catch { errorMessage = error.localizedDescription; return }
         do {
@@ -814,6 +817,8 @@ import CompanionInference
     } catch { errorMessage = error.localizedDescription; await reload() }
   }
 
+  #if DEBUG
+  /// UI-test seed data; compiled only into Debug builds, like the fixture environment.
   private func seedFixture() async {
     guard let store else { return }
     do {
@@ -952,6 +957,7 @@ import CompanionInference
       if scenario == "member-macs-chooser" { newChat() }
     } catch { errorMessage = error.localizedDescription }
   }
+  #endif
 }
 
 extension CompanionWorkspaceAction {
