@@ -64,9 +64,12 @@ targets:
         Debug:
           PRODUCT_BUNDLE_IDENTIFIER: com.wovenmatter.wovenmatter.dev
           WOVENMATTER_DISPLAY_NAME: Woven Matter Dev
+          # Its own link scheme, so a pairing link opened outside the app goes to the TestFlight app.
+          WOVENMATTER_URL_SCHEME: wovenmatter-dev
         Release:
           PRODUCT_BUNDLE_IDENTIFIER: com.wovenmatter.wovenmatter
           WOVENMATTER_DISPLAY_NAME: Woven Matter
+          WOVENMATTER_URL_SCHEME: wovenmatter
   MobileAppTests:
     type: bundle.unit-test
     platform: iOS

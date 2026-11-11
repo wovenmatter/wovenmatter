@@ -136,8 +136,8 @@ struct ItemManagementSheet: View {
   @State private var preview: URL?
   @Environment(\.dismiss) private var dismiss
   private var canEditDetails: Bool { isNote ? model.canEditNoteDetails(id) : model.executionAvailable(for: id) }
-  /// Without a paired library a note lives only here: delete it on this device.
-  private var deletesLocally: Bool { isNote && model.isStandalone }
+  /// A note that only ever lived on this device is deleted here.
+  private var deletesLocally: Bool { isNote && model.canDeleteNoteLocally(id) }
   @State private var confirmDelete = false
   private var destinationFolders: [LibraryFolder] {
     if isNote { return model.folders }

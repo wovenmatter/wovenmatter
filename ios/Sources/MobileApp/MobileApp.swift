@@ -32,9 +32,13 @@ import WovenMatterShared
           if phase == .active { Task { await model.analytics.openInterface() } }
         }
         .onOpenURL { url in
-          guard url.scheme == "wovenmatter", url.host == "pair" else { return }
+          // The Dev app registers wovenmatter-dev://; pairing links are always wovenmatter://.
+          guard ["wovenmatter", "wovenmatter-dev"].contains(url.scheme ?? ""), url.host == "pair",
+            var components = URLComponents(url: url, resolvingAgainstBaseURL: false) else { return }
+          components.scheme = "wovenmatter"
+          guard let pairing = components.url else { return }
           model.tab = .settings; model.pairingPresented = true
-          Task { await model.pair(url: url) }
+          Task { await model.pair(url: pairing) }
         }
     }
   }

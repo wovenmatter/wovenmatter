@@ -795,10 +795,16 @@ import MobileInference
       await reload(); return true
     } catch { errorMessage = error.localizedDescription; return false }
   }
-  /// Deletes a note that lives only on this device (no paired library), with
-  /// the same durable store path an editor uses. Pairing later never sees it.
+  /// A note that never reached a library (revision 0 while unpaired) lives
+  /// only on this device. A note that synced before an unpair belongs to the
+  /// library: deleting it here would trash it there after pairing again.
+  func canDeleteNoteLocally(_ id: String) -> Bool {
+    isStandalone && (state.notes[id]?.revision ?? 0) == 0
+  }
+  /// Deletes a note that lives only on this device, with the same durable
+  /// store path an editor uses. Pairing later never sees it.
   func deleteLocalNote(_ id: String) async -> Bool {
-    guard isStandalone, let store else { return false }
+    guard canDeleteNoteLocally(id), let store else { return false }
     await flushLocalWrites()
     await reload()
     guard let note = state.notes[id] else { return true }

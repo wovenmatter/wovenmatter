@@ -58,10 +58,15 @@ distribution_identities() {
 config_path="${ASC_CONFIG:-${HOME:-~}/.appstoreconnect/woven-matter.env}"
 config_value() {
   [[ -f "$config_path" && -r "$config_path" ]] || return 0
-  local name value
+  local name value trim=$' \t\r'
   while IFS='=' read -r name value || [[ -n "$name" ]]; do
+    # Tolerate `export NAME=value`, spaces around `=`, quotes and a leading ~/.
+    name="${name#"${name%%[!$trim]*}"}"; name="${name#export }"
+    name="${name#"${name%%[!$trim]*}"}"; name="${name%"${name##*[!$trim]}"}"
     if [[ "$name" == "$1" ]]; then
-      value="${value%$'\r'}"; value="${value#\"}"; value="${value%\"}"
+      value="${value#"${value%%[!$trim]*}"}"; value="${value%"${value##*[!$trim]}"}"
+      if [[ "$value" == \"*\" || "$value" == \'*\' ]]; then value="${value:1:${#value}-2}"; fi
+      if [[ "$value" == "~/"* ]]; then value="${HOME:-~}/${value#\~/}"; fi
       printf '%s' "$value"
       return 0
     fi
@@ -174,7 +179,7 @@ case "${1:-}" in
     [[ $# == 2 ]] || usage
     require_identity
     if [[ -z "$(key_problem)" ]]; then use_key; key_note="Xcode may create or update the App Store profile with API key $key_id."
-    else key_note="App Store Connect API key: $(key_problem). Only signing profiles already on this Mac are used."; fi
+    else key_note="App Store Connect API key: $(key_problem). Without it, archiving uses only certificates and profiles already on this Mac (including an Apple Development certificate and profile for this app) and may fail."; fi
     output="$(new_directory "$2")"
     build="$(build_number)"
     printf '%s\n' "Build number: $build" "$key_note"

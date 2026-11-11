@@ -46,6 +46,7 @@ def make_app(directory, profile='distribution'):
         'NSMicrophoneUsageDescription': 'Dictation.', 'NSCameraUsageDescription': 'Pairing.',
         'CFBundleIcons': {'CFBundlePrimaryIcon': {'CFBundleIconName': 'AppIcon'}},
         'ITSAppUsesNonExemptEncryption': False,
+        'CFBundleURLTypes': [{'CFBundleURLName': 'com.wovenmatter.pair', 'CFBundleURLSchemes': [verifier.URL_SCHEMES[profile]]}],
     })
     write_plist(app / 'PrivacyInfo.xcprivacy', privacy_manifest())
     (app / 'WovenMatter').write_bytes(b'\xcf\xfa\xed\xfe release binary')

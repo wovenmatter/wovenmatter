@@ -570,11 +570,11 @@
 		};
 		96273BB487C8D429002C49FF /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
-			productRef = "TEMP_86C76DA9-5C7A-40CD-8330-223E3A77D416" /* WovenMatterShared */;
+			productRef = "TEMP_178B5071-B45D-46A0-9434-A4021EAB6D2A" /* WovenMatterShared */;
 		};
 		ACF617EDC0A46EA569653882 /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
-			productRef = "TEMP_9E6CCB55-C02F-414A-81F3-602B5B6BCBC3" /* LibraryClient */;
+			productRef = "TEMP_921CE8AD-CA48-421B-B408-516AC38EEF48" /* LibraryClient */;
 		};
 		CCBA7F918269AC02D6E8E2AF /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
@@ -639,6 +639,7 @@
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = "1,2";
 				WOVENMATTER_DISPLAY_NAME = "Woven Matter";
+				WOVENMATTER_URL_SCHEME = wovenmatter;
 			};
 			name = Release;
 		};
@@ -679,6 +680,7 @@
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = "1,2";
 				WOVENMATTER_DISPLAY_NAME = "Woven Matter Dev";
+				WOVENMATTER_URL_SCHEME = "wovenmatter-dev";
 			};
 			name = Debug;
 		};
@@ -888,11 +890,11 @@
 			isa = XCSwiftPackageProductDependency;
 			productName = WovenMatterShared;
 		};
-		"TEMP_86C76DA9-5C7A-40CD-8330-223E3A77D416" /* WovenMatterShared */ = {
+		"TEMP_178B5071-B45D-46A0-9434-A4021EAB6D2A" /* WovenMatterShared */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = WovenMatterShared;
 		};
-		"TEMP_9E6CCB55-C02F-414A-81F3-602B5B6BCBC3" /* LibraryClient */ = {
+		"TEMP_921CE8AD-CA48-421B-B408-516AC38EEF48" /* LibraryClient */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = LibraryClient;
 		};

@@ -20,6 +20,8 @@ PROFILES = {
     'dev': ('Woven Matter Dev', 'com.wovenmatter.wovenmatter.dev'),
     'distribution': ('Woven Matter', 'com.wovenmatter.wovenmatter'),
 }
+# Only the TestFlight app answers wovenmatter:// pairing links opened outside the app.
+URL_SCHEMES = {'dev': 'wovenmatter-dev', 'distribution': 'wovenmatter'}
 # Apple's CFBundleVersion/CFBundleShortVersionString: one to three
 # period-separated integers, without leading zeros.
 VERSION = re.compile(r'(0|[1-9][0-9]*)(\.(0|[1-9][0-9]*)){0,2}')
@@ -144,6 +146,10 @@ def verify_bundle(app, profile, version=None, build=None):
             f'Wrong iOS product profile: expected {name} / {identifier}, found '
             f'{info.get("CFBundleDisplayName")} / {info.get("CFBundleIdentifier")}')
     require(not unexpanded(info), 'Info.plist contains an unexpanded build setting')
+    schemes = [scheme for kind in info.get('CFBundleURLTypes') or [] if isinstance(kind, dict)
+               for scheme in kind.get('CFBundleURLSchemes') or []]
+    require(schemes == [URL_SCHEMES[profile]],
+            f'URL schemes must be exactly {URL_SCHEMES[profile]!r} for the {profile} app, found {schemes}')
     for key in ('CFBundleShortVersionString', 'CFBundleVersion'):
         value = info.get(key)
         require(isinstance(value, str) and VERSION.fullmatch(value) is not None,

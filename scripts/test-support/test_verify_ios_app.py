@@ -64,6 +64,8 @@ def mutations():
     yield 'dev identity in Release', info(lambda v: v.update(CFBundleIdentifier='com.wovenmatter.wovenmatter.dev'))
     yield 'dev name in Release', info(lambda v: v.update(CFBundleDisplayName='Woven Matter Dev'))
     yield 'unexpanded build setting', info(lambda v: v.update(CFBundleDisplayName='$(WOVENMATTER_DISPLAY_NAME)'))
+    yield 'dev link scheme in Release', info(lambda v: v.update(CFBundleURLTypes=[{'CFBundleURLSchemes': ['wovenmatter-dev']}]))
+    yield 'no pairing link scheme', info(lambda v: v.pop('CFBundleURLTypes'))
     yield 'unexpanded version', info(lambda v: v.update(CFBundleVersion='$(CURRENT_PROJECT_VERSION)'))
     yield 'invalid build number', info(lambda v: v.update(CFBundleVersion='19a'))
     yield 'four-part build number', info(lambda v: v.update(CFBundleVersion='.'.join(['20261111', '1', '2', '3'])))  # Joined, so the public-tree scan does not read an address.
@@ -282,6 +284,11 @@ with tempfile.TemporaryDirectory() as temporary:
     refuses(['--upload', fresh], from_config, 69, no_identity)
     refuses(['--upload', fresh], {**from_config, 'ASC_KEY_ID': 'bad id'}, 69, 'ASC_KEY_ID')
     refuses(['--upload', fresh], {**base_env, 'ASC_CONFIG': str(work / 'missing.env')}, 69, 'API key: not configured')
+    (work / 'home').mkdir(exist_ok=True)
+    (work / 'home' / 'AuthKey_ABCDE12345.p8').write_text('SYNTHETIC-KEY-NOT-REAL\n')
+    loose = work / 'loose.env'
+    loose.write_text("export ASC_KEY_ID = 'ABCDE12345'\n  ASC_ISSUER_ID=\"57246542-96fe-1a63-e053-0824d011072a\"\r\nASC_KEY_PATH=~/AuthKey_ABCDE12345.p8\n")
+    refuses(['--upload', fresh], {**base_env, 'ASC_CONFIG': str(loose)}, 69, no_identity)
     if marker.exists():
         fail('the App Store Connect config file was executed instead of parsed')
     identities.write_text('  1) 0123456789ABCDEF0123456789ABCDEF01234567 "Apple Distribution: Example (3M84Q9NAMN)"\n')
