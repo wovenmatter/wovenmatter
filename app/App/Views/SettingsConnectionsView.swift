@@ -279,26 +279,7 @@ struct SettingsConnectionsView: View {
     }
     private var signInSection: some View {
         VStack(alignment: .leading, spacing: 8) {
-            if let url = agent.signInURL {
-                HStack {
-                    Link("Open sign-in page", destination: url)
-                        .foregroundStyle(DashboardPalette.success)
-                    Button("Copy link") {
-                        NSPasteboard.general.clearContents()
-                        NSPasteboard.general.setString(url.absoluteString, forType: .string)
-                    }
-                }
-                Link(destination: url) {
-                    Text(url.absoluteString).font(.settingsSecondary).multilineTextAlignment(.leading)
-                }
-                .foregroundStyle(DashboardPalette.success)
-                if let code = agent.signInCode {
-                    HStack {
-                        Text(code).font(.system(.title3, design: .monospaced)).textSelection(.enabled)
-                        Button("Copy code") { NSPasteboard.general.clearContents(); NSPasteboard.general.setString(code, forType: .string) }
-                    }
-                }
-            }
+            SettingsSignInHandoff(url: agent.signInURL, code: agent.signInURL == nil ? nil : agent.signInCode)
             if let prompt = agent.prompt {
                 Text(prompt).font(.settingsBody)
                 if agent.promptOptions.isEmpty {

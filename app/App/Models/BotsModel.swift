@@ -56,11 +56,12 @@ final class BotsModel {
     /// running them; nil turns them off everywhere. Bots and their files stay put.
     func runBots(on machineID: String?) async {
         do {
-            for machine in machines where machine.id != machineID && ![.off, .unreachable].contains(machine.state) {
-                try await send(.setMachineEnabled(machineID: machine.id, false))
-            }
+            // The target first: if it can't run bots, the current machine keeps them.
             if let machineID, machines.first(where: { $0.id == machineID })?.state == .off {
                 try await send(.setMachineEnabled(machineID: machineID, true))
+            }
+            for machine in machines where machine.id != machineID && ![.off, .unreachable].contains(machine.state) {
+                try await send(.setMachineEnabled(machineID: machine.id, false))
             }
         } catch { notice = error.localizedDescription }
         await refresh()

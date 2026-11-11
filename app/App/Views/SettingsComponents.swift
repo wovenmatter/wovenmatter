@@ -261,7 +261,7 @@ struct SettingsRow<Accessory: View>: View {
             HStack(alignment: .center, spacing: 24) {
                 // A small ideal width lets this layout win, then the text takes what's left and wraps.
                 label.frame(minWidth: 160, idealWidth: 160, maxWidth: .infinity, alignment: .leading)
-                HStack(spacing: 8) { accessory }.fixedSize()
+                HStack(spacing: 8) { accessory }.layoutPriority(1)
             }
             .frame(maxWidth: .infinity, minHeight: SettingsMetrics.rowHeight, alignment: .leading)
             VStack(alignment: .leading, spacing: 6) {
@@ -1039,7 +1039,13 @@ struct SettingsHarnessSignInControl: View {
 
     private var signIn: HarnessSignInModel { model.harnessSignIn }
     private var status: AgentSignInStatus? { signIn.statuses[runtimeKind] }
-    private var methods: [HarnessSignInFlow.Method] { HarnessSignInFlow.methods(runtimeKind) }
+    /// The setup window's compact row has no key field, so it offers only sign-in methods.
+    private var methods: [HarnessSignInFlow.Method] {
+        HarnessSignInFlow.methods(runtimeKind).filter { method in
+            if compact, case .keyBeforeStart = method.input { return false }
+            return true
+        }
+    }
     private var hasCredentials: Bool {
         ["verified", "credentials_present"].contains(status?.state ?? "")
     }
@@ -1101,7 +1107,10 @@ struct SettingsHarnessSignInControl: View {
         let accounts = status?.accounts ?? []
         if accounts.isEmpty {
             SettingsRow(title: status?.label ?? "Signed in",
-                        detail: "\(runtimeKind.displayName) didn't share the account name.") { removeButton }
+                        detail: runtimeKind == .opencode ? "OpenCode didn't list its saved keys, so they can't be removed here."
+                            : "\(runtimeKind.displayName) didn't share the account name.") {
+                if runtimeKind != .opencode { removeButton }
+            }
         }
         ForEach(Array(accounts.enumerated()), id: \.offset) { index, account in
             SettingsRow(title: account.name ?? account.method, detail: account.name == nil ? nil : account.method) {
@@ -1188,6 +1197,37 @@ struct SettingsHarnessSignInControl: View {
     }
 }
 
+/// The sign-in link and one-time code, shared by every in-app sign-in panel.
+struct SettingsSignInHandoff: View {
+    let url: URL?
+    let code: String?
+
+    var body: some View {
+        if let url {
+            HStack {
+                Link("Open sign-in page", destination: url)
+                    .foregroundStyle(DashboardPalette.success)
+                Button("Copy link") { copy(url.absoluteString) }
+            }
+            Link(destination: url) {
+                Text(url.absoluteString).font(.settingsSecondary).multilineTextAlignment(.leading)
+            }
+            .foregroundStyle(DashboardPalette.success)
+        }
+        if let code {
+            HStack {
+                Text(code).font(.system(.title3, design: .monospaced)).textSelection(.enabled)
+                Button("Copy code") { copy(code) }
+            }
+        }
+    }
+
+    private func copy(_ value: String) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(value, forType: .string)
+    }
+}
+
 /// The in-app sign-in under a harness's account: the sign-in link, the one-time code,
 /// and a field for the code a sign-in page shows, styled like Subscriptions & API Keys.
 struct SettingsHarnessSignInPanel: View {
@@ -1198,29 +1238,7 @@ struct SettingsHarnessSignInPanel: View {
     var body: some View {
         if let session = model.harnessSignIn.sessions[runtimeKind], session.state != .succeeded {
             VStack(alignment: .leading, spacing: 8) {
-                if let url = session.url {
-                    HStack {
-                        Link("Open sign-in page", destination: url)
-                            .foregroundStyle(DashboardPalette.success)
-                        Button("Copy link") {
-                            NSPasteboard.general.clearContents()
-                            NSPasteboard.general.setString(url.absoluteString, forType: .string)
-                        }
-                    }
-                    Link(destination: url) {
-                        Text(url.absoluteString).font(.settingsSecondary).multilineTextAlignment(.leading)
-                    }
-                    .foregroundStyle(DashboardPalette.success)
-                }
-                if let value = session.code {
-                    HStack {
-                        Text(value).font(.system(.title3, design: .monospaced)).textSelection(.enabled)
-                        Button("Copy code") {
-                            NSPasteboard.general.clearContents()
-                            NSPasteboard.general.setString(value, forType: .string)
-                        }
-                    }
-                }
+                SettingsSignInHandoff(url: session.url, code: session.code)
                 if case .codeFromPage(let label) = session.method.input, session.state == .waiting, session.url != nil {
                     HStack {
                         TextField(label, text: $code).dashboardInput()

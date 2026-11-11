@@ -138,26 +138,8 @@ struct SettingsRemoteHarnessAccountView: View {
                     SettingsNote(notice)
                 }
 
-                if let url = session.verificationURL {
-                    HStack {
-                        Link("Open sign-in page", destination: url)
-                            .foregroundStyle(DashboardPalette.success)
-                        Button("Copy link") { copy(url.absoluteString) }
-                            .buttonStyle(SettingsQuietButtonStyle())
-                    }
-                    Link(destination: url) {
-                        Text(url.absoluteString).font(.settingsSecondary).multilineTextAlignment(.leading)
-                    }
-                    .foregroundStyle(DashboardPalette.success)
-                }
-
-                if let userCode = session.userCode {
-                    HStack {
-                        Text(userCode).font(.system(.title3, design: .monospaced)).textSelection(.enabled)
-                        Button("Copy code") { copy(userCode) }
-                            .buttonStyle(SettingsQuietButtonStyle())
-                    }
-                }
+                SettingsSignInHandoff(url: session.verificationURL, code: session.userCode)
+                    .buttonStyle(SettingsQuietButtonStyle())
 
                 if session.state == "waiting_for_user",
                    session.acceptsAuthorizationCode {
@@ -209,10 +191,4 @@ struct SettingsRemoteHarnessAccountView: View {
         model.submitAuthorizationCode(code, configuration: workspace)
         authorizationCode = ""
     }
-
-    private func copy(_ value: String) {
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(value, forType: .string)
-    }
-
 }

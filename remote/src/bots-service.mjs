@@ -124,6 +124,7 @@ export function createBotsService({ configuration, mcp, defaultAgent, serverPort
   async function handleHost(request, response, url, { readJSON, json }) {
     if (!url.pathname.startsWith('/v1/bots-host/')) return false
     if (!hostAuthorized(request)) { json(response, 401, { error: 'unauthorized' }); return true }
+    await loadedTurnedOff
     if (!active()) { json(response, 409, { error: 'bots_disabled' }); return true }
     const path = url.pathname, method = request.method
     if (path === '/v1/bots-host/mcp-keys' && method === 'POST') {
@@ -173,6 +174,7 @@ export function createBotsService({ configuration, mcp, defaultAgent, serverPort
   // WOVEN_EVERYWHERE.md, "Woven server routes for bots"), plus this server's
   // own engine, runtime and settings detail.
   async function status() {
+    await loadedTurnedOff
     const [engineStatus, saved, identity] = await Promise.all([engine.status(), settings(), machineInfo()])
     const report = engineStatus.installed ? await engine.resources({ botMemoryBytes: saved.botMemoryBytes ?? null }).catch(() => null) : null
     const running = runtime?.status() ?? null
