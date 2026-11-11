@@ -1,4 +1,6 @@
 import { join } from "node:path";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import type { Credential } from "@earendil-works/pi-ai";
 import { createModels } from "@earendil-works/pi-ai/models";
@@ -14,6 +16,7 @@ import { BotManager } from "../src/bots.ts";
 import { openSharedDatabase } from "../src/storage/database.ts";
 import {
   fetchUrl,
+  createPinnedWebAgent,
   htmlToText,
   isBlockedAddress,
   NO_SEARCH_KEY,
@@ -191,6 +194,23 @@ describe("web_search", () => {
     expect(seen).toEqual([]);
   });
 
+  it("refuses provider redirects before a search key can be forwarded", async () => {
+    for (const [provider, key] of [["exa", EXA_KEY], ["brave", BRAVE_KEY], ["firecrawl", FIRECRAWL_KEY]] as const) {
+      const fetch = (async (_url: string | URL | Request, init?: RequestInit) => {
+        expect(init?.redirect).toBe("error");
+        throw new TypeError("redirect blocked");
+      }) as typeof globalThis.fetch;
+      await expect(webSearch({ credentials: store({ [provider]: key }), provider, fetch }, "q"))
+        .rejects.toThrow("redirect blocked");
+    }
+  });
+
+  it("bounds provider responses before parsing JSON", async () => {
+    const { fetch } = fakeFetch(() => json({ results: [], padding: "x".repeat(2_000_000) }));
+    await expect(webSearch({ credentials: store({ exa: EXA_KEY }), provider: "exa", fetch }, "q"))
+      .rejects.toThrow("provider response was too large");
+  });
+
   it("turns provider HTTP errors into one line without the key or body", async () => {
     for (const [status, text] of [
       [401, "the API key was rejected (check it in Woven Matter Settings → Subscriptions & API Keys) (HTTP 401)"],
@@ -221,6 +241,27 @@ describe("web_search", () => {
 });
 
 describe("fetch_url", () => {
+  it("dials the validated address without re-resolving the URL hostname", async () => {
+    let requestedHost: string | undefined;
+    const server = createServer((request, response) => {
+      requestedHost = request.headers.host;
+      response.end("pinned");
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const agent = createPinnedWebAgent("127.0.0.1", 4);
+    try {
+      const port = (server.address() as AddressInfo).port;
+      const response = await fetch(`http://rebinding.invalid:${port}/`, {
+        dispatcher: agent,
+      } as RequestInit);
+      expect(await response.text()).toBe("pinned");
+      expect(requestedHost).toBe(`rebinding.invalid:${port}`);
+    } finally {
+      await agent.destroy();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
   const page = `<!doctype html><html><head><title>Hello &amp; welcome</title>
     <style>body { color: red }</style><script>alert("x")</script></head>
     <body><nav>Menu</nav><h1>Heading</h1><p>First   paragraph<br>next line</p>

@@ -1,5 +1,6 @@
 import { lookup as dnsLookup } from "node:dns/promises";
 import { BlockList, isIP } from "node:net";
+import { Agent } from "undici";
 import type { CredentialStore } from "@earendil-works/pi-ai";
 import { defineExtension, defineTool, type Extension } from "@earendil-works/pi-durable";
 import { Type } from "typebox";
@@ -79,6 +80,9 @@ async function requestJson(
   try {
     response = await fetch(url, {
       ...init,
+      // Search credentials use custom headers, which fetch can retain across
+      // cross-origin redirects. Provider endpoints must answer directly.
+      redirect: "error",
       signal: AbortSignal.timeout(options.timeoutMs ?? TIMEOUT_MS),
     });
   } catch (error) {
@@ -88,8 +92,10 @@ async function requestJson(
     await response.body?.cancel().catch(() => {});
     throw httpError(who, response.status);
   }
+  const { text, truncated } = await readCapped(response, MAX_BYTES);
+  if (truncated) throw new Error(`${who} search failed: the provider response was too large.`);
   try {
-    const body = (await response.json()) as unknown;
+    const body = JSON.parse(text) as unknown;
     return body && typeof body === "object" ? (body as Record<string, unknown>) : {};
   } catch {
     throw new Error(`${who} search failed: the response was not JSON.`);
@@ -266,7 +272,10 @@ const defaultLookup = async (hostname: string): Promise<string[]> =>
   (await dnsLookup(hostname, { all: true, verbatim: true })).map((entry) => entry.address);
 
 /** Refuse non-http(s) URLs and hosts that are, or resolve to, a blocked address. */
-async function checkTarget(url: URL, options: WebToolsOptions): Promise<void> {
+async function checkTarget(
+  url: URL,
+  options: WebToolsOptions,
+): Promise<{ address: string; family: 4 | 6 }> {
   if (url.protocol !== "http:" && url.protocol !== "https:") {
     throw new Error(`only http and https URLs can be fetched, not ${url.protocol}`);
   }
@@ -287,6 +296,19 @@ async function checkTarget(url: URL, options: WebToolsOptions): Promise<void> {
       `refusing to fetch ${url.host}: it is a loopback, private, link-local or tailnet address`,
     );
   }
+  const address = addresses[0];
+  if (!address) throw new Error(`could not resolve ${host}`);
+  return { address, family: isIP(address) as 4 | 6 };
+}
+
+/** Connect to the checked address while HTTP Host and TLS SNI remain the URL host. */
+export function createPinnedWebAgent(address: string, family: 4 | 6): Agent {
+  return new Agent({
+    connect: {
+      autoSelectFamily: false,
+      lookup: (_hostname, _lookupOptions, callback) => callback(null, address, family),
+    },
+  });
 }
 
 async function readCapped(
@@ -387,58 +409,68 @@ export async function fetchUrl(
   const limit = Math.min(Math.max(Math.round(maxChars) || DEFAULT_PAGE_CHARS, 500), MAX_PAGE_CHARS);
   const fetch = options.fetch ?? globalThis.fetch;
   const signal = AbortSignal.timeout(options.timeoutMs ?? TIMEOUT_MS);
-  let response: Response;
   for (let hop = 0; ; hop++) {
-    await checkTarget(url, options);
+    const pinned = await checkTarget(url, options);
+    // The production connection must use the address that passed the check.
+    // A fresh dispatcher for each hop also prevents cross-request socket reuse.
+    const dispatcher = options.fetch ? undefined : createPinnedWebAgent(pinned.address, pinned.family);
     try {
-      response = await fetch(url.href, {
-        redirect: "manual",
-        signal,
-        headers: {
-          "user-agent": "Pi Bot (fetch_url)",
-          accept: "text/html, application/json, text/plain;q=0.9, */*;q=0.5",
-        },
-      });
-    } catch (error) {
-      throw new Error(`fetch failed: ${reason(error)}`);
+      let response: Response;
+      try {
+        response = await fetch(url.href, {
+          redirect: "manual",
+          signal,
+          headers: {
+            "user-agent": "Pi Bot (fetch_url)",
+            accept: "text/html, application/json, text/plain;q=0.9, */*;q=0.5",
+          },
+          ...(dispatcher ? { dispatcher } : {}),
+        } as RequestInit);
+      } catch (error) {
+        throw new Error(`fetch failed: ${reason(error)}`);
+      }
+      const location = response.headers.get("location");
+      if (response.status >= 300 && response.status < 400 && location) {
+        await response.body?.cancel().catch(() => {});
+        if (hop >= MAX_REDIRECTS) throw new Error(`too many redirects (more than ${MAX_REDIRECTS})`);
+        try {
+          url = new URL(location, url);
+        } catch {
+          throw new Error("the page redirected to an invalid URL");
+        }
+        continue;
+      }
+      if (!response.ok) {
+        await response.body?.cancel().catch(() => {});
+        throw new Error(`fetch failed: HTTP ${response.status} from ${url.host}`);
+      }
+      const type = (response.headers.get("content-type") ?? "").toLowerCase();
+      if (type && !/^text\/|json|xml|javascript/.test(type)) {
+        await response.body?.cancel().catch(() => {});
+        throw new Error(`not a text page (${type.split(";")[0]})`);
+      }
+      let { text, truncated } = await readCapped(response, MAX_BYTES);
+      let title: string | undefined;
+      if (/html/.test(type) || (!type && /^\s*<(?:!doctype html|html)/i.test(text))) {
+        const found = /<title[^>]*>([\s\S]*?)<\/title>/i.exec(text)?.[1];
+        title = found ? oneLine(found, 200) : undefined;
+        text = htmlToText(text);
+      }
+      if (text.length > limit) {
+        text = text.slice(0, limit);
+        truncated = true;
+      }
+      return [
+        `URL: ${url.href}`,
+        ...(title ? [`Title: ${title}`] : []),
+        "",
+        text || "(no text)",
+        ...(truncated ? [`\n[truncated at ${text.length} characters]`] : []),
+      ].join("\n");
+    } finally {
+      await dispatcher?.destroy();
     }
-    const location = response.headers.get("location");
-    if (response.status < 300 || response.status >= 400 || !location) break;
-    await response.body?.cancel().catch(() => {});
-    if (hop >= MAX_REDIRECTS) throw new Error(`too many redirects (more than ${MAX_REDIRECTS})`);
-    try {
-      url = new URL(location, url);
-    } catch {
-      throw new Error("the page redirected to an invalid URL");
-    }
   }
-  if (!response.ok) {
-    await response.body?.cancel().catch(() => {});
-    throw new Error(`fetch failed: HTTP ${response.status} from ${url.host}`);
-  }
-  const type = (response.headers.get("content-type") ?? "").toLowerCase();
-  if (type && !/^text\/|json|xml|javascript/.test(type)) {
-    await response.body?.cancel().catch(() => {});
-    throw new Error(`not a text page (${type.split(";")[0]})`);
-  }
-  let { text, truncated } = await readCapped(response, MAX_BYTES);
-  let title: string | undefined;
-  if (/html/.test(type) || (!type && /^\s*<(?:!doctype html|html)/i.test(text))) {
-    const found = /<title[^>]*>([\s\S]*?)<\/title>/i.exec(text)?.[1];
-    title = found ? oneLine(found, 200) : undefined;
-    text = htmlToText(text);
-  }
-  if (text.length > limit) {
-    text = text.slice(0, limit);
-    truncated = true;
-  }
-  return [
-    `URL: ${url.href}`,
-    ...(title ? [`Title: ${title}`] : []),
-    "",
-    text || "(no text)",
-    ...(truncated ? [`\n[truncated at ${text.length} characters]`] : []),
-  ].join("\n");
 }
 
 /**
