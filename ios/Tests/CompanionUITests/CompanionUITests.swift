@@ -651,4 +651,93 @@ final class CompanionUITests: XCTestCase {
     saveScreenshot("send-settled")
   }
 
+
+  /// A fresh install that was never paired (an App Review device has no Mac):
+  /// Quick Chat leads with its setup prompt, notes and folders work on the
+  /// phone, Mac-only pages stay out of the way, and pairing is offered calmly.
+  @MainActor func testFreshInstallWithoutPairingIsCompleteAndCalm() {
+    let app = launch(tab: "Home", scenario: "standalone")
+    let connect = app.buttons["home-connect-mac"]
+    XCTAssertTrue(connect.waitForExistence(timeout: 5))
+    XCTAssertTrue(app.staticTexts["home-connect-mac-caption"].label.contains("Everything on this iPhone is kept"))
+    XCTAssertTrue(app.buttons["open-calendar"].exists)
+    XCTAssertFalse(app.buttons["open-scheduled-tasks"].exists, "Scheduled tasks run on a Mac or Linux workspace")
+    XCTAssertFalse(app.buttons["open-databases"].exists)
+    XCTAssertFalse(app.staticTexts["workspace-action-error"].exists)
+    saveScreenshot("standalone-home")
+
+    // Quick Chat opens with the provider sign-in prompt, which leads to Connections and web search.
+    app.buttons["launch-agent-local:pi-durable-device"].tap()
+    let setup = app.buttons["quick-chat-setup"]
+    XCTAssertTrue(setup.waitForExistence(timeout: 5))
+    XCTAssertEqual(setup.label, "Sign in to a model provider to use Quick Chat")
+    XCTAssertTrue(app.descendants(matching: .any)["chat-composer"].firstMatch.exists)
+    saveScreenshot("standalone-quick-chat")
+    setup.tap()
+    XCTAssertTrue(app.navigationBars["iPhone Connections"].waitForExistence(timeout: 5))
+    XCTAssertTrue(app.buttons["Web search"].exists)
+    saveScreenshot("standalone-connections")
+
+    // A note is created, edited and saved on this iPhone, then deleted there.
+    app.buttons["tab-home"].tap()
+    app.buttons["action-new-note"].firstMatch.tap()
+    let title = app.descendants(matching: .any)["note-title"].firstMatch
+    XCTAssertTrue(title.waitForExistence(timeout: 5))
+    title.coordinate(withNormalizedOffset: CGVector(dx: 0.98, dy: 0.5)).tap()
+    title.typeText(" for the trip")
+    let body = app.textViews.matching(NSPredicate(format: "identifier BEGINSWITH 'note-body-editor-' ")).firstMatch
+    XCTAssertTrue(body.waitForExistence(timeout: 5))
+    body.tap(); body.typeText("Pack the charger.")
+    let saved = app.buttons["note-save-state"]
+    expectation(for: NSPredicate(format: "label CONTAINS 'Saved on this device'"), evaluatedWith: saved)
+    waitForExpectations(timeout: 10)
+    saveScreenshot("standalone-note")
+    app.buttons["Note actions"].tap()
+    app.buttons["Details, move and delete"].tap()
+    let delete = app.buttons["note-delete"]
+    XCTAssertTrue(delete.waitForExistence(timeout: 5))
+    XCTAssertFalse(app.buttons["Move to Trash"].exists)
+    delete.tap()
+    let confirm = app.sheets.buttons["Delete note"]
+    if confirm.waitForExistence(timeout: 2) { confirm.tap() }
+    else { app.buttons.matching(NSPredicate(format: "label == 'Delete note' AND identifier != 'note-delete'")).firstMatch.tap() }
+    XCTAssertTrue(app.buttons["tab-folders"].waitForExistence(timeout: 5))
+    app.buttons["tab-folders"].tap()
+    XCTAssertFalse(app.buttons.matching(NSPredicate(format: "label CONTAINS 'for the trip'")).firstMatch.exists, "The deleted note is gone")
+
+    // Folders: a folder is created here, and remote workspaces explain pairing instead of an outage.
+    let remote = app.staticTexts["folders-remote-empty"]
+    XCTAssertTrue(remote.waitForExistence(timeout: 5))
+    XCTAssertTrue(remote.label.hasPrefix("Pair with your Mac"))
+    let newFolder = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "action-new-folder-")).firstMatch
+    reveal(newFolder, in: app)
+    newFolder.tap()
+    let field = app.alerts["New folder"].textFields["Folder name"]
+    XCTAssertTrue(field.waitForExistence(timeout: 5))
+    field.tap(); field.typeText("Trips")
+    app.alerts["New folder"].buttons["Create"].tap()
+    XCTAssertTrue(app.staticTexts["This folder is empty. Add a note or start a chat."].waitForExistence(timeout: 5))
+    saveScreenshot("standalone-folder")
+
+    // Library explains what pairing adds instead of showing a disabled search.
+    app.buttons["tab-home"].tap()
+    app.buttons["open-library"].tap()
+    XCTAssertTrue(app.staticTexts["library-standalone"].waitForExistence(timeout: 5))
+    XCTAssertFalse(app.buttons["Search"].exists)
+
+    // Analytics say plainly that nothing is sent without a paired Mac.
+    app.buttons["tab-settings"].tap()
+    app.buttons["General"].tap()
+    let analytics = app.staticTexts["analytics-explanation"]
+    XCTAssertTrue(analytics.waitForExistence(timeout: 5))
+    XCTAssertTrue(analytics.label.hasPrefix("Nothing is sent while this iPhone isn’t paired"))
+    saveScreenshot("standalone-general")
+  }
+
+  /// A Quick Chat timer made on a phone that was never paired shows in its calendar.
+  @MainActor func testStandaloneTimerAppearsInCalendar() {
+    let app = launch(tab: "Calendar", scenario: "standalone-timer")
+    XCTAssertTrue(app.staticTexts["Stretch"].waitForExistence(timeout: 10))
+    saveScreenshot("standalone-timer-calendar")
+  }
 }

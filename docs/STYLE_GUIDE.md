@@ -61,6 +61,11 @@ when an intentional design change is accepted.
   Web search keys (Exa, Brave Search, Firecrawl) live in Settings → Subscriptions & API Keys with
   the model providers. Do not add data-sharing prompts:
   connecting a provider is the user's choice to use it.
+  With no paired Mac the app must still feel complete: no blocking screens, error banners or
+  "not reachable" wording for missing pairing. Home shows one "Connect your Mac" row with a
+  single caption saying what pairing adds; Mac-only pages stay hidden until paired. The
+  Quick Chat composer notice reads "Sign in to a model provider to use Quick Chat", then
+  "Add a web search key for answers from the web" until a key is saved.
 - **Agent naming:** use **Pi Durable** for the agent in navigation, settings,
   conversation labels, and actions. Use **Pi Durable SDK** for the underlying SDK
   in technical descriptions and version/update controls. Keep the agent name

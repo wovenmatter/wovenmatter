@@ -95,6 +95,34 @@ final class CompanionModelTests: XCTestCase {
     XCTAssertEqual(saved?.receipt?.status, .completed)
   }
 
+  /// A phone that was never paired keeps everything on the device: a note is
+  /// deleted there (pairing later never sees it), and analytics have nowhere
+  /// to go. Once paired, notes go to the library's Trash instead.
+  @MainActor func testStandaloneNotesDeleteOnThisDeviceAndAnalyticsHaveNoDestination() async throws {
+    let model = CompanionModel()
+    XCTAssertTrue(model.isStandalone)
+    let analyticsTarget = await model.analyticsTransport()
+    XCTAssertNil(analyticsTarget)
+    await model.newNote()
+    let id = try XCTUnwrap(model.selectedNoteID)
+    let created = try XCTUnwrap(model.state.notes[id])
+    model.saveNote(id: id, title: "Packing", content: created.content, base: created)
+    await model.flushLocalWrites()
+    let deleted = await model.deleteLocalNote(id)
+    XCTAssertTrue(deleted)
+    XCTAssertNil(model.state.notes[id]); XCTAssertNil(model.selectedNoteID)
+    XCTAssertTrue(model.state.outbox.isEmpty, "Pairing later never uploads a deleted local note")
+
+    await model.newNote()
+    let kept = try XCTUnwrap(model.selectedNoteID)
+    try await XCTUnwrap(model.store).bindWorkspace("library")
+    await model.reload()
+    XCTAssertFalse(model.isStandalone)
+    let refused = await model.deleteLocalNote(kept)
+    XCTAssertFalse(refused)
+    XCTAssertNotNil(model.state.notes[kept])
+  }
+
   @MainActor func testWorkspaceGroupingMatchesPrefixedFolderBindingsWithoutChangingRoute() {
     let model = CompanionModel()
     let registryID = UUID().uuidString.lowercased()

@@ -89,7 +89,7 @@ struct NotePane: View {
         }.disabled(!editable).accessibilityLabel("Format note").accessibilityIdentifier("note-format")
         if editable, document?.kind == .note { MobileDictationMicrophone(editor: dictationEditor) }
         Menu {
-          Button("Details, move and export") { detailsPresented = true }
+          Button(model.isStandalone ? "Details, move and delete" : "Details, move and export") { detailsPresented = true }
             .disabled(!model.online && !model.canEditNoteDetails(note.id))
           Button("Reference in new chat", glyph: .messageSquare) { model.newChat(referencing: note.id) }.disabled(!editable)
           if model.state.conflicts[note.id] != nil { Button("Review saved conflict", systemImage: "doc.on.doc") { conflictsPresented = true } }

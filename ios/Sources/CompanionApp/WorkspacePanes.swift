@@ -18,7 +18,8 @@ struct LibraryPane: View {
     VStack(spacing: 0) {
       HStack {
         DashboardSearchField(text: $search, prompt: "Search files, links and photos").onSubmit { Task { await load() } }
-        Button("Search") { Task { await load() } }.buttonStyle(DashboardQuietButtonStyle()).disabled(!model.online || loading)
+        // Saved files filter as you type; the Library search runs on your Mac.
+        if !model.isStandalone { Button("Search") { Task { await load() } }.buttonStyle(DashboardQuietButtonStyle()).disabled(!model.online || loading) }
       }.padding(.horizontal)
       DashboardSegmentedSelector(options: ["", "file", "link", "photo"], selection: $kind) {
         ["": "All", "file": "Files", "link": "Links", "photo": "Photos"][$0] ?? $0
@@ -38,6 +39,11 @@ struct LibraryPane: View {
           }
         }
         if let failure { Text(failure).foregroundStyle(DashboardPalette.mutedForeground) }
+        if model.isStandalone && savedArtifacts.isEmpty {
+          Text("Pair with your Mac to see its files, links and photos here.")
+            .font(.callout).foregroundStyle(DashboardPalette.mutedForeground).listRowBackground(Color.clear)
+            .accessibilityIdentifier("library-standalone")
+        }
         ForEach(items) { item in
           VStack(alignment: .leading, spacing: 6) {
             if let url = item.webURL, ["https", "http"].contains(url.scheme?.lowercased() ?? "") {
@@ -130,6 +136,9 @@ struct ItemManagementSheet: View {
   @State private var preview: URL?
   @Environment(\.dismiss) private var dismiss
   private var canEditDetails: Bool { isNote ? model.canEditNoteDetails(id) : model.executionAvailable(for: id) }
+  /// Without a paired library a note lives only here: delete it on this device.
+  private var deletesLocally: Bool { isNote && model.isStandalone }
+  @State private var confirmDelete = false
   private var destinationFolders: [CompanionFolder] {
     if isNote { return model.folders }
     let owner = model.canonicalWorkspaceID(model.executionOwner(of: id))
@@ -152,6 +161,10 @@ struct ItemManagementSheet: View {
           }
           Button("Move") { Task { await perform("move") } }
         }.disabled(busy || !canEditDetails)
+        if deletesLocally {
+          Section { Button("Delete note", role: .destructive) { confirmDelete = true }.accessibilityIdentifier("note-delete") }
+            .disabled(busy || !canEditDetails)
+        } else {
         Group {
         Section {
           Button("Pin") { Task { await perform("pin") } }
@@ -162,12 +175,18 @@ struct ItemManagementSheet: View {
         Section { Button("Move to Trash", role: .destructive) { confirmTrash = true } }
         }.disabled(busy || !(isNote ? model.online : model.executionAvailable(for: id)))
         }
+        }
       }
         .navigationTitle(isNote ? "Note details" : "Conversation details")
         .navigationBarTitleDisplayMode(.inline).mobilePageSurface().toolbar(.visible, for: .navigationBar)
         .confirmationDialog("Move this item to Trash?", isPresented: $confirmTrash, titleVisibility: .visible) {
           Button("Move to Trash", role: .destructive) { Task { await perform("trash") } }
         }
+        .confirmationDialog("Delete this note?", isPresented: $confirmDelete, titleVisibility: .visible) {
+          Button("Delete note", role: .destructive) {
+            Task { busy = true; defer { busy = false }; if await model.deleteLocalNote(id) { dismiss() } }
+          }
+        } message: { Text("It is removed from this iPhone.") }
         .quickLookPreview($preview)
     }
   }

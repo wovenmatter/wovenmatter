@@ -4,7 +4,16 @@ Native clients share a central Woven Matter database. On the device, Quick Chat
 runs Pi Durable for notes, web search, simple questions, timers and reminders; Mac
 and Linux workspace agents handle everything else. Inference uses provider
 connections signed in on that device or an explicitly selected Tailscale host.
-Mac pairing is optional for local work. See [Quick Chat](../docs/IOS_CONTINUED_EXECUTION.md).
+See [Quick Chat](../docs/IOS_CONTINUED_EXECUTION.md).
+
+The app is complete without a Mac. A fresh install signs in to a model provider
+and adds a web search key in Settings → iPhone Connections, then uses Quick Chat,
+notes and folders, calendar, timers and reminders, and dictation on the phone.
+Nothing waits on a host: there are no connection banners or network retries,
+and analytics are not sent. Home offers "Connect your Mac" for workspaces, agents on
+your computers and sync; Mac-only pages (Scheduled tasks, Databases) appear once
+paired. Pairing later uploads everything made on the phone once: notes and
+folders, Quick Chat history, calendar events, timer reminders and dictations.
 
 ## Build and validate
 
@@ -34,6 +43,9 @@ Build/install does not authorize pairing, unpairing, or account sign-in.
 UI-only simulator fixtures use `WOVENMATTER_UI_FIXTURE=1` and a stable
 `WOVENMATTER_UI_FIXTURE_NAMESPACE`. Pairing and agent execution are disabled in
 that mode. Use a separate simulator without fixture variables for real pairing.
+`WOVENMATTER_UI_SCENARIO=standalone` is a fresh install that was never paired
+(`standalone-timer` adds a Quick Chat timer); `testFreshInstallWithoutPairingIsCompleteAndCalm`
+covers it.
 
 ## Source layout
 

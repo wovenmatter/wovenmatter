@@ -107,6 +107,14 @@ public struct MobileMembershipState: Codable, Equatable, Sendable {
     for host in hosts.filter({ $0.kind == "linux" }).sorted(by: { $0.name.localizedStandardCompare($1.name) == .orderedAscending }) { add(host) }
     return result
   }
+
+  /// Where product analytics go: only a Mac records them (Linux hosts answer
+  /// `unsupported`). The current host when it is a Mac, otherwise the first
+  /// Mac candidate (the paired Mac, then other Macs); nil with no Mac.
+  public func analyticsHost(current: MobileLibraryHost?, registry: [CompanionExecutionWorkspace] = []) -> MobileLibraryHost? {
+    if let current, current.kind == "mac" { return current }
+    return candidates(registry: registry).first { $0.kind == "mac" }
+  }
 }
 
 /// The persisted membership and host choice. Endpoints are not secrets; the
@@ -146,6 +154,14 @@ public actor MobileLibraryHosts {
   }
 
   public func snapshot() -> MobileMembershipState { state }
+  /// The connection product analytics use: `connection` when it reaches the
+  /// current Mac host, else a signed connection to the preferred Mac.
+  public func analyticsTransport(current: MobileLibraryHost?, connection: HTTPSCompanionTransport?,
+                                 registry: [CompanionExecutionWorkspace] = []) -> HTTPSCompanionTransport? {
+    guard let host = state.analyticsHost(current: current, registry: registry) else { return nil }
+    if let connection, host == current { return connection }
+    return try? transport(for: host)
+  }
   public func transport(for host: MobileLibraryHost) throws -> HTTPSCompanionTransport {
     // A paired Mac that never named its member device ID predates member requests.
     guard MemberRequestSignature.isDeviceID(host.deviceID) else { throw MobileConnectionError.memberUnsupported }

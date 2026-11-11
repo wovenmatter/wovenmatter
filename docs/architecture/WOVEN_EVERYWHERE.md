@@ -946,6 +946,12 @@ hands them to the macOS job, which checks them with
   and no credential, and `CompanionInferenceService` signs them through
   `InferenceMemberSigning` (installed with the phone's member key); a
   connection without `hostDeviceID` keeps presenting its grant.
+- **Analytics.** Only Macs record product analytics (a Linux host answers
+  `unsupported`). Each synchronization picks the analytics connection again
+  (`MobileLibraryHosts.analyticsTransport`): the current host when it is a
+  Mac, otherwise the preferred Mac from `candidates` (the paired Mac, then
+  other Macs). Pairing and host changes therefore re-bind it without a
+  relaunch, and an unpaired phone has no analytics connection at all.
 - **Migration.** Existing phone data stays. A phone paired before members
   shows "Pair again once with any Mac"; pairing with a Mac of the same
   library set (its registry holds the phone's previous library) keeps the
@@ -963,6 +969,33 @@ hands them to the macOS job, which checks them with
   needs runs when the user opens it. Recurring agent work becomes a scheduled
   task on a Mac or Linux workspace.
 - Other devices see Quick Chats as read-only synced history.
+
+### iPhone without a Mac
+
+- The iPhone and iPad app is complete with no Mac or Linux device paired
+  (`CompanionModel.isStandalone`: no pairing credential and no bound library).
+  Provider sign-in and web search keys live in Settings → iPhone Connections;
+  Quick Chat, notes and folders, calendar, timers and reminders, and dictation
+  all run on the device. Nothing waits on a host: with no credential there is
+  no sync engine, so there is no connection banner, no network retry and no
+  analytics send (the 15-second lifecycle tick only reads local state).
+- Home offers "Connect your Mac" with one caption saying what pairing adds
+  (workspaces, agents on your computers, sync) and that local data is kept.
+  Pages that only a Mac or Linux workspace serves (Scheduled tasks, Databases)
+  are left out until paired; Library and Folders explain pairing instead of
+  showing an outage. A note is deleted on the phone itself; once paired,
+  notes go to the library's Trash.
+- **Pairing later** keeps everything. A first pairing binds the empty replica
+  to the Mac's library (`MobileStore.prepareForPairing` with no previous
+  library moves nothing) and registers the phone's device workspace; the next
+  synchronization then sends each local item once: one `createFolder` and one
+  `createNote` per item with its latest writing (edits made before pairing
+  collapse into the create, and a note deleted before pairing is never sent),
+  the Quick Chat journal (its entries were written for the device workspace
+  before it was registered and publish once it is), calendar events and timer
+  reminders, and dictations. Local notes the Mac does not have are kept, and
+  Quick Chats stay owned by the phone. Pairing with a Mac of another library
+  later still takes the explicit library-change path above.
 
 ## Bots
 

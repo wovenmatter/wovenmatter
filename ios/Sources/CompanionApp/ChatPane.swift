@@ -17,6 +17,8 @@ struct ChatPane: View {
   @State private var isUserScrolling = false
   @State private var transcriptOwnsScroll = false
   @State private var scrollInteractionRevision = 0
+  /// Whether a web search key is saved on this device; nil until read.
+  @State private var webSearchConnected: Bool?
   var body: some View {
     VStack(spacing: 0) {
       HStack {
@@ -146,6 +148,8 @@ struct ChatPane: View {
           .font(.caption).foregroundStyle(DashboardPalette.mutedForeground).padding(18)
       } else { composer }
     }
+    .task(id: model.inferenceConnections.count) { await refreshWebSearchConnected() }
+    .onAppear { Task { await refreshWebSearchConnected() } }
     .navigationDestination(isPresented: $pendingPresented) {
       List(model.allPending) { request in
         Button { Task { await model.selectConversation(request.conversationID); pendingPresented = false } } label: {
@@ -177,6 +181,11 @@ struct ChatPane: View {
         }.mobileNavigationPage("Reference a note")
       }
     }
+  }
+  private func refreshWebSearchConnected() async {
+    // Fixtures and app-hosted tests never read the Keychain.
+    guard !model.fixture, !model.isolatedTestHost else { webSearchConnected = model.fixture ? false : nil; return }
+    webSearchConnected = !(await QuickChatWebSearch.connected(credentials: model.executionCredentialStore)).isEmpty
   }
   private var isViewingHistory: Bool {
     model.selectedConversationID.flatMap { model.historyPages[$0] } != nil
@@ -216,9 +225,15 @@ struct ChatPane: View {
   private var composer: some View {
     VStack(alignment: .leading, spacing: 9) {
       if model.selectedExecutionWorkspaceID == "local", model.selectedInferenceConnection == nil {
+        // A fresh install: sign in to a model provider on this iPhone.
         Button { model.executionSettingsPresented = true } label: {
-          Text("Choose a connection for Quick Chat").font(.callout).frame(maxWidth: .infinity, alignment: .leading)
-        }.buttonStyle(.plain).foregroundStyle(DashboardPalette.success)
+          Text(model.inferenceConnections.isEmpty ? "Sign in to a model provider to use Quick Chat" : "Choose a model for Quick Chat")
+            .font(.callout).frame(maxWidth: .infinity, alignment: .leading)
+        }.buttonStyle(.plain).foregroundStyle(DashboardPalette.success).accessibilityIdentifier("quick-chat-setup")
+      } else if model.selectedExecutionWorkspaceID == "local", webSearchConnected == false, model.selectedConversationID == nil {
+        NavigationLink { QuickChatSearchSettingsPane(model: model) } label: {
+          Text("Add a web search key for answers from the web").font(.callout).frame(maxWidth: .infinity, alignment: .leading)
+        }.buttonStyle(.plain).foregroundStyle(DashboardPalette.success).accessibilityIdentifier("quick-chat-web-search-setup")
       }
       if let id = model.selectedConversationID, model.executionRecords[id]?.quickChatVersion == 0 {
         Text("Earlier on-device agent chat · saved history").font(.caption).foregroundStyle(DashboardPalette.mutedForeground)

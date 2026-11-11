@@ -14,6 +14,9 @@ extension CompanionModel {
   /// Paired before members existed (or with a Mac that is too old): one more
   /// pairing makes this phone reach every device directly.
   var needsMemberPairing: Bool { credential != nil && !memberMode }
+  /// Never paired (or unpaired): everything runs on this device. Pairing a Mac
+  /// adds workspaces, agents on your computers and sync; it keeps local data.
+  var isStandalone: Bool { credential == nil && state.workspaceID == nil }
   /// The Mac or Linux host this phone synced with last. Its own sessions are
   /// the "central" route; every other device's sessions go to that device.
   var libraryHostDeviceID: String? { membership?.currentHost?.deviceID ?? membership?.pairedHostDeviceID }
@@ -97,6 +100,16 @@ extension CompanionModel {
     transport = initial
     engine = MobileSyncEngine(store: store, hosts: hosts, initial: initial)
     return true
+  }
+
+  /// Analytics go to a Mac only: the paired Mac's grant, or in member mode
+  /// the current host when it is a Mac, else the preferred Mac. Nil while
+  /// unpaired, so a standalone phone sends nothing. Each synchronization
+  /// re-binds this as the host changes (`MobileSyncEngine`).
+  func analyticsTransport() async -> (any ProductAnalyticsTransport)? {
+    guard credential != nil else { return nil }
+    guard let hosts = libraryHosts else { return transport }
+    return await hosts.analyticsTransport(current: membership?.currentHost, connection: nil, registry: executionWorkspaces)
   }
 
   /// After a synchronization: direct calls (note bodies, capabilities,

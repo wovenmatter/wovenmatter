@@ -180,7 +180,17 @@ public actor MobileSyncEngine {
       throw error
     }
     try Task.checkCancellation()
-    if analyticsTask == nil, let analyticsTransport = transport as? any ProductAnalyticsTransport {
+    // Analytics follow the current host on every pass, so pairing later or a
+    // host change re-binds them. Only Macs record analytics: synced through a
+    // Linux host, the phone sends them to its preferred Mac instead.
+    let analyticsConnection: (any ProductAnalyticsTransport)?
+    if let hosts {
+      let registry = Array(await store.journal.snapshot().workspaces.values)
+      analyticsConnection = await hosts.analyticsTransport(current: status.libraryHost,
+        connection: transport as? HTTPSCompanionTransport, registry: registry)
+    } else { analyticsConnection = transport as? any ProductAnalyticsTransport }
+    if analyticsConnection == nil { await store.analytics.disconnect() }
+    if analyticsTask == nil, let analyticsTransport = analyticsConnection {
       // A single optional telemetry task must not delay any content lane.
       analyticsTask = Task {
         defer { analyticsTask = nil }
