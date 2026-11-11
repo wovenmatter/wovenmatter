@@ -324,6 +324,15 @@ final class HarnessSignInSession {
 
     var isActive: Bool { state == .starting || state == .waiting }
 
+    /// While no link has appeared, the command's last lines, so a prompt or problem the
+    /// parser doesn't recognize is still visible.
+    var outputTail: String? {
+        guard url == nil, state == .waiting else { return nil }
+        let lines = HarnessSignInFlow.sanitized(output).components(separatedBy: .newlines)
+            .map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+        return lines.isEmpty ? nil : lines.suffix(4).joined(separator: "\n")
+    }
+
     var message: String {
         switch state {
         case .starting: "Preparing sign-in…"

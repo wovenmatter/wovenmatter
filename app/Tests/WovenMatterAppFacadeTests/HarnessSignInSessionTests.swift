@@ -70,6 +70,15 @@ import WovenMatterCore
         try await waitUntil { session.state == .cancelled }
         #expect(session.state == .cancelled)
 
+        let (quietDirectory, quiet) = try fakeCommand("printf '\\033[1mApprove this sign-in on your phone\\033[0m\\n'; sleep 30\n")
+        defer { try? FileManager.default.removeItem(at: quietDirectory) }
+        let unparsed = HarnessSignInSession(kind: .grokBuild, method: .init(id: "device", title: "Sign in", arguments: []))
+        unparsed.run(executable: quiet, environment: ProcessInfo.processInfo.environment, key: nil) { _ in }
+        try await waitUntil { unparsed.outputTail != nil }
+        #expect(unparsed.outputTail == "Approve this sign-in on your phone")
+        unparsed.cancel()
+        try await waitUntil { unparsed.state == .cancelled }
+
         let (failingDirectory, failing) = try fakeCommand("exit 2\n")
         defer { try? FileManager.default.removeItem(at: failingDirectory) }
         let failed = HarnessSignInSession(kind: .codex, method: .init(id: "device", title: "Sign in", arguments: []))

@@ -1229,6 +1229,10 @@ struct SettingsHarnessSignInPanel: View {
                     }
                     SettingsNote("If the page shows a code instead of finishing on its own, paste it here.")
                 }
+                if let tail = session.outputTail {
+                    Text(tail).font(.system(size: 11.5, design: .monospaced))
+                        .foregroundStyle(DashboardPalette.mutedForeground).textSelection(.enabled)
+                }
                 if session.state == .failed { SettingsError(session.message) }
                 else { SettingsNote(session.message) }
                 if session.isActive {

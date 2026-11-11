@@ -93,7 +93,8 @@ public enum HarnessSignInFlow {
         return Artifacts(url: urls.first, code: urlCode ?? promptedCode(text) ?? labeledCode(text))
     }
 
-    static func sanitized(_ output: String) -> String {
+    /// Output without terminal escapes or control characters, safe to show as text.
+    public static func sanitized(_ output: String) -> String {
         output
             .replacingOccurrences(of: "\u{1b}\\[[0-?]*[ -/]*[@-~]", with: "", options: .regularExpression)
             .unicodeScalars.filter { $0 == "\n" || $0 == "\t" || (0x20...0x7E).contains($0.value) }
