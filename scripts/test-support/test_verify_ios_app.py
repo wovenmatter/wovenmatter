@@ -272,6 +272,18 @@ with tempfile.TemporaryDirectory() as temporary:
     standard = {key: value for key, value in with_key.items() if key != 'ASC_KEY_PATH'}
     refuses(['--upload', fresh], standard, 69, 'private_keys/AuthKey_ABCDE12345.p8')
     refuses(['--upload', fresh], with_key, 69, no_identity)
+    # IDs saved in the config file are used when the environment does not set them;
+    # the file is parsed, never executed, and the environment wins.
+    config = work / 'woven-matter.env'
+    marker = work / 'config-was-executed'
+    config.write_text(f'ASC_KEY_ID=ABCDE12345\nASC_ISSUER_ID=57246542-96fe-1a63-e053-0824d011072a\n'
+                      f'ASC_KEY_PATH={key}\ntouch {marker}\n')
+    from_config = {**base_env, 'ASC_CONFIG': str(config)}
+    refuses(['--upload', fresh], from_config, 69, no_identity)
+    refuses(['--upload', fresh], {**from_config, 'ASC_KEY_ID': 'bad id'}, 69, 'ASC_KEY_ID')
+    refuses(['--upload', fresh], {**base_env, 'ASC_CONFIG': str(work / 'missing.env')}, 69, 'API key: not configured')
+    if marker.exists():
+        fail('the App Store Connect config file was executed instead of parsed')
     identities.write_text('  1) 0123456789ABCDEF0123456789ABCDEF01234567 "Apple Distribution: Example (3M84Q9NAMN)"\n')
     refuses(['--archive', str(existing)], base_env, 64, 'existing artifacts are never overwritten')
     refuses(['--upload', str(existing)], with_key, 64, 'existing artifacts are never overwritten')

@@ -52,16 +52,30 @@ distribution_identities() {
 }
 
 # App Store Connect API key: ASC_KEY_ID, ASC_ISSUER_ID and ASC_KEY_PATH, or the
-# standard ~/.appstoreconnect/private_keys/AuthKey_<ASC_KEY_ID>.p8.
-key_id="${ASC_KEY_ID:-}"
-issuer_id="${ASC_ISSUER_ID:-}"
-key_path="${ASC_KEY_PATH:-}"
+# standard ~/.appstoreconnect/private_keys/AuthKey_<ASC_KEY_ID>.p8. Values not set
+# in the environment are read from ~/.appstoreconnect/woven-matter.env (or
+# ASC_CONFIG): plain KEY=VALUE lines, parsed here and never sourced or executed.
+config_path="${ASC_CONFIG:-${HOME:-~}/.appstoreconnect/woven-matter.env}"
+config_value() {
+  [[ -f "$config_path" && -r "$config_path" ]] || return 0
+  local name value
+  while IFS='=' read -r name value || [[ -n "$name" ]]; do
+    if [[ "$name" == "$1" ]]; then
+      value="${value%$'\r'}"; value="${value#\"}"; value="${value%\"}"
+      printf '%s' "$value"
+      return 0
+    fi
+  done < "$config_path"
+}
+key_id="${ASC_KEY_ID:-$(config_value ASC_KEY_ID)}"
+issuer_id="${ASC_ISSUER_ID:-$(config_value ASC_ISSUER_ID)}"
+key_path="${ASC_KEY_PATH:-$(config_value ASC_KEY_PATH)}"
 if [[ -z "$key_path" && -n "$key_id" ]]; then
   key_path="${HOME:-~}/.appstoreconnect/private_keys/AuthKey_${key_id}.p8"
 fi
 key_problem() {
   if [[ -z "$key_id" && -z "$issuer_id" && -z "${ASC_KEY_PATH:-}" ]]; then
-    printf 'not configured (set ASC_KEY_ID and ASC_ISSUER_ID)'
+    printf 'not configured (set ASC_KEY_ID and ASC_ISSUER_ID, or save them in %s)' "$config_path"
   elif [[ ! "$key_id" =~ ^[A-Z0-9]{8,16}$ ]]; then
     printf 'ASC_KEY_ID is missing or is not an App Store Connect key ID'
   elif [[ ! "$issuer_id" =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$ ]]; then

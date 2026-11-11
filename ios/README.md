@@ -194,14 +194,20 @@ the script cannot do them.
    chmod 600 ~/.appstoreconnect/private_keys/AuthKey_KEYID.p8
    ```
 
-   Add the key ID and the issuer ID (shown above the list of keys) to `~/.zshrc`:
+   Save the key ID and the issuer ID (shown above the list of keys) next to the
+   key, in `~/.appstoreconnect/woven-matter.env`:
 
    ```sh
-   export ASC_KEY_ID=KEYID
-   export ASC_ISSUER_ID=your-issuer-id
+   printf 'ASC_KEY_ID=KEYID\nASC_ISSUER_ID=your-issuer-id\n' > ~/.appstoreconnect/woven-matter.env
+   chmod 600 ~/.appstoreconnect/woven-matter.env
    ```
 
-   To keep the key somewhere else, also set `ASC_KEY_PATH` to the `.p8` file.
+   The script reads these two values from that file (it never runs the file).
+   `ASC_KEY_ID` and `ASC_ISSUER_ID` set in the environment take precedence, and
+   `ASC_CONFIG` points the script at a different file.
+
+   To keep the key somewhere else, also set `ASC_KEY_PATH` (in the environment or
+   that file) to the `.p8` file.
    The `.p8` file is the secret: never commit it, paste it into a chat, or copy it
    into this repository. If it leaks, revoke it on the same page.
 
