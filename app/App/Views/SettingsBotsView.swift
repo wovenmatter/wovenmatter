@@ -375,15 +375,13 @@ enum BotMachineText {
         }
     }
 
+    /// The operating system bots run on, and how many bots once it is ready. Bots ship with the
+    /// app, so no version is shown.
     @MainActor
     static func summary(_ machine: BotMachine, bots: BotsModel) -> String {
         var parts = [machine.kind == .linux ? "Linux" : "Mac"]
         if let count = bots.session(for: machine.id)?.bots.count, machine.state == .ready {
             parts.append(count == 1 ? "1 bot" : "\(count) bots")
-        }
-        if let runtime = machine.versions.runtime { parts.append("Bots \(runtime)") }
-        if let app = machine.versions.app, machine.kind != .thisMac {
-            parts.append((machine.kind == .linux ? "Server " : "Woven Matter ") + app)
         }
         return parts.joined(separator: " · ")
     }
