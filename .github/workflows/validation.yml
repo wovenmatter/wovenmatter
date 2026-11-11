@@ -36,10 +36,12 @@ jobs:
   macos:
     name: macOS
     if: inputs.scope == 'all' || inputs.scope == 'desktop'
-    runs-on: macos-26
+    # Xcode 27.2, the toolchain the app is developed and released with (macos-26 stops at 26.6).
+    runs-on: xcode-27
     timeout-minutes: 40
     env:
       WOVENMATTER_TEST_CACHE_DIR: /private/tmp/wovenmatter-ci
+      DEVELOPER_DIR: /Applications/Xcode_27.2.app/Contents/Developer
     steps:
       - uses: actions/checkout@main
       - uses: actions/setup-node@main
