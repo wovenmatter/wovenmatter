@@ -123,7 +123,7 @@ Maintenance checks both for newer releases; recorded does not mean frozen.
   The workspace image retains the same reviewed current HTTP dispatcher across
   Mac and Linux tooling, with tuple-header redirect credential stripping covered
   by provider-free fixtures. It applies the independently locked security selection
-  in `remote/npm-runtime` (tested undici 8.12.4, ip-address 10.7.6 and minimatch 11.0.7), addressing CVE-2026-111997,
+  in `remote/npm-runtime` (tested undici 8.12.4, ip-address 10.7.6 and minimatch 11.0.8), addressing CVE-2026-111997,
   GHSA-xjj6-f33q-929c and the
   related denial-of-service advisories. npm ignores overrides for its bundled
   dependencies, so this replacement is explicit in the image definition.
@@ -149,7 +149,7 @@ Maintenance checks both for newer releases; recorded does not mean frozen.
   needs; do not install the workspace browser-library repairs into that smaller
   image without a runtime dependency.
   npm also vendors minimatch 10.2.5, affected by GHSA-g3hv-75wg-m249. The
-  same graph replaces minimatch with 11.0.7 and its locked dependency closure.
+  same graph replaces minimatch with 11.0.8 and its locked dependency closure.
   Mac, native Linux and all container paths copy and verify every graph module,
   including scoped dependencies; npm's actual install/ci behavior and bounded
   glob-pattern fixtures validate this major migration. Keep this replacement
@@ -204,7 +204,8 @@ Maintenance checks both for newer releases; recorded does not mean frozen.
   0.x minors, and refreshes every record and notice together. Upstream currently
   marks even its numbered driver releases as GitHub prereleases to keep the
   monorepo Latest pointer separate. Its release notes identify plain SemVer
-  driver releases as stable; the current selection is 0.47.5.
+  driver releases as stable; the current selection is 0.47.10. The driver refuses input to macOS security
+  and consent prompts.
   The driver is spawned directly by the signed GUI, without a Node SDK or
   additional native libraries. Woven negotiates MCP 2025-06-18 and refuses an
   unsupported initialize response before dispatching desktop tools.
@@ -282,8 +283,9 @@ Maintenance checks both for newer releases; recorded does not mean frozen.
   exact versioned paths, streaming tools/usage, and cancellation with GenAI 3.
   Pi Coding Agent 1.5.2 now selects minimatch 11.0.3, which includes the
   GHSA-g3hv-75wg-m249 repair. The consumer-scoped floor advances to the current
-  `>=11.0.7` patch without changing the named matching API. Provider-free
-  model-scope matching and bounded adversarial-pattern fixtures validate this
+  `>=11.0.8` patch, which bounds compiled pattern cache weight and rejects
+  excessive extglob recursion. Provider-free model-scope matching and
+  bounded adversarial-pattern fixtures validate this
   selection; review the override on every refresh and remove it when Pi itself
   selects the current tested release.
   Pi Durable 1.5 replaces event streams with conversation state watches and

@@ -82,6 +82,10 @@ test('Pi model globs retain matching semantics and reject amplification patterns
     assert.deepEqual(scope.diagnostics, []);
     assert.equal(minimatch('skills/nested/SKILL.md', 'skills/**/SKILL.md'), true);
     assert.equal(minimatch('skills/private/SKILL.md', 'skills/!(private)/**'), false);
+    // Unbounded extglob recursion can exhaust the stack. Reject a pattern
+    // before entering the recursive matcher, while retaining normal extglobs.
+    assert.throws(() => minimatch('fixture', '?(a)'.repeat(257) + 'fixture'),
+      { name: 'TypeError', message: 'pattern has too many extglobs' });
     // GHSA-g3hv-75wg-m249: globstar/parent preprocessing used to amplify
     // entries exponentially at optimization level 2. Failure kills only this child.
     const pattern = '**/../a/b/'.repeat(24) + 'fixture';
