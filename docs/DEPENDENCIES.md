@@ -434,8 +434,12 @@ Read-only CI and analytics helpers follow their upstream default branch
 current release commit, with a comment naming the reason: `release.yml`,
 `refresh-release.yml`, and `pr-author.yml`. The maintenance agent reviews those
 SHAs against current released versions. There is no blanket SHA requirement.
-Linux jobs use `ubuntu-latest`. macOS jobs use `macos-26`, because the app needs
-that SDK.
+Linux jobs use `ubuntu-latest`. Desktop builds (release, release caches,
+desktop validation) use the `xcode-27` image with `DEVELOPER_DIR` set to
+Xcode 27.2, the toolchain the app is developed with; `macos-26` stops at Xcode
+26.6, which crashes compiling the app. The `xcode-27` image is a GitHub preview:
+move to its GA label, and to newer Xcode releases, during maintenance. iOS
+validation stays on `macos-26`.
 
 ## Before every new release
 
