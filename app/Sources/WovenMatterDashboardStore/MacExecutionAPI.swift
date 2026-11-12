@@ -193,7 +193,9 @@ public final class MacExecutionAPI: ExecutionStreamSource {
   public var isServing: Bool { isActive() }
 
   private var notLocal: LibraryAPIError { .init(code: "wrong_workspace", message: "This endpoint can only control agents executing on this Mac.") }
-  private func isLocal(_ value: LibraryConversation) -> Bool {
+  private func isLocal(_ value: LibraryConversation) -> Bool { Self.runsLocally(value) }
+  /// A conversation this Mac runs: a local agent's, not one synchronized from another machine.
+  public nonisolated static func runsLocally(_ value: LibraryConversation) -> Bool {
     value.workspaceID == nil && (value.routeID ?? value.providerID)?.hasPrefix("local:") == true
   }
   private func requireLocal(_ id: String) async throws {
