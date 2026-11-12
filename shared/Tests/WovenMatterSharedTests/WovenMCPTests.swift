@@ -35,6 +35,40 @@ struct WovenMCPTests {
     #expect(throws: WorkspaceToolError.self) { try WovenMatterToolCommand(["sessions", "stop", "--id", id, "--text", "no"]) }
   }
 
+  /// Waiting: a read-only session tool with a bounded timeout and three targets.
+  @Test func sessionWaitIsBoundedAndReadOnly() throws {
+    let id = "22222222-2222-4222-8222-222222222222", workspace = "33333333-3333-4333-8333-333333333333"
+    let wait = try WovenMatterToolCommand(WovenMCPCatalog.request(name: "woven_sessions_wait", arguments: .object([
+      "id": .string(id), "workspace": .string(workspace), "until": .string("either"), "timeoutSeconds": .number(50)])).arguments)
+    #expect(wait.group == .sessions && wait.action == "wait" && !wait.isMutation)
+    #expect(wait.options["until"] == "either" && wait.options["timeout-seconds"] == "50" && wait.options["workspace"] == workspace)
+    let tool = try #require(WovenMCPCatalog.tools.first { $0.name == "woven_sessions_wait" })
+    #expect(tool.group == .sessions && !tool.isMutation)
+    #expect(tool.inputSchema.objectValue?["required"] == .array(["id", "timeoutSeconds", "until"].map(GatewayJSONValue.string)))
+    for arguments: [String: GatewayJSONValue] in [["id": .string(id), "until": .string("done"), "timeoutSeconds": .number(5)],
+                                                   ["id": .string(id), "until": .string("idle"), "timeoutSeconds": .number(Double(StreamProtocol.maximumWaitSeconds + 1))],
+                                                   ["id": .string(id), "until": .string("idle"), "timeoutSeconds": .number(0)],
+                                                   ["id": .string(id), "timeoutSeconds": .number(5)]] {
+      #expect(throws: WorkspaceToolError.self) { try WovenMCPCatalog.request(name: "woven_sessions_wait", arguments: .object(arguments)) }
+    }
+    #expect(throws: WorkspaceToolError.self) { try WovenMatterToolCommand(["sessions", "wait", "--id", id, "--until", "done"]) }
+    #expect(throws: WorkspaceToolError.self) { try WovenMatterToolCommand(["sessions", "wait", "--id", id, "--timeout-seconds", "51"]) }
+  }
+
+  /// The Linux server builds the same wake-up text (remote/test/session-watch.test.mjs).
+  @Test func wakeUpTextMatchesTheSharedFixtures() throws {
+    struct Fixture: Decodable {
+      let kind: SessionWakeUp.Kind, sessionID: String, title: String?, workspaceName: String, question: String?, last: Bool?, text: String
+    }
+    let url = URL(fileURLWithPath: #filePath).deletingLastPathComponent().appending(path: "SessionWakeUpFixtures.json")
+    let fixtures = try JSONDecoder().decode([Fixture].self, from: Data(contentsOf: url))
+    #expect(fixtures.count >= 5)
+    for fixture in fixtures {
+      #expect(SessionWakeUp.text(kind: fixture.kind, sessionID: fixture.sessionID, title: fixture.title, workspaceName: fixture.workspaceName,
+                                 question: fixture.question, last: fixture.last ?? false) == fixture.text)
+    }
+  }
+
   @Test func computerAndBrowserUseNamesAndCuaTargetsAreCanonical() throws {
     let names = Set(WovenMCPCatalog.tools.map(\.name))
     #expect(names.contains("woven_browser_use") && names.contains("woven_browser_use_cancel"))
