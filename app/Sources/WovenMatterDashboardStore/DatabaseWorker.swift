@@ -165,6 +165,9 @@ final class DatabaseWorkers: @unchecked Sendable {
     weak var value: DatabaseWorkers?
     init(_ value: DatabaseWorkers) { self.value = value }
   }
+  /// The pre-pairing recovery backup runs beside these lanes, never on them.
+  let peerBackup = PeerBackupFence()
+
   private static let registryLock = NSLock()
   nonisolated(unsafe) private static var registry: [String: WeakWorkers] = [:]
   let writer = DatabaseWorker(label: "wovenmatter.database.writer")

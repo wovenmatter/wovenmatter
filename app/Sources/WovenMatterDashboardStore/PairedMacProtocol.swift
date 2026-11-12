@@ -124,17 +124,62 @@ extension WorkspaceDatabase {
 
   /// A consistent WAL-aware recovery snapshot precedes the first peer import.
   /// It is never restored automatically over subsequent local writing.
+  var peerBackupFile: URL { supportDirectory.appending(path: "Paired Mac Backups/before-peer-sync.sqlite") }
+
+  /// Starts the recovery backup, if this library has none yet, and returns at
+  /// once. From now on this library accepts a peer page only once the backup
+  /// exists. Copying and checking a library of several gigabytes takes
+  /// minutes, so pairing never waits for it: the first synchronization does.
+  public func prepareForPeerSync() {
+    guard !isReadOnlyProjection else { return }
+    let source = fileURL, file = peerBackupFile
+    workers.peerBackup.start(file) { try WorkspaceDatabase.writePeerBackup(from: source, to: file) }
+  }
+
+  /// Starts the recovery backup if needed and waits for it to finish.
   public func backUpBeforePeerSync() async throws {
-    try await write { connection in
-      let directory = self.supportDirectory.appending(path: "Paired Mac Backups", directoryHint: .isDirectory)
-      try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
-      let file = directory.appending(path: "before-peer-sync.sqlite")
-      guard !FileManager.default.fileExists(atPath: file.path) else { return }
-      let partial = directory.appending(path: UUID().uuidString + ".partial")
-      defer { try? FileManager.default.removeItem(at: partial) }
-      try connection.backupPairedLibrary(to: partial)
-      try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: partial.path)
-      try FileManager.default.moveItem(at: partial, to: file)
+    guard !isReadOnlyProjection else { throw WorkspaceDatabaseError.readOnlyProjection }
+    let source = fileURL, file = peerBackupFile
+    _ = try await workers.peerBackup.wait(file, timeout: nil) { try WorkspaceDatabase.writePeerBackup(from: source, to: file) }
+  }
+
+  /// True once a peer page may be imported: the recovery backup exists, or
+  /// this library never asked for one (a Linux host). Waits at most `timeout`
+  /// for a backup in progress (nil waits until it ends) and throws if it fails.
+  public func peerImportsReady(timeout: TimeInterval? = nil) async throws -> Bool {
+    let source = fileURL, file = peerBackupFile, fence = workers.peerBackup
+    guard !fence.isOpen(file) else { return true }
+    return try await fence.wait(file, timeout: timeout) { try WorkspaceDatabase.writePeerBackup(from: source, to: file) }
+  }
+
+  var acceptsPeerImports: Bool { workers.peerBackup.isOpen(peerBackupFile) }
+
+  /// A refused peer page while the backup runs. `peer_unavailable` makes the
+  /// sending device retry later and show this Mac as offline, not failing.
+  public static let peerBackupPending = LibraryAPIError(code: "peer_unavailable",
+    message: "This Mac is saving a recovery copy of its library before its first synchronization.")
+
+  /// Copies the library through its own read-only connection, so the writer
+  /// and readers keep serving every other job meanwhile. The copy is one
+  /// read transaction: the committed library, WAL included, as it was when
+  /// the copy began.
+  static func writePeerBackup(from source: URL, to file: URL) throws {
+    guard !FileManager.default.fileExists(atPath: file.path) else { return }
+    let directory = file.deletingLastPathComponent()
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+    let partial = directory.appending(path: UUID().uuidString + ".partial")
+    // The copy takes the library's WAL mode until it is switched back, which
+    // leaves sidecar files of its own.
+    defer { for suffix in ["", "-wal", "-shm", "-journal"] { try? FileManager.default.removeItem(atPath: partial.path + suffix) } }
+    var library: OpaquePointer?
+    guard sqlite3_open_v2(source.path, &library, SQLITE_OPEN_READONLY, nil) == SQLITE_OK, let library else {
+      sqlite3_close(library); throw WorkspaceDatabaseError.open("Could not read the local library for its recovery backup.")
     }
+    defer { sqlite3_close(library) }
+    sqlite3_busy_timeout(library, 5_000)
+    try WorkspaceDatabaseConnection.copyMainDatabase(from: library, to: partial, openFailure: "Could not create the local recovery backup.",
+      copyFailure: "Could not snapshot the local library.", incompleteFailure: "The local recovery backup did not complete.")
+    try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: partial.path)
+    try FileManager.default.moveItem(at: partial, to: file)
   }
 }

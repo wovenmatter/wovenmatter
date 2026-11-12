@@ -232,6 +232,12 @@ device's chosen library endpoint.
 Before the first peer import, each Mac saves a consistent, integrity-checked
 `Paired Mac Backups/before-peer-sync.sqlite` snapshot. It includes committed WAL
 content. The app never restores this automatically over subsequent writing.
+Pairing starts the backup and does not wait for it: on a library of several
+gigabytes the copy and its check take minutes, and they read their own
+connection, so every other database job keeps running. Until the backup
+exists, that Mac refuses peer pages with `peer_unavailable` (the sender retries
+and shows the Mac as offline, not failing) and starts its own first exchange
+once the backup is written. An interrupted backup starts again at launch.
 Retain the original database and device-only credential vaults when recovering.
 Ownership of rows that existed before pairing is claimed exactly once, before any
 peer data arrives; a schedule assigned to a client device keeps that executor.

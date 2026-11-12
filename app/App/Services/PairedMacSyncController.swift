@@ -256,6 +256,8 @@ final class PairedMacSyncController {
         files = PairedLibraryFiles(root: database.supportDirectory)
         try await database.savePairedMacRoute(own)
         routes = try await database.pairedMacRoutes()
+        // A recovery backup interrupted by quitting resumes before any import.
+        if (try? loadCredentials())?.isEmpty == false { database.prepareForPeerSync() }
         try await startMembers(own: own)
         if !restored && restoresPairing { await pairing.restorePendingRequest() }
         restored = true
@@ -322,7 +324,9 @@ final class PairedMacSyncController {
         }
         let authentication = try await host.peerAuthentication()
         let identity = try await identity()
-        try await database.backUpBeforePeerSync()
+        // Writing the recovery backup of a large library takes minutes. Pairing
+        // continues meanwhile; the first import from the other Mac waits for it.
+        database.prepareForPeerSync()
         // The join is built once, persisted, and repeated verbatim after a lost
         // reply. It proves this Mac's key for exactly the revocation context the
         // other Mac reported at the explicitly paired endpoint; the reply proves
@@ -436,7 +440,9 @@ final class PairedMacSyncController {
                 // with its exact transcript; the admission persists before any reply.
                 let identity = try await identity()
                 try await authentication.admitJoin(principal, join: join, own: identity)
-                try await database.backUpBeforePeerSync()
+                // The reply never waits for the recovery backup; this Mac's
+                // first import from the joining Mac does.
+                database.prepareForPeerSync()
                 let reciprocal = PeerAdmission.subjectStatement(issuerDeviceID: join.route.deviceID, issuerLibraryID: join.route.libraryID,
                     subjectDeviceID: identity.deviceID, subjectLibraryID: identity.libraryID, subjectPublicKey: identity.publicKey,
                     acknowledgedRevocations: join.reciprocalRevocations)
@@ -497,7 +503,11 @@ final class PairedMacSyncController {
                       try await database.pairedMacRoutes().contains(where: { $0.deviceID == principal.id }) else {
                     return .error("wrong_peer", "Finish pairing before exchanging library content.", status: 403)
                 }
-                try await database.backUpBeforePeerSync()
+                database.prepareForPeerSync()
+                guard try await database.peerImportsReady(timeout: 5) else {
+                    let refusal = WorkspaceDatabase.peerBackupPending
+                    return .error(refusal.code, refusal.message, status: 503)
+                }
                 // Membership and its revocations apply before, and independently
                 // of, any library row that might be rejected or still waiting.
                 try await authentication.mergeMembership(exchange.membership, own: identity())

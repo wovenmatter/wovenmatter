@@ -8,7 +8,7 @@ import CSQLite
 /// The app's internal database. No SQLite handle or synchronous operation escapes
 /// this facade. Each write is one worker job; reads use two query-only connections.
 public final class WorkspaceDatabase: Sendable {
-  private let workers: DatabaseWorkers
+  let workers: DatabaseWorkers
   private let writer: DatabaseConnectionBox<WorkspaceDatabaseConnection>?
   private let readers: [DatabaseConnectionBox<WorkspaceDatabaseConnection>]
   public let supportDirectory: URL
