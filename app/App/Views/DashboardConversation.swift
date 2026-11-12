@@ -91,6 +91,8 @@ struct DashboardCloudConversation: View {
         return model.federatedExecutionSnapshots[conversation.id]
     }
     private var remoteRunID: String? { remote?.transcript?.activeRunID }
+    /// Why this chat is read-only history (`LegacyRemoteChatError`), if it is.
+    private var readOnlyReason: String? { conversation.flatMap { model.legacyRemoteChatReasons[$0.id] } }
     /// Quick Chat runs only on its iPhone or iPad; every Mac shows its synced history read-only.
     private var isPhoneHistory: Bool {
         guard isRemote, let conversation else { return false }
@@ -398,6 +400,20 @@ struct DashboardCloudConversation: View {
                     }
                     .frame(maxWidth: 768, alignment: .leading)
                     .accessibilityElement(children: .combine)
+                } else if let readOnlyReason {
+                    // A chat that ran over SSH and could not move to its host: history only.
+                    VStack(alignment: .leading, spacing: 4) {
+                        Label("Read-only History", systemImage: "clock.arrow.circlepath")
+                            .font(.system(size: 12, weight: .semibold))
+                        Text(readOnlyReason)
+                            .font(.system(size: 11.5))
+                            .foregroundStyle(DashboardPalette.mutedForeground)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .textSelection(.enabled)
+                    }
+                    .frame(maxWidth: 768, alignment: .leading)
+                    .accessibilityElement(children: .combine)
+                    .accessibilityIdentifier("legacy-remote-chat-history")
                 }
                 if let conversation, !conversation.isArchived, conversation.localRuntimeKind == .opencode, let openCode = workspaceOpenCode {
                     OpenCodeConversationControls(model: openCode, conversationID: conversation.id)
@@ -437,7 +453,7 @@ struct DashboardCloudConversation: View {
                     )
                     .id(interaction.id)
                 }
-                if let interaction = remote?.interactions.first, !isPhoneHistory {
+                if let interaction = remote?.interactions.first, !isPhoneHistory, readOnlyReason == nil {
                     RemoteInteractionCard(interaction: interaction) { response in
                         await model.actOnFederatedConversation(.respond(interaction, response), conversationID: interaction.conversationID)
                     }
@@ -476,13 +492,13 @@ struct DashboardCloudConversation: View {
                             DashboardMacAccessNotice(message: macAccessNotice.message,
                                 openSettings: macAccessNotice.isThisMac ? { model.pendingConnectionsScope = "permissions" } : nil)
                         }
-                        if isRemote, !isPhoneHistory, let remote, !remote.online {
+                        if isRemote, !isPhoneHistory, readOnlyReason == nil, let remote, !remote.online {
                             // Its saved history shows; controls return when its owner reconnects.
                             DashboardMacAccessNotice(message: remote.error ?? "\(remote.workspace.name) is not connected. Woven Matter reconnects automatically.",
                                 openSettings: nil)
                                 .accessibilityIdentifier("remote-conversation-offline")
                         }
-                        if isRemote, !isPhoneHistory, let conversation, let goal = remote?.session?.goal {
+                        if isRemote, !isPhoneHistory, readOnlyReason == nil, let conversation, let goal = remote?.session?.goal {
                             ConversationGoalControls(goal: goal, sessionID: conversation.id) { mutation in
                                 guard await model.actOnFederatedConversation(.configure(conversationID: conversation.id,
                                     action: .goal(id: conversation.id, mutation: mutation)), conversationID: conversation.id) != nil else {
@@ -498,7 +514,7 @@ struct DashboardCloudConversation: View {
                                 .frame(maxWidth: .infinity, alignment: .leading)
                                 .padding(.vertical, DashboardComposer.verticalPadding)
                                 .accessibilityIdentifier("federated-quick-chat-history")
-                        } else {
+                        } else if readOnlyReason == nil {
                             if let conversation, !conversation.isArchived, conversation.localRuntimeKind == .defaultAgent,
                                model.localACPSessionMetadata[conversation.id]?.selectableModels.isEmpty == true {
                                 Button {
@@ -754,7 +770,8 @@ struct DashboardCloudConversation: View {
         }
         .task(id: sessionIdentity) {
             guard let conversation, !conversation.isArchived else { return }
-            if conversation.localRuntimeKind != nil {
+            // A Linux host's chat that ran over SSH learns here whether it moved to the host.
+            if conversation.localRuntimeKind != nil || conversation.remoteWorkspaceID != nil {
                 await model.refreshLocalACPSession(conversation: conversation)
             }
         }

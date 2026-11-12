@@ -364,6 +364,9 @@ final class ApplicationModel {
     @ObservationIgnored var federatedAdoptionTasks: [String: Task<Void, any Error>] = [:]
     @ObservationIgnored var adoptedExecutionConversations: Set<String> = []
     var federatedExecutionSnapshots: [String: FederatedExecutionSnapshot] = [:]
+    /// Chats that ran over SSH and could not move to their Linux host's server:
+    /// read-only history, with the reason (`LegacyRemoteChatError`).
+    var legacyRemoteChatReasons: [String: String] = [:]
     /// A window's one live connection to its background server and what it follows.
     @ObservationIgnored let windowLive = WindowLiveState()
     /// Chats another machine runs, as the conversation view renders them.
@@ -2809,15 +2812,30 @@ final class ApplicationModel {
         conversation: WorkspaceConversationRecord
     ) async {
         if !isBackendFrontend {
-            do { try await adoptRegisteredRemoteConversationIfNeeded(conversation) }
-            catch { ensureConversationState(id: conversation.id).setError(error.localizedDescription); return }
+            do {
+                try await adoptRegisteredRemoteConversationIfNeeded(conversation)
+                legacyRemoteChatReasons.removeValue(forKey: conversation.id)
+            } catch let error as LegacyRemoteChatError {
+                // Read-only history: the conversation view says why and offers no composer.
+                legacyRemoteChatReasons[conversation.id] = error.localizedDescription; return
+            } catch { ensureConversationState(id: conversation.id).setError(error.localizedDescription); return }
         }
-        if (try? await dashboardStore?.database.libraryExecutionOwner(conversationID: conversation.id)) != nil {
+        let owned = (try? await dashboardStore?.database.libraryExecutionOwner(conversationID: conversation.id)) != nil
+        if isBackendFrontend, owned, conversation.remoteWorkspaceID != nil {
+            // Only the background server knows whether a chat that ran over SSH moved to its host.
+            if let result = try? await sendBackendCommand(.sessionMetadata(conversationID: conversation.id)) {
+                legacyRemoteChatReasons[conversation.id] = result.readOnlyReason
+            }
+            if legacyRemoteChatReasons[conversation.id] != nil { return }
+        }
+        if owned {
             await refreshFederatedConversation(conversation.id); return
         }
         if isBackendFrontend {
             do {
-                if let metadata = try await sendBackendCommand(.sessionMetadata(conversationID: conversation.id)).metadata {
+                let result = try await sendBackendCommand(.sessionMetadata(conversationID: conversation.id))
+                legacyRemoteChatReasons[conversation.id] = result.readOnlyReason
+                if let metadata = result.metadata {
                     localACPSessionMetadata[conversation.id] = metadata
                 }
             } catch { ensureConversationState(id: conversation.id).setError(error.localizedDescription) }

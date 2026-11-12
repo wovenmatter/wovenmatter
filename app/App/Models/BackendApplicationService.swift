@@ -63,6 +63,8 @@ struct BackendApplicationResult: Codable, Sendable {
     var libraryHost: LibraryHostSnapshot?
     var federatedExecution: FederatedExecutionSnapshot?
     var activityDetails: AgentRunActivity?
+    /// Why a chat is read-only history (`LegacyRemoteChatError`), with session metadata.
+    var readOnlyReason: String?
     var exportURL: URL?
     var trashedConversations: [WorkspaceTrashedConversation]?
     var trashedNotes: [WorkspaceTrashedNote]?
@@ -265,7 +267,7 @@ final class BackendApplicationService {
             return try await .init(noteExport: store.exportNote(id: id, format: format, expectedRevision: revision))
         case let .sessionMetadata(id):
             await model.refreshLocalACPSession(conversation: try conversation(id))
-            return .init(metadata: model.localACPSessionMetadata[id])
+            return .init(readOnlyReason: model.legacyRemoteChatReasons[id], metadata: model.localACPSessionMetadata[id])
         case let .workspaceMutation(mutation):
             return try await executeWorkspaceMutation(mutation)
         case let .createPeerSession(agentID, conversationID, folderID):
