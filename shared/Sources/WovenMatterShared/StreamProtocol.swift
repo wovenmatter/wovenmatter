@@ -226,6 +226,11 @@ public struct StreamCapabilities: Codable, Equatable, Sendable {
   public init(capabilities: HarnessCapabilities) { self.capabilities = capabilities }
 }
 
+public struct StreamSession: Codable, Equatable, Sendable {
+  public var settings: SessionSettings
+  public init(settings: SessionSettings) { self.settings = settings }
+}
+
 public struct StreamServerState: Codable, Equatable, Sendable {
   /// Invalidated scopes, as the background server names them.
   public var scopes: [String]
@@ -234,7 +239,7 @@ public struct StreamServerState: Codable, Equatable, Sendable {
 
 public struct StreamItem: Codable, Equatable, Sendable {
   public enum Kind: String, Codable, Sendable {
-    case conversations, pending, journal, transcript, capabilities, synchronized
+    case conversations, pending, journal, transcript, capabilities, session, synchronized
     case serverState = "server.state"
   }
 
@@ -244,6 +249,7 @@ public struct StreamItem: Codable, Equatable, Sendable {
     case journal(StreamJournal)
     case transcript(StreamTranscript)
     case capabilities(StreamCapabilities)
+    case session(StreamSession)
     case synchronized
     case serverState(StreamServerState)
     /// A kind this build does not know. Ignored, but a `seq` still advances.
@@ -256,6 +262,7 @@ public struct StreamItem: Codable, Equatable, Sendable {
       case .journal: Kind.journal.rawValue
       case .transcript: Kind.transcript.rawValue
       case .capabilities: Kind.capabilities.rawValue
+      case .session: Kind.session.rawValue
       case .synchronized: Kind.synchronized.rawValue
       case .serverState: Kind.serverState.rawValue
       case .unknown(let kind, _): kind
@@ -282,6 +289,7 @@ public struct StreamItem: Codable, Equatable, Sendable {
     case .journal: payload = .journal(try container.decode(StreamJournal.self, forKey: .data))
     case .transcript: payload = .transcript(try container.decode(StreamTranscript.self, forKey: .data))
     case .capabilities: payload = .capabilities(try container.decode(StreamCapabilities.self, forKey: .data))
+    case .session: payload = .session(try container.decode(StreamSession.self, forKey: .data))
     case .synchronized: payload = .synchronized
     case .serverState: payload = .serverState(try container.decode(StreamServerState.self, forKey: .data))
     case nil: payload = .unknown(kind: kind, data: try container.decodeIfPresent(GatewayJSONValue.self, forKey: .data) ?? .null)
@@ -299,6 +307,7 @@ public struct StreamItem: Codable, Equatable, Sendable {
     case .journal(let value): try container.encode(value, forKey: .data)
     case .transcript(let value): try container.encode(value, forKey: .data)
     case .capabilities(let value): try container.encode(value, forKey: .data)
+    case .session(let value): try container.encode(value, forKey: .data)
     case .synchronized: try container.encode([String: String](), forKey: .data)
     case .serverState(let value): try container.encode(value, forKey: .data)
     case .unknown(_, let data): try container.encode(data, forKey: .data)

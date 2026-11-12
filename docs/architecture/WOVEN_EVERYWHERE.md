@@ -1017,9 +1017,12 @@ Every live view of a session streams. Nothing polls an execution workspace.
 
 - **Who is the server.** Each machine's one Woven server (the Mac background
   server, the Linux Node server) owns its sessions and serves the stream. Every
-  user interface, on any device, is a client of every server it uses: a Mac
-  window holds one connection to its own server and one WebSocket to each
-  other Mac and Linux machine it shows; the iPhone holds one WebSocket to each.
+  user interface, on any device, is a client of every server it uses. On a
+  Mac the member key, command journal and history cache live in its
+  background server, so that server holds the one WebSocket to each other Mac
+  and Linux machine on behalf of its windows, and a window holds one
+  connection to its own server, which carries the live items of local and
+  remote sessions alike. The iPhone holds one WebSocket to each server.
   Servers also connect to each other, only for agent-to-agent waiting. Harness
   processes stay ACP children of their own machine's server.
 - **What moves where.** History moves only by library sync. The live view of a
@@ -1047,7 +1050,9 @@ Every live view of a session streams. Nothing polls an execution workspace.
   the window, so the UI says the device clock is wrong; `401` `unauthorized`;
   `403` `unauthorized` when the request carries `Origin` or `Cookie`; `503`
   `unavailable` while the workspace is not enrolled yet or the server is
-  stopping. Every refusal also carries a `message`.
+  stopping. Every refusal also carries a `message`, an `X-Woven-Error` header
+  with its code (`URLSessionWebSocketTask` cannot read a refused upgrade's
+  body), and a `Date` header.
 - Each server keeps a registry of open sockets by member device ID. When its
   member list changes it closes every socket whose member was removed, or is no
   longer an allowed kind, with close code `4401`. A client does not retry after
@@ -1075,7 +1080,7 @@ decode and re-encode every fixture.
 
 | Direction | Frame | Meaning |
 |---|---|---|
-| server | `{t:"hello", protocol:1, deviceID, libraryID, workspaceID, serverTime, capabilities:[…], maxFrameBytes}` | First frame after the upgrade. |
+| server | `{t:"hello", protocol:1, deviceID, libraryID, workspaceID, serverTime, capabilities:[…], maxFrameBytes}` | First frame after the upgrade. `deviceID` is the server's member ID; `libraryID` and `workspaceID` are its registered execution workspace's, and a client closes a stream whose `hello` names another. |
 | client | `{t:"req", id, method, params}` | A call. `id` is unique per socket. |
 | server | `{t:"res", id, result}` or `{t:"res", id, error:{code, message, retryable}}` | Exactly one per `req`. |
 | client | `{t:"sub", id, stream, params}` | Open a subscription. |
@@ -1118,6 +1123,9 @@ member removed.
     loop.
   - `capabilities` `{capabilities: HarnessCapabilities}` on subscribe and when
     they change.
+  - `session` `{settings}`: the session's settings (model, thinking,
+    permission, goal), in the shape of the existing session-settings read, on
+    subscribe and when they change.
   - `synchronized` `{}` after the first snapshot.
 - **Coalescing.** A server sends a conversation's changes at most every 50 ms
   while every changed message is 8 KB or smaller (measured on the message's
