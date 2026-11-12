@@ -204,7 +204,7 @@ Maintenance checks both for newer releases; recorded does not mean frozen.
   0.x minors, and refreshes every record and notice together. Upstream currently
   marks even its numbered driver releases as GitHub prereleases to keep the
   monorepo Latest pointer separate. Its release notes identify plain SemVer
-  driver releases as stable; the current selection is 0.47.10. The driver refuses input to macOS security
+  driver releases as stable; the current selection is 0.47.13. The driver refuses input to macOS security
   and consent prompts.
   The driver is spawned directly by the signed GUI, without a Node SDK or
   additional native libraries. Woven negotiates MCP 2025-06-18 and refuses an
@@ -256,8 +256,8 @@ Maintenance checks both for newer releases; recorded does not mean frozen.
   peer validation. Real local WebSocket streaming/cancellation fixtures and the
   Chord/Durable suites validate this selection; review it on each Chord refresh.
   Pi AI 1.5.2 also pins older provider clients. Consumer-scoped minimum-only
-  overrides select the tested OpenAI 7.55.0, Anthropic 1.8.0, Google GenAI 3.1.0,
-  Bedrock Runtime and token providers 3.1166.0, and Smithy Node HTTP handler
+  overrides select the tested OpenAI 7.55.0, Anthropic 1.8.0, Google GenAI 3.2.0,
+  Bedrock Runtime and token providers 3.1167.0, and Smithy Node HTTP handler
   4.14.2 releases without
   changing vendor manifests. Keeping these clients current is required for
   provider API and transport compatibility, including Anthropic's 2026-10-21
@@ -338,7 +338,7 @@ an older configured channel. OpenCode and Executor retain the documented v2 API 
 maintenance must review a newer stable API major and implement its migration.
 
 `harnesses/catalog.json` records tested connector and engine minimums separately:
-Codex ACP 2.6.0 with Codex 0.167.1, and Claude ACP 0.106.0 with Claude SDK 0.3.322
+Codex ACP 2.6.0 with Codex 0.167.2, and Claude ACP 0.106.0 with Claude SDK 0.3.322
 (native Claude Code 2.1.322). The standalone Codex and Claude sign-in CLIs use their
 official current stable release channels. Codex ACP's `^0.166.0` engine range
 otherwise keeps its chat engine behind; its `~2.4.0` ACP TypeScript SDK range
