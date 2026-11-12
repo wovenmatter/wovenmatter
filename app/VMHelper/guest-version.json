@@ -13,6 +13,6 @@
     "keyFingerprint": "9DC858229FC7DD38854AE2D88D81803C0EBFCD88",
     "keySha256": "1500c1f56fa9e26b9b8f42452a553675796ade0807cdce11975eb98170b3a570",
     "dockerCE": "5:29.9.3-1~ubuntu.26.04~resolute",
-    "containerd": "2.4.2-3~ubuntu.26.04~resolute"
+    "containerd": "2.4.2-4~ubuntu.26.04~resolute"
   }
 }
