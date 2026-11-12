@@ -236,6 +236,9 @@ extension MobileModel {
   func executionOwner(of conversationID: String) -> String {
     if executionRecords[conversationID] != nil { return "local" }
     if let workspaceID = conversationWorkspaceIDs[conversationID] ?? state.conversations[conversationID]?.workspaceID {
+      // A chat created on the central route is the library host's: its
+      // commands use the mobile API, not the host's own workspace route.
+      if workspaceID == "central" { return "central" }
       return canonicalWorkspaceID(workspaceID) == canonicalWorkspaceID(deviceWorkspaceID) ? "local" : workspaceRoute(for: workspaceID)
     }
     return "central"
