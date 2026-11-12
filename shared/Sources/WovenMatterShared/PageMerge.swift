@@ -187,18 +187,28 @@ private struct PageMerger {
     if remoteContent == baseContent { return (localContent, nil) }
 
     var collision = false
-    func pick<T: Equatable>(_ path: KeyPath<Content, T>) -> T {
-      let b = baseContent[keyPath: path], l = localContent[keyPath: path], r = remoteContent[keyPath: path]
+    func choose<T: Equatable>(_ b: T, _ l: T, _ r: T) -> T {
       if l == b || l == r { return r }
       if r == b { return l }
       collision = true
       return r
     }
+    func pick<T: Equatable>(_ path: KeyPath<Content, T>) -> T {
+      choose(baseContent[keyPath: path], localContent[keyPath: path], remoteContent[keyPath: path])
+    }
     var merged = remoteContent
     merged.block = pick(\.block)
     merged.title = pick(\.title)
     merged.role = pick(\.role)
-    merged.task = pick(\.task)
+    // Each task field merges on its own, so ticking the checkbox while another participant
+    // writes the outcome keeps both. Making or clearing the task is one field of its own.
+    if let l = localContent.task, let r = remoteContent.task {
+      let b = baseContent.task ?? BoardTask()
+      merged.task = BoardTask(status: choose(b.status, l.status, r.status), assignee: choose(b.assignee, l.assignee, r.assignee),
+                              outcome: choose(b.outcome, l.outcome, r.outcome))
+    } else {
+      merged.task = pick(\.task)
+    }
     merged.review = pick(\.review)
     // A session link and a change summary are additive metadata, not anyone's writing.
     let added = localContent.sessions.filter { !baseContent.sessions.contains($0) }

@@ -634,6 +634,28 @@ struct PageModelTests {
     #expect(tasks.document.boardItems?[copy]?.task?.status == .blocked)
   }
 
+  @Test func eachTaskFieldMergesOnItsOwn() throws {
+    func patch(_ value: BoardItemPatch) -> (inout NoteDocument) throws -> Void {
+      { _ = try $0.apply([.page(.init(action: .update, id: "b", expectedRevision: $0.boardItemRevision(for: "b"), patch: value))]) }
+    }
+    // A person ticks the task done while an agent records its outcome and assignee.
+    let result = try merged(sample(), local: patch(.init(status: .done)), remote: patch(.init(assignee: "Agent", outcome: "Found the cause")))
+    #expect(result.conflictedIDs.isEmpty && result.conflictCopyIDs.isEmpty)
+    #expect(result.document.boardItems?["b"]?.task == BoardTask(status: .done, assignee: "Agent", outcome: "Found the cause"))
+    // Two new tasks on one component combine the same way.
+    let fresh = try merged(sample(), local: { _ = try $0.apply([.page(.init(action: .update, id: "a", expectedRevision: $0.boardItemRevision(for: "a"), patch: .init(status: .doing)))]) },
+      remote: { _ = try $0.apply([.page(.init(action: .update, id: "a", expectedRevision: $0.boardItemRevision(for: "a"), patch: .init(assignee: "Agent")))]) })
+    #expect(fresh.conflictedIDs.isEmpty)
+    #expect(fresh.document.boardItems?["a"]?.task == BoardTask(status: .doing, assignee: "Agent"))
+    // The same field changed both ways, or a cleared task against an edit, still keeps both versions.
+    let outcomes = try merged(sample(), local: patch(.init(outcome: "Mine")), remote: patch(.init(outcome: "Theirs")))
+    #expect(outcomes.conflictedIDs == ["b"] && outcomes.conflictCopyIDs.count == 1)
+    #expect(outcomes.document.boardItems?["b"]?.task?.outcome == "Theirs")
+    let cleared = try merged(sample(), local: patch(.init(clearTask: true)), remote: patch(.init(outcome: "Theirs")))
+    #expect(cleared.conflictedIDs == ["b"])
+    #expect(cleared.document.boardItems?["b"]?.task?.outcome == "Theirs")
+  }
+
   @Test func anEditOutlivesADeleteOnTheOtherSide() throws {
     let removeA: (inout NoteDocument) throws -> Void = {
       _ = try $0.apply([.page(.init(action: .remove, id: "a", expectedRevision: $0.boardItemRevision(for: "a")))])
