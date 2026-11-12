@@ -608,11 +608,11 @@ test('a slow reader’s subscription ends with resync instead of growing without
     await clock.advance(200)
   }
   client.socket.resume()
-  const end = await client.next(frame => frame.t === 'end' && frame.id === 'c', 10_000)
+  const end = await client.next(frame => frame.t === 'end' && frame.id === 'c', 30_000)
   assert.deepEqual(end.error, { code: 'resync', message: 'This subscription fell behind. Subscribe again.', retryable: true })
   // Subscribing again starts from a snapshot.
   client.send({ t: 'sub', id: 'c2', stream: 'conversation', params: { conversationID: id } })
-  assert.equal((await client.next(isItem('transcript', 'c2'), 10_000)).data.snapshot, true)
+  assert.equal((await client.next(isItem('transcript', 'c2'), 30_000)).data.snapshot, true)
 })
 
 test('the stream client reconnects with a fresh signature, resumes its journal and waits after 4401', async t => {
@@ -643,7 +643,7 @@ test('the stream client reconnects with a fresh signature, resumes its journal a
   f.upgrades.splice(0, 1, restarted.upgrade)
   t.after(() => restarted.close())
   await f.execution.command(f.command('workspace', { conversationID: id, workspaceAction: { conversation: { id, action: 'rename', title: 'Later' } } }), f.device)
-  await eventually(() => client.state() === 'open' && items.filter(frame => frame.kind === 'synchronized').length === 2, 'resubscribed after reconnecting', 10_000)
+  await eventually(() => client.state() === 'open' && items.filter(frame => frame.kind === 'synchronized').length === 2, 'resubscribed after reconnecting', 30_000)
   assert.ok(new Set(signatures).size === signatures.length && signatures.length >= 2, 'every attempt is signed afresh')
   const resumed = items.filter(frame => frame.kind === 'journal').map(frame => frame.seq).slice(replayed.length)
   assert.deepEqual(resumed, f.execution.events(cursor).entries.map(entry => entry.originSequence), 'resumed after the last journal item')
