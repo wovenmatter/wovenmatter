@@ -28,6 +28,8 @@ public struct ExecutionStreamConfiguration: Sendable {
   public var maximumQueuedItems = StreamProtocol.maximumQueuedItems
   public var maximumQueuedBytes = StreamProtocol.maximumQueuedBytes
   public var maximumSubscriptions = 64
+  /// How long a close this server starts waits for the client's answering close frame.
+  public var closeTimeout: Duration = .seconds(2)
   public init() {}
 }
 
@@ -271,7 +273,7 @@ public final class ExecutionStreamServer: @unchecked Sendable {
     guard case .hostPort(_, let remote) = connection.endpoint, let binding = bindings.removeValue(forKey: remote.rawValue) else {
       connection.cancel(); return
     }
-    let session = StreamSession(context: sessionContext, wire: WebSocketStreamWire(connection: connection, queue: queue), member: binding.member)
+    let session = StreamSession(context: sessionContext, wire: WebSocketStreamWire(connection: connection, queue: queue, closeTimeout: configuration.closeTimeout), member: binding.member)
     sessions[session.id] = session
     connection.stateUpdateHandler = { [weak session] state in
       switch state { case .failed, .cancelled: Task { await session?.close(nil) }; default: break }
@@ -304,18 +306,44 @@ public final class ExecutionStreamServer: @unchecked Sendable {
 
 /// A member's WebSocket, terminated by the Network framework: JSON text
 /// frames, ping and pong control frames, and WebSocket close codes.
+///
+/// A close this server starts is a closing handshake (RFC 6455 §7.1): its
+/// close frame goes out, and the connection ends once the client answers with
+/// its own close frame (or fails, or after `closeTimeout`), as the Linux
+/// server's `ws` does. Ending it as soon as the frame was written lets the
+/// client's answer, or anything it was still sending, meet a closed socket.
+/// The reset that follows can reach a client before it has read the close
+/// frame; one whose stack reports the reset first sees an abnormal close
+/// instead of `4401` and retries a removal it should honour.
 final class WebSocketStreamWire: ExecutionStreamWire, @unchecked Sendable {
   private let connection: NWConnection
   private let queue: DispatchQueue
+  private let closeTimeout: Duration
+  private let lock = NSLock()
+  /// This side's close frame was written.
+  private var closeSent = false
+  /// The client sent its close frame, or the connection ended.
+  private var peerClosed = false
+  /// This side is closing: frames from the client are no longer delivered.
+  private var closing = false
 
-  init(connection: NWConnection, queue: DispatchQueue) { self.connection = connection; self.queue = queue }
+  init(connection: NWConnection, queue: DispatchQueue, closeTimeout: Duration) {
+    self.connection = connection; self.queue = queue; self.closeTimeout = closeTimeout
+  }
 
   func start(_ session: StreamSession) { receive(session) }
 
+  private static func metadata(_ context: NWConnection.ContentContext?) -> NWProtocolWebSocket.Metadata? {
+    context?.protocolMetadata(definition: NWProtocolWebSocket.definition) as? NWProtocolWebSocket.Metadata
+  }
+
   private func receive(_ session: StreamSession) {
     connection.receiveMessage { [weak self, weak session] data, context, _, error in
-      guard let self, let session else { return }
-      let metadata = context?.protocolMetadata(definition: NWProtocolWebSocket.definition) as? NWProtocolWebSocket.Metadata
+      guard let self else { return }
+      let metadata = Self.metadata(context)
+      let ended = error != nil || metadata?.opcode == .close
+      if self.lock.withLock({ closing }) { if ended { self.peerFinished() } else { self.drain() }; return }
+      guard let session else { self.connection.cancel(); return }
       Task {
         let input: StreamWireInput
         if error != nil { input = .closed(nil) }
@@ -331,8 +359,23 @@ final class WebSocketStreamWire: ExecutionStreamWire, @unchecked Sendable {
           }
         }
         if await session.deliver(input) { self.receive(session) }
+        // The session is closing: wait for the client's close frame.
+        else if ended { self.peerFinished() } else { self.drain() }
       }
     }
+  }
+
+  /// Reads (and drops) what the client sends until its close frame.
+  private func drain() {
+    connection.receiveMessage { [weak self] _, context, _, error in
+      guard let self else { return }
+      if error != nil || Self.metadata(context)?.opcode == .close { self.peerFinished() } else { self.drain() }
+    }
+  }
+
+  private func peerFinished() {
+    let done = lock.withLock { peerClosed = true; return closeSent }
+    if done { connection.cancel() }
   }
 
   func send(_ data: Data, completion: @escaping @Sendable (Bool) -> Void) {
@@ -354,12 +397,19 @@ final class WebSocketStreamWire: ExecutionStreamWire, @unchecked Sendable {
 
   func close(_ code: WovenMatterShared.StreamProtocol.CloseCode?) {
     let connection = connection
+    lock.withLock { closing = true }
     guard let code else { connection.cancel(); return }
     let metadata = NWProtocolWebSocket.Metadata(opcode: .close)
     metadata.closeCode = code.rawValue < 4000 ? .protocolCode(code == .normal ? .normalClosure : .goingAway) : .privateCode(UInt16(code.rawValue))
     let context = NWConnection.ContentContext(identifier: "close", metadata: [metadata])
-    connection.send(content: nil, contentContext: context, isComplete: true, completion: .contentProcessed { _ in connection.cancel() })
-    queue.asyncAfter(deadline: .now() + 2) { connection.cancel() }
+    connection.send(content: nil, contentContext: context, isComplete: true, completion: .contentProcessed { [weak self] error in
+      guard let self, error == nil else { connection.cancel(); return }
+      // Ends now when the client already closed (it started the close); otherwise on its answer.
+      if self.lock.withLock({ self.closeSent = true; return self.peerClosed }) { connection.cancel() }
+    })
+    // The session lets go of this wire as it closes; the wait keeps it, and so
+    // its reads of the answer, alive. A client that never answers is not waited for.
+    Task { [self] in try? await Task.sleep(for: closeTimeout); connection.cancel() }
   }
 }
 

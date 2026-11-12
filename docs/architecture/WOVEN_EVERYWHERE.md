@@ -1058,7 +1058,12 @@ Every live view of a session streams. Nothing polls an execution workspace.
   stale clock.
 - Each server keeps a registry of open sockets by member device ID. When its
   member list changes it closes every socket whose member was removed, or is no
-  longer an allowed kind, with close code `4401`. A client does not retry after
+  longer an allowed kind, with close code `4401`. A socket registered after such
+  a change (its member was authenticated before it) is checked against the list
+  once more and closed the same way. A close the server starts is a closing
+  handshake: it ends the connection once the client answers with its own close
+  frame (or after 2 s on a Mac, 5 s on Linux), so nothing the client wrote meanwhile meets a closed
+  socket whose reset could cost it the code. A client does not retry after
   `4401` until its own member list changes. The same registry closes the
   `/v1/bots/ws` relays on both Mac and Linux. The Linux bots upgrade accepts
   signed members, and the installer bearer only on the installing Mac's SSH
