@@ -334,7 +334,7 @@ private final class StreamFixtureServer: @unchecked Sendable {
 }
 
 /// The workspace's HTTP routes: only identity, providers and reads may be used.
-private actor StreamFixtureHTTP: ExecutionWorkspaceTransport {
+private actor StreamFixtureHTTP: ExecutionWorkspaceTransport, ExecutionActivityDetailsReading {
     let workspace: ExecutionWorkspace
     var eventRequests = 0, pendingRequests = 0, transcriptRequests = 0, commands = 0, receiptRequests = 0
     /// Each details read: (conversation, run, activity).

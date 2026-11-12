@@ -607,7 +607,11 @@ extension CentralExecutionClient {
     /// One activity's complete projection, from the workspace that runs it.
     func activityDetails(conversationID: String, runID: String, activityID: String) async throws -> LibraryActivity {
         let workspace = try await requiredWorkspace(conversationID)
-        return try await transport(for: workspace).activityDetails(conversationID, runID: runID, activityID: activityID)
+        // Members sign the read; a provisioned grant's transport has no details route.
+        guard let reader = try await transport(for: workspace) as? any ExecutionActivityDetailsReading else {
+            throw LibraryAPIError(code: "unavailable", message: "Activity details are unavailable for this workspace.")
+        }
+        return try await reader.activityDetails(conversationID, runID: runID, activityID: activityID)
     }
 
     /// The chat closed: its `conversation` subscription ends.

@@ -516,10 +516,6 @@ public actor WorkspaceClient {
   public func pending() async throws -> [PendingInteraction] { try await transport.pending() }
   public func capabilities(_ id: String) async throws -> HarnessCapabilities { try await verify(); return try await transport.capabilities(id) }
   public func earlierTranscript(_ id: String, before: String) async throws -> LibraryTranscript { try await verify(); return try await transport.transcript(id, before: before) }
-  /// One activity's complete projection, read when its disclosure opens.
-  public func activityDetails(_ id: String, runID: String, activityID: String) async throws -> LibraryActivity {
-    try await transport.activityDetails(id, runID: runID, activityID: activityID)
-  }
   public func readWorkspace(_ request: LibraryWorkspaceRead) async throws -> LibraryWorkspaceResult { try await verify(); return try await transport.readWorkspace(request) }
   private func verify() async throws {
     let workspace = try await transport.identity()

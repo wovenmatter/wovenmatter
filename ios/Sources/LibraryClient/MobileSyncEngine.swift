@@ -397,11 +397,8 @@ public actor MobileSyncEngine {
     try await store.cacheTranscriptPage(page)
     return page
   }
-  /// The activity's complete projection, from the details route; a Mac too old
-  /// to have it answers with the activity as its transcript carries it.
-  public func transcriptActivityDetail(_ id: String, runID: String? = nil, activityID: String) async throws -> LibraryActivity? {
-    if let runID, let detail = try? await transport.activityDetails(id, runID: runID, activityID: activityID) { return detail }
-    return try await transport.transcript(id).activities.first { $0.id == activityID }
+  public func transcriptActivityDetail(_ id: String, activityID: String) async throws -> LibraryActivity? {
+    try await transport.transcript(id).activities.first { $0.id == activityID }
   }
   public func refreshTranscriptIfNeeded(_ id: String) async throws {
     let local = await store.snapshot()

@@ -39,8 +39,6 @@ public protocol LibraryTransport: Sendable {
   func transcript(_ id: String, before: String) async throws -> LibraryTranscript
   func command(_ command: LibraryCommand) async throws -> LibraryCommandReceipt
   func receipt(_ id: String) async throws -> LibraryCommandReceipt?
-  /// One activity's complete projection, read when its disclosure opens.
-  func activityDetails(_ id: String, runID: String, activityID: String) async throws -> LibraryActivity
 }
 
 public extension LibraryTransport {
@@ -48,9 +46,6 @@ public extension LibraryTransport {
   func readWorkspace(_ request: LibraryWorkspaceRead) async throws -> LibraryWorkspaceResult { throw MobileConnectionError.offline }
   func linkedData(_ id: String, tableID: String?) async throws -> LinkedDataPreview { throw MobileConnectionError.offline }
   func transcript(_ id: String, before: String) async throws -> LibraryTranscript { throw MobileConnectionError.http(400, "This connection does not support older transcript pages.") }
-  func activityDetails(_ id: String, runID: String, activityID: String) async throws -> LibraryActivity {
-    throw MobileConnectionError.http(404, "Activity details are unavailable on this connection.")
-  }
 }
 
 public enum MobileConnectionError: Error, LocalizedError {
@@ -225,9 +220,6 @@ public final class HTTPSLibraryTransport: LibraryTransport, MobilePairingRequest
   public func pending() async throws -> [PendingInteraction] { try await request("v1/pending") }
   public func transcript(_ id: String) async throws -> LibraryTranscript { try await request("v1/sessions/\(try Self.safeID(id))/transcript") }
   public func transcript(_ id: String, before: String) async throws -> LibraryTranscript { try await request("v1/sessions/\(try Self.safeID(id))/transcript", query: [.init(name: "before", value: before)]) }
-  public func activityDetails(_ id: String, runID: String, activityID: String) async throws -> LibraryActivity {
-    try await request("v1/sessions/\(try Self.safeID(id))/activity", query: activityDetailsQuery(runID: runID, activityID: activityID))
-  }
   public func command(_ command: LibraryCommand) async throws -> LibraryCommandReceipt { try await request("v1/commands", method: "POST", body: JSONEncoder().encode(command)) }
   public func receipt(_ id: String) async throws -> LibraryCommandReceipt? {
     do { return try await request("v1/command-receipts/\(try Self.safeID(id))") }
