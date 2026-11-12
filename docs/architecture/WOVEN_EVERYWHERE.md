@@ -1171,14 +1171,28 @@ member removed.
   1 s to 30 s with jitter, an immediate attempt on wake, network path change
   and app foreground, and no attempts while Tailscale is down. Subscriptions
   resume after a reconnect; commands do not.
-- **Mac window to its own server.** The same frames over the existing Unix
-  socket, on one persistent connection, each frame a 4-byte big-endian length
-  and its JSON. Unix socket permissions authenticate it; there is no upgrade or
-  signature. It adds a `server.state` stream whose items are the scopes the
-  background server invalidates (`settings`, `runtime`, `usage`, `bots` and the
-  rest), replacing the `application.changes` long-poll. The window keeps
-  reading bulk history from its read-only SQLite projection and subscribes to
-  live changes on the connection.
+- **Mac window to its own server.** The window opens an ordinary RPC
+  connection on its server's socket and sends `backend.stream` as its first
+  request (readiness advertises `window.stream`). After the reply both ends
+  exchange the stream's frames on that connection, each a 4-byte big-endian
+  length and its JSON. Unix socket permissions and peer credentials
+  authenticate it, as for every call there; there is no upgrade, signature or
+  ping (a closed socket ends the read). Commands stay on the server's own
+  command call.
+  - `server.state`: on subscribe, `synchronized`, meaning "read everything
+    again from the projection"; then `{scopes, conversationIDs?}` for each
+    invalidation. The window reads named conversations again unless it follows
+    them on a `conversation` subscription.
+  - `conversation` serves sessions this Mac runs from its own tables, as for
+    members. For a session another machine runs, it relays what this server
+    holds for it from its stream to that machine. A relayed session's stream
+    also carries `pending` (that session's questions and approvals) and
+    `owner` `{online, error?}` (whether this server reaches that machine), on
+    subscribe and when they change.
+  - Live text of a message the window already shows is applied from the
+    items; anything else is read from the projection. The window keeps reading
+    bulk history and lists from its read-only SQLite projection. After a
+    reconnect it resubscribes and starts again from snapshots.
 - **iPhone.** Connects to every listed server while the app is in the
   foreground: `workspace` on each, `conversation` only for the open chat. It
   closes cleanly when the app goes to the background and resumes on return.
