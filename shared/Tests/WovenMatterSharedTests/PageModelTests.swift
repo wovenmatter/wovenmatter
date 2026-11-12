@@ -104,7 +104,7 @@ struct PageModelTests {
     // Projection never writes, and the read's tokens are good for the first write.
     let segments = board.pageSegments
     #expect(board.pageNodes == nil)
-    #expect(segments.first?.id == "flow:root:start")
+    #expect(segments.first?.id == PageSegment.flowID(parentID: nil, afterID: nil))
     var written = board
     _ = try written.apply([.page(.init(action: .update, id: "b", expectedRevision: first.boardItemRevision(for: "b"), patch: .init(status: .done)))])
     #expect(written.boardItems?["b"]?.task?.status == .done)
@@ -165,17 +165,30 @@ struct PageModelTests {
     let segments = sample().pageSegments
     #expect(segments == [
       .section(id: "s", parentID: nil, depth: 0),
-      .flow(id: "flow:s:start", parentID: "s", afterID: nil, depth: 1, blockIDs: ["a"]),
+      .flow(id: PageSegment.flowID(parentID: "s", afterID: nil), parentID: "s", afterID: nil, depth: 1, blockIDs: ["a"]),
       .section(id: "t", parentID: "s", depth: 1),
-      .flow(id: "flow:t:start", parentID: "t", afterID: nil, depth: 2, blockIDs: ["b"]),
-      .flow(id: "flow:s:t", parentID: "s", afterID: "t", depth: 1, blockIDs: []),
-      .flow(id: "flow:root:s", parentID: nil, afterID: "s", depth: 0, blockIDs: ["c"]),
+      .flow(id: PageSegment.flowID(parentID: "t", afterID: nil), parentID: "t", afterID: nil, depth: 2, blockIDs: ["b"]),
+      .flow(id: PageSegment.flowID(parentID: "s", afterID: "t"), parentID: "s", afterID: "t", depth: 1, blockIDs: []),
+      .flow(id: PageSegment.flowID(parentID: nil, afterID: "s"), parentID: nil, afterID: "s", depth: 0, blockIDs: ["c"]),
       .asset(id: "l", assetID: "original", parentID: nil, depth: 0),
-      .flow(id: "flow:root:l", parentID: nil, afterID: "l", depth: 0, blockIDs: []),
+      .flow(id: PageSegment.flowID(parentID: nil, afterID: "l"), parentID: nil, afterID: "l", depth: 0, blockIDs: []),
     ])
-    #expect(page([]).pageSegments == [.flow(id: "flow:root:start", parentID: nil, afterID: nil, depth: 0, blockIDs: [])])
+    #expect(page([]).pageSegments == [.flow(id: PageSegment.flowID(parentID: nil, afterID: nil), parentID: nil, afterID: nil, depth: 0, blockIDs: [])])
     let empty = page([text("s")], nodes: ["s": .init(isSection: true)]).pageSegments
-    #expect(empty.contains(.flow(id: "flow:s:start", parentID: "s", afterID: nil, depth: 1, blockIDs: [])))
+    #expect(empty.contains(.flow(id: PageSegment.flowID(parentID: "s", afterID: nil), parentID: "s", afterID: nil, depth: 1, blockIDs: [])))
+  }
+
+  @Test func flowIDsNeverCollide() throws {
+    #expect(PageSegment.flowID(parentID: nil, afterID: nil) == "flow/-/-")
+    #expect(PageSegment.flowID(parentID: "s", afterID: "a:b") == "flow/1:s/3:a:b")
+    let places: [(String?, String?)] = [(nil, nil), ("root", nil), (nil, "start"), ("root", "start"),
+      ("a:b", "c"), ("a", "b:c"), ("a/1:b", nil), ("a", "1:b"), ("-", nil), (nil, "-")]
+    #expect(Set(places.map { PageSegment.flowID(parentID: $0.0, afterID: $0.1) }).count == places.count)
+    // A section literally called "root" holds its own flow, apart from the Page root's.
+    let named = page([text("intro", "Intro"), text("root", "Root section", style: .heading2), text("inside", "In it")],
+      nodes: ["root": .init(isSection: true), "inside": .init(parentID: "root")])
+    let ids = named.pageSegments.map(\.id)
+    #expect(ids.count == 4 && Set(ids).count == ids.count)
   }
 
   @Test func aFlowKeepsItsIdentityWhenItsFirstParagraphGoes() throws {

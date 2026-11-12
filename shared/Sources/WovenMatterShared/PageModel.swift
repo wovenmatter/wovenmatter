@@ -38,6 +38,14 @@ public enum PageSegment: Equatable, Identifiable, Sendable {
     case .flow(_, let parentID, _, _, _), .section(_, let parentID, _), .asset(_, _, let parentID, _): parentID
     }
   }
+
+  /// The ID of the flow at one place on a Page. Each part is length-prefixed, so any
+  /// component ID, including "root", "start" or one containing a separator, gives a
+  /// distinct value. View identity only; it is never stored.
+  public static func flowID(parentID: String?, afterID: String?) -> String {
+    func part(_ id: String?) -> String { id.map { "\($0.utf8.count):\($0)" } ?? "-" }
+    return "flow/\(part(parentID))/\(part(afterID))"
+  }
 }
 
 public enum PageComponentKind: String, Codable, CaseIterable, Sendable { case text, task, section, table, asset }
@@ -115,7 +123,7 @@ public extension NoteDocument {
       var endsWithFlow = false
       func flush() {
         guard !flow.isEmpty else { return }
-        segments.append(.flow(id: Self.pageFlowID(parentID: parentID, afterID: afterID), parentID: parentID,
+        segments.append(.flow(id: PageSegment.flowID(parentID: parentID, afterID: afterID), parentID: parentID,
           afterID: afterID, depth: depth, blockIDs: flow))
         flow = []
       }
@@ -135,7 +143,7 @@ public extension NoteDocument {
       }
       flush()
       if !endsWithFlow {
-        segments.append(.flow(id: Self.pageFlowID(parentID: parentID, afterID: afterID), parentID: parentID,
+        segments.append(.flow(id: PageSegment.flowID(parentID: parentID, afterID: afterID), parentID: parentID,
           afterID: afterID, depth: depth, blockIDs: []))
       }
     }
@@ -143,9 +151,6 @@ public extension NoteDocument {
     return segments
   }
 
-  private static func pageFlowID(parentID: String?, afterID: String?) -> String {
-    "flow:\(parentID ?? "root"):\(afterID ?? "start")"
-  }
 
   /// Converts an older spatial Board deterministically: the same document always gives
   /// the same order and IDs on every host. Purely additive to the stored layout, so
