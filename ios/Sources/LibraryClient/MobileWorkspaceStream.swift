@@ -126,7 +126,7 @@ public actor MobileWorkspaceStream {
       await update(.history)
     case .pending(let value):
       await update(.pending(value.interactions))
-    case .transcript, .capabilities, .session, .synchronized, .serverState, .unknown:
+    case .transcript, .capabilities, .session, .owner, .synchronized, .serverState, .unknown:
       break
     }
     return .accepted
@@ -149,7 +149,7 @@ public actor MobileWorkspaceStream {
       case .session(let value):
         guard value.settings.conversationID == conversationID else { return .accepted }
         await update(.session(conversationID: conversationID, value.settings))
-      case .conversations, .pending, .journal, .synchronized, .serverState, .unknown:
+      case .conversations, .pending, .journal, .owner, .synchronized, .serverState, .unknown:
         break
       }
     }
