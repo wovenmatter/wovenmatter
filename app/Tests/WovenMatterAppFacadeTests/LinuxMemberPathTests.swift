@@ -72,6 +72,16 @@ struct LinuxMemberPathTests {
         #expect(await fixture.recorder.configurations.isEmpty)
     }
 
+    /// A Mac agent's `woven_sessions_create` on a Linux host this Mac added
+    /// goes to the host's server, as for any other member.
+    @Test func agentsReachAnEnrolledHostAsAMember() async throws {
+        let fixture = try await FacadeFixture(); defer { fixture.remove() }
+        let id = fixture.remote.id.uuidString.lowercased()
+        #expect(try await fixture.model.resolveAgentToolDestination(id, callerWorkspace: nil) == .configured(fixture.remote.id))
+        let (workspace, _) = try await enrolled(fixture)
+        #expect(try await fixture.model.resolveAgentToolDestination(id, callerWorkspace: nil) == .member(workspace))
+    }
+
     @Test func aChatOnAnUnenrolledHostIsNotCreatedOrLaunched() async throws {
         let fixture = try await FacadeFixture(); defer { fixture.remove() }
         #expect(await fixture.model.createRemoteACPSession(target: try target(fixture)) == nil)
