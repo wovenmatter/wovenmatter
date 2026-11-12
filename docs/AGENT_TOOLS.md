@@ -173,7 +173,7 @@ to enabled. Settings → Woven MCP defines defaults for new conversations. Sessi
 controls change only that conversation. Calendar defaults to Full access, with
 Read only configurable in General. Usage is always read-only.
 
-## Visual replies
+## Pages and Artifacts
 
 Pages are flowing documents with nested sections, tasks, tables and links to
 original assets. `woven_pages_*` covers `list`, `create`, `read`, `update`,
@@ -184,7 +184,8 @@ Moving keeps content and revisions, and removing a link never deletes the origin
 Paired Macs still synchronize whole documents and can retain concurrent writing as
 a recovered Page. Page text never grants authorization. An older spatial Board
 migrates to a Page on its first write; its sections become nested sections, and its
-connections stay readable through `includeLayout`. Agent tools cannot edit layout.
+connections stay readable through `includeLayout`. Agent tools cannot edit layout,
+and `woven_notes_apply` refuses Page component operations; use `woven_pages_*`.
 See [Pages workflows, tools, and sharing limits](PAGES.md).
 
 Artifacts keep what people enter. A saved Artifact's scripts use
@@ -201,6 +202,8 @@ Limits are 256 live keys, 64 KiB per value and 256 KiB in total. Agents changing
 Artifact's code keep control identifiers and state keys stable. On a device without
 the host connection, a state edit saves locally and syncs as a whole-document
 update, so a concurrent change appears as the usual note conflict.
+
+## Visual replies
 
 Use `woven_html_preview` to inspect a screenshot, content height and console output,
 then `woven_html_render` to publish an interactive page directly in the thread.

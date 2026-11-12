@@ -120,7 +120,8 @@ component updates.
 | `woven_notes_artifact_state` | Read an Artifact's saved values and key versions. |
 | `woven_notes_artifact_state_edit` | Make bounded, revision-checked state edits. |
 
-Use stable `pageID` and `componentID` values. Reads return `componentRevision`,
+Use stable `pageID` and `componentID` values. `woven_notes_apply` refuses Page
+component operations, so every component change goes through these tools. Reads return `componentRevision`,
 `parentID`, depth, kind, task/review metadata, and section `subtreeRevision`.
 Focused writes use these revision tokens; stale writes return current state for
 reconciliation. Reusing a successful request ID with the same arguments replays
