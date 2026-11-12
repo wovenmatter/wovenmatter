@@ -1177,17 +1177,33 @@ member removed.
 ### Agent to agent
 
 - `woven_sessions_wait {id, workspace?, until: "idle"|"needsInput"|"either",
-  timeoutSeconds}` returns when the session reaches that state or after
-  `timeoutSeconds` (at most 50, below harness tool-call limits) with
-  `timedOut: true`, then the same body as `woven_sessions_status`.
-- **Wake-ups.** When a session an agent created on another workspace (a
-  remembered `member_sessions` / `member_tool_sessions` row) finishes or asks a
-  question and the calling session is idle, the caller's server delivers a
-  short message into the calling session, which starts a turn. At most 10
-  wake-ups per calling run; after that the agent must wait or check status
-  itself.
-- Behind both, the caller's server holds one stream to the destination server
-  and subscribes to its `workspace` stream, filtered to the sessions it created.
+  timeoutSeconds}` (1 to 50, below harness tool-call limits). States are
+  `woven_sessions_status`'s: `needsInput` while any question or approval is
+  pending, else `running` during a run, else `idle`. It reads the status,
+  returns at once if the state is there, otherwise waits for a change of that
+  session on the stream and reads again to confirm, and reads once more at the
+  timeout. The reply is the status body plus `state` and `timedOut` (true
+  exactly when `state` does not reach `until`). Nothing polls.
+- **Wake-ups.** A session the caller created (a `member_sessions` /
+  `member_tool_sessions` row) is watched once the caller makes it run or reads
+  it running or needing input. Becoming idle (finished) or needing input with
+  new pending interactions queues one wake-up per session. A newer state
+  replaces it; running again, or any status, wait, send or respond by the
+  caller on that session, drops it; a stop by the caller ends the watch. The
+  caller's server delivers it only while the calling conversation is idle, as
+  a send (never a steer) whose source is that session (`senderKind:
+  notification`, a coordination notification), with the text of
+  `SessionWakeUp.text` (`shared/Sources/WovenMatterShared/SessionWakeUp.swift`,
+  fixtures shared with Node). At most 10 per calling run: the count belongs to
+  the caller's latest run a wake-up did not start, and the tenth says it is the
+  last. Bots get theirs through the bots runtime, and a bot's count restarts
+  when it creates a session. IDs derive from caller, session and state, so each
+  is delivered once; watched sessions and pending wake-ups survive a restart
+  (Linux: `remote/src/session-watch.mjs`).
+- Behind both, the caller's server holds one stream to each destination server
+  while it watches or waits on a session there, subscribed to its `workspace`
+  stream and filtered on the caller's side to those sessions; its own
+  workspace's sessions come from in-process changes.
 
 ### Linux sessions
 
