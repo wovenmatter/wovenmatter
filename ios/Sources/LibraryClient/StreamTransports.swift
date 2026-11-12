@@ -64,6 +64,22 @@ public final class WebSocketStreamTransport: StreamTransport, @unchecked Sendabl
     }
   }
 
+  /// A live library host's loopback development listener on this Mac, which
+  /// only client-mode Dev builds use: `ws://127.0.0.1:<port>/v1/stream?protocol=1`.
+  public static func loopbackURL(port: UInt16) -> URL {
+    URL(string: "ws://127.0.0.1:\(port)/" + StreamProtocol.path + "?" + StreamProtocol.query)!
+  }
+
+  /// One socket to that listener; `headers` carry this attempt's signature.
+  public static func loopback(port: UInt16, headers: [String: String], session: URLSession? = nil) -> WebSocketStreamTransport {
+    var request = URLRequest(url: loopbackURL(port: port), timeoutInterval: 30)
+    for (name, value) in headers { request.setValue(value, forHTTPHeaderField: name) }
+    let task = (session ?? Self.session).webSocketTask(with: request)
+    task.maximumMessageSize = StreamProtocol.maximumFrameBytes
+    task.resume()
+    return WebSocketStreamTransport(task: task)
+  }
+
   /// The upgrade request for one attempt.
   public static func request(url: URL, headers: [String: String], authorize: Authorize) async throws -> URLRequest {
     var request = URLRequest(url: url, timeoutInterval: 30)

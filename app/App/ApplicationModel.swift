@@ -4296,7 +4296,7 @@ extension ApplicationModel {
         guard backendRPCServer == nil else { return }
         let server = BackendRPCServer(socketURL: try socketURL ?? LocalExecutionRole.backendSocketURL(workspaceDirectory: Self.dashboardSupportDirectory()))
         try server.start { [weak self] request in
-            guard ["development.connect", "development.disconnect"].contains(request.method) else {
+            guard ["development.connect", "development.stream", "development.disconnect"].contains(request.method) else {
                 return BackendRPCResponse(id: request.id, error: "This foreground host only accepts development connections.")
             }
             guard let self else { return BackendRPCResponse(id: request.id, error: "The development host stopped.") }
@@ -4377,6 +4377,12 @@ extension ApplicationModel {
                 let value = try JSONDecoder().decode(DevelopmentClientRequest.self, from: request.payload)
                 let connection = try await libraryHost.connectLocalDevelopment(value)
                 return .init(id: request.id, result: try JSONEncoder().encode(connection))
+            }
+            if request.method == "development.stream" {
+                guard request.payload.count <= 4_096 else { throw BackendRPCError.invalidFrame }
+                let value = try JSONDecoder().decode(DevelopmentStreamRequest.self, from: request.payload)
+                let route = try await libraryHost.admitDevelopmentStream(value)
+                return .init(id: request.id, result: try JSONEncoder().encode(route))
             }
             if request.method == "analytics.preference" {
                 await analytics.refresh()

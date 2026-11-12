@@ -1,9 +1,11 @@
+import CryptoKit
 import Foundation
 import Testing
 import WovenMatterClient
 import LibraryClient
 import WorkspaceFixtures
 import WovenMatterCore
+import WovenMatterShared
 @testable import WovenMatterDashboardStore
 @testable import WovenMatterAppFacade
 
@@ -104,6 +106,104 @@ struct LibraryHostLifecycleTests {
         }
     }
 
+
+    /// A client-mode Dev build's stream ("Client mode", docs/DEVELOPMENT_BUILDS.md):
+    /// its key is enrolled with `development.connect` on the same-user socket,
+    /// stays out of the synced member list, opens only the loopback development
+    /// listener, and is revoked (4401) when the client disconnects.
+    @Test func aDevStreamKeyIsLocalOnlyOpensOnlyTheLoopbackStreamAndIsRevokedOnDisconnect() async throws {
+        let fixture = try await HostFixture(); defer { fixture.remove() }
+        try await fixture.model.configureFacadeFixture(directory: fixture.directory)
+        fixture.model.libraryHost = fixture.host
+        await fixture.host.start()
+        let socket = LocalExecutionRole.backendSocketURL(workspaceDirectory: fixture.directory)
+        defer { try? FileManager.default.removeItem(at: socket.deletingLastPathComponent()) }
+        try fixture.model.startDevelopmentConnectionService(socketURL: socket)
+        let rpc = try #require(fixture.model.backendRPCServer)
+        defer { rpc.stop() }
+        let database = try #require(fixture.model.dashboardStore?.database)
+        let membersBefore = try await database.libraryMemberRecords()
+
+        let deviceID = UUID().uuidString.lowercased()
+        let key = Curve25519.Signing.PrivateKey()
+        let connected = try JSONDecoder().decode(DevelopmentClientConnection.self, from: await BackendRPCClient(socketURL: socket).call(
+            method: "development.connect", payload: JSONEncoder().encode(DevelopmentClientRequest(deviceID: deviceID, name: "Dev · fixture",
+                memberKey: key.publicKey.rawRepresentation))))
+        let route = try #require(connected.stream, "development.connect admits the stream key with the new credential")
+        let identity = try await database.libraryIdentity()
+        #expect(route.libraryID == identity.libraryID)
+
+        // The key never enters the synced member list: no entry, removal or
+        // anchor names the Dev device or carries its key.
+        let members = try await database.libraryMemberRecords()
+        #expect(members.entries == membersBefore.entries && members.revocations == membersBefore.revocations)
+        #expect(!members.entries.contains { $0.deviceID == deviceID || $0.publicKey == key.publicKey.rawRepresentation })
+        #expect(!members.anchors.contains { $0.deviceID == deviceID })
+
+        func signed(_ signer: MemberRequestSigner, port: UInt16, audience: String = route.audience) throws -> WebSocketStreamTransport {
+            let url = WebSocketStreamTransport.loopbackURL(port: port)
+            return WebSocketStreamTransport.loopback(port: port,
+                headers: try signer.headers(method: "GET", target: StreamEndpoint.target(of: url), audience: audience))
+        }
+        let devSigner = MemberRequestSigner(deviceID: deviceID, key: key)
+
+        // A roster key's loopback upgrade is accepted: the hello names this host.
+        let stream = try signed(devSigner, port: route.port)
+        guard case .hello(let hello) = try await stream.receive() else { Issue.record("hello was not first"); return }
+        #expect(hello.deviceID == route.audience && hello.libraryID == route.libraryID && hello.workspaceID == route.workspaceID)
+        try await stream.send(.subscribe(.init(id: "w", stream: .workspace)))
+        guard case .item(let first) = try await stream.receive(), case .conversations(let snapshot) = first.payload else {
+            Issue.record("no conversations snapshot"); return
+        }
+        #expect(first.id == "w" && snapshot.snapshot)
+        // A stream key only reads: it answers no call. Commands go through the library API.
+        var command = LibraryCommand(deviceID: deviceID, kind: .stop, conversationID: UUID().uuidString.lowercased())
+        command.libraryID = route.libraryID; command.workspaceID = route.workspaceID
+        try await stream.send(.request(try .init(id: "c", method: .executionCommand, params: StreamCommandParams(command: command))))
+        var refusedCall: StreamResponse?
+        while refusedCall == nil { if case .response(let value) = try await stream.receive() { refusedCall = value } }
+        #expect(refusedCall?.error?.code == "invalid")
+
+        // Any other key is refused before the upgrade, a library member's included.
+        let stranger = MemberRequestSigner(deviceID: UUID().uuidString.lowercased(), key: .init())
+        await #expect(throws: StreamConnectionError.unauthorized) { _ = try await signed(stranger, port: route.port).receive() }
+        let phoneKey = Curve25519.Signing.PrivateKey(), phoneID = UUID().uuidString.lowercased()
+        try await fixture.host.peerSync.members().add(deviceID: phoneID, kind: .ios, name: "Phone",
+            publicKey: phoneKey.publicKey.rawRepresentation, endpoints: [])
+        let phone = MemberRequestSigner(deviceID: phoneID, key: phoneKey)
+        await #expect(throws: StreamConnectionError.unauthorized) { _ = try await signed(phone, port: route.port).receive() }
+        // And the Dev key opens nothing on the library's own (Tailscale) listener.
+        let shared = try #require(URL(string: try fixture.loopbackURL(path: "").absoluteString)?.port.map(UInt16.init))
+        let sharedURL = try #require(URL(string: "ws://127.0.0.1:\(shared)/wovenmatter/" + WovenMatterShared.StreamProtocol.path + "?" + WovenMatterShared.StreamProtocol.query))
+        var sharedRequest = URLRequest(url: sharedURL)
+        for (name, value) in try devSigner.headers(method: "GET", target: StreamEndpoint.target(of: sharedURL), audience: route.audience) {
+            sharedRequest.setValue(value, forHTTPHeaderField: name)
+        }
+        let sharedTask = URLSession.shared.webSocketTask(with: sharedRequest); sharedTask.resume()
+        await #expect(throws: (any Error).self) { _ = try await sharedTask.receive() }
+        #expect((sharedTask.response as? HTTPURLResponse)?.statusCode == 401)
+
+        // The same-user admission needs this Dev identity's current credential.
+        let wrong = DevelopmentStreamRequest(deviceID: deviceID, credential: String(repeating: "x", count: 43),
+                                             memberKey: key.publicKey.rawRepresentation)
+        await #expect(throws: BackendRPCError.self) {
+            _ = try await BackendRPCClient(socketURL: socket).call(method: "development.stream", payload: JSONEncoder().encode(wrong))
+        }
+        let again = DevelopmentStreamRequest(deviceID: deviceID, credential: connected.pairing.credential, memberKey: key.publicKey.rawRepresentation)
+        let readmitted = try JSONDecoder().decode(DevelopmentStreamRoute.self, from: await BackendRPCClient(socketURL: socket).call(
+            method: "development.stream", payload: JSONEncoder().encode(again)))
+        #expect(readmitted == route)
+
+        // Disconnecting (as quitting the Dev client does) revokes the key: the
+        // open socket closes with 4401 and the key no longer upgrades.
+        _ = try await BackendRPCClient(socketURL: socket).call(method: "development.disconnect",
+            payload: JSONEncoder().encode(DevelopmentDisconnectRequest(deviceID: deviceID, credential: connected.pairing.credential)))
+        var closeCode: Int?
+        do { while true { _ = try await stream.receive() } }
+        catch let closed as StreamTransportClosed { closeCode = closed.code }
+        #expect(closeCode == WovenMatterShared.StreamProtocol.CloseCode.memberRemoved.rawValue)
+        await #expect(throws: StreamConnectionError.unauthorized) { _ = try await signed(devSigner, port: route.port).receive() }
+    }
 
     @Test func developmentDisconnectWithdrawsWorkspaceAndRestartReusesIdentity() async throws {
         let fixture = try await HostFixture(); defer { fixture.remove() }
