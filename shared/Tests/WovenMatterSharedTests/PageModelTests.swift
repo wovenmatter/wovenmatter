@@ -656,6 +656,20 @@ struct PageModelTests {
     #expect(cleared.document.boardItems?["b"]?.task?.outcome == "Theirs")
   }
 
+  @Test func mergedSessionLinksStayWithinTheirLimit() throws {
+    var base = sample()
+    let existing = (0..<(BoardItem.maximumSessions - 2)).map { "base-\($0)" }
+    base.boardItems?["b"]?.sessions = existing
+    func link(_ ids: [String]) -> (inout NoteDocument) throws -> Void {
+      { document in for id in ids { _ = try document.apply([.page(.init(action: .linkSession, id: "b", sessionID: id))]) } }
+    }
+    let result = try merged(base, local: link(["local-1", "local-2"]), remote: link(["remote-1", "remote-2"]))
+    #expect(result.document.boardItems?["b"]?.sessions == existing + ["remote-1", "remote-2"])
+    // Below the limit both sides' links are kept.
+    let room = try merged(sample(), local: link(["local-1"]), remote: link(["remote-1"]))
+    #expect(room.document.boardItems?["b"]?.sessions == ["remote-1", "local-1"])
+  }
+
   @Test func anEditOutlivesADeleteOnTheOtherSide() throws {
     let removeA: (inout NoteDocument) throws -> Void = {
       _ = try $0.apply([.page(.init(action: .remove, id: "a", expectedRevision: $0.boardItemRevision(for: "a")))])

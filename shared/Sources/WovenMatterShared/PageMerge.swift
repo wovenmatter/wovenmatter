@@ -211,9 +211,11 @@ private struct PageMerger {
     }
     merged.review = pick(\.review)
     // A session link and a change summary are additive metadata, not anyone's writing.
+    // The remote's links come first, so the cap keeps what is already stored.
     let added = localContent.sessions.filter { !baseContent.sessions.contains($0) }
     let dropped = Set(baseContent.sessions.filter { !localContent.sessions.contains($0) })
-    merged.sessions = (remoteContent.sessions + added.filter { !remoteContent.sessions.contains($0) }).filter { !dropped.contains($0) }
+    merged.sessions = Array((remoteContent.sessions + added.filter { !remoteContent.sessions.contains($0) })
+      .filter { !dropped.contains($0) }.prefix(BoardItem.maximumSessions))
     if localContent.lastChange != baseContent.lastChange, remoteContent.lastChange == baseContent.lastChange {
       merged.lastChange = localContent.lastChange
     }
