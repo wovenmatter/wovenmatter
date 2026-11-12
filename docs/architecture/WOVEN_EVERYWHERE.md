@@ -877,7 +877,7 @@ hands them to the macOS job, which checks them with
 - **Agent freshness.** The phone asks the library host for its agent list on
   the first refresh after launch, after a failed refresh (reconnect), when it
   becomes active or the network returns, when the library host changes, when
-  the New Chat menu opens, and otherwise every fifth refresh. Each reachable
+  the New Chat menu opens,. Each reachable
   workspace's own list is fetched on each of its refreshes, and opening New
   Chat refreshes every workspace at once. The saved agent catalog only fills
   the lists until those answers arrive; a deleted workspace's saved list is
@@ -1222,7 +1222,17 @@ member removed.
 - **iPhone.** Connects to every listed server while the app is in the
   foreground: `workspace` on each, `conversation` only for the open chat. It
   closes cleanly when the app goes to the background and resumes on return.
-  Nothing is live while the app is in the background.
+  Nothing is live while the app is in the background. The library host's
+  stream also carries the central route (its own sessions, unassigned in its
+  library): its `conversations` summaries keep the library's identity,
+  `pending` is the central questions and approvals, and `conversation` follows
+  an open central chat. The phone reads no central transcript, questions,
+  capabilities or session settings over HTTP; central commands stay on the
+  mobile API's `POST v1/commands`. A chat whose subscription the server ends
+  is read once and not resubscribed on that connection. Lost central replies
+  are resolved by receipt once per connection to the host. An expanded
+  activity is read once from its owner's details route; a journaled summary
+  is used only when it is complete.
 
 ### Agent to agent
 
