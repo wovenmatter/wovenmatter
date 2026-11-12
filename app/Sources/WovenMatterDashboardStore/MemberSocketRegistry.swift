@@ -43,10 +43,19 @@ public actor MemberSocketRegistry {
     observer = nil
   }
 
+  /// Keeps a socket whose member was authenticated when it opened. A removal
+  /// between that check and this registration was swept without it, so the
+  /// member is checked once more here, and the socket closed if it is gone.
   @discardableResult
-  public func register(deviceID: String, kinds: Set<MemberKind>, close: @escaping @Sendable () -> Void) -> UUID {
-    let id = UUID()
-    entries[id] = .init(deviceID: deviceID.lowercased(), kinds: kinds, close: close)
+  public func register(deviceID: String, kinds: Set<MemberKind>, close: @escaping @Sendable () -> Void) async -> UUID {
+    let id = UUID(), entry = Entry(deviceID: deviceID.lowercased(), kinds: kinds, close: close)
+    entries[id] = entry
+    // As in a sweep, a list that cannot be read closes nothing.
+    if let list = try? await members.list(), entries[id] != nil,
+       !(list.active(entry.deviceID).map { kinds.contains($0.kind) } ?? false) {
+      entries.removeValue(forKey: id)
+      close()
+    }
     return id
   }
 

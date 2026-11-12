@@ -659,3 +659,20 @@ test('the stream client reconnects with a fresh signature, resumes its journal a
   client.retry()
   await eventually(() => client.state() === 'open', 'connected again once told')
 })
+
+test('a socket added after the sweep that removed its member is closed with 4401', async () => {
+  const registry = createMemberSocketRegistry()
+  const kept = { deviceID: randomUUID(), kind: 'ios' }, removed = { deviceID: randomUUID(), kind: 'mac' }
+  const closes = { early: [], late: [], kept: [] }
+  registry.add(removed, { close: code => closes.early.push(code) })
+  registry.sweep([{ ...kept, revoked: false }, { ...removed, revoked: true }])
+  assert.deepEqual(closes.early, [4401])
+  // Authenticated before that sweep, added after it: closed once its caller has set it up.
+  registry.add(removed, { close: code => closes.late.push(code) })
+  registry.add(kept, { close: code => closes.kept.push(code) })
+  assert.deepEqual(closes.late, [], 'not while it is being added')
+  await new Promise(resolve => queueMicrotask(resolve))
+  assert.deepEqual(closes.late, [4401])
+  assert.deepEqual(closes.kept, [])
+  assert.equal(registry.count(), 1)
+})

@@ -377,6 +377,23 @@ struct ExecutionStreamTests {
     staying.close(); runtime.stop()
   }
 
+  @Test func aSocketRegisteredAfterItsMembersRemovalIsClosed() async throws {
+    let mac = try await StreamMac(); defer { mac.remove() }
+    let phone = try await mac.member(.ios), other = try await mac.member(.mac)
+    final class Closes: @unchecked Sendable {
+      private let lock = NSLock(); private var ids: [String] = []
+      func add(_ id: String) { lock.withLock { ids.append(id) } }
+      var all: [String] { lock.withLock { ids } }
+    }
+    let closes = Closes()
+    // Authenticated before the removal, registered after its sweep.
+    try await mac.directory.remove(phone.deviceID)
+    await mac.registry.register(deviceID: phone.deviceID, kinds: [.ios]) { closes.add("phone") }
+    await mac.registry.register(deviceID: other.deviceID, kinds: [.mac]) { closes.add("other") }
+    #expect(closes.all == ["phone"])
+    #expect(await mac.registry.openSockets() == [other.deviceID: 1])
+  }
+
   // MARK: Backpressure and liveness
 
   @Test func aSubscriptionThatFallsBehindEndsWithResync() async throws {
