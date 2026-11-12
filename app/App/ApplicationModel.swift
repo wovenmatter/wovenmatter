@@ -364,6 +364,8 @@ final class ApplicationModel {
     @ObservationIgnored var federatedAdoptionTasks: [String: Task<Void, any Error>] = [:]
     @ObservationIgnored var adoptedExecutionConversations: Set<String> = []
     var federatedExecutionSnapshots: [String: FederatedExecutionSnapshot] = [:]
+    /// Live snapshot reads in flight per chat; true when another push arrived meanwhile.
+    @ObservationIgnored var federatedLiveRefreshes: [String: Bool] = [:]
     private(set) var peerAgentWorkspaces: [UUID: ExecutionWorkspace] = [:]
     var federatedExecutionOwners: [String: String] = [:]
     /// The synced execution workspace registry, including iPhone and iPad Quick Chat workspaces.
@@ -4613,8 +4615,12 @@ extension ApplicationModel {
                 }, apply: { [weak self] change in
                     guard let self else { throw CancellationError() }
                     if !change.conversationIDs.isEmpty { try await Task.sleep(for: .milliseconds(16)) }
+                    // Live state of a streamed chat the background server pushed.
+                    let live = change.scopes.contains(.execution)
+                        ? change.conversationIDs.filter { self.federatedExecutionSnapshots[$0] != nil } : []
+                    for id in live { self.refreshLiveFederatedConversation(id) }
                     let visible = Set(self.conversationStatesByID.keys)
-                    for id in change.requiresReload ? visible : change.conversationIDs.intersection(visible) {
+                    for id in (change.requiresReload ? visible : change.conversationIDs.intersection(visible)).subtracting(live) {
                         try Task.checkCancellation()
                         await self.refreshConversation(id: id)
                     }

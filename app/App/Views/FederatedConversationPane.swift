@@ -132,11 +132,15 @@ struct FederatedConversationPane: View {
         .task(id: conversation.id) {
             olderMessages = []; olderActivities = []; olderCursor = nil; hasLoadedEarlier = false
             historyGeneration = UUID(); loadingOlder = false
-            while !Task.isCancelled {
-                await model.refreshFederatedConversation(conversation.id)
+            await model.refreshFederatedConversation(conversation.id)
+            // A streamed workspace pushes every change. Only one without a stream is polled.
+            while !Task.isCancelled, snapshot?.streamed != true {
                 do { try await Task.sleep(for: .seconds(snapshot?.online == true ? 1 : 5)) } catch { return }
+                await model.refreshFederatedConversation(conversation.id)
             }
         }
+        .onChange(of: conversation.id) { previous, _ in model.closeFederatedConversation(previous) }
+        .onDisappear { model.closeFederatedConversation(conversation.id) }
     }
     @ViewBuilder private func selectionMenu(_ title: String, values: [SessionSettingOption], selected: String?, action: @escaping (String) -> LibraryWorkspaceAction) -> some View {
         if !values.isEmpty {

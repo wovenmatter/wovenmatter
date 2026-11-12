@@ -421,13 +421,24 @@ struct MemberReachTests {
         // The socket upgrade is signed for that machine only, and only for a member's bots socket.
         let socket = try #require(workspace.endpoint).appending(path: "v1/bots/ws")
         var wss = try #require(URLComponents(url: socket, resolvingAgainstBaseURL: false)); wss.scheme = "wss"
-        let headers = try await macB.model.signBotSocket(url: try #require(wss.url), audience: machineID)
+        let headers = try await macB.model.signMemberSocket(url: try #require(wss.url), audience: machineID)
         #expect(headers[MemberRequestSignature.audienceHeader] == machineID && headers["Authorization"] == nil)
         #expect(try await linux.verifies(method: "GET", target: "/wovenmatter-execution/linux-l/v1/bots/ws", headers: headers))
-        await #expect(throws: BotsError.self) { _ = try await macB.model.signBotSocket(url: try #require(wss.url), audience: UUID().uuidString.lowercased()) }
+        await #expect(throws: BotsError.self) { _ = try await macB.model.signMemberSocket(url: try #require(wss.url), audience: UUID().uuidString.lowercased()) }
         await #expect(throws: BotsError.self) {
-            _ = try await macB.model.signBotSocket(url: URL(string: "wss://linux-l.fixture.ts.net/wovenmatter-execution/linux-l/v1/host/update")!, audience: machineID)
+            _ = try await macB.model.signMemberSocket(url: URL(string: "wss://linux-l.fixture.ts.net/wovenmatter-execution/linux-l/v1/host/update")!, audience: machineID)
         }
+
+        // The live stream upgrade is signed too, with its protocol query, and only that query.
+        let stream = try StreamEndpoint.url(for: try #require(workspace.endpoint))
+        let streamHeaders = try await macB.model.signMemberSocket(url: stream, audience: machineID)
+        #expect(try await linux.verifies(method: "GET", target: "/wovenmatter-execution/linux-l/v1/stream?protocol=1", headers: streamHeaders))
+        #expect(streamHeaders[MemberRequestSignature.nonceHeader] != headers[MemberRequestSignature.nonceHeader])
+        var otherQuery = try #require(URLComponents(url: stream, resolvingAgainstBaseURL: false)); otherQuery.query = "protocol=2"
+        await #expect(throws: BotsError.self) { _ = try await macB.model.signMemberSocket(url: try #require(otherQuery.url), audience: machineID) }
+        var plain = otherQuery; plain.scheme = "ws"; plain.query = "protocol=1"
+        await #expect(throws: BotsError.self) { _ = try await macB.model.signMemberSocket(url: try #require(plain.url), audience: machineID) }
+        await #expect(throws: BotsError.self) { _ = try await macB.model.signMemberSocket(url: stream, audience: UUID().uuidString.lowercased()) }
     }
 
     @Test func updateRequiredPeersRaiseTheUpdateEverythingNotice() {

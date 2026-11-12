@@ -571,9 +571,14 @@ public enum StreamCommands {
   /// Sends a remembered command. `retrying`: the journal already held it, so
   /// its receipt is asked for first.
   public static func deliver(_ command: LibraryCommand, retrying: Bool, workspaceID: String, journal: WorkspaceJournal,
-                             connection: StreamConnection, beforeDispatch: () throws -> Void = {}) async throws -> LibraryCommandReceipt {
+                             connection: StreamConnection) async throws -> LibraryCommandReceipt {
     if retrying, let existing = try await connection.receipt(command.commandID) { return existing }
-    try beforeDispatch()
+    return try await send(command, workspaceID: workspaceID, journal: journal, connection: connection)
+  }
+
+  /// `execution.command` for a remembered command; a lost reply records `outcomeUnknown`.
+  public static func send(_ command: LibraryCommand, workspaceID: String, journal: WorkspaceJournal,
+                          connection: StreamConnection) async throws -> LibraryCommandReceipt {
     do { return try await connection.command(command) }
     catch let error as StreamConnectionError where error.outcomeUnknown {
       try? await journal.rememberReceipt(.init(commandID: command.commandID, deviceID: command.deviceID, status: .outcomeUnknown,

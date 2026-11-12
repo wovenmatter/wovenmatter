@@ -13,6 +13,8 @@ public struct BackendInvalidationCursor: Codable, Equatable, Sendable {
 
 public enum BackendInvalidationScope: String, Codable, Sendable, Hashable {
     case openCode, workspace, calendar, runtime, remoteWorkspaces, permissions, settings, usage, databases, bots
+    /// Live state a workspace stream pushed for `conversationIDs`.
+    case execution
 }
 
 public struct BackendInvalidations: Codable, Equatable, Sendable {
