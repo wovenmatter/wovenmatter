@@ -168,7 +168,7 @@ unsandboxed browser.
 See [validation and manual review](REMOTE_HOST_VALIDATION.md) for reproducible
 provider-free tests, actual workstation evidence and untested configurations.
 
-The existing SQLite execution owner, durable relays, publisher and outbox
+The existing SQLite execution owner, its durable channels, publisher and outbox
 continue to own work on Linux. Dropping the Mac connection does not move
 execution to the Mac or replay an accepted prompt. On reconnection, persisted
 events synchronize through the existing protocol. Linger keeps the service

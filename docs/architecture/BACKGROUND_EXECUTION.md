@@ -64,14 +64,14 @@ Quitting the frontend does not shut down backend-owned sessions.
 
 Local Pi Durable, Codex, Claude Code, Grok, and OpenCode transports belong to the
 execution owner. The frontend requests metadata, configuration, sends, and stops
-through the private backend protocol. Remote native transports remain owned by
-the workspace service; reconnecting its relay does not replay accepted input.
+through the private backend protocol. A Linux host's sessions are owned by its
+own server; every device reaches them there, and reconnecting does not replay accepted input.
 
 Node canonicalizes a module's file URL, while its command-line path can retain
 symlinks such as macOS `/tmp` → `/private/tmp`. Executable module guards must
 compare the real command-line path to the module URL. This applies to native
-harness wrappers and hooks, the OpenCode installer, Pi browser/Executor helpers,
-and the remote stdio relay. Subprocess regressions exercise application aliases
+harness wrappers and hooks, the OpenCode installer and Pi browser/Executor helpers.
+Subprocess regressions exercise application aliases
 containing spaces rather than importing these modules alone.
 
 Pi provider failures retain fixed HTTP classifications across native storage and
