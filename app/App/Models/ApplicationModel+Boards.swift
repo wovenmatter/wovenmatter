@@ -29,7 +29,9 @@ extension ApplicationModel {
         var updated = before
         var item = updated.boardItems?[itemID] ?? BoardItem()
         if !item.sessions.contains(conversationID) {
-            guard item.sessions.count < 32 else { throw BoardDispatchError.sendFailed("An item can link to at most 32 chats. Remove an old link before sending to another chat.") }
+            guard item.sessions.count < BoardItem.maximumSessions else {
+                throw BoardDispatchError.sendFailed("A component can link to at most \(BoardItem.maximumSessions) chats. Remove an old link before sending it to another chat.")
+            }
             item.sessions.append(conversationID)
             if updated.boardItems == nil { updated.boardItems = [:] }
             updated.boardItems?[itemID] = item

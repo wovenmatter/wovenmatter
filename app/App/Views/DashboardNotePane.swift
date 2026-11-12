@@ -99,7 +99,7 @@ struct DashboardNotePane: View {
                     .tracking(-0.3)
                     .lineLimit(1)
                     .focused($titleFocused)
-                    .accessibilityLabel("Note title")
+                    .accessibilityLabel("\(currentDocument.kind.displayName) title")
                     .frame(minWidth: currentDocument.kind == .canvas ? 100 : nil)
                     .layoutPriority(1)
                 Spacer()

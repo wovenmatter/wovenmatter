@@ -32,7 +32,7 @@ struct DashboardNoteContextMenu: ViewModifier {
                     Divider()
                     Button("Export asset") { onAction(note, .export(.standard)) }
                     Button("Export document") { onAction(note, .export(.document)) }
-                        .help("Save the complete note, sheet, page, or board as JSON.")
+                        .help("Save the complete Note, Sheet, Artifact, or Page as JSON.")
                     Divider()
                     Button("Move to Trash", role: .destructive) { onAction(note, .moveToTrash) }
                 }
