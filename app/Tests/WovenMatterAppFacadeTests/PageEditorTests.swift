@@ -5,12 +5,12 @@ import WovenMatterCore
 @testable import WovenMatterAppFacade
 
 @MainActor @Suite(.serialized) struct PageEditorTests {
-    private func editor(_ original: NoteDocument) -> (DashboardNoteEditor.Coordinator, NSTextView, () -> NoteDocument) {
+    private func editor(_ original: NoteDocument, editsPageFlow: Bool = true) -> (DashboardNoteEditor.Coordinator, NSTextView, () -> NoteDocument) {
         final class Storage { var value: NoteDocument; init(_ value: NoteDocument) { self.value = value } }
         let storage = Storage(original)
         let controller = DashboardNoteEditorController()
         let editor = DashboardNoteEditor(document: Binding(get: { storage.value }, set: { storage.value = $0 }),
-            controller: controller, sizesToContent: true)
+            controller: controller, sizesToContent: true, editsPageFlow: editsPageFlow)
         let coordinator = editor.makeCoordinator()
         let view = NSTextView()
         view.isEditable = true
@@ -18,6 +18,23 @@ import WovenMatterCore
         coordinator.bind(view)
         coordinator.apply(original, to: view)
         return (coordinator, view, { storage.value })
+    }
+
+    /// An original Note embedded in a Page sizes to its content but keeps
+    /// ordinary Notes editing. Its multiline block splits into paragraphs, and
+    /// typing elsewhere must not restore the original block beside them.
+    @Test func embeddedOriginalNoteTypingDoesNotDuplicateMultilineText() {
+        let original = NoteDocument(kind: .note, blocks: [
+            .richText(.init(id: "lines", text: "Line A\nLine B")), .richText(.init(id: "other", text: "Other"))])
+        let (coordinator, view, saved) = editor(original, editsPageFlow: false)
+        for (typed, addition) in [("Other", " text"), ("Other text", " again")] {
+            let end = NSMaxRange((view.string as NSString).range(of: typed))
+            view.textStorage!.replaceCharacters(in: NSRange(location: end, length: 0), with: addition)
+            coordinator.textDidChange(Notification(name: NSText.didChangeNotification, object: view))
+        }
+        #expect(saved().blocks.map(\.plainText) == ["Line A", "Line B", "Other text again"])
+        #expect(saved().kind == .note)
+        #expect(saved().boardItems == nil)
     }
 
     @Test func emptyInsertionSlotsNeverReuseAnIDThatWasMovedIntoThePage() {
@@ -67,6 +84,23 @@ import WovenMatterCore
         #expect(reopened.boardItems?["task"]?.task?.status == .done)
         coordinator.toggleTask("task")
         #expect(saved().boardItems?["task"]?.task?.status == .todo)
+    }
+
+    /// Typing in Component details changes only task metadata. The flow keeps
+    /// its text and history, and its stored metadata follows the new details.
+    @Test func detailsOnlyChangesRefreshTaskMetadataInPlace() {
+        let original = NoteDocument(kind: .canvas, blocks: [.richText(.init(id: "task", text: "Pack"))],
+            boardItems: ["task": .init(task: .init(assignee: "Trey"))])
+        let (coordinator, view, saved) = editor(original)
+        let text = NSAttributedString(attributedString: view.attributedString())
+        var details = original
+        details.boardItems?["task"]?.task?.outcome = "Bags are ready"
+        coordinator.apply(details, to: view)
+        #expect(view.string == text.string)
+        coordinator.toggleTask("task")
+        #expect(saved().boardItems?["task"]?.task?.status == .done)
+        #expect(saved().boardItems?["task"]?.task?.outcome == "Bags are ready")
+        #expect(saved().boardItems?["task"]?.task?.assignee == "Trey")
     }
 
     @Test func legacyMultilineContentKeepsOneStableComponentWhileTyping() throws {

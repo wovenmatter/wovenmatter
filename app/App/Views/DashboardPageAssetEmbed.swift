@@ -66,6 +66,9 @@ struct DashboardPageAssetEmbed: View {
                     DashboardNotePane(model: model, note: asset, focusesTitleOnAppear: false,
                         onInitialFocusHandled: {}, onOpenNote: onOpenAsset, embedded: true,
                         onEditorFocus: { viewState.selected = [componentID]; onFocus?($0) })
+                        // An Artifact's web view and saved-input generation belong
+                        // to one asset, even when another has identical HTML.
+                        .id(assetID)
                         .frame(height: source.kind == .note ? nil : embedHeight)
                         .frame(minHeight: source.kind == .note ? 40 : 240)
                         .simultaneousGesture(TapGesture().onEnded {

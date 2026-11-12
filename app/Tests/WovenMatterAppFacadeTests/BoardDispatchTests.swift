@@ -20,11 +20,31 @@ struct BoardDispatchTests {
         var local = base
         local.blocks = [.richText(.init(id: "task", text: "Intended work"))]
         f.model.updateNoteDraft(note: note, content: try local.encoded())
-        await #expect(throws: BoardDispatchError.self) { try await f.model.sendBoardItem(boardID: id, itemID: "task", to: chat) }
+        let error = await #expect(throws: BoardDispatchError.self) { try await f.model.sendBoardItem(boardID: id, itemID: "task", to: chat) }
+        #expect(error?.localizedDescription.contains("kept as a separate component") == true)
         #expect(await f.recorder.deliveries.isEmpty)
         let saved = try #require(try await f.database.readNoteForEditing(id: id).document)
         let copy = try #require(saved.blocks.first { $0.plainText == "Intended work" })
         #expect(saved.boardItems?[copy.id]?.sessions.contains(chat) == true)
+    }
+
+    /// Flushing drafts is a barrier for every note. Another note's failed save
+    /// must not block, or be reported as, a send from a Page that saved.
+    @Test func anUnrelatedNoteSaveFailureDoesNotBlockSendingFromASavedPage() async throws {
+        let f = try await FacadeFixture(); defer { f.remove() }
+        let chat = try await f.createConversation()
+        let card = NoteRichTextBlock(id: "task", text: "Work")
+        let pageID = try await f.database.createNote(folderID: nil, title: "Page",
+            content: NoteDocument(kind: .canvas, blocks: [.richText(card)]).encoded(), kind: .canvas)
+        await f.model.refreshWorkspace()
+        let missing = WorkspaceNoteRecord(id: "missing-note", folderID: nil, title: "Gone", content: "Before",
+            createdAt: nil, updatedAt: nil, isPinned: false, revision: "missing-revision")
+        f.model.updateNoteDraft(note: missing, content: "Unsaved writing")
+        #expect(!(await f.model.flushNoteDrafts()))
+        try await f.model.sendBoardItem(boardID: pageID, itemID: card.id, to: chat)
+        #expect(await f.recorder.deliveries.count == 1)
+        let saved = try #require(try await f.database.readNoteForEditing(id: pageID).document)
+        #expect(saved.boardItems?[card.id]?.sessions == [chat])
     }
 
     @Test func explicitDispatchLinksChatAndUsesOrdinaryAdmissionWithoutCompletingTask() async throws {

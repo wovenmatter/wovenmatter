@@ -88,10 +88,18 @@ struct DashboardPageEditor: View {
                         .padding(.horizontal, 24).padding(.top, 8).padding(.bottom, 60)
                     }.scrollIndicators(.never)
                     .onChange(of: viewState.revealCardID) { _, id in
-                        guard let id, let segment = projection.segments.first(where: { segmentContains($0, id: id) }) else { return }
+                        guard let id else { return }
+                        guard let segment = projection.segments.first(where: { segmentContains($0, id: id) }) else {
+                            viewState.revealCardID = nil
+                            return
+                        }
                         var parent = page.pageParentID(for: id)
                         while let id = parent { collapsed.remove(id); parent = page.pageParentID(for: id) }
                         withAnimation { proxy.scrollTo(segment.id, anchor: .center) }
+                        // A text flow clears the request after focusing its text.
+                        // Sections and embeds have nothing more to do.
+                        if case .flow = segment { return }
+                        DispatchQueue.main.async { if viewState.revealCardID == id { viewState.revealCardID = nil } }
                     }
                 }
                 if viewState.showsInspector, let id = selectedID, page.blocks.contains(where: { $0.id == id }) {
@@ -108,6 +116,8 @@ struct DashboardPageEditor: View {
                                 conversations: model.workspaceOverview?.conversations ?? [],
                                 onSend: { id, chat in try await model.sendBoardItem(boardID: noteID, itemID: id, to: chat) },
                                 onOpenSession: onOpenSession)
+                            // Each component's details start from its own values.
+                            .id(id)
                         }.padding(16)
                     }.frame(width: 270).scrollIndicators(.never)
                         .simultaneousGesture(TapGesture().onEnded { onSectionFocus?() })
@@ -166,6 +176,7 @@ struct DashboardPageEditor: View {
         case let .asset(id, assetID, _, _):
             DashboardPageAssetEmbed(model: model, pageDocument: $document, viewState: $viewState,
                 componentID: id, assetID: assetID, onOpenAsset: onOpenAsset, onFocus: onFocus, onNonTextFocus: onSectionFocus)
+                .id(assetID)
                 .padding(.vertical, 10)
         }
     }

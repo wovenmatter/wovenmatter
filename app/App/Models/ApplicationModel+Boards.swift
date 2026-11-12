@@ -6,7 +6,7 @@ enum BoardDispatchError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .unavailable: "The Page component or chat is no longer available."
-        case .saveFailed: "Save the Page before sending this component. No task was sent."
+        case .saveFailed: "This Page could not be saved, so the component was not sent. Retry saving the Page, then send it again."
         case .sendFailed(let message): message
         }
     }
@@ -29,7 +29,9 @@ extension ApplicationModel {
         var updated = before
         var item = updated.boardItems?[itemID] ?? BoardItem()
         if !item.sessions.contains(conversationID) {
-            guard item.sessions.count < 32 else { throw BoardDispatchError.sendFailed("An item can link to at most 32 chats. Remove an old link before sending to another chat.") }
+            guard item.sessions.count < BoardItem.maximumSessions else {
+                throw BoardDispatchError.sendFailed("A component can link to at most \(BoardItem.maximumSessions) chats. Remove an old link before sending it to another chat.")
+            }
             item.sessions.append(conversationID)
             if updated.boardItems == nil { updated.boardItems = [:] }
             updated.boardItems?[itemID] = item
@@ -37,18 +39,31 @@ extension ApplicationModel {
             try updated.validateEditableShape()
             updateNoteDraft(note: note, content: try updated.encoded())
         }
-        guard await flushNoteDrafts(), !noteEditingSuspended, !backendStopping else {
-            throw BoardDispatchError.saveFailed
-        }
+        // The flush is a barrier for every note. Its result can describe an
+        // unrelated note, so this Page's own saved copy decides whether to send.
+        let flushed = await flushNoteDrafts()
+        guard !noteEditingSuspended, !backendStopping else { throw BoardDispatchError.saveFailed }
         guard let database = dashboardStore?.database,
               let saved = try await database.readNoteForEditing(id: boardID).document,
-              saved.kind == .canvas, let block = saved.blocks.first(where: { $0.id == itemID }),
-              saved.boardItems?[itemID]?.sessions.contains(conversationID) == true else {
+              saved.kind == .canvas else {
             throw BoardDispatchError.saveFailed
         }
-        guard block.normalized == updated.blocks.first(where: { $0.id == itemID })?.normalized else {
+        guard let block = saved.blocks.first(where: { $0.id == itemID }) else { throw BoardDispatchError.unavailable }
+        let linked = saved.boardItems?[itemID]?.sessions.contains(conversationID) == true
+        let intended = updated.blocks.first(where: { $0.id == itemID })?.normalized
+        guard linked, block.normalized == intended else {
             await refreshWorkspace()
-            throw BoardDispatchError.sendFailed("This component changed while the Page was saving. Review its retained versions and send the intended component again. No task was sent.")
+            if NoteDocument.pageConflictComponentRemaps(submitted: updated, stored: saved)[itemID] != nil {
+                throw BoardDispatchError.sendFailed("Another edit to this component arrived while the Page was saving. Your version was kept as a separate component marked for review. Review it, then send the intended component. No task was sent.")
+            }
+            let current = workspaceOverview?.notes.first(where: { $0.id == boardID }).flatMap {
+                try? NoteDocument.editableDocument(from: noteDraft(for: $0).content).materializedPage()
+            }
+            if current?.blocks.first(where: { $0.id == itemID })?.normalized != intended {
+                throw BoardDispatchError.sendFailed("This component changed while it was being sent. Send it again to include the latest text. No task was sent.")
+            }
+            guard linked, flushed else { throw BoardDispatchError.saveFailed }
+            throw BoardDispatchError.sendFailed("This component was changed elsewhere while the Page was saving. Review it, then send it again. No task was sent.")
         }
         // Encode the quote as one JSON value and neutralize markup delimiters.
         // The same bounded payload is used for local and federated destinations.

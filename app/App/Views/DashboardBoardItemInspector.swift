@@ -102,7 +102,7 @@ struct DashboardBoardItemInspector: View {
                 }
             }
             if let onSend {
-                Menu(sending ? "Sending…" : "Send item to chat") {
+                Menu(sending ? "Sending…" : "Send to chat") {
                     ForEach(conversations, id: \.id) { chat in
                         Button(chat.title.isEmpty ? "Untitled chat" : chat.title) {
                             sending = true
@@ -119,7 +119,7 @@ struct DashboardBoardItemInspector: View {
                     }
                 }.disabled(sending || conversations.isEmpty)
                 if conversations.isEmpty {
-                    Text("Create a chat to send this item to an agent.").font(.caption).foregroundStyle(.secondary)
+                    Text("Create a chat to send this component to an agent.").font(.caption).foregroundStyle(.secondary)
                 }
                 if let sendResult { Text(sendResult).font(.caption).foregroundStyle(.secondary) }
                 Text("Uses that chat's current agent and permissions. Its run does not change task state automatically.")

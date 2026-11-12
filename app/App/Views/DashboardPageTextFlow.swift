@@ -18,7 +18,7 @@ struct DashboardPageTextFlow: View {
         let base = document.materializedPage()
         DashboardNoteEditor(document: flowBinding(base: base), controller: controller,
             dictationEditor: dictationEditor, dictationIdentity: "page:\(flowID)",
-            sizesToContent: true, onFocus: { controller in
+            sizesToContent: true, editsPageFlow: true, onFocus: { controller in
                 if let id = controller.selectedBlockID, document.blocks.contains(where: { $0.id == id }) {
                     viewState.selected = [id]
                 } else { viewState.selected = Set(parentID.map { [$0] } ?? []) }
@@ -62,11 +62,21 @@ struct DashboardPageTextFlow: View {
                 let included = Set(local.blocks.map(\.id))
                 for block in updated.blocks where included.contains(block.id) {
                     if let changed = updated.boardItems?[block.id] {
-                        var item = local.boardItems?[block.id] ?? BoardItem()
-                        item.task = changed.task; item.review = changed.review; item.role = changed.role
-                        item.lastChange = changed.lastChange; item.sessions = changed.sessions
-                        if local.boardItems == nil { local.boardItems = [:] }
-                        local.boardItems?[block.id] = item
+                        if var item = local.boardItems?[block.id] {
+                            // Text editing only starts, ends or checks off a task. Details
+                            // belong to Component details, so restored text attributes
+                            // (such as from undo) cannot revert them.
+                            if let task = changed.task {
+                                if item.task == nil { item.task = task } else { item.task?.status = task.status }
+                            } else { item.task = nil }
+                            local.boardItems?[block.id] = item
+                        } else {
+                            var item = BoardItem()
+                            item.task = changed.task; item.review = changed.review; item.role = changed.role
+                            item.lastChange = changed.lastChange; item.sessions = changed.sessions
+                            if local.boardItems == nil { local.boardItems = [:] }
+                            local.boardItems?[block.id] = item
+                        }
                     } else if let previous = local.boardItems?[block.id], previous.task != nil {
                         local.boardItems?[block.id]?.task = nil
                     }
@@ -82,9 +92,14 @@ struct DashboardPageTextFlow: View {
         })
     }
 
+    /// Handles a reveal request once. Clearing it keeps flows created later from
+    /// taking focus and lets the same component be revealed again.
     private func focusRequestedComponent() {
         guard let id = viewState.revealCardID, liveIDs(in: document.materializedPage()).contains(id) else { return }
-        DispatchQueue.main.async { controller.focus(blockID: id, atEnd: true) }
+        DispatchQueue.main.async {
+            controller.focus(blockID: id, atEnd: true)
+            if viewState.revealCardID == id { viewState.revealCardID = nil }
+        }
     }
 }
 

@@ -1609,18 +1609,19 @@ struct DashboardNewNoteDrawer: View {
                     icon: .fileText,
                     kind: .note
                 )
+                // Each kind uses the same icon as its asset rows.
                 artifactButton(
                     "Sheet",
-                    icon: .panelsTopLeft,
+                    systemImage: "tablecells",
                     kind: .spreadsheet
                 )
                 artifactButton(
                     "Artifact",
                     detail: "Interactive HTML artifacts built on live data",
-                    icon: .panelTop,
+                    systemImage: "chevron.left.forwardslash.chevron.right",
                     kind: .html
                 )
-                artifactButton("Page", detail: "A fluid document for your work with agents", icon: .fileText, kind: .canvas)
+                artifactButton("Page", detail: "A fluid document for your work with agents", icon: .panelsTopLeft, kind: .canvas)
             }
             .padding(20)
         }
@@ -1629,7 +1630,8 @@ struct DashboardNewNoteDrawer: View {
     private func artifactButton(
         _ title: String,
         detail: String? = nil,
-        icon: DashboardLucideGlyph,
+        icon: DashboardLucideGlyph = .fileText,
+        systemImage: String? = nil,
         kind: NoteArtifactKind
     ) -> some View {
         Button {
@@ -1638,6 +1640,7 @@ struct DashboardNewNoteDrawer: View {
         } label: {
             DashboardNewChatOptionCard(
                 icon: icon,
+                systemImage: systemImage,
                 title: title,
                 detail: detail
             )
@@ -1692,6 +1695,8 @@ struct DashboardNewChatSection<Content: View>: View {
 
 struct DashboardNewChatOptionCard: View {
     let icon: DashboardLucideGlyph
+    /// A system symbol in place of `icon`, matching assets whose rows use one.
+    var systemImage: String? = nil
     var harnessLogo: DashboardHarnessLogo? = nil
     let title: String
     var detail: String? = nil
@@ -1701,6 +1706,10 @@ struct DashboardNewChatOptionCard: View {
             Group {
                 if let harnessLogo {
                     DashboardHarnessLogoIcon(logo: harnessLogo, size: 20)
+                } else if let systemImage {
+                    Image(systemName: systemImage)
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundStyle(DashboardPalette.primary)
                 } else {
                     DashboardLucideIcon(glyph: icon, size: 16)
                         .foregroundStyle(DashboardPalette.primary)
@@ -1831,7 +1840,7 @@ struct DashboardSidebarWorkspacePage: View {
                         }
                         .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
                         .accessibilityLabel("Asset type: \(assetKind.map { $0.displayName + "s" } ?? "All assets")")
-                        .help("Filter notes, sheets, pages, and boards")
+                        .help("Filter by Notes, Sheets, Artifacts, or Pages")
                     }
                     if onBack != nil {
                         filterMenu(inSearchRow: true)

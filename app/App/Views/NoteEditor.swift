@@ -85,7 +85,17 @@ final class DashboardNoteEditorController {
     func unbind(_ textView: NSTextView) {
         guard self.textView === textView else { return }
         removeUndoObservers()
-        textView.undoManager?.removeAllActions()
+        if let manager = textView.undoManager {
+            if (textView as? NoteTextView)?.sharedUndoManager === manager {
+                // Page flows share one history. Closing one flow, such as by
+                // collapsing its section, keeps the other flows' undo.
+                manager.removeAllActions(withTarget: textView)
+                textView.textStorage.map { manager.removeAllActions(withTarget: $0) }
+                manager.removeAllActions(withTarget: self)
+            } else {
+                manager.removeAllActions()
+            }
+        }
         self.textView = nil
         documentText = nil
         onChange = nil
@@ -489,7 +499,12 @@ struct DashboardNoteEditor: NSViewRepresentable {
     let controller: DashboardNoteEditorController
     var dictationEditor: DictationEditor? = nil
     var dictationIdentity = ""
+    /// Layout only: grow to the text's height and pass scrolling to the parent.
     var sizesToContent = false
+    /// Page flow editing: task metadata and checkboxes, one component per
+    /// paragraph on Enter, and undo fenced at incoming changes. Only Page text
+    /// flows set this; an embedded original Note keeps ordinary Notes editing.
+    var editsPageFlow = false
     var onFocus: ((DashboardNoteEditorController) -> Void)?
     var onSynchronize: (() -> Void)?
     var sharedUndoManager: UndoManager?
@@ -520,8 +535,8 @@ struct DashboardNoteEditor: NSViewRepresentable {
         textView.isVerticallyResizable = true
         textView.isHorizontallyResizable = false
         textView.autoresizingMask = [.width]
-        textView.textContainerInset = NSSize(width: sizesToContent ? 24 : 0, height: 8)
-        textView.showsPageTasks = sizesToContent
+        textView.textContainerInset = NSSize(width: editsPageFlow ? 24 : 0, height: 8)
+        textView.showsPageTasks = editsPageFlow
         textView.onToggleTask = { [weak coordinator = context.coordinator] id in coordinator?.toggleTask(id) }
         textView.textContainer?.widthTracksTextView = true
         textView.textContainer?.containerSize = NSSize(
@@ -540,14 +555,16 @@ struct DashboardNoteEditor: NSViewRepresentable {
     }
 
     func sizeThatFits(_ proposal: ProposedViewSize, nsView: NSScrollView, context: Context) -> CGSize? {
+        // Measure with TextKit 2. Reading `layoutManager` would permanently
+        // switch the view to TextKit 1 and stop the highlight drawing.
         guard sizesToContent, let textView = nsView.documentView as? NSTextView,
-              let container = textView.textContainer, let manager = textView.layoutManager else { return nil }
+              let container = textView.textContainer, let manager = textView.textLayoutManager else { return nil }
         let width = max(80, proposal.width ?? max(80, nsView.frame.width))
         textView.setFrameSize(NSSize(width: width, height: max(40, textView.frame.height)))
         container.containerSize = NSSize(width: max(20, width - textView.textContainerInset.width * 2),
                                          height: .greatestFiniteMagnitude)
-        manager.ensureLayout(for: container)
-        return CGSize(width: width, height: max(40, ceil(manager.usedRect(for: container).maxY + textView.textContainerInset.height * 2)))
+        manager.ensureLayout(for: manager.documentRange)
+        return CGSize(width: width, height: max(40, ceil(manager.usageBoundsForTextContainer.maxY + textView.textContainerInset.height * 2)))
     }
 
     func updateNSView(_ scrollView: NSScrollView, context: Context) {
@@ -597,9 +614,20 @@ struct DashboardNoteEditor: NSViewRepresentable {
         }
 
         func apply(_ document: NoteDocument, to textView: NSTextView) {
+            if parent.editsPageFlow, document != lastDocument, Self.flowText(lastDocument) == Self.flowText(document) {
+                // Only Component details changed. The text is unchanged, so keep
+                // its undo history and refresh the stored task metadata in place.
+                applying = true
+                synchronizePageAttributes(document, in: textView)
+                lastDocument = document
+                parent.controller.adopt(document)
+                synchronizedText = NSAttributedString(attributedString: textView.attributedString())
+                applying = false
+                return
+            }
             applying = true
             let previous = lastDocument
-            if parent.sizesToContent {
+            if parent.editsPageFlow {
                 // A focused Page flow must never undo a snapshot over incoming
                 // agent/component work. Native typing keeps its ordinary undo.
                 textView.undoManager?.removeAllActions()
@@ -626,9 +654,20 @@ struct DashboardNoteEditor: NSViewRepresentable {
             parent.onSynchronize?()
         }
 
+        /// What a Page flow shows: its blocks and each task's checkbox. Other
+        /// fields belong to Component details and never change the text.
+        private static func flowText(_ document: NoteDocument) -> NoteDocument {
+            var value = document
+            let items = (document.boardItems ?? [:])
+                .mapValues { BoardItem(task: $0.task.map { BoardTask(status: $0.status) }) }
+                .filter { $0.value != BoardItem() }
+            value.boardItems = items.isEmpty ? nil : items
+            return value
+        }
+
         func emit(_ proposed: NoteDocument) {
             var document = proposed
-            if parent.sizesToContent, let before = synchronizedText, let view = parent.controller.textView {
+            if parent.editsPageFlow, let before = synchronizedText, let view = parent.controller.textView {
                 let after = view.attributedString()
                 let originals = Dictionary(lastDocument.blocks.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
                 for index in document.blocks.indices {
@@ -705,7 +744,7 @@ struct DashboardNoteEditor: NSViewRepresentable {
         }
 
         func toggleTask(_ id: String) {
-            guard parent.sizesToContent, let textView = parent.controller.textView, textView.isEditable,
+            guard parent.editsPageFlow, let textView = parent.controller.textView, textView.isEditable,
                   let storage = textView.textStorage else { return }
             parent.controller.performEdit(action: "Toggle Task") {
                 var changes: [(NSRange, Data)] = []
@@ -791,7 +830,7 @@ struct DashboardNoteEditor: NSViewRepresentable {
                 ? textView.textStorage?.attributes(at: range.location, effectiveRange: nil) ?? [:]
                 : textView.typingAttributes
             let isEmpty = string.substring(with: range).trimmingCharacters(in: .newlines).isEmpty
-            if parent.sizesToContent, isEmpty,
+            if parent.editsPageFlow, isEmpty,
                commandSelector == #selector(NSTextView.insertNewline(_:)) || commandSelector == #selector(NSTextView.deleteBackward(_:)),
                let data = attributes[.notePageItem] as? Data,
                var item = try? JSONDecoder().decode(BoardItem.self, from: data), item.task != nil {
@@ -805,7 +844,7 @@ struct DashboardNoteEditor: NSViewRepresentable {
                 }
                 return true
             }
-            if parent.sizesToContent, attributes[.noteTableID] == nil {
+            if parent.editsPageFlow, attributes[.noteTableID] == nil {
                 let pageStyle = (attributes[.noteBlockStyle] as? String).flatMap(NoteParagraphStyle.init(rawValue:)) ?? .paragraph
                 if isEmpty, pageStyle.isList,
                    commandSelector == #selector(NSTextView.insertNewline(_:)) || commandSelector == #selector(NSTextView.deleteBackward(_:)) {
@@ -894,6 +933,7 @@ private final class NoteTextView: NSTextView {
     var showsPageTasks = false
     var onToggleTask: ((String) -> Void)?
     private var taskRegions: [(String, NSRect)] = []
+    private var taskElements: [PageTaskAccessibilityElement] = []
     // Each note owns its editing history; the window's title fields and other
     // editors must not become targets of these toolbar actions.
     private let noteUndoManager = UndoManager()
@@ -969,22 +1009,37 @@ private final class NoteTextView: NSTextView {
     override func mouseDown(with event: NSEvent) {
         let point = convert(event.locationInWindow, from: nil)
         if let (id, _) = taskRegions.first(where: { $0.1.insetBy(dx: -4, dy: -4).contains(point) }), isEditable {
-            window?.makeFirstResponder(self)
-            if let storage = textStorage {
-                storage.enumerateAttributes(in: NSRange(location: 0, length: storage.length)) { values, range, stop in
-                    guard (values[.noteBlockID] as? String ?? values[.noteTableID] as? String) == id else { return }
-                    setSelectedRange(NSRange(location: range.location, length: 0))
-                    stop.pointee = true
-                }
-            }
-            onToggleTask?(id)
+            toggleTask(id)
             return
         }
         super.mouseDown(with: event)
     }
 
+    @discardableResult fileprivate func toggleTask(_ id: String) -> Bool {
+        guard isEditable, let onToggleTask else { return false }
+        window?.makeFirstResponder(self)
+        if let storage = textStorage {
+            storage.enumerateAttributes(in: NSRange(location: 0, length: storage.length)) { values, range, stop in
+                guard (values[.noteBlockID] as? String ?? values[.noteTableID] as? String) == id else { return }
+                setSelectedRange(NSRange(location: range.location, length: 0))
+                stop.pointee = true
+            }
+        }
+        onToggleTask(id)
+        return true
+    }
+
+    /// The checkboxes are drawn, so expose each one to VoiceOver as a checkbox
+    /// that names its task and can be pressed.
+    override func accessibilityChildren() -> [Any]? {
+        let children = super.accessibilityChildren() ?? []
+        return taskElements.isEmpty ? children : children + taskElements
+    }
+
     private func drawPageTasks() {
         taskRegions.removeAll()
+        var tasks: [(id: String, label: String, done: Bool, frame: NSRect)] = []
+        defer { updateTaskElements(tasks) }
         guard showsPageTasks, let storage = textStorage, let window else { return }
         var drawn = Set<String>()
         storage.enumerateAttribute(.notePageItem, in: NSRange(location: 0, length: storage.length)) { value, range, _ in
@@ -996,6 +1051,10 @@ private final class NoteTextView: NSTextView {
             let line = convert(window.convertFromScreen(screen), from: nil)
             let frame = NSRect(x: 3, y: line.midY - 6, width: 12, height: 12)
             taskRegions.append((id, frame))
+            let paragraph = (storage.string as NSString).paragraphRange(for: NSRange(location: range.location, length: 0))
+            let text = (storage.string as NSString).substring(with: paragraph)
+                .replacingOccurrences(of: "\u{2028}", with: " ").trimmingCharacters(in: .whitespacesAndNewlines)
+            tasks.append((id, text.isEmpty ? "Task" : String(text.prefix(120)), task.status == .done, frame))
             let outline = NSBezierPath(roundedRect: frame, xRadius: 3, yRadius: 3)
             DashboardColors.noteForeground().withAlphaComponent(0.6).setStroke()
             outline.lineWidth = 1
@@ -1010,6 +1069,27 @@ private final class NoteTextView: NSTextView {
                 check.stroke()
             }
         }
+    }
+
+    private func updateTaskElements(_ tasks: [(id: String, label: String, done: Bool, frame: NSRect)]) {
+        let changed = tasks.count != taskElements.count
+            || zip(tasks, taskElements).contains { task, element in
+                task.id != element.taskID || task.label != element.accessibilityLabel()
+                    || task.done != element.isChecked
+            }
+        if changed {
+            taskElements = tasks.map { task in
+                let element = PageTaskAccessibilityElement(taskID: task.id, owner: self)
+                element.setAccessibilityLabel(task.label)
+                element.isChecked = task.done
+                return element
+            }
+        }
+        for (task, element) in zip(tasks, taskElements) {
+            element.setAccessibilityFrameInParentSpace(task.frame.insetBy(dx: -4, dy: -4))
+            element.setAccessibilityEnabled(isEditable)
+        }
+        if changed { NSAccessibility.post(element: self, notification: .layoutChanged) }
     }
 
     private func drawHighlights(in rect: NSRect) {
@@ -1041,6 +1121,31 @@ private final class NoteTextView: NSTextView {
                 return true
             }
         }
+    }
+}
+
+/// A drawn Page task checkbox, as VoiceOver sees it.
+private final class PageTaskAccessibilityElement: NSAccessibilityElement {
+    let taskID: String
+    weak var owner: NoteTextView?
+    var isChecked = false {
+        didSet { setAccessibilityValue(NSNumber(value: isChecked ? 1 : 0)) }
+    }
+
+    init(taskID: String, owner: NoteTextView) {
+        self.taskID = taskID
+        self.owner = owner
+        super.init()
+        setAccessibilityRole(.checkBox)
+        setAccessibilityParent(owner)
+        setAccessibilityValue(NSNumber(value: 0))
+        setAccessibilityHelp("Completes or reopens this task.")
+    }
+
+    override func accessibilityPerformPress() -> Bool {
+        // Accessibility actions arrive on the main thread.
+        let owner = owner, id = taskID
+        return MainActor.assumeIsolated { owner?.toggleTask(id) ?? false }
     }
 }
 

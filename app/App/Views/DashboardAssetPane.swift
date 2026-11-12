@@ -81,7 +81,6 @@ struct DashboardAssetPane: View {
                             focusesTitleOnAppear: note.id == newlyCreatedNoteID,
                             onInitialFocusHandled: { onNewNoteFocusHandled(note.id) },
                             onOpenNote: { assets.openNote($0) },
-                            onCanvasContext: { assets.canvasContexts[note.id] = $0 },
                             onOpenSession: onOpenSession
                         ).id(id)
                     } else {

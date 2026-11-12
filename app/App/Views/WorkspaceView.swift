@@ -402,10 +402,12 @@ struct WorkspaceView: View {
         }
     }
 
+    /// Reads the stored record's kind, never the draft: typing in any note must
+    /// not invalidate the whole workspace or decode the document again.
     private var presentsCanvas: Bool {
         guard destination == .workspace, assets.tabs.isPresented,
               let note = selectedNote else { return false }
-        return NoteDocument.decode(model.noteDraft(for: note).content).kind == .canvas
+        return assets.kind(of: note) == .canvas
     }
 
     private func desktopShell(layout: DashboardLayoutState) -> some View {
@@ -415,6 +417,8 @@ struct WorkspaceView: View {
         let showRightRailButton = sidebarStyle != .split
             ? !layout.showsRightRail && singleSidebarSide == .right
             : !layout.showsRightRail
+
+        let presentsCanvas = self.presentsCanvas
 
         return HStack(spacing: presentsCanvas ? 0 : DashboardMetrics.shellGap) {
             if layout.showsLeftRail {
