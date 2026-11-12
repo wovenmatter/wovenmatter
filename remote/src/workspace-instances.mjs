@@ -194,7 +194,9 @@ export function createWorkspaceInstances(options) {
       // SSE can remain silent while idle; cancellation still closes the upstream.
       response.once('close', () => { upstream.destroy(); done() })
       request.once('aborted', () => upstream.destroy())
-      request.pipe(upstream)
+      // A signed member's body was read to verify its signature.
+      if (request.wovenBody) upstream.end(request.wovenBody)
+      else request.pipe(upstream)
     })
   }
   async function handle(request, response, url) {
