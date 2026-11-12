@@ -78,7 +78,7 @@ extension WorkspaceDatabase {
           "desktop_activity_index", "desktop_activity_index_schema", "desktop_message_revisions", "workspace_tool_settings",
           // Federation, replica and identity state in the former central library's namespace.
           "library_identity", "device_sync_changes", "device_sync_revisions",
-          "device_mutation_receipts", "device_workspace_publishers", "execution_workspaces",
+          "device_mutation_receipts", "execution_workspace_publishers", "execution_workspaces",
           "execution_journal", "execution_conversations", "execution_runs",
           "execution_adoptions", "execution_replica_context", "execution_retained_settlements",
           "execution_native_history", "execution_native_history_parts", "calendar_task_executors",

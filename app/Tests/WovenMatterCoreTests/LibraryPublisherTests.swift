@@ -266,14 +266,14 @@ struct LibraryPublisherTests {
   }
 
   private struct Fixture {
-    let persistence: PersistenceFixture, database: WorkspaceDatabase, identity: LibraryIdentity, workspace: ExecutionWorkspace, grant: LibraryWorkspacePublisherGrant
+    let persistence: PersistenceFixture, database: WorkspaceDatabase, identity: LibraryIdentity, workspace: ExecutionWorkspace, grant: ExecutionWorkspacePublisherGrant
     init() async throws {
       persistence = try PersistenceFixture()
       database = try await persistence.openDatabase()
       identity = try await database.libraryIdentity()
       workspace = try await database.registerExecutionWorkspace(.init(workspace: .init(id: UUID().uuidString.lowercased(), libraryID: identity.libraryID,
         ownerDeviceID: identity.hostDeviceID, kind: .linux, name: "Linux", executionDeviceID: UUID().uuidString.lowercased(), journalDeviceIDs: [identity.hostDeviceID, "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"])), deviceID: identity.hostDeviceID)
-      grant = try await database.issueLibraryWorkspacePublisher(workspaceID: workspace.id, endpoint: URL(string: "https://central.tail.ts.net/wovenmatter")!, deviceID: identity.hostDeviceID)
+      grant = try await database.issueExecutionWorkspacePublisher(workspaceID: workspace.id, endpoint: URL(string: "https://central.tail.ts.net/wovenmatter")!, deviceID: identity.hostDeviceID)
     }
     func remove() { persistence.remove() }
     func request<T: Encodable>(_ path: String, _ value: T, libraryID: String? = nil) throws -> LibraryHTTPRequest {

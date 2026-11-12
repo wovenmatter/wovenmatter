@@ -15,9 +15,9 @@ struct LibraryToolBridgeTests {
     let workspace = try #require(await fixture.database.libraryConversationExecutionWorkspace(conversationID: historicalCaller))
     let workspaceID = try #require(UUID(uuidString: workspace.id))
     let identity = try await fixture.database.libraryIdentity()
-    let grant = try await fixture.database.issueLibraryWorkspaceMCP(workspaceID: workspace.id,
+    let grant = try await fixture.database.issueExecutionWorkspaceMCP(workspaceID: workspace.id,
       endpoint: URL(string: "https://central.tail.ts.net/wovenmatter")!, deviceID: identity.hostDeviceID)
-    let principal = try await fixture.database.authenticateLibraryWorkspaceMCP(bearer: grant.bearerToken)
+    let principal = try await fixture.database.authenticateExecutionWorkspaceMCP(bearer: grant.bearerToken)
     let start = Date(timeIntervalSince1970: floor(Date().timeIntervalSince1970) - 60)
     let task = WorkspaceCalendarTask(prompt: "Read the notes", configuration: .init(runtimeKind: .codex,
       workspaceID: workspaceID, title: "Read notes", nativeWorkingDirectory: "/home/.woven-matter", tools: .init(enabled: [.notes])))
@@ -42,7 +42,7 @@ struct LibraryToolBridgeTests {
     }
     _ = try await fixture.database.prepareLibraryScheduledMCP(.init(run: run,
       eventRevision: event.calendar.revision, nativeSessionID: "native-scheduled-session"), principal: principal)
-    try await fixture.database.authorizeLibraryWorkspaceMCPCaller(conversationID: run.sessionID, principal: principal)
+    try await fixture.database.authorizeExecutionWorkspaceMCPCaller(conversationID: run.sessionID, principal: principal)
     try await fixture.database.authorizeLibraryTool(call, deviceID: executor)
     var forged = run; forged.task.configuration.tools = .init(enabled: [.notes, .executor])
     await #expect(throws: (any Error).self) {
@@ -57,22 +57,22 @@ struct LibraryToolBridgeTests {
     let workspace = try #require(await fixture.database.libraryConversationExecutionWorkspace(conversationID: caller))
     let identity = try await fixture.database.libraryIdentity()
     let endpoint = URL(string: "https://central.tail.ts.net/wovenmatter")!
-    let original = try await fixture.database.issueLibraryWorkspaceMCP(workspaceID: workspace.id,
+    let original = try await fixture.database.issueExecutionWorkspaceMCP(workspaceID: workspace.id,
       endpoint: endpoint, deviceID: identity.hostDeviceID)
-    let principal = try await fixture.database.authenticateLibraryWorkspaceMCP(bearer: original.bearerToken)
-    let replacement = try await fixture.database.issueLibraryWorkspaceMCP(workspaceID: workspace.id,
+    let principal = try await fixture.database.authenticateExecutionWorkspaceMCP(bearer: original.bearerToken)
+    let replacement = try await fixture.database.issueExecutionWorkspaceMCP(workspaceID: workspace.id,
       endpoint: endpoint, deviceID: identity.hostDeviceID)
-    #expect(try await fixture.database.libraryWorkspaceMCPMatches(workspaceID: workspace.id,
+    #expect(try await fixture.database.executionWorkspaceMCPMatches(workspaceID: workspace.id,
       grantID: replacement.grantID, endpoint: endpoint))
     await #expect(throws: (any Error).self) {
-      _ = try await fixture.database.authenticateLibraryWorkspaceMCP(bearer: original.bearerToken)
+      _ = try await fixture.database.authenticateExecutionWorkspaceMCP(bearer: original.bearerToken)
     }
     await #expect(throws: (any Error).self) {
-      try await fixture.database.authorizeLibraryWorkspaceMCPCaller(conversationID: caller, principal: principal)
+      try await fixture.database.authorizeExecutionWorkspaceMCPCaller(conversationID: caller, principal: principal)
     }
-    try await fixture.database.revokeLibraryWorkspaceMCP(workspaceID: workspace.id, deviceID: identity.hostDeviceID)
+    try await fixture.database.revokeExecutionWorkspaceMCP(workspaceID: workspace.id, deviceID: identity.hostDeviceID)
     await #expect(throws: (any Error).self) {
-      _ = try await fixture.database.authenticateLibraryWorkspaceMCP(bearer: replacement.bearerToken)
+      _ = try await fixture.database.authenticateExecutionWorkspaceMCP(bearer: replacement.bearerToken)
     }
   }
 
@@ -113,7 +113,7 @@ struct LibraryToolBridgeTests {
           conversation: .init(id: conversationID, title: "Device agent", runtimeKind: "piDurable"))
       ])
       if kind == .linux {
-        let grant = try await database.issueLibraryWorkspacePublisher(workspaceID: workspace.id,
+        let grant = try await database.issueExecutionWorkspacePublisher(workspaceID: workspace.id,
           endpoint: URL(string: "https://central.tail.ts.net/wovenmatter")!, deviceID: identity.hostDeviceID)
         let path = "/v1/federation/publisher/journal"
         let request = LibraryHTTPRequest(method: "POST", target: path,

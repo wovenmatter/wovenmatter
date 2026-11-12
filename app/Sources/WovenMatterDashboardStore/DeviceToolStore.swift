@@ -18,7 +18,7 @@ extension WorkspaceDatabaseConnection {
         device_id TEXT NOT NULL, request_id TEXT NOT NULL, conversation_id TEXT NOT NULL,
         fingerprint BLOB NOT NULL, response BLOB, PRIMARY KEY(device_id,request_id)
       );
-      CREATE TABLE IF NOT EXISTS device_workspace_mcp_grants (
+      CREATE TABLE IF NOT EXISTS execution_workspace_mcp_grants (
         workspace_id TEXT PRIMARY KEY, digest BLOB NOT NULL UNIQUE, payload BLOB NOT NULL
       );
       CREATE TABLE IF NOT EXISTS device_scheduled_mcp_callers (
@@ -66,7 +66,7 @@ extension WorkspaceDatabaseConnection {
       throw LibraryAPIError(code: "wrong_owner", message: "Sync this device's conversation before using the central library tools.")
     }
     if workspace.kind == .linux {
-      guard try activeLibraryWorkspaceMCPGrantUnlocked(workspaceID: workspaceID, executionDeviceID: deviceID) else {
+      guard try activeExecutionWorkspaceMCPGrantUnlocked(workspaceID: workspaceID, executionDeviceID: deviceID) else {
         throw LibraryAPIError(code: "unauthorized", message: "This execution workspace has no current library MCP grant.")
       }
     }

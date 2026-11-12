@@ -13,8 +13,8 @@ extension WorkspaceDatabaseConnection {
     ("companion_command_receipts", "device_command_receipts"),
     ("companion_draft_receipts", "device_draft_receipts"),
     ("companion_tool_receipts", "device_tool_receipts"),
-    ("companion_workspace_mcp_grants", "device_workspace_mcp_grants"),
-    ("companion_workspace_publishers", "device_workspace_publishers"),
+    ("companion_workspace_mcp_grants", "execution_workspace_mcp_grants"),
+    ("companion_workspace_publishers", "execution_workspace_publishers"),
     ("companion_scheduled_mcp_callers", "device_scheduled_mcp_callers"),
     ("companion_message_provenance", "device_message_provenance"),
     ("companion_saved_artifacts", "device_saved_artifacts"),
@@ -64,12 +64,22 @@ extension WorkspaceDatabaseConnection {
     for (old, new) in Self.legacyCompanionTables where tables.contains(old) {
       // A newer table only exists if a build of this change already ran; it
       // then holds the current state.
-      if tables.contains(new) { try executeUnlocked("DROP TABLE \(Self.peerQuote(old))"); continue }
+      if tables.contains(new) {
+        try executeUnlocked("DROP TABLE \(Self.peerQuote(old))")
+        for bookkeeping in ["paired_library_rows", "paired_library_frontier", "paired_library_reassert", "paired_library_seeded"]
+          where tables.contains(bookkeeping) {
+          try toolsExecuteUnlocked("DELETE FROM \(bookkeeping) WHERE table_name=?", [old])
+        }
+        continue
+      }
       try executeUnlocked("ALTER TABLE \(Self.peerQuote(old)) RENAME TO \(Self.peerQuote(new))")
       for bookkeeping in ["paired_library_rows", "paired_library_frontier", "paired_library_reassert", "paired_library_seeded"]
         where tables.contains(bookkeeping) {
         try toolsExecuteUnlocked("UPDATE \(bookkeeping) SET table_name=? WHERE table_name=?", [new, old])
       }
+      // Pending, quarantine and conflict IDs are hashes of the old payload
+      // text. They are only local de-duplication keys: a peer that sends the
+      // same record again queues it once more, and applying it is idempotent.
       for bookkeeping in ["paired_library_rows", "paired_library_frontier", "paired_library_changes", "paired_library_pending",
                           "paired_library_quarantine", "paired_library_conflicts"] where tables.contains(bookkeeping) {
         try toolsExecuteUnlocked("""

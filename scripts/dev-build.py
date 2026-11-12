@@ -148,8 +148,8 @@ LEGACY_TABLES = {
     "companion_library_identity": "library_identity", "companion_versions": "device_sync_revisions",
     "companion_changes": "device_sync_changes", "companion_mutation_receipts": "device_mutation_receipts",
     "companion_command_receipts": "device_command_receipts", "companion_draft_receipts": "device_draft_receipts",
-    "companion_tool_receipts": "device_tool_receipts", "companion_workspace_mcp_grants": "device_workspace_mcp_grants",
-    "companion_workspace_publishers": "device_workspace_publishers",
+    "companion_tool_receipts": "device_tool_receipts", "companion_workspace_mcp_grants": "execution_workspace_mcp_grants",
+    "companion_workspace_publishers": "execution_workspace_publishers",
     "companion_scheduled_mcp_callers": "device_scheduled_mcp_callers",
     "companion_message_provenance": "device_message_provenance", "companion_saved_artifacts": "device_saved_artifacts",
     "companion_artifact_uploads": "device_artifact_uploads", "companion_artifact_chunks": "device_artifact_chunks",
@@ -215,8 +215,8 @@ def disconnect_snapshot(file, *, device_id, execution_root, published_root):
         # uploads, grants, schedule executors and replica roles. What devices
         # produced (revisions, changes, projected history, artifacts) is kept.
         source_state = {"library_identity", "device_mutation_receipts", "device_command_receipts",
-                        "device_draft_receipts", "device_tool_receipts", "device_workspace_publishers",
-                        "device_workspace_mcp_grants", "device_scheduled_mcp_callers", "execution_journal",
+                        "device_draft_receipts", "device_tool_receipts", "execution_workspace_publishers",
+                        "execution_workspace_mcp_grants", "device_scheduled_mcp_callers", "execution_journal",
                         "execution_adoptions", "execution_receipts", "execution_replica_context",
                         "execution_retained_settlements", "device_artifact_uploads", "calendar_task_executors",
                         "calendar_run_publishers", "calendar_published_runs", "device_calendar_receipts",

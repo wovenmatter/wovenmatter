@@ -18,7 +18,7 @@ struct CentralExecutionClientTests {
             libraryID: identity.libraryID, workspaceID: workspace.id)
         let origin = ExecutionJournalEntry(workspaceID: workspace.id, originSequence: 1, conversationID: conversation.id,
             kind: .conversation, conversation: conversation)
-        let publisher = try await fixture.database.issueLibraryWorkspacePublisher(workspaceID: workspace.id,
+        let publisher = try await fixture.database.issueExecutionWorkspacePublisher(workspaceID: workspace.id,
             endpoint: URL(string: "https://central.ts.net/wovenmatter")!, deviceID: identity.hostDeviceID)
         try await publish([origin], grant: publisher, database: fixture.database)
         let remote = CentralExecutionFixtureTransport(workspace: workspace, conversation: conversation, entries: [origin])
@@ -80,7 +80,7 @@ struct CentralExecutionClientTests {
             libraryID: identity.libraryID, workspaceID: workspace.id)
         let origin = ExecutionJournalEntry(workspaceID: workspace.id, originSequence: 1, conversationID: conversation.id,
             kind: .conversation, conversation: conversation)
-        let publisher = try await fixture.database.issueLibraryWorkspacePublisher(workspaceID: workspace.id,
+        let publisher = try await fixture.database.issueExecutionWorkspacePublisher(workspaceID: workspace.id,
             endpoint: URL(string: "https://central.ts.net/wovenmatter")!, deviceID: identity.hostDeviceID)
         try await publish([origin], grant: publisher, database: fixture.database)
         let history = ExecutionJournalEntry(workspaceID: workspace.id, originSequence: 2, conversationID: conversation.id,
@@ -112,7 +112,7 @@ struct CentralExecutionClientTests {
         #expect(client.errors[workspace.id] != nil)
         #expect(await fixture.recorder.deliveries.isEmpty)
     }
-    private func publish(_ entries: [ExecutionJournalEntry], grant: LibraryWorkspacePublisherGrant, database: WorkspaceDatabase) async throws {
+    private func publish(_ entries: [ExecutionJournalEntry], grant: ExecutionWorkspacePublisherGrant, database: WorkspaceDatabase) async throws {
         let path = "/v1/federation/publisher/journal"
         let request = LibraryHTTPRequest(method: "POST", target: path,
             headers: ["authorization": "Bearer " + grant.token, "x-woven-workspace": grant.libraryID],

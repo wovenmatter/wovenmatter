@@ -1338,7 +1338,7 @@ final class RemoteWorkspacesModel {
         try requireCurrent(identity)
     }
 
-    func executionPublisherStatus(configuration: RemoteWorkspaceConfiguration) async throws -> LibraryWorkspacePublisherStatus {
+    func executionPublisherStatus(configuration: RemoteWorkspaceConfiguration) async throws -> ExecutionWorkspacePublisherStatus {
         let identity = try requestIdentity(configuration)
         let client = try await serviceClient(for: configuration)
         try requireCurrent(identity)
@@ -1346,7 +1346,7 @@ final class RemoteWorkspacesModel {
         try requireCurrent(identity)
         return value
     }
-    func configureExecutionPublisher(configuration: RemoteWorkspaceConfiguration, grant: LibraryWorkspacePublisherGrant) async throws {
+    func configureExecutionPublisher(configuration: RemoteWorkspaceConfiguration, grant: ExecutionWorkspacePublisherGrant) async throws {
         let identity = try requestIdentity(configuration)
         guard grant.workspaceID == configuration.id.uuidString.lowercased() else { throw RemoteWorkspaceClientError.invalidResponse("The publisher belongs to another execution workspace.") }
         let client = try await serviceClient(for: configuration)
@@ -1356,7 +1356,7 @@ final class RemoteWorkspacesModel {
         guard value.configured, value.grantID == grant.grantID else { throw RemoteWorkspaceClientError.invalidResponse("The execution owner did not save its publisher grant.") }
     }
 
-    func executionMCPLibraryStatus(configuration: RemoteWorkspaceConfiguration) async throws -> LibraryWorkspacePublisherStatus {
+    func executionMCPLibraryStatus(configuration: RemoteWorkspaceConfiguration) async throws -> ExecutionWorkspacePublisherStatus {
         let identity = try requestIdentity(configuration)
         let client = try await serviceClient(for: configuration)
         try requireCurrent(identity)

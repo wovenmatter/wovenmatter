@@ -113,7 +113,7 @@ struct FederatedExecutionFlowTests {
       executionDeviceID: mac.credential.deviceID,
       journalDeviceIDs: [phone.credential.deviceID, mac.credential.deviceID])
     workspace = try await fixture.database.registerExecutionWorkspace(.init(workspace: workspace), deviceID: identity.hostDeviceID)
-    let grant = try await fixture.database.issueLibraryWorkspacePublisher(workspaceID: workspace.id,
+    let grant = try await fixture.database.issueExecutionWorkspacePublisher(workspaceID: workspace.id,
       endpoint: URL(string: "https://central.test-tailnet.ts.net/wovenmatter")!, deviceID: identity.hostDeviceID)
     let conversationID = UUID().uuidString.lowercased()
     let conversation = LibraryConversation(id: conversationID, title: "One execution owner", workspaceID: workspace.id)

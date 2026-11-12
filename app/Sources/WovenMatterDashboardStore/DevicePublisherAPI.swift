@@ -5,7 +5,7 @@ import WovenMatterCore
 public enum DevicePublisherAPI {
   static func handle(_ request: LibraryHTTPRequest, path: String, database: WorkspaceDatabase) async throws -> LibraryHTTPResponse {
     guard request.method == "POST", let bearer = request.bearer else { return .error("unauthorized", "A workspace publisher is required.", status: 401) }
-    let principal = try await database.authenticateLibraryWorkspacePublisher(bearer: bearer)
+    let principal = try await database.authenticateExecutionWorkspacePublisher(bearer: bearer)
     guard request.headers["x-woven-workspace"] == principal.libraryID else { return .error("library_mismatch", "This publisher belongs to another library.", status: 409) }
     switch path {
     case "/v1/federation/publisher/association":

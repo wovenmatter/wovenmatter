@@ -15,7 +15,7 @@ extension WorkspaceDatabaseConnection {
         id TEXT PRIMARY KEY, owner_device_id TEXT NOT NULL, revision INTEGER NOT NULL,
         deleted INTEGER NOT NULL DEFAULT 0, payload BLOB NOT NULL
       );
-      CREATE TABLE IF NOT EXISTS device_workspace_publishers (
+      CREATE TABLE IF NOT EXISTS execution_workspace_publishers (
         workspace_id TEXT PRIMARY KEY, digest BLOB NOT NULL UNIQUE, payload BLOB NOT NULL
       );
       CREATE TABLE IF NOT EXISTS execution_journal (

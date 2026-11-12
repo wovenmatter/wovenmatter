@@ -109,8 +109,8 @@ private extension DeviceAPI {
     /// `X-Woven-Workspace-ID` (so a Linux host needs no grant from any one Mac).
     /// `current` re-checks it during and after a long call.
     struct WorkspaceMCPCaller: Sendable {
-        let principal: LibraryWorkspaceMCPPrincipal
-        let current: @Sendable () async throws -> LibraryWorkspaceMCPPrincipal
+        let principal: ExecutionWorkspaceMCPPrincipal
+        let current: @Sendable () async throws -> ExecutionWorkspaceMCPPrincipal
     }
     func authenticateWorkspaceMCP(_ request: LibraryHTTPRequest) async throws -> Result<WorkspaceMCPCaller, LibraryAPIError> {
         if MemberRequestVerifier.isSigned(request.headers) {
@@ -124,23 +124,23 @@ private extension DeviceAPI {
                 return .failure(.init(code: "invalid_request", message: "Name the Linux workspace in X-Woven-Workspace-ID."))
             }
             let database = database
-            let current: @Sendable () async throws -> LibraryWorkspaceMCPPrincipal = {
+            let current: @Sendable () async throws -> ExecutionWorkspaceMCPPrincipal = {
                 guard await members.member(key.deviceID) != nil else { throw LibraryAPIError(code: "unauthorized", message: MemberRequestError.unknown.message) }
                 // Any Mac checks the same synced rows: the registry and the member list.
                 let workspace = try await database.libraryExecutionWorkspaces().first { $0.id == workspaceID }
                 let serving = if let workspace { await members.audience(for: workspace) } else { String?.none }
-                return try await database.libraryWorkspaceMCPMember(workspaceID: workspaceID, deviceID: key.deviceID, serving: serving)
+                return try await database.executionWorkspaceMCPMember(workspaceID: workspaceID, deviceID: key.deviceID, serving: serving)
             }
             return .success(.init(principal: try await current(), current: current))
         }
         guard let bearer = request.bearer else { return .failure(.init(code: "unauthorized", message: "A library MCP grant is required.")) }
-        let principal = try await database.authenticateLibraryWorkspaceMCP(bearer: bearer)
+        let principal = try await database.authenticateExecutionWorkspaceMCP(bearer: bearer)
         guard request.headers["x-woven-workspace"] == principal.libraryID else {
             return .failure(.init(code: "library_mismatch", message: "This MCP grant belongs to another library."))
         }
         let database = database
         return .success(.init(principal: principal, current: {
-            let current = try await database.authenticateLibraryWorkspaceMCP(bearer: bearer)
+            let current = try await database.authenticateExecutionWorkspaceMCP(bearer: bearer)
             guard current.grantID == principal.grantID else {
                 throw LibraryAPIError(code: "unauthorized", message: "The workspace's library MCP grant changed.")
             }
@@ -159,7 +159,7 @@ private extension DeviceAPI {
         }
         let principal = caller.principal
         let (message, conversationID, groups, captureID) = try mcpInput(request)
-        try await database.authorizeLibraryWorkspaceMCPCaller(conversationID: conversationID, principal: principal)
+        try await database.authorizeExecutionWorkspaceMCPCaller(conversationID: conversationID, principal: principal)
         let result = await WovenMCPServer.handle(message, contextID: captureID, allowedTools: mcpTools(groups: groups)) { call in
             await self.performWorkspaceMCP(call, conversationID: conversationID, groups: groups, caller: caller)
         }
@@ -200,7 +200,7 @@ private extension DeviceAPI {
         do {
             guard isActive() else { throw LibraryAPIError(code: "unavailable", message: "The library MCP host stopped.") }
             let current = try await caller.current()
-            try await database.authorizeLibraryWorkspaceMCPCaller(conversationID: conversationID, principal: current)
+            try await database.authorizeExecutionWorkspaceMCPCaller(conversationID: conversationID, principal: current)
             let request = LibraryToolRequest(conversationID: conversationID, request: call, enabledGroups: groups)
             try await database.authorizeLibraryTool(request, deviceID: current.executionDeviceID)
             let response = try await commands.executeTool(request, deviceID: current.executionDeviceID)

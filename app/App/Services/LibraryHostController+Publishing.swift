@@ -40,10 +40,10 @@ extension LibraryHostController {
         let current = try await model.remoteWorkspaces.executionPublisherStatus(configuration: configuration)
         let publisherMatches: Bool
         if current.configured, let id = current.grantID {
-            publisherMatches = try await database.libraryWorkspacePublisherMatches(workspaceID: workspace.id, grantID: id, endpoint: endpoint)
+            publisherMatches = try await database.executionWorkspacePublisherMatches(workspaceID: workspace.id, grantID: id, endpoint: endpoint)
         } else { publisherMatches = false }
         if !publisherMatches {
-            let grant = try await database.issueLibraryWorkspacePublisher(workspaceID: workspace.id, endpoint: endpoint, deviceID: identity.hostDeviceID)
+            let grant = try await database.issueExecutionWorkspacePublisher(workspaceID: workspace.id, endpoint: endpoint, deviceID: identity.hostDeviceID)
             try await model.remoteWorkspaces.configureExecutionPublisher(configuration: configuration, grant: grant)
         }
         // Library tools have a distinct, revocable grant. A previously valid
@@ -68,10 +68,10 @@ extension LibraryHostController {
         let mcp = try await model.remoteWorkspaces.executionMCPLibraryStatus(configuration: configuration)
         let grantMatches: Bool
         if mcp.configured, let id = mcp.grantID {
-            grantMatches = try await database.libraryWorkspaceMCPMatches(workspaceID: workspace.id, grantID: id, endpoint: endpoint)
+            grantMatches = try await database.executionWorkspaceMCPMatches(workspaceID: workspace.id, grantID: id, endpoint: endpoint)
         } else { grantMatches = false }
         if !grantMatches {
-            let grant = try await database.issueLibraryWorkspaceMCP(workspaceID: workspace.id, endpoint: endpoint, deviceID: identity.hostDeviceID)
+            let grant = try await database.issueExecutionWorkspaceMCP(workspaceID: workspace.id, endpoint: endpoint, deviceID: identity.hostDeviceID)
             var payload = try JSONDecoder().decode(GatewayJSONValue.self, from: JSONEncoder().encode(grant)).objectValue ?? [:]
             payload["toolSettings"] = toolSettings
             try await model.remoteWorkspaces.configureExecutionMCPLibrary(configuration: configuration, grant: .object(payload))

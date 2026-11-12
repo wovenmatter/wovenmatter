@@ -108,7 +108,7 @@ struct PairedLibraryTests {
     #expect(!tables.contains("desktop_local_acp_sessions"))
     #expect(!tables.contains("workspace_session_deliveries"))
     #expect(!tables.contains("workspace_session_timers"))
-    #expect(!tables.contains("device_workspace_publishers"))
+    #expect(!tables.contains("execution_workspace_publishers"))
     try await a.database.backUpBeforePeerSync()
     #expect(FileManager.default.fileExists(atPath: a.directory.appending(path: "Paired Mac Backups/before-peer-sync.sqlite").path))
     let route = PairedMacRoute(deviceID: a.id, libraryID: try await a.database.libraryID(), endpoint: URL(string: "https://air.example.ts.net:8443/wovenmatter")!, name: "Air")
