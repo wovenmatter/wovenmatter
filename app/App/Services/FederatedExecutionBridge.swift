@@ -96,6 +96,8 @@ extension ApplicationModel {
         if let service = backendApplicationService {
             Task { await service.invalidations.publish(scopes: [.execution], conversationIDs: ids) }
         }
+        // A headless background server shows nothing itself.
+        guard LocalExecutionRole.current != .backend else { return }
         for id in ids where federatedExecutionSnapshots[id] != nil { refreshLiveFederatedConversation(id) }
     }
 

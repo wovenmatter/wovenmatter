@@ -76,6 +76,12 @@ public actor MobileWorkspaceStream {
   }
 
   private func stateChanged(_ state: StreamConnection.State) async {
+    // The server must answer for the listed workspace.
+    if case .open(let hello) = state, hello.workspaceID != workspaceID || hello.libraryID != libraryID {
+      await connection.stop()
+      await update(.state(.waiting(.refused(status: 200, code: "wrong_workspace", message: "It answered as another workspace."))))
+      return
+    }
     await update(.state(state))
     guard case .open = state else { return }
     // Commands whose reply was lost are asked about, never resent. Not from

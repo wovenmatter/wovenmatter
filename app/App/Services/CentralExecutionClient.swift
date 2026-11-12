@@ -591,7 +591,13 @@ extension CentralExecutionClient {
         guard let stream = live[id] else { return }
         stream.state = state
         switch state {
-        case .open:
+        case .open(let hello):
+            // The server must answer for the registered workspace, as `identity()` does over HTTP.
+            guard hello.workspaceID == id, hello.libraryID == stream.workspace.libraryID else {
+                onlineWorkspaces.remove(id); errors[id] = "\(stream.workspace.name) answered as another workspace."
+                Task { await stream.connection.stop() }
+                return
+            }
             onlineWorkspaces.insert(id); errors.removeValue(forKey: id)
             // Commands whose reply was lost are resolved, never resent.
             let connection = stream.connection, journal = commandJournal
