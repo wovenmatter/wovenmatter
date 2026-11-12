@@ -56,6 +56,7 @@
 		B8416A7CAFF21DFFDD1C31FE /* ConversationHTMLRender.swift in Sources */ = {isa = PBXBuildFile; fileRef = AFFCF44C63E3FB28738DDDBD /* ConversationHTMLRender.swift */; };
 		BA3B128C748BA03FB46ED65D /* HomeDataPanes.swift in Sources */ = {isa = PBXBuildFile; fileRef = F9DC6AFFB36E3D25C0BC5540 /* HomeDataPanes.swift */; };
 		BF382BF4B802857E492E55B5 /* PairingPane.swift in Sources */ = {isa = PBXBuildFile; fileRef = 63E3FF0A1A4D7388AD06095B /* PairingPane.swift */; };
+		C39B8660E81052B7056B2CB3 /* CentralStreamTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 147C2293F3911085BB1966F2 /* CentralStreamTests.swift */; };
 		C506BE9478BB1899AE289BD9 /* ChatComposerSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9064A4008F6B1FA681C6905E /* ChatComposerSettings.swift */; };
 		C6F83AD756AA5D21CF96669A /* DeviceScheduledExecution.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7F4CE24FB44A7412B33FDC4 /* DeviceScheduledExecution.swift */; };
 		C74D7A3593792BEB244EE148 /* ConversationMessageLayout.swift in Sources */ = {isa = PBXBuildFile; fileRef = F42C4725F26049BF633BA1D6 /* ConversationMessageLayout.swift */; };
@@ -104,6 +105,7 @@
 		0AAB721C7AC79332D1EB02B1 /* ConversationPresentationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationPresentationTests.swift; sourceTree = "<group>"; };
 		11D878B18930E942902ED24F /* MobileUITests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = MobileUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		122C704E61D4F27F662004FB /* ConversationWorkTranscript.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationWorkTranscript.swift; sourceTree = "<group>"; };
+		147C2293F3911085BB1966F2 /* CentralStreamTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CentralStreamTests.swift; sourceTree = "<group>"; };
 		151DEDFDADF83947B4793187 /* MobileDictation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MobileDictation.swift; sourceTree = "<group>"; };
 		15D0B09B75B5B7A44E01A628 /* MemberMacsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MemberMacsTests.swift; sourceTree = "<group>"; };
 		1D52378DC37CD45FB5D18279 /* NotePane.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotePane.swift; sourceTree = "<group>"; };
@@ -280,6 +282,7 @@
 		73427ED5F7AAF368045755A5 /* MobileAppTests */ = {
 			isa = PBXGroup;
 			children = (
+				147C2293F3911085BB1966F2 /* CentralStreamTests.swift */,
 				0AAB721C7AC79332D1EB02B1 /* ConversationPresentationTests.swift */,
 				EFF31C3347539F15762797F2 /* DeviceBackgroundLifecycleTests.swift */,
 				FB322F7867D268FCD9DF2235 /* ExecutionRoutingTests.swift */,
@@ -545,6 +548,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				C39B8660E81052B7056B2CB3 /* CentralStreamTests.swift in Sources */,
 				94AE8D08417DAFB689A8997C /* ConversationPresentationTests.swift in Sources */,
 				D2163EB03C9EB64BA89ABB68 /* DeviceBackgroundLifecycleTests.swift in Sources */,
 				C954498139610491C70D768C /* ExecutionRoutingTests.swift in Sources */,

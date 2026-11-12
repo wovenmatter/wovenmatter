@@ -28,8 +28,8 @@ extension MobileModel {
     let connection = try HTTPSLibraryTransport(credential: paired, metadata: deviceMetadata, performer: httpPerformer)
     connectionGeneration = UUID()
     connectionRefreshTask?.cancel(); connectionRefreshTask = nil
-    for task in workspacePollTasks.values { task.cancel() }
-    workspacePollTasks = [:]
+    for task in workspaceReadTasks.values { task.cancel() }
+    workspaceReadTasks = [:]
     closeWorkspaceStreams()
     let previousEngine = engine
     credential = nil; transport = nil; engine = nil; online = false
@@ -53,8 +53,8 @@ extension MobileModel {
     defer { pairingInProgress = false }
     connectionGeneration = UUID()
     connectionRefreshTask?.cancel(); connectionRefreshTask = nil
-    for task in workspacePollTasks.values { task.cancel() }
-    workspacePollTasks = [:]
+    for task in workspaceReadTasks.values { task.cancel() }
+    workspaceReadTasks = [:]
     closeWorkspaceStreams()
     let previousEngine = engine
     let previousTransport = transport
@@ -80,14 +80,20 @@ extension MobileModel {
     } catch { pairingError = error.localizedDescription }
   }
 
+  /// The foreground library sync cadence. It is the only timer, and it reads
+  /// no execution workspace.
+  static let librarySyncInterval: Duration = .seconds(15)
+
   static func connectionRetryDelay(_ failures: Int) -> TimeInterval {
     min(120, 5 * pow(2, Double(min(max(failures - 1, 0), 5))))
   }
 
   func connectionDidBecomeActive() {
     connectionForeground = true
+    // Every stream reconnects now, before the library sync below finishes.
+    resumeWorkspaceStreams()
     guard automaticSynchronization, !fixture, !isolatedTestHost else { return }
-    centralRefreshAfter = .distantPast; workspaceRefreshAfter = [:]; centralProvidersRefreshDue = true
+    centralRefreshAfter = .distantPast; centralProvidersRefreshDue = true
     requestSynchronization(immediately: true)
   }
 
@@ -117,19 +123,17 @@ extension MobileModel {
         await refreshExecutionWorkspaces()
         if let engine { synchronizationStatus = await engine.synchronizationStatus() }
       }
-      // A viewed running chat receives live activity: pushed by a streamed
-      // workspace, polled from any other. Idle workspaces and failed
-      // connections each have their own longer deadline before any network work.
-      let polled = workspaceStreams[selectedExecutionWorkspaceID] == nil
-      let interval: Duration = polled && tab == .chat && (activeRunID != nil || awaitingRemoteTurn) ? .seconds(2) : .seconds(15)
-      do { try await Task.sleep(for: interval) } catch { return }
+      // Library sync every 15 s (notes, calendar, dictation and history, which
+      // no stream carries), and the registry's streams reconciled. Live views
+      // of sessions stream; nothing here reads an execution workspace.
+      do { try await Task.sleep(for: Self.librarySyncInterval) } catch { return }
     }
   }
 
-  private func connectionDidBecomeReachable() {
+  func connectionDidBecomeReachable() {
     guard connectionForeground else { return }
     reconnectWorkspaceStreams()
-    centralRefreshAfter = .distantPast; workspaceRefreshAfter = [:]; centralProvidersRefreshDue = true
+    centralRefreshAfter = .distantPast; centralProvidersRefreshDue = true
     requestSynchronization(immediately: true)
   }
 

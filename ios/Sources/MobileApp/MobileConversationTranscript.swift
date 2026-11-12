@@ -8,7 +8,8 @@ struct MobileConversationTranscript: View {
   let disclosureState: ConversationTranscriptState
   var agentSourceTitle: @MainActor (String) -> String? = { _ in nil }
   var openAgentSource: @MainActor (String) -> Void = { _ in }
-  let loadDetails: @MainActor (String) async throws -> AgentRunActivity?
+  /// (runID, activityID) to the activity's complete projection.
+  let loadDetails: @MainActor (String, String) async throws -> AgentRunActivity?
 
   var body: some View {
     let rows = MobileConversationProjection.rows(transcript)
@@ -28,7 +29,10 @@ struct MobileConversationTranscript: View {
                   .font(.caption).foregroundStyle(DashboardPalette.mutedForeground)
               }
             }
-            ConversationUserBubble(content: message.content) { EmptyView() }
+            let attachments = message.attachments ?? []
+            ConversationUserBubble(content: MobileConversationProjection.displayedPrompt(message), hasAttachments: !attachments.isEmpty) {
+              if !attachments.isEmpty { MobileMessageAttachments(attachments: attachments) }
+            }
           }
         }
       case .turn(let turn):
@@ -46,11 +50,39 @@ struct MobileConversationTranscript: View {
         }
         .environment(\.conversationTranscriptState, disclosureState)
         .environment(\.conversationActivityDetails, { runID, activityID in
-          if let full = try await loadDetails(activityID) { return full }
+          if let full = try await loadDetails(runID, activityID) { return full }
           return turn.records.last { $0.runID == runID && $0.activity.id == activityID }?.activity
         })
       }
     }
+  }
+}
+
+/// A message's attached files as its workspace received them, shown like the
+/// desktop's sent-attachment chips. The files stay on that workspace.
+struct MobileMessageAttachments: View {
+  let attachments: [LibraryAttachmentReference]
+  var body: some View {
+    LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), spacing: 6)], spacing: 6) {
+      ForEach(Array(attachments.enumerated()), id: \.offset) { _, attachment in
+        HStack(spacing: 7) {
+          Image(systemName: attachment.mimeType.hasPrefix("image/") ? "photo" : "doc")
+            .font(.caption.weight(.semibold)).foregroundStyle(DashboardPalette.primary)
+          VStack(alignment: .leading, spacing: 1) {
+            Text(attachment.name).lineLimit(1)
+            if let size = attachment.byteCount {
+              Text(ByteCountFormatter.string(fromByteCount: size, countStyle: .file))
+                .font(.caption2).foregroundStyle(DashboardPalette.mutedForeground)
+            }
+          }
+        }.font(.caption.weight(.medium))
+          .padding(.horizontal, 9).padding(.vertical, 7)
+          .frame(maxWidth: .infinity, alignment: .leading)
+          .background(DashboardPalette.background.opacity(0.75), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+          .accessibilityElement(children: .combine)
+          .accessibilityLabel("Attached file " + attachment.name)
+      }
+    }.frame(maxWidth: .infinity, alignment: .leading)
   }
 }
 
@@ -159,6 +191,12 @@ struct MobileConversationProjection {
     for activity in transcript.activities { appendTurn(activity.runID) }
     for run in transcript.runs ?? [] { appendTurn(run.id) }
     return rows
+  }
+
+  /// What a user row shows, as on the desktop: a goal continuation is named,
+  /// and the goal guidance appended to a prompt is not shown.
+  static func displayedPrompt(_ message: LibraryMessage) -> String {
+    message.senderKind == "goal" ? "Continuing toward the goal." : WorkspaceGoal.displayPrompt(message.content)
   }
 
   private static func parsedDate(_ text: String?) -> Date? {
