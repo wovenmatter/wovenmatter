@@ -7,16 +7,17 @@ import WovenMatterDashboardStore
 /// (`ExecutionWindowStreamServer`). A conversation this Mac runs is read from
 /// its own tables, exactly as for a member's WebSocket. A conversation another
 /// machine runs is relayed from what this server already holds for it: the
-/// one WebSocket it keeps to that machine (`CentralExecutionClient`), or, for
-/// a machine without a stream (and a client-mode Dev build's live host), the
-/// execution reads it makes on the window's behalf while the chat is open.
-/// Either way the window receives the same items.
+/// one WebSocket it keeps to that machine (`CentralExecutionClient`), read
+/// again only when that stream pushes or an action finishes. A machine this
+/// server cannot reach shows the history library sync brought, marked offline;
+/// nothing polls it. Only a client-mode Dev build, which has no member key for
+/// its live host's stream, reads its live host on the window's behalf while a
+/// chat is open (`CentralLibraryClientModel`).
 @MainActor
 final class BackendWindowStreamSource: ExecutionConversationSource {
-    /// How often a chat on a machine without a stream is read while open,
-    /// connected and not; what the window itself used to poll.
-    static let unstreamedInterval: Duration = .seconds(1)
-    static let unstreamedOfflineInterval: Duration = .seconds(5)
+    /// How often a client-mode Dev build reads an open chat from its live host.
+    static let clientModeInterval: Duration = .seconds(1)
+    static let clientModeOfflineInterval: Duration = .seconds(5)
 
     private unowned let model: ApplicationModel
     /// Told when relayed state changed, so its subscriptions compare again.
@@ -29,6 +30,8 @@ final class BackendWindowStreamSource: ExecutionConversationSource {
     /// Relayed reads in flight; true when another change arrived meanwhile.
     private var reading: [String: Bool] = [:]
     private var pollers: [String: Task<Void, Never>] = [:]
+    /// Open chats read on a timer: only a client-mode Dev build has any.
+    var polledConversationIDs: Set<String> { Set(pollers.keys) }
 
     init(model: ApplicationModel) { self.model = model }
 
@@ -151,18 +154,17 @@ final class BackendWindowStreamSource: ExecutionConversationSource {
         changed([id])
     }
 
-    /// A machine without a stream pushes nothing: its open chat is read here,
-    /// on the window's behalf, for as long as the window follows it.
+    /// A client-mode Dev build's live host pushes nothing to it: its open chat
+    /// is read here, on the window's behalf, for as long as the window follows
+    /// it. Every other build follows the background server's streams.
     private func updatePoller(_ id: String) {
-        let streamed = snapshots[id]?.streamed == true
-        guard !streamed else { pollers.removeValue(forKey: id)?.cancel(); return }
+        guard model.liveLibraryClient != nil else { pollers.removeValue(forKey: id)?.cancel(); return }
         guard pollers[id] == nil else { return }
         pollers[id] = Task { [weak self] in
             while !Task.isCancelled {
                 let online = self?.snapshots[id]?.online == true
-                do { try await Task.sleep(for: online ? Self.unstreamedInterval : Self.unstreamedOfflineInterval) } catch { return }
+                do { try await Task.sleep(for: online ? Self.clientModeInterval : Self.clientModeOfflineInterval) } catch { return }
                 guard let self, self.openCounts[id] != nil else { return }
-                if self.snapshots[id]?.streamed == true { self.pollers.removeValue(forKey: id); return }
                 await self.read(id)
             }
         }

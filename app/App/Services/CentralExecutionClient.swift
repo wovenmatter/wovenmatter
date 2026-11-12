@@ -9,9 +9,12 @@ import LibraryClient
 import WovenMatterCore
 import WovenMatterDashboardStore
 
-/// The authoritative Mac is also an observer of foreign execution owners.
-/// Direct control keeps a separate validated history cache; only an execution
-/// owner's publisher can add that history to the authoritative database.
+/// This Mac's reach into every other machine's sessions: one member-signed
+/// stream per workspace (docs/architecture/WOVEN_EVERYWHERE.md, "Streaming").
+/// The live view (open chats' transcripts, questions and approvals,
+/// capabilities, session settings) and commands move on the stream; history
+/// arrives only by library sync. Nothing here reads a workspace on a timer: a
+/// machine that is not connected shows what the library holds, marked offline.
 @MainActor @Observable
 final class CentralExecutionClient {
     typealias Provision = @MainActor (String) async throws -> ExecutionCredential
@@ -22,15 +25,14 @@ final class CentralExecutionClient {
     /// Opens the live stream to a `stream.v1` workspace (one signed socket per
     /// attempt), or nil when this Mac cannot sign for it yet.
     typealias MakeStream = @MainActor (ExecutionWorkspace) async throws -> StreamConnection.Connect?
-    private var foreignHistoryJournals: [String: WorkspaceJournal] = [:]
     private let database: WorkspaceDatabase
+    /// Command identities and receipts, so a retried command is never run twice.
     private let commandJournal: WorkspaceJournal
     private let provision: Provision
     private let makeTransport: MakeTransport
     private let makeSignedTransport: MakeSignedTransport?
     private let loadCredential: @MainActor (String) throws -> DirectWorkspaceCredential?
     private let saveCredential: @MainActor (DirectWorkspaceCredential) throws -> Void
-    private let onChange: @MainActor () async -> Void
     private let makeStream: MakeStream?
     private let streamConfiguration: StreamConnection.Configuration
     /// The member list's revision: a change lets a stream closed with 4401 try again.
@@ -46,14 +48,11 @@ final class CentralExecutionClient {
     /// Chats open in a window, with how many windows hold each.
     private var held: [String: Int] = [:]
     private var lastMemberRevision: String?
-    private var changeScheduled = false
     private var wakeMonitor: StreamWakeMonitor?
-    private var sessionCache: [String: CachedSession] = [:]
     private var transports: [String: any ExecutionWorkspaceTransport] = [:]
-    private var nextBackgroundRefresh: [String: Date] = [:]
-    private var backgroundRefreshInProgress = false
+    /// `connectRegisteredWorkspaces` is running; true when asked again meanwhile.
+    private var connecting: Bool?
     private var transportEndpoints: [String: URL] = [:]
-    private var refreshTasks: [String: Task<Void, any Error>] = [:]
     private(set) var transcripts: [String: LibraryTranscript] = [:]
     private(set) var capabilities: [String: HarnessCapabilities] = [:]
     /// Session settings a watched chat's `conversation` stream sent.
@@ -68,112 +67,89 @@ final class CentralExecutionClient {
          saveCredential: @escaping @MainActor (DirectWorkspaceCredential) throws -> Void = CentralExecutionCredentialVault.save,
          makeSignedTransport: MakeSignedTransport? = nil,
          makeStream: MakeStream? = nil, memberRevision: (@MainActor () async -> String?)? = nil,
-         streamConfiguration: StreamConnection.Configuration = .init(),
-         onChange: @escaping @MainActor () async -> Void = {}) throws {
+         streamConfiguration: StreamConnection.Configuration = .init()) throws {
         self.makeSignedTransport = makeSignedTransport
         self.database = database; self.commandJournal = try WorkspaceJournal(file: commandJournalURL)
-        self.provision = provision; self.makeTransport = makeTransport; self.onChange = onChange
+        self.provision = provision; self.makeTransport = makeTransport
         self.loadCredential = loadCredential; self.saveCredential = saveCredential
         self.makeStream = makeStream; self.memberRevision = memberRevision; self.streamConfiguration = streamConfiguration
         if makeStream != nil { wakeMonitor = StreamWakeMonitor { [weak self] in self?.reconnectStreams() } }
     }
 
+    /// The workspace that runs the conversation: from the library, or, for a
+    /// session this Mac just created there before its history arrived by
+    /// library sync, from the creation command this Mac recorded.
     func workspace(conversationID: String) async throws -> ExecutionWorkspace? {
-        var descriptor = try await database.libraryConversationExecutionWorkspace(conversationID: conversationID)
-        if descriptor == nil {
-            let cached = await commandJournal.snapshot()
-            if !cached.deletedConversationIDs.contains(conversationID), let owner = cached.conversationWorkspaceIDs[conversationID] {
-                descriptor = try await database.libraryExecutionWorkspaces().first { $0.id == owner && !$0.deleted }
-            }
+        if let descriptor = try await database.libraryConversationExecutionWorkspace(conversationID: conversationID) { return descriptor }
+        let created = await commandJournal.snapshot().commands.values.first {
+            $0.command.kind == .createSession && $0.command.conversationID == conversationID && $0.receipt?.status != .rejected
         }
-        return descriptor
+        guard let owner = created?.command.workspaceID else { return nil }
+        return try await database.libraryExecutionWorkspaces().first { $0.id == owner && !$0.deleted }
     }
 
-    /// Background observer refresh does not depend on a selected conversation.
-    /// Only enrolled endpoints participate; this never launches a workspace or
-    /// publishes another execution owner's history.
-    func refreshRegisteredWorkspaces() async {
-        guard !backgroundRefreshInProgress else { return }
-        backgroundRefreshInProgress = true
-        defer { backgroundRefreshInProgress = false }
-        guard let workspaces = try? await database.libraryExecutionWorkspaces() else { return }
-        await applyMemberRevision()
-        var streamed: Set<String> = []
-        for workspace in workspaces where !workspace.deleted && workspace.endpoint != nil && workspace.retainedHistory != true {
-            guard !Task.isCancelled else { return }
-            // A `stream.v1` workspace pushes its journal, questions and approvals:
-            // nothing here polls it, connected or not.
-            if await ensureStream(workspace) != nil { streamed.insert(workspace.id); continue }
-            guard !workspace.capabilities.contains("history.central.v1") else { continue }
-            guard nextBackgroundRefresh[workspace.id].map({ $0 <= Date() }) ?? true else { continue }
-            do {
-                if let pending = refreshTasks[workspace.id] { try await pending.value }
-                else {
-                    let task = Task { try await self.replay(workspace: workspace) }
-                    refreshTasks[workspace.id] = task
-                    do { try await task.value; refreshTasks.removeValue(forKey: workspace.id) }
-                    catch { refreshTasks.removeValue(forKey: workspace.id); throw error }
-                }
-                pending[workspace.id] = try await transport(for: workspace).pending()
-                onlineWorkspaces.insert(workspace.id); errors.removeValue(forKey: workspace.id)
-                nextBackgroundRefresh[workspace.id] = Date().addingTimeInterval(10)
-            } catch {
-                if case MobileConnectionError.revoked = error { transports.removeValue(forKey: workspace.id) }
-                onlineWorkspaces.remove(workspace.id); errors[workspace.id] = error.localizedDescription
-                nextBackgroundRefresh[workspace.id] = Date().addingTimeInterval(45)
+    /// Opens the stream of every registered workspace that has one and closes
+    /// the streams of workspaces that left the registry. Run when the registry
+    /// or the member list changes (`LibraryHostController.connectExecutionStreams`);
+    /// it reads only this library, never a workspace, and each stream then
+    /// reconnects by itself.
+    func connectRegisteredWorkspaces() async {
+        guard connecting == nil else { connecting = true; return }
+        repeat {
+            connecting = false
+            guard let workspaces = try? await database.libraryExecutionWorkspaces() else { break }
+            await applyMemberRevision()
+            var streamed: Set<String> = []
+            for workspace in workspaces where streamEligible(workspace) {
+                if await ensureStream(workspace) != nil { streamed.insert(workspace.id) }
             }
-        }
-        for id in Array(live.keys) where !streamed.contains(id) { await closeStream(id) }
+            for id in Array(live.keys) where !streamed.contains(id) { await closeStream(id) }
+        } while connecting == true
+        connecting = nil
     }
 
+    /// The chat's live state. On a stream this subscribes the chat and
+    /// returns what the stream holds, waiting briefly for a first snapshot;
+    /// while the machine is not connected it shows what the library holds and
+    /// throws why. A workspace this Mac holds no stream to (one without
+    /// `stream.v1`, or that cannot yet verify this Mac) shows what the library
+    /// holds, marked offline with the reason. Nothing is read from the workspace.
     func refresh(conversationID: String) async throws {
         guard let descriptor = try await workspace(conversationID: conversationID) else { return }
-        if let stream = await ensureStream(descriptor) {
-            // Live: the open chat is subscribed and its state is pushed. This
-            // returns what the stream holds, waiting briefly for a first snapshot.
-            await watch(conversationID, on: stream)
-            await stream.synchronized(conversationID, within: .seconds(5))
-            if onlineWorkspaces.contains(descriptor.id), transcripts[conversationID] != nil { return }
-            await restoreSaved(conversationID: conversationID, descriptor: descriptor)
-            throw LibraryAPIError(code: "workspace_unavailable", message: errors[descriptor.id] ?? "\(descriptor.name) is not connected yet.")
+        guard let stream = await ensureStream(descriptor) else {
+            onlineWorkspaces.remove(descriptor.id)
+            if errors[descriptor.id] == nil { errors[descriptor.id] = Self.unstreamedProblem(descriptor) }
+            await restoreSaved(conversationID: conversationID)
+            return
         }
-        do {
-            if let task = refreshTasks[descriptor.id] { try await task.value }
-            else {
-                let task = Task { try await self.replay(workspace: descriptor) }
-                refreshTasks[descriptor.id] = task
-                do { try await task.value; refreshTasks.removeValue(forKey: descriptor.id) }
-                catch { refreshTasks.removeValue(forKey: descriptor.id); throw error }
-            }
-            let transport = try await transport(for: descriptor)
-            // Live streaming state is a projection only. Durable history arrives
-            // through replay, where origin identity and sequence are validated.
-            let transcript = try await transport.transcript(conversationID)
-            guard transcript.conversationID == conversationID else { throw MobileConnectionError.invalidResponse }
-            transcripts[conversationID] = Self.markCursor(transcript, origin: "owner")
-            capabilities[conversationID] = try await transport.capabilities(conversationID)
-            pending[descriptor.id] = try await transport.pending()
-            onlineWorkspaces.insert(descriptor.id); errors.removeValue(forKey: descriptor.id)
-        } catch {
-            if case MobileConnectionError.revoked = error { transports.removeValue(forKey: descriptor.id) }
-            onlineWorkspaces.remove(descriptor.id); errors[descriptor.id] = error.localizedDescription
-            await restoreSaved(conversationID: conversationID, descriptor: descriptor)
-            throw error
-        }
+        await watch(conversationID, on: stream)
+        await stream.synchronized(conversationID, within: .seconds(5))
+        if onlineWorkspaces.contains(descriptor.id), transcripts[conversationID] != nil { return }
+        await restoreSaved(conversationID: conversationID)
+        throw LibraryAPIError(code: "workspace_unavailable", message: errors[descriptor.id] ?? "\(descriptor.name) is not connected yet.")
     }
 
-    /// An observer may be ahead of the owner's last central publication.
-    /// Prefer that durable cache only while its origin cursor is newer.
-    private func restoreSaved(conversationID: String, descriptor: ExecutionWorkspace) async {
-        let cached = await (foreignHistoryJournals[descriptor.libraryID] ?? commandJournal).snapshot()
-        let publishedCursor = (try? await database.libraryExecutionOriginCursor(workspaceID: descriptor.id)) ?? 0
-        if (cached.directCursors[descriptor.id] ?? 0) > publishedCursor, let saved = cached.transcripts[conversationID] {
-            transcripts[conversationID] = Self.markCursor(saved, origin: "owner")
-        } else if let saved = try? await database.libraryFederatedTranscript(conversationID: conversationID) {
-            transcripts[conversationID] = Self.markCursor(saved, origin: "library")
-        } else if let saved = cached.transcripts[conversationID] {
-            transcripts[conversationID] = Self.markCursor(saved, origin: "owner")
+    /// Last known state: the history library sync brought, which every device
+    /// holds. Without any, the chat keeps what its stream last sent.
+    private func restoreSaved(conversationID: String) async {
+        guard let saved = try? await database.libraryFederatedTranscript(conversationID: conversationID) else { return }
+        transcripts[conversationID] = Self.markCursor(saved, origin: "library")
+    }
+
+    /// Why a workspace has no live stream here.
+    static func unstreamedProblem(_ workspace: ExecutionWorkspace) -> String {
+        if workspace.retainedHistory == true {
+            return "\(workspace.name) is retained history here. Its chats stay readable; start a new session to run work."
         }
+        if workspace.kind == .ios {
+            return "Open Woven Matter on the device that owns this conversation to continue its on-device agent."
+        }
+        if workspace.deleted { return "\(workspace.name) was removed from this library. Its chats stay readable." }
+        if workspace.endpoint == nil { return "\(workspace.name) is not connected. Its chats show their saved history." }
+        if !workspace.capabilities.contains(StreamProtocol.capability) {
+            return "\(workspace.name) does not stream its sessions. Its chats show their saved history."
+        }
+        return "\(workspace.name) does not recognize this Mac yet. It does once the two devices synchronize their member list."
     }
 
 
@@ -237,45 +213,6 @@ final class CentralExecutionClient {
         guard remote.id == workspace.id, remote.libraryID == workspace.libraryID else { throw MobileStore.Failure.wrongWorkspace }
         transports[workspace.id] = transport; transportEndpoints[workspace.id] = remote.endpoint
         return transport
-    }
-
-    /// Where a workspace's replayed history is cached: the command journal for
-    /// this library, a separate journal per foreign library.
-    private func historyJournal(for workspace: ExecutionWorkspace) async throws -> WorkspaceJournal {
-        let identity = try await database.libraryIdentity()
-        if workspace.libraryID == identity.libraryID { return commandJournal }
-        if let existing = foreignHistoryJournals[workspace.libraryID] { return existing }
-        let journal = try WorkspaceJournal(file: database.supportDirectory.appending(path: "Peer History/" + workspace.libraryID + ".json"))
-        foreignHistoryJournals[workspace.libraryID] = journal
-        return journal
-    }
-
-    private func replay(workspace: ExecutionWorkspace) async throws {
-        if workspace.capabilities.contains("history.central.v1") { return }
-        let journal = try await historyJournal(for: workspace)
-        let transport = try await transport(for: workspace)
-        try await journal.upsertWorkspace(workspace, pending: false)
-        var changed = false
-        for _ in 0..<100 {
-            let cursor = await journal.snapshot().directCursors[workspace.id] ?? 0
-            let page = try await transport.events(after: cursor)
-            // Validates library, contiguous workspace sequence, immutable event
-            // identities and projection ownership in one durable transaction.
-            // Omitting localDeviceID keeps every received event cache-only.
-            try await journal.receiveWorkspace(page, workspaceID: workspace.id)
-            try await database.retainDirectPairedHistory(page, workspace: workspace)
-            changed = changed || !page.entries.isEmpty
-            if !page.hasMore { break }
-        }
-        let cached = await journal.snapshot()
-        for (id, owner) in cached.conversationWorkspaceIDs where owner == workspace.id {
-            if cached.deletedConversationIDs.contains(id) {
-                transcripts.removeValue(forKey: id)
-            } else if let transcript = cached.transcripts[id] {
-                transcripts[id] = Self.markCursor(transcript, origin: "owner")
-            }
-        }
-        if changed { await onChange() }
     }
 
     /// Creates a session on `workspace` with the caller's choices. A locked Pi
@@ -510,6 +447,8 @@ final class CentralExecutionClient {
                 throw LibraryAPIError(code: "workspace_unavailable", message: errors[workspace.id] ?? error.localizedDescription)
             }
         } else {
+            // A workspace without `stream.v1` (a client-mode Dev build's own
+            // execution) takes one signed request per command.
             let transport = try await transport(for: workspace)
             if let existing = try await transport.receipt(command.commandID) { receipt = existing }
             else { try beforeDispatch(); receipt = try await transport.command(command) }
@@ -522,10 +461,7 @@ final class CentralExecutionClient {
             throw LibraryAPIError(code: receipt.status == .rejected ? receipt.code ?? "execution_unconfirmed" : "execution_unconfirmed",
                 message: receipt.message ?? "The execution workspace has not confirmed this command. Its durable identity has been retained.")
         }
-        // A failed refresh cannot turn an acknowledged command into a failed send.
-        // The UI clears the draft after success and refreshes history independently.
-        // A streamed workspace pushes the result instead.
-        if stream == nil { try? await refresh(conversationID: command.conversationID ?? "") }
+        // The stream pushes the command's effect; history follows by library sync.
         return receipt
     }
 }
@@ -537,19 +473,15 @@ final class CentralExecutionClient {
 final class LiveWorkspace {
     let workspace: ExecutionWorkspace
     let connection: StreamConnection
-    /// Where its journal entries are cached; nil for a workspace with central history.
-    let journal: WorkspaceJournal?
     var subscription: StreamSubscription?
     var conversations: [String: StreamSubscription] = [:]
     var synchronizedConversations: Set<String> = []
     var state = StreamConnection.State.idle
-    /// A journal entry this Mac could not take; the journal replay resumes after this.
-    var journalRetryAt: Date?
     var stateTask: Task<Void, Never>?
     private var waiters: [String: [UUID: CheckedContinuation<Void, Never>]] = [:]
 
-    init(workspace: ExecutionWorkspace, connection: StreamConnection, journal: WorkspaceJournal?) {
-        self.workspace = workspace; self.connection = connection; self.journal = journal
+    init(workspace: ExecutionWorkspace, connection: StreamConnection) {
+        self.workspace = workspace; self.connection = connection
     }
 
     /// Returns once the open chat's first snapshot arrived, the connection
@@ -578,14 +510,8 @@ final class LiveWorkspace {
     func releaseAll() { for id in Array(waiters.keys) { release(id) } }
 }
 
-private struct CachedSession {
-    var runID: String?
-    var capabilities: HarnessCapabilities?
-    var value: SessionSettings
-}
-
 extension CentralExecutionClient {
-    /// Whether this workspace's live state is pushed by its stream rather than polled.
+    /// Whether this Mac holds a stream to the workspace.
     func isStreamed(_ workspaceID: String) -> Bool { live[workspaceID] != nil }
 
     /// Opens the workspace's stream now (a wait on one of its sessions), if it has one.
@@ -598,14 +524,12 @@ extension CentralExecutionClient {
     }
 
     /// The workspace's stream, opened on first use: one connection per
-    /// workspace, its `workspace` subscription replaying the journal after this
-    /// Mac's cursor. Nil when the workspace has no stream or this Mac cannot sign for it.
+    /// workspace and its `workspace` subscription (conversations, questions
+    /// and approvals; no journal, since history arrives by library sync). Nil
+    /// when the workspace has no stream or this Mac cannot sign for it.
     fileprivate func ensureStream(_ workspace: ExecutionWorkspace) async -> LiveWorkspace? {
         if let existing = live[workspace.id] {
-            if existing.workspace.endpoint == workspace.endpoint, streamEligible(workspace) {
-                await resumeJournalIfDue(existing)
-                return existing
-            }
+            if existing.workspace.endpoint == workspace.endpoint, streamEligible(workspace) { return existing }
             await closeStream(workspace.id)
         }
         guard streamEligible(workspace), let makeStream else { return nil }
@@ -615,24 +539,14 @@ extension CentralExecutionClient {
             connect = value
         } catch { errors[workspace.id] = error.localizedDescription; return nil }
         if let existing = live[workspace.id] { return existing }
-        var journal: WorkspaceJournal?
-        if !workspace.capabilities.contains("history.central.v1") {
-            do {
-                let value = try await historyJournal(for: workspace)
-                try await value.upsertWorkspace(workspace, pending: false)
-                journal = value
-            } catch { errors[workspace.id] = error.localizedDescription; return nil }
-        }
-        if let existing = live[workspace.id] { return existing }
         let connection = StreamConnection(configuration: streamConfiguration, connect: connect)
-        let stream = LiveWorkspace(workspace: workspace, connection: connection, journal: journal)
+        let stream = LiveWorkspace(workspace: workspace, connection: connection)
         live[workspace.id] = stream
         let id = workspace.id
         stream.stateTask = Task { [weak self] in
             for await state in connection.states { self?.streamState(state, workspaceID: id) }
         }
-        let after: Int64? = journal == nil ? nil : await journal?.snapshot().directCursors[id] ?? 0
-        stream.subscription = await connection.subscribe(.workspace, params: .init(after: after)) { [weak self] event in
+        stream.subscription = await connection.subscribe(.workspace, params: .init()) { [weak self] event in
             await self?.workspaceEvent(event, workspaceID: id) ?? .accepted
         }
         stream.state = .connecting
@@ -723,13 +637,6 @@ extension CentralExecutionClient {
         }
     }
 
-    private func resumeJournalIfDue(_ stream: LiveWorkspace) async {
-        guard let retry = stream.journalRetryAt, retry <= Date(), let journal = stream.journal, let subscription = stream.subscription else { return }
-        stream.journalRetryAt = nil
-        let cursor = await journal.snapshot().directCursors[stream.workspace.id] ?? 0
-        await stream.connection.resubscribe(subscription, params: .init(after: cursor))
-    }
-
     private func streamState(_ state: StreamConnection.State, workspaceID id: String) {
         guard let stream = live[id] else { return }
         stream.state = state
@@ -780,38 +687,13 @@ extension CentralExecutionClient {
         default: break
         }
         switch item.payload {
-        case .journal(let value):
-            guard let journal = stream.journal else { return .accepted }
-            let workspace = stream.workspace
-            let cursor = await journal.snapshot().directCursors[id] ?? 0
-            let entry = value.entry
-            guard entry.originSequence > cursor else { return .accepted }
-            // One entry is one page: the journal validates library, contiguous
-            // sequence and identities exactly as for an HTTP replay page.
-            let page = ExecutionJournalPage(libraryID: workspace.libraryID, cursor: entry.originSequence, entries: [entry])
-            do { try await journal.receiveWorkspace(page, workspaceID: id) }
-            catch WorkspaceJournal.Failure.replayGap { return .resubscribe(.init(after: cursor)) }
-            catch {
-                // Keep questions and approvals live; try the journal again later.
-                errors[id] = error.localizedDescription
-                stream.journalRetryAt = Date().addingTimeInterval(45)
-                return .resubscribe(.init())
-            }
-            do { try await database.retainDirectPairedHistory(page, workspace: workspace) }
-            catch { errors[id] = error.localizedDescription }
-            let cached = await journal.snapshot()
-            let conversationID = entry.conversationID
-            if cached.deletedConversationIDs.contains(conversationID) { transcripts.removeValue(forKey: conversationID) }
-            else if stream.conversations[conversationID] == nil, let transcript = cached.transcripts[conversationID] {
-                transcripts[conversationID] = Self.markCursor(transcript, origin: "owner")
-            }
-            scheduleChange()
-            onLive([conversationID])
         case .pending(let value):
             let previous = Set((pending[id] ?? []).map(\.conversationID))
             pending[id] = value.interactions
             onLive(previous.union(value.interactions.map(\.conversationID)))
-        case .conversations, .transcript, .capabilities, .session, .owner, .synchronized, .serverState, .unknown:
+        // `journal` items come only to a subscriber that asks with `after`;
+        // this Mac takes history from library sync and never asks.
+        case .journal, .conversations, .transcript, .capabilities, .session, .owner, .synchronized, .serverState, .unknown:
             break
         }
         return .accepted
@@ -847,33 +729,12 @@ extension CentralExecutionClient {
         return .accepted
     }
 
-    /// Journal changes reach the library views at most every 250 ms.
-    private func scheduleChange() {
-        guard !changeScheduled else { return }
-        changeScheduled = true
-        Task { [weak self] in
-            try? await Task.sleep(for: .milliseconds(250))
-            guard let self else { return }
-            self.changeScheduled = false
-            await self.onChange()
-        }
-    }
-
-    /// The chat's model, thinking and permission settings. A streamed chat
-    /// whose server sends `session` items is never read: the item is current.
-    /// One whose server does not yet send them is read again only when its run
-    /// or capabilities change, or after an action.
-    func sessionSettings(conversationID: String, workspace: ExecutionWorkspace, force: Bool) async -> SessionSettings? {
-        guard onlineWorkspaces.contains(workspace.id) else { return nil }
-        if isStreamed(workspace.id), live[workspace.id]?.conversations[conversationID] != nil,
-           let streamed = sessions[conversationID] { return streamed }
-        let runID = transcripts[conversationID]?.activeRunID, current = capabilities[conversationID]
-        if !force, isStreamed(workspace.id), let cached = sessionCache[conversationID], cached.runID == runID, cached.capabilities == current {
-            return cached.value
-        }
-        guard case .session(let value) = try? await readWorkspace(conversationID: conversationID, request: .session(id: conversationID)) else { return nil }
-        sessionCache[conversationID] = .init(runID: runID, capabilities: current, value: value)
-        return value
+    /// The chat's model, thinking and permission settings, as its
+    /// `conversation` stream last sent them (on subscribe and whenever they
+    /// change). Nothing reads them: nil while the chat is not connected.
+    func sessionSettings(conversationID: String, workspace: ExecutionWorkspace) -> SessionSettings? {
+        guard onlineWorkspaces.contains(workspace.id), live[workspace.id]?.conversations[conversationID] != nil else { return nil }
+        return sessions[conversationID]
     }
 }
 
