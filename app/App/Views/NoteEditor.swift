@@ -85,7 +85,17 @@ final class DashboardNoteEditorController {
     func unbind(_ textView: NSTextView) {
         guard self.textView === textView else { return }
         removeUndoObservers()
-        textView.undoManager?.removeAllActions()
+        if let manager = textView.undoManager {
+            if (textView as? NoteTextView)?.sharedUndoManager === manager {
+                // Page flows share one history. Closing one flow, such as by
+                // collapsing its section, keeps the other flows' undo.
+                manager.removeAllActions(withTarget: textView)
+                textView.textStorage.map { manager.removeAllActions(withTarget: $0) }
+                manager.removeAllActions(withTarget: self)
+            } else {
+                manager.removeAllActions()
+            }
+        }
         self.textView = nil
         documentText = nil
         onChange = nil
@@ -604,6 +614,17 @@ struct DashboardNoteEditor: NSViewRepresentable {
         }
 
         func apply(_ document: NoteDocument, to textView: NSTextView) {
+            if parent.editsPageFlow, document != lastDocument, Self.flowText(lastDocument) == Self.flowText(document) {
+                // Only Component details changed. The text is unchanged, so keep
+                // its undo history and refresh the stored task metadata in place.
+                applying = true
+                synchronizePageAttributes(document, in: textView)
+                lastDocument = document
+                parent.controller.adopt(document)
+                synchronizedText = NSAttributedString(attributedString: textView.attributedString())
+                applying = false
+                return
+            }
             applying = true
             let previous = lastDocument
             if parent.editsPageFlow {
@@ -631,6 +652,17 @@ struct DashboardNoteEditor: NSViewRepresentable {
                                types: NSTextCheckingResult.CheckingType.spelling.rawValue, options: [:])
             applying = false
             parent.onSynchronize?()
+        }
+
+        /// What a Page flow shows: its blocks and each task's checkbox. Other
+        /// fields belong to Component details and never change the text.
+        private static func flowText(_ document: NoteDocument) -> NoteDocument {
+            var value = document
+            let items = (document.boardItems ?? [:])
+                .mapValues { BoardItem(task: $0.task.map { BoardTask(status: $0.status) }) }
+                .filter { $0.value != BoardItem() }
+            value.boardItems = items.isEmpty ? nil : items
+            return value
         }
 
         func emit(_ proposed: NoteDocument) {

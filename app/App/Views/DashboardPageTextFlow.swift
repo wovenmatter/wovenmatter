@@ -62,11 +62,21 @@ struct DashboardPageTextFlow: View {
                 let included = Set(local.blocks.map(\.id))
                 for block in updated.blocks where included.contains(block.id) {
                     if let changed = updated.boardItems?[block.id] {
-                        var item = local.boardItems?[block.id] ?? BoardItem()
-                        item.task = changed.task; item.review = changed.review; item.role = changed.role
-                        item.lastChange = changed.lastChange; item.sessions = changed.sessions
-                        if local.boardItems == nil { local.boardItems = [:] }
-                        local.boardItems?[block.id] = item
+                        if var item = local.boardItems?[block.id] {
+                            // Text editing only starts, ends or checks off a task. Details
+                            // belong to Component details, so restored text attributes
+                            // (such as from undo) cannot revert them.
+                            if let task = changed.task {
+                                if item.task == nil { item.task = task } else { item.task?.status = task.status }
+                            } else { item.task = nil }
+                            local.boardItems?[block.id] = item
+                        } else {
+                            var item = BoardItem()
+                            item.task = changed.task; item.review = changed.review; item.role = changed.role
+                            item.lastChange = changed.lastChange; item.sessions = changed.sessions
+                            if local.boardItems == nil { local.boardItems = [:] }
+                            local.boardItems?[block.id] = item
+                        }
                     } else if let previous = local.boardItems?[block.id], previous.task != nil {
                         local.boardItems?[block.id]?.task = nil
                     }

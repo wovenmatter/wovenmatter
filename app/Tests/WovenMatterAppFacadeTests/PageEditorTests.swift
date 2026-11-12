@@ -86,6 +86,23 @@ import WovenMatterCore
         #expect(saved().boardItems?["task"]?.task?.status == .todo)
     }
 
+    /// Typing in Component details changes only task metadata. The flow keeps
+    /// its text and history, and its stored metadata follows the new details.
+    @Test func detailsOnlyChangesRefreshTaskMetadataInPlace() {
+        let original = NoteDocument(kind: .canvas, blocks: [.richText(.init(id: "task", text: "Pack"))],
+            boardItems: ["task": .init(task: .init(assignee: "Trey"))])
+        let (coordinator, view, saved) = editor(original)
+        let text = NSAttributedString(attributedString: view.attributedString())
+        var details = original
+        details.boardItems?["task"]?.task?.outcome = "Bags are ready"
+        coordinator.apply(details, to: view)
+        #expect(view.string == text.string)
+        coordinator.toggleTask("task")
+        #expect(saved().boardItems?["task"]?.task?.status == .done)
+        #expect(saved().boardItems?["task"]?.task?.outcome == "Bags are ready")
+        #expect(saved().boardItems?["task"]?.task?.assignee == "Trey")
+    }
+
     @Test func legacyMultilineContentKeepsOneStableComponentWhileTyping() throws {
         let original = NoteDocument(kind: .canvas, blocks: [.richText(.init(id: "legacy", text: "First line\nSecond line"))],
             boardItems: ["legacy": .init(task: .init(outcome: "Existing outcome"))])
