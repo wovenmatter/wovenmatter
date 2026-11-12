@@ -74,7 +74,7 @@ struct DesktopJourneyTests {
         f.model.backendApplicationService = backend
         let preparation = FacadeGate(); preparation.hold()
         defer { f.model.backendApplicationService = nil; preparation.open() }
-        f.model.agentTools?.companionFixtureMCPConnection = { _, local, _ in await preparation.pass(); return local }
+        f.model.agentTools?.facadeFixtureMCPConnection = { _, local, _ in await preparation.pass(); return local }
         let client = UUID()
         let admission = AgentDispatchAdmission(instanceID: backend.instanceID, clientID: client, stopSequence: 0, observedStopRevision: 0)
         let request = try rpc(.sendMessageFenced(conversationID: id, input: .init(text: "Stopped"), noteID: nil, admission: admission))
@@ -213,13 +213,13 @@ struct DesktopJourneyTests {
             } }
         }
         _ = await f.model.canonicalActiveRunID(conversationID: id)
-        _ = try await f.model.companionCommands.sessionCapabilities(conversationID: id)
+        _ = try await f.model.libraryCommands.sessionCapabilities(conversationID: id)
         #expect(!trace.statements.contains { $0.contains("FROM dashboard_messages") })
         let backend = BackendApplicationService(model: f.model)
         #expect(await backend.handle(try rpc(.loadAgentDefaults(runtime: .codex, workspace: nil))).error == nil)
         #expect(await backend.handle(try rpc(.sessionMetadata(conversationID: id))).error == nil)
         let bodyQueryStart = trace.statements.count
-        let page = try await f.model.companionCommands.transcript(conversationID: id)
+        let page = try await f.model.libraryCommands.transcript(conversationID: id)
         #expect(page.messages.count == 80)
         #expect(page.activeRunID == nil)
         let olderCursor = try #require(page.olderCursor)
@@ -230,7 +230,7 @@ struct DesktopJourneyTests {
         #expect(firstBodyQueries.count == 1)
         #expect(firstBodyQueries.allSatisfy { $0.contains("LIMIT 81") })
         let nextQueryStart = trace.statements.count
-        let older = try await f.model.companionCommands.transcript(conversationID: id, before: olderCursor)
+        let older = try await f.model.libraryCommands.transcript(conversationID: id, before: olderCursor)
         #expect(!older.messages.isEmpty && older.olderCursor == nil)
         #expect(Set(page.messages.map(\.id)).isDisjoint(with: older.messages.map(\.id)))
         let messageIDs = Set((page.messages + older.messages).map(\.id))
@@ -247,7 +247,7 @@ struct DesktopJourneyTests {
         #expect(oversizedCursor.utf8.count > 2048)
         for invalid in [oversizedCursor, "not-base64!", Data("{}".utf8).base64EncodedString()] {
             await #expect(throws: (any Error).self) {
-                try await f.model.companionCommands.transcript(conversationID: id, before: invalid)
+                try await f.model.libraryCommands.transcript(conversationID: id, before: invalid)
             }
         }
         #expect(!trace.statements.dropFirst(invalidCursorStart).contains {
@@ -290,7 +290,7 @@ struct DesktopJourneyTests {
         try await f.model.refreshClientExecutionState()
         let send = WovenMatterToolRequest(arguments: ["sessions", "send", child.id, "--text", "Revoked work"])
         let preparation = FacadeGate(); preparation.hold(); defer { preparation.open() }
-        tools.companionFixtureMCPConnection = { _, local, _ in await preparation.pass(); return local }
+        tools.facadeFixtureMCPConnection = { _, local, _ in await preparation.pass(); return local }
         let sending = Task { await tools.handle(send, callerID: source) }
         await preparation.waitForArrival()
         _ = try await f.database.setSessionToolEnabled(.sessions, enabled: false, sessionID: source)

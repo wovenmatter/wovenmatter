@@ -286,7 +286,7 @@ struct StreamingPresentationTests {
                 #expect(requestedRun == runID && requestedActivity == activityID)
                 requests += 1
                 if requests == 1 {
-                    throw CompanionAPIError(code: "incomplete_activity_details", message: pendingMessage)
+                    throw LibraryAPIError(code: "incomplete_activity_details", message: pendingMessage)
                 }
                 return full
             })

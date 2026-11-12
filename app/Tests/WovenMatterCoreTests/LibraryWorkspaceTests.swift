@@ -1,0 +1,67 @@
+import WorkspaceFixtures
+import Foundation
+import Testing
+import WovenMatterCore
+@testable import WovenMatterDashboardStore
+
+@Suite("Library canonical persistence", .serialized)
+struct LibraryWorkspaceTests {
+
+  private let device = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+
+  @Test("mobile history, desktop drafts and agent restore share revisions and independent receipts")
+  func mobileHistoryAndAgentRestore() async throws {
+    let fixture = try PersistenceFixture(); defer { fixture.remove() }
+    let db = try await fixture.openDatabase()
+    let caller = try await db.createFixtureLocalACPSession(runtimeKind: .codex, title: "Writer", ownerDeviceID: UUID())
+    try await db.setSessionTools(.init(enabled: [.notes]), sessionID: caller)
+    let noteID = UUID().uuidString.lowercased()
+    let mobileCreate = LibraryMutation(deviceID: device, kind: .createNote, resourceID: noteID,
+      title: "Phone", content: try document("Offline writing"))
+    #expect(try await db.applyLibraryMutation(mobileCreate).status == .accepted)
+    let first = try await #require(db.noteAssetVersions(id: noteID).first)
+    #expect(first.revision == "1" && first.source == "device")
+    let draftID = UUID().uuidString.lowercased()
+    _ = try await db.persistNoteDraft(id: noteID, title: "Desktop", content: document("Desktop writing"),
+      expectedRevision: "1", operationID: draftID)
+    let mobileUpdate = LibraryMutation(deviceID: device, kind: .updateNote, resourceID: noteID,
+      expectedRevision: 2, title: "Phone again", content: try document("New phone writing"))
+    let accepted = try await db.applyLibraryMutation(mobileUpdate)
+    #expect(accepted.status == .accepted && accepted.note?.revision == 3)
+    let versions = try await db.noteAssetVersions(id: noteID)
+    #expect(versions.map(\.revision) == ["3", "2", "1"])
+    #expect(versions[1].title == "Desktop" && versions[1].source == "before-device-edit")
+    #expect(try await db.workspaceOverview().notes.first(where: { $0.id == noteID })?.revision == "3")
+    let restoreID = UUID().uuidString.lowercased()
+    let restored = try await db.restoreNoteAssetVersion(noteID: noteID, versionID: first.id,
+      expectedRevision: "3", callerConversationID: caller, requestID: restoreID)
+    #expect(restored.revision == "4" && restored.title == "Phone")
+    let afterRestore = try #require(try await db.libraryNote(id: noteID))
+    #expect(afterRestore.revision == 4 && afterRestore.content == mobileCreate.content)
+    let stale = LibraryMutation(deviceID: device, kind: .updateNote, resourceID: noteID,
+      expectedRevision: 3, title: "Stale", content: try document("Retain locally"))
+    #expect(try await db.applyLibraryMutation(stale).status == .conflict)
+    let agentRequest = NoteEditingRequest(command: .apply, noteID: noteID,
+      expectedRevision: restored.revision, operations: [.setTitle("Agent after restore")])
+    let agentID = UUID().uuidString.lowercased()
+    let agentResult = try await db.applyNoteEdits(agentRequest, callerConversationID: caller, requestID: agentID)
+    #expect(agentResult.revision == "5")
+    let reopened = try await fixture.openDatabase()
+    #expect(try await reopened.applyLibraryMutation(mobileUpdate) == accepted)
+    #expect(try await reopened.libraryDraftRevision(operationID: draftID) == "2")
+    let replay = try await reopened.restoreNoteAssetVersion(noteID: noteID, versionID: first.id,
+      expectedRevision: "3", callerConversationID: caller, requestID: restoreID)
+    #expect(replay.replayed == true && replay.revision == "4" && replay.document == nil)
+    #expect(try await reopened.libraryNote(id: noteID)?.title == "Agent after restore")
+    #expect(try await reopened.applyNoteEdits(agentRequest, callerConversationID: caller, requestID: agentID).replayed == true)
+    try await reopened.setSessionTools(.init(enabled: []), sessionID: caller)
+    await #expect(throws: WorkspaceToolError.disabled(.notes)) {
+      try await reopened.restoreNoteAssetVersion(noteID: noteID, versionID: first.id,
+        expectedRevision: "3", callerConversationID: caller, requestID: restoreID)
+    }
+  }
+
+  private func document(_ text: String) throws -> String {
+    try NoteDocument(blocks: [.richText(NoteRichTextBlock(text: text))]).encoded()
+  }
+}

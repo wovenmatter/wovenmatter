@@ -25,19 +25,19 @@ struct PeerIdentityFixture {
 @Suite("Signed paired Mac identity", .serialized)
 struct PairedMacIdentityTests {
   private let directory = FileManager.default.temporaryDirectory.appending(path: "paired-identity-" + UUID().uuidString)
-  private func store(_ name: String) throws -> CompanionAuthentication {
-    try CompanionAuthentication(fileURL: directory.appending(path: name + ".json"))
+  private func store(_ name: String) throws -> DeviceAuthentication {
+    try DeviceAuthentication(fileURL: directory.appending(path: name + ".json"))
   }
   private func secret() -> String { (0..<2).map { _ in UUID().uuidString }.joined() }
 
   /// Explicit approval on `issuer`, then the signed join and reciprocal grant.
   /// Returns the bearer `requester` uses at `issuer` and the one `issuer` uses at `requester`.
   @discardableResult
-  private func pair(_ requester: (CompanionAuthentication, PeerIdentityFixture), with issuer: (CompanionAuthentication, PeerIdentityFixture)) async throws -> (atIssuer: String, atRequester: String) {
+  private func pair(_ requester: (DeviceAuthentication, PeerIdentityFixture), with issuer: (DeviceAuthentication, PeerIdentityFixture)) async throws -> (atIssuer: String, atRequester: String) {
     await requester.0.useIdentity(requester.1.own); await issuer.0.useIdentity(issuer.1.own)
     let offer = try await issuer.0.createOffer(endpoint: issuer.1.route.endpoint)
     let response = try await issuer.0.pair(.init(token: offer.payload.token, deviceID: requester.1.id, deviceName: "Mac",
-      metadata: .init(kind: .mac), purpose: CompanionPairingPurpose.peerMac), workspaceID: issuer.1.library)
+      metadata: .init(kind: .mac), purpose: PairingPurpose.peerMac), workspaceID: issuer.1.library)
     let principal = try await issuer.0.authenticate(bearer: response.credential)
     let context = try await issuer.0.joinContext(for: principal)
     let reciprocal = secret()
@@ -51,7 +51,7 @@ struct PairedMacIdentityTests {
     return (response.credential, reciprocal)
   }
   /// The learned-peer handshake, performed directly against the target store.
-  private func handshake(_ requester: PeerIdentityFixture, at target: (CompanionAuthentication, PeerIdentityFixture)) async throws -> String {
+  private func handshake(_ requester: PeerIdentityFixture, at target: (DeviceAuthentication, PeerIdentityFixture)) async throws -> String {
     let request = PairedMacChallengeRequest(requesterDeviceID: requester.id, requesterLibraryID: requester.library,
       targetDeviceID: target.1.id, targetLibraryID: target.1.library)
     let challenge = try await target.0.issueChallenge(request, route: target.1.route, own: target.1.own)
@@ -76,7 +76,7 @@ struct PairedMacIdentityTests {
     #expect(await mini.isActiveMac(c.id))
     #expect(await mini.rosterName(for: phone.deviceID) == "Phone")
     for bearer in [thirdTokens.atIssuer, thirdTokens.atRequester, phone.credential] {
-      await #expect(throws: CompanionAPIError.self) { try await mini.authenticate(bearer: bearer) }
+      await #expect(throws: LibraryAPIError.self) { try await mini.authenticate(bearer: bearer) }
     }
     // C proves its own key directly to the Mini and receives a Mini-local grant.
     let local = try await handshake(c, at: (mini, b))
@@ -86,7 +86,7 @@ struct PairedMacIdentityTests {
     let phonePrincipal = try await air.authenticate(bearer: phone.credential, metadata: .init(kind: .mac))
     #expect(phonePrincipal.kind == .mac)
     #expect(await !air.isAuthorizedPeer(phonePrincipal))
-    await #expect(throws: CompanionAPIError.self) { try await air.joinContext(for: phonePrincipal) }
+    await #expect(throws: LibraryAPIError.self) { try await air.joinContext(for: phonePrincipal) }
   }
 
   @Test func handshakesRejectForgedSendersReplaysAndRestartedChallenges() async throws {
@@ -97,7 +97,7 @@ struct PairedMacIdentityTests {
     try await mini.mergeMembership(air.peerMembership(), own: b.own)
     let request = PairedMacChallengeRequest(requesterDeviceID: c.id, requesterLibraryID: c.library, targetDeviceID: b.id, targetLibraryID: b.library)
     // An unknown Mac cannot even obtain a challenge.
-    await #expect(throws: CompanionAPIError.self) {
+    await #expect(throws: LibraryAPIError.self) {
       try await mini.issueChallenge(.init(requesterDeviceID: stranger.id, requesterLibraryID: stranger.library, targetDeviceID: b.id, targetLibraryID: b.library),
         route: b.route, own: b.own)
     }
@@ -105,11 +105,11 @@ struct PairedMacIdentityTests {
     let forged = try await mini.issueChallenge(request, route: b.route, own: b.own)
     let operation = UUID().uuidString.lowercased()
     let bad = try stranger.key.signature(for: PairedMacHandshake.statement(challenge: forged, request: request, operationID: operation))
-    await #expect(throws: CompanionAPIError.self) {
+    await #expect(throws: LibraryAPIError.self) {
       try await mini.completeHandshake(.init(challengeID: forged.challengeID, request: request, operationID: operation, signature: bad), own: b.own)
     }
     let good = try c.key.signature(for: PairedMacHandshake.statement(challenge: forged, request: request, operationID: operation))
-    await #expect(throws: CompanionAPIError.self) {
+    await #expect(throws: LibraryAPIError.self) {
       try await mini.completeHandshake(.init(challengeID: forged.challengeID, request: request, operationID: operation, signature: good), own: b.own)
     }
     // A valid handshake cannot be replayed.
@@ -117,12 +117,12 @@ struct PairedMacIdentityTests {
     let signature = try c.key.signature(for: PairedMacHandshake.statement(challenge: challenge, request: request, operationID: operation))
     let handshake = PairedMacHandshake(challengeID: challenge.challengeID, request: request, operationID: operation, signature: signature)
     _ = try await mini.completeHandshake(handshake, own: b.own)
-    await #expect(throws: CompanionAPIError.self) { try await mini.completeHandshake(handshake, own: b.own) }
+    await #expect(throws: LibraryAPIError.self) { try await mini.completeHandshake(handshake, own: b.own) }
     // A restarted Mac never honors a challenge issued before the restart.
     let pending = try await mini.issueChallenge(request, route: b.route, own: b.own)
     let restarted = try store("mini")
     let late = try c.key.signature(for: PairedMacHandshake.statement(challenge: pending, request: request, operationID: operation))
-    await #expect(throws: CompanionAPIError.self) {
+    await #expect(throws: LibraryAPIError.self) {
       try await restarted.completeHandshake(.init(challengeID: pending.challengeID, request: request, operationID: operation, signature: late), own: b.own)
     }
   }
@@ -140,7 +140,7 @@ struct PairedMacIdentityTests {
     // The third Mac's distinct unpair arrives later: the fresh grant did not
     // acknowledge it, so it is revoked too.
     try await air.mergeMembership(third.peerMembership(), own: a.own)
-    await #expect(throws: CompanionAPIError.self) { try await air.authenticate(bearer: fresh.atIssuer) }
+    await #expect(throws: LibraryAPIError.self) { try await air.authenticate(bearer: fresh.atIssuer) }
     #expect(await !air.isActiveMac(b.id))
     // Pairing after learning both unpairs survives.
     let final = try await pair((mini, b), with: (air, a))
@@ -219,7 +219,7 @@ struct PairedMacIdentityTests {
     await air.useIdentity(a.own)
     let offer = try await air.createOffer(endpoint: a.route.endpoint)
     let response = try await air.pair(.init(token: offer.payload.token, deviceID: b.id, deviceName: "Mini", metadata: .init(kind: .mac),
-      purpose: CompanionPairingPurpose.peerMac), workspaceID: a.library)
+      purpose: PairingPurpose.peerMac), workspaceID: a.library)
     let principal = try await air.authenticate(bearer: response.credential)
     let context = try await air.joinContext(for: principal)
     let join = PairedMacJoin(route: b.route, returnCredential: secret(), publicKey: b.publicKey, acknowledgedRevocations: context,
@@ -230,19 +230,19 @@ struct PairedMacIdentityTests {
     // Any change after admission, such as another reciprocal bearer, is rejected.
     let changed = PairedMacJoin(route: b.route, returnCredential: secret(), publicKey: b.publicKey, acknowledgedRevocations: context,
       subjectSignature: join.subjectSignature, reciprocalRevocations: [])
-    await #expect(throws: CompanionAPIError.self) { try await air.admitJoin(principal, join: changed, own: a.own) }
+    await #expect(throws: LibraryAPIError.self) { try await air.admitJoin(principal, join: changed, own: a.own) }
     // A Mac admitted only through a learned handshake has no join authority.
     try await pair((third, c), with: (mini, b))
     try await air.mergeMembership(mini.peerMembership(), own: a.own)
     let learned = try await air.authenticate(bearer: handshake(c, at: (air, a)))
     #expect(await air.isAuthorizedPeer(learned))
-    await #expect(throws: CompanionAPIError.self) { try await air.joinContext(for: learned) }
-    await #expect(throws: CompanionAPIError.self) {
+    await #expect(throws: LibraryAPIError.self) { try await air.joinContext(for: learned) }
+    await #expect(throws: LibraryAPIError.self) {
       try await air.admitJoin(learned, join: .init(route: c.route, returnCredential: secret(), publicKey: c.publicKey, acknowledgedRevocations: [],
         subjectSignature: try c.subjectSignature(issuer: a, acknowledged: []), reciprocalRevocations: []), own: a.own)
     }
     // A pin is never replaced while that Mac is still admitted.
-    await #expect(throws: CompanionAPIError.self) {
+    await #expect(throws: LibraryAPIError.self) {
       try await air.enrollPeer(route: c.route, token: secret(), publicKey: b.publicKey,
         subjectSignature: try b.key.signature(for: PeerAdmission.subjectStatement(issuerDeviceID: a.id, issuerLibraryID: a.library, subjectDeviceID: c.id,
           subjectLibraryID: c.library, subjectPublicKey: b.publicKey, acknowledgedRevocations: [])), acknowledgedRevocations: [], own: a.own)
@@ -273,7 +273,7 @@ struct PairedMacIdentityTests {
     #expect(verified.name == "Renamed Mini" && verified.deviceID == b.id)
     // A revoked Mac answering for B's poisoned route never verifies.
     recorder.signer = revoked.own
-    await #expect(throws: CompanionAPIError.self) { try await network.verify(b.route, deviceID: a.id, token: tokens.atIssuer, pin: pin) }
+    await #expect(throws: LibraryAPIError.self) { try await network.verify(b.route, deviceID: a.id, token: tokens.atIssuer, pin: pin) }
     #expect(recorder.bearers.allSatisfy { $0 == nil })
   }
 

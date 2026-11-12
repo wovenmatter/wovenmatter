@@ -48,7 +48,7 @@ final class DashboardNoteDocumentCache {
         try document.validateEditableShape()
         let normalized = document.normalized()
         let source = try normalized.encoded()
-        guard source.utf8.count <= CompanionProtocol.maximumNoteBytes else {
+        guard source.utf8.count <= LibraryProtocol.maximumNoteBytes else {
             throw NoteDocumentSafetyError.tooLarge
         }
         self.noteID = noteID

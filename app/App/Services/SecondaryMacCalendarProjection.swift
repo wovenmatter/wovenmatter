@@ -1,7 +1,7 @@
-import CompanionClient
+import LibraryClient
 import Foundation
 import Darwin
-import WovenMatterCompanion
+import WovenMatterShared
 import WovenMatterDashboardStore
 
 /// The secondary Mac's native runtime needs a SQLite calendar, while shared
@@ -10,8 +10,8 @@ import WovenMatterDashboardStore
 @MainActor
 final class SecondaryMacCalendarProjection {
     private struct Baseline: Codable {
-        var replica: CompanionCalendarRecord
-        var native: CompanionCalendarRecord
+        var replica: LibraryCalendarRecord
+        var native: LibraryCalendarRecord
     }
     private struct Projection: Codable {
         var baselines: [String: Baseline] = [:]
@@ -19,12 +19,12 @@ final class SecondaryMacCalendarProjection {
     }
     private let database: WorkspaceDatabase
     private let replica: MobileStore
-    private let descriptor: CompanionExecutionWorkspace
+    private let descriptor: ExecutionWorkspace
     private let file: URL
     private var projection: Projection
     private var pending: (id: UUID, task: Task<Void, any Error>)?
 
-    init(database: WorkspaceDatabase, replica: MobileStore, descriptor: CompanionExecutionWorkspace, directory: URL) throws {
+    init(database: WorkspaceDatabase, replica: MobileStore, descriptor: ExecutionWorkspace, directory: URL) throws {
         self.database = database; self.replica = replica; self.descriptor = descriptor
         file = directory.appending(path: "calendar-replica-projection.json")
         projection = FileManager.default.fileExists(atPath: file.path)
@@ -73,7 +73,7 @@ final class SecondaryMacCalendarProjection {
         try persist()
         for record in await replica.calendar.allRecords() where conflicts[record.id] == nil {
             let previous = native[record.id]
-            let projected: CompanionCalendarRecord
+            let projected: LibraryCalendarRecord
             if let previous, sameContent(nativeRecord(record), previous) { projected = previous }
             else {
                 // Use the native revision captured before exporting. A tool edit
@@ -92,7 +92,7 @@ final class SecondaryMacCalendarProjection {
         try persist()
     }
 
-    private func sharedRecord(_ value: CompanionCalendarRecord) -> CompanionCalendarRecord {
+    private func sharedRecord(_ value: LibraryCalendarRecord) -> LibraryCalendarRecord {
         var result = value
         if result.ownerDeviceID == "central" { result.ownerDeviceID = nil }
         else if result.event.draft.task != nil, result.ownerDeviceID == nil {
@@ -103,7 +103,7 @@ final class SecondaryMacCalendarProjection {
         }
         return result
     }
-    private func nativeRecord(_ value: CompanionCalendarRecord) -> CompanionCalendarRecord {
+    private func nativeRecord(_ value: LibraryCalendarRecord) -> LibraryCalendarRecord {
         var result = value
         if result.event.draft.task != nil {
             if result.ownerDeviceID == nil { result.ownerDeviceID = "central" }
@@ -113,12 +113,12 @@ final class SecondaryMacCalendarProjection {
         }
         return result
     }
-    private func sameContent(_ left: CompanionCalendarRecord, _ right: CompanionCalendarRecord) -> Bool {
+    private func sameContent(_ left: LibraryCalendarRecord, _ right: LibraryCalendarRecord) -> Bool {
         var left = left, right = right
         left.event.revision = 0; right.event.revision = 0
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        func normalized(_ value: CompanionCalendarRecord) -> CompanionCalendarRecord {
+        func normalized(_ value: LibraryCalendarRecord) -> LibraryCalendarRecord {
             var value = value
             value.event.startsAt = formatter.date(from: formatter.string(from: value.event.startsAt))!
             value.event.draft.startsAt = formatter.date(from: formatter.string(from: value.event.draft.startsAt))!

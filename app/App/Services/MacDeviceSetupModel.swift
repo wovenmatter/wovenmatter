@@ -4,15 +4,15 @@ import WovenMatterDashboardStore
 
 @MainActor @Observable
 final class MacDeviceRow: Identifiable {
-    var mac: CompanionTailnetMac
+    var mac: TailnetMac
     nonisolated let id: String
-    var connection: CompanionMacSSHConnection
-    var installation: CompanionMacInstallation?
+    var connection: MacSSHConnection
+    var installation: MacInstallation?
     var error: String?
     var message: String?
     var busy = false
     var checking = false
-    init(_ mac: CompanionTailnetMac) { self.mac = mac; id = mac.id; connection = .init(alias: mac.sshName) }
+    init(_ mac: TailnetMac) { self.mac = mac; id = mac.id; connection = .init(alias: mac.sshName) }
 }
 
 @MainActor @Observable
@@ -22,12 +22,12 @@ final class MacDeviceSetupModel {
     private(set) var searching = false
     private(set) var searched = false
     private(set) var error: String?
-    private(set) var release: CompanionMacRelease?
+    private(set) var release: MacRelease?
     private(set) var releaseError: String?
-    private let management: CompanionMacManagement
-    private let getRelease: @Sendable () async throws -> CompanionMacRelease
+    private let management: MacManagement
+    private let getRelease: @Sendable () async throws -> MacRelease
     private let pollDelay: @Sendable () async throws -> Void
-    init(management: CompanionMacManagement = .init(), getRelease: (@Sendable () async throws -> CompanionMacRelease)? = nil,
+    init(management: MacManagement = .init(), getRelease: (@Sendable () async throws -> MacRelease)? = nil,
          pollDelay: @escaping @Sendable () async throws -> Void = { try await Task.sleep(for: .seconds(2)) }) {
         self.management = management
         self.getRelease = getRelease ?? { try await management.latestRelease() }

@@ -32,7 +32,7 @@ event queue, retry loop, or offline replay. Each request has a five-second timeo
 concurrent sends are bounded, and excess events are dropped. Six-hour timestamps
 limit attempts as well as successful signals, so a failure does not cause every
 subsequent edit to retry. Future eligible actions can make a new attempt.
-Companion sends do not block content synchronization or user actions.
+iPhone and iPad sends do not block content synchronization or user actions.
 
 Privacy choices persist and synchronize to every device: the preference row, with
 its library-wide analytics ID, is part of library sync between Macs and Linux hosts,
@@ -46,7 +46,7 @@ choices. Re-enabling collects only future activity, without resetting signal lim
 The toggle and policy link are at the bottom of General settings on Mac, iPhone,
 and iPad. The policy lives at [wovenmatter.com/privacy](https://wovenmatter.com/privacy).
 There is no user-facing analytics log. The central library retains bounded
-receipts solely to deduplicate attempts, never for delivery. Companion acceptance
+receipts solely to deduplicate attempts, never for delivery. Acceptance from an iPhone or iPad
 means the central library accepted the attempt, not that PostHog received it.
 
 Only platform, app version, OS major version, and updater target version are

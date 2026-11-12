@@ -4,7 +4,7 @@ import AppKit
 import WovenMatterCore
 import WovenMatterDashboardStore
 #else
-import WovenMatterCompanion
+import WovenMatterShared
 #endif
 
 /// Display-only run values shared by the desktop and the device-owned runtime.
@@ -873,7 +873,7 @@ private struct ConversationActivityDetails: View {
             if key.settled { ConversationActivityDetailCache[cacheKey] = value }
             if value == nil { error = "Details for this activity are no longer available." }
         } catch is CancellationError {
-        } catch let error as CompanionAPIError where error.code == "incomplete_activity_details" {
+        } catch let error as LibraryAPIError where error.code == "incomplete_activity_details" {
             guard !Task.isCancelled else { return }
             waitingForDetails = true
             self.error = nil

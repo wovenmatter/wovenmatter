@@ -393,9 +393,9 @@ extension WorkspaceDatabaseConnection {
     operationID: String? = nil
   ) throws -> Bool {
     try transaction {
-      if let operationID, let receipt = try companionDraftReceiptUnlocked(operationID: operationID) {
+      if let operationID, let receipt = try libraryDraftReceiptUnlocked(operationID: operationID) {
         guard receipt.id == id, receipt.title == title,
-              receipt.content == Self.companionContentFingerprint(content) else {
+              receipt.content == Self.libraryContentFingerprint(content) else {
           throw WorkspaceNoteMutationError.revisionConflict
         }
         return true
@@ -403,7 +403,7 @@ extension WorkspaceDatabaseConnection {
       let operatorID = try localMutationOperatorIDUnlocked()
       let note = try noteForEditingUnlocked(id: id, operatorID: operatorID)
       if note.title == title, note.content == content {
-        try saveCompanionDraftReceiptUnlocked(operationID: operationID, id: id,
+        try saveLibraryDraftReceiptUnlocked(operationID: operationID, id: id,
           title: title, content: content, revision: note.revision)
         return true
       }
@@ -424,7 +424,7 @@ extension WorkspaceDatabaseConnection {
       guard changedRowCountUnlocked == 1 else { throw WorkspaceNoteMutationError.noteNotFound }
       try checkpointNoteUnlocked(id: id, source: "editor", force: false)
       let revision = try noteForEditingUnlocked(id: id, operatorID: operatorID).revision
-      try saveCompanionDraftReceiptUnlocked(operationID: operationID, id: id,
+      try saveLibraryDraftReceiptUnlocked(operationID: operationID, id: id,
         title: title, content: content, revision: revision)
       return true
     }
@@ -539,7 +539,7 @@ extension WorkspaceDatabaseConnection {
     operatorID: String
   ) throws -> (title: String, content: String, revision: String) {
     let statement = try prepareUnlocked("""
-      SELECT title, content, CAST(COALESCE((SELECT revision FROM companion_versions WHERE kind = 'note' AND resource_id = notes.id), 1) AS TEXT)
+      SELECT title, content, CAST(COALESCE((SELECT revision FROM device_sync_revisions WHERE kind = 'note' AND resource_id = notes.id), 1) AS TEXT)
       FROM notes
       WHERE id = ? AND user_id = ? AND deleted_at IS NULL
       """)

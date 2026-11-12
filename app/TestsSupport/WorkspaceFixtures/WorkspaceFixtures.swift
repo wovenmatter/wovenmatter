@@ -43,8 +43,8 @@ public func rows(_ value: GatewayJSONValue) -> [GatewayJSONValue] {
   public var existingPorts: Set<Int> = []
   public private(set) var child: FixtureServingChild?
   public init(dnsName: String) { self.dnsName = dnsName }
-  public func exposure() -> CompanionTailscaleServe {
-    CompanionTailscaleServe(executable: URL(fileURLWithPath: "/fixture/tailscale"),
+  public func exposure() -> TailscaleServe {
+    TailscaleServe(executable: URL(fileURLWithPath: "/fixture/tailscale"),
       probe: { [self] _, arguments in try await probe(arguments) },
       launch: { [self] _, arguments in
         let value = FixtureServingChild(port: Int(arguments[1].dropFirst("--https=".count))!, target: arguments[3])
@@ -64,7 +64,7 @@ public func rows(_ value: GatewayJSONValue) -> [GatewayJSONValue] {
   }
 }
 
-@MainActor public final class FixtureServingChild: CompanionServingProcess {
+@MainActor public final class FixtureServingChild: TailscaleServingProcess {
   public let port: Int
   public let target: String
   public var isRunning = true

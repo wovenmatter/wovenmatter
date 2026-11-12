@@ -1,4 +1,4 @@
-import WovenMatterCompanion
+import WovenMatterShared
 
 public extension WorkspaceGoal {
     static func supports(_ runtime: AgentRuntimeKind?) -> Bool {

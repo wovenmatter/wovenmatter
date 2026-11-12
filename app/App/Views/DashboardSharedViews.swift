@@ -862,7 +862,7 @@ func dashboardChatWidthBounds(totalWidth: CGFloat) -> ClosedRange<Double> {
     )
     let maximum = min(
         Double(DashboardMetrics.maximumChatWidthPercent),
-        100 - Double(DashboardMetrics.companionMinimumWidth / contentWidth * 100)
+        100 - Double(DashboardMetrics.assetPaneMinimumWidth / contentWidth * 100)
     )
     if minimum > maximum {
         let midpoint = (minimum + maximum) / 2

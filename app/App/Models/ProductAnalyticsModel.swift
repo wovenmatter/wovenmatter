@@ -1,4 +1,4 @@
-import CompanionClient
+import LibraryClient
 import Foundation
 import Observation
 import WovenMatterClient

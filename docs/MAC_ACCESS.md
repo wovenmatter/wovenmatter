@@ -62,8 +62,8 @@ spawned by the signed GUI for the same reason. Exceptions:
 
 ## Status on every device
 
-Each Mac publishes its status as `CompanionMacAccessStatus` inside its
-`CompanionExecutionWorkspace` record (`macAccess`): a map from item to
+Each Mac publishes its status as `MacAccessStatus` inside its
+`ExecutionWorkspace` record (`macAccess`): a map from item to
 `ready`/`needsAttention`/`unknown` plus the app name, with no credentials, paths
 or timestamps, so only a real change bumps the record. The central Mac includes
 it in its five-second registry refresh; a secondary Mac republishes on change
@@ -76,7 +76,7 @@ with the last Keychain and Automation results saved by Settings
 A session on a Mac missing Full Disk Access or Keychain access — or Accessibility
 and Screen Recording when Computer Use is enabled for it — shows a quiet notice
 above its composer, for example "Mac Mini is missing Full Disk Access for Woven
-Matter. Open Settings → Permissions & Access on that Mac." `CompanionMacAccessStatus.sessionNotice`
+Matter. Open Settings → Permissions & Access on that Mac." `MacAccessStatus.sessionNotice`
 produces the text for any client, so every device shows the same message.
 
 ## Password prompts fail fast
@@ -192,7 +192,7 @@ Apple references: [Code signing requirements](https://developer.apple.com/docume
 ## Validation
 
 Mac access tests cover the status record's wire format and notice text
-(`CompanionMacAccessTests`), the page's statuses and Allow all
+(`MacAccessTests`), the page's statuses and Allow all
 sequencing against fake probes (`MacAccessSetupModelTests`), the session-tools scripts with a fake sudo on both
 platforms (`WovenSessionEnvironmentTests`, `remote/test/session-tools.test.mjs`)
 and the environment overlays. Real TCC prompts and System Settings grants need a

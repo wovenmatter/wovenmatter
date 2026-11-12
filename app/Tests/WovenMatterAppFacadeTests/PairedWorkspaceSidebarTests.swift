@@ -2,7 +2,7 @@ import WorkspaceFixtures
 import Foundation
 import Testing
 import WovenMatterClient
-import WovenMatterCompanion
+import WovenMatterShared
 import WovenMatterCore
 @testable import WovenMatterAppFacade
 
@@ -12,12 +12,12 @@ import WovenMatterCore
 struct PairedWorkspaceSidebarTests {
     @Test func syncedPhoneQuickChatsAppearUnderTheirWorkspaceAsReadOnlyHistory() async throws {
         let fixture = try await FacadeFixture(); defer { fixture.remove() }
-        let identity = try await fixture.database.companionLibraryIdentity()
-        let phone = try await fixture.database.registerCompanionExecutionWorkspace(.init(workspace: .init(
+        let identity = try await fixture.database.libraryIdentity()
+        let phone = try await fixture.database.registerExecutionWorkspace(.init(workspace: .init(
             id: UUID().uuidString.lowercased(), libraryID: identity.libraryID, ownerDeviceID: fixture.device,
             kind: .ios, name: "Trey's iPhone", executionDeviceID: fixture.device)), deviceID: fixture.device)
         let chat = UUID().uuidString.lowercased()
-        _ = try await fixture.database.ingestCompanionJournal(.init(libraryID: identity.libraryID, entries: [
+        _ = try await fixture.database.ingestExecutionJournal(.init(libraryID: identity.libraryID, entries: [
             .init(workspaceID: phone.id, originSequence: 1, conversationID: chat, kind: .conversation,
                   conversation: .init(id: chat, title: "Tea timer", runtimeKind: "piDurable"))
         ]), deviceID: fixture.device)
@@ -48,12 +48,12 @@ struct PairedWorkspaceSidebarTests {
             .init(userID: "user", codename: runtime.rawValue, displayName: runtime.displayName, iconKey: "bot",
                   executionLocation: .remote, governingPlane: .remoteWorkspace, runtimeKind: runtime)
         }
-        let mac = CompanionExecutionWorkspace(id: UUID().uuidString.lowercased(), libraryID: "library", ownerDeviceID: "mac-b", kind: .mac, name: "Studio")
-        let linux = CompanionExecutionWorkspace(id: UUID().uuidString.lowercased(), libraryID: "library", ownerDeviceID: "mac-b", kind: .linux, name: "Workstation")
+        let mac = ExecutionWorkspace(id: UUID().uuidString.lowercased(), libraryID: "library", ownerDeviceID: "mac-b", kind: .mac, name: "Studio")
+        let linux = ExecutionWorkspace(id: UUID().uuidString.lowercased(), libraryID: "library", ownerDeviceID: "mac-b", kind: .linux, name: "Workstation")
         let managed = RemoteWorkspaceConfiguration(name: "Managed", workspaceID: "managed", hostName: "managed.invalid", kind: .host,
                                                    dataRoot: "/data", workspaceRoot: "/workspace")
-        let managedLinux = CompanionExecutionWorkspace(id: managed.id.uuidString.lowercased(), libraryID: "library", ownerDeviceID: "mac-b", kind: .linux, name: "Managed")
-        let phone = CompanionExecutionWorkspace(id: UUID().uuidString.lowercased(), libraryID: "library", ownerDeviceID: "phone", kind: .ios, name: "iPhone")
+        let managedLinux = ExecutionWorkspace(id: managed.id.uuidString.lowercased(), libraryID: "library", ownerDeviceID: "mac-b", kind: .linux, name: "Managed")
+        let phone = ExecutionWorkspace(id: UUID().uuidString.lowercased(), libraryID: "library", ownerDeviceID: "phone", kind: .ios, name: "iPhone")
         let macCodex = agent(.codex), linuxCodex = agent(.codex), linuxAgain = agent(.codex), linuxClaude = agent(.claudeCode)
         let managedCodex = agent(.codex), phoneAgent = agent(.defaultAgent), local = agent(.codex)
         let peers = [macCodex.id: mac, linuxCodex.id: linux, linuxAgain.id: linux, linuxClaude.id: linux, managedCodex.id: managedLinux, phoneAgent.id: phone]
@@ -73,7 +73,7 @@ struct PairedWorkspaceSidebarTests {
 
     @Test func onlyLivePhonesAreListedOnceAndFoldersMatchTheirDeviceBinding() throws {
         let phone = UUID().uuidString.lowercased(), mac = UUID().uuidString.lowercased()
-        let registry: [CompanionExecutionWorkspace] = [
+        let registry: [ExecutionWorkspace] = [
             .init(id: mac, libraryID: "library", ownerDeviceID: mac, kind: .mac, name: "Other Mac"),
             .init(id: UUID().uuidString.lowercased(), libraryID: "library", ownerDeviceID: mac, kind: .linux, name: "Workstation"),
             .init(id: phone, libraryID: "library", ownerDeviceID: phone, kind: .ios, name: "iPhone"),

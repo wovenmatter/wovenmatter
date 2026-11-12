@@ -22,7 +22,7 @@ private actor Network {
   func setOffline(_ hosts: Set<String>) { offline = hosts }
   func setLatency(_ value: Duration) { latency = value }
   /// An offline device neither answers nor sends.
-  func route(from caller: String, _ endpoint: URL, _ request: CompanionHTTPRequest) async throws -> CompanionHTTPResponse {
+  func route(from caller: String, _ endpoint: URL, _ request: LibraryHTTPRequest) async throws -> LibraryHTTPResponse {
     let host = endpoint.host.map { $0.hasSuffix(".ts.net") ? String($0.dropLast(".ts.net".count)) : $0 } ?? ""
     routed[host, default: 0] += 1
     guard !offline.contains(caller), !offline.contains(host), let handler = handlers[host] else { throw URLError(.cannotConnectToHost) }
@@ -50,7 +50,7 @@ private struct Member {
   init(_ host: String, kind: MemberKind, network: Network, presence: TimeInterval = 3600) async throws {
     persistence = try PersistenceFixture()
     database = try await persistence.openDatabase()
-    let deviceID = try await database.companionLibraryIdentity().hostDeviceID
+    let deviceID = try await database.libraryIdentity().hostDeviceID
     identity = MemberIdentity(deviceID: deviceID, kind: kind, key: Curve25519.Signing.PrivateKey())
     directory = MemberDirectory(database: database, identity: identity, cacheLifetime: 0)
     var configuration = LibraryPeerSync.Configuration(version: "test")
@@ -65,10 +65,10 @@ private struct Member {
 
   func note(_ id: String, _ title: String) async throws {
     let content = try NoteDocument(blocks: [.richText(.init(text: title))]).encoded()
-    let receipt = try await database.applyCompanionMutation(.init(deviceID: self.id, kind: .createNote, resourceID: id, title: title, content: content))
+    let receipt = try await database.applyLibraryMutation(.init(deviceID: self.id, kind: .createNote, resourceID: id, title: title, content: content))
     #expect(receipt.status == .accepted)
   }
-  func has(_ note: String) async -> Bool { (try? await database.companionNote(id: note)) != nil }
+  func has(_ note: String) async -> Bool { (try? await database.libraryNote(id: note)) != nil }
   func remove() async { await sync.stop(); persistence.remove() }
 
   /// Mac-side pairing result: this Mac signs the other device's entry.
@@ -110,7 +110,7 @@ struct MemberSyncTests {
   /// platform's Ed25519 (swift-crypto on Linux, CryptoKit on Apple).
   @Test func sharedVectorsVerifyWithThisPlatformsEd25519() async throws {
     let url = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
-      .appending(path: "../../../shared/Tests/WovenMatterCompanionTests/MemberSignatureVectors.json").standardizedFileURL
+      .appending(path: "../../../shared/Tests/WovenMatterSharedTests/MemberSignatureVectors.json").standardizedFileURL
     let vectors = try #require(try JSONDecoder().decode(GatewayJSONValue.self, from: Data(contentsOf: url)).objectValue)
     let key = try #require(vectors["publicKeyBase64"]?.stringValue.flatMap { Data(base64Encoded: $0) })
     let device = try #require(vectors["deviceID"]?.stringValue), audience = try #require(vectors["audience"]?.stringValue)
@@ -138,7 +138,7 @@ struct MemberSyncTests {
     let url = URL(fileURLWithPath: try #require(ProcessInfo.processInfo.environment["WOVENMATTER_MIGRATION_PROOF_DB"]))
     #expect(!url.path.contains("/Library/Application Support/Woven Matter"))
     let database = try await WorkspaceDatabase(url: url)
-    let identity = MemberIdentity(deviceID: try await database.companionLibraryIdentity().hostDeviceID, kind: .mac, key: .init())
+    let identity = MemberIdentity(deviceID: try await database.libraryIdentity().hostDeviceID, kind: .mac, key: .init())
     try await MemberDirectory(database: database, identity: identity).ensureSelf(name: "Proof", endpoints: [])
     #expect(try await database.libraryMembers().members.map(\.deviceID) == [identity.deviceID])
   }
@@ -325,27 +325,27 @@ struct MemberSyncTests {
     for member in members { await member.sync.start() }
     #expect(try await Self.settle(members) { (try? await $0.directory.list().members.filter { !$0.revoked }.count) == 6 })
     let mac1 = members[0], mac2 = members[1], linux1 = members[3]
-    let library = try await mac1.database.companionLibraryIdentity().libraryID
-    func insert(_ workspace: CompanionExecutionWorkspace, into member: Member) async throws {
+    let library = try await mac1.database.libraryIdentity().libraryID
+    func insert(_ workspace: ExecutionWorkspace, into member: Member) async throws {
       let payload = String(decoding: try JSONEncoder().encode(workspace), as: UTF8.self)
       try await member.database.write { connection in
-        try connection.toolsExecuteUnlocked("INSERT INTO companion_execution_workspaces(id,owner_device_id,revision,deleted,payload) VALUES(?,?,?,0,?) ON CONFLICT(id) DO UPDATE SET revision=excluded.revision,payload=excluded.payload",
+        try connection.toolsExecuteUnlocked("INSERT INTO execution_workspaces(id,owner_device_id,revision,deleted,payload) VALUES(?,?,?,0,?) ON CONFLICT(id) DO UPDATE SET revision=excluded.revision,payload=excluded.payload",
                                             [workspace.id, workspace.ownerDeviceID, String(workspace.revision), payload])
       }
     }
-    let macWorkspace = CompanionExecutionWorkspace(id: UUID().uuidString.lowercased(), libraryID: library, ownerDeviceID: mac1.id, kind: .mac,
+    let macWorkspace = ExecutionWorkspace(id: UUID().uuidString.lowercased(), libraryID: library, ownerDeviceID: mac1.id, kind: .mac,
       name: "Mac 1", endpoint: URL(string: "https://mac1.test.ts.net/wovenmatter"), executionDeviceID: mac1.id, revision: 1)
     try await insert(macWorkspace, into: mac1)
-    #expect(try await Self.settle([mac2, linux1]) { (try? await $0.database.companionExecutionWorkspaces().contains { $0.id == macWorkspace.id }) == true })
+    #expect(try await Self.settle([mac2, linux1]) { (try? await $0.database.libraryExecutionWorkspaces().contains { $0.id == macWorkspace.id }) == true })
     // The host rewrites the Mac's registration to name itself.
     var forged = macWorkspace; forged.executionDeviceID = linux1.id; forged.revision = 2
     try await insert(forged, into: linux1)
     // Its own workspace's registration goes through.
-    let own = CompanionExecutionWorkspace(id: UUID().uuidString.lowercased(), libraryID: library, ownerDeviceID: mac1.id, kind: .linux,
+    let own = ExecutionWorkspace(id: UUID().uuidString.lowercased(), libraryID: library, ownerDeviceID: mac1.id, kind: .linux,
       name: "Linux 1", endpoint: URL(string: "https://linux1.test.ts.net/wovenmatter-execution/one"), executionDeviceID: UUID().uuidString.lowercased(), revision: 1)
     try await insert(own, into: linux1)
-    #expect(try await Self.settle([mac2]) { (try? await $0.database.companionExecutionWorkspaces().contains { $0.id == own.id }) == true })
-    let seen = try #require(try await mac2.database.companionExecutionWorkspaces().first { $0.id == macWorkspace.id })
+    #expect(try await Self.settle([mac2]) { (try? await $0.database.libraryExecutionWorkspaces().contains { $0.id == own.id }) == true })
+    let seen = try #require(try await mac2.database.libraryExecutionWorkspaces().first { $0.id == macWorkspace.id })
     #expect(seen.executionDeviceID == mac1.id && seen.revision == 1)
     #expect(await mac2.directory.audience(for: seen) == mac1.id)
   }

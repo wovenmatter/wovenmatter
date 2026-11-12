@@ -73,7 +73,7 @@ struct HarnessMaintenanceTests {
         let rows = try #require(remote.runtimeMaintenance[fixture.remote.id])
             .filter { $0.id == .codex || $0.id == .defaultAgent }
         // Installation is enough for navigation; no sign-in/readiness is available.
-        remote.configureCompanionFixture(fixture.remote, status: status, harnesses: [], maintenance: rows)
+        remote.configureFacadeFixture(fixture.remote, status: status, harnesses: [], maintenance: rows)
         await fixture.model.synchronizeRemoteAgentCatalog()
         let saved = fixture.model.remoteWorkspaceAgents
         #expect(Set(saved.map(\.runtimeKind)) == [.defaultAgent, .codex])

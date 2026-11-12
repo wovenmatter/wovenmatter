@@ -7,7 +7,7 @@ from PIL import Image, ImageDraw, ImageStat
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[1]
 ASSETS = ROOT / 'app/App/Assets.xcassets'
-IOS_ASSETS = ROOT / 'ios/Sources/CompanionApp/Assets.xcassets'
+IOS_ASSETS = ROOT / 'ios/Sources/MobileApp/Assets.xcassets'
 MASTER_SIZE = (1254, 1254)
 SCALE = 4
 

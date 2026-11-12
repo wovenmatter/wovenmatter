@@ -4,7 +4,7 @@ import WovenMatterCore
 
 struct DevelopmentClientRequest: Codable { var deviceID: String; var name: String }
 struct DevelopmentDisconnectRequest: Codable { var deviceID: String; var credential: String }
-struct DevelopmentClientConnection: Codable { var endpoint: URL; var pairing: CompanionPairResponse }
+struct DevelopmentClientConnection: Codable { var endpoint: URL; var pairing: PairResponse }
 
 /// A build's data role is part of its bundle, so Finder launches and restarts use
 /// the same data role as the launcher. Release builds ignore these keys.

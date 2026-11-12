@@ -29,7 +29,7 @@ let package = Package(
     .systemLibrary(name: "CSQLite", providers: [.apt(["libsqlite3-dev"])]),
     .target(
       name: "WovenMatterCore",
-      dependencies: [.product(name: "WovenMatterCompanion", package: "shared"), linuxCrypto],
+      dependencies: [.product(name: "WovenMatterShared", package: "shared"), linuxCrypto],
       swiftSettings: [
         .enableUpcomingFeature("ExistentialAny")
       ]
@@ -81,7 +81,7 @@ let package = Package(
       name: "WovenMatterLibraryHostTests",
       dependencies: ["WovenMatterLibraryHost", "WovenMatterDashboardStore", "WovenMatterCore", linuxSQLite,
                      // The phone client, for the in-process Mac + Linux + phone reach test.
-                     .product(name: "CompanionClient", package: "ios", condition: .when(platforms: [.macOS]))]
+                     .product(name: "LibraryClient", package: "ios", condition: .when(platforms: [.macOS]))]
     ),
     .target(name: "WorkspaceFixtures", dependencies: ["WovenMatterCore", "WovenMatterClient", "WovenMatterDashboardStore", linuxCrypto, linuxSQLite], path: "TestsSupport/WorkspaceFixtures"),
     .testTarget(
@@ -98,8 +98,8 @@ let package = Package(
     // A fail-closed bridge keeps provider-free facade tests independent of CEF.
     // The native Xcode target still compiles and validates the production bridge.
     .target(
-      name: "CompanionBrowserTestBridge",
-      path: "TestsSupport/CompanionBrowserTestBridge",
+      name: "FacadeBrowserTestBridge",
+      path: "TestsSupport/FacadeBrowserTestBridge",
       publicHeadersPath: "include",
       cSettings: [.unsafeFlags(["-fobjc-arc"])],
       linkerSettings: [.linkedFramework("AppKit")]
@@ -108,11 +108,11 @@ let package = Package(
     // Both test suites exercise those same services without starting providers.
     .target(
       name: "WovenMatterAppFacade",
-      dependencies: ["CompanionBrowserTestBridge", "WovenMatterCore", "WovenMatterClient", "WovenMatterDashboardStore", "WovenMatterAutomation", .product(name: "CompanionClient", package: "ios")],
+      dependencies: ["FacadeBrowserTestBridge", "WovenMatterCore", "WovenMatterClient", "WovenMatterDashboardStore", "WovenMatterAutomation", .product(name: "LibraryClient", package: "ios")],
       path: "App",
       exclude: ["Assets.xcassets", "SharedAssets.xcassets", "Info.plist", "Tests"],
       sources: ["ApplicationModel.swift", "WovenMatterApp.swift", "WovenMatterLifecycleDelegate.swift", "Models", "Services", "Views"],
-      swiftSettings: [.define("COMPANION_FACADE_TESTS")]
+      swiftSettings: [.define("APP_FACADE_TESTS")]
     ),
     .testTarget(
       name: "WovenMatterAgentToolsTests",
@@ -121,7 +121,7 @@ let package = Package(
     ),
     .testTarget(
       name: "WovenMatterAppFacadeTests",
-      dependencies: ["WovenMatterAppFacade", "WovenMatterDashboardStore", "WorkspaceFixtures", .product(name: "CompanionClient", package: "ios")]
+      dependencies: ["WovenMatterAppFacade", "WovenMatterDashboardStore", "WorkspaceFixtures", .product(name: "LibraryClient", package: "ios")]
     )
   ]
 )
@@ -130,7 +130,7 @@ let package = Package(
 // A native Linux build covers the portable library targets only. Apple-only
 // targets stay declared for every macOS host, including Linux cross-builds.
 let appleOnlyTargets: Set<String> = [
-  "WovenMatterAutomation", "WovenMatterAutomationTests", "WovenCuaDesktopFixture", "CompanionBrowserTestBridge",
+  "WovenMatterAutomation", "WovenMatterAutomationTests", "WovenCuaDesktopFixture", "FacadeBrowserTestBridge",
   "WovenMatterAppFacade", "WovenMatterAgentToolsTests", "WovenMatterAppFacadeTests"
 ]
 package.targets.removeAll { appleOnlyTargets.contains($0.name) }

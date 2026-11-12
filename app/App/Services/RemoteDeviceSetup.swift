@@ -13,10 +13,10 @@ enum RemoteDeviceSetup {
               model.state == .ready else { return }
         handling = true
         defer { handling = false }
-        let host = model.companionHost
+        let host = model.libraryHost
         await host.refreshStatus()
         if let observedRaw = defaults.string(forKey: observingKey),
-           let observed = try? JSONDecoder().decode(CompanionMacSetupRequest.self, from: Data(observedRaw.utf8)) {
+           let observed = try? JSONDecoder().decode(MacSetupRequest.self, from: Data(observedRaw.utf8)) {
             if host.connectedPeerRoutes.contains(where: { route in route.endpoint == observed.endpoint && host.pairedDevices.contains(where: { $0.id == route.deviceID }) }) {
                 publish(observed, phase: .paired, message: "Paired Macs keep their libraries synchronized.", defaults: defaults)
                 defaults.removeObject(forKey: observingKey)
@@ -27,11 +27,11 @@ enum RemoteDeviceSetup {
                 publish(observed, phase: .waiting, message: "Waiting for pairing approval on the other Mac.", defaults: defaults)
             }
         }
-        guard let raw = defaults.string(forKey: CompanionMacSetupRequest.preferenceKey) else { return }
-        var decodedRequest: CompanionMacSetupRequest?
+        guard let raw = defaults.string(forKey: MacSetupRequest.preferenceKey) else { return }
+        var decodedRequest: MacSetupRequest?
         do {
             guard raw.utf8.count <= 4096 else { throw MacDeviceSetupError("The setup request is too large.") }
-            let request = try JSONDecoder().decode(CompanionMacSetupRequest.self, from: Data(raw.utf8))
+            let request = try JSONDecoder().decode(MacSetupRequest.self, from: Data(raw.utf8))
             decodedRequest = request
             try request.validate()
             switch request.action {
@@ -46,7 +46,7 @@ enum RemoteDeviceSetup {
                     publish(request, phase: .submitting, message: "Submitting pairing request…", defaults: defaults)
                 }
             case .update:
-                CompanionMacSetupRequest.clearIfCurrent(raw, defaults: defaults)
+                MacSetupRequest.clearIfCurrent(raw, defaults: defaults)
                 publish(request, phase: .preparing, message: "Preparing Woven Matter to update…", defaults: defaults)
                 guard await WorkspaceAssetSession.prepareForRestart() else { throw CancellationError() }
                 if model.isBackendFrontend { try await model.prepareBackendForUpdate() }
@@ -57,17 +57,17 @@ enum RemoteDeviceSetup {
                 model.isPreparedForExecutionRestart = true
                 WovenMatterLifecycleDelegate.requestTerminationAfterUpdate()
             }
-            CompanionMacSetupRequest.clearIfCurrent(raw, defaults: defaults)
+            MacSetupRequest.clearIfCurrent(raw, defaults: defaults)
         } catch {
             defaults.removeObject(forKey: observingKey)
-            CompanionMacSetupRequest.clearIfCurrent(raw, defaults: defaults)
+            MacSetupRequest.clearIfCurrent(raw, defaults: defaults)
             if let decodedRequest { publish(decodedRequest, phase: .failed, message: error.localizedDescription, defaults: defaults) }
             WorkspaceAssetSession.cancelPreparedRestart()
             if model.isBackendFrontend, model.isPreparedForExecutionRestart { try? await model.recoverBackendAfterFailedUpdate() }
         }
     }
-    private static func publish(_ request: CompanionMacSetupRequest, phase: CompanionMacSetupStatus.Phase, message: String, defaults: UserDefaults) {
-        let status = CompanionMacSetupStatus(requestID: request.id, phase: phase, message: message)
-        defaults.set(try? status.json(), forKey: CompanionMacSetupRequest.statusKey)
+    private static func publish(_ request: MacSetupRequest, phase: MacSetupStatus.Phase, message: String, defaults: UserDefaults) {
+        let status = MacSetupStatus(requestID: request.id, phase: phase, message: message)
+        defaults.set(try? status.json(), forKey: MacSetupRequest.statusKey)
     }
 }

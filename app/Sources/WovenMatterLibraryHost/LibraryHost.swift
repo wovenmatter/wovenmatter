@@ -34,7 +34,7 @@ public final class LibraryHost: @unchecked Sendable {
     }.map(\.name))
   }
   public static let maximumRequestBytes = WovenMatterToolRequest.maximumHTMLRequestBytes
-  /// Mobile library routes (today's `CompanionWorkspaceAPI`), mounted under
+  /// Mobile library routes (today's `DeviceAPI`), mounted under
   /// these prefixes so a phone can synchronize with this machine.
   public static let mobilePrefixes = [
     "/v1/hello", "/v1/snapshot", "/v1/changes", "/v1/mutations", "/v1/commands", "/v1/command-receipts/", "/v1/federation/",
@@ -53,9 +53,9 @@ public final class LibraryHost: @unchecked Sendable {
   public let timers: LibraryHostTimers
   private let startedAt = Date()
   private let lock = NSLock()
-  private var mounts: [(prefix: String, handler: CompanionHTTPResponseHandler)] = []
-  private var servers: [CompanionSocketHTTPServer] = []
-  private var mobile: CompanionWorkspaceAPI?
+  private var mounts: [(prefix: String, handler: LibraryHTTPResponseHandler)] = []
+  private var servers: [LibrarySocketHTTPServer] = []
+  private var mobile: DeviceAPI?
 
   /// `name` and `endpoints` are this machine's own advertised entry (the Mac
   /// that adds it signs the authoritative one); `transport` is for tests.
@@ -69,7 +69,7 @@ public final class LibraryHost: @unchecked Sendable {
     try await store.prepareLocalWorkspace()
     database = store.database
     executor = WorkspaceToolExecutor(database: database)
-    let library = try await database.companionLibraryIdentity()
+    let library = try await database.libraryIdentity()
     identity = try MemberIdentity.loadOrCreate(file: layout.memberKeyFile, deviceID: library.hostDeviceID, kind: .linux)
     members = MemberDirectory(database: database, identity: identity)
     timers = LibraryHostTimers(database: database, machineID: identity.deviceID)
@@ -82,9 +82,9 @@ public final class LibraryHost: @unchecked Sendable {
       mount(prefix: prefix) { await sync.handle($0) ?? .error("unauthorized", "Peer routes need a signed member request.", status: 401) }
     }
     // Bearer grants are never issued here; the store only backs the API.
-    let authentication = try CompanionAuthentication(fileURL: layout.library.appending(path: "companion-devices.json"))
+    let authentication = try DeviceAuthentication(fileURL: layout.library.appending(path: DeviceAuthentication.fileName))
     let api = await MainActor.run { [database, members, executor, sync, ownID = identity.deviceID] in
-      CompanionWorkspaceAPI(database: database, authentication: authentication, commands: LibraryHostCommands(executor: executor),
+      DeviceAPI(database: database, authentication: authentication, commands: LibraryHostCommands(executor: executor),
                             isActive: { true }, members: members, syncStatus: { await sync.status() },
                             // This machine's own member entry carries its signed, user-visible name.
                             hostName: { await members.member(ownID)?.name })
@@ -108,16 +108,16 @@ public final class LibraryHost: @unchecked Sendable {
   /// Routes another handler under a loopback path prefix, such as `/v1/peers/`
   /// for peer sync or `/v1/workspace/` for the mobile API. Requests reach it
   /// with the `/wovenmatter` Serve prefix already removed.
-  public func mount(prefix: String, _ handler: @escaping CompanionHTTPResponseHandler) {
+  public func mount(prefix: String, _ handler: @escaping LibraryHTTPResponseHandler) {
     lock.withLock { mounts.append((prefix, handler)); mounts.sort { $0.prefix.count > $1.prefix.count } }
   }
 
   @discardableResult
   public func listen(port: UInt16, socket: URL) throws -> UInt16 {
-    let network = CompanionSocketHTTPServer { [weak self] request in
+    let network = LibrarySocketHTTPServer { [weak self] request in
       await self?.handleNetwork(request) ?? .error("unavailable", "The library host stopped.", status: 503)
     }
-    let local = CompanionSocketHTTPServer(admitUnixPeer: Self.localPeerAdmission()) { [weak self] request in
+    let local = LibrarySocketHTTPServer(admitUnixPeer: Self.localPeerAdmission()) { [weak self] request in
       await self?.handleLocal(request) ?? .error("unavailable", "The library host stopped.", status: 503)
     }
     let bound = try network.start(.loopback(port: port))
@@ -135,7 +135,7 @@ public final class LibraryHost: @unchecked Sendable {
 
   // MARK: Loopback routes
 
-  func handleNetwork(_ request: CompanionHTTPRequest) async -> CompanionHTTPResponse {
+  func handleNetwork(_ request: LibraryHTTPRequest) async -> LibraryHTTPResponse {
     guard var path = URLComponents(string: "http://localhost" + request.target)?.path else {
       return .error("invalid_request", "Invalid request path.", status: 400)
     }
@@ -155,7 +155,7 @@ public final class LibraryHost: @unchecked Sendable {
 
   // MARK: Local (Unix socket) routes
 
-  func handleLocal(_ request: CompanionHTTPRequest) async -> CompanionHTTPResponse {
+  func handleLocal(_ request: LibraryHTTPRequest) async -> LibraryHTTPResponse {
     guard token.accepts(request.bearer) else {
       return .init(status: 401, headers: ["WWW-Authenticate": "Bearer realm=\"woven-library\""],
                    body: Data("{\"code\":\"unauthorized\",\"message\":\"A valid library API token is required.\"}".utf8))
@@ -181,7 +181,7 @@ public final class LibraryHost: @unchecked Sendable {
         guard request.method == "POST", request.body.count <= 8_192 else { return .error("invalid_request", "POST at most 8 KiB.", status: 400) }
         struct Update: Decodable { var name: String?; var endpoints: [URL] }
         let update = try JSONDecoder().decode(Update.self, from: request.body)
-        guard update.endpoints.count <= 8, update.endpoints.allSatisfy({ CompanionPairingPayload.isValidEndpoint($0) }) else {
+        guard update.endpoints.count <= 8, update.endpoints.allSatisfy({ PairingPayload.isValidEndpoint($0) }) else {
           return .error("invalid_request", "Endpoints must be HTTPS tailnet addresses.", status: 400)
         }
         try await members.ensureSelf(name: update.name ?? ProcessInfo.processInfo.hostName, endpoints: update.endpoints)
@@ -199,11 +199,11 @@ public final class LibraryHost: @unchecked Sendable {
         return try await signForServer(request)
       case "/v1/workspaces":
         guard request.method == "GET" else { return .error("method_not_allowed", "Use GET.", status: 405) }
-        struct Workspaces: Encodable { let workspaces: [CompanionExecutionWorkspace] }
-        return try .json(Workspaces(workspaces: try await database.companionExecutionWorkspaces().filter { !$0.deleted }))
+        struct Workspaces: Encodable { let workspaces: [ExecutionWorkspace] }
+        return try .json(Workspaces(workspaces: try await database.libraryExecutionWorkspaces().filter { !$0.deleted }))
       default:
         if path.hasPrefix("/v1/publisher/") {
-          return try await CompanionWorkspacePublisherAPI.handleLocal(request, path: path, database: database)
+          return try await DevicePublisherAPI.handleLocal(request, path: path, database: database)
         }
         let parts = path.split(separator: "/").map(String.init)
         if parts.count == 4, parts[0] == "v1", parts[1] == "bots", parts[3] == "entries" {
@@ -225,7 +225,7 @@ public final class LibraryHost: @unchecked Sendable {
         }
         return .error("not_found", "Unknown library API route.", status: 404)
       }
-    } catch let error as CompanionAPIError {
+    } catch let error as LibraryAPIError {
       return .error(error.code, error.message, status: error.code == "too_large" ? 413 : error.code == "wrong_owner" ? 403 : 400)
     } catch let error as WorkspaceToolError {
       return .error("invalid_request", error.localizedDescription, status: 400)
@@ -248,7 +248,7 @@ public final class LibraryHost: @unchecked Sendable {
       self.method = method; self.target = target; self.bodySHA256 = bodySHA256; self.audience = audience
     }
   }
-  private func signForServer(_ request: CompanionHTTPRequest) async throws -> CompanionHTTPResponse {
+  private func signForServer(_ request: LibraryHTTPRequest) async throws -> LibraryHTTPResponse {
     guard request.method == "POST", request.body.count <= 16_384 else { return .error("invalid_request", "POST at most 16 KiB.", status: 400) }
     let value = try JSONDecoder().decode(SignatureRequest.self, from: request.body)
     guard value.target.hasPrefix("/"), !value.target.hasPrefix("//"), value.target.utf8.count <= 8_192,
@@ -334,12 +334,12 @@ public final class LibraryHost: @unchecked Sendable {
                  publicKey: identity.publicKey, endpoints: own?.endpoints ?? [])
   }
   /// Public by design: the adding Mac reads it to sign this machine's entry.
-  private func identityResponse(_ request: CompanionHTTPRequest) async -> CompanionHTTPResponse {
+  private func identityResponse(_ request: LibraryHTTPRequest) async -> LibraryHTTPResponse {
     guard request.method == "GET" else { return .error("method_not_allowed", "Use GET.", status: 405) }
     return (try? .json(await identityValue())) ?? .error("unavailable", "Identity unavailable.", status: 503)
   }
 
-  private func health(_ request: CompanionHTTPRequest) async -> CompanionHTTPResponse {
+  private func health(_ request: LibraryHTTPRequest) async -> LibraryHTTPResponse {
     guard request.method == "GET" else { return .error("method_not_allowed", "Use GET.", status: 405) }
     struct Health: Encodable {
       let status: String; let service: String; let version: String
@@ -364,7 +364,7 @@ public final class LibraryHost: @unchecked Sendable {
     public var enabledGroups: [String]?
   }
 
-  private func registerCaller(_ request: CompanionHTTPRequest) async throws -> CompanionHTTPResponse {
+  private func registerCaller(_ request: LibraryHTTPRequest) async throws -> LibraryHTTPResponse {
     guard request.method == "POST" else { return .error("method_not_allowed", "Use POST.", status: 405) }
     guard request.body.count <= 16_384 else { return .error("too_large", "The caller registration is too large.", status: 413) }
     let registration = try JSONDecoder().decode(CallerRegistration.self, from: request.body)
@@ -380,7 +380,7 @@ public final class LibraryHost: @unchecked Sendable {
   public func ensureCaller(_ rawID: String, groups: Set<WorkspaceToolGroup>, title: String? = nil,
                            runtimeKind: String? = nil, workingDirectory: String? = nil) async throws -> String {
     guard let uuid = UUID(uuidString: rawID) else {
-      throw CompanionAPIError(code: "invalid_request", message: "Callers are identified by conversation UUIDs.")
+      throw LibraryAPIError(code: "invalid_request", message: "Callers are identified by conversation UUIDs.")
     }
     let id = uuid.uuidString.lowercased()
     let exists = try await database.hasActiveConversation(id)
@@ -406,7 +406,7 @@ public final class LibraryHost: @unchecked Sendable {
   /// `POST /v1/mcp`: stateless MCP JSON-RPC, the same messages the Node server
   /// sends a Mac's `/mcp/workspace`. The caller and its tool selection come
   /// from `X-Woven-Conversation-ID` and `X-Woven-Enabled-Groups`.
-  private func mcp(_ request: CompanionHTTPRequest) async throws -> CompanionHTTPResponse {
+  private func mcp(_ request: LibraryHTTPRequest) async throws -> LibraryHTTPResponse {
     guard request.method == "POST" else {
       return .error("method_not_allowed", "Woven MCP accepts stateless JSON-RPC POST requests.", status: 405)
     }
@@ -459,7 +459,7 @@ public final class LibraryHost: @unchecked Sendable {
     let values = names.map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
     let groups = values.compactMap(WorkspaceToolGroup.init(rawValue:))
     guard groups.count == values.count else {
-      throw CompanionAPIError(code: "invalid_request", message: "An unknown tool group was selected.")
+      throw LibraryAPIError(code: "invalid_request", message: "An unknown tool group was selected.")
     }
     return Set(groups)
   }
@@ -469,19 +469,19 @@ public final class LibraryHost: @unchecked Sendable {
 /// against this database; sessions are started on a Mac or this machine's
 /// own workspace, never from the phone through the library host.
 @MainActor
-final class LibraryHostCommands: CompanionCommandServing {
+final class LibraryHostCommands: DeviceCommandServing {
   private let executor: WorkspaceToolExecutor
   init(executor: WorkspaceToolExecutor) { self.executor = executor }
-  private var unsupported: CompanionAPIError {
+  private var unsupported: LibraryAPIError {
     .init(code: "unsupported", message: "This Linux machine's library does not run sessions for other devices. Use its workspace.")
   }
-  func executeTool(_ request: CompanionToolRequest, deviceID: String) async throws -> WovenMatterToolResponse {
+  func executeTool(_ request: LibraryToolRequest, deviceID: String) async throws -> WovenMatterToolResponse {
     await executor.execute(request.request, callerID: request.conversationID, handlers: WorkspaceToolHandlers())
   }
-  func providers() -> [CompanionProvider] { [] }
-  func pendingInteractions() async -> [CompanionPendingInteraction] { [] }
-  func sessionCapabilities(conversationID: String) async throws -> CompanionProvider { throw unsupported }
-  func transcript(conversationID: String, before: String?) async throws -> CompanionTranscript { throw unsupported }
-  func receipt(commandID: String, deviceID: String) async throws -> CompanionCommandReceipt? { nil }
-  func execute(_ command: CompanionCommand, deviceID: String) async throws -> CompanionCommandReceipt { throw unsupported }
+  func providers() -> [HarnessCapabilities] { [] }
+  func pendingInteractions() async -> [PendingInteraction] { [] }
+  func sessionCapabilities(conversationID: String) async throws -> HarnessCapabilities { throw unsupported }
+  func transcript(conversationID: String, before: String?) async throws -> LibraryTranscript { throw unsupported }
+  func receipt(commandID: String, deviceID: String) async throws -> LibraryCommandReceipt? { nil }
+  func execute(_ command: LibraryCommand, deviceID: String) async throws -> LibraryCommandReceipt { throw unsupported }
 }

@@ -19,12 +19,13 @@ def scopes(paths):
         service=agent or changed(r'^(remote/|\.dockerignore$|scripts/(remote-workspace|'
                                 r'test-remote-workspace|test-container)\.sh$)'),
         pi=agent or changed(r'^(ios/Runtime/|ios/Sources/PiDurableRuntime/Resources/|'
-                            r'ios/Sources/CompanionInference/PiSDKVersion\.swift$|'
+                            r'ios/Sources/MobileInference/PiSDKVersion\.swift$|'
                             r'scripts/build-ios-pi-runtime\.mjs$|THIRD_PARTY_NOTICES\.md$)'),
         embedded=infrastructure or changed(r'^(ios/EmbeddedRuntime/|'
                                           r'ios/Sources/EmbeddedExecution/Resources/|'
                                           r'scripts/build-ios-embedded-runtime\.mjs$)'),
-        scripts=infrastructure or changed(r'^(scripts/|remote/|app/Updater/|'
+        # ios/Config/ holds the TestFlight Info.plist, privacy manifest and export options.
+        scripts=infrastructure or changed(r'^(scripts/|remote/|app/Updater/|ios/Config/|'
                                          r'\.github/workflows/|\.github/release-refresh\.json$)'),
         bots=infrastructure or changed(r'^bots/'),
     )

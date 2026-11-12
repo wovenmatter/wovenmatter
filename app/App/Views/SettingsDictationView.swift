@@ -1,6 +1,6 @@
 import AppKit
 import SwiftUI
-import WovenMatterCompanion
+import WovenMatterShared
 
 struct SettingsDictationView: View {
     let model: ApplicationModel

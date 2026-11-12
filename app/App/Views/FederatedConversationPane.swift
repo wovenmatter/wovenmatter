@@ -11,8 +11,8 @@ struct FederatedConversationPane: View {
     @Binding var draft: String
     let sendInProgress: Bool
     let onSend: () -> Void
-    @State private var olderMessages: [CompanionMessage] = []
-    @State private var olderActivities: [CompanionActivity] = []
+    @State private var olderMessages: [LibraryMessage] = []
+    @State private var olderActivities: [LibraryActivity] = []
     @State private var olderCursor: String?
     @State private var loadingOlder = false
     @State private var hasLoadedEarlier = false
@@ -24,14 +24,14 @@ struct FederatedConversationPane: View {
             owner: model.federatedExecutionOwners[conversation.id], registry: model.executionWorkspaceRegistry)
     }
     private var runID: String? { snapshot?.transcript?.activeRunID }
-    private var messages: [CompanionMessage] {
+    private var messages: [LibraryMessage] {
         let current = snapshot?.transcript?.messages ?? savedMessages.map {
-            CompanionMessage(id: $0.id, conversationID: conversation.id, role: $0.role, content: $0.content)
+            LibraryMessage(id: $0.id, conversationID: conversation.id, role: $0.role, content: $0.content)
         }
         let ids = Set(current.map(\.id))
         return olderMessages.filter { !ids.contains($0.id) } + current
     }
-    private var activities: [CompanionActivity] {
+    private var activities: [LibraryActivity] {
         let current = snapshot?.transcript?.activities ?? []
         let ids = Set(current.map(\.id))
         return olderActivities.filter { !ids.contains($0.id) } + current
@@ -138,7 +138,7 @@ struct FederatedConversationPane: View {
             }
         }
     }
-    @ViewBuilder private func selectionMenu(_ title: String, values: [CompanionSelection], selected: String?, action: @escaping (String) -> CompanionWorkspaceAction) -> some View {
+    @ViewBuilder private func selectionMenu(_ title: String, values: [SessionSettingOption], selected: String?, action: @escaping (String) -> LibraryWorkspaceAction) -> some View {
         if !values.isEmpty {
             Menu(values.first { $0.id == selected }?.label ?? title) {
                 ForEach(values) { value in
@@ -164,8 +164,8 @@ struct FederatedConversationPane: View {
 }
 
 private struct FederatedInteractionCard: View {
-    let interaction: CompanionPendingInteraction
-    let respond: (CompanionInteractionResponse) async -> Void
+    let interaction: PendingInteraction
+    let respond: (InteractionResponse) async -> Void
     @State private var selected: [String: Set<String>] = [:]
     @State private var freeText: [String: String] = [:]
     @State private var submitting = false
@@ -204,7 +204,7 @@ private struct FederatedInteractionCard: View {
             }.disabled(submitting)
         }.padding(14).background(DashboardPalette.muted, in: RoundedRectangle(cornerRadius: DashboardMetrics.cardRadius))
     }
-    private func send(_ response: CompanionInteractionResponse) {
+    private func send(_ response: InteractionResponse) {
         submitting = true
         Task { await respond(response); submitting = false }
     }

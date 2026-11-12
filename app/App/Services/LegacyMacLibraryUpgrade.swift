@@ -1,4 +1,4 @@
-import CompanionClient
+import LibraryClient
 import CryptoKit
 import Foundation
 import WovenMatterCore
@@ -42,7 +42,7 @@ import WovenMatterDashboardStore
         let state = await store.snapshot()
         try await database.backUpBeforePeerSync()
         try await database.adoptLegacyPairedMacIdentity(state.deviceID)
-        defaults.set(state.deviceID, forKey: "companion.execution.local-id." + (try await database.companionWorkspaceID()))
+        defaults.set(state.deviceID, forKey: LibraryHostController.localExecutionIDKeyPrefix + (try await database.libraryID()))
         let local = root.appending(path: "LibraryClient/Execution/" + state.deviceID + "/workspace.sqlite")
         if FileManager.default.fileExists(atPath: local.path) {
             // Migrate and import a WAL-aware copy. The retained original native
@@ -73,7 +73,7 @@ import WovenMatterDashboardStore
             // node's execution workspace is preserved under a recovery identity.
             let known = Set(state.notes.keys).union(state.outbox.map(\.mutation.resourceID))
             for id in try await previous.legacyLiveNoteIDs() where !known.contains(id) {
-                if let note = try await previous.companionNote(id: id) { try await preserve(note, database: database, deviceID: state.deviceID) }
+                if let note = try await previous.libraryNote(id: id) { try await preserve(note, database: database, deviceID: state.deviceID) }
             }
         }
         // Cached writing is preserved under deterministic recovery identities.
@@ -95,8 +95,8 @@ import WovenMatterDashboardStore
     /// and its expected revisions keep their meaning. Every unapplied intent is
     /// preserved visibly; nothing is replayed against this Mac's fresh library.
     /// Agent commands are never replayed. Only then does pairing begin.
-    static func reconnect(host: CompanionHostController, defaults: UserDefaults,
-                          makeTransport: (MobileCredential) throws -> any CompanionTransport = { try HTTPSCompanionTransport(credential: $0) }) async throws {
+    static func reconnect(host: LibraryHostController, defaults: UserDefaults,
+                          makeTransport: (MobileCredential) throws -> any LibraryTransport = { try HTTPSLibraryTransport(credential: $0) }) async throws {
         guard DevelopmentLaunch.mode == nil, defaults.bool(forKey: LocalExecutionRole.libraryClientPreferenceKey),
               defaults.bool(forKey: importedKey), !defaults.bool(forKey: connectedKey),
               let database = host.model?.dashboardStore?.database else { return }
@@ -110,7 +110,7 @@ import WovenMatterDashboardStore
         let transport = try makeTransport(credential)
         var revoked = false
         for entry in state.outbox {
-            let result: CompanionMutationResult
+            let result: LibraryMutationResult
             do { result = try await transport.mutate(entry.mutation) }
             catch MobileConnectionError.revoked { revoked = true; break }
             if result.status == .accepted { continue }
@@ -139,7 +139,7 @@ import WovenMatterDashboardStore
         switch mutation.kind {
         case .createNote, .updateNote:
             let cached = state.notes[mutation.resourceID]
-            let note = CompanionNote(id: mutation.resourceID, title: mutation.title ?? cached?.title ?? "Untitled note",
+            let note = LibraryNote(id: mutation.resourceID, title: mutation.title ?? cached?.title ?? "Untitled note",
                 content: mutation.content ?? cached?.content ?? "", revision: 0)
             try await preserve(note, database: database, deviceID: state.deviceID)
         case .deleteNote:
@@ -157,7 +157,7 @@ import WovenMatterDashboardStore
         }
     }
 
-    private static func preserve(_ note: CompanionNote, database: WorkspaceDatabase, deviceID: String, operationID: String? = nil, describes: Bool = false) async throws {
+    private static func preserve(_ note: LibraryNote, database: WorkspaceDatabase, deviceID: String, operationID: String? = nil, describes: Bool = false) async throws {
         let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
         // An unapplied operation has exactly one recovery identity, however
         // often reconciliation is retried.
@@ -165,8 +165,8 @@ import WovenMatterDashboardStore
         var bytes = Array(SHA256.hash(data: seed).prefix(16))
         bytes[6] = (bytes[6] & 15) | 80; bytes[8] = (bytes[8] & 63) | 128
         let id = UUID(uuid: (bytes[0],bytes[1],bytes[2],bytes[3],bytes[4],bytes[5],bytes[6],bytes[7],bytes[8],bytes[9],bytes[10],bytes[11],bytes[12],bytes[13],bytes[14],bytes[15])).uuidString.lowercased()
-        guard try await database.companionNote(id: id) == nil else { return }
-        _ = try await database.applyCompanionMutation(.init(deviceID: deviceID, kind: .createNote, resourceID: id,
+        guard try await database.libraryNote(id: id) == nil else { return }
+        _ = try await database.applyLibraryMutation(.init(deviceID: deviceID, kind: .createNote, resourceID: id,
             title: describes ? note.title : note.title + " (Saved before pairing upgrade)", content: note.content))
     }
 }

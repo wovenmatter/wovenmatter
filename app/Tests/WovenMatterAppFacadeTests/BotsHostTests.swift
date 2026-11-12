@@ -126,7 +126,7 @@ private func waitFor(_ what: String, _ condition: () -> Bool) async throws {
     throw CancellationError()
 }
 
-private func hostRequest(_ method: String, _ path: String, token: String?, body: [String: Any]? = nil) throws -> CompanionHTTPRequest {
+private func hostRequest(_ method: String, _ path: String, token: String?, body: [String: Any]? = nil) throws -> LibraryHTTPRequest {
     var headers = ["host": "127.0.0.1"]
     if let token { headers["authorization"] = "Bearer " + token }
     if body != nil { headers["content-type"] = "application/json" }
@@ -271,7 +271,7 @@ struct BotsHostTests {
 
     @Test func otherMembersReachTheRuntimeOnlyThroughItsOwnBearer() async throws {
         let fixture = try HostFixture(); defer { fixture.remove() }
-        let upgrade = CompanionHTTPRequest(method: "GET", target: "/v1/bots/ws", headers: [
+        let upgrade = LibraryHTTPRequest(method: "GET", target: "/v1/bots/ws", headers: [
             "host": "mac.tail.ts.net", "upgrade": "websocket", "connection": "Upgrade",
             "sec-websocket-key": "dGhlIHNhbXBsZSBub25jZQ==", "sec-websocket-version": "13", "authorization": "Bearer member-grant",
         ])
@@ -397,13 +397,13 @@ struct BotsHostTests {
         #expect(BotsHostController.devices(nil, showing: []) == nil)
     }
 
-    @Test func theCompanionParserAcceptsAWebSocketUpgradeOnlyWhenAsked() throws {
+    @Test func theLibraryParserAcceptsAWebSocketUpgradeOnlyWhenAsked() throws {
         let raw = Data("GET /v1/bots/ws HTTP/1.1\r\nHost: x\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: k\r\nSec-WebSocket-Version: 13\r\n\r\n".utf8)
-        var plain = CompanionHTTPParser()
+        var plain = LibraryHTTPParser()
         #expect(throws: (any Error).self) { _ = try plain.append(raw) }
-        var upgrading = CompanionHTTPParser(allowsUpgrade: true)
+        var upgrading = LibraryHTTPParser(allowsUpgrade: true)
         #expect(try upgrading.append(raw)?.headers["upgrade"] == "websocket")
-        var post = CompanionHTTPParser(allowsUpgrade: true)
+        var post = LibraryHTTPParser(allowsUpgrade: true)
         #expect(throws: (any Error).self) {
             _ = try post.append(Data("POST /v1/bots/ws HTTP/1.1\r\nHost: x\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nContent-Type: application/json\r\n\r\n".utf8))
         }

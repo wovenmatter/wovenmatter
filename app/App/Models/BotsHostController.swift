@@ -131,7 +131,7 @@ final class BotsHostController {
     @ObservationIgnored private var dependencies: BotsHostDependencies
     @ObservationIgnored private(set) var supervisor: BotsRuntimeSupervisor?
     @ObservationIgnored private let previews: BotPreviewPublisher
-    @ObservationIgnored private var hostServer: CompanionHTTPServer?
+    @ObservationIgnored private var hostServer: LibraryHTTPServer?
     @ObservationIgnored private var hostPort: UInt16?
     @ObservationIgnored private var identity: (deviceID: String, name: String)?
     @ObservationIgnored private var notifier: PiBotClient?
@@ -447,7 +447,7 @@ final class BotsHostController {
         let identity = try await resolveIdentity()
         guard hostServer == nil else { return }
         let api = makeHostAPI(machineID: identity.deviceID)
-        let server = CompanionHTTPServer { request in await api.handle(request) }
+        let server = LibraryHTTPServer { request in await api.handle(request) }
         hostServer = server
         do { hostPort = try await server.start() }
         catch { hostServer = nil; throw error }
@@ -496,18 +496,18 @@ final class BotsHostController {
         throw BotsError.unavailable("Bots on this Mac did not answer.")
     }
 
-    // MARK: Other members (`/v1/bots/*` on this Mac's companion server)
+    // MARK: Other members (`/v1/bots/*` on this Mac's library server)
 
-    /// The caller is already authorized as a member by the companion server.
-    func remoteUpgrade(_ request: CompanionHTTPRequest) -> CompanionUpgradeDecision {
+    /// The caller is already authorized as a member by the library server.
+    func remoteUpgrade(_ request: LibraryHTTPRequest) -> WebSocketUpgradeDecision {
         guard persisted.enabled, supervisor?.phase == .running, let port = persisted.runtimePort.flatMap(UInt16.init(exactly:)),
-              let head = CompanionUpgradeDecision.webSocketHead(for: request, port: port, path: "/ws", bearer: persisted.runtimeToken) else {
+              let head = WebSocketUpgradeDecision.webSocketHead(for: request, port: port, path: "/ws", bearer: persisted.runtimeToken) else {
             return .reject(.error("unavailable", "Bots on this Mac are not running.", status: 503))
         }
         return .tunnel(port: port, head: head)
     }
 
-    func remoteRequest(_ request: CompanionHTTPRequest, path: String) async -> CompanionHTTPResponse {
+    func remoteRequest(_ request: LibraryHTTPRequest, path: String) async -> LibraryHTTPResponse {
         do {
             switch (request.method, path) {
             case ("GET", "/v1/bots/status"):

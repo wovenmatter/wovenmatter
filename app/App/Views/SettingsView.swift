@@ -31,7 +31,7 @@ private enum SettingsRoute: Equatable {
     case harness(AgentRuntimeKind, UUID?, HarnessSettingsOrigin)
     case wovenMCP
     case workspaces(UUID?)
-    case companion
+    case appleDevices
     case backgroundServer
     case dictation
     case bots
@@ -130,11 +130,11 @@ struct SettingsView: View {
                     },
                     onBack: { route = .landing }
                 )
-            case .companion:
-                SettingsCompanionView(model: model, host: model.companionHost,
+            case .appleDevices:
+                SettingsAppleDevicesView(model: model, host: model.libraryHost,
                     reservesRailControlSpace: reservesRailControlSpace,
                     onBack: { route = .landing },
-                    onOpenBots: { open(.bots, .bots, from: .companion) })
+                    onOpenBots: { open(.bots, .bots, from: .appleDevices) })
             case .backgroundServer:
                 SettingsBackgroundServerView(model: model, reservesRailControlSpace: reservesRailControlSpace, onBack: { route = .landing })
             case .dictation:
@@ -260,7 +260,7 @@ struct SettingsView: View {
         case .harness(let kind, _, _): kind.displayName
         case .wovenMCP: "Woven MCP"
         case .workspaces(let id): id.flatMap { model.remoteWorkspaces.configuration(id: $0)?.name } ?? "Workspaces"
-        case .companion: "Apple Devices"
+        case .appleDevices: "Apple Devices"
         case .backgroundServer: "Background Server"
         case .dictation: "Dictation"
         case .bots: "Bots"
@@ -345,7 +345,7 @@ struct SettingsView: View {
                     title: "Apple Devices",
                     detail: "Connect Macs, iPhones, and iPads to share your library.",
                     icon: { DashboardLucideIcon(glyph: .monitor, size: 15) },
-                    action: { route = .companion }
+                    action: { route = .appleDevices }
                 )
                 SettingsDestinationRow(
                     title: "Background Server",

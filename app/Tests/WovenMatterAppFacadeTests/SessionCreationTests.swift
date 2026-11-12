@@ -99,7 +99,7 @@ struct SessionCreationTests {
 
         let id = UUID().uuidString.lowercased()
         let providerID = remote ? "remote:\(f.remote.id.uuidString.lowercased()):codex" : "local:codex"
-        let receipt = try await f.model.companionCommands.execute(.init(deviceID: f.device, kind: .createSession,
+        let receipt = try await f.model.libraryCommands.execute(.init(deviceID: f.device, kind: .createSession,
             conversationID: id, providerID: providerID, folderID: folder, title: "From a member"), deviceID: f.device)
         #expect(receipt.status == .completed, "\(receipt.message ?? "")")
         #expect(try await record(f, id).title == "From a member")

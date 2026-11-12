@@ -57,9 +57,9 @@ extension ApplicationModel {
     func usageDeviceEndpoints() async -> [UsageDeviceEndpoint] {
         let linux = await usageLinuxDevices()
         let direct = Set(linux.flatMap { [$0.identity.id] + $0.formerIDs })
-        let peerSync = companionHost.peerSync
+        let peerSync = libraryHost.peerSync
         // The route list is shared across the library, so it includes this Mac too.
-        let ownDeviceID = try? await dashboardStore?.database.companionLibraryIdentity().hostDeviceID
+        let ownDeviceID = try? await dashboardStore?.database.libraryIdentity().hostDeviceID
         var endpoints = peerSync.routes.filter { $0.deviceID != ownDeviceID }.map { route in
             UsageDeviceEndpoint(
                 identity: .init(id: route.deviceID, name: route.name, kind: .mac),
@@ -73,7 +73,7 @@ extension ApplicationModel {
             UsageDeviceEndpoint(identity: device.identity, formerIDs: device.formerIDs, fetch: device.fetch)
         }
         if let database = dashboardStore?.database,
-           let replicated = try? await database.companionExecutionWorkspaces() {
+           let replicated = try? await database.libraryExecutionWorkspaces() {
             endpoints += replicated.filter { $0.kind == .ios && $0.isVisibleInConnections }.map { workspace in
                 UsageDeviceEndpoint.piDurableHistory(
                     identity: .init(id: workspace.id, name: workspace.name, kind: .ios),

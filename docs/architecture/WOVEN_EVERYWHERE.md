@@ -34,7 +34,7 @@ same commit.
   This generalizes today's paired-Mac identity (`PairedMacIdentity.swift`): a
   Mac's member key *is* its paired-Mac signing key, and a Mac's or Linux
   host's device ID is its library replica identity
-  (`companion_library_identity.host_device_id`, the sync clock's origin). On
+  (`library_identity.host_device_id`, the sync clock's origin). On
   Linux the key is `<library data root>/secrets/member-signing.key` (raw
   32-byte key, base64, created on first start).
 - The **member list** is a synced, signed record set. Each member entry names
@@ -64,13 +64,13 @@ same commit.
     first trusted, for pinning.
   - Adding: Mac↔Mac pairing (link or nearby request, then the signed join)
     records the other Mac on both sides. A phone that includes
-    `memberPublicKey` (raw 32 bytes) in `CompanionPairRequest` gets an `ios`
+    `memberPublicKey` (raw 32 bytes) in `PairRequest` gets an `ios`
     entry from the Mac it pairs with, signed when the phone confirms the
     pairing (`POST /v1/pair/confirm`), before its grant is issued; a pairing
     that is never confirmed adds no member. `POST /v1/pair` first checks that
     the Mac can add that key (`MemberDirectory.checkAdd`) and otherwise answers
     409 with the reason (`member_key_changed`) before the code is spent; it
-    also returns `CompanionPairResponse.libraryIDs` (the libraries in its
+    also returns `PairResponse.libraryIDs` (the libraries in its
     registry). Pairing a phone again on a Mac replaces its key
     (`add(…, replacingKey: true)`: a removal of the old key, then the new
     entry), as for a phone restored from a backup, whose Keychain key is this
@@ -94,7 +94,7 @@ same commit.
     anchor. Later member changes reach the host by peer sync.
   - When: the Mac that manages a Linux host over SSH sets it up as soon as it
     installs the host, installs it bots-only, or adds the workspace to a
-    bots-only host, and again on each launch (`CompanionHostController.setUpLinuxHost`).
+    bots-only host, and again on each launch (`LibraryHostController.setUpLinuxHost`).
     Setup is the adoption above, then, for a host with a workspace, exposing
     and enrolling it (`provisionCentralExecutionWorkspace`: Tailscale Serve
     for its execution API, then the grant that registers the row's
@@ -164,12 +164,12 @@ same commit.
     `/mcp/workspace` call from that serving member as well as from the
     execution device. The installing Mac addresses its first adoption to the
     `memberIdentity.deviceID` it read over SSH. A phone learns the pairing
-    Mac's ID from `CompanionPairResponse.hostDeviceID`. `GET /v1/identity`
+    Mac's ID from `PairResponse.hostDeviceID`. `GET /v1/identity`
     is used only by the Mac that is about to sign that host's entry. A
     workspace or host without a known device ID is not signed for
     (`member_audience_unknown`); the caller treats it as not reachable yet.
   - The shared test vectors in
-    `shared/Tests/WovenMatterCompanionTests/MemberSignatureVectors.json`
+    `shared/Tests/WovenMatterSharedTests/MemberSignatureVectors.json`
     (regenerate with `generate-member-signature-vectors.mjs` there) are
     checked by Swift (CryptoKit, and swift-crypto through
     `MemberSyncTests`) and by Node (`remote/test/member-auth.test.mjs`),
@@ -197,7 +197,7 @@ same commit.
   audience})`, where the server's audience is its library host's identity.
   `MemberDirectory.authenticate(_:allowing:)` checks any request (the Mac's
   bots WebSocket upgrade uses it through
-  `CompanionHostController.authenticateMember`). On a Mac, signed requests are
+  `LibraryHostController.authenticateMember`). On a Mac, signed requests are
   accepted on peer sync (`mac`, `linux`), the mobile API and `/mcp` (`ios`,
   `mac`), `/v1/execution/*` (`mac`, `ios`, `linux`; no execution grant
   needed), `/mcp/workspace` and `/mcp/workspace/prepare` (`linux`, in place
@@ -263,7 +263,7 @@ same commit.
   (`BotUpdatePlan.Step.linuxHost`) updates every Linux host in the registry
   this way (`RemoteWorkspacesModel.runSharedHost(_:.update)`); SSH is only
   the fallback for a host this Mac added. A Linux host's sessions use any
-  Mac's `/mcp/workspace` once the session's `companion_execution_conversations`
+  Mac's `/mcp/workspace` once the session's `execution_conversations`
   row has synchronized there, whichever Mac added the host. On a Mac, other
   Macs' agents (including those for Linux hosts they added) sync as peer
   agents (`pairedAgentWorkspaces`), and a new chat with one is created on its
@@ -286,7 +286,7 @@ same commit.
     to it at once; the reply is `{rotated: true}`, plus `bearer` only for the
     installer on its own tunnel. A Mac that removes another Mac queues a
     rotation (durably, retried with pending revocations,
-    `companion.execution.pending-installer-rotations`) on every Linux host in
+    user-defaults key `library.execution.pending-installer-rotations`) on every Linux host in
     the registry whose `ownerDeviceID` is the removed Mac. Publisher and MCP
     grants at rest are keyed by `WOVENMATTER_SERVICE_SECRET`, the first
     install's bearer, which installs and rotations keep, so rotation never
@@ -297,7 +297,7 @@ same commit.
     bearer: none of these is a call between members.
   - Grants for phones paired before members: the Mac's mobile API pairing
     credential and execution and inference grants
-    (`CompanionExecutionAuthentication`), Linux device grants
+    (`ExecutionAuthentication`), Linux device grants
     (`POST /v1/execution/devices`, issued from any Mac), and the phone's
     saved grants for workspaces too old for signatures.
   - The Linux host's single-Mac library MCP grant and publisher grant, issued
@@ -356,7 +356,7 @@ among Macs that still stand; they never decide who wins a dispute.
   - the peer sync protocol (today's paired-Mac protocol, generalized to all
     members);
   - the mobile library API that the iPhone uses (today's
-    `CompanionWorkspaceAPI` and `CompanionFederationAPI`), so a phone can sync
+    `DeviceAPI` and `FederationAPI`), so a phone can sync
     with any Mac or Linux machine;
   - the library-backed Woven MCP tool groups (notes, history, calendar,
     library, artifacts) for the local Node server, replacing today's relay to
@@ -388,7 +388,7 @@ among Macs that still stand; they never decide who wins a dispute.
     column as it was records nothing. Writers that run on a timer compare
     first: the Mac's 5-second registry refresh rewrites a
     `paired_remote_workspaces` configuration (stored as sorted-key JSON) or a
-    `companion_execution_workspaces` registration only when its decoded value
+    `execution_workspaces` registration only when its decoded value
     changed.
   - Triggers: a write that appends to the change log
     (`WorkspaceDatabase.observePeerChanges`) is announced, debounced 300 ms,
@@ -408,15 +408,15 @@ among Macs that still stand; they never decide who wins a dispute.
     against the sender. Member entries and removals are never deleted, must
     match their signed payload, never roll back to an older entry and never
     rewrite a removal (otherwise quarantined, or skipped when merely stale).
-    A Linux host (any sender but a Mac) writes `companion_execution_workspaces`
+    A Linux host (any sender but a Mac) writes `execution_workspaces`
     only for the workspace it serves itself (`MemberAudience.serving`, before
-    and after the change), `companion_execution_conversations` only for that
+    and after the change), `execution_conversations` only for that
     workspace's sessions, owner rows (`paired_*_owners`,
-    `companion_calendar_owners`, `companion_calendar_run_owners`) only naming
+    `calendar_task_executors`, `calendar_run_publishers`) only naming
     itself, and never `paired_mac_routes` or `paired_remote_workspaces`. Other
     such rows it relays are skipped; they arrive from a Mac directly.
-  - HTTP deadlines (both the Mac listener and `CompanionSocketHTTPServer`,
-    `CompanionHTTPParser.Deadlines`): the request head within 15 s; then the
+  - HTTP deadlines (both the Mac listener and `LibrarySocketHTTPServer`,
+    `LibraryHTTPParser.Deadlines`): the request head within 15 s; then the
     body for up to 15 minutes as long as bytes arrive at least every 30 s; a
     complete request is answered within 60 s, and a reply being written may
     take up to 15 minutes while it moves. An 8 MiB page or a 64 MiB upload
@@ -448,11 +448,21 @@ among Macs that still stand; they never decide who wins a dispute.
   message, version, schema}`; `LibrarySyncStatus` (`{deviceID, version,
   schema, peers: [{deviceID, name, kind, state: online|offline|updateRequired|failing,
   version, lastSynchronized, lastContact, error}], conflicts, quarantined}`,
-  `updateRequired`) is on the Mac's `CompanionHostSnapshot.librarySync`, the
+  `updateRequired`) is on the Mac's `LibraryHostSnapshot.librarySync`, the
   library socket's `GET /v1/sync/status` and, for phones, the mobile API's
   signed `GET /v1/sync/status` on every Mac and Linux host. On a Mac, a peer
   in `updateRequired` raises the same "Versions don't match" / "Update
   everything" notice as a bots version mismatch (`ApplicationModel+Bots.swift`).
+
+- **Storage names.** Table names say what a table holds:
+  - `library_identity` holds this replica's device ID (`host_device_id`) and the library's ID (`library_id`), which every paired device names.
+  - `paired_*` is peer sync between Macs and Linux hosts: the change log, cursors, version vectors and conflicts, plus the owner rows.
+  - `execution_*` is execution workspaces, this Mac's own included, with their journals, conversations, runs, adoptions, receipts, settlements, native history, and the MCP and publisher grants issued to them. Most of it is peer-synced library content (`PairedLibraryTables`).
+  - `calendar_task_executors` names the device that runs each scheduled item; `paired_calendar_owners` names the Mac that owns the row. `calendar_run_publishers` and `calendar_published_runs` are who may report runs and the runs they reported. `calendar_replica_context` and `calendar_execution_conflicts` belong to a replica that executes another library's schedule.
+  - `device_*` is what the library keeps for devices that reach it over the device API: the phone change feed (`device_sync_revisions`, `device_sync_changes`, written by the `device_sync_*` triggers), mutation, command, draft, tool and calendar receipts, scheduled MCP callers, saved files and message provenance.
+  - `library_items`, `library_messages`, `library_settings` and `library_locations` index the Library pane (files and links found in chats); `library_members*` is the signed member list.
+
+  Libraries created before November 2026 used `companion_*` names for all of these, and kept the library ID in `companion_workspace`. Opening such a library renames the tables in place, moves the library ID into `library_identity`, drops the old triggers (each is recreated under its new name) and rewrites the table names in peer sync bookkeeping, so nothing is lost or sent again (`renameLegacyCompanionStorageUnlocked`). The paired-devices file (`companion-devices.json`, now `library-devices.json`), the desktop's `companion.*` settings and its pairing credential and member key in the Keychain (`com.wovenmatter.companion.*`) move once in the same way.
 
 ### Library host (`wovenmatter-library`)
 
@@ -589,7 +599,7 @@ Membership, publishing and bot routes on the local API
   the socket serves it: on loopback every `/v1/members/…` path is 404, and
   mounts match whole path segments. `remote/src/member-client.mjs` requires
   `audience` on every request (`macs()` entries and registry rows carry it).
-- `GET /v1/workspaces` → `{workspaces: [CompanionExecutionWorkspace]}`: the
+- `GET /v1/workspaces` → `{workspaces: [ExecutionWorkspace]}`: the
   synced execution workspace registry (every Mac, Linux and iPhone
   workspace this library knows, deleted ones left out), which the server
   routes cross-workspace sessions with.
@@ -670,7 +680,7 @@ request never reached one or was refused before any effect (401, 403, 404,
 426, 503). The Mac accepts the call when the signer serves that non-deleted
 Linux workspace (its execution device, or the member `MemberAudience.serving`
 names) and the conversation belongs to it. A scheduled task's caller record
-(`companion_scheduled_mcp_callers`, written by `/mcp/workspace/prepare`) is not
+(`device_scheduled_mcp_callers`, written by `/mcp/workspace/prepare`) is not
 synced, so another Mac refuses the task's calls until the session's own row
 reaches it. The Node delegate therefore sends a task's calls to the Mac that
 last prepared it first, and prepares any other Mac (the same idempotent
@@ -833,7 +843,7 @@ hands them to the macOS job, which checks them with
   `.mac` rows only; the library rejects anything else). Devices group a
   folder under the registry row whose own id matches, else under the live row
   that names it as `folderOwnerID`
-  (`CompanionExecutionWorkspace.displayOwner(of:in:)`). This is display and
+  (`ExecutionWorkspace.displayOwner(of:in:)`). This is display and
   routing-choice grouping only; stored folder bindings are never rewritten, so
   existing folders appear under their Mac once it republishes its row (each
   registry refresh). A row without the field (an older Mac) leaves its
@@ -841,7 +851,7 @@ hands them to the macOS job, which checks them with
   Workspaces and Recents.
 - **Listed workspaces.** The iPhone's Home, Folders, New Chat and Calendar
   list Quick Chat plus only the Mac and Linux workspaces that are paired and
-  reachable now (`CompanionModel.workspaceIsActive`, `agentGroupIsActive`):
+  reachable now (`MobileModel.workspaceIsActive`, `agentGroupIsActive`):
   the workspace's own connection answered its last refresh, it is the library
   host the phone is synced with, or one of its agents can start now through
   that host. A registry row or saved agent catalog alone never lists a
@@ -854,11 +864,11 @@ hands them to the macOS job, which checks them with
   connections; their synced Quick Chat history and folders stay listed.
 - **Order and names.** Quick Chat comes first, then the library host, the
   other Macs and the Linux workspaces, each listed once under its registry
-  name with its own agents (`CompanionAgentGroup.list`). Every Mac that hosts
+  name with its own agents (`AgentGroup.list`). Every Mac that hosts
   a library advertises `history.central.v1`, so the central agent list
   ("This Mac", from `GET /v1/providers`) belongs only to the registry row of the
   library host the phone syncs with, matched by its device ID
-  (`CompanionModel.centralExecutionWorkspace`); any other Mac lists its own
+  (`MobileModel.centralExecutionWorkspace`); any other Mac lists its own
   agents from its own endpoint. A library host's agent that its central list
   reports as not ready is offered through its own endpoint when that reports
   it ready.
@@ -871,7 +881,7 @@ hands them to the macOS job, which checks them with
   the lists until those answers arrive; a deleted workspace's saved list is
   dropped.
 - **Sending.** A message to a Mac or Linux session (direct or central) shows in
-  the chat immediately (`CompanionPendingSend`), the composer clears, and a
+  the chat immediately (`PendingSend`), the composer clears, and a
   quiet caption says "Sending to <workspace>…" until the workspace accepts it,
   then "Starting on <workspace>…" until its transcript shows the message and
   its turn. The phone then refreshes that workspace at once and every two
@@ -883,8 +893,8 @@ hands them to the macOS job, which checks them with
 
 - **Identity.** On first pairing the phone creates a Curve25519 signing key
   in its Keychain (`MobileMemberKeyVault`, service
-  `com.wovenmatter.companion.member`, this device only), bound to its library
-  device ID, and sends it as `CompanionPairRequest.memberPublicKey`. A re-pair
+  `com.wovenmatter.wovenmatter.member`, this device only), bound to its library
+  device ID, and sends it as `PairRequest.memberPublicKey`. A re-pair
   presents the same key. The Mac adds the phone when the pairing is
   confirmed, so the phone probes it (a signed `GET /v1/hello`) only after
   confirming: a signed 401 then means the Mac did not add it (`rejected`,
@@ -894,8 +904,8 @@ hands them to the macOS job, which checks them with
   finding the key missing, the phone marks that membership refused instead of
   signing with a key no Mac knows, and pairing again replaces the key on the
   Mac. Whether to keep the replica (same library set) comes from
-  `CompanionPairResponse.libraryIDs`, before any signed request works.
-- **Signed requests.** `HTTPSCompanionTransport(host:identity:)` and
+  `PairResponse.libraryIDs`, before any signed request works.
+- **Signed requests.** `HTTPSLibraryTransport(host:identity:)` and
   `HTTPSExecutionWorkspaceTransport(workspace:identity:)` sign every request
   (`MobileRequestSigning`: the target is the percent-encoded path and query as
   sent, `/wovenmatter` included) and send no bearer. A signed 401 means "this
@@ -924,7 +934,7 @@ hands them to the macOS job, which checks them with
   edit is acknowledged (already there), resent (the host has its base), kept
   as a conflict with both versions (the host has another version) or created
   there (the host never got it). A note the host has only as a deletion
-  answers that create with `notFound` and `CompanionMutationResult.deleted`,
+  answers that create with `notFound` and `LibraryMutationResult.deleted`,
   and an unchanged phone copy is then deleted instead of becoming a conflict;
   calendar edits are rebased on the next
   snapshot the same way; the journal keeps all history, resets its cursor and
@@ -937,15 +947,21 @@ hands them to the macOS job, which checks them with
   client, with no execution grant. A workspace too old for signatures keeps
   its bearer grant.
 - **Inference.** A Mac's inference host (`/v1/inference/catalog`,
-  `/v1/inference/stream`, `CompanionInferenceHost`) accepts signed `ios` and
+  `/v1/inference/stream`, `InferenceHost`) accepts signed `ios` and
   `mac` members: the principal is the member's device ID, a named
   `X-Woven-Workspace` / `X-Woven-Library` / `X-Woven-Device` must match it and
   this Mac, and removal is checked before credentials are prepared and again
   before a stream starts. In member mode the phone saves hosted connections
   with `InferenceHostScope.hostDeviceID` (the workspace's `executionDeviceID`)
-  and no credential, and `CompanionInferenceService` signs them through
+  and no credential, and `MobileInferenceService` signs them through
   `InferenceMemberSigning` (installed with the phone's member key); a
   connection without `hostDeviceID` keeps presenting its grant.
+- **Analytics.** Only Macs record product analytics (a Linux host answers
+  `unsupported`). Each synchronization picks the analytics connection again
+  (`MobileLibraryHosts.analyticsTransport`): the current host when it is a
+  Mac, otherwise the preferred Mac from `candidates` (the paired Mac, then
+  other Macs). Pairing and host changes therefore re-bind it without a
+  relaunch, and an unpaired phone has no analytics connection at all.
 - **Migration.** Existing phone data stays. A phone paired before members
   shows "Pair again once with any Mac"; pairing with a Mac of the same
   library set (its registry holds the phone's previous library) keeps the
@@ -963,6 +979,36 @@ hands them to the macOS job, which checks them with
   needs runs when the user opens it. Recurring agent work becomes a scheduled
   task on a Mac or Linux workspace.
 - Other devices see Quick Chats as read-only synced history.
+
+### iPhone without a Mac
+
+- The iPhone and iPad app is complete with no Mac or Linux device paired
+  (`MobileModel.isStandalone`: no pairing credential and no bound library).
+  Provider sign-in and web search keys live in Settings → iPhone Connections;
+  Quick Chat, notes and folders, calendar, timers and reminders, and dictation
+  all run on the device. Nothing waits on a host: with no credential there is
+  no sync engine, so there is no connection banner, no network retry and no
+  analytics send (the 15-second lifecycle tick only reads local state).
+- Home offers "Connect your Mac" with one caption saying what pairing adds
+  (workspaces, agents on your computers, sync) and that local data is kept.
+  Pages that only a Mac or Linux workspace serves (Scheduled tasks, Databases)
+  are left out until paired; Library and Folders explain pairing instead of
+  showing an outage. On a phone that has never been paired, a note is
+  deleted on the phone itself (`MobileModel.canDeleteNoteLocally`). Once a
+  phone has been paired, notes go to the library's Trash; after an unpair,
+  deleting waits until it pairs again, because a note may already be in the
+  library even before its create was answered.
+- **Pairing later** keeps everything. A first pairing binds the empty replica
+  to the Mac's library (`MobileStore.prepareForPairing` with no previous
+  library moves nothing) and registers the phone's device workspace; the next
+  synchronization then sends each local item once: one `createFolder` and one
+  `createNote` per item with its latest writing (edits made before pairing
+  collapse into the create, and a note deleted before pairing is never sent),
+  the Quick Chat journal (its entries were written for the device workspace
+  before it was registered and publish once it is), calendar events and timer
+  reminders, and dictations. Local notes the Mac does not have are kept, and
+  Quick Chats stay owned by the phone. Pairing with a Mac of another library
+  later still takes the explicit library-change path above.
 
 ## Bots
 

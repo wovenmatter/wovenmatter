@@ -1,6 +1,6 @@
-import CompanionClient
+import LibraryClient
 import Foundation
-import WovenMatterCompanion
+import WovenMatterShared
 import WovenMatterCore
 import WovenMatterDashboardStore
 
@@ -26,7 +26,7 @@ final class SecondaryMacReplicaTools {
         // Browsing other devices' cached history requires the actual history tool.
         if group == .history, !tools.enabled.contains(.history) { return nil }
         try await database.requireTool(group, sessionID: callerID)
-        let snapshot = try await database.companionSnapshot()
+        let snapshot = try await database.librarySnapshot()
         let caller = snapshot.conversations.first(where: { $0.id == callerID })
         guard caller != nil || WovenMCPCaller.isAppWide(callerID) else { throw WorkspaceToolError.notFound("The native caller is no longer available.") }
         let nativeIDs = Set(snapshot.conversations.map(\.id))
@@ -102,7 +102,7 @@ final class SecondaryMacReplicaTools {
         let to = try command.options["until"].map(MobileToolSupport.date) ?? Date()
         guard to >= from else { throw WorkspaceToolError.invalid("--until must be at or after --since.") }
         let journal = await replica.journal.snapshot()
-        var cached: [CompanionUsageSample] = []
+        var cached: [LibraryUsageSample] = []
         for workspace in journal.workspaces.values where workspace.id != workspaceID {
             var samples = try DeviceUsageProjection.samples(in: journal, workspaceID: workspace.id, from: from, to: to)
             for index in samples.indices { samples[index].workspace = workspace.name }

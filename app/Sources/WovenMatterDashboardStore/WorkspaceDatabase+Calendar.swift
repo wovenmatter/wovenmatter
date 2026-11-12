@@ -377,9 +377,9 @@ extension WorkspaceDatabaseConnection {
     !(try historyRowsUnlocked("""
       SELECT 1 FROM workspace_calendar_runs r JOIN dashboard_calendar_items e ON e.id=r.event_id
       WHERE r.id=? AND r.status='pending' AND e.deleted_at IS NULL AND json_extract(e.calendar_json,'$.task') IS NOT NULL
-      AND NOT EXISTS(SELECT 1 FROM companion_calendar_execution_conflicts c WHERE c.event_id=e.id)
+      AND NOT EXISTS(SELECT 1 FROM calendar_execution_conflicts c WHERE c.event_id=e.id)
       AND \(PairedLibraryOwnership.localCalendarItem("e.id"))
-        AND NOT EXISTS(SELECT 1 FROM companion_calendar_owners c WHERE c.event_id=e.id AND c.device_id != COALESCE((SELECT workspace_id FROM companion_calendar_execution_context WHERE singleton=1), (SELECT host_device_id FROM companion_library_identity WHERE singleton=1)))
+        AND NOT EXISTS(SELECT 1 FROM calendar_task_executors c WHERE c.event_id=e.id AND c.device_id != COALESCE((SELECT workspace_id FROM calendar_replica_context WHERE singleton=1), (SELECT host_device_id FROM library_identity WHERE singleton=1)))
       AND NOT EXISTS(SELECT 1 FROM workspace_calendar_remote_ownership o
         WHERE o.workspace_id=lower(json_extract(e.calendar_json,'$.task.configuration.workspaceID')))
       """, values: [id])).isEmpty

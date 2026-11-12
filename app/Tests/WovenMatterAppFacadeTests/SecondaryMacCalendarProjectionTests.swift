@@ -1,8 +1,8 @@
 import WorkspaceFixtures
-import CompanionClient
+import LibraryClient
 import Foundation
 import Testing
-import WovenMatterCompanion
+import WovenMatterShared
 import WovenMatterCore
 @testable import WovenMatterDashboardStore
 @testable import WovenMatterAppFacade
@@ -15,7 +15,7 @@ struct SecondaryMacCalendarProjectionTests {
         let database: WorkspaceDatabase
         let central: WorkspaceDatabase
         let replica: MobileStore
-        let descriptor: CompanionExecutionWorkspace
+        let descriptor: ExecutionWorkspace
         let bridge: SecondaryMacCalendarProjection
         init() async throws {
             directory = FileManager.default.temporaryDirectory.appending(path: "secondary-calendar-" + UUID().uuidString)
@@ -23,8 +23,8 @@ struct SecondaryMacCalendarProjectionTests {
             database = try await WorkspaceDatabase(url: directory.appending(path: "execution.sqlite"))
             central = try await WorkspaceDatabase(url: directory.appending(path: "central.sqlite"))
             replica = try MobileStore(file: directory.appending(path: "client/library.json"))
-            let library = try await central.companionLibraryIdentity().libraryID
-            try await replica.apply(CompanionSnapshot(workspaceID: library, cursor: 0))
+            let library = try await central.libraryIdentity().libraryID
+            try await replica.apply(LibrarySnapshot(workspaceID: library, cursor: 0))
             let owner = await replica.snapshot().deviceID
             descriptor = .init(id: owner, libraryID: library, ownerDeviceID: owner, kind: .mac, name: "Test Mac")
             bridge = try SecondaryMacCalendarProjection(database: database, replica: replica, descriptor: descriptor, directory: directory)
@@ -32,7 +32,7 @@ struct SecondaryMacCalendarProjectionTests {
         func remove() { try? FileManager.default.removeItem(at: directory) }
         func synchronize() async throws {
             while let mutation = try await replica.calendar.nextMutation() {
-                let receipt = try await central.companionCalendarMutate(mutation, deviceID: descriptor.ownerDeviceID)
+                let receipt = try await central.libraryCalendarMutate(mutation, deviceID: descriptor.ownerDeviceID)
                 try await replica.calendar.acknowledge(receipt)
             }
         }

@@ -12,7 +12,7 @@ import SQLite3
 import CSQLite
 #endif
 import Testing
-@testable import WovenMatterCompanion
+@testable import WovenMatterShared
 import WovenMatterCore
 import WovenMatterDashboardStore
 @testable import WovenMatterLibraryHost
@@ -312,7 +312,7 @@ struct LibraryHostTests {
     try FileManager.default.createDirectory(at: macRoot, withIntermediateDirectories: true)
     let macDatabase = try await WorkspaceDatabase(url: macRoot.appending(path: "workspace.sqlite"))
     let mac = MemberDirectory(database: macDatabase, identity: try MemberIdentity.loadOrCreate(file: macRoot.appending(path: "mac.key"),
-      deviceID: try await macDatabase.companionLibraryIdentity().hostDeviceID, kind: .mac), cacheLifetime: 0)
+      deviceID: try await macDatabase.libraryIdentity().hostDeviceID, kind: .mac), cacheLifetime: 0)
     try await mac.ensureSelf(name: "Studio Mac", endpoints: [URL(string: "https://studio.tailnet.ts.net/")!])
     try await mac.add(deviceID: identity.deviceID, kind: .linux, name: "Box", publicKey: identity.publicKey,
                       endpoints: [URL(string: "https://box.tailnet.ts.net/wovenmatter/")!])
@@ -321,12 +321,12 @@ struct LibraryHostTests {
 
     func signed(_ path: String, as member: MemberIdentity = phone) throws -> HTTPReply {
       let headers = try member.signer.headers(method: "GET", target: path, audience: identity.deviceID)
-        .merging(["X-Woven-Protocol": String(CompanionProtocol.version)]) { a, _ in a }
+        .merging(["X-Woven-Protocol": String(LibraryProtocol.version)]) { a, _ in a }
       return try send("GET", path, port: fixture.port, headers: headers)
     }
     // Unsigned or from a stranger: refused before adoption.
     #expect(try signed("/wovenmatter/v1/hello").status == 401)
-    #expect(try send("GET", "/wovenmatter/v1/hello", port: fixture.port, headers: ["X-Woven-Protocol": String(CompanionProtocol.version)]).status == 401)
+    #expect(try send("GET", "/wovenmatter/v1/hello", port: fixture.port, headers: ["X-Woven-Protocol": String(LibraryProtocol.version)]).status == 401)
     // An adoption whose anchor did not sign this host's key is refused.
     let stranger = MemberDirectory(database: macDatabase, identity: try MemberIdentity.loadOrCreate(file: macRoot.appending(path: "other.key"),
       deviceID: UUID().uuidString.lowercased(), kind: .mac))
@@ -351,12 +351,12 @@ struct LibraryHostTests {
     #expect(syncStatus.status == 200 && syncStatus.json?.objectValue?["deviceID"]?.stringValue == identity.deviceID)
     // A signed request cannot be replayed.
     let headers = try phone.signer.headers(method: "GET", target: "/v1/hello", audience: identity.deviceID)
-      .merging(["X-Woven-Protocol": String(CompanionProtocol.version)]) { a, _ in a }
+      .merging(["X-Woven-Protocol": String(LibraryProtocol.version)]) { a, _ in a }
     #expect(try send("GET", "/v1/hello", port: fixture.port, headers: headers).status == 200)
     #expect(try send("GET", "/v1/hello", port: fixture.port, headers: headers).status == 401)
     // A request the phone addressed to another member is refused here, with a fresh nonce.
     let elsewhere = try phone.signer.headers(method: "GET", target: "/v1/hello", audience: mac.identity.deviceID)
-      .merging(["X-Woven-Protocol": String(CompanionProtocol.version)]) { a, _ in a }
+      .merging(["X-Woven-Protocol": String(LibraryProtocol.version)]) { a, _ in a }
     #expect(try send("GET", "/v1/hello", port: fixture.port, headers: elsewhere).status == 401)
 
     try await mac.remove(phone.deviceID)
@@ -378,7 +378,7 @@ struct LibraryHostTests {
     try FileManager.default.createDirectory(at: macRoot, withIntermediateDirectories: true)
     let macDatabase = try await WorkspaceDatabase(url: macRoot.appending(path: "workspace.sqlite"))
     let mac = MemberDirectory(database: macDatabase, identity: try MemberIdentity.loadOrCreate(file: macRoot.appending(path: "mac.key"),
-      deviceID: try await macDatabase.companionLibraryIdentity().hostDeviceID, kind: .mac), cacheLifetime: 0)
+      deviceID: try await macDatabase.libraryIdentity().hostDeviceID, kind: .mac), cacheLifetime: 0)
     try await mac.ensureSelf(name: "Studio Mac", endpoints: [URL(string: "https://studio.tailnet.ts.net/wovenmatter")!])
     try await mac.add(deviceID: identity.deviceID, kind: .linux, name: "Box", publicKey: identity.publicKey, endpoints: [])
     let phone = UUID().uuidString.lowercased(), linux = UUID().uuidString.lowercased()
@@ -466,21 +466,21 @@ struct LibraryHostTests {
     #expect(try await fixture.host.database.botConversationEntries(id: try #require(conversations.first?.id)).count == 1)
 
     // Session history from this machine's Node server lands in its own library.
-    let library = try await fixture.host.database.companionLibraryIdentity()
+    let library = try await fixture.host.database.libraryIdentity()
     // On a real host this descriptor arrives with the adding Mac's records.
-    let workspace = CompanionExecutionWorkspace(id: UUID().uuidString.lowercased(), libraryID: library.libraryID,
+    let workspace = ExecutionWorkspace(id: UUID().uuidString.lowercased(), libraryID: library.libraryID,
       ownerDeviceID: library.hostDeviceID, kind: .linux, name: "Box", executionDeviceID: UUID().uuidString.lowercased())
     let conversation = UUID().uuidString.lowercased()
-    let entry = CompanionJournalEntry(workspaceID: workspace.id, originSequence: 1, conversationID: conversation, kind: .conversation,
+    let entry = ExecutionJournalEntry(workspaceID: workspace.id, originSequence: 1, conversationID: conversation, kind: .conversation,
       conversation: .init(id: conversation, title: "Linux session", runtimeKind: "default_agent"))
-    let journal = CompanionJournalBatch(libraryID: workspace.libraryID, entries: [entry])
+    let journal = ExecutionJournalBatch(libraryID: workspace.libraryID, entries: [entry])
     #expect(try send("POST", "/v1/publisher/journal", unix: fixture.socket, headers: auth, body: JSONEncoder().encode(journal)).status == 403)
-    _ = try await fixture.host.database.registerCompanionExecutionWorkspace(.init(workspace: workspace), deviceID: library.hostDeviceID)
+    _ = try await fixture.host.database.registerExecutionWorkspace(.init(workspace: workspace), deviceID: library.hostDeviceID)
     let published = try send("POST", "/v1/publisher/journal", unix: fixture.socket, headers: auth, body: JSONEncoder().encode(journal))
     #expect(published.status == 200, "\(String(decoding: published.body, as: UTF8.self))")
-    #expect(try JSONDecoder().decode(CompanionJournalBatchResult.self, from: published.body).libraryID == workspace.libraryID)
-    #expect(try await fixture.host.database.companionJournal(after: 0).entries.map(\.eventID) == [entry.eventID])
-    let foreign = CompanionJournalBatch(libraryID: UUID().uuidString.lowercased(), entries: [entry])
+    #expect(try JSONDecoder().decode(ExecutionJournalBatchResult.self, from: published.body).libraryID == workspace.libraryID)
+    #expect(try await fixture.host.database.executionJournal(after: 0).entries.map(\.eventID) == [entry.eventID])
+    let foreign = ExecutionJournalBatch(libraryID: UUID().uuidString.lowercased(), entries: [entry])
     #expect(try send("POST", "/v1/publisher/journal", unix: fixture.socket, headers: auth, body: JSONEncoder().encode(foreign)).status == 400)
   }
 
@@ -502,7 +502,7 @@ struct LibraryHostTests {
     try FileManager.default.createDirectory(at: macRoot, withIntermediateDirectories: true)
     let macDatabase = try await WorkspaceDatabase(url: macRoot.appending(path: "workspace.sqlite"))
     let mac = MemberDirectory(database: macDatabase, identity: try MemberIdentity.loadOrCreate(file: macRoot.appending(path: "mac.key"),
-      deviceID: try await macDatabase.companionLibraryIdentity().hostDeviceID, kind: .mac), cacheLifetime: 0)
+      deviceID: try await macDatabase.libraryIdentity().hostDeviceID, kind: .mac), cacheLifetime: 0)
     try await mac.ensureSelf(name: "Offline Mac", endpoints: [URL(string: "https://mac.tail1.ts.net/wovenmatter")!])
     for (fixture, name) in [(one, "one"), (two, "two")] {
       try await mac.add(deviceID: fixture.host.identity.deviceID, kind: .linux, name: name, publicKey: fixture.host.identity.publicKey,
@@ -532,7 +532,7 @@ struct LibraryHostTests {
     let noteID = try #require(created.value["id"]?.stringValue, "\(created.error ?? "")")
     var arrived = false
     for _ in 0..<200 where !arrived {
-      arrived = (try? await two.host.database.companionNote(id: noteID)) != nil
+      arrived = (try? await two.host.database.libraryNote(id: noteID)) != nil
       if !arrived { try await Task.sleep(for: .milliseconds(50)) }
     }
     #expect(arrived)

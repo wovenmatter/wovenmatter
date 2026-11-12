@@ -6,7 +6,7 @@ import WovenMatterCore
 enum DevelopmentLibraryProjection {
     /// A registered database link must be evaluated by its library host. Reuse
     /// the client preview so a refresh cannot write rendered data into the note.
-    static func usesCentralPreview(_ note: CompanionNote) -> Bool {
+    static func usesCentralPreview(_ note: LibraryNote) -> Bool {
         let document = NoteDocument.decode(note.content)
         return document.databaseLink != nil || document.blocks.contains {
             if case .table(let table) = $0 { return table.databaseLink != nil }
@@ -14,7 +14,7 @@ enum DevelopmentLibraryProjection {
         }
     }
 
-    static func conversation(_ value: CompanionConversation) throws -> WorkspaceConversationRecord {
+    static func conversation(_ value: LibraryConversation) throws -> WorkspaceConversationRecord {
         var fields: [String: Any] = ["id": value.id, "title": value.title, "unread": false,
             "is_pinned": value.isPinned ?? false, "is_archived": false, "is_scheduled_task": false,
             "last_message_at": value.updatedAt, "last_message_preview": value.preview]
@@ -25,9 +25,9 @@ enum DevelopmentLibraryProjection {
 
 /// A read-only window projection; authoritative replica state stays in the server.
 struct DevelopmentReplicaSnapshot: Codable, Equatable {
-    var conversations: [CompanionConversation] = []
+    var conversations: [LibraryConversation] = []
     var owners: [String: String] = [:]
-    var artifacts: [CompanionArtifactManifest] = []
+    var artifacts: [LibraryArtifactManifest] = []
     var workspaceNames: [String: String] = [:]
     var endpoint: URL?
     var status = "Waiting for live library"

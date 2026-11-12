@@ -1,4 +1,4 @@
-name: WovenMatterCompanion
+name: WovenMatter
 options:
   deploymentTarget:
     iOS: "26.0"
@@ -11,12 +11,12 @@ packages:
   Shared:
     path: ../shared
 targets:
-  WovenMatterMobileApp:
-    productName: WovenMatterCompanion
+  WovenMatter:
+    productName: WovenMatter
     type: application
     platform: iOS
     sources:
-      - path: Sources/CompanionApp
+      - path: Sources/MobileApp
       - path: ../app/App/Views/DashboardStyle.swift
       - path: ../app/App/Views/DashboardColors.swift
       - path: ../app/App/Models/ConversationMarkdownDocument.swift
@@ -35,64 +35,78 @@ targets:
       - path: ../app/App/Views/ConversationSubagentRow.swift
       - path: ../app/App/SharedAssets.xcassets
       - path: ../docs/assets/LUCIDE_LICENSE.txt
+      - path: Config/PrivacyInfo.xcprivacy
+        buildPhase: resources
     dependencies:
       - package: Mobile
-        product: CompanionClient
+        product: LibraryClient
       - package: Mobile
         product: PiDurableRuntime
       - package: Mobile
-        product: CompanionInference
+        product: MobileInference
       - package: Shared
-        product: WovenMatterCompanion
+        product: WovenMatterShared
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.wovenmatter.companion.dev
-        PRODUCT_NAME: WovenMatterCompanion
+        PRODUCT_NAME: WovenMatter
         PRODUCT_MODULE_NAME: WovenMatterMobileApp
         DEVELOPMENT_TEAM: 3M84Q9NAMN
         CODE_SIGN_STYLE: Automatic
         INFOPLIST_FILE: Config/Info.plist
-        MARKETING_VERSION: 0.1.0
+        MARKETING_VERSION: 0.0.1
+        # Dev default only. TestFlight archives stamp a UTC build number;
+        # see scripts/prepare-ios-testflight.sh.
         CURRENT_PROJECT_VERSION: 18
         TARGETED_DEVICE_FAMILY: "1,2"
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
-  CompanionAppTests:
+      # Debug is the simulator/local-device Dev app; Release is the TestFlight app.
+      configs:
+        Debug:
+          PRODUCT_BUNDLE_IDENTIFIER: com.wovenmatter.wovenmatter.dev
+          WOVENMATTER_DISPLAY_NAME: Woven Matter Dev
+          # Its own link scheme, so a pairing link opened outside the app goes to the TestFlight app.
+          WOVENMATTER_URL_SCHEME: wovenmatter-dev
+        Release:
+          PRODUCT_BUNDLE_IDENTIFIER: com.wovenmatter.wovenmatter
+          WOVENMATTER_DISPLAY_NAME: Woven Matter
+          WOVENMATTER_URL_SCHEME: wovenmatter
+  MobileAppTests:
     type: bundle.unit-test
     platform: iOS
     sources:
-      - path: Tests/CompanionAppTests
+      - path: Tests/MobileAppTests
     dependencies:
-      - target: WovenMatterMobileApp
+      - target: WovenMatter
       - package: Mobile
-        product: CompanionClient
+        product: LibraryClient
         link: false
       - package: Shared
-        product: WovenMatterCompanion
+        product: WovenMatterShared
         link: false
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.wovenmatter.companion.dev.apptests
-        TEST_HOST: $(BUILT_PRODUCTS_DIR)/WovenMatterCompanion.app/WovenMatterCompanion
+        PRODUCT_BUNDLE_IDENTIFIER: com.wovenmatter.wovenmatter.dev.apptests
+        TEST_HOST: $(BUILT_PRODUCTS_DIR)/WovenMatter.app/WovenMatter
         BUNDLE_LOADER: $(TEST_HOST)
         GENERATE_INFOPLIST_FILE: YES
-  CompanionUITests:
+  MobileUITests:
     type: bundle.ui-testing
     platform: iOS
     sources:
-      - path: Tests/CompanionUITests
+      - path: Tests/MobileUITests
     dependencies:
-      - target: WovenMatterMobileApp
+      - target: WovenMatter
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.wovenmatter.companion.dev.uitests
+        PRODUCT_BUNDLE_IDENTIFIER: com.wovenmatter.wovenmatter.dev.uitests
         DEVELOPMENT_TEAM: 3M84Q9NAMN
         GENERATE_INFOPLIST_FILE: YES
 schemes:
-  WovenMatterCompanion:
+  WovenMatter:
     build:
       targets:
-        WovenMatterMobileApp: all
+        WovenMatter: all
     test:
       targets:
-        - CompanionAppTests
-        - CompanionUITests
+        - MobileAppTests
+        - MobileUITests

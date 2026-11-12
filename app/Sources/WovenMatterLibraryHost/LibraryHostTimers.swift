@@ -73,7 +73,7 @@ public struct LibraryHostTimers: Sendable {
   public func settle(_ settlement: Settlement, now: Date = Date()) async throws {
     guard UUID(uuidString: settlement.deliveryID) != nil, UUID(uuidString: settlement.timerID) != nil,
           settlement.reason.map({ $0.utf8.count <= 1_024 }) ?? true else {
-      throw CompanionAPIError(code: "invalid_request", message: "Settle a timer occurrence by its timer and delivery IDs.")
+      throw LibraryAPIError(code: "invalid_request", message: "Settle a timer occurrence by its timer and delivery IDs.")
     }
     switch settlement.outcome {
     case "accepted": try await database.setToolDeliveryStatus(id: settlement.deliveryID, status: "accepted")
@@ -81,7 +81,7 @@ public struct LibraryHostTimers: Sendable {
       try await database.setToolDeliveryStatus(id: settlement.deliveryID, status: "cancelled",
         failureCode: "not_deliverable", failureReason: settlement.reason ?? "This machine cannot deliver to the timer's session.")
     case "retry": try await database.failToolDeliveryAttempt(id: settlement.deliveryID, now: now); return
-    default: throw CompanionAPIError(code: "invalid_request", message: "A timer outcome is accepted, retry or cancelled.")
+    default: throw LibraryAPIError(code: "invalid_request", message: "A timer outcome is accepted, retry or cancelled.")
     }
     try await database.finishTimerOccurrence(id: settlement.timerID, deliveryID: settlement.deliveryID, now: now)
   }

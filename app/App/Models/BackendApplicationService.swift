@@ -1,5 +1,5 @@
 import Foundation
-import WovenMatterCompanion
+import WovenMatterShared
 import WovenMatterClient
 import WovenMatterCore
 import WovenMatterDashboardStore
@@ -23,7 +23,7 @@ struct BuiltInSubagentArchiveRequest: Codable, Sendable {
 
 enum BackendApplicationCommand: Codable, Sendable {
     case saveDictation(DictationRecord)
-    case companion(CompanionHostAction)
+    case libraryHost(LibraryHostAction)
     case federatedExecution(FederatedExecutionAction)
     case setIdleSleepPolicy(WorkPowerPolicy)
     case setClosedLidPolicy(WorkPowerPolicy)
@@ -58,7 +58,7 @@ enum BackendApplicationCommand: Codable, Sendable {
 }
 
 struct BackendApplicationResult: Codable, Sendable {
-    var companion: CompanionHostSnapshot?
+    var libraryHost: LibraryHostSnapshot?
     var federatedExecution: FederatedExecutionSnapshot?
     var exportURL: URL?
     var trashedConversations: [WorkspaceTrashedConversation]?
@@ -141,7 +141,7 @@ final class BackendApplicationService {
         return result
     }
 
-    func recordCompanionStop(conversationID: String) {
+    func recordLibraryStop(conversationID: String) {
         do { try dispatchAdmissions.prepareLegacyStop(conversationID: conversationID) }
         catch { dispatchAdmissions.refuseFurtherSends(conversationID: conversationID) }
     }
@@ -206,8 +206,8 @@ final class BackendApplicationService {
         switch command {
         case .federatedExecution(let action):
             return try await .init(federatedExecution: model.performFederatedExecution(action))
-        case .companion(let action):
-            let host = model.companionHost
+        case .libraryHost(let action):
+            let host = model.libraryHost
             switch action {
             case .status: await host.refreshStatus()
             case .pairAtEndpoint(let endpoint): await host.pairAtEndpoint(endpoint)
@@ -222,7 +222,7 @@ final class BackendApplicationService {
             case .createCode: await host.createPairingCode()
             case .revoke(let id): await host.revoke(id)
             }
-            return .init(companion: host.snapshot)
+            return .init(libraryHost: host.snapshot)
         case .setIdleSleepPolicy(let policy):
             model.activeWorkSleepPrevention.setPolicy(policy)
             return .init()

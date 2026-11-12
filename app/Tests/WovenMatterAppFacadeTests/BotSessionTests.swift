@@ -69,7 +69,7 @@ struct BotSessionTests {
         let caller = WovenMCPCaller.bot(machineID: machine, botID: botID)
         let target = try #require(await fixture.model.createLocalACPSession(runtimeKind: .codex))
         let gate = FacadeGate(); gate.hold(); defer { gate.open() }
-        tools.companionFixtureMCPConnection = { _, local, _ in await gate.pass(); return local }
+        tools.facadeFixtureMCPConnection = { _, local, _ in await gate.pass(); return local }
         let request = WovenMatterToolRequest(arguments: ["sessions", "send", target, "--text", "Revoked work"])
         let sending = Task { await tools.handle(request, callerID: caller) }
         await gate.waitForArrival()

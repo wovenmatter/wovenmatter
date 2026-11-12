@@ -1,12 +1,12 @@
-# Companion integration checks
+# Cross-device integration checks
 
-Run `scripts/test-companion-integration.sh` on macOS. All state is temporary and
+Run `scripts/test-cross-device-integration.sh` on macOS. All state is temporary and
 all provider work is a controlled fake. No user workspace, tailnet configuration,
 credentials, provider service or Docker lifecycle is touched.
 
 The suite connects the actual iOS `MobileStore` and `MobileSyncEngine` to the
-actual authenticated `CompanionWorkspaceAPI`, durable command dispatcher and
-canonical SQLite database through the production `CompanionHTTPServer` listener
+actual authenticated `DeviceAPI`, durable command dispatcher and
+canonical SQLite database through the production `LibraryHTTPServer` listener
 and HTTP parser, using URLSession on a temporary loopback port under the real
 `/wovenmatter` mount. A test-only transport maps a valid HTTPS fixture credential
 to that loopback endpoint; production HTTPS restrictions remain intact. Pairing,
@@ -22,6 +22,6 @@ lost acknowledgements and restarts between both phases; GET-only command receipt
 recovery without automatic unsent execution; and stopped-host rejection of
 new requests without canceling accepted Mac-owned work.
 
-Related coverage lives in shared package tests, `CompanionWorkspaceTests`, the
+Related coverage lives in shared package tests, `LibraryWorkspaceTests`, the
 iOS package tests, and the `DashboardNoteDraftTests` and `DashboardNoteEditorTests`
 suites in `app/Tests/WovenMatterAppFacadeTests`.

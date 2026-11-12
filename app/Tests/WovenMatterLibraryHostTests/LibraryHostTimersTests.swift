@@ -1,6 +1,6 @@
 import Foundation
 import Testing
-@testable import WovenMatterCompanion
+@testable import WovenMatterShared
 import WovenMatterCore
 import WovenMatterDashboardStore
 @testable import WovenMatterLibraryHost

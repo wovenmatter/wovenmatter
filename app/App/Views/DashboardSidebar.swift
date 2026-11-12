@@ -121,7 +121,7 @@ struct DashboardSidebarRail: View {
     let remoteWorkspaces: RemoteWorkspacesModel
     let localWorkspaceReady: Bool
     let localExecutionWorkspaceID: String?
-    let executionWorkspaces: [CompanionExecutionWorkspace]
+    let executionWorkspaces: [ExecutionWorkspace]
     let conversationOwners: [String: String]
     let folders: [WorkspaceFolderRecord]
     let conversations: [WorkspaceConversationRecord]
@@ -225,7 +225,7 @@ struct DashboardSidebarNavigationPage: View {
     let remoteWorkspaces: RemoteWorkspacesModel
     let localWorkspaceReady: Bool
     let localExecutionWorkspaceID: String?
-    let executionWorkspaces: [CompanionExecutionWorkspace]
+    let executionWorkspaces: [ExecutionWorkspace]
     let conversationOwners: [String: String]
     let folders: [WorkspaceFolderRecord]
     let conversations: [WorkspaceConversationRecord]
@@ -267,7 +267,7 @@ struct DashboardSidebarNavigationPage: View {
         Set(pinnedAgentOrder)
     }
 
-    private var pairedWorkspaceLinks: [CompanionExecutionWorkspace] {
+    private var pairedWorkspaceLinks: [ExecutionWorkspace] {
         DashboardPairedWorkspaceSidebarModel.workspaces(executionWorkspaces)
     }
 
@@ -490,7 +490,7 @@ struct DashboardSidebarNavigationPage: View {
     /// A paired iPhone or iPad: its Quick Chat history (read-only here) and the
     /// folders bound to it. Folders are created on the device itself.
     @ViewBuilder
-    private func pairedWorkspaceSection(_ workspace: CompanionExecutionWorkspace) -> some View {
+    private func pairedWorkspaceSection(_ workspace: ExecutionWorkspace) -> some View {
         let key = "paired-workspace:" + DashboardPairedWorkspaceSidebarModel.canonicalID(workspace.id)
         let history = DashboardPairedWorkspaceSidebarModel.history(
             for: workspace, conversations: conversations, owners: conversationOwners)
@@ -1338,12 +1338,12 @@ enum DashboardNewChatTarget {
 struct DashboardNewChatPeerTarget: Identifiable, Equatable {
     let agentID: UUID
     let runtimeKind: AgentRuntimeKind
-    let workspace: CompanionExecutionWorkspace
+    let workspace: ExecutionWorkspace
     var id: UUID { agentID }
 
     /// One row per workspace and harness, skipping those this Mac already
     /// offers through a Linux host it manages, Macs first, then by name.
-    static func resolve(agents: [WorkspaceAgent], peerWorkspaces: [UUID: CompanionExecutionWorkspace],
+    static func resolve(agents: [WorkspaceAgent], peerWorkspaces: [UUID: ExecutionWorkspace],
                         configured: [RemoteHarnessChatTarget], folderOwnerID: String?) -> [Self] {
         let owner = folderOwnerID.map(DashboardPairedWorkspaceSidebarModel.canonicalID)
         var seen = Set(configured.map { $0.configuration.id.uuidString.lowercased() + ":" + $0.harness.id.rawValue })

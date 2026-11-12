@@ -33,7 +33,7 @@ extension ApplicationModel {
         ]
         let processes = LocalACPClient.inspectionItems()
         if query.conversationID == nil {
-            items += CompanionTailscaleServe.inspectionItems().map { var item = $0; item.parentID = root; return item }
+            items += TailscaleServe.inspectionItems().map { var item = $0; item.parentID = root; return item }
         }
         items += processes.filter { query.conversationID == nil || $0.conversationID == query.conversationID }
             .map { var item = $0; item.parentID = item.conversationID.map { "chat:" + $0 } ?? root; return item }

@@ -92,7 +92,7 @@ enum PiDurableUsageRecords {
   }
 
   /// iPhone and iPad records already synced to this Mac.
-  static func records(from stored: [CompanionStoredNativeRecord]) -> [UsageDeviceRecord] {
+  static func records(from stored: [StoredNativeRecord]) -> [UsageDeviceRecord] {
     Dictionary(grouping: stored, by: \.conversationID).flatMap { conversation, records in
       samples(entries: records.map(\.data), session: .init(id: conversation, sourceID: "pi-durable"))
     }
@@ -255,7 +255,7 @@ public extension UsageDeviceEndpoint {
   /// Usage from an iPhone or iPad, read from records already on this Mac.
   static func piDurableHistory(identity: UsageDeviceIdentity, database: WorkspaceDatabase) -> Self {
     .init(identity: identity, alwaysFull: true) { request in
-      let stored = try await database.companionNativeRecords(
+      let stored = try await database.libraryNativeRecords(
         workspaceID: identity.id,
         format: PiDurableUsageRecords.format
       )

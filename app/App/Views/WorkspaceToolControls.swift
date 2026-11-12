@@ -126,7 +126,7 @@ private struct WorkspaceComputerUseExplanation: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             Text("Allows agents to see and control this Mac’s desktop and apps.")
-            MacPermissionStatusLink(items: CompanionMacAccessStatus.computerUseRequirements, onOpen: onOpenPermissions)
+            MacPermissionStatusLink(items: MacAccessStatus.computerUseRequirements, onOpen: onOpenPermissions)
         }.font(.system(size: 11.5)).foregroundStyle(DashboardPalette.mutedForeground)
     }
 }

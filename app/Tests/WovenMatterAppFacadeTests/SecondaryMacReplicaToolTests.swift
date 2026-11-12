@@ -1,5 +1,5 @@
 import WorkspaceFixtures
-import CompanionClient
+import LibraryClient
 import Foundation
 import Testing
 import WovenMatterCore
@@ -96,7 +96,7 @@ struct SecondaryMacReplicaToolTests {
         let sessions = await tools.handle(.init(arguments: ["sessions", "list", "--all-workspace"]), callerID: caller)
         let ids = sessions.result?.objectValue?["rows"]?.arrayValue?.compactMap { $0.objectValue?["id"]?.stringValue } ?? []
         #expect(ids.contains(caller) && ids.contains(foreign))
-        #expect(try await fixture.database.companionSnapshot().conversations.contains { $0.id == foreign } == false)
+        #expect(try await fixture.database.librarySnapshot().conversations.contains { $0.id == foreign } == false)
         #expect(await workspace.origin.snapshot().conversations[foreign] == nil)
         let sent = await tools.handle(.init(arguments: ["sessions", "send", foreign, "--text", "Must not route remotely"]), callerID: caller)
         #expect(!sent.success)

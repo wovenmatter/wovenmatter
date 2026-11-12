@@ -57,7 +57,7 @@ final class WovenMCPHost {
     private var revocationTask: Task<Void, any Error>?
     private var botDispatches: [UUID: (callerID: String, fence: AgentDispatchFence)] = [:]
     var botNotificationSink: (@MainActor (WovenBotNotification) async throws -> Void)?
-    private let exposure: CompanionTailscaleServe
+    private let exposure: TailscaleServe
     private var outsideEndpoint: String?
     private var exposureError: String?
     private var exposureTask: Task<Void, Never>?
@@ -67,14 +67,14 @@ final class WovenMCPHost {
     private let perform: @MainActor @Sendable (WovenMatterToolRequest, String) async -> WovenMatterToolResponse
     private var credentials: [String: Credential] = [:]
     private var sessionConnections: [String: WovenMCPConnection] = [:]
-    private var server: CompanionHTTPServer?
+    private var server: LibraryHTTPServer?
     private var startTask: Task<String, any Error>?
     private var endpointURL: String?
     private var preferredPort: UInt16 = 0
     private var preferredHTTPSPort: Int?
     private var generation = UUID()
 
-    init(database: WorkspaceDatabase, exposure: CompanionTailscaleServe = CompanionTailscaleServe(),
+    init(database: WorkspaceDatabase, exposure: TailscaleServe = TailscaleServe(),
          perform: @escaping @MainActor @Sendable (WovenMatterToolRequest, String) async -> WovenMatterToolResponse) throws {
         self.database = database; self.perform = perform; self.exposure = exposure
         accessFile = database.supportDirectory.appending(path: "mcp-access.json")
@@ -91,8 +91,8 @@ final class WovenMCPHost {
         let expected = generation
         let task = Task { @MainActor [weak self] () throws -> String in
             guard let self else { throw CancellationError() }
-            func makeListener() -> CompanionHTTPServer {
-                CompanionHTTPServer { [weak self] request in
+            func makeListener() -> LibraryHTTPServer {
+                LibraryHTTPServer { [weak self] request in
                     guard let self else { return .error("unavailable", "Woven MCP stopped.", status: 503) }
                     return await self.handle(request, allowOutside: self.outsideEndpoint != nil) ?? Self.unauthorizedResponse()
                 }
@@ -300,7 +300,7 @@ final class WovenMCPHost {
 
     /// nil allows the paired-device API to authenticate its separate credentials
     /// when both transports share the existing Tailscale HTTP listener.
-    func handle(_ request: CompanionHTTPRequest, allowOutside: Bool = false) async -> CompanionHTTPResponse? {
+    func handle(_ request: LibraryHTTPRequest, allowOutside: Bool = false) async -> LibraryHTTPResponse? {
         let path = URLComponents(string: "http://localhost" + request.target)?.path
         guard path == "/mcp" || path == "/wovenmatter/mcp" else { return nil }
         let credential: Credential?
@@ -445,7 +445,7 @@ final class WovenMCPHost {
         try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: accessFile.path)
     }
 
-    nonisolated private static func unauthorizedResponse() -> CompanionHTTPResponse {
+    nonisolated private static func unauthorizedResponse() -> LibraryHTTPResponse {
         let body = Data("{\"error\":\"unauthorized\",\"message\":\"A valid Woven MCP bearer credential is required.\"}".utf8)
         return .init(status: 401, headers: ["WWW-Authenticate": "Bearer realm=\"woven\""], body: body)
     }

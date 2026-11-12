@@ -77,13 +77,13 @@ extension WorkspaceDatabase {
           "workspace_history_schema", "workspace_tool_schema", "desktop_dashboard_revision", "desktop_activity_revision",
           "desktop_activity_index", "desktop_activity_index_schema", "desktop_message_revisions", "workspace_tool_settings",
           // Federation, replica and identity state in the former central library's namespace.
-          "companion_workspace", "companion_library_identity", "companion_changes", "companion_versions",
-          "companion_mutation_receipts", "companion_workspace_publishers", "companion_execution_workspaces",
-          "companion_execution_journal", "companion_execution_conversations", "companion_execution_runs",
-          "companion_execution_adoptions", "companion_execution_replica_context", "companion_retained_settlements",
-          "companion_native_history", "companion_native_history_parts", "companion_calendar_owners",
-          "companion_calendar_run_owners", "companion_calendar_runs", "companion_calendar_receipts",
-          "companion_calendar_execution_context", "companion_calendar_execution_conflicts"])
+          "library_identity", "device_sync_changes", "device_sync_revisions",
+          "device_mutation_receipts", "execution_workspace_publishers", "execution_workspaces",
+          "execution_journal", "execution_conversations", "execution_runs",
+          "execution_adoptions", "execution_replica_context", "execution_retained_settlements",
+          "execution_native_history", "execution_native_history_parts", "calendar_task_executors",
+          "calendar_run_publishers", "calendar_published_runs", "device_calendar_receipts",
+          "calendar_replica_context", "calendar_execution_conflicts"])
           .union(Self.legacyProjectionTables)
         let tables = try connection.historyRowsUnlocked("SELECT name,sql FROM legacy_mac.sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name", values: [])
         for item in tables {
@@ -92,7 +92,9 @@ extension WorkspaceDatabase {
                 !table.hasPrefix("workspace_history_search"), !sql.uppercased().contains("VIRTUAL TABLE") else { continue }
           let local = try connection.historyRowsUnlocked("PRAGMA main.table_info(\(WorkspaceDatabaseConnection.peerQuote(table)))", values: [])
           let incoming = try connection.historyRowsUnlocked("PRAGMA legacy_mac.table_info(\(WorkspaceDatabaseConnection.peerQuote(table)))", values: [])
-          guard local == incoming else { throw CompanionAPIError(code: "legacy_version", message: "The saved local workspace needs a compatible schema before it can be combined. Both originals are retained.") }
+          // A table the current schema no longer creates is not library content.
+          guard !local.isEmpty else { continue }
+          guard local == incoming else { throw LibraryAPIError(code: "legacy_version", message: "The saved local workspace needs a compatible schema before it can be combined. Both originals are retained.") }
           let generated = sql.uppercased().contains("AUTOINCREMENT")
             ? incoming.first(where: { $0.objectValue?["pk"]?.doubleValue == 1 })?.objectValue?["name"]?.stringValue : nil
           let names = incoming.compactMap { $0.objectValue?["name"]?.stringValue }.filter { $0 != generated }.map(WorkspaceDatabaseConnection.peerQuote).joined(separator: ",")
@@ -125,16 +127,16 @@ extension WorkspaceDatabase {
     guard UUID(uuidString: deviceID) != nil else { throw WorkspaceDatabaseError.corruptRow }
     try await write { connection in
       try connection.transaction {
-        let previous = try connection.companionLibraryIdentityUnlocked().hostDeviceID
+        let previous = try connection.libraryIdentityUnlocked().hostDeviceID
         guard previous != deviceID else { return }
         // This Mac's own advertised route may already exist from an earlier
         // launch; any other Mac means peer data may already carry this identity.
         guard try connection.historyRowsUnlocked("SELECT device_id FROM paired_mac_routes WHERE device_id<>?", values: [previous]).isEmpty,
               try connection.historyRowsUnlocked("SELECT peer_id FROM paired_library_cursors LIMIT 1", values: []).isEmpty else {
-          throw CompanionAPIError(code: "legacy_identity", message: "This library already has a paired Mac identity. Its saved legacy data is retained for recovery.")
+          throw LibraryAPIError(code: "legacy_identity", message: "This library already has a paired Mac identity. Its saved legacy data is retained for recovery.")
         }
         try connection.toolsExecuteUnlocked("DELETE FROM paired_mac_routes WHERE device_id=?", [previous])
-        try connection.toolsExecuteUnlocked("UPDATE companion_library_identity SET host_device_id=?", [deviceID])
+        try connection.toolsExecuteUnlocked("UPDATE library_identity SET host_device_id=?", [deviceID])
         try connection.toolsExecuteUnlocked("UPDATE paired_library_clock SET device_id=?", [deviceID])
         for table in ["paired_calendar_owners", "paired_conversation_owners", "paired_agent_owners"] {
           try connection.toolsExecuteUnlocked("UPDATE \(table) SET device_id=? WHERE device_id=?", [deviceID, previous])

@@ -91,7 +91,7 @@ class IOSRunnerTests(unittest.TestCase):
         self.assertEqual(result.returncode, 17, result.stderr)
         self.assertEqual([call[0] for call in calls], ['swift', 'xcodebuild'])
         self.assertIn('platform=iOS Simulator,id=user-device', calls[1])
-        self.assertIn('-only-testing:CompanionAppTests', calls[1])
+        self.assertIn('-only-testing:MobileAppTests', calls[1])
 
     def test_both_devices_have_separate_result_bundles(self):
         result, calls = self.run_script('--all-devices')
@@ -100,11 +100,11 @@ class IOSRunnerTests(unittest.TestCase):
             ['swift', 'test', '--package-path'], ['xcrun', 'simctl', 'create'],
             ['xcrun', 'simctl', 'boot'], ['xcrun', 'simctl', 'bootstatus'],
             ['xcrun', '--find', 'simctl'], ['Simulator', '-CurrentDeviceUDID', 'fixture-simulator'],
-            ['xcodebuild', '-project', str(ROOT / 'ios/WovenMatterCompanion.xcodeproj')],
+            ['xcodebuild', '-project', str(ROOT / 'ios/WovenMatter.xcodeproj')],
             ['xcrun', 'simctl', 'shutdown'], ['xcrun', 'simctl', 'delete'], ['SimulatorExit']])
         self.assertIn('-b', calls[3])
         self.assertIn('-resultBundlePath', calls[6])
-        self.assertNotIn('-only-testing:CompanionAppTests', calls[6])
+        self.assertNotIn('-only-testing:MobileAppTests', calls[6])
         builds = [call for call in calls if call[0] == 'xcodebuild']
         self.assertEqual(len(builds), 2)
         paths = [call[call.index('-resultBundlePath') + 1] for call in builds]

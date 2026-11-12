@@ -62,12 +62,12 @@ if [[ "$mode" != "--package" ]]; then
       printf 'No standalone Simulator in selected Xcode; testing the booted device through XCTest.\n'
     fi
   fi
-  xcode_arguments=(-project "$root/ios/WovenMatterCompanion.xcodeproj" -scheme WovenMatterCompanion
+  xcode_arguments=(-project "$root/ios/WovenMatter.xcodeproj" -scheme WovenMatter
     -configuration Debug -destination "$destination" -derivedDataPath "$cache/xcode"
     -destination-timeout 120 -parallel-testing-enabled NO
     -resultBundlePath "$results/TestResults.xcresult"
     -collect-test-diagnostics "${WOVENMATTER_IOS_TEST_DIAGNOSTICS:-never}")
-  if [[ "$mode" == "--simulator" ]]; then xcode_arguments+=(-only-testing:CompanionAppTests); fi
+  if [[ "$mode" == "--simulator" ]]; then xcode_arguments+=(-only-testing:MobileAppTests); fi
   if [[ -n "${WOVENMATTER_IOS_TEST_ONLY:-}" ]]; then xcode_arguments+=("-only-testing:$WOVENMATTER_IOS_TEST_ONLY"); fi
   xcodebuild "${xcode_arguments[@]}" CODE_SIGNING_ALLOWED=NO test 2>&1 | tee "$results/xcodebuild.log"
 fi
