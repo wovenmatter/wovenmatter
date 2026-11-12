@@ -265,12 +265,14 @@ import WovenMatterShared
   private func deliver(_ callerID: String) async {
     let now = ContinuousClock.now
     // A caller waiting on that session learns its state from the wait itself.
-    let due = pending(callerID: callerID).filter { waiting[callerID + "\u{0}" + $0.id] == nil && (retryAt[$0.id].map { $0 <= now } ?? true) }
-    guard !due.isEmpty else { return }
+    let candidates = pending(callerID: callerID).filter { waiting[callerID + "\u{0}" + $0.id] == nil }
+    guard !candidates.isEmpty else { return }
+    let due = candidates.filter { retryAt[$0.id].map { $0 <= now } ?? true }
     switch await hooks.caller(callerID) {
     case .gone:
       for wakeUp in pending(callerID: callerID) { await dropWakeUp(wakeUp.id) }
     case .bot:
+      guard !due.isEmpty else { return }
       for wakeUp in due {
         let used = (try? await database.botWakeUpCount(callerID: callerID)) ?? 0
         guard used < maximumWakeUps else { await dropWakeUp(wakeUp.id, key: wakeUp.key); continue }
@@ -286,8 +288,10 @@ import WovenMatterShared
         await dropWakeUp(wakeUp.id, key: wakeUp.key)
       }
     case .conversation(let idle, let used):
-      // A running caller is never woken: its next idle moment delivers.
-      guard idle, let wakeUp = due.first else { return }
+      // A running caller is never woken: its next idle moment delivers, even
+      // one refused earlier, without waiting out its retry.
+      guard idle else { for wakeUp in candidates { retryAt.removeValue(forKey: wakeUp.id) }; return }
+      guard let wakeUp = due.first else { return }
       guard used < maximumWakeUps else {
         hooks.log("Session \(callerID) had \(maximumWakeUps) wake-ups in a row; the rest are dropped until it is started another way.")
         for pending in pending(callerID: callerID) { await dropWakeUp(pending.id) }

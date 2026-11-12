@@ -18,6 +18,9 @@ struct SessionWakeUpsTests {
     var delivered: [SessionWakeUps.Delivery] = []
     var bots: [SessionWakeUps.Delivery] = []
     var reconcile: [String: (conversations: [LibraryConversation], pending: [PendingInteraction])] = [:]
+    /// Refuses the next send, as when the caller started running meanwhile.
+    var refuseNext = false
+    var refused: [SessionWakeUps.Delivery] = []
 
     init(root: URL? = nil) async throws {
       self.root = root ?? FileManager.default.temporaryDirectory.appending(path: "session-wake-ups-\(UUID())")
@@ -27,6 +30,7 @@ struct SessionWakeUpsTests {
         caller: { [unowned self] id in self.callers[id] ?? .gone },
         deliverToConversation: { [unowned self] delivery in
           guard case .conversation(true, let used) = self.callers[delivery.callerID] else { return false }
+          if self.refuseNext { self.refuseNext = false; self.refused.append(delivery); return false }
           self.delivered.append(delivery)
           // The wake-up starts a run: the caller is busy, and one more run in a row was a wake-up's.
           self.callers[delivery.callerID] = .conversation(idle: false, wokenRunsInARow: used + 1)
@@ -151,6 +155,27 @@ struct SessionWakeUpsTests {
     #expect(restarted.delivered.count == 2, "a session that finished meanwhile wakes its caller")
     #expect(restarted.delivered.last?.text.contains("\"Other\"") == true)
     #expect(restarted.wakeUps.watched.isEmpty, "nothing is watched once both finished")
+  }
+
+  @Test func aRefusedWakeUpIsSentAgainAtTheCallersNextIdleMomentAsANewAttempt() async throws {
+    let f = try await Fixture(); defer { f.remove() }
+    let caller = UUID().uuidString.lowercased(), session = UUID().uuidString.lowercased()
+    f.callers[caller] = .conversation(idle: true, wokenRunsInARow: 0)
+    try await f.remember(session, caller: caller)
+    await f.observe(caller, session, "running", runID: "r1")
+    f.refuseNext = true
+    await f.emit(session, "idle")
+    #expect(f.delivered.isEmpty && f.refused.count == 1)
+    // Still idle: it waits out the retry interval instead of sending again at once.
+    await f.wakeUps.deliverPending()
+    #expect(f.delivered.isEmpty)
+    // It ran (the reason it was refused) and is idle again: sent now, as a new attempt.
+    f.callers[caller] = .conversation(idle: false, wokenRunsInARow: 0)
+    await f.wakeUps.deliverPending()
+    f.callers[caller] = .conversation(idle: true, wokenRunsInARow: 0)
+    await f.wakeUps.deliverPending()
+    #expect(f.delivered.count == 1)
+    #expect(f.delivered.first?.id != f.refused.first?.id && f.delivered.first?.text == f.refused.first?.text)
   }
 
   @Test func aBotsCountStartsAgainWhenItCreatesASession() async throws {
