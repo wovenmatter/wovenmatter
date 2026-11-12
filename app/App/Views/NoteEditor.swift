@@ -545,14 +545,16 @@ struct DashboardNoteEditor: NSViewRepresentable {
     }
 
     func sizeThatFits(_ proposal: ProposedViewSize, nsView: NSScrollView, context: Context) -> CGSize? {
+        // Measure with TextKit 2. Reading `layoutManager` would permanently
+        // switch the view to TextKit 1 and stop the highlight drawing.
         guard sizesToContent, let textView = nsView.documentView as? NSTextView,
-              let container = textView.textContainer, let manager = textView.layoutManager else { return nil }
+              let container = textView.textContainer, let manager = textView.textLayoutManager else { return nil }
         let width = max(80, proposal.width ?? max(80, nsView.frame.width))
         textView.setFrameSize(NSSize(width: width, height: max(40, textView.frame.height)))
         container.containerSize = NSSize(width: max(20, width - textView.textContainerInset.width * 2),
                                          height: .greatestFiniteMagnitude)
-        manager.ensureLayout(for: container)
-        return CGSize(width: width, height: max(40, ceil(manager.usedRect(for: container).maxY + textView.textContainerInset.height * 2)))
+        manager.ensureLayout(for: manager.documentRange)
+        return CGSize(width: width, height: max(40, ceil(manager.usageBoundsForTextContainer.maxY + textView.textContainerInset.height * 2)))
     }
 
     func updateNSView(_ scrollView: NSScrollView, context: Context) {
