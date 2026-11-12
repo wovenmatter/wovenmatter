@@ -200,7 +200,10 @@ extension MobileStore {
       let edits = try JSONDecoder().decode([ArtifactStateEdit].self, from: Data(c.required("json").utf8))
       guard !edits.isEmpty else { throw WorkspaceToolError.invalid("Supply at least one state edit.") }
       return [.artifactState(edits)]
-    case "apply": return try JSONDecoder().decode([NoteEditOperation].self, from: Data(c.required("json").utf8))
+    case "apply":
+      let operations = try JSONDecoder().decode([NoteEditOperation].self, from: Data(c.required("json").utf8))
+      try NoteEditOperation.requireGenericNoteOperations(operations)
+      return operations
     case "link", "unlink":
       let link: DatabaseArtifactLink? = c.action == "unlink" ? nil : .init(sourceID: try c.required("source-id"), databaseID: try c.required("database-id"), relativePath: try c.required("path"), sqliteQuery: c.options["query"])
       return [c.options["table-id"].map { .setTableDatabaseLink(tableID: $0, link: link) } ?? .setArtifactDatabaseLink(link)]
