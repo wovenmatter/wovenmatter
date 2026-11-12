@@ -224,7 +224,7 @@ struct SessionWakeUpsTests {
     for (until, state) in [("idle", "idle"), ("needsInput", "needsInput"), ("either", "needsInput"), ("either", "idle")] {
       reads.state = "running"; reads.count = 0
       let waiting = Task { try await f.wakeUps.wait(callerID: nil, workspaceID: Self.workspace, id: id, until: until, timeout: .seconds(10), read: read) }
-      try await Task.sleep(for: .milliseconds(50))
+      while reads.count == 0 { try await Task.sleep(for: .milliseconds(10)) }
       // A change that does not reach it is ignored.
       await f.emit(id, "running", runID: "other-run")
       reads.state = state
@@ -242,16 +242,18 @@ struct SessionWakeUpsTests {
     f.callers[caller] = .bot
     try await f.remember(session, caller: caller)
     await f.observe(caller, session, "running", runID: "r1")
-    final class State { var value = "running" }
+    final class State { var value = "running"; var reads = 0 }
     let state = State()
     let waiting = Task {
       try await f.wakeUps.wait(callerID: caller, workspaceID: Self.workspace, id: session, until: "idle", timeout: .seconds(10)) {
         // The wait's read is a status read: it observes what it shows.
         await f.observe(caller, session, state.value)
+        state.reads += 1
         return (.object([:]), state.value)
       }
     }
-    try await Task.sleep(for: .milliseconds(50))
+    // The wait has begun (its first read is done) before the session finishes.
+    while state.reads == 0 { try await Task.sleep(for: .milliseconds(10)) }
     state.value = "idle"
     await f.emit(session, "idle")
     #expect(try await waiting.value.objectValue?["state"] == .string("idle"))

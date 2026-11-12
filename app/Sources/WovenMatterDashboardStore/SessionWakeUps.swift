@@ -202,7 +202,9 @@ import WovenMatterShared
   public func observe(callerID: String, workspaceID: String, workspaceName: String?, id rawID: String, title: String? = nil,
                       harness: String? = nil, state: String, runID: String? = nil, pendingIDs: [String] = [], created: Bool = false) async {
     let id = rawID.lowercased()
-    guard (try? await database.memberToolSession(id: id))?.callerID == callerID else { return }
+    // A session watched or pending for this caller was checked when it was first watched.
+    let known = watches[id]?.callerID == callerID || wakeUps[id]?.callerID == callerID
+    if !known { guard (try? await database.memberToolSession(id: id))?.callerID == callerID else { return } }
     if created, WovenMCPCaller.parseBot(callerID) != nil { try? await database.setBotWakeUpCount(callerID: callerID, count: nil) }
     await dropWakeUp(id)
     if state == "idle" { await unwatch(id); return }
