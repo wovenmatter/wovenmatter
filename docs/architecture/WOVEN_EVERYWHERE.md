@@ -1213,7 +1213,11 @@ member removed.
 - Behind both, the caller's server holds one stream to each destination server
   while it watches or waits on a session there, subscribed to its `workspace`
   stream and filtered on the caller's side to those sessions; its own
-  workspace's sessions come from in-process changes.
+  workspace's sessions come from in-process changes. A Linux host answers its
+  scheduled tasks' waits itself; a Mac watches through its
+  `CentralExecutionClient` streams and stores watches and pending wake-ups
+  unsynchronized in its library (`member_session_watch`,
+  `member_session_wakeups`, `member_session_wakeup_counts`).
 
 ### Linux sessions
 
