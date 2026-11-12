@@ -32,6 +32,8 @@ import MobileInference
   var savedAgentCatalog: AgentCatalog?
   var pending: [PendingInteraction] = []
   var sessionCapabilities: [String: HarnessCapabilities] = [:]
+  /// The open chat's settings as its workspace's stream last sent them (`session` items).
+  var streamedSessionSettings: [String: SessionSettings] = [:]
   var historyPages: [String: LibraryTranscript] = [:]
   @ObservationIgnored let transcriptStates = MobileConversationStates()
   var loadingHistory = false
