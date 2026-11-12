@@ -50,6 +50,13 @@ import Foundation
 /// - The command (or bot delivery) ID derives from the caller, the session and
 ///   the state (`finished:<the run last seen running>` or
 ///   `needsInput:<sorted interaction IDs>`), so a wake-up is delivered once.
+///   A refused send (the caller started running, or its workspace is at its
+///   session limit) is tried again with a new attempt number in that ID when
+///   the caller is next idle, or after 30 seconds. A bot wake-up the bots
+///   runtime does not take is retried every 30 seconds and dropped after 20
+///   attempts. While the caller waits on that session with
+///   `woven_sessions_wait`, its wake-up is held, and the wait's own reading
+///   usually drops it.
 /// - Watched sessions and pending wake-ups are stored, so they survive a
 ///   restart: the server subscribes again and compares the snapshot with the
 ///   stored state.

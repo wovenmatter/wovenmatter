@@ -14,6 +14,9 @@ export const streamCloseCodes = Object.freeze({ normal: 1000, goingAway: 1001, p
 export const streamTimings = Object.freeze({ pingMilliseconds: 25_000, pongTimeoutMilliseconds: 60_000, reconnectInitialMilliseconds: 1_000, reconnectMaximumMilliseconds: 30_000,
   smallMessageBytes: 8 * 1024, smallMessageMilliseconds: 50, largeMessageMilliseconds: 200 })
 export const streamQueueLimits = Object.freeze({ items: 512, bytes: 8 * 1024 * 1024 })
+// Agent to agent (session-watch.mjs; Swift `StreamProtocol`, `SessionWakeUp`).
+export const maximumWaitSeconds = 50
+export const maximumWakeUpsPerRun = 10
 
 export class StreamFrameError extends Error {}
 

@@ -11,6 +11,8 @@ import { memberURL, unreached } from './member-client.mjs'
 // Every session a caller creates here is remembered (`member_sessions`), so
 // later calls name it by ID alone. A bot has no conversation of its own, so it
 // reaches this workspace through the same execution commands (`local`).
+// What each call shows about a remembered session's state goes to `observe`
+// (session-watch.mjs), which watches it and wakes its caller.
 
 const fail = (statusCode, message, code) => Object.assign(new Error(message), { statusCode, ...(code ? { code } : {}) })
 const stableID = value => {
@@ -27,7 +29,7 @@ const own = Symbol('this workspace')
  * command}) is this workspace's own execution API, used for bots, which have
  * no conversation to coordinate from. `db` keeps the sessions each caller created.
  */
-export function createMemberSessions({ transport, identity, deviceID, localProviders, db = null, local = null, probeTimeout = 5000, workspaceRole = () => true }) {
+export function createMemberSessions({ transport, identity, deviceID, localProviders, db = null, local = null, probeTimeout = 5000, workspaceRole = () => true, observe = () => {} }) {
   db?.exec('CREATE TABLE IF NOT EXISTS member_sessions (id TEXT PRIMARY KEY, caller TEXT NOT NULL, workspace TEXT NOT NULL, created_at TEXT NOT NULL)')
   const headers = workspace => ({ 'x-woven-protocol': '3', 'x-woven-library': workspace.libraryID, 'x-woven-workspace': workspace.id, 'x-woven-device': deviceID() })
   // A bots-only host has no workspace of its own, and a workspace host has
@@ -116,9 +118,10 @@ export function createMemberSessions({ transport, identity, deviceID, localProvi
     await command(client, { commandID: stableID(base + ':title'), kind: 'workspace', conversationID,
       workspaceAction: { conversation: { id: conversationID, action: 'rename', title: String(input.title).slice(0, 256) } } }, signal).catch(() => null)
     const sent = await command(client, { commandID: stableID(base + ':send'), kind: 'send', conversationID, text: input.text }, signal)
+    if (['accepted', 'completed'].includes(sent.status)) seen(callerID, client, { id: conversationID, title: title.title ?? null, harness: kind, state: 'running', runID: sent.runID ?? null, created: true })
     return { session: { id: conversationID, title: input.title, harness: kind, workspace: client.workspace.id, workspaceName: client.workspace.name, workspaceKind: client.workspace.kind },
       independent: true, receipt: sent,
-      note: 'Manage it with woven_sessions_status (state, pending questions and recent transcript), woven_sessions_send, woven_sessions_stop and woven_sessions_respond; it is not coordinated, so poll its status.' }
+      note: 'Manage it with woven_sessions_status (state, pending questions and recent transcript), woven_sessions_send, woven_sessions_stop and woven_sessions_respond. It is not coordinated: wait for it with woven_sessions_wait, and you are woken with a short message when it finishes or asks a question while you are idle.' }
   }
 
   /**
@@ -138,6 +141,7 @@ export function createMemberSessions({ transport, identity, deviceID, localProvi
     if (!workspace?.endpoint) throw fail(409, 'The workspace that runs this session is no longer known here.')
     return api(workspace)
   }
+  const seen = (callerID, client, values) => { try { observe({ callerID, workspace: client.workspace, ...values }) } catch {} }
   const created = (callerID, id) => !!db?.prepare('SELECT 1 FROM member_sessions WHERE id=? AND caller=?').get(String(id).toLowerCase(), callerID)
 
   async function conversation(client, id, signal) {
@@ -163,6 +167,7 @@ export function createMemberSessions({ transport, identity, deviceID, localProvi
         options: item.options ?? [], questions: item.questions ?? [] }))
     const session = describe(client, found)
     if (questions.length) session.state = 'needsInput'
+    seen(callerID, client, { id: found.id, title: found.title ?? null, harness: found.runtimeKind ?? null, state: session.state, runID: found.activeRunID ?? null, pending: questions })
     return { session, pending: questions, transcript: { messages, ...(transcript?.olderCursor ? { before: transcript.olderCursor } : {}) },
       ...(questions.some(item => item.kind === 'approval') ? { note: 'Permission approvals belong to the user unless this workspace’s user granted full access; answer questions with woven_sessions_respond.' } : {}) }
   }
@@ -173,16 +178,23 @@ export function createMemberSessions({ transport, identity, deviceID, localProvi
     if (found.activeRunID) {
       const capabilities = await Promise.resolve().then(() => client.capabilities(found.id, signal)).catch(() => null)
       if (capabilities?.canSteer !== true) throw fail(409, `${found.title ?? 'The session'} is running and its harness cannot take a message mid-turn. Check woven_sessions_status and send when it is idle.`)
-      return { session: describe(client, found), receipt: await command(client, { commandID: stableID(base + ':steer'), kind: 'steer', conversationID: found.id, runID: found.activeRunID, text }, signal) }
+      const receipt = await command(client, { commandID: stableID(base + ':steer'), kind: 'steer', conversationID: found.id, runID: found.activeRunID, text }, signal)
+      if (['accepted', 'completed'].includes(receipt.status)) seen(callerID, client, { id: found.id, title: found.title ?? null, harness: found.runtimeKind ?? null, state: 'running', runID: found.activeRunID })
+      return { session: describe(client, found), receipt }
     }
-    return { session: describe(client, found), receipt: await command(client, { commandID: stableID(base + ':send'), kind: 'send', conversationID: found.id, text }, signal) }
+    const receipt = await command(client, { commandID: stableID(base + ':send'), kind: 'send', conversationID: found.id, text }, signal)
+    if (['accepted', 'completed'].includes(receipt.status)) seen(callerID, client, { id: found.id, title: found.title ?? null, harness: found.runtimeKind ?? null, state: 'running', runID: receipt.runID ?? null })
+    return { session: describe(client, found), receipt }
   }
 
   async function stop({ client, callerID, requestID, id, signal }) {
     const found = await conversation(client, id, signal)
     if (!found.activeRunID) return { session: describe(client, found), stopped: false, message: 'The session is not running.' }
     const receipt = await command(client, { commandID: stableID([callerID, requestID, client.workspace.id, found.id, 'stop'].join(':')), kind: 'stop', conversationID: found.id, runID: found.activeRunID }, signal)
-    return { session: describe(client, found), stopped: ['accepted', 'completed'].includes(receipt.status), receipt }
+    const stopped = ['accepted', 'completed'].includes(receipt.status)
+    // The caller stopped it: no wake-up for its end.
+    if (stopped) seen(callerID, client, { id: found.id, state: 'idle' })
+    return { session: describe(client, found), stopped, receipt }
   }
 
   /** Answers one pending question (or approval) of the session's current run. */
@@ -194,6 +206,7 @@ export function createMemberSessions({ transport, identity, deviceID, localProvi
     if (!response.cancelled && pending.kind === 'approval' && !(pending.options ?? []).some(option => option.id === optionID)) throw fail(400, 'Choose one of the offered options.')
     const receipt = await command(client, { commandID: stableID([callerID, requestID, client.workspace.id, found.id, 'respond'].join(':')), kind: 'respond',
       conversationID: found.id, runID: pending.runID, interactionID: pending.id, response }, signal)
+    if (['accepted', 'completed'].includes(receipt.status)) seen(callerID, client, { id: found.id, title: found.title ?? null, harness: found.runtimeKind ?? null, state: 'running', runID: pending.runID })
     return { session: describe(client, found), receipt }
   }
 
