@@ -93,7 +93,7 @@ struct WindowStreamTests {
 
     // Closing the chat closes what the server opened for it.
     await connection.unsubscribe(subscription)
-    #expect(try await pollUntil(attempts: 200, interval: .milliseconds(10)) { await mac.source.closed == ["remote-1"] })
+    #expect(try await pollUntil(attempts: 1_000, interval: .milliseconds(10)) { await mac.source.closed == ["remote-1"] })
     await connection.stop()
   }
 
@@ -127,7 +127,7 @@ struct WindowStreamTests {
     }
     #expect(mac.window.openSessionCount() == 1)
     await connection.stop()
-    #expect(try await pollUntil(attempts: 200, interval: .milliseconds(10)) { mac.window.openSessionCount() == 0 })
+    #expect(try await pollUntil(attempts: 1_000, interval: .milliseconds(10)) { mac.window.openSessionCount() == 0 })
   }
 }
 

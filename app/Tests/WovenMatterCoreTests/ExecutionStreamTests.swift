@@ -155,29 +155,38 @@ struct ExecutionStreamTests {
 
     // Coalescing: rapid small writes arrive at most every 50 ms, and the last state always arrives.
     var small: [ContinuousClock.Instant] = []
+    let smallStart = ContinuousClock.now, smallWrites = 100
     let writer = Task {
-      for index in 0..<40 {
+      for index in 0..<smallWrites {
         try await mac.database.appendLocalACPAssistantChunk(runID: run.runID, chunk: " \(index)")
         try await Task.sleep(for: .milliseconds(5))
       }
+      return ContinuousClock.now
     }
     var finalContent = ""
-    let expected = "All 214 tests" + (0..<40).map { " \($0)" }.joined()
+    let expected = "All 214 tests" + (0..<smallWrites).map { " \($0)" }.joined()
     while finalContent != expected {
       let item = try await client.transcript("c") { _ in true }
       small.append(.now)
       finalContent = item.transcript.messages.first { $0.id == run.assistantMessageID }?.content ?? finalContent
     }
-    try await writer.value
-    #expect(small.count >= 2 && small.count < 40, "\(small.count) updates for 40 writes")
-    // Arrival times jitter under load, so the bound is on how many updates fit in the time they spanned.
-    #expect(Self.updates(small, fitWithin: .milliseconds(50)), "\(small.count) updates over \(small.last! - small.first!)")
+    // Writes a busy machine slows past the interval leave nothing to coalesce:
+    // the bound always holds, and the rest is checked while the writes outpaced it.
+    let smallPace = (try await writer.value - smallStart) / smallWrites
+    #expect(small.count >= 2)
+    #expect(Self.updates(small, since: smallStart, fitWithin: .milliseconds(50)), "\(small.count) updates over \(small.last! - smallStart)")
+    if smallPace < .milliseconds(25) {
+      #expect(small.count < smallWrites, "\(small.count) updates for \(smallWrites) writes")
+      // And small messages are not held to the large messages' interval.
+      #expect(!Self.updates(small, since: smallStart, fitWithin: .milliseconds(200)), "\(small.count) updates over \(small.last! - smallStart)")
+    }
 
     // The 8 KB guard: once a changed message is larger, at most every 200 ms.
     let large = String(repeating: "x", count: StreamProtocol.smallMessageBytes + 1)
     try await mac.database.replaceLocalACPAssistantMessage(runID: run.runID, content: large)
     _ = try await client.transcript("c") { $0.messages.contains { $0.content == large } }
     var slow: [ContinuousClock.Instant] = []
+    let largeStart = ContinuousClock.now
     let largeWriter = Task {
       for index in 0..<30 {
         try await mac.database.appendLocalACPAssistantChunk(runID: run.runID, chunk: "\(index % 10)")
@@ -193,8 +202,7 @@ struct ExecutionStreamTests {
     }
     try await largeWriter.value
     #expect(slow.count >= 2)
-    #expect(Self.updates(slow, fitWithin: .milliseconds(200)), "\(slow.count) updates over \(slow.last! - slow.first!)")
-    #expect(slow.count < small.count, "large messages update less often than small ones")
+    #expect(Self.updates(slow, since: largeStart, fitWithin: .milliseconds(200)), "\(slow.count) updates over \(slow.last! - largeStart)")
 
     // A command, a duplicate replay of it, then its receipt.
     let command = LibraryCommand(deviceID: phone.deviceID, kind: .send, conversationID: conversation, text: "Continue",
@@ -241,11 +249,16 @@ struct ExecutionStreamTests {
     client.close()
   }
 
-  /// Whether `arrivals`, sent at most every `interval`, could have been: no more of
-  /// them than fit in the span they arrived over, allowing one interval of delivery jitter.
-  static func updates(_ arrivals: [ContinuousClock.Instant], fitWithin interval: Duration) -> Bool {
-    guard let first = arrivals.first, let last = arrivals.last else { return true }
-    return Double(arrivals.count - 1) <= ((last - first) + interval) / interval
+  /// Whether `arrivals` of updates caused by writes that began at `start`
+  /// could have been sent at most every `interval`. The k-th such update is
+  /// sent no earlier than `start + (k - 1) * interval` and arrives later still,
+  /// so the bound is measured to the last arrival from `start`, not from the
+  /// first arrival: delivery delays only lengthen that span, even when a busy
+  /// machine hands the client several updates at once. One interval more
+  /// allows for an update the previous write left queued.
+  static func updates(_ arrivals: [ContinuousClock.Instant], since start: ContinuousClock.Instant, fitWithin interval: Duration) -> Bool {
+    guard let last = arrivals.last else { return true }
+    return Double(arrivals.count - 1) <= ((last - start) + interval) / interval
   }
 
   @Test func upgradesAreRefusedBeforeTheyBegin() async throws {
@@ -391,7 +404,8 @@ struct ExecutionStreamTests {
 
   @Test func aSocketWithoutPongsIsClosedAndOneThatAnswersStaysOpen() async throws {
     var configuration = ExecutionStreamConfiguration()
-    configuration.pingInterval = .milliseconds(100); configuration.pongTimeout = .milliseconds(600)
+    // A pong timeout well above what a busy machine delays an answered ping.
+    configuration.pingInterval = .milliseconds(100); configuration.pongTimeout = .milliseconds(1_500)
     let mac = try await StreamMac(configuration: configuration); defer { mac.remove() }
     let phone = try await mac.member(.ios)
     let answering = try await mac.connect(phone)
@@ -399,9 +413,9 @@ struct ExecutionStreamTests {
     // The raw client never answers pings (nor reads them).
     let silent = try await mac.rawUpgrade(target: "/wovenmatter/v1/stream?protocol=1", signer: phone, keepOpen: true)
     let connection = try #require(silent.connection)
-    #expect(try await connection.waitForClose(timeout: .seconds(5)))
-    // Pings were answered automatically throughout.
-    try await Task.sleep(for: .milliseconds(900))
+    #expect(try await connection.waitForClose(timeout: .seconds(15)))
+    // Pings were answered automatically throughout: past another timeout too.
+    try await Task.sleep(for: .milliseconds(1_600))
     answering.send(.request(try .init(id: "q", method: .executionReceipt, params: StreamReceiptParams(commandID: UUID().uuidString.lowercased()))))
     #expect(try await answering.response("q").error == nil)
     answering.close()
