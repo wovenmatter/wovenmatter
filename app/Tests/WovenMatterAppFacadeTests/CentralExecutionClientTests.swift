@@ -75,14 +75,12 @@ struct CentralExecutionClientTests {
         try await source.conversationOpened(id)
         let relay = await source.conversationRelay(conversationID: id)
         #expect(relay?.owner.online == false && relay?.owner.error != nil)
-        #expect(source.polledConversationIDs.isEmpty)
 
         // Neither registry changes nor time make anything read the workspace.
         await client.connectRegisteredWorkspaces()
         await client.connectRegisteredWorkspaces()
         try await Task.sleep(for: .milliseconds(1_200))
         try? await client.refresh(conversationID: id)
-        #expect(source.polledConversationIDs.isEmpty)
         #expect(await setup.remote.reads == 0, "History, questions, transcripts and settings are never read from it")
         #expect(!client.isStreamed(workspace.id))
         await source.conversationClosed(id)

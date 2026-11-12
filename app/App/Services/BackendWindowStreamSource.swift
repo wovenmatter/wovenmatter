@@ -10,15 +10,12 @@ import WovenMatterDashboardStore
 /// one WebSocket it keeps to that machine (`CentralExecutionClient`), read
 /// again only when that stream pushes or an action finishes. A machine this
 /// server cannot reach shows the history library sync brought, marked offline;
-/// nothing polls it. Only a client-mode Dev build, which has no member key for
-/// its live host's stream, reads its live host on the window's behalf while a
-/// chat is open (`CentralLibraryClientModel`).
+/// nothing polls it. A client-mode Dev build relays what its one stream to its
+/// live host carries (`CentralLibraryClientModel`, signed with its local-only
+/// Dev stream key): it reads a chat again only when that stream pushes, a
+/// library pass lands, or an action finishes.
 @MainActor
 final class BackendWindowStreamSource: ExecutionConversationSource {
-    /// How often a client-mode Dev build reads an open chat from its live host.
-    static let clientModeInterval: Duration = .seconds(1)
-    static let clientModeOfflineInterval: Duration = .seconds(5)
-
     private unowned let model: ApplicationModel
     /// Told when relayed state changed, so its subscriptions compare again.
     var changed: (Set<String>) -> Void = { _ in }
@@ -29,9 +26,6 @@ final class BackendWindowStreamSource: ExecutionConversationSource {
     private var failures: [String: String] = [:]
     /// Relayed reads in flight; true when another change arrived meanwhile.
     private var reading: [String: Bool] = [:]
-    private var pollers: [String: Task<Void, Never>] = [:]
-    /// Open chats read on a timer: only a client-mode Dev build has any.
-    var polledConversationIDs: Set<String> { Set(pollers.keys) }
 
     init(model: ApplicationModel) { self.model = model }
 
@@ -51,7 +45,8 @@ final class BackendWindowStreamSource: ExecutionConversationSource {
         openCounts[conversationID, default: 0] += 1
         guard kind == .remote, openCounts[conversationID] == 1 else { return }
         // Every chat open in a window stays live, however many are open.
-        if model.liveLibraryClient == nil { (try? model.centralExecutionClient())?.hold(conversationID) }
+        if let client = model.liveLibraryClient { client.followConversation(conversationID) }
+        else { (try? model.centralExecutionClient())?.hold(conversationID) }
         await read(conversationID)
     }
 
@@ -60,7 +55,6 @@ final class BackendWindowStreamSource: ExecutionConversationSource {
         guard count <= 1 else { openCounts[conversationID] = count - 1; return }
         openCounts.removeValue(forKey: conversationID)
         let kind = kinds.removeValue(forKey: conversationID)
-        pollers.removeValue(forKey: conversationID)?.cancel()
         snapshots.removeValue(forKey: conversationID); failures.removeValue(forKey: conversationID)
         // The background server's own `conversation` subscription ends with the window's.
         if kind == .remote {
@@ -150,24 +144,7 @@ final class BackendWindowStreamSource: ExecutionConversationSource {
         } while reading[id] == true
         reading.removeValue(forKey: id)
         guard openCounts[id] != nil else { return }
-        updatePoller(id)
         changed([id])
-    }
-
-    /// A client-mode Dev build's live host pushes nothing to it: its open chat
-    /// is read here, on the window's behalf, for as long as the window follows
-    /// it. Every other build follows the background server's streams.
-    private func updatePoller(_ id: String) {
-        guard model.liveLibraryClient != nil else { pollers.removeValue(forKey: id)?.cancel(); return }
-        guard pollers[id] == nil else { return }
-        pollers[id] = Task { [weak self] in
-            while !Task.isCancelled {
-                let online = self?.snapshots[id]?.online == true
-                do { try await Task.sleep(for: online ? Self.clientModeInterval : Self.clientModeOfflineInterval) } catch { return }
-                guard let self, self.openCounts[id] != nil else { return }
-                await self.read(id)
-            }
-        }
     }
 }
 
