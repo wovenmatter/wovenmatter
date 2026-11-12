@@ -799,7 +799,8 @@ hands them to the macOS job, which checks them with
   `WorkspaceToolHandlers.memberSession` sends a call for a remembered or named
   member session to `ApplicationModel+MemberSessions.swift`, which signs it
   through `CentralExecutionClient` (`SignedExecutionWorkspaceTransport`); a
-  session on that Mac or on a Linux host it manages over SSH stays local. Each is one or more signed calls to the destination's
+  session on that Mac stays local; a Linux host's sessions, the adding Mac's
+  included, are reached with signed calls to that host. Each is one or more signed calls to the destination's
   execution API (`GET v1/execution/conversations`, `…/conversations/<id>/transcript`,
   `…/capabilities`, `GET v1/execution/interactions`, `POST v1/execution/commands`):
   - `woven_sessions_status {id, workspace?, before?}` → `{session: {id, title,
@@ -1278,9 +1279,22 @@ no stdio relay.
 - **Library files.** A Mac retains an agent's file with `POST
   v1/execution/library-file {conversationID, path}`: inside the session root,
   `/tmp` or `/mnt/data`, no final symlink, 25 MiB.
-- **Adoption** of a chat that ran over SSH before reopens a stopped or missing
-  durable channel with `session/load`, leaves no process behind when that
-  fails, and takes the Mac's existing `transcript`.
+- **Adoption.** A chat that ran over SSH before moves to its host's server
+  when this Mac first opens, refreshes or sends to it. Runs it left unsettled
+  are interrupted, the adoption is fenced in the library
+  (`execution_adoptions`), and `POST v1/execution/adopt` carries `transcript`:
+  the newest messages and activities that fit in 6 MiB. The host reopens a
+  stopped or missing durable channel with `session/load` and leaves no process
+  behind when that fails. A retry resends the same adoption. A chat that
+  cannot move (its host is no longer set up or not yet enrolled, it never
+  started a native session, or the host refuses) stays in the library as
+  read-only history, and sending to it says why.
+- **The adding Mac** creates its chats on the host with `createSession`
+  (`sessionOptions`, `folderID`, `title`), sends files and context as every
+  member does, applies later choices with `workspace` `configureSession`,
+  reaches OpenCode through the signed `/v1/workspace-instances/opencode/api/*`
+  proxy, and pushes Pi Durable credentials with
+  `v1/default-agent/configuration`, signed once the host is enrolled.
 
 ## Bots
 
