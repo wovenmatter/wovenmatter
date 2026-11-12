@@ -102,7 +102,11 @@ final class MobileWorkspaceStreamTests: XCTestCase {
     let submit = Task { try await client.submit(command) }
     await eventually("command") { await first.requests.count == 1 }
     let sent = try await first.requests[0].decodeParams(StreamCommandParams.self).command
+    // The same identity `POST v1/execution/commands` carries in its body,
+    // which a Mac checks against the socket's scope: this workspace and its library.
     XCTAssertEqual(sent.workspaceID, "linux")
+    XCTAssertEqual(sent.libraryID, "library")
+    XCTAssertEqual(sent.deviceID, "phone")
     await first.serverClose(code: 1006)
     do { _ = try await submit.value; XCTFail("Expected a lost reply") }
     catch { XCTAssertEqual(error as? StreamConnectionError, .disconnected) }
