@@ -54,8 +54,8 @@ extension MobileModel {
       try context.authorize(command)
       // Refuse Page writes before reserving the call or asking for approval.
       if command.isMutation, command.group == .notes {
-        let noteID = command.options["note-id"] ?? command.positional.first
-        let editsPage = noteID.flatMap { await store.snapshot().notes[$0] }
+        let notes = await store.snapshot().notes
+        let editsPage = (command.options["note-id"] ?? command.positional.first).flatMap { notes[$0] }
           .map { NoteDocument.decode($0.content).kind == .canvas } ?? false
         if command.isPageCommand || editsPage {
           throw WorkspaceToolError.invalid("Pages are edited on a Mac. This phone has not changed the Page.")

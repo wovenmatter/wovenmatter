@@ -165,18 +165,17 @@ the controls whose values would be saved. Buttons, opted-out controls, and contr
 without a stable identity stay usable for that view; nothing they do is saved, and
 `wovenArtifact.set` and `remove` reject.
 
-Mobile MCP tools default to the device's `local` target, and the write path depends
-on the asset:
+Quick Chat on iPhone and iPad runs its tools against the device's own library
+copy, and the write path depends on the asset:
 
-- **Pages:** writes never apply locally. Page tools and note edits of a Page are
-  refused until retried with `target: central`, which needs a connection and uses
-  the central host's atomic write path with its component revisions.
-- **Artifact state:** `woven_notes_artifact_state_edit` with the `local` target
-  changes the device's cached copy and queues it through the existing whole-document
-  note sync. Key versions are checked against that copy only, not the central host,
-  so a concurrent central change follows the existing sync conflict path rather
-  than a key-level conflict. An Artifact with linked data cannot be edited locally;
-  use `target: central` to get the host's key-level check.
+- **Pages:** writes never apply on the device. Page tools and note edits of a
+  Page are refused before approval is requested, with nothing changed. Edit Pages
+  on a Mac, where agents share the host's atomic write path and component revisions.
+- **Artifact state:** `woven_notes_artifact_state_edit` changes the device's copy
+  and queues it through the existing whole-document note sync. Key versions are
+  checked against that copy only, so a concurrent change on a Mac follows the
+  existing sync conflict path rather than a key-level conflict. An Artifact with
+  linked data cannot be edited on the device.
 
 Focused fixtures cover model persistence, conflict handling, native editing, MCP
 and the state bridge without providers. A local fixture is not proof of real
