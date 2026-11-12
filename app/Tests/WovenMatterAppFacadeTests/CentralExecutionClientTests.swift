@@ -16,7 +16,7 @@ struct CentralExecutionClientTests {
             kind: .linux, name: "Independent owner", endpoint: URL(string: "https://fixture.ts.net/wovenmatter"), executionDeviceID: UUID().uuidString.lowercased())), deviceID: identity.hostDeviceID)
         let conversation = LibraryConversation(id: UUID().uuidString.lowercased(), title: "Remote", providerID: "pi-durable", routeID: workspace.id,
             libraryID: identity.libraryID, workspaceID: workspace.id)
-        let origin = LibraryJournalEntry(workspaceID: workspace.id, originSequence: 1, conversationID: conversation.id,
+        let origin = ExecutionJournalEntry(workspaceID: workspace.id, originSequence: 1, conversationID: conversation.id,
             kind: .conversation, conversation: conversation)
         let publisher = try await fixture.database.issueLibraryWorkspacePublisher(workspaceID: workspace.id,
             endpoint: URL(string: "https://central.ts.net/wovenmatter")!, deviceID: identity.hostDeviceID)
@@ -78,12 +78,12 @@ struct CentralExecutionClientTests {
             kind: .linux, name: "Independent owner", endpoint: URL(string: "https://fixture.ts.net/wovenmatter"), executionDeviceID: UUID().uuidString.lowercased())), deviceID: identity.hostDeviceID)
         let conversation = LibraryConversation(id: UUID().uuidString.lowercased(), title: "Remote", providerID: "pi-durable", routeID: workspace.id,
             libraryID: identity.libraryID, workspaceID: workspace.id)
-        let origin = LibraryJournalEntry(workspaceID: workspace.id, originSequence: 1, conversationID: conversation.id,
+        let origin = ExecutionJournalEntry(workspaceID: workspace.id, originSequence: 1, conversationID: conversation.id,
             kind: .conversation, conversation: conversation)
         let publisher = try await fixture.database.issueLibraryWorkspacePublisher(workspaceID: workspace.id,
             endpoint: URL(string: "https://central.ts.net/wovenmatter")!, deviceID: identity.hostDeviceID)
         try await publish([origin], grant: publisher, database: fixture.database)
-        let history = LibraryJournalEntry(workspaceID: workspace.id, originSequence: 2, conversationID: conversation.id,
+        let history = ExecutionJournalEntry(workspaceID: workspace.id, originSequence: 2, conversationID: conversation.id,
             kind: .transcript, transcript: .init(conversationID: conversation.id, messages: (0..<100).map { index in
                 .init(id: UUID().uuidString.lowercased(), conversationID: conversation.id, role: "user", content: "Saved \(index)")
             }))
@@ -112,11 +112,11 @@ struct CentralExecutionClientTests {
         #expect(client.errors[workspace.id] != nil)
         #expect(await fixture.recorder.deliveries.isEmpty)
     }
-    private func publish(_ entries: [LibraryJournalEntry], grant: LibraryWorkspacePublisherGrant, database: WorkspaceDatabase) async throws {
+    private func publish(_ entries: [ExecutionJournalEntry], grant: LibraryWorkspacePublisherGrant, database: WorkspaceDatabase) async throws {
         let path = "/v1/federation/publisher/journal"
         let request = LibraryHTTPRequest(method: "POST", target: path,
             headers: ["authorization": "Bearer " + grant.token, "x-woven-workspace": grant.libraryID],
-            body: try JSONEncoder().encode(LibraryJournalBatch(libraryID: grant.libraryID, entries: entries)))
+            body: try JSONEncoder().encode(ExecutionJournalBatch(libraryID: grant.libraryID, entries: entries)))
         let response = try await LibraryWorkspacePublisherAPI.handle(request, path: path, database: database)
         #expect(response.status == 200)
     }
@@ -126,7 +126,7 @@ struct CentralExecutionClientTests {
 private actor CentralExecutionFixtureTransport: ExecutionWorkspaceTransport {
     let workspace: ExecutionWorkspace
     let conversation: LibraryConversation
-    var entries: [LibraryJournalEntry]
+    var entries: [ExecutionJournalEntry]
     var receipts: [String: LibraryCommandReceipt] = [:]
     var executions = 0
     var eventRequests = 0
@@ -135,19 +135,19 @@ private actor CentralExecutionFixtureTransport: ExecutionWorkspaceTransport {
     func setOffline(_ value: Bool) { offline = value }
     var lostACK = false
     var broken = false
-    init(workspace: ExecutionWorkspace, conversation: LibraryConversation, entries: [LibraryJournalEntry]) {
+    init(workspace: ExecutionWorkspace, conversation: LibraryConversation, entries: [ExecutionJournalEntry]) {
         self.workspace = workspace; self.conversation = conversation; self.entries = entries
     }
     func identity() throws -> ExecutionWorkspace { if offline { throw MobileConnectionError.offline }; return workspace }
-    func providers() -> [LibraryProvider] { [] }
+    func providers() -> [HarnessCapabilities] { [] }
     func pending() -> [PendingInteraction] { [] }
     func receipt(_ id: String) -> LibraryCommandReceipt? { receipts[id] }
     func conversations() -> [LibraryConversation] { [conversation] }
-    func capabilities(_ id: String) -> LibraryProvider { .init(id: "pi-durable", runtimeKind: "defaultAgent", displayName: "Pi Durable", available: true, canSteer: true, canStop: true) }
+    func capabilities(_ id: String) -> HarnessCapabilities { .init(id: "pi-durable", runtimeKind: "defaultAgent", displayName: "Pi Durable", available: true, canSteer: true, canStop: true) }
     func transcript(_ id: String) -> LibraryTranscript {
         entries.last(where: { $0.transcript != nil })?.transcript ?? .init(conversationID: id)
     }
-    func events(after: Int64) throws -> LibraryJournalPage {
+    func events(after: Int64) throws -> ExecutionJournalPage {
         if offline { throw MobileConnectionError.offline }
         eventRequests += 1; requestedCursors.append(after)
         let available = entries.filter { $0.originSequence > after }

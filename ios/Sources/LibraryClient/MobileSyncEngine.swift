@@ -376,7 +376,7 @@ public actor MobileSyncEngine {
       if let receipt = try await transport.receipt(record.id) { try await store.rememberReceipt(receipt) }
     }
   }
-  public func linkedData(note: LibraryNote, tableID: String? = nil) async throws -> LibraryLinkedData {
+  public func linkedData(note: LibraryNote, tableID: String? = nil) async throws -> LinkedDataPreview {
     try await verifyRemoteWorkspace()
     let value = try await transport.linkedData(note.id, tableID: tableID)
     guard value.noteID == note.id, value.noteRevision == note.revision, value.tableID == tableID else {
@@ -388,7 +388,7 @@ public actor MobileSyncEngine {
     try await verifyRemoteWorkspace()
     return try await transport.readWorkspace(request)
   }
-  public func providers() async throws -> [LibraryProvider] { try await transport.providers() }
+  public func providers() async throws -> [HarnessCapabilities] { try await transport.providers() }
   public func pending() async throws -> [PendingInteraction] { try await transport.pending() }
   public func earlierTranscript(_ id: String, before: String) async throws -> LibraryTranscript {
     try await verifyRemoteWorkspace()

@@ -2,7 +2,7 @@ import Foundation
 
 /// An online read of a document's registered database link. This is a preview,
 /// never a write to the note or a query/path supplied by the phone.
-public struct LibraryLinkedData: Codable, Equatable, Sendable {
+public struct LinkedDataPreview: Codable, Equatable, Sendable {
   public var noteID: String
   public var noteRevision: Int64
   public var tableID: String?

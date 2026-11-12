@@ -499,9 +499,9 @@ final class BotsHostController {
     // MARK: Other members (`/v1/bots/*` on this Mac's library server)
 
     /// The caller is already authorized as a member by the library server.
-    func remoteUpgrade(_ request: LibraryHTTPRequest) -> LibraryUpgradeDecision {
+    func remoteUpgrade(_ request: LibraryHTTPRequest) -> WebSocketUpgradeDecision {
         guard persisted.enabled, supervisor?.phase == .running, let port = persisted.runtimePort.flatMap(UInt16.init(exactly:)),
-              let head = LibraryUpgradeDecision.webSocketHead(for: request, port: port, path: "/ws", bearer: persisted.runtimeToken) else {
+              let head = WebSocketUpgradeDecision.webSocketHead(for: request, port: port, path: "/ws", bearer: persisted.runtimeToken) else {
             return .reject(.error("unavailable", "Bots on this Mac are not running.", status: 503))
         }
         return .tunnel(port: port, head: head)

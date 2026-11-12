@@ -4,7 +4,7 @@ import MobileInference
 import WovenMatterShared
 
 extension MobileModel {
-  func startNewChat(with agent: LibraryAgentLauncher) async {
+  func startNewChat(with agent: LaunchableAgent) async {
     guard let current = launcherAgents.first(where: { $0.id == agent.id }) else { return }
     guard current.isAvailable else {
       chatSetupProblem = workspaceIsConnected(current.workspaceID) ? "This agent is currently unavailable." : Self.deviceConnectionMessage
@@ -112,7 +112,7 @@ extension MobileModel {
   var deviceChatPermission: DevicePermissionMode {
     selectedConversationID.flatMap { executionRecords[$0]?.permissionMode } ?? (selectedConversationID == nil ? draftDeviceSettings.permissionMode ?? .defaultMode : .defaultMode)
   }
-  static var devicePermissionOptions: [LibrarySelection] {
+  static var devicePermissionOptions: [SessionSettingOption] {
     DevicePermissionMode.allCases.map { .init(id: $0.rawValue, label: $0.label) }
   }
   var deviceChatTools: [String] {
@@ -206,14 +206,14 @@ struct NewChatChooser: View {
         .buttonStyle(DashboardIconButtonStyle()).accessibilityLabel("Close agent chooser").disabled(model.startingChat)
     }.padding(.horizontal, 20).padding(.top, 10)
   }
-  private func workspaceSection(_ workspace: LibraryAgentGroup) -> some View {
+  private func workspaceSection(_ workspace: AgentGroup) -> some View {
     VStack(alignment: .leading, spacing: 8) {
       GroupLabel(text: workspace.id == "local" ? "Quick Chat" : workspace.name)
         .accessibilityIdentifier("chooser-group-" + workspace.id)
       ForEach(workspace.agents) { agent in agentRow(agent) }
     }
   }
-  private func agentRow(_ agent: LibraryAgentLauncher) -> some View {
+  private func agentRow(_ agent: LaunchableAgent) -> some View {
     Button { Task { await model.startNewChat(with: agent) } } label: {
       HStack(spacing: 12) {
         MobileAgentIcon(runtimeKind: agent.runtimeKind, size: 24)

@@ -5,8 +5,8 @@ public protocol FederationTransport: Sendable {
   func libraryIdentity() async throws -> LibraryIdentity
   func executionWorkspaces() async throws -> [ExecutionWorkspace]
   func registerWorkspace(_ registration: LibraryWorkspaceRegistration) async throws -> ExecutionWorkspace
-  func journal(after: Int64) async throws -> LibraryJournalPage
-  func importJournal(_ batch: LibraryJournalBatch) async throws -> LibraryJournalBatchResult
+  func journal(after: Int64) async throws -> ExecutionJournalPage
+  func importJournal(_ batch: ExecutionJournalBatch) async throws -> ExecutionJournalBatchResult
   func artifactManifests() async throws -> [LibraryArtifactManifest]
   func registerArtifact(_ registration: LibraryArtifactRegistration) async throws -> LibraryArtifactTransfer
   func uploadArtifactChunk(_ chunk: LibraryArtifactChunk) async throws -> LibraryArtifactTransfer
@@ -35,8 +35,8 @@ extension HTTPSLibraryTransport: FederationTransport {
   public func registerWorkspace(_ registration: LibraryWorkspaceRegistration) async throws -> ExecutionWorkspace {
     try await request("v1/federation/workspaces", method: "POST", body: JSONEncoder().encode(registration))
   }
-  public func journal(after: Int64) async throws -> LibraryJournalPage { try await request("v1/federation/journal", query: [.init(name: "after", value: String(after))]) }
-  public func importJournal(_ batch: LibraryJournalBatch) async throws -> LibraryJournalBatchResult {
+  public func journal(after: Int64) async throws -> ExecutionJournalPage { try await request("v1/federation/journal", query: [.init(name: "after", value: String(after))]) }
+  public func importJournal(_ batch: ExecutionJournalBatch) async throws -> ExecutionJournalBatchResult {
     try await request("v1/federation/journal", method: "POST", body: JSONEncoder().encode(batch))
   }
   public func artifactManifests() async throws -> [LibraryArtifactManifest] { try await request("v1/federation/artifacts") }
@@ -88,7 +88,7 @@ extension MobileSyncEngine {
     for _ in 0..<100 {
       try Task.checkCancellation()
       let pending = await store.journal.pendingOwnerEntries(deviceID: deviceID)
-      var entries: [LibraryJournalEntry] = [], bytes = 0
+      var entries: [ExecutionJournalEntry] = [], bytes = 0
       for entry in pending.prefix(FederationProtocol.maximumBatchEntries) {
         let size = try JSONEncoder().encode(entry).count
         guard size <= FederationProtocol.maximumEntryBytes else { throw MobileConnectionError.responseTooLarge }

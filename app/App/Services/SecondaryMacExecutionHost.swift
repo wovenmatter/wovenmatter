@@ -163,9 +163,9 @@ final class SecondaryMacExecutionHost {
 private final class SecondaryMacExecutionCommands: LibraryCommandServing {
     let workspace: SecondaryMacExecutionWorkspace
     init(workspace: SecondaryMacExecutionWorkspace) { self.workspace = workspace }
-    func providers() -> [LibraryProvider] { workspace.model.libraryCommands.providers().filter { $0.id.hasPrefix("local:") } }
+    func providers() -> [HarnessCapabilities] { workspace.model.libraryCommands.providers().filter { $0.id.hasPrefix("local:") } }
     func pendingInteractions() async -> [PendingInteraction] { await workspace.model.libraryCommands.pendingInteractions() }
-    func sessionCapabilities(conversationID: String) async throws -> LibraryProvider { try await workspace.capabilities(conversationID) }
+    func sessionCapabilities(conversationID: String) async throws -> HarnessCapabilities { try await workspace.capabilities(conversationID) }
     func transcript(conversationID: String, before: String?) async throws -> LibraryTranscript {
         try await workspace.model.libraryCommands.transcript(conversationID: conversationID, before: before)
     }

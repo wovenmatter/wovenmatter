@@ -17,17 +17,17 @@ public enum LibraryWorkspacePublisherAPI {
       }
       return try .json(association)
     case "/v1/federation/publisher/retained/settle":
-      let batch = try JSONDecoder().decode(LibraryJournalBatch.self, from: request.body)
+      let batch = try JSONDecoder().decode(ExecutionJournalBatch.self, from: request.body)
       guard batch.libraryID == principal.libraryID, batch.entries.allSatisfy({ $0.workspaceID == principal.workspaceID }) else {
         return .error("wrong_owner", "A publisher may settle only exact retained runs from its workspace.", status: 403)
       }
       return try .json(try await database.settleLibraryRetainedRuns(batch, deviceID: principal.executionDeviceID))
     case "/v1/federation/publisher/journal":
-      let batch = try JSONDecoder().decode(LibraryJournalBatch.self, from: request.body)
+      let batch = try JSONDecoder().decode(ExecutionJournalBatch.self, from: request.body)
       guard batch.libraryID == principal.libraryID, batch.entries.allSatisfy({ $0.workspaceID == principal.workspaceID }) else {
         return .error("wrong_owner", "A publisher may submit only its own workspace history.", status: 403)
       }
-      return try .json(try await database.ingestLibraryJournal(batch, deviceID: principal.executionDeviceID))
+      return try .json(try await database.ingestExecutionJournal(batch, deviceID: principal.executionDeviceID))
     case "/v1/federation/publisher/artifacts/register":
       let value = try JSONDecoder().decode(LibraryArtifactRegistration.self, from: request.body)
       guard value.manifest.workspaceID == principal.workspaceID else { return .error("wrong_owner", "A publisher may save only its own workspace artifacts.", status: 403) }
@@ -63,7 +63,7 @@ public enum LibraryWorkspacePublisherAPI {
       }
       return workspace
     }
-    func batchWorkspace(_ batch: LibraryJournalBatch) async throws -> ExecutionWorkspace? {
+    func batchWorkspace(_ batch: ExecutionJournalBatch) async throws -> ExecutionWorkspace? {
       let ids = Set(batch.entries.map(\.workspaceID))
       guard ids.count <= 1 else { throw LibraryAPIError(code: "wrong_owner", message: "Publish one workspace's history per batch.") }
       guard let id = ids.first else { return nil }
@@ -73,7 +73,7 @@ public enum LibraryWorkspacePublisherAPI {
       }
       return value
     }
-    func relabel(_ result: LibraryJournalBatchResult, _ libraryID: String) -> LibraryJournalBatchResult {
+    func relabel(_ result: ExecutionJournalBatchResult, _ libraryID: String) -> ExecutionJournalBatchResult {
       var copy = result; copy.libraryID = libraryID; return copy
     }
     switch path {
@@ -91,14 +91,14 @@ public enum LibraryWorkspacePublisherAPI {
       }
       return try .json(association)
     case "/v1/publisher/retained/settle", "/v1/publisher/journal":
-      var batch = try JSONDecoder().decode(LibraryJournalBatch.self, from: request.body)
+      var batch = try JSONDecoder().decode(ExecutionJournalBatch.self, from: request.body)
       let original = batch.libraryID
       guard let target = try await batchWorkspace(batch), let device = target.executionDeviceID else {
-        return try .json(LibraryJournalBatchResult(libraryID: original, acceptedEventIDs: [], cursor: 0))
+        return try .json(ExecutionJournalBatchResult(libraryID: original, acceptedEventIDs: [], cursor: 0))
       }
       batch.libraryID = own
       let result = path.hasSuffix("settle") ? try await database.settleLibraryRetainedRuns(batch, deviceID: device)
-        : try await database.ingestLibraryJournal(batch, deviceID: device)
+        : try await database.ingestExecutionJournal(batch, deviceID: device)
       return try .json(relabel(result, original))
     case "/v1/publisher/artifacts/register":
       let value = try JSONDecoder().decode(LibraryArtifactRegistration.self, from: request.body)

@@ -9,7 +9,7 @@ public final class MacExecutionAPI {
   private let commands: any LibraryCommandServing
   private let authentication: ExecutionAuthentication
   private let descriptor: ExecutionWorkspace
-  private let events: (@MainActor @Sendable (Int64) async throws -> LibraryJournalPage)?
+  private let events: (@MainActor @Sendable (Int64) async throws -> ExecutionJournalPage)?
   private let isActive: @MainActor @Sendable () -> Bool
   private let authorizeDevice: @MainActor @Sendable (String) async throws -> Void
   /// Live authorization of one presented grant, by device and provenance.
@@ -21,7 +21,7 @@ public final class MacExecutionAPI {
   public init(database: WorkspaceDatabase, commands: any LibraryCommandServing,
               authentication: ExecutionAuthentication, descriptor: ExecutionWorkspace,
               isActive: @escaping @MainActor @Sendable () -> Bool,
-              events: (@MainActor @Sendable (Int64) async throws -> LibraryJournalPage)? = nil,
+              events: (@MainActor @Sendable (Int64) async throws -> ExecutionJournalPage)? = nil,
               authorizeDevice: @escaping @MainActor @Sendable (String) async throws -> Void = { _ in },
               authorizeGrant: (@MainActor @Sendable (String, String?) async throws -> Void)? = nil,
               members: MemberDirectory? = nil) {
@@ -97,7 +97,7 @@ public final class MacExecutionAPI {
           // This host's canonical DB already owns these records. Advertise
           // history.central.v1 and fetch its normal library change feed instead.
           guard query("after") == nil || query("after") == "0" else { return .error("invalid_cursor", "Central Mac history uses the library change cursor.", status: 400) }
-          return try .json(LibraryJournalPage(libraryID: descriptor.libraryID, cursor: 0))
+          return try .json(ExecutionJournalPage(libraryID: descriptor.libraryID, cursor: 0))
         default: break
         }
         if parts.count == 4, parts[2] == "commands" {

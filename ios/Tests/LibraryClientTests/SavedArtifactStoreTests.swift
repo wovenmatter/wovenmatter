@@ -20,8 +20,8 @@ private actor ArtifactLibrary: FederationTransport {
   func libraryIdentity() throws -> LibraryIdentity { throw MobileConnectionError.offline }
   func executionWorkspaces() -> [ExecutionWorkspace] { [] }
   func registerWorkspace(_ registration: LibraryWorkspaceRegistration) throws -> ExecutionWorkspace { throw MobileConnectionError.offline }
-  func journal(after: Int64) throws -> LibraryJournalPage { throw MobileConnectionError.offline }
-  func importJournal(_ batch: LibraryJournalBatch) throws -> LibraryJournalBatchResult { throw MobileConnectionError.offline }
+  func journal(after: Int64) throws -> ExecutionJournalPage { throw MobileConnectionError.offline }
+  func importJournal(_ batch: ExecutionJournalBatch) throws -> ExecutionJournalBatchResult { throw MobileConnectionError.offline }
   func artifactManifests() -> [LibraryArtifactManifest] { complete ? manifest.map { [$0] } ?? [] : [] }
   func registerArtifact(_ registration: LibraryArtifactRegistration) -> LibraryArtifactTransfer {
     if manifest == nil { manifest = registration.manifest; manifest!.revision = 1 }

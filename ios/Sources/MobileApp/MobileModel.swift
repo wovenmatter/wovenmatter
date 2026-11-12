@@ -26,12 +26,12 @@ import MobileInference
   let analytics = MobileAnalyticsModel()
   var tab: Tab = .home
   var state = MobileStoreState()
-  var providers: [LibraryProvider] = []
+  var providers: [HarnessCapabilities] = []
   var knownAgentIDs: Set<String> = []
   var selectedConversationRoute: (conversationID: String, workspaceID: String)?
-  var savedAgentCatalog: LibraryAgentCatalog?
+  var savedAgentCatalog: AgentCatalog?
   var pending: [PendingInteraction] = []
-  var sessionCapabilities: [String: LibraryProvider] = [:]
+  var sessionCapabilities: [String: HarnessCapabilities] = [:]
   var historyPages: [String: LibraryTranscript] = [:]
   @ObservationIgnored let transcriptStates = MobileConversationStates()
   var loadingHistory = false
@@ -131,7 +131,7 @@ import MobileInference
   var executionWorkspaces: [ExecutionWorkspace] = []
   var workspacePollTasks: [String: Task<Void, Never>] = [:]
   var workspaceClients: [String: WorkspaceClient] = [:]
-  var workspaceProviders: [String: [LibraryProvider]] = [:]
+  var workspaceProviders: [String: [HarnessCapabilities]] = [:]
   var workspaceReachable: [String: Bool] = [:]
   var executionWorkspaceRefreshInProgress = false
   var remotePending: [String: [PendingInteraction]] = [:]
@@ -266,7 +266,7 @@ import MobileInference
     if let id = selectedConversationID, let record = executionRecords[id] { return (record.status == "running" || record.status == "stopping") ? record.runID : nil }
     return selectedConversationID.flatMap { state.transcripts[$0]?.activeRunID } ?? selectedConversation?.activeRunID
   }
-  var centralProvider: LibraryProvider? { selectedConversationID.flatMap { sessionCapabilities[$0] } ?? providers.first { $0.id == (selectedConversation?.providerID ?? providerID) } }
+  var centralProvider: HarnessCapabilities? { selectedConversationID.flatMap { sessionCapabilities[$0] } ?? providers.first { $0.id == (selectedConversation?.providerID ?? providerID) } }
   var allPending: [PendingInteraction] { pending + localPending + remotePending.values.flatMap { $0 } }
   var currentPending: [PendingInteraction] { allPending.filter { $0.conversationID == selectedConversationID } }
 
@@ -406,7 +406,7 @@ import MobileInference
       let refreshProviders = centralProvidersRefreshDue || frame % 5 == 0 || providers.isEmpty || host != centralProvidersHostID
       let refreshedProviders = refreshProviders ? try await engine.providers() : providers
       let refreshedPending = try await engine.pending()
-      var capability: LibraryProvider?
+      var capability: HarnessCapabilities?
       if let targetConversationID {
         try await engine.refreshTranscriptIfNeeded(targetConversationID)
         // The host this synchronization chose (member mode can fail over).
@@ -536,7 +536,7 @@ import MobileInference
     if state.isDirty(id) { return "Saved on this device · waiting to sync" }
     return "Saved · synced with Mac"
   }
-  func linkedData(note: LibraryNote, tableID: String? = nil) async throws -> LibraryLinkedData {
+  func linkedData(note: LibraryNote, tableID: String? = nil) async throws -> LinkedDataPreview {
     guard online, let engine else { throw MobileConnectionError.offline }
     let result = try await engine.linkedData(note: note, tableID: tableID)
     guard state.notes[note.id]?.revision == note.revision else { throw CancellationError() }
@@ -687,7 +687,7 @@ import MobileInference
     guard let conversationID = selectedConversationID, let runID = activeRunID, online, activeProvider?.canStop == true else { return }
     await submit(.init(deviceID: state.deviceID, kind: .stop, conversationID: conversationID, runID: runID))
   }
-  func respond(_ interaction: PendingInteraction, response: LibraryInteractionResponse) async {
+  func respond(_ interaction: PendingInteraction, response: InteractionResponse) async {
     if let approval = localApprovals.removeValue(forKey: interaction.id) {
       localPending.removeAll { $0.id == interaction.id }
       if !response.answers.isEmpty {
@@ -795,11 +795,14 @@ import MobileInference
       await reload(); return true
     } catch { errorMessage = error.localizedDescription; return false }
   }
-  /// A note that never reached a library (revision 0 while unpaired) lives
-  /// only on this device. A note that synced before an unpair belongs to the
-  /// library: deleting it here would trash it there after pairing again.
+  /// Only a phone that has never been bound to a library deletes notes on its
+  /// own: every note there was created on it and never sent anywhere. Once a
+  /// phone has been paired, a note may exist in a library even at revision 0
+  /// (a create that was sent but not answered, or a note re-created for a new
+  /// library host), so deleting waits until the phone is paired again and the
+  /// note goes to the library's Trash.
   func canDeleteNoteLocally(_ id: String) -> Bool {
-    isStandalone && (state.notes[id]?.revision ?? 0) == 0
+    isStandalone && state.detachedWorkspaceID == nil && state.notes[id] != nil && state.notes[id]?.revision == 0
   }
   /// Deletes a note that lives only on this device, with the same durable
   /// store path an editor uses. Pairing later never sees it.
@@ -968,7 +971,7 @@ import MobileInference
           // A library copied from another Mac keeps that Mac's row as history only.
           .init(id: copied, libraryID: "fixture", ownerDeviceID: copied, kind: .mac, name: "Copied MacBook Air", capabilities: ["history.central.v1"], retainedHistory: true)
         ]
-        func agent(_ id: String, _ name: String, ready: Bool) -> LibraryProvider { .init(id: id, runtimeKind: id, displayName: name, available: ready, canStart: ready) }
+        func agent(_ id: String, _ name: String, ready: Bool) -> HarnessCapabilities { .init(id: id, runtimeKind: id, displayName: name, available: ready, canStart: ready) }
         let cached = [agent("default_agent", "Pi Durable", ready: true), agent("codex", "Codex", ready: false), agent("claude_code", "Claude Code", ready: false),
           agent("grok_build", "Grok Build", ready: true), agent("opencode", "OpenCode", ready: false)]
         workspaceProviders[mac] = cached; workspaceProviders[stale] = cached; workspaceProviders[copied] = cached

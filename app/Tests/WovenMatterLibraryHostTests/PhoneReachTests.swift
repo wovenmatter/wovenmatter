@@ -49,9 +49,9 @@ private final class Tailnet: MobileHTTPPerforming, @unchecked Sendable {
 @MainActor private final class LinuxSessions: LibraryCommandServing {
   var created: [LibraryCommand] = []
   var receipts: [String: LibraryCommandReceipt] = [:]
-  func providers() -> [LibraryProvider] { [.init(id: "local:default_agent", runtimeKind: "default_agent", displayName: "Agent", routeName: "Box", available: true)] }
+  func providers() -> [HarnessCapabilities] { [.init(id: "local:default_agent", runtimeKind: "default_agent", displayName: "Agent", routeName: "Box", available: true)] }
   func pendingInteractions() async -> [PendingInteraction] { [] }
-  func sessionCapabilities(conversationID: String) async throws -> LibraryProvider { providers()[0] }
+  func sessionCapabilities(conversationID: String) async throws -> HarnessCapabilities { providers()[0] }
   func transcript(conversationID: String, before: String?) async throws -> LibraryTranscript { .init(conversationID: conversationID) }
   func receipt(commandID: String, deviceID: String) async throws -> LibraryCommandReceipt? { receipts[commandID] }
   func execute(_ command: LibraryCommand, deviceID: String) async throws -> LibraryCommandReceipt {

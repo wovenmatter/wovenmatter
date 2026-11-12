@@ -46,16 +46,16 @@ struct LibraryTranscriptMigrationTests {
       _ = try await database.registerExecutionWorkspace(.init(workspace: .init(
         id: workspaceID, libraryID: libraryID, ownerDeviceID: deviceID, kind: .ios, name: "Fixture iPhone",
         executionDeviceID: deviceID)), deviceID: deviceID)
-      _ = try await database.ingestLibraryJournal(.init(libraryID: libraryID, entries: [
+      _ = try await database.ingestExecutionJournal(.init(libraryID: libraryID, entries: [
         .init(workspaceID: workspaceID, originSequence: 1, conversationID: conversationID, kind: .conversation,
           conversation: .init(id: conversationID, title: "Hey", runtimeKind: "piDurable"))
       ]), deviceID: deviceID)
     }
-    func entry(_ value: LibraryTranscript, sequence: Int64) -> LibraryJournalEntry {
+    func entry(_ value: LibraryTranscript, sequence: Int64) -> ExecutionJournalEntry {
       .init(workspaceID: workspaceID, originSequence: sequence, conversationID: conversationID, kind: .transcript, transcript: value)
     }
-    func ingest(_ entries: [LibraryJournalEntry]) async throws {
-      _ = try await database.ingestLibraryJournal(.init(libraryID: libraryID, entries: entries), deviceID: deviceID)
+    func ingest(_ entries: [ExecutionJournalEntry]) async throws {
+      _ = try await database.ingestExecutionJournal(.init(libraryID: libraryID, entries: entries), deviceID: deviceID)
     }
     func projection() -> LibraryTranscript {
       DeviceTranscript.project(snapshot: ["entries": [

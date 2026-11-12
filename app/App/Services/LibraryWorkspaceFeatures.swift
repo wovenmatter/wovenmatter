@@ -76,7 +76,7 @@ extension LibraryCommandService {
             return .session(settings)
         case .trash:
             var values = try await store.trashedConversations().prefix(500).map {
-                LibraryTrashedItem(id: $0.id, title: $0.title, kind: "conversation")
+                TrashedItem(id: $0.id, title: $0.title, kind: "conversation")
             }
             for note in try await store.trashedNotes().prefix(500) {
                 values.append(.init(id: note.id, title: note.title, kind: "note",
@@ -210,7 +210,7 @@ extension LibraryCommandService {
         await model.refreshWorkspace()
     }
 
-    private func sessionSettings(_ id: String) async throws -> LibrarySessionSettings {
+    private func sessionSettings(_ id: String) async throws -> SessionSettings {
         _ = try await conversation(id)
         guard let store = model.dashboardStore else { throw CommandError.unavailable }
         // Reading settings does not launch or authenticate a provider. Options
@@ -219,7 +219,7 @@ extension LibraryCommandService {
         let metadata = model.openCodeModel(for: id)?.metadata(id)
             ?? model.localACPSessionMetadata[id]
         let tools = try await store.database.sessionTools(id)
-        func options(_ values: [String]?, _ labels: [String: SessionOptionMetadata]?, current: String?) -> [LibrarySelection] {
+        func options(_ values: [String]?, _ labels: [String: SessionOptionMetadata]?, current: String?) -> [SessionSettingOption] {
             var ids = values ?? []
             if let current, !ids.contains(current) { ids.append(current) }
             return ids.map { .init(id: $0, label: labels?[$0]?.name ?? $0) }
@@ -248,7 +248,7 @@ extension LibraryCommandService {
     nonisolated private static var fileTooLarge: LibraryAPIError {
         .init(code: "file_too_large", message: "Open files larger than 32 MB on your Mac.")
     }
-    private static func readRetainedFile(_ url: URL, name: String, mimeType: String) async throws -> LibraryFile {
+    private static func readRetainedFile(_ url: URL, name: String, mimeType: String) async throws -> FileContents {
         try await Task.detached(priority: .utility) {
             guard url.isFileURL else { throw CommandError.invalidCommand }
             let handle = try FileHandle(forReadingFrom: url)

@@ -107,7 +107,7 @@ public actor MobileCalendarStore {
       return result
     }.sorted { $0.startsAt == $1.startsAt ? $0.occurrenceID < $1.occurrenceID : $0.startsAt < $1.startsAt }
   }
-  public func scheduledTasks() -> [LibraryScheduledTaskItem] {
+  public func scheduledTasks() -> [ScheduledTaskItem] {
     records().filter { $0.event.draft.task != nil }.map { record in
       let run = state.runs.values.filter { $0.eventID == record.id }.max { $0.scheduledAt < $1.scheduledAt }
       var event = record.event

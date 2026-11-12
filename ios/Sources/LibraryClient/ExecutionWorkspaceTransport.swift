@@ -35,21 +35,21 @@ public struct DirectWorkspaceCredential: Codable, Equatable, Sendable {
 /// supplies the same interface without using HTTP or library connectivity.
 public protocol ExecutionWorkspaceTransport: Sendable {
   func identity() async throws -> ExecutionWorkspace
-  func providers() async throws -> [LibraryProvider]
+  func providers() async throws -> [HarnessCapabilities]
   func pending() async throws -> [PendingInteraction]
   func command(_ command: LibraryCommand) async throws -> LibraryCommandReceipt
   func receipt(_ id: String) async throws -> LibraryCommandReceipt?
-  func events(after: Int64) async throws -> LibraryJournalPage
+  func events(after: Int64) async throws -> ExecutionJournalPage
   func conversations() async throws -> [LibraryConversation]
   func transcript(_ id: String) async throws -> LibraryTranscript
   func transcript(_ id: String, before: String) async throws -> LibraryTranscript
-  func capabilities(_ id: String) async throws -> LibraryProvider
+  func capabilities(_ id: String) async throws -> HarnessCapabilities
   func readWorkspace(_ request: LibraryWorkspaceRead) async throws -> LibraryWorkspaceResult
 }
 
 public extension ExecutionWorkspaceTransport {
   func transcript(_ id: String, before: String) async throws -> LibraryTranscript { throw MobileConnectionError.http(400, "Older history is unavailable for this workspace.") }
-  func capabilities(_ id: String) async throws -> LibraryProvider { throw MobileConnectionError.http(400, "Session capabilities are unavailable for this workspace.") }
+  func capabilities(_ id: String) async throws -> HarnessCapabilities { throw MobileConnectionError.http(400, "Session capabilities are unavailable for this workspace.") }
   func readWorkspace(_ request: LibraryWorkspaceRead) async throws -> LibraryWorkspaceResult { throw MobileConnectionError.http(400, "This action is unavailable for this execution workspace.") }
 }
 
@@ -84,7 +84,7 @@ public final class HTTPSExecutionWorkspaceTransport: ExecutionWorkspaceTransport
     guard value.id == credential.workspaceID, value.libraryID == credential.libraryID else { throw MobileStore.Failure.wrongWorkspace }
     return value
   }
-  public func providers() async throws -> [LibraryProvider] {
+  public func providers() async throws -> [HarnessCapabilities] {
     try await client.request("v1/execution/providers")
   }
   public func pending() async throws -> [PendingInteraction] {
@@ -101,7 +101,7 @@ public final class HTTPSExecutionWorkspaceTransport: ExecutionWorkspaceTransport
     do { return try await client.request("v1/execution/commands/" + TailnetJSONClient.safeID(id), query: [.init(name: "deviceID", value: credential.deviceID)]) }
     catch MobileConnectionError.http(404, _) { return nil }
   }
-  public func events(after: Int64) async throws -> LibraryJournalPage {
+  public func events(after: Int64) async throws -> ExecutionJournalPage {
     try await client.request("v1/execution/events", query: [.init(name: "after", value: String(after))])
   }
   public func conversations() async throws -> [LibraryConversation] {
@@ -113,7 +113,7 @@ public final class HTTPSExecutionWorkspaceTransport: ExecutionWorkspaceTransport
   public func transcript(_ id: String, before: String) async throws -> LibraryTranscript {
     try await client.request("v1/execution/conversations/" + TailnetJSONClient.safeID(id) + "/transcript", query: [.init(name: "before", value: before)])
   }
-  public func capabilities(_ id: String) async throws -> LibraryProvider {
+  public func capabilities(_ id: String) async throws -> HarnessCapabilities {
     try await client.request("v1/execution/conversations/" + TailnetJSONClient.safeID(id) + "/capabilities")
   }
   public func readWorkspace(_ request: LibraryWorkspaceRead) async throws -> LibraryWorkspaceResult {

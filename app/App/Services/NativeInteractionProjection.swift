@@ -29,7 +29,7 @@ enum NativeInteractionProjection {
         let permissions = snapshot.permissions.compactMap { request -> PendingInteraction? in
             guard !request["id"].text.isEmpty, request["sessionID"].string == link.sessionID else { return nil }
             let ordinary = OpenCodePermissionHandling.libraryRequestID(request, sessionID: link.sessionID) != nil
-            var options: [LibraryInteractionOption] = ordinary ? [.init(id: "once", label: "Allow Once")] : []
+            var options: [InteractionOption] = ordinary ? [.init(id: "once", label: "Allow Once")] : []
             if ordinary, !request["save"].array.isEmpty { options.append(.init(id: "always", label: "Always Allow")) }
             if ordinary { options.append(.init(id: "reject", label: "Reject")) }
             let detail = ordinary

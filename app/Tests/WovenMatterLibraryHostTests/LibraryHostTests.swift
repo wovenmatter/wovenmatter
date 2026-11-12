@@ -471,16 +471,16 @@ struct LibraryHostTests {
     let workspace = ExecutionWorkspace(id: UUID().uuidString.lowercased(), libraryID: library.libraryID,
       ownerDeviceID: library.hostDeviceID, kind: .linux, name: "Box", executionDeviceID: UUID().uuidString.lowercased())
     let conversation = UUID().uuidString.lowercased()
-    let entry = LibraryJournalEntry(workspaceID: workspace.id, originSequence: 1, conversationID: conversation, kind: .conversation,
+    let entry = ExecutionJournalEntry(workspaceID: workspace.id, originSequence: 1, conversationID: conversation, kind: .conversation,
       conversation: .init(id: conversation, title: "Linux session", runtimeKind: "default_agent"))
-    let journal = LibraryJournalBatch(libraryID: workspace.libraryID, entries: [entry])
+    let journal = ExecutionJournalBatch(libraryID: workspace.libraryID, entries: [entry])
     #expect(try send("POST", "/v1/publisher/journal", unix: fixture.socket, headers: auth, body: JSONEncoder().encode(journal)).status == 403)
     _ = try await fixture.host.database.registerExecutionWorkspace(.init(workspace: workspace), deviceID: library.hostDeviceID)
     let published = try send("POST", "/v1/publisher/journal", unix: fixture.socket, headers: auth, body: JSONEncoder().encode(journal))
     #expect(published.status == 200, "\(String(decoding: published.body, as: UTF8.self))")
-    #expect(try JSONDecoder().decode(LibraryJournalBatchResult.self, from: published.body).libraryID == workspace.libraryID)
-    #expect(try await fixture.host.database.libraryJournal(after: 0).entries.map(\.eventID) == [entry.eventID])
-    let foreign = LibraryJournalBatch(libraryID: UUID().uuidString.lowercased(), entries: [entry])
+    #expect(try JSONDecoder().decode(ExecutionJournalBatchResult.self, from: published.body).libraryID == workspace.libraryID)
+    #expect(try await fixture.host.database.executionJournal(after: 0).entries.map(\.eventID) == [entry.eventID])
+    let foreign = ExecutionJournalBatch(libraryID: UUID().uuidString.lowercased(), entries: [entry])
     #expect(try send("POST", "/v1/publisher/journal", unix: fixture.socket, headers: auth, body: JSONEncoder().encode(foreign)).status == 400)
   }
 

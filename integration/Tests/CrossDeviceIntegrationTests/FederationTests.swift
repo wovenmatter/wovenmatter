@@ -20,7 +20,7 @@ struct FederationTests {
     return try await db.registerExecutionWorkspace(.init(workspace: .init(id: uuid(), libraryID: library.libraryID,
       ownerDeviceID: owner, kind: .ios, name: "Phone", executionDeviceID: owner, journalDeviceIDs: grants)), deviceID: owner)
   }
-  func creation(_ workspace: ExecutionWorkspace, id: String? = nil, sequence: Int64 = 1) -> LibraryJournalEntry {
+  func creation(_ workspace: ExecutionWorkspace, id: String? = nil, sequence: Int64 = 1) -> ExecutionJournalEntry {
     let id = id ?? uuid()
     return .init(workspaceID: workspace.id, originSequence: sequence, conversationID: id, kind: .conversation,
       conversation: .init(id: id, title: "Mobile execution", runtimeKind: "pi"))
@@ -64,25 +64,25 @@ struct FederationTests {
     let directory = try fixture(); defer { try? FileManager.default.removeItem(at: directory) }
     let url = directory.appendingPathComponent("workspace.sqlite"); let db = try await WorkspaceDatabase(url: url)
     let workspace = try await register(db, grants: [observer]); let event = creation(workspace)
-    let batch = LibraryJournalBatch(libraryID: workspace.libraryID, entries: [event])
-    await #expect(throws: LibraryAPIError.self) { try await db.ingestLibraryJournal(batch, deviceID: observer) }
-    let result = try await db.ingestLibraryJournal(batch, deviceID: owner)
+    let batch = ExecutionJournalBatch(libraryID: workspace.libraryID, entries: [event])
+    await #expect(throws: LibraryAPIError.self) { try await db.ingestExecutionJournal(batch, deviceID: observer) }
+    let result = try await db.ingestExecutionJournal(batch, deviceID: owner)
     #expect(result.cursor == 1 && result.acceptedEventIDs == [event.eventID])
     let restarted = try await WorkspaceDatabase(url: url)
-    #expect(try await restarted.ingestLibraryJournal(batch, deviceID: owner) == result)
+    #expect(try await restarted.ingestExecutionJournal(batch, deviceID: owner) == result)
     #expect(try await restarted.librarySnapshot().conversations.map(\.id) == [event.conversationID])
     var forged = event; forged.conversation?.title = "Conflicting replay"
-    await #expect(throws: LibraryAPIError.self) { try await restarted.ingestLibraryJournal(.init(libraryID: workspace.libraryID, entries: [forged]), deviceID: owner) }
+    await #expect(throws: LibraryAPIError.self) { try await restarted.ingestExecutionJournal(.init(libraryID: workspace.libraryID, entries: [forged]), deviceID: owner) }
     let next = creation(workspace, sequence: 2); let gap = creation(workspace, sequence: 4)
-    await #expect(throws: LibraryAPIError.self) { try await db.ingestLibraryJournal(.init(libraryID: workspace.libraryID, entries: [next, gap]), deviceID: owner) }
-    #expect(try await db.libraryJournal(after: 0).entries == [event])
+    await #expect(throws: LibraryAPIError.self) { try await db.ingestExecutionJournal(.init(libraryID: workspace.libraryID, entries: [next, gap]), deviceID: owner) }
+    #expect(try await db.executionJournal(after: 0).entries == [event])
     #expect(try await db.librarySnapshot().conversations.map(\.id) == [event.conversationID])
     let other = try await register(db)
     let takeover = creation(other, id: event.conversationID)
-    await #expect(throws: LibraryAPIError.self) { try await db.ingestLibraryJournal(.init(libraryID: workspace.libraryID, entries: [takeover]), deviceID: owner) }
+    await #expect(throws: LibraryAPIError.self) { try await db.ingestExecutionJournal(.init(libraryID: workspace.libraryID, entries: [takeover]), deviceID: owner) }
     let ungranted = creation(other)
-    await #expect(throws: LibraryAPIError.self) { try await db.ingestLibraryJournal(.init(libraryID: workspace.libraryID, entries: [ungranted]), deviceID: observer) }
-    await #expect(throws: LibraryAPIError.self) { try await db.libraryJournal(after: 2) }
+    await #expect(throws: LibraryAPIError.self) { try await db.ingestExecutionJournal(.init(libraryID: workspace.libraryID, entries: [ungranted]), deviceID: observer) }
+    await #expect(throws: LibraryAPIError.self) { try await db.executionJournal(after: 2) }
   }
 
   @Test("transcript deltas merge while central archival cannot reserve or execute commands")
@@ -91,26 +91,26 @@ struct FederationTests {
     let db = try await WorkspaceDatabase(url: directory.appendingPathComponent("workspace.sqlite"))
     let workspace = try await register(db); let first = creation(workspace)
     let run = uuid(); let message = LibraryMessage(id: uuid(), conversationID: first.conversationID, runID: run, role: "assistant", content: "First")
-    let delta = LibraryJournalEntry(workspaceID: workspace.id, originSequence: 2, conversationID: first.conversationID, runID: run, kind: .transcript,
+    let delta = ExecutionJournalEntry(workspaceID: workspace.id, originSequence: 2, conversationID: first.conversationID, runID: run, kind: .transcript,
       transcript: .init(conversationID: first.conversationID, messages: [message], activeRunID: run))
     let secondMessage = LibraryMessage(id: uuid(), conversationID: first.conversationID, runID: run, role: "assistant", content: "Second")
-    let done = LibraryJournalEntry(workspaceID: workspace.id, originSequence: 3, conversationID: first.conversationID, runID: run, kind: .transcript,
+    let done = ExecutionJournalEntry(workspaceID: workspace.id, originSequence: 3, conversationID: first.conversationID, runID: run, kind: .transcript,
       transcript: .init(conversationID: first.conversationID, messages: [secondMessage]))
     let receipt = LibraryCommandReceipt(commandID: uuid(), deviceID: owner, status: .completed, conversationID: first.conversationID, runID: run, workspaceID: workspace.id)
-    let receiptEvent = LibraryJournalEntry(workspaceID: workspace.id, originSequence: 4, conversationID: first.conversationID, runID: run, kind: .receipt, receipt: receipt)
-    _ = try await db.ingestLibraryJournal(.init(libraryID: workspace.libraryID, entries: [first, delta, done, receiptEvent]), deviceID: owner)
+    let receiptEvent = ExecutionJournalEntry(workspaceID: workspace.id, originSequence: 4, conversationID: first.conversationID, runID: run, kind: .receipt, receipt: receipt)
+    _ = try await db.ingestExecutionJournal(.init(libraryID: workspace.libraryID, entries: [first, delta, done, receiptEvent]), deviceID: owner)
     let transcript = try #require(try await db.libraryFederatedTranscript(conversationID: first.conversationID))
     #expect(transcript.messages == [message, secondMessage] && transcript.activeRunID == nil)
     #expect(try await db.libraryCommandReceipt(deviceID: owner, commandID: receipt.commandID) == nil)
     let snapshot = try await db.librarySnapshot()
     #expect(snapshot.conversations.first?.workspaceID == workspace.id)
-    let delete = LibraryJournalEntry(workspaceID: workspace.id, originSequence: 5, conversationID: first.conversationID, kind: .deletedConversation)
-    _ = try await db.ingestLibraryJournal(.init(libraryID: workspace.libraryID, entries: [delete]), deviceID: owner)
+    let delete = ExecutionJournalEntry(workspaceID: workspace.id, originSequence: 5, conversationID: first.conversationID, kind: .deletedConversation)
+    _ = try await db.ingestExecutionJournal(.init(libraryID: workspace.libraryID, entries: [delete]), deviceID: owner)
     #expect(try await db.librarySnapshot().conversations.isEmpty)
     var resurrect = first; resurrect.eventID = uuid(); resurrect.originSequence = 6
-    _ = try await db.ingestLibraryJournal(.init(libraryID: workspace.libraryID, entries: [resurrect]), deviceID: owner)
+    _ = try await db.ingestExecutionJournal(.init(libraryID: workspace.libraryID, entries: [resurrect]), deviceID: owner)
     var delayed = done; delayed.eventID = uuid(); delayed.originSequence = 7
-    _ = try await db.ingestLibraryJournal(.init(libraryID: workspace.libraryID, entries: [delayed]), deviceID: owner)
+    _ = try await db.ingestExecutionJournal(.init(libraryID: workspace.libraryID, entries: [delayed]), deviceID: owner)
     #expect(try await db.librarySnapshot().conversations.isEmpty)
     #expect(try await db.libraryExecutionOriginCursor(workspaceID: workspace.id) == 7)
   }
@@ -123,11 +123,11 @@ struct FederationTests {
     let bytes = Data(repeating: 42, count: 800_000); let hash = digest(bytes); let record = uuid()
     let one = NativeRecordPart(recordID: record, format: "pi.message.v1", partIndex: 0, partCount: 2, byteCount: Int64(bytes.count), sha256: hash, data: bytes.prefix(400_000))
     let two = NativeRecordPart(recordID: record, format: "pi.message.v1", partIndex: 1, partCount: 2, byteCount: Int64(bytes.count), sha256: hash, data: bytes.suffix(400_000))
-    let e1 = LibraryJournalEntry(workspaceID: workspace.id, originSequence: 2, conversationID: first.conversationID, kind: .nativeRecord, nativeRecord: one)
-    let e2 = LibraryJournalEntry(workspaceID: workspace.id, originSequence: 3, conversationID: first.conversationID, kind: .nativeRecord, nativeRecord: two)
-    _ = try await db.ingestLibraryJournal(.init(libraryID: workspace.libraryID, entries: [first, e1]), deviceID: owner)
+    let e1 = ExecutionJournalEntry(workspaceID: workspace.id, originSequence: 2, conversationID: first.conversationID, kind: .nativeRecord, nativeRecord: one)
+    let e2 = ExecutionJournalEntry(workspaceID: workspace.id, originSequence: 3, conversationID: first.conversationID, kind: .nativeRecord, nativeRecord: two)
+    _ = try await db.ingestExecutionJournal(.init(libraryID: workspace.libraryID, entries: [first, e1]), deviceID: owner)
     #expect(try await db.libraryNativeHistoryPart(workspaceID: workspace.id, recordID: record, partIndex: 0) == nil)
-    _ = try await db.ingestLibraryJournal(.init(libraryID: workspace.libraryID, entries: [e2]), deviceID: owner)
+    _ = try await db.ingestExecutionJournal(.init(libraryID: workspace.libraryID, entries: [e2]), deviceID: owner)
     #expect(try await db.libraryNativeHistoryPart(workspaceID: workspace.id, recordID: record, partIndex: 0) == one)
     #expect(try await db.libraryNativeHistoryPart(workspaceID: workspace.id, recordID: record, partIndex: 1) == two)
   }
@@ -149,7 +149,7 @@ struct FederationTests {
       entries.append(.init(workspaceID: workspace.id, originSequence: Int64(index + 2), conversationID: first.conversationID,
         kind: .nativeRecord, nativeRecord: part))
     }
-    _ = try await db.ingestLibraryJournal(.init(libraryID: workspace.libraryID, entries: entries), deviceID: owner)
+    _ = try await db.ingestExecutionJournal(.init(libraryID: workspace.libraryID, entries: entries), deviceID: owner)
     let found = try await db.queryHistory(.init(command: "search", search: marker, conversationID: first.conversationID,
       kind: "native.federated.record"))
     let rows = found.objectValue?["rows"]?.arrayValue ?? []
@@ -192,14 +192,14 @@ struct FederationTests {
     #expect(try await db.localACPSession(conversationID: conversationID).acpSessionID == "native-existing")
     let repeated = try await db.prepareExecutionAdoption(conversationID: conversationID, workspaceID: descriptor.id, deviceID: identity.hostDeviceID)
     #expect(repeated.knownRunIDs == transfer.knownRunIDs)
-    let event = LibraryJournalEntry(workspaceID: descriptor.id, originSequence: 1, conversationID: conversationID,
+    let event = ExecutionJournalEntry(workspaceID: descriptor.id, originSequence: 1, conversationID: conversationID,
       runID: run.runID, kind: .conversation, conversation: transfer.conversation)
     await #expect(throws: LibraryAPIError.self) {
-      try await db.ingestLibraryJournal(.init(libraryID: identity.libraryID, entries: [event]), deviceID: identity.hostDeviceID)
+      try await db.ingestExecutionJournal(.init(libraryID: identity.libraryID, entries: [event]), deviceID: identity.hostDeviceID)
     }
     let publisher = try await db.issueLibraryWorkspacePublisher(workspaceID: descriptor.id,
       endpoint: URL(string: "https://central.test.ts.net/wovenmatter")!, deviceID: identity.hostDeviceID)
-    _ = try await db.ingestLibraryJournal(.init(libraryID: identity.libraryID, entries: [event]), deviceID: publisher.executionDeviceID)
+    _ = try await db.ingestExecutionJournal(.init(libraryID: identity.libraryID, entries: [event]), deviceID: publisher.executionDeviceID)
     #expect(try await db.libraryExecutionOriginCursor(workspaceID: descriptor.id) == 1)
     try await db.write { connection in
       try connection.transaction {
@@ -216,14 +216,14 @@ struct FederationTests {
     let directory = try fixture(); defer { try? FileManager.default.removeItem(at: directory) }
     let db = try await WorkspaceDatabase(url: directory.appendingPathComponent("workspace.sqlite"))
     let workspace = try await register(db); let first = creation(workspace)
-    _ = try await db.ingestLibraryJournal(.init(libraryID: workspace.libraryID, entries: [first]), deviceID: owner)
+    _ = try await db.ingestExecutionJournal(.init(libraryID: workspace.libraryID, entries: [first]), deviceID: owner)
     let legacy = LibraryTranscript(conversationID: first.conversationID, messages: [
       .init(id: uuid(), conversationID: first.conversationID, role: "assistant", content: String(repeating: "x", count: 5 * 1_024 * 1_024))
     ])
     let content = String(decoding: try JSONEncoder().encode(legacy), as: UTF8.self)
     try await db.write { connection in
       try connection.transaction {
-        try connection.toolsExecuteUnlocked("UPDATE library_execution_conversations SET transcript=? WHERE id=?", [content, first.conversationID])
+        try connection.toolsExecuteUnlocked("UPDATE device_execution_conversations SET transcript=? WHERE id=?", [content, first.conversationID])
       }
     }
     let page = try #require(try await db.libraryFederatedTranscript(conversationID: first.conversationID))
@@ -235,19 +235,19 @@ struct FederationTests {
     let directory = try fixture(); defer { try? FileManager.default.removeItem(at: directory) }
     let db = try await WorkspaceDatabase(url: directory.appendingPathComponent("workspace.sqlite"))
     let workspace = try await register(db); let first = creation(workspace)
-    _ = try await db.ingestLibraryJournal(.init(libraryID: workspace.libraryID, entries: [first]), deviceID: owner)
+    _ = try await db.ingestExecutionJournal(.init(libraryID: workspace.libraryID, entries: [first]), deviceID: owner)
     try await db.write { connection in
       try connection.transaction {
         try connection.toolsExecuteUnlocked("UPDATE dashboard_conversations SET title='Central title',deleted_at='deleted' WHERE id=?", [first.conversationID])
       }
     }
     var replay = first; replay.eventID = uuid(); replay.originSequence = 2; replay.conversation?.title = "Stale title"
-    _ = try await db.ingestLibraryJournal(.init(libraryID: workspace.libraryID, entries: [replay]), deviceID: owner)
+    _ = try await db.ingestExecutionJournal(.init(libraryID: workspace.libraryID, entries: [replay]), deviceID: owner)
     #expect(try await db.librarySnapshot().conversations.isEmpty)
     let changes = try await db.libraryChanges(after: 0)
     #expect(changes.changes.last(where: { $0.resourceKind == .conversation })?.operation == .delete)
     var restore = first; restore.eventID = uuid(); restore.originSequence = 3; restore.kind = .restoredConversation
-    _ = try await db.ingestLibraryJournal(.init(libraryID: workspace.libraryID, entries: [restore]), deviceID: owner)
+    _ = try await db.ingestExecutionJournal(.init(libraryID: workspace.libraryID, entries: [restore]), deviceID: owner)
     #expect(try await db.librarySnapshot().conversations.count == 1)
     #expect(try await db.librarySnapshot().conversations.first?.title == "Central title")
   }

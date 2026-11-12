@@ -421,7 +421,7 @@ private actor MacClientFakeCentral: LibraryTransport {
         return .init(operationID: mutation.operationID, status: .accepted, note: note)
     }
     func note(_ id: String) throws -> LibraryNote { try #require(notes[id]) }
-    func providers() -> [LibraryProvider] { [.init(id: "local:default_agent", runtimeKind: "default_agent", displayName: "Pi Durable", available: true)] }
+    func providers() -> [HarnessCapabilities] { [.init(id: "local:default_agent", runtimeKind: "default_agent", displayName: "Pi Durable", available: true)] }
     func pending() -> [PendingInteraction] { [] }
     func transcript(_ id: String) -> LibraryTranscript { .init(conversationID: id) }
     func command(_ command: LibraryCommand) throws -> LibraryCommandReceipt {
@@ -436,7 +436,7 @@ private actor MacClientFakeCentral: LibraryTransport {
 
 private actor MacClientFakeExecution: ExecutionWorkspaceTransport {
     let workspace: ExecutionWorkspace
-    var entries: [LibraryJournalEntry] = []
+    var entries: [ExecutionJournalEntry] = []
     var receiptValues: [String: LibraryCommandReceipt] = [:]
     var sendCount = 0
     init(workspace: ExecutionWorkspace) { self.workspace = workspace }
@@ -448,7 +448,7 @@ private actor MacClientFakeExecution: ExecutionWorkspaceTransport {
         // As HTTPSExecutionWorkspaceTransport reports a rejected bearer.
         if revoked { throw MobileConnectionError.revoked }; return workspace
     }
-    func providers() -> [LibraryProvider] { [.init(id: "default_agent", runtimeKind: "default_agent", displayName: "Pi Durable", routeName: "Linux", available: true)] }
+    func providers() -> [HarnessCapabilities] { [.init(id: "default_agent", runtimeKind: "default_agent", displayName: "Pi Durable", routeName: "Linux", available: true)] }
     func pending() -> [PendingInteraction] { [] }
     func command(_ command: LibraryCommand) -> LibraryCommandReceipt {
         if let receipt = receiptValues[command.commandID] { return receipt }
@@ -467,7 +467,7 @@ private actor MacClientFakeExecution: ExecutionWorkspaceTransport {
         return receipt
     }
     func receipt(_ id: String) -> LibraryCommandReceipt? { receiptValues[id] }
-    func events(after: Int64) -> LibraryJournalPage { .init(libraryID: workspace.libraryID, cursor: Int64(entries.count), entries: Array(entries.dropFirst(Int(after)))) }
+    func events(after: Int64) -> ExecutionJournalPage { .init(libraryID: workspace.libraryID, cursor: Int64(entries.count), entries: Array(entries.dropFirst(Int(after)))) }
     func conversations() -> [LibraryConversation] { entries.compactMap(\.conversation) }
     func transcript(_ id: String) -> LibraryTranscript { entries.last(where: { $0.conversationID == id && $0.transcript != nil })?.transcript ?? .init(conversationID: id) }
 }

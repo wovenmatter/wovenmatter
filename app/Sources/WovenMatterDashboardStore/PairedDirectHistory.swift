@@ -6,7 +6,7 @@ extension WorkspaceDatabase {
   /// A full Mac replica may retain and relay them while the workspace's managing
   /// Mac is offline. Origin identity, sequence and fingerprint stay unchanged.
   /// This method is app-internal orchestration, never an HTTP publishing route.
-  public func retainDirectPairedHistory(_ page: LibraryJournalPage, workspace: ExecutionWorkspace) async throws {
+  public func retainDirectPairedHistory(_ page: ExecutionJournalPage, workspace: ExecutionWorkspace) async throws {
     try await write { connection in
       let local = try connection.libraryIdentityUnlocked()
       guard workspace.libraryID != local.libraryID else { return }
@@ -20,7 +20,7 @@ extension WorkspaceDatabase {
       }
       // Only the local envelope namespace changes. Entry bytes and their origin
       // namespace are the exact records validated by the direct transport.
-      _ = try connection.ingestLibraryJournal(.init(libraryID: local.libraryID, entries: page.entries), deviceID: origin)
+      _ = try connection.ingestExecutionJournal(.init(libraryID: local.libraryID, entries: page.entries), deviceID: origin)
     }
   }
 }

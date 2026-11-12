@@ -15,7 +15,7 @@ extension WorkspaceDatabaseConnection {
   public func applyLibraryMutation(_ request: LibraryMutation) throws -> LibraryMutationResult {
     try transaction {
       let fingerprint = try libraryFingerprint(request)
-      let lookup = try prepareUnlocked("SELECT request, response FROM library_mutation_receipts WHERE device_id = ? AND operation_id = ?")
+      let lookup = try prepareUnlocked("SELECT request, response FROM device_mutation_receipts WHERE device_id = ? AND operation_id = ?")
       defer { sqlite3_finalize(lookup) }
       try bind(request.deviceID, at: 1, to: lookup); try bind(request.operationID, at: 2, to: lookup)
       let code = sqlite3_step(lookup)
@@ -34,7 +34,7 @@ extension WorkspaceDatabaseConnection {
       if var note = result.note {
         note.content = ""; note.contentIncluded = false; result.note = note
       }
-      let receipt = try prepareUnlocked("INSERT INTO library_mutation_receipts(device_id, operation_id, request, response) VALUES (?, ?, ?, ?)")
+      let receipt = try prepareUnlocked("INSERT INTO device_mutation_receipts(device_id, operation_id, request, response) VALUES (?, ?, ?, ?)")
       defer { sqlite3_finalize(receipt) }
       try bind(request.deviceID, at: 1, to: receipt); try bind(request.operationID, at: 2, to: receipt)
       try bind(fingerprint, at: 3, to: receipt); try bind(JSONEncoder().encode(result), at: 4, to: receipt)
@@ -151,7 +151,7 @@ extension WorkspaceDatabaseConnection {
   public func reserveLibraryCommand(_ request: LibraryCommand) throws -> LibraryCommandReservation {
     try transaction {
       let fingerprint = try libraryFingerprint(request)
-      let lookup = try prepareUnlocked("SELECT request, response FROM library_command_receipts WHERE device_id = ? AND command_id = ?")
+      let lookup = try prepareUnlocked("SELECT request, response FROM device_command_receipts WHERE device_id = ? AND command_id = ?")
       defer { sqlite3_finalize(lookup) }
       try bind(request.deviceID, at: 1, to: lookup); try bind(request.commandID, at: 2, to: lookup)
       let code = sqlite3_step(lookup)
@@ -171,7 +171,7 @@ extension WorkspaceDatabaseConnection {
         return LibraryCommandReservation(receipt: LibraryCommandReceipt(commandID: request.commandID, deviceID: request.deviceID, status: .rejected, message: "Commands require UUID identities."), isNew: false)
       }
       let receipt = LibraryCommandReceipt(commandID: request.commandID, deviceID: request.deviceID, status: .accepted, conversationID: request.conversationID, runID: request.runID)
-      let insert = try prepareUnlocked("INSERT INTO library_command_receipts(device_id, command_id, request, response) VALUES (?, ?, ?, ?)")
+      let insert = try prepareUnlocked("INSERT INTO device_command_receipts(device_id, command_id, request, response) VALUES (?, ?, ?, ?)")
       defer { sqlite3_finalize(insert) }
       try bind(request.deviceID, at: 1, to: insert); try bind(request.commandID, at: 2, to: insert)
       try bind(fingerprint, at: 3, to: insert); try bind(JSONEncoder().encode(receipt), at: 4, to: insert)
@@ -182,7 +182,7 @@ extension WorkspaceDatabaseConnection {
 
   public func finishLibraryCommand(_ receipt: LibraryCommandReceipt) throws {
     try transaction {
-      let update = try prepareUnlocked("UPDATE library_command_receipts SET response = ? WHERE device_id = ? AND command_id = ?")
+      let update = try prepareUnlocked("UPDATE device_command_receipts SET response = ? WHERE device_id = ? AND command_id = ?")
       defer { sqlite3_finalize(update) }
       try bind(JSONEncoder().encode(receipt), at: 1, to: update)
       try bind(receipt.deviceID, at: 2, to: update); try bind(receipt.commandID, at: 3, to: update)
@@ -193,7 +193,7 @@ extension WorkspaceDatabaseConnection {
 
   public func libraryCommandReceipt(deviceID: String, commandID: String) throws -> LibraryCommandReceipt? {
     try withLock {
-      let statement = try prepareUnlocked("SELECT response FROM library_command_receipts WHERE device_id = ? AND command_id = ?")
+      let statement = try prepareUnlocked("SELECT response FROM device_command_receipts WHERE device_id = ? AND command_id = ?")
       defer { sqlite3_finalize(statement) }
       try bind(deviceID, at: 1, to: statement); try bind(commandID, at: 2, to: statement)
       let code = sqlite3_step(statement)

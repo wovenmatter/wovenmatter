@@ -7,7 +7,7 @@ import PiDurableRuntime
 extension MobileModel {
   static var deviceToolGroups: [WorkspaceToolGroup] { QuickChatCapabilities.groups }
   static func deviceToolSelectionID(_ group: WorkspaceToolGroup) -> String { "woven_" + group.rawValue }
-  static var deviceToolAccessOptions: [LibrarySelection] { QuickChatCapabilities.options }
+  static var deviceToolAccessOptions: [SessionSettingOption] { QuickChatCapabilities.options }
   static func migratedDeviceToolSelection(_ selection: [String]?) -> [String]? { MobileToolSupport.migratedMCPSelection(selection) }
   static func deviceToolEnabled(_ name: String, selection: [String]?) -> Bool { QuickChatCapabilities.enabled(name, selection: selection) }
   static var deviceMCPTools: [[String: Any]] {

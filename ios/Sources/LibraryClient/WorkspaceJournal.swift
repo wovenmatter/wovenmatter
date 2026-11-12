@@ -9,7 +9,7 @@ public struct WorkspaceJournalState: Codable, Equatable, Sendable {
   public var workspaces: [String: ExecutionWorkspace] = [:]
   public var pendingRegistrations: Set<String> = []
   public var centralWorkspaceRevisions: [String: Int64] = [:]
-  public var entries: [String: LibraryJournalEntry] = [:]
+  public var entries: [String: ExecutionJournalEntry] = [:]
   public var pendingEventIDs: Set<String> = []
   public var originSequences: [String: Int64] = [:]
   var conversationOwners: [String: String]?
@@ -22,7 +22,7 @@ public struct WorkspaceJournalState: Codable, Equatable, Sendable {
   public var conversationWorkspaceIDs: [String: String] {
     conversationOwners ?? Dictionary(entries.values.map { ($0.conversationID, $0.workspaceID) }, uniquingKeysWith: { first, _ in first })
   }
-  public var pendingEntries: [LibraryJournalEntry] {
+  public var pendingEntries: [ExecutionJournalEntry] {
     entries.values.filter { pendingEventIDs.contains($0.eventID) }.sorted {
       $0.workspaceID == $1.workspaceID ? $0.originSequence < $1.originSequence : $0.workspaceID < $1.workspaceID
     }
@@ -76,7 +76,7 @@ public actor WorkspaceJournal {
     workspace.kind != .linux && workspace.ownerDeviceID == deviceID &&
       (workspace.executionDeviceID ?? workspace.ownerDeviceID) == deviceID
   }
-  public func pendingOwnerEntries(deviceID: String) -> [LibraryJournalEntry] {
+  public func pendingOwnerEntries(deviceID: String) -> [ExecutionJournalEntry] {
     state.pendingEntries.filter { entry in
       state.workspaces[entry.workspaceID].map { Self.isLocalExecutionOwner($0, deviceID: deviceID) } == true
     }
@@ -189,14 +189,14 @@ public actor WorkspaceJournal {
   public func mergeRegistry(_ workspaces: [ExecutionWorkspace]) throws {
     for workspace in workspaces where !state.pendingRegistrations.contains(workspace.id) { try upsertWorkspace(workspace, pending: false, trustedRegistry: true) }
   }
-  public func record(_ entry: LibraryJournalEntry) throws {
+  public func record(_ entry: ExecutionJournalEntry) throws {
     try transaction { next in try Self.insert(entry, into: &next); next.pendingEventIDs.insert(entry.eventID) }
   }
   /// Only the execution owner calls this helper. Observing clients replay its
   /// immutable entries; they must not invent a second sequence for that workspace.
   @discardableResult public func append(workspaceID: String, conversation: LibraryConversation? = nil,
-    transcript: LibraryTranscript? = nil, receipt: LibraryCommandReceipt? = nil) throws -> [LibraryJournalEntry] {
-    var recorded: [LibraryJournalEntry] = []
+    transcript: LibraryTranscript? = nil, receipt: LibraryCommandReceipt? = nil) throws -> [ExecutionJournalEntry] {
+    var recorded: [ExecutionJournalEntry] = []
     var conversation = conversation
     let preview = String((conversation?.preview ?? "").unicodeScalars.prefix(512))
     conversation?.preview = preview
@@ -246,8 +246,8 @@ public actor WorkspaceJournal {
     }
     try transaction { next in
       guard next.workspaces[workspaceID]?.deleted != true else { throw Failure.deletedWorkspace }
-      func add(_ kind: LibraryJournalEntry.Kind, id: String, runID: String? = nil) throws {
-        let entry = LibraryJournalEntry(workspaceID: workspaceID, originSequence: (next.originSequences[workspaceID] ?? 0) + 1,
+      func add(_ kind: ExecutionJournalEntry.Kind, id: String, runID: String? = nil) throws {
+        let entry = ExecutionJournalEntry(workspaceID: workspaceID, originSequence: (next.originSequences[workspaceID] ?? 0) + 1,
           conversationID: id, runID: runID, kind: kind, conversation: kind == .conversation ? conversation : nil,
           transcript: kind == .transcript ? transcript : nil, receipt: kind == .receipt ? receipt : nil)
         try Self.insert(entry, into: &next); next.pendingEventIDs.insert(entry.eventID); recorded.append(entry)
@@ -340,7 +340,7 @@ public actor WorkspaceJournal {
   /// A recordID identifies one immutable native record in the workspace. The
   /// checksum verifies bytes; it must not serve as identity for distinct records.
   @discardableResult public func appendNativeRecord(workspaceID: String, conversationID: String, runID: String? = nil,
-    recordID: String, format: String, data: Data) throws -> [LibraryJournalEntry] {
+    recordID: String, format: String, data: Data) throws -> [ExecutionJournalEntry] {
     let sha = SHA256.hash(data: data).hexString
     let existing = state.entries.values.filter { $0.workspaceID == workspaceID && $0.nativeRecord?.recordID == recordID }
     if !existing.isEmpty {
@@ -348,20 +348,20 @@ public actor WorkspaceJournal {
       return existing.sorted { $0.originSequence < $1.originSequence }
     }
     let partBytes = 64 * 1_024, count = max(1, (data.count + partBytes - 1) / partBytes)
-    var recorded: [LibraryJournalEntry] = []
+    var recorded: [ExecutionJournalEntry] = []
     try transaction { next in
       for index in 0..<count {
         let start = index * partBytes, end = min(data.count, start + partBytes)
         let part = NativeRecordPart(recordID: recordID, format: format, partIndex: index, partCount: count,
           byteCount: Int64(data.count), sha256: sha, data: data.subdata(in: start..<end))
-        let entry = LibraryJournalEntry(workspaceID: workspaceID, originSequence: (next.originSequences[workspaceID] ?? 0) + 1,
+        let entry = ExecutionJournalEntry(workspaceID: workspaceID, originSequence: (next.originSequences[workspaceID] ?? 0) + 1,
           conversationID: conversationID, runID: runID, kind: .nativeRecord, nativeRecord: part)
         try Self.insert(entry, into: &next); next.pendingEventIDs.insert(entry.eventID); recorded.append(entry)
       }
     }
     return recorded
   }
-  public func acknowledge(_ result: LibraryJournalBatchResult, submitted: [LibraryJournalEntry]) throws {
+  public func acknowledge(_ result: ExecutionJournalBatchResult, submitted: [ExecutionJournalEntry]) throws {
     guard result.libraryID == state.libraryID, Set(result.acceptedEventIDs) == Set(submitted.map(\.eventID)),
       result.acceptedEventIDs.count == submitted.count else { throw Failure.invalidAcknowledgement }
     try transaction { next in
@@ -373,7 +373,7 @@ public actor WorkspaceJournal {
       // interleaved records that this client still needs to download.
     }
   }
-  public func receiveCentral(_ page: LibraryJournalPage) throws {
+  public func receiveCentral(_ page: ExecutionJournalPage) throws {
     try transaction { next in
       guard next.libraryID == page.libraryID else { throw Failure.wrongLibrary }
       guard page.cursor == next.centralCursor + Int64(page.entries.count), !page.hasMore || !page.entries.isEmpty else { throw Failure.replayGap }
@@ -381,7 +381,7 @@ public actor WorkspaceJournal {
       next.centralCursor = page.cursor
     }
   }
-  public func receiveWorkspace(_ page: LibraryJournalPage, workspaceID: String, localDeviceID: String? = nil) throws {
+  public func receiveWorkspace(_ page: ExecutionJournalPage, workspaceID: String, localDeviceID: String? = nil) throws {
     try transaction { next in
       guard (next.workspaces[workspaceID]?.libraryID ?? next.libraryID) == page.libraryID else { throw Failure.wrongLibrary }
       let cursor = next.directCursors[workspaceID] ?? 0
@@ -421,7 +421,7 @@ public actor WorkspaceJournal {
     state.commands.filter { $0.key.hasPrefix(workspaceID + ":") }.map(\.value)
   }
   private static func commandKey(_ workspaceID: String, _ commandID: String) -> String { workspaceID + ":" + commandID }
-  private static func insert(_ entry: LibraryJournalEntry, into next: inout WorkspaceJournalState) throws {
+  private static func insert(_ entry: ExecutionJournalEntry, into next: inout WorkspaceJournalState) throws {
     guard try JSONEncoder().encode(entry).count <= FederationProtocol.maximumEntryBytes else { throw Failure.recordTooLarge }
     if let existing = next.entries[entry.eventID] {
       guard existing == entry else { throw Failure.reusedIdentity }; return
@@ -508,9 +508,9 @@ public actor WorkspaceClient {
   }
   /// Confirms this host still answers for the registered workspace before a new remote creation.
   public func checkConnection() async throws { try await verify() }
-  public func providers() async throws -> [LibraryProvider] { try await transport.providers() }
+  public func providers() async throws -> [HarnessCapabilities] { try await transport.providers() }
   public func pending() async throws -> [PendingInteraction] { try await transport.pending() }
-  public func capabilities(_ id: String) async throws -> LibraryProvider { try await verify(); return try await transport.capabilities(id) }
+  public func capabilities(_ id: String) async throws -> HarnessCapabilities { try await verify(); return try await transport.capabilities(id) }
   public func earlierTranscript(_ id: String, before: String) async throws -> LibraryTranscript { try await verify(); return try await transport.transcript(id, before: before) }
   public func readWorkspace(_ request: LibraryWorkspaceRead) async throws -> LibraryWorkspaceResult { try await verify(); return try await transport.readWorkspace(request) }
   private func verify() async throws {

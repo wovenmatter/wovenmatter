@@ -373,7 +373,7 @@ extension MobileModel {
     guard let id = selectedConversationID, let runID = activeRunID else { return }
     await submitExecutionCommand(.init(deviceID: state.deviceID, kind: .stop, conversationID: id, runID: runID))
   }
-  func respondInExecutionWorkspace(_ interaction: PendingInteraction, response: LibraryInteractionResponse) async {
+  func respondInExecutionWorkspace(_ interaction: PendingInteraction, response: InteractionResponse) async {
     await submitExecutionCommand(.init(deviceID: state.deviceID, kind: .respond, conversationID: interaction.conversationID,
       runID: interaction.runID, interactionID: interaction.id, response: response))
   }

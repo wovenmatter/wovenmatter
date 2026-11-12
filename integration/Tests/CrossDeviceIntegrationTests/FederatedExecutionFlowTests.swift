@@ -58,7 +58,7 @@ struct FederatedExecutionFlowTests {
       try await MobileSyncEngine(store: owner.store, transport: owner.transport).synchronize()
       Issue.record("Expected central reply loss after committing the first page")
     } catch MobileConnectionError.offline {}
-    #expect(try await fixture.database.libraryJournal(after: 0).entries.count == 200)
+    #expect(try await fixture.database.executionJournal(after: 0).entries.count == 200)
     #expect(await owner.store.journal.snapshot().pendingEventIDs.count > 200)
 
     let restarted = try MobileStore(file: owner.file)
@@ -120,12 +120,12 @@ struct FederatedExecutionFlowTests {
     let message = LibraryMessage(id: UUID().uuidString.lowercased(), conversationID: conversationID,
       role: "assistant", content: "Saved on the Linux workspace while the central Mac was offline.")
     let entries = [
-      LibraryJournalEntry(workspaceID: workspace.id, originSequence: 1, conversationID: conversationID,
+      ExecutionJournalEntry(workspaceID: workspace.id, originSequence: 1, conversationID: conversationID,
         kind: .conversation, conversation: conversation),
-      LibraryJournalEntry(workspaceID: workspace.id, originSequence: 2, conversationID: conversationID,
+      ExecutionJournalEntry(workspaceID: workspace.id, originSequence: 2, conversationID: conversationID,
         kind: .transcript, transcript: .init(conversationID: conversationID, messages: [message]))
     ]
-    let batch = LibraryJournalBatch(libraryID: fixture.libraryID, entries: entries)
+    let batch = ExecutionJournalBatch(libraryID: fixture.libraryID, entries: entries)
     let source = RecordedExecutionSource(workspace: workspace, entries: entries)
     for client in [phone, mac] {
       try await WorkspaceClient(store: client.store, workspaceID: workspace.id, transport: source).refresh()
@@ -139,9 +139,9 @@ struct FederatedExecutionFlowTests {
       do { _ = try await client.transport.importJournal(batch); Issue.record("A viewing client must not publish remote history") }
       catch MobileConnectionError.http(let status, _) { #expect(status == 400 || status == 403) }
     }
-    #expect(try await fixture.database.libraryJournal(after: 0).entries.isEmpty)
+    #expect(try await fixture.database.executionJournal(after: 0).entries.isEmpty)
     await #expect(throws: LibraryAPIError.self) {
-      try await fixture.database.ingestLibraryJournal(batch, deviceID: identity.hostDeviceID)
+      try await fixture.database.ingestExecutionJournal(batch, deviceID: identity.hostDeviceID)
     }
 
     // No observing client participates: the workspace's scoped publisher reaches
@@ -154,7 +154,7 @@ struct FederatedExecutionFlowTests {
     #expect(published.status == 200)
     let replay = await fixture.api.handle(request)
     #expect(replay.status == 200)
-    #expect(try await fixture.database.libraryJournal(after: 0).entries == entries)
+    #expect(try await fixture.database.executionJournal(after: 0).entries == entries)
     #expect(try await fixture.database.libraryFederatedTranscript(conversationID: conversationID)?.messages == [message])
     for client in [phone, mac] {
       try await MobileSyncEngine(store: client.store, transport: client.transport).synchronize()
@@ -267,7 +267,7 @@ private final class FederationAPITransport: LibraryTransport, FederationTranspor
   func changes(after: Int64) async throws -> LibraryChangePage { try await request("/v1/changes?after=\(after)") }
   func mutate(_ value: LibraryMutation) async throws -> LibraryMutationResult { try await request("/v1/mutations", method: "POST", body: JSONEncoder().encode(value)) }
   func note(_ id: String) async throws -> LibraryNote { try await request("/v1/notes/\(id)") }
-  func providers() async throws -> [LibraryProvider] { try await request("/v1/providers") }
+  func providers() async throws -> [HarnessCapabilities] { try await request("/v1/providers") }
   func pending() async throws -> [PendingInteraction] { try await request("/v1/pending") }
   func transcript(_ id: String) async throws -> LibraryTranscript { try await request("/v1/sessions/\(id)/transcript") }
   func command(_ value: LibraryCommand) async throws -> LibraryCommandReceipt { try await request("/v1/commands", method: "POST", body: JSONEncoder().encode(value)) }
@@ -275,10 +275,10 @@ private final class FederationAPITransport: LibraryTransport, FederationTranspor
   func libraryIdentity() async throws -> LibraryIdentity { try await request("/v1/federation/identity") }
   func executionWorkspaces() async throws -> [ExecutionWorkspace] { try await request("/v1/federation/workspaces") }
   func registerWorkspace(_ value: LibraryWorkspaceRegistration) async throws -> ExecutionWorkspace { try await request("/v1/federation/workspaces", method: "POST", body: JSONEncoder().encode(value)) }
-  func journal(after: Int64) async throws -> LibraryJournalPage { try await request("/v1/federation/journal?after=\(after)") }
-  func importJournal(_ value: LibraryJournalBatch) async throws -> LibraryJournalBatchResult {
+  func journal(after: Int64) async throws -> ExecutionJournalPage { try await request("/v1/federation/journal?after=\(after)") }
+  func importJournal(_ value: ExecutionJournalBatch) async throws -> ExecutionJournalBatchResult {
     journalImports += 1
-    let result: LibraryJournalBatchResult = try await request("/v1/federation/journal", method: "POST", body: JSONEncoder().encode(value))
+    let result: ExecutionJournalBatchResult = try await request("/v1/federation/journal", method: "POST", body: JSONEncoder().encode(value))
     if dropNextJournalAcknowledgement { dropNextJournalAcknowledgement = false; throw MobileConnectionError.offline }
     return result
   }
@@ -296,15 +296,15 @@ private final class FederationAPITransport: LibraryTransport, FederationTranspor
 
 private actor RecordedExecutionSource: ExecutionWorkspaceTransport {
   let workspace: ExecutionWorkspace
-  let entries: [LibraryJournalEntry]
+  let entries: [ExecutionJournalEntry]
   private(set) var submissions = 0
-  init(workspace: ExecutionWorkspace, entries: [LibraryJournalEntry]) { self.workspace = workspace; self.entries = entries }
+  init(workspace: ExecutionWorkspace, entries: [ExecutionJournalEntry]) { self.workspace = workspace; self.entries = entries }
   func identity() -> ExecutionWorkspace { workspace }
-  func providers() -> [LibraryProvider] { [] }
+  func providers() -> [HarnessCapabilities] { [] }
   func pending() -> [PendingInteraction] { [] }
   func command(_ command: LibraryCommand) throws -> LibraryCommandReceipt { submissions += 1; throw MobileConnectionError.offline }
   func receipt(_ id: String) -> LibraryCommandReceipt? { nil }
-  func events(after: Int64) -> LibraryJournalPage {
+  func events(after: Int64) -> ExecutionJournalPage {
     let page = Array(entries.filter { $0.originSequence > after }.prefix(200))
     let cursor = page.last?.originSequence ?? after
     return .init(libraryID: workspace.libraryID, cursor: cursor, entries: page, hasMore: cursor < Int64(entries.count))
@@ -316,9 +316,9 @@ private actor RecordedExecutionSource: ExecutionWorkspaceTransport {
 @MainActor
 private final class RejectExecutionCommands: LibraryCommandServing {
   private(set) var executions = 0
-  func providers() -> [LibraryProvider] { [] }
+  func providers() -> [HarnessCapabilities] { [] }
   func pendingInteractions() -> [PendingInteraction] { [] }
-  func sessionCapabilities(conversationID: String) throws -> LibraryProvider { throw MobileConnectionError.offline }
+  func sessionCapabilities(conversationID: String) throws -> HarnessCapabilities { throw MobileConnectionError.offline }
   func transcript(conversationID: String, before: String?) throws -> LibraryTranscript { throw MobileConnectionError.offline }
   func receipt(commandID: String, deviceID: String) -> LibraryCommandReceipt? { nil }
   func execute(_ command: LibraryCommand, deviceID: String) throws -> LibraryCommandReceipt {

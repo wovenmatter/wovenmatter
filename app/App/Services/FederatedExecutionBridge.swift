@@ -5,7 +5,7 @@ import WovenMatterDashboardStore
 
 enum FederatedExecutionAction: Codable, Sendable {
     case refresh(conversationID: String)
-    case respond(PendingInteraction, LibraryInteractionResponse)
+    case respond(PendingInteraction, InteractionResponse)
     case stop(conversationID: String, runID: String)
     case configure(conversationID: String, action: LibraryWorkspaceAction)
     case earlier(conversationID: String, before: String)
@@ -13,9 +13,9 @@ enum FederatedExecutionAction: Codable, Sendable {
 struct FederatedExecutionSnapshot: Codable, Sendable {
     var workspace: ExecutionWorkspace
     var transcript: LibraryTranscript?
-    var capability: LibraryProvider?
+    var capability: HarnessCapabilities?
     var interactions: [PendingInteraction]
-    var session: LibrarySessionSettings?
+    var session: SessionSettings?
     var online: Bool
     var error: String?
 }
@@ -118,7 +118,7 @@ extension ApplicationModel {
         }
         guard let workspace = try await client.workspace(conversationID: id) else { throw LibraryAPIError(code: "unknown_workspace", message: "This conversation has no execution workspace.") }
         try? await client.refresh(conversationID: id)
-        var session: LibrarySessionSettings?
+        var session: SessionSettings?
         if client.onlineWorkspaces.contains(workspace.id), case .session(let value) = try? await client.readWorkspace(conversationID: id, request: .session(id: id)) { session = value }
         let snapshot = FederatedExecutionSnapshot(workspace: workspace, transcript: earlier ?? client.transcripts[id],
             capability: client.capabilities[id], interactions: client.pending[workspace.id]?.filter { $0.conversationID == id } ?? [],

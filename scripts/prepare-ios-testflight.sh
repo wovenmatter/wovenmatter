@@ -26,9 +26,11 @@ step() { printf '\n==> %s\n' "$*"; }
 
 marketing_version() {
   local value
-  value="$(sed -n 's/^ *MARKETING_VERSION: *//p' "$root/ios/project.yml" | head -n 1)"
+  value="$(sed -n 's/^ *MARKETING_VERSION: *//p' "$root/ios/project.yml" | head -n 1 | tr -d "\"'\r")"
   [[ -n "$value" ]] || fail 65 'Missing MARKETING_VERSION in ios/project.yml.'
   # The generated project must agree; regenerate with xcodegen rather than editing either by hand.
+  grep -q 'MARKETING_VERSION = ' "$project/project.pbxproj" ||
+    fail 65 'The Xcode project has no MARKETING_VERSION. Run xcodegen in ios/.'
   if grep 'MARKETING_VERSION = ' "$project/project.pbxproj" | grep -qv "MARKETING_VERSION = $value;"; then
     fail 65 'MARKETING_VERSION differs between ios/project.yml and the Xcode project. Run xcodegen in ios/.'
   fi

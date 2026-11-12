@@ -170,12 +170,12 @@ struct CalendarEventSheet: View {
     if task.workspaceID == model.deviceWorkspaceID { return "device" }
     return task.workspaceID.map { "remote:\($0):\(task.runtime)" } ?? "local:\(task.runtime)"
   }
-  private static func defaultTask(_ model: MobileModel) -> LibraryScheduledTask {
+  private static func defaultTask(_ model: MobileModel) -> ScheduledTask {
     let agent = model.listedLauncherAgents.first { $0.workspaceID != "local" && $0.isAvailable }
     return .init(runtime: agent?.runtimeKind ?? "", workspaceID: agent.flatMap { $0.workspaceID == "central" ? nil : $0.workspaceID })
   }
-  private var routeChoices: [LibrarySelection] {
-    var values = [LibrarySelection(id: "", label: "Choose a Mac or Linux agent")]
+  private var routeChoices: [SessionSettingOption] {
+    var values = [SessionSettingOption(id: "", label: "Choose a Mac or Linux agent")]
     // Only reachable workspaces are offered; a saved route stays selected below.
     for agent in model.listedLauncherAgents where agent.workspaceID != "local" {
       let owner = agent.workspaceID == "central" ? "local:" + agent.runtimeKind : "remote:" + agent.workspaceID + ":" + agent.runtimeKind

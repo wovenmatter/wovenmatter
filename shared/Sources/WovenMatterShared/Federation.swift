@@ -103,7 +103,7 @@ public struct RetainedExecution: Codable, Equatable, Sendable {
   }
 }
 
-public struct LibraryJournalEntry: Codable, Equatable, Identifiable, Sendable {
+public struct ExecutionJournalEntry: Codable, Equatable, Identifiable, Sendable {
   public enum Kind: String, Codable, Sendable { case conversation, transcript, receipt, deletedConversation, restoredConversation, nativeRecord }
   public var id: String { eventID }
   public var eventID: String
@@ -126,12 +126,12 @@ public struct LibraryJournalEntry: Codable, Equatable, Identifiable, Sendable {
     self.conversation = conversation; self.transcript = transcript; self.receipt = receipt
   }
 }
-public struct LibraryJournalBatch: Codable, Equatable, Sendable {
+public struct ExecutionJournalBatch: Codable, Equatable, Sendable {
   public var libraryID: String
-  public var entries: [LibraryJournalEntry]
-  public init(libraryID: String, entries: [LibraryJournalEntry]) { self.libraryID = libraryID; self.entries = entries }
+  public var entries: [ExecutionJournalEntry]
+  public init(libraryID: String, entries: [ExecutionJournalEntry]) { self.libraryID = libraryID; self.entries = entries }
 }
-public struct LibraryJournalBatchResult: Codable, Equatable, Sendable {
+public struct ExecutionJournalBatchResult: Codable, Equatable, Sendable {
   public var libraryID: String
   public var acceptedEventIDs: [String]
   public var cursor: Int64
@@ -139,13 +139,13 @@ public struct LibraryJournalBatchResult: Codable, Equatable, Sendable {
     self.libraryID = libraryID; self.acceptedEventIDs = acceptedEventIDs; self.cursor = cursor
   }
 }
-public struct LibraryJournalPage: Codable, Equatable, Sendable {
+public struct ExecutionJournalPage: Codable, Equatable, Sendable {
   public var libraryID: String
   /// Central-library cursor; unrelated to any workspace's originSequence.
   public var cursor: Int64
-  public var entries: [LibraryJournalEntry]
+  public var entries: [ExecutionJournalEntry]
   public var hasMore: Bool
-  public init(libraryID: String, cursor: Int64, entries: [LibraryJournalEntry] = [], hasMore: Bool = false) {
+  public init(libraryID: String, cursor: Int64, entries: [ExecutionJournalEntry] = [], hasMore: Bool = false) {
     self.libraryID = libraryID; self.cursor = cursor; self.entries = entries; self.hasMore = hasMore
   }
 }

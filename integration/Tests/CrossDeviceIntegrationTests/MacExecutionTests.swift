@@ -73,7 +73,7 @@ struct MacExecutionTests {
     var headers = ["authorization": "Bearer " + credential.token, "x-woven-protocol": String(LibraryProtocol.version),
       "x-woven-library": identity.libraryID, "x-woven-workspace": workspace.id, "x-woven-device": deviceID]
     let providersResponse = await api.handle(.init(method: "GET", target: "/wovenmatter/v1/execution/providers", headers: headers))
-    let providers = try JSONDecoder().decode([LibraryProvider].self, from: providersResponse.body)
+    let providers = try JSONDecoder().decode([HarnessCapabilities].self, from: providersResponse.body)
     #expect(providers.map(\.id) == ["local:default_agent"])
     let remote = LibraryCommand(deviceID: deviceID, kind: .createSession, providerID: "remote:other:default_agent", libraryID: identity.libraryID, workspaceID: workspace.id)
     let rejected = await api.handle(.init(method: "POST", target: "/v1/execution/commands", headers: headers, body: try JSONEncoder().encode(remote)))
@@ -94,12 +94,12 @@ struct MacExecutionTests {
 private final class ScopedCommands: LibraryCommandServing {
   var accepted: [LibraryCommand] = []
   var receiptReads = 0
-  func providers() -> [LibraryProvider] {
-    [LibraryProvider(id: "local:default_agent", runtimeKind: "default_agent", displayName: "Pi", available: true),
-     LibraryProvider(id: "remote:other:default_agent", runtimeKind: "default_agent", displayName: "Remote", available: true)]
+  func providers() -> [HarnessCapabilities] {
+    [HarnessCapabilities(id: "local:default_agent", runtimeKind: "default_agent", displayName: "Pi", available: true),
+     HarnessCapabilities(id: "remote:other:default_agent", runtimeKind: "default_agent", displayName: "Remote", available: true)]
   }
   func pendingInteractions() async -> [PendingInteraction] { [] }
-  func sessionCapabilities(conversationID: String) async throws -> LibraryProvider { providers()[0] }
+  func sessionCapabilities(conversationID: String) async throws -> HarnessCapabilities { providers()[0] }
   func transcript(conversationID: String, before: String?) async throws -> LibraryTranscript { .init(conversationID: conversationID) }
   func receipt(commandID: String, deviceID: String) async throws -> LibraryCommandReceipt? { receiptReads += 1; return nil }
   func execute(_ command: LibraryCommand, deviceID: String) async throws -> LibraryCommandReceipt {

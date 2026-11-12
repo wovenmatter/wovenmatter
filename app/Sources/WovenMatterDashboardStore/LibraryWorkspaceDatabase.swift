@@ -12,7 +12,7 @@ extension WorkspaceDatabaseConnection {
   }
 
   func libraryWorkspaceIDUnlocked() throws -> String {
-    let statement = try prepareUnlocked("SELECT workspace_id FROM library_workspace WHERE singleton = 1")
+    let statement = try prepareUnlocked("SELECT workspace_id FROM device_workspace WHERE singleton = 1")
     defer { sqlite3_finalize(statement) }
     guard sqlite3_step(statement) == SQLITE_ROW else { throw WorkspaceDatabaseError.corruptRow }
     return try text(statement, column: 0)
@@ -42,14 +42,14 @@ extension WorkspaceDatabaseConnection {
     try transaction {
       let workspaceID = try libraryWorkspaceIDUnlocked()
       let current = try libraryCursorUnlocked()
-      let oldestStatement = try prepareUnlocked("SELECT COALESCE(MIN(cursor), 0) FROM library_changes")
+      let oldestStatement = try prepareUnlocked("SELECT COALESCE(MIN(cursor), 0) FROM device_changes")
       defer { sqlite3_finalize(oldestStatement) }
       guard sqlite3_step(oldestStatement) == SQLITE_ROW else { throw stepError() }
       let oldest = sqlite3_column_int64(oldestStatement, 0)
       guard cursor >= 0, cursor <= current, oldest == 0 || cursor >= oldest - 1 else {
         return LibraryChangePage(workspaceID: workspaceID, cursor: current, resetRequired: true)
       }
-      let statement = try prepareUnlocked("SELECT cursor, kind, resource_id, revision, deleted FROM library_changes WHERE cursor > ? ORDER BY cursor LIMIT ?")
+      let statement = try prepareUnlocked("SELECT cursor, kind, resource_id, revision, deleted FROM device_changes WHERE cursor > ? ORDER BY cursor LIMIT ?")
       defer { sqlite3_finalize(statement) }
       sqlite3_bind_int64(statement, 1, cursor)
       sqlite3_bind_int(statement, 2, Int32(min(max(limit, 1), LibraryProtocol.maximumChangePage)))
@@ -95,7 +95,7 @@ extension WorkspaceDatabaseConnection {
 
   func libraryCursorUnlocked() throws -> Int64 {
     // sqlite_sequence preserves the high-water mark if a log is compacted.
-    let statement = try prepareUnlocked("SELECT COALESCE((SELECT seq FROM sqlite_sequence WHERE name = 'library_changes'), 0)")
+    let statement = try prepareUnlocked("SELECT COALESCE((SELECT seq FROM sqlite_sequence WHERE name = 'device_changes'), 0)")
     defer { sqlite3_finalize(statement) }
     guard sqlite3_step(statement) == SQLITE_ROW else { throw stepError() }
     return sqlite3_column_int64(statement, 0)
@@ -115,7 +115,7 @@ extension WorkspaceDatabaseConnection {
   }
 
   func libraryVersionUnlocked(kind: String, id: String) throws -> (revision: Int64, deleted: Bool)? {
-    let statement = try prepareUnlocked("SELECT revision, deleted FROM library_versions WHERE kind = ? AND resource_id = ?")
+    let statement = try prepareUnlocked("SELECT revision, deleted FROM device_versions WHERE kind = ? AND resource_id = ?")
     defer { sqlite3_finalize(statement) }
     try bind(kind, at: 1, to: statement); try bind(id, at: 2, to: statement)
     let code = sqlite3_step(statement)

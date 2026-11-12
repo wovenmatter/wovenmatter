@@ -14,7 +14,7 @@ private actor FakeMac: LibraryTransport, FederationTransport, LibraryCalendarTra
   }
   var workspace = "mac-a"
   var refusedFolderIDs = Set<String>()
-  var journalUploads: [LibraryJournalEntry] = []
+  var journalUploads: [ExecutionJournalEntry] = []
   var registeredWorkspaces: [ExecutionWorkspace] = []
   var calendarRecords: [LibraryCalendarRecord] = []
   var transcriptReads: [String] = []
@@ -29,8 +29,8 @@ private actor FakeMac: LibraryTransport, FederationTransport, LibraryCalendarTra
     var value = registration.workspace; value.revision += 1
     registeredWorkspaces.removeAll { $0.id == value.id }; registeredWorkspaces.append(value); return value
   }
-  func journal(after: Int64) -> LibraryJournalPage { .init(libraryID: workspace, cursor: after) }
-  func importJournal(_ batch: LibraryJournalBatch) -> LibraryJournalBatchResult {
+  func journal(after: Int64) -> ExecutionJournalPage { .init(libraryID: workspace, cursor: after) }
+  func importJournal(_ batch: ExecutionJournalBatch) -> ExecutionJournalBatchResult {
     journalUploads += batch.entries
     return .init(libraryID: workspace, acceptedEventIDs: batch.entries.map(\.eventID), cursor: Int64(journalUploads.count))
   }
@@ -51,7 +51,7 @@ private actor FakeMac: LibraryTransport, FederationTransport, LibraryCalendarTra
   var folders: [String: LibraryFolder] = [:]
   var mutations: [LibraryMutation] = []
   var results: [String: LibraryMutationResult] = [:]
-  func linkedData(_ id: String, tableID: String?) async throws -> LibraryLinkedData {
+  func linkedData(_ id: String, tableID: String?) async throws -> LinkedDataPreview {
     throw MobileConnectionError.http(503, "Remote database data is unavailable on this Mac.")
   }
   var receipts: [String: LibraryCommandReceipt] = [:]
@@ -88,7 +88,7 @@ private actor FakeMac: LibraryTransport, FederationTransport, LibraryCalendarTra
     if loseMutationAcknowledgement { loseMutationAcknowledgement = false; throw URLError(.networkConnectionLost) }
     return result
   }
-  func providers() async throws -> [LibraryProvider] {
+  func providers() async throws -> [HarnessCapabilities] {
     ["codex", "claude", "grok", "hermes", "cursor", "opencode", "pi", "openclaw"].map { .init(id: "local:" + $0, runtimeKind: $0, displayName: $0, available: true, canSteer: $0 == "codex") }
   }
   func pending() async throws -> [PendingInteraction] { [] }

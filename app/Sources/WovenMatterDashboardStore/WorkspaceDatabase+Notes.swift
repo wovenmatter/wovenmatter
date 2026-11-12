@@ -539,7 +539,7 @@ extension WorkspaceDatabaseConnection {
     operatorID: String
   ) throws -> (title: String, content: String, revision: String) {
     let statement = try prepareUnlocked("""
-      SELECT title, content, CAST(COALESCE((SELECT revision FROM library_versions WHERE kind = 'note' AND resource_id = notes.id), 1) AS TEXT)
+      SELECT title, content, CAST(COALESCE((SELECT revision FROM device_versions WHERE kind = 'note' AND resource_id = notes.id), 1) AS TEXT)
       FROM notes
       WHERE id = ? AND user_id = ? AND deleted_at IS NULL
       """)

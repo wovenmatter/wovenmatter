@@ -48,11 +48,11 @@ final class LibraryCommandService: LibraryCommandServing {
         try await model.libraryHost.provisionExecutionWorkspace(id: id, device: device)
     }
 
-    func providers() -> [LibraryProvider] {
+    func providers() -> [HarnessCapabilities] {
         let catalog = (try? HarnessCatalog.loadBundled().harnesses) ?? []
-        func provider(_ runtime: AgentRuntimeKind, id: String, name: String, route: String, available: Bool) -> LibraryProvider {
+        func provider(_ runtime: AgentRuntimeKind, id: String, name: String, route: String, available: Bool) -> HarnessCapabilities {
             let definition = catalog.first { $0.id == runtime }
-            return LibraryProvider(
+            return HarnessCapabilities(
                 id: id, runtimeKind: runtime.rawValue, displayName: name, routeName: route,
                 available: available, canStart: available,
                 canResume: definition?.capabilities.contains("resume") == true,
@@ -78,7 +78,7 @@ final class LibraryCommandService: LibraryCommandServing {
     }
 
     /// Reads already negotiated state; never starts a provider just to display controls.
-    func sessionCapabilities(conversationID: String) async throws -> LibraryProvider {
+    func sessionCapabilities(conversationID: String) async throws -> HarnessCapabilities {
         let conversation = try await conversation(conversationID)
         if try await model.dashboardStore?.database.libraryExecutionOwner(conversationID: conversationID) != nil {
             let snapshot = try await model.performFederatedExecution(.refresh(conversationID: conversationID))
@@ -121,7 +121,7 @@ final class LibraryCommandService: LibraryCommandServing {
                     id: pending.id.uuidString.lowercased(), conversationID: pending.conversationID,
                     runID: pending.runID, kind: .question, title: request.message,
                     questions: request.fields.map { field in
-                        let options: [LibraryInteractionOption] = field.kind == .boolean
+                        let options: [InteractionOption] = field.kind == .boolean
                             ? [.init(id: "true", label: "Yes"), .init(id: "false", label: "No")]
                             : field.options.map { .init(id: $0.id, label: $0.label, detail: $0.detail) }
                         var hints = [field.title]

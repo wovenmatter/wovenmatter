@@ -483,7 +483,7 @@ extension WorkspaceDatabaseConnection {
         throw WorkspaceDatabaseError.open("conversation requires an ID")
       }
       sql =
-        "SELECT m.rowid AS sequence,m.id,m.conversation_id,m.run_id,m.role,woven_text_substr(m.content,?,?) AS content,woven_text_length(m.content) AS content_characters,? AS content_offset,CASE WHEN woven_text_length(m.content)>?+? THEN 1 ELSE 0 END AS content_has_more,m.status,m.created_at, COALESCE(d.source_id,p.source_id) AS sender_session_id,COALESCE(d.source_agent,p.source_agent) AS sender_agent,COALESCE(d.source_title,p.source_title) AS sender_session_title FROM dashboard_messages m LEFT JOIN workspace_session_deliveries d ON d.message_id=m.id LEFT JOIN library_message_provenance p ON p.message_id=m.id WHERE m.conversation_id=? AND m.rowid>? ORDER BY m.rowid"
+        "SELECT m.rowid AS sequence,m.id,m.conversation_id,m.run_id,m.role,woven_text_substr(m.content,?,?) AS content,woven_text_length(m.content) AS content_characters,? AS content_offset,CASE WHEN woven_text_length(m.content)>?+? THEN 1 ELSE 0 END AS content_has_more,m.status,m.created_at, COALESCE(d.source_id,p.source_id) AS sender_session_id,COALESCE(d.source_agent,p.source_agent) AS sender_agent,COALESCE(d.source_title,p.source_title) AS sender_session_title FROM dashboard_messages m LEFT JOIN workspace_session_deliveries d ON d.message_id=m.id LEFT JOIN device_message_provenance p ON p.message_id=m.id WHERE m.conversation_id=? AND m.rowid>? ORDER BY m.rowid"
       values = [String(query.offset + 1), String(query.characters), String(query.offset),
         String(query.offset), String(query.characters), id, String(query.after)]
     case "message":
@@ -570,7 +570,7 @@ extension WorkspaceDatabaseConnection {
   func checkpointNoteUnlocked(id: String, source: String, force: Bool) throws {
     let note = try prepareUnlocked(
       """
-      SELECT title,content,CAST(COALESCE((SELECT revision FROM library_versions WHERE kind='note' AND resource_id=notes.id),1) AS TEXT) FROM notes WHERE id=? AND deleted_at IS NULL
+      SELECT title,content,CAST(COALESCE((SELECT revision FROM device_versions WHERE kind='note' AND resource_id=notes.id),1) AS TEXT) FROM notes WHERE id=? AND deleted_at IS NULL
       """)
     defer { sqlite3_finalize(note) }
     try bind(id, at: 1, to: note)
@@ -691,7 +691,7 @@ extension WorkspaceDatabaseConnection {
 
 extension WorkspaceDatabaseConnection {
   // Preserve chronological metadata even for writes within one millisecond.
-  // Optimistic revision tokens come from library_versions, never this timestamp.
+  // Optimistic revision tokens come from device_versions, never this timestamp.
   func nextNoteUpdatedAtUnlocked(id: String, now: Date = Date()) throws -> String {
     let rows = try historyRowsUnlocked("SELECT updated_at FROM notes WHERE id=?", values: [id])
     let previous = rows.first?.objectValue?["updated_at"]?.stringValue.flatMap(Self.date)

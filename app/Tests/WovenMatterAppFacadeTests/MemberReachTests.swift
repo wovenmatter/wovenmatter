@@ -353,7 +353,7 @@ struct MemberReachTests {
         let row = LibraryConversation(id: session, title: "Linux session", providerID: "local:codex", routeID: "local:codex",
                                         runtimeKind: "codex", libraryID: workspace.libraryID, workspaceID: workspace.id)
         try await fixture.database.write { db in
-            try db.toolsExecuteUnlocked("INSERT INTO library_execution_conversations(id,workspace_id,conversation) VALUES(?,?,?)",
+            try db.toolsExecuteUnlocked("INSERT INTO device_execution_conversations(id,workspace_id,conversation) VALUES(?,?,?)",
                                         [session, workspace.id, String(decoding: try JSONEncoder().encode(row), as: UTF8.self)])
         }
         let served = try await call(linux, conversation: session)
@@ -372,7 +372,7 @@ struct MemberReachTests {
         let mRow = LibraryConversation(id: mSession, title: "M session", providerID: "local:codex", routeID: "local:codex",
                                          runtimeKind: "codex", libraryID: m.libraryID, workspaceID: m.id)
         try await fixture.database.write { db in
-            try db.toolsExecuteUnlocked("INSERT INTO library_execution_conversations(id,workspace_id,conversation) VALUES(?,?,?)",
+            try db.toolsExecuteUnlocked("INSERT INTO device_execution_conversations(id,workspace_id,conversation) VALUES(?,?,?)",
                                         [mSession, m.id, String(decoding: try JSONEncoder().encode(mRow), as: UTF8.self)])
         }
         #expect(await mac.audience(for: m) == hostM.deviceID)
@@ -457,9 +457,9 @@ struct MemberReachTests {
 @MainActor private final class ReachMacCommands: LibraryCommandServing {
     var executed: [LibraryCommand] = []
     var devices: [String] = []
-    func providers() -> [LibraryProvider] { [.init(id: "local:default_agent", runtimeKind: "default_agent", displayName: "Pi Durable", available: true)] }
+    func providers() -> [HarnessCapabilities] { [.init(id: "local:default_agent", runtimeKind: "default_agent", displayName: "Pi Durable", available: true)] }
     func pendingInteractions() async -> [PendingInteraction] { [] }
-    func sessionCapabilities(conversationID: String) async throws -> LibraryProvider { providers()[0] }
+    func sessionCapabilities(conversationID: String) async throws -> HarnessCapabilities { providers()[0] }
     func transcript(conversationID: String, before: String?) async throws -> LibraryTranscript { .init(conversationID: conversationID) }
     func receipt(commandID: String, deviceID: String) async throws -> LibraryCommandReceipt? { nil }
     func execute(_ command: LibraryCommand, deviceID: String) async throws -> LibraryCommandReceipt {
@@ -538,7 +538,7 @@ private final class ReachLinuxHost: @unchecked Sendable {
             switch (method, path.split(separator: "?").first.map(String.init) ?? path) {
             case ("GET", "/v1/execution"): return (try JSONEncoder().encode(descriptor), HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil)!)
             case ("GET", "/v1/execution/providers"):
-                let providers = [LibraryProvider(id: "codex", runtimeKind: "codex", displayName: "Codex", routeName: "Linux L", available: true)]
+                let providers = [HarnessCapabilities(id: "codex", runtimeKind: "codex", displayName: "Codex", routeName: "Linux L", available: true)]
                 return (try JSONEncoder().encode(providers), HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil)!)
             case ("POST", "/v1/execution/commands"):
                 let command = try JSONDecoder().decode(LibraryCommand.self, from: body)
@@ -574,9 +574,9 @@ private final class ReachLinuxHost: @unchecked Sendable {
                 return (try JSONEncoder().encode(LibraryTranscript(conversationID: id, messages: messages, olderCursor: paged ? nil : "cursor-1")),
                         HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil)!)
             case ("GET", let route) where route.hasPrefix("/v1/execution/conversations/") && route.hasSuffix("/capabilities"):
-                let provider = LibraryProvider(id: "codex", runtimeKind: "codex", displayName: "Codex", available: true, canSteer: canSteer)
+                let provider = HarnessCapabilities(id: "codex", runtimeKind: "codex", displayName: "Codex", available: true, canSteer: canSteer)
                 return (try JSONEncoder().encode(provider), HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil)!)
-            case ("GET", "/v1/execution/events"): return (try JSONEncoder().encode(LibraryJournalPage(libraryID: descriptor.libraryID, cursor: 0)), HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+            case ("GET", "/v1/execution/events"): return (try JSONEncoder().encode(ExecutionJournalPage(libraryID: descriptor.libraryID, cursor: 0)), HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil)!)
             case ("GET", "/v1/host/status"): return try reply(200, ["state": "running", "roles": ["workspace": true]])
             case ("GET", "/v1/host/logs"): return try reply(200, ["logs": "server started"])
             case ("POST", "/v1/host/restart"): return try reply(202, ["restarting": true])
@@ -609,7 +609,7 @@ private extension WorkspaceDatabase {
         var value = workspace; value.revision = 1
         let row = value
         try await write { db in
-            let statement = try db.prepareUnlocked("INSERT INTO library_execution_workspaces(id,owner_device_id,revision,deleted,payload) VALUES (?,?,?,0,?)")
+            let statement = try db.prepareUnlocked("INSERT INTO device_execution_workspaces(id,owner_device_id,revision,deleted,payload) VALUES (?,?,?,0,?)")
             defer { sqlite3_finalize(statement) }
             try db.bind(row.id, at: 1, to: statement); try db.bind(row.ownerDeviceID, at: 2, to: statement)
             sqlite3_bind_int64(statement, 3, row.revision)

@@ -21,7 +21,7 @@ enum FederationAPI {
       case "/v1/federation/workspaces": return try .json(try await database.libraryExecutionWorkspaces())
       case "/v1/federation/journal":
         guard let cursor = Int64(value("after") ?? "0"), cursor >= 0 else { return .error("invalid_cursor", "Invalid library journal cursor.", status: 400) }
-        return try .json(try await database.libraryJournal(after: cursor, limit: Int(value("limit") ?? "200") ?? 200))
+        return try .json(try await database.executionJournal(after: cursor, limit: Int(value("limit") ?? "200") ?? 200))
       case "/v1/federation/artifacts": return try .json(try await database.librarySavedArtifacts())
       default: break
       }
@@ -51,11 +51,11 @@ enum FederationAPI {
         }
         return try .json(try await database.registerExecutionWorkspace(registration, deviceID: device.id))
       case "/v1/federation/journal":
-        let batch = try JSONDecoder().decode(LibraryJournalBatch.self, from: request.body)
+        let batch = try JSONDecoder().decode(ExecutionJournalBatch.self, from: request.body)
         for workspaceID in Set(batch.entries.map(\.workspaceID)) {
           guard try await ownsClientWorkspace(workspaceID) else { return rejectedRelay() }
         }
-        return try .json(try await database.ingestLibraryJournal(batch, deviceID: device.id))
+        return try .json(try await database.ingestExecutionJournal(batch, deviceID: device.id))
       case "/v1/federation/artifacts/register":
         let registration = try JSONDecoder().decode(LibraryArtifactRegistration.self, from: request.body)
         guard try await ownsClientWorkspace(registration.manifest.workspaceID) else { return rejectedRelay() }

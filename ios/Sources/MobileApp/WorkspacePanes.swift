@@ -5,7 +5,7 @@ import WovenMatterShared
 
 struct LibraryPane: View {
   @Bindable var model: MobileModel
-  @State private var items: [LibraryEntry] = []
+  @State private var items: [LibraryListItem] = []
   @State private var savedArtifacts: [LibraryArtifactManifest] = []
   @State private var search = ""
   @State private var kind = ""
@@ -79,7 +79,7 @@ struct LibraryPane: View {
       items = more ? items + values : values; hasMore = next
     } catch { if generation == loadGeneration, !Task.isCancelled { failure = error.localizedDescription } }
   }
-  private func open(_ item: LibraryEntry) async {
+  private func open(_ item: LibraryListItem) async {
     do { preview = try await model.exportFile(.libraryFile(id: item.id)) }
     catch { model.errorMessage = error.localizedDescription }
   }
@@ -87,7 +87,7 @@ struct LibraryPane: View {
 
 struct TrashPane: View {
   @Bindable var model: MobileModel
-  @State private var items: [LibraryTrashedItem] = []
+  @State private var items: [TrashedItem] = []
   @State private var failure: String?
   var body: some View {
     VStack {
@@ -117,7 +117,7 @@ struct TrashPane: View {
     do { if case .trash(let items) = try await model.workspace(.trash) { self.items = items } }
     catch { failure = error.localizedDescription }
   }
-  private func restore(_ item: LibraryTrashedItem) async {
+  private func restore(_ item: TrashedItem) async {
     let action: LibraryWorkspaceAction
     if item.kind == "note", let revision = item.revision { action = .note(id: item.id, action: "restore", revision: revision, title: nil, folderID: nil) }
     else { action = .conversation(id: item.id, action: "restore", title: nil, folderID: nil) }
@@ -186,7 +186,7 @@ struct ItemManagementSheet: View {
           Button("Delete note", role: .destructive) {
             Task { busy = true; defer { busy = false }; if await model.deleteLocalNote(id) { dismiss() } }
           }
-        } message: { Text("It is removed from this iPhone.") }
+        } message: { Text("It is removed from \(model.deviceWorkspaceName.lowercased()).") }
         .quickLookPreview($preview)
     }
   }
@@ -221,7 +221,7 @@ struct ItemManagementSheet: View {
 struct SessionSettingsSheet: View {
   @Bindable var model: MobileModel
   let id: String
-  @State private var settings: LibrarySessionSettings?
+  @State private var settings: SessionSettings?
   @State private var selectedModel = ""
   @State private var thinking = ""
   @State private var permission = ""
@@ -262,7 +262,7 @@ struct SessionSettingsSheet: View {
         }
     }
   }
-  @ViewBuilder private func selection(_ title: String, value: Binding<String>, options: [LibrarySelection]) -> some View {
+  @ViewBuilder private func selection(_ title: String, value: Binding<String>, options: [SessionSettingOption]) -> some View {
     if !options.isEmpty {
       Picker(title, selection: value) {
         Text("Keep current").tag("")

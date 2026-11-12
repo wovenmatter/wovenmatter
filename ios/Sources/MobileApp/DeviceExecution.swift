@@ -165,28 +165,28 @@ extension MobileModel {
   var deviceWorkspaceName: String { UIDevice.current.userInterfaceIdiom == .pad ? "This iPad" : "This iPhone" }
   var deviceConnectionsTitle: String { UIDevice.current.userInterfaceIdiom == .pad ? "iPad Connections" : "iPhone Connections" }
   var deviceWorkspaceID: String { state.deviceID }
-  var launcherAgents: [LibraryAgentLauncher] {
+  var launcherAgents: [LaunchableAgent] {
     var known = knownAgentIDs
     for conversation in conversations {
       if let provider = conversation.providerID { known.insert(executionOwner(of: conversation.id) + ":" + provider) }
     }
     // The central list belongs to the library host alone; every other Mac
     // lists its own agents under its own name.
-    return LibraryAgentLauncher.list(deviceName: deviceWorkspaceName, centralOnline: online, providers: providers,
+    return LaunchableAgent.list(deviceName: deviceWorkspaceName, centralOnline: online, providers: providers,
       workspaces: executionWorkspaces, workspaceProviders: workspaceProviders, reachable: workspaceReachable, knownAgentIDs: known,
       centralWorkspaceID: centralExecutionWorkspace?.id, centralName: libraryHostName)
   }
   /// Quick Chat first, then the paired Mac and Linux workspaces reachable now
   /// (`agentGroupIsActive`). Home, Folders, New Chat and Calendar list these.
-  var launcherGroups: [LibraryAgentGroup] {
+  var launcherGroups: [AgentGroup] {
     // A copied snapshot owner (`retainedHistory`) is history, never an agent source.
     let historyOnly = Set(executionWorkspaces.filter { $0.retainedHistory == true }.map(\.id))
-    return LibraryAgentGroup.list(agents: launcherAgents.filter { !historyOnly.contains($0.workspaceID) && !historyOnly.contains($0.groupID) },
+    return AgentGroup.list(agents: launcherAgents.filter { !historyOnly.contains($0.workspaceID) && !historyOnly.contains($0.groupID) },
       workspaces: executionWorkspaces, centralWorkspaceID: centralExecutionWorkspace?.id).filter(agentGroupIsActive)
   }
   /// The agents of `launcherGroups`, for pickers that list agents without groups.
-  var listedLauncherAgents: [LibraryAgentLauncher] { launcherGroups.flatMap(\.agents) }
-  func launchAgent(_ launcher: LibraryAgentLauncher) async {
+  var listedLauncherAgents: [LaunchableAgent] { launcherGroups.flatMap(\.agents) }
+  func launchAgent(_ launcher: LaunchableAgent) async {
     guard let current = launcherAgents.first(where: { $0.id == launcher.id }), current.isAvailable else { return }
     selectedFolderID = nil; folderContentsPresented = false
     let resumable = conversations.filter { current.workspaceID != "local" || executionRecords[$0.id]?.quickChatVersion == 1 }
@@ -202,7 +202,7 @@ extension MobileModel {
     for (workspace, providers) in workspaceProviders {
       for provider in providers where provider.available && provider.canStart { knownAgentIDs.insert(workspace + ":" + provider.id) }
     }
-    let saved = LibraryAgentCatalog(libraryID: libraryID, providers: providers, workspaceProviders: workspaceProviders, knownAgentIDs: knownAgentIDs)
+    let saved = AgentCatalog(libraryID: libraryID, providers: providers, workspaceProviders: workspaceProviders, knownAgentIDs: knownAgentIDs)
     guard saved != savedAgentCatalog else { return }
     do {
       try FileManager.default.createDirectory(at: executionDirectory, withIntermediateDirectories: true)
@@ -213,7 +213,7 @@ extension MobileModel {
   func restoreAgentCatalog() {
     guard let executionDirectory,
       let data = try? Data(contentsOf: executionDirectory.appendingPathComponent("agents.json")),
-      let saved = try? JSONDecoder().decode(LibraryAgentCatalog.self, from: data), saved.libraryID == state.workspaceID else { return }
+      let saved = try? JSONDecoder().decode(AgentCatalog.self, from: data), saved.libraryID == state.workspaceID else { return }
     providers = saved.providers; workspaceProviders = saved.workspaceProviders; knownAgentIDs = saved.knownAgentIDs
     savedAgentCatalog = saved
   }
@@ -308,18 +308,18 @@ extension MobileModel {
     let id = selectedConversationID.flatMap { executionRecords[$0]?.connectionID } ?? inferenceConnectionID
     return inferenceConnections.first { $0.id == id }
   }
-  var availableExecutionProviders: [LibraryProvider] {
+  var availableExecutionProviders: [HarnessCapabilities] {
     if selectedExecutionWorkspaceID == "local" { return [deviceProvider] }
     if selectedExecutionWorkspaceID == "central" { return providers }
     return workspaceProviders[selectedExecutionWorkspaceID] ?? []
   }
-  var deviceProvider: LibraryProvider {
+  var deviceProvider: HarnessCapabilities {
     .init(id: "pi-durable-device", runtimeKind: "pi", displayName: "Quick Chat", routeName: deviceWorkspaceName,
           available: selectedInferenceConnection != nil && executionOnline && selectedConversationID.flatMap { executionRecords[$0]?.quickChatVersion } != 0, canStart: true, canResume: true,
           canSteer: false, canStop: true, supportsApprovals: true, supportsQuestions: true,
           unavailableReason: selectedInferenceConnection == nil ? "Add an inference connection in Settings." : nil)
   }
-  var activeProvider: LibraryProvider? {
+  var activeProvider: HarnessCapabilities? {
     if selectedExecutionWorkspaceID == "local" { return deviceProvider }
     if selectedExecutionWorkspaceID == "central" { return centralProvider }
     return selectedConversationID.flatMap { sessionCapabilities[$0] } ?? availableExecutionProviders.first { $0.id == (selectedConversation?.providerID ?? providerID) }

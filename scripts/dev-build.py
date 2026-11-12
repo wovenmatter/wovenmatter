@@ -174,23 +174,20 @@ def disconnect_snapshot(file, *, device_id, execution_root, published_root):
                      "desktop_opencode_sessions", "desktop_opencode_submissions", "desktop_openclaw_gateway_links",
                      "desktop_openclaw_gateway_sessions", "desktop_openclaw_cron_jobs", "desktop_openclaw_cron_runs",
                      "desktop_scheduled_result_routes", "desktop_scheduled_result_receipts"}
-        # Library protocol state that belongs to the source instance: its replica
-        # identity, receipts, journals, uploads and execution routing. Library
-        # content (versions, changes, projected history, artifacts) is kept.
-        library_state = {"library_identity", "library_workspace", "library_mutation_receipts",
-                         "library_command_receipts", "library_draft_receipts", "library_tool_receipts",
-                         "library_workspace_publishers", "library_workspace_mcp_grants", "library_scheduled_mcp_callers",
-                         "library_execution_journal", "library_execution_adoptions", "library_execution_receipts",
-                         "library_execution_replica_context", "library_retained_settlements", "library_artifact_uploads",
-                         "library_calendar_owners", "library_calendar_run_owners", "library_calendar_runs",
-                         "library_calendar_receipts", "library_calendar_execution_context",
-                         "library_calendar_execution_conflicts"}
+        # State this library keeps for other devices (device_*) belongs to the
+        # source instance: its receipts, journals, uploads, grants and execution
+        # routing. Library content that devices produced (versions, changes,
+        # projected history, artifacts) is kept. The replica identity is new.
+        retained_device = {"device_versions", "device_changes", "device_execution_workspaces",
+                           "device_execution_conversations", "device_execution_runs", "device_native_history",
+                           "device_native_history_parts", "device_saved_artifacts", "device_artifact_chunks",
+                           "device_message_provenance"}
         # Execution ownership is durable metadata, not sync state. Keep it so a
         # snapshot's new identity owns nothing it copied and never runs another
         # Mac's (or the source's) schedules; drop routes, cursors and journals.
         retained_paired = {"paired_conversation_owners", "paired_agent_owners", "paired_calendar_owners", "paired_library_state"}
         for name in tables:
-            if name in transient or (name.startswith("paired_") and name not in retained_paired) or name in library_state:
+            if name in transient or (name.startswith("paired_") and name not in retained_paired) or (name.startswith("device_") and name not in retained_device) or name == "library_identity":
                 db.execute("DELETE FROM " + quote(name))
         if "paired_library_state" in tables:
             db.execute("DELETE FROM paired_library_state WHERE name<>'owners.bootstrap'")
@@ -205,16 +202,16 @@ def disconnect_snapshot(file, *, device_id, execution_root, published_root):
         # A snapshot is a new library. Keep materialized foreign history, but
         # discard the old synchronization stream and all routes to its owners.
         library_id = str(uuid.uuid4())
-        if "library_workspace" in tables:
-            db.execute("INSERT INTO library_workspace(singleton,workspace_id) VALUES(1,?)", (library_id,))
-        for table, column in (("library_execution_workspaces", "payload"),
-                              ("library_execution_conversations", "conversation")):
+        if "device_workspace" in tables:
+            db.execute("INSERT INTO device_workspace(singleton,workspace_id) VALUES(1,?)", (library_id,))
+        for table, column in (("device_execution_workspaces", "payload"),
+                              ("device_execution_conversations", "conversation")):
             if table not in tables:
                 continue
             for identifier, raw in db.execute("SELECT id," + column + " FROM " + table).fetchall():
                 value = json.loads(raw)
                 value["libraryID"] = library_id
-                if table == "library_execution_workspaces":
+                if table == "device_execution_workspaces":
                     value.pop("endpoint", None)
                     value["retainedHistory"] = True
                 else:
@@ -247,8 +244,8 @@ def disconnect_snapshot(file, *, device_id, execution_root, published_root):
         # Retain task definitions with an unreachable owner. New schedules use
         # this instance; copied occurrences cannot be admitted by its scheduler.
         if "dashboard_calendar_items" in tables:
-            db.execute("CREATE TABLE IF NOT EXISTS library_calendar_owners(event_id TEXT PRIMARY KEY, device_id TEXT NOT NULL, tools_json TEXT)")
-            db.execute("INSERT OR REPLACE INTO library_calendar_owners(event_id,device_id) SELECT id,? FROM dashboard_calendar_items", (str(uuid.uuid4()),))
+            db.execute("CREATE TABLE IF NOT EXISTS device_calendar_owners(event_id TEXT PRIMARY KEY, device_id TEXT NOT NULL, tools_json TEXT)")
+            db.execute("INSERT OR REPLACE INTO device_calendar_owners(event_id,device_id) SELECT id,? FROM dashboard_calendar_items", (str(uuid.uuid4()),))
         # Retain goal history without scheduling a continuation from the copy.
         for name in tables:
             if name.startswith("workspace_goal"):

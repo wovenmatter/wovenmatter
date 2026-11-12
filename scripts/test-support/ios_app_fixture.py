@@ -14,7 +14,10 @@ SCRIPT = ROOT / 'scripts/verify-ios-app.py'
 _spec = importlib.util.spec_from_file_location('verify_ios_app', SCRIPT)
 verifier = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(verifier)
-VERSION, BUILD = '0.0.1', '20261111.183402'
+# The version the project builds, so bumping MARKETING_VERSION needs no test edit.
+VERSION = next(line.split(':', 1)[1].strip().strip('"\'') for line in (ROOT / 'ios/project.yml').read_text().splitlines()
+               if line.strip().startswith('MARKETING_VERSION:'))
+BUILD = '20261111.183402'
 
 
 def write_plist(path, value):

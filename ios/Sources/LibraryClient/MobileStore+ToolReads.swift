@@ -82,10 +82,10 @@ extension MobileStore {
       let run = c.options["run"] ?? (c.action == "trace" ? c.options["id"] ?? c.positional.first : nil)
       // Durable journal entries survive the bounded UI cache; do not pretend an
       // evicted UI transcript is the complete device history.
-      func eventDate(_ entry: LibraryJournalEntry) -> String {
+      func eventDate(_ entry: ExecutionJournalEntry) -> String {
         entry.transcript?.messages.first?.createdAt ?? entry.conversation?.updatedAt ?? ""
       }
-      var events: [LibraryJournalEntry] = []
+      var events: [ExecutionJournalEntry] = []
       for entry in journal.entries.values {
         guard permitted(entry.conversationID) else { continue }
         if let id, entry.eventID != id { continue }

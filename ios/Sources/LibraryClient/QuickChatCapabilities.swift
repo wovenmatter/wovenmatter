@@ -7,7 +7,7 @@ public enum QuickChatCapabilities {
   public static let webSelection = "quick_chat_web"
   /// Woven tool groups Quick Chat provides. Everything else stays with Mac and Linux agents.
   public static let groups: [WorkspaceToolGroup] = [.notes, .timers, .calendar]
-  public static let options: [LibrarySelection] = [
+  public static let options: [SessionSettingOption] = [
     .init(id: "woven_notes", label: "Notes"),
     .init(id: "woven_timers", label: "Timers and reminders"),
     .init(id: "woven_calendar", label: "Calendar"),

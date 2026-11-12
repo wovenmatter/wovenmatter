@@ -7,7 +7,7 @@ private actor MemberModeLibrary: OfflineLibraryTransport {
   func workspaceIdentity() async throws -> String { "library-a" }
   func snapshot() async throws -> LibrarySnapshot { .init(workspaceID: "library-a", cursor: 1) }
   func changes(after: Int64) async throws -> LibraryChangePage { .init(workspaceID: "library-a", cursor: 1) }
-  func providers() async throws -> [LibraryProvider] { [] }
+  func providers() async throws -> [HarnessCapabilities] { [] }
   func pending() async throws -> [PendingInteraction] { [] }
   func transcript(_ id: String) async throws -> LibraryTranscript { .init(conversationID: id) }
   func receipt(_ id: String) async throws -> LibraryCommandReceipt? { nil }
@@ -26,9 +26,9 @@ private final class SignedWorkspaceHTTP: MobileHTTPPerforming, @unchecked Sendab
     let body: Data
     switch path {
     case "/wovenmatter/v1/execution": body = try JSONEncoder().encode(workspace)
-    case "/wovenmatter/v1/execution/events": body = try JSONEncoder().encode(LibraryJournalPage(libraryID: workspace.libraryID, cursor: 0))
+    case "/wovenmatter/v1/execution/events": body = try JSONEncoder().encode(ExecutionJournalPage(libraryID: workspace.libraryID, cursor: 0))
     case "/wovenmatter/v1/execution/providers":
-      body = try JSONEncoder().encode([LibraryProvider(id: "local:codex", runtimeKind: "codex", displayName: "Codex", routeName: workspace.name, available: true)])
+      body = try JSONEncoder().encode([HarnessCapabilities(id: "local:codex", runtimeKind: "codex", displayName: "Codex", routeName: workspace.name, available: true)])
     default: body = Data("[]".utf8)
     }
     return (body, HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: [:])!)

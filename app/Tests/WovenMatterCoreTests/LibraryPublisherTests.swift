@@ -20,31 +20,31 @@ struct LibraryPublisherTests {
     try await f.database.updateLocalACPSessionID(conversationID: conversationID, runID: firstRun.runID, sessionID: "native")
     let secondRun = UUID().uuidString.lowercased()
     try await f.database.write { try $0.toolsExecuteUnlocked("INSERT INTO dashboard_runs(id,conversation_id,status,openclaw_session_key) VALUES (?,?,'running','native')", [secondRun, conversationID]) }
-    func entry(_ run: String, _ sequence: Int64) -> LibraryJournalEntry {
+    func entry(_ run: String, _ sequence: Int64) -> ExecutionJournalEntry {
       .init(workspaceID: f.workspace.id, originSequence: sequence, conversationID: conversationID, runID: run, kind: .conversation,
         conversation: .init(id: conversationID, title: "Offline history", runtimeKind: "codex"),
         retainedExecution: .init(source: "task-gateway", nativeSessionID: "native", runtimeKind: "codex", runID: run, status: "completed"))
     }
     let entries = [entry(firstRun.runID, 1), entry(secondRun, 2)]
-    let first = LibraryJournalBatch(libraryID: f.identity.libraryID, entries: [entries[0]])
-    let all = LibraryJournalBatch(libraryID: f.identity.libraryID, entries: entries)
+    let first = ExecutionJournalBatch(libraryID: f.identity.libraryID, entries: [entries[0]])
+    let all = ExecutionJournalBatch(libraryID: f.identity.libraryID, entries: entries)
     let path = "/v1/federation/publisher/retained/settle"
     #expect(try await LibraryWorkspacePublisherAPI.handle(f.request(path, first), path: path, database: f.database).status == 200)
     #expect(try await f.database.libraryExecutionOwner(conversationID: conversationID) == nil)
-    await #expect(throws: (any Error).self) { _ = try await f.database.ingestLibraryJournal(first, deviceID: f.workspace.executionDeviceID!) }
+    await #expect(throws: (any Error).self) { _ = try await f.database.ingestExecutionJournal(first, deviceID: f.workspace.executionDeviceID!) }
     #expect(try await LibraryWorkspacePublisherAPI.handle(f.request(path, all), path: path, database: f.database).status == 200)
     #expect(try await LibraryWorkspacePublisherAPI.handle(f.request(path, all), path: path, database: f.database).status == 200)
     var changed = first; changed.entries[0].retainedExecution?.status = "failed"
     await #expect(throws: (any Error).self) { _ = try await f.database.settleLibraryRetainedRuns(changed, deviceID: f.workspace.executionDeviceID!) }
     let active = UUID().uuidString.lowercased()
     try await f.database.write { try $0.toolsExecuteUnlocked("INSERT INTO dashboard_runs(id,conversation_id,status,openclaw_session_key) VALUES (?,?,'running','native')", [active, conversationID]) }
-    await #expect(throws: (any Error).self) { _ = try await f.database.ingestLibraryJournal(all, deviceID: f.workspace.executionDeviceID!) }
+    await #expect(throws: (any Error).self) { _ = try await f.database.ingestExecutionJournal(all, deviceID: f.workspace.executionDeviceID!) }
     #expect(try await f.database.read { try $0.libraryIDsUnlocked("SELECT status FROM dashboard_runs WHERE id=?", bindings: [active]).first } == "running")
     #expect(try await f.database.libraryExecutionOwner(conversationID: conversationID) == nil)
     try await f.database.write { try $0.toolsExecuteUnlocked("UPDATE dashboard_runs SET status='completed' WHERE id=?", [active]) }
-    _ = try await f.database.ingestLibraryJournal(all, deviceID: f.workspace.executionDeviceID!)
+    _ = try await f.database.ingestExecutionJournal(all, deviceID: f.workspace.executionDeviceID!)
     #expect(try await f.database.libraryExecutionOwner(conversationID: conversationID) == f.workspace.id)
-    #expect(try await f.database.libraryJournal(after: 0).entries.map(\.eventID) == entries.map(\.eventID))
+    #expect(try await f.database.executionJournal(after: 0).entries.map(\.eventID) == entries.map(\.eventID))
   }
 
   @Test func reasoningDisclosureResolvesChunkedDetailsAfterRestartAndClearsCorrections() async throws {
@@ -58,14 +58,14 @@ struct LibraryPublisherTests {
     let count = (bytes.count + chunkSize - 1) / chunkSize
     let digest = SHA256.hash(data: bytes).hexString
     var sequence: Int64 = 0
-    func entry(_ kind: LibraryJournalEntry.Kind, transcript: LibraryTranscript? = nil,
-      native: NativeRecordPart? = nil) -> LibraryJournalEntry {
+    func entry(_ kind: ExecutionJournalEntry.Kind, transcript: LibraryTranscript? = nil,
+      native: NativeRecordPart? = nil) -> ExecutionJournalEntry {
       sequence += 1
       return .init(workspaceID: f.workspace.id, originSequence: sequence, conversationID: conversationID,
         runID: runID, kind: kind, transcript: transcript, nativeRecord: native)
     }
     sequence += 1
-    let creation = LibraryJournalEntry(workspaceID: f.workspace.id, originSequence: sequence,
+    let creation = ExecutionJournalEntry(workspaceID: f.workspace.id, originSequence: sequence,
       conversationID: conversationID, kind: .conversation,
       conversation: .init(id: conversationID, title: "Complete reasoning", runtimeKind: "default_agent"))
     var entries = [creation]
@@ -82,7 +82,7 @@ struct LibraryPublisherTests {
       messages: [.init(id: runID, conversationID: conversationID, runID: runID, role: "assistant", content: "Answer")], activities: [row])))
     // Import separate pages, exactly as an observer encounters native chunks.
     for event in entries {
-      _ = try await f.database.ingestLibraryJournal(.init(libraryID: f.identity.libraryID, entries: [event]), deviceID: f.workspace.executionDeviceID!)
+      _ = try await f.database.ingestExecutionJournal(.init(libraryID: f.identity.libraryID, entries: [event]), deviceID: f.workspace.executionDeviceID!)
     }
     let page = try #require(try await f.database.libraryFederatedTranscript(conversationID: conversationID))
     #expect(page.activities.first?.projectionJSON == row.projectionJSON)
@@ -96,7 +96,7 @@ struct LibraryPublisherTests {
         contentIsDelta: false, detailsAvailable: true, detailVersion: Int64(index + 2))
       row.detail = correction; row.detailsRecordID = nil
       row.projectionJSON = String(decoding: try JSONEncoder().encode(corrected), as: UTF8.self)
-      _ = try await restarted.ingestLibraryJournal(.init(libraryID: f.identity.libraryID,
+      _ = try await restarted.ingestExecutionJournal(.init(libraryID: f.identity.libraryID,
         entries: [entry(.transcript, transcript: .init(conversationID: conversationID, activities: [row]))]), deviceID: f.workspace.executionDeviceID!)
       #expect(try await restarted.conversationActivityDetails(conversationID: conversationID, runID: runID, activityID: id) == corrected)
     }
@@ -120,13 +120,13 @@ struct LibraryPublisherTests {
       contentIsDelta: false, detailsAvailable: true, detailVersion: 1)
     let row = LibraryActivity(id: id, runID: runID, title: "Thinking", detail: "Bounded preview",
       status: "completed", projectionJSON: String(decoding: try JSONEncoder().encode(preview), as: UTF8.self), detailsRecordID: recordID)
-    let creation = LibraryJournalEntry(workspaceID: f.workspace.id, originSequence: 1,
+    let creation = ExecutionJournalEntry(workspaceID: f.workspace.id, originSequence: 1,
       conversationID: conversationID, kind: .conversation,
       conversation: .init(id: conversationID, title: "Pending reasoning", runtimeKind: "default_agent"))
-    let transcript = LibraryJournalEntry(workspaceID: f.workspace.id, originSequence: 2,
+    let transcript = ExecutionJournalEntry(workspaceID: f.workspace.id, originSequence: 2,
       conversationID: conversationID, runID: runID, kind: .transcript,
       transcript: .init(conversationID: conversationID, activities: [row]))
-    _ = try await f.database.ingestLibraryJournal(.init(libraryID: f.identity.libraryID,
+    _ = try await f.database.ingestExecutionJournal(.init(libraryID: f.identity.libraryID,
       entries: [creation, transcript]), deviceID: f.workspace.executionDeviceID!)
     func expectUnavailable() async throws {
       do {
@@ -141,7 +141,7 @@ struct LibraryPublisherTests {
       let part = NativeRecordPart(recordID: recordID, format: "wovenmatter.activity.v1",
         partIndex: index, partCount: count, byteCount: Int64(bytes.count), sha256: digest,
         data: bytes.subdata(in: index * chunkSize..<min(bytes.count, (index + 1) * chunkSize)))
-      let event = LibraryJournalEntry(workspaceID: f.workspace.id, originSequence: Int64(index + 3),
+      let event = ExecutionJournalEntry(workspaceID: f.workspace.id, originSequence: Int64(index + 3),
         conversationID: conversationID, runID: runID, kind: .nativeRecord, nativeRecord: part)
       if index == count - 1 {
         var corrupted = event
@@ -149,7 +149,7 @@ struct LibraryPublisherTests {
         invalidPart.data[0] ^= 1
         corrupted.nativeRecord = invalidPart
         do {
-          _ = try await f.database.ingestLibraryJournal(.init(libraryID: f.identity.libraryID,
+          _ = try await f.database.ingestExecutionJournal(.init(libraryID: f.identity.libraryID,
             entries: [corrupted]), deviceID: f.workspace.executionDeviceID!)
           Issue.record("A mismatched native record digest was accepted")
         } catch let error as LibraryAPIError {
@@ -158,7 +158,7 @@ struct LibraryPublisherTests {
         // The rejected final part rolls back; the same sequence can be retried.
         try await expectUnavailable()
       }
-      _ = try await f.database.ingestLibraryJournal(.init(libraryID: f.identity.libraryID,
+      _ = try await f.database.ingestExecutionJournal(.init(libraryID: f.identity.libraryID,
         entries: [event]), deviceID: f.workspace.executionDeviceID!)
       if index < count - 1 { try await expectUnavailable() }
     }
@@ -174,14 +174,14 @@ struct LibraryPublisherTests {
     let conversationID = UUID().uuidString.lowercased(), runID = UUID().uuidString.lowercased()
     let id = runID + ":trace"
     var sequence: Int64 = 0
-    func ingest(_ kind: LibraryJournalEntry.Kind, transcript: LibraryTranscript? = nil,
+    func ingest(_ kind: ExecutionJournalEntry.Kind, transcript: LibraryTranscript? = nil,
       native: NativeRecordPart? = nil, nativeRun: String? = nil) async throws {
       sequence += 1
-      let event = LibraryJournalEntry(workspaceID: f.workspace.id, originSequence: sequence,
+      let event = ExecutionJournalEntry(workspaceID: f.workspace.id, originSequence: sequence,
         conversationID: conversationID, runID: nativeRun ?? runID, kind: kind,
         conversation: kind == .conversation ? .init(id: conversationID, title: "Linked reasoning", runtimeKind: "default_agent") : nil,
         transcript: transcript, nativeRecord: native)
-      _ = try await f.database.ingestLibraryJournal(.init(libraryID: f.identity.libraryID, entries: [event]), deviceID: f.workspace.executionDeviceID!)
+      _ = try await f.database.ingestExecutionJournal(.init(libraryID: f.identity.libraryID, entries: [event]), deviceID: f.workspace.executionDeviceID!)
     }
     func parts(_ recordID: String, _ content: String, previous: String? = nil,
       identity: String? = nil, version: Int64 = 3) throws -> [NativeRecordPart] {

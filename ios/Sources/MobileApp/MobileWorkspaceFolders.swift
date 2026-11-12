@@ -47,7 +47,7 @@ extension MobileModel {
   /// in All Workspaces and Recents. A workspace's group is listed while that
   /// workspace is active or any of its agents can start now (a Linux
   /// workspace reached through the central Mac).
-  func agentGroupIsActive(_ group: LibraryAgentGroup) -> Bool {
+  func agentGroupIsActive(_ group: AgentGroup) -> Bool {
     if group.id == "local" { return true }
     if executionWorkspaces.contains(where: { $0.id == group.id && ($0.retainedHistory == true || $0.deleted) }) { return false }
     if let workspace = group.workspace, workspaceIsActive(workspace) { return true }
@@ -71,11 +71,11 @@ extension MobileModel {
   var hasUnassignedContent: Bool {
     folders.contains { folderOwner($0) == nil } || notes.contains { noteOwner($0) == nil } || conversations.contains { conversationOwner($0) == nil }
   }
-  func folderAgents(in workspace: MobileFolderWorkspace) -> [LibraryAgentLauncher] {
+  func folderAgents(in workspace: MobileFolderWorkspace) -> [LaunchableAgent] {
     guard workspace.isLocal || workspace.kind != .ios else { return [] }
     return launcherAgents.filter { canonicalWorkspaceID($0.workspaceID) == workspace.id }
   }
-  var chatLauncherGroups: [LibraryAgentGroup] {
+  var chatLauncherGroups: [AgentGroup] {
     let owner = selectedFolderID.flatMap { state.folders[$0] }.flatMap(folderOwner) ?? selectedFolderWorkspaceID
     return launcherGroups.compactMap { group in
       var group = group

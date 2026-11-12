@@ -15,8 +15,8 @@ private actor BackupArtifactLibrary: FederationTransport {
   func libraryIdentity() throws -> LibraryIdentity { throw MobileConnectionError.offline }
   func executionWorkspaces() -> [ExecutionWorkspace] { [] }
   func registerWorkspace(_ registration: LibraryWorkspaceRegistration) throws -> ExecutionWorkspace { throw MobileConnectionError.offline }
-  func journal(after: Int64) throws -> LibraryJournalPage { throw MobileConnectionError.offline }
-  func importJournal(_ batch: LibraryJournalBatch) throws -> LibraryJournalBatchResult { throw MobileConnectionError.offline }
+  func journal(after: Int64) throws -> ExecutionJournalPage { throw MobileConnectionError.offline }
+  func importJournal(_ batch: ExecutionJournalBatch) throws -> ExecutionJournalBatchResult { throw MobileConnectionError.offline }
   /// Central now holds other content, at a later revision, under an existing ID.
   func replace(_ id: String, revision: Int64, with data: Data) {
     remote = .init(id: id, workspaceID: "phone", title: "Replaced", mediaType: "text/plain", byteCount: Int64(data.count),

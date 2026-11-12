@@ -26,7 +26,7 @@ public enum LibraryWorkspaceAction: Codable, Equatable, Sendable {
   case retryLibrary(id: String)
 }
 
-public struct LibraryFile: Codable, Equatable, Sendable {
+public struct FileContents: Codable, Equatable, Sendable {
   public var name: String
   public var mimeType: String
   public var data: Data
@@ -35,7 +35,7 @@ public struct LibraryFile: Codable, Equatable, Sendable {
   }
 }
 
-public struct LibraryEntry: Codable, Equatable, Identifiable, Sendable {
+public struct LibraryListItem: Codable, Equatable, Identifiable, Sendable {
   public var id: String
   public var conversationID: String
   public var title: String
@@ -57,27 +57,27 @@ public struct LibraryEntry: Codable, Equatable, Identifiable, Sendable {
   }
 }
 
-public struct LibrarySelection: Codable, Equatable, Identifiable, Sendable {
+public struct SessionSettingOption: Codable, Equatable, Identifiable, Sendable {
   public var id: String
   public var label: String
   public init(id: String, label: String) { self.id = id; self.label = label }
 }
 
-public struct LibrarySessionSettings: Codable, Equatable, Sendable {
+public struct SessionSettings: Codable, Equatable, Sendable {
   public var conversationID: String
   public var model: String?
   public var thinking: String?
   public var permission: String?
-  public var models: [LibrarySelection]
-  public var thinkingLevels: [LibrarySelection]
-  public var permissions: [LibrarySelection]
-  public var availableTools: [LibrarySelection]
+  public var models: [SessionSettingOption]
+  public var thinkingLevels: [SessionSettingOption]
+  public var permissions: [SessionSettingOption]
+  public var availableTools: [SessionSettingOption]
   public var enabledTools: [String]
   public var goal: WorkspaceGoal?
   public var canConfigure: Bool
   public init(conversationID: String, model: String?, thinking: String?, permission: String?,
-              models: [LibrarySelection], thinkingLevels: [LibrarySelection], permissions: [LibrarySelection],
-              availableTools: [LibrarySelection], enabledTools: [String], canConfigure: Bool, goal: WorkspaceGoal? = nil) {
+              models: [SessionSettingOption], thinkingLevels: [SessionSettingOption], permissions: [SessionSettingOption],
+              availableTools: [SessionSettingOption], enabledTools: [String], canConfigure: Bool, goal: WorkspaceGoal? = nil) {
     self.conversationID = conversationID; self.model = model; self.thinking = thinking; self.permission = permission
     self.models = models; self.thinkingLevels = thinkingLevels; self.permissions = permissions
     self.availableTools = availableTools; self.enabledTools = enabledTools; self.canConfigure = canConfigure; self.goal = goal
@@ -93,19 +93,19 @@ public struct LibraryCalendarDraft: Codable, Equatable, Sendable {
   public var timeZoneID: String
   public var recurrenceUnit: String?
   public var recurrenceInterval: Int
-  public var task: LibraryScheduledTask?
+  public var task: ScheduledTask?
   /// Nil preserves the host’s existing visibility for older clients.
   public var showsOnCalendar: Bool?
   public init(title: String = "", details: String = "", startsAt: Date = Date(), endsAt: Date? = nil,
               allDay: Bool = false, timeZoneID: String = TimeZone.current.identifier,
-              recurrenceUnit: String? = nil, recurrenceInterval: Int = 1, task: LibraryScheduledTask? = nil, showsOnCalendar: Bool? = nil) {
+              recurrenceUnit: String? = nil, recurrenceInterval: Int = 1, task: ScheduledTask? = nil, showsOnCalendar: Bool? = nil) {
     self.title = title; self.details = details; self.startsAt = startsAt; self.endsAt = endsAt
     self.allDay = allDay; self.timeZoneID = timeZoneID; self.recurrenceUnit = recurrenceUnit
     self.recurrenceInterval = recurrenceInterval; self.task = task; self.showsOnCalendar = showsOnCalendar
   }
 }
 
-public struct LibraryScheduledTask: Codable, Equatable, Sendable {
+public struct ScheduledTask: Codable, Equatable, Sendable {
   public var prompt: String
   public var runtime: String
   public var workspaceID: String?
@@ -140,7 +140,7 @@ public struct LibraryCalendarEvent: Codable, Equatable, Identifiable, Sendable {
   }
 }
 
-public struct LibraryTrashedItem: Codable, Equatable, Identifiable, Sendable {
+public struct TrashedItem: Codable, Equatable, Identifiable, Sendable {
   public var id: String
   public var title: String
   public var kind: String
@@ -151,12 +151,12 @@ public struct LibraryTrashedItem: Codable, Equatable, Identifiable, Sendable {
 }
 
 public enum LibraryWorkspaceResult: Codable, Equatable, Sendable {
-  case library(items: [LibraryEntry], hasMore: Bool)
-  case file(LibraryFile)
+  case library(items: [LibraryListItem], hasMore: Bool)
+  case file(FileContents)
   case calendar([LibraryCalendarEvent])
-  case scheduledTasks([LibraryScheduledTaskItem])
+  case scheduledTasks([ScheduledTaskItem])
   case databases([LibraryDatabaseSource])
   case usage(samples: [LibraryUsageSample], hasMore: Bool)
-  case session(LibrarySessionSettings)
-  case trash([LibraryTrashedItem])
+  case session(SessionSettings)
+  case trash([TrashedItem])
 }

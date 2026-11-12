@@ -36,7 +36,7 @@ struct ChatComposerSettings<Accessory: View, Submission: View>: View {
   @ViewBuilder var accessory: () -> Accessory
   @ViewBuilder var submission: () -> Submission
   @Environment(\.dashboardTheme) private var theme
-  @State private var settings: LibrarySessionSettings?
+  @State private var settings: SessionSettings?
   @State private var modelOpen = false
   @State private var thinkingOpen = false
   @State private var toolsOpen = false
@@ -60,16 +60,16 @@ struct ChatComposerSettings<Accessory: View, Submission: View>: View {
     if local { return model.deviceChatModel?.name ?? model.selectedInferenceConnection?.modelID ?? "Model" }
     return settings?.models.first { $0.id == settings?.model }?.label ?? "Model"
   }
-  private var thinkingOptions: [LibrarySelection] {
+  private var thinkingOptions: [SessionSettingOption] {
     local ? (model.deviceChatModel?.supportedThinkingLevels ?? []).map { .init(id: $0, label: $0 == "xhigh" ? "Extra high" : $0.capitalized) } : settings?.thinkingLevels ?? []
   }
   private var thinkingLabel: String {
     thinkingOptions.first { $0.id == (local ? model.deviceChatThinking : settings?.thinking) }?.label ?? "Thinking"
   }
-  private var toolOptions: [LibrarySelection] {
+  private var toolOptions: [SessionSettingOption] {
     local ? MobileModel.deviceToolAccessOptions : settings?.availableTools ?? []
   }
-  private var permissionOptions: [LibrarySelection] { local ? MobileModel.devicePermissionOptions : settings?.permissions ?? [] }
+  private var permissionOptions: [SessionSettingOption] { local ? MobileModel.devicePermissionOptions : settings?.permissions ?? [] }
   private var permissionID: String? { local ? model.deviceChatPermission.rawValue : settings?.permission }
   private var permissionLabel: String { permissionOptions.first { $0.id == permissionID }?.label ?? "Permissions" }
   private var enabledTools: [String] { local ? model.deviceChatTools : settings?.enabledTools ?? [] }

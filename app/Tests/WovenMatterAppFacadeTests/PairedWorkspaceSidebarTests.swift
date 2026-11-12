@@ -17,7 +17,7 @@ struct PairedWorkspaceSidebarTests {
             id: UUID().uuidString.lowercased(), libraryID: identity.libraryID, ownerDeviceID: fixture.device,
             kind: .ios, name: "Trey's iPhone", executionDeviceID: fixture.device)), deviceID: fixture.device)
         let chat = UUID().uuidString.lowercased()
-        _ = try await fixture.database.ingestLibraryJournal(.init(libraryID: identity.libraryID, entries: [
+        _ = try await fixture.database.ingestExecutionJournal(.init(libraryID: identity.libraryID, entries: [
             .init(workspaceID: phone.id, originSequence: 1, conversationID: chat, kind: .conversation,
                   conversation: .init(id: chat, title: "Tea timer", runtimeKind: "piDurable"))
         ]), deviceID: fixture.device)

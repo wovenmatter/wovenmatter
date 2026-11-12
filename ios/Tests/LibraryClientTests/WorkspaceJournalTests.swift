@@ -6,7 +6,7 @@ private actor OfflineWorkspace: ExecutionWorkspaceTransport {
   var receipts: [String: LibraryCommandReceipt] = [:]
   var executed: [LibraryCommand] = []
   func identity() -> ExecutionWorkspace { .init(id: "linux", libraryID: "library", ownerDeviceID: "mac", kind: .linux, name: "Server", revision: 1) }
-  func providers() -> [LibraryProvider] { [] }
+  func providers() -> [HarnessCapabilities] { [] }
   func pending() -> [PendingInteraction] { [] }
   func command(_ command: LibraryCommand) throws -> LibraryCommandReceipt {
     if let receipt = receipts[command.commandID] { return receipt }
@@ -16,14 +16,14 @@ private actor OfflineWorkspace: ExecutionWorkspaceTransport {
     return result
   }
   func receipt(_ id: String) -> LibraryCommandReceipt? { receipts[id] }
-  func events(after: Int64) -> LibraryJournalPage { .init(libraryID: "library", cursor: after) }
+  func events(after: Int64) -> ExecutionJournalPage { .init(libraryID: "library", cursor: after) }
   func conversations() -> [LibraryConversation] { [] }
   func transcript(_ id: String) -> LibraryTranscript { .init(conversationID: id) }
 }
 
 final class WorkspaceJournalTests: XCTestCase {
   private func path() -> URL { FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).appendingPathComponent("library.json") }
-  private func entry(_ sequence: Int64, workspace: String = "phone", id: String = "chat") -> LibraryJournalEntry {
+  private func entry(_ sequence: Int64, workspace: String = "phone", id: String = "chat") -> ExecutionJournalEntry {
     .init(eventID: "event-\(workspace)-\(sequence)", workspaceID: workspace, originSequence: sequence,
       conversationID: id, kind: .conversation, conversation: .init(id: id, title: "Version \(sequence)"))
   }
@@ -34,7 +34,7 @@ final class WorkspaceJournalTests: XCTestCase {
     do { try await journal.upsertWorkspace(remote); XCTFail("Untrusted registration cannot change the library namespace") }
     catch WorkspaceJournal.Failure.wrongLibrary { }
     try await journal.mergeRegistry([remote])
-    let page = LibraryJournalPage(libraryID: "mini-library", cursor: 1, entries: [entry(1, workspace: "linux")])
+    let page = ExecutionJournalPage(libraryID: "mini-library", cursor: 1, entries: [entry(1, workspace: "linux")])
     try await journal.receiveWorkspace(page, workspaceID: "linux")
     let reopened = try WorkspaceJournal(file: file)
     let state = await reopened.snapshot()

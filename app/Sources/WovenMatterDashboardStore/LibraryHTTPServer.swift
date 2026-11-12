@@ -43,7 +43,7 @@ public struct LibraryHTTPResponse: Sendable {
 }
 
 /// What a server with an upgrade handler does with a WebSocket upgrade request.
-public enum LibraryUpgradeDecision: Sendable {
+public enum WebSocketUpgradeDecision: Sendable {
   case reject(LibraryHTTPResponse)
   /// Relay raw bytes with a loopback port after sending `head` there as the request.
   case tunnel(port: UInt16, head: Data)
@@ -141,7 +141,7 @@ public struct LibraryHTTPParser: Sendable {
 /// inference-only streaming response does own its producer and cancels it on close.
 public final class LibraryHTTPServer: @unchecked Sendable {
   public typealias Handler = @Sendable (LibraryHTTPRequest) async -> LibraryHTTPResponse
-  public typealias UpgradeHandler = @Sendable (LibraryHTTPRequest) async -> LibraryUpgradeDecision
+  public typealias UpgradeHandler = @Sendable (LibraryHTTPRequest) async -> WebSocketUpgradeDecision
   private let queue = DispatchQueue(label: "com.wovenmatter.library.http")
   private let handler: Handler
   private let upgradeHandler: UpgradeHandler?

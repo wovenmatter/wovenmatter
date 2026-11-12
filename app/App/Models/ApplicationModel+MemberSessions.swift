@@ -260,7 +260,7 @@ extension ApplicationModel {
     private func memberCommand(_ client: CentralExecutionClient, _ workspace: ExecutionWorkspace, callerID: String,
                                requestID: String, conversation: String, step: String, kind: LibraryCommand.Kind,
                                runID: String? = nil, text: String? = nil, interactionID: String? = nil,
-                               response: LibraryInteractionResponse? = nil) async throws -> LibraryCommandReceipt {
+                               response: InteractionResponse? = nil) async throws -> LibraryCommandReceipt {
         guard let database = dashboardStore?.database else { throw ApplicationModelError.dashboardStoreUnavailable }
         let device = try await database.libraryIdentity().hostDeviceID
         let command = LibraryCommand(commandID: Self.memberToolID(callerID, requestID, workspace.id + ":" + conversation + ":" + step),
@@ -310,7 +310,7 @@ extension ApplicationModel {
     /// Answers one pending question (or approval) of the session's current run.
     private func memberSessionRespond(client: CentralExecutionClient, workspace: ExecutionWorkspace, callerID: String,
                                       requestID: String, id: String, interactionID: String,
-                                      response: LibraryInteractionResponse) async throws -> WovenMatterToolResponse {
+                                      response: InteractionResponse) async throws -> WovenMatterToolResponse {
         let found = try await memberConversation(client, workspace, id)
         guard let pending = try await client.pendingInteractions(workspace: workspace).first(where: {
             $0.id == interactionID && $0.conversationID.lowercased() == found.id.lowercased()
@@ -321,7 +321,7 @@ extension ApplicationModel {
         return .init(result: .object(["session": .object(Self.describeMemberSession(found, on: workspace)), "receipt": Self.receiptValue(receipt)]))
     }
 
-    nonisolated static func interactionResponse(_ command: WovenMatterToolCommand) throws -> LibraryInteractionResponse {
+    nonisolated static func interactionResponse(_ command: WovenMatterToolCommand) throws -> InteractionResponse {
         var answers: [String: [String]] = [:]
         if let raw = command.options["answers"] {
             guard let decoded = try? JSONDecoder().decode([String: [String]].self, from: Data(raw.utf8)) else {
@@ -332,7 +332,7 @@ extension ApplicationModel {
         return .init(optionID: command.options["option-id"], answers: answers, cancelled: command.options["cancelled"] != nil)
     }
 
-    nonisolated static func validate(_ response: LibraryInteractionResponse, for pending: PendingInteraction) throws {
+    nonisolated static func validate(_ response: InteractionResponse, for pending: PendingInteraction) throws {
         if !response.cancelled, pending.kind == .approval, !pending.options.contains(where: { $0.id == response.optionID }) {
             throw WorkspaceToolError.invalid("Choose one of the offered options.")
         }

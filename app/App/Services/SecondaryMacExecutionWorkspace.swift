@@ -121,10 +121,10 @@ final class SecondaryMacExecutionWorkspace: ExecutionWorkspaceTransport {
         }
     }
     func identity() async throws -> ExecutionWorkspace { descriptor }
-    func providers() async throws -> [LibraryProvider] {
+    func providers() async throws -> [HarnessCapabilities] {
         model.libraryCommands.providers().filter { $0.id.hasPrefix("local:") }
     }
-    func capabilities(_ id: String) async throws -> LibraryProvider { try await model.libraryCommands.sessionCapabilities(conversationID: id) }
+    func capabilities(_ id: String) async throws -> HarnessCapabilities { try await model.libraryCommands.sessionCapabilities(conversationID: id) }
     func pending() async throws -> [PendingInteraction] { await model.libraryCommands.pendingInteractions() }
     func command(_ request: LibraryCommand) async throws -> LibraryCommandReceipt {
         guard acceptsCommands else { throw LibraryAPIError(code: "stopping", message: "This Mac execution workspace is stopping.") }
@@ -167,7 +167,7 @@ final class SecondaryMacExecutionWorkspace: ExecutionWorkspaceTransport {
     func receipt(_ id: String) async throws -> LibraryCommandReceipt? {
         try await model.libraryCommands.receipt(commandID: id, deviceID: descriptor.ownerDeviceID)
     }
-    func events(after: Int64) async throws -> LibraryJournalPage {
+    func events(after: Int64) async throws -> ExecutionJournalPage {
         try await capture()
         let snapshot = await origin.snapshot()
         let entries = snapshot.entries.values.filter { $0.workspaceID == descriptor.id && $0.originSequence > after }

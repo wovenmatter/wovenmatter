@@ -66,7 +66,7 @@ struct DeviceAgentSettingsPane: View {
     })
   }
   private var selectedConnection: InferenceConnection? { model.inferenceConnections.first { $0.id == connectionID } }
-  private var toolDefinitions: [LibrarySelection] { MobileModel.deviceToolAccessOptions }
+  private var toolDefinitions: [SessionSettingOption] { MobileModel.deviceToolAccessOptions }
   private var selectedModel: InferenceModel? { models.first { $0.id == selectedModelID } }
   private var thinkingSelection: Binding<String> {
     Binding(get: { defaults.thinking(for: selectedModel) }, set: { defaults.thinkingLevel = $0 })

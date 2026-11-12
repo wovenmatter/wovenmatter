@@ -32,8 +32,8 @@ public protocol LibraryTransport: Sendable {
   func changes(after: Int64) async throws -> LibraryChangePage
   func mutate(_ mutation: LibraryMutation) async throws -> LibraryMutationResult
   func note(_ id: String) async throws -> LibraryNote
-  func linkedData(_ id: String, tableID: String?) async throws -> LibraryLinkedData
-  func providers() async throws -> [LibraryProvider]
+  func linkedData(_ id: String, tableID: String?) async throws -> LinkedDataPreview
+  func providers() async throws -> [HarnessCapabilities]
   func pending() async throws -> [PendingInteraction]
   func transcript(_ id: String) async throws -> LibraryTranscript
   func transcript(_ id: String, before: String) async throws -> LibraryTranscript
@@ -44,7 +44,7 @@ public protocol LibraryTransport: Sendable {
 public extension LibraryTransport {
   func executeMCP(_ message: GatewayJSONValue, conversationID: String, enabledGroups: [WorkspaceToolGroup], contextID: String? = nil) async throws -> GatewayJSONValue { throw MobileConnectionError.offline }
   func readWorkspace(_ request: LibraryWorkspaceRead) async throws -> LibraryWorkspaceResult { throw MobileConnectionError.offline }
-  func linkedData(_ id: String, tableID: String?) async throws -> LibraryLinkedData { throw MobileConnectionError.offline }
+  func linkedData(_ id: String, tableID: String?) async throws -> LinkedDataPreview { throw MobileConnectionError.offline }
   func transcript(_ id: String, before: String) async throws -> LibraryTranscript { throw MobileConnectionError.http(400, "This connection does not support older transcript pages.") }
 }
 
@@ -81,7 +81,7 @@ public final class NoRedirects: NSObject, URLSessionTaskDelegate, Sendable {
   }
 }
 
-private actor LibraryMCPConnections {
+private actor MCPSessionCache {
   struct Session: Sendable { let protocolVersion: String; let id: String? }
   private var sessions: [String: Task<Session, any Error>] = [:]
   func connect(_ conversationID: String, initialize: @escaping @Sendable () async throws -> Session) async throws -> Session {
@@ -106,7 +106,7 @@ public final class HTTPSLibraryTransport: LibraryTransport, MobilePairingRequest
   /// The host's member device ID, which every signed request names.
   let audience: String
   private let performer: any MobileHTTPPerforming
-  private let mcpConnections = LibraryMCPConnections()
+  private let mcpConnections = MCPSessionCache()
   private let deviceMetadata: DeviceMetadata?
   public var endpoint: URL { credential.endpoint }
   public var isSigned: Bool { signer != nil }
@@ -185,7 +185,7 @@ public final class HTTPSLibraryTransport: LibraryTransport, MobilePairingRequest
       let initialized: GatewayJSONValue = .object(["jsonrpc": .string("2.0"), "method": .string("notifications/initialized")])
       _ = try await data("mcp", method: "POST", body: JSONEncoder().encode(initialized),
         maximumBytes: 1_048_576, timeout: 30, headers: notificationHeaders)
-      return LibraryMCPConnections.Session(protocolVersion: version, id: sessionID)
+      return MCPSessionCache.Session(protocolVersion: version, id: sessionID)
     }
     headers["MCP-Protocol-Version"] = negotiated.protocolVersion
     if let sessionID = negotiated.id { headers["MCP-Session-Id"] = sessionID }
@@ -215,8 +215,8 @@ public final class HTTPSLibraryTransport: LibraryTransport, MobilePairingRequest
   public func changes(after: Int64) async throws -> LibraryChangePage { try await request("v1/changes", query: [.init(name: "after", value: String(after)), .init(name: "limit", value: "200")]) }
   public func mutate(_ mutation: LibraryMutation) async throws -> LibraryMutationResult { try await request("v1/mutations", method: "POST", body: JSONEncoder().encode(mutation)) }
   public func note(_ id: String) async throws -> LibraryNote { try await request("v1/notes/\(try Self.safeID(id))") }
-  public func linkedData(_ id: String, tableID: String?) async throws -> LibraryLinkedData { try await request("v1/assets/\(try Self.safeID(id))/linked-data", query: tableID.map { [.init(name: "tableID", value: $0)] } ?? []) }
-  public func providers() async throws -> [LibraryProvider] { try await request("v1/providers") }
+  public func linkedData(_ id: String, tableID: String?) async throws -> LinkedDataPreview { try await request("v1/assets/\(try Self.safeID(id))/linked-data", query: tableID.map { [.init(name: "tableID", value: $0)] } ?? []) }
+  public func providers() async throws -> [HarnessCapabilities] { try await request("v1/providers") }
   public func pending() async throws -> [PendingInteraction] { try await request("v1/pending") }
   public func transcript(_ id: String) async throws -> LibraryTranscript { try await request("v1/sessions/\(try Self.safeID(id))/transcript") }
   public func transcript(_ id: String, before: String) async throws -> LibraryTranscript { try await request("v1/sessions/\(try Self.safeID(id))/transcript", query: [.init(name: "before", value: before)]) }
@@ -229,7 +229,7 @@ public final class HTTPSLibraryTransport: LibraryTransport, MobilePairingRequest
   public func suspendDevelopmentConnection() async throws {
     let _: [String: Bool] = try await request("v1/devices/development/disconnect", method: "POST", body: Data("{}".utf8), timeout: 3)
   }
-  public func capabilities(_ id: String) async throws -> LibraryProvider { try await request("v1/sessions/\(try Self.safeID(id))/capabilities") }
+  public func capabilities(_ id: String) async throws -> HarnessCapabilities { try await request("v1/sessions/\(try Self.safeID(id))/capabilities") }
   public func asset(_ id: String) async throws -> LibraryNote { try await request("v1/assets/\(try Self.safeID(id))") }
 
   func request<Result: Decodable>(_ path: String, method: String = "GET", query: [URLQueryItem] = [], body: Data? = nil, timeout: TimeInterval? = nil) async throws -> Result {

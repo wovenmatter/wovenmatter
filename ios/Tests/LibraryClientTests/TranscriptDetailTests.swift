@@ -53,7 +53,7 @@ final class TranscriptDetailTests: XCTestCase {
     let path = file(), journal = try WorkspaceJournal(file: path)
     let base = String(repeating: "Reasoning e\u{301} 🧵\n", count: 30_000)
     var sequence: Int64 = 0
-    func add(_ kind: LibraryJournalEntry.Kind, part: NativeRecordPart? = nil,
+    func add(_ kind: ExecutionJournalEntry.Kind, part: NativeRecordPart? = nil,
       pointer: String? = nil, runID: String = "run") async throws {
       sequence += 1
       try await journal.record(.init(workspaceID: "owner", originSequence: sequence, conversationID: "chat", runID: runID,

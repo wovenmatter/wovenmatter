@@ -1,7 +1,7 @@
 import Foundation
 import WovenMatterShared
 
-public struct LibraryAgentLauncher: Identifiable, Equatable, Sendable {
+public struct LaunchableAgent: Identifiable, Equatable, Sendable {
   public var workspaceID: String
   public var workspaceName: String
   public var providerID: String
@@ -42,11 +42,11 @@ public struct LibraryAgentLauncher: Identifiable, Equatable, Sendable {
   /// `providers` is the central list: the agents of the library host this
   /// phone syncs with (`centralWorkspaceID`, or `centralName` while its
   /// registry row is unknown). Every other workspace lists its own agents.
-  public static func list(deviceName: String, centralOnline: Bool, providers: [LibraryProvider],
-                          workspaces: [ExecutionWorkspace], workspaceProviders: [String: [LibraryProvider]],
+  public static func list(deviceName: String, centralOnline: Bool, providers: [HarnessCapabilities],
+                          workspaces: [ExecutionWorkspace], workspaceProviders: [String: [HarnessCapabilities]],
                           reachable: [String: Bool], knownAgentIDs: Set<String> = [],
                           centralWorkspaceID: String? = nil, centralName: String? = nil) -> [Self] {
-    func known(_ provider: LibraryProvider, workspace: String) -> Bool {
+    func known(_ provider: HarnessCapabilities, workspace: String) -> Bool {
       (provider.available && provider.canStart) || knownAgentIDs.contains(workspace + ":" + provider.id)
     }
     let workspaces = workspaces.filter { !$0.deleted }.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
@@ -114,15 +114,15 @@ extension ExecutionWorkspace {
 }
 
 /// The directory, rather than available agents, determines which workspaces exist.
-public struct LibraryAgentGroup: Identifiable, Equatable, Sendable {
+public struct AgentGroup: Identifiable, Equatable, Sendable {
   public var id: String
   public var name: String
   public var workspace: ExecutionWorkspace?
-  public var agents: [LibraryAgentLauncher]
+  public var agents: [LaunchableAgent]
 
   /// Quick Chat first, then the library host (`centralWorkspaceID`), the
   /// other Macs and the Linux workspaces, each by name.
-  public static func list(agents: [LibraryAgentLauncher], workspaces: [ExecutionWorkspace],
+  public static func list(agents: [LaunchableAgent], workspaces: [ExecutionWorkspace],
                           centralWorkspaceID: String? = nil) -> [Self] {
     let central = ExecutionWorkspace.liveCentralMac(in: workspaces, id: centralWorkspaceID)
     var groups: [Self] = []
@@ -149,12 +149,12 @@ public struct LibraryAgentGroup: Identifiable, Equatable, Sendable {
 }
 
 /// Non-secret discovery metadata; loading it never restores a live connection.
-public struct LibraryAgentCatalog: Codable, Equatable, Sendable {
+public struct AgentCatalog: Codable, Equatable, Sendable {
   public var libraryID: String
-  public var providers: [LibraryProvider]
-  public var workspaceProviders: [String: [LibraryProvider]]
+  public var providers: [HarnessCapabilities]
+  public var workspaceProviders: [String: [HarnessCapabilities]]
   public var knownAgentIDs: Set<String>
-  public init(libraryID: String, providers: [LibraryProvider], workspaceProviders: [String: [LibraryProvider]], knownAgentIDs: Set<String>) {
+  public init(libraryID: String, providers: [HarnessCapabilities], workspaceProviders: [String: [HarnessCapabilities]], knownAgentIDs: Set<String>) {
     self.libraryID = libraryID; self.providers = providers; self.workspaceProviders = workspaceProviders; self.knownAgentIDs = knownAgentIDs
   }
 }

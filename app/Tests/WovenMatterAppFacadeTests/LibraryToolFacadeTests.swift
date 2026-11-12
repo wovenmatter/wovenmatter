@@ -205,7 +205,7 @@ struct LibraryToolFacadeTests {
         let workspace = try await fixture.database.registerExecutionWorkspace(.init(workspace: .init(
             id: UUID().uuidString.lowercased(), libraryID: identity.libraryID, ownerDeviceID: fixture.device,
             kind: .ios, name: "Phone", executionDeviceID: fixture.device)), deviceID: fixture.device)
-        _ = try await fixture.database.ingestLibraryJournal(.init(libraryID: identity.libraryID, entries: [
+        _ = try await fixture.database.ingestExecutionJournal(.init(libraryID: identity.libraryID, entries: [
             .init(workspaceID: workspace.id, originSequence: 1, conversationID: caller, kind: .conversation,
                   conversation: .init(id: caller, title: "Phone chat", runtimeKind: "piDurable"))
         ]), deviceID: fixture.device)

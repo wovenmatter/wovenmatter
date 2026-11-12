@@ -126,28 +126,29 @@ extension WorkspaceDatabaseConnection {
           try executeUnlocked("""
             INSERT OR IGNORE INTO paired_agent_owners SELECT id,(SELECT device_id FROM paired_library_clock WHERE singleton=1) FROM dashboard_agents;
             INSERT OR IGNORE INTO paired_conversation_owners SELECT id,(SELECT device_id FROM paired_library_clock WHERE singleton=1) FROM dashboard_conversations
-              WHERE NOT EXISTS(SELECT 1 FROM library_execution_conversations c WHERE c.id=dashboard_conversations.id);
+              WHERE NOT EXISTS(SELECT 1 FROM device_execution_conversations c WHERE c.id=dashboard_conversations.id);
             INSERT OR IGNORE INTO paired_calendar_owners SELECT i.id,CASE
-                WHEN o.device_id IS NULL OR o.device_id=(SELECT workspace_id FROM library_calendar_execution_context WHERE singleton=1)
+                WHEN o.device_id IS NULL OR o.device_id=(SELECT workspace_id FROM device_calendar_execution_context WHERE singleton=1)
                   OR o.device_id=(SELECT host_device_id FROM library_identity WHERE singleton=1)
                 THEN (SELECT device_id FROM paired_library_clock WHERE singleton=1) ELSE o.device_id END
-              FROM dashboard_calendar_items i LEFT JOIN library_calendar_owners o ON o.event_id=i.id;
+              FROM dashboard_calendar_items i LEFT JOIN device_calendar_owners o ON o.event_id=i.id;
             """)
         }
         try setPairedStateUnlocked("owners.bootstrap", "1")
       }
       // A local writer owns what it creates. Federation inserts its execution
       // projection first, so independent workspaces are never claimed here.
+      // The conversation trigger is recreated on every open so its body always
+      // names the current execution table.
       try executeUnlocked("""
         DROP TRIGGER IF EXISTS paired_conversation_owner;
-        DROP TRIGGER IF EXISTS paired_conversation_owner_v2;
         CREATE TRIGGER IF NOT EXISTS paired_agent_owner AFTER INSERT ON dashboard_agents
         WHEN (SELECT applying FROM paired_library_clock WHERE singleton=1)=0 BEGIN
           INSERT OR IGNORE INTO paired_agent_owners VALUES(NEW.id,(SELECT device_id FROM paired_library_clock WHERE singleton=1));
         END;
-        CREATE TRIGGER IF NOT EXISTS paired_conversation_owner_v3 AFTER INSERT ON dashboard_conversations
+        CREATE TRIGGER paired_conversation_owner AFTER INSERT ON dashboard_conversations
         WHEN (SELECT applying FROM paired_library_clock WHERE singleton=1)=0
-          AND NOT EXISTS(SELECT 1 FROM library_execution_conversations c WHERE c.id=NEW.id) BEGIN
+          AND NOT EXISTS(SELECT 1 FROM device_execution_conversations c WHERE c.id=NEW.id) BEGIN
           INSERT OR IGNORE INTO paired_conversation_owners VALUES(NEW.id,(SELECT device_id FROM paired_library_clock WHERE singleton=1));
         END;
         CREATE TRIGGER IF NOT EXISTS paired_calendar_owner AFTER INSERT ON dashboard_calendar_items
@@ -402,14 +403,14 @@ extension WorkspaceDatabaseConnection {
     }
     func servesWorkspace(_ id: String?) throws -> Bool { try serves(id.flatMap { try federationWorkspaceUnlocked($0) }) }
     switch record.table {
-    case "library_execution_workspaces":
+    case "device_execution_workspaces":
       guard let id = column("id"), let payload = column("payload"),
             let incoming = try? JSONDecoder().decode(ExecutionWorkspace.self, from: Data(payload.utf8)), incoming.id == id else { return false }
       let existing = try federationWorkspaceUnlocked(id)
       return serves(incoming) && (existing == nil || serves(existing))
-    case "library_execution_conversations":
+    case "device_execution_conversations":
       guard let id = column("id"), try servesWorkspace(column("workspace_id")) else { return false }
-      let current = try historyRowsUnlocked("SELECT workspace_id FROM library_execution_conversations WHERE id=?", values: [id])
+      let current = try historyRowsUnlocked("SELECT workspace_id FROM device_execution_conversations WHERE id=?", values: [id])
         .first?.objectValue?["workspace_id"]?.stringValue
       return try current == nil || servesWorkspace(current)
     case "paired_mac_routes", "paired_remote_workspaces":
@@ -418,11 +419,11 @@ extension WorkspaceDatabaseConnection {
       guard column("device_id")?.lowercased() == own, let id = column("id") else { return false }
       let current = try historyRowsUnlocked("SELECT device_id FROM \(record.table) WHERE id=?", values: [id]).first?.objectValue?["device_id"]?.stringValue
       return current == nil || current?.lowercased() == own
-    case "library_calendar_owners":
+    case "device_calendar_owners":
       guard column("device_id")?.lowercased() == own, let id = column("event_id") else { return false }
-      let current = try historyRowsUnlocked("SELECT device_id FROM library_calendar_owners WHERE event_id=?", values: [id]).first?.objectValue?["device_id"]?.stringValue
+      let current = try historyRowsUnlocked("SELECT device_id FROM device_calendar_owners WHERE event_id=?", values: [id]).first?.objectValue?["device_id"]?.stringValue
       return current == nil || current?.lowercased() == own
-    case "library_calendar_run_owners":
+    case "device_calendar_run_owners":
       return column("device_id")?.lowercased() == own
     default:
       return true
@@ -542,11 +543,11 @@ extension WorkspaceDatabaseConnection {
     if next.vector != winner?.vector {
       try materializePeerRecord(next, table: table)
       try toolsExecuteUnlocked("INSERT INTO paired_library_rows VALUES(?,?,?) ON CONFLICT(table_name,record_key) DO UPDATE SET payload=excluded.payload", [next.table, next.key, try peerJSON(next)])
-      for name in ["dashboard_conversations", "paired_conversation_owners", "library_execution_conversations"] where next.table == name {
+      for name in ["dashboard_conversations", "paired_conversation_owners", "device_execution_conversations"] where next.table == name {
         if let id = next.row["id"]?.value { scope.conversations.insert(id) }
       }
       if table.columns.contains("conversation_id"), let id = next.row["conversation_id"]?.value { scope.conversations.insert(id) }
-      if next.table == "library_execution_workspaces", let owner = next.row["owner_device_id"]?.value { scope.owners.insert(owner) }
+      if next.table == "device_execution_workspaces", let owner = next.row["owner_device_id"]?.value { scope.owners.insert(owner) }
     }
     try toolsExecuteUnlocked("DELETE FROM paired_library_frontier WHERE table_name=? AND record_key=?", [next.table, next.key])
     for member in members where member.vector != next.vector {
@@ -685,10 +686,10 @@ extension WorkspaceDatabaseConnection {
   private func executesNativelyUnlocked(_ conversation: String, local: String) throws -> Bool {
     try historyRowsUnlocked("""
       SELECT 1 AS owned FROM paired_conversation_owners o WHERE o.id=?1 AND o.device_id=?2
-        AND NOT EXISTS(SELECT 1 FROM library_execution_adoptions a WHERE a.conversation_id=?1)
+        AND NOT EXISTS(SELECT 1 FROM device_execution_adoptions a WHERE a.conversation_id=?1)
         AND NOT EXISTS(SELECT 1 FROM retained_execution_history r WHERE r.conversation_id=?1)
-        AND NOT EXISTS(SELECT 1 FROM library_execution_conversations x WHERE x.id=?1 AND NOT EXISTS(
-          SELECT 1 FROM library_execution_workspaces w WHERE w.id=x.workspace_id AND json_extract(CAST(w.payload AS TEXT),'$.kind')='mac'))
+        AND NOT EXISTS(SELECT 1 FROM device_execution_conversations x WHERE x.id=?1 AND NOT EXISTS(
+          SELECT 1 FROM device_execution_workspaces w WHERE w.id=x.workspace_id AND json_extract(CAST(w.payload AS TEXT),'$.kind')='mac'))
       """, values: [conversation, local]).isEmpty == false
   }
 
@@ -838,10 +839,10 @@ extension WorkspaceDatabaseConnection {
     let macWorkspaces = Set(workspaces.filter { $0.kind == .mac }.map(\.id))
     for row in rows {
       guard let id = row.objectValue?["id"]?.stringValue, let owner = row.objectValue?["device_id"]?.stringValue else { continue }
-      let current = try historyRowsUnlocked("SELECT workspace_id FROM library_execution_conversations WHERE id=?", values: [id]).first?.objectValue?["workspace_id"]?.stringValue
+      let current = try historyRowsUnlocked("SELECT workspace_id FROM device_execution_conversations WHERE id=?", values: [id]).first?.objectValue?["workspace_id"]?.stringValue
       if let current, !macWorkspaces.contains(current) { continue }
       if owner == localID {
-        if current != nil { try toolsExecuteUnlocked("DELETE FROM library_execution_conversations WHERE id=?", [id]) }
+        if current != nil { try toolsExecuteUnlocked("DELETE FROM device_execution_conversations WHERE id=?", [id]) }
         continue
       }
       guard let workspace = workspaces.first(where: { $0.kind == .mac && $0.ownerDeviceID == owner && !$0.deleted }),
@@ -853,7 +854,7 @@ extension WorkspaceDatabaseConnection {
         projected.isPinned = current["is_pinned"]?.doubleValue == 1
       }
       let transcript = try federationLegacyTranscriptUnlocked(id)
-      let query = try prepareUnlocked("INSERT INTO library_execution_conversations(id,workspace_id,conversation,transcript) VALUES(?,?,?,?) ON CONFLICT(id) DO UPDATE SET workspace_id=excluded.workspace_id,conversation=excluded.conversation,transcript=excluded.transcript")
+      let query = try prepareUnlocked("INSERT INTO device_execution_conversations(id,workspace_id,conversation,transcript) VALUES(?,?,?,?) ON CONFLICT(id) DO UPDATE SET workspace_id=excluded.workspace_id,conversation=excluded.conversation,transcript=excluded.transcript")
       defer { sqlite3_finalize(query) }
       try bind(id, at: 1, to: query); try bind(workspace.id, at: 2, to: query)
       try bind(JSONEncoder().encode(projected), at: 3, to: query); try bind(JSONEncoder().encode(transcript), at: 4, to: query); try stepDone(query)

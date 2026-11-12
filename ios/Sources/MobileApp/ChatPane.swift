@@ -328,7 +328,7 @@ struct PendingInteractionView: View {
       Text(model.selectedExecutionWorkspaceID == "local" ? "This action runs on this device." : "The first valid answer on any authorized device wins.").font(.caption2).foregroundStyle(DashboardPalette.mutedForeground)
     }.disabled(!model.executionOnline || responding).padding(16).background(theme.palette.themeWhisper, in: RoundedRectangle(cornerRadius: DashboardMetrics.cardRadius, style: .continuous))
   }
-  private func respond(_ response: LibraryInteractionResponse) {
+  private func respond(_ response: InteractionResponse) {
     responding = true
     Task { await model.respond(interaction, response: response); responding = false }
   }

@@ -855,7 +855,7 @@ private final class LegacyCentralTransport: LibraryTransport, @unchecked Sendabl
     func snapshot() async throws -> LibrarySnapshot { throw MobileConnectionError.offline }
     func changes(after: Int64) async throws -> LibraryChangePage { throw MobileConnectionError.offline }
     func note(_ id: String) async throws -> LibraryNote { throw MobileConnectionError.offline }
-    func providers() async throws -> [LibraryProvider] { throw MobileConnectionError.offline }
+    func providers() async throws -> [HarnessCapabilities] { throw MobileConnectionError.offline }
     func pending() async throws -> [PendingInteraction] { throw MobileConnectionError.offline }
     func transcript(_ id: String) async throws -> LibraryTranscript { throw MobileConnectionError.offline }
     func command(_ command: LibraryCommand) async throws -> LibraryCommandReceipt { throw MobileConnectionError.offline }

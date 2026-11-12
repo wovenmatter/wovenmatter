@@ -602,7 +602,7 @@ final class CentralLibraryClientModel {
             else { earlier = try await transport?.transcript(id, before: before) }
         }
         let owner = executionOwner(for: id) ?? "central"
-        var provider: LibraryProvider?
+        var provider: HarnessCapabilities?
         var interactions: [PendingInteraction] = []
         var refreshError: String?
         do {
@@ -617,7 +617,7 @@ final class CentralLibraryClientModel {
         }
         } catch { refreshError = error.localizedDescription }
         await reload()
-        var settings: LibrarySessionSettings?
+        var settings: SessionSettings?
         if case .session(let value) = try? await workspace(.session(id: id)) { settings = value }
         let descriptor = journal.workspaces[owner] ?? ExecutionWorkspace(id: owner,
             libraryID: state.workspaceID ?? "", ownerDeviceID: owner, kind: .mac, name: "Production", capabilities: ["execution.v1"])
@@ -658,7 +658,7 @@ final class CentralLibraryClientModel {
             await refresh(); return true
         } catch { errorMessage = error.localizedDescription; return false }
     }
-    func linkedData(note: LibraryNote, tableID: String? = nil) async throws -> LibraryLinkedData {
+    func linkedData(note: LibraryNote, tableID: String? = nil) async throws -> LinkedDataPreview {
         guard online, let engine else { throw MobileConnectionError.offline }
         let result = try await engine.linkedData(note: note, tableID: tableID)
         guard state.notes[note.id]?.revision == note.revision else { throw CancellationError() }

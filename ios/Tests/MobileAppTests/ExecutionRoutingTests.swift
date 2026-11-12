@@ -22,9 +22,9 @@ private actor ExecutionTestWorkspace: ExecutionWorkspaceTransport {
     if identityOffline { throw MobileConnectionError.offline }
     return workspace
   }
-  func providers() async throws -> [LibraryProvider] { [.init(id: "pi", runtimeKind: "pi", displayName: "Pi Durable", available: true)] }
+  func providers() async throws -> [HarnessCapabilities] { [.init(id: "pi", runtimeKind: "pi", displayName: "Pi Durable", available: true)] }
   func pending() async throws -> [PendingInteraction] { [] }
-  func capabilities(_ id: String) async throws -> LibraryProvider { .init(id: "pi", runtimeKind: "pi", displayName: "Pi Durable", available: true) }
+  func capabilities(_ id: String) async throws -> HarnessCapabilities { .init(id: "pi", runtimeKind: "pi", displayName: "Pi Durable", available: true) }
   func command(_ command: LibraryCommand) async throws -> LibraryCommandReceipt {
     commands.append(command)
     let receipt = LibraryCommandReceipt(commandID: command.commandID, deviceID: command.deviceID, status: .completed, conversationID: command.conversationID)
@@ -44,7 +44,7 @@ private actor ExecutionTestWorkspace: ExecutionWorkspaceTransport {
     return folder
   }
   func receipt(_ id: String) async throws -> LibraryCommandReceipt? { receipts[id] }
-  func events(after: Int64) async throws -> LibraryJournalPage { .init(libraryID: workspace.libraryID, cursor: after) }
+  func events(after: Int64) async throws -> ExecutionJournalPage { .init(libraryID: workspace.libraryID, cursor: after) }
   func conversations() async throws -> [LibraryConversation] { [] }
   func transcript(_ id: String) async throws -> LibraryTranscript { .init(conversationID: id) }
   func readWorkspace(_ request: LibraryWorkspaceRead) async throws -> LibraryWorkspaceResult {
@@ -182,7 +182,7 @@ final class ExecutionRoutingTests: XCTestCase {
       ownerDeviceID: "other-owner", kind: .mac, name: "Another Mac")
     try await store.journal.bind(libraryID: "library")
     for workspace in [central, other] { try await store.journal.upsertWorkspace(workspace, pending: false) }
-    let provider = LibraryProvider(id: "local:codex", runtimeKind: "codex", displayName: "Codex", available: true)
+    let provider = HarnessCapabilities(id: "local:codex", runtimeKind: "codex", displayName: "Codex", available: true)
     model.executionWorkspaces = [other, central]
     model.providers = [provider]; model.workspaceProviders = [central.id: [provider], other.id: [provider]]
     model.workspaceReachable = [central.id: true, other.id: true]; model.online = false
@@ -211,7 +211,7 @@ final class ExecutionRoutingTests: XCTestCase {
     let disconnected = ExecutionWorkspace(id: "disconnected", libraryID: "library", ownerDeviceID: "owner", kind: .linux, name: "Disconnected")
     model.executionWorkspaces = [connected, disconnected]
     model.workspaceReachable = [connected.id: true, disconnected.id: false]
-    let agent = LibraryProvider(id: "pi", runtimeKind: "pi", displayName: "Pi Durable", available: true)
+    let agent = HarnessCapabilities(id: "pi", runtimeKind: "pi", displayName: "Pi Durable", available: true)
     model.workspaceProviders = [connected.id: [agent], disconnected.id: [agent]]
     model.workspaceClients[connected.id] = WorkspaceClient(store: try XCTUnwrap(model.store), workspaceID: connected.id, transport: ExecutionTestWorkspace(connected))
     model.providers = [agent]; model.online = false; model.selectedConversationID = "existing-chat"

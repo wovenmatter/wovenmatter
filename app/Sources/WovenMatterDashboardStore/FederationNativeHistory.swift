@@ -12,7 +12,7 @@ import CSQLite
 import WovenMatterCore
 
 extension WorkspaceDatabaseConnection {
-  func archiveLibraryNativeRecordUnlocked(_ part: NativeRecordPart, entry: LibraryJournalEntry) throws {
+  func archiveLibraryNativeRecordUnlocked(_ part: NativeRecordPart, entry: ExecutionJournalEntry) throws {
     guard !part.recordID.isEmpty, part.recordID.utf8.count <= 256, !part.format.isEmpty, part.format.utf8.count <= 120,
           part.partCount > 0, part.partCount <= 65_536, part.partIndex >= 0, part.partIndex < part.partCount,
           part.byteCount >= 0, part.byteCount <= 512 * 1_024 * 1_024,
@@ -22,7 +22,7 @@ extension WorkspaceDatabaseConnection {
           part.sha256.utf8.allSatisfy({ (48...57).contains($0) || (97...102).contains($0) }) else {
       throw federationError("invalid_record", "Native history records require bounded parts and a complete-record digest.")
     }
-    let lookup = try prepareUnlocked("SELECT conversation_id,run_id,format,part_count,byte_count,sha256 FROM library_native_history WHERE workspace_id=? AND record_id=?")
+    let lookup = try prepareUnlocked("SELECT conversation_id,run_id,format,part_count,byte_count,sha256 FROM device_native_history WHERE workspace_id=? AND record_id=?")
     defer { sqlite3_finalize(lookup) }
     try bind(entry.workspaceID, at: 1, to: lookup); try bind(part.recordID, at: 2, to: lookup)
     let code = sqlite3_step(lookup)
@@ -34,14 +34,14 @@ extension WorkspaceDatabaseConnection {
       }
     } else {
       guard code == SQLITE_DONE else { throw stepError() }
-      let insert = try prepareUnlocked("INSERT INTO library_native_history(workspace_id,record_id,conversation_id,run_id,format,part_count,byte_count,sha256) VALUES (?,?,?,?,?,?,?,?)")
+      let insert = try prepareUnlocked("INSERT INTO device_native_history(workspace_id,record_id,conversation_id,run_id,format,part_count,byte_count,sha256) VALUES (?,?,?,?,?,?,?,?)")
       defer { sqlite3_finalize(insert) }
       try bind(entry.workspaceID, at: 1, to: insert); try bind(part.recordID, at: 2, to: insert)
       try bind(entry.conversationID, at: 3, to: insert); try bindNullable(entry.runID, at: 4, to: insert)
       try bind(part.format, at: 5, to: insert); sqlite3_bind_int(insert, 6, Int32(part.partCount))
       sqlite3_bind_int64(insert, 7, part.byteCount); try bind(part.sha256, at: 8, to: insert); try stepDone(insert)
     }
-    let previous = try prepareUnlocked("SELECT bytes FROM library_native_history_parts WHERE workspace_id=? AND record_id=? AND part_index=?")
+    let previous = try prepareUnlocked("SELECT bytes FROM device_native_history_parts WHERE workspace_id=? AND record_id=? AND part_index=?")
     defer { sqlite3_finalize(previous) }
     try bind(entry.workspaceID, at: 1, to: previous); try bind(part.recordID, at: 2, to: previous); sqlite3_bind_int(previous, 3, Int32(part.partIndex))
     let previousCode = sqlite3_step(previous)
@@ -50,17 +50,17 @@ extension WorkspaceDatabaseConnection {
       return
     }
     guard previousCode == SQLITE_DONE else { throw stepError() }
-    let storedBytes = try federationScalarUnlocked("SELECT COALESCE(SUM(length(bytes)),0) FROM library_native_history_parts WHERE workspace_id=? AND record_id=?", bindings: [entry.workspaceID, part.recordID])
+    let storedBytes = try federationScalarUnlocked("SELECT COALESCE(SUM(length(bytes)),0) FROM device_native_history_parts WHERE workspace_id=? AND record_id=?", bindings: [entry.workspaceID, part.recordID])
     guard storedBytes <= part.byteCount - Int64(part.data.count) else {
       throw federationError("invalid_record", "Native history parts exceed the declared record size.")
     }
-    let insert = try prepareUnlocked("INSERT INTO library_native_history_parts VALUES (?,?,?,?)")
+    let insert = try prepareUnlocked("INSERT INTO device_native_history_parts VALUES (?,?,?,?)")
     defer { sqlite3_finalize(insert) }
     try bind(entry.workspaceID, at: 1, to: insert); try bind(part.recordID, at: 2, to: insert)
     sqlite3_bind_int(insert, 3, Int32(part.partIndex)); try bind(part.data, at: 4, to: insert); try stepDone(insert)
-    let count = try federationScalarUnlocked("SELECT COUNT(*) FROM library_native_history_parts WHERE workspace_id=? AND record_id=?", bindings: [entry.workspaceID, part.recordID])
+    let count = try federationScalarUnlocked("SELECT COUNT(*) FROM device_native_history_parts WHERE workspace_id=? AND record_id=?", bindings: [entry.workspaceID, part.recordID])
     guard count == part.partCount else { return }
-    let chunks = try prepareUnlocked("SELECT part_index,bytes FROM library_native_history_parts WHERE workspace_id=? AND record_id=? ORDER BY part_index")
+    let chunks = try prepareUnlocked("SELECT part_index,bytes FROM device_native_history_parts WHERE workspace_id=? AND record_id=? ORDER BY part_index")
     defer { sqlite3_finalize(chunks) }
     try bind(entry.workspaceID, at: 1, to: chunks); try bind(part.recordID, at: 2, to: chunks)
     var hash = SHA256(); var index = 0; var size: Int64 = 0; var searchBytes = Data()
@@ -74,7 +74,7 @@ extension WorkspaceDatabaseConnection {
     guard size == part.byteCount, hash.finalize().hexString == part.sha256 else {
       throw federationError("record_digest", "Native history record integrity failed. The source must retain its unacknowledged history.")
     }
-    try toolsExecuteUnlocked("UPDATE library_native_history SET complete=1 WHERE workspace_id=? AND record_id=?", [entry.workspaceID, part.recordID])
+    try toolsExecuteUnlocked("UPDATE device_native_history SET complete=1 WHERE workspace_id=? AND record_id=?", [entry.workspaceID, part.recordID])
     // Reasoning v2 records are derived disclosure checkpoints/suffixes, not
     // additional source history. Keep verified retrieval without duplicating
     // search hits for every streamed revision. Legacy v1 indexing is unchanged.
@@ -82,7 +82,7 @@ extension WorkspaceDatabaseConnection {
     // The canonical searchable archive points at the complete chunked record.
     // Only its search excerpt is bounded; retrieval uses the verified manifest.
     let manifest: [String: String] = ["workspaceID": entry.workspaceID, "recordID": part.recordID, "format": part.format,
-      "partCount": String(part.partCount), "byteCount": String(part.byteCount), "sha256": part.sha256, "storage": "library_native_history"]
+      "partCount": String(part.partCount), "byteCount": String(part.byteCount), "sha256": part.sha256, "storage": "device_native_history"]
     let payload = String(decoding: try JSONEncoder().encode(manifest), as: UTF8.self)
     let runtime = try federationConversationUnlocked(entry.conversationID)?.runtimeKind ?? "unknown"
     try recordHistoryUnlocked(.init(id: "federation:" + entry.workspaceID + ":" + part.recordID,
@@ -95,8 +95,8 @@ extension WorkspaceDatabaseConnection {
   func libraryNativeRecordsLocked(workspaceID: String, format: String, maximumBytes: Int64) throws -> [StoredNativeRecord] {
     try withLock {
       let statement = try prepareUnlocked("""
-        SELECT n.record_id,n.conversation_id,p.bytes FROM library_native_history n
-        JOIN library_native_history_parts p ON p.workspace_id=n.workspace_id AND p.record_id=n.record_id
+        SELECT n.record_id,n.conversation_id,p.bytes FROM device_native_history n
+        JOIN device_native_history_parts p ON p.workspace_id=n.workspace_id AND p.record_id=n.record_id
         WHERE n.workspace_id=? AND n.format=? AND n.complete=1 AND n.byte_count<=?
         ORDER BY n.rowid,p.part_index
         """)
@@ -130,7 +130,7 @@ extension WorkspaceDatabaseConnection {
 
   public func libraryNativeHistoryPart(workspaceID: String, recordID: String, partIndex: Int) throws -> NativeRecordPart? {
     try withLock {
-      let statement = try prepareUnlocked("SELECT n.format,n.part_count,n.byte_count,n.sha256,p.bytes FROM library_native_history n JOIN library_native_history_parts p ON p.workspace_id=n.workspace_id AND p.record_id=n.record_id WHERE n.workspace_id=? AND n.record_id=? AND n.complete=1 AND p.part_index=?")
+      let statement = try prepareUnlocked("SELECT n.format,n.part_count,n.byte_count,n.sha256,p.bytes FROM device_native_history n JOIN device_native_history_parts p ON p.workspace_id=n.workspace_id AND p.record_id=n.record_id WHERE n.workspace_id=? AND n.record_id=? AND n.complete=1 AND p.part_index=?")
       defer { sqlite3_finalize(statement) }
       try bind(workspaceID, at: 1, to: statement); try bind(recordID, at: 2, to: statement); sqlite3_bind_int(statement, 3, Int32(clamping: partIndex))
       let code = sqlite3_step(statement)

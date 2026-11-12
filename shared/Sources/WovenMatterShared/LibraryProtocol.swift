@@ -143,7 +143,7 @@ public struct LibraryTranscript: Codable, Equatable, Sendable {
   }
 }
 
-public struct LibraryProvider: Codable, Equatable, Identifiable, Sendable {
+public struct HarnessCapabilities: Codable, Equatable, Identifiable, Sendable {
   public var id: String
   public var runtimeKind: String
   public var displayName: String
@@ -165,21 +165,21 @@ public struct LibraryProvider: Codable, Equatable, Identifiable, Sendable {
   }
 }
 
-public struct LibraryInteractionOption: Codable, Equatable, Identifiable, Sendable {
+public struct InteractionOption: Codable, Equatable, Identifiable, Sendable {
   public var id: String
   public var label: String
   public var detail: String?
   public init(id: String, label: String, detail: String? = nil) { self.id = id; self.label = label; self.detail = detail }
 }
-public struct LibraryQuestion: Codable, Equatable, Identifiable, Sendable {
+public struct AgentQuestion: Codable, Equatable, Identifiable, Sendable {
   public var id: String
   public var prompt: String
-  public var options: [LibraryInteractionOption]
+  public var options: [InteractionOption]
   public var allowsMultiple: Bool
   public var allowsFreeText: Bool
   public var required: Bool?
   public var isRequired: Bool { required ?? true }
-  public init(id: String, prompt: String, options: [LibraryInteractionOption] = [], allowsMultiple: Bool = false, allowsFreeText: Bool = true, required: Bool? = nil) {
+  public init(id: String, prompt: String, options: [InteractionOption] = [], allowsMultiple: Bool = false, allowsFreeText: Bool = true, required: Bool? = nil) {
     self.id = id; self.prompt = prompt; self.options = options; self.allowsMultiple = allowsMultiple; self.allowsFreeText = allowsFreeText
     self.required = required
   }
@@ -192,14 +192,14 @@ public struct PendingInteraction: Codable, Equatable, Identifiable, Sendable {
   public var kind: Kind
   public var title: String
   public var detail: String?
-  public var options: [LibraryInteractionOption]
-  public var questions: [LibraryQuestion]
-  public init(id: String, conversationID: String, runID: String?, kind: Kind, title: String, detail: String? = nil, options: [LibraryInteractionOption] = [], questions: [LibraryQuestion] = []) {
+  public var options: [InteractionOption]
+  public var questions: [AgentQuestion]
+  public init(id: String, conversationID: String, runID: String?, kind: Kind, title: String, detail: String? = nil, options: [InteractionOption] = [], questions: [AgentQuestion] = []) {
     self.id = id; self.conversationID = conversationID; self.runID = runID; self.kind = kind
     self.title = title; self.detail = detail; self.options = options; self.questions = questions
   }
 }
-public struct LibraryInteractionResponse: Codable, Equatable, Sendable {
+public struct InteractionResponse: Codable, Equatable, Sendable {
   public var optionID: String?
   public var answers: [String: [String]]
   public var cancelled: Bool
@@ -295,11 +295,11 @@ public struct LibraryCommand: Codable, Equatable, Sendable {
   public var noteRevision: Int64?
   public var interactionID: String?
   public var workspaceAction: LibraryWorkspaceAction?
-  public var response: LibraryInteractionResponse?
+  public var response: InteractionResponse?
   /// `createSession` only: the new session's title, applied as it is created.
   /// Older destinations ignore it, so callers still follow with a rename.
   public var title: String?
-  public init(commandID: String = UUID().uuidString.lowercased(), deviceID: String, kind: Kind, conversationID: String? = nil, runID: String? = nil, providerID: String? = nil, routeID: String? = nil, runtimeKind: String? = nil, folderID: String? = nil, text: String? = nil, noteID: String? = nil, noteRevision: Int64? = nil, interactionID: String? = nil, response: LibraryInteractionResponse? = nil, workspaceAction: LibraryWorkspaceAction? = nil, libraryID: String? = nil, workspaceID: String? = nil, title: String? = nil) {
+  public init(commandID: String = UUID().uuidString.lowercased(), deviceID: String, kind: Kind, conversationID: String? = nil, runID: String? = nil, providerID: String? = nil, routeID: String? = nil, runtimeKind: String? = nil, folderID: String? = nil, text: String? = nil, noteID: String? = nil, noteRevision: Int64? = nil, interactionID: String? = nil, response: InteractionResponse? = nil, workspaceAction: LibraryWorkspaceAction? = nil, libraryID: String? = nil, workspaceID: String? = nil, title: String? = nil) {
     self.libraryID = libraryID; self.workspaceID = workspaceID; self.title = title
     self.commandID = commandID; self.deviceID = deviceID; self.kind = kind; self.conversationID = conversationID
     self.runID = runID; self.providerID = providerID; self.routeID = routeID; self.runtimeKind = runtimeKind; self.folderID = folderID

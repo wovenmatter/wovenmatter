@@ -12,9 +12,9 @@ public protocol LibraryCommandServing: AnyObject {
     func analyticsPreference() async throws -> ProductAnalyticsPreference
     func setAnalyticsPreference(_ change: ProductAnalyticsPreferenceChange) async throws -> ProductAnalyticsPreference
     func ingestAnalytics(_ batch: ProductAnalyticsBatch) async throws -> ProductAnalyticsAcknowledgement
-    func providers() -> [LibraryProvider]
+    func providers() -> [HarnessCapabilities]
     func pendingInteractions() async -> [PendingInteraction]
-    func sessionCapabilities(conversationID: String) async throws -> LibraryProvider
+    func sessionCapabilities(conversationID: String) async throws -> HarnessCapabilities
     func transcript(conversationID: String, before: String?) async throws -> LibraryTranscript
     func receipt(commandID: String, deviceID: String) async throws -> LibraryCommandReceipt?
     func execute(_ command: LibraryCommand, deviceID: String) async throws -> LibraryCommandReceipt
@@ -187,7 +187,7 @@ private extension LibraryWorkspaceAPI {
             }
             return date
         }
-        let preparation = try decoder.decode(LibraryScheduledMCPPreparation.self, from: request.body)
+        let preparation = try decoder.decode(ScheduledMCPPreparation.self, from: request.body)
         let enabled = try await database.prepareLibraryScheduledMCP(preparation, principal: principal)
         guard isActive() else { return .error("unavailable", "The library MCP host stopped.", status: 503) }
         _ = try await caller.current()
@@ -551,7 +551,7 @@ public final class LibraryWorkspaceAPI {
                     let data = try await linkedData(link)
                     guard isActive() else { return .error("unavailable", "Sharing with devices is stopped.", status: 503) }
                     try await reauthenticate(device, bearer: bearer)
-                    let response = try LibraryHTTPResponse.json(LibraryLinkedData(noteID: note.id, noteRevision: note.revision,
+                    let response = try LibraryHTTPResponse.json(LinkedDataPreview(noteID: note.id, noteRevision: note.revision,
                         tableID: tableID, columns: data.columns, rows: data.rows, json: data.json))
                     guard response.body.count <= 32 * 1_024 * 1_024 else {
                         return .error("preview_too_large", "Open this large database preview on your Mac.", status: 413)

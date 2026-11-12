@@ -324,7 +324,7 @@ final class LibraryHostController {
     }
 
     /// Only `/v1/bots/ws` upgrades: a member's WebSocket to this Mac's bots runtime.
-    private func upgrade(_ request: LibraryHTTPRequest, generation expected: UUID) async -> LibraryUpgradeDecision {
+    private func upgrade(_ request: LibraryHTTPRequest, generation expected: UUID) async -> WebSocketUpgradeDecision {
         guard generation == expected else { return .reject(.error("unavailable", "This sharing session has stopped.", status: 503)) }
         let path = request.target.split(separator: "?", maxSplits: 1).first.map(String.init) ?? request.target
         guard path == "/v1/bots/ws" || path == "/wovenmatter/v1/bots/ws" else {

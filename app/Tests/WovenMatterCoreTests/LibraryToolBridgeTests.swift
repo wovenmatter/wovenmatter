@@ -108,7 +108,7 @@ struct LibraryToolBridgeTests {
       let workspace = try await database.registerExecutionWorkspace(.init(workspace: .init(
         id: UUID().uuidString.lowercased(), libraryID: identity.libraryID, ownerDeviceID: registrar,
         kind: kind, name: "Device", executionDeviceID: executionDeviceID)), deviceID: registrar)
-      let batch = LibraryJournalBatch(libraryID: identity.libraryID, entries: [
+      let batch = ExecutionJournalBatch(libraryID: identity.libraryID, entries: [
         .init(workspaceID: workspace.id, originSequence: 1, conversationID: conversationID, kind: .conversation,
           conversation: .init(id: conversationID, title: "Device agent", runtimeKind: "piDurable"))
       ])
@@ -121,7 +121,7 @@ struct LibraryToolBridgeTests {
           body: try JSONEncoder().encode(batch))
         #expect(try await LibraryWorkspacePublisherAPI.handle(request, path: path, database: database).status == 200)
       } else {
-        _ = try await database.ingestLibraryJournal(batch, deviceID: executionDeviceID ?? deviceID)
+        _ = try await database.ingestExecutionJournal(batch, deviceID: executionDeviceID ?? deviceID)
       }
       #expect(try await database.libraryExecutionOwner(conversationID: conversationID) == workspace.id)
     }

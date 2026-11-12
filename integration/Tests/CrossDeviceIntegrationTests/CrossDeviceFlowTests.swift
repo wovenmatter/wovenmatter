@@ -129,7 +129,7 @@ struct CrossDeviceFlowTests {
     }
     let (bytes, status) = try await get("/v1/assets/\(id)/linked-data?path=/etc/passwd&sql=DELETE")
     #expect(status == 200)
-    let live = try JSONDecoder().decode(LibraryLinkedData.self, from: bytes)
+    let live = try JSONDecoder().decode(LinkedDataPreview.self, from: bytes)
     #expect(live.noteRevision == before.revision && live.noteID == id)
     #expect(live.rows == [["Current"]] && readLinks == [link])
     let (_, tableStatus) = try await get("/v1/assets/\(id)/linked-data?tableID=\(table.id)")
@@ -502,7 +502,7 @@ private actor APITransport: LibraryTransport, LibraryDictationTransport {
     return result
   }
   func note(_ id: String) async throws -> LibraryNote { try await request("/v1/notes/\(id)") }
-  func providers() async throws -> [LibraryProvider] { try await request("/v1/providers") }
+  func providers() async throws -> [HarnessCapabilities] { try await request("/v1/providers") }
   func pending() async throws -> [PendingInteraction] { try await request("/v1/pending") }
   func transcript(_ id: String) async throws -> LibraryTranscript { try await request("/v1/sessions/\(id)/transcript") }
   func command(_ command: LibraryCommand) async throws -> LibraryCommandReceipt {
@@ -548,9 +548,9 @@ private final class FakeCommands: LibraryCommandServing {
   private var startedWaiter: CheckedContinuation<Void, Never>?
   private var releaseWaiter: CheckedContinuation<Void, Never>?
   init(database: WorkspaceDatabase) { self.database = database; dispatcher = LibraryCommandDispatcher(database: database) }
-  func providers() -> [LibraryProvider] { [.init(id: "local:codex", runtimeKind: "codex", displayName: "Fixture Codex", available: true)] }
+  func providers() -> [HarnessCapabilities] { [.init(id: "local:codex", runtimeKind: "codex", displayName: "Fixture Codex", available: true)] }
   func pendingInteractions() -> [PendingInteraction] { [] }
-  func sessionCapabilities(conversationID: String) async throws -> LibraryProvider { providers()[0] }
+  func sessionCapabilities(conversationID: String) async throws -> HarnessCapabilities { providers()[0] }
   func transcript(conversationID: String, before: String?) async throws -> LibraryTranscript {
     let content = try await database.conversationContent(id: conversationID)
     return LibraryTranscript(conversationID: conversationID, messages: content.messages.map {

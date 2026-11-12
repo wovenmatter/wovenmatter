@@ -22,7 +22,7 @@ private actor CountingLibrary: OfflineLibraryTransport {
     if offline { throw MobileConnectionError.offline }
     return .init(workspaceID: "library-a", cursor: 1)
   }
-  func providers() async throws -> [LibraryProvider] {
+  func providers() async throws -> [HarnessCapabilities] {
     providerRequests += 1
     return [.init(id: "local:default_agent", runtimeKind: "default_agent", displayName: "Pi Durable", available: true),
             .init(id: "local:codex", runtimeKind: "codex", displayName: "Codex", available: codexReady, canStart: codexReady,
@@ -43,9 +43,9 @@ private actor SlowWorkspace: ExecutionWorkspaceTransport {
   var holding: Bool { held != nil }
   func release() { held?.resume(); held = nil }
   func identity() async throws -> ExecutionWorkspace { workspace }
-  func providers() async throws -> [LibraryProvider] { [.init(id: "pi", runtimeKind: "pi", displayName: "Pi Durable", available: true)] }
+  func providers() async throws -> [HarnessCapabilities] { [.init(id: "pi", runtimeKind: "pi", displayName: "Pi Durable", available: true)] }
   func pending() async throws -> [PendingInteraction] { [] }
-  func capabilities(_ id: String) async throws -> LibraryProvider { .init(id: "pi", runtimeKind: "pi", displayName: "Pi Durable", available: true) }
+  func capabilities(_ id: String) async throws -> HarnessCapabilities { .init(id: "pi", runtimeKind: "pi", displayName: "Pi Durable", available: true) }
   func command(_ command: LibraryCommand) async throws -> LibraryCommandReceipt {
     await withCheckedContinuation { held = $0 }
     let runID = "run-" + command.commandID
@@ -58,7 +58,7 @@ private actor SlowWorkspace: ExecutionWorkspaceTransport {
     return receipt
   }
   func receipt(_ id: String) async throws -> LibraryCommandReceipt? { receipts[id] }
-  func events(after: Int64) async throws -> LibraryJournalPage { .init(libraryID: workspace.libraryID, cursor: after) }
+  func events(after: Int64) async throws -> ExecutionJournalPage { .init(libraryID: workspace.libraryID, cursor: after) }
   func conversations() async throws -> [LibraryConversation] { [] }
   func transcript(_ id: String) async throws -> LibraryTranscript { transcriptValue }
 }
@@ -89,8 +89,8 @@ final class MemberMacsTests: XCTestCase {
     var membership = MobileMembershipState(deviceID: model.state.deviceID, pairedEndpoint: air.endpoint!, pairedHostDeviceID: airHost)
     membership.currentHost = .init(deviceID: airHost, kind: "mac", name: air.name, endpoint: air.endpoint!)
     model.membership = membership
-    let pi = LibraryProvider(id: "local:default_agent", runtimeKind: "default_agent", displayName: "Pi Durable", available: true)
-    let codex = LibraryProvider(id: "local:codex", runtimeKind: "codex", displayName: "Codex", available: true)
+    let pi = HarnessCapabilities(id: "local:default_agent", runtimeKind: "default_agent", displayName: "Pi Durable", available: true)
+    let codex = HarnessCapabilities(id: "local:codex", runtimeKind: "codex", displayName: "Codex", available: true)
     model.providers = [pi, .init(id: "local:codex", runtimeKind: "codex", displayName: "Codex", available: false, canStart: false)]
     model.workspaceProviders = [air.id: [pi, codex], mini.id: [pi, codex], linux.id: [pi]]
     model.workspaceReachable = [air.id: true, mini.id: true]

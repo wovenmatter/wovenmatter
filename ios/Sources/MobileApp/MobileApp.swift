@@ -254,7 +254,7 @@ struct HomePane: View {
     if model.credential == nil {
       SettingsNavigationRow(title: "Connect your Mac", icon: .monitor) { PairingPane(model: model) }
         .accessibilityIdentifier("home-connect-mac")
-      homeCaption("Pair with Woven Matter on your Mac to use its workspaces and agents here and sync your notes and chats. Everything on this iPhone is kept.")
+      homeCaption("Pair with Woven Matter on your Mac to use its workspaces and agents here and sync your notes and chats. Everything on \(model.deviceWorkspaceName.lowercased()) is kept.")
         .accessibilityIdentifier("home-connect-mac-caption")
     } else {
       if model.needsMemberPairing {
@@ -268,7 +268,7 @@ struct HomePane: View {
     Text(text).font(.caption).foregroundStyle(DashboardPalette.mutedForeground)
       .frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 14).padding(.bottom, 12)
   }
-  @ViewBuilder private func workspaceAgents(_ group: LibraryAgentGroup) -> some View {
+  @ViewBuilder private func workspaceAgents(_ group: AgentGroup) -> some View {
     if group.agents.isEmpty, let workspace = group.workspace {
       SettingsNavigationRow(title: workspace.name, icon: workspace.kind == .mac ? .monitor : .container) {
         WorkspaceSettingsPane(model: model, workspace: workspace)
@@ -294,7 +294,7 @@ struct HomePane: View {
         .background(theme.palette.themeWhisper, in: RoundedRectangle(cornerRadius: DashboardMetrics.cardRadius, style: .continuous))
     }.buttonStyle(.plain)
   }
-  private func agentRow(_ agent: LibraryAgentLauncher) -> some View {
+  private func agentRow(_ agent: LaunchableAgent) -> some View {
     WorkspaceRow(icon: MobileAgentIcon(runtimeKind: agent.runtimeKind, size: 24), title: agent.name, detail: agent.workspaceName) {
       Task { await model.launchAgent(agent) }
     }.disabled(!agent.isAvailable).accessibilityIdentifier("launch-agent-" + agent.id)

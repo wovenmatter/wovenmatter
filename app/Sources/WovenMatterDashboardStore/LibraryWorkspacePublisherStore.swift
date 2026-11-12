@@ -36,7 +36,7 @@ extension WorkspaceDatabaseConnection {
       guard let token = GrantSecrets.randomToken() else { throw federationError("unavailable", "Unable to create a workspace publisher.") }
       let record = WorkspacePublisherRecord(grantID: UUID().uuidString.lowercased(), workspaceID: workspaceID,
         libraryID: identity.libraryID, executionDeviceID: executor, endpoint: endpoint)
-      let statement = try prepareUnlocked("INSERT INTO library_workspace_publishers(workspace_id,digest,payload) VALUES (?,?,?) ON CONFLICT(workspace_id) DO UPDATE SET digest=excluded.digest,payload=excluded.payload")
+      let statement = try prepareUnlocked("INSERT INTO device_workspace_publishers(workspace_id,digest,payload) VALUES (?,?,?) ON CONFLICT(workspace_id) DO UPDATE SET digest=excluded.digest,payload=excluded.payload")
       defer { sqlite3_finalize(statement) }
       try bind(workspaceID, at: 1, to: statement); try bind(Data(SHA256.hash(data: Data(token.utf8))), at: 2, to: statement)
       try bind(JSONEncoder().encode(record), at: 3, to: statement); try stepDone(statement)
@@ -45,7 +45,7 @@ extension WorkspaceDatabaseConnection {
   }
   public func libraryWorkspacePublisherMatches(workspaceID: String, grantID: String, endpoint: URL) throws -> Bool {
     try withLock {
-      guard let record = try federationValuesUnlocked("SELECT payload FROM library_workspace_publishers WHERE workspace_id=?", bindings: [workspaceID], as: WorkspacePublisherRecord.self).first,
+      guard let record = try federationValuesUnlocked("SELECT payload FROM device_workspace_publishers WHERE workspace_id=?", bindings: [workspaceID], as: WorkspacePublisherRecord.self).first,
             let workspace = try federationWorkspaceUnlocked(workspaceID), !workspace.deleted else { return false }
       return record.grantID == grantID && record.endpoint == endpoint && record.executionDeviceID == workspace.executionDeviceID
     }
@@ -53,7 +53,7 @@ extension WorkspaceDatabaseConnection {
   public func authenticateLibraryWorkspacePublisher(bearer: String) throws -> LibraryWorkspacePublisherPrincipal {
     try withLock {
       guard (32...256).contains(bearer.utf8.count) else { throw federationError("unauthorized", "Invalid workspace publisher.") }
-      let statement = try prepareUnlocked("SELECT payload FROM library_workspace_publishers WHERE digest=?")
+      let statement = try prepareUnlocked("SELECT payload FROM device_workspace_publishers WHERE digest=?")
       defer { sqlite3_finalize(statement) }
       try bind(Data(SHA256.hash(data: Data(bearer.utf8))), at: 1, to: statement)
       guard sqlite3_step(statement) == SQLITE_ROW else { throw federationError("unauthorized", "Invalid workspace publisher.") }

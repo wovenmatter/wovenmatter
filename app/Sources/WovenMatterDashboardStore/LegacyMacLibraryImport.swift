@@ -77,13 +77,13 @@ extension WorkspaceDatabase {
           "workspace_history_schema", "workspace_tool_schema", "desktop_dashboard_revision", "desktop_activity_revision",
           "desktop_activity_index", "desktop_activity_index_schema", "desktop_message_revisions", "workspace_tool_settings",
           // Federation, replica and identity state in the former central library's namespace.
-          "library_workspace", "library_identity", "library_changes", "library_versions",
-          "library_mutation_receipts", "library_workspace_publishers", "library_execution_workspaces",
-          "library_execution_journal", "library_execution_conversations", "library_execution_runs",
-          "library_execution_adoptions", "library_execution_replica_context", "library_retained_settlements",
-          "library_native_history", "library_native_history_parts", "library_calendar_owners",
-          "library_calendar_run_owners", "library_calendar_runs", "library_calendar_receipts",
-          "library_calendar_execution_context", "library_calendar_execution_conflicts"])
+          "device_workspace", "library_identity", "device_changes", "device_versions",
+          "device_mutation_receipts", "device_workspace_publishers", "device_execution_workspaces",
+          "device_execution_journal", "device_execution_conversations", "device_execution_runs",
+          "device_execution_adoptions", "device_execution_replica_context", "device_retained_settlements",
+          "device_native_history", "device_native_history_parts", "device_calendar_owners",
+          "device_calendar_run_owners", "device_calendar_runs", "device_calendar_receipts",
+          "device_calendar_execution_context", "device_calendar_execution_conflicts"])
           .union(Self.legacyProjectionTables)
         let tables = try connection.historyRowsUnlocked("SELECT name,sql FROM legacy_mac.sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name", values: [])
         for item in tables {

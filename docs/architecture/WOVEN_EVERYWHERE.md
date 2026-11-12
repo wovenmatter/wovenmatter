@@ -263,7 +263,7 @@ same commit.
   (`BotUpdatePlan.Step.linuxHost`) updates every Linux host in the registry
   this way (`RemoteWorkspacesModel.runSharedHost(_:.update)`); SSH is only
   the fallback for a host this Mac added. A Linux host's sessions use any
-  Mac's `/mcp/workspace` once the session's `library_execution_conversations`
+  Mac's `/mcp/workspace` once the session's `device_execution_conversations`
   row has synchronized there, whichever Mac added the host. On a Mac, other
   Macs' agents (including those for Linux hosts they added) sync as peer
   agents (`pairedAgentWorkspaces`), and a new chat with one is created on its
@@ -388,7 +388,7 @@ among Macs that still stand; they never decide who wins a dispute.
     column as it was records nothing. Writers that run on a timer compare
     first: the Mac's 5-second registry refresh rewrites a
     `paired_remote_workspaces` configuration (stored as sorted-key JSON) or a
-    `library_execution_workspaces` registration only when its decoded value
+    `device_execution_workspaces` registration only when its decoded value
     changed.
   - Triggers: a write that appends to the change log
     (`WorkspaceDatabase.observePeerChanges`) is announced, debounced 300 ms,
@@ -408,11 +408,11 @@ among Macs that still stand; they never decide who wins a dispute.
     against the sender. Member entries and removals are never deleted, must
     match their signed payload, never roll back to an older entry and never
     rewrite a removal (otherwise quarantined, or skipped when merely stale).
-    A Linux host (any sender but a Mac) writes `library_execution_workspaces`
+    A Linux host (any sender but a Mac) writes `device_execution_workspaces`
     only for the workspace it serves itself (`MemberAudience.serving`, before
-    and after the change), `library_execution_conversations` only for that
+    and after the change), `device_execution_conversations` only for that
     workspace's sessions, owner rows (`paired_*_owners`,
-    `library_calendar_owners`, `library_calendar_run_owners`) only naming
+    `device_calendar_owners`, `device_calendar_run_owners`) only naming
     itself, and never `paired_mac_routes` or `paired_remote_workspaces`. Other
     such rows it relays are skipped; they arrive from a Mac directly.
   - HTTP deadlines (both the Mac listener and `LibrarySocketHTTPServer`,
@@ -453,6 +453,15 @@ among Macs that still stand; they never decide who wins a dispute.
   signed `GET /v1/sync/status` on every Mac and Linux host. On a Mac, a peer
   in `updateRequired` raises the same "Versions don't match" / "Update
   everything" notice as a bots version mismatch (`ApplicationModel+Bots.swift`).
+
+- **Storage names.** Table prefixes say whose state a table holds:
+  - `paired_*` is peer sync between Macs and Linux hosts: the change log, cursors, version vectors and conflicts, plus the owner rows.
+  - `device_*` is what this library keeps for and about other devices: the change feed and receipts for phones, execution workspaces with their journals and conversations, which device runs each scheduled item, transcripts and saved files from devices, and device MCP and publisher grants.
+  - `library_items`, `library_messages`, `library_settings` and `library_locations` index the Library pane (files and links found in chats).
+  - `library_members*` is the signed member list.
+  - `library_identity` holds this replica's device ID.
+
+  Libraries created before November 2026 used `companion_*` for the `device_*` tables. Opening one drops those tables, the triggers that wrote to them, and peer sync bookkeeping that names them (`removeLegacyCompanionStorageUnlocked`). That state starts fresh; library content never lived there.
 
 ### Library host (`wovenmatter-library`)
 
@@ -670,7 +679,7 @@ request never reached one or was refused before any effect (401, 403, 404,
 426, 503). The Mac accepts the call when the signer serves that non-deleted
 Linux workspace (its execution device, or the member `MemberAudience.serving`
 names) and the conversation belongs to it. A scheduled task's caller record
-(`library_scheduled_mcp_callers`, written by `/mcp/workspace/prepare`) is not
+(`device_scheduled_mcp_callers`, written by `/mcp/workspace/prepare`) is not
 synced, so another Mac refuses the task's calls until the session's own row
 reaches it. The Node delegate therefore sends a task's calls to the Mac that
 last prepared it first, and prepares any other Mac (the same idempotent
@@ -854,7 +863,7 @@ hands them to the macOS job, which checks them with
   connections; their synced Quick Chat history and folders stay listed.
 - **Order and names.** Quick Chat comes first, then the library host, the
   other Macs and the Linux workspaces, each listed once under its registry
-  name with its own agents (`LibraryAgentGroup.list`). Every Mac that hosts
+  name with its own agents (`AgentGroup.list`). Every Mac that hosts
   a library advertises `history.central.v1`, so the central agent list
   ("This Mac", from `GET /v1/providers`) belongs only to the registry row of the
   library host the phone syncs with, matched by its device ID
@@ -983,8 +992,11 @@ hands them to the macOS job, which checks them with
   (workspaces, agents on your computers, sync) and that local data is kept.
   Pages that only a Mac or Linux workspace serves (Scheduled tasks, Databases)
   are left out until paired; Library and Folders explain pairing instead of
-  showing an outage. A note is deleted on the phone itself; once paired,
-  notes go to the library's Trash.
+  showing an outage. On a phone that has never been paired, a note is
+  deleted on the phone itself (`MobileModel.canDeleteNoteLocally`). Once a
+  phone has been paired, notes go to the library's Trash; after an unpair,
+  deleting waits until it pairs again, because a note may already be in the
+  library even before its create was answered.
 - **Pairing later** keeps everything. A first pairing binds the empty replica
   to the Mac's library (`MobileStore.prepareForPairing` with no previous
   library moves nothing) and registers the phone's device workspace; the next

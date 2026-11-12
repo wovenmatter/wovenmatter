@@ -14,14 +14,14 @@ public struct LibraryToolReservation: Sendable {
 extension WorkspaceDatabaseConnection {
   func createLibraryToolSchemaUnlocked() throws {
     try executeUnlocked("""
-      CREATE TABLE IF NOT EXISTS library_tool_receipts (
+      CREATE TABLE IF NOT EXISTS device_tool_receipts (
         device_id TEXT NOT NULL, request_id TEXT NOT NULL, conversation_id TEXT NOT NULL,
         fingerprint BLOB NOT NULL, response BLOB, PRIMARY KEY(device_id,request_id)
       );
-      CREATE TABLE IF NOT EXISTS library_workspace_mcp_grants (
+      CREATE TABLE IF NOT EXISTS device_workspace_mcp_grants (
         workspace_id TEXT PRIMARY KEY, digest BLOB NOT NULL UNIQUE, payload BLOB NOT NULL
       );
-      CREATE TABLE IF NOT EXISTS library_scheduled_mcp_callers (
+      CREATE TABLE IF NOT EXISTS device_scheduled_mcp_callers (
         run_id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL, workspace_id TEXT NOT NULL,
         event_id TEXT NOT NULL, scheduled_at TEXT NOT NULL, native_session_id TEXT,
         UNIQUE(event_id,scheduled_at)
@@ -45,14 +45,14 @@ extension WorkspaceDatabaseConnection {
       throw LibraryAPIError(code: "invalid_request", message: "Tool calls require bounded requests and stable UUID identities.")
     }
     var owners = try libraryIDsUnlocked("""
-      SELECT f.workspace_id FROM library_execution_conversations f
+      SELECT f.workspace_id FROM device_execution_conversations f
       JOIN dashboard_conversations c ON c.id=f.id
       WHERE f.id=? AND f.deleted=0 AND c.deleted_at IS NULL AND c.is_archived=0
       """, bindings: [value.conversationID])
     if owners.isEmpty {
-      owners = try libraryIDsUnlocked("SELECT DISTINCT f.workspace_id FROM library_scheduled_mcp_callers f JOIN dashboard_conversations c ON c.id=f.conversation_id WHERE f.conversation_id=? AND c.deleted_at IS NULL AND c.is_archived=0", bindings: [value.conversationID])
+      owners = try libraryIDsUnlocked("SELECT DISTINCT f.workspace_id FROM device_scheduled_mcp_callers f JOIN dashboard_conversations c ON c.id=f.conversation_id WHERE f.conversation_id=? AND c.deleted_at IS NULL AND c.is_archived=0", bindings: [value.conversationID])
       if command.isMutation {
-        guard try libraryIDsUnlocked("SELECT run_id FROM library_scheduled_mcp_callers WHERE conversation_id=? AND native_session_id IS NOT NULL", bindings: [value.conversationID]).isEmpty == false else {
+        guard try libraryIDsUnlocked("SELECT run_id FROM device_scheduled_mcp_callers WHERE conversation_id=? AND native_session_id IS NOT NULL", bindings: [value.conversationID]).isEmpty == false else {
           throw LibraryAPIError(code: "unavailable", message: "The scheduled agent has not bound its native session yet.")
         }
       }
@@ -89,7 +89,7 @@ extension WorkspaceDatabaseConnection {
   /// follows pairing; a retired execution owner still cannot issue automation.
   public func requireLibraryAutomationAccess(callerID: String) throws {
     try withLock {
-      let owners = try libraryIDsUnlocked("SELECT workspace_id FROM library_execution_conversations WHERE id=? UNION SELECT workspace_id FROM library_scheduled_mcp_callers WHERE conversation_id=?", bindings: [callerID, callerID])
+      let owners = try libraryIDsUnlocked("SELECT workspace_id FROM device_execution_conversations WHERE id=? UNION SELECT workspace_id FROM device_scheduled_mcp_callers WHERE conversation_id=?", bindings: [callerID, callerID])
       guard let id = owners.first else { return }
       guard let owner = try federationWorkspaceUnlocked(id), !owner.deleted else {
         throw LibraryAPIError(code: "wrong_owner", message: "The automation caller's execution workspace is unavailable.")
@@ -106,7 +106,7 @@ extension WorkspaceDatabaseConnection {
       normalized.request.arguments = value.request.operationArguments
       normalized.enabledGroups = Array(Set(value.enabledGroups)).sorted { $0.rawValue < $1.rawValue }
       let fingerprint = try libraryFingerprint(normalized)
-      let lookup = try prepareUnlocked("SELECT fingerprint,response FROM library_tool_receipts WHERE device_id=? AND request_id=?")
+      let lookup = try prepareUnlocked("SELECT fingerprint,response FROM device_tool_receipts WHERE device_id=? AND request_id=?")
       defer { sqlite3_finalize(lookup) }
       try bind(deviceID, at: 1, to: lookup); try bind(id, at: 2, to: lookup)
       let status = sqlite3_step(lookup)
@@ -119,7 +119,7 @@ extension WorkspaceDatabaseConnection {
         return LibraryToolReservation(isNew: false, response: response)
       }
       guard status == SQLITE_DONE else { throw stepError() }
-      let insert = try prepareUnlocked("INSERT INTO library_tool_receipts(device_id,request_id,conversation_id,fingerprint) VALUES (?,?,?,?)")
+      let insert = try prepareUnlocked("INSERT INTO device_tool_receipts(device_id,request_id,conversation_id,fingerprint) VALUES (?,?,?,?)")
       defer { sqlite3_finalize(insert) }
       try bind(deviceID, at: 1, to: insert); try bind(id, at: 2, to: insert)
       try bind(value.conversationID, at: 3, to: insert); try bind(fingerprint, at: 4, to: insert)
@@ -130,7 +130,7 @@ extension WorkspaceDatabaseConnection {
 
   public func finishLibraryTool(_ response: WovenMatterToolResponse, requestID: String, deviceID: String) throws {
     try transaction {
-      let update = try prepareUnlocked("UPDATE library_tool_receipts SET response=? WHERE device_id=? AND request_id=? AND response IS NULL")
+      let update = try prepareUnlocked("UPDATE device_tool_receipts SET response=? WHERE device_id=? AND request_id=? AND response IS NULL")
       defer { sqlite3_finalize(update) }
       try bind(JSONEncoder().encode(response.bounded()), at: 1, to: update)
       try bind(deviceID, at: 2, to: update)

@@ -4,14 +4,14 @@ import WovenMatterShared
 
 struct ScheduledTasksPane: View {
   @Bindable var model: MobileModel
-  @State private var items: [LibraryScheduledTaskItem] = []
+  @State private var items: [ScheduledTaskItem] = []
   @State private var filter = "All"
   @State private var loading = false
   @State private var generation = 0
   @State private var loaded = false
   @State private var failure: String?
   private var scope: String { "\(model.state.workspaceID ?? ""):\(model.online)" }
-  private var visible: [LibraryScheduledTaskItem] {
+  private var visible: [ScheduledTaskItem] {
     items.filter { filter == "All" || ($0.showsOnCalendar ? "Calendar" : "Scheduled") == filter }
   }
   var body: some View {

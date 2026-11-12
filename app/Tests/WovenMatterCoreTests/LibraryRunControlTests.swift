@@ -39,7 +39,7 @@ struct LibraryRunControlTests {
         let conversationID = try await database.createFixtureLocalACPSession(runtimeKind: runtime, title: "Library fixture", ownerDeviceID: UUID(), requestedConversationID: requestedConversationID,
             fixtureLocation: .init(workspaceID: "device:fixture", rootPath: persistence.directory.path, managed: false))
         #expect(conversationID == id)
-        let gate = LibraryPromptGate()
+        let gate = PromptGate()
         let coordinator = LocalACPSessionCoordinator(database: database, clientFactory: { _, _ in
             LocalACPSessionDriver(initializeSession: { _, _, _, _ in
                 .init(sessionID: "fixture", loadedExistingSession: false)
@@ -109,7 +109,7 @@ struct LibraryRunControlTests {
     }
 }
 
-private actor LibraryPromptGate {
+private actor PromptGate {
     private(set) var started = false
     private(set) var input: AgentMessageInput?
     private var continuation: CheckedContinuation<Void, Never>?

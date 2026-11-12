@@ -116,13 +116,13 @@ public struct LibraryCalendarRun: Codable, Equatable, Identifiable, Sendable {
   public var occurrence: Int
   public var scheduledAt: Date
   public var sessionID: String
-  public var task: LibraryScheduledTask
+  public var task: ScheduledTask
   public var title: String
   public var status: String
   public var error: String?
   public var revision: Int?
   public init(id: String, eventID: String, eventRevision: Int, ownerDeviceID: String, occurrence: Int, scheduledAt: Date,
-    sessionID: String, task: LibraryScheduledTask, title: String, status: String, error: String? = nil) {
+    sessionID: String, task: ScheduledTask, title: String, status: String, error: String? = nil) {
     self.id = id; self.eventID = eventID; self.eventRevision = eventRevision; self.ownerDeviceID = ownerDeviceID
     self.occurrence = occurrence; self.scheduledAt = scheduledAt; self.sessionID = sessionID; self.task = task
     self.title = title; self.status = status; self.error = error; self.revision = 0

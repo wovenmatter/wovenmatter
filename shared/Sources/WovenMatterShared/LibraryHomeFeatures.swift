@@ -1,6 +1,6 @@
 import Foundation
 
-public struct LibraryScheduledTaskItem: Codable, Equatable, Identifiable, Sendable {
+public struct ScheduledTaskItem: Codable, Equatable, Identifiable, Sendable {
   public var id: String { event.id }
   public var event: LibraryCalendarEvent
   public var showsOnCalendar: Bool

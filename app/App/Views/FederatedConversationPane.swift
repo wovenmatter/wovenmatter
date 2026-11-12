@@ -138,7 +138,7 @@ struct FederatedConversationPane: View {
             }
         }
     }
-    @ViewBuilder private func selectionMenu(_ title: String, values: [LibrarySelection], selected: String?, action: @escaping (String) -> LibraryWorkspaceAction) -> some View {
+    @ViewBuilder private func selectionMenu(_ title: String, values: [SessionSettingOption], selected: String?, action: @escaping (String) -> LibraryWorkspaceAction) -> some View {
         if !values.isEmpty {
             Menu(values.first { $0.id == selected }?.label ?? title) {
                 ForEach(values) { value in
@@ -165,7 +165,7 @@ struct FederatedConversationPane: View {
 
 private struct FederatedInteractionCard: View {
     let interaction: PendingInteraction
-    let respond: (LibraryInteractionResponse) async -> Void
+    let respond: (InteractionResponse) async -> Void
     @State private var selected: [String: Set<String>] = [:]
     @State private var freeText: [String: String] = [:]
     @State private var submitting = false
@@ -204,7 +204,7 @@ private struct FederatedInteractionCard: View {
             }.disabled(submitting)
         }.padding(14).background(DashboardPalette.muted, in: RoundedRectangle(cornerRadius: DashboardMetrics.cardRadius))
     }
-    private func send(_ response: LibraryInteractionResponse) {
+    private func send(_ response: InteractionResponse) {
         submitting = true
         Task { await respond(response); submitting = false }
     }

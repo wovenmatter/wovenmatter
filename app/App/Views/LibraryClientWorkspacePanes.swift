@@ -16,7 +16,7 @@ struct LibraryClientPaneHeader<Actions: View>: View {
 struct LibraryClientLibraryPane: View {
   @Environment(\.openDocumentPreview) private var openPreview
   @Bindable var model: CentralLibraryClientModel
-  @State private var items: [LibraryEntry] = []
+  @State private var items: [LibraryListItem] = []
   @State private var search = ""
   @State private var kind = ""
   @State private var hasMore = false
@@ -78,7 +78,7 @@ struct LibraryClientLibraryPane: View {
       items = more ? items + values : values; hasMore = next
     } catch { if generation == loadGeneration, !Task.isCancelled { failure = error.localizedDescription } }
   }
-  private func open(_ item: LibraryEntry) async {
+  private func open(_ item: LibraryListItem) async {
     do { openPreview?(try await model.exportFile(.libraryFile(id: item.id)), "library:" + item.id) }
     catch { model.errorMessage = error.localizedDescription }
   }
@@ -86,7 +86,7 @@ struct LibraryClientLibraryPane: View {
 
 struct LibraryClientTrashPane: View {
   @Bindable var model: CentralLibraryClientModel
-  @State private var items: [LibraryTrashedItem] = []
+  @State private var items: [TrashedItem] = []
   @State private var failure: String?
   var body: some View {
     VStack {
@@ -110,7 +110,7 @@ struct LibraryClientTrashPane: View {
     do { if case .trash(let items) = try await model.workspace(.trash) { self.items = items } }
     catch { failure = error.localizedDescription }
   }
-  private func restore(_ item: LibraryTrashedItem) async {
+  private func restore(_ item: TrashedItem) async {
     let action: LibraryWorkspaceAction
     if item.kind == "note", let revision = item.revision { action = .note(id: item.id, action: "restore", revision: revision, title: nil, folderID: nil) }
     else { action = .conversation(id: item.id, action: "restore", title: nil, folderID: nil) }
@@ -189,7 +189,7 @@ struct LibraryClientItemManagementSheet: View {
 struct LibraryClientSessionSettingsSheet: View {
   @Bindable var model: CentralLibraryClientModel
   let id: String
-  @State private var settings: LibrarySessionSettings?
+  @State private var settings: SessionSettings?
   @State private var selectedModel = ""
   @State private var thinking = ""
   @State private var permission = ""
@@ -231,7 +231,7 @@ struct LibraryClientSessionSettingsSheet: View {
         }
     }
   }
-  @ViewBuilder private func selection(_ title: String, value: Binding<String>, options: [LibrarySelection]) -> some View {
+  @ViewBuilder private func selection(_ title: String, value: Binding<String>, options: [SessionSettingOption]) -> some View {
     if !options.isEmpty {
       Picker(title, selection: value) {
         Text("Keep current").tag("")
@@ -337,7 +337,7 @@ private struct LibraryClientLinkedPreview: View {
   let note: LibraryNote
   let tableID: String?
   let html: String?
-  @State private var data: LibraryLinkedData?
+  @State private var data: LinkedDataPreview?
   @State private var error: String?
   @State private var loading = false
   private var requestKey: String { "\(note.id):\(note.revision):\(tableID ?? "document"):\(model.online)" }

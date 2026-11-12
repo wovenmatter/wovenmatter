@@ -44,7 +44,7 @@ final class SignedExecutionWorkspaceTransport: ExecutionWorkspaceTransport, @unc
         guard value.id == workspace.id, value.libraryID == workspace.libraryID else { throw MobileStore.Failure.wrongWorkspace }
         return value
     }
-    func providers() async throws -> [LibraryProvider] { try await call("v1/execution/providers") }
+    func providers() async throws -> [HarnessCapabilities] { try await call("v1/execution/providers") }
     func pending() async throws -> [PendingInteraction] { try await call("v1/execution/interactions") }
     func command(_ command: LibraryCommand) async throws -> LibraryCommandReceipt {
         guard command.deviceID == deviceID else { throw MobileConnectionError.revoked }
@@ -56,7 +56,7 @@ final class SignedExecutionWorkspaceTransport: ExecutionWorkspaceTransport, @unc
         do { return try await call("v1/execution/commands/" + Self.safeID(id), query: [.init(name: "deviceID", value: deviceID)]) }
         catch MobileConnectionError.http(404, _) { return nil }
     }
-    func events(after: Int64) async throws -> LibraryJournalPage {
+    func events(after: Int64) async throws -> ExecutionJournalPage {
         try await call("v1/execution/events", query: [.init(name: "after", value: String(after))])
     }
     func conversations() async throws -> [LibraryConversation] { try await call("v1/execution/conversations") }
@@ -66,7 +66,7 @@ final class SignedExecutionWorkspaceTransport: ExecutionWorkspaceTransport, @unc
     func transcript(_ id: String, before: String) async throws -> LibraryTranscript {
         try await call("v1/execution/conversations/" + Self.safeID(id) + "/transcript", query: [.init(name: "before", value: before)])
     }
-    func capabilities(_ id: String) async throws -> LibraryProvider {
+    func capabilities(_ id: String) async throws -> HarnessCapabilities {
         try await call("v1/execution/conversations/" + Self.safeID(id) + "/capabilities")
     }
     func readWorkspace(_ request: LibraryWorkspaceRead) async throws -> LibraryWorkspaceResult {

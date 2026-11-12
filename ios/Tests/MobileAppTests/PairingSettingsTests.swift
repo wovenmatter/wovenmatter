@@ -13,7 +13,7 @@ private actor PairingSettingsMac: OfflineLibraryTransport {
   func workspaceIdentity() async throws -> String { "library-a" }
   func snapshot() async throws -> LibrarySnapshot { .init(workspaceID: "library-a", cursor: 1) }
   func changes(after: Int64) async throws -> LibraryChangePage { .init(workspaceID: "library-a", cursor: 1) }
-  func providers() async throws -> [LibraryProvider] {
+  func providers() async throws -> [HarnessCapabilities] {
     if waitForProviders { providerRequestWaiting = true; await withCheckedContinuation { providerGate = $0 } }
     return []
   }
@@ -24,11 +24,11 @@ private actor PairingSettingsMac: OfflineLibraryTransport {
 
 private actor DisabledPairingWorkspace: ExecutionWorkspaceTransport {
   func identity() async throws -> ExecutionWorkspace { throw MobileConnectionError.revoked }
-  func providers() async throws -> [LibraryProvider] { throw MobileConnectionError.revoked }
+  func providers() async throws -> [HarnessCapabilities] { throw MobileConnectionError.revoked }
   func pending() async throws -> [PendingInteraction] { [] }
   func command(_ command: LibraryCommand) async throws -> LibraryCommandReceipt { throw MobileConnectionError.revoked }
   func receipt(_ id: String) async throws -> LibraryCommandReceipt? { nil }
-  func events(after: Int64) async throws -> LibraryJournalPage { throw MobileConnectionError.revoked }
+  func events(after: Int64) async throws -> ExecutionJournalPage { throw MobileConnectionError.revoked }
   func conversations() async throws -> [LibraryConversation] { [] }
   func transcript(_ id: String) async throws -> LibraryTranscript { throw MobileConnectionError.revoked }
 }

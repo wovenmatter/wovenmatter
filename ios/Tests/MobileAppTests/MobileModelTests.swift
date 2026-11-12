@@ -12,7 +12,7 @@ extension OfflineLibraryTransport {
   func changes(after: Int64) async throws -> LibraryChangePage { throw MobileConnectionError.offline }
   func mutate(_ mutation: LibraryMutation) async throws -> LibraryMutationResult { throw MobileConnectionError.offline }
   func note(_ id: String) async throws -> LibraryNote { throw MobileConnectionError.offline }
-  func providers() async throws -> [LibraryProvider] { throw MobileConnectionError.offline }
+  func providers() async throws -> [HarnessCapabilities] { throw MobileConnectionError.offline }
   func pending() async throws -> [PendingInteraction] { throw MobileConnectionError.offline }
   func transcript(_ id: String) async throws -> LibraryTranscript { throw MobileConnectionError.offline }
   func command(_ command: LibraryCommand) async throws -> LibraryCommandReceipt { throw MobileConnectionError.offline }
@@ -50,7 +50,7 @@ private actor ModelMac: OfflineLibraryTransport, LibraryCalendarTransport {
   func release() { shouldGate = false; gate?.resume(); gate = nil }
   func snapshot() async throws -> LibrarySnapshot { .init(workspaceID: "workspace", cursor: 1) }
   func changes(after: Int64) async throws -> LibraryChangePage { .init(workspaceID: "workspace", cursor: 1) }
-  func providers() async throws -> [LibraryProvider] { [] }
+  func providers() async throws -> [HarnessCapabilities] { [] }
   func pending() async throws -> [PendingInteraction] { [] }
   func transcript(_ id: String) async throws -> LibraryTranscript { .init(conversationID: id) }
   func command(_ command: LibraryCommand) async throws -> LibraryCommandReceipt {
@@ -121,6 +121,15 @@ final class MobileModelTests: XCTestCase {
     let refused = await model.deleteLocalNote(kept)
     XCTAssertFalse(refused)
     XCTAssertNotNil(model.state.notes[kept])
+
+    // After unpairing, even a note created later may already be in a library.
+    try await XCTUnwrap(model.store).detachWorkspace()
+    await model.reload()
+    XCTAssertTrue(model.isStandalone)
+    await model.newNote()
+    let afterUnpair = try XCTUnwrap(model.selectedNoteID)
+    XCTAssertFalse(model.canDeleteNoteLocally(afterUnpair))
+    XCTAssertFalse(model.canDeleteNoteLocally(kept))
   }
 
   @MainActor func testWorkspaceGroupingMatchesPrefixedFolderBindingsWithoutChangingRoute() {
@@ -178,8 +187,8 @@ final class MobileModelTests: XCTestCase {
                                           capabilities: ["history.central.v1"], executionDeviceID: macID)
     let linux = ExecutionWorkspace(id: linuxID, libraryID: "library", ownerDeviceID: macID, kind: .linux, name: "Build server")
     model.executionWorkspaces = [mac, linux]
-    let ready = LibraryProvider(id: "local:default_agent", runtimeKind: "default_agent", displayName: "Pi Durable", available: true)
-    let notReady = LibraryProvider(id: "local:codex", runtimeKind: "codex", displayName: "Codex", available: false, canStart: false)
+    let ready = HarnessCapabilities(id: "local:default_agent", runtimeKind: "default_agent", displayName: "Pi Durable", available: true)
+    let notReady = HarnessCapabilities(id: "local:codex", runtimeKind: "codex", displayName: "Codex", available: false, canStart: false)
     // The saved catalog from an earlier connection.
     model.providers = [ready, notReady]
     model.workspaceProviders = [macID: [ready, notReady], linuxID: [.init(id: "pi", runtimeKind: "pi", displayName: "Pi Durable", available: true)]]

@@ -478,9 +478,9 @@ final class LibraryHostCommands: LibraryCommandServing {
   func executeTool(_ request: LibraryToolRequest, deviceID: String) async throws -> WovenMatterToolResponse {
     await executor.execute(request.request, callerID: request.conversationID, handlers: WorkspaceToolHandlers())
   }
-  func providers() -> [LibraryProvider] { [] }
+  func providers() -> [HarnessCapabilities] { [] }
   func pendingInteractions() async -> [PendingInteraction] { [] }
-  func sessionCapabilities(conversationID: String) async throws -> LibraryProvider { throw unsupported }
+  func sessionCapabilities(conversationID: String) async throws -> HarnessCapabilities { throw unsupported }
   func transcript(conversationID: String, before: String?) async throws -> LibraryTranscript { throw unsupported }
   func receipt(commandID: String, deviceID: String) async throws -> LibraryCommandReceipt? { nil }
   func execute(_ command: LibraryCommand, deviceID: String) async throws -> LibraryCommandReceipt { throw unsupported }

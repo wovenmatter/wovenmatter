@@ -16,8 +16,8 @@ extension WorkspaceDatabaseConnection {
             request.deviceID == workspaceID, try libraryWorkspaceIDUnlocked() != libraryID else {
         throw LibraryAPIError(code: "wrong_replica", message: "Replica projection requires an isolated execution database and its owning library.")
       }
-      try executeUnlocked("CREATE TABLE IF NOT EXISTS library_execution_replica_context (singleton INTEGER PRIMARY KEY CHECK(singleton = 1), library_id TEXT NOT NULL, workspace_id TEXT NOT NULL)")
-      let context = try prepareUnlocked("SELECT library_id, workspace_id FROM library_execution_replica_context WHERE singleton = 1")
+      try executeUnlocked("CREATE TABLE IF NOT EXISTS device_execution_replica_context (singleton INTEGER PRIMARY KEY CHECK(singleton = 1), library_id TEXT NOT NULL, workspace_id TEXT NOT NULL)")
+      let context = try prepareUnlocked("SELECT library_id, workspace_id FROM device_execution_replica_context WHERE singleton = 1")
       defer { sqlite3_finalize(context) }
       let code = sqlite3_step(context)
       if code == SQLITE_ROW {
@@ -25,7 +25,7 @@ extension WorkspaceDatabaseConnection {
           throw LibraryAPIError(code: "wrong_replica", message: "This execution database already projects a different library or workspace.")
         }
       } else if code == SQLITE_DONE {
-        try toolsExecuteUnlocked("INSERT INTO library_execution_replica_context(singleton,library_id,workspace_id) VALUES(1,?,?)", [libraryID, workspaceID])
+        try toolsExecuteUnlocked("INSERT INTO device_execution_replica_context(singleton,library_id,workspace_id) VALUES(1,?,?)", [libraryID, workspaceID])
       } else { throw stepError() }
       let operatorID = try localMutationOperatorIDUnlocked()
       let now = Self.timestamp(Date())

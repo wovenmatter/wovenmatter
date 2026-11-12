@@ -39,7 +39,7 @@ extension WorkspaceDatabase {
         }
         let value = LibraryConversation(id: id, title: "New conversation", providerID: "local:" + runtimeKind,
           routeID: "local:" + runtimeKind, runtimeKind: runtimeKind, libraryID: workspace.libraryID, workspaceID: workspace.id)
-        let query = try connection.prepareUnlocked("INSERT OR IGNORE INTO library_execution_conversations(id,workspace_id,conversation) VALUES(?,?,?)")
+        let query = try connection.prepareUnlocked("INSERT OR IGNORE INTO device_execution_conversations(id,workspace_id,conversation) VALUES(?,?,?)")
         defer { sqlite3_finalize(query) }
         try connection.bind(id, at: 1, to: query); try connection.bind(workspace.id, at: 2, to: query)
         try connection.bind(JSONEncoder().encode(value), at: 3, to: query); try connection.stepDone(query)

@@ -37,7 +37,7 @@ extension MobileModel {
       .init(id: Self.memberMacsLinux, libraryID: "fixture", ownerDeviceID: airHost, kind: .linux, name: "Workstation (Dev)",
             capabilities: ["execution.v1", "inference.v1"]),
     ].filter { !$0.deleted }.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
-    func agent(_ kind: String, _ name: String, ready: Bool, resume: Bool = true) -> LibraryProvider {
+    func agent(_ kind: String, _ name: String, ready: Bool, resume: Bool = true) -> HarnessCapabilities {
       .init(id: "local:" + kind, runtimeKind: kind, displayName: name, available: ready, canStart: ready, canResume: resume,
             canStop: ready, supportsQuestions: kind == "claude_code",
             unavailableReason: ready ? nil : "Enable and configure this agent on the Mac.")
@@ -86,17 +86,17 @@ extension MobileModel {
 private actor MemberMacsFixtureWorkspace: ExecutionWorkspaceTransport {
   let workspace: ExecutionWorkspace
   var transcriptValue: LibraryTranscript
-  let agents: [LibraryProvider]
+  let agents: [HarnessCapabilities]
   var receipts: [String: LibraryCommandReceipt] = [:]
-  init(workspace: ExecutionWorkspace, transcript: LibraryTranscript, providers: [LibraryProvider]) {
+  init(workspace: ExecutionWorkspace, transcript: LibraryTranscript, providers: [HarnessCapabilities]) {
     // Without central history the fixture keeps its seeded conversation rows.
     var identity = workspace; identity.capabilities.removeAll { $0 == "history.central.v1" }
     self.workspace = identity; transcriptValue = transcript; agents = providers
   }
   func identity() async throws -> ExecutionWorkspace { workspace }
-  func providers() async throws -> [LibraryProvider] { agents }
+  func providers() async throws -> [HarnessCapabilities] { agents }
   func pending() async throws -> [PendingInteraction] { [] }
-  func capabilities(_ id: String) async throws -> LibraryProvider { agents[0] }
+  func capabilities(_ id: String) async throws -> HarnessCapabilities { agents[0] }
   func command(_ command: LibraryCommand) async throws -> LibraryCommandReceipt {
     try await Task.sleep(for: .seconds(2))
     let runID = "fixture-run-" + command.commandID
@@ -111,7 +111,7 @@ private actor MemberMacsFixtureWorkspace: ExecutionWorkspaceTransport {
     return receipt
   }
   func receipt(_ id: String) async throws -> LibraryCommandReceipt? { receipts[id] }
-  func events(after: Int64) async throws -> LibraryJournalPage { .init(libraryID: workspace.libraryID, cursor: after) }
+  func events(after: Int64) async throws -> ExecutionJournalPage { .init(libraryID: workspace.libraryID, cursor: after) }
   func conversations() async throws -> [LibraryConversation] { [] }
   func transcript(_ id: String) async throws -> LibraryTranscript { transcriptValue }
 }

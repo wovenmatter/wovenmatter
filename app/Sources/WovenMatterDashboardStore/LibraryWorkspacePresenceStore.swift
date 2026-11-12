@@ -7,7 +7,7 @@ extension WorkspaceDatabaseConnection {
   public func libraryConnectionWorkspaces(activeDeviceIDs: Set<String>) throws -> [ExecutionWorkspace] {
     try withLock {
       let hostID = try libraryIdentityUnlocked().hostDeviceID
-      return try federationValuesUnlocked("SELECT payload FROM library_execution_workspaces ORDER BY id", as: ExecutionWorkspace.self).map { stored in
+      return try federationValuesUnlocked("SELECT payload FROM device_execution_workspaces ORDER BY id", as: ExecutionWorkspace.self).map { stored in
         var value = stored
         if value.developmentInstance != nil, value.ownerDeviceID != hostID, !activeDeviceIDs.contains(value.ownerDeviceID) {
           value.endpoint = nil

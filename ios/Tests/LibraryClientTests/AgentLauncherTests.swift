@@ -7,12 +7,12 @@ final class AgentLauncherTests: XCTestCase {
   private var workspace: ExecutionWorkspace {
     .init(id: workspaceID, libraryID: "library", ownerDeviceID: "owner", kind: .linux, name: "Remote")
   }
-  private var pi: LibraryProvider { .init(id: "pi", runtimeKind: "pi", displayName: "Pi Durable", available: true) }
+  private var pi: HarnessCapabilities { .init(id: "pi", runtimeKind: "pi", displayName: "Pi Durable", available: true) }
 
   func testDiscoveredRoutesDeduplicateAndSelectOnlyTheLatestMatchingSession() throws {
-    let central = LibraryProvider(id: "remote:" + workspaceID + ":pi", runtimeKind: "pi", displayName: "Pi Durable", available: true)
-    func agents(centralOnline: Bool, directOnline: Bool) -> [LibraryAgentLauncher] {
-      LibraryAgentLauncher.list(deviceName: "Phone", centralOnline: centralOnline, providers: [central], workspaces: [workspace],
+    let central = HarnessCapabilities(id: "remote:" + workspaceID + ":pi", runtimeKind: "pi", displayName: "Pi Durable", available: true)
+    func agents(centralOnline: Bool, directOnline: Bool) -> [LaunchableAgent] {
+      LaunchableAgent.list(deviceName: "Phone", centralOnline: centralOnline, providers: [central], workspaces: [workspace],
         workspaceProviders: [workspaceID: [pi]], reachable: [workspaceID: directOnline])
     }
     XCTAssertEqual(agents(centralOnline: true, directOnline: true).map(\.workspaceID), ["local", workspaceID])
@@ -35,16 +35,16 @@ final class AgentLauncherTests: XCTestCase {
   func testCentralMacAppearsOnceByItsNameAndEmptyLinuxWorkspaceRemainsVisible() {
     let mac = ExecutionWorkspace(id: "mac", libraryID: "library", ownerDeviceID: "host", kind: .mac,
       name: "James’s MacBook Air", capabilities: ["history.central.v1"])
-    let local = LibraryProvider(id: "local:pi", runtimeKind: "pi", displayName: "Pi Durable", available: true)
-    let gateway = LibraryProvider(id: "gateway:eddie", runtimeKind: "openclaw", displayName: "Eddie", routeName: "OpenClaw Gateway", available: true)
+    let local = HarnessCapabilities(id: "local:pi", runtimeKind: "pi", displayName: "Pi Durable", available: true)
+    let gateway = HarnessCapabilities(id: "gateway:eddie", runtimeKind: "openclaw", displayName: "Eddie", routeName: "OpenClaw Gateway", available: true)
     let empty = ExecutionWorkspace(id: workspaceID, libraryID: "library", ownerDeviceID: "host", kind: .linux, name: "Test")
-    let unconfigured = LibraryProvider(id: "remote:" + workspaceID + ":pi", runtimeKind: "pi", displayName: "Pi Durable", available: false, canStart: false)
-    let agents = LibraryAgentLauncher.list(deviceName: "This iPhone", centralOnline: true,
+    let unconfigured = HarnessCapabilities(id: "remote:" + workspaceID + ":pi", runtimeKind: "pi", displayName: "Pi Durable", available: false, canStart: false)
+    let agents = LaunchableAgent.list(deviceName: "This iPhone", centralOnline: true,
       providers: [local, gateway, unconfigured], workspaces: [mac, empty],
       workspaceProviders: ["mac": [local], workspaceID: []], reachable: ["mac": true])
     XCTAssertEqual(agents.map(\.providerID), ["pi-durable-device", "local:pi", "gateway:eddie"])
     XCTAssertTrue(agents.dropFirst().allSatisfy { $0.workspaceName == mac.name })
-    let groups = LibraryAgentGroup.list(agents: agents, workspaces: [mac, empty])
+    let groups = AgentGroup.list(agents: agents, workspaces: [mac, empty])
     XCTAssertEqual(groups.map(\.name), ["This iPhone", "James’s MacBook Air", "Test"], "Quick Chat leads, then the workspaces")
     XCTAssertEqual(groups.first(where: { $0.name == "Test" })?.agents, [])
     XCTAssertEqual(groups.first(where: { $0.name == "Test" })?.workspace?.kind, .linux)
@@ -64,17 +64,17 @@ final class AgentLauncherTests: XCTestCase {
       endpoint: URL(string: "https://mini.example.ts.net/wovenmatter"), capabilities: capabilities)
     let copied = ExecutionWorkspace(id: "3407decc-357c-4d96-a209-92be30520fb6", libraryID: "air-library",
       ownerDeviceID: "old", kind: .mac, name: "James’s MacBook Air", capabilities: capabilities, retainedHistory: true)
-    func agent(_ kind: String, ready: Bool) -> LibraryProvider {
+    func agent(_ kind: String, ready: Bool) -> HarnessCapabilities {
       .init(id: "local:" + kind, runtimeKind: kind, displayName: kind, available: ready, canStart: ready)
     }
     let ready = [agent("default_agent", ready: true), agent("codex", ready: true), agent("claude_code", ready: true)]
     // A stale central list from the library host still lists Codex as needing setup.
     let central = [agent("default_agent", ready: true), agent("codex", ready: false), agent("claude_code", ready: true)]
     for order in [[mini, air, copied], [air, copied, mini]] {
-      let agents = LibraryAgentLauncher.list(deviceName: "This iPhone", centralOnline: true, providers: central,
+      let agents = LaunchableAgent.list(deviceName: "This iPhone", centralOnline: true, providers: central,
         workspaces: order, workspaceProviders: [air.id: ready, mini.id: ready, copied.id: ready],
         reachable: [air.id: true, mini.id: true], centralWorkspaceID: air.id)
-      let groups = LibraryAgentGroup.list(agents: agents.filter { $0.workspaceID != copied.id }, workspaces: order, centralWorkspaceID: air.id)
+      let groups = AgentGroup.list(agents: agents.filter { $0.workspaceID != copied.id }, workspaces: order, centralWorkspaceID: air.id)
       XCTAssertEqual(groups.map(\.name), ["This iPhone", air.name, mini.name])
       XCTAssertEqual(groups.map(\.id), ["local", "central", mini.id])
       XCTAssertEqual(groups[1].workspace?.id, air.id)
@@ -94,12 +94,12 @@ final class AgentLauncherTests: XCTestCase {
       name: "Mac Mini (Dev) · source", capabilities: ["history.central.v1"], retainedHistory: true)
     let live = ExecutionWorkspace(id: "live", libraryID: "library", ownerDeviceID: "host", kind: .mac,
       name: "Mac Mini (Dev) · e2e", capabilities: ["history.central.v1"])
-    let local = LibraryProvider(id: "local:pi", runtimeKind: "pi", displayName: "Pi Durable", available: true)
+    let local = HarnessCapabilities(id: "local:pi", runtimeKind: "pi", displayName: "Pi Durable", available: true)
     for order in [[copied, live], [live, copied]] {
-      let agents = LibraryAgentLauncher.list(deviceName: "This iPhone", centralOnline: true, providers: [local],
+      let agents = LaunchableAgent.list(deviceName: "This iPhone", centralOnline: true, providers: [local],
         workspaces: order, workspaceProviders: [:], reachable: [:])
       XCTAssertEqual(agents.last?.workspaceName, live.name)
-      let groups = LibraryAgentGroup.list(agents: agents, workspaces: order)
+      let groups = AgentGroup.list(agents: agents, workspaces: order)
       XCTAssertEqual(groups.map(\.name), ["This iPhone", live.name])
       XCTAssertEqual(groups.last?.workspace?.id, live.id)
     }

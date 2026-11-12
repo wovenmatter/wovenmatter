@@ -132,8 +132,9 @@ Disk space and active keyboard APIs are not used.
 | Product interaction | no | Analytics | The six-hourly `app_opened` and `app_active` signals |
 
 The phone sends analytics only to its paired Mac, which forwards them to
-PostHog. Without a paired Mac nothing is sent, because the app first waits for
-the Mac's analytics preference. Notes and chats synced to your own Mac or Linux
+PostHog. Without a paired Mac nothing is sent: there is no analytics
+destination until the phone holds a pairing credential, and unpairing stops
+the connection. Notes and chats synced to your own Mac or Linux
 host, and on-device dictation, are not collected by Woven Matter and are not
 declared. Answer App Store Connect's **App Privacy** questions the same way.
 
@@ -259,10 +260,10 @@ builds of the same version may not need a full review.
 
      > Woven Matter works on its own; pairing with a Mac is optional and not
      > needed to review the app. Notes, folders, calendar and timers are stored
-     > on the device. To try Quick Chat: Settings → iPhone Connections → Claude ·
+     > on the device. To try Quick Chat: Settings → iPhone Connections (iPad Connections on iPad) → Claude ·
      > API key (or OpenAI · API key), paste the test key below, then open Chats
      > and ask a question, or ask it to create a note or a timer. Web search is
-     > optional: Settings → iPhone Connections → Web search.
+     > optional: Settings → iPhone or iPad Connections → Web search.
      >
      > Test provider key: (paste here)
 

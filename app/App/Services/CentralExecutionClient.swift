@@ -30,7 +30,7 @@ final class CentralExecutionClient {
     private var transportEndpoints: [String: URL] = [:]
     private var refreshTasks: [String: Task<Void, any Error>] = [:]
     private(set) var transcripts: [String: LibraryTranscript] = [:]
-    private(set) var capabilities: [String: LibraryProvider] = [:]
+    private(set) var capabilities: [String: HarnessCapabilities] = [:]
     private(set) var pending: [String: [PendingInteraction]] = [:]
     private(set) var onlineWorkspaces: Set<String> = []
     private(set) var errors: [String: String] = [:]
@@ -237,7 +237,7 @@ final class CentralExecutionClient {
     }
 
     /// The destination's agent routes, for choosing a harness on another member.
-    func providers(workspace: ExecutionWorkspace) async throws -> [LibraryProvider] {
+    func providers(workspace: ExecutionWorkspace) async throws -> [HarnessCapabilities] {
         try await transport(for: workspace).providers()
     }
 
@@ -254,7 +254,7 @@ final class CentralExecutionClient {
     func pendingInteractions(workspace: ExecutionWorkspace) async throws -> [PendingInteraction] {
         try await transport(for: workspace).pending()
     }
-    func capabilities(workspace: ExecutionWorkspace, conversationID: String) async throws -> LibraryProvider {
+    func capabilities(workspace: ExecutionWorkspace, conversationID: String) async throws -> HarnessCapabilities {
         try await transport(for: workspace).capabilities(conversationID)
     }
 
@@ -290,7 +290,7 @@ final class CentralExecutionClient {
     }
 
     @discardableResult
-    func respond(_ interaction: PendingInteraction, response: LibraryInteractionResponse) async throws -> LibraryCommandReceipt {
+    func respond(_ interaction: PendingInteraction, response: InteractionResponse) async throws -> LibraryCommandReceipt {
         let workspace = try await requiredWorkspace(interaction.conversationID)
         let identity = try await database.libraryIdentity()
         return try await submit(.init(deviceID: identity.hostDeviceID, kind: .respond, conversationID: interaction.conversationID,
