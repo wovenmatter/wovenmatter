@@ -51,6 +51,23 @@ that still pair with a bearer receive their own scoped direct-execution
 credential, which any Mac can request from a Linux host. Owning execution
 does not confer library authority.
 
+## Live sessions on other machines
+
+A session's history moves only by library sync: a Mac's sessions are in its
+library natively, and a Linux host writes its sessions into its own library
+copy, which synchronizes with every Mac and phone. The live view of a session
+on another machine (its transcript as it is written, run state, questions and
+approvals, capabilities and session settings) and the commands sent to it move
+on that machine's stream, `GET /v1/stream?protocol=1`, a member-signed
+WebSocket (see [Woven everywhere](architecture/WOVEN_EVERYWHERE.md),
+"Streaming"). On a Mac the background server holds the one stream to each
+other machine and relays it to its windows over their connection to it;
+other Macs' and Linux hosts' sessions render in the normal conversation view.
+Nothing polls an execution workspace. When a machine is unreachable its
+sessions show the history the library holds, with an offline notice, and the
+stream reconnects by itself. There is no SSH agent path: SSH installs,
+updates and repairs a Linux host only.
+
 ## Offline changes and reconnection
 
 A SQLite trigger records each shared edit in the same transaction as the content.

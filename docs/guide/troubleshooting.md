@@ -7,7 +7,7 @@
 | A project folder cannot be created | Connect its owning workspace, choose a valid unused directory name, and check the reported filesystem error. For a local existing project, choose Link Existing. |
 | A draft cannot use a folder | Choose a folder owned by the selected agent's execution workspace or Ungrouped. After the first message, start a new chat to use another folder. |
 | An earlier chat cannot resume | Sessions from the former workspace layout are archived history. Their messages remain readable; start a new chat for further work. |
-| Remote workspace unavailable | Confirm the host is reachable with your existing SSH configuration, then inspect its container and service status. |
+| Remote workspace unavailable | Its chats show their saved history, marked offline, and go live again on their own when the host is back. Confirm Tailscale is connected on both machines, then check the host's status and logs from its **Manage** menu in Settings → Workspaces. |
 | Runtime update blocked | Finish active conversations or stop the relevant service before retrying. |
 | OpenCode cannot connect | Check the supported v2 installation and service status; a different OpenCode version may be incompatible. |
 | Linked data is stale or offline | Reconnect the owning workspace and refresh Databases. Views use the last complete synced snapshot while the owner is unavailable. |
