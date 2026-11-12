@@ -116,7 +116,7 @@ final class BackendApplicationService {
     var dispatchStopRevisions: [String: UInt64] { dispatchAdmissions.stopRevisions }
 
     init(model: ApplicationModel) {
-        self.invalidations = BackendInvalidationJournal(instanceID: instanceID)
+        self.invalidations = BackendInvalidationJournal()
         self.dispatchAdmissions = AgentDispatchAdmissionLedger(instanceID: instanceID)
         self.model = model
     }

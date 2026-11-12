@@ -216,7 +216,7 @@ const timers = library && clientExecution ? createLibraryTimers({ library,
 
 const retainedExecution = runningAsService ? createRetainedExecutionCapture({
   directory:resolve(workspaceRoot,'.wovenmatter/retained-execution'),
-  defaultDirectory:resolve(workspaceRoot,'.wovenmatter/default-agent'),taskGateway,defaultAgent,execution:clientExecution,
+  defaultDirectory:resolve(workspaceRoot,'.wovenmatter/default-agent'),taskGateway,execution:clientExecution,
   resolveAssociation:request=>clientExecution.resolveRetainedAssociation(request),
 }) : null
 

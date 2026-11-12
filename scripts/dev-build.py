@@ -206,8 +206,8 @@ def disconnect_snapshot(file, *, device_id, execution_root, published_root):
                 directory.mkdir(parents=True)
                 db.execute("UPDATE folder_execution_roots SET workspace_id=?,root_path=?,managed=1,reference_paths='[]' WHERE folder_id=?",
                            (owner, str(published_root / str(uuid.UUID(folder_id))), folder_id))
-        transient = {"desktop_local_identity", "desktop_local_acp_sessions", "desktop_local_acp_durable_runs",
-                     "desktop_opencode_sessions", "desktop_opencode_submissions", "desktop_openclaw_gateway_links",
+        transient = {"desktop_local_identity", "desktop_local_acp_sessions", "desktop_opencode_sessions",
+                     "desktop_opencode_submissions", "desktop_openclaw_gateway_links",
                      "desktop_openclaw_gateway_sessions", "desktop_openclaw_cron_jobs", "desktop_openclaw_cron_runs",
                      "desktop_scheduled_result_routes", "desktop_scheduled_result_receipts"}
         # State the library keeps about devices and execution belongs to the

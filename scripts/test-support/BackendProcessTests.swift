@@ -48,9 +48,6 @@ private actor FixtureOwner {
                     } catch { fatalError("Fixture write failed: \(error)") }
                 }
                 return .init(id: request.id)
-            case "changes":
-                let cursor = try JSONDecoder().decode(BackendInvalidationCursor?.self, from: request.payload)
-                return .init(id: request.id, result: try JSONEncoder().encode(await journal.waitForChanges(after: cursor, timeoutSeconds: 1)))
             case "stop":
                 Task { try? await Task.sleep(for: .milliseconds(100)); self.shouldStop = true }
                 return .init(id: request.id)
@@ -94,10 +91,15 @@ private final class WindowStream: @unchecked Sendable {
         try await send(.subscribe(.init(id: "state", stream: .serverState)))
         guard case .item(let item) = try await next(), item.payload == .synchronized else { throw BackendRPCError.invalidFrame }
     }
-    /// The next `server.state` item naming `scope`.
-    func serverState(_ scope: String) async throws {
+    /// Reads `server.state` items up to the first naming `scope`, and returns
+    /// every conversation they named on the way.
+    @discardableResult
+    func serverState(_ scope: String) async throws -> Set<String> {
+        var conversations: Set<String> = []
         for _ in 0..<50 {
-            if case .item(let item) = try await next(), case .serverState(let state) = item.payload, state.scopes.contains(scope) { return }
+            guard case .item(let item) = try await next(), case .serverState(let state) = item.payload else { continue }
+            conversations.formUnion(state.conversationIDs ?? [])
+            if state.scopes.contains(scope) { return conversations }
         }
         throw BackendRPCError.timedOut
     }
@@ -173,8 +175,6 @@ private final class WindowStream: @unchecked Sendable {
         var backend = try child("backend", root: root)
         defer { if backend.isRunning { backend.terminate() } }
         try await ready(client, process: backend)
-        let initial = try JSONDecoder().decode(BackendInvalidations.self,
-            from: await client.call(method: "changes", payload: JSONEncoder().encode(BackendInvalidationCursor?.none)))
         // The window's persistent stream crosses the process boundary on the same socket.
         let stream = try await WindowStream(client.socketURL)
         try await stream.followServerState()
@@ -182,16 +182,10 @@ private final class WindowStream: @unchecked Sendable {
         try await wait(frontend)
         try require(backend.isRunning, "Frontend exit stopped backend")
         let projection = try await DashboardStore(supportDirectory: root, readOnlyProjection: true)
-        var changed = try JSONDecoder().decode(BackendInvalidations.self,
-            from: await client.call(method: "changes", payload: JSONEncoder().encode(initial.cursor)))
-        var observedConversations = changed.conversationIDs
-        for _ in 0..<10 where !changed.scopes.contains(.workspace) {
-            changed = try JSONDecoder().decode(BackendInvalidations.self,
-                from: await client.call(method: "changes", payload: JSONEncoder().encode(changed.cursor)))
-            observedConversations.formUnion(changed.conversationIDs)
-        }
-        try require(changed.scopes.contains(.workspace), "Detached completion did not publish invalidation")
-        try await stream.serverState("workspace")
+        // Invalidations reach the window as they are published, never by asking.
+        let observedConversations: Set<String>
+        do { observedConversations = try await stream.serverState("workspace") }
+        catch { throw NSError(domain: "BackendProcessTests", code: 3, userInfo: [NSLocalizedDescriptionKey: "Detached completion did not publish invalidation"]) }
         let snapshot = try await projection.snapshot()
         try require(snapshot.workspace.folders.contains { $0.name == "Completed after frontend exit" }, "Reconnected frontend did not observe backend result")
         try require(!snapshot.workspace.folders.contains { $0.name == "Forbidden frontend write" }, "Frontend altered backend data")
@@ -216,10 +210,7 @@ private final class WindowStream: @unchecked Sendable {
         try require(streamEnded, "The window stream outlived its server")
         backend = try child("backend", root: root)
         try await ready(client, process: backend)
-        let restarted = try JSONDecoder().decode(BackendInvalidations.self,
-            from: await client.call(method: "changes", payload: JSONEncoder().encode(changed.cursor)))
-        try require(restarted.requiresReload && restarted.cursor.instanceID != changed.cursor.instanceID,
-                    "Restart incorrectly reused previous invalidation cursor")
+        // A new server starts every window from `synchronized`: read everything again.
         try await WindowStream(client.socketURL).followServerState()
         let afterRestart = try await projection.snapshot()
         try require(afterRestart.workspace.folders.contains { $0.name == "Completed after frontend exit" }, "Restart lost persisted result")

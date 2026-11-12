@@ -1311,9 +1311,8 @@ extension WorkspaceDatabaseConnection {
       try toolsExecuteUnlocked("""
         UPDATE dashboard_runs SET status='uncertain',error=?,completed_at=NULL,updated_at=?
         WHERE id=? AND desktop_owned=1 AND status='running'
-          AND (id IN (SELECT run_id FROM desktop_local_acp_durable_runs)
-            OR conversation_id IN (SELECT conversation_id FROM desktop_local_acp_sessions
-              WHERE runtime_kind='default_agent'))
+          AND conversation_id IN (SELECT conversation_id FROM desktop_local_acp_sessions
+            WHERE runtime_kind='default_agent')
         """, [detail, now, runID])
       guard changedRowCountUnlocked == 1 else { throw LocalACPSessionDatabaseError.runNotFound }
       try toolsExecuteUnlocked("""
@@ -1363,19 +1362,7 @@ extension WorkspaceDatabaseConnection {
   ) throws {
     try transaction {
       let timestamp = Self.timestamp(recoveredAt)
-      // Losing this process ends a local CLI, but only detaches a service-owned
-      // native run. Do not manufacture terminal truth for the latter.
-      let durable = try historyRowsUnlocked("""
-        SELECT r.id FROM dashboard_runs r JOIN desktop_local_acp_durable_runs d ON d.run_id=r.id
-        WHERE r.desktop_owned=1 AND r.status='running' AND \(PairedLibraryOwnership.localConversation("r.conversation_id"))
-          AND r.conversation_id NOT IN (SELECT conversation_id FROM desktop_openclaw_gateway_sessions)
-          AND r.conversation_id NOT IN (SELECT conversation_id FROM desktop_opencode_sessions)
-        """, values: [])
-      for row in durable {
-        guard let id = row.objectValue?["id"]?.stringValue else { continue }
-        try markLocalACPRunUncertainUnlocked(runID: id,
-          detail: "The connection ended before the remote outcome was confirmed. Reconnect this conversation to recover its result.")
-      }
+      // Losing this process ends every local CLI it ran.
       let message = try prepareUnlocked("""
         UPDATE dashboard_messages
         SET content = CASE
