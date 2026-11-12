@@ -38,6 +38,14 @@ public enum PageSegment: Equatable, Identifiable, Sendable {
     case .flow(_, let parentID, _, _, _), .section(_, let parentID, _), .asset(_, _, let parentID, _): parentID
     }
   }
+
+  /// The ID of the flow at one place on a Page. Each part is length-prefixed, so any
+  /// component ID, including "root", "start" or one containing a separator, gives a
+  /// distinct value. View identity only; it is never stored.
+  public static func flowID(parentID: String?, afterID: String?) -> String {
+    func part(_ id: String?) -> String { id.map { "\($0.utf8.count):\($0)" } ?? "-" }
+    return "flow/\(part(parentID))/\(part(afterID))"
+  }
 }
 
 public enum PageComponentKind: String, Codable, CaseIterable, Sendable { case text, task, section, table, asset }
@@ -76,8 +84,7 @@ public struct PageLegacyConnection: Equatable, Identifiable, Sendable {
 
 public extension NoteDocument {
   static let maximumPageDepth = 8
-
-  var isPage: Bool { kind == .canvas }
+  static let legacyConnectionExcerpt = 120
 
   /// Rejects anything but a contiguous tree: each parent must be an enclosing open
   /// section, which also rules out cycles and split subtrees.
@@ -116,7 +123,7 @@ public extension NoteDocument {
       var endsWithFlow = false
       func flush() {
         guard !flow.isEmpty else { return }
-        segments.append(.flow(id: Self.pageFlowID(parentID: parentID, afterID: afterID), parentID: parentID,
+        segments.append(.flow(id: PageSegment.flowID(parentID: parentID, afterID: afterID), parentID: parentID,
           afterID: afterID, depth: depth, blockIDs: flow))
         flow = []
       }
@@ -136,7 +143,7 @@ public extension NoteDocument {
       }
       flush()
       if !endsWithFlow {
-        segments.append(.flow(id: Self.pageFlowID(parentID: parentID, afterID: afterID), parentID: parentID,
+        segments.append(.flow(id: PageSegment.flowID(parentID: parentID, afterID: afterID), parentID: parentID,
           afterID: afterID, depth: depth, blockIDs: []))
       }
     }
@@ -144,9 +151,6 @@ public extension NoteDocument {
     return segments
   }
 
-  private static func pageFlowID(parentID: String?, afterID: String?) -> String {
-    "flow:\(parentID ?? "root"):\(afterID ?? "start")"
-  }
 
   /// Converts an older spatial Board deterministically: the same document always gives
   /// the same order and IDs on every host. Purely additive to the stored layout, so
@@ -162,9 +166,10 @@ public extension NoteDocument {
       while !taken.insert(value).inserted { value = "\(candidate)~\(suffix)"; suffix += 1 }
       return value
     }
-    // Tolerates a duplicate ID, so a malformed document still reaches validation.
+    // Tolerates a duplicate ID, so a malformed document still reaches validation. A card
+    // with no stored placement sat in the Board's automatic five-column grid.
     let positions = Dictionary(blocks.enumerated().map { index, block in
-      (block.id, canvas?[block.id] ?? .automatic(index: index))
+      (block.id, canvas?[block.id] ?? CanvasCardPlacement(x: 24 + Double(index % 5) * 392, y: 24 + Double(index / 5) * 332))
     }, uniquingKeysWith: { first, _ in first })
     let byID = Dictionary(blocks.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
     func order(_ lhs: (y: Double, x: Double, id: String), _ rhs: (y: Double, x: Double, id: String)) -> Bool {
@@ -313,12 +318,13 @@ public extension NoteDocument {
   }
 
   /// Older connections, readable without any spatial view. Endpoints missing from the
-  /// document cannot occur: validation rejects them and removal prunes them.
+  /// document cannot occur: validation rejects them and removal prunes them. Each end
+  /// is a short excerpt that identifies it, so a read never repeats whole components.
   var pageLegacyConnections: [PageLegacyConnection] {
     let byID = Dictionary(blocks.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
     func text(_ id: String) -> String {
-      if let title = canvas?[id]?.title, !title.isEmpty { return title }
-      return byID[id]?.plainText ?? ""
+      if let title = canvas?[id]?.title, !title.isEmpty { return String(title.prefix(Self.legacyConnectionExcerpt)) }
+      return String((byID[id]?.plainText ?? "").prefix(Self.legacyConnectionExcerpt))
     }
     return (canvasConnections ?? []).map {
       PageLegacyConnection(id: $0.id, fromID: $0.from, toID: $0.to, fromText: text($0.from), toText: text($0.to), label: $0.label)

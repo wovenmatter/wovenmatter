@@ -104,7 +104,7 @@ struct PageModelTests {
     // Projection never writes, and the read's tokens are good for the first write.
     let segments = board.pageSegments
     #expect(board.pageNodes == nil)
-    #expect(segments.first?.id == "flow:root:start")
+    #expect(segments.first?.id == PageSegment.flowID(parentID: nil, afterID: nil))
     var written = board
     _ = try written.apply([.page(.init(action: .update, id: "b", expectedRevision: first.boardItemRevision(for: "b"), patch: .init(status: .done)))])
     #expect(written.boardItems?["b"]?.task?.status == .done)
@@ -165,17 +165,30 @@ struct PageModelTests {
     let segments = sample().pageSegments
     #expect(segments == [
       .section(id: "s", parentID: nil, depth: 0),
-      .flow(id: "flow:s:start", parentID: "s", afterID: nil, depth: 1, blockIDs: ["a"]),
+      .flow(id: PageSegment.flowID(parentID: "s", afterID: nil), parentID: "s", afterID: nil, depth: 1, blockIDs: ["a"]),
       .section(id: "t", parentID: "s", depth: 1),
-      .flow(id: "flow:t:start", parentID: "t", afterID: nil, depth: 2, blockIDs: ["b"]),
-      .flow(id: "flow:s:t", parentID: "s", afterID: "t", depth: 1, blockIDs: []),
-      .flow(id: "flow:root:s", parentID: nil, afterID: "s", depth: 0, blockIDs: ["c"]),
+      .flow(id: PageSegment.flowID(parentID: "t", afterID: nil), parentID: "t", afterID: nil, depth: 2, blockIDs: ["b"]),
+      .flow(id: PageSegment.flowID(parentID: "s", afterID: "t"), parentID: "s", afterID: "t", depth: 1, blockIDs: []),
+      .flow(id: PageSegment.flowID(parentID: nil, afterID: "s"), parentID: nil, afterID: "s", depth: 0, blockIDs: ["c"]),
       .asset(id: "l", assetID: "original", parentID: nil, depth: 0),
-      .flow(id: "flow:root:l", parentID: nil, afterID: "l", depth: 0, blockIDs: []),
+      .flow(id: PageSegment.flowID(parentID: nil, afterID: "l"), parentID: nil, afterID: "l", depth: 0, blockIDs: []),
     ])
-    #expect(page([]).pageSegments == [.flow(id: "flow:root:start", parentID: nil, afterID: nil, depth: 0, blockIDs: [])])
+    #expect(page([]).pageSegments == [.flow(id: PageSegment.flowID(parentID: nil, afterID: nil), parentID: nil, afterID: nil, depth: 0, blockIDs: [])])
     let empty = page([text("s")], nodes: ["s": .init(isSection: true)]).pageSegments
-    #expect(empty.contains(.flow(id: "flow:s:start", parentID: "s", afterID: nil, depth: 1, blockIDs: [])))
+    #expect(empty.contains(.flow(id: PageSegment.flowID(parentID: "s", afterID: nil), parentID: "s", afterID: nil, depth: 1, blockIDs: [])))
+  }
+
+  @Test func flowIDsNeverCollide() throws {
+    #expect(PageSegment.flowID(parentID: nil, afterID: nil) == "flow/-/-")
+    #expect(PageSegment.flowID(parentID: "s", afterID: "a:b") == "flow/1:s/3:a:b")
+    let places: [(String?, String?)] = [(nil, nil), ("root", nil), (nil, "start"), ("root", "start"),
+      ("a:b", "c"), ("a", "b:c"), ("a/1:b", nil), ("a", "1:b"), ("-", nil), (nil, "-")]
+    #expect(Set(places.map { PageSegment.flowID(parentID: $0.0, afterID: $0.1) }).count == places.count)
+    // A section literally called "root" holds its own flow, apart from the Page root's.
+    let named = page([text("intro", "Intro"), text("root", "Root section", style: .heading2), text("inside", "In it")],
+      nodes: ["root": .init(isSection: true), "inside": .init(parentID: "root")])
+    let ids = named.pageSegments.map(\.id)
+    #expect(ids.count == 4 && Set(ids).count == ids.count)
   }
 
   @Test func aFlowKeepsItsIdentityWhenItsFirstParagraphGoes() throws {
@@ -496,6 +509,21 @@ struct PageModelTests {
     #expect(NoteArtifactKind.canvas.rawValue == "canvas" && NoteArtifactKind.canvas.displayName == "Page")
   }
 
+  @Test func agentBatchesCannotCarryPageEdits() throws {
+    try NoteEditOperation.requireGenericNoteOperations([.appendText("Fine", .paragraph)])
+    #expect(throws: WorkspaceToolError.self) {
+      try NoteEditOperation.requireGenericNoteOperations([.appendText("Fine", .paragraph), .page(.init(action: .requirePage))])
+    }
+    let nonce = "nonce"
+    let envelope = RemoteNoteEditEnvelope(nonce: nonce, noteID: "p", expectedRevision: "r",
+      operations: [.page(.init(action: .add, id: "chosen", patch: .init(text: "Bypass")))])
+    let content = RemoteNoteEditEnvelope.beginMarker(nonce: nonce) + "\n" + String(decoding: try JSONEncoder().encode(envelope), as: UTF8.self)
+      + "\n" + RemoteNoteEditEnvelope.endMarker(nonce: nonce)
+    #expect(throws: RemoteNoteEditError.operationNotAllowed) {
+      _ = try RemoteNoteEditEnvelope.extract(from: content, nonce: nonce, noteID: "p", expectedRevision: "r", noteKind: .canvas)
+    }
+  }
+
   // MARK: Generic note tools
 
   @Test func genericToolsKeepTheTreeValid() throws {
@@ -523,14 +551,6 @@ struct PageModelTests {
       var copy = document
       _ = try copy.apply([.deleteBlock(id: "t")])
     }
-    #expect(throws: NoteEditError.pageSectionNotEmpty("t")) {
-      var copy = document
-      _ = try copy.apply([.canvas(.init(action: .remove, id: "t"))])
-    }
-    #expect(throws: NoteEditError.pageSectionNotEmpty("t")) {
-      var copy = document
-      _ = try copy.apply([.board(.init(action: .removeItem, id: "t", expectedRevision: document.boardItemRevision(for: "t")))])
-    }
     #expect(throws: NoteDocumentSafetyError.unsupportedFormat) {
       var copy = document
       _ = try copy.apply([.replaceBlock(id: "t", block: .table(.init(id: "t", columns: [.init(id: "c")], rows: [.init(id: "r", cells: [.init(id: "x")])])))])
@@ -538,6 +558,12 @@ struct PageModelTests {
     _ = try document.apply([.deleteBlock(id: "b")])
     #expect(document.pageNodes?["b"] == nil && document.boardItems?["b"] == nil)
     try document.validateEditableShape()
+
+    // A linked original is edited at its asset, never by hiding text in the embed.
+    #expect(throws: NoteEditError.boardLinkedAssetText("l")) {
+      var copy = document
+      _ = try copy.apply([.replaceBlock(id: "l", block: text("l", "Hidden copy"))])
+    }
 
     // A generic write to an unwritten Board migrates it first, so positions are real.
     var board = legacyBoard()
@@ -625,6 +651,42 @@ struct PageModelTests {
     let copy = try #require(tasks.conflictCopyIDs.first)
     #expect(tasks.document.boardItems?["b"]?.task?.status == .done)
     #expect(tasks.document.boardItems?[copy]?.task?.status == .blocked)
+  }
+
+  @Test func eachTaskFieldMergesOnItsOwn() throws {
+    func patch(_ value: BoardItemPatch) -> (inout NoteDocument) throws -> Void {
+      { _ = try $0.apply([.page(.init(action: .update, id: "b", expectedRevision: $0.boardItemRevision(for: "b"), patch: value))]) }
+    }
+    // A person ticks the task done while an agent records its outcome and assignee.
+    let result = try merged(sample(), local: patch(.init(status: .done)), remote: patch(.init(assignee: "Agent", outcome: "Found the cause")))
+    #expect(result.conflictedIDs.isEmpty && result.conflictCopyIDs.isEmpty)
+    #expect(result.document.boardItems?["b"]?.task == BoardTask(status: .done, assignee: "Agent", outcome: "Found the cause"))
+    // Two new tasks on one component combine the same way.
+    let fresh = try merged(sample(), local: { _ = try $0.apply([.page(.init(action: .update, id: "a", expectedRevision: $0.boardItemRevision(for: "a"), patch: .init(status: .doing)))]) },
+      remote: { _ = try $0.apply([.page(.init(action: .update, id: "a", expectedRevision: $0.boardItemRevision(for: "a"), patch: .init(assignee: "Agent")))]) })
+    #expect(fresh.conflictedIDs.isEmpty)
+    #expect(fresh.document.boardItems?["a"]?.task == BoardTask(status: .doing, assignee: "Agent"))
+    // The same field changed both ways, or a cleared task against an edit, still keeps both versions.
+    let outcomes = try merged(sample(), local: patch(.init(outcome: "Mine")), remote: patch(.init(outcome: "Theirs")))
+    #expect(outcomes.conflictedIDs == ["b"] && outcomes.conflictCopyIDs.count == 1)
+    #expect(outcomes.document.boardItems?["b"]?.task?.outcome == "Theirs")
+    let cleared = try merged(sample(), local: patch(.init(clearTask: true)), remote: patch(.init(outcome: "Theirs")))
+    #expect(cleared.conflictedIDs == ["b"])
+    #expect(cleared.document.boardItems?["b"]?.task?.outcome == "Theirs")
+  }
+
+  @Test func mergedSessionLinksStayWithinTheirLimit() throws {
+    var base = sample()
+    let existing = (0..<(BoardItem.maximumSessions - 2)).map { "base-\($0)" }
+    base.boardItems?["b"]?.sessions = existing
+    func link(_ ids: [String]) -> (inout NoteDocument) throws -> Void {
+      { document in for id in ids { _ = try document.apply([.page(.init(action: .linkSession, id: "b", sessionID: id))]) } }
+    }
+    let result = try merged(base, local: link(["local-1", "local-2"]), remote: link(["remote-1", "remote-2"]))
+    #expect(result.document.boardItems?["b"]?.sessions == existing + ["remote-1", "remote-2"])
+    // Below the limit both sides' links are kept.
+    let room = try merged(sample(), local: link(["local-1"]), remote: link(["remote-1"]))
+    #expect(room.document.boardItems?["b"]?.sessions == ["remote-1", "local-1"])
   }
 
   @Test func anEditOutlivesADeleteOnTheOtherSide() throws {

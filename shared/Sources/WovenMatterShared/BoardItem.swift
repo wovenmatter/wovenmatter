@@ -120,30 +120,6 @@ public struct BoardItemPatch: Codable, Equatable, Sendable {
   }
 }
 
-/// A focused Board mutation. `updateItem` and `removeItem` carry the item revision
-/// that was read, so independent cards do not contend on the document revision.
-public struct BoardEdit: Codable, Equatable, Sendable {
-  /// `requireBoard` changes nothing. It makes a batch of generic operations fail on
-  /// any other asset inside the same transaction, so a successful retry still replays.
-  public enum Action: String, Codable, Sendable { case requireBoard, setPurpose, addItem, updateItem, removeItem, linkSession, unlinkSession }
-  public var action: Action
-  public var id: String?
-  public var expectedRevision: String?
-  /// `setPurpose` only; an empty value clears the purpose.
-  public var purpose: String?
-  public var patch: BoardItemPatch?
-  /// `addItem` only. An existing card's linked asset is never retargeted.
-  public var assetID: String?
-  /// `addItem` only; omitted means the next free position on the Board.
-  public var placement: CanvasCardPlacement?
-  public var sessionID: String?
-  public init(action: Action, id: String? = nil, expectedRevision: String? = nil, purpose: String? = nil,
-              patch: BoardItemPatch? = nil, assetID: String? = nil, placement: CanvasCardPlacement? = nil, sessionID: String? = nil) {
-    self.action = action; self.id = id; self.expectedRevision = expectedRevision; self.purpose = purpose
-    self.patch = patch; self.assetID = assetID; self.placement = placement; self.sessionID = sessionID
-  }
-}
-
 public extension NoteDocument {
   static let maximumBoardPurposeBytes = 4_096
   /// Agent writes cannot exceed the note edit envelope, so the editor must not
@@ -177,7 +153,7 @@ public extension NoteDocument {
       current?.createdBy = previous?.createdBy; current?.createdAt = previous?.createdAt
       current?.updatedBy = previous?.updatedBy; current?.updatedAt = previous?.updatedAt
       let isNew = oldBlocks[id] == nil
-      guard isNew || old.boardContent(for: id, block: oldBlocks[id]) != boardContent(for: id, block: newBlocks[id]) else {
+      guard isNew || oldBlocks[id].map(old.pageComponentContent) != newBlocks[id].map(pageComponentContent) else {
         if let current { items[id] = current }
         continue
       }
@@ -190,109 +166,6 @@ public extension NoteDocument {
       items[id] = item
     }
     boardItems = items.isEmpty && boardItems == nil ? nil : items
-  }
-
-  /// The next card position that overlaps nothing, inside `sectionID` when it fits.
-  func nextBoardPlacement(sectionID: String? = nil) -> CanvasCardPlacement {
-    let width = 360.0, height = 300.0, gap = 32.0
-    let section = sectionID.flatMap { id in canvasSections?.first { $0.id == id } }
-    let originX = section.map { $0.x + 24 } ?? 24, originY = section.map { $0.y + 56 } ?? 24
-    let columns = section.map { max(1, Int(($0.width - 48 + gap) / (width + gap))) } ?? 5
-    let occupied = Array(canvasPlacements.values)
-    func placed(x: Double, y: Double) -> CanvasCardPlacement {
-      var placement = CanvasCardPlacement(x: x, y: y, width: width, height: height)
-      placement.sectionID = section?.id
-      return placement
-    }
-    // One card can straddle several cells, so try a bounded grid, then go below everything.
-    for index in 0..<(occupied.count * 4 + 1) {
-      let x = originX + Double(index % columns) * (width + gap), y = originY + Double(index / columns) * (height + gap)
-      if !occupied.contains(where: { $0.x < x + width && x < $0.x + $0.width && $0.y < y + height && y < $0.y + $0.height }) {
-        return placed(x: x, y: y)
-      }
-    }
-    return placed(x: originX, y: max(originY, (occupied.map { $0.y + $0.height }.max() ?? originY) + gap))
-  }
-
-  mutating func applyBoardEdit(_ edit: BoardEdit) throws {
-    guard kind == .canvas else { throw NoteEditError.artifactKindMismatch }
-    switch edit.action {
-    case .requireBoard:
-      break
-    case .setPurpose:
-      guard let purpose = edit.purpose, purpose.utf8.count <= Self.maximumBoardPurposeBytes else { throw NoteDocumentSafetyError.tooLarge }
-      boardPurpose = purpose.isEmpty ? nil : purpose
-    case .addItem:
-      guard let id = edit.id, !id.isEmpty, id.utf8.count <= 1024 else { throw NoteDocumentSafetyError.unsupportedFormat }
-      guard !blocks.contains(where: { $0.id == id }) else { throw NoteEditError.boardItemExists(id) }
-      if edit.assetID != nil, edit.patch?.text != nil { throw NoteEditError.boardLinkedAssetText(id) }
-      if edit.assetID?.isEmpty == true { throw NoteDocumentSafetyError.unsupportedFormat }
-      var placement = edit.placement ?? nextBoardPlacement()
-      placement.assetID = edit.assetID
-      if let title = edit.patch?.title { placement.title = title }
-      blocks.append(.richText(NoteRichTextBlock(id: id, text: edit.patch?.text ?? "")))
-      if canvas == nil { canvas = [:] }
-      canvas?[id] = placement
-      var item = BoardItem()
-      try applyBoardPatch(edit.patch, to: &item)
-      if boardItems == nil { boardItems = [:] }
-      boardItems?[id] = item
-    case .updateItem:
-      let id = try requireBoardItem(edit, revisionRequired: true)
-      guard let patch = edit.patch else { throw NoteDocumentSafetyError.unsupportedFormat }
-      if let title = patch.title {
-        var placement = canvasPlacement(for: id); placement.title = title.isEmpty ? nil : title
-        if canvas == nil { canvas = [:] }
-        canvas?[id] = placement
-      }
-      if let text = patch.text {
-        guard canvasPlacement(for: id).assetID == nil else { throw NoteEditError.boardLinkedAssetText(id) }
-        guard let index = blocks.firstIndex(where: { $0.id == id }), case .richText(var block) = blocks[index] else {
-          throw NoteEditError.boardItemNotText(id)
-        }
-        if block.plainText != text { block.runs = text.isEmpty ? [] : [NoteTextRun(text: text)]; blocks[index] = .richText(block) }
-      }
-      var item = boardItems?[id] ?? BoardItem()
-      try applyBoardPatch(patch, to: &item)
-      if boardItems == nil { boardItems = [:] }
-      boardItems?[id] = item
-    case .removeItem:
-      let id = try requireBoardItem(edit, revisionRequired: true)
-      try requirePageRemovable(id)
-      blocks.removeAll { $0.id == id }
-      prunePageMetadata([id])
-    case .linkSession:
-      let id = try requireBoardItem(edit, revisionRequired: false)
-      guard let sessionID = edit.sessionID, !sessionID.isEmpty, sessionID.utf8.count <= 1024 else { throw NoteDocumentSafetyError.unsupportedFormat }
-      var item = boardItems?[id] ?? BoardItem()
-      guard !item.sessions.contains(sessionID) else { return }
-      guard item.sessions.count < BoardItem.maximumSessions else { throw NoteEditError.boardSessionLimit(id) }
-      item.sessions.append(sessionID)
-      if boardItems == nil { boardItems = [:] }
-      boardItems?[id] = item
-    case .unlinkSession:
-      let id = try requireBoardItem(edit, revisionRequired: false)
-      guard let sessionID = edit.sessionID else { throw NoteDocumentSafetyError.unsupportedFormat }
-      boardItems?[id]?.sessions.removeAll { $0 == sessionID }
-    }
-  }
-
-  /// Checks identity and the optimistic item revision against the document being edited.
-  private func requireBoardItem(_ edit: BoardEdit, revisionRequired: Bool) throws -> String {
-    guard let id = edit.id else { throw NoteDocumentSafetyError.unsupportedFormat }
-    guard blocks.contains(where: { $0.id == id }) else {
-      // A caller holding a revision read this card, so it was removed since then.
-      if edit.expectedRevision != nil { throw NoteEditError.boardItemConflict(id: id, currentRevision: "") }
-      throw NoteEditError.blockNotFound(id)
-    }
-    if revisionRequired, edit.expectedRevision == nil {
-      throw WorkspaceToolError.revisionRequired("This Board change requires itemRevision. Read the Board and pass the item's current revision.")
-    }
-    if let expected = edit.expectedRevision {
-      let current = boardItemRevision(for: id)
-      guard expected == current else { throw NoteEditError.boardItemConflict(id: id, currentRevision: current) }
-    }
-    return id
   }
 
   internal func applyBoardPatch(_ patch: BoardItemPatch?, to item: inout BoardItem) throws {
@@ -316,13 +189,11 @@ public extension NoteDocument {
     if let lastChange = patch.lastChange { item.lastChange = lastChange.isEmpty ? nil : lastChange }
   }
 
-  /// Compares everything a stamp reflects, and nothing a stamp writes or layout moves.
-  private func boardContent(for id: String, block: NoteBlock?) -> BoardItemContent {
-    // A card with no stored placement has an automatic one, with no title or asset.
-    let placement = canvas?[id]
-    let item = boardItems?[id] ?? BoardItem()
-    return BoardItemContent(block: block?.normalized, title: placement?.title, assetID: placement?.assetID,
-      role: item.role, task: item.task, review: item.review, sessions: item.sessions, lastChange: item.lastChange)
+  /// Everything a reader sees of one component, which a stamp and a merge compare.
+  internal func pageComponentContent(of block: NoteBlock) -> PageComponentContent {
+    let placement = canvas?[block.id], item = boardItems?[block.id] ?? BoardItem()
+    return PageComponentContent(block: block.normalized, title: placement?.title, assetID: placement?.assetID, role: item.role,
+      task: item.task, review: item.review, sessions: item.sessions, lastChange: item.lastChange)
   }
 }
 
@@ -335,13 +206,15 @@ struct BoardItemFingerprint: Encodable {
   let isSection: Bool?
 }
 
-private struct BoardItemContent: Equatable {
-  let block: NoteBlock?
-  let title: String?
-  let assetID: String?
-  let role: BoardItemRole
-  let task: BoardTask?
-  let review: BoardReviewState?
-  let sessions: [String]
-  let lastChange: String?
+/// Everything a reader sees of a component, and nothing a stamp writes or layout moves.
+/// Its encoding names conflict copies, so its field names must stay stable.
+struct PageComponentContent: Equatable, Encodable {
+  var block: NoteBlock
+  var title: String?
+  var assetID: String?
+  var role: BoardItemRole
+  var task: BoardTask?
+  var review: BoardReviewState?
+  var sessions: [String]
+  var lastChange: String?
 }

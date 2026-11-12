@@ -103,7 +103,7 @@ struct PairedLibraryTests {
     #expect(onB.canvas?[reference.id]?.assetID == asset)
     #expect(try await b.database.libraryNote(id: asset)?.content == a.database.libraryNote(id: asset)?.content)
     _ = try await b.database.applyNoteEdits(.init(command: .apply, noteID: board, operations: [
-      .board(.init(action: .updateItem, id: task.id, expectedRevision: onB.boardItemRevision(for: task.id),
+      .page(.init(action: .update, id: task.id, expectedRevision: onB.boardItemRevision(for: task.id),
         patch: .init(status: .done, outcome: "Verified on the second Mac", review: .needed)))
     ]))
     try await b.send(to: a); try await a.send(to: b)
@@ -115,7 +115,7 @@ struct PairedLibraryTests {
     for (mac, outcome) in [(a, "Air offline outcome"), (b, "Mini offline outcome")] {
       let current = try #require(try await mac.database.readNoteForEditing(id: board).document)
       _ = try await mac.database.applyNoteEdits(.init(command: .apply, noteID: board, operations: [
-        .board(.init(action: .updateItem, id: task.id, expectedRevision: current.boardItemRevision(for: task.id),
+        .page(.init(action: .update, id: task.id, expectedRevision: current.boardItemRevision(for: task.id),
           patch: .init(outcome: outcome)))
       ]))
     }
@@ -133,7 +133,7 @@ struct PairedLibraryTests {
     }
     let current = try #require(try await a.database.readNoteForEditing(id: board).document)
     _ = try await a.database.applyNoteEdits(.init(command: .apply, noteID: board, operations: [
-      .board(.init(action: .removeItem, id: reference.id, expectedRevision: current.boardItemRevision(for: reference.id)))
+      .page(.init(action: .remove, id: reference.id, expectedRevision: current.boardItemRevision(for: reference.id)))
     ]))
     try await a.send(to: b)
     #expect(try await a.database.libraryNote(id: asset) != nil)

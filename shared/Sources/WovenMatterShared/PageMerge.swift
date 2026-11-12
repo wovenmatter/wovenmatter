@@ -93,25 +93,10 @@ private struct PageMerger {
     func has(_ id: String) -> Bool { blocks[id] != nil }
     func parent(_ id: String) -> String? { document.pageNodes?[id]?.parentID }
     func isSection(_ id: String) -> Bool { document.pageNodes?[id]?.isSection == true }
-    /// Everything a reader sees of a component, and nothing a stamp writes or layout moves.
-    func content(_ id: String) -> Content? {
-      guard let block = blocks[id] else { return nil }
-      let placement = document.canvas?[id], item = document.boardItems?[id] ?? BoardItem()
-      return Content(block: block.normalized, title: placement?.title, assetID: placement?.assetID, role: item.role,
-        task: item.task, review: item.review, sessions: item.sessions, lastChange: item.lastChange)
-    }
+    func content(_ id: String) -> Content? { blocks[id].map(document.pageComponentContent) }
   }
 
-  struct Content: Equatable, Encodable {
-    var block: NoteBlock
-    var title: String?
-    var assetID: String?
-    var role: BoardItemRole
-    var task: BoardTask?
-    var review: BoardReviewState?
-    var sessions: [String]
-    var lastChange: String?
-  }
+  typealias Content = PageComponentContent
 
   let base: Snapshot, local: Snapshot, remote: Snapshot
   var survivors: Set<String> = []
@@ -187,23 +172,35 @@ private struct PageMerger {
     if remoteContent == baseContent { return (localContent, nil) }
 
     var collision = false
-    func pick<T: Equatable>(_ path: KeyPath<Content, T>) -> T {
-      let b = baseContent[keyPath: path], l = localContent[keyPath: path], r = remoteContent[keyPath: path]
+    func choose<T: Equatable>(_ b: T, _ l: T, _ r: T) -> T {
       if l == b || l == r { return r }
       if r == b { return l }
       collision = true
       return r
     }
+    func pick<T: Equatable>(_ path: KeyPath<Content, T>) -> T {
+      choose(baseContent[keyPath: path], localContent[keyPath: path], remoteContent[keyPath: path])
+    }
     var merged = remoteContent
     merged.block = pick(\.block)
     merged.title = pick(\.title)
     merged.role = pick(\.role)
-    merged.task = pick(\.task)
+    // Each task field merges on its own, so ticking the checkbox while another participant
+    // writes the outcome keeps both. Making or clearing the task is one field of its own.
+    if let l = localContent.task, let r = remoteContent.task {
+      let b = baseContent.task ?? BoardTask()
+      merged.task = BoardTask(status: choose(b.status, l.status, r.status), assignee: choose(b.assignee, l.assignee, r.assignee),
+                              outcome: choose(b.outcome, l.outcome, r.outcome))
+    } else {
+      merged.task = pick(\.task)
+    }
     merged.review = pick(\.review)
     // A session link and a change summary are additive metadata, not anyone's writing.
+    // The remote's links come first, so the cap keeps what is already stored.
     let added = localContent.sessions.filter { !baseContent.sessions.contains($0) }
     let dropped = Set(baseContent.sessions.filter { !localContent.sessions.contains($0) })
-    merged.sessions = (remoteContent.sessions + added.filter { !remoteContent.sessions.contains($0) }).filter { !dropped.contains($0) }
+    merged.sessions = Array((remoteContent.sessions + added.filter { !remoteContent.sessions.contains($0) })
+      .filter { !dropped.contains($0) }.prefix(BoardItem.maximumSessions))
     if localContent.lastChange != baseContent.lastChange, remoteContent.lastChange == baseContent.lastChange {
       merged.lastChange = localContent.lastChange
     }

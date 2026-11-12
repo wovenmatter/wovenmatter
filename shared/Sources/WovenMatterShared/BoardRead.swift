@@ -150,7 +150,7 @@ private extension NoteDocument {
     if let time = item.createdAt { value["createdAt"] = .string(time) }
     if let actor = item.updatedBy { value["updatedBy"] = try WovenMCPCatalog.json(actor) }
     if let time = item.updatedAt { value["updatedAt"] = .string(time) }
-    if includeLayout { value["legacyPlacement"] = try WovenMCPCatalog.json(canvasPlacement(for: id)) }
+    if includeLayout, let placement = canvas?[id] { value["legacyPlacement"] = try WovenMCPCatalog.json(placement) }
     return .object(value)
   }
 }
