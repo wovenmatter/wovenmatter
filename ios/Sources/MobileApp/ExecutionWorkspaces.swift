@@ -173,6 +173,7 @@ extension MobileModel {
       executionWorkspaces = journal.workspaces.values.filter { !$0.deleted && $0.id != deviceWorkspaceID }.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
       let availableIDs = Set(executionWorkspaces.map(\.id))
       for id in Array(workspaceClients.keys) where !availableIDs.contains(id) {
+        if let stream = workspaceStreams.removeValue(forKey: id) { streamEndpoints.removeValue(forKey: id); Task { await stream.close() } }
         workspacePollTasks.removeValue(forKey: id)?.cancel()
         workspaceClients.removeValue(forKey: id); workspaceProviders.removeValue(forKey: id)
         workspaceReachable.removeValue(forKey: id); remotePending.removeValue(forKey: id)
@@ -224,6 +225,8 @@ extension MobileModel {
             transport: try HTTPSExecutionWorkspaceTransport(credential: credential))
         }
         guard workspaceClients[workspace.id] != nil, workspacePollTasks[workspace.id] == nil else { continue }
+        // A streamed workspace pushes its history, questions and the open chat.
+        guard !streams(workspace) else { continue }
         let id = workspace.id
         workspacePollTasks[id] = Task { [weak self] in
           guard let self else { return }
@@ -231,12 +234,15 @@ extension MobileModel {
           self.workspacePollTasks.removeValue(forKey: id)
         }
       }
+      await reconcileWorkspaceStreams()
       if providerID.isEmpty { providerID = availableExecutionProviders.first { $0.available && $0.canStart }?.id ?? "" }
       await reload()
     } catch { pairingError = error.localizedDescription }
   }
   func refreshDirectWorkspace(_ workspaceID: String,
                               clearCredential: ((String) throws -> Void)? = nil) async {
+    // Its stream already holds everything; only the open chat may have changed.
+    if workspaceStreams[workspaceID] != nil { await openStreamedConversation(workspaceID); return }
     guard let client = workspaceClients[workspaceID] else { return }
     do {
       try await client.refresh()
@@ -368,6 +374,7 @@ extension MobileModel {
     centralProvidersRefreshDue = true
     if engine != nil { await refresh() }
     await refreshExecutionWorkspaces(force: true)
+    for id in workspaceStreams.keys where workspaceReachable[id] == true { await refreshStreamedWorkspace(id) }
   }
   func stopExecutionWorkspace() async {
     guard let id = selectedConversationID, let runID = activeRunID else { return }

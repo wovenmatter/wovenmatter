@@ -714,6 +714,7 @@ extension MobileModel {
       stopDeviceScheduler()
     case .background:
       connectionForeground = false
+      stopWorkspaceStreams()
       stopDeviceScheduler()
       beginFallbackExecutionBackgroundTask()
     @unknown default: break

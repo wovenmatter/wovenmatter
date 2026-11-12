@@ -30,6 +30,7 @@ extension MobileModel {
     connectionRefreshTask?.cancel(); connectionRefreshTask = nil
     for task in workspacePollTasks.values { task.cancel() }
     workspacePollTasks = [:]
+    closeWorkspaceStreams()
     let previousEngine = engine
     credential = nil; transport = nil; engine = nil; online = false
     await previousEngine?.cancelSynchronization()
@@ -54,6 +55,7 @@ extension MobileModel {
     connectionRefreshTask?.cancel(); connectionRefreshTask = nil
     for task in workspacePollTasks.values { task.cancel() }
     workspacePollTasks = [:]
+    closeWorkspaceStreams()
     let previousEngine = engine
     let previousTransport = transport
     credential = nil; transport = nil; engine = nil
@@ -115,15 +117,18 @@ extension MobileModel {
         await refreshExecutionWorkspaces()
         if let engine { synchronizationStatus = await engine.synchronizationStatus() }
       }
-      // A viewed running chat receives live activity. Idle workspaces and failed
+      // A viewed running chat receives live activity: pushed by a streamed
+      // workspace, polled from any other. Idle workspaces and failed
       // connections each have their own longer deadline before any network work.
-      let interval: Duration = tab == .chat && (activeRunID != nil || awaitingRemoteTurn) ? .seconds(2) : .seconds(15)
+      let polled = workspaceStreams[selectedExecutionWorkspaceID] == nil
+      let interval: Duration = polled && tab == .chat && (activeRunID != nil || awaitingRemoteTurn) ? .seconds(2) : .seconds(15)
       do { try await Task.sleep(for: interval) } catch { return }
     }
   }
 
   private func connectionDidBecomeReachable() {
     guard connectionForeground else { return }
+    reconnectWorkspaceStreams()
     centralRefreshAfter = .distantPast; workspaceRefreshAfter = [:]; centralProvidersRefreshDue = true
     requestSynchronization(immediately: true)
   }

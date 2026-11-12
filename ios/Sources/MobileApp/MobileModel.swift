@@ -131,6 +131,11 @@ import MobileInference
   var executionWorkspaces: [ExecutionWorkspace] = []
   var workspacePollTasks: [String: Task<Void, Never>] = [:]
   var workspaceClients: [String: WorkspaceClient] = [:]
+  /// Live streams to `stream.v1` workspaces, foreground only.
+  @ObservationIgnored var workspaceStreams: [String: MobileWorkspaceStream] = [:]
+  @ObservationIgnored var streamEndpoints: [String: URL] = [:]
+  @ObservationIgnored var streamMembersRevision: String?
+  @ObservationIgnored var streamReloadScheduled = false
   var workspaceProviders: [String: [HarnessCapabilities]] = [:]
   var workspaceReachable: [String: Bool] = [:]
   var executionWorkspaceRefreshInProgress = false
