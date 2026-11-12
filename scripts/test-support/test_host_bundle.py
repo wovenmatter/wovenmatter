@@ -126,7 +126,7 @@ class ExecTests(unittest.TestCase):
     def test_literal_environment_and_no_shell_rc_execution(self):
         marker=self.home/'rc-was-executed'; (self.home/'.bashrc').write_text('touch '+str(marker)+'\n')
         literal='$(touch '+str(marker)+') # value with spaces'
-        result=self.execute('--env','CODEX_CONFIG='+literal,'harness',sys.executable,'-c','import os; print(os.environ["CODEX_CONFIG"])')
+        result=self.execute('--env','WOVENMATTER_ADDITIONAL_INSTRUCTIONS='+literal,'exec',sys.executable,'-c','import os; print(os.environ["WOVENMATTER_ADDITIONAL_INSTRUCTIONS"])')
         self.assertEqual(result.returncode,0,result.stderr.decode()); self.assertEqual(result.stdout.decode().strip(),literal)
         self.assertFalse(marker.exists())
         result=self.execute('--env','LD_PRELOAD=/bad','exec',sys.executable,'-c','pass')
@@ -137,17 +137,13 @@ class ExecTests(unittest.TestCase):
             result=self.execute('exec',sys.executable,'-c','pass')
             self.assertEqual(result.returncode,75)
             self.assertIn('Runtime maintenance is in progress.',result.stderr.decode())
-    def test_mcp_wrapping_and_default_agent_control_flags(self):
-        node=self.root/'node/current/bin/node'; node.parent.mkdir(parents=True)
-        node.write_text('#!'+sys.executable+'\nimport json,sys; print(json.dumps(sys.argv[1:]))\n'); node.chmod(0o700)
-        result=self.execute('harness','codex-acp','--fixture')
-        self.assertEqual(result.returncode,0,result.stderr.decode()); args=json.loads(result.stdout)
-        self.assertEqual(args,[str(self.root/'current/harnesses/mcp/adapter.mjs'),'codex','codex-acp','--fixture'])
-        args=json.loads(self.execute('default-agent','--control').stdout)
-        self.assertIn('--control',args); self.assertNotIn('--remote',args)
-        args=json.loads(self.execute('default-agent').stdout); self.assertIn('--remote',args)
-        args=json.loads(self.execute('durable-acp','--channel-id','fixture','--','codex-acp').stdout)
-        self.assertNotIn('codex-acp',args); self.assertIn('--channel-id',args)
+    def test_agent_launch_subcommands_are_gone(self):
+        # Agents run in the host's server; the wrapper launches none of them.
+        for command in ('harness','default-agent','durable-acp'):
+            result=self.execute(command,'--control')
+            self.assertEqual(result.returncode,64)
+            self.assertIn('Unsupported host execution subcommand.',result.stderr.decode())
+        self.assertEqual(self.execute('--env','WOVEN_DURABLE_REMOTE_ACP=1','exec','true').returncode,64)
     def test_child_created_directories_are_private(self):
         created=self.root/'workspace/private-child'
         result=self.execute('exec',sys.executable,'-c','from pathlib import Path; Path("private-child").mkdir()')

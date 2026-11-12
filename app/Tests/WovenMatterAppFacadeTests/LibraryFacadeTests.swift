@@ -13,13 +13,13 @@ struct LibraryFacadeTests {
 
     @Test func goalSlashCommandAtCapacityDoesNotPersistOrDispatch() async throws {
         let fixture = try await FacadeFixture(); defer { fixture.remove() }
-        let id = try await fixture.createConversation()
+        let id = try #require(await fixture.model.createLocalACPSession(runtimeKind: .codex))
         let conversation = try #require(try await fixture.database.workspaceOverview().conversations.first { $0.id == id })
         var settings = try await fixture.database.toolSettings()
         settings.maximumRunningSessions = 1
         try await fixture.database.saveToolSettings(settings)
         try await fixture.model.agentTools?.reload()
-        let busyID = try await fixture.createConversation()
+        let busyID = try #require(await fixture.model.createLocalACPSession(runtimeKind: .codex))
         let busy = try #require(try await fixture.database.workspaceOverview().conversations.first { $0.id == busyID })
         #expect(try await fixture.model.dispatchAgentMessage(conversation: busy, input: .init(text: "Occupy the slot")))
         #expect(try await fixture.model.dispatchAgentMessage(conversation: conversation,
@@ -32,6 +32,8 @@ struct LibraryFacadeTests {
     func folderDeletedDuringCreateAwaitLeavesNoSessionAndRetryIsStable(route: String) async throws {
         let fixture = try await FacadeFixture()
         defer { fixture.remove() }
+        // A Linux host creates its session before this Mac records it.
+        if route == "remote" { _ = try await fixture.enrollLinuxHost() }
         let folder = try await fixture.database.createFolder(name: "Will be deleted", location: .init(
             workspaceID: try await fixture.model.executionWorkspaceIdentity(workspaceID: route == "remote" ? fixture.remote.id : nil),
             rootPath: fixture.directory.path, managed: false))
@@ -108,6 +110,8 @@ struct LibraryFacadeTests {
         model.remoteWorkspaces.configureFacadeFixture(remote, status: status, harnesses: harnesses, maintenance: maintenance)
         try await model.configureFacadeFixture(directory: directory)
     }
+    /// A chat on the fixture's Linux host as an older version recorded it,
+    /// when it ran over SSH: history this Mac keeps until the host adopts it.
     func createConversation() async throws -> String {
         return try await database.createRemoteACPSession(runtimeKind: .codex, remoteWorkspaceID: remote.id,
             remoteWorkspaceName: remote.name, title: "Remote", ownerDeviceID: UUID(),

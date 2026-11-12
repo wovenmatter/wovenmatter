@@ -34,7 +34,8 @@ extension ApplicationModel {
         let (own, others) = try await agentToolWorkspaces()
         let id = raw.lowercased()
         if let own, id == own.id { return .thisMac }
-        if let uuid = UUID(uuidString: id), remoteWorkspaces.configuration(id: uuid) != nil { return .configured(uuid) }
+        // A Linux host this Mac added is a member like any other once it is enrolled.
+        if let uuid = UUID(uuidString: id), remoteWorkspaces.configuration(id: uuid) != nil, !others.contains(where: { $0.id == id }) { return .configured(uuid) }
         if let member = others.first(where: { $0.id == id }) { return .member(member) }
         if let database = dashboardStore?.database,
            let named = try await database.libraryExecutionWorkspaces().first(where: { $0.id == id && !$0.deleted }) {

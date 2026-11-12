@@ -1,24 +1,12 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtemp, rm, open, symlink } from 'node:fs/promises'
-import { spawnSync } from 'node:child_process'
-import { fileURLToPath } from 'node:url'
+import { mkdtemp, rm, open } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { PassThrough } from 'node:stream'
 import { EventEmitter } from 'node:events'
 import { createDurableACP } from '../src/durable-acp.mjs'
 import { loadRuntimeConfiguration } from '../src/config.mjs'
-
-test('remote stdio relay executes its fail-closed startup through a symlink', async t => {
-  const root = await mkdtemp(join(tmpdir(), 'durable-relay-entrypoint-'))
-  t.after(() => rm(root, {recursive:true,force:true}))
-  const entrypoint = join(root, 'relay.mjs')
-  await symlink(fileURLToPath(new URL('../src/durable-acp-stdio.mjs', import.meta.url)), entrypoint)
-  const result = spawnSync(process.execPath, [entrypoint], {env:{PATH:process.env.PATH},encoding:'utf8',timeout:5000})
-  assert.equal(result.status, 1)
-  assert.match(result.stderr, /remote session relay disconnected/)
-})
 
 async function fixture(t) {
   const directory = await mkdtemp(join(tmpdir(), 'durable-acp-'))
@@ -193,123 +181,6 @@ for (const latestFailed of [false, true]) test(`concurrent ACP recovery follows 
   assert.equal(done.snapshot.busy, false)
   assert.deepEqual(done.snapshot.recoveredRuns, [{ runID: 'run', content: '', ...(latestFailed ? { error: 'turn failed' } : {}) }])
 })
-
-for (const mode of ['codex', 'codex-paged']) test(`stdio relay forwards continuation output after its last request receipt (${mode})`, { timeout: 5000 }, async t => {
-  const { runStdioRelay } = await import('../src/durable-acp-stdio.mjs')
-  const f = await fixture(t)
-  const count = mode === 'codex-paged' ? 260 : 1
-  const input = new PassThrough(), output = new PassThrough(), observed = []
-  let buffer = ''
-  output.on('data', bytes => {
-    buffer += bytes
-    while (buffer.includes('\n')) {
-      const end = buffer.indexOf('\n'); observed.push(JSON.parse(buffer.slice(0, end))); buffer = buffer.slice(end + 1)
-    }
-  })
-  const until = async predicate => {
-    for (let i = 0; i < 500; i++) {
-      if (predicate()) return
-      await new Promise(resolve => setTimeout(resolve, 5))
-    }
-    assert.fail('Timed out waiting for forwarded continuation output')
-  }
-  const request = async (url, options) => {
-    const work = f.relay.handle('POST', new URL(url).pathname, JSON.parse(options.body))
-    const result = await Promise.race([work, new Promise((_, reject) => {
-      if (options.signal.aborted) reject(options.signal.reason)
-      else options.signal.addEventListener('abort', () => reject(options.signal.reason), { once: true })
-    })])
-    return { ok: true, json: async () => result }
-  }
-  const running = runStdioRelay({ channelID: 'session', harnessID: 'test', token: 'fixture', input, output, request })
-  t.after(async () => { input.end(); await running })
-  const writeInput = message => input.write(JSON.stringify(message) + '\n')
-  const native = () => f.received().trim().split('\n').filter(Boolean).map(JSON.parse)
-  const emit = message => f.child.stdout.write(JSON.stringify({ jsonrpc: '2.0', ...message }) + '\n')
-  const status = type => emit({ method: 'session/update', params: { sessionId: 'native', update: { _meta: { codex: { threadStatus: { type } } } } } })
-  const text = value => emit({ method: 'session/update', params: { sessionId: 'native', update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: value } } } })
-  writeInput({ jsonrpc: '2.0', id: 1, method: 'session/prompt', params: { sessionId: 'native', _meta: { wovenRunID: 'run' } } })
-  await until(() => native().length === 1)
-  const original = native()[0].id
-  status('active')
-  text('before')
-  await until(() => observed.some(message => JSON.stringify(message).includes('before')))
-  writeInput({ jsonrpc: '2.0', id: 2, method: '_session/steering', params: { sessionId: 'native', prompt: [{ type: 'text', text: 'continue' }], _meta: { wovenRunID: 'run' } } })
-  await until(() => native().length === 2)
-  const steering = native()[1].id
-  emit({ id: original, result: { stopReason: 'end_turn' } }); status('idle'); status('active')
-  emit({ id: steering, result: { outcome: 'startedNewTurn' } })
-  await until(() => observed.some(message => message.id === 2))
-  await new Promise(resolve => setImmediate(resolve))
-  for (let i = 0; i < count; i++) text('continued')
-  status('idle')
-  await until(() => observed.filter(message => JSON.stringify(message).includes('continued')).length === count)
-  input.end()
-  await running
-  assert.equal(native().length, 2)
-  await f.relay.stopAll()
-  // Drain the natural-close journal entry queued by the fake child as well.
-  await f.call('poll', { harnessID: 'test' })
-})
-
-test('stdio relay distinguishes a lost dispatch receipt from native rejection', { timeout: 5000 }, async () => {
-  const { runStdioRelay } = await import('../src/durable-acp-stdio.mjs')
-  const input = new PassThrough(), output = new PassThrough()
-  let result
-  output.on('data', bytes => { result = JSON.parse(bytes); input.end() })
-  const request = async (url, options) => {
-    if (url.endsWith('/attach')) return { ok: true, json: async () => ({ state: 'running', attachmentToken: 'fixture-attachment', snapshot: { busy: false }, events: [] }) }
-    if (url.endsWith('/message')) throw new Error('connection lost after dispatch')
-    return new Promise((_, reject) => options.signal.addEventListener('abort', () => reject(options.signal.reason), { once: true }))
-  }
-  input.write(JSON.stringify({ jsonrpc: '2.0', id: 1, method: '_session/steering', params: { sessionId: 'native' } }) + '\n')
-  await runStdioRelay({ channelID: 'session', harnessID: 'test', token: 'fixture', input, output, request })
-  assert.equal(result.id, 1)
-  assert.equal(result.error.data.deliveryUncertain, true)
-})
-
-test('test reconnect waits for restored approval beyond the load deadline', { timeout: 2000 }, async () => {
-  const { runStdioRelay } = await import('../src/durable-acp-stdio.mjs')
-  const input = new PassThrough(), output = new PassThrough()
-  const approval = { jsonrpc: '2.0', id: 'approval', method: 'session/request_permission', params: { sessionId: 'native' } }
-  const reply = { jsonrpc: '2.0', id: 'approval', result: { outcome: { outcome: 'selected', optionId: 'allow' } } }
-  const state = { session: { sessionId: 'native' }, busy: true, pendingRequests: [approval], recoveredRuns: [{ runID: 'saved-run', content: 'Done' }] }
-  let settle
-  const settled = new Promise(resolve => { settle = resolve })
-  const messages = [], delivered = []
-  output.on('data', data => {
-    for (const line of data.toString().trim().split('\n')) {
-      const message = JSON.parse(line)
-      messages.push(message)
-      if (message.id === 'approval') {
-        // The load deadline is already exhausted before the user responds.
-        setImmediate(() => { if (!input.writableEnded) input.write(JSON.stringify(reply) + '\n') })
-      } else if (message.id === 1) input.end()
-    }
-  })
-  const request = async (url, options) => {
-    if (url.endsWith('/message')) {
-      delivered.push(JSON.parse(options.body).message)
-      state.busy = false; state.pendingRequests = []
-      settle()
-      return { ok: true, json: async () => ({ accepted: true }) }
-    }
-    if (url.endsWith('/poll') && state.busy) {
-      await Promise.race([settled, new Promise((_, reject) => {
-        if (options.signal.aborted) reject(options.signal.reason)
-        else options.signal.addEventListener('abort', () => reject(options.signal.reason), { once: true })
-      })])
-    }
-    return { ok: true, json: async () => ({ state: 'running', attachmentToken: 'fixture-attachment', snapshot: structuredClone(state), events: [] }) }
-  }
-  input.write(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'session/load', params: { sessionId: 'native' } }) + '\n')
-  await runStdioRelay({ channelID: 'approval', harnessID: 'test', token: 'fixture', input, output, request, loadTimeout: 0 })
-  assert.deepEqual(delivered, [reply], 'reattachment must only forward the approval, never a new prompt')
-  const result = messages.find(message => message.id === 1)
-  assert.equal(result.error, undefined)
-  assert.deepEqual(result.result._meta.recoveredRuns, state.recoveredRuns)
-})
-
 test('natural process exit settles interrupted prompts and survives service restart', async t => {
   const f = await fixture(t)
   await f.call('attach')

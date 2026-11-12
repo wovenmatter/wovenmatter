@@ -37,7 +37,7 @@ extension RemoteWorkspaceConfiguration {
     }
 }
 
-/// One validated execution destination for every SSH-launched workspace process.
+/// One validated host command over SSH (`wm-exec exec`), for validation and repair.
 /// Host paths are obtained from inspection/health, never from the Mac's home or
 /// from a container's fixed paths. The SSH transport is selected by its caller.
 public struct RemoteWorkspaceExecTarget: Sendable {
@@ -63,7 +63,7 @@ public struct RemoteWorkspaceExecTarget: Sendable {
 
     public var attachmentsDirectory: String {
         get throws {
-            if configuration.kind == .container { return configuration.attachmentsDirectory ?? RemoteAttachmentStager.directory }
+            if configuration.kind == .container { return configuration.attachmentsDirectory ?? "/home/.woven-matter/.wovenmatter/attachments" }
             return try absolute(configuration.attachmentsDirectory ?? workspaceRoot + "/.wovenmatter/attachments")
         }
     }
@@ -77,8 +77,10 @@ public struct RemoteWorkspaceExecTarget: Sendable {
         }
     }
 
+    /// `wm-exec exec`: one host command with the session environment, for
+    /// validation and repair. Agents never launch through it.
     public func prefix(workingDirectory: String? = nil, interactive: Bool = false,
-                       environment: [String: String] = [:], hostSubcommand: String = "exec") throws -> [String] {
+                       environment: [String: String] = [:]) throws -> [String] {
         try configuration.kind.requireSupported()
         guard configuration.workspaceID.wholeMatch(of: /^[a-z0-9][a-z0-9-]{0,47}$/) != nil else {
             throw RemoteWorkspaceClientError.invalidWorkspaceID
@@ -93,7 +95,7 @@ public struct RemoteWorkspaceExecTarget: Sendable {
         for (key, value) in environment.sorted(by: { $0.key < $1.key }) {
             result += ["--env", "\(key)=\(value)"]
         }
-        return result + [hostSubcommand]
+        return result + ["exec"]
     }
 
     public func command(_ arguments: [String], workingDirectory: String? = nil,

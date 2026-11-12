@@ -279,6 +279,10 @@ final class DefaultAgentSettingsModel {
     var promptOptions: [(id: String, label: String)] = []
     private var process: Process?
     private var input: FileHandle?
+    /// A Linux host's settings helper runs on that host, started through its
+    /// server (`v1/default-agent/control-sessions`), never over SSH.
+    var memberRoutes: (@MainActor (RemoteWorkspaceConfiguration) async throws -> any MemberExecutionRoutes)?
+    private var remoteControl: (routes: any MemberExecutionRoutes, id: String)?
     private let inputQueue = DispatchQueue(label: "wovenmatter.built-in.settings-input", qos: .userInitiated)
     private var generation = UUID()
     private var operationTask: Task<Void, Never>?
@@ -591,6 +595,10 @@ final class DefaultAgentSettingsModel {
         promptOptions = []
     }
     private func stopHelper() {
+        if let remoteControl {
+            self.remoteControl = nil
+            Task { try? await remoteControl.routes.cancelDefaultAgentControl(id: remoteControl.id) }
+        }
         outputTask?.cancel()
         outputTask = nil
         // The reader task owns closing stdout after its cancellable read ends.
@@ -622,7 +630,16 @@ final class DefaultAgentSettingsModel {
     func respond(_ answer: String) {
         if forward(.init(action: "respond", value: answer)) { return }
         guard let id = promptID else { return }
-        write(["answerTo": id, "answer": answer])
+        if let remoteControl {
+            let runID = generation
+            Task { [weak self] in
+                do { _ = try await remoteControl.routes.answerDefaultAgentControl(id: remoteControl.id, answerTo: id, answer: answer) }
+                catch {
+                    guard let self, self.generation == runID else { return }
+                    self.failHelper("Pi Durable setup did not accept the answer. Try again.")
+                }
+            }
+        } else { write(["answerTo": id, "answer": answer]) }
         promptID = nil
         prompt = nil
         promptOptions = []
@@ -911,29 +928,24 @@ final class DefaultAgentSettingsModel {
                         body["profile"] = profile ?? prepared.credentials[login]?.accountId ?? "default"
                     }
                 }
-                let child = Process()
                 if let remote {
-                    let launch = try RemoteHarnessLaunchResolver.resolve(
-                        configuration: remote, runtimeKind: .defaultAgent,
-                        processWorkingDirectory: FileManager.default.homeDirectoryForCurrentUser
-                    ).launch
-                    child.executableURL = launch.executableURL
-                    // wm-exec owns the remote flag for native launches; the
-                    // control operation must be requested explicitly.
-                    var arguments = launch.arguments
-                    guard let command = arguments.popLast() else {
-                        throw DefaultAgentError.message("The remote helper command is unavailable.")
-                    }
-                    child.arguments = arguments + [command + " '--control'"]
-                } else {
-                    guard let launch = DefaultAgentSupport.resolution().launchConfiguration else {
-                        throw DefaultAgentError.message("The bundled helper is unavailable. Rebuild Woven Matter.")
-                    }
-                    child.executableURL = URL(fileURLWithPath: "/bin/sh")
-                    child.arguments =
-                        ["-c", #"ulimit -c 0; exec "$@""#, "woven-default-agent", launch.executableURL.path]
-                        + launch.arguments + ["--control"]
+                    guard let memberRoutes else { throw DefaultAgentError.message("Reconnect this workspace to change its Pi Durable settings.") }
+                    let routes = try await memberRoutes(remote)
+                    guard generation == runID, !Task.isCancelled else { return }
+                    let session = try await routes.startDefaultAgentControl(JSONSerialization.data(withJSONObject: body))
+                    guard generation == runID, !Task.isCancelled else { try? await routes.cancelDefaultAgentControl(id: session.id); return }
+                    remoteControl = (routes, session.id)
+                    try await followRemoteControl(session, routes: routes, runID: runID)
+                    return
                 }
+                let child = Process()
+                guard let launch = DefaultAgentSupport.resolution().launchConfiguration else {
+                    throw DefaultAgentError.message("The bundled helper is unavailable. Rebuild Woven Matter.")
+                }
+                child.executableURL = URL(fileURLWithPath: "/bin/sh")
+                child.arguments =
+                    ["-c", #"ulimit -c 0; exec "$@""#, "woven-default-agent", launch.executableURL.path]
+                    + launch.arguments + ["--control"]
                 let stdin = Pipe()
                 let stdout = Pipe()
                 child.standardInput = stdin
@@ -981,6 +993,28 @@ final class DefaultAgentSettingsModel {
             }
         }
     }
+    /// Feeds a host's control session to the same line handling the local
+    /// helper uses: its sign-in notifications, a prompt, then its result.
+    private func followRemoteControl(_ first: DefaultAgentControlSession, routes: any MemberExecutionRoutes, runID: UUID) async throws {
+        var session = first, seen = 0, prompted: String?
+        while generation == runID, !Task.isCancelled {
+            let lines = session.lines(after: seen)
+            seen = session.notifications.count
+            for line in lines {
+                // A prompt already shown is not shown again while it waits.
+                if let object = try? JSONSerialization.jsonObject(with: line) as? [String: Any], object["prompt"] != nil {
+                    guard prompted != session.promptID else { continue }
+                    prompted = session.promptID
+                }
+                receiveLine(line)
+            }
+            guard session.state == "running" else { remoteControl = nil; return }
+            try await Task.sleep(for: .milliseconds(500))
+            guard generation == runID else { return }
+            session = try await routes.defaultAgentControl(id: session.id)
+        }
+    }
+
     private func failHelper(_ message: String) {
         // Late pipe failures or EOF cannot override an accepted result while
         // its account changes are still being saved.

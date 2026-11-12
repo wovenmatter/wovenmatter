@@ -213,7 +213,8 @@ test('Built-in credential routes require authentication, unlock explicitly, and 
   });
   assert.equal((await request('/v1/default-agent/status', undefined, 'wrong')).status, 401);
   assert.equal((await (await request('/v1/default-agent/status')).json()).locked, true);
-  assert.equal((await request('/v1/default-agent/rpc', { method: 'initialize' })).status, 423);
+  // The SSH relay's Pi route is gone; members reach Pi Durable through execution commands.
+  assert.equal((await request('/v1/default-agent/rpc', { method: 'initialize' })).status, 404);
   const unlockKey = randomBytes(32).toString('base64');
   const body = { workspace: 'fixture-workspace', unlockKey, revision: 'fixture-revision', config: {},
     credentials: { openrouter: { type: 'api_key', key: 'fixture-provider-secret' } } };
@@ -544,9 +545,9 @@ createInterface({ input: process.stdin }).on('line', line => {
   const admin = { authorization: 'Bearer ' + token, 'content-type': 'application/json' }
   const id = () => globalThis.crypto.randomUUID()
   const request = (path, method, body, headers = admin) => fetch(service.url + path, { method, headers, ...(body ? { body: typeof body === 'string' || Buffer.isBuffer(body) ? body : JSON.stringify(body) } : {}) })
-  // Background execution off: the SSH relay route refuses, sessions still run.
+  // Background execution off: sessions still run; the SSH relay route is gone.
   assert.equal((await request('/v1/task-gateway', 'PATCH', { enabled: false })).status, 200)
-  assert.equal((await request('/v1/durable-acp/attach', 'POST', { channelID: 'relay', harnessID: 'codex' })).status, 409)
+  assert.equal((await request('/v1/durable-acp/attach', 'POST', { channelID: 'relay', harnessID: 'codex' })).status, 404)
   const device = { libraryID: id(), workspaceID: id(), ownerDeviceID: id(), deviceID: id(), scopes: ['execution'] }
   const grant = await (await request('/v1/execution/devices', 'POST', device)).json()
   const headers = { ...admin, authorization: 'Bearer ' + grant.token }

@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 # This literal parser never sources service.env or a shell startup file. Keep the
-# caller's stdin untouched: ACP and file transfers use it for their own protocol.
+# caller's stdin untouched. It runs one host command (`exec`) with the session
+# environment, for host validation and repair; agents run in the host's server,
+# never through this wrapper.
 exec python3 -c "$(cat <<'PY'
 import fcntl, json, os, re, resource, stat, sys
 from pathlib import Path
@@ -34,8 +36,7 @@ for key in tuple(env):
     if key.startswith('WOVENMATTER_') and key!='WOVENMATTER_ADDITIONAL_INSTRUCTIONS': env.pop(key)
 for key in allow:
     if key in settings: env[key]=settings[key]
-extra={'CODEX_CONFIG','CODEX_PATH','CLAUDE_CODE_EXECUTABLE','WOVEN_EXECUTION_SCOPE',
-       'WOVEN_DEFAULT_AGENT_SCOPE','WOVEN_DURABLE_REMOTE_ACP','WOVENMATTER_ADDITIONAL_INSTRUCTIONS'}
+extra={'WOVENMATTER_ADDITIONAL_INSTRUCTIONS'}
 args=sys.argv[1:]
 cwd=settings.get('WOVENMATTER_WORKSPACE','')
 while args and args[0] in ('--env','--cwd'):
@@ -49,7 +50,6 @@ while args and args[0] in ('--env','--cwd'):
 if not args: fail('A host execution subcommand is required.')
 if not cwd.startswith('/') or '\0' in cwd: fail('The remote working directory must be an absolute path.')
 root=Path(settings['WOVENMATTER_STATE_DIRECTORY']).parent
-node=str(root/'node/current/bin/node')
 # Sessions often start from another device with nobody here: credential prompts
 # fail at once instead of hanging. The session-tools sudo runs sudo -n, so
 # passwordless Full root still works. Keep in sync with remote/src/config.mjs.
@@ -65,16 +65,9 @@ env['WOVEN_DEFAULT_AGENT_DIRECTORY']=str(Path(settings['WOVENMATTER_WORKSPACE'])
 resource.setrlimit(resource.RLIMIT_CORE,(0,0))
 os.umask(0o077)
 command=args.pop(0)
-if command=='durable-acp':
-    if '--' in args: args=args[:args.index('--')]
-    argv=[node,str(root/'current/src/durable-acp-stdio.mjs'),*args]
-elif command=='default-agent': argv=[node,str(root/'current/default-agent/src/main.mjs'),*([] if '--control' in args else ['--remote']),*args]
-elif command in ('harness','exec'):
+if command=='exec':
     if not args: fail('A host command is required.')
     argv=args
-    if command=='harness':
-        runtime={'codex-acp':'codex','claude-agent-acp':'claude_code','claude-code-acp':'claude_code','grok':'grok_build'}.get(Path(args[0]).name)
-        if runtime: argv=[node,str(root/'current/harnesses/mcp/adapter.mjs'),runtime,*args]
 else: fail('Unsupported host execution subcommand.')
 lock_path=Path(settings['WOVENMATTER_STATE_DIRECTORY'])/'runtime-operation.lock'
 if lock_path.is_symlink(): fail('The runtime maintenance lock is unsafe.',78)

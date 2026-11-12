@@ -66,10 +66,6 @@ const catalog = new Map(catalogDocument.harnesses.map((entry) => [entry.id, entr
 // Pi Durable's tools run in this worker, so it gets the same no-prompt session environment.
 const defaultAgent = createManagedDefaultAgentService({ cwd: workspaceRoot, directory: resolve(workspaceRoot, '.wovenmatter/default-agent'), environment: nonInteractiveSessionEnvironment(process.env, configuration) })
 const authenticationSessions = new Map()
-const foregroundDefaultRuns = new Map()
-// Pi Durable sessions the SSH relay (`/v1/default-agent/rpc`) has used, so
-// turning background execution off stops those and not this server's own.
-const relayDefaultSessions = new Set()
 const maximumRetainedTerminalRecords = 64
 const maximumInstallerBytes = 5_242_880
 const installerDownloadTimeoutMilliseconds = 30_000
@@ -92,8 +88,8 @@ const maintenance = createRuntimeMaintenance({
 const releaseTaskOwner = runningAsService
   ? await acquireHostLock(resolve(workspaceRoot,'.wovenmatter/task-gateway.owner.lock'),harnessEnvironment(),workspaceRoot)
   : null
-// Sessions this server runs use durable channels whether or not background
-// execution is on; that setting gates only the SSH relay's HTTP route below.
+// Sessions this server runs use durable channels in process, whether or not
+// background execution is on. Nothing outside this server attaches to them.
 const durableACP = createDurableACP({ catalog, workspaceRoot, runtimeKind: configuration.runtimeKind, configuration,
   environment: harness => harness.id === 'codex' ? harnessRuntimeEnvironment(harness) : harnessEnvironment(),
   isHarnessEnabled:id => maintenance.isInstalled(id) })
@@ -105,15 +101,12 @@ const taskGateway = runningAsService ? createTaskGateway({
     environment: harness => harness?.id === 'codex' ? harnessRuntimeEnvironment(harness) : harnessEnvironment(),
     defaultAgent,instances,prepareMCP:context=>clientExecution.prepareTaskMCP(context),
     isEnabled:id => maintenance.isInstalled(id)}),
-  // Turning background execution off stops what the Mac's SSH relays left
-  // running. Sessions this server owns keep running, as sessions the Mac ran
-  // over SSH did; the setting governs scheduled tasks, which stop above.
+  // Turning background execution off stops scheduled tasks. Sessions this
+  // server owns keep running; a channel no session owns (left by an older
+  // Mac's SSH relay) stops.
   onDisable:async () => {
     const owned = id => clientExecution?.ownsConversation(id) === true
-    const ownedDefault = new Set((clientExecution?.conversations() ?? []).filter(item => item.runtimeKind === 'default_agent').map(item => clientExecution.record(item.id).native?.sessionID).filter(Boolean))
-    await Promise.all([durableACP.stopAll({ except: owned }),
-      ...[...relayDefaultSessions].filter(id => !ownedDefault.has(id)).map(id => defaultAgent.cancelSession(id).catch(() => {}))])
-    relayDefaultSessions.clear(); foregroundDefaultRuns.clear()
+    await durableACP.stopAll({ except: owned })
   },
 }) : null
 
@@ -247,7 +240,7 @@ const stream = clientExecution && members ? createStreamServer({ members, served
   workspaceEnabled: () => configuration.workspaceEnabled !== false, log: message => process.stderr.write(message + '\n') }) : null
 // A bots-only machine keeps its server, data root and connections but runs no
 // workspace agents, schedules or projects until the workspace is added.
-const workspaceRoutes = ['/v1/execution/commands', '/v1/execution/attachments', '/v1/task-gateway', '/v1/durable-acp/', '/v1/default-agent/rpc', '/v1/default-agent/runs/',
+const workspaceRoutes = ['/v1/execution/commands', '/v1/execution/attachments', '/v1/task-gateway',
   '/v1/projects', '/v1/scratch', '/v1/directories', '/v1/databases', '/v1/browser/', '/v1/harnesses/', '/v1/runtime-maintenance', '/v1/workspace-instances']
 const workspaceRoute = pathname => workspaceRoutes.some(prefix => pathname === prefix || pathname.startsWith(prefix.endsWith('/') ? prefix : prefix + '/'))
 // Usage on this machine: its harnesses, its Pi Durable agent and its bots.
@@ -417,7 +410,7 @@ const server = createServer({ maxHeaderSize: 16_384, headersTimeout: 10_000,
       return json(response,200,await clientExecution.uploadAttachment({ id: attachmentUpload[1], name: url.searchParams.get('name') ?? 'attachment',
         mimeType: url.searchParams.get('mimeType') ?? request.headers['content-type'], bytes }))
     }
-    // A file an agent wrote, for a Mac's Library retention (was SSH `RemoteLibraryFiles`).
+    // A file an agent wrote, for a Mac's Library retention.
     if (url.pathname === '/v1/execution/library-file' && request.method === 'POST') {
       if (!administrator) return json(response,403,{error:'administrator_required'})
       return json(response,200,await clientExecution.readLibraryFile(await readJSON(request,16384)))
@@ -500,11 +493,6 @@ const server = createServer({ maxHeaderSize: 16_384, headersTimeout: 10_000,
     if (url.pathname === '/v1/task-gateway/schedules' && request.method === 'GET') return json(response,200,taskGateway.schedules())
     if (url.pathname === '/v1/task-gateway/schedules' && request.method === 'PUT') return json(response,200,taskGateway.publish(await readJSON(request)))
     if (url.pathname === '/v1/task-gateway/results' && request.method === 'GET') return json(response,200,taskGateway.results(url.searchParams.get('after') ?? '0'))
-    // The Mac's SSH durable relay, used only while background execution is on.
-    if (url.pathname.startsWith('/v1/durable-acp/') && request.method === 'POST') {
-      if (!taskGateway.enabled()) return json(response,409,{error:'Background execution is disabled'})
-      return json(response,200,await durableACP.handle(request.method,url.pathname,await readJSON(request)))
-    }
     if (url.pathname === '/v1/sign-in-status' && request.method === 'GET') {
       const agent = await defaultAgent.status();
       const entries = await Promise.all([...catalog.values()].map(async h => ({
@@ -549,25 +537,6 @@ const server = createServer({ maxHeaderSize: 16_384, headersTimeout: 10_000,
     if (controlSession && !controlSession[2] && request.method === 'GET') return json(response, 200, defaultAgentControl.status(controlSession[1]))
     if (controlSession && !controlSession[2] && request.method === 'DELETE') return json(response, 200, defaultAgentControl.cancel(controlSession[1]))
     if (controlSession && controlSession[2] && request.method === 'POST') return json(response, 200, defaultAgentControl.answer(controlSession[1], await readJSON(request, 8192)))
-    if (url.pathname === '/v1/default-agent/rpc' && request.method === 'POST') {
-      const message = retainedExecution.prepareRPC(await readJSON(request))
-      const result = await defaultAgent.invoke(message)
-      retainedExecution.acceptedRPC(message,result)
-      const relaySession = message.params?.sessionId ?? result?.result?.sessionId
-      if (typeof relaySession === 'string' && relaySession) relayDefaultSessions.add(relaySession)
-      if (message.method === 'session/prompt' && result.operationID && !taskGateway.enabled()) {
-        foregroundDefaultRuns.set(result.operationID, { sessionID:message.params?.sessionId, lastSeen:Date.now() })
-      }
-      return json(response, 200, result)
-    }
-    const defaultRun = url.pathname.match(/^\/v1\/default-agent\/runs\/([0-9a-f-]+)$/)
-    if (defaultRun && request.method === 'GET') {
-      const lease = foregroundDefaultRuns.get(defaultRun[1]); if (lease) lease.lastSeen = Date.now()
-      const page = await defaultAgent.poll(defaultRun[1], Number(url.searchParams.get('after') ?? 0))
-      if (page.done) foregroundDefaultRuns.delete(defaultRun[1])
-      return json(response, 200, page)
-    }
-
 
     if (request.method === 'GET' && url.pathname === '/v1/directories') {
       if (!administrator) return json(response, 403, { error: 'administrator_required' })
@@ -743,15 +712,6 @@ server.on('upgrade', (request, socket, head) => {
 if (runningAsService) {
   if (configuration.workspaceEnabled) taskGateway.start()
   retainedExecution.start()
-  setInterval(() => {
-    for (const [id, lease] of foregroundDefaultRuns) {
-      if (taskGateway.enabled()) { foregroundDefaultRuns.delete(id); continue }
-      if (Date.now() - lease.lastSeen > 30000) {
-        foregroundDefaultRuns.delete(id)
-        void defaultAgent.cancelSession(lease.sessionID).catch(() => {})
-      }
-    }
-  }, 5000).unref()
   library?.start()
   timers?.start()
   server.listen(listenPort, listenHost, () => {

@@ -103,7 +103,6 @@ struct RemoteHostLiveValidationTests {
             #expect(health.runtimeKind == .host && health.accessMode == .fullRoot)
             #expect(health.workspaceRoot == state.configuration.workspaceRoot)
             #expect(health.serviceFingerprint != nil)
-            try await Self.verifyFileTransfers(configuration: state.configuration)
             if environment["WOVENMATTER_LIVE_HOST_ROLLBACK"] == "1" {
                 try await Self.verifyRollback(state: state, client: client, service: service)
             }
@@ -113,51 +112,6 @@ struct RemoteHostLiveValidationTests {
             throw error
         }
         print("Native host deployment and authenticated Tailnet tunnel verified. Private state: " + stateURL.path)
-    }
-
-    /// All mutations below are confined to this explicitly named test workspace.
-    /// File transfer uses the production stager and Library reader over Tailnet.
-    private static func verifyFileTransfers(configuration: RemoteWorkspaceConfiguration) async throws {
-        try requireValidationWorkspace(configuration)
-        let name = "host transfer 'quoted' $(literal)-" + UUID().uuidString + ".bin"
-        var bytes = Data(("Woven Matter native transfer fixture " + UUID().uuidString + "\n").utf8)
-        bytes.append(contentsOf: (0..<65539).map { UInt8($0 % 251) })
-        let hash = SHA256.hash(data: bytes).hexString
-        let local = FileManager.default.temporaryDirectory.appending(path: ".wovenmatter-live-transfer-" + UUID().uuidString)
-        guard FileManager.default.createFile(atPath: local.path, contents: bytes,
-            attributes: [.posixPermissions: 0o600]) else {
-            throw RemoteWorkspaceClientError.invalidResponse("Cannot prepare the private live transfer fixture.")
-        }
-        defer { try? FileManager.default.removeItem(at: local) }
-        let draft = AgentFileAttachmentDraft(kind: .file, fileName: name, mimeType: "application/octet-stream",
-            sizeBytes: Int64(bytes.count), contentHash: hash, localURL: local)
-        let stager = RemoteAttachmentStager()
-        let target = RemoteWorkspaceExecTarget(configuration: configuration)
-        let attachments = try target.attachmentsDirectory
-        let expectedDirectory = attachments + "/" + hash
-        let staged = try await stager.stage(draft, in: configuration)
-        guard URL(fileURLWithPath: staged).deletingLastPathComponent().path == expectedDirectory else {
-            throw RemoteWorkspaceClientError.invalidResponse("The transfer fixture was staged outside its test directory.")
-        }
-        defer {
-            // Remove only this run's known file and its now-empty hash directory.
-            // Never recursively remove the attachment root or user files.
-            let cleanup = #"const fs=require('node:fs'),path=require('node:path');const [file,directory]=process.argv.slice(1);if(path.dirname(file)!==directory)process.exit(1);fs.unlinkSync(file);try{fs.rmdirSync(directory)}catch(e){if(e.code!=='ENOTEMPTY')throw e}"#
-            _ = try? runLiveCommand(configuration: configuration,
-                arguments: ["node", "-e", cleanup, "--", staged, expectedDirectory])
-        }
-        let library = RemoteLibraryFiles()
-        let root = try target.workspaceRoot
-        let source = URL(fileURLWithPath: staged).absoluteString
-        #expect(try await library.read(source: source, root: root, configuration: configuration) == bytes)
-        #expect(try await stager.stage(draft, in: configuration) == staged)
-        // An agent can edit its attachment; a repeat transfer must repair bytes,
-        // not accept a same-sized or merely existing remote copy.
-        let corrupt = #"const fs=require('node:fs');fs.writeFileSync(process.argv[1],'modified by the isolated live fixture')"#
-        _ = try runLiveCommand(configuration: configuration, arguments: ["node", "-e", corrupt, "--", staged])
-        #expect(try await stager.stage(draft, in: configuration) == staged)
-        #expect(try await library.read(source: source, root: root, configuration: configuration) == bytes)
-        print("Native attachment upload, reuse, corruption repair, and Library download verified.")
     }
 
     private struct InstallationSnapshot: Decodable, Equatable {

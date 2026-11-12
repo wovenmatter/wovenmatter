@@ -132,31 +132,39 @@ extension ApplicationModel {
 
         let config = task.configuration
         let directory = try config.nativeWorkingDirectory ?? defaultToolWorkingDirectory(workspaceID: config.workspaceID)
+        if let workspaceID = config.workspaceID {
+            return try await linuxSessionOptions(workspaceID: workspaceID, runtime: config.runtimeKind, directory: directory, model: config.model)
+        }
         if config.runtimeKind == .opencode {
-            if config.workspaceID != nil { await synchronizeRemoteOpenCodeInstances() }
-            guard let instance = config.workspaceID.flatMap({ remoteOpenCodes[$0] }) ?? (config.workspaceID == nil ? openCode : nil) else {
-                throw ApplicationModelError.remoteHarnessUnavailable
-            }
+            guard let instance = openCode else { throw ApplicationModelError.remoteHarnessUnavailable }
             return try await instance.calendarTaskMetadata(directory: directory, model: config.model)
         }
-        let launch: LocalACPRuntimeLaunchConfiguration
-        if let workspaceID = config.workspaceID {
-            guard let remote = remoteWorkspaces.configuration(id: workspaceID), remoteWorkspaces.isHarnessReady(config.runtimeKind, in: remote) else {
-                throw ApplicationModelError.remoteHarnessUnavailable
-            }
-            launch = try RemoteHarnessLaunchResolver.resolve(configuration: remote, runtimeKind: config.runtimeKind,
-                processWorkingDirectory: localACPWorkspaceLaunchConfiguration?.rootURL ?? FileManager.default.homeDirectoryForCurrentUser,
-                workingDirectory: URL(fileURLWithPath: directory)).launch
-        } else {
-            guard let local = localACPLaunchConfigurations[config.runtimeKind] else { throw ApplicationModelError.localACPRuntimeUnavailable }
-            launch = .init(runtimeKind: local.runtimeKind, executableURL: local.executableURL,
-                arguments: local.arguments, environment: local.environment,
-                environmentKeysToRemove: local.environmentKeysToRemove,
-                environmentKeyPrefixesToRemove: local.environmentKeyPrefixesToRemove,
-                processWorkingDirectoryURL: URL(fileURLWithPath: directory),
-                requestedPermission: local.requestedPermission, wrappedCommand: local.wrappedCommand)
-        }
+        guard let local = localACPLaunchConfigurations[config.runtimeKind] else { throw ApplicationModelError.localACPRuntimeUnavailable }
+        let launch = LocalACPRuntimeLaunchConfiguration(runtimeKind: local.runtimeKind, executableURL: local.executableURL,
+            arguments: local.arguments, environment: local.environment,
+            environmentKeysToRemove: local.environmentKeysToRemove,
+            environmentKeyPrefixesToRemove: local.environmentKeyPrefixesToRemove,
+            processWorkingDirectoryURL: URL(fileURLWithPath: directory),
+            requestedPermission: local.requestedPermission, wrappedCommand: local.wrappedCommand)
         return try await CalendarSessionOptions.load(launch: launch, directory: URL(fileURLWithPath: directory), model: config.model)
+    }
+
+    /// A Linux host's model, thinking and permission choices for a harness,
+    /// with their descriptions, from its server without a session. A directory
+    /// that does not exist there yet (a scheduled task's scratch folder) reads
+    /// the harness's choices without it.
+    func linuxSessionOptions(workspaceID: UUID, runtime: AgentRuntimeKind, directory: String?, model: String?) async throws -> LocalACPSessionMetadata {
+        guard let database = dashboardStore?.database,
+              let workspace = try await database.libraryExecutionWorkspaces().first(where: { $0.id == workspaceID.uuidString.lowercased() && !$0.deleted }) else {
+            throw ApplicationModelError.remoteHarnessUnavailable
+        }
+        let client = try centralExecutionClient()
+        let settings: SessionSettings
+        do { settings = try await client.sessionOptions(workspace: workspace, runtimeKind: runtime, workingDirectory: directory, model: model) }
+        catch let error as LibraryAPIError where directory != nil && error.code == "http_409" {
+            settings = try await client.sessionOptions(workspace: workspace, runtimeKind: runtime, workingDirectory: nil, model: model)
+        }
+        return CalendarSessionOptions.metadata(from: settings, directory: directory)
     }
 
     /// Calendar owns scheduling; each prompt uses the normal session dispatch,

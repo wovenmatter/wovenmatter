@@ -97,7 +97,7 @@
 		8B47C81B917AA853D87FB56A /* OpenCodeInteractionView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 17AF06D69A7DE73E3F94E40A /* OpenCodeInteractionView.swift */; };
 		46E81C4CE9571D1C715098CA /* OpenCodeSessionView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6F6AFCDD4A429E11B0945492 /* OpenCodeSessionView.swift */; };
 		5C84BF439B9047118002DD70 /* WorkspaceAgentToolsModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 20E807F893654CD4A1F24D40 /* WorkspaceAgentToolsModel.swift */; };
-		0D0C4EE8248E4F63A87CF7B4 /* WovenMatterRemoteToolBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = D8761929DCF444669E58A75E /* WovenMatterRemoteToolBridge.swift */; };
+		0D0C4EE8248E4F63A87CF7B4 /* MemberExecutionRoutes.swift in Sources */ = {isa = PBXBuildFile; fileRef = D8761929DCF444669E58A75E /* MemberExecutionRoutes.swift */; };
 		F19000000000000000000001 /* DashboardNoteDocumentCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = F19000000000000000000002 /* DashboardNoteDocumentCache.swift */; };
 		A14000000000000000000001 /* ApplicationModel+SessionSelections.swift in Sources */ = {isa = PBXBuildFile; fileRef = A14000000000000000000002 /* ApplicationModel+SessionSelections.swift */; };
 		E678564F286E71B5FA588A5A /* DeviceCommandService.swift in Sources */ = {isa = PBXBuildFile; fileRef = FF3D48D1E7B9587A3DF2F895 /* DeviceCommandService.swift */; };
@@ -292,7 +292,7 @@
 		17AF06D69A7DE73E3F94E40A /* OpenCodeInteractionView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenCodeInteractionView.swift; sourceTree = "<group>"; };
 		6F6AFCDD4A429E11B0945492 /* OpenCodeSessionView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenCodeSessionView.swift; sourceTree = "<group>"; };
 		20E807F893654CD4A1F24D40 /* WorkspaceAgentToolsModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "WorkspaceAgentToolsModel.swift"; sourceTree = "<group>"; };
-		D8761929DCF444669E58A75E /* WovenMatterRemoteToolBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "WovenMatterRemoteToolBridge.swift"; sourceTree = "<group>"; };
+		D8761929DCF444669E58A75E /* MemberExecutionRoutes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MemberExecutionRoutes.swift; sourceTree = "<group>"; };
 		F19000000000000000000002 /* DashboardNoteDocumentCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardNoteDocumentCache.swift; sourceTree = "<group>"; };
 		A14000000000000000000002 /* ApplicationModel+SessionSelections.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ApplicationModel+SessionSelections.swift"; sourceTree = "<group>"; };
 		FF3D48D1E7B9587A3DF2F895 /* DeviceCommandService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceCommandService.swift; sourceTree = "<group>"; };
@@ -659,7 +659,7 @@
 				A56DDE951488ED17BBEBA764 /* BotsRuntimeSupervisor.swift */,
 				954103B53A868E278BF6498E /* BotsHostAPI.swift */,
 				0188043D0F3E045113140511 /* BotPreviewPublisher.swift */,
-				D8761929DCF444669E58A75E /* WovenMatterRemoteToolBridge.swift */,
+				D8761929DCF444669E58A75E /* MemberExecutionRoutes.swift */,
 			);
 			path = Services;
 			sourceTree = "<group>";
@@ -916,7 +916,7 @@
 				5C84BF439B9047118002DD70 /* WorkspaceAgentToolsModel.swift in Sources */,
 				A9AEC3CDE2454B04B05F6AA3 /* WorkspaceAgentToolsModel+Goals.swift in Sources */,
 				A71B00000000000000000101 /* LibraryModel.swift in Sources */,
-				0D0C4EE8248E4F63A87CF7B4 /* WovenMatterRemoteToolBridge.swift in Sources */,
+				0D0C4EE8248E4F63A87CF7B4 /* MemberExecutionRoutes.swift in Sources */,
 				E10000000000000000000001 /* NoteEditor.swift in Sources */,
 				49BB9C77C988D34AA1B69E70 /* ApplicationModel.swift in Sources */,
 				9C717BDF5AA9D68422B42FCE /* ProductAnalyticsViews.swift in Sources */,

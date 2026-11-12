@@ -48,7 +48,6 @@ run_package_tests() {
     ACPSessionRoutingTests
     ClosedLidProtectionTests
     DefaultAgentSDKControlTests
-    RemoteAttachmentStagingTests
     RemoteBrowserViewerTests
     WorkspaceAgentToolsServiceTests
     ConversationHTMLWebKitTests

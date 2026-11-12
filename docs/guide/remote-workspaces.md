@@ -139,4 +139,8 @@ Mac and Linux workspace, with every Mac offline if the destination is a Linux
 host. Name a workspace by its ID: `woven_sessions_harnesses` lists them.
 
 The adding Mac still installs the host over SSH, and uses SSH for updates when
-a host is too old to accept signed updates.
+a host is too old to accept signed updates. Its chats run on the host's own
+server like everyone else's: messages, files, Pi Durable settings and sign-in
+go there with the Mac's device key, never over SSH. A chat that ran over SSH
+in an older version moves to the host's server when you open it, keeping its
+history; if it cannot move, it stays readable and says why.

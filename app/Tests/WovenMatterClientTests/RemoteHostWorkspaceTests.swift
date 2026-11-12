@@ -32,32 +32,13 @@ struct RemoteHostWorkspaceTests {
         }
     }
 
-    @Test(arguments: [AgentRuntimeKind.codex, .claudeCode, .grokBuild, .defaultAgent])
-    func hostLaunchUsesNativeExecutionAndWorkspacePermission(kind: AgentRuntimeKind) throws {
-        let resolved = try RemoteHarnessLaunchResolver.resolve(configuration: host(), runtimeKind: kind,
-            processWorkingDirectory: URL(fileURLWithPath: "/private/tmp"), tailnetSSHOptions: { _ in ["TAILNET-FIXTURE"] })
-        let wrapped = try #require(resolved.launch.wrappedCommand)
-        #expect(wrapped.command.first == "/home/alice/.local/share/wovenmatter/current/bin/wm-exec")
-        #expect(!wrapped.command.contains("docker"))
-        #expect(!wrapped.command.contains(where: { $0.contains("/opt/wovenmatter") || $0.contains("HOME=/home") }))
-        #expect(resolved.workspace.rootURL.path == "/home/alice/projects")
-        #expect(resolved.workspace.databasesURL.path == "/home/alice/woven-databases")
-        #expect(resolved.launch.arguments.first == "TAILNET-FIXTURE")
-        if kind == .codex { #expect(resolved.launch.requestedPermission == "agent-full-access") }
-        if kind == .claudeCode || kind == .grokBuild { #expect(resolved.launch.requestedPermission == "bypassPermissions") }
-        let regular = try RemoteHarnessLaunchResolver.resolve(configuration: host(mode: .user), runtimeKind: kind,
-            processWorkingDirectory: URL(fileURLWithPath: "/private/tmp"), tailnetSSHOptions: { _ in [] })
-        #expect(regular.launch.requestedPermission == nil)
-    }
-
-    @Test func durableGrokPermissionRemainsAfterHostRelaySubcommand() throws {
-        let resolved = try RemoteHarnessLaunchResolver.resolve(configuration: host(), runtimeKind: .grokBuild,
-            processWorkingDirectory: URL(fileURLWithPath: "/private/tmp"), durableChannelID: UUID().uuidString,
-            tailnetSSHOptions: { _ in [] }).launch
-        let wrapped = try #require(resolved.wrappedCommand)
-        #expect(wrapped.command[wrapped.harnessArgumentsStartIndex - 1] == "durable-acp")
-        let prepared = try LocalACPSessionPermissions.prepareLaunch(resolved)
-        #expect(prepared.arguments.last?.contains("'durable-acp' '--permission-mode' 'bypassPermissions'") == true)
+    /// A Full-root host's sessions take its workspace permission; the Mac
+    /// names it in `createSession` instead of launching the harness itself.
+    @Test(arguments: [AgentRuntimeKind.codex, .claudeCode, .grokBuild])
+    func fullRootHostNamesItsWorkspacePermission(kind: AgentRuntimeKind) {
+        let expected = kind == .codex ? "agent-full-access" : "bypassPermissions"
+        #expect(host().fullRootPermission(for: kind) == expected)
+        #expect(host(mode: .user).fullRootPermission(for: kind) == nil)
     }
 
 

@@ -20,32 +20,65 @@ public struct OpenCodeConnection: Equatable, Sendable {
     public let pid: Int?
     public let version: String?
     public let servicePathPrefix: String
-    private let bearerToken: String?
-    public var isRemoteWorkspaceProxy: Bool { bearerToken != nil }
+    /// A Linux host's OpenCode, reached through its server's proxy
+    /// (`/v1/workspace-instances/opencode/api/*`) with this Mac's member signature.
+    private let memberSigner: MemberRequestSigner?
+    private let memberAudience: String?
+    public var isRemoteWorkspaceProxy: Bool { memberSigner != nil }
 
     public init(identity: String, url: URL, username: String = "opencode", password: String,
-                registration: URL? = nil, pid: Int? = nil, version: String? = nil,
-                servicePathPrefix: String = "", bearerToken: String? = nil) throws {
+                registration: URL? = nil, pid: Int? = nil, version: String? = nil) throws {
         guard ["http", "https"].contains(url.scheme), url.host != nil,
               url.user == nil, url.password == nil, url.query == nil, url.fragment == nil,
               url.path.isEmpty || url.path == "/" else {
             throw OpenCodeError.message("Use an HTTP or HTTPS server origin without embedded credentials or a path.")
         }
-        if let bearerToken {
-            guard !bearerToken.isEmpty, !bearerToken.contains(where: { $0.isNewline }),
-                  identity.hasPrefix("remote-workspace:"),
-                  UUID(uuidString: String(identity.dropFirst("remote-workspace:".count))) != nil,
-                  url.scheme == "http", ["127.0.0.1", "::1", "[::1]", "localhost"].contains(url.host ?? ""),
-                  servicePathPrefix == "/v1/workspace-instances/opencode", registration == nil else {
-                throw OpenCodeError.message("Remote OpenCode must use its workspace's authenticated SSH loopback proxy.")
-            }
-        } else if !servicePathPrefix.isEmpty {
-            throw OpenCodeError.message("A service path requires workspace proxy authorization.")
-        }
-        self.servicePathPrefix = servicePathPrefix
-        self.bearerToken = bearerToken
+        servicePathPrefix = ""; memberSigner = nil; memberAudience = nil
         self.identity = identity; self.url = url; self.username = username; self.password = password
         self.registration = registration; self.pid = pid; self.version = version
+    }
+
+    /// A Linux host's OpenCode proxy at its private execution endpoint, such as
+    /// `https://host.tailnet.ts.net/wovenmatter-execution/<id>`, signed for `audience`.
+    public init(memberProxy identity: String, endpoint: URL, signer: MemberRequestSigner, audience: String, version: String? = nil) throws {
+        guard identity.hasPrefix("remote-workspace:"), UUID(uuidString: String(identity.dropFirst("remote-workspace:".count))) != nil,
+              endpoint.scheme == "https", endpoint.host?.lowercased().hasSuffix(".ts.net") == true,
+              endpoint.user == nil, endpoint.password == nil, endpoint.query == nil, endpoint.fragment == nil,
+              !endpoint.pathComponents.contains(".."), MemberRequestSignature.isDeviceID(audience.lowercased()),
+              var origin = URLComponents(url: endpoint, resolvingAgainstBaseURL: false) else {
+            throw OpenCodeError.message("Remote OpenCode must use its workspace's private signed proxy.")
+        }
+        let base = origin.percentEncodedPath.hasSuffix("/") ? String(origin.percentEncodedPath.dropLast()) : origin.percentEncodedPath
+        origin.percentEncodedPath = ""
+        guard let url = origin.url else { throw OpenCodeError.message("Remote OpenCode must use its workspace's private signed proxy.") }
+        servicePathPrefix = base + "/v1/workspace-instances/opencode"
+        memberSigner = signer; memberAudience = audience.lowercased()
+        self.identity = identity; self.url = url; username = "opencode"; password = ""
+        registration = nil; pid = nil; self.version = version
+    }
+
+    public static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.identity == rhs.identity && lhs.url == rhs.url && lhs.username == rhs.username && lhs.password == rhs.password
+            && lhs.registration == rhs.registration && lhs.pid == rhs.pid && lhs.version == rhs.version
+            && lhs.servicePathPrefix == rhs.servicePathPrefix && lhs.memberAudience == rhs.memberAudience
+            && lhs.memberSigner?.deviceID == rhs.memberSigner?.deviceID
+    }
+
+    /// Adds this connection's credential to `request`: the local server's
+    /// password, or a member signature over the exact target and body.
+    public func authorize(_ request: inout URLRequest) throws {
+        guard let memberSigner, let memberAudience else {
+            request.setValue("Basic " + Data("\(username):\(password)".utf8).base64EncodedString(), forHTTPHeaderField: "Authorization")
+            return
+        }
+        guard let url = request.url, let components = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
+            throw OpenCodeError.message("Invalid OpenCode request URL.")
+        }
+        let target = components.percentEncodedPath + (components.percentEncodedQuery.map { "?" + $0 } ?? "")
+        for (key, value) in try memberSigner.headers(method: request.httpMethod ?? "GET", target: target,
+                                                     body: request.httpBody ?? Data(), audience: memberAudience) {
+            request.setValue(value, forHTTPHeaderField: key)
+        }
     }
     public static func registrationURL(environment: [String: String] = ProcessInfo.processInfo.environment,
                                        home: URL = FileManager.default.homeDirectoryForCurrentUser) -> URL {
@@ -76,10 +109,6 @@ public struct OpenCodeConnection: Equatable, Sendable {
         var components = URLComponents(url: url, resolvingAgainstBaseURL: false)!
         components.queryItems = [URLQueryItem(name: "auth_token", value: Data("\(username):\(password)".utf8).base64EncodedString())]
         return components.url!
-    }
-    public var authorization: String {
-        if let bearerToken { return "Bearer " + bearerToken }
-        return "Basic " + Data("\(username):\(password)".utf8).base64EncodedString()
     }
 }
 
@@ -154,12 +183,12 @@ public struct OpenCodeHTTPClient: Sendable {
         guard let url = components.url else { throw OpenCodeError.message("Invalid OpenCode request URL.") }
         var request = URLRequest(url: url)
         request.httpMethod = method
-        request.setValue(connection.authorization, forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         if let body {
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
             request.httpBody = try JSONEncoder().encode(body)
         }
+        try connection.authorize(&request)
         return request
     }
     public func call(_ method: String = "GET", _ path: String,

@@ -6,25 +6,19 @@ import WovenMatterCore
 @testable import WovenMatterDashboardStore
 
 struct ACPResumePermissionTests {
-  @Test(arguments: [AgentRuntimeKind.defaultAgent, .codex], [false, true])
-  func configurationLoadsRouteDurableApprovalsToTheirConversation(runtime: AgentRuntimeKind, remote: Bool) async throws {
+  @Test(arguments: [AgentRuntimeKind.defaultAgent, .codex])
+  func configurationLoadsRouteDurableApprovalsToTheirConversation(runtime: AgentRuntimeKind) async throws {
     let persistence = try PersistenceFixture(); defer { persistence.remove() }
     let database = try await persistence.openDatabase()
     var conversations: [String] = []
     for index in 0..<2 {
-      let id: String
-      if remote {
-        id = try await database.createFixtureRemoteACPSession(runtimeKind: runtime, remoteWorkspaceID: UUID(),
-            remoteWorkspaceName: "Fixture", title: "Resume \(index)", ownerDeviceID: UUID())
-      } else {
-        id = try await database.createFixtureLocalACPSession(runtimeKind: runtime, title: "Resume \(index)", ownerDeviceID: UUID())
-      }
+      let id = try await database.createFixtureLocalACPSession(runtimeKind: runtime, title: "Resume \(index)", ownerDeviceID: UUID())
       try await database.updateLocalACPSessionID(conversationID: id, sessionID: "remote-\(index)")
       conversations.append(id)
     }
     let requests = ResumePermissionRecorder()
     let coordinator = LocalACPSessionCoordinator(database: database, clientFactory: { _, _ in
-      ResumePermissionDriver(expectsHandler: runtime == .defaultAgent || remote).driver()
+      ResumePermissionDriver(expectsHandler: runtime == .defaultAgent).driver()
     })
     await coordinator.setResumePermissionHandler { conversationID, request in
       await requests.record(conversationID: conversationID, title: request.title)
@@ -35,7 +29,7 @@ struct ACPResumePermissionTests {
     )
     let workspace = LocalACPWorkspaceLaunchConfiguration(rootURL: persistence.directory)
 
-    // A configuration refresh can load an active remote run before a prompt
+    // A configuration refresh can load an active Pi run before a prompt
     // supplies its own handler. Each concurrent load must keep its identity.
     try await withThrowingTaskGroup(of: Void.self) { group in
       for id in conversations {
@@ -47,7 +41,7 @@ struct ACPResumePermissionTests {
     }
 
     let observed = await requests.values
-    if runtime == .defaultAgent || remote {
+    if runtime == .defaultAgent {
       #expect(observed == [conversations[0]: "remote-0", conversations[1]: "remote-1"])
     } else {
       #expect(observed.isEmpty)

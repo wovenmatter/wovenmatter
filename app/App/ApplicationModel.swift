@@ -565,7 +565,7 @@ final class ApplicationModel {
                 database: dashboardStore.database)
         }
         if agentTools == nil { try await configureAgentTools(store: dashboardStore) }
-        agentTools?.facadeFixtureMCPConnection = { _, local, _ in local }
+        agentTools?.facadeFixtureMCPConnection = { _, local in local }
         await refreshWorkspace()
         state = .ready
     }
@@ -711,6 +711,22 @@ final class ApplicationModel {
             }
             remoteWorkspaces.onHostInstalled = { [weak self] configuration in
                 self?.libraryHost.setUpLinuxHost(configuration, restart: true)
+            }
+            // A Linux host's files, settings and Pi sign-in go through its server.
+            await dashboardStore.library.setRemoteFileReader { [weak self] workspaceID, conversationID, path, underRoot in
+                guard let self else { throw CancellationError() }
+                return try await self.readLinuxLibraryFile(workspaceID: workspaceID, conversationID: conversationID, path: path, underRoot: underRoot)
+            }
+            connections.memberRoutes = { [weak self] configuration in
+                guard let self else { throw CancellationError() }
+                return try await self.linuxMemberRoutes(configuration.id)
+            }
+            remoteWorkspaces.memberClient = { [weak self] configuration in
+                guard let self, let database = self.dashboardStore?.database,
+                      let workspace = try await database.libraryExecutionWorkspaces().first(where: { $0.id == configuration.id.uuidString.lowercased() && !$0.deleted }) else {
+                    throw RemoteWorkspaceClientError.invalidResponse("This host is no longer in the workspace registry.")
+                }
+                return try await self.botsClient(for: workspace)
             }
             remoteWorkspaces.onRuntimeMaintenanceChanged = { [weak self] in
                 await self?.synchronizeRemoteAgentCatalog()
@@ -2502,6 +2518,11 @@ final class ApplicationModel {
 
         if try await dispatchFederatedMessage(conversationID: conversation.id, input: input, note: note,
             expectedRunID: expectedRunID, requiresIdle: requiresIdle, dispatchFence: dispatchFence) { return (true, nil) }
+        // A Linux host's chats run only on its server; one that did not move there is history.
+        if let workspaceID = conversation.remoteWorkspaceID {
+            throw LegacyRemoteChatError(workspace: remoteWorkspaces.configuration(id: workspaceID)?.name ?? "its Linux workspace",
+                reason: conversation.isArchived ? "It is archived" : "It has not moved to the host's server yet")
+        }
         let goalPrompt = input.historyDeliveryID == nil && WorkspaceGoal.supports(conversation.localRuntimeKind)
             ? WorkspaceGoalCommand(input.text)?.agentPrompt : nil
 
@@ -2571,11 +2592,9 @@ final class ApplicationModel {
             context = AgentNoteContext(noteID: note.id, title: response.title ?? note.title, folderID: note.folderID,
                 revision: revision, requireCurrentRevision: expectedNoteRevision != nil ? true : nil)
         }
-        let remote = conversation.remoteWorkspaceID.flatMap { remoteWorkspaces.configuration(id: $0) }
-        if conversation.remoteWorkspaceID != nil, remote == nil { throw ApplicationModelError.remoteHarnessUnavailable }
         let capturedInputID = try await dashboardStore.database.captureInputContext(conversationID: conversation.id,
             noteID: normalized.historyDeliveryID == nil ? context?.noteID : nil)
-        normalized.mcpContext = try await agentTools.mcpContext(sessionID: conversation.id, remote: remote, captureID: capturedInputID)
+        normalized.mcpContext = try await agentTools.mcpContext(sessionID: conversation.id, captureID: capturedInputID)
         let deliveryContent = normalized.text
         if WorkspaceGoal.supports(conversation.localRuntimeKind),
            try await dashboardStore.database.sessionTools(conversation.id).enabled.contains(.goals) {
@@ -2618,11 +2637,10 @@ final class ApplicationModel {
                 _ = try await openCode.send(conversation.id, input: normalized,
                     requiresIdle: requiresIdle, dispatchFence: dispatchFence)
             } else if steering {
-                let staged = try await remoteWorkspaces.stagingFiles(of: normalized, in: conversation.remoteWorkspaceID)
                 try await validateCommandTarget()
                 try dispatchFence.check()
                 let ids = try await dashboardStore.sendActiveLocalACPPrompt(conversationID: conversation.id,
-                    input: staged, deliveryContent: deliveryContent, expectedRunID: expectedRunID, dispatchFence: dispatchFence)
+                    input: normalized, deliveryContent: deliveryContent, expectedRunID: expectedRunID, dispatchFence: dispatchFence)
                 accepted = LocalACPRunIdentifiers(runID: ids.runID, userMessageID: ids.userMessageID, assistantMessageID: ids.assistantMessageID)
             } else {
                 accepted = try await acceptLocalAgentMessage(conversation: conversation, input: normalized,
@@ -2727,13 +2745,8 @@ final class ApplicationModel {
             conversation: conversation,
             runtimeKind: runtimeKind
         )
-        if runtimeKind == .defaultAgent, let workspaceID = conversation.remoteWorkspaceID,
-           let remote = remoteWorkspaces.configuration(id: workspaceID) {
-            try await remoteWorkspaces.ensureDefaultAgent(remote)
-        }
         let launch = context.launch
         let workspace = context.workspace
-        let input = try await remoteWorkspaces.stagingFiles(of: input, in: conversation.remoteWorkspaceID)
         try dispatchFence.check()
         return try await store.acceptLocalACPPrompt(
             conversationID: conversation.id,
@@ -3142,36 +3155,24 @@ final class ApplicationModel {
         do { resolvedRoot = try await folderWorkingDirectory(folderID: folderID, workspaceID: target.configuration.id, explicit: nativeWorkingDirectory, calendarExecutionRoot: calendarExecutionRoot) }
         catch { localRunError = error.localizedDescription; return nil }
         let selectionWorkspace = Self.remoteDatabaseSourceID(target.configuration.id)
-        let capturedDefaults = sessionSelectionPreferences.defaults(harness: target.harness.id.rawValue, workspace: selectionWorkspace)
-        let usesProductPermissionDefault = sessionSelectionPreferences.usesProductPermissionDefault(
+        let id = requestedConversationID ?? UUID()
+        // A scheduled task stages its own choices for its session; others use the destination's defaults.
+        let staged = sessionSelectionPreferences.conversation(id: id.uuidString.lowercased()).flatMap { $0.requiresApplication ? $0 : nil }
+        let capturedDefaults = staged?.desiredSelections
+            ?? sessionSelectionPreferences.defaults(harness: target.harness.id.rawValue, workspace: selectionWorkspace)
+        let usesProductPermissionDefault = staged?.usesProductPermissionDefault ?? sessionSelectionPreferences.usesProductPermissionDefault(
             harness: target.harness.id.rawValue, workspace: selectionWorkspace)
         do {
-            if target.harness.id == .opencode {
-                await synchronizeRemoteOpenCodeInstances()
-                guard let instance = remoteOpenCodes[target.configuration.id] else {
-                    throw ApplicationModelError.remoteHarnessUnavailable
-                }
-                try await instance.connectLocal()
-                let id = try await instance.create(workspace: resolvedRoot, requestedConversationID: requestedConversationID, title: initialTitle, nativeWorkspaceID: nativeWorkspaceID, allowMissingCalendarFolder: calendarExecutionRoot != nil,
-                    executionRoot: try await sessionCreationRoot(folderID: folderID, workspaceID: target.configuration.id, root: resolvedRoot))
-                await refreshWorkspace()
-                return id
-            }
-            guard let dashboardStore else {
-                throw ApplicationModelError.dashboardStoreUnavailable
-            }
-            let conversationID = try await dashboardStore.createRemoteACPSession(
-                runtimeKind: target.harness.id,
-                remoteWorkspaceID: target.configuration.id,
-                remoteWorkspaceName: target.configuration.name,
-                title: Self.initialSessionTitle(initialTitle, harness: target.harness.displayName),
-                requestedConversationID: requestedConversationID,
-                allowMissingCalendarFolder: calendarExecutionRoot != nil,
-                executionRoot: try await sessionCreationRoot(folderID: folderID, workspaceID: target.configuration.id, root: resolvedRoot)
-            )
-            do { try await initializeNewSessionSelections(conversationID: conversationID, capturedDefaults: capturedDefaults,
-                usesProductPermissionDefault: usesProductPermissionDefault) }
-            catch { NSLog("Could not read the new chat’s saved settings; opening with native defaults.") }
+            let conversationID = try await createLinuxMemberSession(target: target,
+                conversationID: id, root: resolvedRoot,
+                // A folder or a scheduled task fixes the directory; a chat in
+                // All Workspaces gets its own scratch folder on the host.
+                workingDirectory: folderID != nil || calendarExecutionRoot != nil || nativeWorkingDirectory != nil ? resolvedRoot.path : nil,
+                title: Self.initialSessionTitle(initialTitle, harness: target.harness.displayName), folderID: folderID,
+                selections: capturedDefaults, usesProductPermissionDefault: usesProductPermissionDefault,
+                allowMissingCalendarFolder: calendarExecutionRoot != nil)
+            // The host applied them as it created the session.
+            if staged != nil { sessionSelectionPreferences.markApplied(id: conversationID) }
             localRunError = nil
             await refreshWorkspace()
             return conversationID
@@ -3181,50 +3182,63 @@ final class ApplicationModel {
         }
     }
 
+    /// A new chat on a Linux host this Mac added, created by the host's own
+    /// server with this Mac's choices (signed `createSession` with
+    /// `sessionOptions` and `folderID`). The host runs it; every message goes
+    /// through its server. Nothing is launched over SSH.
+    func createLinuxMemberSession(target: RemoteHarnessChatTarget, conversationID: UUID, root: URL, workingDirectory: String?,
+                                  title: String, folderID: String?, selections: SessionSelections,
+                                  usesProductPermissionDefault: Bool, allowMissingCalendarFolder: Bool) async throws -> String {
+        guard let dashboardStore else { throw ApplicationModelError.dashboardStoreUnavailable }
+        let database = dashboardStore.database
+        let registryID = target.configuration.id.uuidString.lowercased()
+        guard let workspace = try await database.libraryExecutionWorkspaces().first(where: { $0.id == registryID && !$0.deleted }) else {
+            throw LibraryAPIError(code: "unknown_workspace", message: "\(target.configuration.name) is not in this library's workspaces yet. Reconnect it in Settings → Workspaces.")
+        }
+        let runtime = target.harness.id
+        let forced = target.configuration.fullRootPermission(for: runtime)
+        let permission = runtime == .pi ? nil : forced ?? (usesProductPermissionDefault ? nil : selections.permission)
+        let tools = selections.tools?.filter { WorkspaceToolGroup(rawValue: $0) != nil }
+        let options = LibrarySessionOptions(workingDirectory: workingDirectory, model: selections.model,
+            thinking: selections.thinking, permission: permission, enabledTools: tools)
+        let id = conversationID.uuidString.lowercased()
+        let executionRoot = try await sessionCreationRoot(folderID: folderID, workspaceID: target.configuration.id, root: root)
+        let client = try centralExecutionClient()
+        let receipt = try await client.createSession(workspace: workspace, runtimeKind: runtime, conversationID: id,
+            folderID: folderID, title: title, sessionOptions: options)
+        let providerID = try await client.providers(workspace: workspace).first { $0.runtimeKind == runtime.rawValue }?.id ?? runtime.rawValue
+        guard receipt.conversationID == nil || receipt.conversationID == id else {
+            throw LibraryAPIError(code: "invalid_response", message: "\(target.configuration.name) created a different chat than this Mac requested.")
+        }
+        return try await dashboardStore.createRemoteMemberSession(runtimeKind: runtime, remoteWorkspaceID: target.configuration.id,
+            remoteWorkspaceName: target.configuration.name, title: title,
+            providerID: providerID, conversationID: conversationID, allowMissingCalendarFolder: allowMissingCalendarFolder,
+            executionRoot: executionRoot)
+    }
+
     private func sessionMCPConnection(_ conversationID: String) async throws -> WovenMCPConnection? {
         guard let agentTools, let database = dashboardStore?.database else { return nil }
         let session = try await database.localACPSession(conversationID: conversationID)
         let root = try await database.availableSessionExecutionRoot(id: conversationID)
-        guard root.workspaceID == (try await executionWorkspaceIdentity(workspaceID: session.remoteWorkspaceID)) else {
+        guard session.remoteWorkspaceID == nil, root.workspaceID == (try await executionWorkspaceIdentity(workspaceID: nil)) else {
             throw WorkspaceToolError.invalid("This chat belongs to a different execution workspace.")
         }
-        let remote = session.remoteWorkspaceID.flatMap { remoteWorkspaces.configuration(id: $0) }
-        guard session.remoteWorkspaceID == nil || remote != nil else { throw ApplicationModelError.remoteHarnessUnavailable }
-        return try await agentTools.mcpContext(sessionID: conversationID, remote: remote, captureID: "")
+        return try await agentTools.mcpContext(sessionID: conversationID, captureID: "")
     }
 
+    /// The launch of a chat that runs on this Mac. A Linux host's chats run
+    /// on its own server, never from here.
     func directACPLaunchContext(
         conversation: WorkspaceConversationRecord,
         runtimeKind: AgentRuntimeKind
-    ) async throws -> RemoteHarnessLaunchContext {
+    ) async throws -> LocalHarnessLaunchContext {
+        guard conversation.remoteWorkspaceID == nil else { throw ApplicationModelError.remoteHarnessUnavailable }
         guard !conversation.isArchived,
               let savedRoot = try await dashboardStore?.database.availableSessionExecutionRoot(id: conversation.id),
-              savedRoot.workspaceID == (try await executionWorkspaceIdentity(workspaceID: conversation.remoteWorkspaceID)) else {
+              savedRoot.workspaceID == (try await executionWorkspaceIdentity(workspaceID: nil)) else {
             throw WorkspaceToolError.invalid("This chat has no available execution workspace. Start a new chat.")
         }
         let inheritedRoot = URL(fileURLWithPath: savedRoot.rootPath)
-        if let remoteWorkspaceID = conversation.remoteWorkspaceID {
-            guard let configuration = remoteWorkspaces.configuration(
-                id: remoteWorkspaceID
-            ), remoteWorkspaces.isHarnessReady(runtimeKind, in: configuration) else {
-                throw ApplicationModelError.remoteHarnessUnavailable
-            }
-            let processDirectory = localACPWorkspaceLaunchConfiguration?.rootURL
-                ?? FileManager.default.homeDirectoryForCurrentUser
-
-            var sshOptions: @Sendable (String) throws -> [String] = RemoteWorkspaceTailnet.sshOptions
-            #if APP_FACADE_TESTS
-            if isFacadeFixture { sshOptions = { _ in [] } }
-            #endif
-            return try RemoteHarnessLaunchResolver.resolve(
-                configuration: configuration,
-                runtimeKind: runtimeKind,
-                processWorkingDirectory: processDirectory,
-                workingDirectory: inheritedRoot,
-                durableChannelID: conversation.id,
-                tailnetSSHOptions: sshOptions
-            )
-        }
         guard let launch = localACPLaunchConfigurations[runtimeKind],
               let workspace = localACPWorkspaceLaunchConfiguration else {
             throw localACPLaunchUnavailableError(for: runtimeKind)

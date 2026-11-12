@@ -114,12 +114,9 @@ struct RuntimeBoundaryTests {
       swapLimit: "4"
     )
 
-    // The retained lifecycle helper is not a supported workspace launch path.
-    for runtime in AgentRuntimeKind.allCases {
-      #expect(throws: RemoteWorkspaceClientError.self) {
-        try RemoteHarnessLaunchResolver.resolve(configuration: configuration, runtimeKind: runtime,
-          processWorkingDirectory: URL(fileURLWithPath: "/private/tmp"), tailnetSSHOptions: { _ in [] })
-      }
+    // The retained lifecycle helper runs no host command.
+    #expect(throws: RemoteWorkspaceClientError.self) {
+      try RemoteWorkspaceExecTarget(configuration: configuration).command(["true"])
     }
 
     let deleteRecorder = SSHRecorder(response: #"{"deleted":true}"#)

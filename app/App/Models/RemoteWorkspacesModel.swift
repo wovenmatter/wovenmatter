@@ -264,26 +264,6 @@ final class RemoteWorkspacesModel {
         workspaces.first { $0.id == id }
     }
 
-    /// Copies the input's files into the workspace container and returns the
-    /// input with each file carrying its container path. Local conversations
-    /// (`workspaceID == nil`) pass through unchanged.
-    func stagingFiles(
-        of input: AgentMessageInput,
-        in workspaceID: UUID?
-    ) async throws -> AgentMessageInput {
-        guard !isBackendProjection else { throw BackendRPCError.remote("Remote connections are owned by the background service.") }
-        guard let workspaceID, !input.files.isEmpty else { return input }
-        guard let configuration = configuration(id: workspaceID) else {
-            throw AgentMessageAttachmentError.unsupportedForAgent(
-                "This conversation's remote workspace is no longer configured."
-            )
-        }
-        let stager = RemoteAttachmentStager()
-        return try await input.mappingFiles { file in
-            file.staged(at: try await stager.stage(file, in: configuration))
-        }
-    }
-
     func isHarnessReady(
         _ runtimeKind: AgentRuntimeKind,
         in configuration: RemoteWorkspaceConfiguration
@@ -408,27 +388,29 @@ final class RemoteWorkspacesModel {
         guard isRuntimeInstalled(.opencode, in: configuration), runtimeMaintenance[configuration.id]?.contains(where: {
             $0.id == .opencode && $0.installed && $0.operation?.status != "running"
         }) == true else { throw RemoteWorkspaceClientError.harnessUnavailable }
-        let client = try await serviceClient(for: configuration)
+        // The host's server proxies its OpenCode for signed Mac members.
+        guard let memberClient else { throw RemoteWorkspaceClientError.invalidResponse("Reconnect this workspace to use its OpenCode.") }
+        let client = try await memberClient(configuration)
         try requireCurrent(identity)
-        let health = try await client.health()
+        let health: RemoteWorkspaceHealth = try await client.request("v1/health")
         try requireCurrent(identity)
         guard isRuntimeInstalled(.opencode, in: configuration) else { throw CancellationError() }
-        let status = try await client.workspaceInstance(.opencode, action: allowStart ? "start" : nil)
+        let status: RemoteWorkspaceInstanceStatus = try await client.request("v1/workspace-instances/opencode" + (allowStart ? "/start" : ""),
+            method: allowStart ? "POST" : "GET", timeout: 120)
         try requireCurrent(identity)
         workspaceRoots[configuration.id] = health.workspaceRoot
         workspaceInstances[configuration.id, default: [:]][.opencode] = status
-        guard status.state == "running", let port = await tunnels[configuration.id]?.localPort,
-              let token = try await credentials.token(for: configuration.id) else {
+        guard status.state == "running" else {
             throw RemoteWorkspaceClientError.invalidResponse(status.lastError ?? "The workspace OpenCode server is unavailable.")
         }
-        try requireCurrent(identity)
         guard isRuntimeInstalled(.opencode, in: configuration) else { throw CancellationError() }
-        return try OpenCodeConnection(
-            identity: "remote-workspace:\(configuration.id.uuidString.lowercased())",
-            url: URL(string: "http://127.0.0.1:\(port)")!, password: "",
-            version: status.version, servicePathPrefix: "/v1/workspace-instances/opencode", bearerToken: token
-        )
+        return try OpenCodeConnection(memberProxy: "remote-workspace:\(configuration.id.uuidString.lowercased())",
+            endpoint: client.endpoint, signer: client.signer, audience: client.audience, version: status.version)
     }
+
+    /// A client of a Linux host's server signed with this Mac's member key,
+    /// set by the application model (which holds the member directory).
+    var memberClient: (@MainActor (RemoteWorkspaceConfiguration) async throws -> MemberSignedHTTPClient)?
 
     private func refreshRuntimeMaintenance(_ configuration: RemoteWorkspaceConfiguration,
                                           checkLatest: Bool = false) async {
@@ -1253,9 +1235,17 @@ final class RemoteWorkspacesModel {
             return try await ensureDefaultAgent(configuration)
         }
         let task = Task {
-            let client = try await serviceClient(for: configuration)
-            try requireCurrent(identity)
-            let receipt = try await client.configureDefaultAgent(payload.data())
+            // Through the host's server with this Mac's signature once it is
+            // enrolled; before that (first install) over the installer link.
+            let receipt: DefaultAgentSyncReceipt
+            if let memberClient, let signed = try? await memberClient(configuration) {
+                try requireCurrent(identity)
+                receipt = try await signed.request("v1/default-agent/configuration", method: "POST", body: payload.data(), timeout: 120)
+            } else {
+                let client = try await serviceClient(for: configuration)
+                try requireCurrent(identity)
+                receipt = try await client.configureDefaultAgent(payload.data())
+            }
             try requireCurrent(identity)
             guard receipt.saved, receipt.revision == payload.revision else {
                 throw DefaultAgentError.message("The workspace did not acknowledge the current Pi Durable credentials.")
@@ -1386,18 +1376,6 @@ final class RemoteWorkspacesModel {
         try requireCurrent(identity)
         _ = try await client.configureExecutionMCPSettings(settings)
         try requireCurrent(identity)
-    }
-
-    func adoptExecutionConversation(configuration: RemoteWorkspaceConfiguration, adoption: ExecutionAdoption) async throws -> LibraryConversation {
-        let identity = try requestIdentity(configuration)
-        guard adoption.workspaceID == configuration.id.uuidString.lowercased() else {
-            throw RemoteWorkspaceClientError.invalidResponse("The adoption belongs to another execution workspace.")
-        }
-        let client = try await serviceClient(for: configuration)
-        try requireCurrent(identity)
-        let conversation = try await client.adoptExecutionConversation(adoption)
-        try requireCurrent(identity)
-        return conversation
     }
 
     func revokeExecutionDevice(configuration: RemoteWorkspaceConfiguration, deviceID: String) async throws {

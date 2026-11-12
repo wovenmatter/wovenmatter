@@ -11,7 +11,6 @@ import { grokAccountProfile } from './account-profile.mjs';
 import { inlineClaudeLogin } from './claude-runtime.mjs';
 
 const send = (value, flushed) => process.stdout.write(JSON.stringify(value) + '\n', flushed);
-const remote = process.argv.includes('--remote');
 const control = process.argv.includes('--control');
 const controlController = control ? new AbortController() : undefined;
 
@@ -29,39 +28,9 @@ async function requestCredentials() {
   });
 }
 async function engine() {
-  // Remote relays forward RPCs to their owning service; importing the local
-  // provider/tool graph delays attachment and serves no purpose in that mode.
   const { DefaultAgentEngine } = await import('./engine.mjs');
   return instance ??= new DefaultAgentEngine({ cwd: process.cwd(), directory, config: payload.config, credentials: payload.credentials, credentialAccounts: payload.credentialAccounts, vault,
-    requestCredentials: !remote && !control ? requestCredentials : undefined }).initialize();
-}
-async function remoteRequest(path, body, canUnlock = true) {
-  const port = process.env.WOVENMATTER_LISTEN_PORT ?? '7337';
-  if (!/^\d+$/.test(port) || Number(port) < 1 || Number(port) > 65535) throw new DefaultAgentError('The remote workspace service port is invalid.');
-  const response = await fetch(`http://127.0.0.1:${port}/v1/default-agent/${path}`, { method: body ? 'POST' : 'GET', headers: { Authorization: `Bearer ${process.env.WOVENMATTER_API_TOKEN}`, 'Content-Type': 'application/json' }, body: body ? JSON.stringify(body) : undefined, signal: AbortSignal.timeout(path === 'rpc' ? 24 * 60 * 60 * 1000 : 30000) });
-  if (response.status === 423 && canUnlock && path !== 'configuration') {
-    await remoteRequest('configuration', await requestCredentials(), false);
-    return remoteRequest(path, body, false);
-  }
-  if (!response.ok) throw new Error(`Pi Durable workspace service failed (HTTP ${response.status}).`);
-  return response.json();
-}
-const remoteAttachmentTokens = new Map();
-async function attachedRemoteRPC(message) {
-  const sessionID = message.params?.sessionId;
-  const attachmentToken = remoteAttachmentTokens.get(sessionID);
-  if (['session/prompt', '_session/steering'].includes(message.method) && !attachmentToken) {
-    throw new DefaultAgentError('Update the workspace service and reconnect before sending messages; this service cannot fence replaced attachments.');
-  }
-  const response = await remoteRequest('rpc', { ...message, attachmentToken,
-    ...(['session/new', 'session/load'].includes(message.method) ? { attachmentProtocol: 1 } : {}),
-    operationID: message.method === 'session/prompt' ? (message.params?._meta?.wovenInputID ?? message.params?._meta?.wovenRunID ?? crypto.randomUUID()) : undefined }).catch(error => {
-      if (['session/prompt', '_session/steering'].includes(message.method)) error.deliveryUncertain = true;
-      throw error;
-    });
-  const token = response.attachmentToken ?? response.result?._meta?.attachmentToken;
-  if (token) remoteAttachmentTokens.set(response.result?.sessionId ?? sessionID, token);
-  return response;
+    requestCredentials: !control ? requestCredentials : undefined }).initialize();
 }
 async function invoke(message) {
   const update = value => new Promise(resolve => send({ jsonrpc: '2.0', method: 'session/update', params: { sessionId: message.params?.sessionId, update: value } }, resolve));
@@ -137,39 +106,14 @@ async function invoke(message) {
     }
     return e.status({ signal: controlController.signal });
   }
-  if (!remote) {
-    if (message.method === 'woven/configure') {
-      payload = message.params;
-      const current = await engine();
-      await current.apply(payload);
-      const record = [...current.sessions.values()][0];
-      return record ? current.configuration(record) : {};
-    }
-    return (await engine()).handle(message.method, message.params, update);
+  if (message.method === 'woven/configure') {
+    payload = message.params;
+    const current = await engine();
+    await current.apply(payload);
+    const record = [...current.sessions.values()][0];
+    return record ? current.configuration(record) : {};
   }
-  const response = await attachedRemoteRPC(message);
-  if (!response.operationID) return response.result;
-  let cursor = 0;
-  let terminalOutcomeConfirmed = false;
-  try {
-    while (true) {
-      const page = await remoteRequest(`runs/${response.operationID}?after=${cursor}`).catch(error => {
-        if (message.method === 'session/prompt') error.deliveryUncertain = true;
-        throw error;
-      });
-      terminalOutcomeConfirmed = page.done === true;
-      for (const event of page.updates) await update(event);
-      cursor = page.cursor;
-      if (page.done) {
-        if (page.error) throw new DefaultAgentError(page.error);
-        return page.result;
-      }
-      await new Promise(resolve => setTimeout(resolve, 150));
-    }
-  } catch (error) {
-    if (message.method === 'session/prompt' && !terminalOutcomeConfirmed) error.deliveryUncertain = true;
-    throw error;
-  }
+  return (await engine()).handle(message.method, message.params, update);
 }
 const pendingPrompts = new Map();
 const lines = createInterface({ input: process.stdin });
@@ -199,7 +143,7 @@ async function closeRuntime() {
   shutdown = (async () => {
     const timeout = setTimeout(() => process.exit(0), 5000);
     timeout.unref();
-    if (instance && !remote) {
+    if (instance) {
       // Normal retirement first waits for woven/idle. An unexpected EOF or a
       // forced shutdown explicitly withdraws queues and aborts owned native
       // work before releasing the native store.

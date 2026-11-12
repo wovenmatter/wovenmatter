@@ -70,11 +70,8 @@ final class WorkspaceAgentToolsModel {
     var error: String?
     private var mcpHost: WovenMCPHost?
     #if APP_FACADE_TESTS
-    @ObservationIgnored var facadeFixtureMCPConnection: ((String, WovenMCPConnection, RemoteWorkspaceConfiguration?) async -> WovenMCPConnection)?
+    @ObservationIgnored var facadeFixtureMCPConnection: ((String, WovenMCPConnection) async -> WovenMCPConnection)?
     #endif
-    private var remoteBridges: [String: WovenMCPRemoteBridge] = [:]
-    private var remoteBridgeCredentials: [String: String] = [:]
-    private var pendingBridges: [String: Task<WovenMCPRemoteBridge, any Error>] = [:]
     private var stopped = false
     private var receiptPageRequests: [String: UUID] = [:]
     private let sessionHandler: SessionHandler
@@ -396,36 +393,17 @@ final class WorkspaceAgentToolsModel {
         catch { return .error("unavailable", "Woven MCP is unavailable.", status: 503) }
     }
 
-    func mcpContext(sessionID: String, remote: RemoteWorkspaceConfiguration? = nil, captureID: String) async throws -> WovenMCPConnection {
+    /// The Woven MCP connection of a session that runs on this Mac. A Linux
+    /// host's sessions use that host's own Woven MCP.
+    func mcpContext(sessionID: String, captureID: String) async throws -> WovenMCPConnection {
         let local = try await ensureMCPHost().connection(sessionID: sessionID, captureID: captureID.isEmpty ? nil : captureID)
         #if APP_FACADE_TESTS
-        if let facadeFixtureMCPConnection { return await facadeFixtureMCPConnection(sessionID, local, remote) }
+        if let facadeFixtureMCPConnection { return await facadeFixtureMCPConnection(sessionID, local) }
         #endif
-        guard let remote else { return local }
-        let bridge: WovenMCPRemoteBridge
-        if let current = remoteBridges[sessionID], current.isRunning, remoteBridgeCredentials[sessionID] == local.bearerToken { bridge = current }
-        else {
-            remoteBridges.removeValue(forKey: sessionID)?.stop()
-            let pending: Task<WovenMCPRemoteBridge, any Error>
-            if let existing = pendingBridges[sessionID] { pending = existing }
-            else {
-                pending = Task { try await WovenMCPRemoteBridge.start(configuration: remote, localConnection: local) }
-                pendingBridges[sessionID] = pending
-            }
-            defer { pendingBridges.removeValue(forKey: sessionID) }
-            bridge = try await pending.value
-            guard !stopped else { bridge.stop(); throw CancellationError() }
-            remoteBridges[sessionID] = bridge
-            remoteBridgeCredentials[sessionID] = local.bearerToken
-        }
-        let connection = try bridge.remoteConnection
-        return .init(endpointURL: connection.endpointURL, bearerToken: connection.bearerToken, captureID: local.captureID, sessionID: sessionID)
+        return local
     }
 
     func revokeSessionMCP(_ sessionID: String) {
-        pendingBridges.removeValue(forKey: sessionID)?.cancel()
-        remoteBridges.removeValue(forKey: sessionID)?.stop()
-        remoteBridgeCredentials.removeValue(forKey: sessionID)
         mcpHost?.revokeSession(sessionID)
     }
 
@@ -433,10 +411,6 @@ final class WorkspaceAgentToolsModel {
         stopped = true
         reloadGeneration = UUID()
         receiptPageRequests.removeAll()
-        for pending in pendingBridges.values { pending.cancel() }
-        pendingBridges.removeAll()
-        for bridge in remoteBridges.values { bridge.stop() }
-        remoteBridges.removeAll(); remoteBridgeCredentials.removeAll()
         mcpHost?.stop(); mcpHost = nil
     }
 
