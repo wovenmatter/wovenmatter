@@ -129,4 +129,142 @@ final class MobileWorkspaceStreamTests: XCTestCase {
     let methods = await second.requests.map(\.method)
     XCTAssertEqual(methods, ["execution.receipt", "execution.receipt"])
   }
+
+  /// The library host's stream carries the central route: its own sessions,
+  /// which its library holds unassigned. A pushed summary keeps that identity
+  /// (so the chat never moves to another route), a deleted chat stays deleted,
+  /// and an open central chat is followed live like any other.
+  func testTheLibraryHostsStreamCarriesCentralChatsWithTheLibrarysIdentity() async throws {
+    let store = try MobileStore(file: FileManager.default.temporaryDirectory.appending(path: UUID().uuidString).appending(path: "store.json"))
+    let host = ExecutionWorkspace(id: "studio", libraryID: "library", ownerDeviceID: "mac", kind: .mac, name: "Studio",
+                                  capabilities: ["history.central.v1", StreamProtocol.capability])
+    try await store.journal.upsertWorkspace(host, pending: false)
+    try await store.apply(LibrarySnapshot(workspaceID: "library", cursor: 1, folders: [], notes: [], conversations: [
+      .init(id: "central-chat", title: "Plan", providerID: "local:codex", runtimeKind: "codex"),
+      .init(id: "trashed", title: "Trashed later", providerID: "local:codex", runtimeKind: "codex"),
+    ]))
+    try await store.apply(LibraryChangePage(workspaceID: "library", cursor: 2, changes: [
+      .init(cursor: 2, resourceKind: .conversation, resourceID: "trashed", operation: .delete, revision: 1),
+    ]))
+    let server = FakeStreamServer(), updates = Updates()
+    let stream = MobileWorkspaceStream(workspace: host, store: store, connection: server.connection()) { updates.append($0) }
+    await stream.setLibraryHost(true)
+    await stream.start()
+    await eventually("socket") { server.sockets.count == 1 }
+    let socket = server.sockets[0]
+    await socket.push(.hello(.init(deviceID: "mac", libraryID: "library", workspaceID: "studio", serverTime: 0)))
+    await eventually("open") { await stream.connection.isOpen }
+    await eventually("workspace subscription") { await socket.subscriptions.count == 1 }
+    let workspaceSub = await socket.subscriptions[0]
+    XCTAssertEqual(workspaceSub.stream, "workspace")
+
+    // The host's execution API names its sessions as its workspace's.
+    let pushed = LibraryConversation(id: "central-chat", title: "Plan, running", providerID: "local:codex", runtimeKind: "codex",
+                                     activeRunID: "run", libraryID: "library", workspaceID: "studio")
+    let brandNew = LibraryConversation(id: "new-central-chat", title: "Started on the Mac", providerID: "local:codex", runtimeKind: "codex",
+                                       libraryID: "library", workspaceID: "studio")
+    let trashed = LibraryConversation(id: "trashed", title: "Deleted in the library", providerID: "local:codex", workspaceID: "studio")
+    await socket.push(.item(.init(id: workspaceSub.id, payload: .conversations(.init(conversations: [pushed, brandNew, trashed], snapshot: true)))))
+    await eventually("summary") { await store.snapshot().conversations["central-chat"]?.title == "Plan, running" }
+    let conversations = await store.snapshot().conversations
+    XCTAssertNil(conversations["central-chat"]?.workspaceID, "Still the central route")
+    XCTAssertNil(conversations["central-chat"]?.libraryID)
+    XCTAssertEqual(conversations["central-chat"]?.activeRunID, "run")
+    XCTAssertNil(conversations["new-central-chat"]?.workspaceID)
+    XCTAssertNil(conversations["trashed"], "A chat the library deleted is not brought back")
+
+    // The open central chat streams: its transcript (with activity projections and run state) and capabilities.
+    await stream.open(conversationID: "central-chat")
+    await eventually("conversation subscription") { await socket.subscriptions.count == 2 }
+    let chat = await socket.subscriptions[1]
+    XCTAssertEqual(chat.stream, "conversation")
+    XCTAssertEqual(chat.params.conversationID, "central-chat")
+    await socket.push(.item(.init(id: chat.id, payload: .transcript(.init(transcript: .init(conversationID: "central-chat", messages: [
+      .init(id: "m1", conversationID: "central-chat", runID: "run", role: "user", content: "Plan the release",
+            attachments: [.init(id: "sha", name: "plan.md", mimeType: "text/markdown", byteCount: 12)]),
+    ], activities: [.init(id: "a1", runID: "run", title: "Read file", status: "running", projectionJSON: #"{"id":"a1","kind":"tool"}"#)],
+      activeRunID: "run", runs: [.init(id: "run", status: "running")]), snapshot: true)))))
+    let capabilities = HarnessCapabilities(id: "local:codex", runtimeKind: "codex", displayName: "Codex", available: true, canSteer: true)
+    await socket.push(.item(.init(id: chat.id, payload: .capabilities(.init(capabilities: capabilities)))))
+    await eventually("capabilities") { updates.all.contains(.capabilities(conversationID: "central-chat", capabilities)) }
+    let transcript = await store.snapshot().transcripts["central-chat"]
+    XCTAssertEqual(transcript?.activeRunID, "run")
+    XCTAssertEqual(transcript?.runs?.first?.status, "running")
+    XCTAssertEqual(transcript?.activities.first?.projectionJSON, #"{"id":"a1","kind":"tool"}"#, "Activity projections arrive whole")
+    XCTAssertEqual(transcript?.messages.first?.attachments?.first?.name, "plan.md")
+    XCTAssertTrue(updates.all.contains(.transcript(conversationID: "central-chat")))
+
+    // Another Mac's stream (not the host) names its sessions as its own.
+    await stream.setLibraryHost(false)
+    var other = brandNew; other.title = "Renamed"
+    await socket.push(.item(.init(id: workspaceSub.id, payload: .conversations(.init(conversations: [other], snapshot: false)))))
+    await eventually("renamed") { await store.snapshot().conversations["new-central-chat"]?.title == "Renamed" }
+    let moved = await store.snapshot().conversations["new-central-chat"]?.workspaceID
+    XCTAssertEqual(moved, "studio")
+  }
+
+  /// Overlapping opens (the selection changing while a subscription is sent)
+  /// leave one subscription, for the latest chat.
+  func testOverlappingOpensLeaveOneSubscriptionForTheLatestChat() async throws {
+    let (_, server, stream, _) = try await make()
+    await stream.start()
+    let socket = await open(server, stream)
+    async let first: Void = stream.open(conversationID: "a")
+    async let second: Void = stream.open(conversationID: "a")
+    async let third: Void = stream.open(conversationID: "b")
+    _ = await (first, second, third)
+    await eventually("settled") { await stream.conversationID == "b" }
+    try await Task.sleep(for: .milliseconds(30))
+    let subscriptions = await socket.subscriptions.filter { $0.stream == "conversation" }
+    let cancels = await socket.cancels
+    let open = subscriptions.filter { !cancels.contains($0.id) }
+    XCTAssertEqual(open.map(\.params.conversationID), ["b"], "\(subscriptions.map(\.params.conversationID))")
+  }
+
+  /// A chat the server does not stream (it ended the subscription) is
+  /// reported once and not asked for again on that connection, so a refusal
+  /// never loops; the next connection may ask again.
+  func testAnEndedChatIsReportedAndNotResubscribedOnTheSameConnection() async throws {
+    let (_, server, stream, updates) = try await make()
+    await stream.start()
+    let socket = await open(server, stream)
+    await stream.open(conversationID: "legacy")
+    await eventually("conversation subscription") { await socket.subscriptions.count == 2 }
+    let chat = await socket.subscriptions[1]
+    await socket.push(.end(.init(id: chat.id, error: .init(.notFound, "This endpoint can only control agents executing on this Mac."))))
+    await eventually("ended") { updates.all.contains { if case .conversationEnded("legacy", _) = $0 { true } else { false } } }
+    await stream.open(conversationID: "legacy")
+    try await Task.sleep(for: .milliseconds(30))
+    let count = await socket.subscriptions.count
+    XCTAssertEqual(count, 2, "Not resubscribed on the same connection")
+    await socket.serverClose(code: 1001)
+    let next = await open(server, stream, socket: 1)
+    await eventually("workspace resubscribed") { await next.subscriptions.count == 1 }
+    await stream.open(conversationID: "legacy")
+    await eventually("asked again on the new connection") { await next.subscriptions.count == 2 }
+  }
+
+  /// Lifecycle of one workspace's stream: a stale clock is reported as such;
+  /// a 4401 close (member removed) stops every retry, on wake and on
+  /// foreground too, until the member list changes; the background closes
+  /// the socket cleanly.
+  func testStaleClockMemberRemovedAndBackgroundClose() async throws {
+    let (_, server, stream, updates) = try await make()
+    server.refuse(StreamConnectionError.memberTimeStale(serverTime: 1))
+    await stream.start()
+    await eventually("stale clock") { updates.all.contains(.state(.waiting(.memberTimeStale(serverTime: 1)))) }
+    let socket = await open(server, stream)
+    await socket.serverClose(code: StreamProtocol.CloseCode.memberRemoved.rawValue)
+    await eventually("member removed") { updates.all.contains(.state(.memberRemoved)) }
+    await stream.connection.connectNow()
+    await stream.stop(); await stream.start()
+    try await Task.sleep(for: .milliseconds(50))
+    XCTAssertEqual(server.attempts, 2, "No retry after 4401: not on wake, not on foreground")
+    await stream.connection.membersChanged()
+    let again = await open(server, stream, socket: 1)
+    XCTAssertEqual(server.attempts, 3)
+    await stream.stop()
+    let closed = await again.closedWith
+    XCTAssertEqual(closed, .normal, "The background closes with 1000")
+  }
 }

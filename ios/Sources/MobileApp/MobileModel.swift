@@ -42,7 +42,10 @@ import MobileInference
   var folderContentsUnfiled = false
   var folderContentsPresented = false
   var selectedNoteID: String?
-  var selectedConversationID: String?
+  /// The open chat. Every stream follows it (`followSelectedConversation`).
+  var selectedConversationID: String? {
+    didSet { if selectedConversationID != oldValue, !workspaceStreams.isEmpty { Task { await self.followSelectedConversation() } } }
+  }
   var providerID = ""
   var draftBuffer: [String: MobileChatDraft] = [:]
   var chatDraftTask: Task<Void, Never>?
@@ -73,8 +76,6 @@ import MobileInference
   var centralRefreshAfter = Date.distantPast
   var connectionRefreshTask: Task<Void, Never>?
   @ObservationIgnored var networkMonitor: MobileNetworkMonitor?
-  var workspaceRefreshAfter: [String: Date] = [:]
-  var workspaceRetryCount: [String: Int] = [:]
   var offlineProblems: [String: String] = [:]
   var saveStates: [String: String] = [:]
   var draftTitles: [String: String] = [:]
@@ -131,13 +132,19 @@ import MobileInference
   var localQuestionAnswers: [String: String] = [:]
   var localPending: [PendingInteraction] = []
   var executionWorkspaces: [ExecutionWorkspace] = []
-  var workspacePollTasks: [String: Task<Void, Never>] = [:]
+  /// One-off reads of workspaces that do not stream: when their client is
+  /// made, and on the app's explicit refreshes. Never on a timer.
+  var workspaceReadTasks: [String: Task<Void, Never>] = [:]
   var workspaceClients: [String: WorkspaceClient] = [:]
   /// Live streams to `stream.v1` workspaces, foreground only.
   @ObservationIgnored var workspaceStreams: [String: MobileWorkspaceStream] = [:]
   @ObservationIgnored var streamEndpoints: [String: URL] = [:]
   @ObservationIgnored var streamMembersRevision: String?
   @ObservationIgnored var streamReloadScheduled = false
+  /// Background stops and foreground starts, in order.
+  @ObservationIgnored var streamLifecycle: Task<Void, Never>?
+  /// Test sockets for workspace streams; production signs a WebSocket upgrade.
+  @ObservationIgnored var streamConnector: ((ExecutionWorkspace) -> StreamConnection.Connect?)?
   var workspaceProviders: [String: [HarnessCapabilities]] = [:]
   var workspaceReachable: [String: Bool] = [:]
   var executionWorkspaceRefreshInProgress = false
@@ -176,7 +183,6 @@ import MobileInference
   var deviceScheduleTask: Task<Void, Never>?
   var processingDeviceSchedule = false
 
-  private var frame = 0
   let fixture: Bool
   let isolatedTestHost: Bool
 
@@ -267,8 +273,6 @@ import MobileInference
     guard let pending = pendingSend, !pending.hasStarted(in: transcript) else { return nil }
     return (pending.phase == .sending ? "Sending to " : "Starting on ") + executionName + "…"
   }
-  /// A message was just sent and its turn has not appeared: refresh quickly.
-  var awaitingRemoteTurn: Bool { pendingSend != nil }
   var activeRunID: String? {
     if let id = selectedConversationID, let record = executionRecords[id] { return (record.status == "running" || record.status == "stopping") ? record.runID : nil }
     return selectedConversationID.flatMap { state.transcripts[$0]?.activeRunID } ?? selectedConversation?.activeRunID
@@ -402,34 +406,31 @@ import MobileInference
     refreshInProgress = true; connecting = true
     let generation = connectionGeneration
     defer { refreshInProgress = false; connecting = false }
-    let targetConversationID = selectedExecutionWorkspaceID == "central" ? selectedConversationID : nil
     do {
+      // Library sync: notes, calendar, dictation, history and artifacts. It
+      // reads nothing live of a session; the open chat streams.
       try await engine.synchronize()
       guard generation == connectionGeneration, !Task.isCancelled else { return }
       await adoptCurrentLibraryHost(engine)
       // The central list is the current host's: asked again after launch, a
-      // reconnect, a new host or when New Chat opens, and every fifth refresh.
+      // reconnect, the app becoming active, a new host or when New Chat opens.
       let host = libraryHostDeviceID
-      let refreshProviders = centralProvidersRefreshDue || frame % 5 == 0 || providers.isEmpty || host != centralProvidersHostID
-      let refreshedProviders = refreshProviders ? try await engine.providers() : providers
-      let refreshedPending = try await engine.pending()
-      var capability: HarnessCapabilities?
-      if let targetConversationID {
-        try await engine.refreshTranscriptIfNeeded(targetConversationID)
-        // The host this synchronization chose (member mode can fail over).
-        if let activeTransport = transport { capability = try? await activeTransport.capabilities(targetConversationID) }
-      }
-      if frame % 5 == 0 { try await engine.recoverCommandReceipts() }
+      let connectionChanged = centralProvidersRefreshDue || providers.isEmpty || host != centralProvidersHostID
+      let refreshedProviders = connectionChanged ? try await engine.providers() : providers
+      // The host's stream pushes the central route's questions and approvals
+      // and resolves lost replies when it connects. Without one they are read
+      // once per connection here, and when a chat opens or after a command.
+      let refreshedPending: [PendingInteraction]? = streamsCentral ? [] : connectionChanged ? try await engine.pending() : nil
+      if connectionChanged, !streamsCentral { try await engine.recoverCommandReceipts() }
       let status = await engine.synchronizationStatus()
       guard generation == connectionGeneration, !Task.isCancelled else { return }
-      providers = refreshedProviders; pending = refreshedPending
-      if refreshProviders { centralProvidersHostID = host; centralProvidersRefreshDue = false }
-      if let capability, let targetConversationID { sessionCapabilities[targetConversationID] = capability }
+      providers = refreshedProviders
+      if let refreshedPending, refreshedPending != pending { pending = refreshedPending }
+      if connectionChanged { centralProvidersHostID = host; centralProvidersRefreshDue = false }
       synchronizationStatus = status
-      frame += 1
       online = true; connectionLabel = "Connected"
       centralRetryCount = 0
-      centralRefreshAfter = Date().addingTimeInterval(tab == .chat && selectedExecutionWorkspaceID == "central" && (activeRunID != nil || awaitingRemoteTurn) ? 2 : 15)
+      centralRefreshAfter = Date().addingTimeInterval(15)
       if providerID.isEmpty { providerID = providers.first(where: { $0.available })?.id ?? "" }
       await reload(); rememberAgentCatalog()
     } catch {
@@ -478,15 +479,57 @@ import MobileInference
     selectedConversationID = id; tab = .chat
     if isViewingRemoteQuickChat { await refreshRemoteQuickChatHistory() }
     else if selectedExecutionWorkspaceID == "local" { await openDeviceConversation(id) }
-    else if selectedExecutionWorkspaceID == "central" { await refresh() }
+    else if selectedExecutionWorkspaceID == "central" {
+      // The library host's stream follows it; without a stream it is read once.
+      await followSelectedConversation()
+      if !streamsCentral { await refreshCentralConversation(id) }
+    }
     else { await refreshExecutionWorkspaces(force: true) }
   }
+  /// "Load conversation": the stream already follows the chat; a chat nothing
+  /// streams, or that has no transcript yet, is read once.
   func refreshConversation() async {
     let owner = selectedExecutionWorkspaceID
     if isViewingRemoteQuickChat { await refreshRemoteQuickChatHistory() }
     else if owner == "local", let id = selectedConversationID { await openDeviceConversation(id) }
-    else if owner == "central" { await refresh() }
+    else if owner == "central" {
+      await followSelectedConversation()
+      if let id = selectedConversationID, !streamsCentral || state.transcripts[id] == nil { await refreshCentralConversation(id) }
+    }
     else { await refreshDirectWorkspace(owner) }
+  }
+  /// One read of a central chat's live view, for a host that does not stream
+  /// it: its transcript and capabilities, and the central questions and
+  /// approvals. Only when the chat opens, on "Load conversation" and after a command.
+  func refreshCentralConversation(_ conversationID: String?) async {
+    guard online, let engine else { return }
+    do {
+      if let conversationID {
+        try await engine.refreshTranscript(conversationID)
+        if let capability = try? await transport?.capabilities(conversationID) { sessionCapabilities[conversationID] = capability }
+      }
+      if !streamsCentral { pending = try await engine.pending() }
+      await reload()
+    } catch { /* Saved history stays visible; the next explicit read retries. */ }
+  }
+  /// After a central command: the stream shows its effect. Without a stream
+  /// the chat is read once. Library sync follows shortly, as after any change.
+  func afterCentralCommand(_ conversationID: String?) async {
+    await followSelectedConversation()
+    if !streamsCentral { await refreshCentralConversation(conversationID ?? selectedConversationID) }
+    requestSynchronization()
+  }
+  /// A chat its workspace's stream does not serve (the server ended its
+  /// subscription): read once, never polled.
+  func readConversationOnce(_ conversationID: String) async {
+    let route = executionRoute(for: conversationID)
+    if route == "central" { await refreshCentralConversation(conversationID); return }
+    guard route != "local", let client = workspaceClients[route] else { return }
+    do {
+      _ = try await client.refreshTranscript(conversationID)
+      if let capability = try? await client.capabilities(conversationID) { sessionCapabilities[conversationID] = capability }
+      await reload()
+    } catch { workspaceProblems[route] = error.localizedDescription }
   }
   func loadEarlierMessages() async {
     if selectedExecutionWorkspaceID != "central", let client = workspaceClients[selectedExecutionWorkspaceID], let target = selectedConversationID,
@@ -630,8 +673,7 @@ import MobileInference
       let conversationID = receipt.conversationID ?? target ?? selectedConversationID ?? sourceKey
       acceptPendingSend(from: sourceKey, to: conversationID); accepted = true
       if draftBuffer[sourceKey] == cleared && providerID == route { updateChatDraft(key: sourceKey, draft: cleared) }
-      try? await engine.refreshTranscript(conversationID)
-      await refresh()
+      await afterCentralCommand(conversationID)
     } catch { errorMessage = workspaceActionMessage(error); await reload() }
   }
   /// Resends the saved unconfirmed message with its original command ID. The
@@ -655,7 +697,7 @@ import MobileInference
       } else {
         unconfirmedSendConversationID = nil; errorMessage = receipt?.status == .rejected ? receipt?.message ?? "The previous message was not accepted." : nil
       }
-      await refresh()
+      if route == "central" { await afterCentralCommand(id) } else { await refreshDirectWorkspace(route) }
     } catch { errorMessage = workspaceActionMessage(error) }
   }
   /// New chats whose first message has no confirmed outcome. Each keeps its
@@ -678,7 +720,8 @@ import MobileInference
       await reload()
       if result.accepted { errorMessage = nil; selectedConversationID = result.create.conversationID }
       else { errorMessage = result.sendReceipt?.message ?? result.createReceipt?.message ?? "This new chat still hasn’t been confirmed. It stays saved; try again when connected." }
-      await refresh()
+      if let workspaceID = launch.create.workspaceID { await refreshDirectWorkspace(workspaceID) }
+      else { await afterCentralCommand(result.create.conversationID) }
     } catch { errorMessage = workspaceActionMessage(error); await reload() }
   }
   /// Shows a saved launch's first message in the new-chat composer. The launch
@@ -748,7 +791,7 @@ import MobileInference
           let result = try await client.submit(command)
           guard result.status == .completed else { errorMessage = result.message ?? "The workspace has not confirmed this change."; return false }
           if action.qualifiesForAnalytics { await analytics.record(.active) }
-          await refreshExecutionWorkspaces(); return true
+          await refreshDirectWorkspace(owner); return true
         } catch { errorMessage = error.localizedDescription; return false }
       }
     }
@@ -774,7 +817,7 @@ import MobileInference
         return false
       }
       if pending == nil, action.qualifiesForAnalytics { await analytics.record(.active) }
-      await refresh()
+      await afterCentralCommand(conversationID)
       return true
     } catch { errorMessage = error.localizedDescription; await reload(); return false }
   }
@@ -846,7 +889,7 @@ import MobileInference
     do {
       let result = try await engine.submit(command)
       if result.status == .rejected || result.status == .outcomeUnknown { errorMessage = result.message ?? "This request was not accepted." }
-      await reload(); await refresh()
+      await reload(); await afterCentralCommand(command.conversationID)
     } catch { errorMessage = error.localizedDescription; await reload() }
   }
 

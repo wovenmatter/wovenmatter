@@ -69,7 +69,11 @@ struct ChatPane: View {
             ForEach(model.currentPending) { interaction in
               PendingInteractionView(model: model, interaction: interaction)
             }
-            if model.activeRunID != nil && !model.executionOnline {
+            if let problem = model.selectedStreamProblem {
+              // The live view is not connected; saved history stays readable.
+              Text(problem).font(.caption).foregroundStyle(DashboardPalette.mutedForeground)
+                .accessibilityIdentifier("chat-stream-problem")
+            } else if model.activeRunID != nil && !model.executionOnline {
               Text("Workspace connection interrupted · execution stays there")
                 .font(.caption).foregroundStyle(DashboardPalette.mutedForeground)
             }
@@ -342,7 +346,8 @@ private struct MobileGoalControls: View {
   @State private var showingDetails = false
   @State private var saving = false
   @State private var problem: String?
-  /// A streamed workspace sends the goal with the session settings; any other is read every 2 s.
+  /// A streamed workspace sends the goal with the session settings; any other
+  /// is read when the chat opens and after each change, never polled.
   private var streamed: Bool { model.streamsSessionSettings(conversationID) }
   private var goal: WorkspaceGoal? { streamed ? model.streamedSessionSettings[conversationID]?.goal : readGoal }
   var body: some View {
@@ -393,12 +398,7 @@ private struct MobileGoalControls: View {
     )) {
       Button("OK", role: .cancel) { problem = nil }
     } message: { Text(problem ?? "") }
-    .task(id: "\(conversationID):\(streamed)") {
-      while !Task.isCancelled, !streamed {
-        await load()
-        do { try await Task.sleep(for: .seconds(2)) } catch { return }
-      }
-    }
+    .task(id: "\(conversationID):\(streamed)") { await load() }
   }
   private func load() async {
     guard !streamed else { return }

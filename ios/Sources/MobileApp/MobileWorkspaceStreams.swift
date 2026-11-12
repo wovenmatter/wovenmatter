@@ -4,8 +4,9 @@ import WovenMatterShared
 
 /// Live streams to every listed Mac and Linux workspace that serves `stream.v1`
 /// while the app is in the foreground: `workspace` on each, `conversation`
-/// only for the open chat. Nothing polls those workspaces; a workspace without
-/// a stream keeps its scheduled refresh.
+/// only for the open chat. The library host's stream also carries the central
+/// route (its own sessions). Nothing polls an execution workspace: one without
+/// a stream is read once when it connects, when a chat opens and after a command.
 extension MobileModel {
   /// Whether this workspace is (or will be) reached by its stream: member
   /// mode, a known serving member, and a workspace that offers one.
@@ -15,13 +16,39 @@ extension MobileModel {
       membership?.audience(for: workspace) != nil
   }
 
+  /// The workspace whose stream carries `route`: the route's own workspace,
+  /// or for "central" the library host's registered Mac. Nil for this device
+  /// and for a route nothing streams.
+  func streamedWorkspace(forRoute route: String) -> ExecutionWorkspace? {
+    let workspace = route == "central" ? centralExecutionWorkspace : executionWorkspaces.first { $0.id == route }
+    return workspace.flatMap { streams($0) ? $0 : nil }
+  }
+
+  /// Whether the central route's live view (transcript, run state, questions
+  /// and approvals, capabilities, settings) arrives on the library host's stream.
+  var streamsCentral: Bool { !fixture && streamedWorkspace(forRoute: "central") != nil }
+
   /// Whether this chat's settings (model, thinking, permission, tools, goal)
   /// arrive as `session` items on its workspace's stream. Then nothing reads
   /// them; a workspace without a stream is still read.
   func streamsSessionSettings(_ conversationID: String) -> Bool {
     guard !fixture else { return false }
-    let owner = executionRoute(for: conversationID)
-    return executionWorkspaces.first { $0.id == owner }.map(streams) ?? false
+    return streamedWorkspace(forRoute: executionRoute(for: conversationID)) != nil
+  }
+
+  /// Why the open chat's stream is not connected (a wrong clock, a removed
+  /// member, an unreachable machine), for a quiet caption in the chat.
+  var selectedStreamProblem: String? {
+    guard let id = selectedConversationID, let workspace = streamedWorkspace(forRoute: executionRoute(for: id)),
+          workspaceReachable[workspace.id] == false else { return nil }
+    return workspaceProblems[workspace.id]
+  }
+
+  /// The chat a workspace's stream follows: the open chat when its route is
+  /// that workspace, or "central" and that workspace is the library host.
+  func streamedConversationID(for workspaceID: String) -> String? {
+    guard let id = selectedConversationID, streamedWorkspace(forRoute: executionRoute(for: id))?.id == workspaceID else { return nil }
+    return id
   }
 
   /// Opens, resumes or closes each workspace's stream, and points it at the open chat.
@@ -40,26 +67,47 @@ extension MobileModel {
     }
     for workspace in wanted.values where workspaceStreams[workspace.id] == nil {
       guard let endpoint = workspace.endpoint, let audience = membership?.audience(for: workspace),
-            let connect = try? WebSocketStreamTransport.connector(endpoint: endpoint, signer: memberIdentity.signer, audience: audience, headers: [
+            let connect = streamConnector?(workspace) ?? (try? WebSocketStreamTransport.connector(endpoint: endpoint, signer: memberIdentity.signer, audience: audience, headers: [
               "X-Woven-Protocol": String(LibraryProtocol.version), "X-Woven-Library": workspace.libraryID,
               "X-Woven-Workspace": workspace.id, "X-Woven-Device": memberIdentity.deviceID
-            ]) else { continue }
+            ])) else { continue }
       let id = workspace.id
       let stream = MobileWorkspaceStream(workspace: workspace, store: store, connection: StreamConnection(connect: connect)) { [weak self] update in
         await self?.streamUpdate(update, workspaceID: id)
       }
       workspaceStreams[id] = stream; streamEndpoints[id] = endpoint
     }
+    let host = centralExecutionWorkspace?.id
+    // The central route's pending list comes from the host's stream alone.
+    if streamsCentral, !pending.isEmpty { pending = [] }
     for (id, stream) in workspaceStreams {
       await workspaceClients[id]?.setStream(stream.connection)
+      await stream.setLibraryHost(id == host)
+      // Gone to the background meanwhile: it stays closed until the foreground.
+      guard connectionForeground else { return }
       await stream.start()
-      await stream.open(conversationID: selectedExecutionWorkspaceID == id ? selectedConversationID : nil)
+      await stream.open(conversationID: streamedConversationID(for: id))
     }
   }
 
-  /// The app went to the background: every stream closes cleanly.
+  /// The app went to the background: every stream closes cleanly (1000).
   func stopWorkspaceStreams() {
-    for stream in workspaceStreams.values { Task { await stream.stop() } }
+    let streams = Array(workspaceStreams.values)
+    streamLifecycle = Task { [previous = streamLifecycle] in
+      await previous?.value
+      for stream in streams { await stream.stop() }
+    }
+  }
+
+  /// The app is in the foreground again: every stream reconnects at once,
+  /// with its subscriptions, instead of waiting for the next refresh.
+  func resumeWorkspaceStreams() {
+    guard connectionForeground else { return }
+    let streams = Array(workspaceStreams.values)
+    streamLifecycle = Task { [weak self, previous = streamLifecycle] in
+      await previous?.value
+      for stream in streams where self?.connectionForeground == true { await stream.start() }
+    }
   }
 
   /// Wake or a network path change: try now instead of waiting out the backoff.
@@ -76,7 +124,12 @@ extension MobileModel {
 
   /// The open chat's subscription follows the selection.
   func openStreamedConversation(_ workspaceID: String) async {
-    await workspaceStreams[workspaceID]?.open(conversationID: selectedExecutionWorkspaceID == workspaceID ? selectedConversationID : nil)
+    await workspaceStreams[workspaceID]?.open(conversationID: streamedConversationID(for: workspaceID))
+  }
+
+  /// The selection changed: each stream follows the open chat (and leaves the previous one).
+  func followSelectedConversation() async {
+    for id in workspaceStreams.keys { await openStreamedConversation(id) }
   }
 
   private func streamUpdate(_ update: MobileWorkspaceStream.Update, workspaceID id: String) async {
@@ -85,8 +138,9 @@ extension MobileModel {
     case .state(let state):
       switch state {
       case .open:
-        workspaceReachable[id] = true; workspaceProblems.removeValue(forKey: id); workspaceRetryCount[id] = 0
+        workspaceReachable[id] = true; workspaceProblems.removeValue(forKey: id)
         await refreshStreamedWorkspace(id)
+        if id == centralExecutionWorkspace?.id { await recoverCentralReceipts() }
       case .waiting(let error):
         workspaceReachable[id] = false; workspaceProblems[id] = streamProblem(error, workspaceID: id)
       case .memberRemoved:
@@ -101,7 +155,19 @@ extension MobileModel {
       if streamedSessionSettings[conversationID] != value { streamedSessionSettings[conversationID] = value }
     case .history, .transcript, .receipts:
       scheduleStreamReload()
+    case .conversationEnded(let conversationID, _):
+      // Not served live (a chat its server does not run): read it once.
+      // Not from the subscription's handler: the socket's next frame waits on it.
+      guard conversationID == selectedConversationID else { return }
+      Task { await self.readConversationOnce(conversationID) }
     }
+  }
+
+  /// Central commands whose reply was lost are resolved by receipt once per
+  /// connection to the host, never on a timer.
+  func recoverCentralReceipts() async {
+    guard let engine else { return }
+    do { try await engine.recoverCommandReceipts(); await reload() } catch { /* The next connection asks again. */ }
   }
 
   private func streamProblem(_ error: StreamConnectionError?, workspaceID: String) -> String {

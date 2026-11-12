@@ -6,6 +6,11 @@ import WovenMatterShared
 /// chat. Journal entries go to the phone's `WorkspaceJournal` exactly as HTTP
 /// pages did; the open chat's transcript goes to the store's cache. The app
 /// stops it in the background and starts it again in the foreground.
+///
+/// The library host's stream also carries the "central" route: the host's own
+/// sessions, which its library holds unassigned. Its summaries keep that
+/// identity (`setLibraryHost`), and its `conversation` subscription follows an
+/// open central chat exactly as another workspace's follows its own.
 public actor MobileWorkspaceStream {
   public enum Update: Sendable, Equatable {
     case state(StreamConnection.State)
@@ -18,16 +23,25 @@ public actor MobileWorkspaceStream {
     case session(conversationID: String, SessionSettings)
     /// Receipts learned for commands whose reply was lost.
     case receipts([LibraryCommandReceipt])
+    /// The server ended the open chat's subscription (it does not serve that
+    /// chat, or it is too large for one frame); nothing streams for it now.
+    case conversationEnded(conversationID: String, StreamError?)
   }
 
   public nonisolated let workspaceID: String
   public nonisolated let connection: StreamConnection
   private let libraryID: String
   private let centralHistory: Bool
+  private var libraryHost = false
   private let store: MobileStore
   private let update: @Sendable (Update) async -> Void
   private var workspaceSubscription: StreamSubscription?
   private var conversation: (id: String, subscription: StreamSubscription)?
+  /// The open chat whose subscription the server ended. It is not asked for
+  /// again on this connection, so a refusal never loops.
+  private var endedConversationID: String?
+  private var wantedConversationID: String?
+  private var opening = false
   private var stateTask: Task<Void, Never>?
 
   public init(workspace: ExecutionWorkspace, store: MobileStore, connection: StreamConnection,
@@ -39,6 +53,10 @@ public actor MobileWorkspaceStream {
 
   /// The open chat, if it is this workspace's.
   public var conversationID: String? { conversation?.id }
+
+  /// Whether this workspace is the library host the phone syncs with. Its
+  /// conversation summaries then keep the library's identity for them.
+  public func setLibraryHost(_ value: Bool) { libraryHost = value }
 
   public func start() async {
     if workspaceSubscription == nil {
@@ -67,17 +85,25 @@ public actor MobileWorkspaceStream {
   }
 
   /// Subscribes `conversationID` (nil: none) as the open chat, ending the previous one.
+  /// Calls that overlap (the selection changing while a subscription is sent)
+  /// leave exactly one subscription, for the latest chat asked for.
   public func open(conversationID: String?) async {
-    guard conversation?.id != conversationID else { return }
-    if let previous = conversation { conversation = nil; await connection.unsubscribe(previous.subscription) }
-    guard let conversationID else { return }
-    let subscription = await connection.subscribe(.conversation, params: .init(conversationID: conversationID)) { [weak self] event in
-      await self?.conversationEvent(event, conversationID: conversationID) ?? .accepted
+    wantedConversationID = conversationID
+    guard !opening else { return }
+    opening = true; defer { opening = false }
+    while conversation?.id != wantedConversationID {
+      if let previous = conversation { conversation = nil; await connection.unsubscribe(previous.subscription); continue }
+      guard let target = wantedConversationID, target != endedConversationID else { return }
+      endedConversationID = nil
+      let subscription = await connection.subscribe(.conversation, params: .init(conversationID: target)) { [weak self] event in
+        await self?.conversationEvent(event, conversationID: target) ?? .accepted
+      }
+      conversation = (target, subscription)
     }
-    conversation = (conversationID, subscription)
   }
 
   private func stateChanged(_ state: StreamConnection.State) async {
+    if case .open = state { endedConversationID = nil }
     // The server must answer for the listed workspace.
     if case .open(let hello) = state, hello.workspaceID != workspaceID || hello.libraryID != libraryID {
       await connection.stop()
@@ -122,7 +148,8 @@ public actor MobileWorkspaceStream {
       await update(.history)
     case .conversations(let value):
       guard centralHistory else { return .accepted }
-      try? await store.cacheCentralConversations(value.conversations)
+      if libraryHost { try? await store.cacheLibraryHostConversations(value.conversations) }
+      else { try? await store.cacheCentralConversations(value.conversations) }
       await update(.history)
     case .pending(let value):
       await update(.pending(value.interactions))
@@ -135,8 +162,9 @@ public actor MobileWorkspaceStream {
   private func conversationEvent(_ event: StreamSubscriptionEvent, conversationID: String) async -> StreamItemDisposition {
     guard conversation?.id == conversationID else { return .accepted }
     switch event {
-    case .ended:
-      conversation = nil
+    case .ended(let error):
+      conversation = nil; endedConversationID = conversationID
+      await update(.conversationEnded(conversationID: conversationID, error))
     case .item(let item):
       switch item.payload {
       case .transcript(let value):
