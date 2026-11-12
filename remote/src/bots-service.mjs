@@ -1,21 +1,22 @@
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto'
 import { mkdir, open, readFile, rename } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
-import { connect } from 'node:net'
 import { hostname } from 'node:os'
 import { dirname, join } from 'node:path'
 import { createBotEngine, machineIdentity } from './bots-engine.mjs'
 import { createBotConversationLibrary, createJournalBotLibraryAdapter, createLocalLibraryBotAdapter } from './bots-library.mjs'
 import { createBotPreviews } from './bots-previews.mjs'
 import { botsPackageRoot, createBotsRuntime } from './bots-runtime.mjs'
+import { executionMemberKinds } from './member-sockets.mjs'
+import { WebSocket as RelayWebSocket, WebSocketServer } from './websocket.mjs'
 
 const GB = 1024 ** 3
 const fail = (statusCode, message) => Object.assign(new Error(message), { statusCode })
 const uuid = value => typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value)
 const digest = value => createHash('sha256').update(String(value)).digest()
-// Client headers the runtime's WebSocket handshake may see. Credentials are
-// never forwarded: the proxy authenticates to the runtime with its own token.
-const forwardedSocketHeaders = ['sec-websocket-key', 'sec-websocket-version', 'sec-websocket-protocol', 'sec-websocket-extensions', 'user-agent']
+const OPEN = 1
+// Close codes one side of the relay may pass on to the other.
+const relayCloseCode = code => (code >= 3000 && code <= 4999) || [1000, 1001, 1002, 1003, 1007, 1008, 1009, 1011, 1012, 1013, 1014].includes(code) ? code : 1000
 
 /**
  * The default agent's Claude binary in this release, which the bots runtime runs
@@ -47,7 +48,7 @@ async function writePrivateJSON(path, value) {
  * reports resources, and proxies /v1/bots/ws for Woven apps.
  */
 export function createBotsService({ configuration, mcp, defaultAgent, serverPort, library, libraryHost, engine, runtime, previews,
-  authorizeClient, machine, memberIdentity, release, engineWatchMilliseconds = 5000, webSocket = globalThis.WebSocket, log = message => process.stderr.write(message + '\n') }) {
+  authorizeClient, registry = null, machine, memberIdentity, release, engineWatchMilliseconds = 5000, webSocket = globalThis.WebSocket, log = message => process.stderr.write(message + '\n') }) {
   const stateDirectory = join(configuration.stateDirectory, 'bots')
   const settingsPath = join(stateDirectory, 'settings.json')
   const dataDirectory = configuration.botsData ?? join(configuration.dataRoot, 'bots')
@@ -261,34 +262,64 @@ export function createBotsService({ configuration, mcp, defaultAgent, serverPort
   }
 
   // Woven apps reach this machine's bots here. `authorizeClient` (possibly
-  // async) accepts a signed member request or, during transition, a bearer.
+  // async) returns the signed member, or nothing. The relay ends both
+  // WebSockets itself, so a removed member's socket closes with 4401 (the
+  // `registry`, member-sockets.mjs) and the runtime sees only its own token.
+  const relays = new WebSocketServer({ noServer: true, perMessageDeflate: false, clientTracking: false,
+    handleProtocols: (_, request) => request.wovenUpstreamProtocol || false })
   function upgrade(request, socket, head) {
     const url = new URL(request.url, 'http://localhost')
     if (url.pathname !== '/v1/bots/ws') return false
-    const refuse = (status, text) => { socket.end(`HTTP/1.1 ${status} ${text}\r\nConnection: close\r\nContent-Length: 0\r\n\r\n`) }
+    socket.on('error', () => {})
+    const refuse = (status, text) => { if (socket.writable) socket.end(`HTTP/1.1 ${status} ${text}\r\nConnection: close\r\nContent-Length: 0\r\n\r\n`); else socket.destroy() }
     if (request.headers.origin) { refuse(403, 'Forbidden'); return true }
-    socket.pause()
-    Promise.resolve().then(() => authorizeClient(request)).catch(() => false).then(allowed => {
-      if (!allowed) refuse(401, 'Unauthorized'); else proxySocket(request, socket, head, url, refuse)
+    Promise.resolve().then(() => authorizeClient(request)).catch(() => null).then(member => {
+      if (!member) refuse(401, 'Unauthorized'); else relaySocket(request, socket, head, url, member, refuse)
     })
     return true
   }
-  function proxySocket(request, socket, head, url, refuse) {
+  function relaySocket(request, socket, head, url, member, refuse) {
     const target = active() ? runtime?.endpoint() : null
-    if (!target) { refuse(503, 'Service Unavailable'); return true }
-    if ((request.headers.upgrade ?? '').toLowerCase() !== 'websocket') { refuse(400, 'Bad Request'); return true }
-    const upstream = connect(target.port, target.host, () => {
-      const lines = [`GET /ws${url.search} HTTP/1.1`, `Host: ${target.host}:${target.port}`, 'Upgrade: websocket', 'Connection: Upgrade', `Authorization: Bearer ${target.token}`]
-      for (const name of forwardedSocketHeaders) if (typeof request.headers[name] === 'string') lines.push(`${name}: ${request.headers[name].replace(/[\r\n]/g, '')}`)
-      upstream.write(lines.join('\r\n') + '\r\n\r\n')
-      if (head?.length) upstream.write(head)
-      upstream.pipe(socket); socket.pipe(upstream); socket.resume()
+    if (!target) { refuse(503, 'Service Unavailable'); return }
+    if ((request.headers.upgrade ?? '').toLowerCase() !== 'websocket') { refuse(400, 'Bad Request'); return }
+    const protocols = String(request.headers['sec-websocket-protocol'] ?? '').split(',').map(value => value.trim()).filter(Boolean)
+    const headers = { authorization: 'Bearer ' + target.token, ...(typeof request.headers['user-agent'] === 'string' ? { 'user-agent': request.headers['user-agent'] } : {}) }
+    let upstream
+    try { upstream = new RelayWebSocket(`ws://${target.host}:${target.port}/ws${url.search}`, protocols, { headers, perMessageDeflate: false, handshakeTimeout: 15_000 }) }
+    catch { refuse(502, 'Bad Gateway'); return }
+    let opened = false
+    upstream.on('unexpected-response', (_, response) => { response.resume(); refuse(502, 'Bad Gateway'); upstream.terminate() })
+    upstream.on('error', () => { if (!opened) refuse(502, 'Bad Gateway') })
+    socket.once('close', () => { if (!opened) upstream.terminate() })
+    upstream.once('open', () => {
+      opened = true
+      if (socket.destroyed) { upstream.terminate(); return }
+      request.wovenUpstreamProtocol = upstream.protocol
+      relays.handleUpgrade(request, socket, head, client => bridge(client, upstream, member))
     })
-    const close = () => { upstream.destroy(); socket.destroy() }
-    upstream.on('error', () => { if (!socket.writableEnded && upstream.bytesRead === 0) refuse(502, 'Bad Gateway'); close() })
-    // HTTP server sockets allow half-open connections; end either side fully.
-    for (const event of ['error', 'end', 'close']) socket.on(event, close)
-    upstream.on('end', close); upstream.on('close', close)
+  }
+  function bridge(client, upstream, member) {
+    const unregister = registry && member?.deviceID
+      ? registry.add(member, { kinds: executionMemberKinds, close: (code, reason) => { client.close(code, reason); upstream.close(1000) } }) : () => {}
+    // Messages pass through unchanged; a side that cannot keep up pauses the other.
+    const forward = (from, to) => {
+      let pending = 0
+      from.on('message', (data, isBinary) => {
+        if (to.readyState !== OPEN) return
+        pending += data.length
+        if (pending > 4 * 1024 * 1024 && !from.isPaused) from.pause()
+        to.send(data, { binary: isBinary }, () => { pending -= data.length; if (pending <= 1024 * 1024 && from.isPaused) from.resume() })
+      })
+    }
+    forward(client, upstream); forward(upstream, client)
+    const finish = (other, code, reason) => {
+      unregister()
+      if (other.readyState === OPEN) other.close(relayCloseCode(code), reason)
+      else if (other.readyState !== 3) other.terminate()
+    }
+    client.on('close', (code, reason) => finish(upstream, code, reason))
+    upstream.on('close', (code, reason) => finish(client, code, reason))
+    client.on('error', () => upstream.terminate()); upstream.on('error', () => client.terminate())
   }
 
   // A due timer reaches its bot as `message.send` with the occurrence's delivery
