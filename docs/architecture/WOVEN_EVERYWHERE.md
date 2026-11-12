@@ -1019,7 +1019,7 @@ Every live view of a session streams. Nothing polls an execution workspace.
 - **Who is the server.** Each machine's one Woven server (the Mac background
   server, the Linux Node server) owns its sessions and serves the stream. Every
   user interface, on any device, is a client of every server it uses. On a
-  Mac the member key, command journal and history cache live in its
+  Mac the member key and command journal live in its
   background server, so that server holds the one WebSocket to each other Mac
   and Linux machine on behalf of its windows, and a window holds one
   connection to its own server, which carries the live items of local and
@@ -1109,9 +1109,11 @@ member removed.
   - `journal` `{entry: ExecutionJournalEntry}`, `seq` = its `originSequence`:
     only from a server with an execution journal (a Linux host, a secondary
     Mac), only when the client passed `after`. The server replays every entry
-    after `after`, then sends new entries as they are written. The client feeds
-    them to its `WorkspaceJournal` exactly as it did HTTP pages; a sequence
-    jump means a gap and the client subscribes again with its last cursor.
+    after `after`, then sends new entries as they are written; a sequence jump
+    means a gap and the client subscribes again with its last cursor. A Mac
+    never asks for it: history reaches a Mac only by library sync (a Linux host
+    writes its sessions into its own library copy through `/v1/publisher/*`).
+    The iPhone feeds it to its `WorkspaceJournal`.
   - `synchronized` `{}` after the initial snapshot and replay.
 - **`conversation`** `{conversationID}`, one per open chat:
   - `transcript` `{transcript: LibraryTranscript, snapshot}`: first the latest
@@ -1180,7 +1182,8 @@ member removed.
   is resolved with `execution.receipt` after reconnecting.
 - `execution.receipt` `{commandID}` → `LibraryCommandReceipt` or `null`.
 - `POST v1/execution/commands` and the read routes stay for server-to-server
-  calls and Woven MCP.
+  calls and Woven MCP. `POST v1/execution/commands` also serves a workspace
+  without `stream.v1`, one request per command.
 
 ### Clients
 
@@ -1188,6 +1191,19 @@ member removed.
   1 s to 30 s with jitter, an immediate attempt on wake, network path change
   and app foreground, and no attempts while Tailscale is down. Subscriptions
   resume after a reconnect; commands do not.
+- A Mac's background server opens a stream to every registered workspace that
+  serves one when it starts, and opens or closes streams when the registry or
+  member list changes (a registry refresh, a peer sync that applied rows).
+  Nothing reads a workspace on a timer. A machine the Mac holds no stream to,
+  or one not connected, shows the history library sync brought, with an
+  offline notice. Its live state, questions, approvals and settings come only
+  from its stream; no device keeps a per-machine cache of another machine's
+  history.
+- **Client-mode Dev builds** have no member key for their live host's stream.
+  They read their live host on the window's behalf (`CentralLibraryClientModel`)
+  until a local-only Dev member key exists; their own execution does not
+  advertise `stream.v1`, so the live host shows its sessions as library
+  history.
 - **Mac window to its own server.** The window opens an ordinary RPC
   connection on its server's socket and sends `backend.stream` as its first
   request (readiness advertises `window.stream`). After the reply both ends
