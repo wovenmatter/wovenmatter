@@ -1048,11 +1048,13 @@ Every live view of a session streams. Nothing polls an execution workspace.
   `{code:"protocol_unsupported", supported:[1]}`; `401`
   `{code:"member_time_stale", serverTime}` when the signature time is outside
   the window, so the UI says the device clock is wrong; `401` `unauthorized`;
-  `403` `unauthorized` when the request carries `Origin` or `Cookie`; `503`
-  `unavailable` while the workspace is not enrolled yet or the server is
-  stopping. Every refusal also carries a `message`, an `X-Woven-Error` header
+  `403` `browser_request` when the request carries `Origin` or `Cookie`;
+  `503` `unavailable` while the workspace is not enrolled yet, the server is
+  stopping, or a Linux host has no member registry yet. Every refusal also carries a `message`, an `X-Woven-Error` header
   with its code (`URLSessionWebSocketTask` cannot read a refused upgrade's
-  body), and a `Date` header.
+  body), and a `Date` header. A client reads `X-Woven-Error` first; without
+  it, a `401` whose `Date` is outside the signature window is reported as a
+  stale clock.
 - Each server keeps a registry of open sockets by member device ID. When its
   member list changes it closes every socket whose member was removed, or is no
   longer an allowed kind, with close code `4401`. A client does not retry after
@@ -1123,9 +1125,14 @@ member removed.
     loop.
   - `capabilities` `{capabilities: HarnessCapabilities}` on subscribe and when
     they change.
-  - `session` `{settings}`: the session's settings (model, thinking,
-    permission, goal), in the shape of the existing session-settings read, on
-    subscribe and when they change.
+  - `session` `{settings: SessionSettings}`: exactly what the `session`
+    workspace read (`POST v1/execution/workspace-read` `.session`) returns:
+    model, thinking, permission, enabled tools, goal and `canConfigure`. Sent
+    on subscribe, before `synchronized`, and whenever it changes; an unchanged
+    value is not sent again. A client of a `stream.v1` workspace does not read
+    session settings. On Linux the stream reads them again when the record's
+    runtime configuration, run, goal or tools change and after every settings
+    action, because a runtime may keep its settings outside the record.
   - `synchronized` `{}` after the first snapshot.
 - **Coalescing.** A server sends a conversation's changes at most every 50 ms
   while every changed message is 8 KB or smaller (measured on the message's
@@ -1136,9 +1143,12 @@ member removed.
   still overflows ends with `resync`; nothing is lost, because a new
   subscription starts from a snapshot or a journal cursor.
 - **Mac change source.** A Mac has no execution journal. Triggers on its
-  conversation, message, run and activity tables append to
+  conversation, local session, message, run, activity, session goal and
+  session tool tables append to
   `execution_stream_changes(sequence INTEGER PRIMARY KEY AUTOINCREMENT,
-  conversation_id, entity_kind, entity_id)` in the same transaction, only for
+  conversation_id, entity_kind, entity_id)` (`entity_kind` is `conversation`,
+  `message`, `run`, `run_event`, `activity` or `session`) in the same
+  transaction, only for
   conversations this Mac runs (not history synchronized from other machines).
   Entries are pointers; the server reads the current rows when it sends. The
   sequence is gap-free, so the stream tail never misses a change. Entries

@@ -139,7 +139,7 @@ export function createStreamServer({ members, servedTargets = async () => [], ex
 
   async function accept(request, socket, head, url) {
     // Native apps and servers only: a browser page cannot open the stream.
-    if (request.headers.origin !== undefined || request.headers.cookie !== undefined) return refuseUpgrade(socket, 403, { code: 'unauthorized', message: 'Browser requests cannot open the stream.' })
+    if (request.headers.origin !== undefined || request.headers.cookie !== undefined) return refuseUpgrade(socket, 403, { code: 'browser_request', message: 'Browser requests cannot open the stream.' })
     if (request.method !== 'GET' || (request.headers.upgrade ?? '').toLowerCase() !== 'websocket') return refuseUpgrade(socket, 400, { code: 'invalid', message: 'Open the stream with a WebSocket upgrade.' })
     const requested = url.searchParams.getAll('protocol')
     if (requested.length !== 1 || !supportedStreamProtocols.some(version => String(version) === requested[0])) {
