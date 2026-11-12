@@ -523,14 +523,6 @@ struct PageModelTests {
       var copy = document
       _ = try copy.apply([.deleteBlock(id: "t")])
     }
-    #expect(throws: NoteEditError.pageSectionNotEmpty("t")) {
-      var copy = document
-      _ = try copy.apply([.canvas(.init(action: .remove, id: "t"))])
-    }
-    #expect(throws: NoteEditError.pageSectionNotEmpty("t")) {
-      var copy = document
-      _ = try copy.apply([.board(.init(action: .removeItem, id: "t", expectedRevision: document.boardItemRevision(for: "t")))])
-    }
     #expect(throws: NoteDocumentSafetyError.unsupportedFormat) {
       var copy = document
       _ = try copy.apply([.replaceBlock(id: "t", block: .table(.init(id: "t", columns: [.init(id: "c")], rows: [.init(id: "r", cells: [.init(id: "x")])])))])

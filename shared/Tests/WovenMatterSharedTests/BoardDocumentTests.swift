@@ -12,9 +12,15 @@ struct BoardDocumentTests {
       boardItems: ["a": .init(task: .init(status: .doing, assignee: "Codex")), "b": .init(review: .needed)])
     return (document, "a", "b")
   }
-  private func update(_ id: String, in document: NoteDocument, _ patch: BoardItemPatch) -> NoteEditOperation {
-    .board(.init(action: .updateItem, id: id, expectedRevision: document.boardItemRevision(for: id), patch: patch))
+  /// The same Board after its first write, which is how every component edit sees it.
+  private func page() -> (NoteDocument, a: String, b: String) {
+    let (document, a, b) = board()
+    return (document.materializedPage(), a, b)
   }
+  private func update(_ id: String, in document: NoteDocument, _ patch: BoardItemPatch) -> NoteEditOperation {
+    .page(.init(action: .update, id: id, expectedRevision: document.boardItemRevision(for: id), patch: patch))
+  }
+  private func text(_ id: String, in document: NoteDocument) -> String? { document.blocks.first { $0.id == id }?.plainText }
 
   @Test func everyFieldSurvivesNormalizationAndRoundTrip() throws {
     var (document, a, _) = board()
@@ -61,7 +67,7 @@ struct BoardDocumentTests {
   @Test func boardsCannotGrowPastTheSharedEnvelope() throws {
     let (document, _, _) = board()
     let text = String(repeating: "x", count: 200 * 1_024)
-    var operations: [NoteEditOperation] = (0..<6).map { .board(.init(action: .addItem, id: "large-\($0)", patch: .init(text: text))) }
+    var operations: [NoteEditOperation] = (0..<6).map { .page(.init(action: .add, id: "large-\($0)", patch: .init(text: text))) }
     #expect(throws: RemoteNoteEditError.operationTooLarge) { try RemoteNoteEditEnvelope.validate(operations: operations, applyingTo: document) }
     operations.removeLast(3)
     try RemoteNoteEditEnvelope.validate(operations: operations, applyingTo: document)
@@ -74,12 +80,9 @@ struct BoardDocumentTests {
     _ = try removed.apply([.deleteBlock(id: a)])
     #expect(removed.boardItems?[a] == nil)
     #expect(removed.canvasConnections?.isEmpty == true)
-    removed = document
-    _ = try removed.apply([.canvas(.init(action: .remove, id: a))])
-    #expect(removed.boardItems?[a] == nil)
-    removed = document
-    _ = try removed.apply([.board(.init(action: .removeItem, id: a, expectedRevision: document.boardItemRevision(for: a)))])
-    #expect(removed.boardItems?[a] == nil && removed.canvas?[a] == nil && removed.blocks.count == 1)
+    removed = document.materializedPage()
+    _ = try removed.apply([.page(.init(action: .remove, id: a, expectedRevision: removed.boardItemRevision(for: a)))])
+    #expect(removed.boardItems?[a] == nil && removed.canvas?[a] == nil && !removed.blocks.contains { $0.id == a })
     #expect(removed.boardItems?[b] == document.boardItems?[b])
 
     #expect(throws: NoteEditError.boardCardIDChanged(a)) {
@@ -100,47 +103,34 @@ struct BoardDocumentTests {
     #expect(try NoteDocument.editableDocument(from: document.encoded()).boardItemRevision(for: a) == before)
 
     var moved = document
-    var placement = moved.canvasPlacement(for: a); placement.x = 900; placement.width = 700; placement.color = "blue"
-    let section = CanvasSection(id: "group", title: "Group", x: -400, y: -400)
-    _ = try moved.apply([.canvas(.init(action: .place, id: a, placement: placement)),
-      .canvas(.init(action: .section, section: section, ids: [a])), .canvas(.init(action: .arrange, layout: "row"))])
+    moved.canvasSections = [CanvasSection(id: "group", title: "Group", x: -400, y: -400)]
+    moved.canvas?[a]?.x = 900; moved.canvas?[a]?.width = 700; moved.canvas?[a]?.color = "blue"; moved.canvas?[a]?.sectionID = "group"
+    moved.blocks.reverse()
+    try moved.validateEditableShape()
     #expect(moved.boardItemRevision(for: a) == before)
-    #expect(moved.boardItems == document.boardItems)
 
     var edited = document
-    _ = try edited.apply([update(a, in: document, .init(outcome: "Done"))])
+    edited.boardItems?[a]?.task?.outcome = "Done"
     #expect(edited.boardItemRevision(for: a) != before)
     #expect(edited.boardItemRevision(for: b) == document.boardItemRevision(for: b))
     var retitled = document
-    _ = try retitled.apply([update(a, in: document, .init(title: "Renamed"))])
+    retitled.canvas?[a]?.title = "Renamed"
     #expect(retitled.boardItemRevision(for: a) != before)
     var linked = document
     linked.canvas?[a]?.assetID = "asset"
     #expect(linked.boardItemRevision(for: a) != before)
   }
 
-  @Test func layoutCannotDropATitleOrLinkedAsset() throws {
-    var (document, a, _) = board()
-    document.canvas?[a]?.assetID = "original"
-    _ = try document.apply([.canvas(.init(action: .place, id: a, placement: .init(x: 1, y: 2)))])
-    #expect(document.canvas?[a]?.title == "Ship it")
-    #expect(document.canvas?[a]?.assetID == "original")
-    var cleared = document.canvasPlacement(for: a); cleared.title = ""
-    _ = try document.apply([.canvas(.init(action: .place, id: a, placement: cleared))])
-    #expect(document.canvas?[a]?.title == "")
-  }
-
   @Test func patchesChangeOnlySuppliedFields() throws {
-    var (document, a, _) = board()
+    var (document, a, _) = page()
     _ = try document.apply([update(a, in: document, .init(outcome: "Shipped", lastChange: "Finished"))])
     let item = try #require(document.boardItems?[a])
     #expect(item.task == .init(status: .doing, assignee: "Codex", outcome: "Shipped"))
     #expect(item.lastChange == "Finished")
-    #expect(document.canvas?[a]?.title == "Ship it")
-    #expect(document.blocks[0].plainText == "First")
+    #expect(text(a, in: document) == "First")
 
     _ = try document.apply([update(a, in: document, .init(text: "Rewritten", status: .done))])
-    #expect(document.blocks[0].plainText == "Rewritten")
+    #expect(text(a, in: document) == "Rewritten")
     #expect(document.boardItems?[a]?.task?.status == .done)
     _ = try document.apply([update(a, in: document, .init(clearTask: true, review: .needed))])
     #expect(document.boardItems?[a]?.task == nil)
@@ -154,48 +144,48 @@ struct BoardDocumentTests {
   }
 
   @Test func staleAndMissingItemRevisionsAreRejected() throws {
-    let (document, a, b) = board()
+    let (document, a, b) = page()
     let stale = document.boardItemRevision(for: a)
     var current = document
-    _ = try current.apply([.board(.init(action: .updateItem, id: a, expectedRevision: stale, patch: .init(status: .done)))])
+    _ = try current.apply([.page(.init(action: .update, id: a, expectedRevision: stale, patch: .init(status: .done)))])
     let fresh = current.boardItemRevision(for: a)
     #expect(throws: NoteEditError.boardItemConflict(id: a, currentRevision: fresh)) {
       var copy = current
-      _ = try copy.apply([.board(.init(action: .updateItem, id: a, expectedRevision: stale, patch: .init(status: .blocked)))])
+      _ = try copy.apply([.page(.init(action: .update, id: a, expectedRevision: stale, patch: .init(status: .blocked)))])
     }
     #expect(throws: NoteEditError.boardItemConflict(id: a, currentRevision: fresh)) {
       var copy = current
-      _ = try copy.apply([.board(.init(action: .removeItem, id: a, expectedRevision: stale))])
+      _ = try copy.apply([.page(.init(action: .remove, id: a, expectedRevision: stale))])
     }
     #expect(throws: WorkspaceToolError.self) {
       var copy = current
-      _ = try copy.apply([.board(.init(action: .updateItem, id: a, patch: .init(status: .done)))])
+      _ = try copy.apply([.page(.init(action: .update, id: a, patch: .init(status: .done)))])
     }
-    // A held revision means the card existed when read, so its removal is a conflict.
-    for action in [BoardEdit.Action.updateItem, .removeItem] {
+    // A held revision means the component existed when read, so its removal is a conflict.
+    for action in [PageEdit.Action.update, .remove] {
       #expect(throws: NoteEditError.boardItemConflict(id: "gone", currentRevision: "")) {
         var copy = current
-        _ = try copy.apply([.board(.init(action: action, id: "gone", expectedRevision: stale, patch: .init(status: .done)))])
+        _ = try copy.apply([.page(.init(action: action, id: "gone", expectedRevision: stale, patch: .init(status: .done)))])
       }
     }
     #expect(throws: NoteEditError.blockNotFound("gone")) {
       var copy = current
-      _ = try copy.apply([.board(.init(action: .linkSession, id: "gone", sessionID: "s"))])
+      _ = try copy.apply([.page(.init(action: .linkSession, id: "gone", sessionID: "s"))])
     }
-    // The other card was read before this change and is still current.
-    _ = try current.apply([.board(.init(action: .updateItem, id: b, expectedRevision: document.boardItemRevision(for: b), patch: .init(review: .approved)))])
+    // The other component was read before this change and is still current.
+    _ = try current.apply([.page(.init(action: .update, id: b, expectedRevision: document.boardItemRevision(for: b), patch: .init(review: .approved)))])
     #expect(current.boardItems?[b]?.review == .approved)
   }
 
   @Test func addingKeepsOriginalsAndRefusesCopies() throws {
-    var (document, a, _) = board()
-    _ = try document.apply([.board(.init(action: .addItem, id: "link", patch: .init(title: "Spec", status: .todo), assetID: "asset-1"))])
+    var (document, a, _) = page()
+    _ = try document.apply([.page(.init(action: .add, id: "link", patch: .init(title: "Spec", status: .todo), assetID: "asset-1"))])
     #expect(document.canvas?["link"]?.assetID == "asset-1")
     #expect(document.canvas?["link"]?.title == "Spec")
     #expect(document.boardItems?["link"]?.task?.status == .todo)
     #expect(throws: NoteEditError.boardLinkedAssetText("copy")) {
       var copy = document
-      _ = try copy.apply([.board(.init(action: .addItem, id: "copy", patch: .init(text: "Copied"), assetID: "asset-1"))])
+      _ = try copy.apply([.page(.init(action: .add, id: "copy", patch: .init(text: "Copied"), assetID: "asset-1"))])
     }
     #expect(throws: NoteEditError.boardLinkedAssetText("link")) {
       var copy = document
@@ -203,14 +193,7 @@ struct BoardDocumentTests {
     }
     #expect(throws: NoteEditError.boardItemExists(a)) {
       var copy = document
-      _ = try copy.apply([.board(.init(action: .addItem, id: a))])
-    }
-    let placements = Array(document.canvasPlacements.values)
-    #expect(Set(placements.map { "\($0.x),\($0.y)" }).count == placements.count)
-    for (index, first) in placements.enumerated() {
-      for second in placements[(index + 1)...] {
-        #expect(!(first.x < second.x + second.width && second.x < first.x + first.width && first.y < second.y + second.height && second.y < first.y + first.height))
-      }
+      _ = try copy.apply([.page(.init(action: .add, id: a))])
     }
     #expect(throws: NoteEditError.boardItemNotText("grid")) {
       var copy = document
@@ -220,15 +203,15 @@ struct BoardDocumentTests {
   }
 
   @Test func sessionLinksAreIdempotentAndBounded() throws {
-    var (document, a, _) = board()
-    let link = BoardEdit(action: .linkSession, id: a, sessionID: "s1")
-    _ = try document.apply([.board(link), .board(link)])
+    var (document, a, _) = page()
+    let link = PageEdit(action: .linkSession, id: a, sessionID: "s1")
+    _ = try document.apply([.page(link), .page(link)])
     #expect(document.boardItems?[a]?.sessions == ["s1"])
-    _ = try document.apply([.board(.init(action: .unlinkSession, id: a, sessionID: "s1")), .board(.init(action: .unlinkSession, id: a, sessionID: "s1"))])
+    _ = try document.apply([.page(.init(action: .unlinkSession, id: a, sessionID: "s1")), .page(.init(action: .unlinkSession, id: a, sessionID: "s1"))])
     #expect(document.boardItems?[a]?.sessions == [])
     document.boardItems?[a]?.sessions = (0..<BoardItem.maximumSessions).map { "s\($0)" }
     #expect(throws: NoteEditError.boardSessionLimit(a)) {
-      _ = try document.apply([.board(.init(action: .linkSession, id: a, sessionID: "one-more"))])
+      _ = try document.apply([.page(.init(action: .linkSession, id: a, sessionID: "one-more"))])
     }
   }
 
@@ -354,32 +337,25 @@ struct BoardDocumentTests {
   }
 
   @Test func onlyThePurposeNeedsTheDocumentRevision() throws {
-    let (document, a, _) = board()
-    #expect(RemoteNoteEditEnvelope.requiresRevision([.board(.init(action: .setPurpose, purpose: "New"))]))
+    let (document, a, _) = page()
+    #expect(RemoteNoteEditEnvelope.requiresRevision([.page(.init(action: .setPurpose, purpose: "New"))]))
     #expect(!RemoteNoteEditEnvelope.requiresRevision([update(a, in: document, .init(status: .done))]))
-    #expect(!RemoteNoteEditEnvelope.requiresRevision([.board(.init(action: .addItem, id: "n"))]))
-    #expect(!RemoteNoteEditEnvelope.requiresRevision([.board(.init(action: .linkSession, id: a, sessionID: "s"))]))
-    #expect(!RemoteNoteEditEnvelope.requiresRevision([.board(.init(action: .requireBoard))]))
-    #expect(RemoteNoteEditEnvelope.requiresRevision([.board(.init(action: .requireBoard)), .setTitle("New")]))
-    var unchanged = document
-    _ = try unchanged.apply([.board(.init(action: .requireBoard))])
-    #expect(unchanged == document)
+    #expect(!RemoteNoteEditEnvelope.requiresRevision([.page(.init(action: .add, id: "n"))]))
+    #expect(!RemoteNoteEditEnvelope.requiresRevision([.page(.init(action: .linkSession, id: a, sessionID: "s"))]))
+    #expect(!RemoteNoteEditEnvelope.requiresRevision([.page(.init(action: .requirePage))]))
+    #expect(RemoteNoteEditEnvelope.requiresRevision([.page(.init(action: .requirePage)), .setTitle("New")]))
     #expect(throws: NoteEditError.artifactKindMismatch) {
       var note = NoteDocument()
-      _ = try note.apply([.board(.init(action: .requireBoard)), .setTitle("Renamed")])
-    }
-    #expect(RemoteNoteEditEnvelope.requiresRevision([.canvas(.init(action: .arrange))]))
-    #expect(throws: RemoteNoteEditError.operationNotAllowed) {
-      try RemoteNoteEditEnvelope.validate(operations: [.board(.init(action: .addItem, id: "n"))], noteKind: .note)
+      _ = try note.apply([.page(.init(action: .requirePage)), .setTitle("Renamed")])
     }
     let operation = update(a, in: document, .init(status: .done))
     #expect(try JSONDecoder().decode(NoteEditOperation.self, from: JSONEncoder().encode(operation)) == operation)
     var cleared = document
-    _ = try cleared.apply([.board(.init(action: .setPurpose, purpose: ""))])
+    _ = try cleared.apply([.page(.init(action: .setPurpose, purpose: ""))])
     #expect(cleared.boardPurpose == nil)
     #expect(throws: NoteDocumentSafetyError.tooLarge) {
       var copy = document
-      _ = try copy.apply([.board(.init(action: .setPurpose, purpose: String(repeating: "x", count: NoteDocument.maximumBoardPurposeBytes + 1)))])
+      _ = try copy.apply([.page(.init(action: .setPurpose, purpose: String(repeating: "x", count: NoteDocument.maximumBoardPurposeBytes + 1)))])
     }
   }
 

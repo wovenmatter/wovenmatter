@@ -180,8 +180,7 @@ public struct RemoteNoteEditEnvelope: Codable, Equatable, Sendable {
   public static func requiresRevision(_ operations: [NoteEditOperation]) -> Bool {
     operations.contains { operation in
       switch operation {
-      // Item edits carry their own item revision; only the purpose is Board-wide.
-      case .board(let edit): edit.action == .setPurpose
+      // Component edits carry their own revision; only the purpose is Page-wide.
       case .page(let edit): edit.action == .setPurpose
       // A state write is a keyed compare-and-swap on the latest document.
       case .artifactState: false
@@ -189,7 +188,7 @@ public struct RemoteNoteEditEnvelope: Codable, Equatable, Sendable {
       case .addTableRow(_, let after), .addTableColumn(_, let after): after != nil
       case .setTitle, .replaceBlock, .deleteBlock, .setParagraphStyle, .setTableCell,
            .removeTableRow, .removeTableColumn, .setHTML, .setArtifactDatabaseLink,
-           .setTableDatabaseLink, .canvas: true
+           .setTableDatabaseLink: true
       }
     }
   }
@@ -227,8 +226,6 @@ public struct RemoteNoteEditEnvelope: Codable, Equatable, Sendable {
         throw RemoteNoteEditError.operationTooLarge
       }
       switch operation {
-      case .canvas, .board:
-        guard noteKind == .canvas else { throw RemoteNoteEditError.operationNotAllowed }
       case .page(let edit):
         guard noteKind == .canvas else { throw RemoteNoteEditError.operationNotAllowed }
         if let block = edit.block { try Self.validate(block) }
@@ -403,8 +400,6 @@ public struct NoteEditingResponse: Codable, Equatable, Sendable {
 }
 
 public enum NoteEditOperation: Codable, Equatable, Sendable {
-  case canvas(CanvasEdit)
-  case board(BoardEdit)
   case page(PageEdit)
   case artifactState([ArtifactStateEdit])
   case setTitle(String)
@@ -430,7 +425,7 @@ public enum NoteEditOperation: Codable, Equatable, Sendable {
   }
 
   private enum Kind: String, Codable {
-    case canvas, board, page, artifactState, setTitle, appendText, insertText, replaceBlock, deleteBlock
+    case page, artifactState, setTitle, appendText, insertText, replaceBlock, deleteBlock
     case setParagraphStyle, createTable, setTableCell
     case addTableRow, removeTableRow, addTableColumn, removeTableColumn
     case setHTML, setArtifactDatabaseLink, setTableDatabaseLink
@@ -439,10 +434,6 @@ public enum NoteEditOperation: Codable, Equatable, Sendable {
   public init(from decoder: any Decoder) throws {
     let values = try decoder.container(keyedBy: CodingKeys.self)
     switch try values.decode(Kind.self, forKey: .type) {
-    case .canvas:
-      self = .canvas(try values.decode(CanvasEdit.self, forKey: .edit))
-    case .board:
-      self = .board(try values.decode(BoardEdit.self, forKey: .edit))
     case .page:
       self = .page(try values.decode(PageEdit.self, forKey: .edit))
     case .artifactState:
@@ -523,12 +514,6 @@ public enum NoteEditOperation: Codable, Equatable, Sendable {
   public func encode(to encoder: any Encoder) throws {
     var values = encoder.container(keyedBy: CodingKeys.self)
     switch self {
-    case .canvas(let edit):
-      try values.encode(Kind.canvas, forKey: .type)
-      try values.encode(edit, forKey: .edit)
-    case .board(let edit):
-      try values.encode(Kind.board, forKey: .type)
-      try values.encode(edit, forKey: .edit)
     case .page(let edit):
       try values.encode(Kind.page, forKey: .type)
       try values.encode(edit, forKey: .edit)
@@ -614,10 +599,6 @@ public extension NoteDocument {
     var title: String?
     for operation in operations {
       switch operation {
-      case .canvas(let edit):
-        try applyCanvasEdit(edit)
-      case .board(let edit):
-        try applyBoardEdit(edit)
       case .page(let edit):
         try applyPageEdit(edit)
       case .artifactState(let edits):

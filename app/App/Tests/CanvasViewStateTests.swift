@@ -7,14 +7,14 @@ import WovenMatterCore
     @Test func undoKeepsLocalChangesAndIncomingWorkClearsHistory() throws {
         var state = DashboardCanvasViewState()
         let original = NoteDocument(kind: .canvas)
-        let card = NoteRichTextBlock(text: "Agent-created option")
+        let card = NoteRichTextBlock(id: "card", text: "Agent-created option")
         var agent = original
-        _ = try agent.apply([.canvas(.init(action: .add, block: .richText(card), placement: .init(x: -500, y: 300)))])
+        _ = try agent.apply([.page(.init(action: .add, id: card.id, patch: .init(text: "Agent-created option")))])
         agent.stampBoardChanges(from: original, actor: .init(kind: .session, sessionID: "agent"))
         state.observe(original, agent)
         #expect(state.undoStack.isEmpty)
         var value = agent
-        _ = try value.apply([.board(.init(action: .updateItem, id: card.id,
+        _ = try value.apply([.page(.init(action: .update, id: card.id,
             expectedRevision: value.boardItemRevision(for: card.id), patch: .init(status: .done)))])
         value.stampBoardChanges(from: agent, actor: .init(kind: .user))
         state.recordLocalChange(from: agent, to: value)
@@ -29,7 +29,7 @@ import WovenMatterCore
         #expect(value.boardItems?[card.id]?.task?.status == .done)
         state.observe(undone, value)
         var incoming = value
-        _ = try incoming.apply([.board(.init(action: .updateItem, id: card.id,
+        _ = try incoming.apply([.page(.init(action: .update, id: card.id,
             expectedRevision: incoming.boardItemRevision(for: card.id), patch: .init(outcome: "New agent result")))])
         incoming.stampBoardChanges(from: value, actor: .init(kind: .session, sessionID: "agent"))
         state.observe(value, incoming)
@@ -68,16 +68,5 @@ import WovenMatterCore
         state.undo(&saved)
         #expect(saved.blocks[0].plainText == "Before")
         #expect(saved.boardItems?[block.id]?.updatedBy?.kind == .user)
-    }
-    @Test func zoomKeepsViewportCenterAndFitFindsNegativeCoordinates() {
-        var state = DashboardCanvasViewState()
-        state.viewport = CGSize(width: 800, height: 600)
-        let centerX = state.origin.x + state.viewport.width / state.zoom / 2
-        state.setZoom(0.25)
-        #expect(abs(state.origin.x + state.viewport.width / state.zoom / 2 - centerX) < 0.001)
-        let card = NoteRichTextBlock(text: "Far away")
-        let document = NoteDocument(kind: .canvas, blocks: [.richText(card)], canvas: [card.id: .init(x: -500_000, y: 400_000)])
-        state.fit(document)
-        #expect(state.visibleRect.contains(document.canvasPlacement(for: card.id).rect))
     }
 }

@@ -624,7 +624,6 @@ extension WorkspaceDatabaseConnection {
     // so a busy Page keeps a usable span of history and does not crowd out other notes.
     let forceCheckpoint = !request.operations.allSatisfy {
       switch $0 {
-      case .board(let edit): edit.action != .setPurpose
       case .page(let edit): edit.action != .setPurpose && edit.action != .remove
       case .artifactState: true
       default: false

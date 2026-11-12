@@ -17,10 +17,6 @@ public struct CanvasCardPlacement: Codable, Equatable, Sendable {
     self.x = x; self.y = y; self.width = width; self.height = height; self.assetID = assetID
   }
 
-  public static func automatic(index: Int) -> Self {
-    Self(x: 24 + Double(index % 5) * 392, y: 24 + Double(index / 5) * 332)
-  }
-
   public var isValid: Bool {
     x.isFinite && y.isFinite && width.isFinite && height.isFinite
       && abs(x) <= 1_000_000_000 && abs(y) <= 1_000_000_000
@@ -32,15 +28,9 @@ public struct CanvasCardPlacement: Codable, Equatable, Sendable {
 }
 
 public extension NoteDocument {
-  static let maximumCanvasCards = 10_000
-
-  var canvasPlacements: [String: CanvasCardPlacement] {
-    Dictionary(uniqueKeysWithValues: blocks.enumerated().map { index, block in
-      (block.id, canvas?[block.id] ?? .automatic(index: index))
-    })
-  }
-
+  /// The stored placement, or an empty one. A Page keeps placements only for an
+  /// original's label and embed height, and for layout kept from an older Board.
   func canvasPlacement(for blockID: String) -> CanvasCardPlacement {
-    canvas?[blockID] ?? .automatic(index: blocks.firstIndex { $0.id == blockID } ?? 0)
+    canvas?[blockID] ?? CanvasCardPlacement(x: 0, y: 0)
   }
 }
