@@ -116,6 +116,8 @@ struct DashboardPageEditor: View {
                                 conversations: model.workspaceOverview?.conversations ?? [],
                                 onSend: { id, chat in try await model.sendBoardItem(boardID: noteID, itemID: id, to: chat) },
                                 onOpenSession: onOpenSession)
+                            // Each component's details start from its own values.
+                            .id(id)
                         }.padding(16)
                     }.frame(width: 270).scrollIndicators(.never)
                         .simultaneousGesture(TapGesture().onEnded { onSectionFocus?() })
@@ -174,6 +176,7 @@ struct DashboardPageEditor: View {
         case let .asset(id, assetID, _, _):
             DashboardPageAssetEmbed(model: model, pageDocument: $document, viewState: $viewState,
                 componentID: id, assetID: assetID, onOpenAsset: onOpenAsset, onFocus: onFocus, onNonTextFocus: onSectionFocus)
+                .id(assetID)
                 .padding(.vertical, 10)
         }
     }
