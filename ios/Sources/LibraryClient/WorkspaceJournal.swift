@@ -578,8 +578,17 @@ public actor WorkspaceClient {
     // Recover an acknowledgement before resubmitting the exact same command.
     let receipt: LibraryCommandReceipt
     if let stream {
+      // `execution.command` is the handler of `POST v1/execution/commands`,
+      // which checks the command against its authenticated scope: it names
+      // this workspace and its own library (the one its `hello` names), as
+      // the HTTP transport's body does.
+      let hello = await stream.hello
+      guard let libraryID = await store.journal.snapshot().workspaces[workspaceID]?.libraryID ?? hello?.libraryID,
+            hello == nil || hello?.libraryID == libraryID else { throw MobileStore.Failure.wrongWorkspace }
+      var wire = command
+      wire.libraryID = libraryID; wire.workspaceID = workspaceID
       // A lost reply is recorded as outcomeUnknown and resolved by receipt after reconnecting.
-      receipt = try await StreamCommands.deliver(command, retrying: saved != nil, workspaceID: workspaceID,
+      receipt = try await StreamCommands.deliver(wire, retrying: saved != nil, workspaceID: workspaceID,
                                                  journal: store.journal, connection: stream)
       guard receipt.commandID == command.commandID, receipt.deviceID == command.deviceID else { throw MobileConnectionError.invalidResponse }
     } else if let existing = try await transport.receipt(command.commandID) { receipt = existing }
