@@ -338,10 +338,13 @@ private struct MobileGoalControls: View {
   @Environment(\.dashboardTheme) private var theme
   @Bindable var model: MobileModel
   let conversationID: String
-  @State private var goal: WorkspaceGoal?
+  @State private var readGoal: WorkspaceGoal?
   @State private var showingDetails = false
   @State private var saving = false
   @State private var problem: String?
+  /// A streamed workspace sends the goal with the session settings; any other is read every 2 s.
+  private var streamed: Bool { model.streamsSessionSettings(conversationID) }
+  private var goal: WorkspaceGoal? { streamed ? model.streamedSessionSettings[conversationID]?.goal : readGoal }
   var body: some View {
     Group {
       if let goal {
@@ -390,17 +393,18 @@ private struct MobileGoalControls: View {
     )) {
       Button("OK", role: .cancel) { problem = nil }
     } message: { Text(problem ?? "") }
-    .task(id: conversationID) {
-      while !Task.isCancelled {
+    .task(id: "\(conversationID):\(streamed)") {
+      while !Task.isCancelled, !streamed {
         await load()
         do { try await Task.sleep(for: .seconds(2)) } catch { return }
       }
     }
   }
   private func load() async {
+    guard !streamed else { return }
     do {
       guard case .session(let settings) = try await model.workspace(.session(id: conversationID)), !Task.isCancelled else { return }
-      goal = settings.goal
+      readGoal = settings.goal
     } catch { /* Saved goal remains visible during disconnection. */ }
   }
   private func change(_ mutation: WorkspaceGoalMutation) {

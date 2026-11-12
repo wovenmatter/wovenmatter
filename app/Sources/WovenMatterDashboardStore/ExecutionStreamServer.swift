@@ -15,6 +15,8 @@ import WovenMatterShared
   func localPendingInteractions() async throws -> [PendingInteraction]
   func localTranscript(conversationID: String, before: String?) async throws -> LibraryTranscript
   func localCapabilities(conversationID: String) async throws -> HarnessCapabilities
+  /// The session's settings, as the `session` workspace read answers them.
+  func localSessionSettings(conversationID: String) async throws -> SessionSettings
   func localReceipt(commandID: String, deviceID: String) async throws -> LibraryCommandReceipt?
   func executeLocal(_ command: LibraryCommand, deviceID: String,
                     authorize: @MainActor () async throws -> Void) async throws -> LibraryCommandReceipt
@@ -492,6 +494,9 @@ actor StreamSession {
     var runs: [LibraryTranscriptRun]??
     var removedMessageIDs: [String]??
     var capabilities: HarnessCapabilities?
+    var session: SessionSettings?
+    /// The settings may have changed: read them on the next refresh.
+    var sessionStale = true
     init(id: String, kind: Kind) { self.id = id; self.kind = kind }
   }
 
@@ -529,7 +534,7 @@ actor StreamSession {
     for subscription in subscriptions.values {
       switch (event, subscription.kind) {
       case (.reset, .workspace): subscription.reloadAll = true; markDirty(subscription)
-      case (.reset, _): markDirty(subscription)
+      case (.reset, _): subscription.sessionStale = true; markDirty(subscription)
       case (.changes(let changes), .workspace):
         // Summaries change with the conversation row and its runs; questions
         // and approvals start and end with runs and their events.
@@ -537,9 +542,15 @@ actor StreamSession {
         guard !relevant.isEmpty else { continue }
         subscription.changedConversations.formUnion(relevant.keys)
         markDirty(subscription)
-      case (.changes(let changes), .conversation(let id)): if changes[id] != nil { markDirty(subscription) }
+      case (.changes(let changes), .conversation(let id)):
+        guard let kinds = changes[id] else { continue }
+        // Settings live with the session row, its runs (whether it can be
+        // configured), and its goal and tool rows; not with messages.
+        if !kinds.isDisjoint(with: ["conversation", "run", "session"]) { subscription.sessionStale = true }
+        markDirty(subscription)
       case (.live, .workspace): markDirty(subscription)
-      case (.live(let ids), .conversation(let id)): if ids.isEmpty || ids.contains(id) { markDirty(subscription) }
+      case (.live(let ids), .conversation(let id)):
+        if ids.isEmpty || ids.contains(id) { subscription.sessionStale = true; markDirty(subscription) }
       }
     }
   }
@@ -633,6 +644,10 @@ actor StreamSession {
     let source = server.source
     let transcript = try await source.localTranscript(conversationID: conversationID, before: nil)
     let capabilities = try? await source.localCapabilities(conversationID: conversationID)
+    // Cleared before the read, so a change during it reads them again.
+    let readsSession = subscription.sessionStale
+    subscription.sessionStale = false
+    let session: SessionSettings? = if readsSession { try? await source.localSessionSettings(conversationID: conversationID) } else { nil }
     try Task.checkCancellation()
     let id = subscription.id
     if !subscription.snapshotDone {
@@ -641,6 +656,10 @@ actor StreamSession {
       if let capabilities {
         subscription.capabilities = capabilities
         enqueue(.item(.init(id: id, payload: .capabilities(.init(capabilities: capabilities)))), for: subscription)
+      }
+      if let session {
+        subscription.session = session
+        enqueue(.item(.init(id: id, payload: .session(.init(settings: session)))), for: subscription)
       }
       enqueue(.item(.init(id: id, payload: .synchronized)), for: subscription)
       subscription.snapshotDone = true
@@ -663,6 +682,10 @@ actor StreamSession {
     if let capabilities, capabilities != subscription.capabilities {
       subscription.capabilities = capabilities
       enqueue(.item(.init(id: id, payload: .capabilities(.init(capabilities: capabilities)))), for: subscription)
+    }
+    if let session, session != subscription.session {
+      subscription.session = session
+      enqueue(.item(.init(id: id, payload: .session(.init(settings: session)))), for: subscription)
     }
   }
 
@@ -738,7 +761,8 @@ actor StreamSession {
   private static func supersedes(_ item: StreamItem, _ queued: StreamFrame) -> Bool {
     guard case .item(let other) = queued else { return false }
     switch (item.payload, other.payload) {
-    case (.transcript, .transcript), (.conversations, .conversations), (.pending, .pending), (.capabilities, .capabilities): return true
+    case (.transcript, .transcript), (.conversations, .conversations), (.pending, .pending), (.capabilities, .capabilities),
+         (.session, .session): return true
     default: return false
     }
   }
@@ -763,7 +787,7 @@ actor StreamSession {
       let removals = Set((old.deletedConversationIDs ?? []) + Array(deleted)).subtracting(present)
       result.payload = .conversations(.init(conversations: upserted, deletedConversationIDs: removals.isEmpty ? nil : removals.sorted(),
                                             snapshot: old.snapshot || new.snapshot))
-    case (.pending, .pending), (.capabilities, .capabilities): result.payload = item.payload
+    case (.pending, .pending), (.capabilities, .capabilities), (.session, .session): result.payload = item.payload
     default: return nil
     }
     return result

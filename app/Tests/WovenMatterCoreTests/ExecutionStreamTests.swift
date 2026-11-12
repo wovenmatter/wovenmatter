@@ -140,6 +140,8 @@ struct ExecutionStreamTests {
     #expect(try await first.transcript == mac.api.localTranscript(conversationID: conversation))
     guard case .capabilities(let capabilities) = try await client.item("c").payload else { Issue.record("no capabilities"); return }
     #expect(capabilities.capabilities.id == "local:codex")
+    guard case .session(let session) = try await client.item("c").payload else { Issue.record("no session"); return }
+    #expect(try await session.settings == mac.api.localSessionSettings(conversationID: conversation))
     #expect(try await client.item("c").payload == .synchronized)
 
     // Live text: each persisted chunk reaches the client as the whole message so far.
@@ -268,8 +270,66 @@ struct ExecutionStreamTests {
     let cookie = try await mac.rawUpgrade(target: target, signer: phone, extra: ["Cookie": "session=1"])
     #expect(cookie.status == 403)
 
+    // Every refusal repeats its code in X-Woven-Error and carries a Date:
+    // URLSessionWebSocketTask exposes a refused upgrade's headers, not its body.
+    for (response, code) in [(future, "protocol_unsupported"), (staleResponse, "member_time_stale"), (unsigned, "unauthorized"),
+                             (browser, LibraryHTTPParser.browserRequest.code), (cookie, LibraryHTTPParser.browserRequest.code)] {
+      #expect(response.headers["x-woven-error"] == code && response.json?["code"] as? String == code, "\(code)")
+      let date = try #require(response.headers["date"].flatMap(Self.httpDate), "\(code) has a Date")
+      #expect(abs(date.timeIntervalSinceNow) < 60)
+    }
+
     // The same signed request is accepted.
     #expect(try await mac.rawUpgrade(target: target, signer: phone).status == 101)
+
+    // A stopped stream answers 503 unavailable, in the header too.
+    mac.stream.stop()
+    try await Task.sleep(for: .milliseconds(100))
+    let stopped = try await mac.rawUpgrade(target: target, signer: phone)
+    #expect(stopped.status == 503 && stopped.headers["x-woven-error"] == "unavailable" && stopped.headers["date"] != nil)
+  }
+
+  static func httpDate(_ text: String) -> Date? {
+    let formatter = DateFormatter()
+    formatter.locale = Locale(identifier: "en_US_POSIX"); formatter.timeZone = TimeZone(identifier: "GMT")
+    formatter.dateFormat = "EEE, dd MMM yyyy HH:mm:ss zzz"
+    return formatter.date(from: text)
+  }
+
+  // MARK: Session settings
+
+  @Test func theConversationStreamSendsTheSessionSettingsOnSubscribeAndWhenTheyChange() async throws {
+    let mac = try await StreamMac(); defer { mac.remove() }
+    let conversation = try await mac.database.createFixtureLocalACPSession(runtimeKind: .codex, title: "Settings", ownerDeviceID: UUID())
+    let phone = try await mac.member(.ios)
+    let client = try await mac.connect(phone)
+    guard case .hello = try await client.next() else { Issue.record("no hello"); return }
+    client.send(.subscribe(.init(id: "c", stream: .conversation, params: .init(conversationID: conversation))))
+
+    // On subscribe, before synchronized: what the `session` workspace read returns.
+    let first = try await client.session("c")
+    #expect(try await first == mac.api.localSessionSettings(conversationID: conversation))
+    #expect(first.conversationID == conversation && first.model == "gpt-5.5" && first.goal == nil)
+    #expect(try await client.item("c").payload == .synchronized)
+
+    // A model change the desktop keeps in memory reaches the stream as live state.
+    await mac.commands.setModel("gpt-5.5-mini")
+    mac.stream.liveStateChanged(conversationIDs: [conversation])
+    #expect(try await client.session("c").model == "gpt-5.5-mini")
+
+    // A goal is written to its own table, which the change source records.
+    _ = try await mac.database.mutateGoal(sessionID: conversation, mutation: .set(objective: "Ship it", tokenBudget: nil, turnBudget: nil))
+    #expect(try await client.session("c") { $0.goal != nil }.goal?.objective == "Ship it")
+
+    // Changes that leave the settings as they were send no session item.
+    let run = try await mac.database.beginLocalACPRun(conversationID: conversation, input: .init(text: "Go"))
+    try await mac.database.appendLocalACPAssistantChunk(runID: run.runID, chunk: "Working")
+    _ = try await client.transcript("c") { $0.messages.contains { $0.content == "Working" } }
+    mac.stream.liveStateChanged(conversationIDs: [conversation])
+    await #expect(throws: StreamTestError.self) {
+      _ = try await client.next(timeout: .milliseconds(400)) { if case .item(let item) = $0, case .session = item.payload { return true }; return false }
+    }
+    client.close()
   }
 
   // MARK: Revocation
@@ -456,7 +516,7 @@ private final class StreamMac: @unchecked Sendable {
     return client
   }
 
-  struct RawResponse { let status: Int; let json: [String: Any]?; let connection: RawConnection? }
+  struct RawResponse { let status: Int; let headers: [String: String]; let json: [String: Any]?; let connection: RawConnection? }
 
   func rawUpgrade(target: String, signer: MemberIdentity?, time: Int64 = MemberRequestSignature.now(),
                   extra: [String: String] = [:], keepOpen: Bool = false, botsRuntime: UInt16? = nil) async throws -> RawResponse {
@@ -471,6 +531,11 @@ private final class StreamMac: @unchecked Sendable {
     try await connection.send(Data(head.utf8))
     let response = try await connection.readHead()
     let status = Int(response.head.split(separator: " ").dropFirst().first ?? "") ?? 0
+    var responseHeaders: [String: String] = [:]
+    for line in response.head.components(separatedBy: "\r\n").dropFirst() {
+      guard let colon = line.firstIndex(of: ":") else { continue }
+      responseHeaders[line[..<colon].lowercased()] = line[line.index(after: colon)...].trimmingCharacters(in: .whitespaces)
+    }
     let json: [String: Any]?
     if status != 101 {
       var body = response.rest
@@ -482,7 +547,7 @@ private final class StreamMac: @unchecked Sendable {
       json = try? JSONSerialization.jsonObject(with: body) as? [String: Any]
     } else { json = nil }
     if !keepOpen || status != 101 { connection.cancel() }
-    return .init(status: status, json: json, connection: keepOpen && status == 101 ? connection : nil)
+    return .init(status: status, headers: responseHeaders, json: json, connection: keepOpen && status == 101 ? connection : nil)
   }
 }
 
@@ -498,8 +563,18 @@ private final class BotsPort: @unchecked Sendable {
   private(set) var executed: [LibraryCommand] = []
   private var receipts: [String: LibraryCommandReceipt] = [:]
   private var pending: [PendingInteraction] = []
+  private var model = "gpt-5.5"
   init(database: WorkspaceDatabase) { self.database = database }
   func setPending(_ value: [PendingInteraction]) { pending = value }
+  func setModel(_ value: String) { model = value }
+  /// As the desktop reads them: the model from memory, the goal from its table.
+  func readWorkspace(_ request: LibraryWorkspaceRead) async throws -> LibraryWorkspaceResult {
+    guard case .session(let id) = request else { throw LibraryAPIError(code: "unsupported", message: "Not in this fixture.") }
+    let goal = try await database.sessionGoals().first { $0.sessionID == id }
+    return .session(.init(conversationID: id, model: model, thinking: "high", permission: nil, models: [.init(id: model, label: model)],
+                          thinkingLevels: [.init(id: "high", label: "High")], permissions: [], availableTools: [], enabledTools: [],
+                          canConfigure: true, goal: goal))
+  }
   func providers() -> [HarnessCapabilities] { [.init(id: "local:codex", runtimeKind: "codex", displayName: "Codex", available: true)] }
   func pendingInteractions() async -> [PendingInteraction] { pending }
   func sessionCapabilities(conversationID: String) async throws -> HarnessCapabilities { providers()[0] }
@@ -627,6 +702,12 @@ private final class StreamClient: @unchecked Sendable {
     let item = try await item(id) { if case .transcript(let value) = $0.payload { return predicate(value.transcript) }; return false }
     guard case .transcript(let value) = item.payload else { throw StreamTestError.timeout }
     return value
+  }
+
+  func session(_ id: String, where predicate: @escaping (SessionSettings) -> Bool = { _ in true }) async throws -> SessionSettings {
+    let item = try await item(id) { if case .session(let value) = $0.payload { return predicate(value.settings) }; return false }
+    guard case .session(let value) = item.payload else { throw StreamTestError.timeout }
+    return value.settings
   }
 
   func response(_ id: String) async throws -> StreamResponse {

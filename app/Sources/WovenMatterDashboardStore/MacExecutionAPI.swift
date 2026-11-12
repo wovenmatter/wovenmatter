@@ -150,6 +150,14 @@ public final class MacExecutionAPI: ExecutionStreamSource {
     try await requireLocal(conversationID)
     return try await commands.sessionCapabilities(conversationID: conversationID)
   }
+  /// The session settings, as `POST v1/execution/workspace-read` `.session` answers them.
+  public func localSessionSettings(conversationID: String) async throws -> SessionSettings {
+    try await requireLocal(conversationID)
+    guard case .session(let settings) = try await commands.readWorkspace(.session(id: conversationID)) else {
+      throw LibraryAPIError(code: "unsupported", message: "This Mac read no settings for this session.")
+    }
+    return settings
+  }
   public func localReceipt(commandID: String, deviceID: String) async throws -> LibraryCommandReceipt? {
     guard let receipt = try await commands.receipt(commandID: commandID, deviceID: deviceID) else { return nil }
     if let id = receipt.conversationID { try await requireLocal(id) }

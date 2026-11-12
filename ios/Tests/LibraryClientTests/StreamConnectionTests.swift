@@ -451,6 +451,40 @@ final class StreamConnectionTests: XCTestCase {
     XCTAssertEqual(StreamConnectionError.refusal(status: 403), .refused(status: 403, code: nil, message: nil))
   }
 
+  func testRefusedUpgradeResponsesAreReadFromXWovenErrorFirst() throws {
+    let now = Date(timeIntervalSince1970: 1_762_905_600)
+    let url = URL(string: "https://studio.example.ts.net:8443/wovenmatter/v1/stream?protocol=1")!
+    func response(_ status: Int, _ headers: [String: String]) -> HTTPURLResponse {
+      HTTPURLResponse(url: url, statusCode: status, httpVersion: "HTTP/1.1", headerFields: headers)!
+    }
+    let date = "Wed, 12 Nov 2025 00:00:30 GMT"
+    // The header names the refusal; the Date header carries the server's clock.
+    XCTAssertEqual(StreamConnectionError.refusal(response(401, ["X-Woven-Error": "member_time_stale", "Date": date]), now: now),
+                   .memberTimeStale(serverTime: 1_762_905_630_000))
+    XCTAssertEqual(StreamConnectionError.refusal(response(426, ["X-Woven-Error": "protocol_unsupported", "Date": date]), now: now),
+                   .protocolUnsupported(supported: []))
+    XCTAssertEqual(StreamConnectionError.refusal(response(401, ["X-Woven-Error": "unauthorized", "Date": date]), now: now), .unauthorized)
+    XCTAssertEqual(StreamConnectionError.refusal(response(403, ["x-woven-error": "unauthorized", "Date": date]), now: now), .unauthorized)
+    guard case .refused(503, "unavailable"?, let message?)? = StreamConnectionError.refusal(response(503, ["X-Woven-Error": "unavailable", "Date": date]), now: now) else {
+      return XCTFail("503 unavailable")
+    }
+    XCTAssertFalse(message.isEmpty)
+    // The header wins over a body's code.
+    XCTAssertEqual(StreamConnectionError.refusal(status: 401, body: Data(#"{"code":"unauthorized"}"#.utf8),
+                                                 headers: ["X-Woven-Error": "member_time_stale", "Date": date], now: now),
+                   .memberTimeStale(serverTime: 1_762_905_630_000))
+    // A refusal named unauthorized is not second-guessed by a skewed Date.
+    XCTAssertEqual(StreamConnectionError.refusal(response(401, ["X-Woven-Error": "unauthorized", "Date": "Wed, 12 Nov 2025 00:10:00 GMT"]), now: now),
+                   .unauthorized)
+    // Without the header, the Date-skew fallback still reports a stale clock.
+    XCTAssertEqual(StreamConnectionError.refusal(response(401, ["Date": "Wed, 12 Nov 2025 00:10:00 GMT"]), now: now),
+                   .memberTimeStale(serverTime: 1_762_906_200_000))
+    XCTAssertEqual(StreamConnectionError.refusal(response(401, [:]), now: now), .unauthorized)
+    XCTAssertEqual(StreamConnectionError.refusal(response(404, ["X-Woven-Error": "not_found"]), now: now),
+                   .refused(status: 404, code: "not_found", message: nil))
+    XCTAssertNil(StreamConnectionError.refusal(response(101, [:]), now: now))
+  }
+
   func testEveryUpgradeIsSignedAfreshForItsExactTarget() async throws {
     let key = Curve25519.Signing.PrivateKey()
     let signer = MemberRequestSigner(deviceID: "6F1C2A8E-58A4-4D0E-9B6B-1B2E3C4D5E6F", key: key)

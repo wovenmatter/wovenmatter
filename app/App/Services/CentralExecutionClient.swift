@@ -664,7 +664,7 @@ extension CentralExecutionClient {
             let previous = Set((pending[id] ?? []).map(\.conversationID))
             pending[id] = value.interactions
             onLive(previous.union(value.interactions.map(\.conversationID)))
-        case .conversations, .transcript, .capabilities, .synchronized, .serverState, .unknown:
+        case .conversations, .transcript, .capabilities, .session, .synchronized, .serverState, .unknown:
             break
         }
         return .accepted
@@ -688,7 +688,7 @@ extension CentralExecutionClient {
             case .synchronized:
                 stream.synchronizedConversations.insert(conversationID)
                 stream.release(conversationID)
-            case .conversations, .pending, .journal, .serverState, .unknown:
+            case .conversations, .pending, .journal, .session, .serverState, .unknown:
                 return .accepted
             }
         }
