@@ -173,7 +173,10 @@ extension MobileModel {
       executionWorkspaces = journal.workspaces.values.filter { !$0.deleted && $0.id != deviceWorkspaceID }.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
       let availableIDs = Set(executionWorkspaces.map(\.id))
       for id in Array(workspaceClients.keys) where !availableIDs.contains(id) {
-        if let stream = workspaceStreams.removeValue(forKey: id) { streamEndpoints.removeValue(forKey: id); Task { await stream.close() } }
+        if let stream = workspaceStreams.removeValue(forKey: id) {
+          streamEndpoints.removeValue(forKey: id); Task { await stream.close() }
+          if libraryStream?.workspaceID == id { setLibraryStream(nil) }
+        }
         workspaceReadTasks.removeValue(forKey: id)?.cancel()
         workspaceClients.removeValue(forKey: id); workspaceProviders.removeValue(forKey: id)
         workspaceReachable.removeValue(forKey: id); remotePending.removeValue(forKey: id)

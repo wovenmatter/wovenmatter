@@ -205,6 +205,21 @@ final class MobileWorkspaceStreamTests: XCTestCase {
 
   /// Overlapping opens (the selection changing while a subscription is sent)
   /// leave one subscription, for the latest chat.
+  /// `library` items carry the server's library change cursor, named by the
+  /// member device ID its `hello` gave, for the model to compare with its own.
+  func testLibraryItemsReportTheServersCursor() async throws {
+    let (_, server, stream, updates) = try await make()
+    await stream.start()
+    let socket = await open(server, stream)
+    await eventually("workspace subscription") { await socket.subscriptions.count == 1 }
+    let workspaceSub = await socket.subscriptions[0]
+    await socket.push(.item(.init(id: workspaceSub.id, payload: .library(.init(cursor: 12)))))
+    await socket.push(.item(.init(id: workspaceSub.id, payload: .library(.init(cursor: 15)))))
+    await eventually("cursors") { updates.all.filter { if case .library = $0 { true } else { false } }.count == 2 }
+    XCTAssertEqual(updates.all.filter { if case .library = $0 { true } else { false } },
+                   [.library(cursor: 12, serverDeviceID: "mac"), .library(cursor: 15, serverDeviceID: "mac")])
+  }
+
   func testOverlappingOpensLeaveOneSubscriptionForTheLatestChat() async throws {
     let (_, server, stream, _) = try await make()
     await stream.start()

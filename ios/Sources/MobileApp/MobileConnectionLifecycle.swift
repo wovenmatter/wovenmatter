@@ -80,9 +80,91 @@ extension MobileModel {
     } catch { pairingError = error.localizedDescription }
   }
 
-  /// The foreground library sync cadence. It is the only timer, and it reads
-  /// no execution workspace.
+  /// The foreground library sync cadence while the library host's stream does
+  /// not announce its changes (no stream, an older host, or the stream is
+  /// down). It reads no execution workspace. While that stream carries
+  /// `library` items there is no timer: each item ahead of this phone's
+  /// cursor synchronizes at once.
   static let librarySyncInterval: Duration = .seconds(15)
+
+  /// How the foreground loop waits between library passes.
+  enum LibrarySyncPause: Equatable { case none, timer, stream }
+
+  /// Whether the library needs the 15 s timer: the library host this phone
+  /// syncs with does not announce its changes on an open stream.
+  var librarySyncTimerNeeded: Bool {
+    guard let libraryStream, let host = libraryHostDeviceID?.lowercased() else { return true }
+    return libraryStream.deviceID != host
+  }
+
+  /// A `library` item from a workspace's stream: the server's library change
+  /// cursor. From the library host this phone syncs with, it replaces the
+  /// timer, and a cursor ahead of what this phone holds synchronizes now.
+  /// Cursors of other servers are not comparable with this phone's and are
+  /// ignored (their changes reach the host by peer sync, which announces them).
+  func libraryChanged(cursor: Int64, serverDeviceID: String, workspaceID: String) async {
+    guard let host = libraryHostDeviceID?.lowercased(), host == serverDeviceID.lowercased() else {
+      if libraryStream?.workspaceID == workspaceID { setLibraryStream(nil) }
+      return
+    }
+    setLibraryStream((workspaceID, host))
+    guard let store, cursor > (await store.snapshot().cursor) else { return }
+    synchronizeLibraryNow()
+  }
+
+  /// One library pass at once, then the registry's streams reconciled. A
+  /// pass already running runs once more afterwards (`refresh`).
+  func synchronizeLibraryNow() {
+    guard automaticSynchronization, !fixture, !isolatedTestHost, connectionForeground else { return }
+    Task { [weak self] in
+      guard let self else { return }
+      await self.refresh()
+      await self.refreshExecutionWorkspaces()
+    }
+  }
+
+  /// The stream that announces the library host's changes, or nil. A change
+  /// wakes the foreground loop, which starts or stops its timer.
+  func setLibraryStream(_ value: (workspaceID: String, deviceID: String)?) {
+    guard libraryStream?.workspaceID != value?.workspaceID || libraryStream?.deviceID != value?.deviceID else { return }
+    libraryStream = value
+    libraryStreamChanged()
+  }
+
+  /// Wakes the loop when its pause no longer fits: a timer that is no longer
+  /// needed, or a wait for a stream that no longer announces changes.
+  func libraryStreamChanged() {
+    switch librarySyncPause {
+    case .timer where !librarySyncTimerNeeded, .stream where librarySyncTimerNeeded: wakeLibrarySyncLoop()
+    default: break
+    }
+  }
+
+  func wakeLibrarySyncLoop() {
+    librarySyncTimeout?.cancel(); librarySyncTimeout = nil
+    let waiter = librarySyncWake; librarySyncWake = nil
+    waiter?.resume()
+  }
+
+  /// Waits for `timeout`, or with none until the library stream changes.
+  private func pauseLibrarySync(_ pause: LibrarySyncPause, timeout: Duration?) async {
+    guard !Task.isCancelled else { return }
+    librarySyncPause = pause
+    defer { librarySyncPause = .none }
+    await withTaskCancellationHandler {
+      await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+        librarySyncWake = continuation
+        if let timeout {
+          librarySyncTimeout = Task { [weak self] in
+            do { try await Task.sleep(for: timeout) } catch { return }
+            self?.wakeLibrarySyncLoop()
+          }
+        }
+      }
+    } onCancel: {
+      Task { @MainActor [weak self] in self?.wakeLibrarySyncLoop() }
+    }
+  }
 
   static func connectionRetryDelay(_ failures: Int) -> TimeInterval {
     min(120, 5 * pow(2, Double(min(max(failures - 1, 0), 5))))
@@ -116,17 +198,23 @@ extension MobileModel {
       guard reachable else { return }
       Task { @MainActor [weak self] in self?.connectionDidBecomeReachable() }
     }
-    defer { networkMonitor?.cancel(); networkMonitor = nil; connectionRefreshTask?.cancel() }
+    defer { networkMonitor?.cancel(); networkMonitor = nil; connectionRefreshTask?.cancel(); wakeLibrarySyncLoop() }
+    var first = true
     while !Task.isCancelled {
-      if connectionForeground {
+      // One pass when the loop starts; after that only on the timer.
+      if connectionForeground, first || librarySyncTimerNeeded {
         if Date() >= centralRefreshAfter { await refresh() }
         await refreshExecutionWorkspaces()
         if let engine { synchronizationStatus = await engine.synchronizationStatus() }
       }
-      // Library sync every 15 s (notes, calendar, dictation and history, which
-      // no stream carries), and the registry's streams reconciled. Live views
-      // of sessions stream; nothing here reads an execution workspace.
-      do { try await Task.sleep(for: Self.librarySyncInterval) } catch { return }
+      first = false
+      // Library sync (notes, calendar, dictation, artifacts and the
+      // registry) every 15 s, unless the library host's stream announces its
+      // changes: then nothing waits on a timer, and each `library` item
+      // ahead of this phone synchronizes at once. Live views of sessions
+      // stream; nothing here reads an execution workspace.
+      if librarySyncTimerNeeded { await pauseLibrarySync(.timer, timeout: Self.librarySyncInterval) }
+      else { await pauseLibrarySync(.stream, timeout: nil) }
     }
   }
 

@@ -5,10 +5,13 @@ import WovenMatterShared
 
 /// The library host's mobile API, counting every live read the phone makes.
 private actor CountingLibrary: OfflineLibraryTransport {
-  private(set) var transcripts = 0, pendingReads = 0, providerReads = 0, receiptReads = 0
+  private(set) var transcripts = 0, pendingReads = 0, providerReads = 0, receiptReads = 0, changeReads = 0
+  /// The host's library change cursor, as `GET v1/changes` reports it.
+  private var latestCursor: Int64 = 1
+  func setCursor(_ value: Int64) { latestCursor = value }
   func workspaceIdentity() async throws -> String { "library-a" }
-  func snapshot() async throws -> LibrarySnapshot { .init(workspaceID: "library-a", cursor: 1) }
-  func changes(after: Int64) async throws -> LibraryChangePage { .init(workspaceID: "library-a", cursor: max(after, 1)) }
+  func snapshot() async throws -> LibrarySnapshot { .init(workspaceID: "library-a", cursor: latestCursor) }
+  func changes(after: Int64) async throws -> LibraryChangePage { changeReads += 1; return .init(workspaceID: "library-a", cursor: max(after, latestCursor)) }
   func providers() async throws -> [HarnessCapabilities] {
     providerReads += 1
     return [.init(id: "local:codex", runtimeKind: "codex", displayName: "Codex", available: true)]
@@ -234,6 +237,52 @@ final class CentralStreamTests: XCTestCase {
     // Leaving the chat ends its subscription; nothing else changes.
     await model.selectConversation("central-chat-2")
     await waitUntil("cancel") { await socket.cancels == [chat] }
+  }
+
+  /// The library host's stream announces its library changes (`library`
+  /// items): a cursor ahead of the phone's synchronizes at once, and while
+  /// that stream is open the library has no timer. When it closes, the 15 s
+  /// timer returns.
+  @MainActor func testLibraryItemsFromTheHostSyncAtOnceAndReplaceTheTimer() async throws {
+    let fixture = try await makeFixture(); let model = fixture.model
+    defer { try? FileManager.default.removeItem(at: fixture.root); model.stopDeviceScheduler() }
+    model.automaticSynchronization = true
+    await model.refreshExecutionWorkspaces(force: true)
+    let socket = await openHost(fixture)
+    await waitUntil("workspace subscription") { await socket.subscriptions.count == 1 }
+    let workspaceSub = await socket.subscriptions[0].id
+    XCTAssertTrue(model.librarySyncTimerNeeded, "No announcement yet: the timer stays")
+
+    // The cursor the phone already holds: no sync, and no timer from now on.
+    await socket.push(.item(.init(id: workspaceSub, payload: .library(.init(cursor: 1)))))
+    await waitUntil("announcing stream") { !model.librarySyncTimerNeeded }
+    let loop = Task { await model.maintainConnections() }
+    defer { loop.cancel() }
+    await waitUntil("the loop waits on the stream") { model.librarySyncPause == .stream }
+    let settled = await fixture.library.changeReads
+    try await Task.sleep(for: .milliseconds(100))
+    let idle = await fixture.library.changeReads
+    XCTAssertEqual(idle, settled, "Nothing reads the library while the stream is quiet")
+
+    // A change on the host: synchronized at once, with no timer involved.
+    await fixture.library.setCursor(5)
+    await socket.push(.item(.init(id: workspaceSub, payload: .library(.init(cursor: 5)))))
+    await waitUntil("synchronized") { await fixture.model.store?.snapshot().cursor == 5 }
+    let reads = await fixture.library.changeReads
+    XCTAssertGreaterThan(reads, settled)
+    XCTAssertEqual(model.librarySyncPause, .stream, "Still no timer")
+
+    // A cursor this phone already passed does not sync again.
+    await socket.push(.item(.init(id: workspaceSub, payload: .library(.init(cursor: 4)))))
+    try await Task.sleep(for: .milliseconds(100))
+    let unchanged = await fixture.library.changeReads
+    XCTAssertEqual(unchanged, reads, "An older cursor does not sync")
+
+    // The stream closes: the timer returns until it announces again.
+    await socket.serverClose(code: 1006)
+    await waitUntil("timer") { model.librarySyncPause == .timer }
+    XCTAssertTrue(model.librarySyncTimerNeeded)
+    XCTAssertEqual(MobileModel.librarySyncInterval, .seconds(15))
   }
 
   /// A workspace without a stream is read once when its client is made and
