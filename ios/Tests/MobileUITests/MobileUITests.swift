@@ -659,7 +659,8 @@ final class MobileUITests: XCTestCase {
     let app = launch(tab: "Home", scenario: "standalone")
     let connect = app.buttons["home-connect-mac"]
     XCTAssertTrue(connect.waitForExistence(timeout: 5))
-    XCTAssertTrue(app.staticTexts["home-connect-mac-caption"].label.contains("Everything on this iPhone is kept"))
+    let device = UIDevice.current.userInterfaceIdiom == .pad ? "iPad" : "iPhone"
+    XCTAssertTrue(app.staticTexts["home-connect-mac-caption"].label.contains("Everything on this \(device) is kept"))
     XCTAssertTrue(app.buttons["open-calendar"].exists)
     XCTAssertFalse(app.buttons["open-scheduled-tasks"].exists, "Scheduled tasks run on a Mac or Linux workspace")
     XCTAssertFalse(app.buttons["open-databases"].exists)
@@ -674,7 +675,7 @@ final class MobileUITests: XCTestCase {
     XCTAssertTrue(app.descendants(matching: .any)["chat-composer"].firstMatch.exists)
     saveScreenshot("standalone-quick-chat")
     setup.tap()
-    XCTAssertTrue(app.navigationBars["iPhone Connections"].waitForExistence(timeout: 5))
+    XCTAssertTrue(app.navigationBars["\(device) Connections"].waitForExistence(timeout: 5))
     XCTAssertTrue(app.buttons["Web search"].exists)
     saveScreenshot("standalone-connections")
 
