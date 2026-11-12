@@ -8,6 +8,6 @@
   "dependencies": {
     "undici": ">=8.12.4",
     "ip-address": ">=10.7.6",
-    "minimatch": ">=11.0.5"
+    "minimatch": ">=11.0.8"
   }
 }

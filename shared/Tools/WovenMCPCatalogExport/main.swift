@@ -1,5 +1,5 @@
 import Foundation
-import WovenMatterCompanion
+import WovenMatterShared
 
 // Maintenance generator: one canonical Swift catalog, bundled for Linux's
 // independently running workspace service. No account or runtime access.

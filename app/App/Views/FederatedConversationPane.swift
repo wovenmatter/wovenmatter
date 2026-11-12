@@ -11,22 +11,27 @@ struct FederatedConversationPane: View {
     @Binding var draft: String
     let sendInProgress: Bool
     let onSend: () -> Void
-    @State private var olderMessages: [CompanionMessage] = []
-    @State private var olderActivities: [CompanionActivity] = []
+    @State private var olderMessages: [LibraryMessage] = []
+    @State private var olderActivities: [LibraryActivity] = []
     @State private var olderCursor: String?
     @State private var loadingOlder = false
     @State private var hasLoadedEarlier = false
     @State private var historyGeneration = UUID()
     private var snapshot: FederatedExecutionSnapshot? { model.federatedExecutionSnapshots[conversation.id] }
+    /// Quick Chat runs only on its iPhone or iPad; every Mac shows its synced history read-only.
+    private var isPhoneHistory: Bool {
+        snapshot?.workspace.kind == .ios || DashboardPairedWorkspaceSidebarModel.isPhoneHistory(
+            owner: model.federatedExecutionOwners[conversation.id], registry: model.executionWorkspaceRegistry)
+    }
     private var runID: String? { snapshot?.transcript?.activeRunID }
-    private var messages: [CompanionMessage] {
+    private var messages: [LibraryMessage] {
         let current = snapshot?.transcript?.messages ?? savedMessages.map {
-            CompanionMessage(id: $0.id, conversationID: conversation.id, role: $0.role, content: $0.content)
+            LibraryMessage(id: $0.id, conversationID: conversation.id, role: $0.role, content: $0.content)
         }
         let ids = Set(current.map(\.id))
         return olderMessages.filter { !ids.contains($0.id) } + current
     }
-    private var activities: [CompanionActivity] {
+    private var activities: [LibraryActivity] {
         let current = snapshot?.transcript?.activities ?? []
         let ids = Set(current.map(\.id))
         return olderActivities.filter { !ids.contains($0.id) } + current
@@ -70,6 +75,12 @@ struct FederatedConversationPane: View {
                 }
                 .onChange(of: conversation.id, initial: true) { _, _ in proxy.scrollTo("federated-bottom", anchor: .bottom) }
             }
+            if isPhoneHistory {
+                Text("Quick Chat history · Continue on its iPhone or iPad")
+                    .font(.caption).foregroundStyle(DashboardPalette.mutedForeground)
+                    .frame(maxWidth: .infinity, alignment: .leading).padding(20)
+                    .accessibilityIdentifier("federated-quick-chat-history")
+            } else {
             VStack(alignment: .leading, spacing: 12) {
                 if let error = snapshot?.error { Text(error).font(.caption).foregroundStyle(DashboardPalette.mutedForeground).textSelection(.enabled) }
                 ForEach(snapshot?.interactions ?? []) { interaction in
@@ -110,6 +121,7 @@ struct FederatedConversationPane: View {
                         .disabled(sendInProgress || draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || snapshot?.online != true || (runID != nil && snapshot?.capability?.canSteer != true))
                 }
             }.padding(20)
+            }
         }
         .onChange(of: snapshot?.online) { _, _ in
             // Switching between the owner's live history and the central archive
@@ -126,7 +138,7 @@ struct FederatedConversationPane: View {
             }
         }
     }
-    @ViewBuilder private func selectionMenu(_ title: String, values: [CompanionSelection], selected: String?, action: @escaping (String) -> CompanionWorkspaceAction) -> some View {
+    @ViewBuilder private func selectionMenu(_ title: String, values: [SessionSettingOption], selected: String?, action: @escaping (String) -> LibraryWorkspaceAction) -> some View {
         if !values.isEmpty {
             Menu(values.first { $0.id == selected }?.label ?? title) {
                 ForEach(values) { value in
@@ -152,8 +164,8 @@ struct FederatedConversationPane: View {
 }
 
 private struct FederatedInteractionCard: View {
-    let interaction: CompanionPendingInteraction
-    let respond: (CompanionInteractionResponse) async -> Void
+    let interaction: PendingInteraction
+    let respond: (InteractionResponse) async -> Void
     @State private var selected: [String: Set<String>] = [:]
     @State private var freeText: [String: String] = [:]
     @State private var submitting = false
@@ -192,7 +204,7 @@ private struct FederatedInteractionCard: View {
             }.disabled(submitting)
         }.padding(14).background(DashboardPalette.muted, in: RoundedRectangle(cornerRadius: DashboardMetrics.cardRadius))
     }
-    private func send(_ response: CompanionInteractionResponse) {
+    private func send(_ response: InteractionResponse) {
         submitting = true
         Task { await respond(response); submitting = false }
     }

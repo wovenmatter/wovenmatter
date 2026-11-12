@@ -79,6 +79,32 @@ struct SessionCreationTests {
         #expect(await f.recorder.configurations.last?.selections.thinking == nil)
     }
 
+    /// The backend RPC's `title` and a member's `createSession` title name the
+    /// session as it is created, on this Mac and on a Linux host it manages.
+    @Test(arguments: [false, true])
+    func requestedTitleNamesTheNewSession(remote: Bool) async throws {
+        let f = try await FacadeFixture(); defer { f.remove() }
+        let owner = try await f.model.executionWorkspaceIdentity(workspaceID: remote ? f.remote.id : nil)
+        let folder = try await f.database.createFolder(name: "Chats", location: .init(workspaceID: owner, rootPath: f.directory.path, managed: false))
+        let named: String?
+        if remote {
+            let harness = try #require(f.model.remoteWorkspaces.harnesses[f.remote.id]?.first { $0.id == .codex })
+            named = await f.model.createRemoteACPSession(target: .init(configuration: f.remote, harness: harness), initialTitle: "  Release notes  ", folderID: folder)
+        } else {
+            named = await f.model.createLocalACPSession(runtimeKind: .codex, initialTitle: "  Release notes  ", folderID: folder)
+        }
+        #expect(try await record(f, try #require(named)).title == "Release notes")
+        let untitled = try await create(f, runtime: .codex, remote: remote)
+        #expect(try await record(f, untitled).title == "New \(AgentRuntimeKind.codex.displayName) chat")
+
+        let id = UUID().uuidString.lowercased()
+        let providerID = remote ? "remote:\(f.remote.id.uuidString.lowercased()):codex" : "local:codex"
+        let receipt = try await f.model.libraryCommands.execute(.init(deviceID: f.device, kind: .createSession,
+            conversationID: id, providerID: providerID, folderID: folder, title: "From a member"), deviceID: f.device)
+        #expect(receipt.status == .completed, "\(receipt.message ?? "")")
+        #expect(try await record(f, id).title == "From a member")
+    }
+
     @Test func legacyUnappliedDefaultsAreNotRetriedWhenOpeningOrSending() async throws {
         let f = try await FacadeFixture(); defer { f.remove() }
         let id = try await create(f, runtime: .codex, remote: false)

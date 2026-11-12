@@ -107,6 +107,8 @@ struct DashboardSidebarActions {
     let onConversationAction: (WorkspaceConversationRecord, DashboardConversationMenuAction) -> Void
     let onNoteAction: (WorkspaceNoteRecord, DashboardNoteMenuAction) -> Void
     let onUnavailableMutation: (String) -> Void
+    let onSelectBot: (DashboardBotTarget) -> Void
+    let onOpenBotSettings: () -> Void
 }
 
 struct DashboardSidebarRail: View {
@@ -119,6 +121,8 @@ struct DashboardSidebarRail: View {
     let remoteWorkspaces: RemoteWorkspacesModel
     let localWorkspaceReady: Bool
     let localExecutionWorkspaceID: String?
+    let executionWorkspaces: [ExecutionWorkspace]
+    let conversationOwners: [String: String]
     let folders: [WorkspaceFolderRecord]
     let conversations: [WorkspaceConversationRecord]
     let notes: [WorkspaceNoteRecord]
@@ -127,6 +131,8 @@ struct DashboardSidebarRail: View {
     let selectedFolderID: String?
     let selectedConversationID: String?
     let selectedNoteID: String?
+    let bots: BotsModel
+    let selectedBotTarget: DashboardBotTarget?
     let destination: DashboardDestination
     let contentRevision: Int64
     @Binding var pinnedAgentIDsRaw: String
@@ -156,6 +162,8 @@ struct DashboardSidebarRail: View {
             remoteWorkspaces: remoteWorkspaces,
             localWorkspaceReady: localWorkspaceReady,
             localExecutionWorkspaceID: localExecutionWorkspaceID,
+            executionWorkspaces: executionWorkspaces,
+            conversationOwners: conversationOwners,
             folders: folders,
             conversations: conversations,
             notes: notes,
@@ -163,6 +171,8 @@ struct DashboardSidebarRail: View {
             selectedAgentID: selectedAgentID,
             selectedFolderID: selectedFolderID,
             selectedConversationID: selectedConversationID,
+            bots: bots,
+            selectedBotTarget: selectedBotTarget,
             destination: destination,
             pinnedAgentIDsRaw: $pinnedAgentIDsRaw,
             agentOrderRaw: $agentOrderRaw,
@@ -215,6 +225,8 @@ struct DashboardSidebarNavigationPage: View {
     let remoteWorkspaces: RemoteWorkspacesModel
     let localWorkspaceReady: Bool
     let localExecutionWorkspaceID: String?
+    let executionWorkspaces: [ExecutionWorkspace]
+    let conversationOwners: [String: String]
     let folders: [WorkspaceFolderRecord]
     let conversations: [WorkspaceConversationRecord]
     let notes: [WorkspaceNoteRecord]
@@ -222,6 +234,8 @@ struct DashboardSidebarNavigationPage: View {
     let selectedAgentID: UUID?
     let selectedFolderID: String?
     let selectedConversationID: String?
+    let bots: BotsModel
+    let selectedBotTarget: DashboardBotTarget?
     let destination: DashboardDestination
     @Binding var pinnedAgentIDsRaw: String
     @Binding var agentOrderRaw: String
@@ -253,6 +267,10 @@ struct DashboardSidebarNavigationPage: View {
         Set(pinnedAgentOrder)
     }
 
+    private var pairedWorkspaceLinks: [ExecutionWorkspace] {
+        DashboardPairedWorkspaceSidebarModel.workspaces(executionWorkspaces)
+    }
+
     private var remoteWorkspaceLinks: [DashboardRemoteWorkspaceSidebarLink] {
         DashboardRemoteWorkspaceSidebarModel.links(
             workspaces: remoteWorkspaces.workspaces,
@@ -265,6 +283,14 @@ struct DashboardSidebarNavigationPage: View {
             railHeader
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 0) {
+                    DashboardBotsSidebar(
+                        bots: bots,
+                        selectedTarget: selectedBotTarget,
+                        isWorkspaceDestination: destination == .workspace,
+                        disclosureRaw: $agentDisclosureRaw,
+                        onSelect: actions.onSelectBot,
+                        onOpenSettings: actions.onOpenBotSettings
+                    )
                     topActions
                     allWorkspacesRow
                     workspacesSection
@@ -299,7 +325,8 @@ struct DashboardSidebarNavigationPage: View {
             VStack(alignment: .leading, spacing: 1) {
                 Text("Workspaces")
                     .font(.system(size: 13, weight: .semibold))
-                Text("\(remoteWorkspaceLinks.count + 1) \(remoteWorkspaceLinks.isEmpty ? "workspace" : "workspaces")")
+                let workspaceCount = remoteWorkspaceLinks.count + pairedWorkspaceLinks.count + 1
+                Text("\(workspaceCount) \(workspaceCount == 1 ? "workspace" : "workspaces")")
                 .font(.system(size: 11))
                 .foregroundStyle(DashboardPalette.foreground)
             }
@@ -422,11 +449,14 @@ struct DashboardSidebarNavigationPage: View {
                 let key = DashboardAgentDisclosureKey.remoteWorkspaces
                 agentDisclosureHeading(title: "Remote workspaces", key: key)
                 if agentSectionExpanded(key) {
-                    if remoteWorkspaceLinks.isEmpty {
+                    if remoteWorkspaceLinks.isEmpty && pairedWorkspaceLinks.isEmpty {
                         agentEmptyLabel("No remote workspaces yet")
                     }
                     ForEach(remoteWorkspaceLinks) { workspace in
                         remoteWorkspaceSection(workspace)
+                    }
+                    ForEach(pairedWorkspaceLinks) { workspace in
+                        pairedWorkspaceSection(workspace)
                     }
                 }
             }
@@ -450,7 +480,59 @@ struct DashboardSidebarNavigationPage: View {
     private var unavailableFolderOwnerIDs: [String] {
         let known = Set(remoteWorkspaceLinks.map { ApplicationModel.remoteDatabaseSourceID($0.id) }
             + [localExecutionWorkspaceID].compactMap { $0 })
-        return Set(folders.compactMap { $0.executionWorkspaceID }.filter { !$0.isEmpty }).subtracting(known).sorted()
+        // iPhone and iPad folders are listed under their own workspace.
+        let paired = Set(pairedWorkspaceLinks.map { DashboardPairedWorkspaceSidebarModel.canonicalID($0.id) })
+        return Set(folders.compactMap { $0.executionWorkspaceID }.filter {
+            !$0.isEmpty && !paired.contains(DashboardPairedWorkspaceSidebarModel.canonicalID($0))
+        }).subtracting(known).sorted()
+    }
+
+    /// A paired iPhone or iPad: its Quick Chat history (read-only here) and the
+    /// folders bound to it. Folders are created on the device itself.
+    @ViewBuilder
+    private func pairedWorkspaceSection(_ workspace: ExecutionWorkspace) -> some View {
+        let key = "paired-workspace:" + DashboardPairedWorkspaceSidebarModel.canonicalID(workspace.id)
+        let history = DashboardPairedWorkspaceSidebarModel.history(
+            for: workspace, conversations: conversations, owners: conversationOwners)
+        let sections = DashboardFolderSections(
+            folders: DashboardPairedWorkspaceSidebarModel.folders(for: workspace, in: folders))
+        let counts = folderContentCounts
+        agentDisclosureHeading(title: workspace.name, key: key)
+        if agentSectionExpanded(key) {
+            VStack(alignment: .leading, spacing: 0) {
+                agentDisclosureHeading(title: "Quick Chat", key: key + ":history")
+                if agentSectionExpanded(key + ":history") {
+                    if history.isEmpty { agentEmptyLabel("No synced chats yet") }
+                    ForEach(history) { conversation in
+                        DashboardRailRow(
+                            icon: .messageSquare,
+                            title: conversation.title,
+                            hoverID: "paired-conversation:\(conversation.id)",
+                            selected: selectedConversationID == conversation.id,
+                            conversationID: conversation.id
+                        ) {
+                            actions.onSelectConversation(conversation.id)
+                        }
+                        .help("Quick Chat history. Continue on \(workspace.name).")
+                    }
+                }
+                agentDisclosureHeading(title: "Folders", key: key + ":folders")
+                if agentSectionExpanded(key + ":folders") {
+                    if sections.pinned.isEmpty && sections.unpinned.isEmpty {
+                        agentEmptyLabel("No folders yet. Create folders on \(workspace.name).")
+                    }
+                    ForEach(sections.pinned) { folder in
+                        folderRow(folder, sectionFolders: sections.pinned,
+                                  counts: counts[folder.id, default: .init()], workspaceTitle: workspace.name)
+                    }
+                    ForEach(sections.unpinned) { folder in
+                        folderRow(folder, sectionFolders: sections.unpinned,
+                                  counts: counts[folder.id, default: .init()], workspaceTitle: workspace.name)
+                    }
+                }
+            }
+            .padding(.leading, 8)
+        }
     }
 
     @ViewBuilder
@@ -1245,6 +1327,38 @@ struct DashboardFolderReferencesPopover: View {
 enum DashboardNewChatTarget {
     case acpDirect(AgentRuntimeKind)
     case remoteWorkspace(RemoteHarnessChatTarget)
+    /// Another Mac's agent, on that Mac or a Linux host it added, created there
+    /// with this Mac's member signature (`createPairedMacSession`).
+    case peerAgent(UUID)
+}
+
+/// An agent on another Mac or Linux workspace from the synced registry, offered
+/// in New Chat beside this Mac's own targets. The iPhone is never one: it runs
+/// only its own Quick Chats.
+struct DashboardNewChatPeerTarget: Identifiable, Equatable {
+    let agentID: UUID
+    let runtimeKind: AgentRuntimeKind
+    let workspace: ExecutionWorkspace
+    var id: UUID { agentID }
+
+    /// One row per workspace and harness, skipping those this Mac already
+    /// offers through a Linux host it manages, Macs first, then by name.
+    static func resolve(agents: [WorkspaceAgent], peerWorkspaces: [UUID: ExecutionWorkspace],
+                        configured: [RemoteHarnessChatTarget], folderOwnerID: String?) -> [Self] {
+        let owner = folderOwnerID.map(DashboardPairedWorkspaceSidebarModel.canonicalID)
+        var seen = Set(configured.map { $0.configuration.id.uuidString.lowercased() + ":" + $0.harness.id.rawValue })
+        return agents.compactMap { agent -> Self? in
+            guard let workspace = peerWorkspaces[agent.id], !workspace.deleted, workspace.kind == .mac || workspace.kind == .linux,
+                  owner == nil || owner == DashboardPairedWorkspaceSidebarModel.canonicalID(workspace.id),
+                  seen.insert(DashboardPairedWorkspaceSidebarModel.canonicalID(workspace.id) + ":" + agent.runtimeKind.rawValue).inserted
+            else { return nil }
+            return .init(agentID: agent.id, runtimeKind: agent.runtimeKind, workspace: workspace)
+        }.sorted {
+            let left = ($0.workspace.kind == .mac ? 0 : 1, $0.workspace.name.lowercased(), $0.runtimeKind.displayName)
+            let right = ($1.workspace.kind == .mac ? 0 : 1, $1.workspace.name.lowercased(), $1.runtimeKind.displayName)
+            return left < right
+        }
+    }
 }
 
 enum DashboardNewChatAvailabilitySummary {
@@ -1337,6 +1451,12 @@ struct DashboardNewChatDrawer: View {
         }
     }
 
+    /// Every other Mac's and Linux workspace's agents, whichever Mac added them.
+    private var peerTargets: [DashboardNewChatPeerTarget] {
+        DashboardNewChatPeerTarget.resolve(agents: model.remoteWorkspaceAgents, peerWorkspaces: model.peerAgentWorkspaces,
+                                           configured: model.remoteWorkspaces.readyChatTargets, folderOwnerID: folderOwnerID)
+    }
+
     var body: some View {
         DashboardDrawerChrome(onClose: onClose) {
             Text("New Chat")
@@ -1411,11 +1531,11 @@ struct DashboardNewChatDrawer: View {
                 DashboardNewChatSection(
                     source: .remoteWorkspace,
                     summary: DashboardNewChatAvailabilitySummary.available(
-                        count: remoteChatTargets.count
+                        count: remoteChatTargets.count + peerTargets.count
                     ),
                     isExpanded: expansionBinding(for: .remoteWorkspace)
                 ) {
-                    if remoteChatTargets.isEmpty {
+                    if remoteChatTargets.isEmpty && peerTargets.isEmpty {
                         DashboardNewChatEmptyCard(
                             icon: .container,
                             title: "No remote agents ready",
@@ -1436,6 +1556,20 @@ struct DashboardNewChatDrawer: View {
                                 )
                             }
                             .buttonStyle(DashboardQuietButtonStyle())
+                        }
+                        ForEach(peerTargets) { target in
+                            Button {
+                                onSelect(.peerAgent(target.agentID))
+                            } label: {
+                                DashboardNewChatOptionCard(
+                                    icon: target.workspace.kind == .mac ? .monitor : .container,
+                                    harnessLogo: DashboardHarnessLogo(runtimeKind: target.runtimeKind),
+                                    title: target.runtimeKind.displayName,
+                                    detail: target.workspace.name
+                                )
+                            }
+                            .buttonStyle(DashboardQuietButtonStyle())
+                            .accessibilityLabel("\(target.runtimeKind.displayName) on \(target.workspace.name)")
                         }
                     }
                 }

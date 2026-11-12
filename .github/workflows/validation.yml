@@ -9,7 +9,7 @@ on:
         type: choice
         required: true
         default: all
-        options: [all, desktop, mobile, images]
+        options: [all, desktop, mobile, images, linux]
 
 permissions:
   contents: read
@@ -36,10 +36,12 @@ jobs:
   macos:
     name: macOS
     if: inputs.scope == 'all' || inputs.scope == 'desktop'
-    runs-on: macos-26
+    # Xcode 27.2, the toolchain the app is developed and released with (macos-26 stops at 26.6).
+    runs-on: xcode-27
     timeout-minutes: 40
     env:
       WOVENMATTER_TEST_CACHE_DIR: /private/tmp/wovenmatter-ci
+      DEVELOPER_DIR: /Applications/Xcode_27.2.app/Contents/Developer
     steps:
       - uses: actions/checkout@main
       - uses: actions/setup-node@main
@@ -74,11 +76,11 @@ jobs:
         run: |
           mkdir -p "$WOVENMATTER_TEST_CACHE_DIR"
           scripts/test-changes.sh --native 2>&1 | tee "$WOVENMATTER_TEST_CACHE_DIR/desktop.log"
-      - name: Test companion integration on the same runner
+      - name: Test cross-device integration on the same runner
         shell: bash
         run: |
           mkdir -p "$WOVENMATTER_TEST_CACHE_DIR"
-          scripts/test-changes.sh --companion-desktop 2>&1 | tee "$WOVENMATTER_TEST_CACHE_DIR/companion.log"
+          scripts/test-changes.sh --cross-device-desktop 2>&1 | tee "$WOVENMATTER_TEST_CACHE_DIR/cross-device.log"
       - name: Verify signed full-only update round trip
         run: python3 scripts/test-full-updates.py
       - name: Preserve desktop failure diagnostics
@@ -92,11 +94,32 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
 
+  linux-library:
+    name: Linux library
+    if: inputs.scope == 'all' || inputs.scope == 'linux'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@main
+      # Both steps run in the pinned Swift image (remote/library/build-version.json).
+      - name: Build and test the portable Swift targets on Linux
+        run: scripts/test-linux-library.sh
+      - name: Build the static wovenmatter-library for amd64 and arm64
+        run: scripts/build-linux-library.sh --docker
+      - name: Preserve the Linux library binaries
+        uses: actions/upload-artifact@main
+        with:
+          name: wovenmatter-library-linux-${{ github.run_attempt }}
+          path: remote/host/library/
+          if-no-files-found: error
+          retention-days: 14
+
   ios:
     name: iOS (${{ matrix.device }})
     if: inputs.scope == 'all' || inputs.scope == 'mobile'
     runs-on: macos-26
-    timeout-minutes: 25
+    # The iPad UI suite outgrew 25 minutes on hosted runners once member and send flows were added.
+    timeout-minutes: 40
     env:
       WOVENMATTER_IOS_TEST_CACHE_DIR: /private/tmp/wovenmatter-ios-${{ matrix.device }}
     strategy:
@@ -116,8 +139,8 @@ jobs:
             ${{ env.WOVENMATTER_IOS_TEST_CACHE_DIR }}/modules
             ${{ env.WOVENMATTER_IOS_TEST_CACHE_DIR }}/xcode/Build/Intermediates.noindex
             ${{ env.WOVENMATTER_IOS_TEST_CACHE_DIR }}/xcode/SourcePackages
-          key: ios-v1-${{ runner.arch }}-${{ matrix.device }}-${{ steps.toolchain.outputs.key }}-${{ hashFiles('ios/Package.swift', 'shared/Package.swift', 'ios/WovenMatterCompanion.xcodeproj/project.pbxproj') }}-${{ github.sha }}
-          restore-keys: ios-v1-${{ runner.arch }}-${{ matrix.device }}-${{ steps.toolchain.outputs.key }}-${{ hashFiles('ios/Package.swift', 'shared/Package.swift', 'ios/WovenMatterCompanion.xcodeproj/project.pbxproj') }}-
+          key: ios-v1-${{ runner.arch }}-${{ matrix.device }}-${{ steps.toolchain.outputs.key }}-${{ hashFiles('ios/Package.swift', 'shared/Package.swift', 'ios/WovenMatter.xcodeproj/project.pbxproj') }}-${{ github.sha }}
+          restore-keys: ios-v1-${{ runner.arch }}-${{ matrix.device }}-${{ steps.toolchain.outputs.key }}-${{ hashFiles('ios/Package.swift', 'shared/Package.swift', 'ios/WovenMatter.xcodeproj/project.pbxproj') }}-
       - name: Test native mobile flows
         env:
           WOVENMATTER_IOS_SIMULATOR_DEVICE_TYPE: ${{ matrix.device == 'iPhone' && 'com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro' || 'com.apple.CoreSimulator.SimDeviceType.iPad-Pro-11-inch-M4-8GB' }}
@@ -158,6 +181,8 @@ jobs:
 
       - name: Build the standalone Executor runtime
         run: |
+          # The version comes from the broker, which imports default-agent's packages.
+          npm ci --prefix default-agent --omit=dev --ignore-scripts --no-audit --no-fund
           wm_executor_version="$(node --input-type=module -e 'import { latestExecutorVersion } from "./default-agent/src/executor/broker.mjs"; console.log(await latestExecutorVersion());')"
           docker build --pull --no-cache --build-arg "EXECUTOR_VERSION=$wm_executor_version" \
             --file remote/Executor.Dockerfile --tag wovenmatter-executor:ci remote
@@ -168,7 +193,6 @@ jobs:
             wovenmatter-executor:ci /tmp/test-executor-image.sh
       - name: Verify unchanged Executor scopes, approvals and cancellation in Linux
         run: |
-          npm ci --prefix default-agent --omit=dev --ignore-scripts --no-audit --no-fund
           docker run --rm --entrypoint node --volume "$PWD:/workspace:ro" \
             wovenmatter-executor:ci /workspace/scripts/test-support/test-executor-runtime.mjs \
             /opt/executor/native/executor

@@ -5,7 +5,7 @@ import { sdkStatus, checkSDKUpdates, updateSDK, resolveSDKRuntime, SDKMaintenanc
 
 // Only this proxy is loaded by the long-lived workspace HTTP service. SDKs and
 // session state live in a replaceable process with one immutable generation.
-export function createManagedDefaultAgentService({ cwd, directory }) {
+export function createManagedDefaultAgentService({ cwd, directory, environment = process.env }) {
   let worker, selection = Promise.resolve(), sequence = 0, leases = 0, closed = false, lastConfiguration, attachmentState;
   const installController = new AbortController();
   const updates = new Set();
@@ -24,7 +24,7 @@ export function createManagedDefaultAgentService({ cwd, directory }) {
     const inheritedAttachmentState = attachmentState;
     attachmentState = undefined;
     const child = fork(fileURLToPath(new URL('./sdk-worker.mjs', import.meta.url)), [], { cwd, execPath: process.execPath,
-      env: {...process.env,WOVEN_DEFAULT_AGENT_DATABASE:join(cwd,'.wovenmatter','workspace.sqlite')},
+      env: {...environment,WOVEN_DEFAULT_AGENT_DATABASE:join(cwd,'.wovenmatter','workspace.sqlite')},
       stdio: ['ignore', 'ignore', 'ignore', 'ipc'], serialization: 'advanced' });
     const pending = new Map();
     let exited = false;
@@ -139,6 +139,7 @@ export function createManagedDefaultAgentService({ cwd, directory }) {
     },
     unlockForClient: options => dispatch('unlockForClient', options),
     inferenceCatalog: options => dispatch('inferenceCatalog', options),
+    botCredentials: options => dispatch('botCredentials', options),
     async inferenceStream(request, options) {
       let response;
       await selected(value => { response = value.stream(request, options); leases++; });

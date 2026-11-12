@@ -1,0 +1,577 @@
+// The Woven VM is macOS only.
+#if os(macOS)
+import Compression
+import Darwin
+import Foundation
+import Testing
+@testable import WovenMatterClient
+
+private func temporaryDirectory() throws -> URL {
+    let url = URL(fileURLWithPath: "/private/tmp/wovenvm-tests-\(getpid())-\(UUID().uuidString.prefix(8))", isDirectory: true)
+    try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+    return url
+}
+
+/// A minimal QCOW2 v3 image with 4 KiB clusters: cluster 0 stored raw,
+/// cluster 1 zlib-compressed, cluster 2 flagged as zeros, cluster 3
+/// unallocated, cluster 4 a partial tail.
+private func makeQCOW2(at url: URL, raw: [UInt8], compressedPayload: [UInt8], tail: [UInt8]) throws {
+    let clusterBits = 12, cluster = 1 << clusterBits
+    let virtualSize = UInt64(cluster * 4 + tail.count)
+    var file = [UInt8](repeating: 0, count: cluster * 6)
+    func put64(_ value: UInt64, at offset: Int) { for i in 0..<8 { file[offset + i] = UInt8(truncatingIfNeeded: value >> (56 - 8 * UInt64(i))) } }
+    func put32(_ value: UInt32, at offset: Int) { for i in 0..<4 { file[offset + i] = UInt8(truncatingIfNeeded: value >> (24 - 8 * UInt32(i))) } }
+    put32(0x5146_49fb, at: 0); put32(3, at: 4); put32(UInt32(clusterBits), at: 20); put64(virtualSize, at: 24)
+    put32(1, at: 36); put64(UInt64(cluster), at: 40); put32(4, at: 96); put32(104, at: 100)
+    // L1 at cluster 1 -> L2 at cluster 2; raw data at cluster 3; tail at cluster 4;
+    // compressed bytes at cluster 5.
+    put64(UInt64(cluster * 2) | (1 << 63), at: cluster)
+    let l2 = cluster * 2
+    put64(UInt64(cluster * 3) | (1 << 63), at: l2)
+    var compressed = [UInt8](repeating: 0, count: cluster * 2)
+    let length = compression_encode_buffer(&compressed, compressed.count, compressedPayload, compressedPayload.count, nil, COMPRESSION_ZLIB)
+    #expect(length > 0 && length < cluster)
+    let offset = UInt64(cluster * 5), x = UInt64(62 - (clusterBits - 8))
+    let sectors = (UInt64(length) + 511) / 512 - 1
+    put64(offset | (sectors << x) | (1 << 62), at: l2 + 8)
+    put64(1, at: l2 + 16)
+    put64(UInt64(cluster * 4) | (1 << 63), at: l2 + 32)
+    file.replaceSubrange(cluster * 3..<cluster * 4, with: raw)
+    file.replaceSubrange(cluster * 4..<cluster * 4 + tail.count, with: tail)
+    file.replaceSubrange(cluster * 5..<cluster * 5 + length, with: compressed.prefix(length))
+    try Data(file).write(to: url)
+}
+
+struct WovenVMTests {
+    @Test func qcow2ConversionHandlesRawCompressedZeroAndUnallocatedClusters() throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let raw = (0..<4096).map { UInt8(truncatingIfNeeded: $0 * 7 + 1) }
+        let payload = (0..<4096).map { UInt8(truncatingIfNeeded: $0 / 16) }
+        let tail = [UInt8](repeating: 0xab, count: 1000)
+        let source = directory.appending(path: "image.qcow2"), output = directory.appending(path: "disk.img")
+        try makeQCOW2(at: source, raw: raw, compressedPayload: payload, tail: tail)
+        #expect(try QCOW2Image.readHeader(open(source.path, O_RDONLY)).virtualSize == 4 * 4096 + 1000)
+        var reported: [Double] = []
+        try QCOW2Image.convert(source, to: output) { reported.append($0) }
+        let bytes = [UInt8](try Data(contentsOf: output))
+        #expect(bytes.count == 4 * 4096 + 1000)
+        #expect(Array(bytes[0..<4096]) == raw)
+        #expect(Array(bytes[4096..<8192]) == payload)
+        #expect(bytes[8192..<16_384].allSatisfy { $0 == 0 })
+        #expect(Array(bytes[16_384...]) == tail)
+        #expect(reported.last == 1)
+        // A second conversion never overwrites an existing output.
+        #expect(throws: (any Error).self) { try QCOW2Image.convert(source, to: output) }
+    }
+
+    @Test func qcow2RejectsUnsupportedImagesAndLeavesNoOutput() throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let source = directory.appending(path: "image.qcow2"), output = directory.appending(path: "disk.img")
+        try makeQCOW2(at: source, raw: .init(repeating: 1, count: 4096), compressedPayload: .init(repeating: 2, count: 4096), tail: [3])
+        var data = [UInt8](try Data(contentsOf: source))
+        data[15] = 0x70 // a backing file offset
+        try Data(data).write(to: source)
+        #expect(throws: WovenVMError.self) { try QCOW2Image.convert(source, to: output) }
+        #expect(!FileManager.default.fileExists(atPath: output.path))
+        try Data("not an image at all, just text".utf8).write(to: source)
+        #expect(throws: WovenVMError.self) { try QCOW2Image.convert(source, to: output) }
+    }
+
+    @Test func forwardRequestsNameExactlyOneValidTarget() throws {
+        #expect(try WovenVMForwardRequest(container: "bot-1_a.b", port: 3000).validated().port == 3000)
+        #expect(try WovenVMForwardRequest(address: "127.0.0.1", port: 80, hostPort: 18_080).validated().hostPort == 18_080)
+        #expect(try WovenVMForwardRequest(address: "fd00::1", port: 80).validated().address == "fd00::1")
+        for invalid in [WovenVMForwardRequest(container: "a b", port: 80), WovenVMForwardRequest(container: "x\n", port: 80),
+                        WovenVMForwardRequest(port: 80), WovenVMForwardRequest(container: "a", address: "0.0.0.0", port: 80),
+                        WovenVMForwardRequest(address: "not-an-ip", port: 80), WovenVMForwardRequest(container: "a", port: 0),
+                        WovenVMForwardRequest(container: "a", port: 80, hostPort: 70_000)] {
+            #expect(throws: WovenVMError.self) { try invalid.validated() }
+        }
+    }
+
+    @Test func socketsMoveToAShortPrivatePathWhenTheRootIsTooLong() {
+        let short = WovenVMPaths(root: URL(fileURLWithPath: "/private/var/home/Library/Application Support/Woven Matter/WovenVM"))
+        #expect(short.engineSocket.path == "/private/var/home/Library/Application Support/Woven Matter/WovenVM/docker.sock")
+        let long = WovenVMPaths(root: URL(fileURLWithPath: "/private/var/home/Library/Application Support/Woven Matter Dev/"
+            + String(repeating: "i", count: 64) + "/snapshot/WovenVM"))
+        #expect(long.socketDirectory.path.hasPrefix("/private/tmp/wovenmatter-vm-\(getuid())-"))
+        #expect(long.controlSocket.path.utf8.count < 104)
+        #expect(long.disk.path.hasSuffix("/snapshot/WovenVM/disk.img"))
+    }
+
+    @Test func theSocketDirectoryMustBeAPrivateDirectoryOfThisUser() throws {
+        let base = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: base) }
+        let fresh = base.appending(path: "fresh", directoryHint: .isDirectory)
+        #expect(throws: WovenVMError.self) { try WovenVMPaths.preparePrivateDirectory(fresh, create: false) }
+        try WovenVMPaths.preparePrivateDirectory(fresh)
+        var info = stat()
+        #expect(lstat(fresh.path, &info) == 0 && info.st_mode & 0o777 == 0o700 && info.st_uid == getuid())
+        // An existing directory of this user is tightened; anything else is refused.
+        let open = base.appending(path: "open", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: open, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o777])
+        chmod(open.path, 0o777)
+        try WovenVMPaths.preparePrivateDirectory(open)
+        #expect(lstat(open.path, &info) == 0 && info.st_mode & 0o777 == 0o700)
+        let link = base.appending(path: "link")
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: fresh)
+        #expect(throws: WovenVMError.self) { try WovenVMPaths.preparePrivateDirectory(link) }
+        let file = base.appending(path: "file")
+        try Data().write(to: file)
+        #expect(throws: WovenVMError.self) { try WovenVMPaths.preparePrivateDirectory(file) }
+        // A directory another user owns: /private/tmp itself is root's.
+        #expect(throws: WovenVMError.self) { try WovenVMPaths.preparePrivateDirectory(URL(fileURLWithPath: "/private/tmp"), create: false) }
+    }
+
+    @Test func launchAgentRestartsOnlyUnexpectedExits() throws {
+        let plist = WovenVMLaunchAgent.propertyList(label: "wovenmatter.desktop.vm",
+            helper: URL(fileURLWithPath: "/Applications/Woven Matter.app/Contents/Helpers/WovenMatterVMHelper"),
+            root: URL(fileURLWithPath: "/tmp/root"))
+        #expect(plist["Label"] as? String == "wovenmatter.desktop.vm")
+        #expect((plist["KeepAlive"] as? [String: Bool])?["SuccessfulExit"] == false)
+        #expect(plist["RunAtLoad"] as? Bool == true)
+        #expect(plist["ProgramArguments"] as? [String] == ["/Applications/Woven Matter.app/Contents/Helpers/WovenMatterVMHelper", "--root", "/tmp/root"])
+        #expect(WovenVMLaunchAgent.label(bundleIdentifier: "wovenmatter.desktop.dev") == "wovenmatter.desktop.dev.vm")
+    }
+
+    private let gib: UInt64 = 1 << 30, mib: UInt64 = 1 << 20
+
+    /// A guest reading: `used` excludes the balloon, which Linux counts as used.
+    private func memory(used: UInt64, balloon: UInt64, total: UInt64 = 7992 << 20, dirty: UInt64 = 0,
+                        stall: UInt64 = 0, refault: UInt64 = 0) -> WovenVMGuestMemory {
+        WovenVMGuestMemory(total: total, available: total - min(total, used + balloon), balloon: balloon,
+                           dirty: dirty, stallMicroseconds: stall, refaultBytes: refault)
+    }
+
+    @Test func balloonDemandUsesWhatTheBalloonReallyHolds() {
+        // Ballooned pages and dirty page cache: the first is not demand, the second is.
+        #expect(WovenVMBalloonPolicy.demand(memory(used: 700 * mib, balloon: 5 * gib, dirty: 100 * mib),
+                                            booted: 8 * gib, target: 3 * gib) == 800 * mib)
+        // An older agent does not report the balloon: the target stands in for it.
+        let old = WovenVMGuestMemory(total: 8 * gib, available: 8 * gib - (700 * mib + 5 * gib))
+        #expect(WovenVMBalloonPolicy.demand(old, booted: 8 * gib, target: 3 * gib) == 700 * mib)
+        // A balloon still inflating toward its target holds less than the target says.
+        #expect(WovenVMBalloonPolicy.demand(memory(used: 700 * mib, balloon: 2 * gib), booted: 8 * gib,
+                                            target: 3 * gib) == 700 * mib)
+        let reply: [String: Any] = ["total": 8 * gib, "available": 6 * gib, "balloon": gib, "dirty": 10 * mib,
+                                    "writeback": 5 * mib, "refault": 7 * mib,
+                                    "pressure": ["some": ["avg10": 0.5, "total_us": 1234], "full": ["avg10": 0.0, "total_us": 12]]]
+        #expect(WovenVMGuestMemory(agentReply: reply)
+                == WovenVMGuestMemory(total: 8 * gib, available: 6 * gib, balloon: gib, dirty: 15 * mib,
+                                      stallMicroseconds: 1234, refaultBytes: 7 * mib))
+        #expect(WovenVMGuestMemory(agentReply: ["total": 1]) == nil)
+    }
+
+    @Test func balloonRaisesAtOnceAndOpensUnderPressure() {
+        let now = Date()
+        var state = WovenVMBalloonPolicy.State(target: 3 * gib)
+        // More demand raises the cap at once: demand plus 2 GiB of headroom.
+        var decision = WovenVMBalloonPolicy.step(&state, memory: memory(used: 1536 * mib, balloon: 5 * gib),
+                                                 ceiling: 8 * gib, booted: 8 * gib, now: now)
+        #expect(decision.target == 3584 * mib && !decision.underPressure)
+        // A stall of 1% of the next second opens it fully.
+        decision = WovenVMBalloonPolicy.step(&state, memory: memory(used: 1536 * mib, balloon: 4608 * mib, stall: 10_000),
+                                             ceiling: 8 * gib, booted: 8 * gib, now: now + 1)
+        #expect(decision.target == 8 * gib && decision.underPressure && state.pressureAt == now + 1)
+        // So does page cache read back faster than 8 MiB/s (an image build re-reading layers),
+        state = .init(target: 3 * gib)
+        _ = WovenVMBalloonPolicy.step(&state, memory: memory(used: gib, balloon: 5 * gib), ceiling: 8 * gib, booted: 8 * gib, now: now)
+        decision = WovenVMBalloonPolicy.step(&state, memory: memory(used: gib, balloon: 5 * gib, refault: 40 * mib),
+                                             ceiling: 8 * gib, booted: 8 * gib, now: now + 2)
+        #expect(decision.target == 8 * gib && decision.underPressure)
+        // and available memory under half the headroom, even on the first reading.
+        state = .init(target: 3 * gib)
+        decision = WovenVMBalloonPolicy.step(&state, memory: memory(used: 2 * gib + 200 * mib, balloon: 5 * gib),
+                                             ceiling: 8 * gib, booted: 8 * gib, now: now)
+        #expect(decision.target == 8 * gib && decision.underPressure)
+        // Small pools keep the floor; the pool is the limit.
+        state = .init()
+        #expect(WovenVMBalloonPolicy.step(&state, memory: memory(used: 0, balloon: 0, total: gib), ceiling: gib,
+                                          booted: gib, now: now).target == gib)
+        // An unanswered agent opens it too.
+        state = .init(target: 3 * gib)
+        #expect(WovenVMBalloonPolicy.unanswered(&state, ceiling: 8 * gib, now: now) == 8 * gib)
+        #expect(state.target == 8 * gib && state.pressureAt == now)
+    }
+
+    @Test func balloonLowersOnlyWhenCalmAndInSteps() {
+        let start = Date()
+        var state = WovenVMBalloonPolicy.State()
+        var targets: [UInt64] = []
+        // An idle guest using 700 MiB, after pressure at the start: nothing for
+        // 60 s, then 1 GiB every 5 s down to 700 MiB plus 2 GiB headroom.
+        state.pressureAt = start
+        for second in 0...120 {
+            let current = state.target ?? 8 * gib
+            let decision = WovenVMBalloonPolicy.step(&state, memory: memory(used: 700 * mib, balloon: 8 * gib - current),
+                                                     ceiling: 8 * gib, booted: 8 * gib, now: start + TimeInterval(second))
+            targets.append(decision.target)
+        }
+        #expect(targets[59] == 8 * gib)
+        #expect(targets[60] == 7 * gib && targets[64] == 7 * gib && targets[65] == 6 * gib)
+        #expect(targets.last == 700 * mib + 2 * gib)
+        #expect(zip(targets, targets.dropFirst()).allSatisfy { $0 >= $1 && $0 - $1 <= gib })
+
+        // Without earlier pressure, lowering still waits 30 s of lower demand.
+        state = .init(target: 8 * gib)
+        for second in 0..<30 {
+            #expect(WovenVMBalloonPolicy.step(&state, memory: memory(used: 700 * mib, balloon: 0), ceiling: 8 * gib,
+                                              booted: 8 * gib, now: start + TimeInterval(second)).target == 8 * gib)
+        }
+        #expect(WovenVMBalloonPolicy.step(&state, memory: memory(used: 700 * mib, balloon: 0), ceiling: 8 * gib,
+                                          booted: 8 * gib, now: start + 30).target == 7 * gib)
+        // The balloon's own reclaim right after a step is not pressure,
+        var stall: UInt64 = 200_000
+        #expect(!WovenVMBalloonPolicy.step(&state, memory: memory(used: 700 * mib, balloon: gib, stall: stall), ceiling: 8 * gib,
+                                           booted: 8 * gib, now: start + 31).underPressure)
+        // but a stall once the step has settled is, and opens the balloon.
+        stall += 200_000
+        let late = WovenVMBalloonPolicy.step(&state, memory: memory(used: 700 * mib, balloon: gib, stall: stall), ceiling: 8 * gib,
+                                             booted: 8 * gib, now: start + 34)
+        #expect(late.underPressure && late.target == 8 * gib)
+        // Differences under 256 MiB are left alone.
+        state = .init(target: 2 * gib + 900 * mib)
+        for second in 0...100 {
+            #expect(WovenVMBalloonPolicy.step(&state, memory: memory(used: 700 * mib, balloon: 0), ceiling: 8 * gib,
+                                              booted: 8 * gib, now: start + TimeInterval(second)).target == 2 * gib + 900 * mib)
+        }
+    }
+
+    /// The first image build: quiet downloads, then layers unpacked and
+    /// committed with page cache churning. The balloon never closes in on it.
+    @Test func balloonStaysOpenThroughAnImageBuild() {
+        let start = Date()
+        var state = WovenVMBalloonPolicy.State()
+        var refault: UInt64 = 0, stall: UInt64 = 0, lowest = UInt64.max
+        for second in 0..<600 {
+            let busy = second >= 20 && second % 40 < 30
+            if busy { refault += 30 * mib; stall += 2_000 }
+            let current = state.target ?? 8 * gib
+            let used = busy ? 1500 * mib : 900 * mib
+            let decision = WovenVMBalloonPolicy.step(&state, memory: memory(used: used, balloon: 8 * gib - current,
+                                                                             stall: stall, refault: refault),
+                                                     ceiling: 8 * gib, booted: 8 * gib, now: start + TimeInterval(second))
+            if second >= 20 { lowest = min(lowest, decision.target) }
+        }
+        #expect(lowest == 8 * gib)
+    }
+
+    @Test func balloonNeedsAGuestThatLeavesItsPagesUntouched() {
+        #expect(!WovenVMBalloonPolicy.guestLeavesBalloonUntouched(commandLine: "BOOT_IMAGE=/vmlinuz root=LABEL=cloudimg-rootfs ro console=hvc0"))
+        #expect(WovenVMBalloonPolicy.guestLeavesBalloonUntouched(commandLine: "ro console=tty1 console=hvc0 init_on_alloc=0"))
+        #expect(!WovenVMBalloonPolicy.guestLeavesBalloonUntouched(commandLine: "init_on_alloc=0 init_on_alloc=1"))
+        #expect(WovenVMBalloonPolicy.guestLeavesBalloonUntouched(commandLine: "init_on_alloc=off"))
+        #expect(WovenVMBalloonPolicy.bootTarget(ceiling: 8 * gib) == 3 * gib)
+        #expect(WovenVMBalloonPolicy.bootTarget(ceiling: gib) == gib)
+    }
+
+    @Test func idleVMRestartsOnlyToGiveBackRealMemory() {
+        let now = Date()
+        func restart(footprint: UInt64, idleFor: TimeInterval?, lastRestartAgo: TimeInterval? = nil) -> Bool {
+            WovenVMBalloonPolicy.shouldRestartIdle(footprint: footprint, target: 3 * gib,
+                                                   idleSince: idleFor.map { now - $0 },
+                                                   lastRestart: lastRestartAgo.map { now - $0 }, now: now)
+        }
+        #expect(restart(footprint: 8 * gib, idleFor: 600))
+        #expect(!restart(footprint: 8 * gib, idleFor: 599))
+        #expect(!restart(footprint: 8 * gib, idleFor: nil))
+        #expect(!restart(footprint: 4 * gib, idleFor: 3600))
+        #expect(!restart(footprint: 8 * gib, idleFor: 3600, lastRestartAgo: 1000))
+        #expect(restart(footprint: 8 * gib, idleFor: 3600, lastRestartAgo: 1800))
+        #expect(WovenVMBalloonPolicy.ceiling(bootedBytes: 8 * gib, requestedBytes: 4 * gib) == 4 * gib)
+        #expect(WovenVMBalloonPolicy.ceiling(bootedBytes: 8 * gib, requestedBytes: 16 * gib) == 8 * gib)
+    }
+
+    @Test func sizingFollowsTheResourceRules() throws {
+        let gib: UInt64 = 1 << 30
+        #expect(WovenVMSizing.memoryBytes(requested: nil, physical: 16 * gib + 123, maximumAllowed: 64 * gib) == 16 * gib)
+        #expect(WovenVMSizing.memoryBytes(requested: 8 * gib, physical: 16 * gib, maximumAllowed: 64 * gib) == 8 * gib)
+        #expect(WovenVMSizing.memoryBytes(requested: 100, physical: 16 * gib, maximumAllowed: 64 * gib) == gib)
+        try WovenVMSizing.validate(.init(memoryBytes: nil, diskBytes: nil), physicalMemory: 16 * gib, diskTotal: 500 * gib)
+        try WovenVMSizing.validate(.init(), physicalMemory: 16 * gib, diskTotal: 500 * gib)
+        #expect(throws: WovenVMError.self) { try WovenVMSizing.validate(.init(memoryBytes: 32 * gib), physicalMemory: 16 * gib, diskTotal: 500 * gib) }
+        #expect(throws: WovenVMError.self) { try WovenVMSizing.validate(.init(diskBytes: gib), physicalMemory: 16 * gib, diskTotal: 500 * gib) }
+        #expect(throws: WovenVMError.self) { try WovenVMSizing.validate(.init(diskBytes: 600 * gib), physicalMemory: 16 * gib, diskTotal: 500 * gib) }
+    }
+
+    @Test func controlHTTPParsesCompleteRequestsOnly() throws {
+        let head = "PUT /v1/resources HTTP/1.1\r\nHost: x\r\nContent-Length: 5\r\n\r\n"
+        #expect(try WovenVMControlHTTP.parseRequest(Data(head.utf8)) == nil)
+        let request = try WovenVMControlHTTP.parseRequest(Data((head + "{\"a\"}").utf8))
+        #expect(request == .init(method: "PUT", path: "/v1/resources", body: Data("{\"a\"}".utf8)))
+        #expect(throws: WovenVMError.self) {
+            try WovenVMControlHTTP.parseRequest(Data("POST / HTTP/1.1\r\nContent-Length: 99999999\r\n\r\n".utf8))
+        }
+        #expect(throws: WovenVMError.self) {
+            try WovenVMControlHTTP.parseRequest(Data("POST / HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n".utf8))
+        }
+        let response = WovenVMControlHTTP.response(status: 201, body: Data("{}".utf8))
+        let parsed = try WovenVMControlHTTP.parseResponse(response)
+        #expect(parsed.status == 201 && parsed.body == Data("{}".utf8))
+    }
+
+    /// The bundled guest files are what the record says, and the seed carries
+    /// them without any login credential.
+    @Test func guestSeedCarriesThePinnedFilesAndNoCredentials() throws {
+        let helper = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().appending(path: "VMHelper")
+        let resources = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: resources) }
+        try FileManager.default.copyItem(at: helper.appending(path: "guest-version.json"), to: resources.appending(path: "guest-version.json"))
+        for entry in WovenVMGuestFiles.layout {
+            try FileManager.default.copyItem(at: helper.appending(path: "Guest/" + entry.name), to: resources.appending(path: entry.name))
+        }
+        let version = try WovenVMGuestFiles.loadVersion(resources: resources)
+        #expect(version.docker.engineVersion == version.docker.dockerCE.split(separator: ":")[1].split(separator: "-")[0].description)
+        #expect(version.image.url.absoluteString.contains("/release-\(version.image.serial)/"))
+        let files = try WovenVMGuestFiles.files(resources: resources, version: version)
+        #expect(files.count == WovenVMGuestFiles.layout.count + 1)
+        #expect(String(decoding: files[WovenVMGuestFiles.versionsPath]!, as: UTF8.self).contains("DOCKER_CE_VERSION='\(version.docker.dockerCE)'"))
+        let userData = WovenVMGuestFiles.userData(files: files, diskCapBytes: 50 << 30)
+        #expect(userData.hasPrefix("#cloud-config\n"))
+        #expect(userData.contains("content: \"53687091200\""))
+        #expect(userData.contains("ssh_pwauth: false") && userData.contains("users: []"))
+        for word in ["ssh_authorized_keys", "passwd", "chpasswd"] { #expect(!userData.contains(word)) }
+        for entry in WovenVMGuestFiles.layout { #expect(userData.contains("- path: \(entry.path)")) }
+
+        // A tampered signing key is refused.
+        try Data("tampered".utf8).write(to: resources.appending(path: "docker-archive-keyring.asc"))
+        #expect(throws: WovenVMError.self) { try WovenVMGuestFiles.files(resources: resources, version: version) }
+    }
+
+    @Test func controllerInstallsTheAgentOnceAndMapsHelperErrors() async throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let root = directory.appending(path: "WovenVM")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let paths = WovenVMPaths(root: root)
+        let server = try FakeControlServer(path: paths.controlSocket.path) { request in
+            switch (request.method, request.path) {
+            case ("GET", "/v1/status"):
+                return (200, try JSONEncoder().encode(WovenVMStatus(phase: .provisioning, detail: "Installing Docker Engine",
+                                                                    engineSocket: paths.engineSocket.path)))
+            case ("POST", "/v1/update"):
+                return (409, try JSONEncoder().encode(WovenVMControlHTTP.ErrorBody(error: "The VM can update only when it is ready.")))
+            case ("GET", "/v1/diagnostics"):
+                return (200, try JSONEncoder().encode(WovenVMDiagnostics(
+                    status: WovenVMStatus(phase: .provisioning, detail: "Starting Docker Engine", engineSocket: paths.engineSocket.path),
+                    helperLog: "provisioning: Starting Docker Engine", console: "",
+                    guest: ["kernel_alerts": "Internal error: Oops: 0000000096000004 [#1]  SMP"], guestError: nil)))
+            default:
+                return (404, Data())
+            }
+        }
+        defer { server.stop() }
+        let calls = CallLog()
+        let plist = directory.appending(path: "LaunchAgents/test.vm.plist")
+        let controller = WovenVMController(root: root, label: "test.vm", helper: URL(fileURLWithPath: "/bin/helper"),
+                                           launchAgentPlist: plist) { arguments in
+            calls.append(arguments)
+            return arguments.first == "print" ? (calls.count > 2 ? 0 : 113) : 0
+        }
+        let status = try await controller.ensureRunning()
+        #expect(status.phase == .provisioning && status.detail == "Installing Docker Engine")
+        #expect(calls.values.map { $0[0] } == ["print", "bootstrap", "kickstart"])
+        let written = try PropertyListSerialization.propertyList(from: Data(contentsOf: plist), format: nil) as? [String: Any]
+        #expect(written?["Label"] as? String == "test.vm")
+        #expect(try FileManager.default.attributesOfItem(atPath: plist.path)[.posixPermissions] as? Int == 0o600)
+        // Unchanged plist and a loaded job: only a kickstart, never a reload.
+        _ = try await controller.ensureRunning()
+        #expect(calls.values.suffix(2).map { $0[0] } == ["print", "kickstart"])
+        await #expect(throws: WovenVMError.unavailable("The VM can update only when it is ready.")) {
+            try await controller.update()
+        }
+        let diagnostics = try await controller.diagnostics()
+        #expect(diagnostics.status.detail == "Starting Docker Engine")
+        #expect(WovenVMGuestDiagnostics.kernelFault(diagnostics.guest ?? [:])?.hasPrefix("Internal error: Oops") == true)
+    }
+
+    // MARK: Provisioning watch
+
+    private static let boot = "16dc7e85-dd61-41ff-a36a-719a60b1662d"
+
+    private static func status(provision: [String: Any]? = nil, update: [String: Any]? = nil,
+                               provisioned: Bool = false, docker: Bool = false) -> [String: Any] {
+        var status: [String: Any] = ["agent": 1, "boot_id": boot]
+        if let provision { status["provision"] = provision }
+        if let update { status["update"] = update }
+        if provisioned { status["provisioned"] = ["guestVersion": 1] }
+        if docker { status["docker"] = "29.9.3" }
+        return status
+    }
+
+    private static func step(_ name: String, limit: Int?, phase: String = "running", error: String? = nil,
+                             boot: String? = WovenVMTests.boot) -> [String: Any] {
+        var record: [String: Any] = ["phase": phase, "step": name]
+        if let limit { record["timeout"] = limit }
+        if let error { record["error"] = error }
+        if let boot { record["boot_id"] = boot }
+        return record
+    }
+
+    /// The MacBook Air incident: the guest failed "Starting Docker Engine" and
+    /// said so; the helper must see that at once instead of waiting an hour.
+    @Test func provisioningFailsWithTheGuestsOwnReason() {
+        let start = Date(timeIntervalSince1970: 1_000_000)
+        var watch = WovenVMProvisionWatch(now: start)
+        let rules = Self.status(provision: Self.step("Applying network rules", limit: 300))
+        #expect(watch.observe(.init(provisioningIn: rules), now: start) == .waiting(step: "Applying network rules"))
+        let reason = "Starting Docker Engine failed (exit 1): Job for containerd.service failed because a timeout was exceeded."
+        let failed = Self.status(provision: Self.step("Starting Docker Engine", limit: 300, phase: "failed", error: reason))
+        #expect(watch.observe(.init(provisioningIn: failed), now: start + 150) == .failed(reason))
+    }
+
+    @Test func aStuckStepFailsAtItsLimitNamingTheStep() {
+        let start = Date(timeIntervalSince1970: 1_000_000)
+        var watch = WovenVMProvisionWatch(now: start)
+        let installing = Self.status(provision: Self.step("Installing Docker Engine", limit: 1800))
+        // The guest enforces the limit itself; the watch waits `grace` longer.
+        #expect(watch.observe(.init(provisioningIn: installing), now: start + 10) == .waiting(step: "Installing Docker Engine"))
+        #expect(watch.observe(.init(provisioningIn: installing), now: start + 10 + 1800 + 119) == .waiting(step: "Installing Docker Engine"))
+        #expect(watch.observe(.init(provisioningIn: installing), now: start + 10 + 1800 + 120)
+                == .failed("Installing Docker Engine did not finish within 30 minutes."))
+
+        // Each step's limit counts from when it began.
+        var next = WovenVMProvisionWatch(now: start)
+        _ = next.observe(.init(provisioningIn: installing), now: start)
+        let rules = Self.status(provision: Self.step("Applying network rules", limit: 300))
+        #expect(next.observe(.init(provisioningIn: rules), now: start + 1700) == .waiting(step: "Applying network rules"))
+        #expect(next.observe(.init(provisioningIn: rules), now: start + 1700 + 419) == .waiting(step: "Applying network rules"))
+        #expect(next.observe(.init(provisioningIn: rules), now: start + 1700 + 420)
+                == .failed("Applying network rules did not finish within 5 minutes."))
+
+        // An older guest reports no limit.
+        var older = WovenVMProvisionWatch(now: start)
+        let unlimited = Self.status(provision: Self.step("Installing Docker Engine", limit: nil, boot: nil))
+        #expect(older.observe(.init(provisioningIn: unlimited), now: start) == .waiting(step: "Installing Docker Engine"))
+        #expect(older.observe(.init(provisioningIn: unlimited), now: start + 1799) == .waiting(step: "Installing Docker Engine"))
+        #expect(older.observe(.init(provisioningIn: unlimited), now: start + 1800)
+                == .failed("Installing Docker Engine did not finish within 30 minutes."))
+    }
+
+    @Test func aSilentGuestFailsInsteadOfWaitingForever() {
+        let start = Date(timeIntervalSince1970: 1_000_000)
+        var watch = WovenVMProvisionWatch(now: start)
+        #expect(watch.observe(nil, now: start + 599) == .waiting(step: WovenVMProvisionWatch.startingStep))
+        #expect(watch.observe(nil, now: start + 600) == .failed("The guest did not start."))
+
+        var answered = WovenVMProvisionWatch(now: start)
+        let rules = Self.status(provision: Self.step("Applying network rules", limit: 300))
+        _ = answered.observe(.init(provisioningIn: rules), now: start + 20)
+        #expect(answered.observe(nil, now: start + 20 + 299) == .waiting(step: "Applying network rules"))
+        #expect(answered.observe(nil, now: start + 20 + 300)
+                == .failed("The guest stopped answering (last step: Applying network rules)."))
+    }
+
+    @Test func provisioningIsDoneOnlyWithDockerEngineAnswering() {
+        let start = Date(timeIntervalSince1970: 1_000_000)
+        var watch = WovenVMProvisionWatch(now: start)
+        let provisioned = Self.status(provision: Self.step("Ready", limit: nil, phase: "ready"), provisioned: true)
+        #expect(watch.observe(.init(provisioningIn: provisioned), now: start) == .waiting(step: WovenVMProvisionWatch.engineStep))
+        #expect(watch.observe(.init(provisioningIn: provisioned), now: start + 300)
+                == .failed("\(WovenVMProvisionWatch.engineStep) did not finish within 5 minutes."))
+        var ready = WovenVMProvisionWatch(now: start)
+        let answering = Self.status(provision: Self.step("Ready", limit: nil, phase: "ready"), provisioned: true, docker: true)
+        #expect(ready.observe(.init(provisioningIn: answering), now: start) == .done)
+    }
+
+    /// After the helper reboots a failed guest, the last boot's failure must
+    /// not end the retry before this boot's provisioning reports.
+    @Test func anEarlierBootsReportDoesNotCount() {
+        let start = Date(timeIntervalSince1970: 1_000_000)
+        var watch = WovenVMProvisionWatch(now: start)
+        let earlier = Self.status(provision: Self.step("Starting Docker Engine", limit: 300, phase: "failed",
+                                                       error: "Starting Docker Engine failed (exit 1)", boot: "earlier-boot"))
+        #expect(watch.observe(.init(provisioningIn: earlier), now: start + 5) == .waiting(step: WovenVMProvisionWatch.startingStep))
+        let now = Self.status(provision: Self.step("Turning off automatic updates", limit: 900))
+        #expect(watch.observe(.init(provisioningIn: now), now: start + 10) == .waiting(step: "Turning off automatic updates"))
+    }
+
+    @Test func updatesAreWatchedTheSameWay() {
+        let start = Date(timeIntervalSince1970: 1_000_000)
+        var watch = WovenVMProvisionWatch(now: start)
+        // Before update.json exists, and while an old status.json says ready.
+        let waiting = Self.status(provision: Self.step("Ready", limit: nil, phase: "ready"), provisioned: true, docker: true)
+        #expect(watch.observe(.init(updateIn: waiting), now: start) == .waiting(step: WovenVMProvisionWatch.startingStep))
+        let upgrading = Self.status(update: Self.step("Updating guest packages", limit: 3600), provisioned: true, docker: true)
+        #expect(watch.observe(.init(updateIn: upgrading), now: start + 30) == .waiting(step: "Updating guest packages"))
+        let updated = Self.status(update: Self.step("Updated", limit: nil, phase: "ready"), provisioned: true)
+        #expect(watch.observe(.init(updateIn: updated), now: start + 600) == .done)
+    }
+
+    @Test func diagnosticsNameAGuestKernelFault() {
+        // The agent's reply as the MacBook Air guest gave it (abridged).
+        let reply: [String: Any] = [
+            "provision": ["phase": "failed", "step": "Starting Docker Engine"],
+            "kernel_alerts": """
+                Unable to handle kernel paging request at virtual address 33e5de8f893e3af8
+                Mem abort info:
+                Internal error: Oops: 0000000096000004 [#1]  SMP
+                """,
+            "load": [6.5, 6.25, 4], "uptime": 512.5
+        ]
+        let texts = WovenVMGuestDiagnostics.texts(reply)
+        #expect(texts["load"] == "[6.5,6.25,4]")
+        #expect(texts["provision"] == #"{"phase":"failed","step":"Starting Docker Engine"}"#)
+        #expect(WovenVMGuestDiagnostics.kernelFault(texts)
+                == "Unable to handle kernel paging request at virtual address 33e5de8f893e3af8")
+        #expect(WovenVMGuestDiagnostics.kernelFault(["kernel_alerts": "-- No entries --"]) == nil)
+        #expect(WovenVMGuestDiagnostics.kernelFault([:]) == nil)
+    }
+}
+
+private final class CallLog: @unchecked Sendable {
+    private let lock = NSLock()
+    private var calls: [[String]] = []
+    func append(_ value: [String]) { lock.lock(); calls.append(value); lock.unlock() }
+    var values: [[String]] { lock.lock(); defer { lock.unlock() }; return calls }
+    var count: Int { values.count }
+}
+
+/// Serves canned replies on a Unix socket, one request per connection.
+private final class FakeControlServer: @unchecked Sendable {
+    private let fd: Int32
+    private let path: String
+
+    init(path: String, handler: @escaping @Sendable (WovenVMControlHTTP.Request) throws -> (Int, Data)) throws {
+        self.path = path
+        fd = socket(AF_UNIX, SOCK_STREAM, 0)
+        var address = sockaddr_un()
+        address.sun_family = sa_family_t(AF_UNIX)
+        let bytes = Array(path.utf8)
+        withUnsafeMutableBytes(of: &address.sun_path) { $0.copyBytes(from: bytes); $0[bytes.count] = 0 }
+        let bound = withUnsafePointer(to: &address) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { bind(fd, $0, socklen_t(MemoryLayout<sockaddr_un>.size)) }
+        }
+        guard bound == 0, listen(fd, 16) == 0 else { throw POSIXError(.EADDRINUSE) }
+        let listener = fd
+        Thread.detachNewThread {
+            while true {
+                let client = accept(listener, nil, nil)
+                guard client >= 0 else { return }
+                var data = Data(), buffer = [UInt8](repeating: 0, count: 4096)
+                var request: WovenVMControlHTTP.Request?
+                while request == nil {
+                    let count = read(client, &buffer, buffer.count)
+                    guard count > 0 else { break }
+                    data.append(buffer, count: count)
+                    request = try? WovenVMControlHTTP.parseRequest(data)
+                }
+                if let request, let (status, body) = try? handler(request) {
+                    let reply = WovenVMControlHTTP.response(status: status, body: body)
+                    _ = reply.withUnsafeBytes { write(client, $0.baseAddress, $0.count) }
+                }
+                close(client)
+            }
+        }
+    }
+
+    func stop() {
+        shutdown(fd, SHUT_RDWR)
+        close(fd)
+        unlink(path)
+    }
+}
+#endif

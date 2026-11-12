@@ -1,11 +1,15 @@
 import Foundation
+#if canImport(SQLite3)
 import SQLite3
+#else
+import CSQLite
+#endif
 import WovenMatterCore
 import WovenMatterClient
 
 extension WorkspaceDatabaseConnection {
   public func listAgentNotes(callerID: String, search: String? = nil, folderID: String? = nil,
-                              after: Int64 = Int64.max, limit: Int = 50,
+                              after: Int64 = Int64(WorkspaceToolExecutor.maximumCursor), limit: Int = 50,
                               newestFirst: Bool = true) throws -> GatewayJSONValue {
     try withLock {
       try requireToolUnlocked(.notes, sessionID: callerID)
@@ -31,7 +35,7 @@ extension WorkspaceDatabaseConnection {
       var values: [String?] = [try localMutationOperatorIDUnlocked(), String(after)]
       var sql = """
         SELECT rowid AS sequence,id,title,folder_id AS folderID,json_extract(content,'$.boardPurpose') AS purpose,
-          CAST(COALESCE((SELECT revision FROM companion_versions WHERE kind='note' AND resource_id=notes.id),1) AS TEXT) AS revision,
+          CAST(COALESCE((SELECT revision FROM device_sync_revisions WHERE kind='note' AND resource_id=notes.id),1) AS TEXT) AS revision,
           json_array_length(content,'$.blocks') AS components,
           (SELECT count(*) FROM json_each(content,'$.boardItems') WHERE json_extract(value,'$.task.status') IN ('todo','doing','blocked')) AS openTasks,
           (SELECT count(*) FROM json_each(content,'$.boardItems') WHERE json_extract(value,'$.review')='needed') AS needsReview,
@@ -56,7 +60,7 @@ extension WorkspaceDatabaseConnection {
       try requireToolUnlocked(.notes, sessionID: callerID)
       let rows = try historyRowsUnlocked("""
         SELECT id,title,CASE WHEN json_valid(content) THEN coalesce(json_extract(content,'$.kind'),'note') ELSE 'note' END AS kind,
-          CAST(COALESCE((SELECT revision FROM companion_versions WHERE kind='note' AND resource_id=notes.id),1) AS TEXT) AS revision
+          CAST(COALESCE((SELECT revision FROM device_sync_revisions WHERE kind='note' AND resource_id=notes.id),1) AS TEXT) AS revision
         FROM notes WHERE user_id=? AND deleted_at IS NULL AND id IN (SELECT value FROM json_each(?))
         """, values: [try localMutationOperatorIDUnlocked(), String(decoding: try JSONEncoder().encode(ids), as: UTF8.self)])
       var result: [String: BoardAssetSummary] = [:]
@@ -118,7 +122,7 @@ extension WorkspaceDatabaseConnection {
 
 extension WorkspaceDatabase {
   public func listAgentNotes(callerID: String, search: String? = nil, folderID: String? = nil,
-                              after: Int64 = Int64.max, limit: Int = 50,
+                              after: Int64 = Int64(WorkspaceToolExecutor.maximumCursor), limit: Int = 50,
                               newestFirst: Bool = true) async throws -> GatewayJSONValue {
     try await read { try $0.listAgentNotes(callerID: callerID, search: search, folderID: folderID, after: after, limit: limit, newestFirst: newestFirst) }
   }

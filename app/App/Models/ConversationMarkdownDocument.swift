@@ -1,7 +1,25 @@
 import Foundation
 
+/// Links from chat to pages inside Woven Matter (bots point users at Settings with them).
+/// Only these exact links are live; any other `wovenmatter:` link stays plain text.
+enum WovenAppLink: Equatable, Sendable {
+    case accounts, botProfiles
+
+    init?(_ url: URL) {
+        guard url.scheme?.lowercased() == "wovenmatter", url.host?.lowercased() == "settings" else { return nil }
+        switch url.path.lowercased() {
+        case "/accounts": self = .accounts
+        case "/bots/profiles": self = .botProfiles
+        default: return nil
+        }
+    }
+}
+
 struct ConversationMarkdownDocument: Sendable {
     static let safeExternalLinkSchemes = Set(["http", "https", "mailto", "tel"])
+
+    /// Clickable in a response: a safe external link or a Woven Matter page link.
+    static func isLiveLink(_ url: URL) -> Bool { isSafeExternalLink(url) || WovenAppLink(url) != nil }
 
     static func isSafeExternalLink(_ url: URL) -> Bool {
         guard let scheme = url.scheme?.lowercased() else { return false }
@@ -30,7 +48,7 @@ struct ConversationMarkdownDocument: Sendable {
             ) ?? AttributedString(source)
             let unsafeLinkRanges: [Range<AttributedString.Index>] = rendered.runs.compactMap { run in
                 guard let link = run.link,
-                      ConversationMarkdownDocument.isSafeExternalLink(link) == false else {
+                      ConversationMarkdownDocument.isLiveLink(link) == false else {
                     return nil
                 }
                 return run.range

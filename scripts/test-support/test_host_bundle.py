@@ -15,7 +15,8 @@ import unittest
 
 ROOT=Path(__file__).resolve().parents[2]
 INPUTS=['remote/package.json','remote/src','remote/host','remote/npm-runtime/package.json','remote/npm-runtime/package-lock.json','harnesses','default-agent/package.json',
-        'default-agent/package-lock.json','default-agent/src','default-agent/.node-version','scripts/remote-host.sh']
+        'default-agent/package-lock.json','default-agent/src','default-agent/.node-version','scripts/remote-host.sh',
+        'bots/package.json','bots/package-lock.json','bots/src','bots/helper','bots/image']
 
 def fingerprint(root):
     files=[]
@@ -60,6 +61,15 @@ class BundleTests(unittest.TestCase):
             self.assertFalse(any('node_modules/' in name for name in archive.getnames()))
             for name,entry in manifest['files'].items():
                 self.assertEqual(hashlib.sha256(archive.extractfile(name).read()).hexdigest(),entry['sha256'])
+    def test_bots_runtime_ships_when_present_without_its_dependencies_or_tests(self):
+        (self.root/'bots/src').mkdir(parents=True); (self.root/'bots/helper').mkdir(); (self.root/'bots/image').mkdir(); (self.root/'bots/test').mkdir(); (self.root/'bots/node_modules/x').mkdir(parents=True)
+        for name in ('bots/package.json','bots/package-lock.json','bots/src/cli.ts','bots/helper/agent.mjs','bots/image/Dockerfile','bots/test/fixture.test.ts','bots/node_modules/x/index.js'):
+            (self.root/name).write_text('fixture\n')
+        result=self.build(); self.assertEqual(result.returncode,0,result.stderr.decode())
+        with tarfile.open(fileobj=io.BytesIO(result.stdout),mode='r:gz') as archive:
+            names=set(json.load(archive.extractfile('manifest.json'))['files'])
+        self.assertTrue({'bots/package.json','bots/package-lock.json','bots/src/cli.ts','bots/helper/agent.mjs','bots/image/Dockerfile'}<=names)
+        self.assertFalse(any('node_modules' in name or name.startswith('bots/test') for name in names))
     def test_stale_fingerprint_and_symlink_sources_are_rejected(self):
         fp=fingerprint(self.root); (self.root/'remote/src/server.mjs').write_text('changed')
         self.assertNotEqual(self.build(fp).returncode,0)
@@ -73,6 +83,9 @@ class BundleTests(unittest.TestCase):
         self.assertIn('FROM node:'+versions['nodeVersion'].split('.')[0]+'-',(ROOT/'remote/Dockerfile').read_text())
         self.assertEqual(set(versions['nodeSHA256']),{'linux-x64','linux-arm64'})
         for value in versions['nodeSHA256'].values(): self.assertRegex(value,r'^[a-f0-9]{64}$')
+        self.assertRegex(versions['dockerVersion'],r'^\d+\.\d+\.\d+$')
+        self.assertEqual(set(versions['dockerSHA256']),{'linux-x64','linux-arm64'})
+        for value in versions['dockerSHA256'].values(): self.assertRegex(value,r'^[a-f0-9]{64}$')
         (self.root/'default-agent/.node-version').write_text('0.0.0')
         self.assertNotEqual(self.build().returncode,0)
 
@@ -102,6 +115,14 @@ class ExecTests(unittest.TestCase):
         self.assertNotIn(self.settings['WOVENMATTER_API_TOKEN'],' '.join(value['argv']))
         self.assertEqual(value['input'],'protocol\n'); self.assertEqual(value['cwd'],str(self.root/'workspace'))
         self.assertEqual(value['env']['WOVEN_DEFAULT_AGENT_DIRECTORY'],str(self.root/'workspace/.wovenmatter/default-agent'))
+    def test_sessions_get_noninteractive_credential_prompts(self):
+        code='import os,json; print(json.dumps({k:os.environ.get(k) for k in ("PATH","GIT_TERMINAL_PROMPT","SSH_ASKPASS","SSH_ASKPASS_REQUIRE","SUDO_ASKPASS")}))'
+        result=self.execute('exec',sys.executable,'-c',code)
+        self.assertEqual(result.returncode,0,result.stderr.decode()); value=json.loads(result.stdout)
+        tools=str(self.root/'current/host/session-tools')
+        self.assertEqual(value['PATH'].split(':')[0],tools)
+        self.assertEqual(value['GIT_TERMINAL_PROMPT'],'0'); self.assertEqual(value['SSH_ASKPASS_REQUIRE'],'force')
+        self.assertEqual(value['SSH_ASKPASS'],tools+'/askpass'); self.assertEqual(value['SUDO_ASKPASS'],tools+'/askpass')
     def test_literal_environment_and_no_shell_rc_execution(self):
         marker=self.home/'rc-was-executed'; (self.home/'.bashrc').write_text('touch '+str(marker)+'\n')
         literal='$(touch '+str(marker)+') # value with spaces'

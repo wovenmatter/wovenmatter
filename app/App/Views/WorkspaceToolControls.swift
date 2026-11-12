@@ -3,6 +3,7 @@ import WovenMatterCore
 
 struct WorkspaceToolDefaultsCard: View {
     @Bindable var tools: WorkspaceAgentToolsModel
+    var onOpenPermissions: () -> Void = MacAccessSetupModel.openSettings
 
     private func setting<Value>(_ key: WritableKeyPath<WorkspaceToolSettings, Value>) -> Binding<Value> {
         Binding(get: { tools.settings[keyPath: key] }, set: { value in
@@ -12,51 +13,47 @@ struct WorkspaceToolDefaultsCard: View {
         })
     }
 
+    private var enabledCount: Int {
+        WorkspaceToolGroup.configurableCases.filter { tools.settings.enabledByDefault.contains($0) }.count
+    }
+
     var body: some View {
-        SettingsCard(title: "Woven MCP", detail: "Defaults for new sessions. You can change enabled tools in each session.") {
-            VStack(alignment: .leading, spacing: 14) {
+        SettingsSection(title: "Tools for new chats", detail: "Agents use these by default. You can change them in each chat or on an agent’s page.") {
+            SettingsSummaryRow("Tools", value: "\(enabledCount) of \(WorkspaceToolGroup.configurableCases.count) on") {
                 ForEach(WorkspaceToolGroup.configurableCases) { group in
-                    HStack(spacing: 12) {
-                        Toggle(group.title, isOn: Binding(get: { tools.settings.enabledByDefault.contains(group) }, set: { enabled in
-                            var settings = tools.settings
-                            if enabled { settings.enabledByDefault.insert(group) } else { settings.enabledByDefault.remove(group) }
-                            tools.saveSettingsFromUI(settings)
-                        }))
-                        Spacer(minLength: 8)
-                        if group == .calendar {
-                            Picker("Calendar access", selection: setting(\.calendarAccess)) {
-                                ForEach(WorkspaceCalendarAccess.allCases, id: \.self) { mode in Text(mode.title).tag(mode) }
-                            }.labelsHidden().frame(width: 140)
-                        } else if group == .usage {
-                            Text("Read only").font(.system(size: 11.5)).foregroundStyle(DashboardPalette.mutedForeground)
-                        }
-                    }
+                    Toggle(group.title, isOn: Binding(get: { tools.settings.enabledByDefault.contains(group) }, set: { enabled in
+                        var settings = tools.settings
+                        if enabled { settings.enabledByDefault.insert(group) } else { settings.enabledByDefault.remove(group) }
+                        tools.saveSettingsFromUI(settings)
+                    }))
                     if group == .sessions {
-                        HStack {
-                            Text("Sessions managed by one coordinator")
-                            Spacer(minLength: 12)
-                            Picker("Sessions managed by one coordinator", selection: setting(\.maximumManagedSessions)) {
-                                ForEach(1...16, id: \.self) { Text(String($0)).tag($0) }
-                            }.labelsHidden().frame(width: 78)
-                        }.padding(.leading, 38)
+                        SettingsRow(title: "Sessions managed by one coordinator") {
+                            SettingsPicker("Sessions managed by one coordinator", selection: setting(\.maximumManagedSessions),
+                                options: Array(1...16), popoverWidth: 100) { String($0) }
+                        }
+                        .padding(.leading, 12)
+                    }
+                    if group == .calendar {
+                        SettingsRow(title: "Calendar access") {
+                            SettingsPicker("Calendar access", selection: setting(\.calendarAccess),
+                                options: WorkspaceCalendarAccess.allCases, popoverWidth: 180) { $0.title }
+                        }
+                        .padding(.leading, 12)
+                    }
+                    if group == .usage {
+                        SettingsNote("Usage data is read only.").padding(.leading, 12)
                     }
                     if group == .browser {
-                        Text("Controls the browser inside Woven Matter.").font(.system(size: 11.5)).foregroundStyle(DashboardPalette.mutedForeground)
+                        SettingsNote("Controls the browser inside Woven Matter.").padding(.leading, 12)
                     }
-                    if group == .computer { WorkspaceComputerUseExplanation() }
+                    if group == .computer { WorkspaceComputerUseExplanation(onOpenPermissions: onOpenPermissions).padding(.leading, 12) }
                 }
-                Divider()
-                HStack {
-                    Text("Maximum sessions running simultaneously.")
-                    Spacer(minLength: 12)
-                    Picker("Maximum sessions running simultaneously.", selection: setting(\.maximumRunningSessions)) {
-                        ForEach(1...48, id: \.self) { Text(String($0)).tag($0) }
-                    }.labelsHidden().frame(width: 78)
-                }
-                if let error = tools.error {
-                    Text(error).foregroundStyle(DashboardPalette.mutedForeground).font(.system(size: 11.5))
-                }
-            }.font(.system(size: 13)).foregroundStyle(DashboardPalette.foreground)
+            }
+            SettingsRow(title: "Sessions running at once") {
+                SettingsPicker("Maximum sessions running simultaneously", selection: setting(\.maximumRunningSessions),
+                    options: Array(1...48), popoverWidth: 100) { String($0) }
+            }
+            if let error = tools.error { SettingsError(error) }
         }
     }
 }
@@ -67,6 +64,7 @@ struct WorkspaceSessionToolsMenu: View {
     @State private var showsExecutorApps = false
     @State private var confirmsTimerPause = false
     @State private var error: String?
+    @Environment(\.dismiss) private var dismiss
 
     private func set(_ group: WorkspaceToolGroup, enabled: Bool, confirmed: Bool = false) {
         Task {
@@ -98,7 +96,9 @@ struct WorkspaceSessionToolsMenu: View {
                                 .font(.system(size: 10.5)).foregroundStyle(DashboardPalette.mutedForeground)
                         }
                     }
-                    if group == .computer { WorkspaceComputerUseExplanation() }
+                    if group == .computer {
+                        WorkspaceComputerUseExplanation { MacAccessSetupModel.openSettings(); dismiss() }
+                    }
                 }
                 }
                 WorkspaceSessionManagementControls(tools: tools, sessionID: sessionID)
@@ -118,17 +118,15 @@ struct WorkspaceSessionToolsMenu: View {
     }
 }
 
+/// Computer Use's macOS permissions live in Settings → Permissions & Access;
+/// this shows their status and links there.
 private struct WorkspaceComputerUseExplanation: View {
+    let onOpenPermissions: () -> Void
+
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text("Allows agents to see and control this Mac’s desktop and apps. Requires macOS permissions.")
-            HStack(spacing: 12) {
-                Button("Screen Recording") { open("Privacy_ScreenCapture") }
-                Button("Accessibility") { open("Privacy_Accessibility") }
-            }.buttonStyle(.plain).foregroundStyle(DashboardPalette.foreground)
+            Text("Allows agents to see and control this Mac’s desktop and apps.")
+            MacPermissionStatusLink(items: MacAccessStatus.computerUseRequirements, onOpen: onOpenPermissions)
         }.font(.system(size: 11.5)).foregroundStyle(DashboardPalette.mutedForeground)
-    }
-    private func open(_ pane: String) {
-        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?" + pane) { NSWorkspace.shared.open(url) }
     }
 }

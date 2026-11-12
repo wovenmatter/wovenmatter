@@ -1,5 +1,5 @@
-#if COMPANION_FACADE_TESTS
-import CompanionBrowserTestBridge
+#if APP_FACADE_TESTS
+import FacadeBrowserTestBridge
 #endif
 import Foundation
 import WovenMatterClient
@@ -86,7 +86,7 @@ final class WovenAutomationHost {
                     let admit: @MainActor @Sendable () async throws -> Void = { @MainActor [database] in
                         try Task.checkCancellation()
                         try await database.requireAutomationRequest(group, callerID: invocation.callerID, requestID: id)
-                        try await database.requireCompanionAutomationAccess(callerID: invocation.callerID)
+                        try await database.requireLibraryAutomationAccess(callerID: invocation.callerID)
                         try Task.checkCancellation()
                     }
                     try await admit()
@@ -203,7 +203,7 @@ private final class WovenBrowserActionProcess {
                     Thread { [weak self] in
                         var pending = Data()
                         do {
-                            while let bytes = try output.read(upToCount: 65536), !bytes.isEmpty {
+                            while case let bytes = try PortablePOSIX.readAvailable(output), !bytes.isEmpty {
                                 pending.append(bytes)
                                 guard pending.count <= 8 * 1024 * 1024 else { throw WorkspaceToolError.invalid("Browser protocol response exceeds 8 MiB.") }
                                 while let newline = pending.firstIndex(of: 10) {

@@ -29,6 +29,10 @@ when an intentional design change is accepted.
   without all-caps styling or expanded letter spacing. Keep saved-default actions
   out of the conversation selector popouts. Composer model buttons show only the
   model name and version; connection attribution belongs in the model popout.
+  Permission menus use each harness's own mode names, except that every
+  harness's full mode is shown as Full access. List Full access first (the
+  default everywhere), then the harness's auto-approve modes, then its other
+  modes, with ask-for-approval last.
   Permission buttons use the fullest label that fits, then explicit shorter
   labels, then an icon. Never ellipsize these labels or collapse distinct modes
   such as Auto and Auto Accept into the same text. Popouts retain full labels
@@ -45,36 +49,128 @@ when an intentional design change is accepted.
   patterns in
   [SettingsComponents.swift](../app/App/Views/SettingsComponents.swift).
   Preserve intentional differences such as borderless Usage sections.
+- **Mobile Quick Chat:** name the device conversation feature **Quick Chat**,
+  with **Powered by Pi Durable** in its setup explanation. Mac/Linux agents retain
+  their harness names. On the mobile home page and in the New Chat menu Quick
+  Chat comes first and the workspaces follow it, each once under its own name.
+  A message sent to a Mac or Linux session shows at once with quiet caption
+  progress ("Sending to …", "Starting on …"), never a spinner. Home, Folders, New Chat and Calendar list only paired
+  Mac and Linux workspaces that are reachable now; Settings → Workspaces keeps
+  every saved workspace with its connection state. Never add an "Unavailable
+  workspace" group: folders whose workspace is not listed stay in All Workspaces.
+  Web search keys (Exa, Brave Search, Firecrawl) live in Settings → Subscriptions & API Keys with
+  the model providers. Do not add data-sharing prompts:
+  connecting a provider is the user's choice to use it.
+  With no paired Mac the app must still feel complete: no blocking screens, error banners or
+  "not reachable" wording for missing pairing. Home shows one "Connect your Mac" row with a
+  single caption saying what pairing adds; Mac-only pages stay hidden until paired. The
+  Quick Chat composer notice reads "Sign in to a model provider to use Quick Chat", then
+  "Add a web search key for answers from the web" until a key is saved.
 - **Agent naming:** use **Pi Durable** for the agent in navigation, settings,
   conversation labels, and actions. Use **Pi Durable SDK** for the underlying SDK
   in technical descriptions and version/update controls. Keep the agent name
   stable across model and provider changes.
+- **Settings pages:** keep the landing list and drill-down navigation; do not add a
+  tab row or segmented control that switches between pages or page areas. Pages use a
+  720-point column. `SettingsSection` is a 14-point heading, at most one sentence,
+  then rows, separated by spacing without cards or divider lines. `SettingsRow` puts
+  a 13-point title and 11.5-point secondary line on the left and the control on the
+  right. `SettingsSummaryRow` shows a title, its current value, and a chevron, and
+  opens details on request; `SettingsSummaryLink` is the same row for navigation.
+  Collapse related options into one summary row rather than listing switches on the
+  page, and prefer one dropdown to a pair of switches. Use `SettingsPicker` for
+  dropdowns and `SettingsStatus` (dot and text) for readiness. Use the `Font.settings*`
+  tokens and palette tokens, not literal sizes, `.secondary`, or `.red`. Longer
+  explanations fold into `SettingsHelp`. Hide what does not apply. Each capability
+  has one home; other pages show status and link to it.
 - **Settings navigation:** group Pi Durable, Codex, Claude Code, Grok Build, and
-  OpenCode under **Settings → Agents**. Harness pages return to Agents unless
-  opened from a workspace's settings. Spell **OpenCode** as one word throughout
-  the app. Order the main Settings page as General, Agents, Dictation, Local
-  Workspace, Remote Workspaces, Apple Devices, Background Server, then Usage.
+  OpenCode under **Settings → Agents**. Agent pages return to Agents unless
+  opened from a remote workspace's page. Spell **OpenCode** as one word throughout
+  the app. Order the main Settings page as General, Permissions & Access,
+  Subscriptions & API Keys, Agents, Bots, Woven MCP, Workspaces, Apple Devices,
+  Background Server, then Dictation. Subscriptions & API Keys, Permissions &
+  Access, Woven MCP, and Bots return to the page whose link opened them.
+- **General:** Appearance, Conversation titles, Software, and Privacy only. Other
+  settings live on the page for what they affect. Summary rows whose value would be
+  unclear before opening (Sidebar sections, Agent icons) show a one-line description
+  instead. Conversation titles show the Codex account they use and link to its page.
+- **Bots:** the Bots section sits above New chat in the navigation rail, using the
+  rail's own disclosure headings and rows; with bots on more than one machine, each
+  machine gets its own "Bots on <name>" heading. A bot's row shows only its name and
+  opens its main channel; a chevron reveals its threads, pinned first and then newest
+  created. Thread dropdowns start closed. Everything about bots is native and uses the
+  components regular chats and Settings use: the shared transcript text, user bubble and
+  composer, and Settings sections and rows. A thread sits beside its bot's main channel
+  at 760 points and wider. Message actions appear on hover. Bots run on one machine.
+  **Settings → Bots** holds one "Run bots on" choice (Off, This Mac, or another Mac or
+  Linux machine), the chosen machine's row, Install on another device, and version
+  notices with "Update everything". Choosing a machine asks first, then turns bots off
+  everywhere else; bots and their files stay where they were made. The machine opens
+  its own page: a status row with a Manage menu, then summary links to Profiles, Bots
+  and teams, Resources, and that machine's Subscriptions & API Keys. Profiles and bots
+  are summary rows that open for editing. Bots' Woven MCP access lives in Settings →
+  Woven MCP, with no pause switch; Bots shows it as one summary link. Apple Devices
+  shows only a version status link to Bots. Bots use Subscriptions & API Keys on the
+  machine they run on; there is no separate bot sign-in.
 - **Harness setup:** use compact rows grouped on the theme-whisper surface for
   both harness installation and Pi Durable setup, with the same typography,
   padding, inset dividers, and quiet actions. Keep provider setup limited to
   OpenAI, Anthropic, Grok, OpenRouter, and OpenCode; web-search setup shows only
-  the Exa key form. Both are optional and also accessible from Pi Durable settings.
-- **Agent setup:** Pi Durable uses the same grouped provider rows as Harness setup,
-  inline below SDK management. Web search follows accounts, then the model browser
-  and its single default-model choice. Successful sign-in/key addition opens that
-  provider's model browser. Fallback ordering and workspace overrides are disclosures.
-- **Usage:** account setup lives in Usage settings. Limits show each saved account
-  and signed-out providers, with Go to Usage settings. Device analytics never depends
-  on limits-account switches or credentials.
+  the Exa key form. Both are optional and also accessible from Settings →
+  Subscriptions & API Keys.
+- **Subscriptions & API Keys:** provider sign-ins, API keys, web search keys, and
+  local model servers have one home, used by Pi Durable, Usage, and bots. Each
+  provider is one summary row showing what is connected. Choose the web search
+  provider on its row, beside its key. A new account offers Choose chat models, and
+  connecting one in the shared scope turns on its limit checks. Keep the "Accounts
+  for" selector visible, since saved workspace accounts take priority and must stay
+  reachable. Native harnesses sign in on their own agent pages.
+- **Agent setup:** Pi Durable links to Subscriptions & API Keys with a one-line
+  description and how many are connected, then shows Models, Defaults for new
+  chats, and More. Models holds the default model, In the composer, and Fallbacks. Add
+  models opens the provider catalog with its filters and paging in a sheet. Guided
+  setup opens that sheet after a successful sign-in or key addition.
+- **Usage:** account setup lives in Subscriptions & API Keys, linked from Limits. A
+  fixed header holds the title, the Analytics/Limits switch, and refresh. Device
+  analytics never depends on limits-account switches or credentials.
+  No rule lines separate the header, filter column, and report; spacing does that.
+  While a range has no data yet, the page keeps its full layout with muted placeholders
+  and never reads as zero. Analytics keeps a fixed filter column to the left of its scrolling report: search,
+  range, device rows, provider rows, then compact Model, Harness, and Reasoning
+  dropdowns. Device and provider rows are an intentional exception to switches for
+  multi-select toggles: click a row to show or hide it; a hidden row keeps its place
+  with a hollow swatch and muted text. Provider rows are the graph's legend. A device
+  whose usage may be missing or old says why in its row, never showing zero. The report runs graph, breakdown
+  numbers, by provider, by model, sessions, then collapsed source coverage. Sections
+  stay borderless with hairline rows. Provider colors follow the provider, never rank;
+  neutral ink shows token types. Graphs default to layered lines with a Bars switch and
+  to Tokens with an API estimate switch. A period keeps a minimum width, so long ranges
+  scroll sideways under a fixed y-axis and open on the latest period, with edge fades
+  and earlier/later buttons in place of a scrollbar. Label estimates; never mix them
+  into direct spend. Unknown prices read Unpriced, never $0.
+  Limits uses one-column rows for each saved account: window, bar, amount left, reset.
+  Bars show what is left, with a tick where even spending would be. Signed-out providers
+  share one line. Unavailable data is never shown as zero usage or a full allowance.
 - **Tool defaults:** settings say Woven MCP and show effective defaults,
   rather than an off-looking inheritance switch. Composer controls retain Tools.
-- **Keychain:** General uses Keychain access, Enable/Restore Keychain access,
-  Access ready, and Access needs attention. Keep one storage sentence, a status
-  pill, and an action; show the Always Allow hint only when access is not ready.
-  Consent is not verification.
-- **Harness lists:** local and remote workspaces use compact expandable harness
-  rows. Keep versions and labeled maintenance controls inside the expanded row,
-  rather than a horizontal strip of actions. Remote workspaces have no global
+  **Settings → Woven MCP** holds tool defaults, connected apps, bots, and outside
+  agents; agent pages show one Woven MCP summary row for their own defaults.
+- **Permissions & Access:** Keychain and every macOS permission Woven Matter uses
+  live on this one Settings page, directly after General. It opens with one sentence:
+  agents on this Mac or the user's other devices stop at a prompt here without
+  these permissions. Everything is one section: a header with how many are not
+  allowed yet and one **Allow all** button, then one row per permission with its
+  System Settings name, one line saying only what it does (no instructions), and a
+  quiet "Allowed" check or its own **Allow** button. Allow all brings up each prompt in turn with no steps, Skip or
+  Stop. A row shows **Reopen** only when macOS needs the app reopened. Other
+  settings that depend on a permission (Dictation, Computer Use) show a one-line
+  status with a Permissions & Access link instead of their own controls; the
+  Settings landing row shows "All allowed" or "N to allow" as its status. A session
+  on a Mac missing a permission it needs shows a full-width quiet notice above its
+  composer, like the composer setup notices. Consent is not verification.
+- **Harness lists:** Agents and remote workspace pages use flat rows: logo, name,
+  status, and a chevron to the agent page. Versions, installation, sign-in, updates,
+  and diagnostics live only on the agent page. Remote workspaces have no global
   enable switch; saved workspaces reconnect using silent Keychain reads.
   Installed harnesses are available automatically in local and remote workspaces.
   Do not add harness enable/disable, Use harness, or per-harness sidebar visibility
@@ -85,27 +181,28 @@ when an intentional design change is accepted.
 - **Harness accounts:** sign-in belongs to each harness settings page, scoped to
   Local workspace or a named remote workspace. Workspace inventory shows status and links
   to that scoped page. Never label credentials present as verified sign-in.
+  Sign-in happens in the app, never in Terminal, except OpenCode's key picker: the
+  same panel as Subscriptions & API Keys (Open sign-in page, Copy link, the one-time
+  code with Copy code, and a field for a page's code), using the regular browser
+  sign-in on this Mac and each harness's headless sign-in on remote machines. A
+  signed-in account shows its name or email with **Remove account**; **Sign in**
+  shows only when nothing is signed in. There is no "Change sign-in".
   New remote workspaces offer skippable, reopenable setup with only Pi Durable
   selected by default; additional installations retain installer source review.
 - **Chat defaults:** use Defaults for new chats on every harness page. Group
   thinking level and permissions together, with one short explanation.
-- **Harness settings areas:** separate Accounts & installation from Chat settings.
-  Use DashboardSegmentedSelector for the area control so padding, hover, press,
-  and accessibility behavior match Sidebar layout. Use the quiet standard selection
-  in Dark; retain the existing primary selection color in Green and Cognac.
-  Give accounts their own Local workspace / named remote workspace selector;
-  only Pi Durable exposes Shared Pi Durable accounts. Keep chat inheritance controls
-  inside Chat settings, never above accounts or software. Changing chat inheritance
-  must not change credential selection. Workspace Pi Durable accounts take priority
-  per provider, with shared accounts as fallback; show their source and labels.
-  Explain native harness capability differences in the Account sharing disclosure:
-  reusable API keys are not the same as automatic credential sync, and native
-  subscription sign-ins stay with their installation. Never show key/token values
-  or infer names that a harness does not expose.
-- **Pi Durable updates:** use the same compact runtime row as other harnesses:
-  logo, harness name, embedded SDK versions on one summary line, installed status,
-  and one Check for updates / Update action per
-  workspace. Update all outdated components in one staged activation. Shared scope
+- **Agent pages:** one page with no area switcher: the harness's account ("Codex
+  account"), Software, then Defaults for new chats, using the same layout for every harness. Pages have one Applies to
+  selector, hidden when there is no remote workspace or local override. Keep Use shared
+  chat settings inside Defaults for new chats. Changing chat inheritance must not
+  change credential selection. Workspace Pi Durable accounts take priority per provider,
+  with shared accounts as fallback; show their source and labels. Explain native
+  harness capability differences under How it works: reusable API keys are not the
+  same as automatic credential sync, and native subscription sign-ins stay with their
+  installation. Never show key/token values or infer names that a harness does not expose.
+- **Pi Durable updates:** use the same compact Software row as other harnesses:
+  embedded SDK versions on one summary line, installed status, and one Check for
+  updates / Update action per workspace. Update all outdated components in one staged activation. Shared scope
   lists local and remote installations; an individual scope shows that installation.
   Keep progress and errors with their workspace and preserve operation state when
   a remote row is collapsed.
@@ -116,8 +213,9 @@ when an intentional design change is accepted.
   The style propagates to nested provider, credential, account, and Executor
   defaults disclosures, workspace overrides, local model servers, fallback models,
   and workspace synchronization.
-  OpenAI, Anthropic, and Grok retain separate subscription and API-key groups.
-  Each subscription group shows one account with Reconnect/Remove, without
+  OpenAI, Anthropic, and Grok show their subscription first, with API keys folded
+  under a Use an API key disclosure that opens when a key is saved.
+  Each subscription shows one account with Reconnect/Remove, without
   Add account, priority labels, or ordering controls. Show the subscription identity
   without primary/backup wording. API-key lists show Primary followed by numbered
   backups. Mobile permits one subscription connection per provider per device,
@@ -141,15 +239,20 @@ when an intentional design change is accepted.
   black. Choices persist and may be reused across categories.
 - **Sidebar foregrounds:** use `DashboardPalette.foreground` (`#0A1F16` in Green and Cognac, cream in Dark) for text and interface icons in both rails, including section headings, metadata, and pinned indicators. Keep colored agent/harness logos in their original colors; monochrome marks use a contrasting foreground in Dark. Shared controls use the sidebar foreground environment only inside the rails.
 - **Workspace naming:** use Local workspace and Remote workspaces in the sidebar,
-  and Local Workspace, Remote Workspaces, and Apple Devices for Settings pages.
+  and Workspaces and Apple Devices for Settings pages.
   Describe local workspaces as agents and files on this Mac, remote workspaces as
   agents and files on remote Linux machines, and Apple devices as Macs, iPhones,
   and iPads that share the library.
-- **Apple devices:** show the shared Workspaces inventory once in its own card,
-  separate from Paired devices. Pairing grants access to all available workspaces;
-  do not add per-device workspace permissions or execution-sharing switches.
+- **Workspaces:** one list with the local workspace as a status row, remote workspaces
+  as rows that open their detail, and workspaces from other devices. Forms for adding
+  a workspace open from Add workspace. A remote workspace shows status with a Manage
+  menu, its agents, and Details; do not lay actions out as a strip of buttons.
   Dev workspaces include `(Dev)` and their instance name. Hide retained snapshot
   owners and stopped Dev connections from the active inventory.
+- **Apple devices:** show this Mac, pairing requests, and paired devices, then Pair a
+  device with its three methods closed until needed. Pairing grants access to all
+  available workspaces; do not add per-device workspace permissions or
+  execution-sharing switches.
 - **Workspace sidebar:** group Agents and Folders within each owning workspace.
   Pinned agents and folders lead their respective lists without a separate Pinned
   section. Each Folders section starts with New folder, scoped to that workspace.
@@ -161,7 +264,7 @@ when an intentional design change is accepted.
 - **Sidebar headers:** in Single and Adaptive layouts, mirror the header button
   order when the sidebar moves to the right, and point the workspace back arrow
   toward the navigation rail. Keep titles and list content in normal reading order.
-- **Switches:** use `DashboardSwitchToggleStyle` for boolean controls and multi-select toggles. It supplies compact native switches in a 28 × 16-point control frame before their labels on the left, in the shared forest-green action color and is the default at the app root. iPhone Tools popouts keep native switches at 65% scale inside 44 × 44-point touch frames, with labels on the left and padding around the scroll content. Markdown task-list markers remain document content.
+- **Switches:** settings pages use `SettingsSwitchToggleStyle`, with the switch on the right edge of its row like every other control. Elsewhere, use `DashboardSwitchToggleStyle` for boolean controls and multi-select toggles. It supplies compact native switches in a 28 × 16-point control frame before their labels on the left, in the shared forest-green action color and is the default at the app root. iPhone Tools popouts keep native switches at 65% scale inside 44 × 44-point touch frames, with labels on the left and padding around the scroll content. Markdown task-list markers remain document content.
 - **Interaction:** keep controls compact, selection fills restrained, and focus
   styling quiet. Popover and sheet text inputs use `dashboardQuietTextInput()`
   for a neutral border without a colored focus ring. Clicking noninteractive
@@ -246,7 +349,7 @@ primary/quiet/icon buttons.
 Do not copy the icon catalog or introduce a parallel mobile palette. Desktop
 runtime metadata and window-specific controls remain in `DashboardDesign.swift`.
 
-The companion keeps Dynamic Type and a 44-point minimum for shared touch controls;
+The iOS app keeps Dynamic Type and a 44-point minimum for shared touch controls;
 desktop sizing is unchanged. Dark uses the same shared palette on both platforms. Native sheets, pickers, switches, QR scanning and share controls retain
 iOS behavior. SF Symbols used by desktop for spreadsheet/HTML/file kinds, text
 formatting, and status controls remain deliberate exceptions to Lucide.

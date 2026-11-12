@@ -1,3 +1,4 @@
+#if os(macOS)
 import Foundation
 import Testing
 import WovenMatterCore
@@ -63,8 +64,8 @@ struct RuntimeMaintenanceTests {
         for directory in [adapter, engine.appending(path: "bin"), sdk, root.appending(path: "bin")] {
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         }
-        for (directory, name, version) in [(adapter, "@agentclientprotocol/codex-acp", "2.5.0"),
-            (engine, "@openai/codex", "0.166.0"), (sdk, "@agentclientprotocol/sdk", "2.1.0")] {
+        for (directory, name, version) in [(adapter, "@agentclientprotocol/codex-acp", "2.6.0"),
+            (engine, "@openai/codex", "0.167.0"), (sdk, "@agentclientprotocol/sdk", "2.4.0")] {
             try JSONSerialization.data(withJSONObject: ["name": name, "version": version]).write(to: directory.appending(path: "package.json"))
         }
         let script = adapter.appending(path: "index.js")
@@ -80,9 +81,9 @@ struct RuntimeMaintenanceTests {
         let inventory = await RuntimeMaintenance.inspect(.codex, checkLatest: true,
             resolver: LocalACPRuntimeResolver(executableSearchDirectories: [root.appending(path: "bin").path]),
             fetch: { url in
-                let version = url.absoluteString.hasSuffix("%2fsdk") ? "2.4.0" : url.absoluteString.contains("codex-acp") ? "2.5.0" : "0.166.0"
+                let version = url.absoluteString.hasSuffix("%2fsdk") ? "2.5.0" : url.absoluteString.contains("codex-acp") ? "2.6.0" : "0.167.0"
                 return try JSONSerialization.data(withJSONObject: ["versions": [version: ["bin": ["cli": "index.js"]]]])
-            }, probe: { url in url.path.contains("codex-acp") ? "2.5.0" : "0.166.0" })
+            }, probe: { url in url.path.contains("codex-acp") ? "2.6.0" : "0.167.0" })
         #expect(inventory.isInstalled)
         #expect(inventory.components.filter(\.outdated).map(\.name) == ["Bundled ACP SDK"])
         #expect(inventory.updateAvailable)
@@ -95,10 +96,10 @@ struct RuntimeMaintenanceTests {
         let sdk = try await RuntimeMaintenance.registryVersion("@anthropic-ai/claude-agent-sdk", executableRequired: false,
             fetch: { _ in Data(#"{"versions":{"0.3.312":{},"0.3.314":{}}}"#.utf8) })
         #expect(sdk == "0.3.314")
-        #expect(LocalACPRuntimeCatalog.definition(for: .codex)?.minimumEngineVersion == "0.167.0")
-        #expect(LocalACPRuntimeCatalog.definition(for: .claudeCode)?.minimumEngineVersion == "0.3.319")
-        #expect(LocalACPRuntimeCatalog.definition(for: .codex)?.minimumProtocolSDKVersion == "2.4.0")
-        #expect(LocalACPRuntimeCatalog.definition(for: .claudeCode)?.minimumProtocolSDKVersion == "2.4.0")
+        #expect(LocalACPRuntimeCatalog.definition(for: .codex)?.minimumEngineVersion == "0.167.2")
+        #expect(LocalACPRuntimeCatalog.definition(for: .claudeCode)?.minimumEngineVersion == "0.3.322")
+        #expect(LocalACPRuntimeCatalog.definition(for: .codex)?.minimumProtocolSDKVersion == "2.6.0")
+        #expect(LocalACPRuntimeCatalog.definition(for: .claudeCode)?.minimumProtocolSDKVersion == "2.6.0")
         #expect(LocalACPRuntimeCatalog.definition(for: .claudeCode)?.cliInstallerArguments == ["latest"])
     }
 
@@ -125,3 +126,4 @@ struct RuntimeMaintenanceTests {
     }
 
 }
+#endif

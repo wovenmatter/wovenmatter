@@ -48,7 +48,7 @@ private final class HostInspectionFixture: @unchecked Sendable {
         let status = try #require(fixture.model.remoteWorkspaces.statuses[host.id])
         let harnesses = try #require(fixture.model.remoteWorkspaces.harnesses[host.id])
         let maintenance = try #require(fixture.model.remoteWorkspaces.runtimeMaintenance[host.id])
-        fixture.model.remoteWorkspaces.configureCompanionFixture(host, status: status, harnesses: harnesses, maintenance: maintenance)
+        fixture.model.remoteWorkspaces.configureFacadeFixture(host, status: status, harnesses: harnesses, maintenance: maintenance)
         let scope = ApplicationModel.remoteDatabaseSourceID(host.id)
         fixture.model.sessionSelectionPreferences.saveDefaults(.init(permission: "read-only"), harness: "codex", workspace: scope)
         let target = RemoteHarnessChatTarget(configuration: host, harness: try #require(harnesses.first { $0.id == .codex }))
@@ -75,7 +75,7 @@ private final class HostInspectionFixture: @unchecked Sendable {
         #expect(try await fixture.model.folderWorkingDirectory(folderID: folderID, workspaceID: host.id).path == external)
 
         host.accessMode = .user
-        fixture.model.remoteWorkspaces.configureCompanionFixture(host, status: status, harnesses: harnesses, maintenance: maintenance)
+        fixture.model.remoteWorkspaces.configureFacadeFixture(host, status: status, harnesses: harnesses, maintenance: maintenance)
         #expect(fixture.model.calendarTaskDefaults(runtime: .codex, workspaceID: host.id).configuration.permission == "read-only")
     }
 
@@ -99,6 +99,38 @@ private final class HostInspectionFixture: @unchecked Sendable {
         #expect(model.preflight(hostName: "native.invalid", userName: "trey", kind: .container, accessMode: .fullRoot) == nil)
         #expect(fixture.calls.count == 1)
         #expect(fixture.calls.first?.contains("'fullRoot'") == true)
+    }
+
+    @Test func aWorkspaceAddedToABotsOnlyHostReusesItsServerRecord() async throws {
+        let placeholder = RemoteWorkspaceConfiguration(name: "box", workspaceID: RemoteHostInstallMode.botsOnlyWorkspaceID,
+            hostName: "native.invalid", userName: "trey", remotePort: 7400, kind: .host, accessMode: .user)
+        let converted = try RemoteWorkspacesModel.addingWorkspace(to: placeholder, name: "Studio", workspaceID: "studio", accessMode: .user)
+        // Same record (id, so the same Keychain token), host, port and access level; the real name and id.
+        #expect(converted.id == placeholder.id && converted.remotePort == 7400 && converted.accessMode == .user)
+        #expect(converted.name == "Studio" && converted.workspaceID == "studio")
+        #expect(throws: (any Error).self) {
+            try RemoteWorkspacesModel.addingWorkspace(to: placeholder, name: "Studio", workspaceID: "studio", accessMode: .fullRoot)
+        }
+        #expect(throws: (any Error).self) {
+            try RemoteWorkspacesModel.addingWorkspace(to: placeholder, name: "Studio", workspaceID: "bots", accessMode: .user)
+        }
+        #expect(throws: (any Error).self) {
+            try RemoteWorkspacesModel.addingWorkspace(to: converted, name: "Other", workspaceID: "other", accessMode: .user)
+        }
+
+        // Through the create flow: the placeholder is found instead of refusing a second host workspace.
+        let fixture = HostInspectionFixture(); fixture.setReady(true)
+        let suite = "native-host-bots-placeholder-" + UUID().uuidString
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set(try JSONEncoder().encode([placeholder]), forKey: "wovenmatter.remote-workspaces.v1")
+        let model = RemoteWorkspacesModel(defaults: defaults, backendProjection: false, sshClient: fixture.client)
+        model.checkHost(hostName: placeholder.hostName, userName: "trey", kind: .host, accessMode: .fullRoot)
+        try await settled(model)
+        model.create(name: "Studio", workspaceID: "studio", hostName: placeholder.hostName, userName: "trey",
+            port: 7448, kind: .host, accessMode: .fullRoot)
+        #expect(model.errorMessage?.contains("same access level") == true)
+        #expect(!model.isCreating && model.workspaces == [placeholder])
     }
 
     @Test func nativeWorkspaceCannotBeConfiguredTwiceForTheSameHostAndUser() async throws {
@@ -186,4 +218,104 @@ private final class HostInspectionFixture: @unchecked Sendable {
         #expect(model.harnesses.isEmpty)
     }
 
+    /// A Linux host that is a workspace first gets bots from the app: the server's own
+    /// `bots.state` decides, and an update with the `bots` role turns them on.
+    @Test func installingBotsOnAWorkspaceHostAddsTheBotsRoleToItsServer() async throws {
+        let root = try BotsHostFixture.deploymentRoot(); defer { try? FileManager.default.removeItem(at: root) }
+        let suite = "native-host-add-bots-" + UUID().uuidString
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let existing = RemoteWorkspaceConfiguration(name: "Studio", workspaceID: "studio", hostName: "studio.invalid", userName: "trey",
+                                                    remotePort: 7400, kind: .host, accessMode: .fullRoot)
+        defaults.set(try JSONEncoder().encode([existing]), forKey: "wovenmatter.remote-workspaces.v1")
+        let host = BotsHostFixture(root: root, installation: #"{"id":"studio","port":7400,"accessMode":"fullRoot","roles":{"workspace":true,"bots":false}}"#)
+        let model = RemoteWorkspacesModel(defaults: defaults, backendProjection: false, sshClient: host.client)
+        var steps: [String] = []
+        let result = try await model.installBotsHost(hostName: "studio.invalid", userName: "trey") { steps.append($0) }
+        #expect(result?.id == existing.id && model.workspaces.count == 1)
+        let sent = host.commands
+        #expect(sent.count == 4)
+        #expect(sent[0].contains("'inspect' 'fullRoot'"))
+        #expect(sent[1].contains("'inspect' 'fullRoot' 'workspace,bots'"), "preparation covers the roles it will have")
+        #expect(sent[2].contains("'prepare' 'AUTHORIZED' 'fullRoot' 'workspace,bots'"))
+        #expect(sent[3].contains("'update' 'studio' '7400' 'fullRoot' '") && sent[3].hasSuffix(" 'bots'"), "roles only grow: the workspace stays")
+        #expect(host.tokens == [""], "the server keeps its own bearer")
+        #expect(steps.first == "Checking studio.invalid…" && steps.contains("Preparing studio.invalid…"))
+
+        // Once the server says bots are ready, installing again changes nothing.
+        host.botsState = "bots_ready"
+        #expect(try await model.installBotsHost(hostName: "studio.invalid", userName: "trey")?.id == existing.id)
+        #expect(host.commands.count == 5)
+
+        // A server another Mac added: the same update, with no record kept here.
+        let other = BotsHostFixture(root: root, installation: #"{"id":"lab","port":7500,"accessMode":"user","roles":{"workspace":true,"bots":false}}"#)
+        let unrelated = RemoteWorkspacesModel(defaults: try #require(UserDefaults(suiteName: suite + "-other")), backendProjection: false, sshClient: other.client)
+        defer { UserDefaults().removePersistentDomain(forName: suite + "-other") }
+        #expect(try await unrelated.installBotsHost(hostName: "lab.invalid", userName: nil) == nil)
+        #expect(other.commands.last?.contains("'update' 'lab' '7500' 'user' '") == true && unrelated.workspaces.isEmpty)
+
+        // A record whose server is gone is reported, not reinstalled over.
+        let gone = BotsHostFixture(root: root, installation: nil)
+        let stale = RemoteWorkspacesModel(defaults: defaults, backendProjection: false, sshClient: gone.client)
+        await #expect(throws: (any Error).self) { try await stale.installBotsHost(hostName: "studio.invalid", userName: "trey") }
+        #expect(gone.commands.count == 1)
+    }
+
+}
+
+/// A Linux peer for `remote-host.sh` commands, with a deployment root that carries the
+/// library host for x86_64.
+private final class BotsHostFixture: @unchecked Sendable {
+    private let lock = NSLock()
+    private var sent: [String] = []
+    private var streamed: [String] = []
+    private var state = "server_without_bots"
+    let root: URL
+    let installation: String?
+
+    init(root: URL, installation: String?) { self.root = root; self.installation = installation }
+
+    var commands: [String] { lock.withLock { sent } }
+    var tokens: [String] { lock.withLock { streamed } }
+    var botsState: String { get { lock.withLock { state } } set { lock.withLock { state = newValue } } }
+
+    static func deploymentRoot() throws -> URL {
+        let root = FileManager.default.temporaryDirectory.appending(path: "bots-host-root-" + UUID().uuidString)
+        let files: [String: String] = [
+            "remote/package.json": "{}", "remote/src/server.mjs": "fixture", "remote/npm-runtime/package.json": "{}",
+            "remote/npm-runtime/package-lock.json": "{}", "remote/host/build-bundle.sh": "fixture",
+            "remote/host/runtime-versions.json": #"{"nodeVersion":"26.12.1","playwrightVersion":"1.64.1"}"#,
+            "remote/host/library/linux-x86_64/wovenmatter-library.gz": "fixture",
+            "remote/host/library/linux-x86_64/wovenmatter-library.sha256": String(repeating: "0", count: 64) + "  wovenmatter-library\n",
+            "harnesses/catalog.json": "{}", "default-agent/package.json": "{}", "default-agent/src/agent.mjs": "fixture",
+            "default-agent/package-lock.json": #"{"packages":{"node_modules/playwright-core":{"version":"1.64.1"}}}"#,
+            "default-agent/.node-version": "26.12.1\n", "scripts/remote-host.sh": "fixture",
+        ]
+        for (path, content) in files {
+            let url = root.appending(path: path)
+            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try Data(content.utf8).write(to: url)
+        }
+        return root
+    }
+
+    private func inspect() -> Data {
+        let installation = installation.map { #","installation":"# + $0 } ?? ""
+        return Data((#"{"ready":true,"runtime":"host","version":"","architecture":"amd64","capabilities":{"memory":false,"swap":false},"limitations":[],"hostStorageLow":false,"blockingIssues":[],"preparationRequired":true,"bots":{"state":""# + botsState + #"","blockingIssues":[]}"# + installation + "}").utf8)
+    }
+
+    var client: RemoteWorkspaceSSHClient {
+        RemoteWorkspaceSSHClient(runner: { [self] _, command, _ in
+            lock.withLock { sent.append(command) }
+            return inspect()
+        }, scriptLoader: { Data("container-lifecycle".utf8) }, deploymentRoot: root,
+        streamingRunner: { [self] _, command, input, progress in
+            lock.withLock {
+                sent.append(command)
+                streamed.append(input.flatMap { $0.split(separator: 10, maxSplits: 1, omittingEmptySubsequences: false).first.map { String(decoding: $0, as: UTF8.self) } } ?? "")
+            }
+            progress(Data("WM_PROGRESS bots-engine\n".utf8))
+            return Data(#"{"id":"studio","name":"Studio","state":"running","running":true,"startedAt":"","image":"native","memoryBytes":0,"swapBytes":0,"hostPort":7400,"persistentVolume":"/home/trey/.local/share/wovenmatter","capabilities":{"memory":false,"swap":false},"storageKind":"host","hostStorageLow":false,"legacyStorage":false,"kind":"host"}"#.utf8)
+        }, hostScriptLoader: { Data("host-lifecycle".utf8) })
+    }
 }

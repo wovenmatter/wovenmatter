@@ -4,7 +4,7 @@ let service;
 const inferenceRequests = new Map();
 const send = message => { if (process.connected) process.send?.(message, () => {}); };
 process.on('error', () => {});
-const allowed = new Set(['configure', 'inspection', 'invoke', 'poll', 'status', 'cancelActive', 'cancelSession', 'prepareRetirement', 'inferenceCatalog', 'unlockForClient']);
+const allowed = new Set(['configure', 'inspection', 'invoke', 'poll', 'status', 'cancelActive', 'cancelSession', 'prepareRetirement', 'inferenceCatalog', 'unlockForClient', 'botCredentials']);
 process.on('message', async message => {
   try {
     if (message.method === 'initialize') {

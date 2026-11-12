@@ -2,7 +2,7 @@ import Foundation
 import AppKit
 import SwiftUI
 import Testing
-import WovenMatterCompanion
+import WovenMatterShared
 import WovenMatterDashboardStore
 @testable import WovenMatterAppFacade
 
@@ -60,7 +60,7 @@ struct MacDeviceSetupModelTests {
     @Test func deviceRowsRenderAtNarrowAndWideSettingsInEveryTheme() async throws {
         _ = NSApplication.shared
         let input = Data(#"{"BackendState":"Running","Peer":{"mini":{"Online":true,"OS":"macOS","DNSName":"mini.tail.ts.net.","HostName":"Studio Mac mini","TailscaleIPs":["\#(Self.fixtureIP(2))"]},"fresh":{"Online":true,"OS":"macOS","DNSName":"fresh.tail.ts.net.","HostName":"New MacBook Pro","TailscaleIPs":["\#(Self.fixtureIP(3))"]},"offline":{"Online":false,"OS":"macOS","DNSName":"offline.tail.ts.net.","HostName":"Office Mac","TailscaleIPs":["\#(Self.fixtureIP(4))"]}}}"#.utf8)
-        let release = try JSONDecoder().decode(CompanionMacRelease.self, from: Data("""
+        let release = try JSONDecoder().decode(MacRelease.self, from: Data("""
             {"version":"0.3.6","build":999,"architecture":"arm64","minimum_macos":"26.0","device_setup_version":1,"download_url":"https://github.com/wovenmatter/wovenmatter/releases/download/v0.3.6/WovenMatter_0.3.6_arm64.dmg","sha256":"\(String(repeating: "a", count: 64))"}
             """.utf8))
         let devices = MacDeviceSetupModel(management: .init(executable: URL(fileURLWithPath: "/fixture/Tailscale"), run: { executable, args, _ in
@@ -74,12 +74,12 @@ struct MacDeviceSetupModelTests {
         let defaults = try #require(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
         let application = ApplicationModel(applicationDefaults: defaults, startsAutomatically: false, ownsExecutionOverride: false)
-        let pairing = CompanionMacPairingController(identity: { .init(deviceID: UUID().uuidString, deviceName: "Fixture", metadata: .init(kind: .mac)) }, onPaired: { _, _ in })
+        let pairing = MacPairingController(identity: { .init(deviceID: UUID().uuidString, deviceName: "Fixture", metadata: .init(kind: .mac)) }, onPaired: { _, _ in })
         for theme in DashboardTheme.allCases {
             for width: CGFloat in [440, 920] {
                 let view = SettingsPage(title: "Apple Devices") {
-                    SettingsCard(title: "Find devices", detail: "Find other Macs on your Tailscale network, even when Woven Matter is closed.") {
-                        MacTailnetDiscoveryView(devices: devices, pairing: pairing, host: application.companionHost, canPairWithCentral: false)
+                    SettingsSection(title: "Find devices", detail: "Find other Macs on your Tailscale network, even when Woven Matter is closed.") {
+                        MacTailnetDiscoveryView(devices: devices, pairing: pairing, host: application.libraryHost, canPairWithCentral: false)
                     }
                 }.background(theme.palette.workspace).environment(\.dashboardTheme, theme).preferredColorScheme(theme.colorScheme)
                 let host = NSHostingView(rootView: view)
@@ -113,7 +113,7 @@ private actor SetupResultFixture {
             var result = ""
             if let requestID {
                 polls += 1
-                result = try CompanionMacSetupStatus(requestID: polls == 1 ? UUID() : requestID,
+                result = try MacSetupStatus(requestID: polls == 1 ? UUID() : requestID,
                     phase: polls == 1 ? .paired : .waiting,
                     message: polls == 1 ? "Old request succeeded" : "Current request accepted").json()
             }
@@ -121,7 +121,7 @@ private actor SetupResultFixture {
         }
         let delimiter = try #require(command.range(of: " -- '", options: .backwards))
         let json = String(command[delimiter.upperBound...].dropLast())
-        requestID = try JSONDecoder().decode(CompanionMacSetupRequest.self, from: Data(json.utf8)).id
+        requestID = try JSONDecoder().decode(MacSetupRequest.self, from: Data(json.utf8)).id
         return Data()
     }
 }

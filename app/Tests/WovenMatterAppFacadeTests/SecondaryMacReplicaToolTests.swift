@@ -1,5 +1,5 @@
 import WorkspaceFixtures
-import CompanionClient
+import LibraryClient
 import Foundation
 import Testing
 import WovenMatterCore
@@ -46,6 +46,31 @@ struct SecondaryMacReplicaToolTests {
         #expect(await fixture.recorder.deliveries.isEmpty)
     }
 
+    @Test func botReadsOtherDevicesWithoutANativeCallerRow() async throws {
+        let fixture = try await FacadeFixture(); defer { fixture.remove() }
+        let (replica, workspace, _, phone) = try await setup(fixture)
+        defer { withExtendedLifetime(workspace) {} }
+        let foreign = UUID().uuidString.lowercased()
+        _ = try await replica.journal.append(workspaceID: phone,
+            conversation: .init(id: foreign, title: "Foreign work", runtimeKind: "pi-durable", workspaceID: phone),
+            transcript: .init(conversationID: foreign, messages: [.init(id: UUID().uuidString.lowercased(), conversationID: foreign, role: "assistant", content: "Cached result")]))
+        let tools = try #require(fixture.model.agentTools)
+        let machine = UUID().uuidString, botID = UUID().uuidString
+        _ = try await tools.issueBotKey(machineID: machine, botID: botID, botName: "Replica reader")
+        let caller = WovenMCPCaller.bot(machineID: machine, botID: botID)
+        let count = try await fixture.database.workspaceOverview().conversations.count
+        let status = await tools.handle(.init(arguments: ["sessions", "status", foreign]), callerID: caller)
+        #expect(status.success, "\(status.error ?? "")")
+        #expect(status.result?.objectValue?["rows"]?.arrayValue?.first?.objectValue?["id"] == .string(foreign))
+        let history = await tools.handle(.init(arguments: ["history", "conversation", foreign]), callerID: caller)
+        #expect(history.success, "\(history.error ?? "")")
+        #expect(history.result?.objectValue?["rows"]?.arrayValue?.first?.objectValue?["content"] == .string("Cached result"))
+        #expect(try await fixture.database.workspaceOverview().conversations.count == count)
+        try await fixture.database.updateBotMCP(group: .history, groupEnabled: false)
+        #expect(await !tools.handle(.init(arguments: ["history", "conversation", foreign]), callerID: caller).success)
+        #expect(await fixture.recorder.deliveries.isEmpty)
+    }
+
     private func setup(_ fixture: FacadeFixture) async throws -> (MobileStore, SecondaryMacExecutionWorkspace, String, String) {
         let replica = try MobileStore(file: fixture.directory.appending(path: "replica/library.json"))
         let libraryID = UUID().uuidString.lowercased()
@@ -71,7 +96,7 @@ struct SecondaryMacReplicaToolTests {
         let sessions = await tools.handle(.init(arguments: ["sessions", "list", "--all-workspace"]), callerID: caller)
         let ids = sessions.result?.objectValue?["rows"]?.arrayValue?.compactMap { $0.objectValue?["id"]?.stringValue } ?? []
         #expect(ids.contains(caller) && ids.contains(foreign))
-        #expect(try await fixture.database.companionSnapshot().conversations.contains { $0.id == foreign } == false)
+        #expect(try await fixture.database.librarySnapshot().conversations.contains { $0.id == foreign } == false)
         #expect(await workspace.origin.snapshot().conversations[foreign] == nil)
         let sent = await tools.handle(.init(arguments: ["sessions", "send", foreign, "--text", "Must not route remotely"]), callerID: caller)
         #expect(!sent.success)

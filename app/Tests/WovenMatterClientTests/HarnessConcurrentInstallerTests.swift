@@ -1,4 +1,9 @@
+#if os(macOS)
+#if canImport(CryptoKit)
 import CryptoKit
+#else
+import Crypto
+#endif
 import Foundation
 import Testing
 import WovenMatterCore
@@ -45,3 +50,4 @@ private actor FixtureNodeDownloads {
         return data
     }
 }
+#endif

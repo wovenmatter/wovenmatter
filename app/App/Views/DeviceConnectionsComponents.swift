@@ -1,10 +1,10 @@
 import AppKit
 import CoreImage.CIFilterBuiltins
 import SwiftUI
-import WovenMatterCompanion
+import WovenMatterShared
 
 struct DeviceConnectionIcon: View {
-    let kind: CompanionDeviceKind
+    let kind: DeviceKind
     var size: CGFloat = 20
     var body: some View {
         Group {
@@ -16,28 +16,31 @@ struct DeviceConnectionIcon: View {
             }
         }.frame(width: size + 4, height: size + 4).foregroundStyle(DashboardPalette.foreground)
     }
-    static func label(_ kind: CompanionDeviceKind) -> String {
+    static func label(_ kind: DeviceKind) -> String {
         switch kind { case .mac: "Mac"; case .iPhone: "iPhone"; case .iPad: "iPad"; case .unknown: "Device" }
     }
 }
 
 struct DevicePairingDiscoveryCard: View {
-    @Bindable var pairing: CompanionMacPairingController
-    @Bindable var host: CompanionHostController
+    @Bindable var pairing: MacPairingController
+    @Bindable var host: LibraryHostController
     var canPairWithCentral: Bool
     @State private var devices = MacDeviceSetupModel()
     var body: some View {
-        SettingsCard(title: "Find devices", detail: "Find other Macs on your Tailscale network, even when Woven Matter is closed.") {
+        SettingsSummaryRow("Find on your network") {
+            SettingsNote("Find other Macs on your Tailscale network, even when Woven Matter is closed.")
             MacTailnetDiscoveryView(devices: devices, pairing: pairing, host: host, canPairWithCentral: canPairWithCentral)
-            if let error = pairing.errorMessage { Text(error).font(.system(size: 12)).foregroundStyle(DashboardPalette.danger).textSelection(.enabled) }
         }
+        // Stays visible when the row above is collapsed.
+        if let error = pairing.errorMessage { SettingsError(error) }
     }
 }
 
 struct DevicePairingCodeCard: View {
-    @Bindable var host: CompanionHostController
+    @Bindable var host: LibraryHostController
     var body: some View {
-        SettingsCard(title: "Pair with a QR code or link", detail: "Scan the QR code or paste its link on another device.") {
+        SettingsSummaryRow("Show a QR code or link") {
+            SettingsNote("Scan the QR code or paste its link on another device.")
             if let payload = host.pairingPayload {
                 HStack(alignment: .center, spacing: 24) {
                     if let qr = qrImage(payload.encodedURL.absoluteString) {
@@ -48,7 +51,7 @@ struct DevicePairingCodeCard: View {
                     VStack(alignment: .leading, spacing: 12) {
                         if let expiry = host.pairingExpiresAt {
                             Text("Expires at \(expiry.formatted(date: .omitted, time: .shortened))")
-                                .font(.system(size: 12)).foregroundStyle(DashboardPalette.mutedForeground)
+                                .font(.settingsBody).foregroundStyle(DashboardPalette.mutedForeground)
                         }
                         Button("Copy pairing link") {
                             NSPasteboard.general.clearContents()
@@ -56,11 +59,11 @@ struct DevicePairingCodeCard: View {
                         }.buttonStyle(SettingsQuietButtonStyle())
                         Button("New code") { Task { await host.createPairingCode() } }.buttonStyle(SettingsQuietButtonStyle())
                     }
-                }.accessibilityIdentifier("companion.pairing-code")
+                }.accessibilityIdentifier("devices.pairing-code")
             } else {
                 Button("Create QR code or link") { Task { await host.createPairingCode() } }
                     .buttonStyle(SettingsQuietButtonStyle()).disabled(host.endpoint == nil || host.isStarting)
-                    .accessibilityIdentifier("companion.create-code")
+                    .accessibilityIdentifier("devices.create-code")
             }
         }
     }

@@ -644,7 +644,8 @@ public actor LocalACPSessionCoordinator {
                         agent: nil,
                         workspace: workspace.rootURL.path,
                         tokens: tokens,
-                        costUSD: nil
+                        costUSD: nil,
+                        remoteWorkspaceID: descriptor.remoteWorkspaceID?.uuidString.lowercased()
                     ))
                 }
             })
@@ -1392,7 +1393,7 @@ public actor LocalACPSessionCoordinator {
         requiredSessionID: String? = nil
     ) async throws -> LocalACPSessionDriver {
         guard !executionAdoptionDetached.contains(descriptor.conversationID) else { throw LifecycleError.executionAdopted }
-        guard try await database.companionExecutionOwner(conversationID: descriptor.conversationID) == nil else {
+        guard try await database.libraryExecutionOwner(conversationID: descriptor.conversationID) == nil else {
             throw LifecycleError.executionAdopted
         }
         guard !executionAdoptionDetached.contains(descriptor.conversationID) else { throw LifecycleError.executionAdopted }

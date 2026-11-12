@@ -1,5 +1,12 @@
+#if canImport(CryptoKit)
 import CryptoKit
+#else
+import Crypto
+#endif
 import Foundation
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
 import WovenMatterClient
 import WovenMatterCore
 
@@ -17,16 +24,16 @@ public final class PairedMacNetwork: Sendable {
     session = URLSession(configuration: configuration, delegate: RemoteWorkspaceRedirectPolicy.shared, delegateQueue: nil)
   }
   public func request<T: Decodable & Sendable>(_ endpoint: URL, path: String, token: String? = nil, libraryID: String? = nil, body: Data? = nil) async throws -> T {
-    guard CompanionPairingPayload.isValidEndpoint(endpoint),
+    guard PairingPayload.isValidEndpoint(endpoint),
           ["v1/discovery", "v1/pair", "v1/pair/preview", "v1/pair/confirm"].contains(path) || path.hasPrefix("v1/peers/") || path.hasPrefix("v1/federation/workspaces/") else {
-      throw CompanionAPIError(code: "invalid_endpoint", message: "Invalid paired Mac endpoint.")
+      throw LibraryAPIError(code: "invalid_endpoint", message: "Invalid paired Mac endpoint.")
     }
     if let injectedRequest {
       return try JSONDecoder().decode(T.self, from: await injectedRequest(endpoint, path, token, libraryID, body))
     }
     var request = URLRequest(url: endpoint.appending(path: path)); request.httpMethod = body == nil ? "GET" : "POST"; request.httpBody = body
     request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-    request.setValue(String(CompanionProtocol.version), forHTTPHeaderField: "X-Woven-Protocol")
+    request.setValue(String(LibraryProtocol.version), forHTTPHeaderField: "X-Woven-Protocol")
     if let token { request.setValue("Bearer " + token, forHTTPHeaderField: "Authorization") }
     if let libraryID { request.setValue(libraryID, forHTTPHeaderField: "X-Woven-Workspace") }
     let (bytes, response) = try await session.bytes(for: request)
@@ -34,7 +41,7 @@ public final class PairedMacNetwork: Sendable {
     var data = Data()
     for try await byte in bytes { guard data.count < 48 * 1_024 * 1_024 else { throw invalidResponse }; data.append(byte) }
     guard response.statusCode == 200 else {
-      if let error = try? JSONDecoder().decode(CompanionAPIError.self, from: data) { throw error }; throw invalidResponse
+      if let error = try? JSONDecoder().decode(LibraryAPIError.self, from: data) { throw error }; throw invalidResponse
     }
     return try JSONDecoder().decode(T.self, from: data)
   }
@@ -83,6 +90,6 @@ public final class PairedMacNetwork: Sendable {
     var generator = SystemRandomNumberGenerator()
     return Data((0..<32).map { _ in UInt8.random(in: 0...255, using: &generator) })
   }
-  private var unverified: CompanionAPIError { .init(code: "unverified_peer", message: "This address could not prove that it belongs to the paired Mac.") }
-  private var invalidResponse: CompanionAPIError { .init(code: "peer_unavailable", message: "The paired Mac did not return a valid synchronization response.") }
+  private var unverified: LibraryAPIError { .init(code: "unverified_peer", message: "This address could not prove that it belongs to the paired Mac.") }
+  private var invalidResponse: LibraryAPIError { .init(code: "peer_unavailable", message: "The paired Mac did not return a valid synchronization response.") }
 }

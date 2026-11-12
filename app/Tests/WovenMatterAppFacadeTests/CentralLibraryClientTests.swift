@@ -1,8 +1,8 @@
 import WorkspaceFixtures
 import Foundation
 import Testing
-import CompanionClient
-import WovenMatterCompanion
+import LibraryClient
+import WovenMatterShared
 import WovenMatterCore
 import WovenMatterClient
 @testable import WovenMatterAppFacade
@@ -15,7 +15,7 @@ struct CentralLibraryClientTests {
         let central = MacClientFakeCentral()
         let client = CentralLibraryClientModel(store: store, transport: central)
         await client.initialize(); await client.refresh()
-        let workspace = CompanionExecutionWorkspace(id: UUID().uuidString.lowercased(),
+        let workspace = ExecutionWorkspace(id: UUID().uuidString.lowercased(),
             libraryID: "00000000-0000-4000-8000-000000000001", ownerDeviceID: UUID().uuidString.lowercased(),
             kind: .mac, name: "Other development build")
         let direct = MacClientFakeExecution(workspace: workspace)
@@ -28,7 +28,7 @@ struct CentralLibraryClientTests {
         await fixture.model.refreshWorkspace()
         #expect(fixture.model.workspaceOverview?.conversations.contains { $0.id == id } == true)
         #expect(fixture.model.federatedExecutionOwners[id] == workspace.id)
-        #expect(try await fixture.database.companionSnapshot().conversations.isEmpty)
+        #expect(try await fixture.database.librarySnapshot().conversations.isEmpty)
         let revision = fixture.model.workspaceListRevision
         await fixture.model.refreshWorkspace()
         #expect(fixture.model.workspaceListRevision == revision)
@@ -39,7 +39,7 @@ struct CentralLibraryClientTests {
         await fixture.model.updateDevelopmentReplica(projection)
         #expect(fixture.model.workspaceOverview?.conversations.contains { $0.id == id } == true)
         #expect(fixture.model.federatedExecutionOwners[id] == workspace.id)
-        #expect(try await fixture.database.companionSnapshot().conversations.isEmpty)
+        #expect(try await fixture.database.librarySnapshot().conversations.isEmpty)
         fixture.model.liveLibraryClient = client
         try await client.desktopSend(id: id, text: "Fixture second message")
         #expect(await direct.sendCount == 1)
@@ -61,7 +61,7 @@ struct CentralLibraryClientTests {
         let central = MacClientFakeCentral()
         let client = CentralLibraryClientModel(store: replica, transport: central)
         await client.initialize(); await client.refresh()
-        let workspace = CompanionExecutionWorkspace(id: UUID().uuidString.lowercased(),
+        let workspace = ExecutionWorkspace(id: UUID().uuidString.lowercased(),
             libraryID: "00000000-0000-4000-8000-000000000001", ownerDeviceID: UUID().uuidString.lowercased(),
             kind: .mac, name: "Foreign execution fixture")
         let direct = MacClientFakeExecution(workspace: workspace)
@@ -131,7 +131,7 @@ struct CentralLibraryClientTests {
         #expect(client.state.deviceID == originalDeviceID)
         #expect(await central.notes[offlineNoteID] != nil)
         #expect(await replica.snapshot().outbox.isEmpty)
-        #expect(try await fixture.database.companionNote(id: noteID)?.title == "Changed on production")
+        #expect(try await fixture.database.libraryNote(id: noteID)?.title == "Changed on production")
         let restored = try MobileStore(file: fixture.directory.appending(path: "client/library.json"))
         #expect(await restored.snapshot().notes[noteID]?.title == "Changed on production")
         #expect(await central.sendCount == 0)
@@ -204,7 +204,7 @@ struct CentralLibraryClientTests {
         await model.initializeClientWorkspace()
         #expect(model.sharingLocalExecution)
         #expect(created == 1)
-        let remote = CompanionExecutionWorkspace(id: "remote", libraryID: library, ownerDeviceID: "linux", kind: .linux, name: "Linux")
+        let remote = ExecutionWorkspace(id: "remote", libraryID: library, ownerDeviceID: "linux", kind: .linux, name: "Linux")
         try await model.attachExecutionWorkspace(remote, transport: MacClientFakeExecution(workspace: remote))
         await model.refresh()
         #expect(model.canControl(workspaceID: remote.id))
@@ -223,7 +223,7 @@ struct CentralLibraryClientTests {
         let deviceID = await replica.snapshot().deviceID
         fixture.defaults.set(false, forKey: "wovenmatter.client.local-execution")
         let central = MacClientFakeCentral(); await central.setOffline(true)
-        let remote = CompanionExecutionWorkspace(id: "remote", libraryID: library, ownerDeviceID: "linux", kind: .linux, name: "Linux",
+        let remote = ExecutionWorkspace(id: "remote", libraryID: library, ownerDeviceID: "linux", kind: .linux, name: "Linux",
             endpoint: URL(string: "https://linux.example.ts.net/wovenmatter"))
         // The cached grant was retired by the upgrade; the workspace rejects it.
         let stale = MacClientFakeExecution(workspace: remote); await stale.setRevoked(true)
@@ -273,7 +273,7 @@ struct CentralLibraryClientTests {
         let deviceID = await replica.snapshot().deviceID
         fixture.defaults.set(false, forKey: "wovenmatter.client.local-execution")
         let central = MacClientFakeCentral(); await central.setOffline(true)
-        let remote = CompanionExecutionWorkspace(id: "foreign-remote", libraryID: foreign, ownerDeviceID: "other-mac", kind: .linux, name: "Linux",
+        let remote = ExecutionWorkspace(id: "foreign-remote", libraryID: foreign, ownerDeviceID: "other-mac", kind: .linux, name: "Linux",
             endpoint: URL(string: "https://linux.example.ts.net/wovenmatter"))
         let endpoint = try #require(remote.endpoint)
         let valid = DirectWorkspaceCredential(endpoint: endpoint, libraryID: foreign, workspaceID: remote.id, deviceID: deviceID, token: "foreign-token")
@@ -312,7 +312,7 @@ struct CentralLibraryClientTests {
         let deviceID = await replica.snapshot().deviceID
         fixture.defaults.set(false, forKey: "wovenmatter.client.local-execution")
         let central = MacClientFakeCentral(); await central.setOffline(true)
-        let remote = CompanionExecutionWorkspace(id: "remote", libraryID: library, ownerDeviceID: "linux", kind: .linux, name: "Linux",
+        let remote = ExecutionWorkspace(id: "remote", libraryID: library, ownerDeviceID: "linux", kind: .linux, name: "Linux",
             endpoint: URL(string: "https://linux.example.ts.net/wovenmatter"))
         let stale = MacClientFakeExecution(workspace: remote); await stale.setRevoked(true)
         let renewed = MacClientFakeExecution(workspace: remote)
@@ -361,7 +361,7 @@ struct CentralLibraryClientTests {
         fixture.defaults.set(false, forKey: "wovenmatter.client.local-execution")
         let execution = fixture.directory.appending(path: "execution")
         let pendingFile = execution.appending(path: "pending-direct-enrollment.json")
-        let remote = CompanionExecutionWorkspace(id: "remote", libraryID: library, ownerDeviceID: "linux", kind: .linux, name: "Linux",
+        let remote = ExecutionWorkspace(id: "remote", libraryID: library, ownerDeviceID: "linux", kind: .linux, name: "Linux",
             endpoint: URL(string: "https://linux.example.ts.net/wovenmatter"))
         let fresh = DirectWorkspaceCredential(endpoint: try #require(remote.endpoint), libraryID: library, workspaceID: remote.id,
             deviceID: deviceID, token: "fresh-token")
@@ -422,69 +422,69 @@ struct CentralLibraryClientTests {
     }
 }
 
-private actor MacClientFakeCentral: CompanionTransport {
-    var notes: [String: CompanionNote] = [:]
-    var folders: [String: CompanionFolder] = [:]
-    var publishedChanges: [CompanionChange] = []
-    func publishNote(_ note: CompanionNote) {
+private actor MacClientFakeCentral: LibraryTransport {
+    var notes: [String: LibraryNote] = [:]
+    var folders: [String: LibraryFolder] = [:]
+    var publishedChanges: [LibraryChange] = []
+    func publishNote(_ note: LibraryNote) {
         notes[note.id] = note
         publishedChanges.append(.init(cursor: Int64(publishedChanges.count + 1), resourceKind: .note,
             resourceID: note.id, operation: .upsert, revision: note.revision, note: note))
     }
-    var receipts: [String: CompanionCommandReceipt] = [:]
+    var receipts: [String: LibraryCommandReceipt] = [:]
     var sendCount = 0
     var offline = false
     func setOffline(_ value: Bool) { offline = value }
     var libraryID = "00000000-0000-4000-8000-000000000001"
     func setLibraryID(_ value: String) { libraryID = value }
     func workspaceIdentity() throws -> String { if offline { throw MobileConnectionError.offline }; return libraryID }
-    func snapshot() -> CompanionSnapshot { .init(workspaceID: libraryID, cursor: Int64(publishedChanges.count), folders: Array(folders.values), notes: Array(notes.values)) }
-    func changes(after: Int64) -> CompanionChangePage { .init(workspaceID: libraryID, cursor: Int64(publishedChanges.count), changes: publishedChanges.filter { $0.cursor > after }) }
-    func mutate(_ mutation: CompanionMutation) throws -> CompanionMutationResult {
+    func snapshot() -> LibrarySnapshot { .init(workspaceID: libraryID, cursor: Int64(publishedChanges.count), folders: Array(folders.values), notes: Array(notes.values)) }
+    func changes(after: Int64) -> LibraryChangePage { .init(workspaceID: libraryID, cursor: Int64(publishedChanges.count), changes: publishedChanges.filter { $0.cursor > after }) }
+    func mutate(_ mutation: LibraryMutation) throws -> LibraryMutationResult {
         if mutation.kind == .createFolder {
-            let folder = CompanionFolder(id: mutation.resourceID, name: mutation.title ?? "", revision: 1)
+            let folder = LibraryFolder(id: mutation.resourceID, name: mutation.title ?? "", revision: 1)
             folders[folder.id] = folder
             return .init(operationID: mutation.operationID, status: .accepted, folder: folder)
         }
-        let note = CompanionNote(id: mutation.resourceID, folderID: mutation.folderID, title: mutation.title ?? "", content: mutation.content ?? "", revision: 1)
+        let note = LibraryNote(id: mutation.resourceID, folderID: mutation.folderID, title: mutation.title ?? "", content: mutation.content ?? "", revision: 1)
         notes[note.id] = note
         return .init(operationID: mutation.operationID, status: .accepted, note: note)
     }
-    func note(_ id: String) throws -> CompanionNote { try #require(notes[id]) }
-    func providers() -> [CompanionProvider] { [.init(id: "local:default_agent", runtimeKind: "default_agent", displayName: "Pi Durable", available: true)] }
-    func pending() -> [CompanionPendingInteraction] { [] }
-    func transcript(_ id: String) -> CompanionTranscript { .init(conversationID: id) }
-    func command(_ command: CompanionCommand) throws -> CompanionCommandReceipt {
+    func note(_ id: String) throws -> LibraryNote { try #require(notes[id]) }
+    func providers() -> [HarnessCapabilities] { [.init(id: "local:default_agent", runtimeKind: "default_agent", displayName: "Pi Durable", available: true)] }
+    func pending() -> [PendingInteraction] { [] }
+    func transcript(_ id: String) -> LibraryTranscript { .init(conversationID: id) }
+    func command(_ command: LibraryCommand) throws -> LibraryCommandReceipt {
         if let receipt = receipts[command.commandID] { return receipt }
-        let receipt = CompanionCommandReceipt(commandID: command.commandID, deviceID: command.deviceID, status: .completed, conversationID: command.conversationID)
+        let receipt = LibraryCommandReceipt(commandID: command.commandID, deviceID: command.deviceID, status: .completed, conversationID: command.conversationID)
         receipts[command.commandID] = receipt
         if command.kind == .send { sendCount += 1 }
         return receipt
     }
-    func receipt(_ id: String) -> CompanionCommandReceipt? { receipts[id] }
+    func receipt(_ id: String) -> LibraryCommandReceipt? { receipts[id] }
 }
 
 private actor MacClientFakeExecution: ExecutionWorkspaceTransport {
-    let workspace: CompanionExecutionWorkspace
-    var entries: [CompanionJournalEntry] = []
-    var receiptValues: [String: CompanionCommandReceipt] = [:]
+    let workspace: ExecutionWorkspace
+    var entries: [ExecutionJournalEntry] = []
+    var receiptValues: [String: LibraryCommandReceipt] = [:]
     var sendCount = 0
     var lastSendText: String?
-    init(workspace: CompanionExecutionWorkspace) { self.workspace = workspace }
+    init(workspace: ExecutionWorkspace) { self.workspace = workspace }
     var revoked = false
     var identityRequests = 0
     func setRevoked(_ value: Bool) { revoked = value }
-    func identity() throws -> CompanionExecutionWorkspace {
+    func identity() throws -> ExecutionWorkspace {
         identityRequests += 1
         // As HTTPSExecutionWorkspaceTransport reports a rejected bearer.
         if revoked { throw MobileConnectionError.revoked }; return workspace
     }
-    func providers() -> [CompanionProvider] { [.init(id: "default_agent", runtimeKind: "default_agent", displayName: "Pi Durable", routeName: "Linux", available: true)] }
-    func pending() -> [CompanionPendingInteraction] { [] }
-    func command(_ command: CompanionCommand) -> CompanionCommandReceipt {
+    func providers() -> [HarnessCapabilities] { [.init(id: "default_agent", runtimeKind: "default_agent", displayName: "Pi Durable", routeName: "Linux", available: true)] }
+    func pending() -> [PendingInteraction] { [] }
+    func command(_ command: LibraryCommand) -> LibraryCommandReceipt {
         if let receipt = receiptValues[command.commandID] { return receipt }
         let id = command.conversationID ?? "invalid"
-        let receipt = CompanionCommandReceipt(commandID: command.commandID, deviceID: command.deviceID, status: .completed, conversationID: id)
+        let receipt = LibraryCommandReceipt(commandID: command.commandID, deviceID: command.deviceID, status: .completed, conversationID: id)
         receiptValues[command.commandID] = receipt
         if command.kind == .createSession {
             entries.append(.init(workspaceID: workspace.id, originSequence: Int64(entries.count + 1), conversationID: id,
@@ -498,8 +498,8 @@ private actor MacClientFakeExecution: ExecutionWorkspaceTransport {
         }
         return receipt
     }
-    func receipt(_ id: String) -> CompanionCommandReceipt? { receiptValues[id] }
-    func events(after: Int64) -> CompanionJournalPage { .init(libraryID: workspace.libraryID, cursor: Int64(entries.count), entries: Array(entries.dropFirst(Int(after)))) }
-    func conversations() -> [CompanionConversation] { entries.compactMap(\.conversation) }
-    func transcript(_ id: String) -> CompanionTranscript { entries.last(where: { $0.conversationID == id && $0.transcript != nil })?.transcript ?? .init(conversationID: id) }
+    func receipt(_ id: String) -> LibraryCommandReceipt? { receiptValues[id] }
+    func events(after: Int64) -> ExecutionJournalPage { .init(libraryID: workspace.libraryID, cursor: Int64(entries.count), entries: Array(entries.dropFirst(Int(after)))) }
+    func conversations() -> [LibraryConversation] { entries.compactMap(\.conversation) }
+    func transcript(_ id: String) -> LibraryTranscript { entries.last(where: { $0.conversationID == id && $0.transcript != nil })?.transcript ?? .init(conversationID: id) }
 }

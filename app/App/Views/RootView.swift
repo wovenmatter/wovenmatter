@@ -38,7 +38,7 @@ struct RootView: View {
         .alert("Session limit reached", isPresented: $model.activeSessionLimitPresented) {
             Button("OK", role: .cancel) { }
         } message: {
-            Text("You're at your limit of \(model.agentTools?.settings.maximumRunningSessions ?? 16) sessions running simultaneously. Let a session finish or change the limit in General settings.")
+            Text("You're at your limit of \(model.agentTools?.settings.maximumRunningSessions ?? 16) sessions running simultaneously. Let a session finish or change the limit in Settings → Woven MCP.")
         }
         .alert("Session access could not be granted", isPresented: Binding(
             get: { model.sessionAccessError != nil }, set: { if !$0 { model.sessionAccessError = nil } }

@@ -1,7 +1,16 @@
+#if canImport(CryptoKit)
 import CryptoKit
+#else
+import Crypto
+#endif
+#if canImport(Darwin)
 import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#elseif canImport(Musl)
+import Musl
+#endif
 import Foundation
-import UniformTypeIdentifiers
 import WovenMatterCore
 
 public struct LibraryFileStore: Sendable {
@@ -59,11 +68,9 @@ public struct LibraryFileStore: Sendable {
       throw AgentMessageAttachmentError.unreadableFile(url.lastPathComponent)
     }
     // Recheck the opened file's path after open, including raced parent symlinks.
-    var pathBuffer = [CChar](repeating: 0, count: Int(MAXPATHLEN))
-    guard fcntl(fd, F_GETPATH, &pathBuffer) == 0 else {
+    guard let openedPath = PortablePOSIX.path(of: fd) else {
       throw AgentMessageAttachmentError.unreadableFile(url.lastPathComponent)
     }
-    let openedPath = String(decoding: pathBuffer.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }, as: UTF8.self)
     guard roots.contains(where: { openedPath.hasPrefix($0) }) else {
       throw AgentMessageAttachmentError.unreadableFile(url.lastPathComponent)
     }
@@ -74,7 +81,8 @@ public struct LibraryFileStore: Sendable {
     let bytes = try handle.read(upToCount: Int(maximum) + 1) ?? Data()
     var after = stat()
     guard fstat(fd, &after) == 0, bytes.count == before.st_size, after.st_size == before.st_size,
-      after.st_mtimespec.tv_sec == before.st_mtimespec.tv_sec, after.st_mtimespec.tv_nsec == before.st_mtimespec.tv_nsec
+      PortablePOSIX.modificationTime(after).tv_sec == PortablePOSIX.modificationTime(before).tv_sec,
+      PortablePOSIX.modificationTime(after).tv_nsec == PortablePOSIX.modificationTime(before).tv_nsec
     else {
       throw AgentMessageAttachmentError.unsupportedForAgent("The file changed while being saved. Try again.")
     }
@@ -129,7 +137,7 @@ public struct LibraryFileStore: Sendable {
     var name = String(String.UnicodeScalarView(allowed)).trimmingCharacters(in: .whitespaces)
     if name.isEmpty || name == "." || name == ".." { name = "Attachment" }
     let sourceExtension = URL(string: source)?.pathExtension ?? ""
-    let mimeExtension = mimeType.flatMap { UTType(mimeType: $0)?.preferredFilenameExtension } ?? ""
+    let mimeExtension = mimeType.flatMap { PortableMIME.preferredFilenameExtension(for: $0) } ?? ""
     let ext = !sourceExtension.isEmpty ? sourceExtension : (name as NSString).pathExtension.isEmpty ? mimeExtension : ""
     if !ext.isEmpty, ext.utf8.count <= 32, (name as NSString).pathExtension.lowercased() != ext.lowercased() {
       name += "." + ext

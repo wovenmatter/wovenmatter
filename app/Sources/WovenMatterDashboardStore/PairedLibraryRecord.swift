@@ -34,11 +34,43 @@ public struct PairedLibraryRecord: Codable, Equatable, Sendable {
     return result
   }
   static func winner(_ frontier: [Self]) -> Self? {
-    frontier.reduce(nil) { best, version in best.map { version.outranks($0) ? version : $0 } ?? version }
+    // Privacy: when devices chose differently while apart, opting out of analytics wins.
+    let candidates = frontier.contains(where: \.optsOutOfAnalytics) ? frontier.filter(\.optsOutOfAnalytics) : frontier
+    return candidates.reduce(nil) { best, version in best.map { version.outranks($0) ? version : $0 } ?? version }
+  }
+
+  /// A product analytics preference that turns collection off.
+  var optsOutOfAnalytics: Bool {
+    guard table == "product_analytics_preference", !deleted, let value = row["payload"], let text = value.value else { return false }
+    let data: Data?
+    if value.type == "blob" {
+      var bytes: [UInt8] = []
+      var index = text.startIndex
+      while index < text.endIndex, let next = text.index(index, offsetBy: 2, limitedBy: text.endIndex),
+            let byte = UInt8(text[index..<next], radix: 16) {
+        bytes.append(byte); index = next
+      }
+      data = index == text.endIndex ? Data(bytes) : nil
+    } else { data = Data(text.utf8) }
+    guard let data, let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return false }
+    return object["enabled"] as? Bool == false
   }
   public func dominates(_ other: Self) -> Bool {
     other.vector.allSatisfy { vector[$0.key, default: 0] >= $0.value }
       && vector.contains { $0.value > other.vector[$0.key, default: 0] }
+  }
+}
+
+/// The member a page came from. Records are relayed and their origins are
+/// self-declared, so a receiver checks ownership-bearing rows against the
+/// sender alone (`peerRecordAllowed`).
+public struct PairedLibrarySender: Sendable {
+  public let deviceID: String
+  public let kind: MemberKind
+  /// The receiver's current member list, to decide which workspace the sender serves.
+  public let members: [MemberAudience.Member]
+  public init(deviceID: String, kind: MemberKind, members: [MemberAudience.Member]) {
+    self.deviceID = deviceID.lowercased(); self.kind = kind; self.members = members
   }
 }
 
@@ -65,11 +97,16 @@ enum PairedLibraryTables {
     "dashboard_run_events", "dashboard_run_trace_events", "workspace_history_events", "note_asset_versions",
     "workspace_tool_settings", "workspace_session_tools", "workspace_session_relationships",
     "workspace_session_grants", "workspace_session_goals", "workspace_goal_runs", "workspace_goal_usage",
-    "paired_calendar_owners", "dashboard_calendar_items", "companion_calendar_owners", "companion_calendar_run_owners", "companion_calendar_runs",
-    "companion_execution_workspaces", "companion_execution_journal", "companion_retained_settlements",
-    "companion_execution_conversations", "companion_execution_adoptions", "companion_message_provenance",
-    "companion_execution_runs", "companion_native_history", "companion_native_history_parts",
-    "companion_saved_artifacts", "companion_artifact_uploads", "companion_artifact_chunks",
-    "library_messages", "library_items", "library_locations", "paired_mac_routes", "paired_remote_workspaces"
+    "paired_calendar_owners", "dashboard_calendar_items", "calendar_task_executors", "calendar_run_publishers", "calendar_published_runs",
+    "execution_workspaces", "execution_journal", "execution_retained_settlements",
+    "execution_conversations", "execution_adoptions", "device_message_provenance",
+    "execution_runs", "execution_native_history", "execution_native_history_parts",
+    "device_saved_artifacts", "device_artifact_uploads", "device_artifact_chunks",
+    "library_messages", "library_items", "library_locations", "paired_mac_routes", "paired_remote_workspaces",
+    // Signed member entries and revocations; trust is resolved from signatures.
+    "library_members", "library_member_revocations",
+    "bot_conversations", "bot_conversation_entries",
+    // The analytics choice and its library-wide ID apply to every device.
+    "product_analytics_preference"
   ]
 }

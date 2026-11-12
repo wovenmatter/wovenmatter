@@ -26,7 +26,7 @@ function response(content) {
 }
 async function fixture(t) {
   const root = await mkdtemp(join(tmpdir(), 'woven-claude-native-test-'));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  t.after(() => rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }));
   const config = join(root, 'config'), storage = join(root, 'storage');
   await mkdir(config, { mode: 0o700 }); await mkdir(storage, { mode: 0o700 });
   const requests = [], records = [];

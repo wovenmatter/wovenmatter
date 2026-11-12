@@ -1,6 +1,16 @@
+#if canImport(Darwin)
 import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#elseif canImport(Musl)
+import Musl
+#endif
 import Foundation
+#if canImport(SQLite3)
 import SQLite3
+#else
+import CSQLite
+#endif
 import WovenMatterClient
 import WovenMatterCore
 
@@ -79,9 +89,9 @@ struct UsageLimitsRequest: Sendable {
 public actor LocalUsageService {
   private typealias ImportOutcome = UsageTranscriptImporter.Outcome
 
-  private static let retention: TimeInterval = 120 * 24 * 60 * 60
   private static let localRefreshInterval: TimeInterval = 5 * 60
   private static let viewRefreshInterval: TimeInterval = 60
+  private var deviceExportCache: (since: Date, records: [UsageDeviceRecord])?
 
   private let homeDirectory: URL
   private let fileManager: FileManager
@@ -137,7 +147,7 @@ public actor LocalUsageService {
       guard request.allowCredentialAccess else {
         return request.enabledProviders.map { provider in
           UsageLimitAccount(provider: provider, accountLabel: provider.displayName, status: .unavailable,
-            source: "Saved accounts", detail: "Enable Keychain access in Settings → General to check saved accounts.",
+            source: "Saved accounts", detail: "Allow Keychain in Settings → Permissions & Access to check saved accounts.",
             observedAt: request.now)
         }
       }
@@ -308,7 +318,8 @@ public actor LocalUsageService {
   public func analyticsSnapshot(
     range: UsageTimeRange,
     refreshReason: UsageRefreshReason = .manual,
-    now: Date = Date()
+    now: Date = Date(),
+    onHistoryProgress: (@Sendable (UsageHistoryImportProgress, UsageAnalyticsSnapshot?) async -> Void)? = nil
   ) async throws -> UsageAnalyticsSnapshot {
     try Task.checkCancellation()
     let generation = UsageRefreshOwnership()
@@ -336,10 +347,9 @@ public actor LocalUsageService {
     }
 
     guard isCurrentAnalytics(generation) else { throw CancellationError() }
-    let requestedImportCutoff = max(
-      now.addingTimeInterval(-Self.retention),
-      interval.start.addingTimeInterval(-36 * 60 * 60)
-    )
+    // Index all history once, whatever range is showing. Harnesses may delete old
+    // transcripts, so this index is kept as the lasting record of past usage.
+    let requestedImportCutoff = Date.usageHistoryStart
     if await shouldImportLocal(
       store: store,
       reason: refreshReason,
@@ -347,27 +357,78 @@ public actor LocalUsageService {
       now: now
     ) {
       guard isCurrentAnalytics(generation) else { throw CancellationError() }
-      if await importLocalSources(
-        store: store,
-        cutoff: requestedImportCutoff,
-        enabledProviders: localProviders,
-        generation: generation,
-        now: now
-      ) {
+      let indexedAfter = try? await store.metadataDate("usage.local-indexed-after")
+      let isFirstFullImport = (indexedAfter ?? nil).map { $0 > requestedImportCutoff } ?? true
+      // Once all history is indexed, a refresh reads only files changed since the last
+      // one. A daily full walk picks up files that arrive with old dates (moved, restored).
+      let lastImport = (try? await store.metadataDate("usage.local-import-at")) ?? nil
+      let lastFullWalk = (try? await store.metadataDate("usage.local-full-walk-at")) ?? nil
+      let isFullWalk = isFirstFullImport || lastFullWalk.map { now.timeIntervalSince($0) >= 24 * 60 * 60 } ?? true
+      let filesChangedAfter = isFullWalk ? nil : lastImport.map { $0.addingTimeInterval(-60 * 60) }
+      var batches = [UsageTranscriptImporter.Batch?.none]
+      if isFirstFullImport {
+        // Newest files first, so usage appears quickly and fills in going back.
+        var newer: Date?
+        batches = (UsageHistoryImportProgress.stages.map { $0.duration ?? 0 } + [nil]).map { duration in
+          let after = duration.map { now.addingTimeInterval(-$0) } ?? requestedImportCutoff
+          defer { newer = after }
+          return .init(modifiedAfter: after, modifiedBefore: newer)
+        }
+        await onHistoryProgress?(.init(covered: nil), nil)
+        guard isCurrentAnalytics(generation) else { throw CancellationError() }
+      }
+      for (index, batch) in batches.enumerated() {
+        _ = await importLocalSources(
+          store: store,
+          cutoff: requestedImportCutoff,
+          enabledProviders: localProviders,
+          generation: generation,
+          now: now,
+          batch: batch,
+          filesChangedAfter: filesChangedAfter
+        )
+        guard isCurrentAnalytics(generation) else { throw CancellationError() }
+        // The whole import lane is unavailable, so the next refresh picks up from here.
+        if importOutcomes["wovenmatter:index"] != nil { break }
+        if isFirstFullImport, index < UsageHistoryImportProgress.stages.count {
+          await onHistoryProgress?(
+            .init(covered: UsageHistoryImportProgress.stages[index]),
+            await storedAnalytics(store: store, range: range, interval: interval, providers: localProviders, now: now)
+          )
+          guard isCurrentAnalytics(generation) else { throw CancellationError() }
+        }
+      }
+      // Every source was tried. One that failed keeps no checkpoint and is read again on
+      // the next full walk, so it doesn't make each refresh start the first import over.
+      if importOutcomes["wovenmatter:index"] == nil {
         guard isCurrentAnalytics(generation) else { throw CancellationError() }
         try? await store.write(validating: { try generation.check() }) { connection in
           try connection.performTransaction {
             let previousCutoff = try connection.metadataDate("usage.local-indexed-after")
             try connection.setMetadataDate(now, for: "usage.local-import-at")
+            if isFullWalk { try connection.setMetadataDate(now, for: "usage.local-full-walk-at") }
             try connection.setMetadataDate(min(previousCutoff ?? requestedImportCutoff, requestedImportCutoff),
               for: "usage.local-indexed-after")
-            try connection.prune(before: now.addingTimeInterval(-Self.retention))
           }
         }
       }
     }
     guard isCurrentAnalytics(generation) else { throw CancellationError() }
-    let storedSamples = ((try? await store.samples(in: interval)) ?? []).filter {
+    let snapshot = await storedAnalytics(store: store, range: range, interval: interval, providers: localProviders, now: now)
+    guard isCurrentAnalytics(generation) else { throw CancellationError() }
+    return snapshot
+  }
+
+  /// What the index holds for this range right now.
+  private func storedAnalytics(
+    store: AsyncUsageStore,
+    range: UsageTimeRange,
+    interval: DateInterval,
+    providers: Set<ProviderKind>,
+    now: Date
+  ) async -> UsageAnalyticsSnapshot {
+    let aliases = (try? await store.deviceAliases()) ?? [:]
+    let storedSamples = UsageSample.resolvingDeviceAliases((try? await store.samples(in: interval)) ?? [], aliases: aliases).filter {
       // Legacy account-wide API imports are not activity on this device.
       !$0.sourceID.hasPrefix("openrouter:activity:")
     }
@@ -376,14 +437,144 @@ public actor LocalUsageService {
     ).sorted { lhs, rhs in
       lhs.timestamp == rhs.timestamp ? lhs.id < rhs.id : lhs.timestamp < rhs.timestamp
     }
-    guard isCurrentAnalytics(generation) else { throw CancellationError() }
-    let sources = await coverage(
-      store: store,
-      interval: interval,
-      enabledProviders: localProviders
-    )
-    guard isCurrentAnalytics(generation) else { throw CancellationError() }
+    let sources = await coverage(store: store, interval: interval, enabledProviders: providers)
     return UsageAnalyticsSnapshot(range: range, generatedAt: now, samples: samples, sources: sources)
+  }
+
+  // MARK: - Linked devices
+
+  private static let deviceExportPageSize = 2_000
+  private static let deviceRecentWindow: TimeInterval = 3 * 24 * 60 * 60
+
+  /// This Mac's usage for another device to read: counts and labels per hour, with
+  /// no transcript content or file paths. Account-wide sources are left out because
+  /// every Mac would otherwise count them again.
+  public func deviceExport(
+    _ request: UsageDeviceExportRequest,
+    relaying relayed: [UsageDeviceIdentity] = [],
+    now: Date = Date()
+  ) async throws -> UsageDeviceExportPage {
+    guard let store = await openUsageStore() else {
+      throw WorkspaceToolError.invalid(usageStoreFailure ?? "The recorded usage index is unavailable.")
+    }
+    // A Mac still on its first full import would pass off part of its history as all of
+    // it, and the reader replaces what it stored with each report.
+    guard let indexedAfter = (try? await store.metadataDate("usage.local-indexed-after")) ?? nil,
+          indexedAfter <= .usageHistoryStart else {
+      return UsageDeviceExportPage(state: .scanning, generatedAt: now.timeIntervalSince1970, records: [],
+        hasMore: false, nextOffset: 0, devices: relayed)
+    }
+    // Whole hours only. A partial hour would replace the complete total stored for it.
+    let requested = Date(timeIntervalSince1970: max(0, request.since))
+    let since = max(Calendar.current.dateInterval(of: .hour, for: requested)?.start ?? requested, .usageHistoryStart)
+    let records: [UsageDeviceRecord]
+    if request.offset > 0, let cached = deviceExportCache, cached.since == since {
+      records = cached.records
+    } else {
+      let relayedIDs = Set(relayed.map { UsageDeviceSource.storedID($0.id) })
+      let aliases = try await store.deviceAliases()
+      let stored = UsageSample.resolvingDeviceAliases(
+        try await store.samples(in: DateInterval(start: since, end: max(since, now))), aliases: aliases
+      ).filter {
+        guard !$0.sourceID.hasPrefix("openrouter:activity:"), $0.sourceID != "cursor:account" else { return false }
+        return $0.usageDeviceID == UsageDeviceSource.localDeviceID || relayedIDs.contains($0.usageDeviceID)
+      }
+      let compact = UsageAnalyticsSnapshot(
+        range: .allTime,
+        generatedAt: now,
+        samples: Self.reconcileOpenRouter(deduplicated(stored)),
+        sources: []
+      ).compacted(by: .hour, stableIDs: true)
+      records = compact.samples.map(UsageDeviceRecord.init(sample:)).sorted { $0.timestamp < $1.timestamp }
+      deviceExportCache = (since, records)
+    }
+    let offset = max(0, request.offset)
+    let page = records.dropFirst(offset).prefix(Self.deviceExportPageSize)
+    let hasMore = offset + page.count < records.count
+    if !hasMore { deviceExportCache = nil }
+    return UsageDeviceExportPage(
+      state: .ready,
+      generatedAt: now.timeIntervalSince1970,
+      records: Array(page),
+      hasMore: hasMore,
+      nextOffset: offset + page.count,
+      devices: relayed
+    )
+  }
+
+  public func storedDeviceSummaries() async -> [(identity: UsageDeviceIdentity, syncedAt: Date)] {
+    guard let store = await openUsageStore() else { return [] }
+    // A device's earlier IDs are part of it, not devices of their own.
+    let aliases = Set(((try? await store.deviceAliases()) ?? [:]).keys)
+    return ((try? await store.storedDevices()) ?? []).filter { !aliases.contains(UsageDeviceSource.storedID($0.identity.id)) }
+  }
+
+  /// Reads everything a device has to report and stores it under that device.
+  /// A partial read stores nothing, so a dropped connection can't lose usage.
+  public func collectDeviceUsage(
+    from endpoint: UsageDeviceEndpoint,
+    now: Date = Date()
+  ) async -> UsageDeviceSummary {
+    let identity = endpoint.identity
+    guard let store = await openUsageStore() else {
+      return .init(identity: identity, state: .unavailable, detail: usageStoreFailure)
+    }
+    let previous = try? await store.storedDevices().first { $0.identity.id == identity.id }?.syncedAt
+    let fullKey = "usage.device-full.\(identity.id)"
+    let lastFull = try? await store.metadataDate(fullKey)
+    // Recent days can still change as sessions finish. A daily full pass catches the rest.
+    let isFull = endpoint.alwaysFull || (lastFull ?? nil).map { now.timeIntervalSince($0) >= 24 * 60 * 60 } ?? true
+    let since = isFull ? Date.usageHistoryStart : (previous ?? nil).map { $0.addingTimeInterval(-Self.deviceRecentWindow) } ?? .usageHistoryStart
+    // A Mac's index is a lasting record, so its report replaces everything. Hosts and
+    // phones report only what they still hold, so older rows here outlive their copies.
+    let replaceFrom = endpoint.keepsLastingHistory ? since : max(since, now.addingTimeInterval(-Self.deviceRecentWindow))
+    do {
+      var records: [UsageDeviceRecord] = []
+      var relayed: [UsageDeviceIdentity] = []
+      var offset = 0
+      var isComplete = false
+      for _ in 0..<10_000 {
+        try Task.checkCancellation()
+        let page = try await endpoint.fetch(.init(since: since.timeIntervalSince1970, offset: offset))
+        guard page.records.count <= UsageDeviceExportPage.maximumRecords else {
+          throw UsageDeviceCollectionError.invalidPage
+        }
+        if page.state == .scanning {
+          return .init(identity: identity, state: .scanning, syncedAt: previous ?? nil)
+        }
+        records += page.records
+        relayed += page.devices ?? []
+        guard page.hasMore else { isComplete = true; break }
+        guard page.nextOffset > offset else { throw UsageDeviceCollectionError.invalidPage }
+        offset = page.nextOffset
+      }
+      // A read cut off by the page limit is partial, and a partial read stores nothing.
+      guard isComplete else { throw UsageDeviceCollectionError.invalidPage }
+      // A host read by its member ID was stored under its workspace ID before, here or
+      // relayed by a paired Mac. Those rows are read as this device (`resolvingAliases`).
+      if !endpoint.formerIDs.isEmpty {
+        try await store.write { connection in
+          try connection.recordDeviceAliases(endpoint.formerIDs.map { ($0, identity.id) })
+        }
+      }
+      let byDevice = Dictionary(grouping: records) { $0.device ?? identity.id }
+      for id in Set([identity.id]).union(byDevice.keys) {
+        // A relaying Mac may only speak for the devices it listed.
+        let target = id == identity.id ? identity : relayed.first { $0.id == id }
+        guard let target, !endpoint.excludedRelays.contains(id) else { continue }
+        let samples = (byDevice[id] ?? []).compactMap { $0.sample(deviceID: target.id) }
+        try await store.write { connection in
+          try connection.replaceDeviceEvents(device: target, since: replaceFrom, samples: samples, importedAt: now,
+            keepingOlder: !endpoint.keepsLastingHistory)
+          if isFull { try connection.setMetadataDate(now, for: fullKey) }
+        }
+      }
+      return .init(identity: identity, state: .synced, syncedAt: now)
+    } catch let error as UsageDeviceCollectionError where error == .updateRequired {
+      return .init(identity: identity, state: .updateRequired, syncedAt: previous ?? nil)
+    } catch {
+      return .init(identity: identity, state: .unavailable, syncedAt: previous ?? nil, detail: error.localizedDescription)
+    }
   }
 
   public func saveOpenRouterAPIKey(_ value: String) throws {
@@ -403,7 +594,10 @@ public actor LocalUsageService {
     guard let store = await openUsageStore() else {
       throw WorkspaceToolError.invalid(usageStoreFailure ?? "The recorded usage index is unavailable.")
     }
-    return try await store.samples(in: DateInterval(start: start, end: end), limit: limit, offset: offset)
+    // Agents and phones read what this Mac recorded, including runs it watched on a
+    // remote workspace. Usage reported by other devices stays on the Usage page.
+    return try await store.samples(in: DateInterval(start: start, end: end), limit: limit, offset: offset,
+      excludingDevices: true, uniqueReplies: true)
   }
 
   public func deleteOpenRouterAPIKey() throws {
@@ -476,13 +670,15 @@ public actor LocalUsageService {
   }
 
   private func importLocalSources(store: AsyncUsageStore, cutoff: Date,
-    enabledProviders: Set<ProviderKind>, generation: UsageRefreshOwnership, now: Date) async -> Bool {
+    enabledProviders: Set<ProviderKind>, generation: UsageRefreshOwnership, now: Date,
+    batch: UsageTranscriptImporter.Batch? = nil, filesChangedAfter: Date? = nil) async -> Bool {
     let home = homeDirectory
     let outcomes = importOutcomes
     do {
       let importer = UsageTranscriptImporter(homeDirectory: home, outcomes: outcomes, ownership: generation,
-        preparationWorker: importPreparationWorker)
-      let complete = try await importer.run(store: store, cutoff: cutoff, enabledProviders: enabledProviders, now: now)
+        preparationWorker: importPreparationWorker, libraryDatabaseURL: databaseURL)
+      let complete = try await importer.run(store: store, cutoff: cutoff, enabledProviders: enabledProviders, now: now,
+        batch: batch, filesChangedAfter: filesChangedAfter)
       let updatedOutcomes = await importer.importOutcomes
       guard isCurrentAnalytics(generation) else { return false }
       importOutcomes = updatedOutcomes
@@ -518,7 +714,8 @@ public actor LocalUsageService {
       location: homeDirectory.appending(path: ".codex/sessions"),
       store: store,
       interval: interval,
-      detail: "Exact rollout token deltas with model and reasoning metadata; fork-copy and repeated-delta suppression is applied."
+      detail: "Exact rollout token deltas with model and reasoning metadata, including archived chats; fork-copy and repeated-delta suppression is applied.",
+      outcomeKeys: ["codex:file:", "codex:archived:"]
     )) }
     if enabledProviders.contains(.claude) { await sources.append(sourceCoverage(
       id: "claude",
@@ -553,6 +750,31 @@ public actor LocalUsageService {
       interval: interval,
       detail: "Exact step-finish usage from OpenCode SQLite, including OpenCode Go and other identifiable billing routes."
     )) }
+    if !enabledProviders.isEmpty {
+      // Pi routes to any provider, so both sources are listed whenever any provider is.
+      await sources.append(sourceCoverage(
+        id: "pi",
+        prefix: "pi:file:",
+        sourceName: "Pi CLI",
+        provider: .unknown,
+        harness: UsageSample.currentHarnessName("Pi"),
+        location: homeDirectory.appending(path: ".pi/agent/sessions"),
+        store: store,
+        interval: interval,
+        detail: "Per-reply token usage from Pi CLI sessions, with each reply's provider and model."
+      ))
+      await sources.append(sourceCoverage(
+        id: "pi-durable",
+        prefix: "pi-durable:",
+        sourceName: "Pi Durable",
+        provider: .unknown,
+        harness: PiDurableUsageRecords.harness,
+        location: databaseURL,
+        store: store,
+        interval: interval,
+        detail: "Per-reply token usage from Pi Durable and bots: their SQLite stores and the default agent's earlier session files, each reply counted once."
+      ))
+    }
     if !enabledProviders.isEmpty,
        (importOutcomes["wovenmatter:index"]?.failures ?? 0) > 0 {
       sources.append(UsageSourceCoverage(
@@ -578,9 +800,11 @@ public actor LocalUsageService {
     location: URL,
     store: AsyncUsageStore,
     interval: DateInterval,
-    detail: String
+    detail: String,
+    outcomeKeys: [String]? = nil
   ) async -> UsageSourceCoverage {
-    let outcome = importOutcomes[prefix] ?? .empty
+    let outcome = UsageTranscriptImporter.Outcome(failures: (outcomeKeys ?? [prefix])
+      .reduce(0) { $0 + (importOutcomes[$1]?.failures ?? 0) })
     let stats = try? await store.statistics(sourceIDPrefix: prefix, in: interval)
     let exists = fileManager.fileExists(atPath: location.path)
     let status: UsageSourceStatus
@@ -614,37 +838,69 @@ public actor LocalUsageService {
     )
   }
 
+  /// Each device is deduplicated on its own, so identical keys on two devices never
+  /// move usage from one to the other.
   private func deduplicated(_ samples: [UsageSample]) -> [UsageSample] {
+    Self.droppingLiveRunsReportedElsewhere(Dictionary(grouping: samples, by: \.usageDeviceID).values.flatMap { device in
+      deduplicatedWithinDevice(device)
+    })
+  }
+
+  /// Turns this Mac watched on a remote workspace were stored as this Mac's own before
+  /// they were stored under that host. Once another device's history has the session,
+  /// that history is the record.
+  static func droppingLiveRunsReportedElsewhere(_ samples: [UsageSample]) -> [UsageSample] {
+    let elsewhere = Set(samples.lazy.filter {
+      $0.usageDeviceID != UsageDeviceSource.localDeviceID && !$0.isRemoteLiveRun && !$0.sessionID.isEmpty
+    }.map(\.sessionID))
+    guard !elsewhere.isEmpty else { return samples }
+    return samples.filter { $0.sourceID != "wovenmatter:local" || !elsewhere.contains($0.sessionID) }
+  }
+
+  private func deduplicatedWithinDevice(_ samples: [UsageSample]) -> [UsageSample] {
     var seenEvents: Set<String> = []
     let uniqueEvents = samples.filter { seenEvents.insert($0.id).inserted }
-    let keyed = Dictionary(grouping: uniqueEvents.filter { $0.dedupeKey != nil }) {
-      "\($0.provider.rawValue):\($0.dedupeKey ?? "")"
+    let keyed = Dictionary(grouping: uniqueEvents.filter { Self.duplicateKey($0) != nil }) {
+      "\($0.provider.rawValue):\(Self.duplicateKey($0) ?? "")"
     }
     let winners = Set(keyed.values.compactMap { group in
       group.max { lhs, rhs in Self.dedupeRank(lhs) < Self.dedupeRank(rhs) }?.id
     })
     let exact = uniqueEvents.filter { sample in
-      sample.dedupeKey == nil || winners.contains(sample.id)
+      Self.duplicateKey(sample) == nil || winners.contains(sample.id)
     }
     return Self.suppressWovenMatterEchoes(exact)
   }
 
-  /// ACP prompt results make native Woven turns visible immediately.
-  /// Provider/runtime histories can later report the same settled call with
-  /// richer provenance but a different request ID. Pair exact token/model
-  /// observations one-to-one so a fast path never becomes a second total.
+  /// ACP prompt results make Woven turns visible immediately, before the harness's
+  /// own history is read. That history is the record: once it has the turn, the live
+  /// copy goes. A turn's history can carry another session ID (Codex rollouts, Pi
+  /// Durable sessions) and split the turn into several calls, so the live copy goes
+  /// when the history has the same session, or activity in the same harness during
+  /// the half hour before the turn ended, or (as before) the identical call nearby.
+  /// It runs per device, so a turn watched on a remote workspace gives way to that
+  /// host's history the same way.
   static func suppressWovenMatterEchoes(_ samples: [UsageSample]) -> [UsageSample] {
-    let isImmediate: (UsageSample) -> Bool = {
-      $0.sourceID == "wovenmatter:local"
-    }
-    let echoes = samples.filter(isImmediate)
-      .sorted { $0.timestamp < $1.timestamp }
+    let isImmediate: (UsageSample) -> Bool = { $0.sourceID == "wovenmatter:local" || $0.isRemoteLiveRun }
+    let echoes = samples.filter(isImmediate).sorted { $0.timestamp < $1.timestamp }
+    guard !echoes.isEmpty else { return samples }
     let provenance = samples.filter { !isImmediate($0) }
+    // Indexed by total, so the identical-call fallback doesn't scan all history per turn.
+    let byTotal = Dictionary(grouping: provenance, by: \.tokens.totalTokens)
+    let sessions = Set(provenance.map(\.sessionID).filter { !$0.isEmpty })
+    let activity = Dictionary(grouping: provenance, by: \.harness)
+      .mapValues { $0.map(\.timestamp).sorted() }
     var claimed: Set<String> = []
     var suppressed: Set<String> = []
     for echo in echoes {
+      if sessions.contains(echo.sessionID)
+          || activity[echo.harness].map({ Self.contains($0, from: echo.timestamp.addingTimeInterval(-30 * 60),
+                                                         to: echo.timestamp.addingTimeInterval(5 * 60)) }) == true {
+        suppressed.insert(echo.id)
+        continue
+      }
       let echoModel = echo.canonicalModel
-      let match = provenance
+      let match = (byTotal[echo.tokens.totalTokens] ?? [])
         .filter { candidate in
           guard !claimed.contains(candidate.id),
                 echo.tokens == candidate.tokens,
@@ -652,10 +908,6 @@ public actor LocalUsageService {
                 echo.provider == .unknown || echo.provider == candidate.provider else {
             return false
           }
-          let sameSession = echo.sessionID == candidate.sessionID
-          let cursorAccountCall = echo.provider == .cursor
-            && candidate.sourceID == "cursor:account"
-          guard sameSession || cursorAccountCall else { return false }
           let candidateModel = candidate.canonicalModel
           return echoModel == "Unknown model"
             || candidateModel == "Unknown model"
@@ -671,6 +923,23 @@ public actor LocalUsageService {
       }
     }
     return samples.filter { !suppressed.contains($0.id) }
+  }
+
+  /// Whether sorted `times` holds one within `start...end`.
+  private static func contains(_ times: [Date], from start: Date, to end: Date) -> Bool {
+    var low = 0, high = times.count
+    while low < high {
+      let middle = (low + high) / 2
+      if times[middle] < start { low = middle + 1 } else { high = middle }
+    }
+    return low < times.count && times[low] <= end
+  }
+
+  /// What makes two rows the same call. A Codex rollout's events have no provider ID,
+  /// but their event ID (session, line, time) stays when Codex moves the file into
+  /// archived_sessions, while the stored row ID follows the file's path.
+  private static func duplicateKey(_ sample: UsageSample) -> String? {
+    sample.dedupeKey ?? (sample.sourceID.hasPrefix("codex:file:") ? "rollout:" + sample.sourceEventID : nil)
   }
 
   private static func dedupeRank(_ sample: UsageSample) -> Int {

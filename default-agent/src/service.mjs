@@ -1,7 +1,7 @@
 import { timingSafeEqual } from 'node:crypto';
 import { CredentialVault, sharedCredentials, sharedAccounts } from './vault.mjs';
 import { join } from 'node:path';
-import { DefaultAgentError, canonicalHash, operationErrorMessage, readJSON, validateConfig, writePrivateJSON } from './config.mjs';
+import { DefaultAgentError, canonicalHash, operationErrorMessage, providers as botProviders, readJSON, validateConfig, writePrivateJSON } from './config.mjs';
 import { openNativeJournal } from './native-journal.mjs';
 import { createInferenceAdapter } from './inference-adapter.mjs';
 
@@ -74,6 +74,33 @@ export function createDefaultAgentService({ cwd, directory, engineFactory, write
     if (!vault.unlocked && !engineFactory) throw new DefaultAgentError('Unlock this workspace before using its inference connections.');
     inferenceAdapter ??= createInferenceAdapter(await engine());
     return inferenceAdapter.stream(request, options);
+  }
+  // Bots' agent loops run in the host's bots runtime, never in containers.
+  // Like local SDK helpers they receive access-only credentials: refresh
+  // tokens stay in this store. A Claude subscription is the machine's native
+  // Claude runtime directories, never token material. `null`: not connected.
+  async function botCredentials({ provider } = {}) {
+    if (!vault.unlocked && !engineFactory) throw Object.assign(new DefaultAgentError('Unlock this workspace before bots use its provider connections.'), { statusCode: 423 });
+    const search = ['exa', 'brave', 'firecrawl'];
+    if (typeof provider !== 'string' || ![...botProviders, ...search, 'web-search'].includes(provider)) throw Object.assign(new DefaultAgentError('Choose a Woven provider connection.'), { statusCode: 400 });
+    const current = await engine();
+    if (provider === 'web-search' || search.includes(provider)) {
+      const selected = provider === 'web-search' ? current.config.searchProvider ?? 'exa' : provider;
+      const key = (await current.credentials.read(selected))?.key;
+      return { credential: typeof key === 'string' && key ? { type: 'api_key', key } : null, ...(provider === 'web-search' ? { searchProvider: selected } : {}) };
+    }
+    if (provider === 'claude-subscription') {
+      const profile = (await current.credentials.read('claude-subscription'))?.accountId;
+      if (!(await current.claude.status(profile)).connected) return { credential: null };
+      const environment = await current.claude.environment(undefined, profile);
+      return { credential: { type: 'native', configDir: environment.CLAUDE_CONFIG_DIR, secureStorageDir: environment.CLAUDE_SECURESTORAGE_CONFIG_DIR } };
+    }
+    const credential = (await current.credentials.candidates(provider)).find(value => value.credential)?.credential;
+    if (credential?.type === 'api_key' && typeof credential.key === 'string') return { credential: { type: 'api_key', key: credential.key } };
+    if (credential?.type === 'oauth' && typeof credential.access === 'string' && credential.expires > Date.now()) {
+      return { credential: { type: 'oauth', access: credential.access, expires: credential.expires, ...(typeof credential.accountId === 'string' ? { accountId: credential.accountId } : {}) } };
+    }
+    return { credential: null };
   }
   async function status() {
     if (!vault.unlocked) return { locked: true, providers: [], models: [], searchConfigured: false };
@@ -198,5 +225,5 @@ export function createDefaultAgentService({ cwd, directory, engineFactory, write
     }
     return items.slice(0,1000);
   }
-  return { engine, inspection, unlockForClient: tracked(unlockForClient), inferenceCatalog: tracked(inferenceCatalog), inferenceStream: tracked(inferenceStream), configure: tracked(configure), invoke: tracked(invoke), poll: tracked(poll), status: tracked(status), cancelActive: tracked(cancelActive), cancelSession: tracked(cancelSession), prepareRetirement };
+  return { engine, inspection, unlockForClient: tracked(unlockForClient), inferenceCatalog: tracked(inferenceCatalog), inferenceStream: tracked(inferenceStream), botCredentials: tracked(botCredentials), configure: tracked(configure), invoke: tracked(invoke), poll: tracked(poll), status: tracked(status), cancelActive: tracked(cancelActive), cancelSession: tracked(cancelSession), prepareRetirement };
 }

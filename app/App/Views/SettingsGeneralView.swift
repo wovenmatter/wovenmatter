@@ -7,13 +7,23 @@ struct SettingsGeneralView: View {
     @Bindable var model: ApplicationModel
     var reservesRailControlSpace = false
     var onBack: () -> Void
+    var onOpenCodex: () -> Void = {}
 
-    @Environment(\.openWindow) private var openWindow
-    @Environment(\.dashboardTheme) private var theme
     @AppStorage(DashboardTheme.storageKey) private var storedTheme = DashboardTheme.green.rawValue
     @AppStorage(DashboardSidebarStyle.storageKey) private var storedSidebarStyle = DashboardSidebarStyle.defaultStyle.rawValue
-    @State private var showsCredentialDisclosure = false
-    @State private var closedLidHelperSetup: ClosedLidHelperSetup = .unavailable
+    @AppStorage(DashboardPiDurableLogoStyle.storageKey) private var storedPiDurableLogoStyle =
+        DashboardPiDurableLogoStyle.defaultStyle.rawValue
+    @AppStorage(DashboardCodexLogoStyle.storageKey) private var storedCodexLogoStyle =
+        DashboardCodexLogoStyle.defaultStyle.rawValue
+    @AppStorage(DashboardWorkspaceSidebarVisibility.localWorkspace.storageKey) private var showsLocalWorkspace = true
+    @AppStorage(DashboardWorkspaceSidebarVisibility.remoteWorkspaces.storageKey) private var showsRemoteWorkspaces = true
+
+    private var themeBinding: Binding<DashboardTheme> {
+        Binding(
+            get: { DashboardTheme(rawValue: storedTheme) ?? .green },
+            set: { storedTheme = $0.rawValue }
+        )
+    }
 
     private var sidebarStyleBinding: Binding<DashboardSidebarStyle> {
         Binding(
@@ -31,28 +41,10 @@ struct SettingsGeneralView: View {
             reservesRailControlSpace: reservesRailControlSpace,
             onBack: onBack
         ) {
-            releaseUpdateCard
-            credentialAccessCard
-            harnessSetupCard
-            appearanceCard
-            sidebarLayoutCard
-            if let tools = model.agentTools {
-                WorkspaceToolDefaultsCard(tools: tools)
-                DisclosureGroup("Connected apps · Executor") { ExecutorConnectionsCard(model: model, tools: tools) }
-            }
-            SettingsMCPAccessSection(model: model)
-            dictationCard
-            conversationTitlesCard
-            idleSleepProtectionCard
-            closedLidProtectionCard
-            ProductAnalyticsSettingsCard(analytics: model.analytics)
-        }
-        .task { await model.checkSavedCredentialAccess() }
-        .onReceive(NotificationCenter.default.publisher(for: KeychainAccess.accessNeedsAttention).receive(on: DispatchQueue.main)) { _ in
-            model.keychainAccessNeedsAttention()
-        }
-        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
-            if !model.isReconnectingSavedCredentials { Task { await model.checkSavedCredentialAccess() } }
+            appearanceSection
+            SettingsConversationTitlesSection(model: model, onOpenCodex: onOpenCodex)
+            softwareSection
+            ProductAnalyticsSettingsSection(analytics: model.analytics)
         }
         .onChange(of: storedTheme) { _, _ in
             model.persistMacSurfaceProfileFromUserDefaults()
@@ -60,177 +52,52 @@ struct SettingsGeneralView: View {
         .onChange(of: storedSidebarStyle) { _, _ in
             model.persistMacSurfaceProfileFromUserDefaults()
         }
-        .sheet(isPresented: $showsCredentialDisclosure) {
-            CredentialAccessDisclosureView(
-                purpose: "Use saved credentials across the Woven Matter features you enable, including website sessions and passwords.",
-                onEnable: {
-                    showsCredentialDisclosure = false
-                    Task { await model.reconnectSavedCredentials() }
-                },
-                onCancel: { showsCredentialDisclosure = false }
-            )
-        }
     }
 
-    private var idleSleepProtectionCard: some View {
-        SettingsCard(title: "Keep working when the screen sleeps",
-                     detail: "Prevent automatic system sleep only while agent work is running.") {
-            Toggle("When connected to external power", isOn: idleSleepBinding(externalPower: true))
-                .toggleStyle(DashboardSwitchToggleStyle())
-            Toggle("When running on battery", isOn: idleSleepBinding(externalPower: false))
-                .toggleStyle(DashboardSwitchToggleStyle())
-            Text("The screen can turn off and lock while work continues. At this level, closing the lid or choosing Sleep can still pause work.")
-                .font(.caption).foregroundStyle(.secondary)
-            if let message = model.idleSleepSettingsError {
-                Text(message).font(.caption).foregroundStyle(.red)
+    private var appearanceSection: some View {
+        SettingsSection(title: "Appearance") {
+            SettingsRow(title: "Theme") {
+                DashboardSegmentedSelector(options: DashboardTheme.allCases, selection: themeBinding) { $0.title }
+                    .frame(width: 300)
             }
-        }
-        .disabled(model.isChangingIdleSleepPolicy)
-    }
-
-    private func idleSleepBinding(externalPower: Bool) -> Binding<Bool> {
-        Binding(get: {
-            let policy = model.activeWorkSleepPrevention.snapshot.policy
-            return externalPower ? policy.externalPower : policy.batteryPower
-        }, set: { enabled in
-            var policy = model.activeWorkSleepPrevention.snapshot.policy
-            if externalPower { policy.externalPower = enabled } else { policy.batteryPower = enabled }
-            Task { await model.setIdleSleepPolicyFromSettings(policy) }
-        })
-    }
-
-    private var closedLidProtectionCard: some View {
-        let snapshot = model.closedLidProtection.snapshot
-        return SettingsCard(title: "Keep working when the lid is closed",
-                            detail: "Keep this Mac awake during active work, even with the lid closed.") {
-            Toggle("When connected to external power", isOn: closedLidBinding(externalPower: true))
-                .toggleStyle(DashboardSwitchToggleStyle())
-                .disabled(closedLidHelperSetup == .unavailable && !snapshot.policy.externalPower)
-            Toggle("When running on battery", isOn: closedLidBinding(externalPower: false))
-                .toggleStyle(DashboardSwitchToggleStyle())
-                .disabled(closedLidHelperSetup == .unavailable && !snapshot.policy.batteryPower)
-            Text("While active, this also prevents Sleep from the Apple menu. Stop the work or turn these settings off to allow sleep. The Mac stays awake internally; keep it ventilated.")
-                .font(.caption).foregroundStyle(.secondary)
-            if closedLidHelperSetup == .unavailable {
-                Text("Closed-lid protection requires a signed Woven Matter build with its power helper.")
-                    .font(.caption).foregroundStyle(.secondary)
-            } else if snapshot.policy.isEnabled {
-                if closedLidHelperSetup == .approvalRequired {
-                    HStack {
-                        Text("Approve Woven Matter in macOS Login Items & Extensions to enable protection.")
-                            .font(.caption).foregroundStyle(.secondary)
-                        Spacer()
-                        Button("Open System Settings") { ClosedLidHelperRegistration.openApprovalSettings() }
-                            .buttonStyle(SettingsQuietButtonStyle())
-                    }
-                } else if closedLidHelperSetup == .notRegistered {
-                    Button("Set up closed-lid protection") {
-                        Task { await model.setClosedLidPolicyFromSettings(snapshot.policy) }
-                    }.buttonStyle(SettingsQuietButtonStyle())
-                } else if snapshot.message == nil && model.closedLidSettingsError == nil {
-                    Text(snapshot.isProtecting ? "Closed-lid protection is active."
-                         : "Protection will activate during work on the selected power sources.")
-                        .font(.caption).foregroundStyle(.secondary)
+            SettingsRow(title: "Sidebar layout", detail: sidebarStyleBinding.wrappedValue.detail) {
+                DashboardSegmentedSelector(options: DashboardSidebarStyle.allCases, selection: sidebarStyleBinding) { style in
+                    style.title.replacingOccurrences(of: " Sidebar", with: "")
+                }
+                .frame(width: 300)
+            }
+            SettingsSummaryRow("Sidebar sections", detail: "Hide or show the workspace sections in the sidebar.") {
+                Toggle(DashboardWorkspaceSidebarVisibility.localWorkspace.title, isOn: $showsLocalWorkspace)
+                Toggle(DashboardWorkspaceSidebarVisibility.remoteWorkspaces.title, isOn: $showsRemoteWorkspaces)
+                SettingsNote("Hides or shows these sidebar sections. Workspaces and chats stay active.")
+            }
+            SettingsSummaryRow("Agent icons", detail: "Choose how the Pi Durable and Codex icons look throughout the app.") {
+                SettingsRow(title: "Pi Durable") {
+                    SettingsPicker("Pi Durable icon", selection: Binding(
+                        get: { piDurableLogoStyle }, set: { storedPiDurableLogoStyle = $0.rawValue }
+                    ), options: DashboardPiDurableLogoStyle.allCases) { $0.displayName }
+                }
+                SettingsRow(title: "Codex") {
+                    SettingsPicker("Codex icon", selection: Binding(
+                        get: { codexLogoStyle }, set: { storedCodexLogoStyle = $0.rawValue }
+                    ), options: DashboardCodexLogoStyle.allCases) { $0.displayName }
                 }
             }
-            if let message = model.closedLidSettingsError ?? snapshot.message {
-                Text(message).font(.caption).foregroundStyle(.red)
-            }
-        }
-        .disabled(model.isChangingClosedLidPolicy)
-        .task {
-            while !Task.isCancelled {
-                closedLidHelperSetup = ClosedLidHelperRegistration.status
-                do { try await Task.sleep(for: .seconds(3)) } catch { return }
-            }
         }
     }
 
-    private func closedLidBinding(externalPower: Bool) -> Binding<Bool> {
-        Binding(get: {
-            let policy = model.closedLidProtection.snapshot.policy
-            return externalPower ? policy.externalPower : policy.batteryPower
-        }, set: { enabled in
-            var policy = model.closedLidProtection.snapshot.policy
-            if externalPower { policy.externalPower = enabled } else { policy.batteryPower = enabled }
-            Task { await model.setClosedLidPolicyFromSettings(policy) }
-        })
+    private var piDurableLogoStyle: DashboardPiDurableLogoStyle {
+        DashboardPiDurableLogoStyle(rawValue: storedPiDurableLogoStyle) ?? .defaultStyle
     }
 
-    private var harnessSetupCard: some View {
-        SettingsCard(
-            title: "Harness setup",
-            detail: "Access the guided harness setup flow."
-        ) {
-            Button("Set up harnesses") {
-                openWindow(id: HarnessSetupPresentation.windowID)
-            }
-            .buttonStyle(SettingsQuietButtonStyle())
-        }
+    private var codexLogoStyle: DashboardCodexLogoStyle {
+        DashboardCodexLogoStyle(rawValue: storedCodexLogoStyle) ?? .defaultStyle
     }
 
-    private var credentialAccessCard: some View {
-        SettingsCard(
-            title: "Keychain access",
-            detail: "Credentials are stored in Apple Keychain."
-        ) {
-            HStack(alignment: .center, spacing: 16) {
-                SettingsPill(model.isReconnectingSavedCredentials ? "Checking…"
-                    : model.keychainAccessReady == true ? "Access ready"
-                    : model.keychainAccessReady == false ? "Access needs attention"
-                    : model.hasAcknowledgedCredentialAccessDisclosure ? "Checking…" : "Not enabled",
-                    tone: model.keychainAccessReady == false ? .warning : .neutral)
-                    .help(model.credentialAccessStatus ?? "Enable access to use saved credentials.")
-                Spacer(minLength: 12)
-                Button(model.isReconnectingSavedCredentials ? "Checking…"
-                       : model.keychainAccessReady == true ? "Check access"
-                       : model.hasAcknowledgedCredentialAccessDisclosure || model.keychainAccessReady == false
-                         ? "Restore Keychain access" : "Enable Keychain access") {
-                    if model.keychainAccessReady == true {
-                        Task { await model.checkSavedCredentialAccess() }
-                    } else if model.hasAcknowledgedCredentialAccessDisclosure {
-                        Task { await model.reconnectSavedCredentials() }
-                    } else {
-                        showsCredentialDisclosure = true
-                    }
-                }
-                .buttonStyle(SettingsQuietButtonStyle())
-                .disabled(model.isAuthorizingUsageCredential || model.isReconnectingSavedCredentials)
-            }
-            if model.keychainAccessReady != true {
-                SettingsNote("Choose Always Allow when macOS asks to avoid repeated prompts.")
-            }
-        }
-    }
-    private var dictationCard: some View {
-        @Bindable var dictation = DictationModel.shared
-        return SettingsCard(title: "Dictation", detail: "Dictate into conversations and notes with Apple on-device speech.") {
-            Picker("Language", selection: $dictation.languageIdentifier) {
-                Text("Automatic").tag("")
-                ForEach(dictation.session.availableLanguages, id: \.self) { identifier in
-                    Text(Locale.current.localizedString(forIdentifier: identifier) ?? identifier).tag(identifier)
-                }
-            }
-            .disabled(dictation.isBusy)
-            Text(dictation.availability).font(.caption).foregroundStyle(.secondary)
-            Text("Audio stays on this Mac. Apple may download language support the first time you dictate. Transcripts remain drafts for review. Use ⇧⌘D to start or stop in the focused editor.")
-                .font(.caption).foregroundStyle(.secondary)
-        }.task { await dictation.refreshAvailability() }
-    }
-
-    private var releaseUpdateCard: some View {
+    private var softwareSection: some View {
         let updater = DesktopUpdater.shared
-        return SettingsCard(title: "Software updates") {
-            HStack(alignment: .center, spacing: 16) {
-                VStack(alignment: .leading, spacing: 3) {
-                    Text("Woven Matter v\(currentVersion)")
-                        .font(.system(size: 13, weight: .medium))
-                    Text(updater.errorMessage ?? "Check for the latest version of Woven Matter.")
-                        .font(.system(size: 11))
-                        .foregroundStyle(DashboardPalette.mutedForeground)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                Spacer(minLength: 12)
+        return SettingsSection(title: "Software") {
+            SettingsRow(title: "Woven Matter v\(currentVersion)", detail: updater.errorMessage) {
                 Button("Check for updates") { updater.checkForUpdates() }
                     .buttonStyle(SettingsQuietButtonStyle())
                     .disabled(!updater.canCheckForUpdates)
@@ -242,154 +109,64 @@ struct SettingsGeneralView: View {
         Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
             ?? "0.0.0"
     }
-
-    private var appearanceCard: some View {
-        SettingsCard(
-            title: "Appearance"
-        ) {
-            LazyVGrid(
-                columns: [GridItem(.adaptive(minimum: 230), spacing: 12)],
-                alignment: .leading,
-                spacing: 12
-            ) {
-                ForEach(DashboardTheme.allCases) { option in
-                    themeChoice(option)
-                }
-            }
-
-        }
-    }
-
-    private var sidebarLayoutCard: some View {
-        SettingsCard(title: "Sidebar layout") {
-            DashboardSegmentedSelector(
-                options: DashboardSidebarStyle.allCases,
-                selection: sidebarStyleBinding
-            ) { style in
-                style.title
-            }
-            .frame(maxWidth: 520)
-
-            Text(sidebarStyleBinding.wrappedValue.detail)
-                .font(.system(size: 11))
-                .foregroundStyle(DashboardPalette.mutedForeground)
-        }
-    }
-
-    private func themeChoice(_ option: DashboardTheme) -> some View {
-        let selected = theme == option
-        return Button {
-            storedTheme = option.rawValue
-        } label: {
-            VStack(alignment: .leading, spacing: 11) {
-                SettingsThemePreview(theme: option)
-                HStack(alignment: .center, spacing: 10) {
-                    Text(option.title)
-                        .font(.system(size: 13, weight: .medium))
-                        .foregroundStyle(DashboardPalette.foreground)
-                    Spacer(minLength: 0)
-                    Image(systemName: "checkmark")
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(DashboardPalette.primary)
-                        .opacity(selected ? 1 : 0)
-                }
-            }
-            .padding(12)
-        }
-        .buttonStyle(SettingsThemeChoiceButtonStyle(isSelected: selected))
-        .accessibilityLabel("\(option.title) theme")
-        .accessibilityAddTraits(selected ? .isSelected : [])
-    }
-
-    private var conversationTitlesCard: some View {
-        SettingsCard(
-            title: "Conversation titles",
-            detail: "Uses your local Codex account to name new chats."
-        ) {
-            VStack(alignment: .leading, spacing: 12) {
-                HStack {
-                    Text(model.titleGenerationStatus)
-                        .font(.system(size: 11.5))
-                        .foregroundStyle(DashboardPalette.mutedForeground)
-                    Spacer()
-                    Toggle(
-                        "Generate with Codex",
-                        isOn: Binding(
-                            get: { model.titleGenerationSettings.isEnabled },
-                            set: { model.setTitleGenerationEnabled($0) }
-                        )
-                    )
-                    .toggleStyle(DashboardSwitchToggleStyle())
-                }
-
-                if model.titleGenerationSettings.isEnabled {
-                    VStack(alignment: .leading, spacing: 10) {
-                        HStack(spacing: 16) {
-                            Text("Model")
-                                .font(.system(size: 13, weight: .medium))
-                            Spacer(minLength: 12)
-                            SettingsMenuPicker(
-                                selection: model.titleGenerationSettings.model,
-                                options: model.titleGenerationCapabilities?.models ?? []
-                            ) { option in
-                                model.setTitleGenerationModel(option)
-                            }
-                        }
-
-                        HStack(spacing: 16) {
-                            Text("Thinking level")
-                                .font(.system(size: 13, weight: .medium))
-                            Spacer(minLength: 12)
-                            SettingsMenuPicker(
-                                selection: model.titleGenerationSettings.thinking,
-                                options: model.titleGenerationCapabilities?.thinkingLevels ?? [],
-                                capitalizeOptions: true
-                            ) { option in
-                                model.setTitleGenerationThinking(option)
-                            }
-                        }
-
-                        HStack {
-                            Spacer()
-                            Button(
-                                model.isRefreshingTitleGenerationCapabilities
-                                    ? "Checking…" : "Refresh options"
-                            ) {
-                                model.refreshTitleGenerationCapabilitiesNow()
-                            }
-                            .buttonStyle(SettingsQuietButtonStyle())
-                            .disabled(model.isRefreshingTitleGenerationCapabilities)
-                        }
-                    }
-                }
-            }
-        }
-    }
 }
 
-private struct SettingsThemeChoiceButtonStyle: ButtonStyle {
-    @Environment(\.dashboardTheme) private var theme
-    @State private var isHovering = false
-    let isSelected: Bool
+/// Conversation titles use the Codex account on this Mac, so the section shows that
+/// account and links to the Codex page, where it signs in.
+private struct SettingsConversationTitlesSection: View {
+    @Bindable var model: ApplicationModel
+    let onOpenCodex: () -> Void
 
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .background(
-                configuration.isPressed
-                    ? theme.palette.themeStrong
-                    : isSelected
-                        ? (isHovering ? theme.palette.themeStrong : theme.palette.themeSoft)
-                        : isHovering
-                            ? theme.palette.themeSoft.opacity(0.72)
-                            : theme.palette.themeWhisper
+    private var settings: ConversationTitleGenerationSettings { model.titleGenerationSettings }
+    private var codex: AgentSignInStatus? { model.harnessSignIn.statuses[.codex] }
+    private var signedIn: Bool { ["verified", "credentials_present"].contains(codex?.state ?? "") }
+
+    private var accountValue: String {
+        if signedIn { return codex?.accounts?.first?.name ?? "Signed in" }
+        if codex == nil || model.harnessSignIn.checking.contains(.codex) { return "Checking…" }
+        return codex?.state == "not_installed" ? "Codex isn't installed" : "Not signed in"
+    }
+
+    var body: some View {
+        SettingsSection(title: "Conversation titles", detail: "Names new chats from their first message using your Codex account on this Mac.") {
+            SettingsToggleRow(
+                title: "Generate titles",
+                detail: settings.isEnabled ? model.titleGenerationStatus : nil,
+                isOn: Binding(get: { settings.isEnabled }, set: { model.setTitleGenerationEnabled($0) })
             )
-            .clipShape(DashboardShapes.card)
-            .overlay {
-                if isSelected {
-                    DashboardShapes.card
-                        .stroke(theme.palette.themeRing, lineWidth: 1.5)
+            SettingsSummaryLink(title: "Codex account", value: accountValue,
+                                tone: codex == nil ? nil : signedIn ? .good : .warning, action: onOpenCodex)
+            if settings.isEnabled {
+                if signedIn {
+                    SettingsRow(title: "Model") {
+                        SettingsPicker(
+                            "Title model",
+                            selection: Binding(get: { settings.model }, set: { model.setTitleGenerationModel($0) }),
+                            options: options(model.titleGenerationCapabilities?.models, selected: settings.model)
+                        ) { $0 }
+                    }
+                    SettingsRow(title: "Thinking level") {
+                        SettingsPicker(
+                            "Title thinking level",
+                            selection: Binding(get: { settings.thinking }, set: { model.setTitleGenerationThinking($0) }),
+                            options: options(model.titleGenerationCapabilities?.thinkingLevels, selected: settings.thinking)
+                        ) { $0.capitalized }
+                    }
+                    Button(model.isRefreshingTitleGenerationCapabilities ? "Checking…" : "Refresh options") {
+                        model.refreshTitleGenerationCapabilitiesNow()
+                    }
+                    .buttonStyle(SettingsQuietButtonStyle())
+                    .disabled(model.isRefreshingTitleGenerationCapabilities)
+                } else {
+                    SettingsNote("Sign in to Codex to choose a model and thinking level.")
                 }
             }
-            .onHover { isHovering = $0 }
+        }
+        .task { await model.refreshHarnessSignIn(.codex) }
+    }
+
+    private func options(_ available: [String]?, selected: String) -> [String] {
+        let available = available ?? []
+        return available.contains(selected) ? available : [selected] + available
     }
 }

@@ -11,13 +11,12 @@ choose a harness supported by an account or API key you have.
 
 ## Set up your first agent
 
-1. Open **Settings → Local Agent Workspace** and check that the workspace is
-   ready; use **Retry setup** if it is unavailable.
+1. Open **Settings → Workspaces** and check that the local workspace is ready.
 2. Choose **New folder** in the sidebar to create a blank project or link an
    existing directory on your Mac.
-3. Choose a runtime under **Runtimes**; if it is missing, select **Install** and
+3. Choose a harness under **Settings → Agents**; if it is missing, select **Install** and
    review the installer source before confirming.
-4. Installed harnesses appear in the sidebar automatically. Use **Sign in…** in setup or local runtime settings to connect a missing native account.
+4. Installed harnesses appear in the sidebar automatically. Use **Sign in** in setup or on the harness’s agent page to connect a missing native account. The sign-in link and code appear in Woven Matter.
 5. Open its **Settings** to complete the sign-in or connection steps offered
    for that agent.
 6. Choose **New chat** or the plus beside your folder, select the agent, and

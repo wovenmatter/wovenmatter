@@ -23,6 +23,25 @@ function fixture(t) {
   return {directory,runs,calls,runtime,enrollment,grant,principal,command,get service(){return service},async restart(){await service.close();service=create()},create}
 }
 
+test('a new workspace executes as the host member device the server names, and keeps it',async t=>{
+  const directory=mkdtempSync(join(tmpdir(),'wm-member-device-'))
+  const runtime={providers:async()=>[],create:async()=>({sessionID:randomUUID()}),run:async()=>{},close:async()=>{}}
+  let service=createClientExecution({directory,runtime})
+  t.after(async()=>{await service.close();rmSync(directory,{recursive:true,force:true})})
+  const member=randomUUID(),enrollment={libraryID:randomUUID(),workspaceID:randomUUID(),ownerDeviceID:randomUUID(),deviceID:randomUUID(),scopes:['execution']}
+  assert.equal(service.provision(enrollment,{executionDeviceID:member}).workspace.executionDeviceID,member)
+  // A later enrollment never changes it, whatever it is offered.
+  assert.equal(service.provision({...enrollment,deviceID:randomUUID()},{executionDeviceID:randomUUID()}).workspace.executionDeviceID,member)
+  await service.close(); service=createClientExecution({directory,runtime})
+  assert.equal(service.descriptor().executionDeviceID,member)
+  // Without a library host (no member identity) the workspace has its own random device ID.
+  const other=mkdtempSync(join(tmpdir(),'wm-member-device-'))
+  const plain=createClientExecution({directory:other,runtime})
+  t.after(async()=>{await plain.close();rmSync(other,{recursive:true,force:true})})
+  const own=plain.provision({...enrollment,workspaceID:randomUUID()}).workspace.executionDeviceID
+  assert.match(own,/^[0-9a-f-]{36}$/); assert.notEqual(own,member)
+})
+
 test('per-device bearer grants never expose administration or another device receipts',async t=>{
   const f=fixture(t)
   assert.equal(f.service.principal('Bearer '+f.grant.token,'inference'),null)

@@ -1,5 +1,9 @@
 import Foundation
+#if canImport(SQLite3)
 import SQLite3
+#else
+import CSQLite
+#endif
 import WovenMatterClient
 import WovenMatterCore
 
@@ -565,7 +569,7 @@ extension WorkspaceDatabaseConnection {
             'id', id, 'folder_id', folder_id, 'title', title,
             'content', content, 'created_at', created_at,
             'updated_at', updated_at, 'is_pinned', is_pinned,
-            'revision', CAST(COALESCE((SELECT revision FROM companion_versions WHERE kind = 'note' AND resource_id = notes.id), 1) AS TEXT)
+            'revision', CAST(COALESCE((SELECT revision FROM device_sync_revisions WHERE kind = 'note' AND resource_id = notes.id), 1) AS TEXT)
           )
           FROM notes
           WHERE user_id = ? AND deleted_at IS NULL

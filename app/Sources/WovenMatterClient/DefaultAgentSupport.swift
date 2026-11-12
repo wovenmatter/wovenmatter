@@ -1,5 +1,7 @@
 import Foundation
+#if canImport(Security)
 import Security
+#endif
 import WovenMatterCore
 
 public enum DefaultAgentSupport {
@@ -48,7 +50,7 @@ public enum DefaultAgentSupport {
                 runtimeKind: .defaultAgent, displayName: AgentRuntimeKind.defaultAgent.displayName,
                 state: ready ? .ready : .executableUnavailable,
                 detail: ready
-                    ? "Included with Woven Matter. Manage connections in Settings → Pi Durable."
+                    ? "Included with Woven Matter. Manage connections in Settings → Subscriptions & API Keys."
                     : "The bundled Pi Durable helper is missing. Rebuild or reinstall Woven Matter.",
                 executablePath: executable?.path),
             launchConfiguration: ready
@@ -232,8 +234,12 @@ public enum DefaultAgentSupport {
         }
     }
     public static func checkKeychainAccess(authorize: Bool = false, keychain: KeychainAccess = .init()) throws {
+        // Every Keychain item this app owns, including the paired-Mac signing key and
+        // credentials (`PairedMacCredentialVault`), so Allow restores peer sync too.
+        let bundle = Bundle.main.bundleIdentifier ?? "com.wovenmatter"
         try keychain.checkStoredItems(services: [WovenMatterKeychainService.current + ".default-agent",
-            WovenMatterKeychainService.current + ".usage", "com.wovenmatter.remote-workspaces"], authorize: authorize)
+            WovenMatterKeychainService.current + ".usage", WovenMatterKeychainService.remoteWorkspaces,
+            bundle + ".paired-mac-signing", bundle + ".paired-macs"], authorize: authorize)
     }
 
     private static func keyQuery(_ provider: String, scope: String) -> [String: Any] {

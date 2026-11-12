@@ -1,5 +1,10 @@
+#if os(macOS)
 import Foundation
+#if canImport(SQLite3)
 import SQLite3
+#else
+import CSQLite
+#endif
 import Testing
 import WovenMatterCore
 @testable import WovenMatterDashboardStore
@@ -134,3 +139,4 @@ private final class UsageSQLFixture: @unchecked Sendable {
     }
   }
 }
+#endif

@@ -8,13 +8,13 @@ import tempfile
 import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
-SUITES = ('update_refresh', 'ios_runner', 'dev_build', 'executor_deployment',
+SUITES = ('update_refresh', 'ios_runner', 'verify_ios_app', 'dev_build', 'executor_deployment',
           'remote_image', 'cua_runtime')
 
 
 class CIRunnerTests(unittest.TestCase):
     def test_artifact_bridge_change_runs_its_portable_regressions(self):
-        result, calls = self.run_fixture(['shared/Sources/WovenMatterCompanion/ArtifactStateJavaScript.swift'])
+        result, calls = self.run_fixture(['shared/Sources/WovenMatterShared/ArtifactStateJavaScript.swift'])
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(calls, [['node', '--test', 'scripts/test-support/artifact-state.test.mjs']])
 

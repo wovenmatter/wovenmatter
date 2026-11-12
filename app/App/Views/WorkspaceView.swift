@@ -166,14 +166,17 @@ struct WorkspaceView: View {
         .onChange(of: assets.notice) { _, message in
             if let message { showNotice(message); assets.notice = nil }
         }
+        .onChange(of: model.bots.notice) { _, message in
+            if let message { showNotice(message); model.bots.notice = nil }
+        }
         .onChange(of: model.pendingDefaultAgentSettingsScope) { _, scope in
             if scope != nil { openUtility(.settings) }
         }
         .onChange(of: model.pendingConnectionsScope) { _, scope in
             if scope != nil { openUtility(.settings) }
         }
-        .onReceive(NotificationCenter.default.publisher(for: .init("wovenmatter.open-usage-settings"))) { _ in
-            model.pendingConnectionsScope = "usage"
+        .onReceive(NotificationCenter.default.publisher(for: MacAccessSetupModel.openSettingsNotification)) { _ in
+            model.pendingConnectionsScope = "permissions"
             openUtility(.settings)
         }
         .onReceive(NotificationCenter.default.publisher(for: .init("wovenmatter.open-connections"))) { event in
@@ -582,6 +585,8 @@ struct WorkspaceView: View {
             remoteWorkspaces: model.remoteWorkspaces,
             localWorkspaceReady: model.localACPWorkspaceAvailability.isReady,
             localExecutionWorkspaceID: localExecutionWorkspaceID,
+            executionWorkspaces: model.executionWorkspaceRegistry,
+            conversationOwners: model.federatedExecutionOwners,
             folders: model.workspaceOverview?.folders ?? [],
             conversations: model.workspaceOverview?.conversations ?? [],
             notes: model.workspaceOverview?.notes ?? [],
@@ -590,6 +595,8 @@ struct WorkspaceView: View {
             selectedFolderID: selectedFolderID,
             selectedConversationID: selectedConversationID,
             selectedNoteID: selectedNoteID,
+            bots: model.bots,
+            selectedBotTarget: chatPanels.activeBotTarget,
             destination: destination,
             contentRevision: model.workspaceListRevision,
             pinnedAgentIDsRaw: $pinnedAgentIDsRaw,
@@ -622,7 +629,9 @@ struct WorkspaceView: View {
                 onShowTrash: { showsWorkspaceTrash = true },
                 onConversationAction: handleConversationAction,
                 onNoteAction: handleNoteAction,
-                onUnavailableMutation: showUnavailableMutation
+                onUnavailableMutation: showUnavailableMutation,
+                onSelectBot: selectBot,
+                onOpenBotSettings: openBotSettings
             ),
             onSurfaceProfileChange: {
                 model.persistMacSurfaceProfileFromUserDefaults()
@@ -707,7 +716,12 @@ struct WorkspaceView: View {
                         onSend: send,
                         onAttachmentAction: handleAttachmentAction,
                         onRemoveAttachment: removeAttachment,
-                        onDropFiles: attachFiles
+                        onDropFiles: attachFiles,
+                        onBotRoute: { target, panelID in
+                            _ = chatPanels.setBot(target, in: panelID)
+                        },
+                        onOpenBotLink: { url, panelID in openBotLink(url, from: panelID) },
+                        onOpenBotSettings: openBotSettings
                     )
                 case .calendar:
                     DashboardCalendarSurface(model: model, onOpenSession: { id in
@@ -741,7 +755,10 @@ struct WorkspaceView: View {
                 case .databases:
                     DashboardDatabasesView(model: model)
                 case .usage:
-                    DashboardUsageView(model: model)
+                    DashboardUsageView(
+                        model: model,
+                        reservesRailControlSpace: showLeftRailButton || showRightRailButton
+                    )
                 case .settings:
                     SettingsView(
                         model: model,
@@ -826,6 +843,8 @@ struct WorkspaceView: View {
     }
 
     private func selectDefaults() {
+        // A bot channel is a complete selection; there is no chat to restore.
+        if chatPanels.activeBotTarget != nil { return }
         // A successful creation may arrive before the read projection. Keep its
         // selected ID until the next snapshot instead of restoring an older chat.
         if selectedConversationID != nil && selectedConversation == nil { return }
@@ -910,6 +929,47 @@ struct WorkspaceView: View {
         }
         destination = .workspace
         compactWorkspacePane = .chat
+        compactDrawer = .none
+    }
+
+    private func selectBot(_ target: DashboardBotTarget) {
+        _ = chatPanels.replaceActiveBot(with: target)
+        selectedAgentID = nil
+        destination = .workspace
+        compactWorkspacePane = .chat
+        compactDrawer = .none
+    }
+
+    private func openBotSettings() {
+        model.pendingBotsSettings = true
+        openUtility(.settings)
+        compactDrawer = .none
+    }
+
+    /// Links from a bot open beside it, the same way a chat's browser tabs do.
+    private func openBotLink(_ url: URL, from panelID: DashboardChatPanelID) {
+        if let page = WovenAppLink(url) {
+            switch page {
+            case .accounts:
+                model.pendingConnectionsScope = "global"
+                compactDrawer = .none
+            case .botProfiles:
+                model.pendingBotProfilesMachine = chatPanels.panel(id: panelID)?.botTarget?.machineID
+                openBotSettings()
+            }
+            return
+        }
+        guard assets.openBrowser(url: url.absoluteString) != nil else {
+            NSWorkspace.shared.open(url)
+            return
+        }
+        // The side area sits beside the primary panel, so the bot that was reading moves there.
+        if panelID != .primary, let target = chatPanels.panel(id: panelID)?.botTarget {
+            _ = chatPanels.setBot(target, in: .primary)
+        }
+        chatPanels.presentAsset()
+        destination = .workspace
+        compactWorkspacePane = .note
         compactDrawer = .none
     }
 
@@ -1117,6 +1177,8 @@ struct WorkspaceView: View {
             startDirectChat(runtimeKind)
         case .remoteWorkspace(let target):
             startRemoteChat(target)
+        case .peerAgent(let id):
+            createAgentChat(id)
         }
     }
 
@@ -1469,6 +1531,9 @@ struct DashboardWorkspaceSurface: View {
     let onAttachmentAction: (DashboardChatPanelID, DashboardComposerAttachmentAction) -> Void
     let onRemoveAttachment: (String, DashboardChatPanelID) -> Void
     let onDropFiles: ([URL], DashboardChatPanelID) -> Bool
+    let onBotRoute: (DashboardBotTarget, DashboardChatPanelID) -> Void
+    let onOpenBotLink: (URL, DashboardChatPanelID) -> Void
+    let onOpenBotSettings: () -> Void
 
     var body: some View {
         GeometryReader { geometry in
@@ -1486,7 +1551,7 @@ struct DashboardWorkspaceSurface: View {
                     HStack(spacing: 0) {
                         if noteOnLeft {
                             assetPane()
-                                .frame(minWidth: DashboardMetrics.companionMinimumWidth)
+                                .frame(minWidth: DashboardMetrics.assetPaneMinimumWidth)
                             splitSeparator(totalWidth: geometry.size.width)
                             chatPanel(.primary, showNoteButton: false)
                                 .frame(width: chatWidth(for: geometry.size.width))
@@ -1495,7 +1560,7 @@ struct DashboardWorkspaceSurface: View {
                                 .frame(width: chatWidth(for: geometry.size.width))
                             splitSeparator(totalWidth: geometry.size.width)
                             assetPane()
-                                .frame(minWidth: DashboardMetrics.companionMinimumWidth)
+                                .frame(minWidth: DashboardMetrics.assetPaneMinimumWidth)
                         }
                     }
                     .coordinateSpace(name: "dashboard-workspace-split")
@@ -1557,7 +1622,86 @@ struct DashboardWorkspaceSurface: View {
         return labels.isEmpty ? nil : labels.joined(separator: " · ")
     }
 
-    private func chatPanel(
+    /// Open notes and pages at send time, from the same snapshot regular chats use.
+    /// A note reference is offered only while bots hold the Notes tool group.
+    private func botContext(for panelID: DashboardChatPanelID) -> String? {
+        guard panelID == .primary else { return nil }
+        _ = assets.pageRevision
+        let notes = model.workspaceOverview?.notes ?? []
+        let snapshot = assets.snapshot(notes: notes) { $0.title }
+        guard let context = snapshot?.promptContext else { return nil }
+        return context.count <= 4_000 ? context : nil
+    }
+
+    @ViewBuilder private func chatPanel(
+        _ panelID: DashboardChatPanelID,
+        showNoteButton: Bool
+    ) -> some View {
+        if let target = chatPanels.panel(id: panelID)?.botTarget {
+            botPanel(panelID, target: target, showNoteButton: showNoteButton)
+        } else {
+            conversationPanel(panelID, showNoteButton: showNoteButton)
+        }
+    }
+
+    /// The reveal-rail and assets buttons float over the panels at the window's top edges.
+    private func botHeaderInsets(for panelID: DashboardChatPanelID) -> BotHeaderInsets {
+        let reachesLeadingEdge = panelID == .primary && !(assets.tabs.isPresented && noteOnLeft)
+        let reachesTrailingEdge = panelID == .primary ? !chatPanels.hasAuxiliaryPanels && !(assets.tabs.isPresented && !noteOnLeft) : true
+        return BotHeaderInsets(
+            left: reachesLeadingEdge && reservesLeadingRailControlSpace ? 44 : 0,
+            right: !reachesTrailingEdge ? 0 : (reservesTrailingRailControlSpace ? 88 : 44)
+        )
+    }
+
+    private func botPanel(
+        _ panelID: DashboardChatPanelID,
+        target: DashboardBotTarget,
+        showNoteButton: Bool
+    ) -> some View {
+        ZStack(alignment: .topTrailing) {
+            BotConversationSurface(
+                bots: model.bots,
+                panelID: panelID,
+                target: target,
+                context: botContext(for: panelID),
+                headerInsets: botHeaderInsets(for: panelID),
+                focusGeneration: chatPanels.focusRequest?.panelID == panelID ? chatPanels.focusRequest?.generation : nil,
+                startsComposerCollapsed: panelID != .primary,
+                usesCompactSpacing: chatPanels.hasAuxiliaryPanels,
+                showsClosePanel: chatPanels.canClosePanel(panelID),
+                showsAddPanel: chatPanels.canAddPanel(from: panelID),
+                onActivate: { onActivatePanel(panelID) },
+                onClosePanel: { onClosePanel(panelID) },
+                onAddPanel: { onAddPanel(panelID) },
+                onRoute: { onBotRoute($0, panelID) },
+                onOpenLink: { onOpenBotLink($0, panelID) },
+                onOpenSettings: onOpenBotSettings,
+                onOpenConnections: { model.pendingConnectionsScope = "global" },
+                onOpenProfiles: {
+                    model.pendingBotProfilesMachine = target.machineID
+                    onOpenBotSettings()
+                }
+            )
+            if showNoteButton { compactAssetsButton }
+        }
+    }
+
+    private var compactAssetsButton: some View {
+        Button {
+            compactPane = .note
+        } label: {
+            Label("Assets", systemImage: "rectangle.on.rectangle")
+                .font(.system(size: 12, weight: .medium))
+                .padding(.horizontal, 10)
+                .frame(height: 32)
+        }
+        .buttonStyle(DashboardPillButtonStyle())
+        .padding(.trailing, 52)
+        .padding(.top, 12)
+    }
+
+    private func conversationPanel(
         _ panelID: DashboardChatPanelID,
         showNoteButton: Bool
     ) -> some View {
@@ -1601,19 +1745,7 @@ struct DashboardWorkspaceSurface: View {
                 onDropFiles: { onDropFiles($0, panelID) },
                 onCommandNavigation: handleComposerNavigation
             )
-            if showNoteButton {
-                Button {
-                    compactPane = .note
-                } label: {
-                    Label("Assets", systemImage: "rectangle.on.rectangle")
-                        .font(.system(size: 12, weight: .medium))
-                        .padding(.horizontal, 10)
-                        .frame(height: 32)
-                }
-                .buttonStyle(DashboardPillButtonStyle())
-                .padding(.trailing, 52)
-                .padding(.top, 12)
-            }
+            if showNoteButton { compactAssetsButton }
         }
         .task(id: conversation?.id) {
             guard let conversation, model.libraryMessageTarget?.conversationID != conversation.id else { return }

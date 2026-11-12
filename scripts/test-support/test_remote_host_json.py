@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 """Provider-free lifecycle fixtures, archive attacks and rollback verification."""
+import gzip
 import hashlib
 import io
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import tarfile
 import tempfile
@@ -34,24 +36,46 @@ class HostFixtures(unittest.TestCase):
             mock.patch.object(self.m.os,'getuid',return_value=self.actual_uid),mock.patch.object(self.m,'inventory',return_value=[])]
         for patcher in self.patchers: patcher.start()
         self.m.owned_directory=lambda p: Path(p).mkdir(mode=0o700,parents=True,exist_ok=True)
+        # Never read a real engine on the machine running these tests.
+        self.m.BOTS_ETC=self.home/'etc/wovenmatter-bots'; self.m.BOTS_VAR=self.home/'var/lib/wovenmatter-bots'
+        self.m.BOTS_HELPER=self.home/'usr/local/lib/wovenmatter-bots/bots-engine'
+        self.engine_calls=[]; self.fail_migration=False; self.migrations=[]; self.service_starts=[]; self.node_archive=None
     def tearDown(self):
         for patcher in reversed(self.patchers): patcher.stop()
         self.temp.cleanup()
     def command(self,args,**kwargs):
         args=[str(a) for a in args]; self.calls.append(args); output=b''; code=0
-        if args[0]=='sudo':
+        if args[0]=='sudo' and len(args)>5 and args[3]=='-I':
+            # The root engine helper: record it and act as its installed state.
+            self.engine_calls.append(args[4:])
+            command=args[7]
+            if command=='install':
+                self.m.BOTS_ETC.mkdir(parents=True,exist_ok=True)
+                self.m.BOTS_ETC.joinpath('instance.json').write_text(json.dumps({'user':self.m.pwd.getpwuid(self.actual_uid).pw_name,'socket':str(self.home/'missing.sock'),
+                    'poolBytes':int(args[args.index('--pool')+1]),'diskBytes':int(args[args.index('--disk')+1])}))
+            elif command=='uninstall': self.m.BOTS_ETC.joinpath('instance.json').unlink()
+            output=b'{"ok":true}\n'
+        elif args[0]=='curl':
+            output_path=Path(args[args.index('--output')+1])
+            output_path.write_bytes(self.node_archive if output_path.name=='node.tar.gz' and self.node_archive else b'docker-fixture')
+        elif args[0]=='sudo':
             if args[2:4]==['tailscale','set']:
                 self.tail_operator=args[4].removeprefix('--operator=')
             else: output=b'0\n'
         elif args[0]=='loginctl': output=b'yes\n'
         elif args[0]=='dpkg-query': output=b'installed'
+        elif args[0]=='systemctl' and args[1]!='--user':
+            # System units belong to the bot engine fixture.
+            output=b'active\n' if args[1]=='is-active' else b''
         elif args[0]=='systemctl':
             action=args[2]
             if action=='is-active': output=b'active\n' if self.active else b'inactive\n'; code=0 if self.active else 3
             elif action=='is-enabled': code=0 if self.enabled else 1
             elif action=='stop': self.active=False
-            elif action in ('start','restart'): self.active=True
-            elif action=='enable': self.enabled=True; self.active=self.active or '--now' in args
+            elif action in ('start','restart'): self.active=True; self.service_starts.append(self.m.ENV_FILE.read_text() if self.m.ENV_FILE.exists() else '')
+            elif action=='enable':
+                self.enabled=True; self.active=self.active or '--now' in args
+                if '--now' in args: self.service_starts.append(self.m.ENV_FILE.read_text())
             elif action=='disable': self.enabled=False; self.active=False if '--now' in args else self.active
         elif args[0]=='tailscale':
             if args[1]=='status': output=json.dumps({'BackendState':'Running','Self':{'DNSName':'fixture.test.ts.net.'}}).encode()
@@ -70,6 +94,11 @@ class HostFixtures(unittest.TestCase):
                 name=key[13:]
                 target=prefix/'node_modules'/name; target.mkdir(parents=True)
                 (target/'package.json').write_text(json.dumps({'version':'0.0.0' if self.bad_npm_vendor else graph['node_modules/'+name]['version']}))
+        elif '--migrate-only' in args:
+            self.migrations.append(args)
+            database=Path(args[args.index('--data-root')+1])/'library/workspace.sqlite'; database.parent.mkdir(parents=True,exist_ok=True)
+            database.write_bytes(b'migrated-but-failed' if self.fail_migration else b'migrated')
+            output,code=(b'',1) if self.fail_migration else (b'{"event":"migrated"}\n',0)
         elif args[-1]=='--version': output=b'v26.12.1\n'
         elif args[-1]=='--json': output=json.dumps({'ok':not self.fail_selftest,'reason':'sandbox_blocked' if self.fail_selftest else None,'missingLibraries':[],'hint':'Fixture sandbox blocked.' if self.fail_selftest else ''}).encode(); code=int(self.fail_selftest)
         return subprocess.CompletedProcess(args,code,output,b'')
@@ -93,7 +122,7 @@ class HostFixtures(unittest.TestCase):
             self.assertEqual(result['kind'],'host'); self.assertEqual(result['id'],'fixture')
             if result['running']: self.assertEqual(result['state'],'running')
         self.assertNotIn(TOKEN,json.dumps(self.m.main(['logs','fixture','10'])))
-        self.m.privileged_actions=lambda d:[]; self.m.os_release=lambda:{'ID':'debian','VERSION_ID':'13'}
+        self.m.privileged_actions=lambda d,roles=None:[]; self.m.os_release=lambda:{'ID':'debian','VERSION_ID':'13'}
         # inspect() checks binary discovery after prepare. The fixture's fake
         # command runner does not imply these programs exist on the test host.
         required={'tailscale','script','setpriv','curl'}
@@ -217,22 +246,36 @@ class HostFixtures(unittest.TestCase):
         content=b'tampered'; manifest['files']['src/server.mjs']['sha256']=hashlib.sha256(content).hexdigest()
         path=self.archive([('src/server.mjs',content,tarfile.REGTYPE,''),('manifest.json',json.dumps(manifest).encode(),tarfile.REGTYPE,'')])
         with self.assertRaises(self.m.Failure): self.m.safe_extract(path,self.home/'tampered',fp)
-    def install_bundle(self):
-        versions={'nodeVersion':'26.12.1','playwrightVersion':'1.64.1','nodeSHA256':{'linux-x64':'a'*64}}
+    def install_bundle(self,bots=False,library=True,release_version=None,packed_library=None,node_sha256='a'*64):
+        versions={'nodeVersion':'26.12.1','playwrightVersion':'1.64.1','nodeSHA256':{'linux-x64':node_sha256},
+            'dockerVersion':'29.9.3','dockerSHA256':{'linux-x64':hashlib.sha256(b'docker-fixture').hexdigest(),'linux-arm64':'b'*64}}
         files={'host/runtime-versions.json':json.dumps(versions).encode(),
             'default-agent/package-lock.json':json.dumps({'packages':{'node_modules/playwright-core':{'version':'1.64.1'}}}).encode(),
             'src/server.mjs':b'fixture',
             'npm-runtime/package.json':(ROOT/'remote/npm-runtime/package.json').read_bytes(),
             'npm-runtime/package-lock.json':(ROOT/'remote/npm-runtime/package-lock.json').read_bytes()}
+        if bots: files.update({'bots/package.json':b'{"version":"0.1.0"}','bots/package-lock.json':b'{}','bots/src/cli.ts':b'fixture','host/bots-engine.py':b'# fixture helper\n'})
+        if library and packed_library is None: files['host/library/linux-x86_64/wovenmatter-library']=b'fixture library host'
+        if packed_library is not None:
+            # As build-linux-library.sh ships it: the gzip and the uncompressed binary's SHA-256.
+            binary,recorded=packed_library
+            files['host/library/linux-x86_64/wovenmatter-library.gz']=gzip.compress(binary,mtime=0)
+            files['host/library/linux-x86_64/wovenmatter-library.sha256']=(recorded+'  wovenmatter-library\n').encode()
         digest=hashlib.sha256(); records={}
-        for name,data in sorted(files.items()):
-            source=name if name.startswith('default-agent/') else 'remote/'+name
+        for name,data in sorted(files.items(),key=lambda item:item[0] if item[0].startswith(('default-agent/','bots/')) else 'remote/'+item[0]):
+            source=name if name.startswith(('default-agent/','bots/')) else 'remote/'+name
             digest.update((source+'\0false\0'+'0\0').encode()); digest.update(hashlib.sha256(data).digest())
             records[name]={'sourcePath':source,'sourceMode':0,'mode':0o600,'sha256':hashlib.sha256(data).hexdigest()}
         fp=digest.hexdigest(); manifest={'fingerprint':fp,'nodeVersion':'26.12.1','playwrightVersion':'1.64.1','files':records}
+        if release_version is not None: manifest['releaseVersion']=release_version
         path=self.archive([(name,data,tarfile.REGTYPE,'') for name,data in files.items()]+[('manifest.json',json.dumps(manifest).encode(),tarfile.REGTYPE,'')])
         data=path.read_bytes(); stream=self.home/'stream'; stream.write_bytes((TOKEN+'\n').encode()+data)
         node=self.m.ROOT/'node/26.12.1/bin/node'; node.parent.mkdir(parents=True,exist_ok=True); node.write_bytes(b'fixture')
+        # Every host runs its library host, which records this identity once ready.
+        if library or packed_library is not None:
+            self.m.LIBRARY_STATE.mkdir(parents=True,exist_ok=True)
+            identity=self.m.LIBRARY_STATE/'identity.json'
+            if not identity.exists(): identity.write_text(json.dumps({'deviceID':'6f1c2a5e-8b3d-4c7a-9e21-0d4b5c6a7f80'}))
         return fp,stream
     def test_install_update_and_failed_selftest_restore_all_activation_state(self):
         self.m.ROOT.mkdir(parents=True)
@@ -405,5 +448,295 @@ class HostFixtures(unittest.TestCase):
         (self.m.ROOT/'releases').mkdir(); self.m.ROOT.chmod(0o700)
         with mock.patch.object(self.m.os,'getuid',return_value=self.m.ROOT.stat().st_uid): result=self.m.uninstall('fixture',True)
         self.assertTrue(result['persistentDataRemoved']); self.assertFalse(self.m.ROOT.exists())
+
+    def feed(self,stream):
+        source=open(stream,'rb'); saved=None
+        try: saved=os.dup(3)
+        except OSError: pass
+        os.dup2(source.fileno(),3)
+        def restore():
+            if saved is not None: os.dup2(saved,3); os.close(saved)
+            source.close()
+        self.addCleanup(restore)
+        return source
+    def test_bots_only_install_then_adding_the_workspace_reuses_the_server(self):
+        self.m.ROOT.mkdir(parents=True)
+        fp,stream=self.install_bundle(bots=True); self.m.TOKEN=''
+        self.m.health=lambda *a:{'serviceFingerprint':fp,'runtimeKind':'host'}
+        source=self.feed(stream)
+        result=self.m.main(['install','fixture','7337','fullRoot',fp,'bots'])
+        self.assertEqual(result['roles'],{'workspace':False,'bots':True})
+        settings=self.m.parse_env()
+        self.assertEqual(settings['WOVENMATTER_WORKSPACE_ENABLED'],'0'); self.assertEqual(settings['WOVENMATTER_BOTS_ENABLED'],'1')
+        self.assertEqual(settings['WOVENMATTER_BOTS_DATA'],str(self.m.ROOT/'bots'))
+        self.assertFalse(any('playwright-core/cli.js' in ' '.join(call) for call in self.calls),'a bots-only server installs no host browser')
+        self.assertFalse((self.m.ROOT/'browsers/current').exists())
+        self.assertTrue(any(call[-1].endswith('--no-fund') and str(self.m.ROOT/'releases') in ' '.join(call) and '/bots' in call[call.index('--prefix')+1] for call in self.calls if 'ci' in call))
+        [engine]=self.engine_calls
+        self.assertEqual(engine[:4],[str(self.m.ROOT/'releases'/fp/'host/bots-engine.py'),'--instance','wovenmatter','install'])
+        self.assertEqual(engine[engine.index('--docker-version')+1],'29.9.3')
+        self.assertEqual(int(engine[engine.index('--pool')+1]),min(8*1024**3,self.m.memory_total() or 8*1024**3))
+        # Adding the workspace is an update of the same server: same data root, no second engine install.
+        stream.write_bytes(b'\n'+self.home.joinpath('bundle.tar').read_bytes()); source.seek(0); self.m.TOKEN=''
+        self.m.BOTS_HELPER.parent.mkdir(parents=True); self.m.BOTS_HELPER.write_bytes(b'# fixture helper\n')
+        updated=self.m.main(['update','fixture','7337','fullRoot',fp,'workspace'])
+        self.assertEqual(updated['roles'],{'workspace':True,'bots':True},'roles only grow on update')
+        self.assertEqual(len(self.engine_calls),1)
+        self.assertEqual(self.m.parse_env()['WOVENMATTER_WORKSPACE_ENABLED'],'1')
+        self.assertTrue(any('playwright-core/cli.js' in ' '.join(call) for call in self.calls))
+        self.assertEqual(self.m.parse_env()['WOVENMATTER_API_TOKEN'],TOKEN)
+    def test_a_bots_only_placeholder_becomes_the_real_workspace_once(self):
+        # The Mac records a bots-only host as `bots`; adding the workspace later installs
+        # with the real id and must reuse that server, port, token and data root.
+        self.m.ROOT.mkdir(parents=True)
+        fp,stream=self.install_bundle(bots=True,release_version='1.4.0'); self.m.TOKEN=''
+        self.m.health=lambda *a:{'serviceFingerprint':fp,'runtimeKind':'host'}
+        source=self.feed(stream)
+        first=self.m.main(['install','bots','7337','fullRoot',fp,'bots'])
+        self.assertEqual(first['roles'],{'workspace':False,'bots':True})
+        self.assertEqual(self.m.parse_env()['WOVENMATTER_RELEASE_VERSION'],'1.4.0')
+        self.assertEqual(first['releaseVersion'],'1.4.0')
+        port=self.m.record()['port']
+        def again():
+            stream.write_bytes(b'\n'+self.home.joinpath('bundle.tar').read_bytes()); source.seek(0); self.m.TOKEN=''
+        # Only a workspace install may take over the placeholder, never an update or another bots install.
+        again()
+        with self.assertRaises(self.m.Failure) as conflict: self.m.main(['update','studio','7337','fullRoot',fp,'workspace'])
+        self.assertEqual(conflict.exception.code,'host_workspace_conflict')
+        again()
+        with self.assertRaises(self.m.Failure) as conflict: self.m.main(['install','studio','7337','fullRoot',fp,'bots'])
+        self.assertEqual(conflict.exception.code,'host_workspace_conflict')
+        self.m.BOTS_HELPER.parent.mkdir(parents=True); self.m.BOTS_HELPER.write_bytes(b'# fixture helper\n')
+        again()
+        converted=self.m.main(['install','studio','7337','fullRoot',fp,'workspace'])
+        self.assertEqual(converted['id'],'studio')
+        self.assertEqual(converted['roles'],{'workspace':True,'bots':True})
+        record=self.m.record()
+        self.assertEqual((record['id'],record['port'],record['previousIDs']),('studio',port,['bots']))
+        settings=self.m.parse_env()
+        self.assertEqual(settings['WOVENMATTER_API_TOKEN'],TOKEN)
+        self.assertEqual((settings['WOVENMATTER_DATA_ROOT'],settings['WOVENMATTER_BOTS_DATA']),(str(self.m.ROOT),str(self.m.ROOT/'bots')))
+        self.assertEqual((settings['WOVENMATTER_WORKSPACE_ENABLED'],settings['WOVENMATTER_BOTS_ENABLED']),('1','1'))
+        self.assertEqual(len(self.engine_calls),1,'the running engine is kept, not installed again')
+        # Once: the placeholder is gone, so a second workspace id is a conflict again.
+        again()
+        with self.assertRaises(self.m.Failure) as conflict: self.m.main(['install','other','7337','fullRoot',fp,'workspace'])
+        self.assertEqual(conflict.exception.code,'host_workspace_conflict')
+        self.assertEqual(self.m.status('studio')['roles'],{'workspace':True,'bots':True})
+    def test_workspace_install_without_roles_is_unchanged_and_old_records_read_as_workspace(self):
+        self.save_install()
+        self.assertEqual(self.m.record()['roles'],{'workspace':True,'bots':False})
+        self.assertEqual(self.m.status('fixture')['botsState'],'server_without_bots')
+        missing=lambda args,**kwargs: subprocess.CompletedProcess(args,1 if args[0]=='pacman' else 0,b'yes\n' if args[0]=='loginctl' else b'',b'')
+        with mock.patch.object(self.m,'run',side_effect=missing), mock.patch.object(self.m.shutil,'which',return_value=None):
+            packages=self.m.privileged_actions({'ID':'arch'},{'workspace':False,'bots':True})
+        self.assertEqual(packages[-1][:3],['pacman','-S','--needed'])
+        flat=' '.join(' '.join(action) for action in packages)
+        self.assertIn('nftables',flat); self.assertNotIn('nss',flat.split())
+        with self.assertRaises(self.m.Failure): self.m.valid_roles('workspace,unknown')
+    def test_discovery_reports_no_server_server_without_bots_and_bots_ready(self):
+        self.m.os_release=lambda:{'ID':'debian','VERSION_ID':'13'}
+        self.assertEqual(self.m.inspect('user')['bots']['state'],'no_server')
+        found=self.m.inspect('user','bots')['bots']
+        self.assertGreater(found['memoryTotalBytes'] or 1,0); self.assertGreater(found['diskTotalBytes'],0); self.assertIn('diskFreeBytes',found)
+        self.save_install()
+        self.assertEqual(self.m.inspect('user')['bots']['state'],'server_without_bots')
+        record=json.loads(self.m.RECORD.read_text()); record['roles']={'workspace':True,'bots':True}; self.m.RECORD.write_text(json.dumps(record))
+        self.m.BOTS_ETC.mkdir(parents=True); socket_path=self.home/'docker.sock'
+        import socket as sockets
+        listener=sockets.socket(sockets.AF_UNIX); listener.bind(str(socket_path)); self.addCleanup(listener.close)
+        self.m.BOTS_ETC.joinpath('instance.json').write_text(json.dumps({'user':self.m.pwd.getpwuid(self.actual_uid).pw_name,'socket':str(socket_path),'poolBytes':None,'diskBytes':None}))
+        self.assertEqual(self.m.inspect('user')['bots']['state'],'bots_ready')
+        self.m.BOTS_ETC.joinpath('instance.json').write_text(json.dumps({'user':'someone-else','socket':str(socket_path)}))
+        other=self.m.inspect('user')['bots']
+        self.assertEqual(other['state'],'server_without_bots'); self.assertTrue(other['blockingIssues'])
+    def test_bots_configure_writes_a_request_and_uninstall_removes_the_engine_first(self):
+        self.save_install(); record=json.loads(self.m.RECORD.read_text()); record['roles']={'workspace':True,'bots':True}; self.m.RECORD.write_text(json.dumps(record))
+        self.m.BOTS_ETC.mkdir(parents=True); (self.m.BOTS_VAR/'requests').mkdir(parents=True); (self.m.BOTS_VAR/'state').mkdir(parents=True)
+        self.m.BOTS_ETC.joinpath('instance.json').write_text(json.dumps({'user':self.m.pwd.getpwuid(self.actual_uid).pw_name,'socket':'/missing'}))
+        result=self.m.main(['bots-configure','fixture','4294967296','none','1'])
+        request=json.loads((self.m.BOTS_VAR/'requests/settings.json').read_text())
+        self.assertEqual(request,{'revision':result['revision'],'poolBytes':4294967296,'diskBytes':None})
+        self.assertTrue(result['pending'])
+        with self.assertRaises(self.m.Failure): self.m.main(['bots-configure','fixture','-1','none'])
+        self.m.BOTS_HELPER.parent.mkdir(parents=True); self.m.BOTS_HELPER.write_text('# installed helper'); (self.m.ROOT/'releases').mkdir()
+        removed=self.m.uninstall('fixture')
+        self.assertTrue(removed['botsEngineRemoved'])
+        self.assertEqual(self.engine_calls[0][:4],[str(self.m.BOTS_HELPER),'--instance','wovenmatter','uninstall'])
+
+    def test_library_migrates_before_activation_and_a_failed_migration_restores_everything(self):
+        self.m.ROOT.mkdir(parents=True)
+        fp,stream=self.install_bundle(library=True); self.m.TOKEN=''
+        self.m.health=lambda *a:{'serviceFingerprint':fp,'runtimeKind':'host'}
+        identity={'deviceID':'6f1c2a5e-8b3d-4c7a-9e21-0d4b5c6a7f80','kind':'linux','name':'Fixture','publicKey':'FcjTkjz8DN0RYScE/kWqgsa7w7ns8c2d0RfOoCRv1n0=','libraryEndpoint':'https://fixture.test.ts.net:10000/wovenmatter'}
+        self.m.LIBRARY_STATE.mkdir(parents=True,exist_ok=True); (self.m.LIBRARY_STATE/'identity.json').write_text(json.dumps(identity))
+        source=open(stream,'rb'); saved_fd=None
+        try:
+            try: saved_fd=os.dup(3)
+            except OSError: pass
+            os.dup2(source.fileno(),3)
+            result=self.m.install('fixture','7337','fullRoot',fp)
+            self.assertEqual(result['memberIdentity'],identity)
+            migration=self.migrations[-1]
+            self.assertEqual(migration[0],str(self.m.ROOT/'releases'/fp/'host/library/linux-x86_64/wovenmatter-library'))
+            self.assertEqual(migration[1:4],['--data-root',str(self.m.ROOT),'--migrate-only'])
+            # The migration runs with the old service stopped, before the release switch.
+            stop=max(i for i,call in enumerate(self.calls) if call[:3]==['systemctl','--user','stop'])
+            self.assertLess(stop,self.calls.index(migration))
+            database=self.m.ROOT/'library/workspace.sqlite'; database.write_bytes(b'user data')
+            links={p:os.readlink(p) for p in (self.m.ROOT/'current',self.m.ROOT/'node/current')}
+            stream.write_bytes(b'\n'+self.home.joinpath('bundle.tar').read_bytes()); source.seek(0); self.m.TOKEN=''; self.fail_migration=True
+            with self.assertRaises(self.m.Failure) as error: self.m.install('fixture','7337','fullRoot',fp,True)
+            self.assertEqual(error.exception.code,'library_migration_failed')
+            self.assertEqual(database.read_bytes(),b'user data'); self.assertFalse((self.m.ROOT/'library/workspace.sqlite-wal').exists())
+            self.assertEqual(links,{p:os.readlink(p) for p in links}); self.assertTrue(self.active)
+            self.assertEqual(self.m.inspect()['memberIdentity'],identity); self.assertEqual(self.m.status('fixture')['memberIdentity'],identity)
+        finally:
+            if saved_fd is not None: os.dup2(saved_fd,3); os.close(saved_fd)
+            source.close()
+    def library_update_fixture(self):
+        self.m.ROOT.mkdir(parents=True)
+        fp,stream=self.install_bundle(library=True); self.m.TOKEN=''
+        self.m.LIBRARY_STATE.mkdir(parents=True,exist_ok=True); (self.m.LIBRARY_STATE/'identity.json').write_text(json.dumps({'deviceID':'6f1c2a5e-8b3d-4c7a-9e21-0d4b5c6a7f80'}))
+        self.m.health=lambda *a:{'serviceFingerprint':fp,'runtimeKind':'host'}
+        source=self.feed(stream)
+        self.m.install('fixture','7337','fullRoot',fp)
+        database=self.m.ROOT/'library/workspace.sqlite'; database.write_bytes(b'user data')
+        stream.write_bytes(b'\n'+self.home.joinpath('bundle.tar').read_bytes()); source.seek(0); self.m.TOKEN=''
+        self.service_starts.clear()
+        return fp,database
+    def test_update_checks_run_before_the_library_serves_and_a_failed_check_restores_its_database(self):
+        fp,database=self.library_update_fixture(); self.fail_selftest=True
+        with self.assertRaises(self.m.Failure) as error: self.m.install('fixture','7337','fullRoot',fp,True)
+        self.assertEqual(error.exception.code,'browser_selftest_failed')
+        # The checked service never ran its library host, so the backup is still current.
+        self.assertIn('WOVENMATTER_LIBRARY="0"',self.service_starts[0])
+        self.assertEqual(database.read_bytes(),b'user data')
+        self.assertNotIn('WOVENMATTER_LIBRARY=',self.m.ENV_FILE.read_text()); self.assertTrue(self.active)
+    def test_a_failure_after_the_library_host_starts_keeps_the_migrated_database(self):
+        fp,database=self.library_update_fixture()
+        # Healthy while checked; unhealthy once restarted with the library host.
+        self.m.health=lambda *a:None if len(self.service_starts)>1 else {'serviceFingerprint':fp,'runtimeKind':'host'}
+        self.m.HEALTH_SECONDS=1
+        with self.assertRaises(self.m.Failure) as error: self.m.install('fixture','7337','fullRoot',fp,True)
+        self.assertEqual(error.exception.code,'host_health_failed')
+        self.assertIn('migrated library was kept',error.exception.detail)
+        self.assertEqual(len(self.service_starts),2)
+        self.assertIn('WOVENMATTER_LIBRARY="0"',self.service_starts[0]); self.assertNotIn('WOVENMATTER_LIBRARY=',self.service_starts[1])
+        # No rollback: the database the new library host may have served stays.
+        self.assertEqual(database.read_bytes(),b'migrated'); self.assertTrue(self.active)
+        self.assertEqual(os.readlink(self.m.ROOT/'current'),str(self.m.ROOT/'releases'/fp))
+        self.assertNotIn('WOVENMATTER_LIBRARY=',self.m.ENV_FILE.read_text())
+    def test_rotating_the_installer_bearer_keeps_the_service_secret(self):
+        self.save_install()
+        first=self.m.rotate_token('fixture'); settings=self.m.parse_env()
+        self.assertTrue(first['rotated']); self.assertRegex(first['token'],'^[A-Za-z0-9_-]{64}$')
+        self.assertEqual(settings['WOVENMATTER_API_TOKEN'],first['token']); self.assertEqual(settings['WOVENMATTER_SERVICE_SECRET'],TOKEN)
+        second=self.m.rotate_token('fixture'); settings=self.m.parse_env()
+        self.assertNotEqual(second['token'],first['token'])
+        self.assertEqual(settings['WOVENMATTER_API_TOKEN'],second['token']); self.assertEqual(settings['WOVENMATTER_SERVICE_SECRET'],TOKEN)
+        self.assertEqual(self.m.ENV_FILE.stat().st_mode&0o777,0o600)
+        self.assertNotIn(second['token'],self.m.main(['logs','fixture'])['logs'])
+        with self.assertRaises(self.m.Failure): self.m.rotate_token('other')
+    def test_an_update_keeps_the_service_secret_whatever_bearer_it_streams(self):
+        self.m.ROOT.mkdir(parents=True)
+        fp,stream=self.install_bundle(); self.m.TOKEN=''
+        self.m.health=lambda *a:{'serviceFingerprint':fp,'runtimeKind':'host'}
+        source=self.feed(stream)
+        self.m.install('fixture','7337','fullRoot',fp)
+        self.assertEqual(self.m.parse_env()['WOVENMATTER_SERVICE_SECRET'],TOKEN)
+        rotated=self.m.rotate_token('fixture')['token']
+        stream.write_bytes(b'\n'+self.home.joinpath('bundle.tar').read_bytes()); source.seek(0); self.m.TOKEN=''
+        self.m.install('fixture','7337','fullRoot',fp,True)
+        settings=self.m.parse_env()
+        self.assertEqual(settings['WOVENMATTER_API_TOKEN'],rotated); self.assertEqual(settings['WOVENMATTER_SERVICE_SECRET'],TOKEN)
+    def test_a_compressed_library_binary_is_unpacked_and_verified_before_it_runs(self):
+        binary=b'\x7fELF fixture library host '*4096
+        self.m.ROOT.mkdir(parents=True)
+        fp,stream=self.install_bundle(packed_library=(binary,hashlib.sha256(binary).hexdigest())); self.m.TOKEN=''
+        self.m.health=lambda *a:{'serviceFingerprint':fp,'runtimeKind':'host'}
+        # The installer waits for the library host's identity; this one is already known.
+        self.m.LIBRARY_STATE.mkdir(parents=True,exist_ok=True); (self.m.LIBRARY_STATE/'identity.json').write_text(json.dumps({'deviceID':'6f1c2a5e-8b3d-4c7a-9e21-0d4b5c6a7f80'}))
+        source=self.feed(stream)
+        self.m.install('fixture','7337','fullRoot',fp)
+        unpacked=self.m.ROOT/'releases'/fp/'host/library/linux-x86_64/wovenmatter-library'
+        self.assertEqual(self.migrations[-1][0],str(unpacked))
+        self.assertEqual(unpacked.read_bytes(),binary)
+        self.assertEqual(unpacked.stat().st_mode&0o777,0o700)
+        # A tampered unpacked copy is replaced from the verified archive on the next use.
+        unpacked.write_bytes(b'tampered')
+        self.assertEqual(self.m.library_binary(self.m.ROOT/'releases'/fp),unpacked)
+        self.assertEqual(unpacked.read_bytes(),binary)
+        # A checksum that does not match the archive never runs.
+        directory=self.m.ROOT/'releases'/fp/'host/library/linux-x86_64'
+        unpacked.unlink(); (directory/'wovenmatter-library.sha256').write_text('0'*64+'  wovenmatter-library\n')
+        with self.assertRaises(self.m.Failure) as error: self.m.library_binary(self.m.ROOT/'releases'/fp)
+        self.assertEqual(error.exception.code,'library_verification_failed')
+        self.assertFalse(unpacked.exists())
+        self.assertEqual([path.name for path in directory.iterdir() if path.name.startswith('.')],[])
+    def stream_install(self,stream,*args,**kwargs):
+        source=open(stream,'rb'); saved_fd=None
+        try:
+            try: saved_fd=os.dup(3)
+            except OSError: pass
+            os.dup2(source.fileno(),3)
+            return self.m.install(*args,**kwargs)
+        finally:
+            if saved_fd is not None: os.dup2(saved_fd,3); os.close(saved_fd)
+            source.close()
+    def test_a_release_without_this_machines_library_host_is_refused_before_anything_changes(self):
+        self.m.ROOT.mkdir(parents=True)
+        fp,stream=self.install_bundle(bots=True,library=False); self.m.TOKEN=''
+        self.m.health=lambda *a:{'serviceFingerprint':fp,'runtimeKind':'host'}
+        with self.assertRaises(self.m.Failure) as error: self.stream_install(stream,'bots','7337','user',fp,roles='bots')
+        self.assertEqual(error.exception.code,'library_missing')
+        self.assertIn('build-linux-library.sh',error.exception.detail)
+        self.assertFalse(self.m.RECORD.exists()); self.assertFalse((self.m.ROOT/'current').exists())
+        self.assertFalse(any(call[:2]==['systemctl','--user'] and call[2] in ('stop','enable') for call in self.calls))
+        self.assertEqual(self.engine_calls,[])
+        # Another machine's binary is not this one's.
+        release=self.home/'release'; packed=release/'host/library/linux-x86_64/wovenmatter-library.gz'
+        packed.parent.mkdir(parents=True); packed.write_bytes(b'fixture')
+        self.assertTrue(self.m.library_shipped(release))
+        with mock.patch.object(self.m.platform,'machine',return_value='aarch64'):
+            self.assertFalse(self.m.library_shipped(release))
+    def test_a_failed_install_removes_the_node_runtime_it_downloaded(self):
+        self.m.ROOT.mkdir(parents=True)
+        node=io.BytesIO()
+        with tarfile.open(fileobj=node,mode='w:gz') as archive:
+            entry=tarfile.TarInfo('node-v26.12.1-linux-x64/bin/node'); data=b'fixture node'; entry.size=len(data); entry.mode=0o700
+            archive.addfile(entry,io.BytesIO(data))
+        self.node_archive=node.getvalue()
+        fp,stream=self.install_bundle(node_sha256=hashlib.sha256(self.node_archive).hexdigest()); self.m.TOKEN=''
+        shutil.rmtree(self.m.ROOT/'node')
+        self.bad_npm_vendor=True
+        with self.assertRaises(self.m.Failure) as error: self.stream_install(stream,'fixture','7337','fullRoot',fp)
+        self.assertEqual(error.exception.code,'npm_security_verification_failed')
+        self.assertTrue(any(call[0]=='curl' and 'node-v26.12.1-linux-x64.tar.gz' in call[-3] for call in self.calls))
+        self.assertFalse((self.m.ROOT/'node/26.12.1').exists())
+        self.assertFalse(self.m.RECORD.exists())
+    def test_uninstall_removes_only_the_recorded_library_route(self):
+        self.save_install(); (self.m.ROOT/'releases').mkdir(); self.m.UNIT.parent.mkdir(parents=True); self.m.UNIT.write_text('fixture')
+        endpoint='fixture.test.ts.net:10000'
+        configuration={'TCP':{'10000':{'HTTPS':True}},'Web':{endpoint:{'Handlers':{'/wovenmatter':{'Proxy':'http://127.0.0.1:41000'}}}}}
+        self.m.LIBRARY_STATE.mkdir(parents=True)
+        (self.m.LIBRARY_STATE/'serve.json').write_text(json.dumps({'dns':'fixture.test.ts.net','httpsPort':10000,'target':'http://127.0.0.1:41000','path':'/wovenmatter'}))
+        removals=[]
+        def fake(args,**kwargs):
+            args=[str(a) for a in args]
+            if args[:3]==['tailscale','serve','status']: return subprocess.CompletedProcess(args,0,json.dumps(configuration).encode(),b'')
+            if args[:2]==['tailscale','serve']:
+                removals.append(args); configuration['Web'][endpoint]['Handlers'].pop('/wovenmatter',None); return subprocess.CompletedProcess(args,0,b'',b'')
+            return self.command(args,**kwargs)
+        with mock.patch.object(self.m,'run',side_effect=fake): result=self.m.uninstall('fixture')
+        self.assertEqual(result['privateRoutesRemoved'],1)
+        self.assertEqual(removals,[['tailscale','serve','--https=10000','--set-path=/wovenmatter','off']])
+        self.assertFalse((self.m.LIBRARY_STATE/'serve.json').exists())
+        # A route someone else repointed is left alone.
+        self.save_install(); (self.m.ROOT/'releases').mkdir(exist_ok=True)
+        configuration['Web'][endpoint]['Handlers']['/wovenmatter']={'Proxy':'http://127.0.0.1:9999'}
+        (self.m.LIBRARY_STATE/'serve.json').write_text(json.dumps({'dns':'fixture.test.ts.net','httpsPort':10000,'target':'http://127.0.0.1:41000'}))
+        with mock.patch.object(self.m,'run',side_effect=fake): self.assertEqual(self.m.uninstall('fixture')['privateRoutesRemoved'],0)
+        self.assertEqual(len(removals),1)
 
 if __name__=='__main__': unittest.main()

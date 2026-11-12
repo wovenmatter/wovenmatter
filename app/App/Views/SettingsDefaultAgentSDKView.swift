@@ -59,7 +59,7 @@ struct SettingsDefaultAgentSDKView: View {
 
     private func workspaceLabel(_ workspace: Workspace, state: DefaultAgentSDKWorkspaceState) -> some View {
         HStack {
-            Text(workspace.name).font(.callout.weight(.medium))
+            Text(workspace.name).font(.settingsBody.weight(.medium))
             if state.busy { ProgressView().controlSize(.mini) }
         }
     }
@@ -72,10 +72,11 @@ struct SettingsDefaultAgentSDKView: View {
                 let update = sdk.updateAvailable ? sdk.latestVersion.map { " → \($0)" } ?? "" : ""
                 return "\(sdk.displayName) \(installed)\(update)"
             }.joined(separator: " · ") ?? "Checking installed components…"
-            SettingsRuntimeSummaryRow(runtimeKind: .defaultAgent, summary: summary,
+            SettingsRuntimeSummaryRow(summary: summary,
                 status: state.busy ? (state.operation?.action == .update ? "Updating" : "Checking")
                     : state.status == nil ? "Not checked"
-                    : state.status?.sdks.allSatisfy({ $0.installedVersion != nil }) == true ? "Installed" : "Not installed") {
+                    : state.status?.sdks.allSatisfy({ $0.installedVersion != nil }) == true ? "Installed" : "Not installed",
+                tone: state.status?.sdks.allSatisfy({ $0.installedVersion != nil }) == true ? .good : .neutral) {
                 Button(state.busy ? (state.operation?.action == .update ? "Updating…" : "Checking…")
                     : hasUpdate ? "Update" : "Check for updates") {
                     perform(hasUpdate ? .update : .check, in: workspace)
@@ -88,10 +89,10 @@ struct SettingsDefaultAgentSDKView: View {
             if let operation = state.operation {
                 HStack(spacing: 8) {
                     ProgressView().controlSize(.small)
-                    Text(progress(operation)).font(.caption).foregroundStyle(.secondary)
+                    Text(progress(operation)).font(.settingsSecondary).foregroundStyle(DashboardPalette.mutedForeground)
                 }
             }
-            if let error = state.error { Text(error).font(.callout).foregroundStyle(.red).textSelection(.enabled) }
+            if let error = state.error { Text(error).font(.settingsBody).foregroundStyle(DashboardPalette.danger).textSelection(.enabled) }
         }
     }
 

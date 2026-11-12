@@ -322,7 +322,7 @@ struct PageAndArtifactPersistenceTests {
     let revision = try await db.readNoteForEditing(id: id).revision
     #expect(try await db.persistNoteDraft(id: id, title: "Plan", content: typed.encoded(), expectedRevision: opened.revision, operationID: operation, baseContent: base, baseTitle: "Plan"))
     #expect(try await db.readNoteForEditing(id: id).revision == revision)
-    #expect(try await db.companionDraftRevision(operationID: operation) == revision)
+    #expect(try await db.libraryDraftRevision(operationID: operation) == revision)
   }
 
   @Test func aChainedAutosaveCannotDropAnEarlierMerge() async throws {

@@ -1,3 +1,4 @@
+#if os(macOS)
 import Foundation
 import Testing
 @testable import WovenMatterClient
@@ -10,9 +11,51 @@ struct HarnessOnboardingTests {
         #expect(status.state == "credentials_present")
         #expect(status.accounts?.map(\.name) == ["OpenCode Go · OpenCode Go 2", "OpenCode Go", "OpenCode Go"])
         #expect(status.accounts?.map(\.method) == ["Saved credential", "Saved credential", "API key"])
+        #expect(status.accounts?.map(\.target) == ["OpenCode Go", "OpenCode Go", "OpenCode Go"])
+        #expect(status.accounts?.map(\.credential) == ["OpenCode Go 2", "OpenCode Go", "API key"])
+        #expect(HarnessSignInFlow.openCodeRemoveArguments(target: "OpenCode Go", credential: "OpenCode Go 2")
+            == ["auth", "logout", "OpenCode Go", "OpenCode Go 2"])
         #expect(HarnessOnboarding.parseSignIn(.opencode, output: output, succeeded: false).state == "check_failed")
         #expect(HarnessOnboarding.parseSignIn(.opencode, output: "stored\n", succeeded: true).state == "not_checked")
         #expect(HarnessOnboarding.parseSignIn(.opencode, output: "OpenCode Go  sk-secret  stored\n", succeeded: true).accounts?.isEmpty == true)
+    }
+
+    @Test func signInOutputYieldsTheLinkAndOneTimeCode() {
+        let codex = HarnessSignInFlow.artifacts("""
+            \u{1b}[1mWelcome to Codex\u{1b}[0m
+            Follow these steps to sign in with ChatGPT using device code authorization:
+
+            1. Open this link in your browser and sign in to your account
+               https://auth.openai.com/codex/device
+
+            2. Enter this one-time code (expires in 15 minutes)
+               ABCD-EFGHI
+            """)
+        #expect(codex.url?.absoluteString == "https://auth.openai.com/codex/device")
+        #expect(codex.code == "ABCD-EFGHI")
+        let labeled = HarnessSignInFlow.artifacts("Open https://example.test/device\nDevice code ABCD-EFGH\n")
+        #expect(labeled.url?.absoluteString == "https://example.test/device")
+        #expect(labeled.code == "ABCD-EFGH")
+        let query = HarnessSignInFlow.artifacts("Visit https://accounts.example.test/activate?user_code=WXYZ-1234.")
+        #expect(query.url?.absoluteString == "https://accounts.example.test/activate?user_code=WXYZ-1234")
+        #expect(query.code == "WXYZ-1234")
+        let browser = HarnessSignInFlow.artifacts("Opening browser to sign in…\nIf it didn't open, visit: https://claude.ai/oauth/authorize?code=true&state=abc\n")
+        #expect(browser.url?.host == "claude.ai")
+        #expect(browser.code == nil)
+        #expect(HarnessSignInFlow.artifacts("Device: LOGIN\nhttp://insecure.example.test").url == nil)
+    }
+
+    @Test func signInRunsInAppExceptOpenCode() {
+        #expect(HarnessSignInFlow.methods(.codex).map(\.arguments) == [["login", "--device-auth"], ["login", "--with-api-key"]])
+        #expect(HarnessSignInFlow.methods(.grokBuild).map(\.arguments) == [["login", "--device-auth"]])
+        #expect(HarnessSignInFlow.methods(.claudeCode).first?.arguments == ["auth", "login", "--claudeai"])
+        #expect(HarnessSignInFlow.methods(.opencode).isEmpty)
+        #expect(HarnessSignInFlow.signOutArguments(.codex) == ["logout"])
+        #expect(HarnessSignInFlow.signOutArguments(.claudeCode) == ["auth", "logout"])
+        #expect(HarnessSignInFlow.signOutArguments(.grokBuild) == ["logout"])
+        let executable = URL(fileURLWithPath: "/usr/local/bin/tool")
+        #expect(HarnessOnboarding.signInScript(.codex, executable: executable, searchPath: "/usr/bin") == nil)
+        #expect(HarnessOnboarding.signInScript(.opencode, executable: executable, searchPath: "/usr/bin")?.contains("'auth' 'login'") == true)
     }
 
     @Test func nativeStatusCanArriveOnStandardError() async throws {
@@ -48,3 +91,4 @@ struct HarnessOnboardingTests {
         #expect(denied.accounts?.isEmpty == true)
     }
 }
+#endif

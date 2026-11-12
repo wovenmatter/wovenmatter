@@ -14,9 +14,22 @@ public final class PiCodeModeExecutor: NSObject, WKScriptMessageHandler, WKNavig
   private var allowed = Set<String>()
   private var request: [String: Any] = [:]
   private var finished = false
-  private var lastHeartbeat = ContinuousClock.now
+  /// The responsiveness clock. Tests substitute one they advance themselves, so a
+  /// budget check depends on heartbeats received rather than on machine load.
+  private let now: @MainActor () -> ContinuousClock.Instant
+  private var lastHeartbeat: ContinuousClock.Instant
+  /// Heartbeats received from the worker, for tests that pace a substituted clock.
+  private(set) var heartbeats = 0
   private var checkpoint: (@MainActor (String) async throws -> Void)?
   private var policy = PiExecutionPolicy()
+
+  public override convenience init() { self.init(now: { ContinuousClock.now }) }
+
+  init(now: @escaping @MainActor () -> ContinuousClock.Instant) {
+    self.now = now
+    lastHeartbeat = now()
+    super.init()
+  }
 
   public func run(requestJSON: String, policy: PiExecutionPolicy = .init(),
            checkpoint: @escaping @MainActor (String) async throws -> Void = { _ in
@@ -35,7 +48,7 @@ public final class PiCodeModeExecutor: NSObject, WKScriptMessageHandler, WKNavig
       try Task.checkCancellation()
       return try await withCheckedThrowingContinuation { continuation in
         self.continuation = continuation
-        self.lastHeartbeat = .now
+        self.lastHeartbeat = self.now()
         let configuration = WKWebViewConfiguration()
         configuration.websiteDataStore = .nonPersistent()
         configuration.userContentController.add(self, name: "wovenCodeMode")
@@ -46,8 +59,7 @@ public final class PiCodeModeExecutor: NSObject, WKScriptMessageHandler, WKNavig
           while !Task.isCancelled {
             do { try await Task.sleep(for: .milliseconds(100)) } catch { return }
             guard let self, !self.finished else { return }
-            let now = ContinuousClock.now
-            if self.lastHeartbeat.duration(to: now) >= .seconds(self.policy.unresponsiveCodeSeconds) {
+            if self.lastHeartbeat.duration(to: self.now()) >= .seconds(self.policy.unresponsiveCodeSeconds) {
               self.finish(.failure(PiDurableRuntimeError.unavailable("The code worker stopped responding. Yield during long computations with await yield_control(); saved tool effects have not been replayed."))); return
             }
           }
@@ -80,7 +92,7 @@ public final class PiCodeModeExecutor: NSObject, WKScriptMessageHandler, WKNavig
     guard !finished, message.name == "wovenCodeMode", let body = message.body as? [String: Any],
           let kind = body["type"] as? String else { return }
     if kind == "heartbeat" {
-      lastHeartbeat = .now
+      lastHeartbeat = now(); heartbeats += 1
     } else if kind == "done" {
       do {
         let data = try JSONSerialization.data(withJSONObject: body["result"] ?? [:])

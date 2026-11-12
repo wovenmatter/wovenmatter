@@ -155,7 +155,7 @@ final class WorkspaceProcessLease {
             for: .applicationSupportDirectory,
             in: .userDomainMask
         ).first,
-        isolatedDirectory: URL? = CompanionTestWorkspace.supportDirectory,
+        isolatedDirectory: URL? = IsolatedTestWorkspace.supportDirectory,
         role: LocalExecutionRole = .current
     ) -> URL {
         if let isolated = isolatedDirectory {
@@ -375,12 +375,12 @@ extension FocusedValues {
     }
 }
 
-#if !COMPANION_FACADE_TESTS
+#if !APP_FACADE_TESTS
 @main
 enum WovenMatterEntryPoint {
     @MainActor static func main() {
         // Service helpers must never initialize AppKit, SwiftUI, or a workspace.
-        if let status = CompanionServeSupervisor.dispatch(arguments: CommandLine.arguments) {
+        if let status = TailscaleServeSupervisor.dispatch(arguments: CommandLine.arguments) {
             Darwin.exit(status)
         }
         // Dispatch before App.main and its delegate adaptor can initialize
@@ -491,7 +491,7 @@ struct WovenMatterApp: App {
 
     init() {
         let isRunningUnitTests = ApplicationModel.isRunningUnitTests
-        if !isRunningUnitTests, CompanionTestWorkspace.supportDirectory == nil {
+        if !isRunningUnitTests, IsolatedTestWorkspace.supportDirectory == nil {
             do { try DevelopmentLaunch.validate() }
             catch {
                 NSLog("Development launch refused: %@", error.localizedDescription)

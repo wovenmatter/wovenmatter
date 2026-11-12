@@ -1,5 +1,9 @@
 import Foundation
+#if canImport(SQLite3)
 import SQLite3
+#else
+import CSQLite
+#endif
 import WovenMatterClient
 import WovenMatterCore
 
@@ -517,8 +521,8 @@ extension WorkspaceDatabaseConnection {
     }
     return try transaction {
       _ = try availableSessionExecutionRoot(id: conversationID)
-      guard try companionIDsUnlocked("SELECT workspace_id FROM companion_execution_conversations WHERE id=?", bindings: [conversationID]).isEmpty else {
-        throw CompanionAPIError(code: "execution_owner", message: "This conversation is owned by its independent execution workspace. Reconnect it instead of starting a legacy attachment.")
+      guard try libraryIDsUnlocked("SELECT workspace_id FROM execution_conversations WHERE id=?", bindings: [conversationID]).isEmpty else {
+        throw LibraryAPIError(code: "execution_owner", message: "This conversation is owned by its independent execution workspace. Reconnect it instead of starting a legacy attachment.")
       }
       let active = try prepareUnlocked("""
         SELECT 1 FROM dashboard_runs
@@ -1131,15 +1135,19 @@ extension WorkspaceDatabaseConnection {
     activity update: AgentRunActivity,
     appendingContent: Bool,
     updatedAt: Date,
-    replacingActivity: Bool = false
+    replacingActivity: Bool = false,
+    allowingSettledRun: Bool = false
   ) throws {
+      // Live streams write only into a running run. Canonical reconciliation
+      // may replace a settled run's parts without reopening it.
       let context = try prepareUnlocked("""
         SELECT 1
         FROM dashboard_runs
-        WHERE id = ? AND authority_kind = 'device_owned' AND status = 'running'
+        WHERE id = ? AND authority_kind = 'device_owned' AND (status = 'running' OR ? = 1)
         """)
       defer { sqlite3_finalize(context) }
       try bind(runID, at: 1, to: context)
+      sqlite3_bind_int(context, 2, allowingSettledRun ? 1 : 0)
       guard sqlite3_step(context) == SQLITE_ROW else {
         throw LocalACPSessionDatabaseError.runNotFound
       }

@@ -5,7 +5,7 @@ import { applyTaskConfiguration } from './task-gateway-runner.mjs'
 import { clientInteraction, clientInteractionResponse } from './client-interactions.mjs'
 import { createNativeClientSessions } from './client-native-sessions.mjs'
 import { createNativeTaskExecutor } from './task-gateway-native.mjs'
-import { runtimeConfiguration, workspacePermission, workspaceExecutionConfiguration } from './config.mjs'
+import { runtimeConfiguration, workspacePermission, workspaceExecutionConfiguration, presentPermissionChoices, fullAccessPermissions } from './config.mjs'
 
 const delay = milliseconds => new Promise(resolve => setTimeout(resolve,milliseconds))
 const fail = message => Object.assign(new Error(message), { statusCode: 409 })
@@ -41,14 +41,20 @@ export function createClientExecutionRuntime({ defaultAgent, durableACP, catalog
   async function invoke(native,method,params) {
     return (await defaultAgent.invoke({method,attachmentToken:native.attachmentToken,params:{sessionId:native.sessionID,...params}})).result
   }
-  async function applyWorkspacePolicy(native, runtimeKind, call) {
-    const permission = workspacePermission(runtimeKind, undefined, configuration)
+  // Full root forces Full access. A new session (`creation`) otherwise gets the
+  // requested destination default, or the harness's Full access mode when none
+  // was saved; an adapter that does not offer it keeps its native mode.
+  // Reattaching an existing session never changes its permission.
+  async function applyWorkspacePolicy(native, runtimeKind, call, creation) {
+    const forced = workspacePermission(runtimeKind, undefined, configuration)
+    const requested = creation?.permission
+    const permission = forced ?? (creation ? requested ?? fullAccessPermissions[runtimeKind] : undefined)
     if (!permission || runtimeKind === 'grok_build') return
     await applyTaskConfiguration(async (method, params) => {
       const result = await call(method, params)
       native.configuration = { ...native.configuration, ...result }
       return result
-    }, native.sessionID, native.configuration ?? {}, { runtimeKind, permission })
+    }, native.sessionID, native.configuration ?? {}, { runtimeKind, permission, usesProductPermissionDefault: !forced })
   }
   async function attach(native,runtimeKind) {
     if (runtimeKind === 'grok_build') native.permission = workspacePermission(runtimeKind, native.permission, configuration)
@@ -139,6 +145,7 @@ export function createClientExecutionRuntime({ defaultAgent, durableACP, catalog
     } finally {channel.pending.delete(id)}
   }
   async function create({runtimeKind,conversationID,workspaceID,mcpConnection,nativeWorkingDirectory:requestedDirectory,permission}) {
+    const requestedPermission = permission
     permission = workspacePermission(runtimeKind, permission, configuration)
     if(mcpConnection)mcpConnections.set(conversationID,mcpConnection)
     if(!isExecutionEnabled())throw fail('Background execution is disabled for this workspace.')
@@ -150,24 +157,24 @@ export function createClientExecutionRuntime({ defaultAgent, durableACP, catalog
       if(status.locked)throw fail('Pi Durable is locked. Reconnect the central Mac to unlock its configured accounts.')
       const opened=await defaultAgent.invoke({method:'session/new',attachmentProtocol:1,params:{cwd:nativeWorkingDirectory,_meta:{...(mcpConnection?{wovenMCPConnection:mcpConnection}:{})}}})
       const native = {nativeWorkingDirectory,sessionID:opened.result.sessionId,attachmentToken:opened.result._meta?.attachmentToken,epoch:status.epoch,configuration:opened.result}
-      await applyWorkspacePolicy(native, runtimeKind, (method, params) => invoke(native, method, params))
+      await applyWorkspacePolicy(native, runtimeKind, (method, params) => invoke(native, method, params), { permission: requestedPermission })
       return native
     }
     if(runtimeKind==='opencode') {
       const native = await nativeSessions.perform(runtimeKind,{sessionID:null,conversationID,workspaceID,nativeWorkingDirectory},'create')
-      if (workspacePermission(runtimeKind, undefined, configuration)) await nativeSessions.perform(runtimeKind, native, 'configure', { permission })
+      await nativeSessions.perform(runtimeKind, native, 'configure', { permission: permission ?? fullAccessPermissions.opencode })
       return native
     }
     const harness=catalog.get(runtimeKind)
     if(!harness||!['acp','agent-stdio'].includes(harness.transport))throw fail('This native runtime is unavailable for direct execution.')
-    const native={channelID:conversationID,sessionID:null,nativeWorkingDirectory,...(runtimeKind==='grok_build'?{permission:permission??'default'}:{})}
+    const native={channelID:conversationID,sessionID:null,nativeWorkingDirectory,...(runtimeKind==='grok_build'?{permission:permission??fullAccessPermissions.grok_build}:{})}
     const channel=await attach(native,runtimeKind)
     const initialized=await rpc(channel,'initialize',{protocolVersion:1,clientCapabilities:{fs:{readTextFile:false,writeTextFile:false},terminal:false,elicitation:{form:{}}},clientInfo:{name:'Woven Matter Workspace',version:'1'}})
     native.steeringSupported=initialized._meta?.steering?.supported===true
     if(initialized.protocolVersion!==1)throw fail('Unsupported native agent protocol.')
     native.configuration=await rpc(channel,'session/new',{cwd:native.nativeWorkingDirectory??workspaceRoot,mcpServers:mcpServers(mcpConnection),_meta:{...(mcpConnection?{wovenMCPConnection:mcpConnection}:{})}});native.sessionID=native.configuration.sessionId
     if(typeof native.sessionID!=='string'||!native.sessionID)throw fail('The native agent did not create a session.')
-    await applyWorkspacePolicy(native, runtimeKind, (method, params) => rpc(channel, method, params))
+    await applyWorkspacePolicy(native, runtimeKind, (method, params) => rpc(channel, method, params), { permission: requestedPermission })
     return native
   }
   async function adopt({native,runtimeKind}) {
@@ -312,6 +319,7 @@ export function createClientExecutionRuntime({ defaultAgent, durableACP, catalog
     if(opened.result.sessionId!==native.sessionID)throw fail('Pi Durable reopened a different native session.')
     native.attachmentToken=opened.result._meta?.attachmentToken;native.epoch=status.epoch;native.configuration=opened.result
   }
+  const grokPermissionChoices=[['default','Ask for approval'],['auto','Auto'],['acceptEdits','Auto-accept edits'],['dontAsk',"Don't ask"],['bypassPermissions','Full access']].map(([id,label])=>({id,label}))
   const selections = options => (options??[]).flatMap(item=>item.value!=null?[{id:String(item.value),label:item.name??String(item.value)}]:selections(item.options))
   async function settings({native,runtimeKind}) {
     if(runtimeKind==='opencode')return nativeSessions.perform(runtimeKind,native,'settings')
@@ -322,7 +330,7 @@ export function createClientExecutionRuntime({ defaultAgent, durableACP, catalog
     const permission=initial.configOptions?.find(item=>['permission_mode','approval_mode','mode'].includes(item.id))
     return {model:model?.currentValue??initial.models?.currentModelId,thinking:thinking?.currentValue,permission:runtimeKind==='grok_build'?(native.permission??'default'):permission?.currentValue??initial.modes?.currentModeId,
       models:model?selections(model.options):(initial.models?.availableModels??[]).map(item=>({id:item.modelId,label:item.name??item.modelId})),
-      thinkingLevels:selections(thinking?.options),permissions:runtimeKind==='grok_build'?['default','acceptEdits','auto','dontAsk','bypassPermissions'].map(id=>({id,label:id})):selections(permission?.options),availableTools:[],enabledTools:[],canConfigure:!(runtimeKind==='opencode')}
+      thinkingLevels:selections(thinking?.options),permissions:presentPermissionChoices(runtimeKind,runtimeKind==='grok_build'?grokPermissionChoices:selections(permission?.options)),availableTools:[],enabledTools:[],canConfigure:!(runtimeKind==='opencode')}
   }
   async function configure({native,runtimeKind,options}) {
     options = workspaceExecutionConfiguration({ runtimeKind, ...options }, configuration)

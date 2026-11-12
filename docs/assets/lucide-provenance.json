@@ -1,9 +1,9 @@
 {
   "package": "lucide-static",
-  "version": "1.70.0",
-  "tarball": "https://registry.npmjs.org/lucide-static/-/lucide-static-1.70.0.tgz",
-  "integrity": "sha512-A9UgY98g94IuHQY7rl7/AFwHX7T1qNpzryim+Kw5CGhdV2STobtBY+ib/Z44ohyqXEJB88gvXFAeJ87uOOHKLw==",
-  "source": "https://github.com/lucide-icons/lucide/tree/1.70.0",
+  "version": "1.72.0",
+  "tarball": "https://registry.npmjs.org/lucide-static/-/lucide-static-1.72.0.tgz",
+  "integrity": "sha512-QhdZ60O7Zcs/e8gw40uMfEn055xZTHBZoNi0xb+/1R2dTd0v4FXS46VL6rKSwC+V92tLBiqsAbCcijy7Wy4j4w==",
+  "source": "https://github.com/lucide-icons/lucide/tree/1.72.0",
   "transform": "Retain asset names, 24-point view boxes, black template strokes, and existing stroke widths; omit CSS classes.",
   "assets": {
     "app/App/SharedAssets.xcassets/Lucide/lucide-arrow-down-s25.imageset/lucide-arrow-down-s25.svg": {
@@ -70,9 +70,17 @@
       "upstream": "circle-alert.svg",
       "sha256": "67002a27723525b0eda695ca43d2803ff9140ca4a9108f7eee6f257a855cf2b9"
     },
+    "app/App/SharedAssets.xcassets/Lucide/lucide-circle-check-s20.imageset/lucide-circle-check-s20.svg": {
+      "upstream": "circle-check.svg",
+      "sha256": "713acc192626edf7907f613daaf3b7a7ece8e235ba3e755e6d7fffe77ea32047"
+    },
     "app/App/SharedAssets.xcassets/Lucide/lucide-circle-user-s15.imageset/lucide-circle-user-s15.svg": {
       "upstream": "circle-user.svg",
       "sha256": "29b1196e58b5d7b992d52a29518ceb4be837e5a989d129fd8d3461198fade45e"
+    },
+    "app/App/SharedAssets.xcassets/Lucide/lucide-columns-2-s175.imageset/lucide-columns-2-s175.svg": {
+      "upstream": "columns-2.svg",
+      "sha256": "f8b771b0fb9809d6e5e89a8c973ef67a03fe95ea528c9c8d1e61edcb7d04d911"
     },
     "app/App/SharedAssets.xcassets/Lucide/lucide-compass-s15.imageset/lucide-compass-s15.svg": {
       "upstream": "compass.svg",
@@ -82,6 +90,10 @@
       "upstream": "container.svg",
       "sha256": "8abbf5eedc30d7b2ea850f384a222604ce1d6eeab09b3024d675d5e2a9cb9708"
     },
+    "app/App/SharedAssets.xcassets/Lucide/lucide-copy-s15.imageset/lucide-copy-s15.svg": {
+      "upstream": "copy.svg",
+      "sha256": "a775e1c8281b70a91be06d27bba90007cc02ef03c2a05d5b112ec77413c58058"
+    },
     "app/App/SharedAssets.xcassets/Lucide/lucide-cpu-s15.imageset/lucide-cpu-s15.svg": {
       "upstream": "cpu.svg",
       "sha256": "54381a0f85d448b3611d6af7e82e9ecd5db2725fc17dd6e5e3efe2e79c0a5603"
@@ -89,6 +101,10 @@
     "app/App/SharedAssets.xcassets/Lucide/lucide-database-s15.imageset/lucide-database-s15.svg": {
       "upstream": "database.svg",
       "sha256": "d06a04bc1d7374ec3e04b1a50109865e9ec02dfa25a7e2334d19c440afd252fc"
+    },
+    "app/App/SharedAssets.xcassets/Lucide/lucide-external-link-s175.imageset/lucide-external-link-s175.svg": {
+      "upstream": "external-link.svg",
+      "sha256": "a092450f416d1c5652ce44e465ff2f2d1b1846206270991ae9b3ea26c96ceeb8"
     },
     "app/App/SharedAssets.xcassets/Lucide/lucide-file-text-s15.imageset/lucide-file-text-s15.svg": {
       "upstream": "file-text.svg",
@@ -105,6 +121,10 @@
     "app/App/SharedAssets.xcassets/Lucide/lucide-folder-s15.imageset/lucide-folder-s15.svg": {
       "upstream": "folder.svg",
       "sha256": "49f72dfa929bf45ad4a11ba9955ad792f028d7af30cbb7a792df1edd4be76c1c"
+    },
+    "app/App/SharedAssets.xcassets/Lucide/lucide-git-branch-s15.imageset/lucide-git-branch-s15.svg": {
+      "upstream": "git-branch.svg",
+      "sha256": "de37bd9bfb3344681dcd837503fabba4b14c15c976a5387fcb9617c7e586ae9c"
     },
     "app/App/SharedAssets.xcassets/Lucide/lucide-house-s15.imageset/lucide-house-s15.svg": {
       "upstream": "house.svg",
@@ -125,6 +145,14 @@
     "app/App/SharedAssets.xcassets/Lucide/lucide-list-filter-s20.imageset/lucide-list-filter-s20.svg": {
       "upstream": "list-filter.svg",
       "sha256": "8ecda8e800f98c1879ec8977d7d5126750970ca766bb5dd5aff54c1a0e7b987c"
+    },
+    "app/App/SharedAssets.xcassets/Lucide/lucide-maximize-2-s175.imageset/lucide-maximize-2-s175.svg": {
+      "upstream": "maximize-2.svg",
+      "sha256": "4093507dbe356e78d9c677025fc16671efee59d080ec0a52735909eb92341f3f"
+    },
+    "app/App/SharedAssets.xcassets/Lucide/lucide-message-square-reply-s15.imageset/lucide-message-square-reply-s15.svg": {
+      "upstream": "message-square-reply.svg",
+      "sha256": "c94b8d9813fc8c0b0d37513907299a535f00460d029da5a4d3e3fc3dd69b0ce1"
     },
     "app/App/SharedAssets.xcassets/Lucide/lucide-message-square-s15.imageset/lucide-message-square-s15.svg": {
       "upstream": "message-square.svg",

@@ -124,6 +124,7 @@ struct HarnessSetupView: View {
                 }
             }
             .frame(minHeight: 44)
+            SettingsHarnessSignInPanel(model: model, runtimeKind: kind)
             if let message = model.harnessSignIn.messages[kind] { SettingsNote(message) }
             if let error = setup.errors[kind] ?? model.runtimeFailureDetails[kind] { SettingsError(error) }
             if setup.activeInstall == kind, let prepared = model.preparedLocalACPRuntimeInstall,
@@ -169,7 +170,7 @@ struct HarnessSetupView: View {
             }
             .background(theme.palette.themeWhisper)
             .clipShape(DashboardShapes.card)
-            SettingsNote("Both steps are optional. Reopen this guide from Settings → General → Set up harnesses. Provider connections and web search are also available in Settings → Pi Durable.")
+            SettingsNote("Both steps are optional. Reopen this guide from Settings → Agents. Provider connections and web search are also available in Settings → Subscriptions & API Keys.")
         }
     }
 

@@ -1,0 +1,4 @@
+module FacadeBrowserTestBridge {
+  header "../../../Browser/WMBrowserBridge.h"
+  export *
+}

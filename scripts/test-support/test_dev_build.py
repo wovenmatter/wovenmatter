@@ -13,6 +13,84 @@ dev = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(dev)
 
 
+class FakeSecurity:
+    """`defaults` and `security` for reset(): a Keychain of service names, no real calls."""
+    def __init__(self, services):
+        self.services = list(services)
+        self.calls = []
+
+    def __call__(self, command, **_):
+        self.calls.append(command)
+        if command[:2] == ["security", "dump-keychain"]:
+            out = "".join(f'    "svce"<blob>="{name}"\n' for name in self.services)
+            return subprocess.CompletedProcess(command, 0, out, "")
+        if command[:2] == ["security", "delete-generic-password"]:
+            name = command[command.index("-s") + 1]
+            if name in self.services:
+                self.services.remove(name)
+                return subprocess.CompletedProcess(command, 0, "", "")
+            return subprocess.CompletedProcess(command, 44, "", "")
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+
+class FreshSnapshotTests(unittest.TestCase):
+    bundle = "wovenmatter.desktop.dev.bot-test.snapshot"
+
+    def test_reset_trashes_the_snapshot_and_only_this_instances_keychain_items(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            dev_root = root / "Woven Matter Dev"
+            support = dev_root / "bot-test" / "snapshot"
+            (support / "WovenVM").mkdir(parents=True)
+            (support / "development-snapshot.json").write_text("{}")
+            keep = dev_root / "bot-test-2" / "snapshot"; keep.mkdir(parents=True)
+            security = FakeSecurity([
+                "Woven Matter.desktop.dev.bot-test.snapshot.default-agent",
+                "Woven Matter.desktop.dev.bot-test.snapshot.default-agent",
+                "wovenmatter.desktop.dev.bot-test.snapshot.paired-mac-signing",
+                "wovenmatter.desktop.dev.bot-test-2.snapshot.paired-mac-signing",
+                "Woven Matter.desktop.dev.bot-test-2.snapshot.default-agent",
+                "Woven Matter.desktop",
+            ])
+            dev.reset(support, self.bundle, dev_root=dev_root, trash=root / "Trash", run=security, now=lambda: 0)
+            self.assertFalse(support.exists())
+            self.assertTrue(keep.exists())
+            trashed = list((root / "Trash").iterdir())
+            self.assertEqual(len(trashed), 1)
+            self.assertTrue((trashed[0] / "WovenVM").is_dir())
+            self.assertEqual(security.services, [
+                "wovenmatter.desktop.dev.bot-test-2.snapshot.paired-mac-signing",
+                "Woven Matter.desktop.dev.bot-test-2.snapshot.default-agent",
+                "Woven Matter.desktop",
+            ])
+            self.assertIn(["defaults", "delete", self.bundle], security.calls)
+            # A second reset with nothing left is harmless.
+            dev.reset(support, self.bundle, dev_root=dev_root, trash=root / "Trash", run=security)
+
+    def test_reset_refuses_anything_but_a_dev_snapshot(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            dev_root = root / "Woven Matter Dev"
+            production = root / "Woven Matter"; production.mkdir()
+            unmarked = dev_root / "x" / "snapshot"; unmarked.mkdir(parents=True)
+            client = dev_root / "x" / "client"; client.mkdir(parents=True)
+            security = FakeSecurity([])
+            for path in (production, client, dev_root):
+                with self.assertRaises(ValueError):
+                    dev.reset(path, self.bundle, dev_root=dev_root, trash=root / "Trash", run=security)
+            with self.assertRaises(ValueError):  # right bundle ID, but not a development snapshot
+                dev.reset(unmarked, "wovenmatter.desktop.dev.x.snapshot", dev_root=dev_root, trash=root / "Trash", run=security)
+            self.assertTrue(unmarked.exists())
+            with self.assertRaises(ValueError):
+                dev.reset(unmarked, "wovenmatter.desktop", dev_root=dev_root, trash=root / "Trash", run=security)
+            marked = dev_root / "x" / "snapshot"
+            (marked / "development-snapshot.json").write_text("{}")
+            with self.assertRaises(ValueError):  # another instance's bundle ID
+                dev.reset(marked, self.bundle, dev_root=dev_root, trash=root / "Trash", run=security)
+            self.assertTrue(marked.exists())
+            self.assertEqual(security.calls, [])
+
+
 class DevelopmentBuildTests(unittest.TestCase):
     def test_backend_guard_matches_executable_aliases_without_matching_other_profiles(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -90,6 +168,35 @@ class DevelopmentBuildTests(unittest.TestCase):
         self.assertEqual(other["support"], production)
         self.assertNotEqual(other["bundle"], profiles["live"]["bundle"])
 
+    def test_snapshot_discards_bot_grants_and_coordination(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp); source = root / "source"; source.mkdir()
+            with sqlite3.connect(source / "workspace.sqlite") as db:
+                db.executescript("""
+                  CREATE TABLE workspace_mcp_bot_machines(machine_id TEXT,active INTEGER);
+                  INSERT INTO workspace_mcp_bot_machines VALUES('fixture',1);
+                  CREATE TABLE workspace_session_relationships(session_id TEXT,coordinator_id TEXT,coordination_epoch TEXT,coordination_since TEXT);
+                  INSERT INTO workspace_session_relationships VALUES('session','woven:bot:fixture:bot','epoch','since');
+                  CREATE TABLE workspace_session_grants(source_id TEXT,kind TEXT);
+                  INSERT INTO workspace_session_grants VALUES('woven:bot:fixture:bot','approved');
+                  CREATE TABLE workspace_session_deliveries(id TEXT,status TEXT);
+                  INSERT INTO workspace_session_deliveries VALUES('event','queued');
+                  CREATE TABLE workspace_coordination_access_requests(source_id TEXT,state TEXT);
+                  INSERT INTO workspace_coordination_access_requests VALUES('woven:bot:fixture:bot','pending');
+                """)
+            (source / "mcp-access.json").write_text(json.dumps({"port": 12345, "botKeys": {"woven:bot:fixture:bot": "fixture-digest"}}))
+            target = root / "snapshot"
+            dev.snapshot(source, target)
+            self.assertFalse((target / "mcp-access.json").exists())
+            with sqlite3.connect(target / "workspace.sqlite") as db:
+                self.assertEqual(db.execute("SELECT active FROM workspace_mcp_bot_machines").fetchone(), (0,))
+                self.assertEqual(db.execute("SELECT coordinator_id,coordination_epoch,coordination_since FROM workspace_session_relationships").fetchone(), (None, None, None))
+                self.assertEqual(db.execute("SELECT count(*) FROM workspace_session_grants").fetchone(), (0,))
+                self.assertEqual(db.execute("SELECT status FROM workspace_session_deliveries").fetchone(), ('cancelled',))
+                self.assertEqual(db.execute("SELECT state FROM workspace_coordination_access_requests").fetchone(), ('cancelled',))
+            with sqlite3.connect(source / "workspace.sqlite") as db:
+                self.assertEqual(db.execute("SELECT active FROM workspace_mcp_bot_machines").fetchone(), (1,))
+
     def test_snapshot_includes_wal_and_assets_without_changing_source(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp); source = root / "production"; source.mkdir()
@@ -115,8 +222,12 @@ class DevelopmentBuildTests(unittest.TestCase):
               INSERT INTO paired_calendar_owners VALUES('schedule','other-mac');
               CREATE TABLE paired_library_state(name TEXT, value TEXT);
               INSERT INTO paired_library_state VALUES('owners.bootstrap','1'),('baseline.other-mac','4');
+              -- A library from before November 2026, still on the old table names.
               CREATE TABLE companion_workspace(singleton INTEGER, workspace_id TEXT);
+              CREATE TABLE companion_library_identity(singleton INTEGER, host_device_id TEXT);
+              INSERT INTO companion_library_identity VALUES(1,'source');
               CREATE TABLE companion_execution_workspaces(id TEXT,payload BLOB);
+              CREATE TRIGGER companion_notes_insert AFTER INSERT ON notes BEGIN SELECT 1; END;
               INSERT INTO companion_execution_workspaces VALUES('source-mac','{"libraryID":"production-identity","name":"Mac","endpoint":"https://fixture.test.ts.net/wovenmatter"}');
               CREATE TABLE dashboard_calendar_items(id TEXT, calendar_json TEXT);
               CREATE TABLE dashboard_runs(id TEXT,status TEXT);
@@ -138,7 +249,7 @@ class DevelopmentBuildTests(unittest.TestCase):
                 # Ownership survives, so the snapshot never adopts another Mac's schedule.
                 self.assertEqual(copy.execute("SELECT device_id FROM paired_calendar_owners").fetchall(), [("other-mac",)])
                 self.assertEqual(copy.execute("SELECT name FROM paired_library_state").fetchall(), [("owners.bootstrap",)])
-                workspace = json.loads(copy.execute("SELECT payload FROM companion_execution_workspaces").fetchone()[0])
+                workspace = json.loads(copy.execute("SELECT payload FROM execution_workspaces").fetchone()[0])
                 self.assertTrue(workspace["retainedHistory"])
                 self.assertNotIn("endpoint", workspace)
                 self.assertEqual(workspace["name"], "Mac")
@@ -148,8 +259,12 @@ class DevelopmentBuildTests(unittest.TestCase):
                 self.assertEqual(copy.execute("SELECT status FROM dashboard_agents WHERE id='local-pi'").fetchone()[0], "offline")
                 self.assertEqual(copy.execute("SELECT a.id FROM dashboard_conversations c JOIN dashboard_agents a ON c.agent_id=a.id").fetchone()[0], "local-pi")
                 self.assertIsNone(copy.execute("SELECT deleted_at FROM dashboard_agents WHERE id='remote-pi'").fetchone()[0])
-                self.assertNotEqual(copy.execute("SELECT workspace_id FROM companion_workspace").fetchone()[0], "production-identity")
-                self.assertEqual(copy.execute("SELECT COUNT(*) FROM companion_calendar_owners").fetchone()[0], 1)
+                identity = copy.execute("SELECT host_device_id,library_id FROM library_identity").fetchall()
+                self.assertEqual(len(identity), 1)
+                self.assertNotIn(identity[0][0], ("source", None)); self.assertNotIn(identity[0][1], ("production-identity", None))
+                self.assertEqual(json.loads(copy.execute("SELECT payload FROM execution_workspaces").fetchone()[0])["libraryID"], identity[0][1])
+                self.assertEqual(copy.execute("SELECT name FROM sqlite_master WHERE name LIKE 'companion%'").fetchall(), [])
+                self.assertEqual(copy.execute("SELECT COUNT(*) FROM calendar_task_executors").fetchone()[0], 1)
                 self.assertIn("retain me", copy.execute("SELECT calendar_json FROM dashboard_calendar_items").fetchone()[0])
                 self.assertEqual(copy.execute("SELECT status FROM dashboard_runs").fetchone()[0], "interrupted")
                 self.assertEqual(json.loads(copy.execute("SELECT value FROM workspace_session_goals").fetchone()[0])["status"], "paused")
@@ -187,6 +302,47 @@ class DevelopmentBuildTests(unittest.TestCase):
             (source / "library-files").symlink_to(root, target_is_directory=True)
             with self.assertRaises(ValueError): dev.snapshot(source, root / "dev")
             self.assertFalse((root / "dev").exists())
+
+    def test_missing_linux_library_hosts_are_built_with_docker_or_stop_the_build(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            def ship(arch, *names):
+                directory = root / "remote/host/library" / ("linux-" + arch); directory.mkdir(parents=True, exist_ok=True)
+                for name in names: (directory / name).write_bytes(b"fixture")
+            calls = []
+            def run(command, **kwargs):
+                calls.append([str(part) for part in command])
+                if command[-1] != "info":
+                    # The build script writes what was asked for.
+                    for arch in ([command[command.index("--arch") + 1]] if "--arch" in command else dev.LINUX_LIBRARY_ARCHITECTURES):
+                        ship(arch, "wovenmatter-library.gz", "wovenmatter-library.sha256")
+                return subprocess.CompletedProcess(command, 0)
+            docker = lambda name: "/usr/local/bin/docker"
+            # Nothing shipped: both are missing; without Docker the build stops and says how.
+            self.assertEqual(dev.missing_linux_libraries(root), ["x86_64", "aarch64"])
+            with self.assertRaises(SystemExit) as stopped:
+                dev.ensure_linux_library(root, environ={}, which=lambda name: None, run=run)
+            self.assertIn("scripts/build-linux-library.sh", str(stopped.exception.code))
+            self.assertIn("WOVENMATTER_DEV_LINUX_LIBRARY=skip", str(stopped.exception.code))
+            failing = lambda command, **kwargs: subprocess.CompletedProcess(command, 1)
+            with self.assertRaises(SystemExit): dev.ensure_linux_library(root, environ={}, which=docker, run=failing)
+            self.assertEqual(calls, [])
+            # An explicit skip builds nothing and names what is missing.
+            self.assertEqual(dev.ensure_linux_library(root, environ={"WOVENMATTER_DEV_LINUX_LIBRARY": "skip"}, which=docker, run=run), ["x86_64", "aarch64"])
+            self.assertEqual(calls, [])
+            # A plain binary kept for local runs counts, and is never rebuilt over: only the other architecture is built.
+            ship("x86_64", "wovenmatter-library")
+            self.assertEqual(dev.ensure_linux_library(root, environ={}, which=docker, run=run), [])
+            self.assertEqual(calls[-1][-3:], ["--docker", "--arch", "aarch64"])
+            self.assertTrue(calls[-1][0].endswith("scripts/build-linux-library.sh"))
+            self.assertEqual((root / "remote/host/library/linux-x86_64/wovenmatter-library").read_bytes(), b"fixture")
+            # Everything present: nothing runs.
+            calls.clear()
+            self.assertEqual(dev.ensure_linux_library(root, environ={}, which=docker, run=run), [])
+            self.assertEqual(calls, [])
+            # A packed binary needs its recorded checksum beside it.
+            (root / "remote/host/library/linux-aarch64/wovenmatter-library.sha256").unlink()
+            self.assertEqual(dev.missing_linux_libraries(root), ["aarch64"])
 
 
 if __name__ == "__main__": unittest.main()

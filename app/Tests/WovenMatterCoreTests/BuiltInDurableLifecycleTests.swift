@@ -1,3 +1,4 @@
+#if os(macOS)
 import WorkspaceFixtures
 import Foundation
 import Testing
@@ -117,3 +118,4 @@ private actor BackgroundDriverFixture {
   func finishBackgroundWork() { idleWaiter?.resume(); idleWaiter = nil }
   private func shutdown() { finishBackgroundWork() }
 }
+#endif

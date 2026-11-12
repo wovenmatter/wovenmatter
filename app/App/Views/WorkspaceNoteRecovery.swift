@@ -165,6 +165,10 @@ struct WorkspaceNoteRecovery: View {
         case "before-agent-edit": "Before agent edit"
         case "restore": "Restored version"
         case "before-restore": "Before restoration"
+        // Versions saved before November 2026 used the old "companion" names.
+        case "device", "companion": "Edit from another device"
+        case "before-device-edit", "before-companion-edit": "Before edit from another device"
+        case "before-device-delete", "before-companion-delete": "Before deletion from another device"
         default: value
         }
     }

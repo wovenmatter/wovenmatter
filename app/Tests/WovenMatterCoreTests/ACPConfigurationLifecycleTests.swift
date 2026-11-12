@@ -1,3 +1,4 @@
+#if os(macOS)
 import WorkspaceFixtures
 import Foundation
 import Testing
@@ -43,7 +44,7 @@ struct ACPConfigurationLifecycleTests {
     let expectedID: String? = outcome == "unsent" ? nil : "native-first"
     #expect(fence.hasDispatched == (outcome != "unsent"))
     #expect(try await database.localACPSession(conversationID: id).acpSessionID == expectedID)
-    let content = try await database.read { try $0.companionIDsUnlocked("SELECT content FROM dashboard_messages WHERE id=?", bindings: [run.assistantMessageID]).first }
+    let content = try await database.read { try $0.libraryIDsUnlocked("SELECT content FROM dashboard_messages WHERE id=?", bindings: [run.assistantMessageID]).first }
     // An unsent cancellation terminalizes the placeholder with the app's
     // stopped-before-response message, never provider output.
     #expect(content == (outcome == "unsent" ? "Stopped before the agent produced a response." : "Partial first response"))
@@ -318,3 +319,4 @@ final class ConfigurationTestProcessLease: LocalACPProcessLeasing, @unchecked Se
     lock.withLock { holdCount = max(0, holdCount - 1) }
   }
 }
+#endif

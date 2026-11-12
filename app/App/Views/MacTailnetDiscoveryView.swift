@@ -1,11 +1,11 @@
 import SwiftUI
-import WovenMatterCompanion
+import WovenMatterShared
 import WovenMatterDashboardStore
 
 struct MacTailnetDiscoveryView: View {
     @Bindable var devices: MacDeviceSetupModel
-    @Bindable var pairing: CompanionMacPairingController
-    @Bindable var host: CompanionHostController
+    @Bindable var pairing: MacPairingController
+    @Bindable var host: LibraryHostController
     var canPairWithCentral: Bool
     @State private var confirmation: DeviceSetupConfirmation?
     private var busy: Bool { devices.searching || pairing.isDiscovering || host.isDiscovering || devices.rows.contains(where: \.busy) }
@@ -20,7 +20,7 @@ struct MacTailnetDiscoveryView: View {
                     await inventory
                 }
             }.buttonStyle(SettingsQuietButtonStyle()).disabled(busy)
-                .accessibilityIdentifier("companion.find-macs")
+                .accessibilityIdentifier("devices.find-macs")
             if let error = devices.error {
                 Text(error).font(.system(size: 12)).foregroundStyle(DashboardPalette.danger)
             } else if devices.searched && devices.rows.isEmpty {
@@ -28,7 +28,7 @@ struct MacTailnetDiscoveryView: View {
                     Text("No Macs found").font(.system(size: 13, weight: .medium))
                     Text("No other macOS devices are visible on your Tailscale network. Connect another Mac to this tailnet, then try again.")
                         .font(.system(size: 12)).foregroundStyle(DashboardPalette.mutedForeground)
-                }.accessibilityIdentifier("companion.no-macs")
+                }.accessibilityIdentifier("devices.no-macs")
             }
             ForEach(devices.rows) { row in
                 MacTailnetDeviceRow(row: row, release: devices.release, peer: peer(for: row), paired: isPaired(row),
@@ -52,7 +52,7 @@ struct MacTailnetDiscoveryView: View {
         }
     }
     private func rowError(_ row: MacDeviceRow) { row.error = "Update both Macs to a version that supports paired Mac synchronization." }
-    private func peer(for row: MacDeviceRow) -> CompanionDiscoveredPeer? {
+    private func peer(for row: MacDeviceRow) -> DiscoveredPeer? {
         (pairing.peers + host.discoveredPeers).first { $0.endpoint.host == row.mac.dnsName }
     }
     private func isPaired(_ row: MacDeviceRow) -> Bool {
@@ -96,8 +96,8 @@ struct MacTailnetDiscoveryView: View {
 
 private struct MacTailnetDeviceRow: View {
     @Bindable var row: MacDeviceRow
-    var release: CompanionMacRelease?
-    var peer: CompanionDiscoveredPeer?
+    var release: MacRelease?
+    var peer: DiscoveredPeer?
     var paired: Bool
     var canPairWithCentral: Bool
     var onAction: (MacDeviceSetupModel.Action) -> Void
@@ -138,7 +138,7 @@ private struct MacTailnetDeviceRow: View {
                 }.font(.system(size: 12))
             }
         }.padding(.vertical, 8)
-            .accessibilityIdentifier("companion.mac.\(row.mac.id)")
+            .accessibilityIdentifier("devices.mac.\(row.mac.id)")
     }
     private var summary: String {
         if !row.mac.online { return "Offline · Connect this Mac to Tailscale to continue" }

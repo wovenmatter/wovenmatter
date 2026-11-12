@@ -36,12 +36,12 @@ SOFTWARE.
 
 ## Pi Durable runtime
 
-Pi Durable bundles `@earendil-works/pi-durable` 1.5.0 from
-[Earendil Works Pi](https://github.com/earendil-works/pi/tree/v1.5.0/packages/durable)
+Pi Durable bundles `@earendil-works/pi-durable` 1.5.2 from
+[Earendil Works Pi](https://github.com/earendil-works/pi/tree/v1.5.2/packages/durable)
 for native execution and persistence. The format-1 JSONL migration reader in
 `default-agent/src/legacy-jsonl-migration.mjs` adapts its recovery and reclamation
 rules under the same license. Its
-[upstream license](https://github.com/earendil-works/pi/blob/v1.5.0/LICENSE)
+[upstream license](https://github.com/earendil-works/pi/blob/v1.5.2/LICENSE)
 is MIT, with `Copyright (c) 2025 Mario Zechner`.
 
 Native store ownership uses `proper-lockfile` from
@@ -53,7 +53,7 @@ Bundled dependencies retain their own upstream licenses and notices.
 
 ## Lucide
 
-The dashboard icon assets are derived from `lucide-static` 1.70.0.
+The dashboard icon assets are derived from `lucide-static` 1.72.0.
 Published tarball integrity and per-asset hashes are recorded in
 `docs/assets/lucide-provenance.json`.
 
@@ -160,6 +160,51 @@ The automation server and Executor client bundle the v2
 [the MCP TypeScript SDK](https://github.com/modelcontextprotocol/typescript-sdk)
 under Apache-2.0. Their complete upstream licenses and notices remain in the
 bundled Node dependencies.
+
+## Bots runtime
+
+The bots runtime (`bots/`, shipped under `Resources/bots` and in Linux host
+releases) is ported from Woven Matter's Pi Bot server. It bundles the locked
+production dependencies in `bots/package-lock.json`, installed unmodified with
+`npm ci --omit=dev`: `@earendil-works/pi-durable`, `@earendil-works/pi-ai` and
+`@earendil-works/chord` from
+[Earendil Works Pi](https://github.com/earendil-works/pi) (MIT,
+`Copyright (c) 2025 Mario Zechner`), `typebox` (MIT), `ws` (MIT) and `zod`
+(MIT), and their dependencies under MIT, Apache-2.0, BSD-2-Clause,
+BSD-3-Clause, ISC, 0BSD and Unlicense terms. The
+[Claude Agent SDK](https://github.com/anthropics/claude-agent-sdk-typescript)
+and its native runtime are © Anthropic PBC and used under
+[Anthropic's terms](https://code.claude.com/docs/en/legal-and-compliance); the
+runtime keeps Anthropic's original signature and is never modified. Each
+package's license and notice files remain in the bundled `node_modules`.
+
+The in-container helper (`bots/helper/`) adapts Pi Bot's environment agent.
+Bot containers are built at run time from `bots/image` on Ubuntu 26.04 LTS,
+with Chromium, Playwright, Node.js, Python, git, build tools and tini installed
+from their official distributions inside the bot engine; their licenses and
+notices remain in each image under `/usr/share/doc` and the installed packages.
+No container image is shipped in the app.
+
+## Woven VM guest and bot engines
+
+On Apple silicon Macs, the Woven VM downloads the pinned
+[Ubuntu 26.04 LTS server cloud image](https://cloud-images.ubuntu.com/releases/resolute/)
+for arm64 from Canonical on first run (`app/VMHelper/guest-version.json`
+records its URL, serial, size and SHA-256, which is checked before use). The
+image is not redistributed in the app. Ubuntu is a trademark of Canonical Ltd.;
+the image's packages remain under their own licenses, listed in the guest under
+`/usr/share/doc/*/copyright`. Woven Matter converts the image to a raw disk and
+configures it through cloud-init; it does not modify the packages in the image.
+
+Inside the guest, Docker Engine (Docker CE, containerd, runc and their plugins)
+is installed unmodified from [Docker's signed apt repository](https://download.docker.com/linux/ubuntu)
+at the versions pinned in `guest-version.json`. The app bundles only Docker's
+public repository signing key (`Resources/WovenVM/docker-archive-keyring.asc`),
+verified by fingerprint and SHA-256. On Linux hosts, `remote/host/bots-engine.py`
+installs Docker's official static binaries, pinned with SHA-256 in
+`remote/host/runtime-versions.json`. Docker Engine (Moby) is licensed under
+Apache-2.0, containerd and runc under Apache-2.0; their licenses ship with the
+packages and archives. Docker is a trademark of Docker, Inc.
 
 ## Sparkle 2.10.1
 

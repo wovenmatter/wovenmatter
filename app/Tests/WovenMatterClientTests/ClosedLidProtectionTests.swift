@@ -1,4 +1,11 @@
+#if os(macOS)
+#if canImport(Darwin)
 import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#elseif canImport(Musl)
+import Musl
+#endif
 import Foundation
 import Testing
 @testable import WovenMatterClient
@@ -80,7 +87,7 @@ struct ClosedLidProtectionTests {
         #expect(protection.snapshot.message == "Closed-lid protection is unavailable in this build.")
         setup = .notRegistered
         protection.beat()
-        #expect(protection.snapshot.message == "Set up closed-lid protection in General settings.")
+        #expect(protection.snapshot.message == "Set up closed-lid protection in Background Server settings.")
         setup = .approvalRequired
         protection.beat()
         #expect(protection.snapshot.message?.contains("Approve") == true)
@@ -108,3 +115,4 @@ struct ClosedLidProtectionTests {
     }
 
 }
+#endif

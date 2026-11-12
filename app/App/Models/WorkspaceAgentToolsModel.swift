@@ -52,6 +52,8 @@ final class WorkspaceAgentToolsModel {
     let calendarTaskHandler: CalendarTaskHandler?
     var calendarProjection: (@MainActor () async throws -> Void)?
     var replicaReadHandler: (@MainActor (WovenMatterToolRequest, WovenMatterToolCommand, String) async throws -> WovenMatterToolResponse?)?
+    /// Sessions other members' workspaces run (`WorkspaceToolHandlers.memberSession`).
+    var memberSessionHandler: (@MainActor (WovenMatterToolRequest, WovenMatterToolCommand, String) async throws -> WovenMatterToolResponse?)?
     let database: WorkspaceDatabase
     private(set) var settings: WorkspaceToolSettings
     private(set) var sessionPolicies: [String: WorkspaceSessionTools] = [:]
@@ -64,8 +66,8 @@ final class WorkspaceAgentToolsModel {
     private(set) var hasOlderReceipts: Set<String> = []
     var error: String?
     private var mcpHost: WovenMCPHost?
-    #if COMPANION_FACADE_TESTS
-    @ObservationIgnored var companionFixtureMCPConnection: ((String, WovenMCPConnection, RemoteWorkspaceConfiguration?) async -> WovenMCPConnection)?
+    #if APP_FACADE_TESTS
+    @ObservationIgnored var facadeFixtureMCPConnection: ((String, WovenMCPConnection, RemoteWorkspaceConfiguration?) async -> WovenMCPConnection)?
     #endif
     private var remoteBridges: [String: WovenMCPRemoteBridge] = [:]
     private var remoteBridgeCredentials: [String: String] = [:]
@@ -250,6 +252,21 @@ final class WorkspaceAgentToolsModel {
         catch { self.error = error.localizedDescription }
     }
 
+    /// A bot's own timers (its schedule): this Mac keeps and fires them for its
+    /// own bots. Their target is the bot's principal, never a chat, so session
+    /// views do not list them; the bot's conversation does, by its name.
+    func timers(forBot botID: String, on machineID: String) -> [WorkspaceSessionTimer] {
+        Self.botTimers(timers, machineID: machineID, botID: botID)
+    }
+
+    /// Active timers soonest first, then paused ones.
+    nonisolated static func botTimers(_ timers: [WorkspaceSessionTimer], machineID: String, botID: String) -> [WorkspaceSessionTimer] {
+        let principal = WovenMCPCaller.bot(machineID: machineID, botID: botID)
+        return timers.filter { $0.sessionID == principal }.sorted {
+            ($0.isPaused ? 1 : 0, $0.nextFireAt, $0.id) < ($1.isPaused ? 1 : 0, $1.nextFireAt, $1.id)
+        }
+    }
+
     /// SwiftUI reads a published value; loading is done by observeSession/reload.
     func policy(for sessionID: String) -> WorkspaceSessionTools {
         sessionPolicies[sessionID] ?? WorkspaceSessionTools(enabled: [])
@@ -326,8 +343,42 @@ final class WorkspaceAgentToolsModel {
             guard let self else { return .init(success: false, error: "Woven MCP stopped.", code: "unavailable") }
             return await self.handle(request, callerID: callerID)
         }
+        host.botNotificationSink = botNotificationSink
         mcpHost = host
         return host
+    }
+
+    var botNotificationSink: (@MainActor (WovenBotNotification) async throws -> Void)? {
+        didSet { mcpHost?.botNotificationSink = botNotificationSink }
+    }
+
+    func mcpEndpoint() async throws -> String { try await ensureMCPHost().start() }
+
+    func issueBotKey(machineID: String, botID: String, botName: String) async throws -> WovenBotMCPGrant {
+        try await ensureMCPHost().issueBotKey(machineID: machineID, botID: botID, botName: botName)
+    }
+
+    func revokeBotKey(callerID: String, sticky: Bool) throws {
+        try ensureMCPHost().revokeBotKey(callerID: callerID, sticky: sticky)
+    }
+
+    func reinstateBot(callerID: String) async throws { try await ensureMCPHost().reinstateBot(callerID: callerID) }
+
+    func setBotsPaused(machineID: String, paused: Bool) async throws {
+        try await ensureMCPHost().setBotsPaused(machineID: machineID, paused: paused)
+    }
+
+    func botCallers() async throws -> [WovenBotCaller] { try await database.botCallers() }
+
+    func trackBotDispatch(callerID: String, fence: AgentDispatchFence) throws -> UUID? {
+        guard WovenMCPCaller.parseBot(callerID) != nil else { return nil }
+        return try ensureMCPHost().trackBotDispatch(callerID: callerID, fence: fence)
+    }
+
+    func finishBotDispatch(_ id: UUID?) { mcpHost?.finishBotDispatch(id) }
+
+    func deliverBotNotification(_ delivery: WorkspaceSessionDelivery) async throws -> Bool {
+        try await ensureMCPHost().deliverBotNotification(delivery)
     }
 
     func mcpAccess(_ action: WovenMCPAccessAction) async throws -> WovenMCPAccessSnapshot {
@@ -336,7 +387,7 @@ final class WorkspaceAgentToolsModel {
         return snapshot
     }
 
-    func handleMCP(_ request: CompanionHTTPRequest) async -> CompanionHTTPResponse? {
+    func handleMCP(_ request: LibraryHTTPRequest) async -> LibraryHTTPResponse? {
         guard !passiveProjection, !stopped else { return nil }
         do { return await (try ensureMCPHost()).handle(request) }
         catch { return .error("unavailable", "Woven MCP is unavailable.", status: 503) }
@@ -344,8 +395,8 @@ final class WorkspaceAgentToolsModel {
 
     func mcpContext(sessionID: String, remote: RemoteWorkspaceConfiguration? = nil, captureID: String) async throws -> WovenMCPConnection {
         let local = try await ensureMCPHost().connection(sessionID: sessionID, captureID: captureID.isEmpty ? nil : captureID)
-        #if COMPANION_FACADE_TESTS
-        if let companionFixtureMCPConnection { return await companionFixtureMCPConnection(sessionID, local, remote) }
+        #if APP_FACADE_TESTS
+        if let facadeFixtureMCPConnection { return await facadeFixtureMCPConnection(sessionID, local, remote) }
         #endif
         guard let remote else { return local }
         let bridge: WovenMCPRemoteBridge
@@ -392,464 +443,40 @@ final class WorkspaceAgentToolsModel {
 
     private func execute(_ request: WovenMatterToolRequest, callerID: String) async -> WovenMatterToolResponse {
         guard !passiveProjection else { return .init(success: false, error: "Tool execution belongs to the background service.") }
-        var parsedCommand: WovenMatterToolCommand?
-        do {
-            guard request.schemaVersion == 1, let requestUUID = UUID(uuidString: request.requestID) else {
-                throw WorkspaceToolError.invalid("Unsupported tool request.")
-            }
-            var request = request
-            request.requestID = requestUUID.uuidString.lowercased()
-            let command = try WovenMatterToolCommand(request.arguments)
-            guard try JSONEncoder().encode(request).count <= request.maximumEncodedBytes else {
-                throw WorkspaceToolError.invalid("This tool request exceeds its size limit.")
-            }
-            parsedCommand = command
-            if request.targetSessionID != nil, callerID != WovenMCPCaller.outside {
-                throw WorkspaceToolError.invalid("Conversation callers cannot choose another chat as their tool identity.")
-            }
-            if let suppliedRequestID = command.options["request-id"] {
-                guard let suppliedUUID = UUID(uuidString: suppliedRequestID),
-                      suppliedUUID.uuidString.lowercased() == request.requestID else {
-                    throw WorkspaceToolError.invalid("--request-id must match the request envelope.")
-                }
-            }
-            if command.action == "context", callerID == WovenMCPCaller.outside {
-                try await database.requireTool(.notes, sessionID: callerID)
-                return .init(result: .null, requestID: request.requestID)
-            }
-            if command.action == "context" {
-                let id = try await database.inputContext(id: request.contextID, callerID: callerID)
-                return .init(result: id.map(GatewayJSONValue.string) ?? .null, requestID: request.requestID)
-            }
-            guard let group = command.group else { throw WorkspaceToolError.invalid("Choose a tool.") }
-            // Scoped history reads have their own independent attachment/management
-            // checks. All other commands require the group's current capability.
-            if group != .history && !(group.isAutomation && command.action == "cancel") {
-                try await database.requireTool(group, sessionID: callerID)
-            }
-            let result: WovenMatterToolResponse
-            if let replica = try await replicaReadHandler?(request, command, callerID) { result = replica }
-            else { switch group {
-            case .history:
-                result = .init(result: try await database.queryAgentHistory(historyQuery(command), callerID: callerID,
-                    allWorkspace: command.options["all-workspace"] != nil))
-            case .notes:
-                if command.isDatabaseCommand { result = try await sessionHandler(callerID, command, request) }
-                else if command.isPageCommand { result = try await pages(command, request: request, callerID: callerID) }
-                else { result = try await notes(command, request: request, callerID: callerID) }
-            case .sessions:
-                if command.action == "list" || command.action == "status" {
-                    var query = try historyQuery(command)
-                    query.command = "conversations"
-                    if command.action == "status" { query.id = try command.required("id", allowPositional: true) }
-                    var page = try await database.queryAgentHistory(query, callerID: callerID,
-                        allWorkspace: command.options["all-workspace"] != nil)
-                    if command.action == "status", var object = page.objectValue, let id = query.id {
-                        guard object["rows"]?.arrayValue?.isEmpty == false else {
-                            throw WorkspaceToolError.notFound("The requested session was not found.")
-                        }
-                        object["relationship"] = try WovenMatterToolResponse.value(
-                            await database.sessionRelationship(id)).result ?? .null
-                        page = .object(object)
-                    }
-                    result = .init(result: page)
-                } else if command.action == "folders" {
-                    result = .init(result: try await database.listAgentFolders(callerID: callerID,
-                        after: Int64(command.integer("after", default: 0, range: 0...Int.max)),
-                        limit: command.integer("limit", default: 100, range: 1...200)))
-                } else { result = try await sessionHandler(callerID, command, request) }
-            case .goals: result = try await goal(command, callerID: callerID, requestID: request.requestID, targetID: request.targetSessionID)
-            case .timers: result = try await timer(command, callerID: callerID, requestID: request.requestID, targetID: request.targetSessionID)
-            case .calendar:
-                try await calendarProjection?()
-                result = try await calendar(command, callerID: callerID, requestID: request.requestID)
-                if command.isMutation, result.success { try await calendarProjection?() }
-            case .usage: result = try await usageHandler(command)
-            case .library: result = try await library(command, callerID: callerID)
-            case .html:
-                if command.action == "call" {
-                    let input = try JSONDecoder().decode(GatewayJSONValue.self, from: Data(command.required("json").utf8))
-                    guard let object = input.objectValue, let html = object["html"]?.stringValue,
-                          let action = object["action"]?.stringValue, ["preview", "render"].contains(action) else {
-                        throw WorkspaceToolError.invalid("Provide an HTML render or preview action.")
-                    }
-                    let allowed: Set<String> = action == "render" ? ["action", "html", "title", "height"] : ["action", "html", "width", "appearance", "missingImages"]
-                    guard Set(object.keys).isSubset(of: allowed) else { throw WorkspaceToolError.invalid("Unknown HTML parameter.") }
-                    let page = try ConversationHTMLPage(html: html, title: object["title"]?.stringValue ?? "HTML preview",
-                        height: object["height"]?.intValue ?? 400)
-                    if action == "render" {
-                        guard object["title"]?.stringValue != nil, object["height"]?.intValue != nil else {
-                            throw WorkspaceToolError.invalid("Rendering requires a title and integer height.")
-                        }
-                        let reference = try await database.publishConversationHTML(page, callerID: callerID, requestID: request.requestID, targetID: request.targetSessionID)
-                        result = .init(result: .object([
-                            "htmlRender": try WovenMatterToolResponse.value(reference).result ?? .null,
-                            "message": .string("Shown above your reply. Reply with only what the page does not already say.")
-                        ]))
-                    } else {
-                        guard let automationHandler else { throw WorkspaceToolError.invalid("Open Woven Matter to preview HTML.") }
-                        result = try await automationHandler(callerID, command, request)
-                    }
-                } else {
-                    guard let automationHandler else { throw WorkspaceToolError.invalid("The HTML preview host is unavailable.") }
-                    result = try await automationHandler(callerID, command, request)
-                }
-            case .executor:
-                guard let executorHandler else { throw WorkspaceToolError.invalid("Executor manager is unavailable.") }
-                result = try await executorHandler(callerID, command, request)
-            case .browser, .computer:
-                guard let automationHandler else { throw WorkspaceToolError.invalid("Open Woven Matter to use browser and computer tools.") }
-                result = try await automationHandler(callerID, command, request)
-            }
-            }
-            if command.isMutation {
-                try await recordMCPMutation(command: command, callerID: callerID, requestID: request.requestID,
-                    success: result.success, code: result.code)
-            }
-            try await reload()
+        let session = sessionHandler, note = noteHandler, restore = noteRestoreHandler, usage = usageHandler
+        let onMutation = onMutation
+        var handlers = WorkspaceToolHandlers(afterExecution: { [weak self] in
+            try await self?.reload()
             await onMutation()
-            return .init(success: result.success, result: result.result, error: result.error,
-                code: result.code, silent: result.silent, requestID: request.requestID)
-        } catch {
-            let code = Self.errorCode(error)
-            if let command = parsedCommand, command.isMutation {
-                let canonicalID = UUID(uuidString: request.requestID)?.uuidString.lowercased() ?? request.requestID
-                try? await recordMCPMutation(command: command, callerID: callerID, requestID: canonicalID,
-                    success: false, code: code)
-            }
-            return .init(success: false, error: error.localizedDescription, code: code,
-                requestID: UUID(uuidString: request.requestID)?.uuidString.lowercased() ?? request.requestID)
+        })
+        handlers.session = { caller, command, request in try await session(caller, command, request) }
+        handlers.note = { caller, edit, requestID in try await note(caller, edit, requestID) }
+        handlers.noteRestore = { caller, noteID, versionID, revision, requestID in
+            try await restore(caller, noteID, versionID, revision, requestID)
         }
-    }
-
-    private func recordMCPMutation(command: WovenMatterToolCommand, callerID: String,
-                                   requestID: String, success: Bool, code: String?) async throws {
-        var payload: [String: String] = [
-            "group": command.group?.rawValue ?? "unknown", "action": command.action,
-            "requestID": requestID, "success": success ? "true" : "false"
-        ]
-        if let code { payload["code"] = code }
-        try await database.recordHistory(.init(conversationID: callerID, harness: "wovenmatter",
-            kind: "mcp.mutation", payload: String(decoding: try JSONEncoder().encode(payload), as: UTF8.self)))
-    }
-
-    private static func errorCode(_ error: any Error) -> String {
-        if let error = error as? WorkspaceToolError {
-            switch error {
-            case .disabled: return "tool_disabled"
-            case .accessRequired: return "access_required"
-            case .coordinationConflict: return "coordination_conflict"
-            case .managedLimit: return "managed_limit"
-            case .atCapacity: return "at_capacity"
-            case .notFound: return "not_found"
-            case .revisionRequired: return "revision_required"
-            case .revisionConflict: return "revision_conflict"
-            case .timerPauseConfirmation: return "confirmation_required"
-            case .invalid: return "invalid_request"
-            }
+        handlers.usage = { command in try await usage(command) }
+        if let handler = calendarTaskHandler {
+            handlers.calendarTask = { caller, command, existing in try await handler(caller, command, existing) }
         }
-        if let error = error as? WorkspaceNoteMutationError {
-            switch error {
-            case .folderNotFound, .noteNotFound: return "not_found"
-            case .revisionConflict: return "revision_conflict"
-            }
+        if let projection = calendarProjection { handlers.calendarProjection = { try await projection() } }
+        if let handler = replicaReadHandler {
+            handlers.replicaRead = { request, command, caller in try await handler(request, command, caller) }
         }
-        if let error = error as? NoteEditError {
-            switch error {
-            case .blockNotFound, .tableNotFound, .pageTargetMissing: return "not_found"
-            case .boardItemConflict, .pageSubtreeConflict: return "revision_conflict"
-            default: return "invalid_request"
-            }
+        if let handler = memberSessionHandler {
+            handlers.memberSession = { request, command, caller in try await handler(request, command, caller) }
         }
-        if let error = error as? ArtifactStateError {
-            if case .conflict = error { return "revision_conflict" }
-            return "invalid_request"
+        if let handler = automationHandler {
+            handlers.automation = { caller, command, request in try await handler(caller, command, request) }
         }
-        if error is NoteDocumentSafetyError || error is RemoteNoteEditError { return "invalid_request" }
-        if error is CancellationError { return "cancelled" }
-        return "operation_failed"
-    }
-
-    private func historyQuery(_ command: WovenMatterToolCommand) throws -> WorkspaceHistoryQuery {
-        var query = WorkspaceHistoryQuery(command: command.action)
-        if command.action == "search" { query.search = try command.required("search", allowPositional: true) }
-        else { query.id = command.options["id"] ?? command.positional.first; query.search = command.options["search"] }
-        query.conversationID = command.options["conversation"]
-        query.runID = command.options["run"]
-        query.harness = command.options["harness"]
-        query.sourceID = command.options["source-id"]
-        query.nativeSessionID = command.options["native-session-id"]
-        query.nativeRecordID = command.options["native-record-id"]
-        query.nativeConversationID = command.options["native-conversation-id"]
-        query.folderID = command.options["folder"]
-        query.kind = command.options["kind"]
-        query.since = command.options["since"]
-        query.until = command.options["until"]
-        query.sort = command.options["sort"] ?? (command.action == "conversations" ||
-            (command.group == .sessions && command.action == "list") ? "newest" : "oldest")
-        let initialCursor = query.sort == "newest" ? Int.max : 0
-        query.after = Int64(try command.integer("after", default: initialCursor, range: 0...Int.max))
-        query.limit = try command.integer("limit", default: 50, range: 1...200)
-        query.offset = try command.integer("offset", default: 0, range: 0...(Int.max - 1))
-        query.characters = try command.integer("characters", default: 65_536, range: 1...65_536)
-        return query
-    }
-
-    private func notes(_ command: WovenMatterToolCommand, request: WovenMatterToolRequest, callerID: String) async throws -> WovenMatterToolResponse {
-        switch command.action {
-        case "list":
-            let newest = (command.options["sort"] ?? "newest") == "newest"
-            let initialCursor = newest ? Int.max : 0
-            return .init(result: try await database.listAgentNotes(callerID: callerID, search: command.options["search"], folderID: command.options["folder"],
-                after: Int64(try command.integer("after", default: initialCursor, range: 0...Int.max)),
-                limit: try command.integer("limit", default: 50, range: 1...200), newestFirst: newest))
-        case "folders":
-            return .init(result: try await database.listAgentFolders(callerID: callerID, requiredTool: .notes,
-                after: Int64(command.integer("after", default: 0, range: 0...Int.max)),
-                limit: command.integer("limit", default: 100, range: 1...200)))
-        case "create":
-            guard let kind = NoteArtifactKind(rawValue: command.options["kind"] ?? "note"), kind != .canvas else { throw WorkspaceToolError.invalid("Choose note, spreadsheet or html. Use woven_pages_create for a Page.") }
-            let id = try await database.createNote(folderID: command.options["folder"], title: command.required("title"), kind: kind, callerConversationID: callerID, requestID: request.requestID)
-            return .init(result: .object(["id": .string(id)]))
-        case "versions", "version":
-            var query = try historyQuery(command)
-            query.id = command.options[command.action == "versions" ? "note-id" : "version"]
-                ?? command.options["id"] ?? command.positional.first
-            return .init(result: try await database.queryAgentHistory(query, callerID: callerID))
-        case "restore":
-            return try noteMutationAcknowledgement(await noteRestoreHandler(callerID,
-                command.required("note-id", allowPositional: true), command.required("version"),
-                command.required("revision"), request.requestID))
-        case "artifact-state":
-            let response = try await noteHandler(callerID, .init(command: .read, noteID: command.required("note-id")), request.requestID)
-            guard let document = response.document, document.kind == .html else {
-                throw ArtifactStateError.notArtifact
-            }
-            return .init(result: .object(["id": .string(response.noteID),
-                "revision": response.revision.map(GatewayJSONValue.string) ?? .null,
-                "state": try WovenMCPCatalog.json(document.artifactStateSnapshot)]))
-        case "artifact-state-edit":
-            let edit = try NoteToolEdits.request(command)
-            do {
-                let response = try await noteHandler(callerID, edit, request.requestID)
-                var object = try noteMutationAcknowledgement(response).result?.objectValue ?? [:]
-                // A replay carries only its acknowledgement, never another copy of the state.
-                if let document = response.document { object["state"] = try WovenMCPCatalog.json(document.artifactStateSnapshot) }
-                return .init(success: response.success, result: .object(object), error: response.error,
-                    code: response.success ? nil : "mutation_failed")
-            } catch ArtifactStateError.conflict(let key, let current) {
-                // The failed transaction changed nothing, so this is current state to act on.
-                var object: [String: GatewayJSONValue] = ["id": .string(edit.noteID), "key": .string(key),
-                    "currentVersion": .number(Double(current?.version ?? 0))]
-                if let value = current?.value { object["currentValue"] = value }
-                let message = ArtifactStateError.conflict(key: key, current: current).localizedDescription
-                return .init(success: false, result: .object(object), error: message, code: "revision_conflict")
-            }
-        default:
-            let edit = try NoteToolEdits.request(command)
-            let response = try await noteHandler(callerID, edit, request.requestID)
-            if command.action == "read" {
-                return try noteReadChunk(response,
-                    offset: command.integer("offset", default: 0, range: 0...(Int.max - 1)),
-                    characters: command.integer("characters", default: 65_536, range: 1...65_536))
-            }
-            return try noteMutationAcknowledgement(response)
+        if let handler = executorHandler {
+            handlers.executor = { caller, command, request in try await handler(caller, command, request) }
         }
-    }
-
-    private func pages(_ command: WovenMatterToolCommand, request: WovenMatterToolRequest, callerID: String) async throws -> WovenMatterToolResponse {
-        switch command.action {
-        case "page-list":
-            return .init(result: try await database.listAgentPages(callerID: callerID, search: command.options["search"], folderID: command.options["folder"],
-                after: Int64(try command.integer("after", default: Int.max, range: 0...Int.max)),
-                limit: try command.integer("limit", default: 50, range: 1...200)))
-        case "page-create":
-            let purpose = command.options["purpose"] ?? ""
-            try NoteToolEdits.requirePurpose(purpose)
-            let content = try NoteDocument(kind: .canvas, boardPurpose: purpose.isEmpty ? nil : purpose, pageNodes: [:]).encoded()
-            let id = try await database.createNote(folderID: command.options["folder"], title: command.required("title"), content: content, kind: .canvas,
-                callerConversationID: callerID, requestID: request.requestID)
-            return .init(result: .object(["id": .string(id), "kind": .string("page")]))
-        case "page-read":
-            let filter = try BoardReadFilter(command: command)
-            let (document, response) = try await readPage(command.required("note-id"), callerID: callerID, requestID: request.requestID)
-            let assets = try await database.boardAssetSummaries(callerID: callerID, ids: document.boardAssetIDs(filter: filter))
-            return .init(result: try document.pageReadValue(id: response.noteID, title: response.title ?? "",
-                revision: response.revision ?? "", filter: filter, assets: assets))
-        default:
-            let edit = try NoteToolEdits.pageRequest(command, requestID: request.requestID)
-            let componentID = command.action == "page-add-component" ? request.requestID : command.options["id"]
-            do {
-                let response = try await noteHandler(callerID, edit, request.requestID)
-                return try await pageAcknowledgement(response, componentID: componentID, callerID: callerID)
-            } catch NoteEditError.boardItemConflict(let id, _) {
-                return await pageConflict(pageID: edit.noteID, componentID: id, callerID: callerID, requestID: request.requestID)
-            } catch NoteEditError.pageSubtreeConflict(let id, _) {
-                return await pageConflict(pageID: edit.noteID, componentID: id, callerID: callerID, requestID: request.requestID)
-            } catch WorkspaceNoteMutationError.revisionConflict {
-                return await pageConflict(pageID: edit.noteID, componentID: nil, callerID: callerID, requestID: request.requestID)
-            } catch RemoteNoteEditError.operationNotAllowed, NoteEditError.artifactKindMismatch {
-                throw WorkspaceToolError.invalid("This asset is not a Page. Use the woven_notes tools.")
-            }
-        }
-    }
-
-    private func readPage(_ id: String, callerID: String, requestID: String) async throws -> (NoteDocument, NoteEditingResponse) {
-        let response = try await noteHandler(callerID, .init(command: .read, noteID: id), requestID)
-        guard let document = response.document, document.kind == .canvas else {
-            throw WorkspaceToolError.invalid("This asset is not a Page. Use woven_notes_read.")
-        }
-        return (document, response)
-    }
-
-    /// A replay acknowledges the original revision; it never returns old contents.
-    private func pageAcknowledgement(_ response: NoteEditingResponse, componentID: String?, callerID: String) async throws -> WovenMatterToolResponse {
-        var object: [String: GatewayJSONValue] = [
-            "pageID": .string(response.noteID),
-            "revision": response.revision.map(GatewayJSONValue.string) ?? .null,
-            "replayed": .bool(response.replayed == true),
-        ]
-        if let title = response.title { object["title"] = .string(title) }
-        if let componentID { object["componentID"] = .string(componentID) }
-        if let componentID, let document = response.document, document.blocks.contains(where: { $0.id == componentID }) {
-            let assets = try await database.boardAssetSummaries(callerID: callerID, ids: document.canvas?[componentID]?.assetID.map { [$0] } ?? [])
-            object["componentRevision"] = .string(document.boardItemRevision(for: componentID))
-            object["component"] = try document.pageComponentValue(id: componentID, assets: assets)
-        }
-        return .init(success: response.success, result: .object(object), error: response.error,
-            code: response.success ? nil : "mutation_failed")
-    }
-
-    /// The failed transaction changed nothing, so this reports current state an
-    /// agent can use directly. It says the same in text for clients that drop structure.
-    private func pageConflict(pageID: String, componentID: String?, callerID: String, requestID: String) async -> WovenMatterToolResponse {
-        var object: [String: GatewayJSONValue] = ["pageID": .string(pageID)]
-        var message = componentID.map { "Page component \($0) changed since it was read." } ?? "The Page changed since it was read."
-        if let (stored, response) = try? await readPage(pageID, callerID: callerID, requestID: requestID) {
-            // Reads project an unmigrated Page, so tokens here match what the write compared.
-            let document = stored.materializedPage()
-            let revision = response.revision ?? ""
-            object["currentRevision"] = .string(revision)
-            message += " Current document revision: \(revision)."
-            if let componentID {
-                object["componentID"] = .string(componentID)
-                if document.blocks.contains(where: { $0.id == componentID }) {
-                    let current = document.boardItemRevision(for: componentID)
-                    let ids = document.canvas?[componentID]?.assetID.map { [$0] } ?? []
-                    let assets = (try? await database.boardAssetSummaries(callerID: callerID, ids: ids)) ?? [:]
-                    object["currentComponentRevision"] = .string(current)
-                    object["currentSubtreeRevision"] = .string(document.pageSubtreeRevision(for: componentID))
-                    object["component"] = try? document.pageComponentValue(id: componentID, assets: assets)
-                    message += " Current component revision: \(current)."
-                } else {
-                    object["componentRemoved"] = .bool(true)
-                    message += " The component no longer exists."
-                }
-            }
-        }
-        message += " Apply your intended change to the current data and retry with a new requestID."
-        return .init(success: false, result: .object(object), error: message, code: "revision_conflict")
-    }
-
-    private func noteMutationAcknowledgement(_ response: NoteEditingResponse) throws -> WovenMatterToolResponse {
-        var object: [String: GatewayJSONValue] = ["id": .string(response.noteID)]
-        object["title"] = response.title.map(GatewayJSONValue.string) ?? .null
-        object["revision"] = response.revision.map(GatewayJSONValue.string) ?? .null
-        object["replayed"] = .bool(response.replayed == true)
-        return .init(success: response.success, result: .object(object), error: response.error,
-            code: response.success ? nil : "mutation_failed")
-    }
-
-    private func noteReadChunk(_ response: NoteEditingResponse, offset: Int,
-                               characters: Int) throws -> WovenMatterToolResponse {
-        guard response.success, let document = response.document else {
-            return .init(success: false, error: response.error ?? "The note could not be read.", code: "read_failed")
-        }
-        let content = try document.encoded()
-        let actualOffset = min(offset, content.count)
-        let start = content.index(content.startIndex, offsetBy: actualOffset)
-        let end = content.index(start, offsetBy: min(characters, content.distance(from: start, to: content.endIndex)))
-        let next = content.distance(from: content.startIndex, to: end)
-        return .init(result: .object([
-            "id": .string(response.noteID),
-            "title": response.title.map(GatewayJSONValue.string) ?? .null,
-            "revision": response.revision.map(GatewayJSONValue.string) ?? .null,
-            "kind": .string(document.kind.rawValue),
-            "content": .string(String(content[start..<end])),
-            "contentCharacters": .number(Double(content.count)),
-            "offset": .number(Double(actualOffset)),
-            "hasMore": .bool(next < content.count),
-            "nextOffset": .number(Double(next))
-        ]))
-    }
-
-    private func timer(_ command: WovenMatterToolCommand, callerID: String, requestID: String, targetID: String? = nil) async throws -> WovenMatterToolResponse {
-        let target = targetID ?? command.options["session"] ?? callerID
-        if callerID == WovenMCPCaller.outside, target == callerID {
-            throw WorkspaceToolError.invalid("Outside agents must supply sessionID for timers.")
-        }
-        if target != callerID && callerID != WovenMCPCaller.outside {
-            try await database.requireTool(.sessions, sessionID: callerID)
-            guard try await database.sessionRelationship(target).coordinatorID == callerID else { throw WorkspaceToolError.accessRequired(target) }
-        }
-        if command.action == "list" {
-            return .init(result: try await database.querySessionTimers(callerID: callerID, sessionID: target,
-                after: Int64(command.integer("after", default: 0, range: 0...Int.max)),
-                limit: command.integer("limit", default: 100, range: 1...200)))
-        }
-        if command.action == "create" || command.action == "update" {
-            let id = command.action == "create" ? requestID : try command.required("id", allowPositional: true)
-            let interval: Double?
-            if let raw = command.options["every"] {
-                guard let value = Double(raw) else { throw WorkspaceToolError.invalid("--every requires seconds.") }
-                interval = value
-            } else { interval = nil }
-            let timer = WorkspaceSessionTimer(id: id, sessionID: target,
-                instruction: try command.required("text"), nextFireAt: try Self.date(command.required("at")),
-                intervalSeconds: interval, isPaused: command.options["paused"] != nil)
-            return try await .value(database.saveSessionTimer(timer, callerID: callerID, requestID: requestID,
-                creating: command.action == "create"))
-        }
-        let id = try command.required("id", allowPositional: true)
-        if command.action == "remove" { try await database.removeSessionTimer(id: id, callerID: callerID, requestID: requestID) }
-        else { try await database.pauseSessionTimer(id: id, paused: command.action == "pause", callerID: callerID, requestID: requestID) }
-        return .init(result: .object(["id": .string(id), "status": .string(command.action)]))
+        return await WorkspaceToolExecutor(database: database).execute(request, callerID: callerID, handlers: handlers)
     }
 
     func library(_ command: WovenMatterToolCommand, callerID: String) async throws -> WovenMatterToolResponse {
-        var query = LibraryQuery()
-        query.search = command.options["search"] ?? ""
-        if let workspace = command.options["workspace"] {
-            query.workspaces = Set(workspace.split(separator: ",").map { String($0).lowercased() })
-        }
-        if let harness = command.options["harness"] {
-            query.harnesses = Set(harness.split(separator: ",").map(String.init))
-        }
-        if let kind = command.options["kind"] {
-            guard let value = LibraryItemKind(rawValue: kind) else { throw WorkspaceToolError.invalid("Use file, link, or photo.") }
-            query.kind = value
-        }
-        if let sender = command.options["sender"] {
-            guard let value = LibrarySender(rawValue: sender) else { throw WorkspaceToolError.invalid("Use me or agent.") }
-            query.sender = value
-        }
-        query.since = try command.options["since"].map(Self.date)
-        query.until = try command.options["until"].map(Self.date)
-        if let since = query.since, let until = query.until, until < since {
-            throw WorkspaceToolError.invalid("--until must be at or after --since.")
-        }
-        return .init(result: try await database.queryAgentLibrary(callerID: callerID,
-            id: command.action == "read" ? try command.required("id", allowPositional: true) : nil,
-            query: query, limit: command.integer("limit", default: 100, range: 1...200),
-            offset: command.integer("offset", default: 0, range: 0...Int.max)))
+        try await WorkspaceToolExecutor(database: database).library(command, callerID: callerID)
     }
 
-    static func date(_ raw: String) throws -> Date {
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        if let date = formatter.date(from: raw) { return date }
-        formatter.formatOptions = [.withInternetDateTime]
-        guard let date = formatter.date(from: raw) else { throw WorkspaceToolError.invalid("Use an ISO 8601 date with a time zone.") }
-        return date
-    }
+    static func date(_ raw: String) throws -> Date { try WorkspaceToolExecutor.date(raw) }
 }

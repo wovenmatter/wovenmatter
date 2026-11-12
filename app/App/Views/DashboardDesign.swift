@@ -176,6 +176,55 @@ enum DashboardRemoteWorkspaceSidebarModel {
     }
 }
 
+/// Paired iPhone and iPad workspaces, derived from the synced execution workspace
+/// registry so every Mac lists them, online or not. Quick Chats belong to the
+/// workspace that runs them; folders to the workspace they are bound to. Unfiled
+/// notes have no owner and stay in All Workspaces, as on the iPhone.
+enum DashboardPairedWorkspaceSidebarModel {
+    /// Folder bindings say `device:<id>` where registry rows say `<id>`; this is
+    /// display grouping only and never decides execution ownership.
+    static func canonicalID(_ value: String) -> String {
+        for prefix in ["device:", "remote:"] where value.hasPrefix(prefix) {
+            if let id = UUID(uuidString: String(value.dropFirst(prefix.count))) { return id.uuidString.lowercased() }
+        }
+        return UUID(uuidString: value)?.uuidString.lowercased() ?? value
+    }
+
+    static func workspaces(_ registry: [ExecutionWorkspace]) -> [ExecutionWorkspace] {
+        var seen = Set<String>()
+        return registry
+            .filter { $0.kind == .ios && !$0.deleted && seen.insert(canonicalID($0.id)).inserted }
+            .sorted {
+                let comparison = $0.name.localizedStandardCompare($1.name)
+                return comparison == .orderedSame ? $0.id < $1.id : comparison == .orderedAscending
+            }
+    }
+
+    /// Quick Chat history this workspace ran, newest first.
+    static func history(
+        for workspace: ExecutionWorkspace,
+        conversations: [WorkspaceConversationRecord],
+        owners: [String: String]
+    ) -> [WorkspaceConversationRecord] {
+        let owner = canonicalID(workspace.id)
+        return conversations
+            .filter { !$0.isArchived && owners[$0.id].map(canonicalID) == owner }
+            .sorted { ($0.lastMessageAt ?? "") > ($1.lastMessageAt ?? "") }
+    }
+
+    static func folders(for workspace: ExecutionWorkspace, in folders: [WorkspaceFolderRecord]) -> [WorkspaceFolderRecord] {
+        let owner = canonicalID(workspace.id)
+        return folders.filter { $0.executionWorkspaceID.map(canonicalID) == owner }
+    }
+
+    /// True when the conversation's execution owner is an iPhone or iPad.
+    static func isPhoneHistory(owner: String?, registry: [ExecutionWorkspace]) -> Bool {
+        guard let owner else { return false }
+        let id = canonicalID(owner)
+        return registry.contains { $0.kind == .ios && canonicalID($0.id) == id }
+    }
+}
+
 /// Presentation-only preferences, independent of runtime visibility and section expansion.
 enum DashboardWorkspaceSidebarVisibility: String {
     case localWorkspace

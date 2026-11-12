@@ -1,3 +1,4 @@
+#if os(macOS)
 import Foundation
 import Observation
 import ServiceManagement
@@ -16,17 +17,38 @@ public enum ClosedLidHelperRegistration {
         case .enabled: return .ready
         case .requiresApproval: return .approvalRequired
         case .notRegistered: return .notRegistered
-        case .notFound: return .unavailable
+        // macOS can report a daemon it has never registered as not found. When this
+        // build carries the helper, setup registers it like any unregistered helper.
+        case .notFound: return bundlesHelper ? .notRegistered : .unavailable
         @unknown default: return .unavailable
         }
     }
 
+    /// Why closed-lid protection is unavailable, in words for Settings.
+    public static var unavailableReason: String {
+        if (try? ClosedLidHelperIdentity.signingTeam()) == nil {
+            return "Closed-lid protection needs a Woven Matter build signed by its developer."
+        }
+        return bundlesHelper ? "macOS couldn't find the power helper. Reopen Woven Matter and try again."
+            : "This build doesn't include the power helper that closed-lid protection uses."
+    }
+
     public static func prepareFromUserAction() throws {
         _ = try ClosedLidHelperIdentity.signingTeam()
-        if service.status == .notRegistered { try service.register() }
-        guard status == .ready || status == .approvalRequired else {
-            throw ClosedLidPowerError.unavailable("The signed power helper is unavailable in this build.")
+        if [.notRegistered, .notFound].contains(service.status), bundlesHelper {
+            do { try service.register() } catch {
+                throw ClosedLidPowerError.unavailable("macOS didn't set up the power helper: \(error.localizedDescription)")
+            }
         }
+        guard status == .ready || status == .approvalRequired else {
+            throw ClosedLidPowerError.unavailable(unavailableReason)
+        }
+    }
+
+    /// The helper's launchd plist ships inside the app bundle.
+    private static var bundlesHelper: Bool {
+        FileManager.default.fileExists(atPath: Bundle.main.bundleURL
+            .appending(path: "Contents/Library/LaunchDaemons/" + ClosedLidHelperIdentity.plistName).path)
     }
 
     public static func openApprovalSettings() { SMAppService.openSystemSettingsLoginItems() }
@@ -161,7 +183,7 @@ public final class ClosedLidWorkProtection {
             case .approvalRequired:
                 snapshot.message = "Approve the power helper in macOS Login Items & Extensions to enable closed-lid protection."
             case .notRegistered:
-                snapshot.message = "Set up closed-lid protection in General settings."
+                snapshot.message = "Set up closed-lid protection in Background Server settings."
             case .unavailable:
                 snapshot.message = "Closed-lid protection is unavailable in this build."
             case .ready:
@@ -204,3 +226,4 @@ public final class ClosedLidWorkProtection {
     // also expires it independently if the process disappears or stops responding.
     deinit { heartbeat?.cancel() }
 }
+#endif

@@ -11,15 +11,23 @@ struct SettingsRemoteHarnessAccountView: View {
     let workspace: RemoteWorkspaceConfiguration
     var embedded = false
     @State private var authorizationCode = ""
+    @State private var confirmsRemoval = false
 
     var body: some View {
         Group {
             if embedded { accountContent }
-            else { SettingsCard(title: "Account", detail: workspace.name) { accountContent } }
+            else { SettingsSection(title: "Account", detail: workspace.name) { accountContent } }
         }.id(workspace.id.uuidString + runtimeKind.rawValue)
         .task { await model.refreshSignInStatus(workspace) }
         .onChange(of: model.authenticationSessions[workspace.id]?.state) { _, state in
             if state == "succeeded" { Task { await model.refreshSignInStatus(workspace) } }
+        }
+        .confirmationDialog("Remove your \(runtimeKind.displayName) account from \(workspace.name)?",
+                            isPresented: $confirmsRemoval, titleVisibility: .visible) {
+            Button("Remove account", role: .destructive) { model.signOutHarness(runtimeKind, configuration: workspace) }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("\(runtimeKind.displayName) signs out on \(workspace.name). Sign in again to use it there.")
         }
     }
 
@@ -30,9 +38,12 @@ struct SettingsRemoteHarnessAccountView: View {
                     SettingsNote("Using \(path) (installed on host)")
                 }
                 HStack {
-                    SettingsHarnessAccountDetails(
-                        status: model.signInStatuses[workspace.id]?.first { $0.id == runtimeKind.rawValue },
-                        fallback: HarnessAccountPresentation.remoteLabel(harness))
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Account").font(.settingsRow)
+                        SettingsHarnessAccountDetails(
+                            status: model.signInStatuses[workspace.id]?.first { $0.id == runtimeKind.rawValue },
+                            fallback: HarnessAccountPresentation.remoteLabel(harness))
+                    }
                     Spacer()
                     harnessButtons(harness, workspace: workspace)
                         .disabled(model.busyWorkspaceIDs.contains(workspace.id))
@@ -55,43 +66,33 @@ struct SettingsRemoteHarnessAccountView: View {
         workspace: RemoteWorkspaceConfiguration
     ) -> some View {
         if harness.installationStatus.map({ $0 != "installed" }) ?? ["cli_missing", "adapter_missing"].contains(harness.state) {
-            Text("Install the harness first").font(.caption).foregroundStyle(DashboardPalette.mutedForeground)
+            Text("Install the harness first").font(.settingsSecondary).foregroundStyle(DashboardPalette.mutedForeground)
         } else if harness.authenticationStatus != "verified" && harness.authenticationStatus != "configured" {
             if harness.setupMethods.count == 1,
                let method = harness.setupMethods.first {
-                Button("Sign in") {
+                Button(method.displayName) {
                     startSignIn(harness, method: method, workspace: workspace)
                 }
-                .buttonStyle(DashboardPrimaryButtonStyle())
+                .buttonStyle(SettingsQuietButtonStyle())
             } else if !harness.setupMethods.isEmpty {
-                Menu("Sign in…") {
+                Menu("Sign in") {
                     ForEach(harness.setupMethods) { method in
                         Button(method.displayName) {
                             startSignIn(harness, method: method, workspace: workspace)
                         }
                     }
                 }
-                .buttonStyle(DashboardPrimaryButtonStyle())
+                .menuStyle(.button)
+                .fixedSize()
+                .buttonStyle(SettingsQuietButtonStyle())
             } else {
                 Text("No supported sign-in methods")
-                    .font(.system(size: 11.5))
+                    .font(.settingsSecondary)
                     .foregroundStyle(DashboardPalette.mutedForeground)
             }
         } else {
-            Button("Recheck") {
-                model.performHarnessAction("recheck", harness: harness, configuration: workspace)
-            }
-            .buttonStyle(SettingsQuietButtonStyle())
-            if !harness.setupMethods.isEmpty {
-                Menu("Change sign-in…") {
-                    ForEach(harness.setupMethods) { method in
-                        Button(method.displayName) {
-                            startSignIn(harness, method: method, workspace: workspace)
-                        }
-                    }
-                }
+            Button("Remove account") { confirmsRemoval = true }
                 .buttonStyle(SettingsQuietButtonStyle())
-            }
         }
     }
 
@@ -116,9 +117,9 @@ struct SettingsRemoteHarnessAccountView: View {
             VStack(alignment: .leading, spacing: 10) {
                 HStack {
                     Text(session.methodName)
-                        .font(.system(size: 12.5, weight: .semibold))
+                        .font(.settingsBody.weight(.semibold))
                     Spacer()
-                    SettingsPill(
+                    SettingsStatus(
                         session.state.replacingOccurrences(of: "_", with: " ").capitalized,
                         tone: session.state == "waiting_for_user" ? .warning : .neutral
                     )
@@ -130,35 +131,15 @@ struct SettingsRemoteHarnessAccountView: View {
                     }
                 }
                 Text(session.message)
-                    .font(.system(size: 11.5))
+                    .font(.settingsSecondary)
                     .foregroundStyle(DashboardPalette.mutedForeground)
 
                 if let notice = session.notice {
                     SettingsNote(notice)
                 }
 
-                if let url = session.verificationURL {
-                    Button("Open sign-in page") {
-                        NSWorkspace.shared.open(url)
-                    }
-                    .buttonStyle(DashboardPrimaryButtonStyle())
-                }
-
-                if let userCode = session.userCode {
-                    HStack {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("One-time code")
-                                .font(.system(size: 11))
-                                .foregroundStyle(DashboardPalette.mutedForeground)
-                            Text(userCode)
-                                .font(.system(size: 13, weight: .semibold, design: .monospaced))
-                                .textSelection(.enabled)
-                        }
-                        Spacer()
-                        Button("Copy code") { copy(userCode) }
-                            .buttonStyle(SettingsQuietButtonStyle())
-                    }
-                }
+                SettingsSignInHandoff(url: session.verificationURL, code: session.userCode)
+                    .buttonStyle(SettingsQuietButtonStyle())
 
                 if session.state == "waiting_for_user",
                    session.acceptsAuthorizationCode {
@@ -210,10 +191,4 @@ struct SettingsRemoteHarnessAccountView: View {
         model.submitAuthorizationCode(code, configuration: workspace)
         authorizationCode = ""
     }
-
-    private func copy(_ value: String) {
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(value, forType: .string)
-    }
-
 }

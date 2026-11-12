@@ -20,7 +20,7 @@ case "${1:-changed}" in
 esac
 
 scripts/scan-public-tree.sh
-if grep -Eq '^(shared/Sources/WovenMatterCompanion/ArtifactState|scripts/test-support/artifact-state.test.mjs|app/App/Views/(ArtifactEditor|DashboardArtifactState|DashboardPersistentArtifactView))' "$changed"; then
+if grep -Eq '^(shared/Sources/WovenMatterShared/ArtifactState|scripts/test-support/artifact-state.test.mjs|app/App/Views/(ArtifactEditor|DashboardArtifactState|DashboardPersistentArtifactView))' "$changed"; then
   node --test scripts/test-support/artifact-state.test.mjs
 fi
 while IFS= read -r -d '' file; do
@@ -56,10 +56,14 @@ fi
 if enabled embedded; then
   node scripts/build-ios-embedded-runtime.mjs --check
 fi
+if enabled bots; then
+  scripts/with-pinned-node.sh npm ci --prefix bots --ignore-scripts --no-audit --no-fund
+  scripts/with-pinned-node.sh npm test --prefix bots
+fi
 if enabled scripts; then
   # These fixtures stub external tools; native fixtures run in manual validation.
   scripts/test-release.sh --portable
-  for suite in update_refresh ios_runner dev_build executor_deployment remote_image cua_runtime; do
+  for suite in update_refresh ios_runner verify_ios_app dev_build executor_deployment remote_image cua_runtime; do
     python3 "scripts/test-support/test_${suite}.py"
   done
   scripts/test-dev-signing.sh

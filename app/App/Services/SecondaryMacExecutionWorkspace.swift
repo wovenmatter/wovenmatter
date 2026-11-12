@@ -1,4 +1,4 @@
-import CompanionClient
+import LibraryClient
 import Foundation
 import Darwin
 import CryptoKit
@@ -12,16 +12,16 @@ import WovenMatterDashboardStore
 @MainActor
 final class SecondaryMacExecutionWorkspace: ExecutionWorkspaceTransport {
     struct NoteProjection: Codable {
-        var replica: CompanionNote
+        var replica: LibraryNote
         var executionRevision: Int64
         var pendingConflict: Bool?
     }
     private struct Projection: Codable {
         var notes: [String: NoteProjection] = [:]
-        var folders: [String: CompanionFolder]?
+        var folders: [String: LibraryFolder]?
         var nativeHistoryCursors: [String: Int64]?
     }
-    private(set) var descriptor: CompanionExecutionWorkspace
+    private(set) var descriptor: ExecutionWorkspace
     let model: ApplicationModel
     let database: WorkspaceDatabase
     let origin: WorkspaceJournal
@@ -34,13 +34,13 @@ final class SecondaryMacExecutionWorkspace: ExecutionWorkspaceTransport {
     private var commandsInFlight = 0
     private var acceptsCommands = true
     private var captureTask: Task<Void, any Error>?
-    private struct NoteCommand: Codable { let original: CompanionCommand; let localized: CompanionCommand }
+    private struct NoteCommand: Codable { let original: LibraryCommand; let localized: LibraryCommand }
     private var noteCommands: [String: NoteCommand] = [:]
 
     static func create(directory: URL, replica: MobileStore, assets: WorkspaceAssetSession? = nil, executionModel: ApplicationModel? = nil) async throws -> SecondaryMacExecutionWorkspace {
         let state = await replica.snapshot()
         guard let libraryID = state.workspaceID else {
-            throw CompanionAPIError(code: "unpaired", message: "Connect this Mac to its central library before enabling its execution workspace.")
+            throw LibraryAPIError(code: "unpaired", message: "Connect this Mac to its central library before enabling its execution workspace.")
         }
         let defaults = UserDefaults(suiteName: "com.wovenmatter.client-execution." + state.deviceID)!
         defaults.set(false, forKey: LocalExecutionRole.libraryClientPreferenceKey)
@@ -49,12 +49,13 @@ final class SecondaryMacExecutionWorkspace: ExecutionWorkspaceTransport {
                                      ownsExecutionOverride: true, workspaceAssets: assets)
         guard let ownerDeviceID = UUID(uuidString: state.deviceID) else { throw MobileStore.Failure.incompatibleStore }
         try await model.configureClientExecutionWorkspace(directory: directory, executionWorkspaceDeviceID: ownerDeviceID, store: store)
-        let descriptor = CompanionExecutionWorkspace(id: state.deviceID, libraryID: libraryID, ownerDeviceID: state.deviceID,
+        let descriptor = ExecutionWorkspace(id: state.deviceID, libraryID: libraryID, ownerDeviceID: state.deviceID,
             kind: .mac, name: DevelopmentLaunch.deviceName(),
-            capabilities: ["execution.v1", "inference.v1", "execution.local"], executionDeviceID: state.deviceID, journalDeviceIDs: [state.deviceID], developmentInstance: DevelopmentLaunch.instance)
+            capabilities: ["execution.v1", "inference.v1", "execution.local"], executionDeviceID: state.deviceID, journalDeviceIDs: [state.deviceID], developmentInstance: DevelopmentLaunch.instance,
+            macAccess: MacAccessSetupModel.current(keychainReady: model.keychainAccessReady))
         return try await SecondaryMacExecutionWorkspace(descriptor: descriptor, model: model, replica: replica, directory: directory)
     }
-    init(descriptor: CompanionExecutionWorkspace, model: ApplicationModel, replica: MobileStore, directory: URL) async throws {
+    init(descriptor: ExecutionWorkspace, model: ApplicationModel, replica: MobileStore, directory: URL) async throws {
         guard let database = model.dashboardStore?.database else { throw ApplicationModelError.dashboardStoreUnavailable }
         self.descriptor = descriptor; self.model = model; self.database = database; self.replica = replica; self.directory = directory
         replicaTools = SecondaryMacReplicaTools(model: model, replica: replica, workspaceID: descriptor.id)
@@ -85,7 +86,18 @@ final class SecondaryMacExecutionWorkspace: ExecutionWorkspaceTransport {
     func reconcileCalendar() async throws { try await calendarProjection.reconcile() }
     func setEndpoint(_ endpoint: URL?) async throws {
         descriptor.endpoint = endpoint
+        descriptor.macAccess = MacAccessSetupModel.current(keychainReady: model.keychainAccessReady)
         try await origin.upsertWorkspace(descriptor, pending: false)
+    }
+    /// Publishes this Mac's access setup status when it changes, so paired
+    /// devices can explain a session that is missing a permission it needs.
+    @discardableResult
+    func refreshMacAccess() async throws -> Bool {
+        let current = MacAccessSetupModel.current(keychainReady: model.keychainAccessReady)
+        guard current != descriptor.macAccess else { return false }
+        descriptor.macAccess = current
+        try await origin.upsertWorkspace(descriptor, pending: false)
+        return true
     }
     var hasActiveRuns: Bool { !model.localRunningConversationIDs.isEmpty }
     func prepareToStop() async throws {
@@ -93,10 +105,10 @@ final class SecondaryMacExecutionWorkspace: ExecutionWorkspaceTransport {
         model.backendStopping = true
         do {
             try await model.refreshClientExecutionState()
-            let persisted = try await database.companionSnapshot()
+            let persisted = try await database.librarySnapshot()
             guard commandsInFlight == 0, !hasActiveRuns, !persisted.conversations.contains(where: { $0.activeRunID != nil }),
                   model.pendingLocalACPPermissions.isEmpty, model.pendingLocalACPInteractions.isEmpty else {
-                throw CompanionAPIError(code: "active_execution", message: "Finish or stop this Mac’s running agents and pending approvals before changing its execution workspace.")
+                throw LibraryAPIError(code: "active_execution", message: "Finish or stop this Mac’s running agents and pending approvals before changing its execution workspace.")
             }
             guard await model.flushNoteDrafts() else { throw ApplicationModelError.noteDraftSaveFailed }
             try await capture()
@@ -108,14 +120,14 @@ final class SecondaryMacExecutionWorkspace: ExecutionWorkspaceTransport {
             throw error
         }
     }
-    func identity() async throws -> CompanionExecutionWorkspace { descriptor }
-    func providers() async throws -> [CompanionProvider] {
-        model.companionCommands.providers().filter { $0.id.hasPrefix("local:") }
+    func identity() async throws -> ExecutionWorkspace { descriptor }
+    func providers() async throws -> [HarnessCapabilities] {
+        model.libraryCommands.providers().filter { $0.id.hasPrefix("local:") }
     }
-    func capabilities(_ id: String) async throws -> CompanionProvider { try await model.companionCommands.sessionCapabilities(conversationID: id) }
-    func pending() async throws -> [CompanionPendingInteraction] { await model.companionCommands.pendingInteractions() }
-    func command(_ request: CompanionCommand) async throws -> CompanionCommandReceipt {
-        guard acceptsCommands else { throw CompanionAPIError(code: "stopping", message: "This Mac execution workspace is stopping.") }
+    func capabilities(_ id: String) async throws -> HarnessCapabilities { try await model.libraryCommands.sessionCapabilities(conversationID: id) }
+    func pending() async throws -> [PendingInteraction] { await model.libraryCommands.pendingInteractions() }
+    func command(_ request: LibraryCommand) async throws -> LibraryCommandReceipt {
+        guard acceptsCommands else { throw LibraryAPIError(code: "stopping", message: "This Mac execution workspace is stopping.") }
         commandsInFlight += 1; defer { commandsInFlight -= 1 }
         guard request.workspaceID == nil || request.workspaceID == descriptor.id else { throw WorkspaceJournal.Failure.wrongLibrary }
         // Pin revision translation before native acceptance, so lost acknowledgements
@@ -125,15 +137,15 @@ final class SecondaryMacExecutionWorkspace: ExecutionWorkspaceTransport {
             let key = request.deviceID + ":" + request.commandID
             if let existing = noteCommands[key] {
                 guard existing.original == request else {
-                    throw CompanionAPIError(code: "reused_command", message: "This command ID was already used for another request.")
+                    throw LibraryAPIError(code: "reused_command", message: "This command ID was already used for another request.")
                 }
                 command = existing.localized
             } else {
                 try await reconcileLibrary()
                 let state = await replica.snapshot()
                 guard let shared = state.notes[id], shared.revision == request.noteRevision,
-                      state.conflicts[id] == nil, let note = try await database.companionNote(id: id) else {
-                    throw CompanionAPIError(code: "note_changed", message: "Sync and review the note before starting this run.")
+                      state.conflicts[id] == nil, let note = try await database.libraryNote(id: id) else {
+                    throw LibraryAPIError(code: "note_changed", message: "Sync and review the note before starting this run.")
                 }
                 command.noteRevision = note.revision
                 var next = noteCommands; next[key] = .init(original: request, localized: command)
@@ -141,9 +153,9 @@ final class SecondaryMacExecutionWorkspace: ExecutionWorkspaceTransport {
                 noteCommands = next
             }
         } else { try await reconcileLibrary() }
-        let receipt = try await model.companionCommands.execute(command, deviceID: command.deviceID)
+        let receipt = try await model.libraryCommands.execute(command, deviceID: command.deviceID)
         if let id = receipt.conversationID,
-           var conversation = try await database.companionSnapshot().conversations.first(where: { $0.id == id }) {
+           var conversation = try await database.librarySnapshot().conversations.first(where: { $0.id == id }) {
             conversation.workspaceID = descriptor.id; conversation.libraryID = descriptor.libraryID
             // Publish identity before the receipt in one journal transaction.
             // A rejected creation has no conversation and stays in the command ledger.
@@ -152,21 +164,21 @@ final class SecondaryMacExecutionWorkspace: ExecutionWorkspaceTransport {
         try await capture()
         return receipt
     }
-    func receipt(_ id: String) async throws -> CompanionCommandReceipt? {
-        try await model.companionCommands.receipt(commandID: id, deviceID: descriptor.ownerDeviceID)
+    func receipt(_ id: String) async throws -> LibraryCommandReceipt? {
+        try await model.libraryCommands.receipt(commandID: id, deviceID: descriptor.ownerDeviceID)
     }
-    func events(after: Int64) async throws -> CompanionJournalPage {
+    func events(after: Int64) async throws -> ExecutionJournalPage {
         try await capture()
         let snapshot = await origin.snapshot()
         let entries = snapshot.entries.values.filter { $0.workspaceID == descriptor.id && $0.originSequence > after }
             .sorted { $0.originSequence < $1.originSequence }
-        let page = Array(entries.prefix(CompanionFederationProtocol.maximumBatchEntries))
+        let page = Array(entries.prefix(FederationProtocol.maximumBatchEntries))
         return .init(libraryID: descriptor.libraryID, cursor: page.last?.originSequence ?? after, entries: page, hasMore: entries.count > page.count)
     }
-    func conversations() async throws -> [CompanionConversation] { try await database.companionSnapshot().conversations }
-    func transcript(_ id: String) async throws -> CompanionTranscript { try await model.companionCommands.transcript(conversationID: id) }
-    func transcript(_ id: String, before: String) async throws -> CompanionTranscript { try await model.companionCommands.transcript(conversationID: id, before: before) }
-    func readWorkspace(_ request: CompanionWorkspaceRead) async throws -> CompanionWorkspaceResult { try await model.companionCommands.readWorkspace(request) }
+    func conversations() async throws -> [LibraryConversation] { try await database.librarySnapshot().conversations }
+    func transcript(_ id: String) async throws -> LibraryTranscript { try await model.libraryCommands.transcript(conversationID: id) }
+    func transcript(_ id: String, before: String) async throws -> LibraryTranscript { try await model.libraryCommands.transcript(conversationID: id, before: before) }
+    func readWorkspace(_ request: LibraryWorkspaceRead) async throws -> LibraryWorkspaceResult { try await model.libraryCommands.readWorkspace(request) }
 
     func capture() async throws {
         if let captureTask { return try await captureTask.value }
@@ -178,20 +190,20 @@ final class SecondaryMacExecutionWorkspace: ExecutionWorkspaceTransport {
         try await model.refreshClientExecutionState()
         guard await model.flushNoteDrafts() else { throw ApplicationModelError.noteDraftSaveFailed }
         try await reconcileLibrary()
-        let snapshot = try await database.companionSnapshot()
+        let snapshot = try await database.librarySnapshot()
         let prior = await origin.snapshot()
         for var conversation in snapshot.conversations {
             conversation.workspaceID = descriptor.id
             conversation.libraryID = descriptor.libraryID
             try await origin.restoreConversation(workspaceID: descriptor.id, conversation: conversation)
-            let latest = try await model.companionCommands.transcript(conversationID: conversation.id)
+            let latest = try await model.libraryCommands.transcript(conversationID: conversation.id)
             let known = Set(prior.transcripts[conversation.id]?.messages.map(\.id) ?? [])
             var pages = [latest], cursors = Set<String>()
             while let page = pages.last, let cursor = page.olderCursor {
                 if prior.transcripts[conversation.id]?.olderCursor == nil,
                    page.messages.contains(where: { known.contains($0.id) }) { break }
                 guard cursors.insert(cursor).inserted else { throw MobileConnectionError.invalidResponse }
-                pages.append(try await model.companionCommands.transcript(conversationID: conversation.id, before: cursor))
+                pages.append(try await model.libraryCommands.transcript(conversationID: conversation.id, before: cursor))
             }
             _ = try await origin.append(workspaceID: descriptor.id, conversation: conversation)
             // Journal bounded pages separately; a long session must never turn
@@ -243,14 +255,14 @@ final class SecondaryMacExecutionWorkspace: ExecutionWorkspaceTransport {
     }
     private func performReconcileLibrary() async throws {
         try await calendarProjection.reconcile()
-        var execution = try await database.companionSnapshot(bodyByteBudget: CompanionProtocol.maximumNoteBytes)
+        var execution = try await database.librarySnapshot(bodyByteBudget: LibraryProtocol.maximumNoteBytes)
         let executionNotes = try await completeNotes(execution.notes)
         var replicaState = await replica.snapshot()
         // Folder identities must be queued before notes that refer to them.
         for folder in execution.folders {
             if replicaState.folders[folder.id] == nil, projection.folders?[folder.id] == nil {
                 guard let binding = folder.execution else {
-                    throw CompanionAPIError(code: "execution_owner", message: "This folder has no captured execution workspace.")
+                    throw LibraryAPIError(code: "execution_owner", message: "This folder has no captured execution workspace.")
                 }
                 _ = try await replica.createFolder(name: folder.name, id: folder.id, execution: binding)
             } else if let baseline = projection.folders?[folder.id], folder.name != baseline.name,
@@ -293,31 +305,31 @@ final class SecondaryMacExecutionWorkspace: ExecutionWorkspaceTransport {
         for folder in replicaState.folders.values {
             let existing = execution.folders.first { $0.id == folder.id }
             if existing?.name != folder.name {
-                let mutation = CompanionMutation(deviceID: descriptor.ownerDeviceID, kind: existing == nil ? .createFolder : .renameFolder,
+                let mutation = LibraryMutation(deviceID: descriptor.ownerDeviceID, kind: existing == nil ? .createFolder : .renameFolder,
                     resourceID: folder.id, expectedRevision: existing?.revision, title: folder.name, folderExecution: folder.execution)
                 try await applyProjection(mutation)
             }
         }
-        execution = try await database.companionSnapshot(bodyByteBudget: CompanionProtocol.maximumNoteBytes)
+        execution = try await database.librarySnapshot(bodyByteBudget: LibraryProtocol.maximumNoteBytes)
         for note in replicaState.notes.values where note.contentIncluded {
-            let existing = try await database.companionNote(id: note.id)
+            let existing = try await database.libraryNote(id: note.id)
             if replicaState.conflicts[note.id] != nil { continue }
             if existing?.title != note.title || existing?.content != note.content || existing?.folderID != note.folderID {
                 try await applyProjection(.init(deviceID: descriptor.ownerDeviceID, kind: existing == nil ? .createNote : .updateNote,
                     resourceID: note.id, expectedRevision: existing?.revision, folderID: note.folderID, title: note.title, content: note.content))
             }
-            if let imported = try await database.companionNote(id: note.id) {
+            if let imported = try await database.libraryNote(id: note.id) {
                 projection.notes[note.id] = .init(replica: note, executionRevision: imported.revision)
             }
         }
         for (id, _) in projection.notes where replicaState.notes[id] == nil {
-            if let existing = try await database.companionNote(id: id) {
+            if let existing = try await database.libraryNote(id: id) {
                 try await applyProjection(.init(deviceID: descriptor.ownerDeviceID, kind: .deleteNote, resourceID: id, expectedRevision: existing.revision))
             }
             projection.notes[id] = nil
         }
         for folder in execution.folders where replicaState.folders[folder.id] == nil {
-            let remaining = try await database.companionSnapshot()
+            let remaining = try await database.librarySnapshot()
             if !remaining.notes.contains(where: { $0.folderID == folder.id }) {
                 try await applyProjection(.init(deviceID: descriptor.ownerDeviceID, kind: .deleteFolder,
                     resourceID: folder.id, expectedRevision: folder.revision))
@@ -326,18 +338,18 @@ final class SecondaryMacExecutionWorkspace: ExecutionWorkspaceTransport {
         projection.folders = replicaState.folders
         try persistProjection()
     }
-    private func completeNotes(_ notes: [CompanionNote]) async throws -> [CompanionNote] {
-        var values: [CompanionNote] = []
+    private func completeNotes(_ notes: [LibraryNote]) async throws -> [LibraryNote] {
+        var values: [LibraryNote] = []
         for note in notes {
             if note.contentIncluded { values.append(note) }
-            else if let complete = try await database.companionNote(id: note.id) { values.append(complete) }
+            else if let complete = try await database.libraryNote(id: note.id) { values.append(complete) }
         }
         return values
     }
-    private func applyProjection(_ mutation: CompanionMutation) async throws {
+    private func applyProjection(_ mutation: LibraryMutation) async throws {
         let result = try await database.applyExecutionReplicaProjection(mutation, libraryID: descriptor.libraryID, workspaceID: descriptor.id)
         guard result.status == .accepted else {
-            throw CompanionAPIError(code: "replica_projection_conflict", message: result.message ?? "The shared library projection changed during synchronization.")
+            throw LibraryAPIError(code: "replica_projection_conflict", message: result.message ?? "The shared library projection changed during synchronization.")
         }
     }
     private func persistProjection() throws {

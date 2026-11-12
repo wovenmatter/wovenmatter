@@ -1,8 +1,13 @@
 {
-  "nodeVersion": "26.13.0",
+  "nodeVersion": "26.13.1",
   "playwrightVersion": "1.65.0",
   "nodeSHA256": {
-    "linux-x64": "5848553868b402d3fabb5b09270649977780a390f832155721025a08b5104455",
-    "linux-arm64": "439e9c438acdf6a6ffe47418da709153d66c4bed812e30a473faacb107dd2791"
+    "linux-x64": "518674de2b621728a5e4486f5fb3b7d2900bb3cc4aa97969edaa463db99f9778",
+    "linux-arm64": "80a330b35415382878df18d41afbd106ea89bfb3be0087d6608e289a14c5cc7d"
+  },
+  "dockerVersion": "29.9.3",
+  "dockerSHA256": {
+    "linux-x64": "3fb5d1f13014c18cc54945bc177c58a9056a482dada031e17d12cf2e6922c973",
+    "linux-arm64": "1b27fd739378ef938401e81ce5afb73b7ad7432d4f598814a9ff5f826bb464d2"
   }
 }

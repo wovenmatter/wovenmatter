@@ -21,11 +21,13 @@ enum BackendRemoteWorkspaceCommand: Codable {
     case performHarness(UUID, AgentRuntimeKind, String), prepareHarness(UUID, AgentRuntimeKind, String)
     case confirmHarness(UUID?, AgentRuntimeKind?, String?), cancelHarness(UUID?, AgentRuntimeKind?, String?)
     case signIn(UUID, AgentRuntimeKind, String), authorizationCode(UUID, String), cancelSignIn(UUID)
+    case signOut(UUID, AgentRuntimeKind)
     case databases(UUID), createDatabase(UUID, name: String)
     case hostDirectories(UUID, path: String?)
     case browserTabs(UUID, profile: String? = nil), browserFrame(UUID, tabID: String, previousFrameID: String? = nil, profile: String? = nil), browserAction(UUID, RemoteBrowserAction, profile: String? = nil)
 
     case browserActions(UUID, [RemoteBrowserAction], profile: String? = nil)
+    case sharedHost(String, SharedHostAction)
 
     var isBrowserOperation: Bool {
         switch self {
@@ -96,6 +98,7 @@ struct BackendRemoteWorkspaceService {
             model.startHarnessSignIn(harness: harness, method: method, configuration: try workspace(id))
         case .authorizationCode(let id, let code): model.submitAuthorizationCode(code, configuration: try workspace(id))
         case .cancelSignIn(let id): model.cancelHarnessSignIn(configuration: try workspace(id))
+        case .signOut(let id, let kind): model.signOutHarness(kind, configuration: try workspace(id))
         case .databases(let id): databases = try await model.databases(for: workspace(id))
         case .createDatabase(let id, let name): database = try await model.createDatabase(name: name, in: workspace(id))
         case .hostDirectories(let id, let path): directories = try await model.hostDirectories(path: path, in: workspace(id))
@@ -103,6 +106,9 @@ struct BackendRemoteWorkspaceService {
         case .browserAction(let id, let action, let profile): actionResult = try await model.browserAction(action, for: workspace(id), profile: profile)
         case .browserFrame(let id, let tabID, let previous, let profile): frame = try await model.browserFrame(tabID: tabID, previousFrameID: previous, for: workspace(id), profile: profile)
         case .browserActions(let id, let actions, let profile): actionResults = try await model.browserActions(actions, for: workspace(id), profile: profile)
+        case .sharedHost(let id, let action):
+            // Updates run for minutes; a later snapshot reports their result.
+            if action == .update { model.manageSharedHost(id, action) } else { await model.performSharedHost(id, action) }
         }
         return .init(snapshot: command.isBrowserOperation ? nil : model.backendSnapshot(), databases: databases, database: database, hostDirectories: directories, browserTabs: tabs, browserFrame: frame, browserAction: actionResult, browserActions: actionResults)
     }

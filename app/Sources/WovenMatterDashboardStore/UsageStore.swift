@@ -1,5 +1,9 @@
 import Foundation
+#if canImport(SQLite3)
 import SQLite3
+#else
+import CSQLite
+#endif
 import WovenMatterCore
 
 struct UsageStoredSource: Equatable, Sendable {
@@ -382,7 +386,116 @@ final class UsageStore {
     }
   }
 
-  func samples(in interval: DateInterval, sourceID: String? = nil, limit: Int? = nil, offset: Int = 0) throws -> [UsageSample] {
+  /// Replaces one device's rows from `since` onward and adds what it just reported.
+  /// Earlier rows stay unless a report carries the same ID, so retained history survives.
+  func replaceDeviceEvents(
+    device: UsageDeviceIdentity,
+    since: Date,
+    samples: [UsageSample],
+    importedAt: Date,
+    keepingOlder: Bool = false
+  ) throws {
+    let sourceID = UsageDeviceSource.sourceID(deviceID: device.id)
+    try execute("BEGIN IMMEDIATE")
+    do {
+      let source = try prepare("""
+        INSERT INTO usage_sources (
+          source_id, source_name, source_location, provider, harness,
+          fingerprint, imported_at, source_kind, installation_id
+        ) VALUES (?, ?, ?, 'unknown', NULL, ?, ?, 'device', ?)
+        ON CONFLICT(source_id) DO UPDATE SET
+          source_name = excluded.source_name,
+          fingerprint = excluded.fingerprint,
+          imported_at = excluded.imported_at
+        """)
+      defer { sqlite3_finalize(source) }
+      bind(sourceID, to: 1, in: source)
+      bind(device.name, to: 2, in: source)
+      bind("Linked device", to: 3, in: source)
+      bind(device.kind.rawValue, to: 4, in: source)
+      sqlite3_bind_double(source, 5, importedAt.timeIntervalSince1970)
+      bind(device.id, to: 6, in: source)
+      try stepDone(source)
+
+      let deletion = try prepare("DELETE FROM usage_events WHERE source_id = ? AND timestamp >= ?")
+      defer { sqlite3_finalize(deletion) }
+      bind(sourceID, to: 1, in: deletion)
+      sqlite3_bind_double(deletion, 2, since.timeIntervalSince1970)
+      try stepDone(deletion)
+
+      let columns = """
+        INTO usage_events (
+          event_id, source_id, source_event_id, dedupe_key,
+          provider, billing_provider, billing_route, account_label,
+          model_raw, model_canonical, model_family, model_publisher,
+          model_identity_confidence, timestamp, session_id,
+          reasoning_level, harness, application, agent, workspace,
+          request_count, input_tokens, cached_input_tokens, cache_creation_tokens,
+          output_tokens, reasoning_tokens, reported_total_tokens,
+          cost_usd, attribution_confidence, granularity, imported_at
+        ) VALUES (
+          ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+          ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+        )
+        """
+      let insertion = try prepare("INSERT OR REPLACE " + columns)
+      defer { sqlite3_finalize(insertion) }
+      // A device that reports only what it still holds may have lost some of an older
+      // hour's transcripts, so a row it already reported is never shrunk.
+      let addition = keepingOlder ? try prepare("INSERT OR IGNORE " + columns) : nil
+      defer { if let addition { sqlite3_finalize(addition) } }
+      for sample in samples {
+        let statement = sample.timestamp < since ? addition ?? insertion : insertion
+        try bindUsageEvent(sample, eventID: "\(sourceID):\(sample.sourceEventID)", sourceID: sourceID, importedAt: importedAt, to: statement)
+      }
+      try execute("COMMIT")
+    } catch {
+      try? execute("ROLLBACK")
+      throw error
+    }
+  }
+
+  /// Devices with stored usage, including ones no longer connected.
+  func storedDevices() throws -> [(identity: UsageDeviceIdentity, syncedAt: Date)] {
+    let statement = try prepare("""
+      SELECT installation_id, source_name, fingerprint, imported_at
+      FROM usage_sources WHERE source_kind = 'device' AND installation_id IS NOT NULL
+      """)
+    defer { sqlite3_finalize(statement) }
+    var result: [(identity: UsageDeviceIdentity, syncedAt: Date)] = []
+    while sqlite3_step(statement) == SQLITE_ROW {
+      let identity = UsageDeviceIdentity(
+        id: text(statement, 0),
+        name: text(statement, 1),
+        kind: UsageDeviceKind(rawValue: text(statement, 2)) ?? .mac
+      )
+      result.append((identity, Date(timeIntervalSince1970: sqlite3_column_double(statement, 3))))
+    }
+    return result
+  }
+
+  func samples(
+    in interval: DateInterval,
+    sourceID: String? = nil,
+    limit: Int? = nil,
+    offset: Int = 0,
+    excludingDevices: Bool = false,
+    uniqueReplies: Bool = false
+  ) throws -> [UsageSample] {
+    let filter = """
+      WHERE timestamp >= ? AND timestamp < ?
+      \(sourceID == nil ? "" : "AND source_id = ?")
+      \(excludingDevices ? "AND (source_id NOT LIKE 'device:%' OR source_id LIKE '%:wovenmatter:local')" : "")
+      """
+    // One reply kept in several places (an archived Codex rollout and its copy, a Pi
+    // Durable store and its commit log) is one row, as `LocalUsageService.duplicateKey` reads it.
+    let rows = uniqueReplies ? """
+      (SELECT *, ROW_NUMBER() OVER (
+        PARTITION BY provider, COALESCE(dedupe_key,
+          CASE WHEN source_id LIKE 'codex:file:%' THEN 'rollout:' || source_event_id END, event_id)
+        ORDER BY event_id) AS copy
+      FROM usage_events \(filter)) WHERE copy = 1
+      """ : "usage_events \(filter)"
     let statement = try prepare("""
       SELECT
         event_id, source_id, source_event_id, dedupe_key,
@@ -392,9 +505,7 @@ final class UsageStore {
         request_count, input_tokens, cached_input_tokens, cache_creation_tokens,
         output_tokens, reasoning_tokens, reported_total_tokens,
         cost_usd, attribution_confidence, granularity
-      FROM usage_events
-      WHERE timestamp >= ? AND timestamp < ?
-      \(sourceID == nil ? "" : "AND source_id = ?")
+      FROM \(rows)
       ORDER BY timestamp, event_id
       \(limit == nil ? "" : "LIMIT ? OFFSET ?")
       """)
@@ -432,7 +543,7 @@ final class UsageStore {
           billingProvider: text(statement, 5),
           billingRoute: text(statement, 6),
           reasoningLevel: optionalText(statement, 11),
-          harness: text(statement, 12),
+          harness: UsageSample.currentHarnessName(text(statement, 12)),
           application: text(statement, 13),
           agent: optionalText(statement, 14),
           workspace: optionalText(statement, 15),
@@ -475,6 +586,36 @@ final class UsageStore {
     )
   }
 
+  private static let deviceAliasPrefix = "usage.device-alias."
+
+  /// Earlier device IDs and the device each is now read as.
+  func deviceAliases() throws -> [String: String] {
+    let statement = try prepare("SELECT key, value FROM usage_metadata WHERE substr(key, 1, ?) = ?")
+    defer { sqlite3_finalize(statement) }
+    sqlite3_bind_int(statement, 1, Int32(Self.deviceAliasPrefix.utf8.count))
+    bind(Self.deviceAliasPrefix, to: 2, in: statement)
+    var result: [String: String] = [:]
+    while true {
+      let status = sqlite3_step(statement)
+      if status == SQLITE_DONE { return result }
+      guard status == SQLITE_ROW else { throw stepError() }
+      result[String(text(statement, 0).dropFirst(Self.deviceAliasPrefix.count))] = text(statement, 1)
+    }
+  }
+
+  func recordDeviceAliases(_ pairs: [(former: String, current: String)]) throws {
+    for pair in pairs where UsageDeviceSource.storedID(pair.former) != UsageDeviceSource.storedID(pair.current) {
+      let statement = try prepare("""
+        INSERT INTO usage_metadata (key, value) VALUES (?, ?)
+        ON CONFLICT(key) DO UPDATE SET value = excluded.value
+        """)
+      defer { sqlite3_finalize(statement) }
+      bind(Self.deviceAliasPrefix + UsageDeviceSource.storedID(pair.former), to: 1, in: statement)
+      bind(pair.current, to: 2, in: statement)
+      try stepDone(statement)
+    }
+  }
+
   func metadataDate(_ key: String) throws -> Date? {
     let statement = try prepare("SELECT value FROM usage_metadata WHERE key = ?")
     defer { sqlite3_finalize(statement) }
@@ -494,13 +635,6 @@ final class UsageStore {
     defer { sqlite3_finalize(statement) }
     bind(key, to: 1, in: statement)
     bind(String(value.timeIntervalSince1970), to: 2, in: statement)
-    try stepDone(statement)
-  }
-
-  func prune(before cutoff: Date) throws {
-    let statement = try prepare("DELETE FROM usage_events WHERE timestamp < ?")
-    defer { sqlite3_finalize(statement) }
-    sqlite3_bind_double(statement, 1, cutoff.timeIntervalSince1970)
     try stepDone(statement)
   }
 

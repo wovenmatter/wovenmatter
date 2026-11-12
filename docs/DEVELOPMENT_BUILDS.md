@@ -7,6 +7,26 @@ have independent device credentials. Client and snapshot instances also have
 independent data and process leases.
 An explicit live host uses production's data and exclusive execution lease.
 
+Builds live under `~/Library/Developer/Woven Matter Dev/<instance>/<mode>`
+(`WOVENMATTER_DEV_CACHE_DIR` overrides it). Never put them under `/tmp`: macOS
+marks apps in temporary folders "in-temp-dir" and leaves them out of bundle-ID
+lookups, so System Settings cannot list the Dev app and its Accessibility and
+Screen Recording prompts fail.
+
+Dev builds are signed with this Mac's Apple Development certificate, which keeps
+the app's identity stable across rebuilds; macOS ties privacy permissions and
+Keychain access (including the paired-Mac keys) to that identity. The launcher
+stops when no trusted certificate is installed instead of signing ad-hoc, which
+would give every rebuild a new identity. Add one in Xcode (Settings → Apple
+Accounts → account → team → Manage Certificates → + → Apple Development); a
+certificate macOS does not trust usually means Apple's WWDR G3 intermediate is
+missing. `WOVENMATTER_DEV_SIGNING_IDENTITY=-` builds unsigned on purpose.
+Signing needs the Mac's logged-in session: over SSH the login Keychain is not
+available to codesign (`errSecInternalComponent`), so start remote builds in
+that session (for example `open -a Terminal build.command`). Moving a Mac from
+unsigned to signed builds leaves old permission entries that no longer match;
+reset them once with `tccutil reset <Service> <bundle ID>` and allow again.
+
 ```sh
 scripts/build_and_run.sh
 scripts/build_and_run.sh --mode snapshot
@@ -14,6 +34,7 @@ scripts/build_and_run.sh --mode client
 scripts/build_and_run.sh --mode live
 scripts/build_and_run.sh --mode snapshot --instance chat-ui
 scripts/build_and_run.sh --mode snapshot --instance migration-check
+scripts/build_and_run.sh --mode snapshot --instance chat-ui --fresh
 scripts/build_and_run.sh --plan
 ```
 
@@ -28,6 +49,15 @@ finish that work before rebuilding. It never force-kills another Dev app or the
 production app. Concurrent builds of the same profile are rejected; other
 client/snapshot profiles can build and run independently. Only one host may own
 the production library, regardless of its instance name.
+
+Every Linux host holds a library copy, so the app's host bundle must carry
+`wovenmatter-library` for each Linux architecture (`remote/host/library/`,
+gitignored). Before building, the launcher builds any missing architecture with
+Docker through `scripts/build-linux-library.sh` (the pinned image; a binary
+already there, packed or plain, is kept). Without Docker it stops and says how to
+build it. `WOVENMATTER_DEV_LINUX_LIBRARY=skip` builds the app without it; that
+build then refuses to install or update Linux hosts of a missing architecture, as
+`remote-host.sh` does on the host.
 
 ## Choosing a mode
 
@@ -130,15 +160,24 @@ remain available to history but are retired from the active catalog; startup cre
 one local agent for each harness under the snapshot's new device identity. Existing task definitions
 remain visible but have a detached owner; create a new schedule in the snapshot
 to test execution. Active goals and session timers are paused. Old chats are history; create a new
-session to test the branch's runtime. The snapshot is its own library host with
+session to test the branch's runtime. Only the copied owners and their chats are refused:
+signed execution between members works for every workspace the snapshot knows live, such as
+another Dev Mac paired with it as a member and the Linux hosts it installs, which it adopts
+and enrolls as soon as they are added. The snapshot is its own library host with
 a fresh identity and no production connections or copied grants. Its separate
 Device Connections endpoint can be paired explicitly to test host/API changes;
 it never synchronizes back to production.
 
 Snapshots are disposable development environments. They never merge changes back
 into the source library, and all their data may be discarded when the instance is
-removed. Subsequent launches reuse the same instance; use a new `--instance` for a
-fresh snapshot. Existing snapshots are not repaired or migrated by the launcher.
+removed. Subsequent launches reuse the same instance. `--fresh` replaces an
+instance's snapshot in place: it stops the app (refusing while its background
+server runs), moves the snapshot folder, bots and their VM included, to the
+Trash, deletes the instance's preferences and Keychain items (provider sign-ins,
+pairing keys), and takes a new snapshot. The bundle ID stays the same, so macOS
+keeps the privacy permissions it granted; a new `--instance` name is a new app to
+macOS and asks for them again. Existing snapshots are not repaired or migrated by
+the launcher.
 The launcher refuses to overwrite an existing snapshot. It publishes a newly
 created snapshot only after backup, isolation, asset-copy, and integrity checks
 succeed. Symlinked assets and overlapping source/destination paths are rejected.

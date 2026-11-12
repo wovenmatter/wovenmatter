@@ -27,7 +27,7 @@ there is no fallback connection mode.
 
 ## Create a workspace
 
-1. Open **Settings → Remote Workspaces** and select or enter a Linux host.
+1. Open **Settings → Workspaces**, choose **Add workspace**, and select or enter a Linux host.
    Choose Full root or Normal user permissions for the whole workspace.
 2. Selecting a discovered machine checks it automatically. For a hostname entered
    manually, choose **Inspect host**. Inspection does not install software.
@@ -62,7 +62,7 @@ to `woven_browser_use`. Host browsing is headless and runs directly on Linux.
 ### See the agent's tabs in Woven Matter
 
 Right-click a remote workspace heading in the sidebar and choose **View browser**,
-or open **Settings → Remote Workspaces → Manage → View browser**. Select a
+or open the workspace in **Settings → Workspaces** and choose **Manage → View browser**. Select a
 tab to interact with its live page. Click, type, scroll, select text or drag on the
 page while the agent keeps the same tab open. Use the address field and Back,
 Forward and Reload controls to navigate. Mac shortcuts include Command-A,
@@ -123,6 +123,20 @@ running while the Linux host, agent service and provider access remain available
 Updates preserve the workspace's durable data. Uninstall and removal of workspace
 data are separate explicit actions.
 
-Connections use an authenticated service over a Tailscale SSH tunnel to a host
+The Mac that adds a host connects over a Tailscale SSH tunnel to a host
 loopback port. See [Native Linux hosts](../reference/REMOTE_HOSTS.md) for
 permissions, browser verification, storage and service lifecycle details.
+
+## Use a host from every Mac
+
+A Linux host belongs to all your devices, not to the Mac that added it. Every
+paired Mac lists every Linux host under **Settings → Workspaces → From other
+devices**, with its status, and can show its logs, restart it and update it
+from its **Manage** menu. Those Macs reach the host directly over Tailscale HTTPS with their own
+device key; no SSH setup or sign-in is needed on them. Agents on any Mac or Linux
+host can start sessions on it, and its agents can start sessions on every other
+Mac and Linux workspace, with every Mac offline if the destination is a Linux
+host. Name a workspace by its ID: `woven_sessions_harnesses` lists them.
+
+The adding Mac still installs the host over SSH, and uses SSH for updates when
+a host is too old to accept signed updates.

@@ -11,7 +11,7 @@ public enum OpenCodePermissionHandling {
         return suffix.hasPrefix("/form/")
     }
 
-    public static let options = ["ask", "allow", "deny"]
+    public static let options = AgentRuntimeKind.opencode.orderedPermissionOptions(["ask", "allow", "deny"])
     public static let metadata: [String: SessionOptionMetadata] = [
         "ask": .init(name: "Ask for approval", description: "Use OpenCode’s native ask effect for session actions and resources."),
         "allow": .init(name: "Full access", description: "Use OpenCode’s native allow effect for session actions and resources. Required input forms remain interactive."),
@@ -44,7 +44,7 @@ public enum OpenCodePermissionHandling {
     }
     /// Mobile can explicitly answer ordinary permission requests. Keep authentication
     /// and interactive forms on the Mac; native allow/ask/deny policies stay authoritative.
-    public static func companionRequestID(_ request: OpenCodeValue, sessionID: String) -> String? {
+    public static func libraryRequestID(_ request: OpenCodeValue, sessionID: String) -> String? {
         guard request["sessionID"].string == sessionID,
               let id = request["id"].string, id.hasPrefix("per"),
               let action = request["action"].string, !action.isEmpty,

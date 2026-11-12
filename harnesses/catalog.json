@@ -9,7 +9,7 @@
       "arguments": [],
       "cliCommand": "codex",
       "adapterPackage": "@agentclientprotocol/codex-acp",
-      "minimumAdapterVersion": "2.5.0",
+      "minimumAdapterVersion": "2.6.0",
       "install": {
         "kind": "official-script",
         "source": "https://chatgpt.com/codex/install.sh",
@@ -21,6 +21,7 @@
         "statusCommands": [
           "codex login status"
         ],
+        "signOutCommand": "codex logout",
         "discoveries": [
           {
             "displayName": "Codex account",
@@ -52,8 +53,8 @@
         "permissions",
         "attachments"
       ],
-      "minimumEngineVersion": "0.167.0",
-      "minimumProtocolSDKVersion": "2.4.0"
+      "minimumEngineVersion": "0.167.2",
+      "minimumProtocolSDKVersion": "2.6.0"
     },
     {
       "id": "claude_code",
@@ -63,7 +64,7 @@
       "arguments": [],
       "cliCommand": "claude",
       "adapterPackage": "@agentclientprotocol/claude-agent-acp",
-      "minimumAdapterVersion": "0.101.0",
+      "minimumAdapterVersion": "0.106.0",
       "install": {
         "kind": "official-script",
         "source": "https://claude.ai/install.sh",
@@ -77,6 +78,7 @@
         "statusCommands": [
           "claude auth status --json >/dev/null"
         ],
+        "signOutCommand": "claude auth logout",
         "discoveries": [
           {
             "displayName": "Claude account",
@@ -108,8 +110,8 @@
         "permissions",
         "attachments"
       ],
-      "minimumEngineVersion": "0.3.319",
-      "minimumProtocolSDKVersion": "2.4.0"
+      "minimumEngineVersion": "0.3.322",
+      "minimumProtocolSDKVersion": "2.6.0"
     },
     {
       "id": "grok_build",
@@ -135,6 +137,7 @@
         "statusCommands": [
           "grok models 2>/dev/null | grep -q '^You are logged in'"
         ],
+        "signOutCommand": "grok logout",
         "discoveries": [
           {
             "displayName": "Grok account",

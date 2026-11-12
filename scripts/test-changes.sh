@@ -24,6 +24,7 @@ run_static_checks() {
   python3 scripts/test-support/test_ci_scopes.py
   python3 scripts/test-support/test_cua_runtime.py
   python3 scripts/test-support/test_ios_runner.py
+  PYTHONDONTWRITEBYTECODE=1 python3 scripts/test-support/test_verify_ios_app.py
   bash scripts/test-dev-signing.sh
   PYTHONDONTWRITEBYTECODE=1 python3 scripts/test-support/test_dev_build.py
   scripts/test-app-termination.sh
@@ -92,6 +93,13 @@ run_remote_tests() {
   npm test --prefix remote
 }
 
+run_bots_tests() {
+  # The bots runtime requires Node 26 (bots/package.json engines).
+  scripts/with-pinned-node.sh npm ci --prefix bots --ignore-scripts --no-audit --no-fund
+  scripts/with-pinned-node.sh npm test --prefix bots
+  bots_tested=1
+}
+
 run_app_build() {
   xcodebuild -quiet -onlyUsePackageVersionsFromResolvedFile \
     -project app/WovenMatter.xcodeproj \
@@ -113,7 +121,7 @@ run_app_build() {
   "$browser_build/WovenBrowserLifecycleTests"
 }
 
-run_companion() {
+run_cross_device() {
   local ios_mode="${1:---simulator}"
   env \
     CLANG_MODULE_CACHE_PATH="${cache_root}/ModuleCache" \
@@ -124,16 +132,17 @@ run_companion() {
       scripts/test-ios.sh "$ios_mode"
   fi
   env WOVENMATTER_INTEGRATION_TEST_CACHE_DIR="${cache_root}/Integration" \
-    scripts/test-companion-integration.sh
+    scripts/test-cross-device-integration.sh
 }
 
 run_all() {
   run_static_checks
   run_default_agent_tests
   run_remote_tests
+  run_bots_tests
   run_package_tests
   run_app_build
-  run_companion --all-devices
+  run_cross_device --all-devices
 }
 
 run_desktop() {
@@ -145,7 +154,7 @@ run_desktop() {
 
 run_macos() {
   run_desktop
-  run_companion --simulator
+  run_cross_device --simulator
 }
 
 # CI already ran portable fixtures and JavaScript tests once on Linux.
@@ -165,6 +174,7 @@ run_remote() {
   run_static_checks
   run_default_agent_tests
   run_remote_tests
+  run_bots_tests
 }
 
 mode="${1:-changed}"
@@ -174,12 +184,13 @@ case "$mode" in
   --all) run_all; exit ;;
   --desktop) run_desktop; exit ;;
   --macos) run_macos; exit ;;
-  --companion) run_companion --simulator; exit ;;
-  --companion-desktop) run_companion --desktop-only; exit ;;
+  --cross-device) run_cross_device --simulator; exit ;;
+  --cross-device-desktop) run_cross_device --desktop-only; exit ;;
   --remote) run_remote; exit ;;
+  --linux) WOVENMATTER_TEST_CACHE_DIR="$cache_root" scripts/test-linux-library.sh; exit ;;
   changed) ;;
   *)
-    printf '%s\n' 'usage: scripts/test-changes.sh [--ci|--native|--all|--desktop|--macos|--companion|--companion-desktop|--remote]' >&2
+    printf '%s\n' 'usage: scripts/test-changes.sh [--ci|--native|--all|--desktop|--macos|--cross-device|--cross-device-desktop|--remote|--linux]' >&2
     exit 64
     ;;
 esac
@@ -201,7 +212,13 @@ elif printf '%s\n' "$changed" | grep -Eq '^app/App/' \
   run_macos
 elif printf '%s\n' "$changed" | grep -Eq '^app/(Sources|Tests)/'; then
   run_package_tests
+elif printf '%s\n' "$changed" | grep -Eq '^bots/' \
+  && ! printf '%s\n' "$changed" | grep -Eqv '^(bots/|docs/)'; then
+  run_bots_tests
 else
   run_static_checks
   run_app_build
+fi
+if [ -z "${bots_tested:-}" ] && printf '%s\n' "$changed" | grep -Eq '^bots/'; then
+  run_bots_tests
 fi

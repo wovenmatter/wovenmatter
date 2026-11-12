@@ -47,7 +47,7 @@ future documentation updates:
 | Settings and navigation | [SettingsView.swift](../../app/App/Views/SettingsView.swift) |
 | Panels | [ChatPanelLayout.swift](../../app/Sources/WovenMatterCore/ChatPanelLayout.swift) |
 | Workspace layout | [LocalACPWorkspace.swift](../../app/Sources/WovenMatterClient/LocalACPWorkspace.swift) |
-| Notes and agent access | [ApplicationModel.swift](../../app/App/ApplicationModel.swift) and [NoteEditingProtocol.swift](../../shared/Sources/WovenMatterCompanion/NoteEditingProtocol.swift) |
+| Notes and agent access | [ApplicationModel.swift](../../app/App/ApplicationModel.swift) and [NoteEditingProtocol.swift](../../shared/Sources/WovenMatterShared/NoteEditingProtocol.swift) |
 | Saved conversations and imports | [WorkspaceDatabase.swift](../../app/Sources/WovenMatterDashboardStore/WorkspaceDatabase.swift) |
 | Remote connection and lifecycle | [RemoteWorkspaceClient.swift](../../app/Sources/WovenMatterClient/RemoteWorkspaceClient.swift) and [remote-workspace.sh](../../scripts/remote-workspace.sh) |
 | Remote data limits | [database-catalog.py](../../remote/src/database-catalog.py) |

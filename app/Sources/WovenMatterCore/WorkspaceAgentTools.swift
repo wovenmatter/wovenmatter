@@ -1,15 +1,40 @@
 import Foundation
-import WovenMatterCompanion
+import WovenMatterShared
 
 public enum WorkspaceCalendarAccess: String, CaseIterable, Codable, Sendable {
   case readOnly, full
   public var title: String { self == .full ? "Full access" : "Read only" }
 }
 
-/// An app-wide caller supplied only by the host's private Tailnet transport.
+/// App-wide identities supplied by authenticated host transports.
 /// This is an identity for policy and receipts, never a conversation.
 public enum WovenMCPCaller {
   public static let outside = "woven:tailnet"
+
+  /// A bot's own principal: the device ID of the machine whose Woven server
+  /// issued its key, then the runtime's bot ID. Both parts are lowercased
+  /// identifier tokens, so the principal never needs escaping.
+  public static func bot(machineID: String, botID: String) -> String {
+    "woven:bot:" + machineID.lowercased() + ":" + botID.lowercased()
+  }
+
+  public static func parseBot(_ caller: String) -> (machineID: String, botID: String)? {
+    let parts = caller.split(separator: ":", omittingEmptySubsequences: false)
+    guard parts.count == 4, parts[0] == "woven", parts[1] == "bot",
+          isIdentifier(parts[2]), isIdentifier(parts[3]) else { return nil }
+    return (parts[2].lowercased(), parts[3].lowercased())
+  }
+
+  /// Device IDs and bot IDs are UUIDs today; any short token without separators is accepted.
+  public static func isIdentifier(_ value: some StringProtocol) -> Bool {
+    (1...128).contains(value.utf8.count) && value.utf8.allSatisfy {
+      (48...57).contains($0) || (65...90).contains($0) || (97...122).contains($0) || $0 == 45 || $0 == 95 || $0 == 46
+    }
+  }
+
+  public static func isAppWide(_ caller: String) -> Bool {
+    caller == outside || parseBot(caller) != nil
+  }
 }
 
 public struct WorkspaceExternalMCPSettings: Codable, Equatable, Sendable {
@@ -24,6 +49,7 @@ public struct WorkspaceExternalMCPSettings: Codable, Equatable, Sendable {
 }
 
 public struct WorkspaceToolSettings: Codable, Equatable, Sendable {
+  public var botMCP: WorkspaceExternalMCPSettings = .init(isEnabled: true)
   public var externalMCP: WorkspaceExternalMCPSettings?
   public var enabledByDefault: Set<WorkspaceToolGroup>
   public var calendarAccess: WorkspaceCalendarAccess
@@ -41,6 +67,23 @@ public struct WorkspaceToolSettings: Codable, Equatable, Sendable {
     self.maximumRunningSessions = maximumRunningSessions
   }
 
+  private enum CodingKeys: String, CodingKey {
+    case botMCP, externalMCP, enabledByDefault, calendarAccess, maximumManagedSessions
+    case executorSetup, executor, maximumRunningSessions
+  }
+
+  public init(from decoder: any Decoder) throws {
+    let values = try decoder.container(keyedBy: CodingKeys.self)
+    botMCP = try values.decodeIfPresent(WorkspaceExternalMCPSettings.self, forKey: .botMCP) ?? .init(isEnabled: true)
+    externalMCP = try values.decodeIfPresent(WorkspaceExternalMCPSettings.self, forKey: .externalMCP)
+    enabledByDefault = try values.decode(Set<WorkspaceToolGroup>.self, forKey: .enabledByDefault)
+    calendarAccess = try values.decode(WorkspaceCalendarAccess.self, forKey: .calendarAccess)
+    maximumManagedSessions = try values.decode(Int.self, forKey: .maximumManagedSessions)
+    maximumRunningSessions = try values.decode(Int.self, forKey: .maximumRunningSessions)
+    executorSetup = try values.decodeIfPresent(ExecutorSetupState.self, forKey: .executorSetup)
+    executor = try values.decodeIfPresent(ExecutorConfiguration.self, forKey: .executor)
+  }
+
   public func applyingChanges(from base: Self, to edited: Self) -> Self {
     var result = self
     result.enabledByDefault.formUnion(edited.enabledByDefault.subtracting(base.enabledByDefault))
@@ -54,6 +97,7 @@ public struct WorkspaceToolSettings: Codable, Equatable, Sendable {
       selection.subtract(old.defaultProfiles.subtracting(change.defaultProfiles))
       result.executor?.defaultProfiles = selection.intersection(Set(current.apps.map(\.id)))
     }
+    if base.botMCP != edited.botMCP { result.botMCP = edited.botMCP }
     if base.externalMCP != edited.externalMCP { result.externalMCP = edited.externalMCP }
     // Setup, inventory and connection identity belong to the manager.
     return result

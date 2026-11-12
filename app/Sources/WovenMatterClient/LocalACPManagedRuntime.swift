@@ -1,6 +1,19 @@
+#if canImport(CryptoKit)
 import CryptoKit
+#else
+import Crypto
+#endif
 import Foundation
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
+#if canImport(Darwin)
 import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#elseif canImport(Musl)
+import Musl
+#endif
 import WovenMatterCore
 
 public enum LocalACPRuntimeInstallComponent: Sendable {
@@ -38,17 +51,17 @@ public struct LocalACPManagedNodeArtifact: Equatable, Sendable {
     public static var current: LocalACPManagedNodeArtifact {
         #if arch(arm64)
         LocalACPManagedNodeArtifact(
-            version: "v26.13.0",
+            version: "v26.13.1",
             platform: "darwin-arm64",
-            archiveFileName: "node-v26.13.0-darwin-arm64.tar.gz",
-            sha256: "d38bd5e5a2ddce6bbb5ce45e46e208337da4d51fffe611e567fd32073d6439f6"
+            archiveFileName: "node-v26.13.1-darwin-arm64.tar.gz",
+            sha256: "aec2514ea1ceb2ba52455e9ec65986f6749a06dd759e5db2a72e6889668c9735"
         )
         #elseif arch(x86_64)
         LocalACPManagedNodeArtifact(
-            version: "v26.13.0",
+            version: "v26.13.1",
             platform: "darwin-x64",
-            archiveFileName: "node-v26.13.0-darwin-x64.tar.gz",
-            sha256: "525c9b29bb0263d687de60a4cec0e2a6db876a8eb032369e5795eca71e7c358e"
+            archiveFileName: "node-v26.13.1-darwin-x64.tar.gz",
+            sha256: "82bb96078a24ca50b9c9a38f2379e6be6d87171fcd400fc14c8934b3bce96e2f"
         )
         #else
         #error("Woven Matter's managed Node runtime supports macOS arm64 and x86_64.")
@@ -1001,6 +1014,9 @@ enum LocalACPProcessRunner {
         currentDirectoryURL: URL? = nil,
         timeout: TimeInterval = 600
     ) throws -> LocalACPProcessResult {
+        #if !os(macOS)
+        throw RuntimeMaintenanceError.unavailable
+        #else
         let outputURL = FileManager.default.temporaryDirectory.appending(path: "runtime-output-\(UUID().uuidString)")
         FileManager.default.createFile(atPath: outputURL.path, contents: nil, attributes: [.posixPermissions: 0o600])
         defer { try? FileManager.default.removeItem(at: outputURL) }
@@ -1056,6 +1072,7 @@ enum LocalACPProcessRunner {
         let outputData = try input.read(upToCount: 128 * 1_024) ?? Data()
         return LocalACPProcessResult(terminationStatus: (status & 0x7f) == 0 ? (status >> 8) & 0xff : 128 + (status & 0x7f),
             stdout: String(decoding: outputData, as: UTF8.self))
+        #endif
     }
 }
 

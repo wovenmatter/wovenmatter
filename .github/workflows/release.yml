@@ -24,14 +24,43 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # macOS runners have no Docker: the static Linux library host binaries that host
+  # releases ship are built here and handed to the macOS build as an artifact.
+  linux-library:
+    if: ${{ !inputs.cache_benchmark_run }}
+    name: Linux library binaries
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    steps:
+      # Exact current releases: this workflow holds write tokens and signing
+      # material (docs/DEPENDENCIES.md).
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # The pinned Swift image and Static Linux SDK (remote/library/build-version.json),
+      # both architectures, gzip-packed beside each binary's SHA-256.
+      - name: Build wovenmatter-library for x86_64 and aarch64
+        run: scripts/build-linux-library.sh --docker
+      - name: Verify the packed binaries
+        run: scripts/verify-linux-library.sh
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: wovenmatter-library-linux
+          path: remote/host/library/
+          if-no-files-found: error
+          retention-days: 7
+
   macos:
     if: ${{ !inputs.cache_benchmark_run }}
+    needs: linux-library
     name: Signed Apple Silicon release
-    runs-on: macos-26
+    # Xcode 27.2, the toolchain the app is developed with (macos-26 stops at Xcode 26.6).
+    runs-on: xcode-27
     timeout-minutes: 120
     environment: release
     # Shared, non-secret phase settings.
     env:
+      DEVELOPER_DIR: /Applications/Xcode_27.2.app/Contents/Developer
       WOVENMATTER_SIGNING_IDENTITY: Developer ID Application
       WOVENMATTER_RELEASE_WORK_DIR: /private/tmp/wovenmatter-release-build
       WOVENMATTER_RELEASE_OUTPUT_DIR: ${{ github.workspace }}/dist
@@ -71,6 +100,14 @@ jobs:
             test "$(git rev-list -n 1 "$GITHUB_REF_NAME")" = "$GITHUB_SHA"
           fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      # Before xcodebuild: the app bundles them in its host release sources.
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: wovenmatter-library-linux
+          path: remote/host/library
+      - name: Verify the Linux library binaries
+        run: scripts/verify-linux-library.sh
 
       - name: Validate release metadata before compiling
         env:
@@ -248,13 +285,15 @@ jobs:
   cache-benchmark:
     if: github.event_name == 'workflow_dispatch' && inputs.cache_benchmark_run != '' && startsWith(github.ref, 'refs/tags/v-cache-benchmark-')
     name: Signed cache consumer benchmark (no publication)
-    runs-on: macos-26
+    # Xcode 27.2, the toolchain the app is developed with (macos-26 stops at Xcode 26.6).
+    runs-on: xcode-27
     timeout-minutes: 45
     environment: release
     permissions:
       contents: read
       actions: read
     env:
+      DEVELOPER_DIR: /Applications/Xcode_27.2.app/Contents/Developer
       WOVENMATTER_RELEASE_ALLOW_UNTAGGED: '1'
       WOVENMATTER_RELEASE_WORK_DIR: /private/tmp/wovenmatter-release-build
       WOVENMATTER_RELEASE_OUTPUT_DIR: /private/tmp/wovenmatter-cache-benchmark-output

@@ -1,5 +1,5 @@
 import Foundation
-import WovenMatterCompanion
+import WovenMatterShared
 
 /// Small enough for transcript summaries; the page itself stays in full activity detail.
 public struct ConversationHTMLRenderReference: Codable, Equatable, Sendable {

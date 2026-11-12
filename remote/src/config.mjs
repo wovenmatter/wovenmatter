@@ -28,6 +28,9 @@ export function loadRuntimeConfiguration(environment = process.env) {
     home, serviceRoot, runtimeKind, accessMode, listenHost,
     listenPort: Number.isInteger(port) && port > 0 && port <= 65535 ? port : 7337,
     apiToken: environment.WOVENMATTER_API_TOKEN ?? '',
+    // Keys the publisher and MCP grants at rest; set once the installer bearer
+    // rotates (remote-host.sh rotate-token), older installs use the bearer.
+    serviceSecret: environment.WOVENMATTER_SERVICE_SECRET || null,
     catalogPath: environment.WOVENMATTER_HARNESS_CATALOG ?? resolve(serviceRoot, 'harnesses/catalog.json'),
     workspaceRoot: environment.WOVENMATTER_WORKSPACE ?? resolve(home, '.woven-matter'),
     managedDataRoot,
@@ -37,14 +40,41 @@ export function loadRuntimeConfiguration(environment = process.env) {
     legacyBrowserProfile: resolve(home, '.local/share/wovenmatter/browser'),
     harnessPath: environment.WOVENMATTER_HARNESS_PATH ?? '',
     serviceFingerprint: environment.WOVENMATTER_SERVICE_FINGERPRINT ?? null,
+    // The Woven Matter version that shipped this host release (remote-host.sh reads it
+    // from the bundle manifest); empty or missing for releases that predate it.
+    releaseVersion: environment.WOVENMATTER_RELEASE_VERSION || null,
+    // One server per machine: a Linux host may run bots with the workspace off.
+    workspaceEnabled: environment.WOVENMATTER_WORKSPACE_ENABLED !== '0',
+    botsEnabled: environment.WOVENMATTER_BOTS_ENABLED === '1',
+    botsInstance: environment.WOVENMATTER_BOTS_INSTANCE ?? 'wovenmatter',
+    botsData: environment.WOVENMATTER_BOTS_DATA ?? null,
   })
+}
+
+// Sessions often start from another device with nobody at this one, so a
+// credential prompt must fail at once instead of hanging the session. The
+// session-tools sudo runs the real sudo with -n (passwordless Full root still
+// works); askpass refuses git/ssh prompts with a message. Keep this overlay in
+// sync with remote/host/bin/wm-exec and the Mac's WovenSessionEnvironment.
+export function sessionToolsDirectory(configuration = runtimeConfiguration) {
+  return resolve(configuration.serviceRoot, 'host/session-tools')
+}
+
+export function nonInteractiveSessionEnvironment(environment = process.env, configuration = runtimeConfiguration) {
+  const tools = sessionToolsDirectory(configuration)
+  const askpass = resolve(tools, 'askpass')
+  const paths = (environment.PATH ?? '').split(':').filter(path => path && path !== tools)
+  return { ...environment, PATH: [tools, ...paths].join(':'),
+    GIT_TERMINAL_PROMPT: '0', GCM_INTERACTIVE: 'never', GIT_ASKPASS: askpass,
+    SSH_ASKPASS: askpass, SSH_ASKPASS_REQUIRE: 'force', SUDO_ASKPASS: askpass,
+    DEBIAN_FRONTEND: 'noninteractive' }
 }
 
 export function runtimeHarnessEnvironment(environment = process.env, configuration = loadRuntimeConfiguration(environment)) {
   const paths = [resolve(configuration.home, '.local/bin'), resolve(configuration.home, '.npm-global/bin')]
   if (configuration.harnessPath) paths.push(configuration.harnessPath)
   paths.push(environment.PATH ?? '')
-  return { ...environment, HOME: configuration.home, PATH: paths.join(':'), WOVENMATTER_WORKSPACE: configuration.workspaceRoot }
+  return nonInteractiveSessionEnvironment({ ...environment, HOME: configuration.home, PATH: paths.join(':'), WOVENMATTER_WORKSPACE: configuration.workspaceRoot }, configuration)
 }
 
 export function runtimeNPMCommand(configuration = runtimeConfiguration, nodeExecutable = process.execPath) {
@@ -55,9 +85,28 @@ export function runtimeNPMCommand(configuration = runtimeConfiguration, nodeExec
   return [nodeExecutable, resolve(configuration.serviceRoot, 'tooling/lib/node_modules/npm/bin/npm-cli.js')].map(shellQuote).join(' ')
 }
 
+// Each harness's native Full access mode. New sessions start here unless the
+// user saved a different default; Full root workspaces always use it.
+export const fullAccessPermissions = Object.freeze({ codex: 'agent-full-access', claude_code: 'bypassPermissions', grok_build: 'bypassPermissions', default_agent: 'full', opencode: 'allow' })
+
+const autoApprovePermissions = Object.freeze({ codex: ['agent'], claude_code: ['auto', 'acceptEdits'], grok_build: ['auto', 'acceptEdits'] })
+const askPermissions = Object.freeze({ codex: ['workspace-write'], claude_code: ['default'], grok_build: ['default'], opencode: ['ask'], default_agent: ['ask'] })
+
+// Present native permission modes as Full access first, then the harness's
+// auto-approve modes, then its other modes, with ask-for-approval last. Every
+// Full access mode is labeled "Full access"; the others keep native names.
+export function presentPermissionChoices(runtimeKind, choices) {
+  const rank = id => id === fullAccessPermissions[runtimeKind] ? 0
+    : autoApprovePermissions[runtimeKind]?.includes(id) ? 1
+    : askPermissions[runtimeKind]?.includes(id) ? 3 : 2
+  return choices.map((item, index) => ({ item, index }))
+    .sort((a, b) => rank(a.item.id) - rank(b.item.id) || a.index - b.index)
+    .map(({ item }) => item.id === fullAccessPermissions[runtimeKind] ? { ...item, label: 'Full access' } : item)
+}
+
 export function workspacePermission(runtimeKind, requested, configuration = runtimeConfiguration) {
   if (configuration.runtimeKind !== 'host' || configuration.accessMode !== 'fullRoot') return requested
-  return { codex: 'agent-full-access', claude_code: 'bypassPermissions', grok_build: 'bypassPermissions', default_agent: 'full', opencode: 'allow' }[runtimeKind] ?? requested
+  return fullAccessPermissions[runtimeKind] ?? requested
 }
 
 export function workspaceExecutionConfiguration(value, configuration = runtimeConfiguration) {

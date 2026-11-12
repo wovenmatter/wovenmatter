@@ -5,7 +5,7 @@ import vm from 'node:vm';
 
 // Exercise the exact JavaScript embedded by the native renderer, without
 // WebKit, a provider, or a separately maintained implementation of the bridge.
-const source = readFileSync(new URL('../../shared/Sources/WovenMatterCompanion/ArtifactStateJavaScript.swift', import.meta.url), 'utf8');
+const source = readFileSync(new URL('../../shared/Sources/WovenMatterShared/ArtifactStateJavaScript.swift', import.meta.url), 'utf8');
 const script = source.split('public static let bootstrap = #"""')[1].split('"""#')[0];
 const tick = () => new Promise(resolve => setImmediate(resolve));
 const plain = value => JSON.parse(JSON.stringify(value));

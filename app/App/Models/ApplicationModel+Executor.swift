@@ -6,7 +6,7 @@ extension ApplicationModel {
     func executorClient(install: Bool = false, config proposed: ExecutorConfiguration? = nil, prepareHost: Bool = false) async throws -> ExecutorBrokerClient {
         guard !isBackendFrontend, let database = dashboardStore?.database else { throw ApplicationModelError.dashboardStoreUnavailable }
         let saved = try await database.toolSettings().executor
-        guard let config = proposed ?? saved else { throw DefaultAgentError.message("Set up Executor in Settings → General first.") }
+        guard let config = proposed ?? saved else { throw DefaultAgentError.message("Set up Executor in Settings → Woven MCP first.") }
         if executorRuntime.client == nil {
             executorRuntime.client = ExecutorBrokerClient(directory: try Self.dashboardSupportDirectory().appending(path: "executor"))
         }
@@ -19,11 +19,11 @@ extension ApplicationModel {
                 let ssh = RemoteWorkspaceSSHClient()
                 var preflight = try await ssh.preflight(hostName: host, userName: user)
                 if !preflight.ready, prepareHost {
-                    guard preflight.canPrepare == true else { throw DefaultAgentError.message("This Linux host cannot be prepared automatically. Inspect its blocking issues in Remote workspaces.") }
+                    guard preflight.canPrepare == true else { throw DefaultAgentError.message("This Linux host cannot be prepared automatically. Inspect its blocking issues in Settings → Workspaces.") }
                     _ = try await ssh.prepareHost(hostName: host, userName: user)
                     preflight = try await ssh.preflight(hostName: host, userName: user)
                 }
-                guard preflight.ready else { throw DefaultAgentError.message("Prepare this Linux host through Remote workspaces, then deploy Executor.") }
+                guard preflight.ready else { throw DefaultAgentError.message("Prepare this Linux host through Settings → Workspaces, then deploy Executor.") }
             }
             _ = try await client.call(.object(["operation": .string("configure"), "config": try executorJSON(config), "install": .bool(install)]))
             executorRuntime.configured = config
@@ -119,7 +119,7 @@ extension ApplicationModel {
 
     func synchronizeExecutorScope(_ session: String, policy: WorkspaceSessionTools) async throws {
         guard let settings = try await dashboardStore?.database.toolSettings(), let config = settings.executor else {
-            if policy.enabled.contains(.executor) { throw DefaultAgentError.message("Set up Executor in Settings → General → Executor first.") }; return
+            if policy.enabled.contains(.executor) { throw DefaultAgentError.message("Set up Executor in Settings → Woven MCP first.") }; return
         }
         let profiles = config.apps.filter { policy.executorProfiles?.contains($0.id) == true }
         _ = try await executorClient().call(.object(["operation": .string("scope"), "session": .string(session),
@@ -127,7 +127,7 @@ extension ApplicationModel {
     }
 
     func executorPolicy(_ session: String) async throws -> ExecutorApprovalPolicy {
-        if session == WovenMCPCaller.outside {
+        if WovenMCPCaller.isAppWide(session) {
             guard let database = dashboardStore?.database else { throw ApplicationModelError.dashboardStoreUnavailable }
             try await database.requireTool(.executor, sessionID: session)
             return .full

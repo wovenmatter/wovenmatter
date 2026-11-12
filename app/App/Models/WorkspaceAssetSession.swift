@@ -1,5 +1,5 @@
-#if COMPANION_FACADE_TESTS
-import CompanionBrowserTestBridge
+#if APP_FACADE_TESTS
+import FacadeBrowserTestBridge
 #endif
 import AppKit
 import Observation

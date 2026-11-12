@@ -1,7 +1,12 @@
 import Foundation
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
+#if canImport(Security)
 import Security
+#endif
 import WovenMatterCore
-import WovenMatterCompanion
+import WovenMatterShared
 
 /// Captures authorization and destination before suspension; stale responses must not apply.
 public struct RemoteWorkspaceRequestIdentity: Sendable, Equatable {
@@ -28,14 +33,17 @@ public struct RemoteMachineCandidate: Codable, Equatable, Identifiable, Sendable
     public let online: Bool
     /// Keep the Tailnet short name and the DNS name required for private HTTPS.
     public let dnsName: String?
+    /// `linux` or `macOS`, from tailscaled. Discovery for workspaces lists only Linux.
+    public var system: String? = nil
 
     public var id: String { hostName }
 
-    public init(hostName: String, displayName: String, online: Bool, dnsName: String? = nil) {
+    public init(hostName: String, displayName: String, online: Bool, dnsName: String? = nil, system: String? = nil) {
         self.hostName = hostName
         self.displayName = displayName
         self.online = online
         self.dnsName = dnsName
+        self.system = system
     }
 }
 
@@ -249,6 +257,35 @@ public struct RemoteWorkspacePreflight: Codable, Equatable, Sendable {
     public var fingerprint: String? = nil
     public var linger: Bool? = nil
     public var requiredPrivilegedActions: [String]? = nil
+    /// The Woven server this SSH account already runs there (native hosts).
+    public var installation: Installation? = nil
+    /// Whether that server hosts bots (native hosts).
+    public var bots: Bots? = nil
+
+    public struct Installation: Codable, Equatable, Sendable {
+        public struct Roles: Codable, Equatable, Sendable {
+            public var workspace: Bool
+            public var bots: Bool
+            public init(workspace: Bool, bots: Bool) { self.workspace = workspace; self.bots = bots }
+        }
+        public var id: String
+        public var port: Int
+        /// `fullRoot` or `user`.
+        public var accessMode: String
+        public var fingerprint: String?
+        public var roles: Roles?
+        public init(id: String, port: Int, accessMode: String, fingerprint: String? = nil, roles: Roles? = nil) {
+            self.id = id; self.port = port; self.accessMode = accessMode; self.fingerprint = fingerprint; self.roles = roles
+        }
+    }
+
+    public struct Bots: Codable, Equatable, Sendable {
+        /// `no_server`, `server_without_bots` or `bots_ready`.
+        public var state: String
+        public var blockingIssues: [String]?
+        public init(state: String, blockingIssues: [String]? = nil) { self.state = state; self.blockingIssues = blockingIssues }
+        public var isReady: Bool { state == "bots_ready" }
+    }
 }
 
 public struct RemoteWorkspaceStatus: Codable, Equatable, Sendable {
@@ -436,7 +473,8 @@ public enum RemoteWorkspaceLifecycleAction: String, Sendable {
 }
 
 public enum RemoteMachineDiscovery {
-    public static func tailnetMachines() throws -> [RemoteMachineCandidate] {
+    /// Online Linux peers; with `includeMacs`, online macOS peers too (Discover devices for bots).
+    public static func tailnetMachines(includeMacs: Bool = false) throws -> [RemoteMachineCandidate] {
         let executable = try RemoteWorkspaceTailnet.executable()
         let result = try RemoteWorkspaceProcess.run(
             executable: executable,
@@ -445,18 +483,20 @@ public enum RemoteMachineDiscovery {
         guard result.status == 0 else {
             throw RemoteWorkspaceClientError.commandFailed(result.output)
         }
-        return try decodeTailnetMachines(from: result.data)
+        return try decodeTailnetMachines(from: result.data, includeMacs: includeMacs)
     }
 
-    static func decodeTailnetMachines(from data: Data) throws -> [RemoteMachineCandidate] {
+    public static func decodeTailnetMachines(from data: Data, includeMacs: Bool = false) throws -> [RemoteMachineCandidate] {
         let document = try JSONSerialization.jsonObject(with: data)
         guard let root = document as? [String: Any], root["BackendState"] as? String == "Running",
               let peers = root["Peer"] as? [String: Any]
         else { throw RemoteWorkspaceClientError.commandFailed("Connect Tailscale before using remote workspaces.") }
         return peers.values.compactMap { value in
             guard let peer = value as? [String: Any], peer["Online"] as? Bool == true,
-                  peer["Expired"] as? Bool != true,
-                  RemoteWorkspaceTailnet.isLinuxPeer(peer) else { return nil }
+                  peer["Expired"] as? Bool != true else { return nil }
+            let isLinux = RemoteWorkspaceTailnet.isLinuxPeer(peer)
+            let isMac = (peer["OS"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "macos"
+            guard isLinux || (includeMacs && isMac) else { return nil }
             let dnsName = (peer["DNSName"] as? String)?
                 .trimmingCharacters(in: CharacterSet(charactersIn: "."))
             let shortName = (peer["HostName"] as? String)?
@@ -470,7 +510,8 @@ public enum RemoteMachineDiscovery {
                 hostName: hostName,
                 displayName: preferredName ?? hostName,
                 online: peer["Online"] as? Bool ?? false,
-                dnsName: dnsName
+                dnsName: dnsName,
+                system: isLinux ? "linux" : "macOS"
             )
         }.sorted {
             $0.displayName.localizedCaseInsensitiveCompare($1.displayName)
@@ -603,18 +644,21 @@ public actor RemoteWorkspaceSSHClient {
         self.hostScriptLoader = hostScriptLoader ?? scriptLoader
     }
 
+    /// `roles` (host only) is `remote-host.sh inspect`'s roles argument: the preparation
+    /// it lists is for those roles.
     public func preflight(
         hostName: String,
         userName: String?,
         kind: RemoteWorkspaceKind = .container,
-        accessMode: RemoteWorkspaceAccessMode = .user
+        accessMode: RemoteWorkspaceAccessMode = .user,
+        roles: String? = nil
     ) throws -> RemoteWorkspacePreflight {
         try decode(
             RemoteWorkspacePreflight.self,
             from: runScript(
                 hostName: hostName,
                 userName: userName,
-                arguments: kind == .host ? ["inspect", accessMode.rawValue] : ["inspect"],
+                arguments: kind == .host ? ["inspect", accessMode.rawValue] + (roles.map { [$0] } ?? []) : ["inspect"],
                 kind: kind
             )
         )
@@ -637,18 +681,20 @@ public actor RemoteWorkspaceSSHClient {
         return result.endpoint
     }
 
+    /// `roles` (host only) is `remote-host.sh prepare`'s roles argument, such as `bots`.
     public func prepareHost(
         hostName: String,
         userName: String?,
         kind: RemoteWorkspaceKind = .container,
-        accessMode: RemoteWorkspaceAccessMode = .user
+        accessMode: RemoteWorkspaceAccessMode = .user,
+        roles: String? = nil
     ) throws -> RemoteWorkspacePreflight {
         try decode(
             RemoteWorkspacePreflight.self,
             from: runScript(
                 hostName: hostName,
                 userName: userName,
-                arguments: ["prepare", "AUTHORIZED"] + (kind == .host ? [accessMode.rawValue] : []),
+                arguments: ["prepare", "AUTHORIZED"] + (kind == .host ? [accessMode.rawValue] + (roles.map { [$0] } ?? []) : []),
                 kind: kind
             )
         )
@@ -1065,7 +1111,7 @@ public struct RemoteWorkspaceServiceClient: Sendable {
 
     public func provisionExecutionDevice(libraryID: String, workspaceID: String, ownerDeviceID: String,
                                          deviceID: String, name: String, workspaceName: String, endpoint: URL,
-                                         scopes: [String] = ["execution", "inference"]) async throws -> CompanionExecutionCredential {
+                                         scopes: [String] = ["execution", "inference"]) async throws -> ExecutionCredential {
         struct Payload: Encodable {
             let libraryID: String; let workspaceID: String; let ownerDeviceID: String
             let deviceID: String; let name: String; let workspaceName: String; let endpoint: URL; let scopes: [String]
@@ -1075,25 +1121,39 @@ public struct RemoteWorkspaceServiceClient: Sendable {
         return try await request(path: "v1/execution/devices", method: "POST", body: JSONEncoder().encode(payload))
     }
 
-    public func executionPublisherStatus() async throws -> CompanionWorkspacePublisherStatus {
+    /// `GET /v1/host/status`, whose `memberIdentity` is the Linux host's
+    /// `{deviceID, kind, name, publicKey, endpoints, libraryEndpoint}`.
+    public func hostStatus() async throws -> GatewayJSONValue {
+        try await request(path: "v1/host/status", method: "GET", body: nil)
+    }
+    /// Hands the Linux host the signed member records (a `LibraryMemberAdoption`);
+    /// the server forwards them to its library socket's `POST /v1/members/adopt`.
+    /// The server accepts the installer bearer only for the first adoption;
+    /// after that it needs a signed `mac` member, so `signer` signs the request.
+    /// `audience` is the host's member device ID from its `memberIdentity`.
+    public func adoptMembers(_ adoption: Data, signer: MemberRequestSigner? = nil, audience: String? = nil) async throws -> GatewayJSONValue {
+        try await request(path: "v1/host/members/adopt", method: "POST", body: adoption, signer: signer.map { ($0, audience ?? "") })
+    }
+
+    public func executionPublisherStatus() async throws -> ExecutionWorkspacePublisherStatus {
         try await request(path: "v1/execution/publisher", method: "GET", body: nil)
     }
-    public func configureExecutionPublisher(_ grant: CompanionWorkspacePublisherGrant) async throws -> CompanionWorkspacePublisherStatus {
+    public func configureExecutionPublisher(_ grant: ExecutionWorkspacePublisherGrant) async throws -> ExecutionWorkspacePublisherStatus {
         try await request(path: "v1/execution/publisher", method: "POST", body: JSONEncoder().encode(grant))
     }
 
-    public func executionMCPLibraryStatus() async throws -> CompanionWorkspacePublisherStatus {
+    public func executionMCPLibraryStatus() async throws -> ExecutionWorkspacePublisherStatus {
         try await request(path: "v1/execution/mcp-library", method: "GET", body: nil)
     }
-    public func configureExecutionMCPLibrary(_ grant: GatewayJSONValue) async throws -> CompanionWorkspacePublisherStatus {
+    public func configureExecutionMCPLibrary(_ grant: GatewayJSONValue) async throws -> ExecutionWorkspacePublisherStatus {
         try await request(path: "v1/execution/mcp-library", method: "POST", body: JSONEncoder().encode(grant))
     }
 
-    public func configureExecutionMCPSettings(_ settings: GatewayJSONValue) async throws -> CompanionWorkspacePublisherStatus {
+    public func configureExecutionMCPSettings(_ settings: GatewayJSONValue) async throws -> ExecutionWorkspacePublisherStatus {
         try await request(path: "v1/execution/mcp-settings", method: "POST", body: JSONEncoder().encode(settings))
     }
 
-    public func adoptExecutionConversation(_ adoption: CompanionExecutionAdoption) async throws -> CompanionConversation {
+    public func adoptExecutionConversation(_ adoption: ExecutionAdoption) async throws -> LibraryConversation {
         try await request(path: "v1/execution/adopt", method: "POST", body: JSONEncoder().encode(adoption))
     }
 
@@ -1113,6 +1173,14 @@ public struct RemoteWorkspaceServiceClient: Sendable {
 
     public func taskGatewaySchedules() async throws -> RemoteTaskGatewaySchedules {
         try await request(path: "v1/task-gateway/schedules", method: "GET", body: nil)
+    }
+
+    /// Counts only, built on the host from its own harness history.
+    public func usageExport(_ request: UsageDeviceExportRequest) async throws -> UsageDeviceExportPage {
+        try await self.request(path: "v1/usage/export", method: "GET", body: nil, queryItems: [
+            URLQueryItem(name: "since", value: String(request.since)),
+            URLQueryItem(name: "offset", value: String(request.offset)),
+        ])
     }
 
     public func taskGatewayResults(after cursor: String = "0") async throws -> RemoteTaskGatewayResults {
@@ -1318,6 +1386,12 @@ public struct RemoteWorkspaceServiceClient: Sendable {
         )
     }
 
+    /// Runs the harness's own sign-out on the workspace and returns its new status.
+    public func signOut(harnessID: AgentRuntimeKind) async throws -> RemoteHarnessStatus {
+        try await request(path: "v1/harnesses/\(harnessID.rawValue)/sign-out", method: "POST",
+                          body: Data("{}".utf8))
+    }
+
     public func authenticationSession(
         id: UUID
     ) async throws -> RemoteHarnessAuthenticationSession {
@@ -1365,6 +1439,25 @@ public struct RemoteWorkspaceServiceClient: Sendable {
         try await request(path: "v1/default-agent/sdks", method: command.action == .status ? "GET" : "POST",
                           body: command.action == .status ? nil : JSONEncoder().encode(command))
     }
+    /// The host's bots, if its server runs them (docs/architecture/WOVEN_EVERYWHERE.md).
+    public func botsStatus() async throws -> BotsRemoteStatus {
+        try await request(path: "v1/bots/status", method: "GET", body: nil)
+    }
+    /// Bots run on one machine, so a host's bots turn off when they move elsewhere.
+    public func setBotsEnabled(_ enabled: Bool) async throws -> BotsRemoteStatus {
+        try await request(path: "v1/bots/enabled", method: "POST",
+                          body: try JSONSerialization.data(withJSONObject: ["enabled": enabled]))
+    }
+    public func setBotsResources(_ resources: BotResourceSettings) async throws -> BotsRemoteStatus {
+        struct Body: Encodable { let resources: BotResourceSettings }
+        return try await request(path: "v1/bots/resources", method: "POST", body: JSONEncoder().encode(Body(resources: resources)))
+    }
+    /// The WebSocket this host's server proxies to its bots runtime, over the SSH tunnel.
+    public var botsSocket: BotSocketEndpoint {
+        var components = URLComponents(url: baseURL.appending(path: "v1/bots/ws"), resolvingAgainstBaseURL: false)!
+        components.scheme = "ws"
+        return BotSocketEndpoint(url: components.url!, bearer: token)
+    }
     public func signInStatuses() async throws -> [AgentSignInStatus] {
         struct Response: Decodable { let statuses: [AgentSignInStatus] }
         let value: Response = try await request(path: "v1/sign-in-status", method: "GET", body: nil)
@@ -1382,7 +1475,8 @@ public struct RemoteWorkspaceServiceClient: Sendable {
         path: String,
         method: String,
         body: Data?,
-        queryItems: [URLQueryItem]? = nil
+        queryItems: [URLQueryItem]? = nil,
+        signer: (MemberRequestSigner, audience: String)? = nil
     ) async throws -> Value {
         try validateOrigin()
         let endpoint = baseURL.appending(path: path)
@@ -1408,6 +1502,12 @@ public struct RemoteWorkspaceServiceClient: Sendable {
         if body != nil {
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         }
+        if let (signer, audience) = signer {
+            let target = components.percentEncodedPath + (components.percentEncodedQuery.map { "?" + $0 } ?? "")
+            for (key, value) in try signer.headers(method: method, target: target, body: body ?? Data(), audience: audience) {
+                request.setValue(value, forHTTPHeaderField: key)
+            }
+        }
         let (data, response) = try await session.data(for: request, delegate: RemoteWorkspaceRedirectPolicy.shared)
         guard let http = response as? HTTPURLResponse,
               (200..<300).contains(http.statusCode)
@@ -1428,6 +1528,16 @@ public struct RemoteWorkspaceServiceClient: Sendable {
                 }
                 let detail = (try? JSONDecoder().decode([String: String].self, from: data))?["error"]
                 throw RemoteWorkspaceClientError.invalidResponse(detail ?? "SDK maintenance could not complete in this workspace.")
+            }
+            if path.hasPrefix("v1/harnesses/"), path.hasSuffix("/sign-out") {
+                throw RemoteWorkspaceClientError.invalidResponse(
+                    (response as? HTTPURLResponse)?.statusCode == 404
+                    ? "Update this workspace in Settings → Workspaces to remove accounts from here."
+                    : "The account couldn't be removed. Reconnect to the workspace and try again."
+                )
+            }
+            if path == "v1/usage/export", (response as? HTTPURLResponse)?.statusCode == 404 {
+                throw UsageDeviceCollectionError.updateRequired
             }
             if path.hasPrefix("v1/task-gateway") {
                 throw RemoteWorkspaceClientError.invalidResponse(
@@ -1470,7 +1580,7 @@ public struct RemoteWorkspaceServiceClient: Sendable {
 }
 
 public actor RemoteWorkspaceCredentialStore {
-    private let service = "com.wovenmatter.remote-workspaces"
+    private let service = WovenMatterKeychainService.remoteWorkspaces
     private let keychain: KeychainAccess
     private var cachedTokens: [UUID: String] = [:]
     private var blocked: [UUID: OSStatus] = [:]
@@ -1622,7 +1732,7 @@ enum RemoteWorkspaceProcess {
             guard let errorReader, let onStandardError else { return }
             // Progress is best-effort; a transient read failure must not orphan SSH.
             // The complete stderr file is still read on command failure below.
-            while let chunk = try? errorReader.read(upToCount: 65536), !chunk.isEmpty { onStandardError(chunk) }
+            while let chunk = try? PortablePOSIX.readAvailable(errorReader), !chunk.isEmpty { onStandardError(chunk) }
         }
         var inputURL: URL?
         var inputHandle: FileHandle?

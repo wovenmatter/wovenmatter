@@ -1,5 +1,9 @@
 import Foundation
+#if canImport(SQLite3)
 import SQLite3
+#else
+import CSQLite
+#endif
 import WovenMatterClient
 import WovenMatterCore
 
@@ -393,9 +397,9 @@ extension WorkspaceDatabaseConnection {
     baseTitle: String? = nil
   ) throws -> Bool {
     try transaction {
-      if let operationID, let receipt = try companionDraftReceiptUnlocked(operationID: operationID) {
+      if let operationID, let receipt = try libraryDraftReceiptUnlocked(operationID: operationID) {
         guard receipt.id == id, receipt.title == title,
-              receipt.content == Self.companionContentFingerprint(content) else {
+              receipt.content == Self.libraryContentFingerprint(content) else {
           throw WorkspaceNoteMutationError.revisionConflict
         }
         return true
@@ -403,7 +407,7 @@ extension WorkspaceDatabaseConnection {
       let operatorID = try localMutationOperatorIDUnlocked()
       let note = try noteForEditingUnlocked(id: id, operatorID: operatorID)
       if note.title == title, note.content == content {
-        try saveCompanionDraftReceiptUnlocked(operationID: operationID, id: id,
+        try saveLibraryDraftReceiptUnlocked(operationID: operationID, id: id,
           title: title, content: content, revision: note.revision)
         return true
       }
@@ -412,7 +416,7 @@ extension WorkspaceDatabaseConnection {
       // A stale draft can resolve to exactly what is stored. Nothing moves, so no
       // other writer's revision goes stale because of it.
       if resolved.title == note.title, resolved.content == note.content {
-        try saveCompanionDraftReceiptUnlocked(operationID: operationID, id: id,
+        try saveLibraryDraftReceiptUnlocked(operationID: operationID, id: id,
           title: title, content: content, revision: note.revision)
         return true
       }
@@ -437,7 +441,7 @@ extension WorkspaceDatabaseConnection {
       try checkpointNoteUnlocked(id: id, source: "editor", force: false)
       let revision = try noteForEditingUnlocked(id: id, operatorID: operatorID).revision
       // The receipt identifies what was submitted, so a retry of a merged draft replays it.
-      try saveCompanionDraftReceiptUnlocked(operationID: operationID, id: id,
+      try saveLibraryDraftReceiptUnlocked(operationID: operationID, id: id,
         title: title, content: content, revision: revision)
       return true
     }
@@ -515,7 +519,7 @@ extension WorkspaceDatabaseConnection {
           changed: false, revision: note.revision, snapshot: document.artifactStateSnapshot)
       }
       let content = try document.encoded()
-      guard content.utf8.count <= CompanionProtocol.maximumNoteBytes else { throw ArtifactStateError.stateTooLarge }
+      guard content.utf8.count <= LibraryProtocol.maximumNoteBytes else { throw ArtifactStateError.stateTooLarge }
       // Saved inputs change often. Coalesce their history so they cannot crowd out real versions.
       try checkpointNoteUnlocked(id: noteID, source: "artifact-state", force: false)
       try toolsExecuteUnlocked(
@@ -703,7 +707,7 @@ extension WorkspaceDatabaseConnection {
     operatorID: String
   ) throws -> (title: String, content: String, revision: String) {
     let statement = try prepareUnlocked("""
-      SELECT title, content, CAST(COALESCE((SELECT revision FROM companion_versions WHERE kind = 'note' AND resource_id = notes.id), 1) AS TEXT)
+      SELECT title, content, CAST(COALESCE((SELECT revision FROM device_sync_revisions WHERE kind = 'note' AND resource_id = notes.id), 1) AS TEXT)
       FROM notes
       WHERE id = ? AND user_id = ? AND deleted_at IS NULL
       """)

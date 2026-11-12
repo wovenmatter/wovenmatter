@@ -1,6 +1,17 @@
+#if canImport(CryptoKit)
 import CryptoKit
+#else
+import Crypto
+#endif
+#if canImport(Darwin)
 import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#elseif canImport(Musl)
+import Musl
+#endif
 import Foundation
+import WovenMatterCore
 
 public struct BackendRPCRequest: Codable, Sendable {
     public let id: String
@@ -52,7 +63,12 @@ public enum BackendRPCError: Error, LocalizedError, Sendable {
 
 /// One bounded request per connection. Filesystem permissions and kernel peer credentials
 /// authenticate both ends; no bearer token is persisted or sent through this transport.
+/// A call waits at most `maximumWait` for its reply. Work that can take longer runs as
+/// a job in the background service and reports its progress and outcome through state
+/// the window reads (for bots, `BotsCommandResult.jobs`).
 public struct BackendRPCClient: Sendable {
+    /// The longest any call waits for its reply.
+    public static let maximumWait: TimeInterval = 30
     public let socketURL: URL
     public init(socketURL: URL) { self.socketURL = socketURL }
     public func call(method: String, payload: Data = Data(), requestID: String = UUID().uuidString, timeout: TimeInterval = 30) async throws -> Data {
@@ -75,7 +91,7 @@ public struct BackendRPCClient: Sendable {
                 }
             }
             if status != 0 && errno != EINPROGRESS { throw BackendRPCError.unavailable }
-            let deadline = Date().addingTimeInterval(max(0.05, min(timeout, 30)))
+            let deadline = Date().addingTimeInterval(max(0.05, min(timeout, Self.maximumWait)))
             try BackendSocket.ready(fd, events: Int16(POLLOUT), deadline: deadline)
             var socketError: Int32 = 0
             var size = socklen_t(MemoryLayout<Int32>.size)
@@ -139,8 +155,9 @@ public final class BackendRPCServer: @unchecked Sendable {
                     do {
                         try BackendSocket.configure(client)
                         try BackendSocket.authenticate(client)
-                        let deadline = Date().addingTimeInterval(30)
-                        let request = try JSONDecoder().decode(BackendRPCRequest.self, from: BackendSocket.readFrame(fd: client, deadline: deadline))
+                        let received = Date()
+                        let request = try JSONDecoder().decode(BackendRPCRequest.self,
+                            from: BackendSocket.readFrame(fd: client, deadline: received.addingTimeInterval(BackendRPCClient.maximumWait)))
                         Task {
                             let response: BackendRPCResponse
                             if request.method == "backend.ping" {
@@ -152,7 +169,21 @@ public final class BackendRPCServer: @unchecked Sendable {
                             DispatchQueue.global(qos: .userInitiated).async {
                                 defer { Darwin.close(client); self.slots.signal() }
                                 // Fail closed; never log payloads or credentials.
-                                try? BackendSocket.writeFrame(JSONEncoder().encode(response), fd: client, deadline: deadline)
+                                var frame = (try? JSONEncoder().encode(response)) ?? Data()
+                                if frame.count > BackendSocket.maximumFrame {
+                                    // Answer with an error the caller can show instead of a silent close.
+                                    NSLog("Background service reply for %@ was too large (%ld bytes)", request.method, frame.count)
+                                    let error = BackendRPCResponse(id: request.id, error: "The background service's reply was too large to send.")
+                                    frame = (try? JSONEncoder().encode(error)) ?? Data()
+                                }
+                                // The reply gets its own short deadline, whatever the handler took.
+                                // A caller waits at most `maximumWait`, so a slower handler's reply
+                                // is lost: say so, since that work must run as a job instead.
+                                do { try BackendSocket.writeFrame(frame, fd: client, deadline: Date().addingTimeInterval(5)) }
+                                catch {
+                                    NSLog("Background service reply for %@ was not delivered after %.0f s; its caller had stopped waiting",
+                                          request.method, Date().timeIntervalSince(received))
+                                }
                             }
                         }
                     } catch { Darwin.close(client); self.slots.signal() }
@@ -166,7 +197,7 @@ public final class BackendRPCServer: @unchecked Sendable {
     public func stop() {
         lock.lock(); defer { lock.unlock() }
         guard descriptor >= 0 else { return }
-        shutdown(descriptor, SHUT_RDWR); Darwin.close(descriptor); descriptor = -1
+        shutdown(descriptor, PortablePOSIX.shutdownBoth); Darwin.close(descriptor); descriptor = -1
         unlink(socketURL.path)
     }
 }
@@ -186,27 +217,20 @@ private enum BackendSocket {
               info.st_uid == getuid(), info.st_mode & 0o077 == 0 else { throw BackendRPCError.unauthorized }
     }
     static func address(_ url: URL) throws -> sockaddr_un {
-        var address = sockaddr_un()
-        let bytes = Array(url.path.utf8) + [0]
-        guard bytes.count <= MemoryLayout.size(ofValue: address.sun_path) else { throw BackendRPCError.invalidEndpoint }
-        address.sun_family = sa_family_t(AF_UNIX)
-        address.sun_len = UInt8(MemoryLayout<sockaddr_un>.size)
-        withUnsafeMutableBytes(of: &address.sun_path) { target in target.copyBytes(from: bytes) }
+        guard let address = PortablePOSIX.unixAddress(path: url.path) else { throw BackendRPCError.invalidEndpoint }
         return address
     }
     static func make() throws -> Int32 {
-        let fd = socket(AF_UNIX, SOCK_STREAM, 0)
+        let fd = socket(AF_UNIX, PortablePOSIX.streamSocket, 0)
         guard fd >= 0 else { throw BackendRPCError.unavailable }
         do { try configure(fd); return fd } catch { Darwin.close(fd); throw error }
     }
     static func configure(_ fd: Int32) throws {
-        var one: Int32 = 1
         guard fcntl(fd, F_SETFL, O_NONBLOCK) == 0, fcntl(fd, F_SETFD, FD_CLOEXEC) == 0,
-              setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &one, socklen_t(MemoryLayout<Int32>.size)) == 0 else { throw BackendRPCError.unavailable }
+              PortablePOSIX.disableBrokenPipeSignal(fd) else { throw BackendRPCError.unavailable }
     }
     static func authenticate(_ fd: Int32) throws {
-        var uid: uid_t = 0; var gid: gid_t = 0
-        guard getpeereid(fd, &uid, &gid) == 0, uid == getuid() else { throw BackendRPCError.unauthorized }
+        guard PortablePOSIX.peerUser(fd) == getuid() else { throw BackendRPCError.unauthorized }
     }
     static func ready(_ fd: Int32, events: Int16, deadline: Date) throws {
         while true {
@@ -244,7 +268,13 @@ private enum BackendSocket {
         var offset = 0
         while offset < frame.count {
             try ready(fd, events: Int16(POLLOUT), deadline: deadline)
+            // Linux has no SO_NOSIGPIPE: a reply to a caller that already left must
+            // fail with EPIPE instead of killing the process with SIGPIPE.
+            #if canImport(Darwin)
             let amount = frame.withUnsafeBytes { Darwin.write(fd, $0.baseAddress!.advanced(by: offset), frame.count - offset) }
+            #else
+            let amount = frame.withUnsafeBytes { send(fd, $0.baseAddress!.advanced(by: offset), frame.count - offset, Int32(MSG_NOSIGNAL)) }
+            #endif
             if amount < 0 && (errno == EINTR || errno == EAGAIN) { continue }
             guard amount > 0 else { throw BackendRPCError.unavailable }
             offset += amount

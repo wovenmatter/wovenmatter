@@ -1,4 +1,8 @@
+#if canImport(CryptoKit)
 import CryptoKit
+#else
+import Crypto
+#endif
 import Foundation
 import WovenMatterCore
 
@@ -122,10 +126,10 @@ public struct PeerAdmission: Codable, Equatable, Sendable {
 public struct PeerRosterEntry: Codable, Equatable, Sendable {
   public let deviceID: String
   public let name: String
-  public let kind: CompanionDeviceKind
+  public let kind: DeviceKind
   public let introducedBy: String
   public let admission: PeerAdmission?
-  public init(deviceID: String, name: String, kind: CompanionDeviceKind, introducedBy: String, admission: PeerAdmission?) {
+  public init(deviceID: String, name: String, kind: DeviceKind, introducedBy: String, admission: PeerAdmission?) {
     self.deviceID = deviceID; self.name = name; self.kind = kind; self.introducedBy = introducedBy; self.admission = admission
   }
 }

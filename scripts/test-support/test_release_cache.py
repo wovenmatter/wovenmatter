@@ -83,7 +83,7 @@ elif name == 'cmake' and os.environ.get('FIXTURE_CMAKE_FAILS'): sys.exit(1)
 else: print(name, ' '.join(args), os.environ.get('FIXTURE_TOOLCHAIN', 'xcode 26'))
 '''
 INPUTS = ('app/Browser/cef-version.json', 'app/Browser/Helper.cc', 'default-agent/.node-version',
-          'default-agent/package.json', 'default-agent/package-lock.json', 'scripts/prepare-default-agent.sh',
+          'default-agent/package.json', 'default-agent/package-lock.json', 'bots/package-lock.json', 'scripts/prepare-default-agent.sh',
           'app/Updater/sparkle-version.json', 'app/Automation/cua-version.json', 'app/Package.resolved',
           'app/Package.swift', 'shared/Package.swift', 'app/WovenMatter.xcodeproj/project.pbxproj',
           'scripts/build-release.sh', 'scripts/warm-release-compiler.sh', 'scripts/prepare-browser.sh',
@@ -125,6 +125,7 @@ with tempfile.TemporaryDirectory() as temp:
         return {key for key in baseline if current[key] != baseline[key]}
     assert changed('default-agent/.node-version') == {'downloads'}
     assert changed('default-agent/package-lock.json') == {'npm'}
+    assert changed('bots/package-lock.json') == {'npm'}
     assert changed('app/Package.resolved') == {'swiftpm', 'compiler'}
     assert changed('app/WovenMatter.xcodeproj/project.pbxproj') == {'compiler'}
     assert changed('app/Browser/Helper.cc') == {'browser'}

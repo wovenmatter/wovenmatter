@@ -1,4 +1,7 @@
 import Foundation
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
 
 public struct RemoteBrowserTab: Codable, Equatable, Identifiable, Sendable {
     public let id: String

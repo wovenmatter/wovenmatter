@@ -84,7 +84,7 @@ access to signed-in pages. Closing the pane stops sharing its context.
 
 Website sessions persist across restarts. Password saving and autofill are
 enabled; confirm Save or Update above the page when offered. Credential access
-is managed in **Settings → General**, directly below Software updates. Clear
+is managed in **Settings → General**, under Software. Clear
 Browser Data clears site sessions on the next restart and keeps saved passwords.
 
 ## Restore a version

@@ -1,5 +1,5 @@
 import WorkspaceFixtures
-import CompanionClient
+import LibraryClient
 import Foundation
 import Testing
 import WovenMatterCore
@@ -37,8 +37,8 @@ struct SecondaryMacExecutionWorkspaceTests {
         #expect(renamed.notes[note]?.folderID == folder)
         #expect(renamed.outbox.filter { $0.mutation.resourceID == folder }.count == 1)
         #expect(renamed.outbox.first { $0.mutation.resourceID == folder }?.mutation.title == "Renamed tool folder")
-        let saved = try #require(try await fixture.database.companionNote(id: note))
-        #expect(try await fixture.database.applyCompanionMutation(.init(deviceID: owner, kind: .deleteNote,
+        let saved = try #require(try await fixture.database.libraryNote(id: note))
+        #expect(try await fixture.database.applyLibraryMutation(.init(deviceID: owner, kind: .deleteNote,
             resourceID: note, expectedRevision: saved.revision)).status == .accepted)
         try await workspace.capture()
         #expect(await replica.snapshot().notes[note] == nil)
@@ -67,9 +67,9 @@ struct SecondaryMacExecutionWorkspaceTests {
         let originalGrant = try #require(host.managementGrant)
         let oldHandler = host.requestHandler()
         let deviceID = UUID().uuidString.lowercased()
-        func request(_ grant: CompanionExecutionManagementGrant, path: String) throws -> CompanionHTTPRequest {
+        func request(_ grant: ExecutionManagementGrant, path: String) throws -> LibraryHTTPRequest {
             .init(method: "POST", target: path, headers: ["authorization": "Bearer " + grant.token,
-                "x-woven-protocol": String(CompanionProtocol.version), "x-woven-library": libraryID,
+                "x-woven-protocol": String(LibraryProtocol.version), "x-woven-library": libraryID,
                 "x-woven-workspace": owner], body: try JSONEncoder().encode(["deviceID": deviceID]))
         }
         gate.hold = true
@@ -84,18 +84,18 @@ struct SecondaryMacExecutionWorkspaceTests {
         let handler = host.requestHandler()
         let response = await handler(try request(replacementGrant, path: "/v1/execution/manage/devices"))
         #expect(response.status == 200)
-        let credential = try JSONDecoder().decode(CompanionExecutionCredential.self, from: response.body)
+        let credential = try JSONDecoder().decode(ExecutionCredential.self, from: response.body)
         gate.release()
         #expect(await pending.value.status == 503)
-        let auth = try CompanionExecutionAuthentication(fileURL: fixture.directory.appending(path: "execution-access.json"))
+        let auth = try ExecutionAuthentication(fileURL: fixture.directory.appending(path: "execution-access.json"))
         #expect(try await auth.authenticate(bearer: credential.token).deviceID == deviceID)
         #expect(await handler(originalRequest).status == 403)
         let revoked = await handler(try request(replacementGrant, path: "/v1/execution/manage/revoke"))
         #expect(revoked.status == 200)
         host.stop(); try await host.waitUntilStopped(); try await host.start()
         let restarted = host.requestHandler()
-        let executionRead = CompanionHTTPRequest(method: "GET", target: "/v1/execution", headers: [
-            "authorization": "Bearer " + credential.token, "x-woven-protocol": String(CompanionProtocol.version),
+        let executionRead = LibraryHTTPRequest(method: "GET", target: "/v1/execution", headers: [
+            "authorization": "Bearer " + credential.token, "x-woven-protocol": String(LibraryProtocol.version),
             "x-woven-library": libraryID, "x-woven-workspace": owner, "x-woven-device": deviceID])
         #expect(await restarted(executionRead).status == 401)
     }
@@ -108,7 +108,7 @@ struct SecondaryMacExecutionWorkspaceTests {
             conversationID: conversation, providerID: "local:codex", workspaceID: owner))
         #expect(created.status == .completed)
         let note = try await replica.createNote(folderID: nil, title: "Context", content: NoteDocument(blocks: [.richText(.init(text: "Bound note"))]).encoded())
-        let input = CompanionCommand(deviceID: owner, kind: .send, conversationID: conversation, text: "Exactly once",
+        let input = LibraryCommand(deviceID: owner, kind: .send, conversationID: conversation, text: "Exactly once",
             noteID: note.id, noteRevision: note.revision, workspaceID: owner)
         let receipt = try await workspace.command(input)
         #expect(receipt.status == .completed)
