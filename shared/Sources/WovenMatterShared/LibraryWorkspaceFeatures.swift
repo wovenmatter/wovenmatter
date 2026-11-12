@@ -60,7 +60,9 @@ public struct LibraryListItem: Codable, Equatable, Identifiable, Sendable {
 public struct SessionSettingOption: Codable, Equatable, Identifiable, Sendable {
   public var id: String
   public var label: String
-  public init(id: String, label: String) { self.id = id; self.label = label }
+  /// What the choice does, when the harness or Woven describes it.
+  public var description: String?
+  public init(id: String, label: String, description: String? = nil) { self.id = id; self.label = label; self.description = description }
 }
 
 public struct SessionSettings: Codable, Equatable, Sendable {

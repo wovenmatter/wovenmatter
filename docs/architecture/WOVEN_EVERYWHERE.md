@@ -1223,6 +1223,47 @@ them; its durable channels (`remote/src/durable-acp.mjs`) keep runs alive.
 SSH is for install, update and repair only: there is no SSH agent launch and
 no stdio relay.
 
+- **Creating.** `createSession` takes `sessionOptions {workingDirectory,
+  model, thinking, permission, enabledTools}`; unset values use the
+  destination's saved defaults, and a model or thinking level the harness does
+  not offer keeps its native value. A `folderID` bound to this workspace
+  (`remote:<workspace id>`, from the host's library copy) runs in its root and
+  `workingDirectory` must match it; a folder bound elsewhere is refused; an
+  unbound or not-yet-synchronized folder only groups. Without a folder the
+  session gets its own scratch folder, unless the caller names an existing
+  directory: a Mac any directory, other members one inside the workspace.
+  `initialConfiguration` stays internal to agent-to-agent creation.
+- **Messages.** Files are uploaded first (`PUT
+  v1/execution/attachments/<sha256>?name=&mimeType=`, 25 MiB each, stored under
+  `.wovenmatter/attachments/<sha256>/<name>`), then named in `send` or `steer`
+  `attachments` (8 files, 50 MiB) and checked again before delivery. Images and
+  UTF-8 text are inlined up to 5 MiB per message; other files, and anything
+  past that, are linked and listed by path. `promptContext` (visible notes and
+  pages, references) follows the message to the harness and is not in the
+  transcript; `noteID` is the note shown when sending, which `woven_context`
+  returns.
+- **Background execution** governs scheduled tasks only. Sessions, their goals
+  and timers run with it off.
+- **Pi Durable.** Provider credentials stay in the host's encrypted vault, and
+  its key stays on the Mac that set it up. A locked refusal has code
+  `default_agent_locked`; a Mac unlocks with `POST v1/default-agent/unlock
+  {workspace, unlockKey}` (or `v1/default-agent/configuration`) and retries.
+  Settings, sign-in and the model catalog use `POST v1/default-agent/control`
+  and `v1/default-agent/control-sessions`, which run the control helper on the
+  host.
+- **Without a session.** `GET v1/execution/providers/<id>/options` returns
+  `SessionSettings` (empty `conversationID`) from a short-lived native session
+  with no Woven tools.
+- **Titles.** The host titles a chat from its first message with its own
+  Codex (the Mac's instructions); a failure keeps the first-message title, and
+  a rename wins.
+- **Library files.** A Mac retains an agent's file with `POST
+  v1/execution/library-file {conversationID, path}`: inside the session root,
+  `/tmp` or `/mnt/data`, no final symlink, 25 MiB.
+- **Adoption** of a chat that ran over SSH before reopens a stopped or missing
+  durable channel with `session/load`, leaves no process behind when that
+  fails, and takes the Mac's existing `transcript`.
+
 ## Bots
 
 ### Runtime

@@ -85,9 +85,12 @@ public struct LibraryMessage: Codable, Equatable, Identifiable, Sendable {
   public var senderSessionTitle: String?
   public var senderHarness: String?
   public var senderKind: String?
+  /// A message's attached files, as an execution workspace received them.
+  public var attachments: [LibraryAttachmentReference]?
   public init(id: String, conversationID: String, runID: String? = nil, role: String, content: String, status: String? = nil, createdAt: String = "", sequence: Int64? = nil,
-              agentSourceID: String? = nil, isAgentAuthored: Bool? = nil, senderSessionTitle: String? = nil, senderHarness: String? = nil, senderKind: String? = nil) {
-    self.sequence = sequence
+              agentSourceID: String? = nil, isAgentAuthored: Bool? = nil, senderSessionTitle: String? = nil, senderHarness: String? = nil, senderKind: String? = nil,
+              attachments: [LibraryAttachmentReference]? = nil) {
+    self.sequence = sequence; self.attachments = attachments
     self.agentSourceID = agentSourceID; self.isAgentAuthored = isAgentAuthored
     self.senderSessionTitle = senderSessionTitle; self.senderHarness = senderHarness; self.senderKind = senderKind
     self.id = id; self.conversationID = conversationID; self.runID = runID; self.role = role
@@ -299,13 +302,50 @@ public struct LibraryCommand: Codable, Equatable, Sendable {
   /// `createSession` only: the new session's title, applied as it is created.
   /// Older destinations ignore it, so callers still follow with a rename.
   public var title: String?
-  public init(commandID: String = UUID().uuidString.lowercased(), deviceID: String, kind: Kind, conversationID: String? = nil, runID: String? = nil, providerID: String? = nil, routeID: String? = nil, runtimeKind: String? = nil, folderID: String? = nil, text: String? = nil, noteID: String? = nil, noteRevision: Int64? = nil, interactionID: String? = nil, response: InteractionResponse? = nil, workspaceAction: LibraryWorkspaceAction? = nil, libraryID: String? = nil, workspaceID: String? = nil, title: String? = nil) {
+  /// `createSession` only: the caller's choices for the new session.
+  public var sessionOptions: LibrarySessionOptions?
+  /// `send` and `steer`: files uploaded first with
+  /// `PUT v1/execution/attachments/<sha256>`. On `send` and `steer`, `noteID`
+  /// is the note the sending device shows, which `woven_context` returns.
+  public var attachments: [LibraryAttachmentReference]?
+  /// `send` and `steer`: text the harness receives after the message (the
+  /// device's visible notes and pages, references) and the transcript omits.
+  public var promptContext: String?
+  public init(commandID: String = UUID().uuidString.lowercased(), deviceID: String, kind: Kind, conversationID: String? = nil, runID: String? = nil, providerID: String? = nil, routeID: String? = nil, runtimeKind: String? = nil, folderID: String? = nil, text: String? = nil, noteID: String? = nil, noteRevision: Int64? = nil, interactionID: String? = nil, response: InteractionResponse? = nil, workspaceAction: LibraryWorkspaceAction? = nil, libraryID: String? = nil, workspaceID: String? = nil, title: String? = nil,
+              sessionOptions: LibrarySessionOptions? = nil, attachments: [LibraryAttachmentReference]? = nil, promptContext: String? = nil) {
     self.libraryID = libraryID; self.workspaceID = workspaceID; self.title = title
+    self.sessionOptions = sessionOptions; self.attachments = attachments; self.promptContext = promptContext
     self.commandID = commandID; self.deviceID = deviceID; self.kind = kind; self.conversationID = conversationID
     self.runID = runID; self.providerID = providerID; self.routeID = routeID; self.runtimeKind = runtimeKind; self.folderID = folderID
     self.text = text; self.noteID = noteID; self.noteRevision = noteRevision; self.interactionID = interactionID; self.response = response; self.workspaceAction = workspaceAction
   }
 }
+/// A new session's choices (`LibraryCommand.sessionOptions`). Unset values
+/// take the destination's saved defaults. `workingDirectory` must match a
+/// folder's bound root when `folderID` names one bound to the destination.
+public struct LibrarySessionOptions: Codable, Equatable, Sendable {
+  public var workingDirectory: String?
+  public var model: String?
+  public var thinking: String?
+  public var permission: String?
+  public var enabledTools: [String]?
+  public init(workingDirectory: String? = nil, model: String? = nil, thinking: String? = nil, permission: String? = nil, enabledTools: [String]? = nil) {
+    self.workingDirectory = workingDirectory; self.model = model; self.thinking = thinking
+    self.permission = permission; self.enabledTools = enabledTools
+  }
+}
+
+/// A message file on an execution workspace: `id` is its SHA-256 (hex).
+public struct LibraryAttachmentReference: Codable, Equatable, Sendable {
+  public var id: String
+  public var name: String
+  public var mimeType: String
+  public var byteCount: Int64?
+  public init(id: String, name: String, mimeType: String, byteCount: Int64? = nil) {
+    self.id = id; self.name = name; self.mimeType = mimeType; self.byteCount = byteCount
+  }
+}
+
 public struct LibraryCommandReceipt: Codable, Equatable, Sendable {
   public enum Status: String, Codable, Sendable { case accepted, completed, rejected, outcomeUnknown }
   public var commandID: String
@@ -316,8 +356,11 @@ public struct LibraryCommandReceipt: Codable, Equatable, Sendable {
   public var conversationID: String?
   public var runID: String?
   public var message: String?
-  public init(commandID: String, deviceID: String, status: Status, conversationID: String? = nil, runID: String? = nil, message: String? = nil, libraryID: String? = nil, workspaceID: String? = nil) {
-    self.libraryID = libraryID; self.workspaceID = workspaceID
+  /// A rejection the caller can act on: `default_agent_locked` (a Mac
+  /// unlocks Pi Durable, then the caller retries) or `attachment_unavailable`.
+  public var code: String?
+  public init(commandID: String, deviceID: String, status: Status, conversationID: String? = nil, runID: String? = nil, message: String? = nil, libraryID: String? = nil, workspaceID: String? = nil, code: String? = nil) {
+    self.libraryID = libraryID; self.workspaceID = workspaceID; self.code = code
     self.commandID = commandID; self.deviceID = deviceID; self.status = status
     self.conversationID = conversationID; self.runID = runID; self.message = message
   }

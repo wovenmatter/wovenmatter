@@ -1,7 +1,8 @@
 import { createUsageScanner } from './usage-scan.mjs'
 import { existsSync } from 'node:fs'
 const defaultAgentModule = new URL('../default-agent/src/managed-service.mjs', import.meta.url)
-const { createManagedDefaultAgentService } = await import(existsSync(defaultAgentModule) ? defaultAgentModule.href : new URL('../../default-agent/src/managed-service.mjs', import.meta.url).href)
+const defaultAgentSource = existsSync(defaultAgentModule) ? defaultAgentModule : new URL('../../default-agent/src/managed-service.mjs', import.meta.url)
+const { createManagedDefaultAgentService } = await import(defaultAgentSource.href)
 const { signInStatuses } = await import(new URL('./sign-in-status.mjs', existsSync(defaultAgentModule) ? defaultAgentModule : new URL('../../default-agent/src/managed-service.mjs', import.meta.url)).href)
 import { databaseOperation } from './database-catalog.mjs'
 import { createProject, deleteProject, ensureScratchDirectory, linkHostProject, listHostDirectories } from './projects.mjs'
@@ -29,6 +30,9 @@ import { streamCapability, streamPath } from './stream-protocol.mjs'
 import { createStreamServer } from './stream-server.mjs'
 import { createHostAdministration, runHostScript } from './host-admin.mjs'
 import { createInstallerBearer } from './installer-bearer.mjs'
+import { createExecutionAttachments } from './execution-attachments.mjs'
+import { createTitleGenerator } from './title-generation.mjs'
+import { createDefaultAgentControl } from './default-agent-control.mjs'
 import { createServer } from 'node:http'
 import { randomUUID, createHash } from 'node:crypto'
 import { readFile, writeFile, mkdir, realpath, rename, rm } from 'node:fs/promises'
@@ -63,6 +67,9 @@ const catalog = new Map(catalogDocument.harnesses.map((entry) => [entry.id, entr
 const defaultAgent = createManagedDefaultAgentService({ cwd: workspaceRoot, directory: resolve(workspaceRoot, '.wovenmatter/default-agent'), environment: nonInteractiveSessionEnvironment(process.env, configuration) })
 const authenticationSessions = new Map()
 const foregroundDefaultRuns = new Map()
+// Pi Durable sessions the SSH relay (`/v1/default-agent/rpc`) has used, so
+// turning background execution off stops those and not this server's own.
+const relayDefaultSessions = new Set()
 const maximumRetainedTerminalRecords = 64
 const maximumInstallerBytes = 5_242_880
 const installerDownloadTimeoutMilliseconds = 30_000
@@ -85,9 +92,11 @@ const maintenance = createRuntimeMaintenance({
 const releaseTaskOwner = runningAsService
   ? await acquireHostLock(resolve(workspaceRoot,'.wovenmatter/task-gateway.owner.lock'),harnessEnvironment(),workspaceRoot)
   : null
+// Sessions this server runs use durable channels whether or not background
+// execution is on; that setting gates only the SSH relay's HTTP route below.
 const durableACP = createDurableACP({ catalog, workspaceRoot, runtimeKind: configuration.runtimeKind, configuration,
   environment: harness => harness.id === 'codex' ? harnessRuntimeEnvironment(harness) : harnessEnvironment(),
-  isEnabled:async () => taskGateway?.enabled() === true, isHarnessEnabled:id => maintenance.isInstalled(id) })
+  isHarnessEnabled:id => maintenance.isInstalled(id) })
 const taskGateway = runningAsService ? createTaskGateway({
   workspaceRoot,
   directory:resolve(workspaceRoot,'.wovenmatter/task-gateway'),
@@ -96,7 +105,16 @@ const taskGateway = runningAsService ? createTaskGateway({
     environment: harness => harness?.id === 'codex' ? harnessRuntimeEnvironment(harness) : harnessEnvironment(),
     defaultAgent,instances,prepareMCP:context=>clientExecution.prepareTaskMCP(context),
     isEnabled:id => maintenance.isInstalled(id)}),
-  onDisable:async () => { await Promise.all([durableACP.stopAll(), defaultAgent.cancelActive(), clientExecution?.cancelActive()]); foregroundDefaultRuns.clear() },
+  // Turning background execution off stops what the Mac's SSH relays left
+  // running. Sessions this server owns keep running, as sessions the Mac ran
+  // over SSH did; the setting governs scheduled tasks, which stop above.
+  onDisable:async () => {
+    const owned = id => clientExecution?.ownsConversation(id) === true
+    const ownedDefault = new Set((clientExecution?.conversations() ?? []).filter(item => item.runtimeKind === 'default_agent').map(item => clientExecution.record(item.id).native?.sessionID).filter(Boolean))
+    await Promise.all([durableACP.stopAll({ except: owned }),
+      ...[...relayDefaultSessions].filter(id => !ownedDefault.has(id)).map(id => defaultAgent.cancelSession(id).catch(() => {}))])
+    relayDefaultSessions.clear(); foregroundDefaultRuns.clear()
+  },
 }) : null
 
 const workspaceBrowser = createWorkspaceBrowser({ profile: configuration.legacyBrowserProfile,
@@ -146,12 +164,37 @@ function knownMacMember() {
   return members.members().some(item => item.kind === 'mac' && !item.revoked && item.endpoints.length > 0)
 }
 const maximumSignedBodyBytes = 50 * 1024 * 1024
+// WOVENMATTER_PERFORMANCE_LOG=1 writes each execution command's duration to stderr.
+const performanceLog = process.env.WOVENMATTER_PERFORMANCE_LOG === '1' ? line => process.stderr.write(line + '\n') : null
+// Pi Durable's settings helper (`main.mjs --control`), started here for a
+// signed Mac instead of over SSH with `wm-exec default-agent --control`.
+const defaultAgentControl = createDefaultAgentControl({
+  command: () => ({ command: process.execPath, arguments: [fileURLToPath(new URL('./main.mjs', defaultAgentSource)), '--control'] }),
+  cwd: () => workspaceRoot,
+  environment: () => {
+    const environment = { ...nonInteractiveSessionEnvironment(process.env, configuration), WOVEN_DEFAULT_AGENT_DIRECTORY: resolve(workspaceRoot, '.wovenmatter/default-agent') }
+    for (const key of ['WOVENMATTER_API_TOKEN', 'WOVENMATTER_SERVICE_SECRET']) delete environment[key]
+    return environment
+  },
+})
 
 const clientExecution = runningAsService ? createClientExecution({
   directory: resolve(workspaceRoot, '.wovenmatter/client-execution'),
   // Stable across bearer rotations: it keys the publisher and MCP grants at rest.
   publisherKey: configuration.serviceSecret || apiToken,
-  mcpEndpointURL: () => `http://127.0.0.1:${server.address()?.port ?? listenPort}/mcp`, managedDataRoot,externalRunningSessions:()=>taskGateway.status().activeRuns,
+  mcpEndpointURL: () => `http://127.0.0.1:${server.address()?.port ?? listenPort}/mcp`, managedDataRoot,externalRunningSessions:()=>taskGateway.status().activeRuns, workspaceRoot, performanceLog,
+  attachments: createExecutionAttachments({ directory: resolve(workspaceRoot, '.wovenmatter/attachments') }),
+  // Chats named by their first message get a title from this host's Codex
+  // when it is installed; a failure keeps the first-message title.
+  titleGenerator: (() => {
+    const generate = createTitleGenerator({ catalog, environment: harness => harnessRuntimeEnvironment(harness),
+      cwd: async () => { const directory = resolve(workspaceRoot, '.wovenmatter/title-generation'); await mkdir(directory, { recursive: true, mode: 0o700 }); return directory } })
+    return async text => {
+      if (!catalog.has('codex') || !await maintenance.isInstalled('codex')) return null
+      try { return await generate(text) }
+      catch (error) { process.stderr.write('A chat title could not be generated: ' + error.message + '\n'); return null }
+    }
+  })(),
   kind: process.platform === 'darwin' ? 'mac' : 'linux',
   workspaceBrowser,
   library: library ? { client: library.client, available: library.available } : null,
@@ -164,8 +207,8 @@ const clientExecution = runningAsService ? createClientExecution({
     hasMac: () => library.available() && knownMacMember() } : null,
   // A wake-up for a bot goes to the bots runtime like a due timer.
   deliverBot: delivery => bots ? bots.deliver(delivery) : Promise.reject(Object.assign(new Error('Bots are not enabled on this machine.'), { statusCode: 503 })),
-  runtime: createClientExecutionRuntime({defaultAgent,durableACP,catalog,workspaceRoot,harnessStatus,
-    environment:harnessEnvironment,instances,isExecutionEnabled:()=>taskGateway.enabled()}),
+  runtime: createClientExecutionRuntime({defaultAgent,durableACP,catalog,workspaceRoot,harnessStatus,instances,
+    environment: harness => harness.id === 'codex' ? harnessRuntimeEnvironment(harness) : harnessEnvironment()}),
 }) : null
 
 // Streams this server opened to other members, refused with 4401 when this
@@ -204,7 +247,7 @@ const stream = clientExecution && members ? createStreamServer({ members, served
   workspaceEnabled: () => configuration.workspaceEnabled !== false, log: message => process.stderr.write(message + '\n') }) : null
 // A bots-only machine keeps its server, data root and connections but runs no
 // workspace agents, schedules or projects until the workspace is added.
-const workspaceRoutes = ['/v1/execution/commands', '/v1/task-gateway', '/v1/durable-acp/', '/v1/default-agent/rpc', '/v1/default-agent/runs/',
+const workspaceRoutes = ['/v1/execution/commands', '/v1/execution/attachments', '/v1/task-gateway', '/v1/durable-acp/', '/v1/default-agent/rpc', '/v1/default-agent/runs/',
   '/v1/projects', '/v1/scratch', '/v1/directories', '/v1/databases', '/v1/browser/', '/v1/harnesses/', '/v1/runtime-maintenance', '/v1/workspace-instances']
 const workspaceRoute = pathname => workspaceRoutes.some(prefix => pathname === prefix || pathname.startsWith(prefix.endsWith('/') ? prefix : prefix + '/'))
 // Usage on this machine: its harnesses, its Pi Durable agent and its bots.
@@ -270,7 +313,7 @@ const server = createServer({ maxHeaderSize: 16_384, headersTimeout: 10_000,
     if (bots && await bots.handleHost(request, response, url, { readJSON, json })) return
     const scope = url.pathname.startsWith('/v1/inference/') ? 'inference' : 'execution'
     // Every member gets the execution and inference scopes a device grant had.
-    const device = member ? { id: member.deviceID, name: member.name, scopes: ['execution', 'inference'], memberKind: member.kind }
+    const device = member ? { id: member.deviceID, name: member.name, scopes: ['execution', 'inference'], memberKind: member.kind, administrator: member.kind === 'mac' }
       : clientExecution?.principal(request.headers.authorization, scope)
     if (!administrator && !device) return json(response, 401, { error: 'unauthorized' })
     if (device && !member) {
@@ -349,7 +392,8 @@ const server = createServer({ maxHeaderSize: 16_384, headersTimeout: 10_000,
     if (url.pathname === '/v1/execution' && request.method === 'GET') return json(response,200,clientExecution.descriptor())
     if (url.pathname === '/v1/execution/commands' && request.method === 'POST') {
       const body = await readJSON(request)
-      return json(response,200,await clientExecution.command(body,device ?? {id:body.deviceID}))
+      // Without a device this is the installer bearer: an administrator.
+      return json(response,200,await clientExecution.command(body,device ?? {id:body.deviceID,administrator:true}))
     }
     const executionReceipt = url.pathname.match(/^\/v1\/execution\/commands\/([0-9a-f-]+)$/)
     if (executionReceipt && request.method === 'GET') return json(response,200,clientExecution.receipt(executionReceipt[1],device?.id ?? url.searchParams.get('deviceID')))
@@ -361,6 +405,23 @@ const server = createServer({ maxHeaderSize: 16_384, headersTimeout: 10_000,
     if (executionCapabilities && request.method === 'GET') return json(response,200,await clientExecution.capabilities(executionCapabilities[1]))
     if (url.pathname === '/v1/execution/workspace-read' && request.method === 'POST') return json(response,200,await clientExecution.readWorkspace(await readJSON(request)))
     if (url.pathname === '/v1/execution/providers' && request.method === 'GET') return json(response,200,await clientExecution.providers())
+    // A harness's model, thinking and permission choices before a session exists.
+    const providerOptions = url.pathname.match(/^\/v1\/execution\/providers\/([a-z0-9_-]{1,64})\/options$/)
+    if (providerOptions && request.method === 'GET') return json(response,200,await clientExecution.sessionOptions(providerOptions[1],
+      { workingDirectory: url.searchParams.get('workingDirectory') ?? undefined, model: url.searchParams.get('model') ?? undefined }))
+    // A message attachment, uploaded before the send that names it: the raw
+    // bytes, addressed by their SHA-256, with `name` and `mimeType` in the query.
+    const attachmentUpload = url.pathname.match(/^\/v1\/execution\/attachments\/([0-9a-f]{64})$/)
+    if (attachmentUpload && request.method === 'PUT') {
+      const bytes = request.wovenBody ?? await readBody(request, 26 * 1024 * 1024)
+      return json(response,200,await clientExecution.uploadAttachment({ id: attachmentUpload[1], name: url.searchParams.get('name') ?? 'attachment',
+        mimeType: url.searchParams.get('mimeType') ?? request.headers['content-type'], bytes }))
+    }
+    // A file an agent wrote, for a Mac's Library retention (was SSH `RemoteLibraryFiles`).
+    if (url.pathname === '/v1/execution/library-file' && request.method === 'POST') {
+      if (!administrator) return json(response,403,{error:'administrator_required'})
+      return json(response,200,await clientExecution.readLibraryFile(await readJSON(request,16384)))
+    }
     if (url.pathname === '/v1/execution/interactions' && request.method === 'GET') return json(response,200,clientExecution.interactions())
     if (url.pathname === '/v1/inference/catalog' && request.method === 'GET') return json(response,200,await defaultAgent.inferenceCatalog({principalID:device?.id ?? 'administrator',provider:url.searchParams.get('provider')}))
     if (url.pathname === '/v1/inference/stream' && request.method === 'POST') {
@@ -439,7 +500,11 @@ const server = createServer({ maxHeaderSize: 16_384, headersTimeout: 10_000,
     if (url.pathname === '/v1/task-gateway/schedules' && request.method === 'GET') return json(response,200,taskGateway.schedules())
     if (url.pathname === '/v1/task-gateway/schedules' && request.method === 'PUT') return json(response,200,taskGateway.publish(await readJSON(request)))
     if (url.pathname === '/v1/task-gateway/results' && request.method === 'GET') return json(response,200,taskGateway.results(url.searchParams.get('after') ?? '0'))
-    if (url.pathname.startsWith('/v1/durable-acp/') && request.method === 'POST') return json(response,200,await durableACP.handle(request.method,url.pathname,await readJSON(request)))
+    // The Mac's SSH durable relay, used only while background execution is on.
+    if (url.pathname.startsWith('/v1/durable-acp/') && request.method === 'POST') {
+      if (!taskGateway.enabled()) return json(response,409,{error:'Background execution is disabled'})
+      return json(response,200,await durableACP.handle(request.method,url.pathname,await readJSON(request)))
+    }
     if (url.pathname === '/v1/sign-in-status' && request.method === 'GET') {
       const agent = await defaultAgent.status();
       const entries = await Promise.all([...catalog.values()].map(async h => ({
@@ -460,10 +525,36 @@ const server = createServer({ maxHeaderSize: 16_384, headersTimeout: 10_000,
       return json(response, 200, result)
     }
     if (url.pathname === '/v1/default-agent/status' && request.method === 'GET') return json(response, 200, await defaultAgent.status())
+    // A Mac's key for this workspace's Pi Durable vault, without its
+    // credentials: the provider accounts already in the host's encrypted
+    // vault become usable again (after a restart, for every member). The key
+    // is held in memory only, as a configuration's is.
+    if (url.pathname === '/v1/default-agent/unlock' && request.method === 'POST') {
+      const body = await readJSON(request, 4096)
+      if (typeof body.workspace !== 'string' || typeof body.unlockKey !== 'string' || Object.keys(body).some(key => !['workspace', 'unlockKey'].includes(key))) return json(response, 400, { error: 'invalid_unlock' })
+      try { await defaultAgent.unlockForClient(body) } catch { return json(response, 403, { error: 'unlock_refused' }) }
+      clientExecution.rememberUnlockMaterial(body)
+      const status = await defaultAgent.status()
+      return json(response, 200, { unlocked: !status.locked, ...(status.epoch ? { epoch: status.epoch } : {}) })
+    }
+    // Pi Durable settings: sign-in status, the model catalog, sign-in and
+    // sign-out, as `wm-exec default-agent --control` answered them over SSH.
+    if (url.pathname === '/v1/default-agent/control' && request.method === 'POST') {
+      return json(response, 200, { result: await defaultAgentControl.run(await readJSON(request, 1_048_576)) })
+    }
+    if (url.pathname === '/v1/default-agent/control-sessions' && request.method === 'POST') {
+      return json(response, 201, defaultAgentControl.start(await readJSON(request, 1_048_576)))
+    }
+    const controlSession = url.pathname.match(/^\/v1\/default-agent\/control-sessions\/([0-9a-f-]{36})(\/answer)?$/)
+    if (controlSession && !controlSession[2] && request.method === 'GET') return json(response, 200, defaultAgentControl.status(controlSession[1]))
+    if (controlSession && !controlSession[2] && request.method === 'DELETE') return json(response, 200, defaultAgentControl.cancel(controlSession[1]))
+    if (controlSession && controlSession[2] && request.method === 'POST') return json(response, 200, defaultAgentControl.answer(controlSession[1], await readJSON(request, 8192)))
     if (url.pathname === '/v1/default-agent/rpc' && request.method === 'POST') {
       const message = retainedExecution.prepareRPC(await readJSON(request))
       const result = await defaultAgent.invoke(message)
       retainedExecution.acceptedRPC(message,result)
+      const relaySession = message.params?.sessionId ?? result?.result?.sessionId
+      if (typeof relaySession === 'string' && relaySession) relayDefaultSessions.add(relaySession)
       if (message.method === 'session/prompt' && result.operationID && !taskGateway.enabled()) {
         foregroundDefaultRuns.set(result.operationID, { sessionID:message.params?.sessionId, lastSeen:Date.now() })
       }
@@ -673,7 +764,7 @@ if (runningAsService) {
     library?.quiesce()
     server.close()
     let code = 0
-    try { timers?.close(); await stream?.close(); await bots?.close(); await workspaceBrowser.close(); await taskGateway.close(); await retainedExecution.close(); await clientExecution.close(); await durableACP.stopAll(); await defaultAgent.close(); releaseTaskOwner?.() }
+    try { timers?.close(); defaultAgentControl.close(); await stream?.close(); await bots?.close(); await workspaceBrowser.close(); await taskGateway.close(); await retainedExecution.close(); await clientExecution.close(); await durableACP.stopAll(); await defaultAgent.close(); releaseTaskOwner?.() }
     catch { code = 1 }
     await library?.stop().catch(() => {}); members?.close()
     process.exit(code)
