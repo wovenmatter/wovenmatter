@@ -26,7 +26,7 @@ function inputMessages(command,runID) {
 
 // This store is owned by the workspace service (the existing host lock fences
 // competing owners). Neither a phone nor an SSH attachment owns these runs.
-export function createClientExecution({ directory, runtime, kind = 'linux', name = 'Workspace', publisherKey, publisherFetch, publisherIntervalMilliseconds, goalIntervalMilliseconds = 1000, mcpEndpointURL = 'http://127.0.0.1:7337/mcp', managedDataRoot = resolve(directory, '../databases'), externalRunningSessions=()=>0,workspaceBrowser, library = null, members = null, onTimersChanged = () => {}, workspaceRole = () => true }) {
+export function createClientExecution({ directory, runtime, kind = 'linux', name = 'Workspace', publisherKey, publisherFetch, publisherIntervalMilliseconds, goalIntervalMilliseconds = 1000, mcpEndpointURL = 'http://127.0.0.1:7337/mcp', managedDataRoot = resolve(directory, '../databases'), externalRunningSessions=()=>0,workspaceBrowser, library = null, members = null, onTimersChanged = () => {}, workspaceRole = () => true, extraCapabilities = () => [] }) {
   mkdirSync(directory, { recursive: true, mode: 0o700 })
   const path = resolve(directory, 'execution.sqlite')
   const db = new DatabaseSync(path)
@@ -43,20 +43,39 @@ export function createClientExecution({ directory, runtime, kind = 'linux', name
   let flushTimer
   let closed = false, unlockMaterial
   let goalsTickRunning = false
+  // Live streams (stream-server.mjs) watch changes in process, as they happen:
+  // `record` when a conversation is saved, `journal` once an entry is
+  // committed, `deleted` when a conversation is removed. Durable journaling is
+  // unchanged; watchers read the stored state.
+  const watchers = new Set()
+  let committedJournal = null
+  function notify(change) { for (const watcher of watchers) { try { watcher(change) } catch {} } }
   const transaction = action => {
     db.exec('BEGIN IMMEDIATE')
-    try { const value = action(); db.exec('COMMIT'); return value }
-    catch (error) { db.exec('ROLLBACK'); throw error }
+    committedJournal = []
+    try {
+      const value = action(); db.exec('COMMIT')
+      const written = committedJournal; committedJournal = null
+      for (const sequence of written) notify({ kind: 'journal', sequence })
+      return value
+    }
+    catch (error) { committedJournal = null; db.exec('ROLLBACK'); throw error }
   }
+  // An entry written outside a transaction is committed already.
+  function journalWritten(sequence) { if (committedJournal) committedJournal.push(sequence); else notify({ kind: 'journal', sequence }) }
   function assertIdentity() { if (!identity) throw fail(409, 'This workspace has not been enrolled in a central library.') }
   function event(kind, conversationID, payload, runID) {
     const record = { eventID: randomUUID(), recordedAt:date(), workspaceID: identity.id, conversationID, kind, ...(runID ? {runID} : {}), ...payload }
     const result = db.prepare('INSERT INTO events(body) VALUES (?)').run('{}')
     record.originSequence = Number(result.lastInsertRowid)
     db.prepare('UPDATE events SET body=? WHERE sequence=?').run(JSON.stringify(record), record.originSequence)
+    journalWritten(record.originSequence)
   }
-  function save(record) {
+  // `transcript` names what changed in the transcript: `null` nothing (other
+  // fields of the record), `{messages, activities}` those IDs, `'all'` unknown.
+  function save(record, transcript = null) {
     db.prepare('INSERT OR REPLACE INTO conversations(id,body) VALUES (?,?)').run(record.conversation.id, JSON.stringify(record))
+    notify({ kind: 'record', conversationID: record.conversation.id, transcript })
   }
   function publish(record, changed, force = !changed) {
     let pendingDetails=false
@@ -67,7 +86,7 @@ export function createClientExecution({ directory, runtime, kind = 'linux', name
       if(parts===null)pendingDetails=true
       for(const nativeRecord of parts??[])event('nativeRecord',record.conversation.id,{nativeRecord},activity.runID)
     }
-    save(record)
+    save(record, changed ? { messages: [...changed.messages], activities: [...changed.activities] } : 'all')
     event('conversation', record.conversation.id, { conversation: record.conversation }, record.conversation.activeRunID)
     const messages = changed ? record.transcript.messages.filter(item => changed.messages.has(item.id)) : record.transcript.messages
     const activities = changed ? record.transcript.activities.filter(item => changed.activities.has(item.id)) : record.transcript.activities
@@ -91,7 +110,7 @@ export function createClientExecution({ directory, runtime, kind = 'linux', name
     if (!flushTimer) { flushTimer = setTimeout(() => { flushTimer = undefined; for (const id of dirty.keys()) flush(id) }, 500); flushTimer.unref() }
   }
   function markDirty(record, messages = [], activities = []) {
-    save(record)
+    save(record, { messages, activities })
     const changes = dirty.get(record.conversation.id) ?? {messages: new Set(), activities: new Set()}
     messages.forEach(id => changes.messages.add(id)); activities.forEach(id => changes.activities.add(id))
     dirty.set(record.conversation.id, changes)
@@ -124,7 +143,12 @@ export function createClientExecution({ directory, runtime, kind = 'linux', name
       }
     }
   })
-  function descriptor() { assertIdentity(); return copy(identity) }
+  function descriptor() {
+    assertIdentity()
+    const value = copy(identity)
+    value.capabilities = [...new Set([...(value.capabilities ?? []), ...extraCapabilities()])]
+    return value
+  }
   // A new workspace's execution device is this host's member device ID (its
   // library host's identity), so other members address it from the registry
   // alone; without a library host it gets its own random ID.
@@ -281,7 +305,7 @@ export function createClientExecution({ directory, runtime, kind = 'linux', name
       save({native:{},pending:[],enabledTools,conversation:{id:command.conversationID,runtimeKind:selected,workspaceID:identity.id,routeID:identity.id,...(command.folderID?{folderID:command.folderID}:{})},transcript:{conversationID:command.conversationID,messages:[],activities:[]}})
       let native
       try {native = await runtime.create({ runtimeKind: selected, conversationID: command.conversationID, providerID: provider.id, workspaceID: identity.id, mcpConnection: mcp.sessionConnection(command.conversationID),nativeWorkingDirectory:initial.nativeWorkingDirectory,permission:initial.permission??defaults.permission })}
-      catch(error){db.prepare('DELETE FROM conversations WHERE id=?').run(command.conversationID);mcp.revokeSession(command.conversationID);throw error}
+      catch(error){db.prepare('DELETE FROM conversations WHERE id=?').run(command.conversationID);notify({kind:'deleted',conversationID:command.conversationID});mcp.revokeSession(command.conversationID);throw error}
       // A title named at creation (a member's createSession, or the frozen intent) stays past the first message.
       const named=[command.title,initial.title].find(value=>typeof value==='string'&&value.trim())?.trim().slice(0,256)
       const record = { native, pending: [], enabledTools, ...(named?{titled:true}:{}), conversation: { id: command.conversationID, title:named??'New conversation', preview: '', runtimeKind: selected,
@@ -557,6 +581,7 @@ export function createClientExecution({ directory, runtime, kind = 'linux', name
         if (old) { const prior=JSON.parse(old.body);delete prior.originSequence;if(JSON.stringify(ordered(prior))!==JSON.stringify(ordered(entry)))throw fail(409,'Retained event identity was reused.');continue }
         const inserted=db.prepare('INSERT INTO events(body) VALUES (?)').run('{}');entry.originSequence=Number(inserted.lastInsertRowid)
         db.prepare('UPDATE events SET body=? WHERE sequence=?').run(JSON.stringify(entry),entry.originSequence)
+        journalWritten(entry.originSequence)
         if(entry.kind==='conversation' && entry.retainedExecution) {
           const proof=entry.retainedExecution, previous=db.prepare('SELECT body FROM conversations WHERE id=?').get(entry.conversationID)
           if(previous) {
@@ -574,7 +599,7 @@ export function createClientExecution({ directory, runtime, kind = 'linux', name
               record.transcript[field]??=[];const index=record.transcript[field].findIndex(old=>old.id===item.id)
               if(index<0)record.transcript[field].push(item);else record.transcript[field][index]=item
             }
-            save(record)
+            save(record,'all')
           }
           for(const run of entry.transcript?.runs??[])if(['completed','failed','cancelled','interrupted'].includes(run.status))db.prepare('INSERT OR IGNORE INTO runs(id,commandID) VALUES (?,?)').run(run.id,'retained')
         }
@@ -706,7 +731,8 @@ export function createClientExecution({ directory, runtime, kind = 'linux', name
     async cancelActive(){await runtime.cancelActive?.();await Promise.allSettled([...jobs.values()].map(job=>job.completion))},
     rememberUnlockMaterial, unlockMaterial: clientUnlockMaterial, command, receipt: getReceipt, events,
     conversations: () => db.prepare('SELECT body FROM conversations').all().map(row => JSON.parse(row.body).conversation),
-    transcript: (id, before) => {
+    // The latest `limit` messages and activities before `before`.
+    transcript: (id, before, {limit = 40} = {}) => {
       const value = getRecord(id).transcript
       let end = {messages:value.messages.length,activities:value.activities.length}
       if (before != null) {
@@ -717,11 +743,19 @@ export function createClientExecution({ directory, runtime, kind = 'linux', name
       }
       if (!end || !Number.isSafeInteger(end.messages) || end.messages < 0 || end.messages > value.messages.length
         || !Number.isSafeInteger(end.activities) || end.activities < 0 || end.activities > value.activities.length) throw fail(400, 'Invalid transcript cursor.')
-      const start = {messages:Math.max(0,end.messages-40),activities:Math.max(0,end.activities-40)}
+      const start = {messages:Math.max(0,end.messages-limit),activities:Math.max(0,end.activities-limit)}
       return {...value,messages:value.messages.slice(start.messages,end.messages),activities:value.activities.slice(start.activities,end.activities),
         ...(start.messages || start.activities ? {olderCursor:Buffer.from(JSON.stringify(start)).toString('base64url')} : {})}
     },
     interactions: () => db.prepare('SELECT body FROM conversations').all().flatMap(row => JSON.parse(row.body).pending),
+    // For live streams: one conversation's summary and pending interactions
+    // without parsing its transcript, and the stored record itself.
+    summary: id => {
+      const row = identifier(id) ? db.prepare("SELECT json_extract(body,'$.conversation') AS conversation, json_extract(body,'$.pending') AS pending FROM conversations WHERE id=?").get(id) : null
+      return row ? {conversation:JSON.parse(row.conversation),pending:JSON.parse(row.pending ?? '[]')} : null
+    },
+    record: id => getRecord(id),
+    watch(listener) { watchers.add(listener); return () => watchers.delete(listener) },
     providers: () => runtime.providers(),
     async capabilities(id) { const record = getRecord(id); return runtime.capabilities ? runtime.capabilities({native:record.native,runtimeKind:record.conversation.runtimeKind}) : (await runtime.providers()).find(provider => provider.runtimeKind === record.conversation.runtimeKind) },
     async readWorkspace(request) {

@@ -24,6 +24,9 @@ import { createLibraryServe } from './library-serve.mjs'
 import { createLibraryTimers } from './library-timers.mjs'
 import { createMemberVerifier, hasMemberSignature } from './member-auth.mjs'
 import { createMemberTransport } from './member-client.mjs'
+import { authenticateMemberUpgrade, createMemberSocketRegistry } from './member-sockets.mjs'
+import { streamCapability } from './stream-protocol.mjs'
+import { createStreamServer } from './stream-server.mjs'
 import { createHostAdministration, runHostScript } from './host-admin.mjs'
 import { createInstallerBearer } from './installer-bearer.mjs'
 import { createServer } from 'node:http'
@@ -122,6 +125,10 @@ const libraryServe = library && process.env.WOVENMATTER_LIBRARY_SERVE !== '0' ? 
 // Signed requests must name this host's own member device ID as their audience.
 const members = library ? createMemberVerifier({ loadMembers: () => library.client.members(),
   audience: async () => memberIdentityRecord?.deviceID ?? (await library.client.identity()).deviceID }) : null
+// Every open stream and bots socket, by member: a member removed from the
+// list, or no longer an allowed kind, is disconnected with 4401.
+const memberSockets = createMemberSocketRegistry()
+members?.watch(list => memberSockets.sweep(list))
 const hostAdmin = nativeLinuxHost ? createHostAdministration({ serviceRoot: configuration.serviceRoot, dataRoot: configuration.dataRoot, stateDirectory: configuration.stateDirectory,
   extra: async () => ({ library: library?.status() ?? null, memberIdentity: memberIdentityRecord }),
   ...(library ? {
@@ -151,6 +158,8 @@ const clientExecution = runningAsService ? createClientExecution({
   onTimersChanged: () => timers?.kick(),
   // Without it the host runs only bots; with it, bots wait for its enrollment.
   workspaceRole: () => configuration.workspaceEnabled !== false,
+  // Signed members stream this workspace (stream-server.mjs).
+  extraCapabilities: () => members ? [streamCapability] : [],
   members: memberTransport ? { transport: memberTransport, deviceID: () => memberIdentityRecord?.deviceID ?? null,
     hasMac: () => library.available() && knownMacMember() } : null,
   runtime: createClientExecutionRuntime({defaultAgent,durableACP,catalog,workspaceRoot,harnessStatus,
@@ -180,11 +189,13 @@ function hostRelease() {
 
 const bots = runningAsService && configuration.runtimeKind === 'host' && process.platform === 'linux' ? createBotsService({
   configuration, mcp: clientExecution.mcp, release: hostRelease, defaultAgent, serverPort: () => server.address()?.port ?? listenPort,
-  libraryHost: library, memberIdentity,
-  // Any member may open the bots socket; the bearers remain for the transition.
-  authorizeClient: async request => authorized(request) || !!clientExecution.principal(request.headers.authorization, 'execution')
-    || !!(members && hasMemberSignature(request.headers) && await members.verify({ method: request.method, target: request.url, alternateTargets: await servedTargets(request.url), headers: request.headers, body: Buffer.alloc(0) }).catch(() => null)),
+  libraryHost: library, memberIdentity, registry: memberSockets,
+  // Any signed member may open the bots socket; bearers and device grants do not.
+  authorizeClient: async request => (await authenticateMemberUpgrade(request, { members, servedTargets })).member ?? null,
 }) : null
+// The live stream at the execution endpoint (`GET /v1/stream?protocol=1`).
+const stream = clientExecution && members ? createStreamServer({ members, servedTargets, execution: clientExecution, registry: memberSockets,
+  workspaceEnabled: () => configuration.workspaceEnabled !== false, log: message => process.stderr.write(message + '\n') }) : null
 // A bots-only machine keeps its server, data root and connections but runs no
 // workspace agents, schedules or projects until the workspace is added.
 const workspaceRoutes = ['/v1/execution/commands', '/v1/task-gateway', '/v1/durable-acp/', '/v1/default-agent/rpc', '/v1/default-agent/runs/',
@@ -626,7 +637,8 @@ server.maxConnections = 256
 server.maxRequestsPerSocket = 1_000
 server.on('upgrade', (request, socket, head) => {
   socket.on('error', () => {})
-  if (!bots?.upgrade(request, socket, head)) socket.end('HTTP/1.1 404 Not Found\r\nConnection: close\r\nContent-Length: 0\r\n\r\n')
+  if (stream?.upgrade(request, socket, head) || bots?.upgrade(request, socket, head)) return
+  socket.end('HTTP/1.1 404 Not Found\r\nConnection: close\r\nContent-Length: 0\r\n\r\n')
 })
 
 if (runningAsService) {
@@ -653,7 +665,7 @@ if (runningAsService) {
     library?.quiesce()
     server.close()
     let code = 0
-    try { timers?.close(); await bots?.close(); await workspaceBrowser.close(); await taskGateway.close(); await retainedExecution.close(); await clientExecution.close(); await durableACP.stopAll(); await defaultAgent.close(); releaseTaskOwner?.() }
+    try { timers?.close(); await stream?.close(); await bots?.close(); await workspaceBrowser.close(); await taskGateway.close(); await retainedExecution.close(); await clientExecution.close(); await durableACP.stopAll(); await defaultAgent.close(); releaseTaskOwner?.() }
     catch { code = 1 }
     await library?.stop().catch(() => {}); members?.close()
     process.exit(code)
