@@ -56,8 +56,8 @@ struct ChatPane: View {
             if let transcript = model.displayedTranscript {
               MobileConversationTranscript(transcript: transcript, disclosureState: model.transcriptStates.state(for: transcript.conversationID),
                 agentSourceTitle: { model.state.conversations[$0]?.title },
-                openAgentSource: { id in Task { await model.selectConversation(id) } }) { activityID in
-                try await model.conversationActivityDetail(conversationID: transcript.conversationID, activityID: activityID)
+                openAgentSource: { id in Task { await model.selectConversation(id) } }) { runID, activityID in
+                try await model.conversationActivityDetail(conversationID: transcript.conversationID, runID: runID, activityID: activityID)
               }
             }
             if let progress = model.sendProgress {

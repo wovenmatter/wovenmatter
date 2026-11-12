@@ -16,6 +16,12 @@ private actor CountingLibrary: OfflineLibraryTransport {
   func pending() async throws -> [PendingInteraction] { pendingReads += 1; return [] }
   func transcript(_ id: String) async throws -> LibraryTranscript { transcripts += 1; return .init(conversationID: id) }
   func receipt(_ id: String) async throws -> LibraryCommandReceipt? { receiptReads += 1; return nil }
+  private(set) var detailReads: [String] = []
+  func activityDetails(_ id: String, runID: String, activityID: String) async throws -> LibraryActivity {
+    detailReads.append(runID + "/" + activityID)
+    return .init(id: activityID, runID: runID, title: "Read file", status: "completed",
+                 projectionJSON: #"{"id":"a1","kind":"tool","title":"Read file","content":"The whole file","locations":[],"changes":[],"planEntries":[]}"#)
+  }
   var liveReads: Int { transcripts + pendingReads + receiptReads }
 }
 
@@ -210,6 +216,20 @@ final class CentralStreamTests: XCTestCase {
     XCTAssertEqual(model.currentPending.map(\.id), ["q1"], "One copy of each question, from the stream")
     let execution = fixture.http.paths(host: "studio.tail1.ts.net")
     XCTAssertFalse(execution.contains { $0.contains("/transcript") || $0.contains("/interactions") || $0.contains("/capabilities") }, "\(execution)")
+
+    // A streamed row carries the compact projection; expanding it reads the
+    // library host's details route once, and nothing else.
+    await socket.push(.item(.init(id: chat, payload: .transcript(.init(transcript: .init(conversationID: "central-chat", messages: [],
+      activities: [.init(id: "a1", runID: "run", title: "Read file", status: "completed",
+                         projectionJSON: #"{"id":"a1","kind":"tool","title":"Read file","content":"The wh","detailsAvailable":true,"locations":[],"changes":[],"planEntries":[]}"#)],
+      activeRunID: "run", runs: [.init(id: "run", status: "running")]), snapshot: false)))))
+    await waitUntil("compact row") { model.transcript?.activities.first?.id == "a1" }
+    let detail = try await model.conversationActivityDetail(conversationID: "central-chat", runID: "run", activityID: "a1")
+    XCTAssertEqual(detail?.content, "The whole file")
+    let detailReads = await fixture.library.detailReads
+    XCTAssertEqual(detailReads, ["run/a1"])
+    let transcriptReads = await fixture.library.transcripts
+    XCTAssertEqual(transcriptReads, 0, "Details never read the whole transcript")
 
     // Leaving the chat ends its subscription; nothing else changes.
     await model.selectConversation("central-chat-2")

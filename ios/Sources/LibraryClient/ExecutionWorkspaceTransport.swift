@@ -45,12 +45,23 @@ public protocol ExecutionWorkspaceTransport: Sendable {
   func transcript(_ id: String, before: String) async throws -> LibraryTranscript
   func capabilities(_ id: String) async throws -> HarnessCapabilities
   func readWorkspace(_ request: LibraryWorkspaceRead) async throws -> LibraryWorkspaceResult
+  /// One activity's complete projection, read when its disclosure opens
+  /// (`GET v1/execution/conversations/<id>/activity?id=&run=`).
+  func activityDetails(_ id: String, runID: String, activityID: String) async throws -> LibraryActivity
 }
 
 public extension ExecutionWorkspaceTransport {
   func transcript(_ id: String, before: String) async throws -> LibraryTranscript { throw MobileConnectionError.http(400, "Older history is unavailable for this workspace.") }
   func capabilities(_ id: String) async throws -> HarnessCapabilities { throw MobileConnectionError.http(400, "Session capabilities are unavailable for this workspace.") }
   func readWorkspace(_ request: LibraryWorkspaceRead) async throws -> LibraryWorkspaceResult { throw MobileConnectionError.http(400, "This action is unavailable for this execution workspace.") }
+  func activityDetails(_ id: String, runID: String, activityID: String) async throws -> LibraryActivity {
+    throw MobileConnectionError.http(404, "Activity details are unavailable for this workspace.")
+  }
+}
+
+/// The query of an activity details read; activity IDs are free-form, so they travel as query values.
+public func activityDetailsQuery(runID: String, activityID: String) -> [URLQueryItem] {
+  [.init(name: "id", value: activityID), .init(name: "run", value: runID)]
 }
 
 public final class HTTPSExecutionWorkspaceTransport: ExecutionWorkspaceTransport, @unchecked Sendable {
@@ -118,6 +129,10 @@ public final class HTTPSExecutionWorkspaceTransport: ExecutionWorkspaceTransport
   }
   public func readWorkspace(_ request: LibraryWorkspaceRead) async throws -> LibraryWorkspaceResult {
     try await client.request("v1/execution/workspace-read", method: "POST", body: JSONEncoder().encode(request))
+  }
+  public func activityDetails(_ id: String, runID: String, activityID: String) async throws -> LibraryActivity {
+    try await client.request("v1/execution/conversations/" + TailnetJSONClient.safeID(id) + "/activity",
+      query: activityDetailsQuery(runID: runID, activityID: activityID))
   }
 }
 
