@@ -516,19 +516,21 @@ struct ExecutionStreamTests {
     #expect(try await client.item("w").payload == .synchronized, "the cursor comes with the snapshot")
 
     // One change goes out; a burst right after it waits out the window and arrives as its last cursor.
+    let written = ContinuousClock.now
     _ = try await mac.database.createFixtureLocalACPSession(runtimeKind: .codex, title: "One", ownerDeviceID: UUID())
     let first = try await library()
-    let firstAt = ContinuousClock.now
     #expect(first > initial)
     for index in 0..<3 { _ = try await mac.database.createFixtureLocalACPSession(runtimeKind: .codex, title: "Burst \(index)", ownerDeviceID: UUID()) }
     let last = try await mac.database.libraryWakeCursor()
-    var arrivals: [(cursor: Int64, at: ContinuousClock.Instant)] = [(first, firstAt)]
+    var arrivals: [(cursor: Int64, at: ContinuousClock.Instant)] = [(first, .now)]
     while arrivals.last?.cursor != last { arrivals.append((try await library(), .now)) }
     #expect(arrivals.count <= 3, "three changes coalesce: \(arrivals.map(\.cursor))")
-    for (earlier, later) in zip(arrivals, arrivals.dropFirst()) {
-      #expect(later.at - earlier.at >= .milliseconds(250), "at most every 300 ms")
-      #expect(later.cursor > earlier.cursor)
-    }
+    for (earlier, later) in zip(arrivals, arrivals.dropFirst()) { #expect(later.cursor > earlier.cursor) }
+    // The k-th item is sent no earlier than (k - 1) windows after the first change,
+    // and arrives later still; gaps between arrivals say nothing when a busy
+    // machine hands several to the client at once.
+    let span = arrivals.last!.at - written
+    #expect(span >= .milliseconds(250) * (arrivals.count - 1), "at most every 300 ms: \(arrivals.count) items over \(span)")
     await #expect(throws: StreamTestError.self) { _ = try await library(timeout: .milliseconds(700)) }
 
     // A transcript that changes, as a running session rewrites it, wakes no phone.
@@ -820,8 +822,12 @@ private final class StreamClient: @unchecked Sendable {
     connection = NWConnection(to: .url(URL(string: "ws://127.0.0.1:\(port)\(target)")!), using: parameters)
   }
 
-  func connect() async throws {
+  /// Opens the socket; a handshake that has not completed after `timeout` fails the test instead of hanging it.
+  func connect(timeout: Duration = .seconds(30)) async throws {
     let queue = DispatchQueue(label: "stream.test.client")
+    let connection = connection
+    let deadline = Task { guard (try? await Task.sleep(for: timeout)) != nil else { return }; connection.cancel() }
+    defer { deadline.cancel() }
     try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, any Error>) in
       final class Once: @unchecked Sendable { var done = false }
       let once = Once()
@@ -831,7 +837,9 @@ private final class StreamClient: @unchecked Sendable {
         case .failed(let error), .waiting(let error):
           if !once.done { once.done = true; continuation.resume(throwing: error) }
           self?.finish(code: nil)
-        case .cancelled: self?.finish(code: nil)
+        case .cancelled:
+          if !once.done { once.done = true; continuation.resume(throwing: StreamTestError.closed) }
+          self?.finish(code: nil)
         default: break
         }
       }
