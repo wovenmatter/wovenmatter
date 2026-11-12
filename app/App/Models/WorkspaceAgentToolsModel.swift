@@ -54,6 +54,9 @@ final class WorkspaceAgentToolsModel {
     var replicaReadHandler: (@MainActor (WovenMatterToolRequest, WovenMatterToolCommand, String) async throws -> WovenMatterToolResponse?)?
     /// Sessions other members' workspaces run (`WorkspaceToolHandlers.memberSession`).
     var memberSessionHandler: (@MainActor (WovenMatterToolRequest, WovenMatterToolCommand, String) async throws -> WovenMatterToolResponse?)?
+    /// Waits and wake-ups of the sessions agents here created elsewhere
+    /// (`ApplicationModel+SessionWaits.swift`), created on first use.
+    var sessionWakeUps: SessionWakeUps?
     let database: WorkspaceDatabase
     private(set) var settings: WorkspaceToolSettings
     private(set) var sessionPolicies: [String: WorkspaceSessionTools] = [:]

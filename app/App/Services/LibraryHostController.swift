@@ -269,7 +269,11 @@ final class LibraryHostController {
                 if (try? await stream.start()) != nil {
                     guard generation == expectedGeneration, !Task.isCancelled else { stream.stop(); throw CancellationError() }
                     memberSockets = registry; executionStream = stream
-                    model.executionStreamChanged = { [weak stream] ids in stream?.liveStateChanged(conversationIDs: ids) }
+                    model.executionStreamChanged = { [weak stream, weak model] ids in
+                        stream?.liveStateChanged(conversationIDs: ids)
+                        // Waits on this Mac's sessions follow the same in-memory changes.
+                        Task { await model?.sessionWakeUpsLocalChanged(ids) }
+                    }
                 } else { stream.stop() }
             }
             // Only a signed member request (a Mac or phone member). Other Macs
