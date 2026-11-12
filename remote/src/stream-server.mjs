@@ -139,7 +139,7 @@ export function createStreamServer({ members, servedTargets = async () => [], ex
 
   async function accept(request, socket, head, url) {
     // Native apps and servers only: a browser page cannot open the stream.
-    if (request.headers.origin !== undefined || request.headers.cookie !== undefined) return refuseUpgrade(socket, 403, { code: 'unauthorized', message: 'Browser requests cannot open the stream.' })
+    if (request.headers.origin !== undefined || request.headers.cookie !== undefined) return refuseUpgrade(socket, 403, { code: 'browser_request', message: 'Browser requests cannot open the stream.' })
     if (request.method !== 'GET' || (request.headers.upgrade ?? '').toLowerCase() !== 'websocket') return refuseUpgrade(socket, 400, { code: 'invalid', message: 'Open the stream with a WebSocket upgrade.' })
     const requested = url.searchParams.getAll('protocol')
     if (requested.length !== 1 || !supportedStreamProtocols.some(version => String(version) === requested[0])) {
@@ -365,12 +365,14 @@ export function createStreamServer({ members, servedTargets = async () => [], ex
   }
 
   // `conversation` {conversationID}: the latest transcript window, then
-  // upserts of changed messages and activities, and the capabilities.
+  // upserts of changed messages and activities, the capabilities and the
+  // session settings.
   async function conversationStream({ subscription, enqueue, end }, params) {
     const id = params.conversationID
     if (!uuid(id)) throw failure('invalid', 'conversationID is a conversation ID.')
     const sent = new Map(), hints = { all: false, messages: new Set(), activities: new Set() }
     let timer = null, lastSentAt = 0, ready = false, touched = false, shape = null, capabilitiesInput = null, capabilities = null
+    let sessionInput = null, session = null, sessionStale = false, sessionRead = null, sessionAgain = false
     const item = (kind, data, options = {}) => enqueue({ t: 'item', id: subscription.id, kind, data }, { subscription, key: options.key ?? null, merge: options.merge ?? null })
     const mergeTranscripts = (queued, next) => queued.data.snapshot ? null : { ...next, data: { snapshot: false, transcript: {
       conversationID: id, messages: mergeByID(queued.data.transcript.messages, next.data.transcript.messages),
@@ -389,6 +391,32 @@ export function createStreamServer({ members, servedTargets = async () => [], ex
       if (fingerprint === capabilities) return
       capabilities = fingerprint
       item('capabilities', { capabilities: value }, { key: 'capabilities', merge: (_, next) => next })
+    }
+
+    // The session settings, as the `session` workspace read answers them.
+    // They are read again when what they derive from changes (the runtime's
+    // native configuration, the run, the goal, the enabled tools) or when the
+    // execution service says the settings changed (`session`); one read at a
+    // time, the last one always after the latest change.
+    const sessionKey = record => hash(JSON.stringify([record.conversation.runtimeKind, record.native ?? null, record.conversation.activeRunID ?? null,
+      record.goal ?? null, record.enabledTools ?? null]))
+    function refreshSession(record) {
+      sessionInput = sessionKey(record); sessionStale = false
+      if (sessionRead) { sessionAgain = true; return sessionRead }
+      sessionRead = (async () => {
+        do {
+          sessionAgain = false
+          let value = null
+          try { value = (await execution.readWorkspace({ session: { id } }))?.session?._0 ?? null } catch {}
+          if (subscription.ended) return
+          if (!value) continue
+          const fingerprint = hash(JSON.stringify(value))
+          if (fingerprint === session) continue
+          session = fingerprint
+          item('session', { settings: value }, { key: 'session', merge: (_, next) => next })
+        } while (sessionAgain && !subscription.ended)
+      })().finally(() => { sessionRead = null })
+      return sessionRead
     }
 
     // Upserts in as few items as fit in a frame.
@@ -428,6 +456,7 @@ export function createStreamServer({ members, servedTargets = async () => [], ex
       }
       const input = hash(JSON.stringify([record.conversation.runtimeKind, record.native ?? null, record.conversation.activeRunID ?? null]))
       if (input !== capabilitiesInput) void refreshCapabilities(record)
+      if (sessionStale || sessionKey(record) !== sessionInput) void refreshSession(record)
     }
     function schedule() {
       if (timer || !ready || subscription.ended) return
@@ -437,6 +466,7 @@ export function createStreamServer({ members, servedTargets = async () => [], ex
     subscription.changed = change => {
       if (change.conversationID !== id) return
       if (change.kind === 'deleted') { end(streamFailure('not_found', 'This conversation was removed.')); return }
+      if (change.kind === 'session') { sessionStale = touched = true; schedule(); return }
       if (change.kind !== 'record') return
       touched = true
       if (change.transcript === 'all') hints.all = true
@@ -460,6 +490,8 @@ export function createStreamServer({ members, servedTargets = async () => [], ex
     }
     lastSentAt = clock.now()
     await refreshCapabilities(record)
+    if (subscription.ended) return
+    await refreshSession(record)
     if (subscription.ended) return
     item('synchronized', {})
     ready = true

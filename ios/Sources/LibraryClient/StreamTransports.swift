@@ -108,13 +108,9 @@ public final class WebSocketStreamTransport: StreamTransport, @unchecked Sendabl
     task.cancel(with: URLSessionWebSocketTask.CloseCode(rawValue: code.rawValue) ?? .normalClosure, reason: nil)
   }
 
-  /// A refused upgrade (its HTTP status), or the close code the server sent.
+  /// A refused upgrade (its `X-Woven-Error`, `Date` and status), or the close code the server sent.
   private func failure(_ error: any Error) -> any Error {
-    if let response = task.response as? HTTPURLResponse, response.statusCode != 101 {
-      var headers: [String: String] = [:]
-      for (name, value) in response.allHeaderFields { headers[String(describing: name)] = String(describing: value) }
-      return StreamConnectionError.refusal(status: response.statusCode, headers: headers)
-    }
+    if let response = task.response as? HTTPURLResponse, let refusal = StreamConnectionError.refusal(response) { return refusal }
     if task.closeCode != .invalid {
       return StreamTransportClosed(code: task.closeCode.rawValue, reason: task.closeReason.map { String(decoding: $0, as: UTF8.self) })
     }

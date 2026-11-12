@@ -32,10 +32,16 @@ export async function authenticateMemberUpgrade(request, { members, servedTarget
 
 const reasons = { 400: 'Bad Request', 401: 'Unauthorized', 403: 'Forbidden', 404: 'Not Found', 426: 'Upgrade Required', 502: 'Bad Gateway', 503: 'Service Unavailable' }
 
-/** Ends an upgrade request with a JSON HTTP error. */
+/**
+ * Ends an upgrade request with a JSON HTTP error. The code is repeated in
+ * `X-Woven-Error`, and `Date` is always sent: a client whose WebSocket API
+ * cannot read a refused upgrade's body still learns why, and its clock skew.
+ */
 export function refuseUpgrade(socket, status, body = {}, headers = {}) {
   const payload = JSON.stringify(body)
+  const code = typeof body.code === 'string' && /^[a-z_]+$/.test(body.code) ? body.code : null
   const lines = [`HTTP/1.1 ${status} ${reasons[status] ?? 'Error'}`, 'Connection: close', 'Content-Type: application/json', 'Cache-Control: no-store',
+    `Date: ${new Date().toUTCString()}`, ...(code ? [`X-Woven-Error: ${code}`] : []),
     `Content-Length: ${Buffer.byteLength(payload)}`, ...Object.entries(headers).map(([name, value]) => `${name}: ${value}`)]
   if (socket.writable) socket.end(lines.join('\r\n') + '\r\n\r\n' + payload)
   else socket.destroy()

@@ -14,6 +14,8 @@ public actor MobileWorkspaceStream {
     case history
     case transcript(conversationID: String)
     case capabilities(conversationID: String, HarnessCapabilities)
+    /// The open chat's settings (model, thinking, permission, tools, goal).
+    case session(conversationID: String, SessionSettings)
     /// Receipts learned for commands whose reply was lost.
     case receipts([LibraryCommandReceipt])
   }
@@ -124,7 +126,7 @@ public actor MobileWorkspaceStream {
       await update(.history)
     case .pending(let value):
       await update(.pending(value.interactions))
-    case .transcript, .capabilities, .synchronized, .serverState, .unknown:
+    case .transcript, .capabilities, .session, .synchronized, .serverState, .unknown:
       break
     }
     return .accepted
@@ -144,6 +146,9 @@ public actor MobileWorkspaceStream {
         await update(.transcript(conversationID: conversationID))
       case .capabilities(let value):
         await update(.capabilities(conversationID: conversationID, value.capabilities))
+      case .session(let value):
+        guard value.settings.conversationID == conversationID else { return .accepted }
+        await update(.session(conversationID: conversationID, value.settings))
       case .conversations, .pending, .journal, .synchronized, .serverState, .unknown:
         break
       }

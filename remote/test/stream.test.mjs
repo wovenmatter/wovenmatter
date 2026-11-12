@@ -58,7 +58,12 @@ async function fixture(t, { clock, limits, timings, refreshMilliseconds = 15_000
   const directory = mkdtempSync(join(tmpdir(), 'wm-stream-')), runs = []
   const provider = { id: 'default_agent', runtimeKind: 'default_agent', displayName: 'Pi Durable', routeName: 'This workspace', available: true, canStart: true,
     canResume: true, canSteer: true, canStop: true, supportsApprovals: false, supportsQuestions: false, activeInputMode: 'steer' }
+  // Session settings live in the runtime, outside the record, as OpenCode's do.
+  const configured = new Map(), models = [{ id: 'small', label: 'Small' }, { id: 'large', label: 'Large' }]
   const runtime = { providers: async () => [provider], create: async () => ({ sessionID: randomUUID() }),
+    settings: async ({ native }) => ({ model: configured.get(native.sessionID)?.model ?? 'small', thinking: configured.get(native.sessionID)?.thinking ?? null,
+      permission: null, models, thinkingLevels: [], permissions: [], availableTools: [], enabledTools: [], canConfigure: true }),
+    configure: async ({ native, options }) => { configured.set(native.sessionID, { ...configured.get(native.sessionID), ...Object.fromEntries(Object.entries(options).filter(([key, value]) => key !== 'id' && value != null)) }) },
     run: async input => { const done = Promise.withResolvers(); runs.push({ ...input, done }); await done.promise },
     stop: async ({ command }) => runs.find(item => item.command.runID === command.runID)?.done.resolve(),
     respond: async () => {}, steer: async () => {}, close: async () => { for (const run of runs) run.done.resolve() } }
@@ -131,7 +136,7 @@ function handshake(port, { path = '/v1/stream?protocol=1', headers = {} } = {}) 
     request.on('response', response => {
       let body = ''
       response.on('data', chunk => { body += chunk })
-      response.on('end', () => resolve({ status: response.statusCode, body: body ? JSON.parse(body) : null }))
+      response.on('end', () => resolve({ status: response.statusCode, headers: response.headers, body: body ? JSON.parse(body) : null }))
     })
     request.on('upgrade', (_, socket) => { socket.destroy(); resolve({ status: 101 }) })
     request.on('error', reject)
@@ -162,7 +167,7 @@ test('every shared stream fixture decodes and re-encodes to the same JSON', () =
     assert.deepEqual(JSON.parse(encodeFrame(decoded)), frame, `${name} did not round-trip`)
   }
   assert.deepEqual([...types].sort(), ['cancel', 'end', 'hello', 'item', 'req', 'res', 'sub'])
-  for (const kind of ['conversations', 'pending', 'journal', 'transcript', 'capabilities', 'synchronized', 'server.state']) assert.ok(kinds.has(kind), kind)
+  for (const kind of ['conversations', 'pending', 'journal', 'transcript', 'capabilities', 'session', 'synchronized', 'server.state']) assert.ok(kinds.has(kind), kind)
   for (const frame of fixtures.unknownFrames) {
     assert.deepEqual(decodeFrame(JSON.stringify(frame)), { t: 'unknown', type: 'futureFrame' })
     assert.throws(() => encodeFrame(frame), StreamFrameError)
@@ -220,6 +225,15 @@ test('the stream upgrade refuses bad protocols, stale clocks, bearers and browse
   assert.equal((await handshake(f.port, { headers: f.signed(streamTarget, {}, stranger) })).status, 401, 'a device that is not a member')
   assert.equal((await handshake(f.port, { headers: { ...f.signed(), origin: 'https://evil.example' } })).status, 403)
   assert.equal((await handshake(f.port, { headers: { ...f.signed(), cookie: 'session=1' } })).status, 403)
+  // Every refusal repeats its code in X-Woven-Error and carries a Date, for
+  // clients that cannot read a refused upgrade's body.
+  const browser = await handshake(f.port, { headers: { ...f.signed(), origin: 'https://evil.example' } })
+  const unsigned = await handshake(f.port, {})
+  for (const [result, code] of [[refused, 'protocol_unsupported'], [stale, 'member_time_stale'], [browser, 'unauthorized'], [unsigned, 'unauthorized']]) {
+    assert.equal(result.headers['x-woven-error'], code)
+    assert.equal(result.body.code, code)
+    assert.ok(Math.abs(Date.parse(result.headers.date) - Date.now()) < 60_000, 'a Date header')
+  }
   // Signed for the path the member sent, or as this server saw it.
   assert.equal((await handshake(f.port, { headers: f.signed() })).status, 101)
   assert.equal((await handshake(f.port, { headers: f.signed('/v1/stream?protocol=1') })).status, 101)
@@ -233,6 +247,10 @@ test('the stream upgrade refuses bad protocols, stale clocks, bearers and browse
   assert.ok(hello.capabilities.includes('stream.v1'))
   assert.equal(client.frames[0].t, 'hello', 'hello is the first frame')
   assert.ok(f.execution.descriptor().capabilities.includes('stream.v1'))
+  // A stopping server refuses with 503 unavailable, in the header too.
+  await f.stream.close()
+  const stopping = await handshake(f.port, { headers: f.signed() })
+  assert.deepEqual([stopping.status, stopping.body.code, stopping.headers['x-woven-error']], [503, 'unavailable', 'unavailable'])
 })
 
 test('the workspace stream sends its snapshot, replays the journal after the cursor and follows new entries', async t => {
@@ -333,6 +351,33 @@ test('the conversation stream sends the transcript window, then live upserts wel
   await f.execution.command(f.command('workspace', { conversationID: id, workspaceAction: { conversation: { id, action: 'rename', title: 'After' } } }), f.device)
   await new Promise(resolve => setTimeout(resolve, 120))
   assert.equal(client.frames.slice(before).filter(frame => frame.id === 'c').length, 0)
+})
+
+test('the conversation stream sends the session settings on subscribe and whenever they change', async t => {
+  const f = await fixture(t)
+  const id = await f.session()
+  const client = f.connect()
+  await client.next(frame => frame.t === 'hello')
+  client.send({ t: 'sub', id: 'c', stream: 'conversation', params: { conversationID: id } })
+  // On subscribe, before synchronized, exactly what the `session` workspace read returns.
+  const first = await client.next(isItem('session', 'c'))
+  assert.deepEqual(first.data.settings, (await f.execution.readWorkspace({ session: { id } })).session._0)
+  assert.deepEqual([first.data.settings.conversationID, first.data.settings.model, first.data.settings.canConfigure], [id, 'small', true])
+  await client.next(isItem('synchronized', 'c'))
+  assert.ok(client.frames.findIndex(isItem('session', 'c')) < client.frames.findIndex(isItem('synchronized', 'c')))
+
+  // A model change the runtime keeps outside the record.
+  await f.execution.command(f.command('workspace', { conversationID: id, workspaceAction: { configureSession: { id, model: 'large' } } }), f.device)
+  assert.equal((await client.next(isItem('session', 'c'))).data.settings.model, 'large')
+  // A change that leaves the settings as they were sends nothing.
+  const sent = client.frames.filter(isItem('session', 'c')).length
+  await f.execution.command(f.command('workspace', { conversationID: id, workspaceAction: { conversation: { id, action: 'rename', title: 'Same settings' } } }), f.device)
+  await new Promise(resolve => setTimeout(resolve, 150))
+  assert.equal(client.frames.filter(isItem('session', 'c')).length, sent)
+  // A goal change.
+  await f.execution.command(f.command('workspace', { conversationID: id, workspaceAction: { goal: { id, mutation: { set: { objective: 'Ship it' } } } } }), f.device)
+  const goal = await client.next(frame => isItem('session', 'c')(frame) && frame.data.settings.goal)
+  assert.equal(goal.data.settings.goal.objective, 'Ship it')
 })
 
 test('conversation changes are coalesced every 50 ms, and every 200 ms once a message exceeds 8 KB', async t => {

@@ -1,5 +1,8 @@
 import Foundation
 import WovenMatterShared
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
 
 /// One frame channel to one Woven server (docs/architecture/WOVEN_EVERYWHERE.md,
 /// "Streaming"). A member-signed WebSocket (`WebSocketStreamTransport`) reaches
@@ -63,29 +66,47 @@ public enum StreamConnectionError: Error, Equatable, Sendable, LocalizedError {
     }
   }
 
-  /// Maps an HTTP refusal before the upgrade. `body` is the JSON reply when the
-  /// transport can read it; `headers` are the response headers. When the body is
-  /// unavailable (`URLSessionWebSocketTask` does not expose it), a 401 whose
+  /// Maps an HTTP refusal before the upgrade. `X-Woven-Error` (the refusal's
+  /// code) is the primary signal: `URLSessionWebSocketTask` cannot read a
+  /// refused upgrade's body. `body` is the JSON reply when a transport can read
+  /// it. A server that sends no code is judged by its status, and a 401 whose
   /// `Date` is outside the signature window is still reported as a stale clock.
   public static func refusal(status: Int, body: Data? = nil, headers: [String: String] = [:],
                              now: Date = Date()) -> StreamConnectionError {
     struct Reply: Decodable { var code: String?; var error: String?; var message: String?; var serverTime: Int64?; var supported: [Int]? }
     let reply = body.flatMap { try? JSONDecoder().decode(Reply.self, from: $0) }
     let header = { (name: String) in headers.first { $0.key.caseInsensitiveCompare(name) == .orderedSame }?.value }
-    let code = reply?.code ?? reply?.error ?? header("X-Woven-Error")
+    let code = header("X-Woven-Error").map { $0.trimmingCharacters(in: .whitespaces) }.flatMap { $0.isEmpty ? nil : $0 }
+      ?? reply?.code ?? reply?.error
+    let serverDate = header("Date").flatMap(Self.httpDate)
+    switch code.flatMap(StreamProtocol.ErrorCode.init(rawValue:)) {
+    case .memberTimeStale?: return .memberTimeStale(serverTime: reply?.serverTime ?? serverDate.map(Self.milliseconds))
+    case .protocolUnsupported?: return .protocolUnsupported(supported: reply?.supported ?? [])
+    case .unauthorized?: return .unauthorized
+    case .unavailable?:
+      return .refused(status: status, code: StreamProtocol.ErrorCode.unavailable.rawValue,
+                      message: reply?.message ?? "That machine is not ready to stream yet. Woven Matter reconnects automatically.")
+    default: break
+    }
     switch status {
     case 426: return .protocolUnsupported(supported: reply?.supported ?? [])
     case 401:
-      if code == StreamProtocol.ErrorCode.memberTimeStale.rawValue {
-        return .memberTimeStale(serverTime: reply?.serverTime ?? header("Date").flatMap(Self.httpDate).map(Self.milliseconds))
-      }
-      if code == nil, let date = header("Date").flatMap(Self.httpDate),
+      if code == nil, let date = serverDate,
          abs(Self.milliseconds(date) - Self.milliseconds(now)) > MemberRequestSignature.windowMilliseconds {
         return .memberTimeStale(serverTime: Self.milliseconds(date))
       }
       return .unauthorized
     default: return .refused(status: status, code: code, message: reply?.message)
     }
+  }
+
+  /// A refused upgrade's response, as `URLSessionWebSocketTask` exposes it
+  /// (headers, no body); nil for `101 Switching Protocols`.
+  public static func refusal(_ response: HTTPURLResponse, now: Date = Date()) -> StreamConnectionError? {
+    guard response.statusCode != 101 else { return nil }
+    var headers: [String: String] = [:]
+    for (name, value) in response.allHeaderFields { headers[String(describing: name)] = String(describing: value) }
+    return refusal(status: response.statusCode, headers: headers, now: now)
   }
 
   private static func milliseconds(_ date: Date) -> Int64 { Int64((date.timeIntervalSince1970 * 1000).rounded(.down)) }

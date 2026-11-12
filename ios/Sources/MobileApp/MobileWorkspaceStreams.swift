@@ -15,6 +15,15 @@ extension MobileModel {
       membership?.audience(for: workspace) != nil
   }
 
+  /// Whether this chat's settings (model, thinking, permission, tools, goal)
+  /// arrive as `session` items on its workspace's stream. Then nothing reads
+  /// them; a workspace without a stream is still read.
+  func streamsSessionSettings(_ conversationID: String) -> Bool {
+    guard !fixture else { return false }
+    let owner = executionRoute(for: conversationID)
+    return executionWorkspaces.first { $0.id == owner }.map(streams) ?? false
+  }
+
   /// Opens, resumes or closes each workspace's stream, and points it at the open chat.
   func reconcileWorkspaceStreams() async {
     guard !fixture, let store, let memberIdentity, connectionForeground else { return }
@@ -88,6 +97,8 @@ extension MobileModel {
       remotePending[id] = interactions
     case .capabilities(let conversationID, let value):
       sessionCapabilities[conversationID] = value
+    case .session(let conversationID, let value):
+      if streamedSessionSettings[conversationID] != value { streamedSessionSettings[conversationID] = value }
     case .history, .transcript, .receipts:
       scheduleStreamReload()
     }
@@ -100,6 +111,7 @@ extension MobileModel {
     case .unauthorized: return "\(name) doesn’t recognize this device yet. It will once your devices synchronize."
     case .memberRemoved: return "\(name) no longer lists this device as a member."
     case .protocolUnsupported: return "Update Woven Matter on every device."
+    case .refused(_, .some(StreamProtocol.ErrorCode.unavailable.rawValue), _): return "\(name) isn’t ready yet. Woven Matter reconnects automatically."
     case nil, .disconnected, .timedOut, .notConnected: return "\(name) isn’t connected. Woven Matter reconnects automatically."
     case let error?: return error.localizedDescription
     }

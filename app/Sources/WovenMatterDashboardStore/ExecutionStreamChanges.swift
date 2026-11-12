@@ -10,7 +10,7 @@ import WovenMatterCore
 /// docs/architecture/WOVEN_EVERYWHERE.md). The server reads the current rows
 /// when it sends; the pointer says only which entity of which conversation changed.
 public struct ExecutionStreamChange: Equatable, Sendable {
-  public enum EntityKind: String, Sendable { case conversation, message, run, runEvent = "run_event", activity }
+  public enum EntityKind: String, Sendable { case conversation, message, run, runEvent = "run_event", activity, session }
   public let sequence: Int64
   public let conversationID: String
   public let entityKind: String
@@ -30,7 +30,8 @@ public struct ExecutionStreamChangePage: Equatable, Sendable {
 extension WorkspaceDatabaseConnection {
   /// Tables whose rows make up a conversation this Mac runs, with the entity
   /// each row names. `desktop_local_acp_sessions` is what makes a conversation
-  /// one this Mac runs, so its rows are conversation changes too.
+  /// one this Mac runs, so its rows are conversation changes too. A session's
+  /// goal and enabled tools are part of its settings (the `session` item).
   static let executionStreamTables: [(table: String, kind: ExecutionStreamChange.EntityKind, conversation: String, entity: String)] = [
     ("dashboard_conversations", .conversation, "id", "id"),
     ("desktop_local_acp_sessions", .conversation, "conversation_id", "conversation_id"),
@@ -38,6 +39,8 @@ extension WorkspaceDatabaseConnection {
     ("dashboard_runs", .run, "conversation_id", "id"),
     ("dashboard_run_events", .runEvent, "conversation_id", "id"),
     ("dashboard_run_trace_events", .activity, "conversation_id", "id"),
+    ("workspace_session_goals", .session, "session_id", "session_id"),
+    ("workspace_session_tools", .session, "session_id", "session_id"),
   ]
 
   /// Whether `conversation` (an SQL expression) is a conversation this Mac
