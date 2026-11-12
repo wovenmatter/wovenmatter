@@ -3,12 +3,23 @@ import LibraryClient
 import WovenMatterCore
 import WovenMatterClient
 
+/// A transport that reads one activity's complete projection when its
+/// disclosure opens (`GET v1/execution/conversations/<id>/activity?id=&run=`).
+protocol ExecutionActivityDetailsReading: Sendable {
+    func activityDetails(_ id: String, runID: String, activityID: String) async throws -> LibraryActivity
+}
+
+/// Activity IDs are free-form, so they travel as query values.
+func activityDetailsQuery(runID: String, activityID: String) -> [URLQueryItem] {
+    [.init(name: "id", value: activityID), .init(name: "run", value: runID)]
+}
+
 /// Execution transport to another member's workspace (a paired Mac's
 /// `/wovenmatter/v1/execution/*` or a Linux host's Node server behind
 /// `/wovenmatter-execution/<id>/`), authenticated by this Mac's member
 /// signature. Nothing is provisioned or stored for it, so any Mac reaches any
 /// workspace as soon as both are members.
-final class SignedExecutionWorkspaceTransport: ExecutionWorkspaceTransport, @unchecked Sendable {
+final class SignedExecutionWorkspaceTransport: ExecutionWorkspaceTransport, ExecutionActivityDetailsReading, @unchecked Sendable {
     let workspace: ExecutionWorkspace
     let client: MemberSignedHTTPClient
     private var deviceID: String { client.signer.deviceID }
@@ -71,6 +82,10 @@ final class SignedExecutionWorkspaceTransport: ExecutionWorkspaceTransport, @unc
     }
     func readWorkspace(_ request: LibraryWorkspaceRead) async throws -> LibraryWorkspaceResult {
         try await call("v1/execution/workspace-read", method: "POST", body: JSONEncoder().encode(request))
+    }
+    func activityDetails(_ id: String, runID: String, activityID: String) async throws -> LibraryActivity {
+        try await call("v1/execution/conversations/" + Self.safeID(id) + "/activity",
+            query: activityDetailsQuery(runID: runID, activityID: activityID))
     }
 
     static func safeID(_ value: String) throws -> String {

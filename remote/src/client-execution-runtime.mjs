@@ -125,6 +125,9 @@ export function createClientExecutionRuntime({ defaultAgent, durableACP, catalog
       const request=channel.pending.get(String(message.id))
       if(request){channel.pending.delete(String(message.id));if(message.error||message.success===false)request.reject(fail('The native agent rejected this operation.'));else request.resolve(message.result??message.data??{})}
     }
+    // The command palette arrives with the session, usually outside a run.
+    if(message.method==='session/update'&&message.params?.sessionId===channel.native.sessionID&&message.params.update?.sessionUpdate==='available_commands_update')
+      channel.commands=message.params.update.availableCommands
     if(!run)return
     if(message.method==='session/update' && message.params?.sessionId===channel.native.sessionID)run.publish(message.params.update)
     if(message.method==='session/request_permission' && message.params?.sessionId===channel.native.sessionID) {
@@ -376,7 +379,9 @@ export function createClientExecutionRuntime({ defaultAgent, durableACP, catalog
     if(runtimeKind==='opencode')return nativeSessions.perform(runtimeKind,native,'settings')
     let initial=native.configuration??{}
     if(runtimeKind==='default_agent'){await ensureBuiltIn(native);initial=native.configuration}
-    return project(runtimeKind,initial,native.permission)
+    const commands=channels.get(native.channelID)?.commands
+    return {...project(runtimeKind,initial,native.permission),...(Array.isArray(commands)?{commands:commands.flatMap(item=>typeof item?.name==='string'&&item.name?[{name:item.name,
+      ...(typeof item.description==='string'&&item.description?{detail:item.description}:{}),...(typeof item.input?.hint==='string'&&item.input.hint?{argumentHint:item.input.hint}:{})}]:[])}:{})}
   }
   // A harness's choices before any session exists (the calendar editor, the
   // new-chat pickers): a short-lived native session with no Woven tools, as

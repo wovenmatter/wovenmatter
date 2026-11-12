@@ -341,21 +341,17 @@ final class DeviceCommandService: DeviceCommandServing {
             else { throw CommandError.invalidCommand }
             cursor = .init(createdAt: decoded.createdAt, messageID: decoded.messageID)
         } else { cursor = nil }
-        let page = try await store.conversationHistoryPage(id: conversationID, before: cursor, limit: 80)
+        // Compact projections, as this Mac's own view reads them; a disclosure
+        // reads the rest (`activityDetails`). Large details stay off the stream.
+        let page = try await store.conversationHistoryPage(id: conversationID, before: cursor, limit: 80, compactActivities: true)
         let olderCursor = try page.hasOlderMessages ? page.oldestMessageCursor.map {
             try JSONEncoder().encode(HistoryCursor(createdAt: $0.createdAt, messageID: $0.messageID)).base64EncodedString()
         } : nil
-        return LibraryTranscript(
-            conversationID: conversationID,
-            messages: page.messages.map { .init(id: $0.id, conversationID: $0.conversationID, runID: $0.runID,
-                role: $0.role, content: $0.role == "user" ? ($0.senderKind == .goal ? "Continuing toward the goal." : WorkspaceGoal.displayPrompt($0.content)) : $0.content, status: $0.status, createdAt: $0.createdAt) },
-            activities: page.activities.map { .init(id: $0.id, runID: $0.runID,
-                title: $0.activity.title ?? $0.activity.kind.rawValue,
-                detail: $0.activity.detail ?? $0.activity.content, status: $0.activity.status ?? "",
-                projectionJSON: $0.activity.htmlRender == nil ? nil :
-                    (try? JSONEncoder().encode($0.activity)).map { String(decoding: $0, as: UTF8.self) }) },
-            activeRunID: await model.canonicalActiveRunID(conversationID: conversationID), olderCursor: olderCursor
-        )
+        return RemoteConversationRecords.transcript(conversationID: conversationID, messages: page.messages, runs: page.runs,
+            activities: page.activities, attachments: page.attachments,
+            activeRunID: await model.canonicalActiveRunID(conversationID: conversationID), olderCursor: olderCursor) {
+            $0.role == "user" ? ($0.senderKind == .goal ? "Continuing toward the goal." : WorkspaceGoal.displayPrompt($0.content)) : $0.content
+        }
     }
 }
 

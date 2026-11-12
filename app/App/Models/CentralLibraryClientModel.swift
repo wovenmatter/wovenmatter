@@ -581,6 +581,18 @@ final class CentralLibraryClientModel {
         await refresh()
     }
 
+    /// One activity as a client-mode build can read it: the row its owner's
+    /// transcript carries. (These clients are the phone's, which have no
+    /// details route yet; their transport belongs to the iPhone app.)
+    func desktopActivityDetails(conversationID: String, runID: String, activityID: String) async throws -> LibraryActivity {
+        if let owner = executionOwner(for: conversationID), let client = directClients[owner],
+           let row = try await client.refreshTranscript(conversationID).activities.first(where: { $0.id == activityID }) { return row }
+        guard let engine, let row = try await engine.transcriptActivityDetail(conversationID, activityID: activityID) else {
+            throw MobileConnectionError.offline
+        }
+        return row
+    }
+
     func desktopExecution(_ action: FederatedExecutionAction) async throws -> FederatedExecutionSnapshot {
         let id: String
         var earlier: LibraryTranscript?

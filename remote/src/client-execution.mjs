@@ -1,5 +1,6 @@
 import { updateReasoningDetails, flushReasoningDetails } from './reasoning-details.mjs'
 import { assemblePresentationFrame, textParts } from './presentation-frames.mjs'
+import { toolActivity, planActivity, subagentActivity, commentaryActivity, summary, storeActivity, storedActivity, settleActivity, activityDetails } from './activity-projection.mjs'
 import { createClientExecutionPublisher } from './client-execution-publisher.mjs'
 import { DatabaseSync } from 'node:sqlite'
 import { mkdirSync, chmodSync } from 'node:fs'
@@ -23,6 +24,12 @@ const fail = (statusCode, message) => Object.assign(new Error(message), { status
 const identifier = value => typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(value)
 const copy = structuredClone
 const date = () => new Date().toISOString()
+// How many recent runs a transcript keeps the timing of.
+const maximumRuns = 32
+// ACP `available_commands_update` as `SessionSettings.commands`.
+const sessionCommands = value => (Array.isArray(value) ? value : []).flatMap(item => typeof item?.name === 'string' && item.name
+  ? [{ name: item.name.slice(0, 128), ...(typeof item.description === 'string' && item.description ? { detail: item.description.slice(0, 1024) } : {}),
+    ...(typeof item.input?.hint === 'string' && item.input.hint ? { argumentHint: item.input.hint.slice(0, 256) } : {}) }] : []).slice(0, 256)
 // `files` are the input's attachments, listed on its first message.
 function inputMessages(command,runID,files=[]) {
   return textParts(command.text).map((content,index)=>({id:index?`${command.commandID}-part-${index}`:command.commandID,
@@ -127,6 +134,7 @@ export function createClientExecution({ directory, runtime, kind = 'linux', name
     for (let offset = 0; offset < Math.max(messages.length, activities.length, 1); offset += 4) {
       event('transcript', record.conversation.id, { transcript: { conversationID: record.conversation.id,
         messages: messages.slice(offset, offset + 4), activities: activities.slice(offset, offset + 4),
+        ...(offset === 0 && record.transcript.runs?.length ? {runs: record.transcript.runs.slice(-1)} : {}),
         ...(record.transcript.activeRunID ? {activeRunID: record.transcript.activeRunID} : {}) } }, record.conversation.activeRunID)
     }
     return pendingDetails
@@ -169,6 +177,7 @@ export function createClientExecution({ directory, runtime, kind = 'linux', name
       if (record.conversation.activeRunID) {
         delete record.presentationFrames
         for(const activity of record.transcript.activities)if(activity.status==='running')activity.status='interrupted'
+        for(const run of record.transcript.runs??[])if(run.status==='running'){run.status='interrupted';run.completedAt=date()}
         delete record.conversation.activeRunID; delete record.transcript.activeRunID; record.pending = record.pending.filter(item=>item.mcpManageAccessID)
         for (const message of record.transcript.messages) if (message.status === 'running') message.status = 'interrupted'
         publish(record)
@@ -538,6 +547,8 @@ export function createClientExecution({ directory, runtime, kind = 'linux', name
       if(untitled&&!command.goalID&&!command.agentSourceID&&command.text.trim())scheduleTitle(command.conversationID,command.text)
       command.text=deliveryText(command)+goalGuidance
       record.transcript.messages.push({id: runID, conversationID: command.conversationID, runID, role: 'assistant', content: '', status: 'running', createdAt: date()})
+      // The latest runs' timing, for the elapsed work header (`LibraryTranscriptRun`).
+      record.transcript.runs = [...(record.transcript.runs ?? []), {id: runID, status: 'running', startedAt: date(), userMessageID: command.commandID, assistantMessageID: runID}].slice(-maximumRuns)
       const result = transaction(() => {
         db.prepare('INSERT INTO runs VALUES (?,?)').run(runID, command.commandID)
         db.prepare('UPDATE commands SET body=? WHERE id=?').run(JSON.stringify(command), command.commandID)
@@ -644,6 +655,32 @@ export function createClientExecution({ directory, runtime, kind = 'linux', name
     save(record)
     orchestration.needsInput(conversationID,runID,interaction)
   }
+  // A new activity in the run: the assistant text written since the last
+  // one becomes commentary before it, so text and work interleave as they
+  // happened. Every activity takes the next position in the conversation.
+  function addActivity(record, runID, row, changedActivities) {
+    freezeCommentary(record, runID, changedActivities)
+    row.sequence = nextActivityPosition(record); row.createdAt = date()
+    record.transcript.activities.push(row)
+    return row
+  }
+  function nextActivityPosition(record) {
+    record.activityPosition = (record.activityPosition ?? record.transcript.activities.length) + 1
+    return record.activityPosition
+  }
+  function freezeCommentary(record, runID, changedActivities) {
+    const content = record.transcript.messages.filter(item => item.runID === runID && item.role === 'assistant'
+      && (item.id === runID || item.id.startsWith(runID + '-part-'))).map(item => item.content).join('')
+    const frozen = (record.commentary ??= {})[runID] ?? 0
+    const segment = content.slice(frozen)
+    if (!segment.trim() || content.length < frozen) return
+    record.commentary[runID] = content.length
+    const id = runID + ':assistant:' + record.transcript.activities.filter(item => item.runID === runID && item.id.startsWith(runID + ':assistant:')).length
+    const row = {id, runID, title: 'Commentary', status: 'completed', sequence: nextActivityPosition(record), createdAt: date()}
+    row.projectionJSON = JSON.stringify(summary({...commentaryActivity(id, runID, segment), position: row.sequence}))
+    record.transcript.activities.push(row)
+    changedActivities.push(id)
+  }
   function applyUpdate(conversationID, runID, update) {
     if (closed) return
     const record = getRecord(conversationID)
@@ -656,6 +693,10 @@ export function createClientExecution({ directory, runtime, kind = 'linux', name
           {nativeRecord:{recordID,format:'woven-native-update-v1',partIndex,partCount,byteCount:bytes.length,sha256,
             data:bytes.subarray(partIndex*131072,(partIndex+1)*131072).toString('base64')}},runID)
       })
+    }
+    if(update.sessionUpdate==='available_commands_update') {
+      record.availableCommands=sessionCommands(update.availableCommands);save(record)
+      notify({kind:'session',conversationID});return
     }
     if(update.sessionUpdate==='usage_update'||update.sessionUpdate==='woven_usage') {
       const tokens=update.usage?.totalTokens??update.totalTokens
@@ -684,18 +725,33 @@ export function createClientExecution({ directory, runtime, kind = 'linux', name
     } else if (update.sessionUpdate === 'agent_thought_chunk') {
       const id=runID+':'+String(update._meta?.wovenThoughtID??'thinking')
       let activity=record.transcript.activities.find(item=>item.id===id)
-      if(!activity){activity={id,runID,title:'Thinking',status:'running',detail:''};record.transcript.activities.push(activity)}
+      if(!activity)activity=addActivity(record,runID,{id,runID,title:'Thinking',status:'running',detail:''},changedActivities)
       const parts=updateReasoningDetails(directory,activity,update,randomUUID())
       transaction(() => { for(const nativeRecord of parts)event('nativeRecord',conversationID,{nativeRecord},runID) })
       changedActivities.push(id)
     } else if (['tool_call','tool_call_update'].includes(update.sessionUpdate)) {
       const id = runID+':'+String(update.toolCallId ?? randomUUID())
       let activity = record.transcript.activities.find(item => item.id === id)
-      if (!activity) { activity = {id,runID,title:textParts(update.title ?? 'Tool')[0],status:'running'}; record.transcript.activities.push(activity) }
+      if (!activity) activity = addActivity(record, runID, {id,runID,title:textParts(update.title ?? 'Tool')[0],status:'running'}, changedActivities)
       activity.status = update.status === 'completed' ? 'completed' : update.status === 'failed' ? 'failed' : 'running'
       if (update.title) activity.title = textParts(update.title)[0]
-      const detail = update.content?.map(item => item.content?.text ?? item.text ?? '').filter(Boolean).join('\n')
+      const detail = Array.isArray(update.content) ? update.content.map(item => item?.content?.text ?? item?.text ?? '').filter(Boolean).join('\n') : ''
       if (detail) activity.detail = textParts(detail)[0]
+      const previous = storedActivity(directory, id) ?? (activity.projectionJSON ? JSON.parse(activity.projectionJSON) : undefined)
+      storeActivity(directory, activity, {...toolActivity(update, previous, id), position: activity.sequence})
+      if (activity.status !== 'running') {
+        const parts = settleActivity(directory, activity)
+        transaction(() => { for (const nativeRecord of parts) event('nativeRecord', conversationID, {nativeRecord}, runID) })
+      }
+      changedActivities.push(id)
+    } else if (update.sessionUpdate === 'plan' || update.sessionUpdate === 'woven_subagents') {
+      const plan = update.sessionUpdate === 'plan', id = runID + (plan ? ':plan' : ':subagents')
+      let activity = record.transcript.activities.find(item => item.id === id)
+      if (!activity) activity = addActivity(record, runID, {id, runID, title: plan ? 'Plan' : 'Subagents', status: 'running'}, changedActivities)
+      const full = {...(plan ? planActivity(update, id) : subagentActivity(update, id)), position: activity.sequence}
+      activity.status = full.status === 'completed' ? 'completed' : 'running'
+      activity.detail = plan ? full.planEntries.map(entry => entry.content).join('\n').slice(0, 16384) : full.detail
+      storeActivity(directory, activity, full)
       changedActivities.push(id)
     } else return
     record.conversation.updatedAt = date()
@@ -712,10 +768,15 @@ export function createClientExecution({ directory, runtime, kind = 'linux', name
     for (const item of record.transcript.messages) if (item.runID === command.runID && item.role === 'assistant') item.status = stopped ? 'cancelled' : error ? 'failed' : 'completed'
     if (error && !message.content) message.content = 'The workspace run stopped before completion. Review its saved history before retrying.'
     for(const activity of record.transcript.activities)if(activity.runID===command.runID&&activity.status==='running')activity.status=stopped?'cancelled':error?'failed':'completed'
+    const run=record.transcript.runs?.find(item=>item.id===command.runID)
+    if(run){run.status=stopped?'cancelled':error?'failed':'completed';run.completedAt=date()}
+    // Every settled activity's full projection reaches history as a record.
+    const details=record.transcript.activities.filter(item=>item.runID===command.runID).flatMap(item=>settleActivity(directory,item))
+    if(record.commentary)delete record.commentary[command.runID]
     delete record.conversation.activeRunID; delete record.transcript.activeRunID; record.pending = record.pending.filter(item=>item.mcpManageAccessID)
     dirty.delete(command.conversationID)
     settleGoal(record,command.runID,!error&&!stopped,record.runUsage?.[command.runID])
-    transaction(() => { publish(record); receipt(command, error ? 'outcomeUnknown' : 'completed', error ? {message: message.content} : {}) })
+    transaction(() => { for(const nativeRecord of details)event('nativeRecord',command.conversationID,{nativeRecord},command.runID); publish(record); receipt(command, error ? 'outcomeUnknown' : 'completed', error ? {message: message.content} : {}) })
     orchestration.settled(command.conversationID,command.runID,error,command.coordinationNotification===true)
   }
   async function tickGoals() {
@@ -993,6 +1054,14 @@ export function createClientExecution({ directory, runtime, kind = 'linux', name
       return {...value,messages:value.messages.slice(start.messages,end.messages),activities:value.activities.slice(start.activities,end.activities),
         ...(start.messages || start.activities ? {olderCursor:Buffer.from(JSON.stringify(start)).toString('base64url')} : {})}
     },
+    // One activity's complete projection, read when its disclosure opens.
+    activityDetails: (id, activityID) => {
+      const row = getRecord(id).transcript.activities.find(item => item.id === activityID)
+      if (!row) throw fail(404, 'This activity is not in the conversation.')
+      const projectionJSON = activityDetails(directory, row)
+      const { detailsRecordID, ...value } = row
+      return { ...value, ...(projectionJSON ? { projectionJSON } : {}) }
+    },
     interactions: () => db.prepare('SELECT body FROM conversations').all().flatMap(row => JSON.parse(row.body).pending),
     // For live streams: one conversation's summary and pending interactions
     // without parsing its transcript, and the stored record itself.
@@ -1008,7 +1077,8 @@ export function createClientExecution({ directory, runtime, kind = 'linux', name
       if (request?.session) {
         const record = getRecord(request.session.id)
         const settings = await runtime.settings({native:record.native,runtimeKind:record.conversation.runtimeKind})
-        return {session:{_0:{...settings,availableTools:allToolGroups.filter(id=>!['goals','html'].includes(id)).map(id=>({id,label:toolLabels[id]})),enabledTools:record.enabledTools??mcp.settings().enabledByDefault,conversationID:record.conversation.id,canConfigure:settings.canConfigure && !record.conversation.activeRunID,...(record.goal?{goal:record.goal}:{})}}}
+        const commands=record.availableCommands??settings.commands
+        return {session:{_0:{...settings,...(commands?{commands}:{}),availableTools:allToolGroups.filter(id=>!['goals','html'].includes(id)).map(id=>({id,label:toolLabels[id]})),enabledTools:record.enabledTools??mcp.settings().enabledByDefault,conversationID:record.conversation.id,canConfigure:settings.canConfigure && !record.conversation.activeRunID,...(record.goal?{goal:record.goal}:{})}}}
       }
       if (request?.exportConversation) {
         const {id,format}=request.exportConversation, record=getRecord(id)
