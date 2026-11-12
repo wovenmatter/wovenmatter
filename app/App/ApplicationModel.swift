@@ -369,7 +369,7 @@ final class ApplicationModel {
     /// The synced execution workspace registry, including iPhone and iPad Quick Chat workspaces.
     var executionWorkspaceRegistry: [ExecutionWorkspace] = []
     @ObservationIgnored
-    lazy var libraryCommands = LibraryCommandService(model: self)
+    lazy var libraryCommands = DeviceCommandService(model: self)
     @ObservationIgnored
     lazy var libraryHost = LibraryHostController(model: self)
     private var noteWriteBehind: DashboardNoteWriteBehind?
@@ -2075,7 +2075,7 @@ final class ApplicationModel {
     @discardableResult
     func preserveRecoveredNoteAsCopy(id: String) async throws -> String {
         guard let entry = recoveredNoteEntries[id], let dashboardStore, let noteWriteBehind else {
-            throw LibraryCommandService.CommandError.unavailable
+            throw DeviceCommandService.CommandError.unavailable
         }
         let copyID: String
         if isBackendFrontend {
@@ -2535,7 +2535,7 @@ final class ApplicationModel {
                 let noteID = note?.id ?? input.references.first(where: { $0.kind == .note })?.resourceID
                 guard let noteID, let canonical = try await dashboardStore.database.libraryNote(id: noteID),
                       String(canonical.revision) == expectedNoteRevision else {
-                    throw LibraryCommandService.CommandError.noteRevisionChanged
+                    throw DeviceCommandService.CommandError.noteRevisionChanged
                 }
             }
         }

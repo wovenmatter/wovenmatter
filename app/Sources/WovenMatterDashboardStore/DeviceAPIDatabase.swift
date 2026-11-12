@@ -7,12 +7,12 @@ import CSQLite
 import WovenMatterCore
 
 extension WorkspaceDatabaseConnection {
-  public func libraryWorkspaceID() throws -> String {
-    try withLock { try libraryWorkspaceIDUnlocked() }
+  public func libraryID() throws -> String {
+    try withLock { try libraryIDUnlocked() }
   }
 
-  func libraryWorkspaceIDUnlocked() throws -> String {
-    let statement = try prepareUnlocked("SELECT workspace_id FROM device_workspace WHERE singleton = 1")
+  func libraryIDUnlocked() throws -> String {
+    let statement = try prepareUnlocked("SELECT library_id FROM library_identity WHERE singleton = 1")
     defer { sqlite3_finalize(statement) }
     guard sqlite3_step(statement) == SQLITE_ROW else { throw WorkspaceDatabaseError.corruptRow }
     return try text(statement, column: 0)
@@ -26,7 +26,7 @@ extension WorkspaceDatabaseConnection {
       let conversations = try libraryIDsUnlocked("SELECT id FROM dashboard_conversations WHERE (user_id = ? OR desktop_owned = 1) AND deleted_at IS NULL AND is_archived = 0 ORDER BY updated_at DESC, id", bindings: [operatorID])
       var remainingBodyBytes = max(0, min(bodyByteBudget, 4 * 1_024 * 1_024))
       return try LibrarySnapshot(
-        workspaceID: libraryWorkspaceIDUnlocked(), cursor: libraryCursorUnlocked(),
+        workspaceID: libraryIDUnlocked(), cursor: libraryCursorUnlocked(),
         folders: folders.compactMap { try libraryFolderUnlocked(id: $0) },
         notes: notes.compactMap { try libraryNoteUnlocked(id: $0).map { libraryBudgetedNote($0, remainingBytes: &remainingBodyBytes) } },
         conversations: conversations.compactMap { try libraryConversationUnlocked(id: $0) }
@@ -40,16 +40,16 @@ extension WorkspaceDatabaseConnection {
 
   public func libraryChanges(after cursor: Int64, limit: Int = 200) throws -> LibraryChangePage {
     try transaction {
-      let workspaceID = try libraryWorkspaceIDUnlocked()
+      let workspaceID = try libraryIDUnlocked()
       let current = try libraryCursorUnlocked()
-      let oldestStatement = try prepareUnlocked("SELECT COALESCE(MIN(cursor), 0) FROM device_changes")
+      let oldestStatement = try prepareUnlocked("SELECT COALESCE(MIN(cursor), 0) FROM device_sync_changes")
       defer { sqlite3_finalize(oldestStatement) }
       guard sqlite3_step(oldestStatement) == SQLITE_ROW else { throw stepError() }
       let oldest = sqlite3_column_int64(oldestStatement, 0)
       guard cursor >= 0, cursor <= current, oldest == 0 || cursor >= oldest - 1 else {
         return LibraryChangePage(workspaceID: workspaceID, cursor: current, resetRequired: true)
       }
-      let statement = try prepareUnlocked("SELECT cursor, kind, resource_id, revision, deleted FROM device_changes WHERE cursor > ? ORDER BY cursor LIMIT ?")
+      let statement = try prepareUnlocked("SELECT cursor, kind, resource_id, revision, deleted FROM device_sync_changes WHERE cursor > ? ORDER BY cursor LIMIT ?")
       defer { sqlite3_finalize(statement) }
       sqlite3_bind_int64(statement, 1, cursor)
       sqlite3_bind_int(statement, 2, Int32(min(max(limit, 1), LibraryProtocol.maximumChangePage)))
@@ -95,7 +95,7 @@ extension WorkspaceDatabaseConnection {
 
   func libraryCursorUnlocked() throws -> Int64 {
     // sqlite_sequence preserves the high-water mark if a log is compacted.
-    let statement = try prepareUnlocked("SELECT COALESCE((SELECT seq FROM sqlite_sequence WHERE name = 'device_changes'), 0)")
+    let statement = try prepareUnlocked("SELECT COALESCE((SELECT seq FROM sqlite_sequence WHERE name = 'device_sync_changes'), 0)")
     defer { sqlite3_finalize(statement) }
     guard sqlite3_step(statement) == SQLITE_ROW else { throw stepError() }
     return sqlite3_column_int64(statement, 0)
@@ -115,7 +115,7 @@ extension WorkspaceDatabaseConnection {
   }
 
   func libraryVersionUnlocked(kind: String, id: String) throws -> (revision: Int64, deleted: Bool)? {
-    let statement = try prepareUnlocked("SELECT revision, deleted FROM device_versions WHERE kind = ? AND resource_id = ?")
+    let statement = try prepareUnlocked("SELECT revision, deleted FROM device_sync_revisions WHERE kind = ? AND resource_id = ?")
     defer { sqlite3_finalize(statement) }
     try bind(kind, at: 1, to: statement); try bind(id, at: 2, to: statement)
     let code = sqlite3_step(statement)
@@ -201,8 +201,8 @@ extension WorkspaceDatabaseConnection {
 }
 
 extension WorkspaceDatabase {
-  public func libraryWorkspaceID() async throws -> String {
-    try await read { try $0.libraryWorkspaceID() }
+  public func libraryID() async throws -> String {
+    try await read { try $0.libraryID() }
   }
   public func librarySnapshot(bodyByteBudget: Int = 1_024 * 1_024) async throws -> LibrarySnapshot {
     try await read { try $0.librarySnapshot(bodyByteBudget: bodyByteBudget) }

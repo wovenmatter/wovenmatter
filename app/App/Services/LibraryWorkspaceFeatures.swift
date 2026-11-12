@@ -3,7 +3,7 @@ import WovenMatterClient
 import WovenMatterCore
 import WovenMatterDashboardStore
 
-extension LibraryCommandService {
+extension DeviceCommandService {
     func readWorkspace(_ request: LibraryWorkspaceRead) async throws -> LibraryWorkspaceResult {
         guard let store = model.dashboardStore else { throw CommandError.unavailable }
         switch request {

@@ -115,7 +115,7 @@ extension WorkspaceDatabaseConnection {
   func requireProtectedConversationMutationUnlocked(_ id: String) throws {
     if try locallyOwnsConversationUnlocked(id) { return }
     if try historyRowsUnlocked("""
-      SELECT 1 AS independent FROM device_execution_conversations x JOIN device_execution_workspaces w ON w.id=x.workspace_id
+      SELECT 1 AS independent FROM execution_conversations x JOIN execution_workspaces w ON w.id=x.workspace_id
       WHERE x.id=? AND w.deleted=0 AND json_extract(CAST(w.payload AS TEXT),'$.kind') IN ('linux','ios')
       """, values: [id]).isEmpty == false { return }
     throw try pairedForeignOwnerUnlocked(id) != nil ? WorkspaceConversationActionError.ownedByAnotherMac : WorkspaceConversationActionError.unavailable

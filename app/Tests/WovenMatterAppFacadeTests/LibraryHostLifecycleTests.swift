@@ -465,7 +465,7 @@ extension LibraryHostLifecycleTests {
         let phoneID = UUID().uuidString.lowercased()
         let authentication = try await third.host.peerAuthentication()
         let offer = try await authentication.createOffer(endpoint: third.host.peerRoute().endpoint)
-        let phone = try await authentication.pair(.init(token: offer.payload.token, deviceID: phoneID, deviceName: "New iPhone", metadata: .init(kind: .iPhone)), workspaceID: thirdDB.libraryWorkspaceID())
+        let phone = try await authentication.pair(.init(token: offer.payload.token, deviceID: phoneID, deviceName: "New iPhone", metadata: .init(kind: .iPhone)), workspaceID: thirdDB.libraryID())
         await air.host.peerSync.synchronize(force: true)
         await third.host.peerSync.synchronize(force: true)
         #expect(try await airDB.libraryNote(id: second)?.title == "Third offline")
@@ -885,7 +885,7 @@ extension LibraryHostLifecycleTests {
         #expect(created.status == .accepted)
         // The node cached the central library, then wrote offline.
         let replica = try MobileStore(file: fixture.directory.appending(path: "LibraryClient/library.json"))
-        try await replica.bindWorkspace(central.libraryWorkspaceID())
+        try await replica.bindWorkspace(central.libraryID())
         try await replica.apply(central.librarySnapshot())
         let plan = try #require(await replica.snapshot().notes[edited]), draft = try #require(await replica.snapshot().notes[deleted])
         try await replica.editNote(id: edited, title: "Plan", content: content("Plan edited offline"), folderID: nil, base: plan)
@@ -900,7 +900,7 @@ extension LibraryHostLifecycleTests {
         try await LegacyMacLibraryUpgrade.prepare(database: node, defaults: fixture.defaults)
         let state = await replica.snapshot()
         fixture.storage = .memory(legacy: .init(endpoint: URL(string: "https://central.fixture.ts.net/wovenmatter")!,
-            workspaceID: try await central.libraryWorkspaceID(), deviceID: state.deviceID, token: String(repeating: "t", count: 43)))
+            workspaceID: try await central.libraryID(), deviceID: state.deviceID, token: String(repeating: "t", count: 43)))
         fixture.host.peerSync = PairedMacSyncController(host: fixture.host,
             network: PairedMacNetwork(request: { _, _, _, _, _ in throw URLError(.notConnectedToInternet) }), storage: fixture.storage)
         let transport = LegacyCentralTransport(central)

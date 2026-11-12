@@ -263,7 +263,7 @@ same commit.
   (`BotUpdatePlan.Step.linuxHost`) updates every Linux host in the registry
   this way (`RemoteWorkspacesModel.runSharedHost(_:.update)`); SSH is only
   the fallback for a host this Mac added. A Linux host's sessions use any
-  Mac's `/mcp/workspace` once the session's `device_execution_conversations`
+  Mac's `/mcp/workspace` once the session's `execution_conversations`
   row has synchronized there, whichever Mac added the host. On a Mac, other
   Macs' agents (including those for Linux hosts they added) sync as peer
   agents (`pairedAgentWorkspaces`), and a new chat with one is created on its
@@ -356,7 +356,7 @@ among Macs that still stand; they never decide who wins a dispute.
   - the peer sync protocol (today's paired-Mac protocol, generalized to all
     members);
   - the mobile library API that the iPhone uses (today's
-    `LibraryWorkspaceAPI` and `FederationAPI`), so a phone can sync
+    `DeviceAPI` and `FederationAPI`), so a phone can sync
     with any Mac or Linux machine;
   - the library-backed Woven MCP tool groups (notes, history, calendar,
     library, artifacts) for the local Node server, replacing today's relay to
@@ -388,7 +388,7 @@ among Macs that still stand; they never decide who wins a dispute.
     column as it was records nothing. Writers that run on a timer compare
     first: the Mac's 5-second registry refresh rewrites a
     `paired_remote_workspaces` configuration (stored as sorted-key JSON) or a
-    `device_execution_workspaces` registration only when its decoded value
+    `execution_workspaces` registration only when its decoded value
     changed.
   - Triggers: a write that appends to the change log
     (`WorkspaceDatabase.observePeerChanges`) is announced, debounced 300 ms,
@@ -408,11 +408,11 @@ among Macs that still stand; they never decide who wins a dispute.
     against the sender. Member entries and removals are never deleted, must
     match their signed payload, never roll back to an older entry and never
     rewrite a removal (otherwise quarantined, or skipped when merely stale).
-    A Linux host (any sender but a Mac) writes `device_execution_workspaces`
+    A Linux host (any sender but a Mac) writes `execution_workspaces`
     only for the workspace it serves itself (`MemberAudience.serving`, before
-    and after the change), `device_execution_conversations` only for that
+    and after the change), `execution_conversations` only for that
     workspace's sessions, owner rows (`paired_*_owners`,
-    `device_calendar_owners`, `device_calendar_run_owners`) only naming
+    `calendar_task_executors`, `calendar_run_publishers`) only naming
     itself, and never `paired_mac_routes` or `paired_remote_workspaces`. Other
     such rows it relays are skipped; they arrive from a Mac directly.
   - HTTP deadlines (both the Mac listener and `LibrarySocketHTTPServer`,
@@ -454,14 +454,15 @@ among Macs that still stand; they never decide who wins a dispute.
   in `updateRequired` raises the same "Versions don't match" / "Update
   everything" notice as a bots version mismatch (`ApplicationModel+Bots.swift`).
 
-- **Storage names.** Table prefixes say whose state a table holds:
+- **Storage names.** Table names say what a table holds:
+  - `library_identity` holds this replica's device ID (`host_device_id`) and the library's ID (`library_id`), which every paired device names.
   - `paired_*` is peer sync between Macs and Linux hosts: the change log, cursors, version vectors and conflicts, plus the owner rows.
-  - `device_*` is what this library keeps for and about other devices: the change feed and receipts for phones, execution workspaces with their journals and conversations, which device runs each scheduled item, transcripts and saved files from devices, and device MCP and publisher grants.
-  - `library_items`, `library_messages`, `library_settings` and `library_locations` index the Library pane (files and links found in chats).
-  - `library_members*` is the signed member list.
-  - `library_identity` holds this replica's device ID.
+  - `execution_*` is execution workspaces, this Mac's own included, with their journals, conversations, runs, adoptions, receipts, settlements and native history. Most of it is peer-synced library content (`PairedLibraryTables`).
+  - `calendar_task_executors` names the device that runs each scheduled item; `paired_calendar_owners` names the Mac that owns the row. `calendar_run_publishers` and `calendar_published_runs` are who may report runs and the runs they reported. `calendar_replica_context` and `calendar_execution_conflicts` belong to a replica that executes another library's schedule.
+  - `device_*` is what the library keeps for devices that reach it over the device API: the phone change feed (`device_sync_revisions`, `device_sync_changes`, written by the `device_sync_*` triggers), mutation, command, draft, tool and calendar receipts, device MCP and publisher grants, saved files and message provenance.
+  - `library_items`, `library_messages`, `library_settings` and `library_locations` index the Library pane (files and links found in chats); `library_members*` is the signed member list.
 
-  Libraries created before November 2026 used `companion_*` for the `device_*` tables. Opening one drops those tables, the triggers that wrote to them, and peer sync bookkeeping that names them (`removeLegacyCompanionStorageUnlocked`). That state starts fresh; library content never lived there.
+  Libraries created before November 2026 used `companion_*` names for all of these, and kept the library ID in `companion_workspace`. Opening such a library renames the tables in place, moves the library ID into `library_identity`, drops the old triggers (each is recreated under its new name) and rewrites the table names in peer sync bookkeeping, so nothing is lost or sent again (`renameLegacyCompanionStorageUnlocked`). The paired-devices file (`companion-devices.json`, now `library-devices.json`), the desktop's `companion.*` settings and its `com.wovenmatter.companion.*` Keychain items move once in the same way.
 
 ### Library host (`wovenmatter-library`)
 

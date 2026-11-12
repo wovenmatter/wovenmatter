@@ -160,7 +160,7 @@ final class SecondaryMacExecutionHost {
 }
 
 @MainActor
-private final class SecondaryMacExecutionCommands: LibraryCommandServing {
+private final class SecondaryMacExecutionCommands: DeviceCommandServing {
     let workspace: SecondaryMacExecutionWorkspace
     init(workspace: SecondaryMacExecutionWorkspace) { self.workspace = workspace }
     func providers() -> [HarnessCapabilities] { workspace.model.libraryCommands.providers().filter { $0.id.hasPrefix("local:") } }

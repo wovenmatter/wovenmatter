@@ -5,7 +5,7 @@ all provider work is a controlled fake. No user workspace, tailnet configuration
 credentials, provider service or Docker lifecycle is touched.
 
 The suite connects the actual iOS `MobileStore` and `MobileSyncEngine` to the
-actual authenticated `LibraryWorkspaceAPI`, durable command dispatcher and
+actual authenticated `DeviceAPI`, durable command dispatcher and
 canonical SQLite database through the production `LibraryHTTPServer` listener
 and HTTP parser, using URLSession on a temporary loopback port under the real
 `/wovenmatter` mount. A test-only transport maps a valid HTTPS fixture credential

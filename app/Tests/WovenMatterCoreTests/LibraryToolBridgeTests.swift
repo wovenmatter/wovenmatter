@@ -119,7 +119,7 @@ struct LibraryToolBridgeTests {
         let request = LibraryHTTPRequest(method: "POST", target: path,
           headers: ["authorization": "Bearer " + grant.token, "x-woven-workspace": identity.libraryID],
           body: try JSONEncoder().encode(batch))
-        #expect(try await LibraryWorkspacePublisherAPI.handle(request, path: path, database: database).status == 200)
+        #expect(try await DevicePublisherAPI.handle(request, path: path, database: database).status == 200)
       } else {
         _ = try await database.ingestExecutionJournal(batch, deviceID: executionDeviceID ?? deviceID)
       }

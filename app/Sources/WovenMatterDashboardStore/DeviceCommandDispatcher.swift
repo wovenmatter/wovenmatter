@@ -4,7 +4,7 @@ import WovenMatterCore
 /// Durable acceptance precedes execution. Accepted work has a retained task and
 /// never inherits cancellation from a phone's HTTP request or reconnect.
 @MainActor
-public final class LibraryCommandDispatcher {
+public final class DeviceCommandDispatcher {
     public let database: WorkspaceDatabase
     private var commands: [String: Task<LibraryCommandReceipt, any Error>] = [:]
 

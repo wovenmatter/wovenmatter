@@ -4,7 +4,7 @@ import WovenMatterCore
 private struct MCPMalformedJSON: Error {}
 
 @MainActor
-public protocol LibraryCommandServing: AnyObject {
+public protocol DeviceCommandServing: AnyObject {
     func executeTool(_ request: LibraryToolRequest, deviceID: String) async throws -> WovenMatterToolResponse
     func registerExecutionManagement(_ grant: ExecutionManagementGrant, device: PairedDevice) async throws -> ExecutionWorkspace
     func provisionExecutionWorkspace(id: String, device: PairedDevice) async throws -> ExecutionCredential
@@ -20,7 +20,7 @@ public protocol LibraryCommandServing: AnyObject {
     func execute(_ command: LibraryCommand, deviceID: String) async throws -> LibraryCommandReceipt
 }
 
-private extension LibraryWorkspaceAPI {
+private extension DeviceAPI {
     func mcpInput(_ request: LibraryHTTPRequest) throws -> (GatewayJSONValue, String, [WorkspaceToolGroup], String?) {
         guard request.method == "POST" else {
             throw LibraryAPIError(code: "method_not_allowed", message: "Woven MCP uses HTTP POST for JSON-RPC requests.")
@@ -214,7 +214,7 @@ private extension LibraryWorkspaceAPI {
     }
 }
 
-public extension LibraryCommandServing {
+public extension DeviceCommandServing {
     func analyticsPreference() async throws -> ProductAnalyticsPreference { throw LibraryAPIError(code:"unsupported",message:"Update the central Mac to configure analytics.") }
     func setAnalyticsPreference(_ change: ProductAnalyticsPreferenceChange) async throws -> ProductAnalyticsPreference { throw LibraryAPIError(code:"unsupported",message:"Update the central Mac to configure analytics.") }
     func ingestAnalytics(_ batch: ProductAnalyticsBatch) async throws -> ProductAnalyticsAcknowledgement { throw LibraryAPIError(code:"unsupported",message:"Update the central Mac to configure analytics.") }
@@ -236,10 +236,10 @@ public extension LibraryCommandServing {
 /// One authenticated, workspace-bound API per serving attempt. The activity
 /// predicate captures that attempt, so a delayed request cannot cross stop/restart.
 @MainActor
-public final class LibraryWorkspaceAPI {
+public final class DeviceAPI {
     private let database: WorkspaceDatabase
     private let authentication: DeviceAuthentication
-    private let commands: any LibraryCommandServing
+    private let commands: any DeviceCommandServing
     private let isActive: @MainActor @Sendable () -> Bool
     private let onCancelPairing: @MainActor @Sendable (PairedDevice) async throws -> Void
     private let discovery: @MainActor @Sendable () -> DiscoveryAdvertisement?
@@ -260,7 +260,7 @@ public final class LibraryWorkspaceAPI {
     /// The name `GET /v1/hello` reports; nil falls back to this machine's name.
     private let hostName: @MainActor @Sendable () async -> String?
     public init(database: WorkspaceDatabase, authentication: DeviceAuthentication,
-                commands: any LibraryCommandServing,
+                commands: any DeviceCommandServing,
                 isActive: @escaping @MainActor @Sendable () -> Bool,
                 onCancelPairing: @escaping @MainActor @Sendable (PairedDevice) async throws -> Void = { _ in
                     throw LibraryAPIError(code: "unavailable", message: "Revoke this device from the central Mac settings.")
@@ -312,7 +312,7 @@ public final class LibraryWorkspaceAPI {
             }
             var path = target.path
             if path.hasPrefix("/wovenmatter/") { path = String(path.dropFirst("/wovenmatter".count)) }
-            let workspaceID = try await database.libraryWorkspaceID()
+            let workspaceID = try await database.libraryID()
             if path == "/v1/discovery", request.method == "GET", let advertisement = discovery() {
                 return try .json(advertisement)
             }
@@ -348,7 +348,7 @@ public final class LibraryWorkspaceAPI {
                     return .error("version_mismatch", "Update Woven Matter on both devices.", status: 426)
                 }
                 guard isActive() else { return .error("unavailable", "Sharing with devices stopped.", status: 503) }
-                let response = try await LibraryWorkspacePublisherAPI.handle(request, path: path, database: database)
+                let response = try await DevicePublisherAPI.handle(request, path: path, database: database)
                 guard isActive() else { return .error("unavailable", "Sharing with devices stopped.", status: 503) }
                 if request.method == "POST", response.status == 200 { onMutation() }
                 return response

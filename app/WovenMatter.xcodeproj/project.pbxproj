@@ -100,7 +100,7 @@
 		0D0C4EE8248E4F63A87CF7B4 /* WovenMatterRemoteToolBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = D8761929DCF444669E58A75E /* WovenMatterRemoteToolBridge.swift */; };
 		F19000000000000000000001 /* DashboardNoteDocumentCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = F19000000000000000000002 /* DashboardNoteDocumentCache.swift */; };
 		A14000000000000000000001 /* ApplicationModel+SessionSelections.swift in Sources */ = {isa = PBXBuildFile; fileRef = A14000000000000000000002 /* ApplicationModel+SessionSelections.swift */; };
-		E678564F286E71B5FA588A5A /* LibraryCommandService.swift in Sources */ = {isa = PBXBuildFile; fileRef = FF3D48D1E7B9587A3DF2F895 /* LibraryCommandService.swift */; };
+		E678564F286E71B5FA588A5A /* DeviceCommandService.swift in Sources */ = {isa = PBXBuildFile; fileRef = FF3D48D1E7B9587A3DF2F895 /* DeviceCommandService.swift */; };
 		B7937C7349692E25EE127696 /* LibraryHostController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0083907CDB98FA31255BD2C1 /* LibraryHostController.swift */; };
 		301E0D2FD0D0674DA6DF406A /* LibraryHostController+Publishing.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0643377195E7D10D99BB22ED /* LibraryHostController+Publishing.swift */; };
 		891F58B6ECD392232CDF9C9C /* SignedExecutionWorkspaceTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = F693CF31F7FF68A69F6E42C2 /* SignedExecutionWorkspaceTransport.swift */; };
@@ -293,7 +293,7 @@
 		D8761929DCF444669E58A75E /* WovenMatterRemoteToolBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "WovenMatterRemoteToolBridge.swift"; sourceTree = "<group>"; };
 		F19000000000000000000002 /* DashboardNoteDocumentCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardNoteDocumentCache.swift; sourceTree = "<group>"; };
 		A14000000000000000000002 /* ApplicationModel+SessionSelections.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ApplicationModel+SessionSelections.swift"; sourceTree = "<group>"; };
-		FF3D48D1E7B9587A3DF2F895 /* LibraryCommandService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryCommandService.swift; sourceTree = "<group>"; };
+		FF3D48D1E7B9587A3DF2F895 /* DeviceCommandService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceCommandService.swift; sourceTree = "<group>"; };
 		0083907CDB98FA31255BD2C1 /* LibraryHostController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryHostController.swift; sourceTree = "<group>"; };
 		0643377195E7D10D99BB22ED /* LibraryHostController+Publishing.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "LibraryHostController+Publishing.swift"; sourceTree = "<group>"; };
 		F693CF31F7FF68A69F6E42C2 /* SignedExecutionWorkspaceTransport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SignedExecutionWorkspaceTransport.swift; sourceTree = "<group>"; };
@@ -642,7 +642,7 @@
 				A22000000000000000000003 /* RemoteDeviceSetup.swift */,
 				A2737F707B9A5E3A2A5A5AD8 /* NativeInteractionProjection.swift */,
 				853617F2A39F477E947E59DA /* LibraryWorkspaceFeatures.swift */,
-				FF3D48D1E7B9587A3DF2F895 /* LibraryCommandService.swift */,
+				FF3D48D1E7B9587A3DF2F895 /* DeviceCommandService.swift */,
 				259A15701666BC22C0E6C0F1 /* WovenAutomationHost.swift */,
 				1A5EE1246A71A5EB98C6053B /* ConversationHTMLPreview.swift */,
 				FCBB65211C7015A6B8158E80 /* DictationEditor.swift */,
@@ -862,7 +862,7 @@
 				A22000000000000000000006 /* MacTailnetDiscoveryView.swift in Sources */,
 				D8ADD27CBC40434BB0183702 /* NativeInteractionProjection.swift in Sources */,
 				77A348D5C0634041BD69B746 /* LibraryWorkspaceFeatures.swift in Sources */,
-				E678564F286E71B5FA588A5A /* LibraryCommandService.swift in Sources */,
+				E678564F286E71B5FA588A5A /* DeviceCommandService.swift in Sources */,
 				C131C0A00000000000000004 /* DashboardConversationActions.swift in Sources */,
 				C131C0B00000000000000004 /* DashboardNoteActions.swift in Sources */,
 				923D138C1F54FC887AA90493 /* DashboardSharedViews.swift in Sources */,

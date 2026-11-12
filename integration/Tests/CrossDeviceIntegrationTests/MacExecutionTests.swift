@@ -16,13 +16,13 @@ struct MacExecutionTests {
   func remoteDevelopmentDisconnect() async throws {
     let dir = try directory(); defer { try? FileManager.default.removeItem(at: dir) }
     let db = try await WorkspaceDatabase(url: dir.appendingPathComponent("workspace.sqlite"))
-    let library = try await db.libraryWorkspaceID()
+    let library = try await db.libraryID()
     let auth = try DeviceAuthentication(fileURL: dir.appendingPathComponent("paired.json"))
     let offer = try await auth.createOffer(endpoint: URL(string: "https://fixture.test.ts.net/wovenmatter")!)
     let pairing = try await auth.pair(.init(token: offer.payload.token, deviceID: deviceID, deviceName: "Remote Mac",
       metadata: .init(kind: .mac, developmentInstance: "review")), workspaceID: library)
     #expect(await auth.deviceConnections().first?.name == "Remote Mac (Dev)")
-    let api = LibraryWorkspaceAPI(database: db, authentication: auth, commands: ScopedCommands(), isActive: { true })
+    let api = DeviceAPI(database: db, authentication: auth, commands: ScopedCommands(), isActive: { true })
     let response = await api.handle(.init(method: "POST", target: "/v1/devices/development/disconnect",
       headers: ["authorization": "Bearer " + pairing.credential, "x-woven-protocol": String(LibraryProtocol.version), "x-woven-workspace": library]))
     #expect(response.status == 200)
@@ -91,7 +91,7 @@ struct MacExecutionTests {
 }
 
 @MainActor
-private final class ScopedCommands: LibraryCommandServing {
+private final class ScopedCommands: DeviceCommandServing {
   var accepted: [LibraryCommand] = []
   var receiptReads = 0
   func providers() -> [HarnessCapabilities] {

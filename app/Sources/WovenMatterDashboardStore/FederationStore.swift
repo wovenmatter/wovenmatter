@@ -13,16 +13,16 @@ extension WorkspaceDatabaseConnection {
   func libraryIdentityUnlocked() throws -> LibraryIdentity {
     let ids = try libraryIDsUnlocked("SELECT host_device_id FROM library_identity WHERE singleton = 1", bindings: [])
     guard let deviceID = ids.first else { throw WorkspaceDatabaseError.corruptRow }
-    return try LibraryIdentity(libraryID: libraryWorkspaceIDUnlocked(), hostDeviceID: deviceID)
+    return try LibraryIdentity(libraryID: libraryIDUnlocked(), hostDeviceID: deviceID)
   }
   public func libraryExecutionWorkspaces() throws -> [ExecutionWorkspace] {
     try withLock {
-      try federationValuesUnlocked("SELECT payload FROM device_execution_workspaces ORDER BY id", as: ExecutionWorkspace.self)
+      try federationValuesUnlocked("SELECT payload FROM execution_workspaces ORDER BY id", as: ExecutionWorkspace.self)
     }
   }
   public func libraryExecutionOwners() throws -> [String: String] {
     try withLock {
-      let statement = try prepareUnlocked("SELECT id,workspace_id FROM device_execution_conversations")
+      let statement = try prepareUnlocked("SELECT id,workspace_id FROM execution_conversations")
       defer { sqlite3_finalize(statement) }
       var values: [String: String] = [:]
       while true {
@@ -34,25 +34,25 @@ extension WorkspaceDatabaseConnection {
     }
   }
   public func libraryExecutionOwner(conversationID: String) throws -> String? {
-    try withLock { try libraryIDsUnlocked("SELECT workspace_id FROM device_execution_conversations WHERE id=?", bindings: [conversationID]).first }
+    try withLock { try libraryIDsUnlocked("SELECT workspace_id FROM execution_conversations WHERE id=?", bindings: [conversationID]).first }
   }
   public func libraryConversationExecutionWorkspace(conversationID: String) throws -> ExecutionWorkspace? {
     try withLock {
-      guard let id = try libraryIDsUnlocked("SELECT workspace_id FROM device_execution_conversations WHERE id=?", bindings: [conversationID]).first else { return nil }
+      guard let id = try libraryIDsUnlocked("SELECT workspace_id FROM execution_conversations WHERE id=?", bindings: [conversationID]).first else { return nil }
       return try federationWorkspaceUnlocked(id)
     }
   }
   public func libraryExecutionOriginCursor(workspaceID: String) throws -> Int64 {
-    try withLock { try federationScalarUnlocked("SELECT COALESCE(MAX(origin_sequence),0) FROM device_execution_journal WHERE workspace_id=?", bindings: [workspaceID]) }
+    try withLock { try federationScalarUnlocked("SELECT COALESCE(MAX(origin_sequence),0) FROM execution_journal WHERE workspace_id=?", bindings: [workspaceID]) }
   }
   func federationWorkspaceUnlocked(_ id: String) throws -> ExecutionWorkspace? {
-    try federationValuesUnlocked("SELECT payload FROM device_execution_workspaces WHERE id = ?", bindings: [id], as: ExecutionWorkspace.self).first
+    try federationValuesUnlocked("SELECT payload FROM execution_workspaces WHERE id = ?", bindings: [id], as: ExecutionWorkspace.self).first
   }
   public func registerExecutionWorkspace(_ request: LibraryWorkspaceRegistration, deviceID: String) throws -> ExecutionWorkspace {
     try transaction {
       var value = request.workspace
       let identity = try libraryIdentityUnlocked()
-      guard value.libraryID == (try libraryWorkspaceIDUnlocked()) else { throw federationError("library_mismatch", "This workspace belongs to another central library.") }
+      guard value.libraryID == (try libraryIDUnlocked()) else { throw federationError("library_mismatch", "This workspace belongs to another central library.") }
       guard federationID(value.id), federationID(value.ownerDeviceID), (value.ownerDeviceID == deviceID || deviceID == identity.hostDeviceID),
             value.executionDeviceID.map(federationID) ?? true,
             value.developmentInstance.map({ !$0.isEmpty && $0.count <= 64 && $0.allSatisfy { $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "-") } }) ?? true,
@@ -86,7 +86,7 @@ extension WorkspaceDatabaseConnection {
         }
         value.revision = 1
       }
-      let statement = try prepareUnlocked("INSERT INTO device_execution_workspaces(id,owner_device_id,revision,deleted,payload) VALUES (?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET revision=excluded.revision,deleted=excluded.deleted,payload=excluded.payload")
+      let statement = try prepareUnlocked("INSERT INTO execution_workspaces(id,owner_device_id,revision,deleted,payload) VALUES (?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET revision=excluded.revision,deleted=excluded.deleted,payload=excluded.payload")
       defer { sqlite3_finalize(statement) }
       try bind(value.id, at: 1, to: statement); try bind(value.ownerDeviceID, at: 2, to: statement)
       sqlite3_bind_int64(statement, 3, value.revision); sqlite3_bind_int(statement, 4, value.deleted ? 1 : 0)
@@ -104,7 +104,7 @@ extension WorkspaceDatabaseConnection {
   }
   public func ingestExecutionJournal(_ batch: ExecutionJournalBatch, deviceID: String) throws -> ExecutionJournalBatchResult {
     try transaction {
-      let libraryID = try libraryWorkspaceIDUnlocked()
+      let libraryID = try libraryIDUnlocked()
       guard batch.libraryID == libraryID else { throw federationError("library_mismatch", "History belongs to another library.") }
       guard batch.entries.count <= FederationProtocol.maximumBatchEntries,
             try JSONEncoder().encode(batch).count <= FederationProtocol.maximumBatchBytes else {
@@ -117,7 +117,7 @@ extension WorkspaceDatabaseConnection {
           throw federationError("invalid_event", "Execution history requires stable UUID identities and bounded records.")
         }
         let fingerprint = try libraryFingerprint(entry)
-        let lookup = try prepareUnlocked("SELECT event_id,workspace_id,origin_sequence,fingerprint FROM device_execution_journal WHERE event_id = ? OR (workspace_id = ? AND origin_sequence = ?)")
+        let lookup = try prepareUnlocked("SELECT event_id,workspace_id,origin_sequence,fingerprint FROM execution_journal WHERE event_id = ? OR (workspace_id = ? AND origin_sequence = ?)")
         defer { sqlite3_finalize(lookup) }
         try bind(entry.eventID, at: 1, to: lookup); try bind(entry.workspaceID, at: 2, to: lookup); sqlite3_bind_int64(lookup, 3, entry.originSequence)
         let code = sqlite3_step(lookup)
@@ -129,12 +129,12 @@ extension WorkspaceDatabaseConnection {
           continue
         }
         guard code == SQLITE_DONE else { throw stepError() }
-        let current = try federationScalarUnlocked("SELECT COALESCE(MAX(origin_sequence),0) FROM device_execution_journal WHERE workspace_id = ?", bindings: [entry.workspaceID])
+        let current = try federationScalarUnlocked("SELECT COALESCE(MAX(origin_sequence),0) FROM execution_journal WHERE workspace_id = ?", bindings: [entry.workspaceID])
         guard entry.originSequence == current + 1 else {
           throw federationError("origin_gap", "Upload the missing execution history before acknowledging later records. Expected sequence \(current + 1).")
         }
         try projectExecutionJournalUnlocked(entry, workspace: workspace)
-        let insert = try prepareUnlocked("INSERT INTO device_execution_journal(event_id,workspace_id,origin_sequence,fingerprint,payload) VALUES (?,?,?,?,?)")
+        let insert = try prepareUnlocked("INSERT INTO execution_journal(event_id,workspace_id,origin_sequence,fingerprint,payload) VALUES (?,?,?,?,?)")
         defer { sqlite3_finalize(insert) }
         try bind(entry.eventID, at: 1, to: insert); try bind(entry.workspaceID, at: 2, to: insert)
         sqlite3_bind_int64(insert, 3, entry.originSequence); try bind(fingerprint, at: 4, to: insert)
@@ -147,7 +147,7 @@ extension WorkspaceDatabaseConnection {
     try transaction {
       let current = try federationJournalCursorUnlocked()
       guard cursor >= 0, cursor <= current else { throw federationError("invalid_cursor", "The library journal cursor is invalid.") }
-      let statement = try prepareUnlocked("SELECT cursor,payload FROM device_execution_journal WHERE cursor > ? ORDER BY cursor LIMIT ?")
+      let statement = try prepareUnlocked("SELECT cursor,payload FROM execution_journal WHERE cursor > ? ORDER BY cursor LIMIT ?")
       defer { sqlite3_finalize(statement) }
       sqlite3_bind_int64(statement, 1, cursor); sqlite3_bind_int(statement, 2, Int32(max(1, min(limit, 200))))
       var entries: [ExecutionJournalEntry] = []; var next = cursor; var bytes = 0
@@ -160,16 +160,16 @@ extension WorkspaceDatabaseConnection {
         entries.append(try JSONDecoder().decode(ExecutionJournalEntry.self, from: payload))
         next = sqlite3_column_int64(statement, 0); bytes += payload.count
       }
-      return try ExecutionJournalPage(libraryID: libraryWorkspaceIDUnlocked(), cursor: next, entries: entries, hasMore: next < current)
+      return try ExecutionJournalPage(libraryID: libraryIDUnlocked(), cursor: next, entries: entries, hasMore: next < current)
     }
   }
   func federationJournalCursorUnlocked() throws -> Int64 {
-    try federationScalarUnlocked("SELECT COALESCE(MAX(cursor),0) FROM device_execution_journal")
+    try federationScalarUnlocked("SELECT COALESCE(MAX(cursor),0) FROM execution_journal")
   }
   public func libraryFederatedTranscript(conversationID: String, before: String? = nil) throws -> LibraryTranscript? {
     try withLock {
       guard try federationConversationUnlocked(conversationID) != nil else { return nil }
-      let stored = try federationValuesUnlocked("SELECT transcript FROM device_execution_conversations WHERE id = ? AND deleted = 0 AND transcript IS NOT NULL", bindings: [conversationID], as: LibraryTranscript.self).first ?? LibraryTranscript(conversationID: conversationID)
+      let stored = try federationValuesUnlocked("SELECT transcript FROM execution_conversations WHERE id = ? AND deleted = 0 AND transcript IS NOT NULL", bindings: [conversationID], as: LibraryTranscript.self).first ?? LibraryTranscript(conversationID: conversationID)
       var end = FederationTranscriptCursor(messages: stored.messages.count, activities: stored.activities.count)
       if let before {
         guard before.utf8.count <= 2_048, let data = Data(base64Encoded: before),
@@ -202,7 +202,7 @@ extension WorkspaceDatabaseConnection {
     }
   }
   func federationConversationUnlocked(_ id: String) throws -> LibraryConversation? {
-    guard var value = try federationValuesUnlocked("SELECT f.conversation FROM device_execution_conversations f JOIN dashboard_conversations c ON c.id=f.id WHERE f.id=? AND f.deleted=0 AND c.deleted_at IS NULL AND c.is_archived=0", bindings: [id], as: LibraryConversation.self).first else { return nil }
+    guard var value = try federationValuesUnlocked("SELECT f.conversation FROM execution_conversations f JOIN dashboard_conversations c ON c.id=f.id WHERE f.id=? AND f.deleted=0 AND c.deleted_at IS NULL AND c.is_archived=0", bindings: [id], as: LibraryConversation.self).first else { return nil }
     let statement = try prepareUnlocked("SELECT title,folder_id,is_pinned,updated_at FROM dashboard_conversations WHERE id=?")
     defer { sqlite3_finalize(statement) }
     try bind(id, at: 1, to: statement)

@@ -42,7 +42,7 @@ import WovenMatterDashboardStore
         let state = await store.snapshot()
         try await database.backUpBeforePeerSync()
         try await database.adoptLegacyPairedMacIdentity(state.deviceID)
-        defaults.set(state.deviceID, forKey: LibraryHostController.localExecutionIDKeyPrefix + (try await database.libraryWorkspaceID()))
+        defaults.set(state.deviceID, forKey: LibraryHostController.localExecutionIDKeyPrefix + (try await database.libraryID()))
         let local = root.appending(path: "LibraryClient/Execution/" + state.deviceID + "/workspace.sqlite")
         if FileManager.default.fileExists(atPath: local.path) {
             // Migrate and import a WAL-aware copy. The retained original native

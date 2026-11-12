@@ -4,7 +4,7 @@ import WovenMatterCore
 /// Client disconnects do not cancel accepted work. Stable receipts prevent a
 /// lost HTTP reply (or host restart) from executing a tool mutation twice.
 @MainActor
-public final class LibraryToolDispatcher {
+public final class DeviceToolDispatcher {
   public let database: WorkspaceDatabase
   private var pending: [String: Task<WovenMatterToolResponse, any Error>] = [:]
 

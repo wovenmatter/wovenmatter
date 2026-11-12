@@ -324,7 +324,7 @@ struct MemberReachTests {
         }
         let workspace = try await fixture.database.receiveSyncedWorkspace(.init(id: UUID().uuidString.lowercased(), libraryID: UUID().uuidString.lowercased(),
             ownerDeviceID: UUID().uuidString.lowercased(), kind: .linux, name: "Linux L", executionDeviceID: linux.deviceID))
-        let api = LibraryWorkspaceAPI(database: fixture.database,
+        let api = DeviceAPI(database: fixture.database,
             authentication: try DeviceAuthentication(fileURL: fixture.directory.appending(path: "mcp-devices.json")),
             commands: fixture.model.libraryCommands, isActive: { true }, members: mac)
         let message = Data(#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#.utf8)
@@ -353,7 +353,7 @@ struct MemberReachTests {
         let row = LibraryConversation(id: session, title: "Linux session", providerID: "local:codex", routeID: "local:codex",
                                         runtimeKind: "codex", libraryID: workspace.libraryID, workspaceID: workspace.id)
         try await fixture.database.write { db in
-            try db.toolsExecuteUnlocked("INSERT INTO device_execution_conversations(id,workspace_id,conversation) VALUES(?,?,?)",
+            try db.toolsExecuteUnlocked("INSERT INTO execution_conversations(id,workspace_id,conversation) VALUES(?,?,?)",
                                         [session, workspace.id, String(decoding: try JSONEncoder().encode(row), as: UTF8.self)])
         }
         let served = try await call(linux, conversation: session)
@@ -372,7 +372,7 @@ struct MemberReachTests {
         let mRow = LibraryConversation(id: mSession, title: "M session", providerID: "local:codex", routeID: "local:codex",
                                          runtimeKind: "codex", libraryID: m.libraryID, workspaceID: m.id)
         try await fixture.database.write { db in
-            try db.toolsExecuteUnlocked("INSERT INTO device_execution_conversations(id,workspace_id,conversation) VALUES(?,?,?)",
+            try db.toolsExecuteUnlocked("INSERT INTO execution_conversations(id,workspace_id,conversation) VALUES(?,?,?)",
                                         [mSession, m.id, String(decoding: try JSONEncoder().encode(mRow), as: UTF8.self)])
         }
         #expect(await mac.audience(for: m) == hostM.deviceID)
@@ -454,7 +454,7 @@ struct MemberReachTests {
     }
 }
 
-@MainActor private final class ReachMacCommands: LibraryCommandServing {
+@MainActor private final class ReachMacCommands: DeviceCommandServing {
     var executed: [LibraryCommand] = []
     var devices: [String] = []
     func providers() -> [HarnessCapabilities] { [.init(id: "local:default_agent", runtimeKind: "default_agent", displayName: "Pi Durable", available: true)] }
@@ -609,7 +609,7 @@ private extension WorkspaceDatabase {
         var value = workspace; value.revision = 1
         let row = value
         try await write { db in
-            let statement = try db.prepareUnlocked("INSERT INTO device_execution_workspaces(id,owner_device_id,revision,deleted,payload) VALUES (?,?,?,0,?)")
+            let statement = try db.prepareUnlocked("INSERT INTO execution_workspaces(id,owner_device_id,revision,deleted,payload) VALUES (?,?,?,0,?)")
             defer { sqlite3_finalize(statement) }
             try db.bind(row.id, at: 1, to: statement); try db.bind(row.ownerDeviceID, at: 2, to: statement)
             sqlite3_bind_int64(statement, 3, row.revision)

@@ -238,7 +238,7 @@ struct CrossDeviceFlowTests {
     _ = try await fixture.mobile.createNote(folderID: nil, title: "Retain offline", content: richDocument("Private writing"))
     let wrongDB = try await WorkspaceDatabase(url: fixture.directory.appending(path: "other-workspace.sqlite"))
     let wrongCommands = FakeCommands(database: wrongDB)
-    let wrongAPI = LibraryWorkspaceAPI(database: wrongDB, authentication: fixture.authentication, commands: wrongCommands, isActive: { true })
+    let wrongAPI = DeviceAPI(database: wrongDB, authentication: fixture.authentication, commands: wrongCommands, isActive: { true })
     let wrongServer = try await FlowHTTPServer(api: wrongAPI)
     defer { wrongServer.stop() }
     let wrongTransport = APITransport(serverURL: wrongServer.endpoint, credential: fixture.credential)
@@ -397,7 +397,7 @@ private final class FlowFixture {
   let authentication: DeviceAuthentication
   let commands: FakeCommands
   let activity: FlowActivity
-  let api: LibraryWorkspaceAPI
+  let api: DeviceAPI
   let credential: MobileCredential
   let http: FlowHTTPServer
   let transport: APITransport
@@ -412,7 +412,7 @@ private final class FlowFixture {
     authentication = try DeviceAuthentication(fileURL: directory.appending(path: "devices.json"))
     commands = FakeCommands(database: database)
     activity = FlowActivity()
-    api = LibraryWorkspaceAPI(database: database, authentication: authentication, commands: commands, isActive: { [activity] in activity.active }, onCancelPairing: { [authentication] device in
+    api = DeviceAPI(database: database, authentication: authentication, commands: commands, isActive: { [activity] in activity.active }, onCancelPairing: { [authentication] device in
       try await authentication.revoke(deviceID: device.id, expected: device)
     }, linkedData: linkedData)
     http = try await FlowHTTPServer(api: api)
@@ -443,7 +443,7 @@ private final class FlowHTTPServer: Sendable {
   let server: LibraryHTTPServer
   let endpoint: URL
   let observations: FlowHTTPObservations
-  init(api: LibraryWorkspaceAPI) async throws {
+  init(api: DeviceAPI) async throws {
     let observations = FlowHTTPObservations()
     self.observations = observations
     server = LibraryHTTPServer { request in
@@ -536,9 +536,9 @@ private actor APITransport: LibraryTransport, LibraryDictationTransport {
 }
 
 @MainActor
-private final class FakeCommands: LibraryCommandServing {
+private final class FakeCommands: DeviceCommandServing {
   let database: WorkspaceDatabase
-  let dispatcher: LibraryCommandDispatcher
+  let dispatcher: DeviceCommandDispatcher
   var received: [LibraryCommand] = []
   var boundNoteContents: [String] = []
   var holdCommands = false
@@ -547,7 +547,7 @@ private final class FakeCommands: LibraryCommandServing {
   private var completedWaiter: CheckedContinuation<Void, Never>?
   private var startedWaiter: CheckedContinuation<Void, Never>?
   private var releaseWaiter: CheckedContinuation<Void, Never>?
-  init(database: WorkspaceDatabase) { self.database = database; dispatcher = LibraryCommandDispatcher(database: database) }
+  init(database: WorkspaceDatabase) { self.database = database; dispatcher = DeviceCommandDispatcher(database: database) }
   func providers() -> [HarnessCapabilities] { [.init(id: "local:codex", runtimeKind: "codex", displayName: "Fixture Codex", available: true)] }
   func pendingInteractions() -> [PendingInteraction] { [] }
   func sessionCapabilities(conversationID: String) async throws -> HarnessCapabilities { providers()[0] }

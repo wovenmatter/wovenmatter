@@ -222,16 +222,20 @@ class DevelopmentBuildTests(unittest.TestCase):
               INSERT INTO paired_calendar_owners VALUES('schedule','other-mac');
               CREATE TABLE paired_library_state(name TEXT, value TEXT);
               INSERT INTO paired_library_state VALUES('owners.bootstrap','1'),('baseline.other-mac','4');
-              CREATE TABLE device_workspace(singleton INTEGER, workspace_id TEXT);
-              CREATE TABLE device_execution_workspaces(id TEXT,payload BLOB);
-              INSERT INTO device_execution_workspaces VALUES('source-mac','{"libraryID":"production-identity","name":"Mac","endpoint":"https://fixture.test.ts.net/wovenmatter"}');
+              -- A library from before November 2026, still on the old table names.
+              CREATE TABLE companion_workspace(singleton INTEGER, workspace_id TEXT);
+              CREATE TABLE companion_library_identity(singleton INTEGER, host_device_id TEXT);
+              INSERT INTO companion_library_identity VALUES(1,'source');
+              CREATE TABLE companion_execution_workspaces(id TEXT,payload BLOB);
+              CREATE TRIGGER companion_notes_insert AFTER INSERT ON notes BEGIN SELECT 1; END;
+              INSERT INTO companion_execution_workspaces VALUES('source-mac','{"libraryID":"production-identity","name":"Mac","endpoint":"https://fixture.test.ts.net/wovenmatter"}');
               CREATE TABLE dashboard_calendar_items(id TEXT, calendar_json TEXT);
               CREATE TABLE dashboard_runs(id TEXT,status TEXT);
               CREATE TABLE workspace_session_goals(session_id TEXT,value TEXT);
               CREATE TABLE workspace_session_timers(id TEXT,is_paused INTEGER,pending_delivery_id TEXT);
               INSERT INTO notes VALUES('note','shared content');
               INSERT INTO desktop_local_acp_sessions VALUES('production-session');
-              INSERT INTO device_workspace VALUES(1,'production-identity');
+              INSERT INTO companion_workspace VALUES(1,'production-identity');
               INSERT INTO dashboard_calendar_items VALUES('job','{"task":{"prompt":"retain me"}}');
               INSERT INTO dashboard_runs VALUES('run','running');
               INSERT INTO workspace_session_goals VALUES('session','{"status":"active"}');
@@ -245,7 +249,7 @@ class DevelopmentBuildTests(unittest.TestCase):
                 # Ownership survives, so the snapshot never adopts another Mac's schedule.
                 self.assertEqual(copy.execute("SELECT device_id FROM paired_calendar_owners").fetchall(), [("other-mac",)])
                 self.assertEqual(copy.execute("SELECT name FROM paired_library_state").fetchall(), [("owners.bootstrap",)])
-                workspace = json.loads(copy.execute("SELECT payload FROM device_execution_workspaces").fetchone()[0])
+                workspace = json.loads(copy.execute("SELECT payload FROM execution_workspaces").fetchone()[0])
                 self.assertTrue(workspace["retainedHistory"])
                 self.assertNotIn("endpoint", workspace)
                 self.assertEqual(workspace["name"], "Mac")
@@ -255,8 +259,12 @@ class DevelopmentBuildTests(unittest.TestCase):
                 self.assertEqual(copy.execute("SELECT status FROM dashboard_agents WHERE id='local-pi'").fetchone()[0], "offline")
                 self.assertEqual(copy.execute("SELECT a.id FROM dashboard_conversations c JOIN dashboard_agents a ON c.agent_id=a.id").fetchone()[0], "local-pi")
                 self.assertIsNone(copy.execute("SELECT deleted_at FROM dashboard_agents WHERE id='remote-pi'").fetchone()[0])
-                self.assertNotEqual(copy.execute("SELECT workspace_id FROM device_workspace").fetchone()[0], "production-identity")
-                self.assertEqual(copy.execute("SELECT COUNT(*) FROM device_calendar_owners").fetchone()[0], 1)
+                identity = copy.execute("SELECT host_device_id,library_id FROM library_identity").fetchall()
+                self.assertEqual(len(identity), 1)
+                self.assertNotIn(identity[0][0], ("source", None)); self.assertNotIn(identity[0][1], ("production-identity", None))
+                self.assertEqual(json.loads(copy.execute("SELECT payload FROM execution_workspaces").fetchone()[0])["libraryID"], identity[0][1])
+                self.assertEqual(copy.execute("SELECT name FROM sqlite_master WHERE name LIKE 'companion%'").fetchall(), [])
+                self.assertEqual(copy.execute("SELECT COUNT(*) FROM calendar_task_executors").fetchone()[0], 1)
                 self.assertIn("retain me", copy.execute("SELECT calendar_json FROM dashboard_calendar_items").fetchone()[0])
                 self.assertEqual(copy.execute("SELECT status FROM dashboard_runs").fetchone()[0], "interrupted")
                 self.assertEqual(json.loads(copy.execute("SELECT value FROM workspace_session_goals").fetchone()[0])["status"], "paused")

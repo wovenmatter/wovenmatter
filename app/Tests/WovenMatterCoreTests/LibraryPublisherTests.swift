@@ -29,11 +29,11 @@ struct LibraryPublisherTests {
     let first = ExecutionJournalBatch(libraryID: f.identity.libraryID, entries: [entries[0]])
     let all = ExecutionJournalBatch(libraryID: f.identity.libraryID, entries: entries)
     let path = "/v1/federation/publisher/retained/settle"
-    #expect(try await LibraryWorkspacePublisherAPI.handle(f.request(path, first), path: path, database: f.database).status == 200)
+    #expect(try await DevicePublisherAPI.handle(f.request(path, first), path: path, database: f.database).status == 200)
     #expect(try await f.database.libraryExecutionOwner(conversationID: conversationID) == nil)
     await #expect(throws: (any Error).self) { _ = try await f.database.ingestExecutionJournal(first, deviceID: f.workspace.executionDeviceID!) }
-    #expect(try await LibraryWorkspacePublisherAPI.handle(f.request(path, all), path: path, database: f.database).status == 200)
-    #expect(try await LibraryWorkspacePublisherAPI.handle(f.request(path, all), path: path, database: f.database).status == 200)
+    #expect(try await DevicePublisherAPI.handle(f.request(path, all), path: path, database: f.database).status == 200)
+    #expect(try await DevicePublisherAPI.handle(f.request(path, all), path: path, database: f.database).status == 200)
     var changed = first; changed.entries[0].retainedExecution?.status = "failed"
     await #expect(throws: (any Error).self) { _ = try await f.database.settleLibraryRetainedRuns(changed, deviceID: f.workspace.executionDeviceID!) }
     let active = UUID().uuidString.lowercased()

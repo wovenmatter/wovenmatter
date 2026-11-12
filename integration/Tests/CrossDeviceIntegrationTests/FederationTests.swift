@@ -34,7 +34,7 @@ struct FederationTests {
     let note = try await db.createNote(folderID: nil, title: "Kept", content: "Offline writing")
     let before = try await db.libraryNote(id: note)
     let identity = try await db.libraryIdentity()
-    #expect(identity.libraryID == (try await db.libraryWorkspaceID()))
+    #expect(identity.libraryID == (try await db.libraryID()))
     let restarted = try await WorkspaceDatabase(url: url)
     #expect(try await restarted.libraryIdentity() == identity)
     #expect(try await restarted.libraryNote(id: note) == before)
@@ -223,7 +223,7 @@ struct FederationTests {
     let content = String(decoding: try JSONEncoder().encode(legacy), as: UTF8.self)
     try await db.write { connection in
       try connection.transaction {
-        try connection.toolsExecuteUnlocked("UPDATE device_execution_conversations SET transcript=? WHERE id=?", [content, first.conversationID])
+        try connection.toolsExecuteUnlocked("UPDATE execution_conversations SET transcript=? WHERE id=?", [content, first.conversationID])
       }
     }
     let page = try #require(try await db.libraryFederatedTranscript(conversationID: first.conversationID))

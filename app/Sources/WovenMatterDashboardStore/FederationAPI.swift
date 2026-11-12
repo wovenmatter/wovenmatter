@@ -4,7 +4,7 @@ import WovenMatterCore
 @MainActor
 enum FederationAPI {
   static func handle(_ request: LibraryHTTPRequest, path: String, query: [URLQueryItem], device: PairedDevice,
-                     database: WorkspaceDatabase, commands: any LibraryCommandServing) async throws -> LibraryHTTPResponse {
+                     database: WorkspaceDatabase, commands: any DeviceCommandServing) async throws -> LibraryHTTPResponse {
     func value(_ key: String) -> String? { query.first(where: { $0.name == key })?.value }
     let parts = path.split(separator: "/").map(String.init)
     func ownsClientWorkspace(_ id: String) async throws -> Bool {

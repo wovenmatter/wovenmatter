@@ -16,7 +16,7 @@ enum PairedLibraryOwnership {
     """
     (EXISTS(SELECT 1 FROM paired_conversation_owners own_c JOIN library_identity own_i ON own_i.singleton=1
        WHERE own_c.id=\(column) AND own_c.device_id=own_i.host_device_id)
-     AND NOT EXISTS(SELECT 1 FROM device_execution_conversations own_x WHERE own_x.id=\(column))
+     AND NOT EXISTS(SELECT 1 FROM execution_conversations own_x WHERE own_x.id=\(column))
      AND NOT EXISTS(SELECT 1 FROM retained_execution_history own_r WHERE own_r.conversation_id=\(column)))
     """
   }

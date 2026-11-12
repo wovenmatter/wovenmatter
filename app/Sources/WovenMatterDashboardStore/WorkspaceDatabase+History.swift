@@ -570,7 +570,7 @@ extension WorkspaceDatabaseConnection {
   func checkpointNoteUnlocked(id: String, source: String, force: Bool) throws {
     let note = try prepareUnlocked(
       """
-      SELECT title,content,CAST(COALESCE((SELECT revision FROM device_versions WHERE kind='note' AND resource_id=notes.id),1) AS TEXT) FROM notes WHERE id=? AND deleted_at IS NULL
+      SELECT title,content,CAST(COALESCE((SELECT revision FROM device_sync_revisions WHERE kind='note' AND resource_id=notes.id),1) AS TEXT) FROM notes WHERE id=? AND deleted_at IS NULL
       """)
     defer { sqlite3_finalize(note) }
     try bind(id, at: 1, to: note)
@@ -691,7 +691,7 @@ extension WorkspaceDatabaseConnection {
 
 extension WorkspaceDatabaseConnection {
   // Preserve chronological metadata even for writes within one millisecond.
-  // Optimistic revision tokens come from device_versions, never this timestamp.
+  // Optimistic revision tokens come from device_sync_revisions, never this timestamp.
   func nextNoteUpdatedAtUnlocked(id: String, now: Date = Date()) throws -> String {
     let rows = try historyRowsUnlocked("SELECT updated_at FROM notes WHERE id=?", values: [id])
     let previous = rows.first?.objectValue?["updated_at"]?.stringValue.flatMap(Self.date)

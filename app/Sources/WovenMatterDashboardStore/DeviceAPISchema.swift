@@ -7,10 +7,10 @@ import CSQLite
 import WovenMatterCore
 
 extension WorkspaceDatabaseConnection {
-  func createLibrarySchemaUnlocked() throws {
+  func createDeviceSchemaUnlocked() throws {
     try createFederationSchemaUnlocked()
     try createProductAnalyticsSchemaUnlocked()
-    try createLibraryToolSchemaUnlocked()
+    try createDeviceToolSchemaUnlocked()
     try executeUnlocked("""
       CREATE INDEX IF NOT EXISTS desktop_cache_runs_active_conversation
         ON dashboard_runs(conversation_id, status, created_at DESC, id DESC);
@@ -19,14 +19,11 @@ extension WorkspaceDatabaseConnection {
         created_at REAL NOT NULL, payload_json TEXT NOT NULL
       );
       CREATE INDEX IF NOT EXISTS dictation_history_date ON dictation_history(created_at DESC, id DESC);
-      CREATE TABLE IF NOT EXISTS device_workspace (
-        singleton INTEGER PRIMARY KEY CHECK(singleton = 1), workspace_id TEXT NOT NULL
-      );
-      CREATE TABLE IF NOT EXISTS device_versions (
+      CREATE TABLE IF NOT EXISTS device_sync_revisions (
         kind TEXT NOT NULL, resource_id TEXT NOT NULL, revision INTEGER NOT NULL,
         deleted INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(kind, resource_id)
       );
-      CREATE TABLE IF NOT EXISTS device_changes (
+      CREATE TABLE IF NOT EXISTS device_sync_changes (
         cursor INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT NOT NULL,
         resource_id TEXT NOT NULL, revision INTEGER NOT NULL, deleted INTEGER NOT NULL DEFAULT 0
       );
@@ -43,10 +40,6 @@ extension WorkspaceDatabaseConnection {
         content TEXT NOT NULL, revision TEXT NOT NULL
       );
       """)
-    let identity = try prepareUnlocked("INSERT OR IGNORE INTO device_workspace VALUES (1, ?)")
-    defer { sqlite3_finalize(identity) }
-    try bind(UUID().uuidString.lowercased(), at: 1, to: identity)
-    try stepDone(identity)
     for (table, kind, identifier, deletion) in [
       ("folders", "folder", "id", "0"),
       ("notes", "note", "id", "CASE WHEN NEW.deleted_at IS NULL THEN 0 ELSE 1 END"),
@@ -68,7 +61,7 @@ extension WorkspaceDatabaseConnection {
       if kind == "folder" || kind == "note" || kind == "conversation" {
         let initialDeletion = deletion.replacingOccurrences(of: "NEW.", with: "")
         try executeUnlocked("""
-          INSERT OR IGNORE INTO device_versions(kind, resource_id, revision, deleted)
+          INSERT OR IGNORE INTO device_sync_revisions(kind, resource_id, revision, deleted)
           SELECT '\(kind)', \(identifier), 1, \(initialDeletion) FROM \(table);
           """)
       }
@@ -81,17 +74,17 @@ extension WorkspaceDatabaseConnection {
           ? "CASE WHEN NEW.title IS NOT OLD.title OR NEW.content IS NOT OLD.content OR NEW.folder_id IS NOT OLD.folder_id OR NEW.deleted_at IS NOT OLD.deleted_at OR NEW.updated_at IS NOT OLD.updated_at THEN 1 ELSE 0 END"
           : "1"
         try executeUnlocked("""
-          CREATE TRIGGER IF NOT EXISTS device_version_\(table)_\(operation.lowercased())
+          CREATE TRIGGER IF NOT EXISTS device_sync_\(table)_\(operation.lowercased())
           AFTER \(operation) ON \(table)
           BEGIN
-            INSERT INTO device_versions(kind, resource_id, revision, deleted)
+            INSERT INTO device_sync_revisions(kind, resource_id, revision, deleted)
             VALUES ('\(kind)', \(row).\(identifier), 1, \(deleted))
             ON CONFLICT(kind, resource_id) DO UPDATE SET revision = revision + \(increment), deleted = excluded.deleted;
-            INSERT INTO device_changes(kind, resource_id, revision, deleted)
-            SELECT kind, resource_id, revision, deleted FROM device_versions
+            INSERT INTO device_sync_changes(kind, resource_id, revision, deleted)
+            SELECT kind, resource_id, revision, deleted FROM device_sync_revisions
             WHERE kind = '\(kind)' AND resource_id = \(row).\(identifier);
-            DELETE FROM device_changes WHERE cursor <=
-              (SELECT COALESCE(MAX(cursor), 0) - \(LibraryProtocol.maximumReplayChanges) FROM device_changes);
+            DELETE FROM device_sync_changes WHERE cursor <=
+              (SELECT COALESCE(MAX(cursor), 0) - \(LibraryProtocol.maximumReplayChanges) FROM device_sync_changes);
           END;
           """)
       }
@@ -99,8 +92,8 @@ extension WorkspaceDatabaseConnection {
     // Detach notes and unbound conversations at every deletion entry point.
     // Rooted sessions retain their captured folder identity and execution directory.
     try executeUnlocked("""
-      DROP TRIGGER IF EXISTS device_folder_detach;
-      CREATE TRIGGER device_folder_detach BEFORE DELETE ON folders
+      DROP TRIGGER IF EXISTS folder_detach_contents;
+      CREATE TRIGGER folder_detach_contents BEFORE DELETE ON folders
       BEGIN
         UPDATE notes SET folder_id = NULL WHERE folder_id = OLD.id;
         UPDATE dashboard_conversations SET folder_id = NULL WHERE folder_id = OLD.id

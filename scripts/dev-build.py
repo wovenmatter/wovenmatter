@@ -141,6 +141,33 @@ def copy_assets(source, target):
         raise ValueError(f"Unsupported snapshot asset: {source}")
 
 
+# Libraries from before November 2026 used these names. The app renames them
+# in place on open (LegacyCompanionStorage.swift); a snapshot of such a library
+# is renamed the same way first, so its isolation below sees current names.
+LEGACY_TABLES = {
+    "companion_library_identity": "library_identity", "companion_versions": "device_sync_revisions",
+    "companion_changes": "device_sync_changes", "companion_mutation_receipts": "device_mutation_receipts",
+    "companion_command_receipts": "device_command_receipts", "companion_draft_receipts": "device_draft_receipts",
+    "companion_tool_receipts": "device_tool_receipts", "companion_workspace_mcp_grants": "device_workspace_mcp_grants",
+    "companion_workspace_publishers": "device_workspace_publishers",
+    "companion_scheduled_mcp_callers": "device_scheduled_mcp_callers",
+    "companion_message_provenance": "device_message_provenance", "companion_saved_artifacts": "device_saved_artifacts",
+    "companion_artifact_uploads": "device_artifact_uploads", "companion_artifact_chunks": "device_artifact_chunks",
+    "companion_execution_workspaces": "execution_workspaces", "companion_execution_journal": "execution_journal",
+    "companion_execution_conversations": "execution_conversations",
+    "companion_execution_adoptions": "execution_adoptions", "companion_execution_runs": "execution_runs",
+    "companion_execution_receipts": "execution_receipts",
+    "companion_execution_replica_context": "execution_replica_context",
+    "companion_retained_settlements": "execution_retained_settlements",
+    "companion_native_history": "execution_native_history",
+    "companion_native_history_parts": "execution_native_history_parts",
+    "companion_calendar_owners": "calendar_task_executors", "companion_calendar_run_owners": "calendar_run_publishers",
+    "companion_calendar_runs": "calendar_published_runs", "companion_calendar_receipts": "device_calendar_receipts",
+    "companion_calendar_execution_context": "calendar_replica_context",
+    "companion_calendar_execution_conflicts": "calendar_execution_conflicts",
+}
+
+
 def disconnect_snapshot(file, *, device_id, execution_root, published_root):
     """Keep ownership/history; disable copied execution and isolate test projects."""
     with sqlite3.connect(file) as db:
@@ -151,6 +178,15 @@ def disconnect_snapshot(file, *, device_id, execution_root, published_root):
         quote = lambda name: '"' + name.replace('"', '""') + '"'
         for name, _ in triggers:
             db.execute("DROP TRIGGER " + quote(name))
+        # Old-named triggers are not restored: the app recreates every trigger
+        # under its current name.
+        triggers = [(name, sql) for name, sql in triggers if "companion_" not in name and "companion_" not in (sql or "")]
+        for old, new in LEGACY_TABLES.items():
+            if old in tables:
+                db.execute(("DROP TABLE " + quote(old)) if new in tables else ("ALTER TABLE " + quote(old) + " RENAME TO " + quote(new)))
+                tables.discard(old); tables.add(new)
+        tables.discard("companion_workspace")
+        db.execute("DROP TABLE IF EXISTS companion_workspace")
         source_device = (db.execute("SELECT device_id FROM desktop_local_identity WHERE singleton=1").fetchone()
                          if "desktop_local_identity" in tables else None)
         # Ownership is durable metadata. Availability is a separate history state;
@@ -174,20 +210,23 @@ def disconnect_snapshot(file, *, device_id, execution_root, published_root):
                      "desktop_opencode_sessions", "desktop_opencode_submissions", "desktop_openclaw_gateway_links",
                      "desktop_openclaw_gateway_sessions", "desktop_openclaw_cron_jobs", "desktop_openclaw_cron_runs",
                      "desktop_scheduled_result_routes", "desktop_scheduled_result_receipts"}
-        # State this library keeps for other devices (device_*) belongs to the
-        # source instance: its receipts, journals, uploads, grants and execution
-        # routing. Library content that devices produced (versions, changes,
-        # projected history, artifacts) is kept. The replica identity is new.
-        retained_device = {"device_versions", "device_changes", "device_execution_workspaces",
-                           "device_execution_conversations", "device_execution_runs", "device_native_history",
-                           "device_native_history_parts", "device_saved_artifacts", "device_artifact_chunks",
-                           "device_message_provenance"}
+        # State the library keeps about devices and execution belongs to the
+        # source instance: its identity and library ID, receipts, journals,
+        # uploads, grants, schedule executors and replica roles. What devices
+        # produced (revisions, changes, projected history, artifacts) is kept.
+        source_state = {"library_identity", "device_mutation_receipts", "device_command_receipts",
+                        "device_draft_receipts", "device_tool_receipts", "device_workspace_publishers",
+                        "device_workspace_mcp_grants", "device_scheduled_mcp_callers", "execution_journal",
+                        "execution_adoptions", "execution_receipts", "execution_replica_context",
+                        "execution_retained_settlements", "device_artifact_uploads", "calendar_task_executors",
+                        "calendar_run_publishers", "calendar_published_runs", "device_calendar_receipts",
+                        "calendar_replica_context", "calendar_execution_conflicts"}
         # Execution ownership is durable metadata, not sync state. Keep it so a
         # snapshot's new identity owns nothing it copied and never runs another
         # Mac's (or the source's) schedules; drop routes, cursors and journals.
         retained_paired = {"paired_conversation_owners", "paired_agent_owners", "paired_calendar_owners", "paired_library_state"}
         for name in tables:
-            if name in transient or (name.startswith("paired_") and name not in retained_paired) or (name.startswith("device_") and name not in retained_device) or name == "library_identity":
+            if name in transient or (name.startswith("paired_") and name not in retained_paired) or name in source_state:
                 db.execute("DELETE FROM " + quote(name))
         if "paired_library_state" in tables:
             db.execute("DELETE FROM paired_library_state WHERE name<>'owners.bootstrap'")
@@ -202,16 +241,19 @@ def disconnect_snapshot(file, *, device_id, execution_root, published_root):
         # A snapshot is a new library. Keep materialized foreign history, but
         # discard the old synchronization stream and all routes to its owners.
         library_id = str(uuid.uuid4())
-        if "device_workspace" in tables:
-            db.execute("INSERT INTO device_workspace(singleton,workspace_id) VALUES(1,?)", (library_id,))
-        for table, column in (("device_execution_workspaces", "payload"),
-                              ("device_execution_conversations", "conversation")):
+        if "library_identity" in tables:
+            if "library_id" not in {r[1] for r in db.execute("PRAGMA table_info(library_identity)")}:
+                db.execute("ALTER TABLE library_identity ADD COLUMN library_id TEXT")
+            db.execute("INSERT INTO library_identity(singleton,host_device_id,library_id) VALUES(1,?,?)",
+                       (str(uuid.uuid4()), library_id))
+        for table, column in (("execution_workspaces", "payload"),
+                              ("execution_conversations", "conversation")):
             if table not in tables:
                 continue
             for identifier, raw in db.execute("SELECT id," + column + " FROM " + table).fetchall():
                 value = json.loads(raw)
                 value["libraryID"] = library_id
-                if table == "device_execution_workspaces":
+                if table == "execution_workspaces":
                     value.pop("endpoint", None)
                     value["retainedHistory"] = True
                 else:
@@ -244,8 +286,8 @@ def disconnect_snapshot(file, *, device_id, execution_root, published_root):
         # Retain task definitions with an unreachable owner. New schedules use
         # this instance; copied occurrences cannot be admitted by its scheduler.
         if "dashboard_calendar_items" in tables:
-            db.execute("CREATE TABLE IF NOT EXISTS device_calendar_owners(event_id TEXT PRIMARY KEY, device_id TEXT NOT NULL, tools_json TEXT)")
-            db.execute("INSERT OR REPLACE INTO device_calendar_owners(event_id,device_id) SELECT id,? FROM dashboard_calendar_items", (str(uuid.uuid4()),))
+            db.execute("CREATE TABLE IF NOT EXISTS calendar_task_executors(event_id TEXT PRIMARY KEY, device_id TEXT NOT NULL, tools_json TEXT)")
+            db.execute("INSERT OR REPLACE INTO calendar_task_executors(event_id,device_id) SELECT id,? FROM dashboard_calendar_items", (str(uuid.uuid4()),))
         # Retain goal history without scheduling a continuation from the copy.
         for name in tables:
             if name.startswith("workspace_goal"):

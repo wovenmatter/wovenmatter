@@ -34,7 +34,7 @@ public final class LibraryHost: @unchecked Sendable {
     }.map(\.name))
   }
   public static let maximumRequestBytes = WovenMatterToolRequest.maximumHTMLRequestBytes
-  /// Mobile library routes (today's `LibraryWorkspaceAPI`), mounted under
+  /// Mobile library routes (today's `DeviceAPI`), mounted under
   /// these prefixes so a phone can synchronize with this machine.
   public static let mobilePrefixes = [
     "/v1/hello", "/v1/snapshot", "/v1/changes", "/v1/mutations", "/v1/commands", "/v1/command-receipts/", "/v1/federation/",
@@ -55,7 +55,7 @@ public final class LibraryHost: @unchecked Sendable {
   private let lock = NSLock()
   private var mounts: [(prefix: String, handler: LibraryHTTPResponseHandler)] = []
   private var servers: [LibrarySocketHTTPServer] = []
-  private var mobile: LibraryWorkspaceAPI?
+  private var mobile: DeviceAPI?
 
   /// `name` and `endpoints` are this machine's own advertised entry (the Mac
   /// that adds it signs the authoritative one); `transport` is for tests.
@@ -84,7 +84,7 @@ public final class LibraryHost: @unchecked Sendable {
     // Bearer grants are never issued here; the store only backs the API.
     let authentication = try DeviceAuthentication(fileURL: layout.library.appending(path: DeviceAuthentication.fileName))
     let api = await MainActor.run { [database, members, executor, sync, ownID = identity.deviceID] in
-      LibraryWorkspaceAPI(database: database, authentication: authentication, commands: LibraryHostCommands(executor: executor),
+      DeviceAPI(database: database, authentication: authentication, commands: LibraryHostCommands(executor: executor),
                             isActive: { true }, members: members, syncStatus: { await sync.status() },
                             // This machine's own member entry carries its signed, user-visible name.
                             hostName: { await members.member(ownID)?.name })
@@ -203,7 +203,7 @@ public final class LibraryHost: @unchecked Sendable {
         return try .json(Workspaces(workspaces: try await database.libraryExecutionWorkspaces().filter { !$0.deleted }))
       default:
         if path.hasPrefix("/v1/publisher/") {
-          return try await LibraryWorkspacePublisherAPI.handleLocal(request, path: path, database: database)
+          return try await DevicePublisherAPI.handleLocal(request, path: path, database: database)
         }
         let parts = path.split(separator: "/").map(String.init)
         if parts.count == 4, parts[0] == "v1", parts[1] == "bots", parts[3] == "entries" {
@@ -469,7 +469,7 @@ public final class LibraryHost: @unchecked Sendable {
 /// against this database; sessions are started on a Mac or this machine's
 /// own workspace, never from the phone through the library host.
 @MainActor
-final class LibraryHostCommands: LibraryCommandServing {
+final class LibraryHostCommands: DeviceCommandServing {
   private let executor: WorkspaceToolExecutor
   init(executor: WorkspaceToolExecutor) { self.executor = executor }
   private var unsupported: LibraryAPIError {

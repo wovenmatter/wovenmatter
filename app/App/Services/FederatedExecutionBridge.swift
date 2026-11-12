@@ -139,7 +139,7 @@ extension ApplicationModel {
         }
         var transcript = try await database.libraryFederatedTranscript(conversationID: id, before: before)
         transcript?.activeRunID = nil
-        return .init(workspace: .init(id: "snapshot-history", libraryID: try await database.libraryWorkspaceID(),
+        return .init(workspace: .init(id: "snapshot-history", libraryID: try await database.libraryID(),
             ownerDeviceID: "snapshot-history", kind: .mac, name: "Snapshot history"),
             transcript: transcript, capability: nil, interactions: [], session: nil, online: false, error: nil)
     }

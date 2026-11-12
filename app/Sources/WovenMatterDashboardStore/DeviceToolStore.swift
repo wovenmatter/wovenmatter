@@ -12,7 +12,7 @@ public struct LibraryToolReservation: Sendable {
 }
 
 extension WorkspaceDatabaseConnection {
-  func createLibraryToolSchemaUnlocked() throws {
+  func createDeviceToolSchemaUnlocked() throws {
     try executeUnlocked("""
       CREATE TABLE IF NOT EXISTS device_tool_receipts (
         device_id TEXT NOT NULL, request_id TEXT NOT NULL, conversation_id TEXT NOT NULL,
@@ -45,7 +45,7 @@ extension WorkspaceDatabaseConnection {
       throw LibraryAPIError(code: "invalid_request", message: "Tool calls require bounded requests and stable UUID identities.")
     }
     var owners = try libraryIDsUnlocked("""
-      SELECT f.workspace_id FROM device_execution_conversations f
+      SELECT f.workspace_id FROM execution_conversations f
       JOIN dashboard_conversations c ON c.id=f.id
       WHERE f.id=? AND f.deleted=0 AND c.deleted_at IS NULL AND c.is_archived=0
       """, bindings: [value.conversationID])
@@ -89,7 +89,7 @@ extension WorkspaceDatabaseConnection {
   /// follows pairing; a retired execution owner still cannot issue automation.
   public func requireLibraryAutomationAccess(callerID: String) throws {
     try withLock {
-      let owners = try libraryIDsUnlocked("SELECT workspace_id FROM device_execution_conversations WHERE id=? UNION SELECT workspace_id FROM device_scheduled_mcp_callers WHERE conversation_id=?", bindings: [callerID, callerID])
+      let owners = try libraryIDsUnlocked("SELECT workspace_id FROM execution_conversations WHERE id=? UNION SELECT workspace_id FROM device_scheduled_mcp_callers WHERE conversation_id=?", bindings: [callerID, callerID])
       guard let id = owners.first else { return }
       guard let owner = try federationWorkspaceUnlocked(id), !owner.deleted else {
         throw LibraryAPIError(code: "wrong_owner", message: "The automation caller's execution workspace is unavailable.")

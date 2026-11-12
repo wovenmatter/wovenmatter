@@ -214,15 +214,15 @@ private final class FederationFlowFixture {
   let database: WorkspaceDatabase
   let authentication: DeviceAuthentication
   let commands = RejectExecutionCommands()
-  let api: LibraryWorkspaceAPI
+  let api: DeviceAPI
   let libraryID: String
   init() async throws {
     directory = FileManager.default.temporaryDirectory.appending(path: "woven-federation-flow-\(UUID())")
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
     database = try await WorkspaceDatabase(url: directory.appending(path: "central.sqlite"))
-    libraryID = try await database.libraryWorkspaceID()
+    libraryID = try await database.libraryID()
     authentication = try DeviceAuthentication(fileURL: directory.appending(path: "paired-devices.json"))
-    api = LibraryWorkspaceAPI(database: database, authentication: authentication, commands: commands, isActive: { true })
+    api = DeviceAPI(database: database, authentication: authentication, commands: commands, isActive: { true })
   }
   func client(_ name: String) async throws -> Client {
     let file = directory.appending(path: name + "/library.json")
@@ -244,12 +244,12 @@ private final class FederationFlowFixture {
 /// request crosses JSON encoding/decoding and the ordinary pairing credential.
 @MainActor
 private final class FederationAPITransport: LibraryTransport, FederationTransport {
-  let api: LibraryWorkspaceAPI
+  let api: DeviceAPI
   let credential: MobileCredential
   var dropNextJournalAcknowledgement = false
   var dropNextArtifactChunkAcknowledgement = false
   var journalImports = 0
-  init(api: LibraryWorkspaceAPI, credential: MobileCredential) { self.api = api; self.credential = credential }
+  init(api: DeviceAPI, credential: MobileCredential) { self.api = api; self.credential = credential }
   private func request<T: Decodable & Sendable>(_ path: String, method: String = "GET", body: Data = Data()) async throws -> T {
     let response = await api.handle(.init(method: method, target: "/wovenmatter" + path, headers: [
       "authorization": "Bearer " + credential.token,
@@ -314,7 +314,7 @@ private actor RecordedExecutionSource: ExecutionWorkspaceTransport {
 }
 
 @MainActor
-private final class RejectExecutionCommands: LibraryCommandServing {
+private final class RejectExecutionCommands: DeviceCommandServing {
   private(set) var executions = 0
   func providers() -> [HarnessCapabilities] { [] }
   func pendingInteractions() -> [PendingInteraction] { [] }

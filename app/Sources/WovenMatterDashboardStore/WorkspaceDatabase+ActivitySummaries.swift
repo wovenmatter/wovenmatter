@@ -211,7 +211,7 @@ extension WorkspaceDatabaseConnection {
   /// activity pages continue to read the bounded projection and summary index.
   private func libraryActivityDetailsUnlocked(conversationID: String, runID: String,
     activityID: String) throws -> AgentRunActivity? {
-    let lookup = try prepareUnlocked("SELECT workspace_id,transcript FROM device_execution_conversations WHERE id=? AND deleted=0 AND transcript IS NOT NULL")
+    let lookup = try prepareUnlocked("SELECT workspace_id,transcript FROM execution_conversations WHERE id=? AND deleted=0 AND transcript IS NOT NULL")
     defer { sqlite3_finalize(lookup) }
     try bind(conversationID, at: 1, to: lookup)
     let lookupCode = sqlite3_step(lookup)
@@ -234,7 +234,7 @@ extension WorkspaceDatabaseConnection {
     runID: String, recordID: String) throws -> (format: String, data: Data) {
     // Query by immutable identity first so a cross-run/conversation reference is
     // rejected, rather than treated as an incomplete record that could arrive.
-    let manifest = try prepareUnlocked("SELECT conversation_id,run_id,format,part_count,byte_count,sha256,complete FROM device_native_history WHERE workspace_id=? AND record_id=?")
+    let manifest = try prepareUnlocked("SELECT conversation_id,run_id,format,part_count,byte_count,sha256,complete FROM execution_native_history WHERE workspace_id=? AND record_id=?")
     defer { sqlite3_finalize(manifest) }
     try bind(workspaceID, at: 1, to: manifest); try bind(recordID, at: 2, to: manifest)
     let code = sqlite3_step(manifest)
@@ -248,7 +248,7 @@ extension WorkspaceDatabaseConnection {
     guard count > 0, count <= 65_536, size >= 0,
       size <= LibraryActivityDetails.maximumBytes else { throw LibraryActivityDetails.invalid }
     guard sqlite3_column_int(manifest, 6) == 1 else { throw LibraryActivityDetails.incomplete }
-    let parts = try prepareUnlocked("SELECT part_index,bytes FROM device_native_history_parts WHERE workspace_id=? AND record_id=? ORDER BY part_index")
+    let parts = try prepareUnlocked("SELECT part_index,bytes FROM execution_native_history_parts WHERE workspace_id=? AND record_id=? ORDER BY part_index")
     defer { sqlite3_finalize(parts) }
     try bind(workspaceID, at: 1, to: parts); try bind(recordID, at: 2, to: parts)
     var data = Data(), index = 0

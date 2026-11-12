@@ -33,7 +33,7 @@ extension WorkspaceDatabaseConnection {
       records.append(try JSONDecoder().decode(DictationRecord.self, from: Data(json.utf8)))
       next = sequence; bytes += json.utf8.count
     }
-    return try .init(workspaceID: libraryWorkspaceIDUnlocked(), cursor: next, records: records, hasMore: rows.count > records.count)
+    return try .init(workspaceID: libraryIDUnlocked(), cursor: next, records: records, hasMore: rows.count > records.count)
   }
 }
 extension WorkspaceDatabase {

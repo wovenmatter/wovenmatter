@@ -6,7 +6,7 @@ extension WorkspaceDatabaseConnection {
     try withLock {
       let operatorID = try localMutationOperatorIDUnlocked()
       guard let row = try historyRowsUnlocked("""
-        SELECT CAST(COALESCE((SELECT revision FROM device_versions WHERE kind = 'note' AND resource_id = notes.id), 1) AS TEXT) AS updated_at FROM notes WHERE id = ? AND user_id = ?
+        SELECT CAST(COALESCE((SELECT revision FROM device_sync_revisions WHERE kind = 'note' AND resource_id = notes.id), 1) AS TEXT) AS updated_at FROM notes WHERE id = ? AND user_id = ?
           AND deleted_at IS \(trashed ? "NOT NULL" : "NULL")
         """, values: [id, operatorID]).first?.objectValue,
         let revision = row["updated_at"]?.stringValue else { throw WorkspaceNoteMutationError.noteNotFound }

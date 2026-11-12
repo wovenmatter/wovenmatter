@@ -99,9 +99,9 @@ final class LibraryHostController {
     private static let pendingRevocationsKey = "library.execution.pending-revocations"
     private static let pendingInstallerRotationsKey = "library.execution.pending-installer-rotations"
     nonisolated static let appliedPeerRevocationsKey = "library.peers.applied-revocations"
-    /// Followed by the library workspace ID.
+    /// Followed by the library ID.
     private static let httpsPortKeyPrefix = "library.https.port."
-    /// Followed by the library workspace ID.
+    /// Followed by the library ID.
     nonisolated static let localExecutionIDKeyPrefix = "library.execution.local-id."
     private var server: LibraryHTTPServer?
     private var serve: TailscaleServe?
@@ -114,6 +114,16 @@ final class LibraryHostController {
     private var availabilityTask: Task<Void, Never>?
     private let retryInterval: Duration
 
+    /// Settings saved before November 2026 used a "companion." prefix. They
+    /// move once, keeping pending revocations, the HTTPS port and this Mac's
+    /// execution workspace ID.
+    nonisolated static func moveLegacyDefaults(in defaults: UserDefaults) {
+        for (key, value) in defaults.dictionaryRepresentation() where key.hasPrefix("companion.") {
+            let current = "library." + key.dropFirst("companion.".count)
+            if defaults.object(forKey: current) == nil { defaults.set(value, forKey: current) }
+            defaults.removeObject(forKey: key)
+        }
+    }
     init(model: ApplicationModel, defaults: UserDefaults = .standard, supportDirectory: URL? = nil,
          retryInterval: Duration = .seconds(15),
          peerStorage: PairedMacDeviceStorage? = nil,
@@ -121,6 +131,7 @@ final class LibraryHostController {
         self.peerStorage = peerStorage ?? .standard
         self.model = model
         self.defaults = defaults
+        Self.moveLegacyDefaults(in: defaults)
         self.supportDirectory = supportDirectory
         self.makeExposure = makeExposure
         self.retryInterval = retryInterval
@@ -168,7 +179,7 @@ final class LibraryHostController {
             discoveryIdentity = .init(deviceID: centralIdentity.hostDeviceID,
                 deviceName: DevelopmentLaunch.deviceName(),
                 metadata: MacPairingController.metadata)
-            let api = LibraryWorkspaceAPI(database: database, authentication: authentication,
+            let api = DeviceAPI(database: database, authentication: authentication,
                 commands: model.libraryCommands,
                 isActive: { [weak self] in self?.generation == expectedGeneration && self?.endpoint != nil },
                 onCancelPairing: { [weak self] principal in
@@ -208,7 +219,7 @@ final class LibraryHostController {
             let exposure = makeExposure()
             attemptExposure = exposure
             serve = exposure
-            let portKey = Self.httpsPortKeyPrefix + (try await database.libraryWorkspaceID())
+            let portKey = Self.httpsPortKeyPrefix + (try await database.libraryID())
             // Only paired devices rely on a stable address. Before the first
             // pairing, an old occupied port must not prevent initial setup.
             let savedPort = pairedDevices.isEmpty ? nil : defaults.object(forKey: portKey) as? Int
@@ -296,7 +307,7 @@ final class LibraryHostController {
         }
     }
 
-    private func handle(_ request: LibraryHTTPRequest, generation expected: UUID, libraryAPI: LibraryWorkspaceAPI) async -> LibraryHTTPResponse {
+    private func handle(_ request: LibraryHTTPRequest, generation expected: UUID, libraryAPI: DeviceAPI) async -> LibraryHTTPResponse {
         guard generation == expected else { return .error("unavailable", "This sharing session has stopped.", status: 503) }
         let path = request.target.split(separator: "?", maxSplits: 1).first.map(String.init) ?? request.target
         if let response = await peerSync.handle(request) { return response }
@@ -1028,7 +1039,7 @@ final class LibraryHostController {
         if model?.isBackendFrontend == true { await forward(.approvePairing(id)); return }
         guard endpoint != nil, let authentication, let database = model?.dashboardStore?.database else { return }
         do {
-            try await authentication.approvePairing(id: id, workspaceID: database.libraryWorkspaceID())
+            try await authentication.approvePairing(id: id, workspaceID: database.libraryID())
             await refreshStatus(); errorMessage = nil
         } catch { errorMessage = error.localizedDescription }
     }
@@ -1142,7 +1153,7 @@ final class LibraryHostController {
             throw LibraryAPIError(code: "unavailable", message: "Run production with background execution enabled, or a live Dev host, and wait for its library to connect.")
         }
         let response = try await authentication.enrollLocalDevelopment(deviceID: request.deviceID,
-            name: request.name, workspaceID: database.libraryWorkspaceID())
+            name: request.name, workspaceID: database.libraryID())
         await didPair()
         return .init(endpoint: endpoint, pairing: response)
     }

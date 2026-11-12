@@ -2,7 +2,7 @@ import Foundation
 import WovenMatterCore
 
 @MainActor
-public enum LibraryWorkspacePublisherAPI {
+public enum DevicePublisherAPI {
   static func handle(_ request: LibraryHTTPRequest, path: String, database: WorkspaceDatabase) async throws -> LibraryHTTPResponse {
     guard request.method == "POST", let bearer = request.bearer else { return .error("unauthorized", "A workspace publisher is required.", status: 401) }
     let principal = try await database.authenticateLibraryWorkspacePublisher(bearer: bearer)
@@ -55,7 +55,7 @@ public enum LibraryWorkspacePublisherAPI {
   public static func handleLocal(_ request: LibraryHTTPRequest, path: String, database: WorkspaceDatabase) async throws -> LibraryHTTPResponse {
     guard request.method == "POST" else { return .error("method_not_allowed", "Use POST.", status: 405) }
     guard request.body.count <= FederationProtocol.maximumBatchBytes + 65_536 else { return .error("too_large", "Publish in smaller batches.", status: 413) }
-    let own = try await database.libraryWorkspaceID()
+    let own = try await database.libraryID()
     func workspace(_ id: String) async throws -> ExecutionWorkspace {
       guard let workspace = try await database.libraryExecutionWorkspaces().first(where: { $0.id == id }), !workspace.deleted,
             workspace.kind == .linux, workspace.executionDeviceID != nil else {

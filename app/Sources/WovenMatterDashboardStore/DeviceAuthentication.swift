@@ -139,6 +139,13 @@ public actor DeviceAuthentication {
   public init(fileURL: URL, now: @escaping @Sendable () -> Date = Date.init) throws {
     self.fileURL = fileURL
     self.now = now
+    // Before November 2026 this store was companion-devices.json; it moves
+    // once, so paired devices stay paired.
+    let legacy = fileURL.deletingLastPathComponent().appendingPathComponent("companion-devices.json")
+    if fileURL.lastPathComponent == Self.fileName, !FileManager.default.fileExists(atPath: fileURL.path),
+       FileManager.default.fileExists(atPath: legacy.path) {
+      try FileManager.default.moveItem(at: legacy, to: fileURL)
+    }
     if FileManager.default.fileExists(atPath: fileURL.path) {
       let size = (try fileURL.resourceValues(forKeys: [.fileSizeKey])).fileSize ?? 0
       guard size <= 16_777_216 else { throw Self.error("credential_store", "The paired-device store exceeds its safety limit.") }

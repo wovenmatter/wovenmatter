@@ -58,7 +58,7 @@ extension WorkspaceDatabaseConnection {
       try bind(Data(SHA256.hash(data: Data(bearer.utf8))), at: 1, to: statement)
       guard sqlite3_step(statement) == SQLITE_ROW else { throw federationError("unauthorized", "Invalid workspace publisher.") }
       let record = try JSONDecoder().decode(WorkspacePublisherRecord.self, from: blob(statement, column: 0))
-      guard record.libraryID == (try libraryWorkspaceIDUnlocked()), let workspace = try federationWorkspaceUnlocked(record.workspaceID),
+      guard record.libraryID == (try libraryIDUnlocked()), let workspace = try federationWorkspaceUnlocked(record.workspaceID),
             !workspace.deleted, workspace.kind == .linux, workspace.executionDeviceID == record.executionDeviceID else {
         throw federationError("unauthorized", "This workspace publisher is no longer authorized.")
       }

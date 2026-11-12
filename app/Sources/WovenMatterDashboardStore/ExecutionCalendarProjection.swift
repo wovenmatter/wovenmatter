@@ -17,8 +17,8 @@ extension WorkspaceDatabase {
     try await write { connection in
       try connection.transaction {
         try connection.bindExecutionCalendar(libraryID: libraryID, workspaceID: workspaceID)
-        try connection.toolsExecuteUnlocked("DELETE FROM device_calendar_execution_conflicts", [])
-        for id in ids { try connection.toolsExecuteUnlocked("INSERT INTO device_calendar_execution_conflicts(event_id) VALUES(?)", [id]) }
+        try connection.toolsExecuteUnlocked("DELETE FROM calendar_execution_conflicts", [])
+        for id in ids { try connection.toolsExecuteUnlocked("INSERT INTO calendar_execution_conflicts(event_id) VALUES(?)", [id]) }
       }
     }
   }
@@ -28,15 +28,15 @@ extension WorkspaceDatabase {
 }
 extension WorkspaceDatabaseConnection {
   func calendarForeignExecutionEventIDs() throws -> Set<String> {
-    let localID = try historyRowsUnlocked("SELECT workspace_id FROM device_calendar_execution_context WHERE singleton=1", values: []).first?.objectValue?["workspace_id"]?.stringValue ?? libraryIdentityUnlocked().hostDeviceID
-    let conflicts = try historyRowsUnlocked("SELECT event_id FROM device_calendar_execution_conflicts", values: []).compactMap { $0.objectValue?["event_id"]?.stringValue }
+    let localID = try historyRowsUnlocked("SELECT workspace_id FROM calendar_replica_context WHERE singleton=1", values: []).first?.objectValue?["workspace_id"]?.stringValue ?? libraryIdentityUnlocked().hostDeviceID
+    let conflicts = try historyRowsUnlocked("SELECT event_id FROM calendar_execution_conflicts", values: []).compactMap { $0.objectValue?["event_id"]?.stringValue }
     return Set(try calendarReplicaOwners().filter { $0.value != localID }.map(\.key)).union(conflicts)
   }
   func bindExecutionCalendar(libraryID: String, workspaceID: String) throws {
-    guard UUID(uuidString: workspaceID) != nil, !libraryID.isEmpty, workspaceID != (try libraryWorkspaceID()), libraryID != (try libraryWorkspaceID()) else { throw LibraryCalendarError.wrongWorkspace }
-    if let context = try historyRowsUnlocked("SELECT library_id,workspace_id FROM device_calendar_execution_context WHERE singleton=1", values: []).first?.objectValue {
+    guard UUID(uuidString: workspaceID) != nil, !libraryID.isEmpty, workspaceID != (try self.libraryID()), libraryID != (try self.libraryID()) else { throw LibraryCalendarError.wrongWorkspace }
+    if let context = try historyRowsUnlocked("SELECT library_id,workspace_id FROM calendar_replica_context WHERE singleton=1", values: []).first?.objectValue {
       guard context["library_id"]?.stringValue == libraryID, context["workspace_id"]?.stringValue == workspaceID else { throw LibraryCalendarError.wrongWorkspace }
-    } else { try toolsExecuteUnlocked("INSERT INTO device_calendar_execution_context(singleton,library_id,workspace_id) VALUES(1,?,?)", [libraryID, workspaceID]) }
+    } else { try toolsExecuteUnlocked("INSERT INTO calendar_replica_context(singleton,library_id,workspace_id) VALUES(1,?,?)", [libraryID, workspaceID]) }
   }
   func executionCalendarSnapshot(workspaceID: String) throws -> LibraryCalendarSnapshot {
     var snapshot = try libraryCalendarSnapshot()
@@ -100,8 +100,8 @@ extension WorkspaceDatabaseConnection {
       }
       let tools = try desired.event.draft.task?.enabledTools.map { try toolsJSON($0) }
       if let owner = desired.ownerDeviceID {
-        try toolsExecuteUnlocked("INSERT INTO device_calendar_owners(event_id,device_id,tools_json) VALUES(?,?,?) ON CONFLICT(event_id) DO UPDATE SET device_id=excluded.device_id,tools_json=excluded.tools_json", [record.id, owner, tools])
-      } else { try toolsExecuteUnlocked("DELETE FROM device_calendar_owners WHERE event_id=?", [record.id]) }
+        try toolsExecuteUnlocked("INSERT INTO calendar_task_executors(event_id,device_id,tools_json) VALUES(?,?,?) ON CONFLICT(event_id) DO UPDATE SET device_id=excluded.device_id,tools_json=excluded.tools_json", [record.id, owner, tools])
+      } else { try toolsExecuteUnlocked("DELETE FROM calendar_task_executors WHERE event_id=?", [record.id]) }
       guard let result = try executionCalendarSnapshot(workspaceID: workspaceID).records.first(where: { $0.id == record.id }) else { throw LibraryCalendarError.missing }
       return result
     }

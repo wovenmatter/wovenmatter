@@ -52,7 +52,7 @@ enum NativeInteractionProjection {
     }
 }
 
-extension LibraryCommandService {
+extension DeviceCommandService {
     func pendingNativeInteractions() async -> [PendingInteraction] {
         var result: [PendingInteraction] = []
         for native in model.openCodeInstances {

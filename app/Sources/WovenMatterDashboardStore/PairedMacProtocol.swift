@@ -112,7 +112,7 @@ extension WorkspaceDatabase {
             && workspace.ownerDeviceID == deviceID && !workspace.deleted
             && (workspace.endpoint != nil || workspace.retainedHistory != true) {
           workspace.endpoint = nil; workspace.retainedHistory = true; workspace.revision += 1
-          let query = try connection.prepareUnlocked("UPDATE device_execution_workspaces SET revision=?,payload=? WHERE id=?")
+          let query = try connection.prepareUnlocked("UPDATE execution_workspaces SET revision=?,payload=? WHERE id=?")
           defer { sqlite3_finalize(query) }
           sqlite3_bind_int64(query, 1, workspace.revision)
           try connection.bind(JSONEncoder().encode(workspace), at: 2, to: query)

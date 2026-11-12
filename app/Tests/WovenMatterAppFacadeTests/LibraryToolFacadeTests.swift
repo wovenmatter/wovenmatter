@@ -74,7 +74,7 @@ struct LibraryToolFacadeTests {
             file: fixture.directory.appending(path: "mac.key"), deviceID: try await fixture.database.libraryIdentity().hostDeviceID, kind: .mac), cacheLifetime: 0)
         try await mac.ensureSelf(name: "Mac", endpoints: [])
         let phone = try MemberIdentity.loadOrCreate(file: fixture.directory.appending(path: "phone.key"), deviceID: UUID().uuidString.lowercased(), kind: .ios)
-        let api = LibraryWorkspaceAPI(database: fixture.database, authentication: auth, commands: fixture.model.libraryCommands,
+        let api = DeviceAPI(database: fixture.database, authentication: auth, commands: fixture.model.libraryCommands,
             isActive: { true }, members: mac, onMemberPaired: { id, name, key in
                 _ = try? await mac.add(deviceID: id, kind: .ios, name: name, publicKey: key, endpoints: [])
             })
@@ -107,11 +107,11 @@ struct LibraryToolFacadeTests {
         let mac = MemberDirectory(database: fixture.database, identity: try MemberIdentity.loadOrCreate(
             file: fixture.directory.appending(path: "mac.key"), deviceID: try await fixture.database.libraryIdentity().hostDeviceID, kind: .mac), cacheLifetime: 0)
         try await mac.ensureSelf(name: "Mac", endpoints: [])
-        let api = LibraryWorkspaceAPI(database: fixture.database, authentication: auth, commands: fixture.model.libraryCommands,
+        let api = DeviceAPI(database: fixture.database, authentication: auth, commands: fixture.model.libraryCommands,
             isActive: { true }, members: mac, onMemberPaired: { id, name, key in
                 try await mac.add(deviceID: id, kind: .ios, name: name, publicKey: key, endpoints: [], replacingKey: true)
             })
-        let workspaceID = try await fixture.database.libraryWorkspaceID()
+        let workspaceID = try await fixture.database.libraryID()
         let phoneID = UUID().uuidString.lowercased()
         func pair(_ device: String, key: Data) async throws -> LibraryHTTPResponse {
             let offer = try await auth.createOffer(endpoint: URL(string: "https://fixture.ts.net/wovenmatter")!)
@@ -153,10 +153,10 @@ struct LibraryToolFacadeTests {
         let caller = try await importPhone(fixture)
         let auth = try DeviceAuthentication(fileURL: fixture.directory.appending(path: "test-devices.json"))
         let offer = try await auth.createOffer(endpoint: URL(string: "https://fixture.ts.net/wovenmatter")!)
-        let workspaceID = try await fixture.database.libraryWorkspaceID()
+        let workspaceID = try await fixture.database.libraryID()
         let paired = try await auth.pair(.init(token: offer.payload.token, deviceID: fixture.device,
             deviceName: "Fixture phone", protocolVersion: LibraryProtocol.version), workspaceID: workspaceID)
-        let api = LibraryWorkspaceAPI(database: fixture.database, authentication: auth,
+        let api = DeviceAPI(database: fixture.database, authentication: auth,
             commands: fixture.model.libraryCommands, isActive: { true })
         let call: GatewayJSONValue = .object(["jsonrpc": .string("2.0"), "id": .number(1),
             "method": .string("tools/call"), "params": .object(["name": .string("woven_notes_list"), "arguments": .object([:])])])

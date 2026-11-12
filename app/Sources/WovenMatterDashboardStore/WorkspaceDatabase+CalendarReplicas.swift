@@ -13,37 +13,37 @@ extension WorkspaceDatabase {
 extension WorkspaceDatabaseConnection {
   func migrateCalendarReplicas() throws {
     try executeUnlocked("""
-      CREATE TABLE IF NOT EXISTS device_calendar_execution_conflicts(event_id TEXT PRIMARY KEY);
-      CREATE TABLE IF NOT EXISTS device_calendar_execution_context(singleton INTEGER PRIMARY KEY CHECK(singleton=1), library_id TEXT NOT NULL, workspace_id TEXT NOT NULL);
-      CREATE TABLE IF NOT EXISTS device_calendar_owners(event_id TEXT PRIMARY KEY, device_id TEXT NOT NULL, tools_json TEXT);
-      CREATE TABLE IF NOT EXISTS device_calendar_run_owners(event_id TEXT NOT NULL, device_id TEXT NOT NULL, PRIMARY KEY(event_id,device_id));
-      CREATE TABLE IF NOT EXISTS device_calendar_runs(id TEXT PRIMARY KEY, event_id TEXT NOT NULL, device_id TEXT NOT NULL, payload_json TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS calendar_execution_conflicts(event_id TEXT PRIMARY KEY);
+      CREATE TABLE IF NOT EXISTS calendar_replica_context(singleton INTEGER PRIMARY KEY CHECK(singleton=1), library_id TEXT NOT NULL, workspace_id TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS calendar_task_executors(event_id TEXT PRIMARY KEY, device_id TEXT NOT NULL, tools_json TEXT);
+      CREATE TABLE IF NOT EXISTS calendar_run_publishers(event_id TEXT NOT NULL, device_id TEXT NOT NULL, PRIMARY KEY(event_id,device_id));
+      CREATE TABLE IF NOT EXISTS calendar_published_runs(id TEXT PRIMARY KEY, event_id TEXT NOT NULL, device_id TEXT NOT NULL, payload_json TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS device_calendar_receipts(device_id TEXT NOT NULL, mutation_id TEXT NOT NULL,
         input_json TEXT NOT NULL, result_json TEXT NOT NULL, PRIMARY KEY(device_id,mutation_id));
       """)
-    let columns = Set(try historyRowsUnlocked("PRAGMA table_info(device_calendar_owners)", values: []).compactMap { $0.objectValue?["name"]?.stringValue })
-    if !columns.contains("tools_json") { try executeUnlocked("ALTER TABLE device_calendar_owners ADD COLUMN tools_json TEXT") }
-    try executeUnlocked("INSERT OR IGNORE INTO device_calendar_run_owners(event_id,device_id) SELECT event_id,device_id FROM device_calendar_owners")
+    let columns = Set(try historyRowsUnlocked("PRAGMA table_info(calendar_task_executors)", values: []).compactMap { $0.objectValue?["name"]?.stringValue })
+    if !columns.contains("tools_json") { try executeUnlocked("ALTER TABLE calendar_task_executors ADD COLUMN tools_json TEXT") }
+    try executeUnlocked("INSERT OR IGNORE INTO calendar_run_publishers(event_id,device_id) SELECT event_id,device_id FROM calendar_task_executors")
   }
   func libraryCalendarSnapshot() throws -> LibraryCalendarSnapshot {
     let owners = try calendarReplicaOwners()
     var selectedTools: [String: [String]] = [:]
-    for row in try historyRowsUnlocked("SELECT event_id,tools_json FROM device_calendar_owners WHERE tools_json IS NOT NULL", values: []) {
+    for row in try historyRowsUnlocked("SELECT event_id,tools_json FROM calendar_task_executors WHERE tools_json IS NOT NULL", values: []) {
       if let id = row.objectValue?["event_id"]?.stringValue, let json = row.objectValue?["tools_json"]?.stringValue {
         selectedTools[id] = try JSONDecoder().decode([String].self, from: Data(json.utf8))
       }
     }
     let deleted = Set(try historyRowsUnlocked("SELECT id FROM dashboard_calendar_items WHERE deleted_at IS NOT NULL", values: []).compactMap { $0.objectValue?["id"]?.stringValue })
-    let runs = try historyRowsUnlocked("SELECT payload_json FROM device_calendar_runs", values: []).compactMap { row -> LibraryCalendarRun? in
+    let runs = try historyRowsUnlocked("SELECT payload_json FROM calendar_published_runs", values: []).compactMap { row -> LibraryCalendarRun? in
       guard let json = row.objectValue?["payload_json"]?.stringValue else { return nil }
       return try JSONDecoder().decode(LibraryCalendarRun.self, from: Data(json.utf8))
     }
-    return .init(workspaceID: try libraryWorkspaceID(), records: try calendarItemsUnlocked(includeDeleted: true).map {
+    return .init(workspaceID: try libraryID(), records: try calendarItemsUnlocked(includeDeleted: true).map {
       Self.calendarReplica($0, owner: owners[$0.id], deleted: deleted.contains($0.id), enabledTools: selectedTools[$0.id])
     }, runs: runs)
   }
   func replicaCalendarRuns() throws -> [WorkspaceCalendarRun] {
-    try historyRowsUnlocked("SELECT payload_json FROM device_calendar_runs", values: []).compactMap { row in
+    try historyRowsUnlocked("SELECT payload_json FROM calendar_published_runs", values: []).compactMap { row in
       guard let json = row.objectValue?["payload_json"]?.stringValue else { return nil }
       let run = try JSONDecoder().decode(LibraryCalendarRun.self, from: Data(json.utf8))
       guard let runtime = AgentRuntimeKind(rawValue: run.task.runtime) else { return nil }
@@ -55,7 +55,7 @@ extension WorkspaceDatabaseConnection {
     }
   }
   func calendarReplicaOwners() throws -> [String: String] {
-    Dictionary(uniqueKeysWithValues: try historyRowsUnlocked("SELECT event_id,device_id FROM device_calendar_owners", values: []).compactMap {
+    Dictionary(uniqueKeysWithValues: try historyRowsUnlocked("SELECT event_id,device_id FROM calendar_task_executors", values: []).compactMap {
       guard let id = $0.objectValue?["event_id"]?.stringValue, let device = $0.objectValue?["device_id"]?.stringValue else { return nil }
       return (id, device)
     })
@@ -96,15 +96,15 @@ extension WorkspaceDatabaseConnection {
         try toolsExecuteUnlocked("UPDATE dashboard_calendar_items SET calendar_json=? WHERE id=?", [try toolsJSON(details), item.id])
         if let owner = mutation.record.ownerDeviceID {
           let tools = try mutation.record.event.draft.task?.enabledTools.map { String(decoding: try encoder.encode($0), as: UTF8.self) }
-          try toolsExecuteUnlocked("INSERT INTO device_calendar_owners(event_id,device_id,tools_json) VALUES(?,?,?) ON CONFLICT(event_id) DO UPDATE SET device_id=excluded.device_id,tools_json=excluded.tools_json", [item.id, owner, tools])
-          try toolsExecuteUnlocked("INSERT OR IGNORE INTO device_calendar_run_owners(event_id,device_id) VALUES(?,?)", [item.id, owner])
-        } else { try toolsExecuteUnlocked("DELETE FROM device_calendar_owners WHERE event_id=?", [item.id]) }
+          try toolsExecuteUnlocked("INSERT INTO calendar_task_executors(event_id,device_id,tools_json) VALUES(?,?,?) ON CONFLICT(event_id) DO UPDATE SET device_id=excluded.device_id,tools_json=excluded.tools_json", [item.id, owner, tools])
+          try toolsExecuteUnlocked("INSERT OR IGNORE INTO calendar_run_publishers(event_id,device_id) VALUES(?,?)", [item.id, owner])
+        } else { try toolsExecuteUnlocked("DELETE FROM calendar_task_executors WHERE event_id=?", [item.id]) }
         result = .init(mutationID: mutation.id, status: .accepted, record: try libraryCalendarSnapshot().records.first { $0.id == item.id })
       }
       if result.status == .accepted, before == nil {
         // An event may run and then be converted or deleted entirely offline.
         // Its creator can still publish those immutable historical receipts.
-        try toolsExecuteUnlocked("INSERT OR IGNORE INTO device_calendar_run_owners(event_id,device_id) VALUES(?,?)", [mutation.record.id, deviceID])
+        try toolsExecuteUnlocked("INSERT OR IGNORE INTO calendar_run_publishers(event_id,device_id) VALUES(?,?)", [mutation.record.id, deviceID])
       }
       try toolsExecuteUnlocked("INSERT INTO device_calendar_receipts(device_id,mutation_id,input_json,result_json) VALUES(?,?,?,?)",
         [deviceID, mutation.id, input, String(decoding: try encoder.encode(result), as: UTF8.self)])
@@ -114,13 +114,13 @@ extension WorkspaceDatabaseConnection {
   func libraryCalendarPublishRuns(_ runs: [LibraryCalendarRun], deviceID: String) throws -> [String] {
     guard runs.count <= 200 else { throw LibraryCalendarError.invalid }
     return try transaction {
-      let permittedEvents = Set(try historyRowsUnlocked("SELECT event_id FROM device_calendar_run_owners WHERE device_id=?", values: [deviceID]).compactMap { $0.objectValue?["event_id"]?.stringValue })
+      let permittedEvents = Set(try historyRowsUnlocked("SELECT event_id FROM calendar_run_publishers WHERE device_id=?", values: [deviceID]).compactMap { $0.objectValue?["event_id"]?.stringValue })
       for run in runs {
         guard run.ownerDeviceID == deviceID, permittedEvents.contains(run.eventID),
           UUID(uuidString: run.id) != nil, UUID(uuidString: run.sessionID) != nil,
           run.occurrence >= 0, run.scheduledAt.timeIntervalSince1970.isFinite,
           ["pending", "running", "completed", "failed", "cancelled", "accepted", "uncertain", "queued", "sending"].contains(run.status) else { throw LibraryCalendarError.invalid }
-        if let json = try historyRowsUnlocked("SELECT payload_json FROM device_calendar_runs WHERE id=?", values: [run.id]).first?.objectValue?["payload_json"]?.stringValue {
+        if let json = try historyRowsUnlocked("SELECT payload_json FROM calendar_published_runs WHERE id=?", values: [run.id]).first?.objectValue?["payload_json"]?.stringValue {
           var old = try JSONDecoder().decode(LibraryCalendarRun.self, from: Data(json.utf8))
           let previousRevision = old.revision ?? 0
           if previousRevision == (run.revision ?? 0), old != run { throw LibraryCalendarError.requestMismatch }
@@ -130,7 +130,7 @@ extension WorkspaceDatabaseConnection {
           // earlier running or pending status from the same device.
           if previousRevision > (run.revision ?? 0) { continue }
         }
-        try toolsExecuteUnlocked("INSERT INTO device_calendar_runs(id,event_id,device_id,payload_json) VALUES(?,?,?,?) ON CONFLICT(id) DO UPDATE SET payload_json=excluded.payload_json",
+        try toolsExecuteUnlocked("INSERT INTO calendar_published_runs(id,event_id,device_id,payload_json) VALUES(?,?,?,?) ON CONFLICT(id) DO UPDATE SET payload_json=excluded.payload_json",
           [run.id, run.eventID, deviceID, try toolsJSON(run)])
       }
       return runs.map(\.id)

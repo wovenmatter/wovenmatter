@@ -117,7 +117,7 @@ struct CentralExecutionClientTests {
         let request = LibraryHTTPRequest(method: "POST", target: path,
             headers: ["authorization": "Bearer " + grant.token, "x-woven-workspace": grant.libraryID],
             body: try JSONEncoder().encode(ExecutionJournalBatch(libraryID: grant.libraryID, entries: entries)))
-        let response = try await LibraryWorkspacePublisherAPI.handle(request, path: path, database: database)
+        let response = try await DevicePublisherAPI.handle(request, path: path, database: database)
         #expect(response.status == 200)
     }
 

@@ -6,7 +6,7 @@ import WovenMatterDashboardStore
 /// The same Mac-owned routing, concurrency and note-binding path used by desktop UI.
 /// Request tasks only await this service; they never own or cancel provider tasks.
 @MainActor
-final class LibraryCommandService: LibraryCommandServing {
+final class DeviceCommandService: DeviceCommandServing {
     enum CommandError: LocalizedError {
         case unavailable, invalidCommand, unknownProvider, unknownConversation
         case noteRevisionChanged, interactionResolved
@@ -25,8 +25,8 @@ final class LibraryCommandService: LibraryCommandServing {
     }
     private struct HistoryCursor: Codable { let createdAt: String; let messageID: String }
     unowned let model: ApplicationModel
-    private var commandDispatcher: LibraryCommandDispatcher?
-    private var toolDispatcher: LibraryToolDispatcher?
+    private var commandDispatcher: DeviceCommandDispatcher?
+    private var toolDispatcher: DeviceToolDispatcher?
 
     init(model: ApplicationModel) { self.model = model }
 
@@ -34,7 +34,7 @@ final class LibraryCommandService: LibraryCommandServing {
         guard let database = model.dashboardStore?.database, let tools = model.agentTools else {
             throw CommandError.unavailable
         }
-        if toolDispatcher == nil { toolDispatcher = LibraryToolDispatcher(database: database) }
+        if toolDispatcher == nil { toolDispatcher = DeviceToolDispatcher(database: database) }
         return try await toolDispatcher!.execute(request, deviceID: deviceID) { request, callerID in
             return await tools.handle(request, callerID: callerID)
         }
@@ -175,9 +175,9 @@ final class LibraryCommandService: LibraryCommandServing {
         return try await dispatcher(for: store).receipt(commandID: commandID, deviceID: deviceID)
     }
 
-    private func dispatcher(for store: DashboardStore) -> LibraryCommandDispatcher {
+    private func dispatcher(for store: DashboardStore) -> DeviceCommandDispatcher {
         if let commandDispatcher, commandDispatcher.database === store.database { return commandDispatcher }
-        let dispatcher = LibraryCommandDispatcher(database: store.database)
+        let dispatcher = DeviceCommandDispatcher(database: store.database)
         commandDispatcher = dispatcher
         return dispatcher
     }
@@ -359,7 +359,7 @@ final class LibraryCommandService: LibraryCommandServing {
     }
 }
 
-extension LibraryCommandService {
+extension DeviceCommandService {
     func analyticsPreference() async throws -> ProductAnalyticsPreference {
         guard let database = model.dashboardStore?.database else { throw ApplicationModelError.dashboardStoreUnavailable }
         return try await database.productAnalyticsPreference()

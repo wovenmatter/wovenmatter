@@ -6,7 +6,7 @@ import WovenMatterCore
 @MainActor
 public final class MacExecutionAPI {
   private let database: WorkspaceDatabase
-  private let commands: any LibraryCommandServing
+  private let commands: any DeviceCommandServing
   private let authentication: ExecutionAuthentication
   private let descriptor: ExecutionWorkspace
   private let events: (@MainActor @Sendable (Int64) async throws -> ExecutionJournalPage)?
@@ -18,7 +18,7 @@ public final class MacExecutionAPI {
   /// local sessions with its own signature; nothing is issued or managed.
   private let members: MemberDirectory?
   private struct Scope { let deviceID: String; let libraryID: String; let workspaceID: String }
-  public init(database: WorkspaceDatabase, commands: any LibraryCommandServing,
+  public init(database: WorkspaceDatabase, commands: any DeviceCommandServing,
               authentication: ExecutionAuthentication, descriptor: ExecutionWorkspace,
               isActive: @escaping @MainActor @Sendable () -> Bool,
               events: (@MainActor @Sendable (Int64) async throws -> ExecutionJournalPage)? = nil,

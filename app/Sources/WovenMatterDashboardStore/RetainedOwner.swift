@@ -41,7 +41,7 @@ extension WorkspaceDatabaseConnection {
           association.conversationID == entry.conversationID, association.runtimeKind == proof.runtimeKind else {
       throw federationError("wrong_owner", "Retained history does not match an exact settled execution in this workspace.")
     }
-    let settled = try prepareUnlocked("SELECT fingerprint FROM device_retained_settlements WHERE event_id=?")
+    let settled = try prepareUnlocked("SELECT fingerprint FROM execution_retained_settlements WHERE event_id=?")
     defer { sqlite3_finalize(settled) }
     try bind(entry.eventID, at: 1, to: settled)
     let code = sqlite3_step(settled)
@@ -56,7 +56,7 @@ extension WorkspaceDatabaseConnection {
   /// journal. This changes no conversation owner and never touches a runtime.
   public func settleLibraryRetainedRuns(_ batch: ExecutionJournalBatch, deviceID: String) throws -> ExecutionJournalBatchResult {
     try transaction {
-      let library = try libraryWorkspaceIDUnlocked()
+      let library = try libraryIDUnlocked()
       guard batch.libraryID == library, batch.entries.count <= FederationProtocol.maximumBatchEntries,
             try JSONEncoder().encode(batch).count <= FederationProtocol.maximumBatchBytes else {
         throw federationError("invalid_event", "Retained run proofs require a bounded batch for this library.")
@@ -68,7 +68,7 @@ extension WorkspaceDatabaseConnection {
           throw federationError("invalid_event", "Retained run proofs require immutable bounded event identities.")
         }
         let fingerprint = try libraryFingerprint(entry)
-        let existing = try prepareUnlocked("SELECT workspace_id,fingerprint FROM device_retained_settlements WHERE event_id=?")
+        let existing = try prepareUnlocked("SELECT workspace_id,fingerprint FROM execution_retained_settlements WHERE event_id=?")
         defer { sqlite3_finalize(existing) }
         try bind(entry.eventID, at: 1, to: existing)
         let code = sqlite3_step(existing)
@@ -80,12 +80,12 @@ extension WorkspaceDatabaseConnection {
         }
         guard code == SQLITE_DONE else { throw stepError() }
         let proof = try validatedRetainedProofUnlocked(entry, workspace: workspace)
-        let owner = try libraryIDsUnlocked("SELECT workspace_id || '/' || conversation_id FROM device_execution_runs WHERE id=?", bindings: [proof.runID]).first
+        let owner = try libraryIDsUnlocked("SELECT workspace_id || '/' || conversation_id FROM execution_runs WHERE id=?", bindings: [proof.runID]).first
         guard owner == nil || owner == workspace.id + "/" + entry.conversationID else {
           throw federationError("wrong_owner", "This retained run belongs to another workspace or conversation.")
         }
         try toolsExecuteUnlocked("UPDATE dashboard_runs SET status=?,updated_at=?,completed_at=COALESCE(completed_at,?) WHERE id=?", [proof.status, Self.timestamp(Date()), Self.timestamp(Date()), proof.runID])
-        let insert = try prepareUnlocked("INSERT INTO device_retained_settlements VALUES (?,?,?)")
+        let insert = try prepareUnlocked("INSERT INTO execution_retained_settlements VALUES (?,?,?)")
         defer { sqlite3_finalize(insert) }
         try bind(entry.eventID, at: 1, to: insert); try bind(workspace.id, at: 2, to: insert); try bind(fingerprint, at: 3, to: insert); try stepDone(insert)
       }
@@ -100,21 +100,21 @@ extension WorkspaceDatabaseConnection {
           var conversation = try libraryConversationUnlocked(id: entry.conversationID) else {
       throw federationError("wrong_owner", "Retained ownership cannot replace another active execution.")
     }
-    let owner = try libraryIDsUnlocked("SELECT workspace_id FROM device_execution_conversations WHERE id=?", bindings: [entry.conversationID]).first
+    let owner = try libraryIDsUnlocked("SELECT workspace_id FROM execution_conversations WHERE id=?", bindings: [entry.conversationID]).first
     guard owner == nil || owner == workspace.id else { throw federationError("wrong_owner", "Retained history belongs to another execution workspace.") }
     if owner == nil {
       conversation.workspaceID = workspace.id; conversation.libraryID = workspace.libraryID; conversation.activeRunID = nil
-      let insert = try prepareUnlocked("INSERT INTO device_execution_conversations(id,workspace_id,conversation,transcript) VALUES (?,?,?,?)")
+      let insert = try prepareUnlocked("INSERT INTO execution_conversations(id,workspace_id,conversation,transcript) VALUES (?,?,?,?)")
       defer { sqlite3_finalize(insert) }
       try bind(entry.conversationID, at: 1, to: insert); try bind(workspace.id, at: 2, to: insert)
       try bind(JSONEncoder().encode(conversation), at: 3, to: insert)
       try bind(JSONEncoder().encode(federationLegacyTranscriptUnlocked(entry.conversationID)), at: 4, to: insert); try stepDone(insert)
     }
-    let runOwner = try libraryIDsUnlocked("SELECT workspace_id || '/' || conversation_id FROM device_execution_runs WHERE id=?", bindings: [proof.runID]).first
+    let runOwner = try libraryIDsUnlocked("SELECT workspace_id || '/' || conversation_id FROM execution_runs WHERE id=?", bindings: [proof.runID]).first
     guard runOwner == nil || runOwner == workspace.id + "/" + entry.conversationID else {
       throw federationError("wrong_owner", "Retained run identity belongs to another execution workspace or conversation.")
     }
-    try toolsExecuteUnlocked("INSERT OR IGNORE INTO device_execution_runs(id,workspace_id,conversation_id) VALUES (?,?,?)", [proof.runID, workspace.id, entry.conversationID])
+    try toolsExecuteUnlocked("INSERT OR IGNORE INTO execution_runs(id,workspace_id,conversation_id) VALUES (?,?,?)", [proof.runID, workspace.id, entry.conversationID])
     try toolsExecuteUnlocked("UPDATE dashboard_runs SET status=?,updated_at=?,completed_at=COALESCE(completed_at,?) WHERE id=?", [proof.status, Self.timestamp(Date()), Self.timestamp(Date()), proof.runID])
   }
 }

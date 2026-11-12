@@ -46,7 +46,7 @@ private final class Tailnet: MobileHTTPPerforming, @unchecked Sendable {
 
 /// A Linux workspace's sessions (the Node server's role): signed member
 /// requests create sessions here with every Mac offline.
-@MainActor private final class LinuxSessions: LibraryCommandServing {
+@MainActor private final class LinuxSessions: DeviceCommandServing {
   var created: [LibraryCommand] = []
   var receipts: [String: LibraryCommandReceipt] = [:]
   func providers() -> [HarnessCapabilities] { [.init(id: "local:default_agent", runtimeKind: "default_agent", displayName: "Agent", routeName: "Box", available: true)] }
@@ -102,7 +102,7 @@ private final class ReachWorld: @unchecked Sendable {
     let pairing = try DeviceAuthentication(fileURL: root.appending(path: "mac-devices.json"))
     self.pairing = pairing
     let api = await MainActor.run {
-      LibraryWorkspaceAPI(database: macDatabase, authentication: pairing, commands: LibraryHostCommands(executor: WorkspaceToolExecutor(database: macDatabase)),
+      DeviceAPI(database: macDatabase, authentication: pairing, commands: LibraryHostCommands(executor: WorkspaceToolExecutor(database: macDatabase)),
         isActive: { true }, members: macMembers, onMemberPaired: { id, name, key in
           _ = try? await macMembers.add(deviceID: id, kind: .ios, name: name, publicKey: key, endpoints: [])
         }, syncStatus: { await macSync.status() })
