@@ -482,7 +482,7 @@ struct MemberReachTests {
 /// A Linux host's Node server as a Mac sees it through Tailscale Serve: it
 /// verifies every member signature over the path with its `/wovenmatter-execution/<id>`
 /// prefix restored, then routes the stripped path.
-private final class ReachLinuxHost: @unchecked Sendable {
+final class ReachLinuxHost: @unchecked Sendable {
     let prefix: String
     let descriptor: ExecutionWorkspace
     private let verifier: MemberRequestVerifier
@@ -613,7 +613,7 @@ private final class ReachLinuxHost: @unchecked Sendable {
     }
 }
 
-private extension WorkspaceDatabase {
+extension WorkspaceDatabase {
     /// A registry row as peer sync delivers it from the Mac that added the host
     /// (another library, another owner), which local registration refuses.
     func receiveSyncedWorkspace(_ workspace: ExecutionWorkspace) async throws -> ExecutionWorkspace {

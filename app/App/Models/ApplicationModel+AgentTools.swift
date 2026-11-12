@@ -148,6 +148,8 @@ extension ApplicationModel {
                 try await database.finishTimerOccurrence(id: timer.id, deliveryID: id)
             }
             await runConversationGoals()
+            // Wake-ups wait for their callers' turns to end (SessionWakeUps).
+            await sessionWakeUps()?.deliverPending()
             try await database.settleCalendarRuns()
             try await agentTools?.reload()
         } catch { agentTools?.error = error.localizedDescription }
@@ -443,9 +445,11 @@ extension ApplicationModel {
             nativeWorkspaceID: nil, tools: tools)
     }
 
+    /// `allowSteering: false` sends only into an idle target (a wake-up).
     func dispatchToolDelivery(_ delivery: WorkspaceSessionDelivery,
                               admissionDecision: WorkspaceSessionAdmission.Decision? = nil,
-                              dispatchFence suppliedFence: AgentDispatchFence? = nil) async throws -> WovenMatterToolResponse {
+                              dispatchFence suppliedFence: AgentDispatchFence? = nil,
+                              allowSteering: Bool = true) async throws -> WovenMatterToolResponse {
         guard let database = dashboardStore?.database else { throw CancellationError() }
         if WovenMCPCaller.parseBot(delivery.targetID) != nil {
             guard let agentTools else { throw ApplicationModelError.dashboardStoreUnavailable }
@@ -471,7 +475,7 @@ extension ApplicationModel {
             }
             let sent = try await dispatchAgentMessage(conversation: target,
                 input: .init(text: claimed.text, historyDeliveryID: claimed.id),
-                allowSteering: claimed.kind != .calendar && claimed.kind != .goal, admissionDecision: admissionDecision,
+                allowSteering: allowSteering && claimed.kind != .calendar && claimed.kind != .goal, admissionDecision: admissionDecision,
                 dispatchFence: dispatchFence)
             guard sent else {
                 if claimed.kind == .calendar || claimed.kind == .goal {

@@ -210,6 +210,22 @@ test('a wait on another workspace resolves through the destination\'s stream wit
   assert.equal(stream.connections(), 1, 'still one stream')
 })
 
+test('a scheduled task waits on this server, never on a Mac', async t => {
+  const f = workspace(t)
+  const owner = await conversation(f), child = await conversation(f)
+  const run = { id: randomUUID(), sessionID: owner.id, eventID: randomUUID(), task: { configuration: { tools: { enabled: ['sessions'] } } } }
+  const connection = await f.service.prepareTaskMCP({ run, eventRevision: 1 })
+  const scope = f.service.mcp.resolvePrincipal('Bearer ' + connection.bearerToken)
+  const tools = (await f.service.mcp.handle(scope, { jsonrpc: '2.0', id: 1, method: 'tools/list' })).result.tools.map(tool => tool.name)
+  assert.ok(tools.includes('woven_sessions_wait'))
+  await sendTo(f, child.id, 'Work for a while')
+  const waiting = f.service.mcp.handle(scope, { jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'woven_sessions_wait', arguments: { id: child.id, until: 'idle', timeoutSeconds: 10 } } })
+  await sleep(50)
+  f.finish(f.runs.at(-1).runID)
+  const waited = resultOf(await waiting)
+  assert.equal(waited.state, 'idle'); assert.equal(waited.timedOut, false)
+})
+
 test('a finished session wakes its idle caller, and waits while the caller runs', async t => {
   const { l, m, mWorkspace } = await hosts(t, 'wm-wake-')
   const caller = await conversation(l)

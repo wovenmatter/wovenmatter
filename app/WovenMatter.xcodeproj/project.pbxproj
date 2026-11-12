@@ -174,6 +174,7 @@
 		895A902611CD21FC10814499 /* ApplicationModel+Bots.swift in Sources */ = {isa = PBXBuildFile; fileRef = C29A70F944FF97D2DD457E7C /* ApplicationModel+Bots.swift */; };
 		2A9DD382F8055BA4D1817FEB /* RemoteWorkspacesModel+SharedHosts.swift in Sources */ = {isa = PBXBuildFile; fileRef = C675F53C9F1FED2C8ED7B721 /* RemoteWorkspacesModel+SharedHosts.swift */; };
 		CA2FBC8830FD2860BE268EA5 /* ApplicationModel+MemberSessions.swift in Sources */ = {isa = PBXBuildFile; fileRef = EE5A3B5C1BAA5CF305BDFD9C /* ApplicationModel+MemberSessions.swift */; };
+		93DD64C0702470963BF9F70B /* ApplicationModel+SessionWaits.swift in Sources */ = {isa = PBXBuildFile; fileRef = 04597A93224A7D9BD469CB00 /* ApplicationModel+SessionWaits.swift */; };
 		0E7D7AE0817B9BEF633E5B27 /* BackendBotsService.swift in Sources */ = {isa = PBXBuildFile; fileRef = A43821D6EA11448362738D3A /* BackendBotsService.swift */; };
 		250B7901DFC1AAF2F91F87C8 /* BotsModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = C5878323C60BE97DFD9BAFC2 /* BotsModel.swift */; };
 		BA32B256A31201F0C7A60050 /* BotConversationController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1EDC53FEFEB9F50425DA9E5B /* BotConversationController.swift */; };
@@ -366,6 +367,7 @@
 		C29A70F944FF97D2DD457E7C /* ApplicationModel+Bots.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ApplicationModel+Bots.swift"; sourceTree = "<group>"; };
 		C675F53C9F1FED2C8ED7B721 /* RemoteWorkspacesModel+SharedHosts.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "RemoteWorkspacesModel+SharedHosts.swift"; sourceTree = "<group>"; };
 		EE5A3B5C1BAA5CF305BDFD9C /* ApplicationModel+MemberSessions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ApplicationModel+MemberSessions.swift"; sourceTree = "<group>"; };
+		04597A93224A7D9BD469CB00 /* ApplicationModel+SessionWaits.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ApplicationModel+SessionWaits.swift"; sourceTree = "<group>"; };
 		A43821D6EA11448362738D3A /* BackendBotsService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "BackendBotsService.swift"; sourceTree = "<group>"; };
 		C5878323C60BE97DFD9BAFC2 /* BotsModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "BotsModel.swift"; sourceTree = "<group>"; };
 		1EDC53FEFEB9F50425DA9E5B /* BotConversationController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "BotConversationController.swift"; sourceTree = "<group>"; };
@@ -491,6 +493,7 @@
 				C29A70F944FF97D2DD457E7C /* ApplicationModel+Bots.swift */,
 				C675F53C9F1FED2C8ED7B721 /* RemoteWorkspacesModel+SharedHosts.swift */,
 				EE5A3B5C1BAA5CF305BDFD9C /* ApplicationModel+MemberSessions.swift */,
+				04597A93224A7D9BD469CB00 /* ApplicationModel+SessionWaits.swift */,
 				A43821D6EA11448362738D3A /* BackendBotsService.swift */,
 				C5878323C60BE97DFD9BAFC2 /* BotsModel.swift */,
 				1EDC53FEFEB9F50425DA9E5B /* BotConversationController.swift */,
@@ -790,6 +793,7 @@
 				895A902611CD21FC10814499 /* ApplicationModel+Bots.swift in Sources */,
 				2A9DD382F8055BA4D1817FEB /* RemoteWorkspacesModel+SharedHosts.swift in Sources */,
 				CA2FBC8830FD2860BE268EA5 /* ApplicationModel+MemberSessions.swift in Sources */,
+				93DD64C0702470963BF9F70B /* ApplicationModel+SessionWaits.swift in Sources */,
 				0E7D7AE0817B9BEF633E5B27 /* BackendBotsService.swift in Sources */,
 				250B7901DFC1AAF2F91F87C8 /* BotsModel.swift in Sources */,
 				BA32B256A31201F0C7A60050 /* BotConversationController.swift in Sources */,

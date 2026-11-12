@@ -35,6 +35,9 @@ final class CentralExecutionClient {
     private let memberRevision: (@MainActor () async -> String?)?
     /// Live state pushed by a stream changed for these conversations.
     var onLive: @MainActor (Set<String>) -> Void = { _ in }
+    /// Every `conversations`, `pending` and `synchronized` item of a
+    /// workspace's stream, in order, for agent-to-agent waiting (`SessionWakeUps`).
+    var onWorkspaceItem: (@MainActor (String, StreamItem.Payload) async -> Void)?
     private var live: [String: LiveWorkspace] = [:]
     /// Open chats with a `conversation` subscription, least recently opened first.
     private var watched: [String] = []
@@ -484,6 +487,10 @@ extension CentralExecutionClient {
     /// Whether this workspace's live state is pushed by its stream rather than polled.
     func isStreamed(_ workspaceID: String) -> Bool { live[workspaceID] != nil }
 
+    /// Opens the workspace's stream now (a wait on one of its sessions), if it has one.
+    @discardableResult
+    func openStream(_ workspace: ExecutionWorkspace) async -> Bool { await ensureStream(workspace) != nil }
+
     private func streamEligible(_ workspace: ExecutionWorkspace) -> Bool {
         makeStream != nil && !workspace.deleted && workspace.endpoint != nil && workspace.retainedHistory != true &&
             workspace.kind != .ios && workspace.capabilities.contains(StreamProtocol.capability)
@@ -631,6 +638,10 @@ extension CentralExecutionClient {
         guard case .item(let item) = event else {
             if case .ended(let error) = event { errors[id] = error?.message ?? Self.streamProblem(nil, workspace: stream.workspace) }
             return .accepted
+        }
+        switch item.payload {
+        case .conversations, .pending, .synchronized: await onWorkspaceItem?(id, item.payload)
+        default: break
         }
         switch item.payload {
         case .journal(let value):

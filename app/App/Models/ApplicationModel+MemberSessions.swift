@@ -71,6 +71,10 @@ extension ApplicationModel {
         try await database.rememberMemberToolSession(id: conversationID, callerID: sourceID, workspaceID: workspace.id)
         _ = try? await client.submit(command(.workspace, "title", action: .conversation(id: conversationID, action: "rename", title: title, folderID: nil)), workspace: workspace)
         let receipt = try await client.submit(command(.send, "send", text: text), workspace: workspace)
+        // Watched from now on: it wakes this caller when it finishes or asks a question.
+        await observeMemberSession(callerID: sourceID, workspace: workspace, id: conversationID, state: "running",
+            response: .init(result: .object(["session": .object(["title": .string(title), "harness": .string(runtime.rawValue)]),
+                                             "receipt": .object(receipt.runID.map { ["runID": .string($0)] } ?? [:])])), created: true)
         return .init(result: .object([
             "session": .object(["id": .string(conversationID), "title": .string(title), "harness": .string(runtime.rawValue),
                                 "workspace": .string(workspace.id), "workspaceName": .string(workspace.name),
@@ -79,7 +83,7 @@ extension ApplicationModel {
             // Sessions on other devices are not coordinated from here; their
             // history reaches this library as they run.
             "independent": .bool(true),
-            "note": .string("Manage it with woven_sessions_status (state, pending questions and recent transcript), woven_sessions_send, woven_sessions_stop and woven_sessions_respond; it is not coordinated, so poll its status.")
+            "note": .string("Manage it with woven_sessions_status (state, pending questions and recent transcript), woven_sessions_send, woven_sessions_stop and woven_sessions_respond. It is not coordinated: wait for it with woven_sessions_wait, and you are woken with a short message when it finishes or asks a question while you are idle.")
         ]))
     }
 
@@ -145,10 +149,12 @@ extension ApplicationModel {
     /// `woven_sessions_status`, `_send`, `_stop`, `_respond` and `_list` for a
     /// session another member's workspace runs: one this caller created there,
     /// or one named with `workspace`. Nil when this Mac handles the call.
+    /// `woven_sessions_wait` is always answered here, for this Mac's sessions too.
     func handleMemberSessionTool(callerID: String, command: WovenMatterToolCommand,
                                  request: WovenMatterToolRequest) async throws -> WovenMatterToolResponse? {
         guard let database = dashboardStore?.database else { throw ApplicationModelError.dashboardStoreUnavailable }
         let readsAll = try await database.sessionTools(callerID).enabled.contains(.history)
+        if command.action == "wait" { return try await memberSessionWait(callerID: callerID, command: command, readsAll: readsAll) }
         if command.action == "list" {
             let limit = try command.integer("limit", default: 100, range: 1...200)
             if let raw = command.options["workspace"] {
@@ -168,16 +174,28 @@ extension ApplicationModel {
             guard readsAll || creator == callerID else {
                 throw WorkspaceToolError.invalid("Read only the sessions you created, or enable Conversation history.")
             }
-            return try await memberSessionStatus(client: client, workspace: workspace, id: id, before: command.options["before"])
+            let status = try await memberSessionStatus(client: client, workspace: workspace, id: id, before: command.options["before"])
+            await observeMemberSession(callerID: callerID, workspace: workspace, id: id,
+                state: status.result?.objectValue?["session"]?.objectValue?["state"]?.stringValue ?? "idle", response: status)
+            return status
         case "send":
-            return try await memberSessionSend(client: client, workspace: workspace, callerID: callerID, requestID: request.requestID,
-                                               id: id, text: command.required("text"))
+            let sent = try await memberSessionSend(client: client, workspace: workspace, callerID: callerID, requestID: request.requestID,
+                                                   id: id, text: command.required("text"))
+            await observeMemberSession(callerID: callerID, workspace: workspace, id: id, state: "running", response: sent)
+            return sent
         case "stop":
-            return try await memberSessionStop(client: client, workspace: workspace, callerID: callerID, requestID: request.requestID, id: id)
+            let stopped = try await memberSessionStop(client: client, workspace: workspace, callerID: callerID, requestID: request.requestID, id: id)
+            // The caller stopped it: no wake-up for its end.
+            if stopped.result?.objectValue?["stopped"] == .bool(true) {
+                await observeMemberSession(callerID: callerID, workspace: workspace, id: id, state: "idle")
+            }
+            return stopped
         case "respond":
-            return try await memberSessionRespond(client: client, workspace: workspace, callerID: callerID, requestID: request.requestID,
-                                                  id: id, interactionID: command.required("interaction"),
-                                                  response: Self.interactionResponse(command))
+            let answered = try await memberSessionRespond(client: client, workspace: workspace, callerID: callerID, requestID: request.requestID,
+                                                          id: id, interactionID: command.required("interaction"),
+                                                          response: Self.interactionResponse(command))
+            await observeMemberSession(callerID: callerID, workspace: workspace, id: id, state: "running", response: answered)
+            return answered
         default: return nil
         }
     }
@@ -185,7 +203,7 @@ extension ApplicationModel {
     /// The member workspace that runs session `id`: the one `named` names, or
     /// the one this Mac created it on. Nil for this Mac and the Linux hosts it
     /// manages over SSH, whose sessions are in this library.
-    private func memberSessionWorkspace(id: String, named: String?) async throws -> ExecutionWorkspace? {
+    func memberSessionWorkspace(id: String, named: String?) async throws -> ExecutionWorkspace? {
         if let named {
             if case .member(let workspace) = try await resolveAgentToolDestination(named, callerWorkspace: nil) { return workspace }
             return nil
@@ -226,7 +244,7 @@ extension ApplicationModel {
 
     /// State, pending questions and approvals, and the latest 20 messages
     /// (4000 characters each); `before` pages older ones.
-    private func memberSessionStatus(client: CentralExecutionClient, workspace: ExecutionWorkspace,
+    func memberSessionStatus(client: CentralExecutionClient, workspace: ExecutionWorkspace,
                                      id: String, before: String?) async throws -> WovenMatterToolResponse {
         let found = try await memberConversation(client, workspace, id)
         let transcript = try await client.transcript(workspace: workspace, conversationID: found.id, before: before)
