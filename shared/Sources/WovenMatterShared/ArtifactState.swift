@@ -243,6 +243,8 @@ public extension NoteDocument {
       merged[key] = ArtifactStateEntry(value: wanted, version: version, updatedAt: timestamp)
       changed = true
     }
+    // Same bounds as keyed edits, so a draft that clears many keys stays saveable.
+    if changed { try evictArtifactTombstones(&merged) }
     return changed ? merged : current
   }
 

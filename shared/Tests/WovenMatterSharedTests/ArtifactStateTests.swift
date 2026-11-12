@@ -271,6 +271,15 @@ struct ArtifactStateTests {
     #expect(try NoteDocument.mergeArtifactState(base: nil, draft: nil, current: nil, at: "later") == nil)
   }
 
+  @Test func aDraftClearingManyKeysStaysWithinTheTombstoneLimit() throws {
+    let count = ArtifactStateLimits.maximumTombstones + 10
+    let base = Dictionary(uniqueKeysWithValues: (0..<count).map { ("form:\($0)", ArtifactStateEntry(value: .number(1), version: 1, updatedAt: time)) })
+    let cleared = base.mapValues { ArtifactStateEntry(value: nil, version: $0.version, updatedAt: time) }
+    let merged = try #require(try NoteDocument.mergeArtifactState(base: base, draft: cleared, current: base, at: "later"))
+    #expect(merged.values.filter { $0.isTombstone }.count == ArtifactStateLimits.maximumTombstones)
+    #expect(merged.values.allSatisfy { $0.isTombstone })
+  }
+
   @Test func genericEditsLeaveStateAloneAndStateEditsLeaveCodeAlone() throws {
     var document = artifact()
     _ = try document.apply([.artifactState([set("app:x", .number(1))])])
