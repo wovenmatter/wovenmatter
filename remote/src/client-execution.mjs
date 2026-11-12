@@ -548,7 +548,7 @@ export function createClientExecution({ directory, runtime, kind = 'linux', name
       command.text=deliveryText(command)+goalGuidance
       record.transcript.messages.push({id: runID, conversationID: command.conversationID, runID, role: 'assistant', content: '', status: 'running', createdAt: date()})
       // The latest runs' timing, for the elapsed work header (`LibraryTranscriptRun`).
-      record.transcript.runs = [...(record.transcript.runs ?? []), {id: runID, status: 'running', startedAt: date()}].slice(-maximumRuns)
+      record.transcript.runs = [...(record.transcript.runs ?? []), {id: runID, status: 'running', startedAt: date(), userMessageID: command.commandID, assistantMessageID: runID}].slice(-maximumRuns)
       const result = transaction(() => {
         db.prepare('INSERT INTO runs VALUES (?,?)').run(runID, command.commandID)
         db.prepare('UPDATE commands SET body=? WHERE id=?').run(JSON.stringify(command), command.commandID)
