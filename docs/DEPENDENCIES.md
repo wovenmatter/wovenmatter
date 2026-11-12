@@ -34,6 +34,7 @@ for every package update. Three separate mechanisms do that:
 | `app/Browser/cef-version.json` | Exact CEF build and archive SHA-1 values per architecture | Maintenance PR |
 | `remote/library/build-version.json` | Swift toolchain image digest, Static Linux SDK archive SHA-256, and SQLite amalgamation SHA-256 for the Linux `wovenmatter-library` build | Maintenance PR, all together with `app/Package.resolved` |
 | `app/VMHelper/guest-version.json` and `app/VMHelper/Guest/docker-archive-keyring.asc` | Woven Mac VM guest: Ubuntu cloud image serial, URL, size and SHA-256; Docker apt repository, signing-key fingerprint and file SHA-256, exact `docker-ce` and `containerd.io` versions | Maintenance PR, record and key together |
+| `app/xcode-version.json` and each `DEVELOPER_DIR` in the macOS workflows | The Xcode version, build and runner image that desktop validation, release caches and release builds use, matching local development | Maintenance PR, all copies together; `scripts/check-xcode.sh` fails a job on any other Xcode, and portable CI rejects drift between the copies |
 | `app/Updater/sparkle-version.json` and the Xcode Sparkle revision | Release, exact commit, and tools archive SHA-256 for the updater | Maintenance PR, both together |
 | Generated iOS bundles and `provenance.json` | Output of the locked packages, verified by `--check` in CI | Regenerated from the updated lockfiles during maintenance |
 
@@ -435,11 +436,14 @@ current release commit, with a comment naming the reason: `release.yml`,
 `refresh-release.yml`, and `pr-author.yml`. The maintenance agent reviews those
 SHAs against current released versions. There is no blanket SHA requirement.
 Linux jobs use `ubuntu-latest`. Desktop builds (release, release caches,
-desktop validation) use the `xcode-27` image with `DEVELOPER_DIR` set to
-Xcode 27.2, the toolchain the app is developed with; `macos-26` stops at Xcode
-26.6, which crashes compiling the app. The `xcode-27` image is a GitHub preview:
-move to its GA label, and to newer Xcode releases, during maintenance. iOS
-validation stays on `macos-26`.
+desktop validation) use the runner image and Xcode recorded in
+`app/xcode-version.json` (now the `xcode-27` image and Xcode 27.2), the toolchain
+the app is developed with; `macos-26` stops at Xcode 26.6, which crashes
+compiling the app. Each of those jobs runs `scripts/check-xcode.sh` right after
+checkout, so a runner image that changes or drops that Xcode fails the job
+before it builds anything. The `xcode-27` image is a GitHub preview: move to its
+GA label, and to newer Xcode releases, during maintenance, updating the record
+and every `DEVELOPER_DIR` together. iOS validation stays on `macos-26`.
 
 ## Before every new release
 

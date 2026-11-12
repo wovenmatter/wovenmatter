@@ -40,17 +40,37 @@ snapshot. Report any concrete upstream blocker explicitly. Do not resolve or
 install newer versions inside the signed release build: it must use the accepted
 lockfiles. A previously verified private draft retains its original snapshot.
 
-Release from clean, current `origin/main`. PR CI and explicitly requested platform
-validation own source validation. Do not run `scripts/test-changes.sh --all`, any
-test suite, or an unsigned Debug build as a release prerequisite. Do not trigger,
-wait for, or rerun CI during release preparation. Create and push an annotated `vX.Y.Z`
-tag at that exact accepted commit to start the release workflow. Never move or
-reuse a release tag; an existing private draft can be resumed at its original
-accepted commit.
+Release from clean, current `origin/main`. Do not run `scripts/test-changes.sh
+--all`, any local test suite, or an unsigned Debug build as a release
+prerequisite, and do not rerun PR CI.
 
-Automatic CI runs on PRs only; native/mobile/image validation is manual. Release
-preparation does not recreate a main CI run or dispatch platform validation.
+Before tagging, the release commit must have passed manual validation with scope
+`linux` and `desktop` (or `all`). Automatic PR CI never compiles the Linux library
+or the macOS app; v0.4.0 failed its release build three times on code and a
+toolchain those validations would have caught. Check with
+`scripts/check-release-validation.py RELEASE_COMMIT_SHA` (read-only). A passing
+run on a PR branch counts when its commit has the identical source tree, so an
+up-to-date PR validated before merging needs nothing more. Otherwise, while
+`origin/main` is still at the release commit, dispatch the missing scopes with
+`gh workflow run validation.yml --ref main -f scope=linux` and `-f scope=desktop`,
+wait for both, and re-run the check. Draft the description while they run.
+The tag-triggered release repeats this check before building anything. On a
+validation failure, report it and fix it in a development PR; do not tag. Only
+Trey can waive the requirement, for one named release, by explicit decision: the
+annotated tag message then carries a `Validation-waiver: <his reason>` line.
+
+Create and push an annotated `vX.Y.Z` tag at that exact accepted commit to start
+the release workflow. Never move or reuse a release tag that has a draft or a
+public release; an existing private draft can be resumed at its original accepted
+commit. A pushed tag whose workflow failed before creating a draft can be moved
+to a fixed commit only with Trey's explicit decision for that release; delete the
+local copy before fetching (`git tag -d vX.Y.Z`), because
+`scripts/publish-release.sh` fetches tags and fails on a clobbered tag.
+
+Automatic CI runs on PRs only; native/mobile/image validation is manual.
 Lightweight tag/main source checks remain before importing signing secrets.
+Desktop validation and release builds run on the Xcode recorded in
+`app/xcode-version.json`, and fail at once on any other (`scripts/check-xcode.sh`).
 Always build a new production Release app; a Debug app is never a distribution
 artifact.
 

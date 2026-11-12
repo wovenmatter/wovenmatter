@@ -1,4 +1,6 @@
 name: Manual validation
+# The release gate (scripts/check-release-validation.py) reads the scope from this title.
+run-name: Manual validation (${{ inputs.scope }})
 
 # Expensive platform validation runs only when a maintainer requests it.
 on:
@@ -36,7 +38,7 @@ jobs:
   macos:
     name: macOS
     if: inputs.scope == 'all' || inputs.scope == 'desktop'
-    # Xcode 27.2, the toolchain the app is developed and released with (macos-26 stops at 26.6).
+    # The Xcode recorded in app/xcode-version.json (macos-26 stops at Xcode 26.6).
     runs-on: xcode-27
     timeout-minutes: 40
     env:
@@ -44,6 +46,8 @@ jobs:
       DEVELOPER_DIR: /Applications/Xcode_27.2.app/Contents/Developer
     steps:
       - uses: actions/checkout@main
+      - name: Require the recorded Xcode
+        run: scripts/check-xcode.sh
       - uses: actions/setup-node@main
         with:
           # The bundled Node stable release, refreshed during dependency maintenance.

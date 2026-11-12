@@ -21,12 +21,19 @@ struct ConversationHTMLScrollTests {
         web.frame = NSRect(x: 0, y: 40, width: 680, height: 280)
         document.addSubview(web)
         defer { coordinator.stop(web); window.contentView = nil; window.close() }
-        var ready = false
+        var ready = false, failure: (any Error)?
         coordinator.onReady = { ready = true }
+        coordinator.onFailure = { failure = $0 }
+        // A deadline, not an attempt count: on a loaded CI runner the main actor
+        // this test shares with other suites makes each poll much slower.
+        func requireReady(_ page: String) async throws {
+            let deadline = ContinuousClock.now + .seconds(20)
+            while !ready, failure == nil, ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(10)) }
+            try #require(ready, "The \(page) page never became ready: \(failure.map { "\($0)" } ?? "WebKit reported no error"); console \(coordinator.consoleMessages)")
+        }
         coordinator.apply(html: "<div style='height:240px'>A chart fixture</div>",
             theme: ConversationHTMLTheme.value(.green), to: web)
-        _ = try await pollUntil(attempts: 400, interval: .milliseconds(10)) { ready }
-        try #require(ready)
+        try await requireReady("inline")
         window.contentView?.layoutSubtreeIfNeeded()
         let event = try wheelEvent(window: window, web: web)
         let point = web.convert(NSPoint(x: 100, y: 100), to: scroll)
@@ -64,8 +71,7 @@ struct ConversationHTMLScrollTests {
             addEventListener('message',e=>{if(e.data?.kind==='fixture-scroll')scrollTo(0,240)});
             </script>
             """, theme: ConversationHTMLTheme.value(.green), to: web)
-        _ = try await pollUntil(attempts: 400, interval: .milliseconds(10)) { ready }
-        try #require(ready)
+        try await requireReady("expanded")
         target.scrollWheel(with: try wheelEvent(window: window, web: web))
         try await Task.sleep(for: .milliseconds(200))
         #expect(scroll.wheelEvents == count, "Expanded page wheel was redirected to the transcript")

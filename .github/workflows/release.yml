@@ -24,10 +24,35 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # PR CI never compiles the Linux library or the macOS app. A new version starts
+  # only from source that passed manual linux and desktop validation, unless Trey
+  # waived it in the tag message. Same-version update refreshes are exempt.
+  preflight:
+    if: ${{ !inputs.cache_benchmark_run }}
+    name: Require validated release source
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Require passing linux and desktop validation
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REFRESH: ${{ inputs.refresh || false }}
+        run: |
+          if [ "$REFRESH" = true ]; then
+            echo 'Update refresh build: it reuses the released version and skips this gate.'
+            exit 0
+          fi
+          scripts/check-release-validation.py --repo "$GITHUB_REPOSITORY" --tag "$GITHUB_REF_NAME" "$GITHUB_SHA"
+
   # macOS runners have no Docker: the static Linux library host binaries that host
   # releases ship are built here and handed to the macOS build as an artifact.
   linux-library:
     if: ${{ !inputs.cache_benchmark_run }}
+    needs: preflight
     name: Linux library binaries
     runs-on: ubuntu-latest
     timeout-minutes: 60
@@ -54,7 +79,7 @@ jobs:
     if: ${{ !inputs.cache_benchmark_run }}
     needs: linux-library
     name: Signed Apple Silicon release
-    # Xcode 27.2, the toolchain the app is developed with (macos-26 stops at Xcode 26.6).
+    # The Xcode recorded in app/xcode-version.json (macos-26 stops at Xcode 26.6).
     runs-on: xcode-27
     timeout-minutes: 120
     environment: release
@@ -71,6 +96,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+      - name: Require the recorded Xcode
+        run: scripts/check-xcode.sh
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           # The bundled Node stable release, refreshed during dependency maintenance.
@@ -285,7 +312,7 @@ jobs:
   cache-benchmark:
     if: github.event_name == 'workflow_dispatch' && inputs.cache_benchmark_run != '' && startsWith(github.ref, 'refs/tags/v-cache-benchmark-')
     name: Signed cache consumer benchmark (no publication)
-    # Xcode 27.2, the toolchain the app is developed with (macos-26 stops at Xcode 26.6).
+    # The Xcode recorded in app/xcode-version.json (macos-26 stops at Xcode 26.6).
     runs-on: xcode-27
     timeout-minutes: 45
     environment: release
@@ -316,6 +343,8 @@ jobs:
         with:
           fetch-depth: 0
           ref: ${{ steps.seed.outputs.revision }}
+      - name: Require the recorded Xcode
+        run: scripts/check-xcode.sh
       - name: Verify accepted benchmark source
         run: |
           git fetch --no-tags origin main

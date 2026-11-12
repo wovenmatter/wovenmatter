@@ -32,6 +32,12 @@ for directory in ('scripts', 'remote/security'):
 PY
 python3 scripts/test-support/test_ci_scopes.py
 python3 scripts/test-support/test_ci_runner.py
+# PR CI cannot compile Swift for Linux, so every PR gets a static check of the
+# sources the Linux library builds; manual `linux` validation compiles them.
+python3 scripts/test-support/test_linux_portability.py
+python3 scripts/check-linux-portability.py
+python3 scripts/test-support/test_workflow_toolchain.py
+python3 scripts/test-support/test_release_validation.py
 jq -e '.schemaVersion == 4 and (.harnesses | length == 4)' harnesses/catalog.json >/dev/null
 
 selection="$(python3 scripts/ci-scopes.py < "$changed")"

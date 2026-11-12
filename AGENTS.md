@@ -31,10 +31,12 @@
 - For UI work, follow [the style guide](docs/STYLE_GUIDE.md).
 - Validate: `scripts/test-changes.sh`; use `--all` for changes spanning components.
   Use `--ci` for CI-only changes. Automatic PR CI is one portable Linux check;
-  native/mobile/image workflows run only when explicitly requested.
+  it statically checks Swift built for Linux but compiles none. Native/mobile/image
+  workflows run only when explicitly requested or required before a release.
   PR CI and explicitly requested platform validation own source validation.
-  Release preparation never runs local test suites or reruns CI; follow the
-  release skill to start the workflow.
+  Release preparation never runs local test suites or reruns PR CI, but the
+  release commit needs passing manual `linux` and `desktop` validation before
+  tagging; follow the release skill to start the workflow.
   Tests must not consume provider services. Container lifecycle tests use
   `scripts/test-container.sh` when in scope and Docker is available.
 - Keep one-off audit reports, generated coverage inventories, and review evidence

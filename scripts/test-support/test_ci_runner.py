@@ -24,6 +24,9 @@ class CIRunnerTests(unittest.TestCase):
             # The classifier itself is tested separately; keep this fixture small.
             (support / 'test_ci_scopes.py').write_text('')
             (support / 'test_ci_runner.py').write_text('')
+            for name in ('test_linux_portability.py', 'test_workflow_toolchain.py', 'test_release_validation.py'):
+                (support / name).write_text('')
+            (scripts / 'check-linux-portability.py').write_text('')
             for suite in SUITES:
                 (support / f'test_{suite}.py').write_text('')
             for name in ('scan-public-tree.sh', 'test-release.sh',

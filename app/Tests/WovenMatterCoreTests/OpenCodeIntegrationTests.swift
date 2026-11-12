@@ -234,9 +234,20 @@ struct OpenCodeIntegrationTests {
         let link = OpenCodeSessionLink(conversationID: id, connectionID: "fixture", sessionID: "ses_fixture")
         let session = fixtureSession()
         defer { session.invalidateAndCancel() }
+        // A long ceiling keeps the idle and base rates far apart, so a slow,
+        // loaded CI machine cannot blur them: the test waits for outcomes with
+        // generous deadlines instead of counting refreshes in a fixed window.
         let coordinator = OpenCodeSessionCoordinator(database: database, clientFactory: { OpenCodeHTTPClient(connection: $0, session: session) },
-            repairInterval: .milliseconds(20), idleRepairCeiling: .milliseconds(400))
+            repairInterval: .milliseconds(20), idleRepairCeiling: .seconds(5))
         func refreshes() -> Int { fixture.lock.withLock { fixture.inboxRequests } }
+        func waitForRefreshes(_ count: Int, within limit: Duration) async throws -> Bool {
+            let deadline = ContinuousClock.now + limit
+            while refreshes() < count {
+                guard ContinuousClock.now < deadline else { return false }
+                try await Task.sleep(for: .milliseconds(10))
+            }
+            return true
+        }
         func recordedAnswers(_ path: String) async throws -> Int {
             try await database.read { try $0.historyRowsUnlocked(
                 "SELECT id FROM workspace_history_events WHERE kind='wire.in' AND source_connection_id='fixture' AND json_extract(payload,'$.path')=?",
@@ -245,13 +256,13 @@ struct OpenCodeIntegrationTests {
         do {
             try await coordinator.connect(connection())
             await coordinator.watch(link)
-            // Idle repairs double from 20 ms; by now they run at the 400 ms ceiling.
-            try await Task.sleep(for: .milliseconds(1200))
-            #expect(refreshes() >= 3)
+            // Idle repairs double from 20 ms. After seven inbox reads (with or
+            // without the watch's first read), the next one is at least 1.28 s away.
+            try #require(try await waitForRefreshes(7, within: .seconds(15)))
             let idleStart = refreshes()
             try await Task.sleep(for: .seconds(1))
             // A fixed 20 ms poll would refresh about 50 times here.
-            #expect(refreshes() - idleStart <= 4)
+            #expect(refreshes() - idleStart <= 1)
             #expect(try await recordedAnswers("/api/session/ses%5Ffixture/inbox") == 1)
             #expect(try await recordedAnswers("/api/session/ses%5Ffixture") == 1)
             #expect(try await recordedAnswers("/api/info") == 1)
@@ -260,9 +271,11 @@ struct OpenCodeIntegrationTests {
             fixture.lock.withLock { fixture.activeSession = true }
             await coordinator.receiveLogEvent(["type": "session.execution.started", "durable": ["seq": .number(1)]], link: link)
             _ = try await committedSnapshot(coordinator, conversationID: id, cursor: 1)
+            // Eight refreshes take about 160 ms at the base rate; still idle,
+            // they would take more than 30 s.
             let activeStart = refreshes()
-            try await Task.sleep(for: .seconds(1))
-            #expect(refreshes() - activeStart >= 8)
+            #expect(try await waitForRefreshes(activeStart + 8, within: .seconds(10)),
+                "Pending work did not restore the base repair rate")
             // Only the changed activity answer was recorded again.
             #expect(try await recordedAnswers("/api/session/active") == 2)
             #expect(try await recordedAnswers("/api/session/ses%5Ffixture/inbox") == 1)

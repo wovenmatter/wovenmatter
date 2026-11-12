@@ -5,6 +5,42 @@ import Testing
 import WovenMatterCore
 @testable import WovenMatterAppFacade
 
+/// Some scenes read their rendered pixels back with Vision text recognition.
+/// On GitHub's virtualized macOS runners Vision's `perform` fails without an
+/// error (Swift reports `.nilError`), so those scenes skip there, with the
+/// reason printed, instead of failing. Every Mac with working Vision runs them.
+enum VisionTextProbe {
+    static let isAvailable: Bool = {
+        let reason = unavailableReason()
+        if let reason { print("Skipping Vision-rendered scenes: \(reason)") }
+        return reason == nil
+    }()
+
+    private static func unavailableReason() -> String? {
+        let width = 480, height = 96
+        guard let context = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0,
+            space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else {
+            return "could not create a probe bitmap"
+        }
+        context.setFillColor(CGColor(red: 1, green: 1, blue: 1, alpha: 1))
+        context.fill(CGRect(x: 0, y: 0, width: width, height: height))
+        // Core Text draws in black unless a color is given.
+        let text = NSAttributedString(string: "VISION PROBE",
+            attributes: [.font: CTFontCreateWithName("Helvetica-Bold" as CFString, 44, nil)])
+        context.textPosition = CGPoint(x: 16, y: 28)
+        CTLineDraw(CTLineCreateWithAttributedString(text), context)
+        guard let image = context.makeImage() else { return "could not render the probe image" }
+        let request = VNRecognizeTextRequest()
+        request.recognitionLevel = .accurate
+        request.usesLanguageCorrection = false
+        do { try VNImageRequestHandler(cgImage: image).perform([request]) } catch {
+            return "text recognition failed on a probe image (\(error))"
+        }
+        let seen = (request.results ?? []).compactMap { $0.topCandidates(1).first?.string }.joined(separator: " ")
+        return seen.contains("VISION") ? nil : "text recognition read \"\(seen)\" from a probe image"
+    }
+}
+
 /// Provider-free rendered acceptance scenes. Set WOVENMATTER_STREAMING_SCREENSHOTS
 /// to export the actual shared SwiftUI views for visual review.
 @MainActor @Suite(.serialized, .timeLimit(.minutes(2)))
@@ -19,7 +55,7 @@ struct StreamingPresentationTests {
         }
     }
 
-    @Test func renderedReasoningOmitsProtocolDumpAndRetainsToolDetails() async throws {
+    @Test(.enabled(if: VisionTextProbe.isAvailable, "Vision text recognition does not work on this machine")) func renderedReasoningOmitsProtocolDumpAndRetainsToolDetails() async throws {
         _ = NSApplication.shared
         let unique = UUID().uuidString
         let state = ConversationTranscriptState()
@@ -82,7 +118,7 @@ struct StreamingPresentationTests {
         }
     }
 
-    @Test func eventReplayKeepsThoughtsAndAccumulatesLiveToolsBeforeFoldingOnlyPastGroups() async throws {
+    @Test(.enabled(if: VisionTextProbe.isAvailable, "Vision text recognition does not work on this machine")) func eventReplayKeepsThoughtsAndAccumulatesLiveToolsBeforeFoldingOnlyPastGroups() async throws {
         _ = NSApplication.shared
         let fixture = EventReplayFixture()
         let state = ConversationTranscriptState()
@@ -202,7 +238,7 @@ struct StreamingPresentationTests {
         }
     }
 
-    @Test func followingResponseReplacesGenericWaitingWithoutHidingToolHistory() async throws {
+    @Test(.enabled(if: VisionTextProbe.isAvailable, "Vision text recognition does not work on this machine")) func followingResponseReplacesGenericWaitingWithoutHidingToolHistory() async throws {
         _ = NSApplication.shared
         let fixture = EventReplayFixture()
         let state = ConversationTranscriptState()

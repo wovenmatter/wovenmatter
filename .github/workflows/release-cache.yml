@@ -30,7 +30,7 @@ jobs:
         startsWith(github.event.workflow_run.head_branch, 'v') &&
         !startsWith(github.event.workflow_run.head_branch, 'v-cache-benchmark-') &&
         github.event.workflow_run.head_repository.full_name == github.repository))
-    # Xcode 27.2, the toolchain the app is developed with (macos-26 stops at Xcode 26.6).
+    # The Xcode recorded in app/xcode-version.json (macos-26 stops at Xcode 26.6).
     runs-on: xcode-27
     timeout-minutes: 60
     env:
@@ -39,6 +39,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           fetch-depth: 0
+      - name: Require the recorded Xcode
+        run: scripts/check-xcode.sh
       - name: Verify accepted cache source
         env:
           RELEASE_SOURCE: ${{ github.event.workflow_run.head_sha }}
