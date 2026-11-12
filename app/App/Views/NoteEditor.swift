@@ -489,7 +489,12 @@ struct DashboardNoteEditor: NSViewRepresentable {
     let controller: DashboardNoteEditorController
     var dictationEditor: DictationEditor? = nil
     var dictationIdentity = ""
+    /// Layout only: grow to the text's height and pass scrolling to the parent.
     var sizesToContent = false
+    /// Page flow editing: task metadata and checkboxes, one component per
+    /// paragraph on Enter, and undo fenced at incoming changes. Only Page text
+    /// flows set this; an embedded original Note keeps ordinary Notes editing.
+    var editsPageFlow = false
     var onFocus: ((DashboardNoteEditorController) -> Void)?
     var onSynchronize: (() -> Void)?
     var sharedUndoManager: UndoManager?
@@ -520,8 +525,8 @@ struct DashboardNoteEditor: NSViewRepresentable {
         textView.isVerticallyResizable = true
         textView.isHorizontallyResizable = false
         textView.autoresizingMask = [.width]
-        textView.textContainerInset = NSSize(width: sizesToContent ? 24 : 0, height: 8)
-        textView.showsPageTasks = sizesToContent
+        textView.textContainerInset = NSSize(width: editsPageFlow ? 24 : 0, height: 8)
+        textView.showsPageTasks = editsPageFlow
         textView.onToggleTask = { [weak coordinator = context.coordinator] id in coordinator?.toggleTask(id) }
         textView.textContainer?.widthTracksTextView = true
         textView.textContainer?.containerSize = NSSize(
@@ -599,7 +604,7 @@ struct DashboardNoteEditor: NSViewRepresentable {
         func apply(_ document: NoteDocument, to textView: NSTextView) {
             applying = true
             let previous = lastDocument
-            if parent.sizesToContent {
+            if parent.editsPageFlow {
                 // A focused Page flow must never undo a snapshot over incoming
                 // agent/component work. Native typing keeps its ordinary undo.
                 textView.undoManager?.removeAllActions()
@@ -628,7 +633,7 @@ struct DashboardNoteEditor: NSViewRepresentable {
 
         func emit(_ proposed: NoteDocument) {
             var document = proposed
-            if parent.sizesToContent, let before = synchronizedText, let view = parent.controller.textView {
+            if parent.editsPageFlow, let before = synchronizedText, let view = parent.controller.textView {
                 let after = view.attributedString()
                 let originals = Dictionary(lastDocument.blocks.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
                 for index in document.blocks.indices {
@@ -705,7 +710,7 @@ struct DashboardNoteEditor: NSViewRepresentable {
         }
 
         func toggleTask(_ id: String) {
-            guard parent.sizesToContent, let textView = parent.controller.textView, textView.isEditable,
+            guard parent.editsPageFlow, let textView = parent.controller.textView, textView.isEditable,
                   let storage = textView.textStorage else { return }
             parent.controller.performEdit(action: "Toggle Task") {
                 var changes: [(NSRange, Data)] = []
@@ -791,7 +796,7 @@ struct DashboardNoteEditor: NSViewRepresentable {
                 ? textView.textStorage?.attributes(at: range.location, effectiveRange: nil) ?? [:]
                 : textView.typingAttributes
             let isEmpty = string.substring(with: range).trimmingCharacters(in: .newlines).isEmpty
-            if parent.sizesToContent, isEmpty,
+            if parent.editsPageFlow, isEmpty,
                commandSelector == #selector(NSTextView.insertNewline(_:)) || commandSelector == #selector(NSTextView.deleteBackward(_:)),
                let data = attributes[.notePageItem] as? Data,
                var item = try? JSONDecoder().decode(BoardItem.self, from: data), item.task != nil {
@@ -805,7 +810,7 @@ struct DashboardNoteEditor: NSViewRepresentable {
                 }
                 return true
             }
-            if parent.sizesToContent, attributes[.noteTableID] == nil {
+            if parent.editsPageFlow, attributes[.noteTableID] == nil {
                 let pageStyle = (attributes[.noteBlockStyle] as? String).flatMap(NoteParagraphStyle.init(rawValue:)) ?? .paragraph
                 if isEmpty, pageStyle.isList,
                    commandSelector == #selector(NSTextView.insertNewline(_:)) || commandSelector == #selector(NSTextView.deleteBackward(_:)) {

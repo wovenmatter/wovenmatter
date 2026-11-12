@@ -18,7 +18,7 @@ struct DashboardPageTextFlow: View {
         let base = document.materializedPage()
         DashboardNoteEditor(document: flowBinding(base: base), controller: controller,
             dictationEditor: dictationEditor, dictationIdentity: "page:\(flowID)",
-            sizesToContent: true, onFocus: { controller in
+            sizesToContent: true, editsPageFlow: true, onFocus: { controller in
                 if let id = controller.selectedBlockID, document.blocks.contains(where: { $0.id == id }) {
                     viewState.selected = [id]
                 } else { viewState.selected = Set(parentID.map { [$0] } ?? []) }

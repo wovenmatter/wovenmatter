@@ -516,7 +516,8 @@ private struct LibraryClientPageText: View {
   let document: NoteDocument
   @State private var controller = DashboardNoteEditorController()
   var body: some View {
-    DashboardNoteEditor(document: .constant(document), controller: controller, sizesToContent: true)
+    DashboardNoteEditor(document: .constant(document), controller: controller,
+      sizesToContent: true, editsPageFlow: true)
       .frame(minHeight: 40).disabled(true).accessibilityLabel("Page text, read only")
   }
 }
