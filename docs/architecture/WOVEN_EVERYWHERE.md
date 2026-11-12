@@ -1045,20 +1045,25 @@ Every live view of a session streams. Nothing polls an execution workspace.
   `{code:"protocol_unsupported", supported:[1]}`; `401`
   `{code:"member_time_stale", serverTime}` when the signature time is outside
   the window, so the UI says the device clock is wrong; `401` `unauthorized`;
-  `403` when the request carries `Origin` or `Cookie`.
+  `403` `unauthorized` when the request carries `Origin` or `Cookie`; `503`
+  `unavailable` while the workspace is not enrolled yet or the server is
+  stopping. Every refusal also carries a `message`.
 - Each server keeps a registry of open sockets by member device ID. When its
   member list changes it closes every socket whose member was removed, or is no
   longer an allowed kind, with close code `4401`. A client does not retry after
   `4401` until its own member list changes. The same registry closes the
-  `/v1/bots/ws` relays on both Mac and Linux, and the Linux bots upgrade accepts
-  signed members only (the installer bearer and device grants no longer open it).
+  `/v1/bots/ws` relays on both Mac and Linux. The Linux bots upgrade accepts
+  signed members, and the installer bearer only on the installing Mac's SSH
+  tunnel (how it reaches a bots-only host that is not in the registry); device
+  grants no longer open it, and the bearer never works through Tailscale Serve.
 
 ### Frames
 
 JSON text frames, one message per frame, at most 8 MiB (normal frames are far
-smaller). Liveness uses WebSocket ping and pong control frames: the client
-pings every 25 s while connected and the server closes a socket with no pong
-for 60 s. The Swift types live in `shared/Sources/WovenMatterShared/StreamProtocol.swift`;
+smaller); a server refuses client frames over 1 MiB (close `1009`). Liveness
+uses WebSocket ping and pong control frames: both sides ping every 25 s and
+answer the other's pings, and the server closes a socket with no pong for
+60 s. Binary frames and invalid JSON close the socket with `4400`. The Swift types live in `shared/Sources/WovenMatterShared/StreamProtocol.swift`;
 `shared/Tests/WovenMatterSharedTests/StreamProtocolFixtures.json` holds one
 example of every frame and item, and the Swift and Node test suites both
 decode and re-encode every fixture.
@@ -1073,7 +1078,8 @@ decode and re-encode every fixture.
 | server | `{t:"end", id, error?}` | The server closed a subscription. |
 | client | `{t:"cancel", id}` | Close a subscription or abandon a call. |
 
-Unknown frame types and unknown item kinds are ignored. Error codes:
+Unknown frame types and unknown item kinds are ignored. A subscription the
+client cancels gets no `end`. Error codes:
 `unauthorized`, `not_found`, `invalid`, `unavailable`, `conflict`, and
 `resync` (the subscription fell behind: subscribe again). Close codes: `1000`
 normal, `1001` server stopping or sleeping, `4400` protocol violation, `4401`
@@ -1105,8 +1111,8 @@ member removed.
     they change.
   - `synchronized` `{}` after the first snapshot.
 - **Coalescing.** A server sends a conversation's changes at most every 50 ms
-  while every changed message is 8 KB or smaller, and at most every 200 ms
-  once one is larger. Durable state is never coalesced away: the last update
+  while every changed message is 8 KB or smaller (measured on the message's
+  encoded JSON), and at most every 200 ms once one is larger. Durable state is never coalesced away: the last update
   always reflects the stored state.
 - **Backpressure.** Each socket has a bounded outbound queue (512 items or
   8 MiB). Updates to the same entity supersede queued ones. A subscription that

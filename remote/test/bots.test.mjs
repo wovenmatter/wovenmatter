@@ -14,7 +14,8 @@ import { createBotsRuntime } from '../src/bots-runtime.mjs'
 import { botEngineLayout, createBotEngine, machineIdentity } from '../src/bots-engine.mjs'
 import { createBotsService } from '../src/bots-service.mjs'
 import { createMemberVerifier, privateKeyFromSeed, rawPublicKeyFor, signMemberRequest } from '../src/member-auth.mjs'
-import { authenticateMemberUpgrade } from '../src/member-sockets.mjs'
+import { authenticateMemberUpgrade, authorizeBotsUpgrade } from '../src/member-sockets.mjs'
+import { createInstallerBearer } from '../src/installer-bearer.mjs'
 import { WebSocket, WebSocketServer } from '../src/websocket.mjs'
 
 const temporary = t => { const directory = mkdtempSync(join(tmpdir(), 'woven-bots-')); t.after(() => rmSync(directory, { recursive: true, force: true })); return directory }
@@ -478,12 +479,15 @@ test('the bots socket accepts only signed members and reaches the runtime with t
   const verifier = createMemberVerifier({ audience: here, loadMembers: async () => ({ revision: '1', members: [
     { deviceID: mac.deviceID, kind: 'mac', name: 'Studio', publicKey: rawPublicKeyFor(mac.key).toString('base64'), endpoints: [], revoked: false }] }) })
   t.after(() => verifier.close())
-  // What server.mjs passes: a bearer, installer token or device grant opens nothing.
-  const authorizeClient = async request => (await authenticateMemberUpgrade(request, { members: verifier })).member
+  // What server.mjs passes: signed members, or the installer bearer on the SSH tunnel.
+  const installer = 'i'.repeat(43)
+  const installerBearer = createInstallerBearer({ token: installer, rotate: async () => installer })
+  const authorizeClient = request => authorizeBotsUpgrade(request, { members: verifier, installerBearer })
   const f = await serviceFixture(t, { runtime, authorizeClient })
   const signed = () => signMemberRequest({ deviceID: mac.deviceID, privateKey: mac.key, audience: here, method: 'GET', target: '/v1/bots/ws?client=mac' })
   assert.equal((await botsSocket(f.port, { authorization: 'Bearer device' }, '/v1/bots/ws?client=mac')).status, 401)
-  assert.equal((await botsSocket(f.port, { authorization: 'Bearer ' + 'i'.repeat(43) }, '/v1/bots/ws?client=mac')).status, 401, 'the installer bearer no longer opens the socket')
+  assert.equal((await botsSocket(f.port, { authorization: 'Bearer ' + installer, 'x-forwarded-host': 'host.example.ts.net' }, '/v1/bots/ws?client=mac')).status, 401, 'the installer bearer never opens the socket through Tailscale Serve')
+  assert.deepEqual(await botsSocket(f.port, { authorization: 'Bearer ' + installer }, '/v1/bots/ws?client=mac'), { status: 101, echo: 'echo' }, 'the installing Mac reaches a bots-only host over its SSH tunnel')
   assert.equal((await botsSocket(f.port, { ...signed(), origin: 'https://evil.example' }, '/v1/bots/ws?client=mac')).status, 403)
   assert.deepEqual(await botsSocket(f.port, { ...signed(), authorization: 'Bearer device', cookie: 'secret' }, '/v1/bots/ws?client=mac'), { status: 101, echo: 'echo' })
   // Exactly what the Mac's URLSessionWebSocketTask sends besides the fields above (captured
@@ -491,5 +495,6 @@ test('the bots socket accepts only signed members and reaches the runtime with t
   const cfNetwork = { 'accept-encoding': 'gzip, deflate', 'user-agent': 'Woven Matter CFNetwork/3896.200.61 Darwin/27.2.0', 'sec-websocket-extensions': 'permessage-deflate', accept: '*/*', 'accept-language': 'en-US,en;q=0.9' }
   assert.deepEqual(await botsSocket(f.port, { ...signed(), ...cfNetwork }, '/v1/bots/ws?client=mac'), { status: 101, echo: 'echo' })
   assert.deepEqual(seen, [{ url: '/ws?client=mac', authorization: 'Bearer runtime-token', cookie: undefined, signature: undefined },
+    { url: '/ws?client=mac', authorization: 'Bearer runtime-token', cookie: undefined, signature: undefined },
     { url: '/ws?client=mac', authorization: 'Bearer runtime-token', cookie: undefined, signature: undefined }])
 })

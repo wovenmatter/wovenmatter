@@ -42,6 +42,19 @@ export function refuseUpgrade(socket, status, body = {}, headers = {}) {
 }
 
 /**
+ * Who may open this host's bots relay: a signed member, or the installer
+ * bearer on the installing Mac's SSH tunnel (a bots-only host that is not in
+ * the registry is reached only that way). The bearer never works through
+ * Tailscale Serve (`installerBearer.authorizes`), and an installer socket is
+ * not a member socket, so the member registry never closes it.
+ */
+export async function authorizeBotsUpgrade(request, { members, servedTargets, installerBearer = null }) {
+  const member = members ? (await authenticateMemberUpgrade(request, { members, servedTargets })).member : null
+  if (member) return member
+  return installerBearer?.authorizes(request) ? { installer: true } : null
+}
+
+/**
  * Open member sockets by device ID. `sweep(members)` closes every socket whose
  * member is gone, revoked, or no longer an allowed kind, with `4401`.
  */

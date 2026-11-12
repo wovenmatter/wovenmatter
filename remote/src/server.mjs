@@ -24,7 +24,7 @@ import { createLibraryServe } from './library-serve.mjs'
 import { createLibraryTimers } from './library-timers.mjs'
 import { createMemberVerifier, hasMemberSignature } from './member-auth.mjs'
 import { createMemberTransport } from './member-client.mjs'
-import { authenticateMemberUpgrade, createMemberSocketRegistry } from './member-sockets.mjs'
+import { authenticateMemberUpgrade, authorizeBotsUpgrade, createMemberSocketRegistry } from './member-sockets.mjs'
 import { streamCapability } from './stream-protocol.mjs'
 import { createStreamServer } from './stream-server.mjs'
 import { createHostAdministration, runHostScript } from './host-admin.mjs'
@@ -190,8 +190,8 @@ function hostRelease() {
 const bots = runningAsService && configuration.runtimeKind === 'host' && process.platform === 'linux' ? createBotsService({
   configuration, mcp: clientExecution.mcp, release: hostRelease, defaultAgent, serverPort: () => server.address()?.port ?? listenPort,
   libraryHost: library, memberIdentity, registry: memberSockets,
-  // Any signed member may open the bots socket; bearers and device grants do not.
-  authorizeClient: async request => (await authenticateMemberUpgrade(request, { members, servedTargets })).member ?? null,
+  // Signed members, or the installer bearer on the SSH tunnel only; device grants open nothing.
+  authorizeClient: request => authorizeBotsUpgrade(request, { members, servedTargets, installerBearer }),
 }) : null
 // The live stream at the execution endpoint (`GET /v1/stream?protocol=1`).
 const stream = clientExecution && members ? createStreamServer({ members, servedTargets, execution: clientExecution, registry: memberSockets,
