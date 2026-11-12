@@ -49,30 +49,33 @@ private final class HostInspectionFixture: @unchecked Sendable {
         let harnesses = try #require(fixture.model.remoteWorkspaces.harnesses[host.id])
         let maintenance = try #require(fixture.model.remoteWorkspaces.runtimeMaintenance[host.id])
         fixture.model.remoteWorkspaces.configureFacadeFixture(host, status: status, harnesses: harnesses, maintenance: maintenance)
+        let (_, linux) = try await fixture.enrollLinuxHost()
         let scope = ApplicationModel.remoteDatabaseSourceID(host.id)
         fixture.model.sessionSelectionPreferences.saveDefaults(.init(permission: "read-only"), harness: "codex", workspace: scope)
         let target = RemoteHarnessChatTarget(configuration: host, harness: try #require(harnesses.first { $0.id == .codex }))
-        let folderless = try #require(await fixture.model.createRemoteACPSession(target: target))
-        #expect(try await fixture.database.localACPSession(conversationID: folderless).permission == "agent-full-access")
-        #expect(await fixture.recorder.configurations.last?.selections.permission == "agent-full-access")
+        // The host creates the session with its workspace permission.
+        let folderless = try #require(await fixture.model.createRemoteACPSession(target: target), "\(fixture.model.localRunError ?? "")")
+        #expect(await linux.commands.last { $0.kind == .createSession }?.sessionOptions?.permission == "agent-full-access")
         #expect(try fixture.model.defaultToolWorkingDirectory(workspaceID: host.id) == host.workspaceRoot)
         let calendar = fixture.model.calendarTaskDefaults(runtime: .codex, workspaceID: host.id)
         #expect(calendar.configuration.permission == "agent-full-access")
         #expect(calendar.configuration.usesProductPermissionDefault == false)
 
         // A previously captured restrictive selection also yields to the
-        // workspace policy when an existing chat is recovered.
+        // workspace policy when it is applied to an existing chat.
         fixture.model.sessionSelectionPreferences.stageCalendarSelections(id: folderless, harness: "codex", workspace: scope,
             selections: .init(permission: "read-only"), usesProductPermissionDefault: true)
         try await fixture.model.applyStagedSessionSelections(conversationID: folderless)
-        #expect(await fixture.recorder.configurations.last?.selections.permission == "agent-full-access")
+        #expect(await linux.commands.last { $0.kind == .workspace }?.workspaceAction
+            == .configureSession(id: folderless, model: nil, thinking: nil, permission: "agent-full-access"))
 
         let external = "/home/trey/projects/existing-repository"
         let folderID = try await fixture.store.createFolder(name: "Linked repository", location: .init(workspaceID: scope, rootPath: external, managed: false))
-        let linked = try #require(await fixture.model.createRemoteACPSession(target: target, folderID: folderID))
-        #expect(try await fixture.database.localACPSession(conversationID: linked).permission == "agent-full-access")
-        #expect(await fixture.recorder.configurations.last?.directory == external)
+        _ = try #require(await fixture.model.createRemoteACPSession(target: target, folderID: folderID))
+        let linked = try #require(await linux.commands.last { $0.kind == .createSession })
+        #expect(linked.sessionOptions?.permission == "agent-full-access" && linked.sessionOptions?.workingDirectory == external)
         #expect(try await fixture.model.folderWorkingDirectory(folderID: folderID, workspaceID: host.id).path == external)
+        #expect(await fixture.recorder.configurations.isEmpty)
 
         host.accessMode = .user
         fixture.model.remoteWorkspaces.configureFacadeFixture(host, status: status, harnesses: harnesses, maintenance: maintenance)

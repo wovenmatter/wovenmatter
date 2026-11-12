@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import WovenMatterCore
 import LibraryClient
@@ -12,6 +13,17 @@ enum FederatedExecutionAction: Codable, Sendable {
     /// The chat closed: a streamed workspace ends its `conversation` subscription.
     case close(conversationID: String)
 }
+/// A chat that ran over SSH before and could not move to its Linux host's
+/// server. It stays in the library, readable; sending to it says why.
+struct LegacyRemoteChatError: LocalizedError, Equatable {
+    var workspace: String
+    var reason: String
+    var errorDescription: String? {
+        "This chat ran on \(workspace) over SSH, which Woven Matter no longer uses, and it could not move to \(workspace)'s server: "
+            + reason.trimmingCharacters(in: CharacterSet(charactersIn: ". ")) + ". Its history stays here, read-only. Start a new chat to continue."
+    }
+}
+
 struct FederatedExecutionSnapshot: Codable, Sendable {
     var workspace: ExecutionWorkspace
     var transcript: LibraryTranscript?
@@ -75,8 +87,42 @@ extension ApplicationModel {
             memberRevision: { [weak self] in try? await self?.libraryHost.peerSync.members().list().revision },
             onChange: { [weak self] in await self?.refreshWorkspace() })
         client.onLive = { [weak self] ids in self?.federatedLiveChanged(ids) }
+        // A Linux host's Pi Durable vault opens with this Mac's key for that
+        // workspace (its registry id is the Keychain scope).
+        client.unlockDefaultAgentHandler = { workspace, routes in
+            try await DefaultAgentHostUnlock.unlock(scope: workspace.id, routes: routes)
+        }
         federatedExecutionClient = client
         return client
+    }
+
+    /// The signed member routes of a Linux host this Mac added, by its
+    /// configuration ID (which is its registry ID).
+    func linuxMemberRoutes(_ id: UUID) async throws -> any MemberExecutionRoutes {
+        guard let database = dashboardStore?.database,
+              let workspace = try await database.libraryExecutionWorkspaces().first(where: { $0.id == id.uuidString.lowercased() && !$0.deleted }) else {
+            throw LibraryAPIError(code: "unknown_workspace", message: "This Linux workspace is not in this library's workspaces yet. Reconnect it in Settings → Workspaces.")
+        }
+        return try await centralExecutionClient().memberRoutes(for: workspace)
+    }
+
+    /// An agent's file on a Linux host, for Library retention: `path` as the
+    /// agent wrote it, resolved by the host in the chat's directory. A chat the
+    /// host does not run (history that never moved there) reads `underRoot`,
+    /// the path under the directory this library recorded for it.
+    func readLinuxLibraryFile(workspaceID: String, conversationID: String, path: String, underRoot: String? = nil) async throws -> Data {
+        guard let id = UUID(uuidString: workspaceID) else { throw WorkspaceToolError.invalid("Reconnect this remote workspace to save the file.") }
+        let routes = try await linuxMemberRoutes(id)
+        let file: MemberLibraryFile
+        do { file = try await routes.libraryFile(conversationID: conversationID, path: path) }
+        catch let error as LibraryAPIError where error.code == "http_404" {
+            file = try await routes.libraryFile(conversationID: nil, path: underRoot ?? path)
+        }
+        guard let data = Data(base64Encoded: file.data), Int64(data.count) == file.byteCount,
+              SHA256.hash(data: data).map({ String(format: "%02x", $0) }).joined() == file.sha256 else {
+            throw WorkspaceToolError.invalid("The workspace returned a damaged copy of this file. Try again.")
+        }
+        return data
     }
 
     /// The chat's workspace, connection and saved state when it opens; a
@@ -209,33 +255,52 @@ extension ApplicationModel {
             transcript: transcript, capability: nil, interactions: [], session: nil, online: false, error: nil)
     }
 
-    /// Transfer existing idle native sessions once their workspace participates in
-    /// federation. The database fence precedes enrollment; every retry uses the
-    /// immutable adoption request, so a lost acknowledgement never creates a run.
+    /// A chat that ran over SSH before moves to its Linux host's server on
+    /// first open, refresh or send: the host adopts its native session
+    /// (`POST v1/execution/adopt`, signed) with the transcript this Mac shows.
+    /// The database fence precedes the request; every retry sends the same
+    /// immutable adoption, so a lost acknowledgement never creates a run.
+    /// Nothing runs a chat over SSH any more, so one that cannot move stays
+    /// here as read-only history and this throws `LegacyRemoteChatError`.
     func adoptRegisteredRemoteConversationIfNeeded(_ conversation: WorkspaceConversationRecord) async throws {
         guard !conversation.isArchived, !isBackendFrontend, !adoptedExecutionConversations.contains(conversation.id),
-              let workspaceID = conversation.remoteWorkspaceID,
-              let configuration = remoteWorkspaces.configuration(id: workspaceID),
-              let store = dashboardStore,
-              let native = try? await store.database.localACPSession(conversationID: conversation.id),
-              native.acpSessionID != nil else { return }
+              let workspaceID = conversation.remoteWorkspaceID, let store = dashboardStore else { return }
         let id = workspaceID.uuidString.lowercased()
-        guard try await store.database.libraryExecutionWorkspaces().contains(where: { $0.id == id && !$0.deleted }) else { return }
+        let owner = try await store.database.libraryExecutionOwner(conversationID: conversation.id)
+        // Created on the host's server: there is nothing to move.
+        if owner != nil, try await !store.database.hasExecutionAdoption(conversationID: conversation.id) {
+            adoptedExecutionConversations.insert(conversation.id); return
+        }
+        let name = remoteWorkspaces.configuration(id: workspaceID)?.name ?? "its Linux workspace"
+        guard remoteWorkspaces.configuration(id: workspaceID) != nil else {
+            throw LegacyRemoteChatError(workspace: name, reason: "That workspace is no longer set up on this Mac.")
+        }
+        guard let workspace = try await store.database.libraryExecutionWorkspaces().first(where: { $0.id == id && !$0.deleted }) else {
+            throw LegacyRemoteChatError(workspace: name, reason: "It is not in this library's workspaces yet. Reconnect it in Settings → Workspaces.")
+        }
         if let pending = federatedAdoptionTasks[conversation.id] { try await pending.value; return }
         let task = Task { @MainActor in
-            let owner = try await store.database.libraryExecutionOwner(conversationID: conversation.id)
             if owner == nil {
-                // Leave a currently running legacy session on its current owner.
-                // Its next idle refresh will perform the transfer.
-                if try await store.database.activeRunID(conversationID: conversation.id) != nil { return }
-                _ = try await self.libraryHost.provisionCentralExecutionWorkspace(id: id)
+                // The SSH session that ran it is gone with the app that started
+                // it; an unsettled run is interrupted so the chat can move.
+                try await store.database.interruptLegacyRemoteRuns(conversationID: conversation.id)
                 try await store.detachLocalACPForExecutionAdoption(conversationID: conversation.id)
             }
             let identity = try await store.database.libraryIdentity()
-            let adoption = try await store.database.prepareExecutionAdoption(conversationID: conversation.id,
-                workspaceID: id, deviceID: identity.hostDeviceID)
+            let adoption: ExecutionAdoption
+            do {
+                adoption = try await store.database.prepareExecutionAdoption(conversationID: conversation.id,
+                    workspaceID: id, deviceID: identity.hostDeviceID)
+            } catch let error as LibraryAPIError {
+                throw LegacyRemoteChatError(workspace: name, reason: error.message)
+            }
             self.federatedExecutionOwners[conversation.id] = id
-            _ = try await self.remoteWorkspaces.adoptExecutionConversation(configuration: configuration, adoption: adoption)
+            do {
+                let routes = try await self.centralExecutionClient().memberRoutes(for: workspace)
+                try await routes.adopt(JSONEncoder().encode(adoption))
+            } catch {
+                throw LegacyRemoteChatError(workspace: workspace.name, reason: error.localizedDescription)
+            }
             self.adoptedExecutionConversations.insert(conversation.id)
             await self.refreshWorkspace()
         }
@@ -265,7 +330,12 @@ extension ApplicationModel {
         if try await database.libraryConversationExecutionWorkspace(conversationID: conversationID)?.kind == .ios {
             throw WorkspaceToolError.invalid(Self.quickChatReadOnlyMessage)
         }
-        guard input.files.isEmpty else { throw LibraryAPIError(code: "attachment_unavailable", message: "Save this file to the workspace before referencing it in this remote conversation.") }
+        let workspace = try await database.libraryConversationExecutionWorkspace(conversationID: conversationID)
+        // Files go to a Linux host, which keeps them with the message. Other
+        // workspaces take references only.
+        guard input.files.isEmpty || workspace?.kind == .linux else {
+            throw LibraryAPIError(code: "attachment_unavailable", message: "Save this file to the workspace before referencing it in this remote conversation.")
+        }
         try await waitForAgentStop(conversationID: conversationID)
         try dispatchFence.check()
         let client = try centralExecutionClient()
@@ -275,15 +345,30 @@ extension ApplicationModel {
         let active = client.transcripts[conversationID]?.activeRunID
         if requiresIdle && active != nil { throw LocalACPSessionDatabaseError.runAlreadyActive }
         if let expectedRunID, expectedRunID != active { throw LocalACPSessionDatabaseError.runNotFound }
-        var prompt = input.text
-        for reference in input.references {
-            prompt += "\n\nReferenced content: \(reference.titleSnapshot)\n\(reference.contentSnapshot)"
-        }
-        if let note, !input.references.contains(where: { $0.resourceID == note.id }) {
-            prompt += "\n\nReferenced note: \(note.title)\n\(note.content)"
-        }
-        _ = try await client.send(conversationID: conversationID, text: prompt, expectedRunID: expectedRunID ?? active,
+        let message = Self.federatedMessage(input, note: note, linux: workspace?.kind == .linux)
+        _ = try await client.send(conversationID: conversationID, text: message.text, expectedRunID: expectedRunID ?? active,
+            files: input.files, promptContext: message.promptContext, noteID: workspace?.kind == .linux ? note?.id : nil,
             beforeDispatch: { try dispatchFence.claimDispatch() })
         return true
+    }
+
+    /// What a member workspace receives for a message from this Mac. A Linux
+    /// host takes the visible notes and pages and the reference blocks as
+    /// `promptContext`, exactly as a local harness receives them after the
+    /// message, so the transcript shows only what was typed; the note on
+    /// screen is also named by `noteID`. Other members take references inline.
+    nonisolated static func federatedMessage(_ input: AgentMessageInput, note: WorkspaceNoteRecord?, linux: Bool) -> (text: String, promptContext: String?) {
+        let unreferencedNote = note.flatMap { note in input.references.contains(where: { $0.resourceID == note.id }) ? nil : note }
+        guard linux else {
+            var prompt = input.text
+            for reference in input.references {
+                prompt += "\n\nReferenced content: \(reference.titleSnapshot)\n\(reference.contentSnapshot)"
+            }
+            if let note = unreferencedNote { prompt += "\n\nReferenced note: \(note.title)\n\(note.content)" }
+            return (prompt, nil)
+        }
+        var context = [input.promptContext].compactMap { $0 }
+        if let note = unreferencedNote { context.append("Referenced note: \(note.title)\n\(note.content)") }
+        return (input.text, context.isEmpty ? nil : context.joined(separator: "\n\n"))
     }
 }

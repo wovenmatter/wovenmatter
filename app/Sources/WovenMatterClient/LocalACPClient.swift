@@ -203,21 +203,15 @@ public struct LocalACPSessionConfiguration: Equatable, Sendable {
 public struct LocalACPInitializedSession: Equatable, Sendable {
     public let sessionID: String
     public let loadedExistingSession: Bool
-    public let recoveredDefaultAgentRuns: [DefaultAgentRunSnapshot]
-    public let confirmedRemoteIdleSessionID: String?
     public let configuration: LocalACPSessionConfiguration
 
     public init(
         sessionID: String,
         loadedExistingSession: Bool,
-        configuration: LocalACPSessionConfiguration = .empty,
-        recoveredDefaultAgentRuns: [DefaultAgentRunSnapshot] = [],
-        confirmedRemoteIdleSessionID: String? = nil
+        configuration: LocalACPSessionConfiguration = .empty
     ) {
         self.sessionID = sessionID
         self.loadedExistingSession = loadedExistingSession
-        self.recoveredDefaultAgentRuns = recoveredDefaultAgentRuns
-        self.confirmedRemoteIdleSessionID = confirmedRemoteIdleSessionID
         self.configuration = configuration
     }
 }
@@ -514,11 +508,10 @@ public actor LocalACPClient {
     private var nextID: Int64 = 0
     private var negotiatedProtocolVersion: Int64?
     private var defaultAgentRunID: String?
-    private var defaultAgentRemote = false
-    private var durableRemoteACP = false
     private let accountCoordinator: ProviderAccountCoordinator?
-    private var defaultAgentScope = "local"
-    private var executionScope = "local"
+    // Every session this client runs is on this Mac.
+    private let defaultAgentScope = "local"
+    private let executionScope = "local"
     private var historyReplayOrdinal: Int?
     private var defaultAgentCredentialRevision: String?
     public func setDefaultAgentRunID(_ value: String) async throws {
@@ -530,7 +523,7 @@ public actor LocalACPClient {
         return try await coordinator.prepare(scope)
     }
     private func prepareDefaultAgent() async throws {
-        guard runtimeKind == .defaultAgent, !defaultAgentRemote else { return }
+        guard runtimeKind == .defaultAgent else { return }
         let payload = try await prepareCredentialPayload("local")
         guard payload.revision != defaultAgentCredentialRevision else { return }
         let parameters = try JSONDecoder().decode(ACPJSONValue.self, from: payload.data())
@@ -625,11 +618,6 @@ public actor LocalACPClient {
         self.input = input
         self.cursor = cursor
         self.runtimeKind = runtimeKind
-        self.durableRemoteACP = process.environment?["WOVEN_DURABLE_REMOTE_ACP"] == "1"
-        let scope = process.environment?["WOVEN_DEFAULT_AGENT_SCOPE"] ?? "local"
-        self.defaultAgentScope = scope
-        self.executionScope = process.environment?["WOVEN_EXECUTION_SCOPE"] ?? scope
-        self.defaultAgentRemote = process.arguments?.contains("/usr/bin/ssh") == true
         self.workingDirectory = workingDirectory.standardizedFileURL
     }
 
@@ -678,8 +666,8 @@ public actor LocalACPClient {
         }
         environment["WOVENMATTER_LOCAL_ACP"] = "1"
         // Harness tools run on this Mac with nobody necessarily at its screen.
-        // Remote launches get the Linux host's equivalent from wm-exec.
-        if launch.wrappedCommand == nil, launch.executableURL.path != "/usr/bin/ssh" {
+        // A wrapped command gets its own environment from its wrapper.
+        if launch.wrappedCommand == nil {
             WovenSessionEnvironment.apply(to: &environment)
         }
         process.environment = environment
@@ -739,10 +727,7 @@ public actor LocalACPClient {
                 return LocalACPInitializedSession(
                     sessionID: existingSessionID,
                     loadedExistingSession: true,
-                    configuration: configuration,
-                    recoveredDefaultAgentRuns: (runtimeKind != .defaultAgent && durableRemoteACP) ? ((try? JSONDecoder().decode([DefaultAgentRunSnapshot].self, from: JSONEncoder().encode(loaded?["_meta"]?["recoveredRuns"] ?? .array([])))) ?? []) : [],
-                    confirmedRemoteIdleSessionID: runtimeKind != .defaultAgent && loaded?["_meta"]?["recoveryComplete"]?.boolValue == true
-                        ? loaded?["_meta"]?["recoverySessionID"]?.stringValue : nil
+                    configuration: configuration
                 )
             } catch LocalACPClientError.agent(let code, let message)
                 where Self.isMissingSessionError(
@@ -1103,9 +1088,6 @@ public actor LocalACPClient {
                 promptBlocks.arrayValue?.first?["text"]?.stringValue ?? ""
             )
             if commandOnly { steeringMetadata["wovenCommandOnly"] = .bool(true) }
-            if durableRemoteACP, let defaultAgentRunID {
-                steeringMetadata["wovenRunID"] = .string(defaultAgentRunID)
-            }
             let response = try await request(
                 method: "_session/steering",
                 params: .object([
@@ -1278,7 +1260,7 @@ public actor LocalACPClient {
         let promptRunID = defaultAgentRunID ?? UUID().uuidString.lowercased()
         do {
             var metadata: [String: ACPJSONValue] = [:]
-            if runtimeKind == .defaultAgent || durableRemoteACP {
+            if runtimeKind == .defaultAgent {
                 metadata["wovenRunID"] = .string(promptRunID)
                 metadata["wovenInputID"] = .string(UUID().uuidString.lowercased())
                 if let conversationID = input.mcpContext?.sessionID {
@@ -1785,7 +1767,7 @@ public actor LocalACPClient {
             }
             try await respondToPermissionRequest(
                 envelope,
-                handler: activePermissionHandler ?? (durableRemoteACP ? resumePermissionHandler : nil)
+                handler: activePermissionHandler
             )
         } else if envelope.method == "elicitation/create" {
             try await respondToElicitation(envelope)
@@ -1839,7 +1821,7 @@ public actor LocalACPClient {
 
     private func recordBuiltInNativeHistory(_ value: ACPJSONValue, sessionID: String) async throws {
         guard let historyRecorder else { return }
-        let prefix = defaultAgentRemote ? "remote:\(defaultAgentScope):" : "local:"
+        let prefix = "local:"
         let data = try BuiltInNativeHistoryCapture.batchData(value, sessionID: sessionID,
             sourcePrefix: prefix)
         try await historyRecorder("native", data)

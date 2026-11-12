@@ -12,7 +12,7 @@ const sha256 = bytes => createHash('sha256').update(bytes).digest('hex')
 export const attachmentLimits = Object.freeze({ count: 8, fileBytes: 25 * 1024 * 1024, totalBytes: 50 * 1024 * 1024 })
 
 // The original name with path separators and control characters replaced, so
-// agents see the real extension (`RemoteAttachmentStager.fileName`).
+// agents see the real extension.
 export function attachmentFileName(name) {
   const cleaned = [...String(name ?? '')].map(character => character === '/' || character === '\\' || character.codePointAt(0) < 0x20 ? '_' : character).join('').trim()
   return !cleaned || cleaned === '.' || cleaned === '..' ? 'attachment' : cleaned.slice(0, 255)
@@ -108,7 +108,7 @@ const knownTypes = { '.txt': 'text/plain', '.md': 'text/markdown', '.csv': 'text
   '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp', '.svg': 'image/svg+xml', '.zip': 'application/zip' }
 
 // One explicitly shared regular file, for Library retention of a file an
-// agent wrote (`RemoteLibraryFiles` over SSH did the same on the host). The
+// agent wrote, read by a Mac through `POST v1/execution/library-file`. The
 // file must be inside `root`, /tmp or /mnt/data, is opened without following
 // its final symlink, and must not change while it is read.
 export async function readWorkspaceFile({ path: requestedPath, root, maximumBytes = attachmentLimits.fileBytes }) {
