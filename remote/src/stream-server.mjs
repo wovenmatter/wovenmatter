@@ -114,19 +114,22 @@ export function createOutboundQueue({ send, isOpen = () => true, limits, overflo
 /**
  * `members` is the member verifier, `execution` the client execution service,
  * `registry` the shared member socket registry (member-sockets.mjs).
- * `clock` drives conversation coalescing only, so tests can use fake time.
+ * `library` is this machine's library host (`{cursor(), watch(listener)}`,
+ * library-host.mjs): its change cursor goes to `workspace` subscriptions as
+ * `library` items. `clock` drives coalescing only, so tests can use fake time.
  */
-export function createStreamServer({ members, servedTargets = async () => [], execution, registry, serverDeviceID = () => members.audience(),
+export function createStreamServer({ members, servedTargets = async () => [], execution, registry, serverDeviceID = () => members.audience(), library = null,
   workspaceEnabled = () => true, kinds = executionMemberKinds, clock = { now: () => Date.now(), setTimeout, clearTimeout }, limits = {}, timings = {}, log = () => {} }) {
   const limit = { items: streamQueueLimits.items, bytes: streamQueueLimits.bytes, inflightBytes: 1024 * 1024, subscriptions: 64, calls: 64,
     frameBytes: maximumFrameBytes, clientFrameBytes: maximumClientFrameBytes, snapshotWindow: 40, ...limits }
   const time = { pingMilliseconds: streamTimings.pingMilliseconds, pongTimeoutMilliseconds: streamTimings.pongTimeoutMilliseconds,
     smallMessageBytes: streamTimings.smallMessageBytes, smallMessageMilliseconds: streamTimings.smallMessageMilliseconds,
-    largeMessageMilliseconds: streamTimings.largeMessageMilliseconds, closeMilliseconds: 5_000, ...timings }
+    largeMessageMilliseconds: streamTimings.largeMessageMilliseconds, libraryMilliseconds: streamTimings.libraryMilliseconds, closeMilliseconds: 5_000, ...timings }
   const webSockets = new WebSocketServer({ noServer: true, maxPayload: limit.clientFrameBytes, perMessageDeflate: false, clientTracking: false })
   const connections = new Set()
   let closed = false
   const unwatch = execution.watch(change => { for (const connection of connections) connection.changed(change) })
+  const unwatchLibrary = library?.watch(cursor => { for (const connection of connections) connection.changed({ kind: 'library', cursor }) }) ?? (() => {})
 
   /** Handles `/v1/stream` upgrades; returns false for any other path. */
   function upgrade(request, socket, head) {
@@ -269,13 +272,14 @@ export function createStreamServer({ members, servedTargets = async () => [], ex
     return connection
   }
 
-  // `workspace` {after?}: conversation summaries, pending interactions and,
-  // when `after` is given, the execution journal after it.
+  // `workspace` {after?}: conversation summaries, pending interactions, the
+  // library change cursor and, when `after` is given, the execution journal after it.
   async function workspaceStream({ subscription, enqueue, waitForRoom, room, end }, params) {
     const after = params.after
     if (after !== undefined && (!Number.isSafeInteger(after) || after < 0)) throw failure('invalid', 'after is a journal sequence.')
     const summaries = new Map(), pendingByConversation = new Map(), dirty = new Set(), deleted = new Set()
     let pendingList = null, timer = null, lastSentAt = 0, cursor = after, pumping = false, more = false, synchronized = false
+    let librarySent = null, libraryTimer = null, librarySentAt = -Infinity
     const item = (kind, data, options = {}) => enqueue({ t: 'item', id: subscription.id, ...(options.seq !== undefined ? { seq: options.seq } : {}), kind, data },
       { subscription, key: options.key ?? null, merge: options.merge ?? null })
     const mergeConversations = (queued, next) => {
@@ -320,6 +324,20 @@ export function createStreamServer({ members, servedTargets = async () => [], ex
       timer = clock.setTimeout(flush, Math.max(0, lastSentAt + time.smallMessageMilliseconds - clock.now()))
     }
 
+    // The library host's change cursor, so a phone syncs this library when it
+    // changes: on subscribe, then at most every 300 ms while it moves.
+    function sendLibrary() {
+      libraryTimer = null
+      const value = library?.cursor()
+      if (subscription.ended || !Number.isSafeInteger(value) || value === librarySent) return
+      librarySent = value; librarySentAt = clock.now()
+      item('library', { cursor: value }, { key: 'library', merge: (_, next) => next })
+    }
+    function scheduleLibrary() {
+      if (libraryTimer || subscription.ended) return
+      libraryTimer = clock.setTimeout(sendLibrary, Math.max(0, librarySentAt + time.libraryMilliseconds - clock.now()))
+    }
+
     // The journal is read by cursor, so it waits for room instead of
     // overflowing: nothing is skipped, and nothing is held twice.
     async function pumpJournal() {
@@ -346,8 +364,9 @@ export function createStreamServer({ members, servedTargets = async () => [], ex
       if (change.kind === 'journal') { if (cursor !== undefined && change.sequence > cursor) void pumpJournal() }
       else if (change.kind === 'record') { dirty.add(change.conversationID); schedule() }
       else if (change.kind === 'deleted') { deleted.add(change.conversationID); dirty.delete(change.conversationID); schedule() }
+      else if (change.kind === 'library') scheduleLibrary()
     }
-    subscription.stop = () => { clock.clearTimeout(timer); timer = null }
+    subscription.stop = () => { clock.clearTimeout(timer); timer = null; clock.clearTimeout(libraryTimer); libraryTimer = null }
 
     const conversations = execution.conversations()
     for (const conversation of conversations) summaries.set(conversation.id, hash(JSON.stringify(conversation)))
@@ -360,6 +379,7 @@ export function createStreamServer({ members, servedTargets = async () => [], ex
     }
     lastSentAt = clock.now()
     sendPending()
+    sendLibrary()
     if (cursor === undefined) { synchronized = true; item('synchronized', {}) }
     else await pumpJournal()
   }
@@ -501,7 +521,7 @@ export function createStreamServer({ members, servedTargets = async () => [], ex
 
   async function close() {
     closed = true
-    unwatch()
+    unwatch(); unwatchLibrary()
     for (const connection of connections) connection.close(streamCloseCodes.goingAway, 'The server is stopping.')
   }
 

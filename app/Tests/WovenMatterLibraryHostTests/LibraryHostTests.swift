@@ -192,6 +192,27 @@ struct LibraryHostTests {
     var info = stat(); #expect(lstat(fixture.socket, &info) == 0 && info.st_mode & 0o777 == 0o600)
   }
 
+  /// The host tells its Node server when its phone change feed moves: one
+  /// stdout line per cursor (`{"event":"library","cursor":N}`), once at
+  /// start and then after each change a phone syncs, at most every 300 ms.
+  @Test func libraryChangesAreAnnouncedForTheNodeServer() async throws {
+    #expect(LibraryHost.libraryLine(42) == "{\"event\":\"library\",\"cursor\":42}\n")
+    let line = try JSONDecoder().decode(GatewayJSONValue.self, from: Data(LibraryHost.libraryLine(7).utf8))
+    #expect(line == .object(["event": .string("library"), "cursor": .number(7)]))
+    let fixture = try await HostFixture(); defer { fixture.remove() }
+    final class Seen: @unchecked Sendable { let lock = NSLock(); var values: [Int64] = []; var all: [Int64] { lock.withLock { values } } }
+    let seen = Seen()
+    await fixture.host.announceLibraryChanges { cursor in seen.lock.withLock { seen.values.append(cursor) } }
+    let start = try await fixture.host.database.libraryWakeCursor()
+    #expect(seen.all == [start])
+    let caller = UUID().uuidString.lowercased()
+    let created = try fixture.call(caller, "woven_notes_create", ["title": .string("Groceries")])
+    #expect(created.success, "\(created.error ?? "")")
+    for _ in 0..<200 where seen.all.count < 2 { try await Task.sleep(for: .milliseconds(10)) }
+    let after = try await fixture.host.database.libraryWakeCursor()
+    #expect(after > start && seen.all.last == after, "\(seen.all)")
+  }
+
   @Test func libraryToolsServeOnlyLibraryGroups() async throws {
     let fixture = try await HostFixture(); defer { fixture.remove() }
     let caller = UUID().uuidString.lowercased()

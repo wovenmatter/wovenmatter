@@ -25,6 +25,8 @@ public enum StreamProtocol {
   public static let smallMessageBytes = 8 * 1_024
   public static let smallMessageInterval: Duration = .milliseconds(50)
   public static let largeMessageInterval: Duration = .milliseconds(200)
+  /// `library` items on a `workspace` subscription are sent at most this often.
+  public static let libraryInterval: Duration = .milliseconds(300)
   public static let maximumQueuedItems = 512
   public static let maximumQueuedBytes = 8 * 1_024 * 1_024
   /// Pointer entries the Mac keeps in `execution_stream_changes`.
@@ -247,6 +249,18 @@ public struct StreamServerState: Codable, Equatable, Sendable {
   public init(scopes: [String], conversationIDs: [String]? = nil) { self.scopes = scopes; self.conversationIDs = conversationIDs }
 }
 
+/// The server's mobile library change cursor (the phone's `GET v1/changes`
+/// feed, `device_sync_changes`): on a `workspace` subscription, on subscribe
+/// and whenever the feed advances with a change a phone syncs, at most every
+/// `StreamProtocol.libraryInterval`. A phone that holds this server's library
+/// at an older cursor synchronizes it at once. Changes that only rewrite
+/// transcripts (which the open chat streams) or the agent list do not
+/// advance it, so `cursor` may trail the feed's newest entry.
+public struct StreamLibrary: Codable, Equatable, Sendable {
+  public var cursor: Int64
+  public init(cursor: Int64) { self.cursor = cursor }
+}
+
 /// Whether the server reaches the machine that runs a session. Sent only on a
 /// Mac window's socket, on `conversation` subscriptions to sessions another
 /// machine runs: on subscribe and when it changes.
@@ -258,7 +272,7 @@ public struct StreamOwner: Codable, Equatable, Sendable {
 
 public struct StreamItem: Codable, Equatable, Sendable {
   public enum Kind: String, Codable, Sendable {
-    case conversations, pending, journal, transcript, capabilities, session, owner, synchronized
+    case conversations, pending, journal, transcript, capabilities, session, owner, library, synchronized
     case serverState = "server.state"
   }
 
@@ -270,6 +284,7 @@ public struct StreamItem: Codable, Equatable, Sendable {
     case capabilities(StreamCapabilities)
     case session(StreamSession)
     case owner(StreamOwner)
+    case library(StreamLibrary)
     case synchronized
     case serverState(StreamServerState)
     /// A kind this build does not know. Ignored, but a `seq` still advances.
@@ -284,6 +299,7 @@ public struct StreamItem: Codable, Equatable, Sendable {
       case .capabilities: Kind.capabilities.rawValue
       case .session: Kind.session.rawValue
       case .owner: Kind.owner.rawValue
+      case .library: Kind.library.rawValue
       case .synchronized: Kind.synchronized.rawValue
       case .serverState: Kind.serverState.rawValue
       case .unknown(let kind, _): kind
@@ -312,6 +328,7 @@ public struct StreamItem: Codable, Equatable, Sendable {
     case .capabilities: payload = .capabilities(try container.decode(StreamCapabilities.self, forKey: .data))
     case .session: payload = .session(try container.decode(StreamSession.self, forKey: .data))
     case .owner: payload = .owner(try container.decode(StreamOwner.self, forKey: .data))
+    case .library: payload = .library(try container.decode(StreamLibrary.self, forKey: .data))
     case .synchronized: payload = .synchronized
     case .serverState: payload = .serverState(try container.decode(StreamServerState.self, forKey: .data))
     case nil: payload = .unknown(kind: kind, data: try container.decodeIfPresent(GatewayJSONValue.self, forKey: .data) ?? .null)
@@ -331,6 +348,7 @@ public struct StreamItem: Codable, Equatable, Sendable {
     case .capabilities(let value): try container.encode(value, forKey: .data)
     case .session(let value): try container.encode(value, forKey: .data)
     case .owner(let value): try container.encode(value, forKey: .data)
+    case .library(let value): try container.encode(value, forKey: .data)
     case .synchronized: try container.encode([String: String](), forKey: .data)
     case .serverState(let value): try container.encode(value, forKey: .data)
     case .unknown(_, let data): try container.encode(data, forKey: .data)

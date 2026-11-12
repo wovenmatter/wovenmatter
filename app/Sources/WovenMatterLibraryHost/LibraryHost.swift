@@ -56,6 +56,7 @@ public final class LibraryHost: @unchecked Sendable {
   private var mounts: [(prefix: String, handler: LibraryHTTPResponseHandler)] = []
   private var servers: [LibrarySocketHTTPServer] = []
   private var mobile: DeviceAPI?
+  private var libraryAnnouncer: LibraryChangeAnnouncer?
 
   /// `name` and `endpoints` are this machine's own advertised entry (the Mac
   /// that adds it signs the authoritative one); `transport` is for tests.
@@ -105,6 +106,20 @@ public final class LibraryHost: @unchecked Sendable {
   /// change-driven announcements and a slow presence check.
   public func startSync() async { await sync.start() }
 
+  /// One stdout line for the supervising Node server: `{"event":"library","cursor":N}`.
+  public static func libraryLine(_ cursor: Int64) -> String { "{\"event\":\"library\",\"cursor\":\(cursor)}\n" }
+
+  /// Announces the mobile library change cursor (`device_sync_changes`, what a
+  /// phone syncs from) once now and then whenever it moves, at most every
+  /// 300 ms. The Node server carries each value to phones as `library` items
+  /// on its stream, so they synchronize this library when it changes.
+  public func announceLibraryChanges(_ announce: @escaping @Sendable (Int64) async -> Void) async {
+    let announcer = LibraryChangeAnnouncer(database: database, announce: announce)
+    let previous = lock.withLock { defer { libraryAnnouncer = announcer }; return libraryAnnouncer }
+    await previous?.stop()
+    await announcer.start()
+  }
+
   /// Routes another handler under a loopback path prefix, such as `/v1/peers/`
   /// for peer sync or `/v1/workspace/` for the mobile API. Requests reach it
   /// with the `/wovenmatter` Serve prefix already removed.
@@ -129,8 +144,8 @@ public final class LibraryHost: @unchecked Sendable {
   public func stop() {
     let current = lock.withLock { defer { servers = [] }; return servers }
     for server in current { server.stop() }
-    let sync = sync
-    Task { await sync.stop() }
+    let sync = sync, announcer = lock.withLock { defer { libraryAnnouncer = nil }; return libraryAnnouncer }
+    Task { await sync.stop(); await announcer?.stop() }
   }
 
   // MARK: Loopback routes

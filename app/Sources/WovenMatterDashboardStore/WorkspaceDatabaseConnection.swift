@@ -61,6 +61,7 @@ final class WorkspaceDatabaseConnection {
       try migrateBotConversations()
       try migratePairedLibrary()
       try migrateExecutionStreamChanges()
+      try migrateDeviceSyncWakes()
     } catch {
       sqlite3_close(database)
       connection = nil

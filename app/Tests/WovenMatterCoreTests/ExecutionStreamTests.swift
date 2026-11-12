@@ -131,6 +131,7 @@ struct ExecutionStreamTests {
     #expect(try await mac.api.localConversations() == conversations.conversations, "the same data as GET v1/execution/conversations")
     guard case .pending(let pending) = try await client.item("w").payload else { Issue.record("no pending"); return }
     #expect(pending.interactions.isEmpty)
+    #expect(try await client.item("w").payload == .library(.init(cursor: mac.database.libraryWakeCursor())))
     #expect(try await client.item("w").payload == .synchronized)
 
     // Conversation: the transcript GET returns, capabilities, synchronized.
@@ -443,7 +444,104 @@ struct ExecutionStreamTests {
     let removed = StreamItem(id: "w", payload: .conversations(.init(conversations: [b], deletedConversationIDs: ["a"], snapshot: false)))
     guard case .conversations(let list) = try #require(StreamSession.merge(listed, removed)).payload else { return }
     #expect(list.conversations.map(\.id) == ["b"] && list.deletedConversationIDs == ["a"])
+    let library = try #require(StreamSession.merge(.init(id: "w", payload: .library(.init(cursor: 3))), .init(id: "w", payload: .library(.init(cursor: 5)))))
+    #expect(library.payload == .library(.init(cursor: 5)), "a newer cursor replaces a queued one")
   }
+
+  // MARK: Library change cursor
+
+  /// `library` items carry the phone change feed's cursor: with the snapshot,
+  /// then whenever a change a phone syncs commits, at most every 300 ms.
+  @Test func theWorkspaceStreamCarriesTheLibraryCursorOnSubscribeAndAtMostEvery300ms() async throws {
+    let mac = try await StreamMac(); defer { mac.remove() }
+    let phone = try await mac.member(.ios)
+    let client = try await mac.connect(phone)
+    guard case .hello = try await client.next() else { Issue.record("no hello"); return }
+    client.send(.subscribe(.init(id: "w", stream: .workspace)))
+    func library(timeout: Duration = .seconds(10)) async throws -> Int64 {
+      let frame = try await client.next(timeout: timeout) { if case .item(let item) = $0, item.id == "w", case .library = item.payload { return true }; return false }
+      guard case .item(let item) = frame, case .library(let value) = item.payload else { throw StreamTestError.closed }
+      return value.cursor
+    }
+    let initial = try await library()
+    #expect(initial == (try await mac.database.libraryWakeCursor()))
+    #expect(try await client.item("w").payload == .synchronized, "the cursor comes with the snapshot")
+
+    // One change goes out; a burst right after it waits out the window and arrives as its last cursor.
+    _ = try await mac.database.createFixtureLocalACPSession(runtimeKind: .codex, title: "One", ownerDeviceID: UUID())
+    let first = try await library()
+    let firstAt = ContinuousClock.now
+    #expect(first > initial)
+    for index in 0..<3 { _ = try await mac.database.createFixtureLocalACPSession(runtimeKind: .codex, title: "Burst \(index)", ownerDeviceID: UUID()) }
+    let last = try await mac.database.libraryWakeCursor()
+    var arrivals: [(cursor: Int64, at: ContinuousClock.Instant)] = [(first, firstAt)]
+    while arrivals.last?.cursor != last { arrivals.append((try await library(), .now)) }
+    #expect(arrivals.count <= 3, "three changes coalesce: \(arrivals.map(\.cursor))")
+    for (earlier, later) in zip(arrivals, arrivals.dropFirst()) {
+      #expect(later.at - earlier.at >= .milliseconds(250), "at most every 300 ms")
+      #expect(later.cursor > earlier.cursor)
+    }
+    await #expect(throws: StreamTestError.self) { _ = try await library(timeout: .milliseconds(700)) }
+
+    // A transcript that changes, as a running session rewrites it, wakes no phone.
+    let quiet = try await mac.database.libraryWakeCursor()
+    try await mac.database.write { connection in
+      try connection.withLock { try connection.executeUnlocked("INSERT INTO device_sync_changes(kind, resource_id, revision, deleted) VALUES ('transcript', 'x', 1, 0)") }
+    }
+    #expect(try await mac.database.libraryWakeCursor() == quiet)
+    await #expect(throws: StreamTestError.self) { _ = try await library(timeout: .milliseconds(700)) }
+    client.close()
+  }
+
+  /// The calendar, dictation, registry and artifact tables a phone syncs
+  /// outside `GET v1/changes` move the cursor too; their entries are skipped
+  /// by change pages. The announcer reads once per window and only reports moves.
+  @Test func wakeTablesMoveTheCursorAndTheAnnouncerCoalesces() async throws {
+    let fixture = try PersistenceFixture(); defer { fixture.remove() }
+    let database = try await fixture.openDatabase()
+    func run(_ sql: String) async throws {
+      try await database.write { connection in try connection.withLock { try connection.executeUnlocked(sql) } }
+    }
+    let before = try await database.libraryWakeCursor()
+    try await run("INSERT INTO execution_workspaces(id, owner_device_id, revision, deleted, payload) VALUES ('w1', 'o', 1, 0, x'00')")
+    let registry = try await database.libraryWakeCursor()
+    #expect(registry > before)
+    try await run("INSERT INTO device_saved_artifacts(id, revision, manifest) VALUES ('a1', 1, x'00')")
+    #expect(try await database.libraryWakeCursor() > registry)
+    let page = try await database.read { try $0.libraryChanges(after: before) }
+    #expect(page.cursor == (try await database.libraryWakeCursor()) && page.changes.isEmpty, "wake entries advance a page and carry nothing")
+
+    final class Sleeps: @unchecked Sendable {
+      let lock = NSLock(); var waits: [Duration] = []; var gates: [CheckedContinuation<Void, Never>] = []
+      func sleep(_ value: Duration) async { await withCheckedContinuation { gate in lock.withLock { waits.append(value); gates.append(gate) } } }
+      func release() { for gate in lock.withLock({ defer { gates = [] }; return gates }) { gate.resume() } }
+      var count: Int { lock.withLock { waits.count } }
+    }
+    final class Seen: @unchecked Sendable { let lock = NSLock(); var values: [Int64] = []; var all: [Int64] { lock.withLock { values } } }
+    let sleeps = Sleeps(), seen = Seen()
+    let announcer = LibraryChangeAnnouncer(database: database, sleep: { await sleeps.sleep($0) }) { cursor in seen.lock.withLock { seen.values.append(cursor) } }
+    await announcer.start()
+    let start = try await database.libraryWakeCursor()
+    #expect(seen.all == [start], "announced once on start")
+    // Three commits inside the window: one sleep, then one read of the latest cursor.
+    for id in ["w2", "w3", "w4"] { try await run("INSERT INTO execution_workspaces(id, owner_device_id, revision, deleted, payload) VALUES ('\(id)', 'o', 1, 0, x'00')") }
+    for _ in 0..<200 where sleeps.count == 0 { try await Task.sleep(for: .milliseconds(5)) }
+    #expect(sleeps.count == 1)
+    #expect(sleeps.waits.first.map { $0 > .zero && $0 <= StreamProtocol.libraryInterval } == true)
+    #expect(seen.all == [start], "nothing before the window ends")
+    sleeps.release()
+    let latest = try await database.libraryWakeCursor()
+    for _ in 0..<200 where seen.all.count < 2 { try await Task.sleep(for: .milliseconds(5)) }
+    #expect(seen.all == [start, latest])
+    // A commit that only rewrites a transcript reads once and reports nothing.
+    try await run("INSERT INTO device_sync_changes(kind, resource_id, revision, deleted) VALUES ('transcript', 'x', 1, 0)")
+    for _ in 0..<200 where sleeps.count < 2 { try await Task.sleep(for: .milliseconds(5)) }
+    sleeps.release()
+    try await Task.sleep(for: .milliseconds(50))
+    #expect(seen.all == [start, latest])
+    await announcer.stop()
+  }
+
 }
 
 // MARK: - Fixture

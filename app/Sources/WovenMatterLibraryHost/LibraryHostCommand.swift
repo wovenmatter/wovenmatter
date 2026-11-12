@@ -141,6 +141,13 @@ public enum LibraryHostCommand {
       }
       FileHandle.standardOutput.write(ready + Data([10]))
       await host.startSync()
+      // After the ready line, one line per library change cursor, which the
+      // Node server streams to phones as `library` items. Written in order on
+      // their own queue, so a slow reader never holds the database.
+      let lines = DispatchQueue(label: "com.wovenmatter.library.announcements")
+      await host.announceLibraryChanges { cursor in
+        lines.async { FileHandle.standardOutput.write(Data(LibraryHost.libraryLine(cursor).utf8)) }
+      }
       await waitForTermination()
       host.stop()
       try? FileManager.default.removeItem(at: layout.endpointFile)

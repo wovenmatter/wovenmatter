@@ -54,6 +54,8 @@ enum ExecutionStreamEvent: Sendable {
   /// In-memory state (questions, approvals, run state, capabilities) changed
   /// for these conversations, or for every conversation when empty.
   case live(Set<String>)
+  /// The library change cursor moved (`LibraryChangeAnnouncer`, coalesced).
+  case library(Int64)
 }
 
 /// Tails `execution_stream_changes` after each commit that adds to it.
@@ -128,6 +130,8 @@ public final class ExecutionStreamServer: @unchecked Sendable {
   private var bindings: [UInt16: (member: LibraryMember, expires: Date)] = [:]
   private var sessions: [UUID: StreamSession] = [:]
   private var observer: UUID?
+  /// `library` items: the mobile library change cursor, at most every 300 ms.
+  private var library: LibraryChangeAnnouncer?
 
   public init(database: WorkspaceDatabase, source: any ExecutionStreamSource, members: MemberDirectory,
               registry: MemberSocketRegistry, configuration: ExecutionStreamConfiguration = .init()) {
@@ -140,7 +144,9 @@ public final class ExecutionStreamServer: @unchecked Sendable {
     await tail.start()
     let tail = tail
     let observer = database.observeExecutionStreamChanges { _ in Task { await tail.poke() } }
-    queue.sync { self.observer = observer }
+    let library = LibraryChangeAnnouncer(database: database) { cursor in await tail.publish(.library(cursor)) }
+    queue.sync { self.observer = observer; self.library = library }
+    await library.start()
     await registry.start()
     let port: UInt16 = try await withCheckedThrowingContinuation { continuation in
       queue.async { [self] in
@@ -185,10 +191,11 @@ public final class ExecutionStreamServer: @unchecked Sendable {
   /// Closes every stream socket with 1001 and stops listening.
   public func stop() {
     if let observer = queue.sync(execute: { self.observer }) { database.removeExecutionStreamObserver(observer) }
+    if let library = queue.sync(execute: { self.library }) { Task { await library.stop() } }
     let registry = registry
     Task { await registry.stop() }
     queue.async { [self] in
-      observer = nil
+      observer = nil; library = nil
       listener?.cancel(); listener = nil; port = nil; bindings.removeAll()
       for session in sessions.values { Task { await session.close(.goingAway) } }
       sessions.removeAll()
@@ -273,10 +280,11 @@ public final class ExecutionStreamServer: @unchecked Sendable {
   }
 
   private var sessionContext: StreamSessionContext {
-    .init(configuration: configuration, conversations: source, workspace: source, members: members, registry: registry,
+    let database = database
+    return .init(configuration: configuration, conversations: source, workspace: source, members: members, registry: registry,
           tail: tail, serverState: nil, hello: { [weak self] in
             await self?.hello ?? StreamHello(deviceID: "", libraryID: "", workspaceID: "", serverTime: MemberRequestSignature.now())
-          }, ended: { [weak self] id in self?.ended(id) })
+          }, ended: { [weak self] id in self?.ended(id) }, libraryCursor: { try? await database.libraryWakeCursor() })
   }
 
   func ended(_ id: UUID) {

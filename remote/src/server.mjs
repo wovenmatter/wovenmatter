@@ -236,7 +236,10 @@ const bots = runningAsService && configuration.runtimeKind === 'host' && process
   authorizeClient: request => authorizeBotsUpgrade(request, { members, servedTargets, installerBearer }),
 }) : null
 // The live stream at the execution endpoint (`GET /v1/stream?protocol=1`).
+// Its `workspace` stream also carries the library host's change cursor, so
+// phones sync this machine's library when it changes.
 const stream = clientExecution && members ? createStreamServer({ members, servedTargets, execution: clientExecution, registry: memberSockets,
+  library: library ? { cursor: () => library.libraryCursor(), watch: listener => library.watchLibrary(listener) } : null,
   workspaceEnabled: () => configuration.workspaceEnabled !== false, log: message => process.stderr.write(message + '\n') }) : null
 // A bots-only machine keeps its server, data root and connections but runs no
 // workspace agents, schedules or projects until the workspace is added.
