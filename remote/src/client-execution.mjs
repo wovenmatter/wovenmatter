@@ -3,8 +3,10 @@ import { assemblePresentationFrame, textParts } from './presentation-frames.mjs'
 import { createClientExecutionPublisher } from './client-execution-publisher.mjs'
 import { DatabaseSync } from 'node:sqlite'
 import { mkdirSync, chmodSync } from 'node:fs'
+import { realpath, stat } from 'node:fs/promises'
 import { mutateGoal, settleGoal, setGoalStatus, budgetReached, goalUsageUnavailable, goalPrompt, goalGuidance } from './client-goals.mjs'
-import { resolve } from 'node:path'
+import { resolve, isAbsolute, sep } from 'node:path'
+import { readWorkspaceFile } from './execution-attachments.mjs'
 import { createWorkspaceMCP } from './workspace-mcp.mjs'
 import { createLocalLibraryTools } from './library-tools.mjs'
 import { createWorkspaceMCPOrchestration } from './workspace-mcp-orchestration.mjs'
@@ -19,14 +21,41 @@ const fail = (statusCode, message) => Object.assign(new Error(message), { status
 const identifier = value => typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(value)
 const copy = structuredClone
 const date = () => new Date().toISOString()
-function inputMessages(command,runID) {
+// `files` are the input's attachments, listed on its first message.
+function inputMessages(command,runID,files=[]) {
   return textParts(command.text).map((content,index)=>({id:index?`${command.commandID}-part-${index}`:command.commandID,
-    conversationID:command.conversationID,runID,role:'user',content,createdAt:date(),...(command.agentSourceID?{agentSourceID:command.agentSourceID,isAgentAuthored:true,senderSessionTitle:command.senderSessionTitle,senderHarness:command.senderHarness,senderKind:command.senderKind??'message'}:{})}))
+    conversationID:command.conversationID,runID,role:'user',content,createdAt:date(),...(command.agentSourceID?{agentSourceID:command.agentSourceID,isAgentAuthored:true,senderSessionTitle:command.senderSessionTitle,senderHarness:command.senderHarness,senderKind:command.senderKind??'message'}:{}),
+    ...(!index&&files.length?{attachments:files.map(({id,name,mimeType,byteCount})=>({id,name,mimeType,byteCount}))}:{})}))
+}
+const maximumInput = 262144
+// A member's choices for a new session (`LibraryCommand.sessionOptions`).
+function requestedOptions(value, toolGroups) {
+  if (value == null) return {}
+  if (typeof value !== 'object' || Array.isArray(value)) throw fail(400, 'Invalid session options.')
+  const text = (name, limit = 512) => {
+    if (value[name] == null) return undefined
+    if (typeof value[name] !== 'string' || !value[name] || value[name].length > limit || value[name].includes('\0')) throw fail(400, `Invalid ${name}.`)
+    return value[name]
+  }
+  const enabledTools = value.enabledTools == null ? undefined : value.enabledTools
+  if (enabledTools !== undefined && (!Array.isArray(enabledTools) || enabledTools.some(item => !toolGroups.includes(item)))) throw fail(400, 'Invalid execution tool selection.')
+  return { workingDirectory: text('workingDirectory', 4096), model: text('model'), thinking: text('thinking'), permission: text('permission'),
+    ...(enabledTools ? { enabledTools: [...new Set([...enabledTools, 'goals'])] } : {}) }
+}
+function inputExtras(command) {
+  if (command.promptContext != null && (typeof command.promptContext !== 'string' || command.promptContext.length > maximumInput)) throw fail(400, 'Invalid message context.')
+  if (command.noteID != null && (typeof command.noteID !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(command.noteID))) throw fail(400, 'Invalid visible note.')
+  if (command.attachments != null && (!Array.isArray(command.attachments) || command.attachments.length > 8)) throw fail(400, 'Attach up to 8 files to one message.')
 }
 
 // This store is owned by the workspace service (the existing host lock fences
 // competing owners). Neither a phone nor an SSH attachment owns these runs.
-export function createClientExecution({ directory, runtime, kind = 'linux', name = 'Workspace', publisherKey, publisherFetch, publisherIntervalMilliseconds, goalIntervalMilliseconds = 1000, mcpEndpointURL = 'http://127.0.0.1:7337/mcp', managedDataRoot = resolve(directory, '../databases'), externalRunningSessions=()=>0,workspaceBrowser, library = null, members = null, onTimersChanged = () => {}, workspaceRole = () => true, extraCapabilities = () => [] }) {
+// `workspaceRoot` is where sessions run (default: two levels above
+// `directory`). `attachments` (execution-attachments.mjs) holds uploaded
+// message files; `titleGenerator(text)` names a chat from its first message
+// (title-generation.mjs); `performanceLog(line)` receives command timings.
+export function createClientExecution({ directory, runtime, kind = 'linux', name = 'Workspace', publisherKey, publisherFetch, publisherIntervalMilliseconds, goalIntervalMilliseconds = 1000, mcpEndpointURL = 'http://127.0.0.1:7337/mcp', managedDataRoot = resolve(directory, '../databases'), externalRunningSessions=()=>0,workspaceBrowser, library = null, members = null, onTimersChanged = () => {}, workspaceRole = () => true, extraCapabilities = () => [],
+  workspaceRoot = resolve(directory, '../..'), attachments = null, titleGenerator = null, performanceLog = null }) {
   mkdirSync(directory, { recursive: true, mode: 0o700 })
   const path = resolve(directory, 'execution.sqlite')
   const db = new DatabaseSync(path)
@@ -225,6 +254,23 @@ export function createClientExecution({ directory, runtime, kind = 'linux', name
     if (!row) throw fail(404, 'Conversation not found in this workspace.')
     return JSON.parse(row.body)
   }
+  // The history the adopting Mac already shows (`transcript`: its messages
+  // and activities before adoption), so this owner's transcript starts with
+  // it. An unfinished entry is kept as interrupted.
+  function adoptedTranscript(value, conversationID) {
+    if (value == null) return { messages: [], activities: [] }
+    const messages = value.messages ?? [], activities = value.activities ?? []
+    if (typeof value !== 'object' || !Array.isArray(messages) || !Array.isArray(activities) || messages.length > 10000 || activities.length > 10000) throw fail(400, 'Invalid adopted history.')
+    const settled = status => ['running', 'pending', 'queued'].includes(status) ? 'interrupted' : status
+    const ids = new Set()
+    const entity = (item, valid) => {
+      if (!item || typeof item !== 'object' || typeof item.id !== 'string' || !item.id || item.id.length > 256 || ids.has(item.id) || !valid(item)) throw fail(400, 'Invalid adopted history.')
+      ids.add(item.id)
+      return { ...copy(item), conversationID, ...(item.status != null ? { status: settled(item.status) } : {}) }
+    }
+    return { messages: messages.map(item => entity(item, value => ['user', 'assistant', 'system'].includes(value.role) && typeof value.content === 'string')),
+      activities: activities.map(item => entity(item, value => typeof value.title === 'string')).map(({ conversationID: _, ...item }) => item) }
+  }
   async function adopt(body) {
     assertIdentity()
     if(body.workspaceID!==identity.id || !identifier(body.conversation?.id)||body.conversation.activeRunID
@@ -239,9 +285,11 @@ export function createClientExecution({ directory, runtime, kind = 'linux', name
       }
       if(db.prepare("SELECT id FROM conversations WHERE json_extract(body,'$.conversation.runtimeKind')=? AND json_extract(body,'$.native.sessionID')=?").get(body.runtimeKind,body.nativeSessionID))throw fail(409,'This native session already belongs to another conversation.')
       for(const runID of body.knownRunIDs??[])if(db.prepare('SELECT id FROM runs WHERE id=?').get(runID))throw fail(409,'A run already belongs to another conversation.')
+      const seeded=adoptedTranscript(body.transcript,body.conversation.id)
       const native=await runtime.adopt({native:{sessionID:body.nativeSessionID,channelID:body.conversation.id,workspaceID:identity.id,nativeWorkingDirectory:body.nativeWorkingDirectory},runtimeKind:body.runtimeKind})
       const record={native,pending:[],conversation:{...copy(body.conversation),runtimeKind:body.runtimeKind,workspaceID:identity.id,routeID:identity.id},
-        transcript:{conversationID:body.conversation.id,messages:[],activities:[]}}
+        // A title the Mac already shows stays; its "New … chat" placeholder does not.
+        ...(typeof body.conversation.title==='string'&&body.conversation.title.trim()&&!/^New .+ chat$/.test(body.conversation.title)?{titled:true}:{}),transcript:{conversationID:body.conversation.id,...seeded}}
       if(body.goal) {
         if(body.goal.sessionID!==body.conversation.id)throw fail(400,'Goal identity does not match.')
         record.goal=copy(body.goal);if(record.goal.status==='active')setGoalStatus(record.goal,'paused');delete record.goal.pendingDeliveryID
@@ -253,6 +301,66 @@ export function createClientExecution({ directory, runtime, kind = 'linux', name
       })
       return copy(record.conversation)
     }))
+  }
+  // A library folder's binding to a directory on this host, from this
+  // machine's library copy (`woven_sessions_folders`): {workspaceID,
+  // rootPath}, {workspaceID: null} for an unbound folder, or null when the
+  // library cannot say (not running, or the folder has not synced here yet).
+  async function folderBinding(folderID, conversationID) {
+    if (!libraryTools?.available()) return null
+    let after = 0
+    try {
+      for (let page = 0; page < 50; page++) {
+        const reply = await libraryTools.call({ conversationID, groups: ['sessions'], message: { jsonrpc: '2.0', id: randomUUID(), method: 'tools/call',
+          params: { name: 'woven_sessions_folders', arguments: { requestID: randomUUID(), after, limit: 200 } } } })
+        const value = reply?.result?.structuredContent?.result ?? JSON.parse(reply?.result?.content?.[0]?.text ?? 'null')
+        if (reply?.result?.isError || !Array.isArray(value?.rows)) return null
+        const row = value.rows.find(item => String(item.id).toLowerCase() === folderID.toLowerCase())
+        if (row) {
+          const workspaceID = row.execution_workspace_id ?? row.executionWorkspaceID ?? null, rootPath = row.root_path ?? row.rootPath ?? null
+          return workspaceID && rootPath ? { workspaceID: String(workspaceID).toLowerCase(), rootPath: String(rootPath) } : { workspaceID: null }
+        }
+        if (!value.hasMore || !Number.isSafeInteger(value.nextCursor) || value.nextCursor <= after) return null
+        after = value.nextCursor
+      }
+    } catch { return null }
+    return null
+  }
+  async function existingDirectory(path) {
+    if (typeof path !== 'string' || !isAbsolute(path) || path.includes('\0') || Buffer.byteLength(path) > 4096) throw fail(400, 'The working directory must be an absolute path.')
+    try { const actual = await realpath(path); if ((await stat(actual)).isDirectory()) return actual } catch {}
+    throw fail(409, 'The working directory does not exist on this workspace.')
+  }
+  // Where a member's new session runs, as the Mac chose for a session it
+  // created over SSH (`folderWorkingDirectory`): a folder bound to this
+  // workspace runs in its root, and an explicit directory must match it; a
+  // folder bound to another workspace is refused. Without a binding the
+  // session gets its own scratch folder, unless the caller names a directory:
+  // a Mac any directory on this host, other members one inside its workspace.
+  async function creationDirectory(command, options, trusted) {
+    const explicit = options.workingDirectory
+    const binding = command.folderID ? await folderBinding(command.folderID, command.conversationID) : null
+    if (binding?.workspaceID) {
+      if (binding.workspaceID !== 'remote:' + identity.id.toLowerCase()) throw fail(409, "Select a folder owned by this workspace, or All Workspaces.")
+      const root = await existingDirectory(binding.rootPath)
+      if (explicit && await existingDirectory(explicit) !== root) throw fail(409, "The folder's root directory is fixed.")
+      return root
+    }
+    if (!explicit) return undefined
+    const directory = await existingDirectory(explicit)
+    const base = await realpath(workspaceRoot).catch(() => resolve(workspaceRoot))
+    if (!trusted && directory !== base && !directory.startsWith(base + sep)) throw fail(403, 'Choose a directory inside this workspace.')
+    return directory
+  }
+  async function applySelections(native, runtimeKind, wanted) {
+    if (!wanted.model && !wanted.thinking) return
+    try {
+      const offered = await runtime.settings({ native, runtimeKind })
+      const options = {}
+      if (wanted.model && wanted.model !== offered.model && offered.models.some(item => item.id === wanted.model)) options.model = wanted.model
+      if (wanted.thinking && wanted.thinking !== offered.thinking && offered.thinkingLevels.some(item => item.id === wanted.thinking)) options.thinking = wanted.thinking
+      if (Object.keys(options).length) await runtime.configure({ native, runtimeKind, options })
+    } catch {}
   }
   function getReceipt(id, deviceID) {
     const row = db.prepare('SELECT device,receipt FROM commands WHERE id=?').get(id)
@@ -284,28 +392,46 @@ export function createClientExecution({ directory, runtime, kind = 'linux', name
     const initial = { commandID: command.commandID, deviceID: device.id, conversationID: command.conversationID,
       libraryID: identity.libraryID, workspaceID: identity.id, status: 'accepted' }
     db.prepare('INSERT INTO commands VALUES (?,?,?,?,?)').run(command.commandID, device.id, fingerprint, JSON.stringify(command), JSON.stringify(initial))
+    // A Mac member (or this host's installer) may choose any working
+    // directory, as it administers this host; other members stay inside it.
+    const trusted = internal || device.administrator === true || device.memberKind === 'mac'
+    const started = performance.now()
     return serialize(command.conversationID, async () => {
-      try { return await perform(command) }
-      catch (error) { return transaction(() => receipt(command, error.outcomeUnknown ? 'outcomeUnknown' : 'rejected', {message: error.message ?? 'The workspace command failed.'})) }
+      try { return await perform(command, {trusted}) }
+      catch (error) { return transaction(() => receipt(command, error.outcomeUnknown ? 'outcomeUnknown' : 'rejected', {message: error.message ?? 'The workspace command failed.',
+        ...(typeof error.code === 'string' && /^[a-z_]{1,64}$/.test(error.code) ? {code: error.code} : {})})) }
+      finally { performanceLog?.(`execution command kind=${command.kind} ms=${Math.round(performance.now() - started)}`) }
     })
   }
-  async function perform(command) {
+  async function perform(command, {trusted = true} = {}) {
     if(closed)throw fail(503,'The workspace is stopping.')
     if (command.kind === 'createSession') {
       if (db.prepare('SELECT id FROM conversations WHERE id=?').get(command.conversationID)) throw fail(409, 'Conversation already exists.')
+      const options = requestedOptions(command.sessionOptions, allToolGroups)
       const providers = await runtime.providers()
       const route = command.providerID ?? command.routeID ?? command.runtimeKind ?? 'default_agent'
       const provider = providers.find(item => item.id === route)
+      if (provider?.locked) throw Object.assign(fail(423, provider.unavailableReason ?? 'Pi Durable is locked.'), { code: 'default_agent_locked' })
       if (!provider?.available || provider.canStart === false || (command.runtimeKind && command.runtimeKind !== provider.runtimeKind)) throw fail(409, 'The selected agent route is unavailable or does not match its runtime.')
       const selected = provider.runtimeKind
+      // The frozen intent of a session an agent creates here
+      // (workspace-mcp-orchestration.mjs) is internal; members name their
+      // choices in `sessionOptions`, validated above and below.
       const defaults=mcp.settings().harnessDefaults?.[selected]??{},initial=command.initialConfiguration??{}
-      const enabledTools=initial.enabledTools??[...new Set([...(defaults.tools??mcp.settings().enabledByDefault),'goals'])]
+      const enabledTools=initial.enabledTools??options.enabledTools??[...new Set([...(defaults.tools??mcp.settings().enabledByDefault),'goals'])]
       // The authenticated tool session exists before a native MCP client
       // discovers its catalog. No prompt has been submitted at this point.
       save({native:{},pending:[],enabledTools,conversation:{id:command.conversationID,runtimeKind:selected,workspaceID:identity.id,routeID:identity.id,...(command.folderID?{folderID:command.folderID}:{})},transcript:{conversationID:command.conversationID,messages:[],activities:[]}})
       let native
-      try {native = await runtime.create({ runtimeKind: selected, conversationID: command.conversationID, providerID: provider.id, workspaceID: identity.id, mcpConnection: mcp.sessionConnection(command.conversationID),nativeWorkingDirectory:initial.nativeWorkingDirectory,permission:initial.permission??defaults.permission })}
+      try {
+        const nativeWorkingDirectory=initial.nativeWorkingDirectory??await creationDirectory(command,options,trusted)
+        native = await runtime.create({ runtimeKind: selected, conversationID: command.conversationID, providerID: provider.id, workspaceID: identity.id, mcpConnection: mcp.sessionConnection(command.conversationID),nativeWorkingDirectory,permission:initial.permission??options.permission??defaults.permission })
+      }
       catch(error){db.prepare('DELETE FROM conversations WHERE id=?').run(command.conversationID);notify({kind:'deleted',conversationID:command.conversationID});mcp.revokeSession(command.conversationID);throw error}
+      // The requested model and thinking level, else the destination's saved
+      // ones, applied as the Mac applied them to a session it created over
+      // SSH: one the harness does not offer, or a failure, keeps the native value.
+      if(!command.initialConfiguration)await applySelections(native,selected,{model:options.model??defaults.model,thinking:options.thinking??defaults.thinking})
       // A title named at creation (a member's createSession, or the frozen intent) stays past the first message.
       const named=[command.title,initial.title].find(value=>typeof value==='string'&&value.trim())?.trim().slice(0,256)
       const record = { native, pending: [], enabledTools, ...(named?{titled:true}:{}), conversation: { id: command.conversationID, title:named??'New conversation', preview: '', runtimeKind: selected,
@@ -386,20 +512,25 @@ export function createClientExecution({ directory, runtime, kind = 'linux', name
       if (record.conversation.activeRunID) throw fail(409, 'This conversation is already running.')
       const running=db.prepare("SELECT count(*) AS count FROM conversations WHERE json_extract(body,'$.conversation.activeRunID') IS NOT NULL").get().count
       if(running+externalRunningSessions()>=mcp.settings().maximumRunningSessions)throw fail(409,'The workspace has reached its simultaneous-session limit.')
-      if (typeof command.text !== 'string' || !command.text.trim() || command.text.length > 262144) throw fail(400, 'A message is required.')
+      inputExtras(command)
+      if (typeof command.text !== 'string' || (!command.text.trim() && !command.attachments?.length) || command.text.length > maximumInput) throw fail(400, 'A message is required.')
       if(command.goalID&&(record.goal?.id!==command.goalID||record.goal?.status!=='active'||record.goal?.pendingDeliveryID!==command.commandID))throw fail(409,'The goal continuation was cancelled.')
+      const files = await messageFiles(command)
       const runID = command.runID ?? randomUUID()
       if (!identifier(runID)) throw fail(400, 'Invalid run identifier.')
       if (db.prepare('SELECT id FROM runs WHERE id=?').get(runID)) throw fail(409, 'This run identifier has already been used.')
       command.runID = runID
       record.conversation.activeRunID = runID; record.transcript.activeRunID = runID
       // A title set before the first message (an agent naming the session it creates) stays.
-      record.conversation.title = record.transcript.messages.length || record.titled ? record.conversation.title : command.text.slice(0,100)
+      const untitled = !record.titled && !record.titleGenerated && (!record.transcript.messages.length || record.conversation.title === record.titleFallback)
+      if (!record.transcript.messages.length && !record.titled) record.conversation.title = record.titleFallback = (command.text.trim() ? command.text : files[0]?.name ?? 'Attachment').slice(0,100)
       record.conversation.preview = command.text.slice(0,256); record.conversation.updatedAt = date()
       const visible=command.goalID?'Continuing toward the goal.':command.text
-      record.transcript.messages.push(...inputMessages({...command,text:visible},runID))
+      record.transcript.messages.push(...inputMessages({...command,text:visible},runID,files))
+      captureInput(record, command, runID)
       if(record.goal?.status==='active') { (record.goalRuns??={})[runID]={settled:false};delete record.goal.pendingDeliveryID }
-      command.text+=goalGuidance
+      if(untitled&&!command.goalID&&!command.agentSourceID&&command.text.trim())scheduleTitle(command.conversationID,command.text)
+      command.text=deliveryText(command)+goalGuidance
       record.transcript.messages.push({id: runID, conversationID: command.conversationID, runID, role: 'assistant', content: '', status: 'running', createdAt: date()})
       const result = transaction(() => {
         db.prepare('INSERT INTO runs VALUES (?,?)').run(runID, command.commandID)
@@ -412,7 +543,7 @@ export function createClientExecution({ directory, runtime, kind = 'linux', name
         if(job.stopped)throw fail(409,'The run stopped before native dispatch.')
         command.mcpConnection={...mcp.sessionConnection(command.conversationID),captureID:command.commandID}
         return runtime.run({ native: record.native, runtimeKind: record.conversation.runtimeKind,
-        command, publish: update => applyUpdate(command.conversationID, runID, update),
+        command, files, publish: update => applyUpdate(command.conversationID, runID, update),
         interaction: value => setInteraction(command.conversationID, runID, value) }) })
         .then(() => finish(command, undefined), error => finish(command, error))
         .finally(() => jobs.delete(runID))
@@ -435,13 +566,69 @@ export function createClientExecution({ directory, runtime, kind = 'linux', name
       catch(error){if(job)job.stopped=false;throw error}
       return transaction(() => receipt(command, 'completed'))
     }
-    if (typeof command.text !== 'string' || !command.text.trim() || command.text.length > 262144) throw fail(400, 'A message is required.')
+    inputExtras(command)
+    if (typeof command.text !== 'string' || (!command.text.trim() && !command.attachments?.length) || command.text.length > maximumInput) throw fail(400, 'A message is required.')
+    const files = await messageFiles(command)
     command.mcpConnection={...mcp.sessionConnection(command.conversationID),captureID:command.commandID}
-    await runtime.steer({ native: record.native, runtimeKind: record.conversation.runtimeKind, command })
+    const visible = command.text
+    await runtime.steer({ native: record.native, runtimeKind: record.conversation.runtimeKind, command: {...command, text: deliveryText(command)}, files })
     // Read again: streaming updates may have arrived while the steer was sent.
     const latest = getRecord(command.conversationID)
-    latest.transcript.messages.push(...inputMessages(command,command.runID))
+    latest.transcript.messages.push(...inputMessages({...command,text:visible},command.runID,files))
+    captureInput(latest, command, command.runID)
     return transaction(() => { publish(latest); return receipt(command, 'completed') })
+  }
+  // The uploaded files a send or steer names, verified again now.
+  async function messageFiles(command) {
+    if (!command.attachments?.length) return []
+    if (!attachments) throw Object.assign(fail(409, 'This workspace does not accept message attachments.'), { code: 'attachment_unavailable' })
+    return attachments.resolve(command.attachments)
+  }
+  // What the harness receives: the message, then the sending device's
+  // context (its visible notes and pages, references), as the Mac's
+  // `AgentMessageInput.transportText` joined them. The transcript keeps the
+  // message alone.
+  function deliveryText(command) {
+    const context = typeof command.promptContext === 'string' ? command.promptContext.trim() : ''
+    return context ? (command.text.trim() ? command.text + '\n\n' : '') + context : command.text
+  }
+  // Each input's capture for `woven_context`: the note the sending device
+  // showed, kept only while the session has Notes, and nothing for an
+  // agent's, a goal's or a timer's input (the Mac's
+  // `captureInputContext`). The latest 64 are kept.
+  function captureInput(record, command, runID) {
+    const notes = (record.enabledTools ?? mcp.settings().enabledByDefault).includes('notes')
+    // A timer's input carries no note, so it captures none either.
+    const device = !command.agentSourceID && !command.goalID
+    const captures = (record.inputContexts ?? []).filter(item => item.id !== command.commandID)
+    captures.push({ id: command.commandID, runID, noteID: notes && device ? command.noteID ?? null : null })
+    record.inputContexts = captures.slice(-64)
+  }
+  // The capture `contextID` names (the harness's `_meta.wovenContextID`),
+  // else the latest of the running turn, else the latest input.
+  function inputContext(conversationID, contextID) {
+    const record = getRecord(conversationID), captures = record.inputContexts ?? []
+    const capture = contextID ? captures.find(item => item.id === contextID)
+      : captures.filter(item => !record.conversation.activeRunID || item.runID === record.conversation.activeRunID).at(-1)
+    if (contextID && !capture) throw fail(404, 'The native harness has not supplied a context binding for this message.')
+    return capture?.noteID ?? null
+  }
+  // A chat named by its first message gets a generated title, once, unless
+  // it is renamed first. A failure keeps the first-message title and the
+  // next message tries again, as on the Mac.
+  const titling = new Set()
+  function scheduleTitle(conversationID, text) {
+    if (!titleGenerator || titling.has(conversationID)) return
+    titling.add(conversationID)
+    void Promise.resolve().then(() => titleGenerator(text)).then(title => {
+      if (!title || closed) return
+      return serialize(conversationID, () => {
+        const latest = getRecord(conversationID)
+        if (latest.titled || latest.titleGenerated || latest.conversation.title !== latest.titleFallback) return
+        latest.conversation.title = String(title).slice(0, 256); latest.titleGenerated = true
+        transaction(() => publish(latest))
+      })
+    }).catch(() => {}).finally(() => titling.delete(conversationID))
   }
   function setInteraction(conversationID, runID, interaction) {
     const record = getRecord(conversationID)
@@ -660,7 +847,7 @@ export function createClientExecution({ directory, runtime, kind = 'linux', name
     if(!managed.includes(name))throw fail(400,'This session tool is not available to bots.')
     return memberOperation(await memberSessions.resolve(callerID,input.id,input.workspace,{bot:true}),callerID,name,input,canReadAll,signal)
   }
-  async function performMCP(scope,name,input,{signal}={}) {
+  async function performMCP(scope,name,input,{signal,contextID}={}) {
     if(scope?.kind==='bot')return {success:true,result:await botSessionCall(scope,name,input,signal),requestID:input.requestID}
     let client
     if(memberSessions&&managed.includes(name)&&(client=await memberSessions.resolve(scope.conversationID,input.id,input.workspace))) {
@@ -680,7 +867,8 @@ export function createClientExecution({ directory, runtime, kind = 'linux', name
     }
     const caller=name==='woven_context'||name.startsWith('woven_databases_')||name.startsWith('woven_browser_use')?null:getRecord(scope.conversationID),requestID=input.requestID
     let value,destination
-    if(name==='woven_context')value=null // Device-originated inputs have no borrowed Mac asset capture.
+    // A scheduled task's caller has no conversation here, so no capture.
+    if(name==='woven_context')value=!scope.taskProof&&identifier(scope.conversationID)&&db.prepare('SELECT id FROM conversations WHERE id=?').get(scope.conversationID)?inputContext(scope.conversationID,contextID):null
     else if(name==='woven_browser_use')value=await workspaceBrowser.executeMCP(scope,input,{signal})
     else if(name==='woven_browser_use_cancel')value=await workspaceBrowser.cancelMCP(scope,input.id)
     else if(name==='woven_sessions_harnesses'&&memberSessions)value=await memberSessions.harnesses(input)
@@ -773,6 +961,38 @@ export function createClientExecution({ directory, runtime, kind = 'linux', name
       throw fail(400,'This content belongs to the central library and is unavailable through execution transport.')
     },
     tickGoals,
+    ownsConversation: id => identifier(id) && !!db.prepare('SELECT id FROM conversations WHERE id=?').get(id),
+    // A message attachment a member uploads before it sends (execution-attachments.mjs).
+    async uploadAttachment(value) {
+      assertIdentity()
+      if (!attachments) throw fail(503, 'This workspace does not accept message attachments.')
+      const { path, ...stored } = await attachments.store(value)
+      return stored
+    },
+    // A harness's options before a session exists (`SessionSettings`, with
+    // no conversation): native choices plus this workspace's tool groups and
+    // its saved tool default for that harness.
+    async sessionOptions(providerID, { workingDirectory, model } = {}) {
+      assertIdentity()
+      const provider = (await runtime.providers()).find(item => item.id === providerID || item.runtimeKind === providerID)
+      if (!provider) throw fail(404, 'This agent is not on this workspace.')
+      if (provider.locked) throw Object.assign(fail(423, provider.unavailableReason ?? 'Pi Durable is locked.'), { code: 'default_agent_locked' })
+      if (provider.available === false) throw fail(409, provider.unavailableReason ?? 'This agent is not ready on this workspace.')
+      if (!runtime.sessionOptions) throw fail(501, 'This workspace cannot list options without a session.')
+      const directory = workingDirectory ? await existingDirectory(workingDirectory) : undefined
+      const settings = await runtime.sessionOptions({ runtimeKind: provider.runtimeKind, workingDirectory: directory, model })
+      const defaults = mcp.settings().harnessDefaults?.[provider.runtimeKind] ?? {}
+      return { ...settings, conversationID: '', availableTools: allToolGroups.filter(id => !['goals', 'html'].includes(id)).map(id => ({ id, label: toolLabels[id] })),
+        enabledTools: defaults.tools ?? mcp.settings().enabledByDefault, canConfigure: true }
+    },
+    // A file an agent wrote, for Library retention: inside the session's
+    // working directory (or this workspace), /tmp or /mnt/data.
+    async readLibraryFile({ conversationID, path }) {
+      assertIdentity()
+      const root = conversationID != null ? getRecord(conversationID).native?.nativeWorkingDirectory ?? workspaceRoot : workspaceRoot
+      const file = await readWorkspaceFile({ path, root })
+      return { name: file.name, mimeType: file.mimeType, byteCount: file.byteCount, sha256: file.sha256, data: file.data.toString('base64') }
+    },
     // A timer occurrence from this machine's library (library-timers.mjs). The
     // delivery ID names the command, so a retry replays its receipt.
     async deliverTimer(sessionID, text, deliveryID) {

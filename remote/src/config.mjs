@@ -92,16 +92,47 @@ export const fullAccessPermissions = Object.freeze({ codex: 'agent-full-access',
 const autoApprovePermissions = Object.freeze({ codex: ['agent'], claude_code: ['auto', 'acceptEdits'], grok_build: ['auto', 'acceptEdits'] })
 const askPermissions = Object.freeze({ codex: ['workspace-write'], claude_code: ['default'], grok_build: ['default'], opencode: ['ask'], default_agent: ['ask'] })
 
+// The Mac's names and descriptions for native permission modes
+// (`LocalACPSessionPermissions.nativeMetadata`); a mode it does not rename
+// keeps its native name and description.
+const permissionPresentation = Object.freeze({
+  codex: { 'read-only': ['Read only', "Codex's native read-only sandbox and approval policy.", true],
+    'agent-full-access': ['Full access'] },
+  claude_code: { default: ['Ask for approval'], bypassPermissions: ['Full access'],
+    auto: ['Auto', "Claude's model classifier decides which actions may run automatically."], acceptEdits: ['Auto-accept edits'],
+    plan: ['Plan', 'Plan without executing commands or editing files.', true],
+    dontAsk: ["Don't ask", 'Deny actions requiring permission instead of asking for approval.', true] },
+})
+function permissionMetadata(runtimeKind, item, choices) {
+  if (runtimeKind === 'codex' && item.id === 'agent') {
+    // Codex's agent preset auto-reviews unsafe actions when the adapter offers it.
+    const reviewed = choices.some(choice => choice.id === 'workspace-write' || choice.kind === 'auto_review')
+    return reviewed ? { ...item, label: 'Approve for me', description: 'Only ask for actions detected as potentially unsafe.' }
+      : { ...item, label: 'Workspace access', description: "Use Codex's workspace access preset with its native approval and sandbox rules." }
+  }
+  const [label, description, fallback] = permissionPresentation[runtimeKind]?.[item.id] ?? []
+  const value = { ...item, ...(label ? { label } : {}) }
+  if (description && (!fallback || !item.description)) value.description = description
+  return value
+}
+
 // Present native permission modes as Full access first, then the harness's
 // auto-approve modes, then its other modes, with ask-for-approval last. Every
-// Full access mode is labeled "Full access"; the others keep native names.
+// Full access mode is labeled "Full access"; the others keep native names
+// unless the Mac names them (`permissionMetadata`). A choice may carry the
+// native `description`; `kind` (the adapter's `_meta.kind`) is dropped.
 export function presentPermissionChoices(runtimeKind, choices) {
   const rank = id => id === fullAccessPermissions[runtimeKind] ? 0
     : autoApprovePermissions[runtimeKind]?.includes(id) ? 1
     : askPermissions[runtimeKind]?.includes(id) ? 3 : 2
   return choices.map((item, index) => ({ item, index }))
     .sort((a, b) => rank(a.item.id) - rank(b.item.id) || a.index - b.index)
-    .map(({ item }) => item.id === fullAccessPermissions[runtimeKind] ? { ...item, label: 'Full access' } : item)
+    .map(({ item }) => {
+      const value = permissionMetadata(runtimeKind, item, choices)
+      delete value.kind
+      if (!value.description) delete value.description
+      return item.id === fullAccessPermissions[runtimeKind] ? { ...value, label: 'Full access' } : value
+    })
 }
 
 export function workspacePermission(runtimeKind, requested, configuration = runtimeConfiguration) {
