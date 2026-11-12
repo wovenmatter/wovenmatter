@@ -16,6 +16,8 @@ async function fixture(t) {
 async function candidate(options) {
   const path = join(options.env.HOME, '.executor/v2/launcher', version);
   await mkdir(path, { recursive: true });
+  await mkdir(join(path, 'runtime/node_modules/ws'), { recursive: true });
+  await writeFile(join(path, 'runtime/node_modules/ws/package.json'), JSON.stringify({ version: '8.21.0' }));
   await writeFile(join(path, process.platform === 'win32' ? 'executor.exe' : 'executor'), 'fixture');
   return path;
 }
@@ -37,13 +39,23 @@ test('native Executor is verified before promotion with a generation-private lau
   assert.equal((await readdir(root)).some(name => name.startsWith('.native-')), false);
   const provenance = JSON.parse(await readFile(join(root, 'native/woven-provenance.json')));
   assert.equal(provenance.archiveSHA256, 'a'.repeat(64));
+  assert.equal(provenance.webSocket.version, '8.23.0');
+  await writeFile(join(root, 'native/woven-provenance.json'), JSON.stringify({ ...provenance, webSocket: undefined }));
+  await assert.rejects(executorCommand(root), /security provenance differs/);
+  await writeFile(join(root, 'native/woven-provenance.json'), JSON.stringify(provenance));
+  const repaired = join(root, 'native/runtime/node_modules/ws');
+  assert.equal(JSON.parse(await readFile(join(repaired, 'package.json'))).version, '8.23.0');
+  const original = await readFile(join(repaired, 'index.js'));
+  await writeFile(join(repaired, 'index.js'), 'tampered');
+  await assert.rejects(executorCommand(root), /security provenance differs/);
+  await writeFile(join(repaired, 'index.js'), original);
   provenance.archiveSHA256 = 'b'.repeat(64);
   await writeFile(join(root, 'native/woven-provenance.json'), JSON.stringify(provenance));
   await assert.rejects(executorCommand(root), /provenance differs/);
 });
 
 test('failed native candidates leave earlier generations intact and refuse version or integrity failures', async t => {
-  for (const failure of ['checksum', 'version', 'symlink']) {
+  for (const failure of ['checksum', 'version', 'symlink', 'repair-symlink']) {
     const root = await fixture(t);
     await writeFile(join(root, 'previous-generation'), 'retained');
     await assert.rejects(materializeExecutor(root, { run: async (_node, _args, options) => {
@@ -52,6 +64,10 @@ test('failed native candidates leave earlier generations intact and refuse versi
       if (failure === 'symlink') {
         await rm(join(path, 'executor'));
         await symlink(process.execPath, join(path, 'executor'));
+      }
+      if (failure === 'repair-symlink') {
+        await rm(join(path, 'runtime'), { recursive: true });
+        await symlink(root, join(path, 'runtime'));
       }
       return { stdout: failure === 'version' ? '2.0.0-beta.36' : version };
     } }));

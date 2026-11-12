@@ -81,6 +81,9 @@ RUN test -n "$EXECUTOR_VERSION" \
     && find /opt/wovenmatter/executor-runtime/node_modules/@img -mindepth 1 -maxdepth 1 -type d -name 'sharp-*' -exec cp -a '{}' "$runtime_modules/@img/" ';' \
     && cp -a /opt/wovenmatter/executor-runtime/node_modules/detect-libc "$runtime_modules/detect-libc" \
     && cp -a /opt/wovenmatter/executor-runtime/node_modules/semver "$runtime_modules/semver" \
+    && rm -rf "$runtime_modules/ws" \
+    && cp -a /opt/wovenmatter/executor-runtime/node_modules/ws "$runtime_modules/ws" \
+    && node -e 'if(require(process.argv[1]+"/package.json").version!=="8.23.0")process.exit(1)' "$runtime_modules/ws" \
     && node -e 'const sharp=require(process.argv[1]); if (sharp.versions.sharp !== "0.35.5") process.exit(1)' "$runtime_modules/sharp" \
     && rm -rf "$npm_config_cache" /opt/wovenmatter/npm-runtime /opt/wovenmatter/executor-runtime
 ENV NODE_ENV=production HOME=/home/node
