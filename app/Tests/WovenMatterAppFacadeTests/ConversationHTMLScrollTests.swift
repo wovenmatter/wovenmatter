@@ -26,14 +26,22 @@ struct ConversationHTMLScrollTests {
         coordinator.onFailure = { failure = $0 }
         // A deadline, not an attempt count: on a loaded CI runner the main actor
         // this test shares with other suites makes each poll much slower.
-        func requireReady(_ page: String) async throws {
+        // False when this machine's WebKit cannot load a sandboxed frame at all.
+        func requireReady(_ page: String) async throws -> Bool {
             let deadline = ContinuousClock.now + .seconds(20)
             while !ready, failure == nil, ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(10)) }
+            if !ready, failure == nil, !(try await SandboxedFrameProbe.loads()) {
+                withKnownIssue("WebKit here cannot load a sandboxed frame, even without the app's page (GitHub's virtualized macOS runners)") {
+                    try #require(ready)
+                }
+                return false
+            }
             try #require(ready, "The \(page) page never became ready: \(failure.map { "\($0)" } ?? "WebKit reported no error"); console \(coordinator.consoleMessages)")
+            return true
         }
         coordinator.apply(html: "<div style='height:240px'>A chart fixture</div>",
             theme: ConversationHTMLTheme.value(.green), to: web)
-        try await requireReady("inline")
+        guard try await requireReady("inline") else { return }
         window.contentView?.layoutSubtreeIfNeeded()
         let event = try wheelEvent(window: window, web: web)
         let point = web.convert(NSPoint(x: 100, y: 100), to: scroll)
@@ -71,7 +79,7 @@ struct ConversationHTMLScrollTests {
             addEventListener('message',e=>{if(e.data?.kind==='fixture-scroll')scrollTo(0,240)});
             </script>
             """, theme: ConversationHTMLTheme.value(.green), to: web)
-        try await requireReady("expanded")
+        guard try await requireReady("expanded") else { return }
         target.scrollWheel(with: try wheelEvent(window: window, web: web))
         try await Task.sleep(for: .milliseconds(200))
         #expect(scroll.wheelEvents == count, "Expanded page wheel was redirected to the transcript")
@@ -161,6 +169,26 @@ struct ConversationHTMLScrollTests {
         event.flags = flags
         event.location = window.convertPoint(toScreen: web.convert(NSPoint(x: 100, y: 100), to: nil))
         return try #require(NSEvent(cgEvent: event))
+    }
+}
+
+/// Loads a minimal sandboxed srcdoc frame, using none of the app's HTML code, to
+/// tell a WebKit that cannot load such frames (seen on GitHub's virtualized
+/// macOS runners) from a regression in the conversation page.
+@MainActor private enum SandboxedFrameProbe {
+    static func loads() async throws -> Bool {
+        let view = WKWebView(frame: NSRect(x: 0, y: 0, width: 200, height: 100), configuration: WKWebViewConfiguration())
+        view.loadHTMLString("""
+            <script>addEventListener('message', e => { if (e.data === 'probe') window.probeReady = true })</script>
+            <iframe sandbox="allow-scripts" srcdoc="<script>addEventListener('load',()=>parent.postMessage('probe','*'))</script>"></iframe>
+            """, baseURL: nil)
+        defer { view.stopLoading() }
+        let deadline = ContinuousClock.now + .seconds(20)
+        while ContinuousClock.now < deadline {
+            if (try? await view.evaluateJavaScript("window.probeReady === true")) as? Bool == true { return true }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        return false
     }
 }
 
