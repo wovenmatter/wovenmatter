@@ -1056,14 +1056,19 @@ Every live view of a session streams. Nothing polls an execution workspace.
   signed members, and the installer bearer only on the installing Mac's SSH
   tunnel (how it reaches a bots-only host that is not in the registry); device
   grants no longer open it, and the bearer never works through Tailscale Serve.
+  The Linux relay sends `4401` to a removed member's bots socket; the Mac relay
+  carries raw bytes, so it closes the connection and that client sees an
+  abnormal close (`1006`), after which its signed upgrade is refused. A Mac's
+  library server answers `403` to any request carrying `Origin` or `Cookie`,
+  not only upgrades.
 
 ### Frames
 
 JSON text frames, one message per frame, at most 8 MiB (normal frames are far
 smaller); a server refuses client frames over 1 MiB (close `1009`). Liveness
 uses WebSocket ping and pong control frames: both sides ping every 25 s and
-answer the other's pings, and the server closes a socket with no pong for
-60 s. Binary frames and invalid JSON close the socket with `4400`. The Swift types live in `shared/Sources/WovenMatterShared/StreamProtocol.swift`;
+answer the other's pings, and the server closes a socket (`1001`) after 60 s
+in which it heard nothing from it, neither a pong nor any frame. Binary frames and invalid JSON close the socket with `4400`. The Swift types live in `shared/Sources/WovenMatterShared/StreamProtocol.swift`;
 `shared/Tests/WovenMatterSharedTests/StreamProtocolFixtures.json` holds one
 example of every frame and item, and the Swift and Node test suites both
 decode and re-encode every fixture.
@@ -1106,7 +1111,11 @@ member removed.
     upserts of the messages and activities that changed, each whole, with the
     transcript's `activeRunID`, `runs` and `removedMessageIDs`. The client
     replaces entities by ID. Live text is the whole message so far, never an
-    appended piece.
+    appended piece. Changes are found within the latest window (80 messages on
+    a Mac); an edit to an older message reaches the client through history,
+    not live. A snapshot or single entity too large for one frame ends the
+    subscription with a non-retryable `unavailable`, so the client does not
+    loop.
   - `capabilities` `{capabilities: HarnessCapabilities}` on subscribe and when
     they change.
   - `synchronized` `{}` after the first snapshot.
