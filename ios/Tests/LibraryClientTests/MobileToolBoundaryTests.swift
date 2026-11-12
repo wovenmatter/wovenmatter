@@ -61,7 +61,7 @@ struct MobileToolBoundaryTests {
     for arguments in writes {
       let response = await call(store, arguments, context: context)
       #expect(!response.success, "\(arguments)")
-      #expect(response.error?.contains("target central") == true, "\(arguments)")
+      #expect(response.error?.contains("edited on a Mac") == true, "\(arguments)")
     }
     #expect(await store.snapshot().notes[page.id] == before)
     let created = await call(store, ["notes", "create", "--title", "Page", "--kind", "canvas"], context: context)

@@ -478,8 +478,9 @@ extension WorkspaceDatabaseConnection {
       let chosen: NoteDocument
       if derivesFromCurrent {
         stateBase = current.artifactState; chosen = draft
-      } else if code(draft) == code(current) {
-        stateBase = base?.artifactState ?? current.artifactState; chosen = current
+      } else if let base, base.kind == .html, code(draft) == code(current) {
+        // Without a base, every state difference would look like this draft's own change.
+        stateBase = base.artifactState; chosen = current
       } else if let base, base.kind == .html {
         stateBase = base.artifactState
         if code(base) == code(current) { chosen = draft }      // Only state moved underneath this draft.
@@ -580,6 +581,12 @@ extension WorkspaceDatabaseConnection {
   private func boardActorUnlocked(callerConversationID: String?) throws -> BoardActor {
     guard let id = callerConversationID else { return BoardActor(kind: .user) }
     if id == WovenMCPCaller.outside { return BoardActor(kind: .outside) }
+    // A bot is an app-wide caller, not a conversation, so it has no chat to open.
+    if WovenMCPCaller.parseBot(id) != nil {
+      let name = try historyRowsUnlocked("SELECT display_name FROM workspace_mcp_callers WHERE id=?", values: [id])
+        .first?.objectValue?["display_name"]?.stringValue
+      return BoardActor(kind: .outside, label: name.map { String($0.prefix(160)) })
+    }
     let title = try historyRowsUnlocked("SELECT title FROM dashboard_conversations WHERE id=?", values: [id])
       .first?.objectValue?["title"]?.stringValue
     return BoardActor(kind: .session, sessionID: id, label: title.map { String($0.prefix(160)) })

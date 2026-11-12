@@ -426,6 +426,7 @@ extension WorkspaceAgentToolsServiceTests {
             let response = await model.handle(.init(arguments: arguments), callerID: caller)
             #expect(!response.success, "\(arguments)")
             #expect(response.code == "invalid_request", "\(arguments)")
+            #expect(response.error?.contains("not a Page") == true, "\(arguments)")
         }
         let unchanged = try await database.readNoteForEditing(id: note)
         #expect(unchanged.title == "Ordinary" && unchanged.revision == revision)
@@ -444,6 +445,15 @@ extension WorkspaceAgentToolsServiceTests {
         #expect(replay.result?.objectValue?["replayed"]?.boolValue == true)
         let mismatch = await model.handle(.init(arguments: ["pages", "update", "--note-id", page, "--revision", pageRevision, "--title", "Other"], requestID: requestID), callerID: caller)
         #expect(!mismatch.success)
+
+        // An invalid block on a real Page says what is wrong instead of "not a Page".
+        let valid = await model.handle(.init(arguments: ["pages", "create", "--title", "Tables"]), callerID: caller)
+        let tables = try #require(valid.result?.objectValue?["id"]?.stringValue)
+        let wide = NoteBlock.table(.init(rows: 1, columns: RemoteNoteEditEnvelope.maximumTableColumns + 1))
+        let json = String(decoding: try JSONEncoder().encode(wide), as: UTF8.self)
+        let refused = await model.handle(.init(arguments: ["pages", "add-component", "--note-id", tables, "--json", json]), callerID: caller)
+        #expect(!refused.success)
+        #expect(refused.error?.contains("not a Page") == false)
     }
 
     @Test func removedComponentsConflictActionablyAndRepeatedLinksKeepRevisions() async throws {

@@ -375,8 +375,14 @@ public struct WorkspaceToolExecutor: Sendable {
         return await pageConflict(pageID: edit.noteID, componentID: id, callerID: callerID, requestID: request.requestID, note: note)
       } catch WorkspaceNoteMutationError.revisionConflict {
         return await pageConflict(pageID: edit.noteID, componentID: nil, callerID: callerID, requestID: request.requestID, note: note)
-      } catch RemoteNoteEditError.operationNotAllowed, NoteEditError.artifactKindMismatch {
+      } catch NoteEditError.artifactKindMismatch {
         throw WorkspaceToolError.invalid("This asset is not a Page. Use the woven_notes tools.")
+      } catch RemoteNoteEditError.operationNotAllowed {
+        // Also thrown for an invalid block on a real Page, which needs its own message.
+        guard (try? await readPage(edit.noteID, callerID: callerID, requestID: request.requestID, note: note)) != nil else {
+          throw WorkspaceToolError.invalid("This asset is not a Page. Use the woven_notes tools.")
+        }
+        throw WorkspaceToolError.invalid("This component is not valid for a Page. Check its size, table shape and links.")
       }
     }
   }
