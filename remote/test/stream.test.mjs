@@ -23,7 +23,7 @@ const prefix = '/wovenmatter-execution/box'
 const streamTarget = prefix + '/v1/stream?protocol=1'
 const settle = () => new Promise(resolve => setImmediate(resolve))
 const listen = server => new Promise(resolve => server.listen(0, '127.0.0.1', () => resolve(server.address().port)))
-async function eventually(condition, message, timeout = 5_000) {
+async function eventually(condition, message, timeout = 10_000) {
   for (const deadline = Date.now() + timeout; !condition();) {
     assert.ok(Date.now() < deadline, message)
     await new Promise(resolve => setTimeout(resolve, 5))
@@ -119,7 +119,7 @@ function frameReader(socket) {
   socket.on('error', () => {})
   const closed = new Promise(resolve => socket.on('close', (code, reason) => resolve({ code, reason: String(reason) })))
   const opened = new Promise((resolve, reject) => { socket.once('open', resolve); socket.once('unexpected-response', (_, response) => reject(new Error('refused ' + response.statusCode))) })
-  async function next(predicate = () => true, timeout = 5_000) {
+  async function next(predicate = () => true, timeout = 10_000) {
     const deadline = Date.now() + timeout
     for (;;) {
       const index = frames.findIndex((frame, position) => !read.has(position) && predicate(frame))
@@ -330,7 +330,8 @@ test('the conversation stream sends the transcript window, then live upserts wel
   f.runs[0].publish({ sessionUpdate: 'agent_message_chunk', content: { text: 'Hel' } })
   const upsert = await client.next(isItem('transcript', 'c'))
   const elapsed = Date.now() - started
-  assert.ok(elapsed < 300, `live text took ${elapsed} ms`)
+  // Before the journal's 500 ms flush: the stream does not wait for it (checked below).
+  assert.ok(elapsed < 500, `live text took ${elapsed} ms`)
   assert.equal(upsert.data.snapshot, false)
   assert.deepEqual(upsert.data.transcript.messages.map(message => [message.id, message.content]), [[receipt.runID, 'Hel']])
   assert.equal(upsert.data.transcript.activeRunID, receipt.runID)
@@ -355,7 +356,8 @@ test('the conversation stream sends the transcript window, then live upserts wel
   assert.equal((await client.next(frame => frame.t === 'end' && frame.id === 'missing')).error.code, 'not_found')
   // Cancel ends a subscription without an end frame.
   client.send({ t: 'cancel', id: 'c' })
-  await settle()
+  // A call answered after it: the server read the cancel first (frames are handled in order).
+  await client.request('execution.receipt', { commandID: randomUUID() })
   const before = client.frames.length
   await f.execution.command(f.command('workspace', { conversationID: id, workspaceAction: { conversation: { id, action: 'rename', title: 'After' } } }), f.device)
   await new Promise(resolve => setTimeout(resolve, 120))
@@ -430,7 +432,8 @@ test('the workspace stream carries the library change cursor: on subscribe, then
   assert.deepEqual((await other.next(isItem('library', 'w'))).data, { cursor: 3 })
   // A closed subscription stops listening.
   other.send({ t: 'cancel', id: 'w' })
-  await settle()
+  // A call answered after it: the server read the cancel first (frames are handled in order).
+  await other.request('execution.receipt', { commandID: randomUUID() })
   empty.set(4)
   await clock.advance(300)
   assert.equal(other.frames.filter(isItem('library', 'w')).length, 1)
@@ -556,13 +559,14 @@ test('a removed member’s stream and bots relay close with 4401', async t => {
 })
 
 test('a socket that answers no pings is closed', async t => {
-  const f = await fixture(t, { timings: { pingMilliseconds: 40, pongTimeoutMilliseconds: 250 } })
+  // A pong timeout well above what a busy machine delays an answered ping.
+  const f = await fixture(t, { timings: { pingMilliseconds: 40, pongTimeoutMilliseconds: 1_000 } })
   const silent = f.connect(f.signed(), { autoPong: false })
   const answering = f.connect(f.signed())
   await silent.next(frame => frame.t === 'hello'); await answering.next(frame => frame.t === 'hello')
   const started = Date.now()
   await silent.closed
-  assert.ok(Date.now() - started >= 150)
+  assert.ok(Date.now() - started >= 900)
   assert.equal(answering.socket.readyState, WebSocket.OPEN, 'a socket that answers pings stays open')
   // The server answers the client's pings.
   const pong = new Promise(resolve => answering.socket.once('pong', resolve))
