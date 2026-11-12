@@ -153,7 +153,7 @@ public extension NoteDocument {
       current?.createdBy = previous?.createdBy; current?.createdAt = previous?.createdAt
       current?.updatedBy = previous?.updatedBy; current?.updatedAt = previous?.updatedAt
       let isNew = oldBlocks[id] == nil
-      guard isNew || old.boardContent(for: id, block: oldBlocks[id]) != boardContent(for: id, block: newBlocks[id]) else {
+      guard isNew || oldBlocks[id].map(old.pageComponentContent) != newBlocks[id].map(pageComponentContent) else {
         if let current { items[id] = current }
         continue
       }
@@ -189,13 +189,11 @@ public extension NoteDocument {
     if let lastChange = patch.lastChange { item.lastChange = lastChange.isEmpty ? nil : lastChange }
   }
 
-  /// Compares everything a stamp reflects, and nothing a stamp writes or layout moves.
-  private func boardContent(for id: String, block: NoteBlock?) -> BoardItemContent {
-    // A card with no stored placement has an automatic one, with no title or asset.
-    let placement = canvas?[id]
-    let item = boardItems?[id] ?? BoardItem()
-    return BoardItemContent(block: block?.normalized, title: placement?.title, assetID: placement?.assetID,
-      role: item.role, task: item.task, review: item.review, sessions: item.sessions, lastChange: item.lastChange)
+  /// Everything a reader sees of one component, which a stamp and a merge compare.
+  internal func pageComponentContent(of block: NoteBlock) -> PageComponentContent {
+    let placement = canvas?[block.id], item = boardItems?[block.id] ?? BoardItem()
+    return PageComponentContent(block: block.normalized, title: placement?.title, assetID: placement?.assetID, role: item.role,
+      task: item.task, review: item.review, sessions: item.sessions, lastChange: item.lastChange)
   }
 }
 
@@ -208,13 +206,15 @@ struct BoardItemFingerprint: Encodable {
   let isSection: Bool?
 }
 
-private struct BoardItemContent: Equatable {
-  let block: NoteBlock?
-  let title: String?
-  let assetID: String?
-  let role: BoardItemRole
-  let task: BoardTask?
-  let review: BoardReviewState?
-  let sessions: [String]
-  let lastChange: String?
+/// Everything a reader sees of a component, and nothing a stamp writes or layout moves.
+/// Its encoding names conflict copies, so its field names must stay stable.
+struct PageComponentContent: Equatable, Encodable {
+  var block: NoteBlock
+  var title: String?
+  var assetID: String?
+  var role: BoardItemRole
+  var task: BoardTask?
+  var review: BoardReviewState?
+  var sessions: [String]
+  var lastChange: String?
 }

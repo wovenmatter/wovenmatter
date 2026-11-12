@@ -93,25 +93,10 @@ private struct PageMerger {
     func has(_ id: String) -> Bool { blocks[id] != nil }
     func parent(_ id: String) -> String? { document.pageNodes?[id]?.parentID }
     func isSection(_ id: String) -> Bool { document.pageNodes?[id]?.isSection == true }
-    /// Everything a reader sees of a component, and nothing a stamp writes or layout moves.
-    func content(_ id: String) -> Content? {
-      guard let block = blocks[id] else { return nil }
-      let placement = document.canvas?[id], item = document.boardItems?[id] ?? BoardItem()
-      return Content(block: block.normalized, title: placement?.title, assetID: placement?.assetID, role: item.role,
-        task: item.task, review: item.review, sessions: item.sessions, lastChange: item.lastChange)
-    }
+    func content(_ id: String) -> Content? { blocks[id].map(document.pageComponentContent) }
   }
 
-  struct Content: Equatable, Encodable {
-    var block: NoteBlock
-    var title: String?
-    var assetID: String?
-    var role: BoardItemRole
-    var task: BoardTask?
-    var review: BoardReviewState?
-    var sessions: [String]
-    var lastChange: String?
-  }
+  typealias Content = PageComponentContent
 
   let base: Snapshot, local: Snapshot, remote: Snapshot
   var survivors: Set<String> = []
