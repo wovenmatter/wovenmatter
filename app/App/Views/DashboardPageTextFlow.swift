@@ -92,9 +92,14 @@ struct DashboardPageTextFlow: View {
         })
     }
 
+    /// Handles a reveal request once. Clearing it keeps flows created later from
+    /// taking focus and lets the same component be revealed again.
     private func focusRequestedComponent() {
         guard let id = viewState.revealCardID, liveIDs(in: document.materializedPage()).contains(id) else { return }
-        DispatchQueue.main.async { controller.focus(blockID: id, atEnd: true) }
+        DispatchQueue.main.async {
+            controller.focus(blockID: id, atEnd: true)
+            if viewState.revealCardID == id { viewState.revealCardID = nil }
+        }
     }
 }
 

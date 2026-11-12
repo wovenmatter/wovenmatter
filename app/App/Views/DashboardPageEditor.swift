@@ -88,10 +88,18 @@ struct DashboardPageEditor: View {
                         .padding(.horizontal, 24).padding(.top, 8).padding(.bottom, 60)
                     }.scrollIndicators(.never)
                     .onChange(of: viewState.revealCardID) { _, id in
-                        guard let id, let segment = projection.segments.first(where: { segmentContains($0, id: id) }) else { return }
+                        guard let id else { return }
+                        guard let segment = projection.segments.first(where: { segmentContains($0, id: id) }) else {
+                            viewState.revealCardID = nil
+                            return
+                        }
                         var parent = page.pageParentID(for: id)
                         while let id = parent { collapsed.remove(id); parent = page.pageParentID(for: id) }
                         withAnimation { proxy.scrollTo(segment.id, anchor: .center) }
+                        // A text flow clears the request after focusing its text.
+                        // Sections and embeds have nothing more to do.
+                        if case .flow = segment { return }
+                        DispatchQueue.main.async { if viewState.revealCardID == id { viewState.revealCardID = nil } }
                     }
                 }
                 if viewState.showsInspector, let id = selectedID, page.blocks.contains(where: { $0.id == id }) {
