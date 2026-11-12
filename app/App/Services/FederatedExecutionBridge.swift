@@ -9,6 +9,8 @@ enum FederatedExecutionAction: Codable, Sendable {
     case stop(conversationID: String, runID: String)
     case configure(conversationID: String, action: LibraryWorkspaceAction)
     case earlier(conversationID: String, before: String)
+    /// The chat closed: a streamed workspace ends its `conversation` subscription.
+    case close(conversationID: String)
 }
 struct FederatedExecutionSnapshot: Codable, Sendable {
     var workspace: ExecutionWorkspace
@@ -18,6 +20,8 @@ struct FederatedExecutionSnapshot: Codable, Sendable {
     var session: SessionSettings?
     var online: Bool
     var error: String?
+    /// The workspace pushes every change on its stream: nothing polls it.
+    var streamed: Bool? = nil
 }
 
 extension ApplicationModel {
@@ -57,19 +61,69 @@ extension ApplicationModel {
                       let audience = await directory.audience(for: workspace) else { return nil }
                 return try SignedExecutionWorkspaceTransport(workspace: workspace, signer: directory.identity.signer, audience: audience)
             },
+            makeStream: { [weak self] workspace in
+                // The live stream lives where the member key, the command journal
+                // and the history cache are: this process, never a frontend window.
+                guard let self, workspace.kind != .ios, let endpoint = workspace.endpoint,
+                      let directory = try? await self.libraryHost.peerSync.members(),
+                      let audience = await directory.audience(for: workspace) else { return nil }
+                return try WebSocketStreamTransport.connector(endpoint: endpoint, signer: directory.identity.signer, audience: audience, headers: [
+                    "X-Woven-Protocol": String(LibraryProtocol.version), "X-Woven-Library": workspace.libraryID,
+                    "X-Woven-Workspace": workspace.id, "X-Woven-Device": directory.identity.deviceID
+                ])
+            },
+            memberRevision: { [weak self] in try? await self?.libraryHost.peerSync.members().list().revision },
             onChange: { [weak self] in await self?.refreshWorkspace() })
+        client.onLive = { [weak self] ids in self?.federatedLiveChanged(ids) }
         federatedExecutionClient = client
         return client
     }
 
-    func refreshFederatedConversation(_ id: String) async {
+    func refreshFederatedConversation(_ id: String, reloadingConversation: Bool = true) async {
         do {
             let snapshot: FederatedExecutionSnapshot?
             if isBackendFrontend { snapshot = try await sendBackendCommand(.federatedExecution(.refresh(conversationID: id))).federatedExecution }
             else { snapshot = try await performFederatedExecution(.refresh(conversationID: id)) }
             if let snapshot { federatedExecutionSnapshots[id] = snapshot }
-            await refreshConversation(id: id)
+            if reloadingConversation { await refreshConversation(id: id) }
         } catch { ensureConversationState(id: id).setError(error.localizedDescription) }
+    }
+
+    /// A stream pushed live state for these chats. A background server tells
+    /// its windows; a window showing one of them reads the new snapshot.
+    func federatedLiveChanged(_ ids: Set<String>) {
+        guard !ids.isEmpty else { return }
+        if let service = backendApplicationService {
+            Task { await service.invalidations.publish(scopes: [.execution], conversationIDs: ids) }
+        }
+        // A headless background server shows nothing itself.
+        guard LocalExecutionRole.current != .backend else { return }
+        for id in ids where federatedExecutionSnapshots[id] != nil { refreshLiveFederatedConversation(id) }
+    }
+
+    /// One snapshot read at a time per chat; pushes that arrive meanwhile are
+    /// folded into one more read.
+    func refreshLiveFederatedConversation(_ id: String) {
+        if federatedLiveRefreshes[id] != nil { federatedLiveRefreshes[id] = true; return }
+        federatedLiveRefreshes[id] = false
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            repeat {
+                self.federatedLiveRefreshes[id] = false
+                await self.refreshFederatedConversation(id, reloadingConversation: false)
+            } while self.federatedLiveRefreshes[id] == true
+            self.federatedLiveRefreshes[id] = nil
+        }
+    }
+
+    /// The chat closed: its live subscription ends (streamed workspaces only).
+    func closeFederatedConversation(_ id: String) {
+        guard federatedExecutionSnapshots[id]?.streamed == true else { return }
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            if self.isBackendFrontend { _ = try? await self.sendBackendCommand(.federatedExecution(.close(conversationID: id))) }
+            else { _ = try? await self.performFederatedExecution(.close(conversationID: id)) }
+        }
     }
 
     @discardableResult
@@ -92,9 +146,16 @@ extension ApplicationModel {
         let client = try centralExecutionClient()
         let targetID: String
         switch action {
-        case .refresh(let id), .earlier(let id, _): targetID = id
+        case .refresh(let id), .earlier(let id, _), .close(let id): targetID = id
         case .stop(let id, _), .configure(let id, _): targetID = id
         case .respond(let interaction, _): targetID = interaction.conversationID
+        }
+        if case .close(let id) = action {
+            await client.unwatch(id)
+            guard let workspace = try await client.workspace(conversationID: id) else {
+                throw LibraryAPIError(code: "unknown_workspace", message: "This conversation has no execution workspace.")
+            }
+            return federatedSnapshot(id, workspace: workspace, client: client, transcript: client.transcripts[id], session: nil)
         }
         // A snapshot's copied conversation has no live owner here: read its saved history.
         if readsCopiedHistoryOnly, try await client.workspace(conversationID: targetID).map({ $0.retainedHistory == true }) ?? true {
@@ -115,16 +176,24 @@ extension ApplicationModel {
         case .respond(let interaction, let response): id = interaction.conversationID; _ = try await client.respond(interaction, response: response)
         case .configure(let conversationID, let command): id = conversationID; _ = try await client.perform(conversationID: id, action: command)
         case .earlier(let conversationID, let before): id = conversationID; earlier = try await client.earlierTranscript(conversationID: id, before: before)
+        case .close(let conversationID): id = conversationID
         }
         guard let workspace = try await client.workspace(conversationID: id) else { throw LibraryAPIError(code: "unknown_workspace", message: "This conversation has no execution workspace.") }
         try? await client.refresh(conversationID: id)
-        var session: SessionSettings?
-        if client.onlineWorkspaces.contains(workspace.id), case .session(let value) = try? await client.readWorkspace(conversationID: id, request: .session(id: id)) { session = value }
-        let snapshot = FederatedExecutionSnapshot(workspace: workspace, transcript: earlier ?? client.transcripts[id],
-            capability: client.capabilities[id], interactions: client.pending[workspace.id]?.filter { $0.conversationID == id } ?? [],
-            session: session, online: client.onlineWorkspaces.contains(workspace.id), error: client.errors[workspace.id])
+        var refreshing = false
+        if case .refresh = action { refreshing = true }
+        let session = await client.sessionSettings(conversationID: id, workspace: workspace, force: !refreshing)
+        let snapshot = federatedSnapshot(id, workspace: workspace, client: client, transcript: earlier ?? client.transcripts[id], session: session)
         federatedExecutionSnapshots[id] = snapshot
         return snapshot
+    }
+
+    private func federatedSnapshot(_ id: String, workspace: ExecutionWorkspace, client: CentralExecutionClient,
+                                   transcript: LibraryTranscript?, session: SessionSettings?) -> FederatedExecutionSnapshot {
+        FederatedExecutionSnapshot(workspace: workspace, transcript: transcript,
+            capability: client.capabilities[id], interactions: client.pending[workspace.id]?.filter { $0.conversationID == id } ?? [],
+            session: session, online: client.onlineWorkspaces.contains(workspace.id), error: client.errors[workspace.id],
+            streamed: client.isStreamed(workspace.id))
     }
 
     /// A snapshot's copied history has no connection or credential to its former owner.

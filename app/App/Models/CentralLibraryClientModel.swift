@@ -596,6 +596,8 @@ final class CentralLibraryClientModel {
         case .configure(let value, let command):
             id = value
             try requireAccepted(await submit(.init(deviceID: state.deviceID, kind: .workspace, conversationID: id, workspaceAction: command), workspaceID: executionOwner(for: id) ?? "central"))
+        case .close(let value):
+            id = value
         case .earlier(let value, let before):
             id = value
             if let owner = executionOwner(for: id), let client = directClients[owner] { earlier = try await client.earlierTranscript(id, before: before) }
