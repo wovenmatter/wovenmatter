@@ -1029,7 +1029,7 @@ Every live view of a session streams. Nothing polls an execution workspace.
 - **What moves where.** History moves only by library sync. The live view of a
   session (its transcript as it is written, run state, questions and
   approvals, capabilities) and commands move on the stream. Older history
-  pages, attachments, the browser screencast, inference, bots and library sync
+  pages, attachments (`GET v1/execution/attachments/<sha256>`), the browser screencast, inference, bots and library sync
   stay on their signed HTTP routes.
 
 ### Endpoint and authentication
@@ -1114,6 +1114,17 @@ member removed.
     never asks for it: history reaches a Mac only by library sync (a Linux host
     writes its sessions into its own library copy through `/v1/publisher/*`).
     The iPhone feeds it to its `WorkspaceJournal`.
+  - `library` `{cursor}`: the server's mobile library change cursor
+    (`device_sync_changes`, what `GET v1/changes` pages), on subscribe and then
+    whenever a change a phone syncs commits, at most every 300 ms
+    (`LibraryChangeAnnouncer`). Calendar, dictation, registry
+    (`execution_workspaces`) and saved-artifact rows add wake-only entries,
+    which change pages skip. Transcript and agent-list entries do not move the
+    cursor, so it may trail the feed's newest entry. A phone compares it only
+    with the cursor it holds for that same server, matched by `hello.deviceID`.
+    On a Linux host the library host prints `{"event":"library","cursor":N}`
+    on stdout after its ready line, and the Node server streams the latest
+    value.
   - `synchronized` `{}` after the initial snapshot and replay.
 - **`conversation`** `{conversationID}`, one per open chat:
   - `transcript` `{transcript: LibraryTranscript, snapshot}`: first the latest
@@ -1248,7 +1259,12 @@ member removed.
   is read once and not resubscribed on that connection. Lost central replies
   are resolved by receipt once per connection to the host. An expanded
   activity is read once from its owner's details route; a journaled summary
-  is used only when it is complete.
+  is used only when it is complete. While the stream of the library host it
+  syncs with carries `library` items, the phone has no library timer: an item
+  ahead of its cursor synchronizes at once, and a refresh asked for during one
+  runs once more afterwards. Without that stream (an older host, the stream
+  down, another host) the 15 s foreground timer runs. It also syncs once on
+  foreground, network return and connection.
 
 ### Agent to agent
 
@@ -1311,7 +1327,14 @@ no stdio relay.
   past that, are linked and listed by path. `promptContext` (visible notes and
   pages, references) follows the message to the harness and is not in the
   transcript; `noteID` is the note shown when sending, which `woven_context`
-  returns.
+  returns. `GET v1/execution/attachments/<sha256>?name=` returns the bytes
+  with their type, under the execution reads' authorization, up to 25 MiB,
+  only for a regular file directly in `.wovenmatter/attachments/<sha256>/`,
+  reached without a link and still matching its digest (otherwise 403, 404 or
+  409). A Mac serves the same route for files of sessions it runs. A Mac
+  window opens a remote session's attachment through its background server,
+  which reads it once and keeps it after it matches its digest; the phone
+  reads it from the workspace, caches it and previews it with Quick Look.
 - **Background execution** governs scheduled tasks only. Sessions, their goals
   and timers run with it off.
 - **Pi Durable.** Provider credentials stay in the host's encrypted vault, and
