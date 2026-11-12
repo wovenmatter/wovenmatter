@@ -542,6 +542,60 @@ struct ExecutionStreamTests {
     await announcer.stop()
   }
 
+  // MARK: Attachments
+
+  /// `GET v1/execution/attachments/<sha256>`: a message file of a session this
+  /// Mac runs, with its type, signed like every execution read; nothing
+  /// outside the attachment store, and nothing that no longer matches.
+  @Test func attachmentsOfLocalSessionsAreServedFromTheAttachmentStoreOnly() async throws {
+    let mac = try await StreamMac(); defer { mac.remove() }
+    let bytes = Data("fixture image bytes".utf8)
+    let hash = SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined()
+    let blobs = mac.database.supportDirectory.appending(path: "message-attachments/blobs")
+    try FileManager.default.createDirectory(at: blobs, withIntermediateDirectories: true)
+    try bytes.write(to: blobs.appending(path: hash))
+    let conversation = try await mac.database.createFixtureLocalACPSession(runtimeKind: .codex, title: "Photo", ownerDeviceID: UUID())
+    _ = try await mac.database.beginLocalACPRun(conversationID: conversation, input: .init(text: "What is this?", attachments: [
+      .file(.init(kind: .image, fileName: "photo.png", mimeType: "image/png", sizeBytes: Int64(bytes.count), contentHash: hash, localURL: blobs.appending(path: hash))),
+    ]))
+    let phone = try await mac.member(.ios)
+    func get(_ path: String, signer: MemberIdentity?) async throws -> (Int, String?, Data) {
+      let target = "/wovenmatter/" + path
+      var request = URLRequest(url: URL(string: "http://127.0.0.1:\(mac.port)" + target)!)
+      request.setValue(String(LibraryProtocol.version), forHTTPHeaderField: "X-Woven-Protocol")
+      if let signer { for (key, value) in try signer.signer.headers(method: "GET", target: target, audience: mac.hostID) { request.setValue(value, forHTTPHeaderField: key) } }
+      let (data, response) = try await URLSession.shared.data(for: request)
+      let http = try #require(response as? HTTPURLResponse)
+      return (http.statusCode, http.value(forHTTPHeaderField: "Content-Type"), data)
+    }
+    let read = try await get("v1/execution/attachments/\(hash)?name=photo.png", signer: phone)
+    #expect(read.0 == 200 && read.1 == "image/png" && read.2 == bytes)
+    #expect(try await get("v1/execution/attachments/\(hash)?name=photo.png", signer: nil).0 == 401, "unsigned")
+    let stranger = MemberIdentity(deviceID: UUID().uuidString.lowercased(), kind: .ios, key: .init())
+    #expect(try await get("v1/execution/attachments/\(hash)", signer: stranger).0 == 401, "not a member")
+    // Only a digest names a file; nothing else in the support directory is reachable.
+    #expect(try await get("v1/execution/attachments/..%2F..%2Fworkspace.sqlite", signer: phone).0 != 200)
+    #expect(try await get("v1/execution/attachments/" + String(repeating: "a", count: 64), signer: phone).0 == 404, "no message carries it")
+    // A blob replaced by a link out of the store, or edited, is refused.
+    let outside = mac.database.supportDirectory.appending(path: "outside.txt")
+    try bytes.write(to: outside)
+    try FileManager.default.removeItem(at: blobs.appending(path: hash))
+    try FileManager.default.createSymbolicLink(at: blobs.appending(path: hash), withDestinationURL: outside)
+    #expect(try await get("v1/execution/attachments/\(hash)", signer: phone).0 == 404)
+    try FileManager.default.removeItem(at: blobs.appending(path: hash))
+    try Data("edited".utf8).write(to: blobs.appending(path: hash))
+    #expect(try await get("v1/execution/attachments/\(hash)", signer: phone).0 == 409)
+    try FileManager.default.removeItem(at: blobs.appending(path: hash))
+
+    // A file read from the machine that runs its session is kept only when it matches its digest.
+    let files = mac.database.libraryFiles
+    #expect(throws: (any Error).self) { try files.retainMessageAttachment(Data("damaged".utf8), contentHash: hash) }
+    #expect(!files.hasMessageAttachment(contentHash: hash))
+    try files.retainMessageAttachment(bytes, contentHash: hash)
+    #expect(files.hasMessageAttachment(contentHash: hash))
+    #expect(try files.messageAttachment(contentHash: hash) == bytes)
+    #expect(throws: (any Error).self) { try files.retainMessageAttachment(bytes, contentHash: "../workspace.sqlite") }
+  }
 }
 
 // MARK: - Fixture

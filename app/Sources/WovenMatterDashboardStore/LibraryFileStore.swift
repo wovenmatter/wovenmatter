@@ -96,6 +96,64 @@ public struct LibraryFileStore: Sendable {
       source: item.source, storage: item.storage, error: item.error)
   }
 
+  /// A message attachment's stored copy: `message-attachments/blobs/<sha256>`.
+  private func messageAttachmentBlob(_ contentHash: String) throws -> URL {
+    guard LibraryAttachmentReference.isDigest(contentHash) else { throw AgentMessageAttachmentError.unreadableFile("Attachment") }
+    return supportDirectory.appending(path: "message-attachments/blobs/" + contentHash)
+  }
+
+  /// Whether this library holds the attachment's bytes.
+  public func hasMessageAttachment(contentHash: String) -> Bool {
+    guard let url = try? messageAttachmentBlob(contentHash) else { return false }
+    return FileManager.default.fileExists(atPath: url.path)
+  }
+
+  /// A message attachment's bytes, for `GET v1/execution/attachments/<sha256>`:
+  /// only a regular file in the attachment store, opened without following a
+  /// link, at most the upload limit, and only while it matches its digest.
+  public func messageAttachment(contentHash: String) throws -> Data {
+    let url = try messageAttachmentBlob(contentHash)
+    let store = url.deletingLastPathComponent()
+    let fd = Darwin.open(url.path, O_RDONLY | O_NOFOLLOW | O_NONBLOCK)
+    guard fd >= 0 else { throw AgentMessageAttachmentError.unreadableFile("Attachment") }
+    let handle = FileHandle(fileDescriptor: fd, closeOnDealloc: true)
+    defer { try? handle.close() }
+    var info = stat()
+    guard fstat(fd, &info) == 0, info.st_mode & S_IFMT == S_IFREG else { throw AgentMessageAttachmentError.unreadableFile("Attachment") }
+    let maximum = AgentMessageAttachmentLimits.maximumFileBytes
+    guard info.st_size <= maximum else { throw AgentMessageAttachmentError.fileTooLarge(name: "Attachment", maximumBytes: maximum) }
+    // The opened file itself, wherever a parent points, is in the store.
+    guard let opened = PortablePOSIX.path(of: fd), let pointer = realpath(store.path, nil) else {
+      throw AgentMessageAttachmentError.unreadableFile("Attachment")
+    }
+    let root = String(cString: pointer) + "/"
+    free(pointer)
+    guard opened.hasPrefix(root) else { throw AgentMessageAttachmentError.unreadableFile("Attachment") }
+    let data = try handle.read(upToCount: Int(maximum) + 1) ?? Data()
+    guard data.count <= maximum, SHA256.hash(data: data).hexString == contentHash else {
+      throw AgentMessageAttachmentError.unsupportedForAgent("This attachment changed on this Mac since it was sent.")
+    }
+    return data
+  }
+
+  /// Keeps a message attachment read from the machine that runs its session,
+  /// once its bytes match their digest, so it opens like a local one.
+  public func retainMessageAttachment(_ data: Data, contentHash: String) throws {
+    guard !readOnlyProjection else { throw WorkspaceDatabaseError.readOnlyProjection }
+    let url = try messageAttachmentBlob(contentHash)
+    guard data.count <= AgentMessageAttachmentLimits.maximumFileBytes else {
+      throw AgentMessageAttachmentError.fileTooLarge(name: "Attachment", maximumBytes: AgentMessageAttachmentLimits.maximumFileBytes)
+    }
+    guard SHA256.hash(data: data).hexString == contentHash else {
+      throw AgentMessageAttachmentError.unsupportedForAgent("The workspace returned a damaged copy of this file. Try again.")
+    }
+    guard !FileManager.default.fileExists(atPath: url.path) else { return }
+    try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true,
+                                            attributes: [.posixPermissions: 0o700])
+    try data.write(to: url, options: .atomic)
+    try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+  }
+
   public func attachmentURL(contentHash: String, fileName: String, mimeType: String) throws -> URL {
     try openingURL(
       contentHash: contentHash, title: fileName, mimeType: mimeType,

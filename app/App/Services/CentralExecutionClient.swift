@@ -710,6 +710,12 @@ extension CentralExecutionClient {
         return try await reader.activityDetails(conversationID, runID: runID, activityID: activityID)
     }
 
+    /// A message file of a session another machine runs, from that machine
+    /// (`GET v1/execution/attachments/<sha256>`), checked against its digest.
+    func attachment(conversationID: String, reference: LibraryAttachmentReference) async throws -> Data {
+        try await transport(for: requiredWorkspace(conversationID)).attachment(reference)
+    }
+
     /// The chat closed: its `conversation` subscription ends.
     func unwatch(_ conversationID: String) async {
         watched.removeAll { $0 == conversationID }

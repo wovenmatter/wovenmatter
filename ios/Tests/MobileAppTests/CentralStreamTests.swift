@@ -1,3 +1,4 @@
+import CryptoKit
 import XCTest
 import LibraryClient
 import WovenMatterShared
@@ -33,6 +34,9 @@ private final class RecordingWorkspaceHTTP: MobileHTTPPerforming, @unchecked Sen
   private let lock = NSLock()
   private var workspaces: [String: ExecutionWorkspace] = [:]
   private var recorded: [String] = []
+  private var _attachment = Data()
+  /// The bytes `GET v1/execution/attachments/<sha256>` answers with.
+  var attachment: Data { get { lock.withLock { _attachment } } set { lock.withLock { _attachment = newValue } } }
   func serve(_ workspace: ExecutionWorkspace) { lock.withLock { workspaces[workspace.endpoint?.host ?? ""] = workspace } }
   var paths: [String] { lock.withLock { recorded } }
   func paths(host: String) -> [String] { lock.withLock { recorded.filter { $0.hasPrefix(host) } } }
@@ -45,6 +49,7 @@ private final class RecordingWorkspaceHTTP: MobileHTTPPerforming, @unchecked Sen
     case "/wovenmatter/v1/execution/events": body = try JSONEncoder().encode(ExecutionJournalPage(libraryID: workspace?.libraryID ?? "", cursor: 0))
     case "/wovenmatter/v1/execution/providers":
       body = try JSONEncoder().encode([HarnessCapabilities(id: "local:codex", runtimeKind: "codex", displayName: "Codex", available: true)])
+    case let value where value.hasPrefix("/wovenmatter/v1/execution/attachments/"): body = attachment
     default: body = Data("[]".utf8)
     }
     return (body, HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: [:])!)
@@ -283,6 +288,31 @@ final class CentralStreamTests: XCTestCase {
     await waitUntil("timer") { model.librarySyncPause == .timer }
     XCTAssertTrue(model.librarySyncTimerNeeded)
     XCTAssertEqual(MobileModel.librarySyncInterval, .seconds(15))
+  }
+
+  /// A message file of a session another machine runs is read from that
+  /// workspace once, checked against its digest, and kept for Quick Look.
+  @MainActor func testAttachmentsOfARemoteSessionAreReadFromItsWorkspace() async throws {
+    let fixture = try await makeFixture(); let model = fixture.model
+    defer { try? FileManager.default.removeItem(at: fixture.root); try? FileManager.default.removeItem(at: model.attachmentDirectory) }
+    await model.refreshExecutionWorkspaces(force: true)
+    let bytes = Data("fixture image bytes".utf8)
+    let digest = SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined()
+    fixture.http.attachment = bytes
+    let reference = LibraryAttachmentReference(id: digest, name: "photo/../.png", mimeType: "image/png")
+    await model.selectConversation("central-chat")
+    let url = try await model.attachmentURL(reference, conversationID: "central-chat")
+    XCTAssertEqual(try Data(contentsOf: url), bytes)
+    XCTAssertEqual(url.lastPathComponent, "photo...png", "No path separators from the sent name")
+    XCTAssertEqual(fixture.http.paths(host: "studio.tail1.ts.net").filter { $0.contains("/attachments/") }, ["studio.tail1.ts.net/wovenmatter/v1/execution/attachments/" + digest])
+    // Opened again: from this iPhone, with no request.
+    _ = try await model.attachmentURL(reference, conversationID: "central-chat")
+    XCTAssertEqual(fixture.http.paths(host: "studio.tail1.ts.net").filter { $0.contains("/attachments/") }.count, 1)
+    // Damaged bytes are refused and nothing is kept.
+    fixture.http.attachment = Data("damaged".utf8)
+    let other = LibraryAttachmentReference(id: String(repeating: "c", count: 64), name: "notes.txt", mimeType: "text/plain")
+    do { _ = try await model.attachmentURL(other, conversationID: "central-chat"); XCTFail("Accepted damaged bytes") } catch {}
+    XCTAssertFalse(FileManager.default.fileExists(atPath: model.attachmentDirectory.appendingPathComponent(other.id).path))
   }
 
   /// A workspace without a stream is read once when its client is made and

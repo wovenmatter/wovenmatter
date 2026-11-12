@@ -1,3 +1,4 @@
+import CryptoKit
 import XCTest
 import WovenMatterShared
 @testable import LibraryClient
@@ -218,6 +219,40 @@ final class MobileWorkspaceStreamTests: XCTestCase {
     await eventually("cursors") { updates.all.filter { if case .library = $0 { true } else { false } }.count == 2 }
     XCTAssertEqual(updates.all.filter { if case .library = $0 { true } else { false } },
                    [.library(cursor: 12, serverDeviceID: "mac"), .library(cursor: 15, serverDeviceID: "mac")])
+  }
+
+  /// A message file is read from its workspace and checked against its digest.
+  func testAttachmentsAreReadFromTheWorkspaceAndCheckedAgainstTheirDigest() async throws {
+    let bytes = Data("fixture image bytes".utf8)
+    let digest = SHA256.hash(data: bytes).hexString
+    let http = AttachmentHTTP(bytes: bytes)
+    let credential = DirectWorkspaceCredential(endpoint: URL(string: "https://linux.tail1.ts.net/wovenmatter-execution/linux")!,
+                                               libraryID: "library", workspaceID: "linux", deviceID: "phone", token: "test-token")
+    let transport = try HTTPSExecutionWorkspaceTransport(credential: credential, performer: http)
+    let reference = LibraryAttachmentReference(id: digest, name: "photo.png", mimeType: "image/png")
+    let read = try await transport.attachment(reference)
+    XCTAssertEqual(read, bytes)
+    XCTAssertEqual(http.requests.first?.url?.path, "/wovenmatter-execution/linux/v1/execution/attachments/" + digest)
+    XCTAssertEqual(http.requests.first?.url?.query, "name=photo.png")
+    XCTAssertEqual(http.requests.first?.value(forHTTPHeaderField: "Authorization"), "Bearer test-token")
+    // Bytes that do not match the digest are refused; a name that is not a digest is never requested.
+    http.bytes = Data("damaged".utf8)
+    do { _ = try await transport.attachment(reference); XCTFail("Accepted damaged bytes") } catch {}
+    do { _ = try await transport.attachment(.init(id: "../secret", name: "x", mimeType: "text/plain")); XCTFail("Read a non-digest") } catch {}
+    XCTAssertEqual(http.requests.count, 2)
+  }
+
+  private final class AttachmentHTTP: MobileHTTPPerforming, @unchecked Sendable {
+    private let lock = NSLock()
+    private var _bytes: Data
+    private var recorded: [URLRequest] = []
+    init(bytes: Data) { _bytes = bytes }
+    var bytes: Data { get { lock.withLock { _bytes } } set { lock.withLock { _bytes = newValue } } }
+    var requests: [URLRequest] { lock.withLock { recorded } }
+    func perform(_ request: URLRequest, maximumBytes: Int, longLived: Bool) async throws -> (Data, HTTPURLResponse) {
+      lock.withLock { recorded.append(request) }
+      return (bytes, HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: ["Content-Type": "image/png"])!)
+    }
   }
 
   func testOverlappingOpensLeaveOneSubscriptionForTheLatestChat() async throws {

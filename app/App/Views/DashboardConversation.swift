@@ -231,7 +231,8 @@ struct DashboardCloudConversation: View {
                                                 activities: run.map { activitiesByRunID[$0.id] ?? [] } ?? [],
                                                 onOpenAttachment: { attachment in
                                                     openAttachment(contentHash: attachment.contentHash,
-                                                        fileName: attachment.fileName, mimeType: attachment.mimeType)
+                                                        fileName: attachment.fileName, mimeType: attachment.mimeType,
+                                                        remoteConversationID: isRemote ? attachment.conversationID : nil)
                                                 },
                                                 resolveFile: { source in try await generatedFileURL(source, message: message) },
                                                 layout: fragment.layout,
@@ -777,7 +778,9 @@ struct DashboardCloudConversation: View {
         }
     }
 
-    private func openAttachment(contentHash: String?, fileName: String, mimeType: String) {
+    /// Opens a message file. One sent in a session another machine runs
+    /// (`remoteConversationID`) is read from that machine the first time.
+    private func openAttachment(contentHash: String?, fileName: String, mimeType: String, remoteConversationID: String? = nil) {
         guard let contentHash else {
             attachmentOpenError = "This attachment is not available on this Mac."
             return
@@ -785,7 +788,7 @@ struct DashboardCloudConversation: View {
         Task {
             do {
                 let url = try await model.library.attachmentURL(
-                    contentHash: contentHash, fileName: fileName, mimeType: mimeType)
+                    contentHash: contentHash, fileName: fileName, mimeType: mimeType, remoteConversationID: remoteConversationID)
                 openPreview?(url, nil)
             } catch { attachmentOpenError = error.localizedDescription }
         }

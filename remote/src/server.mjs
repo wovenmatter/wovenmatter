@@ -416,6 +416,15 @@ const server = createServer({ maxHeaderSize: 16_384, headersTimeout: 10_000,
       return json(response,200,await clientExecution.uploadAttachment({ id: attachmentUpload[1], name: url.searchParams.get('name') ?? 'attachment',
         mimeType: url.searchParams.get('mimeType') ?? request.headers['content-type'], bytes }))
     }
+    // Its bytes, for a member opening the attachment chip: only from the
+    // attachment store, and only bytes that still match the digest.
+    if (attachmentUpload && request.method === 'GET') {
+      const file = await clientExecution.readAttachment({ id: attachmentUpload[1], name: url.searchParams.get('name') ?? undefined,
+        mimeType: url.searchParams.get('mimeType') ?? undefined })
+      response.writeHead(200, { 'content-type': file.mimeType, 'content-length': file.bytes.length, 'cache-control': 'no-store',
+        'x-content-type-options': 'nosniff', 'content-disposition': 'attachment; filename*=UTF-8\'\'' + encodeURIComponent(file.name) })
+      response.end(file.bytes); return
+    }
     // A file an agent wrote, for a Mac's Library retention.
     if (url.pathname === '/v1/execution/library-file' && request.method === 'POST') {
       if (!administrator) return json(response,403,{error:'administrator_required'})

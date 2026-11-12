@@ -353,6 +353,18 @@ public struct LibraryAttachmentReference: Codable, Equatable, Sendable {
   public init(id: String, name: String, mimeType: String, byteCount: Int64? = nil) {
     self.id = id; self.name = name; self.mimeType = mimeType; self.byteCount = byteCount
   }
+  /// A message file is at most 25 MiB, read as it was uploaded.
+  public static let maximumBytes = 25 * 1_024 * 1_024
+  /// Whether `id` is a SHA-256 digest (64 lowercase hex characters), so the
+  /// file can be read from the workspace that holds it.
+  public var isReadable: Bool { Self.isDigest(id) }
+  public static func isDigest(_ value: String) -> Bool {
+    value.utf8.count == 64 && value.utf8.allSatisfy { (48...57).contains($0) || (97...102).contains($0) }
+  }
+  /// `GET <workspace endpoint>/v1/execution/attachments/<sha256>?name=`: the
+  /// file's bytes, from the workspace that runs its session, with the same
+  /// authorization as the other execution reads.
+  public var readPath: String { "v1/execution/attachments/" + id }
 }
 
 public struct LibraryCommandReceipt: Codable, Equatable, Sendable {

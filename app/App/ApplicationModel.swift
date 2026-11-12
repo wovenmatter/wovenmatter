@@ -4426,7 +4426,11 @@ extension ApplicationModel {
                     let result = BackendLibraryResult(url: url)
                     return .init(id: request.id, result: try JSONEncoder().encode(result))
                 }
-                let result = try await BackendLibraryService(service: dashboardStore.library).execute(command)
+                // A file of a session another machine runs is read from there once.
+                let result = try await BackendLibraryService(service: dashboardStore.library, remoteAttachment: { [weak self] conversationID, reference in
+                    guard let self else { throw ApplicationModelError.dashboardStoreUnavailable }
+                    return try await self.centralExecutionClient().attachment(conversationID: conversationID, reference: reference)
+                }).execute(command)
                 return .init(id: request.id, result: try JSONEncoder().encode(result))
             }
             if request.method.hasPrefix("usage.") {

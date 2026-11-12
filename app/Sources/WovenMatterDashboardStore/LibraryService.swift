@@ -162,6 +162,17 @@ public actor LibraryService {
     try files.attachmentURL(contentHash: contentHash, fileName: fileName, mimeType: mimeType)
   }
 
+  /// A message file that this library may not hold yet (a session another
+  /// machine runs): `fetch` reads it from that machine once, and it is kept
+  /// here after its bytes match their digest, then opened like a local one.
+  public func openAttachmentURL(contentHash: String, fileName: String, mimeType: String,
+                                fetch: @Sendable () async throws -> Data) async throws -> URL {
+    if !files.hasMessageAttachment(contentHash: contentHash) {
+      try files.retainMessageAttachment(try await fetch(), contentHash: contentHash)
+    }
+    return try files.attachmentURL(contentHash: contentHash, fileName: fileName, mimeType: mimeType)
+  }
+
   public func retry(id: String) async throws {
     try await database.retryLibraryFile(id: id)
   }

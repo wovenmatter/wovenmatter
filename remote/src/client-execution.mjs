@@ -1097,6 +1097,13 @@ export function createClientExecution({ directory, runtime, kind = 'linux', name
       const { path, ...stored } = await attachments.store(value)
       return stored
     },
+    // An uploaded attachment's bytes (`GET v1/execution/attachments/<sha256>`).
+    async readAttachment(value) {
+      assertIdentity()
+      if (!attachments) throw fail(404, 'This workspace holds no message attachments.')
+      const { path, ...file } = await attachments.read(value)
+      return file
+    },
     // A harness's options before a session exists (`SessionSettings`, with
     // no conversation): native choices plus this workspace's tool groups and
     // its saved tool default for that harness.

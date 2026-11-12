@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import LibraryClient
 import WovenMatterCore
@@ -86,6 +87,22 @@ final class SignedExecutionWorkspaceTransport: ExecutionWorkspaceTransport, Exec
     func activityDetails(_ id: String, runID: String, activityID: String) async throws -> LibraryActivity {
         try await call("v1/execution/conversations/" + Self.safeID(id) + "/activity",
             query: activityDetailsQuery(runID: runID, activityID: activityID))
+    }
+    /// A message file of one of this workspace's sessions
+    /// (`GET v1/execution/attachments/<sha256>?name=`), checked against its digest.
+    func attachment(_ reference: LibraryAttachmentReference) async throws -> Data {
+        guard reference.isReadable else { throw MobileConnectionError.http(404, "This file was not saved with its message.") }
+        let (data, response) = try await client.data(reference.readPath, query: [.init(name: "name", value: reference.name)],
+                                                     headers: ["Accept": "*/*"], timeout: 120)
+        guard (200..<300).contains(response.statusCode) else {
+            throw MobileConnectionError.http(response.statusCode, response.statusCode == 404
+                ? "\(workspace.name) no longer has this file." : "\(workspace.name) could not send this file (\(response.statusCode)).")
+        }
+        guard data.count <= LibraryAttachmentReference.maximumBytes,
+              SHA256.hash(data: data).map({ String(format: "%02x", $0) }).joined() == reference.id else {
+            throw MobileConnectionError.invalidResponse
+        }
+        return data
     }
 
     static func safeID(_ value: String) throws -> String {
