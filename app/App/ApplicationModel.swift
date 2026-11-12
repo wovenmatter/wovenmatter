@@ -393,6 +393,9 @@ final class ApplicationModel {
     private var conversationChangeWorkers: [String: Task<Void, Never>] = [:]
     private var conversationChangeWorkerTokens: [String: UUID] = [:]
     private var pendingConversationChanges: [String: [DashboardConversationChange]] = [:]
+    /// The library host's live stream, told when in-memory session state
+    /// changes: questions and approvals, run state and capabilities (empty: every conversation).
+    @ObservationIgnored var executionStreamChanged: (@MainActor (Set<String>) -> Void)?
     private var terminalRunIDsByConversation: [String: String] = [:]
     private var surfaceProfilePersistenceTask: Task<Void, Never>?
     private var surfaceProfilePersistenceGeneration = 0
@@ -1065,6 +1068,7 @@ final class ApplicationModel {
     private func enqueueConversationChange(
         _ change: DashboardConversationChange
     ) {
+        switch change.phase { case .configuration, .terminal: executionStreamChanged?([change.conversationID]); default: break }
         if let backendApplicationService {
             let scopes: Set<BackendInvalidationScope>
             switch change.phase { case .configuration, .terminal: scopes = [.runtime]; default: scopes = [] }
@@ -4472,6 +4476,7 @@ extension ApplicationModel {
             Task { @MainActor in
                 guard let self, let service = self.backendApplicationService else { return }
                 self.observeBackendApplicationState()
+                self.executionStreamChanged?([])
                 await service.invalidations.publish(scopes: [.runtime, .permissions])
             }
         }

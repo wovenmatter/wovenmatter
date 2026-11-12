@@ -279,7 +279,7 @@ struct BotsHostTests {
         #expect(stopped.status == 503)
         _ = try await fixture.host.perform(.setEnabled(true))
         try await waitFor("runtime") { fixture.supervisor.phase == .running }
-        guard case let .tunnel(port, head) = fixture.host.remoteUpgrade(upgrade) else { Issue.record("no tunnel"); return }
+        guard case let .tunnel(port, head, _) = fixture.host.remoteUpgrade(upgrade) else { Issue.record("no tunnel"); return }
         let text = String(decoding: head, as: UTF8.self)
         #expect(Int(port) == fixture.host.persisted.runtimePort)
         #expect(text.hasPrefix("GET /ws HTTP/1.1\r\n"))

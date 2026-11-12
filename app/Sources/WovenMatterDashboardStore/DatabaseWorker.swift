@@ -169,6 +169,8 @@ final class DatabaseWorkers: @unchecked Sendable {
   nonisolated(unsafe) private static var registry: [String: WeakWorkers] = [:]
   let writer = DatabaseWorker(label: "wovenmatter.database.writer")
   let readers = (0..<2).map { DatabaseWorker(label: "wovenmatter.database.reader.\($0)", capacity: 128) }
+  /// Shared by every handle on one file, so a write through any of them wakes the stream.
+  let streamChanges = PeerChangeObservers(table: "execution_stream_changes")
 
   static func shared(url: URL) -> DatabaseWorkers {
     let key = url.standardizedFileURL.resolvingSymlinksInPath().path

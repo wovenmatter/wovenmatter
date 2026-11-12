@@ -4,7 +4,7 @@ import WovenMatterCore
 /// The local Mac execution surface shares native command receipts with the
 /// desktop and central-library route. It cannot launch or control other hosts.
 @MainActor
-public final class MacExecutionAPI {
+public final class MacExecutionAPI: ExecutionStreamSource {
   private let database: WorkspaceDatabase
   private let commands: any DeviceCommandServing
   private let authentication: ExecutionAuthentication
@@ -81,14 +81,8 @@ public final class MacExecutionAPI {
         switch path {
         case "/v1/execution": return try .json(descriptor)
         case "/v1/execution/providers": return try .json(commands.providers().filter { $0.id.hasPrefix("local:") })
-        case "/v1/execution/conversations":
-          let values = try await database.librarySnapshot(bodyByteBudget: 0).conversations.filter(isLocal)
-          return try .json(values.map { value in
-            var copy = value; copy.workspaceID = descriptor.id; copy.libraryID = descriptor.libraryID; return copy
-          })
-        case "/v1/execution/interactions":
-          let local = Set(try await database.librarySnapshot(bodyByteBudget: 0).conversations.filter(isLocal).map(\.id))
-          return try .json(await commands.pendingInteractions().filter { local.contains($0.conversationID) })
+        case "/v1/execution/conversations": return try .json(try await localConversations())
+        case "/v1/execution/interactions": return try .json(try await localPendingInteractions())
         case "/v1/execution/events":
           if let events {
             guard let cursor = Int64(query("after") ?? "0"), cursor >= 0 else { return .error("invalid_cursor", "Invalid execution history cursor.", status: 400) }
@@ -101,9 +95,8 @@ public final class MacExecutionAPI {
         default: break
         }
         if parts.count == 4, parts[2] == "commands" {
-          guard let receipt = try await commands.receipt(commandID: parts[3], deviceID: scope.deviceID) else { return .error("not_found", "No receipt exists for this command.", status: 404) }
-          if let id = receipt.conversationID { try await requireLocal(id) }
-          return try .json(scoped(receipt))
+          guard let receipt = try await localReceipt(commandID: parts[3], deviceID: scope.deviceID) else { return .error("not_found", "No receipt exists for this command.", status: 404) }
+          return try .json(receipt)
         }
         if parts.count == 5, parts[2] == "conversations" {
           try await requireLocal(parts[3])
@@ -114,23 +107,7 @@ public final class MacExecutionAPI {
         if path == "/v1/execution/commands" {
           let command = try JSONDecoder().decode(LibraryCommand.self, from: request.body)
           guard command.deviceID == scope.deviceID, command.libraryID == scope.libraryID, command.workspaceID == scope.workspaceID else { return .error("wrong_workspace", "Command identity does not match its authenticated execution scope.", status: 403) }
-          if let route = command.routeID, !route.hasPrefix("local:") { throw notLocal }
-          if let provider = command.providerID, !provider.hasPrefix("local:") { throw notLocal }
-          if command.kind == .createSession {
-            guard let route = command.providerID ?? command.routeID, route.hasPrefix("local:"),
-                  commands.providers().contains(where: { $0.id == route }) else { throw notLocal }
-          } else if command.kind == .workspace {
-            guard let action = command.workspaceAction else { throw notLocal }
-            switch action {
-            case .goal(let id, _), .conversation(let id, _, _, _), .configureSession(let id, _, _, _), .sessionTools(let id, _, _): try await requireLocal(id)
-            default: throw LibraryAPIError(code: "unsupported", message: "Use central library synchronization for this app-data operation.")
-            }
-          } else {
-            guard let id = command.conversationID else { throw notLocal }
-            try await requireLocal(id)
-          }
-          try await authorize()
-          return try .json(scoped(try await commands.execute(command, deviceID: scope.deviceID)))
+          return try .json(try await executeLocal(command, deviceID: scope.deviceID, authorize: authorize))
         }
         if path == "/v1/execution/workspace-read" {
           let read = try JSONDecoder().decode(LibraryWorkspaceRead.self, from: request.body)
@@ -148,12 +125,71 @@ public final class MacExecutionAPI {
     } catch is DecodingError { return .error("invalid_request", "Invalid execution request.", status: 400) }
     catch { return .error("execution_error", "The Mac could not complete this execution request. Check its receipt before retrying.", status: 500) }
   }
+  /// The conversations this Mac runs, named as this workspace's.
+  public func localConversations() async throws -> [LibraryConversation] {
+    try await database.librarySnapshot(bodyByteBudget: 0).conversations.filter(isLocal).map { value in
+      var copy = value; copy.workspaceID = descriptor.id; copy.libraryID = descriptor.libraryID; return copy
+    }
+  }
+  /// The named conversations that this Mac runs; any other is absent.
+  public func localConversations(ids: Set<String>) async throws -> [String: LibraryConversation] {
+    try await database.libraryConversations(ids: ids).filter { isLocal($0.value) }.mapValues { value in
+      var copy = value; copy.workspaceID = descriptor.id; copy.libraryID = descriptor.libraryID; return copy
+    }
+  }
+  public func localPendingInteractions() async throws -> [PendingInteraction] {
+    let pending = await commands.pendingInteractions()
+    let local = try await database.libraryConversations(ids: Set(pending.map(\.conversationID))).filter { isLocal($0.value) }
+    return pending.filter { local[$0.conversationID] != nil }
+  }
+  public func localTranscript(conversationID: String, before: String? = nil) async throws -> LibraryTranscript {
+    try await requireLocal(conversationID)
+    return try await commands.transcript(conversationID: conversationID, before: before)
+  }
+  public func localCapabilities(conversationID: String) async throws -> HarnessCapabilities {
+    try await requireLocal(conversationID)
+    return try await commands.sessionCapabilities(conversationID: conversationID)
+  }
+  public func localReceipt(commandID: String, deviceID: String) async throws -> LibraryCommandReceipt? {
+    guard let receipt = try await commands.receipt(commandID: commandID, deviceID: deviceID) else { return nil }
+    if let id = receipt.conversationID { try await requireLocal(id) }
+    return scoped(receipt)
+  }
+  /// `POST v1/execution/commands` once the caller is authenticated: only agents
+  /// this Mac runs, with the shared idempotent command receipts. The stream's
+  /// `execution.command` uses the same path.
+  public func executeLocal(_ command: LibraryCommand, deviceID: String,
+                           authorize: @MainActor () async throws -> Void = {}) async throws -> LibraryCommandReceipt {
+    guard command.deviceID == deviceID, command.libraryID == descriptor.libraryID, command.workspaceID == descriptor.id else {
+      throw LibraryAPIError(code: "wrong_workspace", message: "Command identity does not match its authenticated execution scope.")
+    }
+    if let route = command.routeID, !route.hasPrefix("local:") { throw notLocal }
+    if let provider = command.providerID, !provider.hasPrefix("local:") { throw notLocal }
+    if command.kind == .createSession {
+      guard let route = command.providerID ?? command.routeID, route.hasPrefix("local:"),
+            commands.providers().contains(where: { $0.id == route }) else { throw notLocal }
+    } else if command.kind == .workspace {
+      guard let action = command.workspaceAction else { throw notLocal }
+      switch action {
+      case .goal(let id, _), .conversation(let id, _, _, _), .configureSession(let id, _, _, _), .sessionTools(let id, _, _): try await requireLocal(id)
+      default: throw LibraryAPIError(code: "unsupported", message: "Use central library synchronization for this app-data operation.")
+      }
+    } else {
+      guard let id = command.conversationID else { throw notLocal }
+      try await requireLocal(id)
+    }
+    try await authorize()
+    return scoped(try await commands.execute(command, deviceID: deviceID))
+  }
+  public var workspaceDescriptor: ExecutionWorkspace { descriptor }
+  public var isServing: Bool { isActive() }
+
   private var notLocal: LibraryAPIError { .init(code: "wrong_workspace", message: "This endpoint can only control agents executing on this Mac.") }
   private func isLocal(_ value: LibraryConversation) -> Bool {
     value.workspaceID == nil && (value.routeID ?? value.providerID)?.hasPrefix("local:") == true
   }
   private func requireLocal(_ id: String) async throws {
-    guard let value = try await database.librarySnapshot(bodyByteBudget: 0).conversations.first(where: { $0.id == id }), isLocal(value) else { throw notLocal }
+    guard let value = try await database.libraryConversations(ids: [id])[id], isLocal(value) else { throw notLocal }
   }
   private func scoped(_ receipt: LibraryCommandReceipt) -> LibraryCommandReceipt {
     var value = receipt; value.libraryID = descriptor.libraryID; value.workspaceID = descriptor.id; return value

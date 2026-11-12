@@ -43,7 +43,19 @@ public actor MemberDirectory {
     cached = (list, Date())
     return list
   }
-  public func invalidate() { cached = nil }
+  /// Every change to the member list (a sync that received records, or a
+  /// local add or removal) invalidates the cache, and observers hear of it.
+  public func invalidate() {
+    cached = nil
+    for observer in observers.values { observer() }
+  }
+  private var observers: [UUID: @Sendable () -> Void] = [:]
+  /// `handler` runs (on this actor; keep it short) whenever the member list may have changed.
+  @discardableResult
+  public func observeChanges(_ handler: @escaping @Sendable () -> Void) -> UUID {
+    let id = UUID(); observers[id] = handler; return id
+  }
+  public func removeObserver(_ id: UUID) { observers.removeValue(forKey: id) }
 
   /// A Mac this device has trusted continuously for `pinAfter` becomes one
   /// of its anchors, so its trust no longer depends on the Mac that

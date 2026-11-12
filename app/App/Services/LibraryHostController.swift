@@ -74,6 +74,10 @@ final class LibraryHostController {
     private(set) var lastSeenAt: Date?
     private var authentication: DeviceAuthentication?
     private var executionAPI: MacExecutionAPI?
+    /// `GET /v1/stream`: live sessions for every other member device.
+    private(set) var executionStream: ExecutionStreamServer?
+    /// Open stream sockets and bots relays by member, closed when a member is removed.
+    private var memberSockets: MemberSocketRegistry?
     private var inferenceHost: InferenceHost?
     /// Who may use this Mac's bots from another device (`/v1/bots/*`).
     private var authorizeBots: (@MainActor (LibraryHTTPRequest) async throws -> Void)?
@@ -257,6 +261,17 @@ final class LibraryHostController {
                         throw LibraryAPIError(code: "unauthorized", message: "This device is no longer paired.")
                     }
                 }, authorizeGrant: authorizeGrant, members: try? await peerSync.members())
+            // A stream that cannot start leaves the HTTP routes serving; its
+            // upgrade answers 503 until the next start.
+            if let directory = try? await peerSync.members(), let executionAPI {
+                let registry = MemberSocketRegistry(members: directory)
+                let stream = ExecutionStreamServer(database: database, source: executionAPI, members: directory, registry: registry)
+                if (try? await stream.start()) != nil {
+                    guard generation == expectedGeneration, !Task.isCancelled else { stream.stop(); throw CancellationError() }
+                    memberSockets = registry; executionStream = stream
+                    model.executionStreamChanged = { [weak stream] ids in stream?.liveStateChanged(conversationIDs: ids) }
+                } else { stream.stop() }
+            }
             // Only a signed member request (a Mac or phone member). Other Macs
             // reach this Mac's bots with their member key; no grant is accepted.
             authorizeBots = { [weak self] request in
@@ -334,17 +349,31 @@ final class LibraryHostController {
         return await libraryAPI.handle(request)
     }
 
-    /// Only `/v1/bots/ws` upgrades: a member's WebSocket to this Mac's bots runtime.
+    /// Two upgrades: a member's live stream (`/v1/stream`), and its WebSocket
+    /// to this Mac's bots runtime (`/v1/bots/ws`). Both are held in the member
+    /// socket registry, so removing the member closes them.
     private func upgrade(_ request: LibraryHTTPRequest, generation expected: UUID) async -> WebSocketUpgradeDecision {
         guard generation == expected else { return .reject(.error("unavailable", "This sharing session has stopped.", status: 503)) }
         let path = request.target.split(separator: "?", maxSplits: 1).first.map(String.init) ?? request.target
+        if path == "/" + StreamProtocol.path || path == "/wovenmatter/" + StreamProtocol.path {
+            guard let executionStream else { return .reject(.error("unavailable", "This Mac's stream is starting.", status: 503)) }
+            return await executionStream.upgrade(request)
+        }
         guard path == "/v1/bots/ws" || path == "/wovenmatter/v1/bots/ws" else {
             return .reject(.error("not_found", "Unknown upgrade route.", status: 404))
         }
-        guard let authorizeBots, let host = model?.botsHost else { return .reject(.error("unavailable", "Bots on this Mac are starting.", status: 503)) }
-        do { try await authorizeBots(request) }
-        catch { return .reject(.error("unauthorized", error.localizedDescription, status: 401)) }
-        return host.remoteUpgrade(request)
+        guard authorizeBots != nil, let host = model?.botsHost else { return .reject(.error("unavailable", "Bots on this Mac are starting.", status: 503)) }
+        let kinds: Set<MemberKind> = [.mac, .ios]
+        let member: LibraryMember
+        do {
+            guard MemberRequestVerifier.isSigned(request.headers) else { throw MemberRequestError.missing }
+            member = try await authenticateMember(request, allowing: kinds)
+        } catch { return .reject(.error("unauthorized", error.localizedDescription, status: 401)) }
+        let decision = host.remoteUpgrade(request)
+        guard case let .tunnel(port, head, options) = decision else { return decision }
+        var owned = options
+        if let memberSockets { owned.owner = .init(registry: memberSockets, deviceID: member.deviceID, kinds: kinds) }
+        return .tunnel(port: port, head: head, options: owned)
     }
 
     /// Quit and role changes cancel recovery as well as the owned listener.
@@ -360,6 +389,8 @@ final class LibraryHostController {
         let peerSync = peerSync
         Task { await peerSync.stopMembers() }
         server?.stop(); server = nil; executionAPI = nil; inferenceHost = nil; authorizeBots = nil
+        executionStream?.stop(); executionStream = nil; memberSockets = nil
+        model?.executionStreamChanged = nil
         for setup in linuxHostSetups.values { setup.task.cancel() }
         linuxHostSetups.removeAll()
         if let serve {
@@ -573,7 +604,7 @@ final class LibraryHostController {
         var desired: [ExecutionWorkspace] = [
             .init(id: localID, libraryID: identity.libraryID, ownerDeviceID: identity.hostDeviceID,
                   kind: .mac, name: DevelopmentLaunch.deviceName(), endpoint: endpoint,
-                  capabilities: ["execution.v1", "history.central.v1", "inference.v1"], executionDeviceID: identity.hostDeviceID, developmentInstance: DevelopmentLaunch.instance,
+                  capabilities: ["execution.v1", "history.central.v1", "inference.v1", StreamProtocol.capability], executionDeviceID: identity.hostDeviceID, developmentInstance: DevelopmentLaunch.instance,
                   // Paired devices show sessions here a clear message when a permission is missing.
                   macAccess: MacAccessSetupModel.current(keychainReady: model.keychainAccessReady),
                   folderOwnerID: folderOwnerID)
