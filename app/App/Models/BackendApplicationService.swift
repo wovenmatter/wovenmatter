@@ -90,6 +90,8 @@ struct BackendApplicationReadiness: Codable, Sendable {
     var startupError: String? = nil
     var executionDirectory: URL? = nil
     var startupMessage: String? = nil
+    /// The server serves its windows' persistent stream on its socket.
+    static let windowStreamCapability = "window.stream"
 }
 
 /// Dispatches frontend commands to the backend-owned application model.
@@ -158,11 +160,9 @@ final class BackendApplicationService {
                     completeClientRouting: true,
                     capabilities: ["session.create", "session.send", "session.configure", "session.tools",
                                    "session.cancel", "session.permission", "session.interaction", "calendar.write",
-                                   "calendar.metadata", "session.dispatch-epochs"], startupError: startupError,
+                                   "calendar.metadata", "session.dispatch-epochs",
+                                   BackendApplicationReadiness.windowStreamCapability], startupError: startupError,
                     executionDirectory: model.clientExecutionDirectory, startupMessage: model.backendStartupMessage))
-            case "application.changes":
-                let cursor = try JSONDecoder().decode(BackendInvalidationCursor?.self, from: request.payload)
-                return try await response(request, invalidations.waitForChanges(after: cursor))
             case "remoteWorkspaces.command":
                 guard model.readyForBackendClients else { throw BackendRPCError.remote("The background service is still starting.") }
                 let command = try JSONDecoder().decode(BackendRemoteWorkspaceCommand.self, from: request.payload)

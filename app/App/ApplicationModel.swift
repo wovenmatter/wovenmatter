@@ -364,8 +364,11 @@ final class ApplicationModel {
     @ObservationIgnored var federatedAdoptionTasks: [String: Task<Void, any Error>] = [:]
     @ObservationIgnored var adoptedExecutionConversations: Set<String> = []
     var federatedExecutionSnapshots: [String: FederatedExecutionSnapshot] = [:]
-    /// Live snapshot reads in flight per chat; true when another push arrived meanwhile.
-    @ObservationIgnored var federatedLiveRefreshes: [String: Bool] = [:]
+    /// A window's one live connection to its background server and what it follows.
+    @ObservationIgnored let windowLive = WindowLiveState()
+    /// A background server's side of its windows' live connections.
+    @ObservationIgnored var backendWindowStream: ExecutionWindowStreamServer?
+    @ObservationIgnored var backendWindowSource: BackendWindowStreamSource?
     private(set) var peerAgentWorkspaces: [UUID: ExecutionWorkspace] = [:]
     var federatedExecutionOwners: [String: String] = [:]
     /// The synced execution workspace registry, including iPhone and iPad Quick Chat workspaces.
@@ -380,8 +383,6 @@ final class ApplicationModel {
     @ObservationIgnored var backendRPCClient: BackendRPCClient?
     @ObservationIgnored var backendRPCServer: BackendRPCServer?
     @ObservationIgnored var backendApplicationService: BackendApplicationService?
-    @ObservationIgnored var backendClientTask: Task<Void, Never>?
-    @ObservationIgnored var backendConversationClientTask: Task<Void, Never>?
     @ObservationIgnored var backendStopping = false
     @ObservationIgnored var backgroundServerTermination: @MainActor () -> Void = { WovenMatterLifecycleDelegate.requestTerminationAfterUpdate() }
     @ObservationIgnored var backendCommandsInFlight = 0
@@ -1490,7 +1491,7 @@ final class ApplicationModel {
         }
     }
 
-    private nonisolated static func renderMessagePresentations(
+    nonisolated static func renderMessagePresentations(
         _ messages: [WorkspaceMessageRecord],
         activities: [WorkspaceRunActivityRecord],
         runs: [WorkspaceRunRecord],
@@ -3571,6 +3572,7 @@ final class ApplicationModel {
         await botsHost?.shutdown()
         shutdownLocalACPSessions()
         await localSessionShutdownTask?.value
+        backendWindowStream?.stop()
         backendRPCServer?.stop()
     }
 
@@ -4287,10 +4289,16 @@ extension ApplicationModel {
             let server = BackendRPCServer(socketURL: LocalExecutionRole.backendSocketURL(workspaceDirectory: try Self.dashboardSupportDirectory()))
             backendApplicationService = service
             backendRPCServer = server
-            try server.start { [weak self] request in
+            try server.start(handler: { [weak self] request in
                 guard let self else { return BackendRPCResponse(id: request.id, error: "The background service stopped.") }
                 return await self.handleBackendRequest(request)
-            }
+            }, stream: { [weak self] channel in
+                // A window's persistent connection, past the same peer check.
+                Task { @MainActor in
+                    guard let self else { channel.close(); return }
+                    self.acceptWindowStream(channel)
+                }
+            })
             observeBackendApplicationState()
             observeBackendRemoteState()
             observeBackendDatabasesState()
@@ -4526,10 +4534,11 @@ extension ApplicationModel {
             from: await callBackend(method: "remoteWorkspaces.snapshot")))
     }
 
+    static let backendDisconnectedMessage = "Background service disconnected. Your sessions remain owned by the backend."
+    func reportBackendDisconnected() { workspaceError = Self.backendDisconnectedMessage }
+
     func startBackendClient() async {
-        backendClientTask?.cancel()
-        backendConversationClientTask?.cancel()
-        let disconnectedMessage = "Background service disconnected. Your sessions remain owned by the backend."
+        await stopWindowStream()
         do {
             let support = try Self.dashboardSupportDirectory()
             let client = BackendRPCClient(socketURL: LocalExecutionRole.backendSocketURL(workspaceDirectory: support))
@@ -4563,6 +4572,9 @@ extension ApplicationModel {
                     startupMessage = status.startupMessage
                     if status.ready {
                         guard status.protocolVersion == 1, status.capabilities.contains("session.dispatch-epochs") else { throw AgentDispatchAdmissionError.invalid }
+                        guard status.capabilities.contains(BackendApplicationReadiness.windowStreamCapability) else {
+                            throw BackendRPCError.remote("The background service is incompatible with this app. Restart Woven Matter after finishing current work.")
+                        }
                         guard status.completeClientRouting else {
                             throw BackendRPCError.remote("The background server is unavailable. Open Background Server in Settings to start it or try again.")
                         }
@@ -4609,69 +4621,44 @@ extension ApplicationModel {
             try Task.checkCancellation()
             state = .ready
             startBotsClient()
-            backendClientTask?.cancel()
-            backendConversationClientTask?.cancel()
-            // The journal supports independent bounded waiters. Transcript
-            // delivery must never wait for runtime/settings/usage inventory.
-            backendConversationClientTask = Task { [weak self] in
-                await BackendInvalidationConsumer.run(receive: { cursor in
-                    let data = try await client.call(method: "application.changes", payload: JSONEncoder().encode(cursor))
-                    return try JSONDecoder().decode(BackendInvalidations.self, from: data)
-                }, apply: { [weak self] change in
-                    guard let self else { throw CancellationError() }
-                    if !change.conversationIDs.isEmpty { try await Task.sleep(for: .milliseconds(16)) }
-                    // Live state of a streamed chat the background server pushed.
-                    let live = change.scopes.contains(.execution)
-                        ? change.conversationIDs.filter { self.federatedExecutionSnapshots[$0] != nil } : []
-                    for id in live { self.refreshLiveFederatedConversation(id) }
-                    let visible = Set(self.conversationStatesByID.keys)
-                    for id in (change.requiresReload ? visible : change.conversationIDs.intersection(visible)).subtracting(live) {
-                        try Task.checkCancellation()
-                        await self.refreshConversation(id: id)
-                    }
-                }, failed: { [weak self] _ in
-                    self?.workspaceError = disconnectedMessage
-                })
-            }
-            backendClientTask = Task { [weak self] in
-                await BackendInvalidationConsumer.run(receive: { cursor in
-                    let data = try await client.call(method: "application.changes", payload: JSONEncoder().encode(cursor))
-                    return try JSONDecoder().decode(BackendInvalidations.self, from: data)
-                }, apply: { [weak self] change in
-                    guard let self else { throw CancellationError() }
-                    if change.requiresReload || !change.scopes.isDisjoint(with: [.workspace, .calendar]) {
-                        if DevelopmentLaunch.isClient {
-                            self.backendReplica = try JSONDecoder().decode(DevelopmentReplicaSnapshot.self,
-                                from: await client.call(method: "development.replica"))
-                            // Replica changes can leave the local execution DB revision unchanged.
-                            await self.refreshWorkspace()
-                        } else {
-                            await self.refreshWorkspaceIfChanged()
-                        }
-                    }
-                    if change.requiresReload || !change.scopes.isDisjoint(with: [.runtime, .permissions]) {
-                        try await self.refreshBackendApplicationState()
-                    }
-                    if change.requiresReload || change.scopes.contains(.databases) { try await self.refreshBackendDatabasesState() }
-                    if change.requiresReload || change.scopes.contains(.bots) { await self.bots.refresh() }
-                    if change.requiresReload || change.scopes.contains(.remoteWorkspaces) { try await self.refreshBackendRemoteState() }
-                    if change.requiresReload || change.scopes.contains(.openCode) { try await self.refreshBackendOpenCodeState() }
-                    if change.requiresReload || change.scopes.contains(.settings) {
-                        try await self.refreshBackendConnectionsState()
-                        try await self.refreshBackendSurfaceProfile()
-                        await self.analytics.refresh()
-                    }
-                    if change.requiresReload || change.scopes.contains(.usage) { await self.usage.refreshBackendSnapshot() }
-                    if change.requiresReload || change.scopes.contains(.settings) { try await self.agentTools?.reload() }
-                    if self.workspaceError == disconnectedMessage { self.workspaceError = nil }
-                }, failed: { [weak self] _ in
-                    self?.workspaceError = disconnectedMessage
-                })
-            }
+            // One persistent connection follows the background server:
+            // `server.state` carries what it invalidates, and each open chat
+            // follows its `conversation` subscription. After a reconnect both
+            // resubscribe and everything is read again from the projection.
+            await startWindowStream(socketURL: client.socketURL)
         } catch {
             if Task.isCancelled { return }
             state = .failed(error.localizedDescription)
         }
+    }
+
+    /// `server.state` scopes: the background-server state the window reads
+    /// again (everything when `reloadAll`, on subscribe and after a reconnect).
+    /// Transcript reloads never wait on this.
+    func applyServerScopes(_ scopes: Set<BackendInvalidationScope>, reloadAll: Bool) async throws {
+        if reloadAll || !scopes.isDisjoint(with: [.workspace, .calendar]) {
+            if DevelopmentLaunch.isClient {
+                backendReplica = try JSONDecoder().decode(DevelopmentReplicaSnapshot.self,
+                    from: await callBackend(method: "development.replica"))
+                // Replica changes can leave the local execution DB revision unchanged.
+                await refreshWorkspace()
+            } else {
+                await refreshWorkspaceIfChanged()
+            }
+        }
+        if reloadAll || !scopes.isDisjoint(with: [.runtime, .permissions]) { try await refreshBackendApplicationState() }
+        if reloadAll || scopes.contains(.databases) { try await refreshBackendDatabasesState() }
+        if reloadAll || scopes.contains(.bots) { await bots.refresh() }
+        if reloadAll || scopes.contains(.remoteWorkspaces) { try await refreshBackendRemoteState() }
+        if reloadAll || scopes.contains(.openCode) { try await refreshBackendOpenCodeState() }
+        if reloadAll || scopes.contains(.settings) {
+            try await refreshBackendConnectionsState()
+            try await refreshBackendSurfaceProfile()
+            await analytics.refresh()
+        }
+        if reloadAll || scopes.contains(.usage) { await usage.refreshBackendSnapshot() }
+        if reloadAll || scopes.contains(.settings) { try await agentTools?.reload() }
+        if workspaceError == Self.backendDisconnectedMessage { workspaceError = nil }
     }
 
     private func refreshBackendApplicationState() async throws {
@@ -4802,7 +4789,8 @@ extension ApplicationModel {
                 let status = try JSONDecoder().decode(BackendApplicationReadiness.self, from: data)
                 if let error = status.startupError { throw BackendRPCError.remote(error) }
                 guard status.protocolVersion == 1, status.completeClientRouting,
-                      status.capabilities.contains("session.dispatch-epochs") else {
+                      status.capabilities.contains("session.dispatch-epochs"),
+                      status.capabilities.contains(BackendApplicationReadiness.windowStreamCapability) else {
                     throw BackendRPCError.remote("The background service is incompatible with this app. Restart Woven Matter after finishing current work.")
                 }
                 return status.ready

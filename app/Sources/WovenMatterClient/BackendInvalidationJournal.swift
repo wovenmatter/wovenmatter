@@ -11,10 +11,8 @@ public struct BackendInvalidationCursor: Codable, Equatable, Sendable {
     }
 }
 
-public enum BackendInvalidationScope: String, Codable, Sendable, Hashable {
+public enum BackendInvalidationScope: String, Codable, Sendable, Hashable, CaseIterable {
     case openCode, workspace, calendar, runtime, remoteWorkspaces, permissions, settings, usage, databases, bots
-    /// Live state a workspace stream pushed for `conversationIDs`.
-    case execution
 }
 
 public struct BackendInvalidations: Codable, Equatable, Sendable {
@@ -44,18 +42,24 @@ public actor BackendInvalidationJournal {
         let timeout: Task<Void, Never>
     }
     private var waiters: [UUID: Waiter] = [:]
+    /// The windows' `server.state` stream: every publication, in order.
+    public typealias Listener = @Sendable (Set<BackendInvalidationScope>, Set<String>) async -> Void
+    private var listener: Listener?
 
     public init(instanceID: UUID = UUID(), capacity: Int = 512) {
         self.instanceID = instanceID
         self.capacity = max(1, capacity)
     }
 
-    public func publish(scopes: Set<BackendInvalidationScope> = [], conversationIDs: Set<String> = []) {
+    public func setListener(_ listener: Listener?) { self.listener = listener }
+
+    public func publish(scopes: Set<BackendInvalidationScope> = [], conversationIDs: Set<String> = []) async {
         guard !scopes.isEmpty || !conversationIDs.isEmpty else { return }
         revision += 1
         entries.append(.init(revision: revision, scopes: scopes, conversationIDs: conversationIDs))
         if entries.count > capacity { entries.removeFirst(entries.count - capacity) }
         for id in Array(waiters.keys) { finishWaiter(id) }
+        await listener?(scopes, conversationIDs)
     }
 
     /// An idle client holds one waiter rather than polling or touching the database.
