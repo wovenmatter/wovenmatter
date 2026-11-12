@@ -1124,6 +1124,20 @@ member removed.
     not live. A snapshot or single entity too large for one frame ends the
     subscription with a non-retryable `unavailable`, so the client does not
     loop.
+    Each activity carries its compact `AgentRunActivity` projection in
+    `projectionJSON` (title, detail and content to 280 characters, file
+    changes as line counts, no raw data, plus `detailsAvailable` and
+    `detailVersion`), its `sequence` (its position in the conversation) and
+    `createdAt`. Assistant text written before a new piece of work becomes an
+    `assistant` activity at its position. Runs carry `startedAt`,
+    `completedAt`, `userMessageID` and `assistantMessageID`; a Linux host keeps
+    its latest 32. The full projection is read when its disclosure opens:
+    `GET v1/execution/conversations/<id>/activity?id=<activity>&run=<run>`
+    (Mac and Linux; a library host also answers `GET v1/sessions/<id>/activity`)
+    returns a `LibraryActivity` with the complete projection. A Linux host
+    journals a settled activity's full projection as a
+    `wovenmatter.activity.v2` native record named in `detailsRecordID`, so
+    history discloses it too.
   - `capabilities` `{capabilities: HarnessCapabilities}` on subscribe and when
     they change.
   - `session` `{settings: SessionSettings}`: exactly what the `session`
@@ -1134,6 +1148,8 @@ member removed.
     session settings. On Linux the stream reads them again when the record's
     runtime configuration, run, goal or tools change and after every settings
     action, because a runtime may keep its settings outside the record.
+    `commands` lists the harness's slash commands (`{name, detail?,
+    argumentHint?}`) from ACP `available_commands_update`.
   - `synchronized` `{}` after the first snapshot.
 - **Coalescing.** A server sends a conversation's changes at most every 50 ms
   while every changed message is 8 KB or smaller (measured on the message's
@@ -1194,6 +1210,15 @@ member removed.
     items; anything else is read from the projection. The window keeps reading
     bulk history and lists from its read-only SQLite projection. After a
     reconnect it resubscribes and starts again from snapshots.
+  - A session another machine runs renders in the same conversation view as
+    this Mac's own sessions, from its relayed transcript
+    (`RemoteConversationRecords`). Older pages come from `earlier`, and an
+    activity's details from the background command `federatedActivityDetails`
+    (once per `detailVersion`). The background server keeps every chat a window
+    holds subscribed, and at most 8 chats read for other reasons, closing the
+    least recently viewed first; viewing one subscribes it again. A chat that
+    ran over SSH and could not move is read-only history: the window learns
+    why with its session metadata (`readOnlyReason`) and shows no composer.
 - **iPhone.** Connects to every listed server while the app is in the
   foreground: `workspace` on each, `conversation` only for the open chat. It
   closes cleanly when the app goes to the background and resumes on return.

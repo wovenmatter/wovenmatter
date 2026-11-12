@@ -25,6 +25,8 @@ enum BackendApplicationCommand: Codable, Sendable {
     case saveDictation(DictationRecord)
     case libraryHost(LibraryHostAction)
     case federatedExecution(FederatedExecutionAction)
+    /// One activity's complete projection in a chat another machine runs.
+    case federatedActivityDetails(conversationID: String, runID: String, activityID: String)
     case setIdleSleepPolicy(WorkPowerPolicy)
     case setClosedLidPolicy(WorkPowerPolicy)
     case stageAttachments(files: [BackendAttachmentSource])
@@ -60,6 +62,9 @@ enum BackendApplicationCommand: Codable, Sendable {
 struct BackendApplicationResult: Codable, Sendable {
     var libraryHost: LibraryHostSnapshot?
     var federatedExecution: FederatedExecutionSnapshot?
+    var activityDetails: AgentRunActivity?
+    /// Why a chat is read-only history (`LegacyRemoteChatError`), with session metadata.
+    var readOnlyReason: String?
     var exportURL: URL?
     var trashedConversations: [WorkspaceTrashedConversation]?
     var trashedNotes: [WorkspaceTrashedNote]?
@@ -206,6 +211,9 @@ final class BackendApplicationService {
         switch command {
         case .federatedExecution(let action):
             return try await .init(federatedExecution: model.performFederatedExecution(action))
+        case let .federatedActivityDetails(conversationID, runID, activityID):
+            return try await .init(activityDetails: model.performFederatedActivityDetails(conversationID: conversationID,
+                runID: runID, activityID: activityID))
         case .libraryHost(let action):
             let host = model.libraryHost
             switch action {
@@ -259,7 +267,7 @@ final class BackendApplicationService {
             return try await .init(noteExport: store.exportNote(id: id, format: format, expectedRevision: revision))
         case let .sessionMetadata(id):
             await model.refreshLocalACPSession(conversation: try conversation(id))
-            return .init(metadata: model.localACPSessionMetadata[id])
+            return .init(readOnlyReason: model.legacyRemoteChatReasons[id], metadata: model.localACPSessionMetadata[id])
         case let .workspaceMutation(mutation):
             return try await executeWorkspaceMutation(mutation)
         case let .createPeerSession(agentID, conversationID, folderID):

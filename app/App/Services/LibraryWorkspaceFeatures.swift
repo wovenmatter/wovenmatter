@@ -230,7 +230,8 @@ extension DeviceCommandService {
             thinkingLevels: options(metadata?.thinkingLevels, metadata?.thinkingOptionMetadata, current: metadata?.thinking ?? saved?.thinking),
             permissions: options(metadata?.permissionOptions, metadata?.permissionOptionMetadata, current: metadata?.permission ?? saved?.permission),
             availableTools: WorkspaceToolGroup.configurableCases.map { .init(id: $0.rawValue, label: $0.title) },
-            enabledTools: tools.enabled.map(\.rawValue).sorted(), canConfigure: !model.runningToolSessionIDs.contains(id))
+            enabledTools: tools.enabled.map(\.rawValue).sorted(), canConfigure: !model.runningToolSessionIDs.contains(id),
+            commands: metadata.map { $0.slashCommands.map { .init(name: $0.name, detail: $0.detail, argumentHint: $0.argumentHint) } })
     }
 
     private static func calendarDraft(_ value: WorkspaceCalendarDraft) -> LibraryCalendarDraft {

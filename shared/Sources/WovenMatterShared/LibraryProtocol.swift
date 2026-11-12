@@ -124,8 +124,13 @@ public struct LibraryTranscriptRun: Codable, Equatable, Identifiable, Sendable {
   public var status: String
   public var startedAt: String?
   public var completedAt: String?
-  public init(id: String, status: String, startedAt: String? = nil, completedAt: String? = nil) {
+  /// The prompt that started the run and the reply its work belongs to.
+  public var userMessageID: String?
+  public var assistantMessageID: String?
+  public init(id: String, status: String, startedAt: String? = nil, completedAt: String? = nil,
+              userMessageID: String? = nil, assistantMessageID: String? = nil) {
     self.id = id; self.status = status; self.startedAt = startedAt; self.completedAt = completedAt
+    self.userMessageID = userMessageID; self.assistantMessageID = assistantMessageID
   }
 }
 

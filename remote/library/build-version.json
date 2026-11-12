@@ -1,6 +1,6 @@
 {
   "swiftVersion": "6.4.2",
-  "swiftImage": "swift:6.4.2-noble@sha256:bca121f6eb59fd80340d1296887b2698ed8f3eb9eca7d80c181f8af769dc7ee0",
+  "swiftImage": "swift:6.4.2-noble@sha256:23d9b28ad97fb1cf1999edc3a0cb265ee915ed42299a9344e7173d5a6d2b05f4",
   "staticSDKID": "swift-6.4.2-RELEASE_static-linux-0.1.0",
   "staticSDKURL": "https://download.swift.org/swift-6.4.2-release/static-sdk/swift-6.4.2-RELEASE/swift-6.4.2-RELEASE_static-linux-0.1.0.artifactbundle.tar.gz",
   "staticSDKSHA256": "3786b179936d9cc9e266dd506bd1654176358d7b25288e243359f4d17cc4dc5a",

@@ -334,7 +334,8 @@ test('the conversation stream sends the transcript window, then live upserts wel
   const next = await client.next(frame => isItem('transcript', 'c')(frame) && frame.data.transcript.activities.length > 0)
   assert.equal(f.execution.transcript(id).messages.find(message => message.id === receipt.runID).content, 'Hello')
   assert.ok([...client.frames].filter(isItem('transcript', 'c')).some(frame => frame.data.transcript.messages.some(message => message.content === 'Hello')))
-  assert.equal(next.data.transcript.activities[0].title, 'Read')
+  // The text before the tool became its commentary; the tool follows it.
+  assert.deepEqual(next.data.transcript.activities.map(activity => activity.title), ['Commentary', 'Read'])
   // The run ends: the final state, with no active run.
   f.runs[0].done.resolve()
   const finished = await client.next(frame => isItem('transcript', 'c')(frame) && !frame.data.transcript.activeRunID)
@@ -428,7 +429,7 @@ test('conversation changes are coalesced every 50 ms, and every 200 ms once a me
   await clock.advance(50)
   await eventually(() => upserts().length === 5, 'small entities at 50 ms')
   assert.equal(upserts()[4].data.transcript.messages.length, 0)
-  assert.equal(upserts()[4].data.transcript.activities[0].title, 'Small')
+  assert.equal(upserts()[4].data.transcript.activities.at(-1).title, 'Small')
 })
 
 test('execution.command and execution.receipt answer with the HTTP command receipts', async t => {

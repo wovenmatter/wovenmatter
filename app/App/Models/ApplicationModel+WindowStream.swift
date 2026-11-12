@@ -286,6 +286,7 @@ extension ApplicationModel {
             }
         }
         if let snapshot = federatedExecutionSnapshots[id] { federatedExecutionSnapshots[id] = Self.overlay(snapshot, follow) }
+        renderRemoteConversation(id)
     }
 
     /// A chat this Mac runs. Live text of a message the chat already shows is
@@ -342,6 +343,7 @@ extension ApplicationModel {
         } else {
             federatedExecutionSnapshots[id] = snapshot
         }
+        renderRemoteConversation(id)
     }
 
     private static func overlay(_ base: FederatedExecutionSnapshot, _ follow: WindowLiveState.LiveConversation) -> FederatedExecutionSnapshot {

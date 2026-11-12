@@ -83,13 +83,36 @@ struct DashboardCloudConversation: View {
     @State private var choosingFolder = false
     @State private var folderSelectionError: String?
 
+    /// A chat another machine runs renders here exactly as one this Mac
+    /// runs; its controls act through its owner.
+    private var isRemote: Bool { conversation.map { model.isRemoteConversation($0.id) } ?? false }
+    private var remote: FederatedExecutionSnapshot? {
+        guard isRemote, let conversation else { return nil }
+        return model.federatedExecutionSnapshots[conversation.id]
+    }
+    private var remoteRunID: String? { remote?.transcript?.activeRunID }
+    /// Why this chat is read-only history (`LegacyRemoteChatError`), if it is.
+    private var readOnlyReason: String? { conversation.flatMap { model.legacyRemoteChatReasons[$0.id] } }
+    /// Quick Chat runs only on its iPhone or iPad; every Mac shows its synced history read-only.
+    private var isPhoneHistory: Bool {
+        guard isRemote, let conversation else { return false }
+        return remote?.workspace.kind == .ios || DashboardPairedWorkspaceSidebarModel.isPhoneHistory(
+            owner: model.federatedExecutionOwners[conversation.id], registry: model.executionWorkspaceRegistry)
+    }
+    private var remoteMetadata: LocalACPSessionMetadata? { remote?.session.map(LocalACPSessionMetadata.init(remote:)) }
+
+    private func actOnRemote(_ action: FederatedExecutionAction) {
+        guard let id = conversation?.id else { return }
+        Task { await model.actOnFederatedConversation(action, conversationID: id) }
+    }
+
+    private func configureRemote(model selection: String? = nil, thinking: String? = nil, permission: String? = nil) {
+        guard let id = conversation?.id else { return }
+        actOnRemote(.configure(conversationID: id, action: .configureSession(id: id, model: selection, thinking: thinking, permission: permission)))
+    }
+
     @ViewBuilder var body: some View {
-        if let conversation, model.federatedExecutionOwners[conversation.id] != nil {
-            FederatedConversationPane(model: model, conversation: conversation, savedMessages: messages,
-                draft: $draft, sendInProgress: sendInProgress, onSend: onSend)
-        } else {
-            nativeBody
-        }
+        nativeBody
     }
 
     @ViewBuilder private var nativeBody: some View {
@@ -253,7 +276,12 @@ struct DashboardCloudConversation: View {
                     scrollState.setNearBottom(false)
                 }
                 .environment(\.conversationActivityDetails) { runID, activityID in
-                    guard let conversationID = conversation?.id, let store = model.dashboardStore else { return nil }
+                    guard let conversationID = conversation?.id else { return nil }
+                    // Another machine's activity: its owner's details route, read on disclosure.
+                    if model.isRemoteConversation(conversationID) {
+                        return try await model.remoteActivityDetails(conversationID: conversationID, runID: runID, activityID: activityID)
+                    }
+                    guard let store = model.dashboardStore else { return nil }
                     return try await store.database.conversationActivityDetails(
                         conversationID: conversationID, runID: runID, activityID: activityID)
                 }
@@ -372,6 +400,20 @@ struct DashboardCloudConversation: View {
                     }
                     .frame(maxWidth: 768, alignment: .leading)
                     .accessibilityElement(children: .combine)
+                } else if let readOnlyReason {
+                    // A chat that ran over SSH and could not move to its host: history only.
+                    VStack(alignment: .leading, spacing: 4) {
+                        Label("Read-only History", systemImage: "clock.arrow.circlepath")
+                            .font(.system(size: 12, weight: .semibold))
+                        Text(readOnlyReason)
+                            .font(.system(size: 11.5))
+                            .foregroundStyle(DashboardPalette.mutedForeground)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .textSelection(.enabled)
+                    }
+                    .frame(maxWidth: 768, alignment: .leading)
+                    .accessibilityElement(children: .combine)
+                    .accessibilityIdentifier("legacy-remote-chat-history")
                 }
                 if let conversation, !conversation.isArchived, conversation.localRuntimeKind == .opencode, let openCode = workspaceOpenCode {
                     OpenCodeConversationControls(model: openCode, conversationID: conversation.id)
@@ -411,6 +453,13 @@ struct DashboardCloudConversation: View {
                     )
                     .id(interaction.id)
                 }
+                if let interaction = remote?.interactions.first, !isPhoneHistory, readOnlyReason == nil {
+                    RemoteInteractionCard(interaction: interaction) { response in
+                        await model.actOnFederatedConversation(.respond(interaction, response), conversationID: interaction.conversationID)
+                    }
+                    .disabled(remote?.online != true)
+                    .id(interaction.id)
+                }
                 // Side buttons sit on the composer's bottom control row; the
                 // composer grows upward with its draft and Tasks badge.
                 HStack(alignment: .bottom, spacing: 8) {
@@ -443,195 +492,232 @@ struct DashboardCloudConversation: View {
                             DashboardMacAccessNotice(message: macAccessNotice.message,
                                 openSettings: macAccessNotice.isThisMac ? { model.pendingConnectionsScope = "permissions" } : nil)
                         }
-                        if let conversation, !conversation.isArchived, conversation.localRuntimeKind == .defaultAgent,
-                           model.localACPSessionMetadata[conversation.id]?.selectableModels.isEmpty == true {
-                            Button {
-                                let scope = conversation.remoteWorkspaceID?.uuidString.lowercased() ?? "local"
-                                model.pendingDefaultAgentSettingsScope = model.connections.settings.workspaces[scope] == nil ? "global" : scope
-                            } label: {
-                                HStack(alignment: .firstTextBaseline, spacing: 8) {
-                                    Text("No models configured for Pi Durable. Go to settings to complete setup.")
-                                        .font(.system(size: 12.5, weight: .regular))
-                                        .foregroundStyle(DashboardPalette.mutedForeground)
-                                        .multilineTextAlignment(.leading)
-                                        .fixedSize(horizontal: false, vertical: true)
-                                    Spacer(minLength: 0)
-                                    Image(systemName: "arrow.right")
-                                        .font(.system(size: 11, weight: .regular))
-                                        .foregroundStyle(DashboardPalette.mutedForeground)
-                                        .accessibilityHidden(true)
+                        if isRemote, !isPhoneHistory, readOnlyReason == nil, let remote, !remote.online {
+                            // Its saved history shows; controls return when its owner reconnects.
+                            DashboardMacAccessNotice(message: remote.error ?? "\(remote.workspace.name) is not connected. Woven Matter reconnects automatically.",
+                                openSettings: nil)
+                                .accessibilityIdentifier("remote-conversation-offline")
+                        }
+                        if isRemote, !isPhoneHistory, readOnlyReason == nil, let conversation, let goal = remote?.session?.goal {
+                            ConversationGoalControls(goal: goal, sessionID: conversation.id) { mutation in
+                                guard await model.actOnFederatedConversation(.configure(conversationID: conversation.id,
+                                    action: .goal(id: conversation.id, mutation: mutation)), conversationID: conversation.id) != nil else {
+                                    throw WorkspaceToolError.invalid("The execution owner did not confirm this goal change.")
                                 }
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .padding(.vertical, 6)
                             }
-                            .buttonStyle(SettingsQuietButtonStyle(horizontalPadding: 12, minimumHeight: 32))
-                            .background(theme.palette.themeWhisper,
-                                in: RoundedRectangle(cornerRadius: DashboardMetrics.controlRadius, style: .continuous))
-                            .help("Open Pi Durable settings")
+                            .disabled(remote?.online != true)
                         }
-                        if let conversation, !conversation.isArchived,
-                           WorkspaceGoal.supports(conversation.localRuntimeKind),
-                           let tools = model.agentTools, tools.goals[conversation.id] != nil {
-                            ConversationGoalControls(tools: tools, sessionID: conversation.id)
-                        }
-                        DashboardComposer(
-                            placeholder: dashboardComposerPlaceholder(
-                                agent: agent,
-                                runtimeKind: conversation?.localRuntimeKind
-                            ),
-                            draft: $draft,
-                            attachedNoteTitle: attachedNoteTitle,
-                            attachments: attachments,
-                            agentTools: model.agentTools,
-                            sessionID: conversation?.id,
-                            supportsGoals: WorkspaceGoal.supports(conversation?.localRuntimeKind),
-                            showsSessionControls: conversation.map {
-                                !$0.isArchived && $0.localRuntimeKind != nil
-                            } ?? false,
-                            showsPermissionControl: conversation.map {
-                                !$0.isArchived && $0.localRuntimeKind != nil
-                            } ?? false,
-                            sessionMetadataLoading: conversation.map {
-                                guard !$0.isArchived else { return false }
-                                if $0.localRuntimeKind == .opencode { return workspaceOpenCode?.metadata($0.id) == nil }
-                                return model.loadingLocalACPSessionIDs.contains($0.id)
-                                    || model.localACPSessionMetadata[$0.id] == nil
-                            } ?? false,
-                            sessionMetadata: conversation.flatMap {
-                                guard !$0.isArchived else { return nil }
-                                if $0.localRuntimeKind == .opencode { return workspaceOpenCode?.metadata($0.id) }
-                                return model.localACPSessionMetadata[$0.id]
-                            },
-                            sessionControlsDisabled: conversation.map {
-                                guard !$0.isArchived else { return true }
-                                if $0.localRuntimeKind == .opencode {
-                                    return workspaceOpenCode?.isLocalSession($0.id) != true
-                                        || workspaceOpenCode?.statuses[$0.id] != "Connected"
-                                        || workspaceOpenCode?.updatingSessions.contains($0.id) == true
-                                        || model.localRunningConversationIDs.contains($0.id)
+                        if isPhoneHistory {
+                            Text("Quick Chat history · Continue on its iPhone or iPad")
+                                .font(.system(size: 12.5))
+                                .foregroundStyle(DashboardPalette.mutedForeground)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(.vertical, DashboardComposer.verticalPadding)
+                                .accessibilityIdentifier("federated-quick-chat-history")
+                        } else if readOnlyReason == nil {
+                            if let conversation, !conversation.isArchived, conversation.localRuntimeKind == .defaultAgent,
+                               model.localACPSessionMetadata[conversation.id]?.selectableModels.isEmpty == true {
+                                Button {
+                                    let scope = conversation.remoteWorkspaceID?.uuidString.lowercased() ?? "local"
+                                    model.pendingDefaultAgentSettingsScope = model.connections.settings.workspaces[scope] == nil ? "global" : scope
+                                } label: {
+                                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                                        Text("No models configured for Pi Durable. Go to settings to complete setup.")
+                                            .font(.system(size: 12.5, weight: .regular))
+                                            .foregroundStyle(DashboardPalette.mutedForeground)
+                                            .multilineTextAlignment(.leading)
+                                            .fixedSize(horizontal: false, vertical: true)
+                                        Spacer(minLength: 0)
+                                        Image(systemName: "arrow.right")
+                                            .font(.system(size: 11, weight: .regular))
+                                            .foregroundStyle(DashboardPalette.mutedForeground)
+                                            .accessibilityHidden(true)
+                                    }
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .padding(.vertical, 6)
                                 }
-                                if $0.localRuntimeKind != nil {
+                                .buttonStyle(SettingsQuietButtonStyle(horizontalPadding: 12, minimumHeight: 32))
+                                .background(theme.palette.themeWhisper,
+                                    in: RoundedRectangle(cornerRadius: DashboardMetrics.controlRadius, style: .continuous))
+                                .help("Open Pi Durable settings")
+                            }
+                            if let conversation, !conversation.isArchived,
+                               WorkspaceGoal.supports(conversation.localRuntimeKind),
+                               let tools = model.agentTools, tools.goals[conversation.id] != nil {
+                                ConversationGoalControls(tools: tools, sessionID: conversation.id)
+                            }
+                            DashboardComposer(
+                                placeholder: dashboardComposerPlaceholder(
+                                    agent: agent,
+                                    runtimeKind: conversation?.localRuntimeKind
+                                ),
+                                draft: $draft,
+                                attachedNoteTitle: attachedNoteTitle,
+                                attachments: attachments,
+                                // This Mac's tool groups belong to its own sessions.
+                                agentTools: isRemote ? nil : model.agentTools,
+                                sessionID: conversation?.id,
+                                supportsGoals: !isRemote && WorkspaceGoal.supports(conversation?.localRuntimeKind),
+                                showsSessionControls: conversation.map {
+                                    !$0.isArchived && (isRemote ? remote?.session != nil : $0.localRuntimeKind != nil)
+                                } ?? false,
+                                showsPermissionControl: conversation.map {
+                                    !$0.isArchived && (isRemote ? remote?.session?.permissions.isEmpty == false : $0.localRuntimeKind != nil)
+                                } ?? false,
+                                sessionMetadataLoading: conversation.map {
+                                    guard !$0.isArchived else { return false }
+                                    if isRemote { return remote == nil }
+                                    if $0.localRuntimeKind == .opencode { return workspaceOpenCode?.metadata($0.id) == nil }
+                                    return model.loadingLocalACPSessionIDs.contains($0.id)
+                                        || model.localACPSessionMetadata[$0.id] == nil
+                                } ?? false,
+                                sessionMetadata: conversation.flatMap {
+                                    guard !$0.isArchived else { return nil }
+                                    if isRemote { return remoteMetadata }
+                                    if $0.localRuntimeKind == .opencode { return workspaceOpenCode?.metadata($0.id) }
+                                    return model.localACPSessionMetadata[$0.id]
+                                },
+                                sessionControlsDisabled: conversation.map {
+                                    guard !$0.isArchived else { return true }
+                                    if isRemote { return remote?.online != true || remoteRunID != nil || remote?.session?.canConfigure != true }
+                                    if $0.localRuntimeKind == .opencode {
+                                        return workspaceOpenCode?.isLocalSession($0.id) != true
+                                            || workspaceOpenCode?.statuses[$0.id] != "Connected"
+                                            || workspaceOpenCode?.updatingSessions.contains($0.id) == true
+                                            || model.localRunningConversationIDs.contains($0.id)
+                                    }
+                                    if $0.localRuntimeKind != nil {
+                                        return model.loadingLocalACPSessionIDs.contains($0.id)
+                                            || model.updatingLocalACPSessionIDs.contains($0.id)
+                                            || model.localRunningConversationIDs.contains($0.id)
+                                    }
+                                    return true
+                                } ?? true,
+                                sendDisabled: sendInProgress || (conversation.map {
+                                    guard !$0.isArchived else { return true }
+                                    // Steering a remote run needs its harness to accept it.
+                                    if isRemote { return remote?.online != true || (remoteRunID != nil && remote?.capability?.canSteer != true) }
+                                    if $0.localRuntimeKind == .opencode { return workspaceOpenCode?.isLocalSession($0.id) != true || workspaceOpenCode?.statuses[$0.id] != "Connected" }
+                                    guard $0.localRuntimeKind != nil else { return true }
                                     return model.loadingLocalACPSessionIDs.contains($0.id)
                                         || model.updatingLocalACPSessionIDs.contains($0.id)
-                                        || model.localRunningConversationIDs.contains($0.id)
-                                }
-                                return true
-                            } ?? true,
-                            sendDisabled: sendInProgress || (conversation.map {
-                                guard !$0.isArchived else { return true }
-                                if $0.localRuntimeKind == .opencode { return workspaceOpenCode?.isLocalSession($0.id) != true || workspaceOpenCode?.statuses[$0.id] != "Connected" }
-                                guard $0.localRuntimeKind != nil else { return true }
-                                return model.loadingLocalACPSessionIDs.contains($0.id)
-                                    || model.updatingLocalACPSessionIDs.contains($0.id)
-                            } ?? false),
-                            startsCollapsed: startsComposerCollapsed,
-                            collapseOverride: $composerCollapseOverride,
-                            focusRequestGeneration: focusRequestGeneration,
-                            onActivate: onActivatePanel,
-                            onSelectModel: { selection in
-                                guard let conversation, !conversation.isArchived else { return }
-                                if conversation.localRuntimeKind == .opencode { workspaceOpenCode?.updateSelection(conversation.id, model: selection); return }
-                                if conversation.localRuntimeKind != nil {
-                                    Task { await model.updateLocalACPSession(
-                                        conversation: conversation, model: selection
-                                    ) }
-                                    return
-                                }
-                            },
-                            onSelectThinking: { selection in
-                                guard let conversation, !conversation.isArchived else { return }
-                                if conversation.localRuntimeKind == .opencode { workspaceOpenCode?.updateSelection(conversation.id, thinking: selection); return }
-                                if conversation.localRuntimeKind != nil {
-                                    Task { await model.updateLocalACPSession(
-                                        conversation: conversation, thinking: selection
-                                    ) }
-                                    return
-                                }
-                            },
-                            onSelectPermission: { selection in
-                                guard let conversation, !conversation.isArchived else { return }
-                                if conversation.localRuntimeKind == .opencode {
-                                    workspaceOpenCode?.updateSelection(conversation.id, permission: selection)
-                                    return
-                                }
-                                if conversation.localRuntimeKind != nil {
-                                    Task { await model.updateLocalACPSession(conversation: conversation, permission: selection) }
-                                }
-                            },
-                            onAttachmentAction: onAttachmentAction,
-                            onRemoveAttachment: onRemoveAttachment,
-                            onOpenAttachment: { file in
-                                openAttachment(contentHash: file.contentHash,
-                                    fileName: file.fileName, mimeType: file.mimeType)
-                            },
-                            onDropFiles: { urls in
-                                guard conversation?.isArchived != true else { return false }
-                                return onDropFiles(urls)
-                            },
-                            onCommandNavigation: onCommandNavigation,
-                            onSend: {
-                                guard conversation?.isArchived != true else { return }
-                                transcriptOwnsScroll = false
-                                isUserScrolling = false
-                                scrollInteractionRevision += 1
-                                scrollState.setNearBottom(true)
-                                scrollPositionID = chatEndID
-                                onSend()
-                            },
-                            onStop: conversation.flatMap { current in
-                                guard !current.isArchived, model.localRunningConversationIDs.contains(current.id) else { return nil }
-                                return { model.cancelLocalACPPrompt(conversationID: current.id) }
-                            },
-                            folderLabel: conversation.map { current in
-                                model.workspaceOverview?.folders.first(where: { $0.id == current.folderID })?.name ?? "All Workspaces"
-                            },
-                            availableFolders: model.workspaceOverview?.folders ?? [],
-                            selectedFolderID: conversation?.folderID,
-                            folderWorkspaceID: executionWorkspaceID,
-                            folderSelectionDisabled: !canChooseFolder || choosingFolder || sendInProgress
-                                || messages.contains(where: { $0.role == "user" }),
-                            onSelectFolder: { folderID in
-                                guard let conversation, !conversation.isArchived, canChooseFolder, !choosingFolder else { return }
-                                choosingFolder = true
-                                folderSelectionError = nil
-                                Task {
-                                    let accepted = await model.moveConversation(id: conversation.id, toFolderID: folderID)
-                                    if !accepted {
-                                        folderSelectionError = model.folderMutationError ?? "The draft folder could not be changed."
+                                } ?? false),
+                                startsCollapsed: startsComposerCollapsed,
+                                collapseOverride: $composerCollapseOverride,
+                                focusRequestGeneration: focusRequestGeneration,
+                                onActivate: onActivatePanel,
+                                onSelectModel: { selection in
+                                    guard let conversation, !conversation.isArchived else { return }
+                                    if isRemote { configureRemote(model: selection); return }
+                                    if conversation.localRuntimeKind == .opencode { workspaceOpenCode?.updateSelection(conversation.id, model: selection); return }
+                                    if conversation.localRuntimeKind != nil {
+                                        Task { await model.updateLocalACPSession(
+                                            conversation: conversation, model: selection
+                                        ) }
+                                        return
                                     }
-                                    choosingFolder = false
+                                },
+                                onSelectThinking: { selection in
+                                    guard let conversation, !conversation.isArchived else { return }
+                                    if isRemote { configureRemote(thinking: selection); return }
+                                    if conversation.localRuntimeKind == .opencode { workspaceOpenCode?.updateSelection(conversation.id, thinking: selection); return }
+                                    if conversation.localRuntimeKind != nil {
+                                        Task { await model.updateLocalACPSession(
+                                            conversation: conversation, thinking: selection
+                                        ) }
+                                        return
+                                    }
+                                },
+                                onSelectPermission: { selection in
+                                    guard let conversation, !conversation.isArchived else { return }
+                                    if isRemote { configureRemote(permission: selection); return }
+                                    if conversation.localRuntimeKind == .opencode {
+                                        workspaceOpenCode?.updateSelection(conversation.id, permission: selection)
+                                        return
+                                    }
+                                    if conversation.localRuntimeKind != nil {
+                                        Task { await model.updateLocalACPSession(conversation: conversation, permission: selection) }
+                                    }
+                                },
+                                onAttachmentAction: onAttachmentAction,
+                                onRemoveAttachment: onRemoveAttachment,
+                                onOpenAttachment: { file in
+                                    openAttachment(contentHash: file.contentHash,
+                                        fileName: file.fileName, mimeType: file.mimeType)
+                                },
+                                onDropFiles: { urls in
+                                    guard conversation?.isArchived != true else { return false }
+                                    return onDropFiles(urls)
+                                },
+                                onCommandNavigation: onCommandNavigation,
+                                onSend: {
+                                    guard conversation?.isArchived != true else { return }
+                                    transcriptOwnsScroll = false
+                                    isUserScrolling = false
+                                    scrollInteractionRevision += 1
+                                    scrollState.setNearBottom(true)
+                                    scrollPositionID = chatEndID
+                                    onSend()
+                                },
+                                onStop: conversation.flatMap { current in
+                                    if isRemote {
+                                        guard let runID = remoteRunID, remote?.online == true else { return nil }
+                                        return { actOnRemote(.stop(conversationID: current.id, runID: runID)) }
+                                    }
+                                    guard !current.isArchived, model.localRunningConversationIDs.contains(current.id) else { return nil }
+                                    return { model.cancelLocalACPPrompt(conversationID: current.id) }
+                                },
+                                folderLabel: conversation.map { current in
+                                    model.workspaceOverview?.folders.first(where: { $0.id == current.folderID })?.name ?? "All Workspaces"
+                                },
+                                availableFolders: model.workspaceOverview?.folders ?? [],
+                                selectedFolderID: conversation?.folderID,
+                                folderWorkspaceID: executionWorkspaceID,
+                                folderSelectionDisabled: !canChooseFolder || choosingFolder || sendInProgress
+                                    || messages.contains(where: { $0.role == "user" }),
+                                onSelectFolder: { folderID in
+                                    guard let conversation, !conversation.isArchived, canChooseFolder, !choosingFolder else { return }
+                                    choosingFolder = true
+                                    folderSelectionError = nil
+                                    Task {
+                                        let accepted = await model.moveConversation(id: conversation.id, toFolderID: folderID)
+                                        if !accepted {
+                                            folderSelectionError = model.folderMutationError ?? "The draft folder could not be changed."
+                                        }
+                                        choosingFolder = false
+                                    }
+                                }
+                            )
+                            .disabled(conversation?.isArchived == true)
+                            .task(id: conversation?.id) {
+                                // Cheap, prompt-free checks; a grant made elsewhere clears the notice.
+                                macAccessNotice = nil
+                                guard let conversation else { return }
+                                while !Task.isCancelled {
+                                    let notice = await model.macAccessNotice(for: conversation)
+                                    guard !Task.isCancelled else { return }
+                                    if notice != macAccessNotice { macAccessNotice = notice }
+                                    do { try await Task.sleep(for: .seconds(10)) } catch { return }
                                 }
                             }
-                        )
-                        .disabled(conversation?.isArchived == true)
-                        .task(id: conversation?.id) {
-                            // Cheap, prompt-free checks; a grant made elsewhere clears the notice.
-                            macAccessNotice = nil
-                            guard let conversation else { return }
-                            while !Task.isCancelled {
-                                let notice = await model.macAccessNotice(for: conversation)
+                            .task(id: "\(conversation?.id ?? ""):\(conversation?.folderID ?? ""):\(conversation?.isArchived == true):\(messages.contains(where: { $0.role == "user" })):\(sendInProgress)") {
+                                canChooseFolder = false
+                                executionWorkspaceID = nil
+                                guard let conversation, !conversation.isArchived else { return }
+                                let id = conversation.id
+                                async let owner = model.conversationExecutionWorkspaceID(id: id)
+                                async let draftIsMutable = model.canChooseConversationFolder(id: id)
+                                let values = await (owner, draftIsMutable)
                                 guard !Task.isCancelled else { return }
-                                if notice != macAccessNotice { macAccessNotice = notice }
-                                do { try await Task.sleep(for: .seconds(10)) } catch { return }
+                                executionWorkspaceID = values.0
+                                canChooseFolder = values.1
                             }
-                        }
-                        .task(id: "\(conversation?.id ?? ""):\(conversation?.folderID ?? ""):\(conversation?.isArchived == true):\(messages.contains(where: { $0.role == "user" })):\(sendInProgress)") {
-                            canChooseFolder = false
-                            executionWorkspaceID = nil
-                            guard let conversation, !conversation.isArchived else { return }
-                            let id = conversation.id
-                            async let owner = model.conversationExecutionWorkspaceID(id: id)
-                            async let draftIsMutable = model.canChooseConversationFolder(id: id)
-                            let values = await (owner, draftIsMutable)
-                            guard !Task.isCancelled else { return }
-                            executionWorkspaceID = values.0
-                            canChooseFolder = values.1
-                        }
-                        .alert("Folder could not be changed", isPresented: Binding(
-                            get: { folderSelectionError != nil },
-                            set: { if !$0 { folderSelectionError = nil } }
-                        )) { Button("OK") { folderSelectionError = nil } } message: {
-                            Text(folderSelectionError ?? "")
+                            .alert("Folder could not be changed", isPresented: Binding(
+                                get: { folderSelectionError != nil },
+                                set: { if !$0 { folderSelectionError = nil } }
+                            )) { Button("OK") { folderSelectionError = nil } } message: {
+                                Text(folderSelectionError ?? "")
+                            }
                         }
                     }
                     Group {
@@ -671,7 +757,7 @@ struct DashboardCloudConversation: View {
         .background(theme.palette.workspace)
         .environment(\.conversationTranscriptState, conversationState?.transcriptState)
         .environment(\.conversationTaskProgress, localPermission == nil && localInteraction == nil
-            ? conversationState?.taskProgress : nil)
+            && remote?.interactions.isEmpty != false ? conversationState?.taskProgress : nil)
         .onChange(of: localPermission?.id) { _, _ in conversationState?.transcriptState.tasksExpanded = false }
         .onChange(of: localInteraction?.id) { _, _ in conversationState?.transcriptState.tasksExpanded = false }
         .alert("Could not open attachment", isPresented: Binding(
@@ -684,7 +770,8 @@ struct DashboardCloudConversation: View {
         }
         .task(id: sessionIdentity) {
             guard let conversation, !conversation.isArchived else { return }
-            if conversation.localRuntimeKind != nil {
+            // A Linux host's chat that ran over SSH learns here whether it moved to the host.
+            if conversation.localRuntimeKind != nil || conversation.remoteWorkspaceID != nil {
                 await model.refreshLocalACPSession(conversation: conversation)
             }
         }
@@ -706,6 +793,7 @@ struct DashboardCloudConversation: View {
 
     private func generatedFileURL(_ source: String, message: WorkspaceMessageRecord) async throws -> URL {
         let id = WorkspaceLibraryItem.identifier(messageID: message.id, source: source)
+        if isRemote { return try await model.sharedLibraryFileURL(id: id) }
         if let client = model.liveLibraryClient, client.isForeignConversation(message.conversationID) {
             return try await client.exportFile(.libraryFile(id: id))
         }

@@ -396,6 +396,9 @@ const server = createServer({ maxHeaderSize: 16_384, headersTimeout: 10_000,
     if (executionTranscript && request.method === 'GET') return json(response,200,clientExecution.transcript(executionTranscript[1],url.searchParams.get('before')))
     const executionCapabilities = url.pathname.match(/^\/v1\/execution\/conversations\/([0-9a-f-]+)\/capabilities$/)
     if (executionCapabilities && request.method === 'GET') return json(response,200,await clientExecution.capabilities(executionCapabilities[1]))
+    // One activity's complete projection, read when its disclosure opens.
+    const executionActivity = url.pathname.match(/^\/v1\/execution\/conversations\/([0-9a-f-]+)\/activity$/)
+    if (executionActivity && request.method === 'GET') return json(response,200,clientExecution.activityDetails(executionActivity[1],url.searchParams.get('id') ?? ''))
     if (url.pathname === '/v1/execution/workspace-read' && request.method === 'POST') return json(response,200,await clientExecution.readWorkspace(await readJSON(request)))
     if (url.pathname === '/v1/execution/providers' && request.method === 'GET') return json(response,200,await clientExecution.providers())
     // A harness's model, thinking and permission choices before a session exists.

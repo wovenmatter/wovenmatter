@@ -269,7 +269,11 @@ struct LinuxMemberPathTests {
         let second = try #require(try await fixture.database.workspaceOverview().conversations.first { $0.id == adoptable })
         await #expect(throws: LegacyRemoteChatError.self) { try await fixture.model.adoptRegisteredRemoteConversationIfNeeded(second) }
         await fixture.model.refreshLocalACPSession(conversation: second)
-        #expect(fixture.model.ensureConversationState(id: adoptable).error?.contains("could not move") == true)
+        // The conversation view shows it as read-only history with the reason, without a composer.
+        #expect(fixture.model.legacyRemoteChatReasons[adoptable]?.contains("could not move") == true)
+        #expect(fixture.model.ensureConversationState(id: adoptable).error == nil)
+        await fixture.model.refreshLocalACPSession(conversation: record)
+        #expect(fixture.model.legacyRemoteChatReasons[id]?.contains("read-only") == true)
         #expect(try await fixture.database.workspaceOverview().conversations.contains { $0.id == adoptable })
     }
 }

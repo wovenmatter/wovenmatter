@@ -77,12 +77,26 @@ public struct SessionSettings: Codable, Equatable, Sendable {
   public var enabledTools: [String]
   public var goal: WorkspaceGoal?
   public var canConfigure: Bool
+  /// The harness's slash commands (ACP `available_commands_update`), for the composer's palette.
+  public var commands: [SessionCommand]?
   public init(conversationID: String, model: String?, thinking: String?, permission: String?,
               models: [SessionSettingOption], thinkingLevels: [SessionSettingOption], permissions: [SessionSettingOption],
-              availableTools: [SessionSettingOption], enabledTools: [String], canConfigure: Bool, goal: WorkspaceGoal? = nil) {
+              availableTools: [SessionSettingOption], enabledTools: [String], canConfigure: Bool, goal: WorkspaceGoal? = nil,
+              commands: [SessionCommand]? = nil) {
     self.conversationID = conversationID; self.model = model; self.thinking = thinking; self.permission = permission
     self.models = models; self.thinkingLevels = thinkingLevels; self.permissions = permissions
     self.availableTools = availableTools; self.enabledTools = enabledTools; self.canConfigure = canConfigure; self.goal = goal
+    self.commands = commands
+  }
+}
+
+/// One slash command a session's harness offers.
+public struct SessionCommand: Codable, Equatable, Sendable {
+  public var name: String
+  public var detail: String?
+  public var argumentHint: String?
+  public init(name: String, detail: String? = nil, argumentHint: String? = nil) {
+    self.name = name; self.detail = detail; self.argumentHint = argumentHint
   }
 }
 

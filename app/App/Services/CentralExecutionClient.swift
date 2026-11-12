@@ -3,6 +3,7 @@ import CryptoKit
 import Foundation
 import Network
 import Observation
+import os
 import Security
 import LibraryClient
 import WovenMatterCore
@@ -40,8 +41,10 @@ final class CentralExecutionClient {
     /// workspace's stream, in order, for agent-to-agent waiting (`SessionWakeUps`).
     var onWorkspaceItem: (@MainActor (String, StreamItem.Payload) async -> Void)?
     private var live: [String: LiveWorkspace] = [:]
-    /// Open chats with a `conversation` subscription, least recently opened first.
+    /// Chats with a `conversation` subscription, least recently viewed first.
     private var watched: [String] = []
+    /// Chats open in a window, with how many windows hold each.
+    private var held: [String: Int] = [:]
     private var lastMemberRevision: String?
     private var changeScheduled = false
     private var wakeMonitor: StreamWakeMonitor?
@@ -658,8 +661,11 @@ extension CentralExecutionClient {
         for stream in live.values { await stream.connection.membersChanged() }
     }
 
-    /// Subscribes the open chat to its `conversation` stream. At most four
-    /// chats stay subscribed; the least recently opened is closed first.
+    /// Subscribes the chat to its `conversation` stream. A chat open in any
+    /// window (`hold`) stays subscribed until it closes. Chats read for other
+    /// reasons (a send, an agent's status) stay subscribed too, at most
+    /// `maximumUnheldWatches` of them: the least recently viewed is closed
+    /// first, and viewing it again subscribes it again.
     fileprivate func watch(_ conversationID: String, on stream: LiveWorkspace) async {
         watched.removeAll { $0 == conversationID }
         watched.append(conversationID)
@@ -671,7 +677,37 @@ extension CentralExecutionClient {
             if stream.conversations[conversationID] == nil { stream.conversations[conversationID] = subscription }
             else { await stream.connection.unsubscribe(subscription) }
         }
-        while watched.count > 4 { await unwatch(watched[0]) }
+        while let evicted = watched.first(where: { held[$0] == nil }),
+              watched.count(where: { held[$0] == nil }) > Self.maximumUnheldWatches {
+            Self.log.notice("Closing the least recently viewed chat's live subscription: \(evicted, privacy: .public)")
+            await unwatch(evicted)
+        }
+    }
+
+    /// Chats read but not open in any window that stay subscribed.
+    static let maximumUnheldWatches = 8
+    private static let log = Logger(subsystem: "com.wovenmatter.wovenmatter", category: "execution-stream")
+
+    /// The chats with a live `conversation` subscription, least recently viewed first.
+    var watchedConversationIDs: [String] { watched }
+
+    /// A window opened the chat: it stays live until every window that holds it releases it.
+    func hold(_ conversationID: String) { held[conversationID, default: 0] += 1 }
+
+    /// A window closed the chat. Its subscription ends with the `close` that follows.
+    func release(_ conversationID: String) {
+        guard let count = held[conversationID] else { return }
+        if count <= 1 { held.removeValue(forKey: conversationID) } else { held[conversationID] = count - 1 }
+    }
+
+    /// One activity's complete projection, from the workspace that runs it.
+    func activityDetails(conversationID: String, runID: String, activityID: String) async throws -> LibraryActivity {
+        let workspace = try await requiredWorkspace(conversationID)
+        // Members sign the read; a provisioned grant's transport has no details route.
+        guard let reader = try await transport(for: workspace) as? any ExecutionActivityDetailsReading else {
+            throw LibraryAPIError(code: "unavailable", message: "Activity details are unavailable for this workspace.")
+        }
+        return try await reader.activityDetails(conversationID, runID: runID, activityID: activityID)
     }
 
     /// The chat closed: its `conversation` subscription ends.

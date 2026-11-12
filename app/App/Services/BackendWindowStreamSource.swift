@@ -47,6 +47,8 @@ final class BackendWindowStreamSource: ExecutionConversationSource {
         kinds[conversationID] = kind
         openCounts[conversationID, default: 0] += 1
         guard kind == .remote, openCounts[conversationID] == 1 else { return }
+        // Every chat open in a window stays live, however many are open.
+        if model.liveLibraryClient == nil { (try? model.centralExecutionClient())?.hold(conversationID) }
         await read(conversationID)
     }
 
@@ -58,7 +60,10 @@ final class BackendWindowStreamSource: ExecutionConversationSource {
         pollers.removeValue(forKey: conversationID)?.cancel()
         snapshots.removeValue(forKey: conversationID); failures.removeValue(forKey: conversationID)
         // The background server's own `conversation` subscription ends with the window's.
-        if kind == .remote { _ = try? await model.performFederatedExecution(.close(conversationID: conversationID)) }
+        if kind == .remote {
+            model.federatedExecutionClient?.release(conversationID)
+            _ = try? await model.performFederatedExecution(.close(conversationID: conversationID))
+        }
     }
 
     /// A conversation another machine runs, or one this Mac runs; anything
