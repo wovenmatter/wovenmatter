@@ -366,6 +366,8 @@ final class ApplicationModel {
     var federatedExecutionSnapshots: [String: FederatedExecutionSnapshot] = [:]
     /// A window's one live connection to its background server and what it follows.
     @ObservationIgnored let windowLive = WindowLiveState()
+    /// Chats another machine runs, as the conversation view renders them.
+    @ObservationIgnored let remoteConversations = RemoteConversationState()
     /// A background server's side of its windows' live connections.
     @ObservationIgnored var backendWindowStream: ExecutionWindowStreamServer?
     @ObservationIgnored var backendWindowSource: BackendWindowStreamSource?
@@ -1300,9 +1302,15 @@ final class ApplicationModel {
     }
 
     func refreshConversation(id: String) async {
-        if liveLibraryClient?.isForeignConversation(id) == true || backendReplica.owners[id] != nil { return }
         // Presentation work belongs to the UI; execution and terminal bookkeeping stay in the backend.
         guard LocalExecutionRole.current != .backend else { return }
+        // Another machine runs it: render what its owner streams, as this view
+        // renders its own sessions. Until anything arrives, saved history shows.
+        if isRemoteConversation(id) {
+            _ = ensureConversationState(id: id)
+            if refreshRemoteConversation(id) { return }
+        }
+        if liveLibraryClient?.isForeignConversation(id) == true || backendReplica.owners[id] != nil { return }
         let state = ensureConversationState(id: id)
         let generation = state.beginRefresh()
         do {
@@ -1398,6 +1406,7 @@ final class ApplicationModel {
 
     @discardableResult
     func loadOlderConversationMessages(id: String) async -> Bool {
+        if isRemoteConversation(id), remoteTranscript(id) != nil { return await loadOlderRemoteMessages(id) }
         guard let state = conversationStatesByID[id],
               !state.isLoadingOlderMessages,
               let current = state.presentation,
@@ -1548,7 +1557,7 @@ final class ApplicationModel {
         return result
     }
 
-    private nonisolated static func renderRunPresentations(
+    nonisolated static func renderRunPresentations(
         _ runs: [WorkspaceRunRecord],
         reusing previous: [String: DashboardRunPresentation]
     ) -> [String: DashboardRunPresentation] {

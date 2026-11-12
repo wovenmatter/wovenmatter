@@ -581,6 +581,17 @@ final class CentralLibraryClientModel {
         await refresh()
     }
 
+    /// One activity's complete projection, from the workspace that runs the chat.
+    func desktopActivityDetails(conversationID: String, runID: String, activityID: String) async throws -> LibraryActivity {
+        if let owner = executionOwner(for: conversationID), let client = directClients[owner] {
+            return try await client.activityDetails(conversationID, runID: runID, activityID: activityID)
+        }
+        guard let engine, let detail = try await engine.transcriptActivityDetail(conversationID, runID: runID, activityID: activityID) else {
+            throw MobileConnectionError.offline
+        }
+        return detail
+    }
+
     func desktopExecution(_ action: FederatedExecutionAction) async throws -> FederatedExecutionSnapshot {
         let id: String
         var earlier: LibraryTranscript?

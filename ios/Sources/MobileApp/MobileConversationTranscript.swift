@@ -8,7 +8,8 @@ struct MobileConversationTranscript: View {
   let disclosureState: ConversationTranscriptState
   var agentSourceTitle: @MainActor (String) -> String? = { _ in nil }
   var openAgentSource: @MainActor (String) -> Void = { _ in }
-  let loadDetails: @MainActor (String) async throws -> AgentRunActivity?
+  /// (runID, activityID) to the activity's complete projection.
+  let loadDetails: @MainActor (String, String) async throws -> AgentRunActivity?
 
   var body: some View {
     let rows = MobileConversationProjection.rows(transcript)
@@ -46,7 +47,7 @@ struct MobileConversationTranscript: View {
         }
         .environment(\.conversationTranscriptState, disclosureState)
         .environment(\.conversationActivityDetails, { runID, activityID in
-          if let full = try await loadDetails(activityID) { return full }
+          if let full = try await loadDetails(runID, activityID) { return full }
           return turn.records.last { $0.runID == runID && $0.activity.id == activityID }?.activity
         })
       }

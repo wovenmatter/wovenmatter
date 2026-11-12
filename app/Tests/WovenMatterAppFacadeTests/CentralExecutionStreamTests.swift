@@ -21,7 +21,7 @@ struct CentralExecutionStreamTests {
         let live: LiveChanges
     }
 
-    private func setup(seedingOwner: Bool = false) async throws -> Setup {
+    private func setup(seedingOwner: Bool = false, alsoSeeding others: [String] = []) async throws -> Setup {
         let fixture = try await FacadeFixture()
         let identity = try await fixture.database.libraryIdentity()
         let workspace = try await fixture.database.registerExecutionWorkspace(.init(workspace: .init(
@@ -33,12 +33,14 @@ struct CentralExecutionStreamTests {
         let journalURL = fixture.directory.appending(path: "stream-commands.json")
         let conversationID = UUID().uuidString.lowercased()
         if seedingOwner {
-            // The conversation's owner is known from its journal.
+            // The conversations' owner is known from its journal.
             let journal = try WorkspaceJournal(file: journalURL)
             try await journal.upsertWorkspace(workspace, pending: false)
-            try await journal.receiveWorkspace(.init(libraryID: workspace.libraryID, cursor: 1, entries: [.init(workspaceID: workspace.id,
-                originSequence: 1, conversationID: conversationID, kind: .conversation,
-                conversation: .init(id: conversationID, title: "Fix the build"))]), workspaceID: workspace.id)
+            let ids = [conversationID] + others
+            try await journal.receiveWorkspace(.init(libraryID: workspace.libraryID, cursor: Int64(ids.count),
+                entries: ids.enumerated().map { index, id in .init(workspaceID: workspace.id,
+                    originSequence: Int64(index + 1), conversationID: id, kind: .conversation,
+                    conversation: .init(id: id, title: "Chat \(index)")) }), workspaceID: workspace.id)
         }
         let client = try CentralExecutionClient(database: fixture.database, commandJournalURL: journalURL,
             provision: { _ in throw LibraryAPIError(code: "unexpected", message: "Nothing is provisioned for a member.") },
@@ -181,6 +183,99 @@ struct CentralExecutionStreamTests {
         #expect(await setup.http.commands == 0)
         #expect(await setup.http.receiptRequests == 0)
     }
+
+    /// Answers every chat's `conversation` subscription with a snapshot, as a
+    /// workspace's server does, until cancelled.
+    private func serveConversations(_ socket: StreamFixtureSocket) -> Task<Void, Never> {
+        Task {
+            var answered: Set<String> = []
+            while !Task.isCancelled {
+                for subscription in await socket.subscriptions where subscription.stream == "conversation" && !answered.contains(subscription.id) {
+                    answered.insert(subscription.id)
+                    let id = subscription.params.conversationID ?? ""
+                    await socket.push(.item(.init(id: subscription.id, payload: .transcript(.init(transcript: .init(conversationID: id, messages: [
+                        .init(id: id + "-m1", conversationID: id, role: "user", content: "Hello")
+                    ]), snapshot: true)))))
+                    await socket.push(.item(.init(id: subscription.id, payload: .synchronized)))
+                }
+                try? await Task.sleep(for: .milliseconds(2))
+            }
+        }
+    }
+
+    @Test func everyChatOpenInAWindowStaysLive() async throws {
+        let others = (0..<14).map { _ in UUID().uuidString.lowercased() }
+        let setup = try await setup(seedingOwner: true, alsoSeeding: others); defer { setup.fixture.remove() }
+        let client = setup.client
+        let open = [setup.conversationID] + others.prefix(5)
+        // Six chats open in windows: more than any number the client keeps for other reasons.
+        for id in open { client.hold(id) }
+        let first = Task { try await client.refresh(conversationID: open[0]) }
+        let socket = try await self.open(setup)
+        let server = serveConversations(socket)
+        defer { server.cancel() }
+        try await first.value
+        for id in open.dropFirst() { try await client.refresh(conversationID: id) }
+        #expect(Set(client.watchedConversationIDs) == Set(open))
+
+        // Chats read but not open (an agent's status, a send) are bounded; the
+        // least recently viewed of those closes first, never an open one.
+        let unheld = Array(others.suffix(8 + 1))
+        for id in unheld { try await client.refresh(conversationID: id) }
+        #expect(client.watchedConversationIDs.count == open.count + CentralExecutionClient.maximumUnheldWatches)
+        #expect(Set(open).isSubset(of: client.watchedConversationIDs))
+        #expect(!client.watchedConversationIDs.contains(unheld[0]))
+        let subscriptions = await socket.subscriptions.filter { $0.stream == "conversation" }
+        let cancelled = Set(await socket.cancels)
+        #expect(subscriptions.filter { cancelled.contains($0.id) }.compactMap(\.params.conversationID) == [unheld[0]])
+
+        // Every open chat still takes its live updates.
+        for id in open {
+            let subscription = try #require(subscriptions.first { $0.params.conversationID == id })
+            await socket.push(.item(.init(id: subscription.id, payload: .transcript(.init(transcript: .init(conversationID: id, messages: [
+                .init(id: id + "-m2", conversationID: id, role: "assistant", content: "Live", status: "streaming")
+            ], activeRunID: "run"), snapshot: false)))))
+        }
+        try await until("every open chat updated") { open.allSatisfy { client.transcripts[$0]?.messages.count == 2 } }
+
+        // Viewing the evicted chat again subscribes it again.
+        try await client.refresh(conversationID: unheld[0])
+        #expect(client.watchedConversationIDs.last == unheld[0])
+        // A closed chat is no longer held: it counts with the others.
+        client.release(open[1])
+        await client.unwatch(open[1])
+        #expect(!client.watchedConversationIDs.contains(open[1]))
+    }
+
+    @Test func aDisclosureReadsTheActivityFromItsOwnersDetailsRoute() async throws {
+        let setup = try await setup(seedingOwner: true); defer { setup.fixture.remove() }
+        let (client, id, model) = (setup.client, setup.conversationID, setup.fixture.model)
+        let full = AgentRunActivity(id: "run:edit", kind: .tool, title: "Edit app.swift", status: "completed", toolName: "edit",
+            content: "Edited", changes: [.init(path: "app.swift", oldText: "a", newText: "b")], rawInputJSON: #"{"path":"app.swift"}"#)
+        let projection = String(decoding: try JSONEncoder().encode(full), as: UTF8.self)
+        await setup.http.setDetails(.init(id: "run:edit", runID: "run", title: "Edit app.swift", status: "completed", projectionJSON: projection))
+        let direct = try await client.activityDetails(conversationID: id, runID: "run", activityID: "run:edit")
+        #expect(direct.projectionJSON == projection)
+        #expect(await setup.http.detailRequests == [[id, "run", "run:edit"]])
+
+        // The window's view loads it through the same member route, once per version.
+        model.federatedExecutionClient = client
+        model.federatedExecutionOwners[id] = setup.workspace.id
+        let compact = full.presentationSummary(version: 3)
+        let summary = String(decoding: try JSONEncoder().encode(compact), as: UTF8.self)
+        model.federatedExecutionSnapshots[id] = .init(workspace: setup.workspace, transcript: .init(conversationID: id, messages: [
+            .init(id: "u", conversationID: id, runID: "run", role: "user", content: "Edit it"),
+            .init(id: "run", conversationID: id, runID: "run", role: "assistant", content: "Done", status: "completed")
+        ], activities: [.init(id: "run:edit", runID: "run", title: "Edit app.swift", status: "completed", projectionJSON: summary, sequence: 1)],
+            runs: [.init(id: "run", status: "completed")]), capability: nil, interactions: [], session: nil, online: true)
+        await model.renderRemoteConversationNow(id)
+        let shown = try #require(model.conversationState(for: id)?.runActivities.first?.activity)
+        #expect(shown.detailsAvailable == true && shown.rawInputJSON == nil && shown.changes.first?.newText == "")
+        let loaded = try await model.remoteActivityDetails(conversationID: id, runID: "run", activityID: "run:edit")
+        #expect(loaded == full)
+        _ = try await model.remoteActivityDetails(conversationID: id, runID: "run", activityID: "run:edit")
+        #expect(await setup.http.detailRequests.count == 2, "A settled activity's details are read once per version")
+    }
 }
 
 @MainActor private func until(_ what: String, _ condition: () async -> Bool) async throws {
@@ -242,7 +337,16 @@ private final class StreamFixtureServer: @unchecked Sendable {
 private actor StreamFixtureHTTP: ExecutionWorkspaceTransport {
     let workspace: ExecutionWorkspace
     var eventRequests = 0, pendingRequests = 0, transcriptRequests = 0, commands = 0, receiptRequests = 0
+    /// Each details read: (conversation, run, activity).
+    var detailRequests: [[String]] = []
+    var details: [String: LibraryActivity] = [:]
     init(workspace: ExecutionWorkspace) { self.workspace = workspace }
+    func setDetails(_ value: LibraryActivity) { details[value.id] = value }
+    func activityDetails(_ id: String, runID: String, activityID: String) throws -> LibraryActivity {
+        detailRequests.append([id, runID, activityID])
+        guard let value = details[activityID] else { throw MobileConnectionError.http(404, "No such activity.") }
+        return value
+    }
     func identity() -> ExecutionWorkspace { workspace }
     func providers() -> [HarnessCapabilities] { [] }
     func pending() -> [PendingInteraction] { pendingRequests += 1; return [] }

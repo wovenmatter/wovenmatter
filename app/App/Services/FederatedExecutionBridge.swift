@@ -96,17 +96,11 @@ extension ApplicationModel {
     func federatedLiveChanged(_ ids: Set<String>) {
         guard !ids.isEmpty else { return }
         windowStreamRelayChanged(ids)
-    }
-
-    /// The chat closed. A window's `conversation` subscription ends with the
-    /// view that held it, and with it the background server's own; a process
-    /// that runs its own execution client ends that subscription here.
-    func closeFederatedConversation(_ id: String) {
-        guard !isBackendFrontend, federatedExecutionSnapshots[id]?.streamed == true else { return }
-        Task { @MainActor [weak self] in
-            guard let self else { return }
-            if self.isBackendFrontend { _ = try? await self.sendBackendCommand(.federatedExecution(.close(conversationID: id))) }
-            else { _ = try? await self.performFederatedExecution(.close(conversationID: id)) }
+        // A process that renders its own chats, with no background server
+        // between, takes the pushed state here.
+        guard backendWindowSource == nil, !isBackendFrontend, LocalExecutionRole.current != .backend else { return }
+        for id in ids where conversationStatesByID[id] != nil {
+            Task { await refreshFederatedConversation(id, reloadingConversation: false) }
         }
     }
 
@@ -175,7 +169,8 @@ extension ApplicationModel {
         if case .refresh = action { refreshing = true }
         let session = await client.sessionSettings(conversationID: id, workspace: workspace, force: !refreshing)
         let snapshot = federatedSnapshot(id, workspace: workspace, client: client, transcript: earlier ?? client.transcripts[id], session: session)
-        federatedExecutionSnapshots[id] = snapshot
+        // An older page is the caller's; the chat's own snapshot stays its live window.
+        if earlier == nil { federatedExecutionSnapshots[id] = snapshot; renderRemoteConversation(id) }
         // An action's effect reaches the windows that follow this chat.
         if !refreshing { windowStreamRelayChanged([id]) }
         return snapshot
