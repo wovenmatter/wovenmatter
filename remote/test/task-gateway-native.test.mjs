@@ -236,3 +236,19 @@ test('OpenCode final history is refreshed after idle to capture a racing termina
   assert.deepEqual(updates.filter(update=>update.toolCallId).map(update=>update.status),['in_progress','completed'])
   assert.ok(nativeRecords(updates).some(record=>record.payload?.includes('finished')))
 })
+
+test('direct OpenCode steers a running turn with more input and its files',async()=>{
+  const busy={data:[{id:'answer',type:'assistant',content:[{id:'text',type:'text',text:'Working'}]}]}
+  const fixture=openCodeFixture({snapshots:[busy,busy,busy,{data:[{id:'answer',type:'assistant',content:[{id:'text',type:'text',text:'Done'}]}]}]})
+  fixture.context.run.task.files=[{uri:'file:///workspace/.wovenmatter/attachments/a/photo.png',name:'photo.png'}]
+  let control
+  fixture.context.interactive={publish:()=>{},bind:value=>{control=value}}
+  const running=fixture.execute(fixture.context)
+  for(let i=0;i<100&&!control;i++)await new Promise(resolve=>setTimeout(resolve,10))
+  assert.deepEqual(await control.steer('and also this','6f1e2d3c-0000-4000-8000-000000000001',{files:[{uri:'file:///workspace/notes.txt',name:'notes.txt'}],mcpConnection:{captureID:'capture'}}),{outcome:'injected'})
+  await running
+  const prompts=fixture.calls.filter(call=>call.path.endsWith('/prompt'))
+  assert.equal(prompts.length,2)
+  assert.deepEqual(prompts[0].body.files,[{uri:'file:///workspace/.wovenmatter/attachments/a/photo.png',name:'photo.png'}])
+  assert.deepEqual(prompts[1].body,{id:'msg_6f1e2d3c000040008000000000000001',text:'and also this',files:[{uri:'file:///workspace/notes.txt',name:'notes.txt'}],delivery:'steer',metadata:{wovenMCP:{captureID:'capture'}}})
+})

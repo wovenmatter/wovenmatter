@@ -229,7 +229,7 @@ test('the stream upgrade refuses bad protocols, stale clocks, bearers and browse
   // clients that cannot read a refused upgrade's body.
   const browser = await handshake(f.port, { headers: { ...f.signed(), origin: 'https://evil.example' } })
   const unsigned = await handshake(f.port, {})
-  for (const [result, code] of [[refused, 'protocol_unsupported'], [stale, 'member_time_stale'], [browser, 'unauthorized'], [unsigned, 'unauthorized']]) {
+  for (const [result, code] of [[refused, 'protocol_unsupported'], [stale, 'member_time_stale'], [browser, 'browser_request'], [unsigned, 'unauthorized']]) {
     assert.equal(result.headers['x-woven-error'], code)
     assert.equal(result.body.code, code)
     assert.ok(Math.abs(Date.parse(result.headers.date) - Date.now()) < 60_000, 'a Date header')

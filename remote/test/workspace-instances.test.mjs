@@ -91,3 +91,22 @@ test('streaming proxy uses host Basic auth, strips client bearer and cookies, pr
     assert.equal(recorded.url, '/api/fs/read/%2Fremote%2Ffile%2Etxt')
   } finally { await new Promise((done) => upstream.close(done)) }
 })
+
+test('the proxy forwards a signed member body that was read to verify its signature', async () => {
+  let received
+  const upstream = createServer((request, response) => {
+    const chunks = []
+    request.on('data', chunk => chunks.push(chunk)).on('end', () => { received = Buffer.concat(chunks).toString(); response.writeHead(200, { 'content-type': 'application/json' }); response.end('{}') })
+  })
+  await new Promise((done) => upstream.listen(0, '127.0.0.1', done))
+  try {
+    const instances = fixture({ readFile: async () => JSON.stringify({ ...info, url: `http://127.0.0.1:${upstream.address().port}` }) })
+    // The server consumed the stream and kept its bytes as `wovenBody`.
+    const request = Readable.from([])
+    request.method = 'POST'; request.headers = { 'content-type': 'application/json' }; request.wovenBody = Buffer.from('{"text":"signed"}')
+    const response = new Writable({ write(_chunk, _encoding, done) { done() } })
+    response.setHeader = () => {}
+    await instances.handle(request, response, new URL('http://host/v1/workspace-instances/opencode/api/session/ses_x/prompt'))
+    assert.equal(received, '{"text":"signed"}')
+  } finally { await new Promise((done) => upstream.close(done)) }
+})
