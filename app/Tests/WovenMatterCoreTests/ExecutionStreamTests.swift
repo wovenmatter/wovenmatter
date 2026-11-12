@@ -1,3 +1,5 @@
+// The Mac stream server terminates WebSockets with the Network framework.
+#if os(macOS)
 import CryptoKit
 import Foundation
 import Network
@@ -1047,3 +1049,4 @@ private final class EchoListener: @unchecked Sendable {
 
   func stop() { listener.cancel() }
 }
+#endif
