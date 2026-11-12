@@ -210,7 +210,8 @@ export function createWorkspaceMCP({db,identity,secret,endpointURL,policy,localT
       const group=groupFor(tool.name)
       const cleanup=['woven_browser_use_cancel','woven_computer_use_cancel','woven_html_cancel'].includes(tool.name)
       const scopedHistory=!scope.taskProof&&group==='history'&&scopedHistoryAccess(scope)
-      const localTask=tool.name.startsWith('woven_databases_')||tool.name==='woven_context'||group==='browser'&&local.has(tool.name)
+      // A scheduled task waits on sessions here: this server watches them (session-watch.mjs).
+      const localTask=tool.name.startsWith('woven_databases_')||tool.name==='woven_context'||tool.name==='woven_sessions_wait'||group==='browser'&&local.has(tool.name)
       const transport=servedLocally(scope,tool.name)||(scope.taskProof?(localTask||hasLibrary):(local.has(tool.name)||hasLibrary))
       return (current.has(group)||cleanup||scopedHistory)&&transport
     })
@@ -317,7 +318,7 @@ export function createWorkspaceMCP({db,identity,secret,endpointURL,policy,localT
         // A new or changed timer may fire sooner than the dispatcher's next check.
         finally {if(groupFor(name)==='timers'&&!tool.annotations?.readOnlyHint)try{onTimersChanged()}catch{}}
       }
-      if(isBot(scope)&&!forBots.has(name)||!isBot(scope)&&!local.has(name)||scope.taskProof&&!name.startsWith('woven_databases_')&&name!=='woven_context'&&groupFor(name)!=='browser')return await libraryCall(scope,{...message,params:{...message.params,arguments:{...input,requestID:operationRequestID}}},invocationSignal)
+      if(isBot(scope)&&!forBots.has(name)||!isBot(scope)&&!local.has(name)||scope.taskProof&&!name.startsWith('woven_databases_')&&name!=='woven_context'&&name!=='woven_sessions_wait'&&groupFor(name)!=='browser')return await libraryCall(scope,{...message,params:{...message.params,arguments:{...input,requestID:operationRequestID}}},invocationSignal)
       const value=await localCall(scope,name,{...input,requestID:operationRequestID},{signal:invocationSignal})
       const reply=result(value)
       if(Buffer.byteLength(JSON.stringify(reply))>1048576)throw fail(413,'The response exceeds 1 MiB. Request a smaller page or character window.')
