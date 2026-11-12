@@ -40,6 +40,30 @@ public struct LibraryHTTPResponse: Sendable {
     (try? .json(LibraryAPIError(code: code, message: message), status: status))
       ?? Self(status: 500, body: Data())
   }
+
+  /// This response as a refused upgrade: the JSON body's code repeated in
+  /// `X-Woven-Error` (`URLSessionWebSocketTask` cannot read a refused
+  /// upgrade's body), and a `Date`, so a client can tell its clock is wrong.
+  public func refusal(at date: Date = Date()) -> Self {
+    guard stream == nil else { return self }
+    struct Coded: Decodable { let code: String }
+    var headers = headers
+    let named = { (name: String) in headers.keys.contains { $0.caseInsensitiveCompare(name) == .orderedSame } }
+    if !named("X-Woven-Error"), let code = (try? JSONDecoder().decode(Coded.self, from: body))?.code, !code.isEmpty,
+       code.utf8.allSatisfy({ (97...122).contains($0) || (48...57).contains($0) || $0 == 95 }) {
+      headers["X-Woven-Error"] = code
+    }
+    if !named("Date") { headers["Date"] = Self.httpDate(date) }
+    return Self(status: status, contentType: contentType, headers: headers, body: body)
+  }
+
+  /// An HTTP `Date` value (IMF-fixdate).
+  public static func httpDate(_ date: Date) -> String {
+    let formatter = DateFormatter()
+    formatter.locale = Locale(identifier: "en_US_POSIX"); formatter.timeZone = TimeZone(identifier: "GMT")
+    formatter.dateFormat = "EEE, dd MMM yyyy HH:mm:ss 'GMT'"
+    return formatter.string(from: date)
+  }
 }
 
 /// What a server with an upgrade handler does with a WebSocket upgrade request.
@@ -316,7 +340,7 @@ private final class LibraryHTTPConnection: @unchecked Sendable {
               let decision = await upgradeHandler(request)
               queue.async { [self] in
                 switch decision {
-                case .reject(let response): send(response)
+                case .reject(let response): send(response.refusal())
                 case let .tunnel(port, head, options): openTunnel(port: port, head: head, options: options)
                 }
               }
@@ -335,7 +359,8 @@ private final class LibraryHTTPConnection: @unchecked Sendable {
           self.receive()
         }
       } catch let error as LibraryAPIError where error.code == LibraryHTTPParser.browserRequest.code {
-        self.send(.error(error.code, error.message, status: 403))
+        // Also the stream's refusal of a browser upgrade, so it carries the refusal headers.
+        self.send(LibraryHTTPResponse.error(error.code, error.message, status: 403).refusal())
       } catch {
         self.send(.error("invalid_request", "Invalid or oversized library request.", status: 400))
       }
