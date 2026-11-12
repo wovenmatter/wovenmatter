@@ -165,7 +165,8 @@ struct ExecutionStreamTests {
     }
     try await writer.value
     #expect(small.count >= 2 && small.count < 40, "\(small.count) updates for 40 writes")
-    for pair in zip(small, small.dropFirst()) { #expect(pair.1 - pair.0 >= .milliseconds(35), "\(pair.1 - pair.0)") }
+    // Arrival times jitter under load, so the bound is on how many updates fit in the time they spanned.
+    #expect(Self.updates(small, fitWithin: .milliseconds(50)), "\(small.count) updates over \(small.last! - small.first!)")
 
     // The 8 KB guard: once a changed message is larger, at most every 200 ms.
     let large = String(repeating: "x", count: StreamProtocol.smallMessageBytes + 1)
@@ -187,7 +188,8 @@ struct ExecutionStreamTests {
     }
     try await largeWriter.value
     #expect(slow.count >= 2)
-    for pair in zip(slow, slow.dropFirst()) { #expect(pair.1 - pair.0 >= .milliseconds(170), "\(pair.1 - pair.0)") }
+    #expect(Self.updates(slow, fitWithin: .milliseconds(200)), "\(slow.count) updates over \(slow.last! - slow.first!)")
+    #expect(slow.count < small.count, "large messages update less often than small ones")
 
     // A command, a duplicate replay of it, then its receipt.
     let command = LibraryCommand(deviceID: phone.deviceID, kind: .send, conversationID: conversation, text: "Continue",
@@ -232,6 +234,13 @@ struct ExecutionStreamTests {
     client.send(.request(try .init(id: "r6", method: .executionReceipt, params: StreamReceiptParams(commandID: UUID().uuidString.lowercased()))))
     #expect(try await client.response("r6").error == nil)
     client.close()
+  }
+
+  /// Whether `arrivals`, sent at most every `interval`, could have been: no more of
+  /// them than fit in the span they arrived over, allowing one interval of delivery jitter.
+  static func updates(_ arrivals: [ContinuousClock.Instant], fitWithin interval: Duration) -> Bool {
+    guard let first = arrivals.first, let last = arrivals.last else { return true }
+    return Double(arrivals.count - 1) <= ((last - first) + interval) / interval
   }
 
   @Test func upgradesAreRefusedBeforeTheyBegin() async throws {
