@@ -453,13 +453,17 @@ struct DashboardSidebarNavigationState: Equatable, Sendable {
         adaptiveWorkspaceVisible = false
     }
 
+    /// A compact window has room for one rail page, so Adaptive then shows the
+    /// folder's contents alone, with a back button, as Single does.
     func pages(
         for side: DashboardSidebarSide,
-        style: DashboardSidebarStyle
+        style: DashboardSidebarStyle,
+        collapsesAdaptivePages: Bool = false
     ) -> [DashboardSidebarPage] {
         switch style {
         case .adaptive:
             guard adaptiveWorkspaceVisible else { return [.navigation] }
+            if collapsesAdaptivePages { return [.workspace] }
             return side == .left
                 ? [.navigation, .workspace]
                 : [.workspace, .navigation]
@@ -500,18 +504,26 @@ struct DashboardLayoutState: Equatable {
         rightRailRequested: Bool,
         sidebarStyle: DashboardSidebarStyle = .defaultStyle,
         singleSidebarSide: DashboardSidebarSide = .defaultSide,
-        singleRailRequested: Bool = true
+        singleRailRequested: Bool = true,
+        compactRail: DashboardSidebarSide? = nil
     ) -> DashboardLayoutState {
+        // Below the breakpoint the rails hide on their own. Revealing one docks
+        // it beside the conversation exactly as at full width; the minimum
+        // window always leaves one rail and the minimum workspace room.
         let compact = width < DashboardMetrics.desktopBreakpoint
         let showsLeftRail: Bool
         let showsRightRail: Bool
         switch sidebarStyle {
         case .adaptive, .single:
-            showsLeftRail = !compact && singleRailRequested && singleSidebarSide == .left
-            showsRightRail = !compact && singleRailRequested && singleSidebarSide == .right
+            showsLeftRail = compact
+                ? compactRail == .left && singleSidebarSide == .left
+                : singleRailRequested && singleSidebarSide == .left
+            showsRightRail = compact
+                ? compactRail == .right && singleSidebarSide == .right
+                : singleRailRequested && singleSidebarSide == .right
         case .split:
-            showsLeftRail = !compact && leftRailRequested
-            showsRightRail = !compact && rightRailRequested
+            showsLeftRail = compact ? compactRail == .left : leftRailRequested
+            showsRightRail = compact ? compactRail == .right : rightRailRequested
         }
         return DashboardLayoutState(
             compact: compact,
