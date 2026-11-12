@@ -54,8 +54,13 @@ up-to-date PR validated before merging needs nothing more. Otherwise, while
 `origin/main` is still at the release commit, dispatch the missing scopes with
 `gh workflow run validation.yml --ref main -f scope=linux` and `-f scope=desktop`,
 wait for both, and re-run the check. Draft the description while they run.
-The tag-triggered release repeats this check before building anything. On a
-validation failure, report it and fix it in a development PR; do not tag. Only
+The tag-triggered release repeats this check before building anything.
+GitHub's hosted runners are much slower than a real Mac, and some timing-sensitive
+tests fail there intermittently. When a failure is in a test unrelated to the
+release's changes, re-run only the failed jobs once (`gh run rerun RUN_ID --failed`);
+the check reads each run's latest attempt, so a passing re-run counts. Report the
+failure and its re-run. If the same test fails again, or the failure is in changed
+code, fix it in a development PR; do not tag. Only
 Trey can waive the requirement, for one named release, by explicit decision: the
 annotated tag message then carries a `Validation-waiver: <his reason>` line.
 

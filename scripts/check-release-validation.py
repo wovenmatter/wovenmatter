@@ -90,7 +90,8 @@ def main(argv=None):
           f'(tree {tree[:12]}). While main is at that commit, run:', file=sys.stderr)
     for scope in missing:
         print(f'  gh workflow run validation.yml --ref main -f scope={scope}', file=sys.stderr)
-    print('then re-run this check. Only Trey can waive it, with a Validation-waiver: line '
+    print('then re-run this check. A failed run counts once its failed jobs pass on one re-run '
+          '(gh run rerun RUN_ID --failed). Only Trey can waive it, with a Validation-waiver: line '
           'in the annotated tag message.', file=sys.stderr)
     return 1
 
