@@ -712,9 +712,9 @@ final class ApplicationModel {
                 self?.libraryHost.setUpLinuxHost(configuration, restart: true)
             }
             // A Linux host's files, settings and Pi sign-in go through its server.
-            await dashboardStore.library.setRemoteFileReader { [weak self] workspaceID, conversationID, path in
+            await dashboardStore.library.setRemoteFileReader { [weak self] workspaceID, conversationID, path, underRoot in
                 guard let self else { throw CancellationError() }
-                return try await self.readLinuxLibraryFile(workspaceID: workspaceID, conversationID: conversationID, path: path)
+                return try await self.readLinuxLibraryFile(workspaceID: workspaceID, conversationID: conversationID, path: path, underRoot: underRoot)
             }
             connections.memberRoutes = { [weak self] configuration in
                 guard let self else { throw CancellationError() }

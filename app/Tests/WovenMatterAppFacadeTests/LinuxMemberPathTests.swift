@@ -103,8 +103,9 @@ struct LinuxMemberPathTests {
         // Nothing was staged or launched over SSH.
         #expect(await fixture.recorder.deliveries.isEmpty)
 
+        // Other members keep taking references inline.
         let text = ApplicationModel.federatedMessage(input, note: nil, linux: false)
-        #expect(text.promptContext == nil && text.text.hasPrefix("Look at this\n\n<wovenmatter-reference"))
+        #expect(text.promptContext == nil && text.text == "Look at this\n\nReferenced content: Plan\nShip it")
     }
 
     @Test func tooManyFilesAreRefusedBeforeUpload() async throws {
@@ -188,10 +189,12 @@ struct LinuxMemberPathTests {
         #expect(try await fixture.model.readLinuxLibraryFile(workspaceID: workspace.id, conversationID: id, path: "/srv/out/report.txt") == bytes)
         let request = await fake.fileRequests.first
         #expect(request?.conversationID == id && request?.path == "/srv/out/report.txt")
-        // History that never moved to the host reads from its workspace.
+        // History that never moved to the host reads under the root this library recorded.
         await fake.forgetConversations()
-        #expect(try await fixture.model.readLinuxLibraryFile(workspaceID: workspace.id, conversationID: id, path: "/srv/out/report.txt") == bytes)
-        #expect(await fake.fileRequests.last?.conversationID == nil)
+        #expect(try await fixture.model.readLinuxLibraryFile(workspaceID: workspace.id, conversationID: id, path: "./report.txt",
+            underRoot: "/srv/out/./report.txt") == bytes)
+        let fallback = await fake.fileRequests.last
+        #expect(fallback?.conversationID == nil && fallback?.path == "/srv/out/./report.txt")
         await fake.damageFiles()
         await #expect(throws: WorkspaceToolError.self) {
             _ = try await fixture.model.readLinuxLibraryFile(workspaceID: workspace.id, conversationID: id, path: "/srv/out/report.txt")

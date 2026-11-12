@@ -205,10 +205,11 @@ struct WorkspaceLibraryTests {
     let bytes = Data("PDF fixture".utf8)
     let service = LibraryService(
       database: f.db,
-      remoteFiles: { workspaceID, conversationID, path in
+      remoteFiles: { workspaceID, conversationID, path, underRoot in
         #expect(workspaceID == configuration.id.uuidString.lowercased())
         #expect(conversationID == chat)
-        #expect(path == "/srv/wovenmatter-test/workspace/./report.pdf")
+        #expect(path == "./report.pdf")
+        #expect(underRoot == "/srv/wovenmatter-test/workspace/./report.pdf")
         return bytes
       })
     try await service.synchronize(locations: [], remoteWorkspace: { _ in nil })

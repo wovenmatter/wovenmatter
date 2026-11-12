@@ -106,14 +106,18 @@ extension ApplicationModel {
         return try await centralExecutionClient().memberRoutes(for: workspace)
     }
 
-    /// An agent's file on a Linux host, for Library retention. A chat the host
-    /// does not run (history that never moved there) reads from its workspace.
-    func readLinuxLibraryFile(workspaceID: String, conversationID: String, path: String) async throws -> Data {
+    /// An agent's file on a Linux host, for Library retention: `path` as the
+    /// agent wrote it, resolved by the host in the chat's directory. A chat the
+    /// host does not run (history that never moved there) reads `underRoot`,
+    /// the path under the directory this library recorded for it.
+    func readLinuxLibraryFile(workspaceID: String, conversationID: String, path: String, underRoot: String? = nil) async throws -> Data {
         guard let id = UUID(uuidString: workspaceID) else { throw WorkspaceToolError.invalid("Reconnect this remote workspace to save the file.") }
         let routes = try await linuxMemberRoutes(id)
         let file: MemberLibraryFile
         do { file = try await routes.libraryFile(conversationID: conversationID, path: path) }
-        catch let error as LibraryAPIError where error.code == "http_404" { file = try await routes.libraryFile(conversationID: nil, path: path) }
+        catch let error as LibraryAPIError where error.code == "http_404" {
+            file = try await routes.libraryFile(conversationID: nil, path: underRoot ?? path)
+        }
         guard let data = Data(base64Encoded: file.data), Int64(data.count) == file.byteCount,
               SHA256.hash(data: data).map({ String(format: "%02x", $0) }).joined() == file.sha256 else {
             throw WorkspaceToolError.invalid("The workspace returned a damaged copy of this file. Try again.")
@@ -347,7 +351,7 @@ extension ApplicationModel {
         if let expectedRunID, expectedRunID != active { throw LocalACPSessionDatabaseError.runNotFound }
         let message = Self.federatedMessage(input, note: note, linux: workspace?.kind == .linux)
         _ = try await client.send(conversationID: conversationID, text: message.text, expectedRunID: expectedRunID ?? active,
-            files: input.files, promptContext: message.promptContext, noteID: note?.id,
+            files: input.files, promptContext: message.promptContext, noteID: workspace?.kind == .linux ? note?.id : nil,
             beforeDispatch: { try dispatchFence.claimDispatch() })
         return true
     }
@@ -355,15 +359,20 @@ extension ApplicationModel {
     /// What a member workspace receives for a message from this Mac. A Linux
     /// host takes the visible notes and pages and the reference blocks as
     /// `promptContext`, exactly as a local harness receives them after the
-    /// message, so the transcript shows only what was typed. Other members
-    /// take that context inline. The note on screen is also named by `noteID`.
+    /// message, so the transcript shows only what was typed; the note on
+    /// screen is also named by `noteID`. Other members take references inline.
     nonisolated static func federatedMessage(_ input: AgentMessageInput, note: WorkspaceNoteRecord?, linux: Bool) -> (text: String, promptContext: String?) {
-        var context = [input.promptContext].compactMap { $0 }
-        if let note, !input.references.contains(where: { $0.resourceID == note.id }) {
-            context.append("Referenced note: \(note.title)\n\(note.content)")
+        let unreferencedNote = note.flatMap { note in input.references.contains(where: { $0.resourceID == note.id }) ? nil : note }
+        guard linux else {
+            var prompt = input.text
+            for reference in input.references {
+                prompt += "\n\nReferenced content: \(reference.titleSnapshot)\n\(reference.contentSnapshot)"
+            }
+            if let note = unreferencedNote { prompt += "\n\nReferenced note: \(note.title)\n\(note.content)" }
+            return (prompt, nil)
         }
-        let joined = context.isEmpty ? nil : context.joined(separator: "\n\n")
-        guard !linux else { return (input.text, joined) }
-        return ([input.text, joined].compactMap { $0 }.joined(separator: "\n\n"), nil)
+        var context = [input.promptContext].compactMap { $0 }
+        if let note = unreferencedNote { context.append("Referenced note: \(note.title)\n\(note.content)") }
+        return (input.text, context.isEmpty ? nil : context.joined(separator: "\n\n"))
     }
 }

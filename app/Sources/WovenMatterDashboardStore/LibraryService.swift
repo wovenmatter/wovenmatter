@@ -17,8 +17,11 @@ public struct LibraryLocation: Equatable, Sendable {
 public actor LibraryService {
   public typealias RemoteWorkspaceLookup = @Sendable (String) async -> RemoteWorkspaceConfiguration?
   /// Reads an agent's file from a Linux host's server (`POST
-  /// v1/execution/library-file`): workspace ID, conversation ID, path.
-  public typealias RemoteFileReader = @Sendable (_ workspaceID: String, _ conversationID: String, _ path: String) async throws -> Data
+  /// v1/execution/library-file`): workspace ID, conversation ID, the path as
+  /// the agent wrote it (the host resolves a relative one in the chat's own
+  /// directory), and the same path under this library's root for the chat,
+  /// for history the host does not run.
+  public typealias RemoteFileReader = @Sendable (_ workspaceID: String, _ conversationID: String, _ path: String, _ underRoot: String) async throws -> Data
 
   private let database: WorkspaceDatabase
   private let savedArtifacts: SavedArtifactLibraryService
@@ -126,7 +129,10 @@ public actor LibraryService {
       throw WorkspaceToolError.invalid("Reconnect this host workspace to discover its files directory.")
     }
     guard let remoteFiles else { throw WorkspaceToolError.invalid("Reconnect this remote workspace to save the file.") }
-    let bytes = try await remoteFiles(item.workspaceID, item.conversationID, Self.remotePath(source: item.source, root: root))
+    guard let written = LibraryFileReference.path(item.source) else {
+      throw RemoteWorkspaceClientError.invalidResponse("The file link does not name a file in this workspace.")
+    }
+    let bytes = try await remoteFiles(item.workspaceID, item.conversationID, written, Self.remotePath(source: item.source, root: root))
     guard bytes.count <= AgentMessageAttachmentLimits.maximumFileBytes else {
       throw RemoteWorkspaceClientError.invalidResponse("The file exceeds the 25 MB retention limit.")
     }
