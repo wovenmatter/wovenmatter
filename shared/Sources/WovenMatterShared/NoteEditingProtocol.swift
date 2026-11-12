@@ -635,6 +635,8 @@ public extension NoteDocument {
         }
         // A Board card's ID is what placements, links, tasks and agents refer to.
         guard kind != .canvas || block.id == id else { throw NoteEditError.boardCardIDChanged(id) }
+        // A linked original's block only labels the embed; its content lives in the original.
+        guard canvas?[id]?.assetID == nil else { throw NoteEditError.boardLinkedAssetText(id) }
         blocks[index] = block
       case .deleteBlock(let id):
         guard let index = blocks.firstIndex(where: { $0.id == id }) else {

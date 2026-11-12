@@ -559,6 +559,12 @@ struct PageModelTests {
     #expect(document.pageNodes?["b"] == nil && document.boardItems?["b"] == nil)
     try document.validateEditableShape()
 
+    // A linked original is edited at its asset, never by hiding text in the embed.
+    #expect(throws: NoteEditError.boardLinkedAssetText("l")) {
+      var copy = document
+      _ = try copy.apply([.replaceBlock(id: "l", block: text("l", "Hidden copy"))])
+    }
+
     // A generic write to an unwritten Board migrates it first, so positions are real.
     var board = legacyBoard()
     _ = try board.apply([.insertText(afterBlockID: "a", text: "Note", style: .paragraph)])
