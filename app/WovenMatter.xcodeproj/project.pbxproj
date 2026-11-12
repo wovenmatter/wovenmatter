@@ -118,7 +118,7 @@
 		22101ADAF84DA8CEE85A4AB8 /* DashboardCalendarTaskFields.swift in Sources */ = {isa = PBXBuildFile; fileRef = D6DCB1F7BFAF35416DF437EE /* DashboardCalendarTaskFields.swift */; };
 		C47EAA780000000000000001 /* DashboardCalendarFormControls.swift in Sources */ = {isa = PBXBuildFile; fileRef = C47EAA780000000000000002 /* DashboardCalendarFormControls.swift */; };
 		C47EAA780000000000000003 /* DashboardCalendarColors.swift in Sources */ = {isa = PBXBuildFile; fileRef = C47EAA780000000000000004 /* DashboardCalendarColors.swift */; };
-		95C7998809D0EDB0A8E1C327 /* BackendInvalidationConsumer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 58C9C50BA69858EC448D4F19 /* BackendInvalidationConsumer.swift */; };
+		95C7998809D0EDB0A8E1C327 /* ApplicationModel+WindowStream.swift in Sources */ = {isa = PBXBuildFile; fileRef = 58C9C50BA69858EC448D4F19 /* ApplicationModel+WindowStream.swift */; };
 		CE19449AB0FFF6A1E12E4D48 /* BackendApplicationService.swift in Sources */ = {isa = PBXBuildFile; fileRef = E1A63205C0811CE6DBAD590C /* BackendApplicationService.swift */; };
 		B6231CA12C591F524524199B /* BackendWorkspaceMutations.swift in Sources */ = {isa = PBXBuildFile; fileRef = 35A700A1F4344E51450A9C54 /* BackendWorkspaceMutations.swift */; };
 		A7DC09137B7808A179245C1D /* BackendToolsService.swift in Sources */ = {isa = PBXBuildFile; fileRef = D84D7A0E10812D5E772A19B5 /* BackendToolsService.swift */; };
@@ -148,6 +148,7 @@
 		6D31E453B9DB807ED72C7E93 /* SavedArtifactsModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8AB39465A1E975E9B17949AD /* SavedArtifactsModel.swift */; };
 		3920C098CAD3AD073343D629 /* DashboardSavedArtifactsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CF0706BAE96F6819E10625D5 /* DashboardSavedArtifactsView.swift */; };
 		D9F61698E2250BF9BFAF5A2F /* CentralExecutionClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4C92277CA35CAFDF60ADE671 /* CentralExecutionClient.swift */; };
+		A7D1E2F3B4C5D6E7F8091A2B /* BackendWindowStreamSource.swift in Sources */ = {isa = PBXBuildFile; fileRef = B8E2F3A4C5D6E7F8091A2B3C /* BackendWindowStreamSource.swift */; };
 		FA2F7EB3AD102A068C2F070C /* FederatedExecutionBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = 306E57A53B3F8371623DCC8F /* FederatedExecutionBridge.swift */; };
 		04C170D0E4FB2920E4D214EF /* FederatedConversationPane.swift in Sources */ = {isa = PBXBuildFile; fileRef = 969050270F91397F88F6A49D /* FederatedConversationPane.swift */; };
 		BB19447D10499B1B7094401B /* ProductAnalyticsModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = D35B856CA9704E5408840D77 /* ProductAnalyticsModel.swift */; };
@@ -312,7 +313,7 @@
 		D6DCB1F7BFAF35416DF437EE /* DashboardCalendarTaskFields.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "DashboardCalendarTaskFields.swift"; sourceTree = "<group>"; };
 		C47EAA780000000000000002 /* DashboardCalendarFormControls.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "DashboardCalendarFormControls.swift"; sourceTree = "<group>"; };
 		C47EAA780000000000000004 /* DashboardCalendarColors.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "DashboardCalendarColors.swift"; sourceTree = "<group>"; };
-		58C9C50BA69858EC448D4F19 /* BackendInvalidationConsumer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "BackendInvalidationConsumer.swift"; sourceTree = "<group>"; };
+		58C9C50BA69858EC448D4F19 /* ApplicationModel+WindowStream.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ApplicationModel+WindowStream.swift"; sourceTree = "<group>"; };
 		E1A63205C0811CE6DBAD590C /* BackendApplicationService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "BackendApplicationService.swift"; sourceTree = "<group>"; };
 		35A700A1F4344E51450A9C54 /* BackendWorkspaceMutations.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "BackendWorkspaceMutations.swift"; sourceTree = "<group>"; };
 		D84D7A0E10812D5E772A19B5 /* BackendToolsService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "BackendToolsService.swift"; sourceTree = "<group>"; };
@@ -341,6 +342,7 @@
 		8AB39465A1E975E9B17949AD /* SavedArtifactsModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SavedArtifactsModel.swift; sourceTree = "<group>"; };
 		CF0706BAE96F6819E10625D5 /* DashboardSavedArtifactsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardSavedArtifactsView.swift; sourceTree = "<group>"; };
 		4C92277CA35CAFDF60ADE671 /* CentralExecutionClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CentralExecutionClient.swift; sourceTree = "<group>"; };
+		B8E2F3A4C5D6E7F8091A2B3C /* BackendWindowStreamSource.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackendWindowStreamSource.swift; sourceTree = "<group>"; };
 		306E57A53B3F8371623DCC8F /* FederatedExecutionBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FederatedExecutionBridge.swift; sourceTree = "<group>"; };
 		969050270F91397F88F6A49D /* FederatedConversationPane.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FederatedConversationPane.swift; sourceTree = "<group>"; };
 		D35B856CA9704E5408840D77 /* ProductAnalyticsModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models/ProductAnalyticsModel.swift; sourceTree = "<group>"; };
@@ -483,7 +485,7 @@
 				D4540000000000000000000A /* ApplicationModel+UsageDevices.swift */,
 				848A38FA567146749E61538D /* ApplicationModel+Goals.swift */,
 				FBC100000000000000000004 /* ApplicationModel+RuntimeInspection.swift */,
-				58C9C50BA69858EC448D4F19 /* BackendInvalidationConsumer.swift */,
+				58C9C50BA69858EC448D4F19 /* ApplicationModel+WindowStream.swift */,
 				E1A63205C0811CE6DBAD590C /* BackendApplicationService.swift */,
 				35A700A1F4344E51450A9C54 /* BackendWorkspaceMutations.swift */,
 				E7E000000000000000000006 /* ExecutorRuntime.swift */,
@@ -629,6 +631,7 @@
 				A03000000000000000000002 /* DesktopUpdater.swift */,
 				306E57A53B3F8371623DCC8F /* FederatedExecutionBridge.swift */,
 				4C92277CA35CAFDF60ADE671 /* CentralExecutionClient.swift */,
+				B8E2F3A4C5D6E7F8091A2B3C /* BackendWindowStreamSource.swift */,
 				DDAE8827A1011FA6113C72B1 /* InferenceHost.swift */,
 				39BA0BCFBF07BFAE8B625A62 /* SecondaryMacExecutionHost.swift */,
 				A333A6EA2E03E144FC4AE5DD /* SecondaryMacExecutionWorkspace.swift */,
@@ -819,6 +822,7 @@
 				04C170D0E4FB2920E4D214EF /* FederatedConversationPane.swift in Sources */,
 				FA2F7EB3AD102A068C2F070C /* FederatedExecutionBridge.swift in Sources */,
 				D9F61698E2250BF9BFAF5A2F /* CentralExecutionClient.swift in Sources */,
+				A7D1E2F3B4C5D6E7F8091A2B /* BackendWindowStreamSource.swift in Sources */,
 				3920C098CAD3AD073343D629 /* DashboardSavedArtifactsView.swift in Sources */,
 				6D31E453B9DB807ED72C7E93 /* SavedArtifactsModel.swift in Sources */,
 				97AD203F32768DAAE8E74B8A /* InferenceHost.swift in Sources */,
@@ -894,7 +898,7 @@
 				D472AB9160464F1FAB826C12 /* ApplicationModel+AgentTools.swift in Sources */,
 				D45400000000000000000009 /* ApplicationModel+UsageDevices.swift in Sources */,
 				A7EAFACF3F974117B37965CC /* ApplicationModel+Goals.swift in Sources */,
-				95C7998809D0EDB0A8E1C327 /* BackendInvalidationConsumer.swift in Sources */,
+				95C7998809D0EDB0A8E1C327 /* ApplicationModel+WindowStream.swift in Sources */,
 				CE19449AB0FFF6A1E12E4D48 /* BackendApplicationService.swift in Sources */,
 				B6231CA12C591F524524199B /* BackendWorkspaceMutations.swift in Sources */,
 				E7E000000000000000000005 /* ExecutorRuntime.swift in Sources */,

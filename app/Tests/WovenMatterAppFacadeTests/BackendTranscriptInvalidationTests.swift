@@ -1,92 +1,126 @@
 import Foundation
+import LibraryClient
 import Testing
 import WorkspaceFixtures
 import WovenMatterClient
 import WovenMatterCore
 @testable import WovenMatterAppFacade
 
+/// The window's side of its connection to its own background server: how it
+/// applies `server.state` and `conversation` items to what it shows.
 @MainActor @Suite(.serialized, .timeLimit(.minutes(1)))
 struct BackendTranscriptInvalidationTests {
-    @Test func replacedConsumerDoesNotReportALateTransportFailure() async throws {
-        var receiveStarted = false
-        var release: CheckedContinuation<BackendInvalidations, any Error>?
-        var failed = false
-        let consumer = Task {
-            await BackendInvalidationConsumer.run(receive: { _ in
-                receiveStarted = true
-                return try await withCheckedThrowingContinuation { release = $0 }
-            }, apply: { _ in Issue.record("Cancelled consumer applied state") },
-                failed: { _ in failed = true })
-        }
-        try await waitUntil { receiveStarted }
-        consumer.cancel()
-        release?.resume(throwing: BackendRPCError.unavailable)
-        await consumer.value
-        #expect(!failed, "An old connection overwrote the replacement's status")
-    }
-
-    @Test func savedPromptAndStreamingAnswerRefreshWhileMetadataIsBlocked() async throws {
+    @Test func serverStateReloadsChatsWithoutWaitingForTheRestOfTheServer() async throws {
         let fixture = try await FacadeFixture()
         defer { fixture.remove() }
         let id = try await fixture.database.createFixtureLocalACPSession(runtimeKind: .grokBuild,
             title: "Invalidation fixture", ownerDeviceID: UUID())
         await fixture.model.refreshConversation(id: id)
         let state = try #require(fixture.model.conversationState(for: id))
-        let journal = BackendInvalidationJournal(capacity: 2)
-        var metadataStarted = false
-        var releaseMetadata: CheckedContinuation<Void, Never>?
-        let metadata = Task {
-            await BackendInvalidationConsumer.run(receive: { cursor in
-                await journal.waitForChanges(after: cursor)
-            }, apply: { _ in
-                metadataStarted = true
-                await withCheckedContinuation { releaseMetadata = $0 }
-            }, failed: { _ in Issue.record("Unexpected metadata failure") })
-        }
-        var refreshedIDs: [String] = []
-        let transcript = Task {
-            await BackendInvalidationConsumer.run(receive: { cursor in
-                await journal.waitForChanges(after: cursor)
-            }, apply: { change in
-                let visible: Set<String> = [id]
-                for affected in change.requiresReload ? visible : change.conversationIDs.intersection(visible) {
-                    refreshedIDs.append(affected)
-                    await fixture.model.refreshConversation(id: affected)
-                }
-            }, failed: { _ in Issue.record("Unexpected transcript failure") })
-        }
-        defer {
-            metadata.cancel()
-            transcript.cancel()
-            releaseMetadata?.resume()
-        }
-        try await waitUntil { metadataStarted && !refreshedIDs.isEmpty }
-        let run = try await fixture.database.beginLocalACPRun(conversationID: id, input: .init(text: "Visible fixture prompt"))
-        await journal.publish(scopes: [.settings, .usage], conversationIDs: [id, "unobserved-session"])
-        try await waitUntil { state.content?.messages.contains { $0.role == "user" && $0.content == "Visible fixture prompt" } == true }
-        #expect(releaseMetadata != nil, "The metadata gate must still be closed when the prompt appears")
-        try await fixture.database.appendLocalACPAssistantChunk(runID: run.runID, chunk: "First visible response.\n\n")
-        await journal.publish(conversationIDs: [id])
-        try await waitUntil { state.messagePresentations[run.assistantMessageID]?.displayedBody == "First visible response.\n\n" }
-        #expect(Set(refreshedIDs) == [id], "An unobserved chat was read by the transcript consumer")
 
-        // Terminal invalidation refreshes the same canonical IDs, without
-        // resending a prompt or waiting for ancillary account inventory.
+        // Settings cannot be read here (no background service), and the
+        // prompt still appears: transcripts never wait for that worker.
+        let run = try await fixture.database.beginLocalACPRun(conversationID: id, input: .init(text: "Visible fixture prompt"))
+        fixture.model.applyServerState(scopes: [.settings, .usage], conversationIDs: [id, "unobserved-session"], reloadAll: false)
+        try await waitUntil { state.content?.messages.contains { $0.role == "user" && $0.content == "Visible fixture prompt" } == true }
+        #expect(fixture.model.conversationState(for: "unobserved-session") == nil, "an unloaded chat was read")
+
+        try await fixture.database.appendLocalACPAssistantChunk(runID: run.runID, chunk: "First visible response.\n\n")
+        fixture.model.applyServerState(scopes: [], conversationIDs: [id], reloadAll: false)
+        try await waitUntil { state.messagePresentations[run.assistantMessageID]?.displayedBody == "First visible response.\n\n" }
+
+        // `synchronized` (subscribe, reconnect) reads every loaded chat again.
         try await fixture.database.completeLocalACPRun(runID: run.runID)
-        await journal.publish(scopes: [.runtime], conversationIDs: [id])
+        fixture.model.applyServerState(scopes: [], conversationIDs: [], reloadAll: true)
         try await waitUntil { state.content?.runs.first?.status == "completed" }
         #expect(state.content?.messages.filter { $0.role == "user" }.count == 1)
         #expect(await fixture.recorder.deliveries.isEmpty)
-        transcript.cancel()
-        await transcript.value
-        let count = refreshedIDs.count
-        await journal.publish(conversationIDs: [id])
-        try await Task.sleep(for: .milliseconds(30))
-        #expect(refreshedIDs.count == count, "A cancelled consumer continued applying transcript updates")
     }
 
-    private func waitUntil(_ condition: () -> Bool) async throws {
-        if try await pollUntil(attempts: 100, interval: .milliseconds(10), { condition() }) { return }
-        try #require(condition(), "Transcript refresh waited for the deliberately blocked metadata consumer")
+    @Test func liveTextReachesTheOpenChatAsItemsAndStructureFromTheProjection() async throws {
+        let fixture = try await FacadeFixture()
+        defer { fixture.remove() }
+        let model = fixture.model
+        let id = try await fixture.database.createFixtureLocalACPSession(runtimeKind: .grokBuild,
+            title: "Live fixture", ownerDeviceID: UUID())
+        let run = try await fixture.database.beginLocalACPRun(conversationID: id, input: .init(text: "Stream something"))
+        try await fixture.database.appendLocalACPAssistantChunk(runID: run.runID, chunk: "Stored start")
+        await model.refreshConversation(id: id)
+        let state = try #require(model.conversationState(for: id))
+        model.windowLive.follows[id] = WindowLiveState.LiveConversation()
+
+        func transcript(_ content: String?, snapshot: Bool, runs: [LibraryTranscriptRun] = [.init(id: run.runID, status: "running")]) -> StreamSubscriptionEvent {
+            .item(.init(id: "s1", payload: .transcript(.init(transcript: .init(conversationID: id,
+                messages: content.map { [.init(id: run.assistantMessageID, conversationID: id, runID: run.runID, role: "assistant", content: $0, status: "streaming")] } ?? [],
+                activeRunID: run.runID, runs: runs), snapshot: snapshot))))
+        }
+        // A subscription starts from a snapshot: the chat reads its projection.
+        model.receiveLiveConversation(transcript(nil, snapshot: true), conversationID: id)
+        let follow = try #require(model.windowLive.follows[id])
+        try await waitUntil { !follow.draining && follow.events.isEmpty && state.messagePresentations[run.assistantMessageID]?.source == "Stored start" }
+        // Live text is applied from the item itself. It is deliberately not in
+        // the database, so it can only have come from the stream.
+        model.receiveLiveConversation(transcript("Streamed, not stored", snapshot: false), conversationID: id)
+        try await waitUntil { state.messagePresentations[run.assistantMessageID]?.source == "Streamed, not stored" }
+        #expect(state.content?.messages.first { $0.id == run.assistantMessageID }?.status == "streaming")
+
+        // A changed run is structure: read from the projection, which has the stored text.
+        try await fixture.database.appendLocalACPAssistantChunk(runID: run.runID, chunk: ", then stored")
+        try await fixture.database.completeLocalACPRun(runID: run.runID)
+        model.receiveLiveConversation(transcript("Stored start, then stored", snapshot: false, runs: [.init(id: run.runID, status: "completed")]), conversationID: id)
+        try await waitUntil { state.content?.runs.first?.status == "completed" && state.messagePresentations[run.assistantMessageID]?.source == "Stored start, then stored" }
+
+        // A chat whose subscription the server ended (a session it does not
+        // stream) goes back to being read for `server.state`.
+        model.receiveLiveConversation(.ended(.init(.notFound, "This conversation is not running on this Mac.")), conversationID: id)
+        try await waitUntil { model.windowLive.follows[id]?.ended == true }
+        let next = try await fixture.database.beginLocalACPRun(conversationID: id, input: .init(text: "Again"))
+        try await fixture.database.appendLocalACPAssistantChunk(runID: next.runID, chunk: "Second answer")
+        model.applyServerState(scopes: [], conversationIDs: [id], reloadAll: false)
+        try await waitUntil { state.messagePresentations[next.assistantMessageID]?.source == "Second answer" }
+    }
+
+    @Test func aSessionAnotherMachineRunsShowsItsItemsAndKeepsThemOverAnOlderSnapshot() async throws {
+        let fixture = try await FacadeFixture()
+        defer { fixture.remove() }
+        let model = fixture.model
+        let id = "remote-chat"
+        let workspace = ExecutionWorkspace(id: "linux-1", libraryID: "library", ownerDeviceID: "linux-1", kind: .linux, name: "Workstation")
+        let saved = FederatedExecutionSnapshot(workspace: workspace, transcript: .init(conversationID: id), capability: nil,
+            interactions: [], session: nil, online: true, error: nil)
+        model.federatedExecutionOwners[id] = workspace.id
+        model.storeFederatedSnapshot(saved, conversationID: id)
+        model.windowLive.follows[id] = WindowLiveState.LiveConversation()
+
+        let message = LibraryMessage(id: "m1", conversationID: id, role: "assistant", content: "Working on it", status: "streaming")
+        let settings = SessionSettings(conversationID: id, model: "gpt-5.5-codex", thinking: "high", permission: nil, models: [],
+            thinkingLevels: [], permissions: [], availableTools: [], enabledTools: [], canConfigure: true)
+        let question = PendingInteraction(id: "q1", conversationID: id, runID: "r1", kind: .approval, title: "Run npm test?")
+        for payload: StreamItem.Payload in [
+            .transcript(.init(transcript: .init(conversationID: id, messages: [message], activeRunID: "r1"), snapshot: true)),
+            .session(.init(settings: settings)), .pending(.init(interactions: [question])),
+            .owner(.init(online: false, error: "Workstation is not connected.")), .synchronized,
+        ] { model.receiveLiveConversation(.item(.init(id: "s7", payload: payload)), conversationID: id) }
+        try await waitUntil { model.federatedExecutionSnapshots[id]?.online == false }
+        let live = try #require(model.federatedExecutionSnapshots[id])
+        #expect(live.transcript?.messages == [message] && live.transcript?.activeRunID == "r1")
+        #expect(live.session == settings && live.interactions == [question])
+        #expect(live.error == "Workstation is not connected.")
+
+        // Live text: the whole message so far replaces it by ID.
+        var longer = message; longer.content = "Working on it. Done."
+        model.receiveLiveConversation(.item(.init(id: "s7", payload: .transcript(.init(transcript: .init(conversationID: id,
+            messages: [longer], activeRunID: nil), snapshot: false)))), conversationID: id)
+        try await waitUntil { model.federatedExecutionSnapshots[id]?.transcript?.messages.first?.content == "Working on it. Done." }
+
+        // A snapshot the background service read earlier does not undo it.
+        model.storeFederatedSnapshot(saved, conversationID: id)
+        #expect(model.federatedExecutionSnapshots[id]?.transcript?.messages.first?.content == "Working on it. Done.")
+        #expect(model.federatedExecutionSnapshots[id]?.session == settings)
+    }
+
+    private func waitUntil(sourceLocation: SourceLocation = #_sourceLocation, _ condition: () -> Bool) async throws {
+        if try await pollUntil(attempts: 300, interval: .milliseconds(10), { condition() }) { return }
+        try #require(condition(), sourceLocation: sourceLocation)
     }
 }

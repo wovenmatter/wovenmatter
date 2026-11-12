@@ -565,7 +565,7 @@ final class LibraryHostController {
     /// Test seam: carries signed requests to Linux hosts in process.
     @ObservationIgnored var remoteHostSend: MemberSignedHTTPClient.Send?
 
-    private func localExecutionWorkspaceID(libraryID: String) -> String {
+    func localExecutionWorkspaceID(libraryID: String) -> String {
         let key = Self.localExecutionIDKeyPrefix + libraryID
         if let value = defaults.string(forKey: key), UUID(uuidString: value) != nil { return value.lowercased() }
         let value = UUID().uuidString.lowercased(); defaults.set(value, forKey: key); return value

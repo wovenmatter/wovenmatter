@@ -81,24 +81,8 @@ public struct BackendRPCClient: Sendable {
     }
     /// For existing serial write-behind queues only; never call on the main or cooperative executor.
     public func callSynchronously(method: String, payload: Data = Data(), requestID: String = UUID().uuidString, timeout: TimeInterval = 30) throws -> Data {
-            try BackendSocket.validateDirectory(socketURL.deletingLastPathComponent(), create: false)
-            let fd = try BackendSocket.make()
+            let (fd, deadline) = try connectSynchronously(timeout: timeout)
             defer { Darwin.close(fd) }
-            var address = try BackendSocket.address(socketURL)
-            let status = withUnsafePointer(to: &address) {
-                $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
-                    Darwin.connect(fd, $0, socklen_t(MemoryLayout<sockaddr_un>.size))
-                }
-            }
-            if status != 0 && errno != EINPROGRESS { throw BackendRPCError.unavailable }
-            let deadline = Date().addingTimeInterval(max(0.05, min(timeout, Self.maximumWait)))
-            try BackendSocket.ready(fd, events: Int16(POLLOUT), deadline: deadline)
-            var socketError: Int32 = 0
-            var size = socklen_t(MemoryLayout<Int32>.size)
-            guard getsockopt(fd, SOL_SOCKET, SO_ERROR, &socketError, &size) == 0, socketError == 0 else {
-                throw BackendRPCError.unavailable
-            }
-            try BackendSocket.authenticate(fd)
             let request = BackendRPCRequest(id: requestID, method: method, payload: payload)
             try BackendSocket.writeFrame(JSONEncoder().encode(request), fd: fd, deadline: deadline)
             let response = try JSONDecoder().decode(BackendRPCResponse.self, from: BackendSocket.readFrame(fd: fd, deadline: deadline))
@@ -110,21 +94,79 @@ public struct BackendRPCClient: Sendable {
     public func ping() async throws -> BackendRPCIdentity {
         try JSONDecoder().decode(BackendRPCIdentity.self, from: await call(method: "backend.ping"))
     }
+
+    /// Opens the persistent stream connection: the same connect and peer
+    /// check as every call, then one `backend.stream` request whose reply
+    /// hands the socket to the stream. A server that does not serve the
+    /// stream answers it with an error.
+    public func openStream(timeout: TimeInterval = 5) async throws -> BackendStreamChannel {
+        try await withCheckedThrowingContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async {
+                do { continuation.resume(returning: try openStreamSynchronously(timeout: timeout)) }
+                catch { continuation.resume(throwing: error) }
+            }
+        }
+    }
+
+    private func openStreamSynchronously(timeout: TimeInterval) throws -> BackendStreamChannel {
+        let (fd, deadline) = try connectSynchronously(timeout: timeout)
+        var handedOff = false
+        defer { if !handedOff { Darwin.close(fd) } }
+        let request = BackendRPCRequest(method: StreamProtocol.unixSocketMethod)
+        try BackendSocket.writeFrame(JSONEncoder().encode(request), fd: fd, deadline: deadline)
+        let response = try JSONDecoder().decode(BackendRPCResponse.self, from: BackendSocket.readFrame(fd: fd, deadline: deadline))
+        guard response.id == request.id else { throw BackendRPCError.invalidFrame }
+        if let error = response.error { throw BackendRPCError.remote(error) }
+        handedOff = true
+        return BackendStreamChannel(fd: fd)
+    }
+
+    /// A connected, peer-checked socket and the deadline for its first exchange.
+    private func connectSynchronously(timeout: TimeInterval) throws -> (Int32, Date) {
+        try BackendSocket.validateDirectory(socketURL.deletingLastPathComponent(), create: false)
+        let fd = try BackendSocket.make()
+        var connected = false
+        defer { if !connected { Darwin.close(fd) } }
+        var address = try BackendSocket.address(socketURL)
+        let status = withUnsafePointer(to: &address) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                Darwin.connect(fd, $0, socklen_t(MemoryLayout<sockaddr_un>.size))
+            }
+        }
+        if status != 0 && errno != EINPROGRESS { throw BackendRPCError.unavailable }
+        let deadline = Date().addingTimeInterval(max(0.05, min(timeout, Self.maximumWait)))
+        try BackendSocket.ready(fd, events: Int16(POLLOUT), deadline: deadline)
+        var socketError: Int32 = 0
+        var size = socklen_t(MemoryLayout<Int32>.size)
+        guard getsockopt(fd, SOL_SOCKET, SO_ERROR, &socketError, &size) == 0, socketError == 0 else {
+            throw BackendRPCError.unavailable
+        }
+        try BackendSocket.authenticate(fd)
+        connected = true
+        return (fd, deadline)
+    }
 }
 
 public final class BackendRPCServer: @unchecked Sendable {
     public typealias Handler = @Sendable (BackendRPCRequest) async -> BackendRPCResponse
+    /// Takes one persistent stream connection (a window's `backend.stream`).
+    public typealias StreamHandler = @Sendable (BackendStreamChannel) -> Void
     public let socketURL: URL
     private let lock = NSLock()
     private var descriptor: Int32 = -1
     private var generation = UUID()
     private let slots = DispatchSemaphore(value: 32)
+    private var streamHandler: StreamHandler?
+    private var streams: [UUID: BackendStreamChannel] = [:]
     public init(socketURL: URL) { self.socketURL = socketURL }
     deinit { stop() }
 
-    public func start(handler: @escaping Handler) throws {
+    /// `stream`, when given, serves connections whose first request is
+    /// `StreamProtocol.unixSocketMethod`; without it that request is refused.
+    public func start(handler: @escaping Handler, stream: StreamHandler? = nil) throws {
         lock.lock(); defer { lock.unlock() }
         guard descriptor == -1 else { return }
+        streamHandler = stream
         try BackendSocket.validateDirectory(socketURL.deletingLastPathComponent(), create: true)
         let fd = try BackendSocket.make()
         var succeeded = false
@@ -158,6 +200,12 @@ public final class BackendRPCServer: @unchecked Sendable {
                         let received = Date()
                         let request = try JSONDecoder().decode(BackendRPCRequest.self,
                             from: BackendSocket.readFrame(fd: client, deadline: received.addingTimeInterval(BackendRPCClient.maximumWait)))
+                        if request.method == StreamProtocol.unixSocketMethod {
+                            // The same peer check passed; the connection now stays open.
+                            self.slots.signal()
+                            self.openStream(client, requestID: request.id)
+                            return
+                        }
                         Task {
                             let response: BackendRPCResponse
                             if request.method == "backend.ping" {
@@ -195,14 +243,49 @@ public final class BackendRPCServer: @unchecked Sendable {
         lock.lock(); defer { lock.unlock() }; return descriptor == fd && generation == expected
     }
     public func stop() {
-        lock.lock(); defer { lock.unlock() }
-        guard descriptor >= 0 else { return }
+        lock.lock()
+        guard descriptor >= 0 else { lock.unlock(); return }
         shutdown(descriptor, PortablePOSIX.shutdownBoth); Darwin.close(descriptor); descriptor = -1
         unlink(socketURL.path)
+        let open = Array(streams.values)
+        streams.removeAll()
+        lock.unlock()
+        // A window sees its stream end and reconnects to the next server.
+        for channel in open { channel.close() }
+    }
+
+    /// Persistent stream connections from windows, at most this many at once.
+    public static let maximumStreams = 16
+
+    /// Answers the stream request and hands the connection to the stream
+    /// handler, or refuses it when this server serves no stream.
+    private func openStream(_ client: Int32, requestID: String) {
+        lock.lock()
+        let handler = descriptor >= 0 ? streamHandler : nil
+        let admitted = handler != nil && streams.count < Self.maximumStreams
+        lock.unlock()
+        let reply = admitted ? BackendRPCResponse(id: requestID, result: Data())
+            : BackendRPCResponse(id: requestID, error: handler == nil ? "The background service does not support this request."
+                                 : "Too many windows are connected to the background service.")
+        do { try BackendSocket.writeFrame(JSONEncoder().encode(reply), fd: client, deadline: Date().addingTimeInterval(5)) }
+        catch { Darwin.close(client); return }
+        guard admitted, let handler else { Darwin.close(client); return }
+        let id = UUID()
+        let channel = BackendStreamChannel(fd: client) { [weak self] in self?.removeStream(id) }
+        lock.lock()
+        let running = descriptor >= 0
+        if running { streams[id] = channel }
+        lock.unlock()
+        guard running else { channel.close(); return }
+        handler(channel)
+    }
+
+    private func removeStream(_ id: UUID) {
+        lock.lock(); streams.removeValue(forKey: id); lock.unlock()
     }
 }
 
-private enum BackendSocket {
+enum BackendSocket {
     // HTML activity details and previews include up to 25 MiB of embedded data,
     // plus JSON/base64 framing. Individual RPC handlers retain their own bounds.
     static let maximumFrame = 64 * 1024 * 1024
@@ -265,6 +348,10 @@ private enum BackendSocket {
         guard !data.isEmpty, data.count <= maximumFrame else { throw BackendRPCError.invalidFrame }
         var size = UInt32(data.count).bigEndian
         var frame = withUnsafeBytes(of: &size) { Data($0) }; frame.append(data)
+        try writeAll(frame, fd: fd, deadline: deadline)
+    }
+    /// Writes every byte of `frame` (already framed) before `deadline`.
+    static func writeAll(_ frame: Data, fd: Int32, deadline: Date) throws {
         var offset = 0
         while offset < frame.count {
             try ready(fd, events: Int16(POLLOUT), deadline: deadline)

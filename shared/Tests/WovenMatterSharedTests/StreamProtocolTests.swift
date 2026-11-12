@@ -53,7 +53,7 @@ private func object(_ data: Data) throws -> NSObject {
       }
     }
     #expect(types == ["hello", "req", "res", "sub", "item", "end", "cancel"])
-    let known = Set(["conversations", "pending", "journal", "transcript", "capabilities", "session", "synchronized", "server.state"])
+    let known = Set(["conversations", "pending", "journal", "transcript", "capabilities", "session", "owner", "synchronized", "server.state"])
     #expect(known.isSubset(of: kinds))
   }
 

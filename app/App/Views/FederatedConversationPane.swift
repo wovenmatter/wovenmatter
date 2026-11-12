@@ -132,12 +132,8 @@ struct FederatedConversationPane: View {
         .task(id: conversation.id) {
             olderMessages = []; olderActivities = []; olderCursor = nil; hasLoadedEarlier = false
             historyGeneration = UUID(); loadingOlder = false
+            // Then its live state arrives on the chat's `conversation` subscription.
             await model.refreshFederatedConversation(conversation.id)
-            // A streamed workspace pushes every change. Only one without a stream is polled.
-            while !Task.isCancelled, snapshot?.streamed != true {
-                do { try await Task.sleep(for: .seconds(snapshot?.online == true ? 1 : 5)) } catch { return }
-                await model.refreshFederatedConversation(conversation.id)
-            }
         }
         .onChange(of: conversation.id) { previous, _ in model.closeFederatedConversation(previous) }
         .onDisappear { model.closeFederatedConversation(conversation.id) }

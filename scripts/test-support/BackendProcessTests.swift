@@ -60,6 +60,49 @@ private actor FixtureOwner {
     }
 }
 
+/// A window stream with no conversations of its own: `server.state` only.
+@MainActor private final class EmptyConversations: ExecutionConversationSource {
+    func localTranscript(conversationID: String, before: String?) async throws -> LibraryTranscript {
+        throw LibraryAPIError(code: "wrong_workspace", message: "Fixture only.")
+    }
+    func localCapabilities(conversationID: String) async throws -> HarnessCapabilities {
+        throw LibraryAPIError(code: "wrong_workspace", message: "Fixture only.")
+    }
+    func localSessionSettings(conversationID: String) async throws -> SessionSettings {
+        throw LibraryAPIError(code: "wrong_workspace", message: "Fixture only.")
+    }
+}
+
+/// The window's side of the persistent stream, frame by frame.
+private final class WindowStream: @unchecked Sendable {
+    let channel: BackendStreamChannel
+    private var buffer = Data()
+    private var frames: [StreamFrame] = []
+    init(_ socket: URL) async throws { channel = try await BackendRPCClient(socketURL: socket).openStream() }
+    func send(_ frame: StreamFrame) async throws { try await channel.write(StreamProtocol.lengthPrefixed(frame)) }
+    func next() async throws -> StreamFrame {
+        while frames.isEmpty {
+            guard let bytes = try await channel.read() else { throw BackendRPCError.unavailable }
+            buffer.append(bytes)
+            frames = try StreamProtocol.takeLengthPrefixedFrames(from: &buffer)
+        }
+        return frames.removeFirst()
+    }
+    /// Subscribes to `server.state`; the first item is `synchronized`.
+    func followServerState() async throws {
+        guard case .hello = try await next() else { throw BackendRPCError.invalidFrame }
+        try await send(.subscribe(.init(id: "state", stream: .serverState)))
+        guard case .item(let item) = try await next(), item.payload == .synchronized else { throw BackendRPCError.invalidFrame }
+    }
+    /// The next `server.state` item naming `scope`.
+    func serverState(_ scope: String) async throws {
+        for _ in 0..<50 {
+            if case .item(let item) = try await next(), case .serverState(let state) = item.payload, state.scopes.contains(scope) { return }
+        }
+        throw BackendRPCError.timedOut
+    }
+}
+
 @main private struct BackendProcessTests {
     static func require(_ value: Bool, _ message: String) throws {
         if !value { throw NSError(domain: "BackendProcessTests", code: 1, userInfo: [NSLocalizedDescriptionKey: message]) }
@@ -97,7 +140,16 @@ private actor FixtureOwner {
             if CommandLine.arguments[1] == "backend" {
                 let owner = try await FixtureOwner(root: root)
                 let server = BackendRPCServer(socketURL: endpoint)
-                try server.start { await owner.handle($0) }
+                let source = await MainActor.run { EmptyConversations() }
+                let window = ExecutionWindowStreamServer(database: owner.database, source: source) {
+                    StreamHello(deviceID: "backend", libraryID: "fixture", workspaceID: "fixture", serverTime: MemberRequestSignature.now())
+                }
+                await window.start()
+                let feed = window.serverState
+                await owner.journal.setListener { scopes, ids in
+                    await feed.publish(.init(scopes: scopes.map(\.rawValue).sorted(), conversationIDs: ids.isEmpty ? nil : ids.sorted()))
+                }
+                try server.start(handler: { await owner.handle($0) }, stream: { window.accept($0) })
                 while !(await owner.shouldStop) { try await Task.sleep(for: .milliseconds(25)) }
                 server.stop()
                 return
@@ -123,6 +175,9 @@ private actor FixtureOwner {
         try await ready(client, process: backend)
         let initial = try JSONDecoder().decode(BackendInvalidations.self,
             from: await client.call(method: "changes", payload: JSONEncoder().encode(BackendInvalidationCursor?.none)))
+        // The window's persistent stream crosses the process boundary on the same socket.
+        let stream = try await WindowStream(client.socketURL)
+        try await stream.followServerState()
         let frontend = try child("frontend", root: root)
         try await wait(frontend)
         try require(backend.isRunning, "Frontend exit stopped backend")
@@ -136,6 +191,7 @@ private actor FixtureOwner {
             observedConversations.formUnion(changed.conversationIDs)
         }
         try require(changed.scopes.contains(.workspace), "Detached completion did not publish invalidation")
+        try await stream.serverState("workspace")
         let snapshot = try await projection.snapshot()
         try require(snapshot.workspace.folders.contains { $0.name == "Completed after frontend exit" }, "Reconnected frontend did not observe backend result")
         try require(!snapshot.workspace.folders.contains { $0.name == "Forbidden frontend write" }, "Frontend altered backend data")
@@ -155,16 +211,20 @@ private actor FixtureOwner {
         _ = try await client.call(method: "stop")
         try await wait(backend)
         try require(!FileManager.default.fileExists(atPath: client.socketURL.path), "Orderly shutdown left a stale endpoint")
+        var streamEnded = false
+        do { while true { _ = try await stream.next() } } catch { streamEnded = true }
+        try require(streamEnded, "The window stream outlived its server")
         backend = try child("backend", root: root)
         try await ready(client, process: backend)
         let restarted = try JSONDecoder().decode(BackendInvalidations.self,
             from: await client.call(method: "changes", payload: JSONEncoder().encode(changed.cursor)))
         try require(restarted.requiresReload && restarted.cursor.instanceID != changed.cursor.instanceID,
                     "Restart incorrectly reused previous invalidation cursor")
+        try await WindowStream(client.socketURL).followServerState()
         let afterRestart = try await projection.snapshot()
         try require(afterRestart.workspace.folders.contains { $0.name == "Completed after frontend exit" }, "Restart lost persisted result")
         _ = try await client.call(method: "stop")
         try await wait(backend)
-        print("Backend process boundary: passed (separate owner, frontend write exclusion, live transcript/terminal delta after client exit, reconnect, restart).")
+        print("Backend process boundary: passed (separate owner, frontend write exclusion, live transcript/terminal delta after client exit, window stream, reconnect, restart).")
     }
 }

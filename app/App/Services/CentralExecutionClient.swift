@@ -52,6 +52,8 @@ final class CentralExecutionClient {
     private var refreshTasks: [String: Task<Void, any Error>] = [:]
     private(set) var transcripts: [String: LibraryTranscript] = [:]
     private(set) var capabilities: [String: HarnessCapabilities] = [:]
+    /// Session settings a watched chat's `conversation` stream sent.
+    private(set) var sessions: [String: SessionSettings] = [:]
     private(set) var pending: [String: [PendingInteraction]] = [:]
     private(set) var onlineWorkspaces: Set<String> = []
     private(set) var errors: [String: String] = [:]
@@ -579,6 +581,8 @@ extension CentralExecutionClient {
     /// The chat closed: its `conversation` subscription ends.
     func unwatch(_ conversationID: String) async {
         watched.removeAll { $0 == conversationID }
+        // No longer pushed: the next subscription sends it again.
+        sessions.removeValue(forKey: conversationID)
         for stream in live.values {
             guard let subscription = stream.conversations.removeValue(forKey: conversationID) else { continue }
             stream.synchronizedConversations.remove(conversationID)
@@ -675,7 +679,7 @@ extension CentralExecutionClient {
             let previous = Set((pending[id] ?? []).map(\.conversationID))
             pending[id] = value.interactions
             onLive(previous.union(value.interactions.map(\.conversationID)))
-        case .conversations, .transcript, .capabilities, .session, .synchronized, .serverState, .unknown:
+        case .conversations, .transcript, .capabilities, .session, .owner, .synchronized, .serverState, .unknown:
             break
         }
         return .accepted
@@ -686,6 +690,7 @@ extension CentralExecutionClient {
         switch event {
         case .ended:
             stream.conversations.removeValue(forKey: conversationID)
+            sessions.removeValue(forKey: conversationID)
             stream.synchronizedConversations.remove(conversationID)
             stream.release(conversationID)
         case .item(let item):
@@ -696,10 +701,13 @@ extension CentralExecutionClient {
                 transcripts[conversationID] = (transcripts[conversationID] ?? .init(conversationID: conversationID)).applying(value)
             case .capabilities(let value):
                 capabilities[conversationID] = value.capabilities
+            case .session(let value):
+                guard value.settings.conversationID == conversationID else { return .accepted }
+                sessions[conversationID] = value.settings
             case .synchronized:
                 stream.synchronizedConversations.insert(conversationID)
                 stream.release(conversationID)
-            case .conversations, .pending, .journal, .session, .serverState, .unknown:
+            case .conversations, .pending, .journal, .owner, .serverState, .unknown:
                 return .accepted
             }
         }
@@ -720,9 +728,13 @@ extension CentralExecutionClient {
     }
 
     /// The chat's model, thinking and permission settings. A streamed chat
-    /// reads them again only when its run or capabilities change, or after an action.
+    /// whose server sends `session` items is never read: the item is current.
+    /// One whose server does not yet send them is read again only when its run
+    /// or capabilities change, or after an action.
     func sessionSettings(conversationID: String, workspace: ExecutionWorkspace, force: Bool) async -> SessionSettings? {
         guard onlineWorkspaces.contains(workspace.id) else { return nil }
+        if isStreamed(workspace.id), live[workspace.id]?.conversations[conversationID] != nil,
+           let streamed = sessions[conversationID] { return streamed }
         let runID = transcripts[conversationID]?.activeRunID, current = capabilities[conversationID]
         if !force, isStreamed(workspace.id), let cached = sessionCache[conversationID], cached.runID == runID, cached.capabilities == current {
             return cached.value

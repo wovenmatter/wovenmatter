@@ -79,46 +79,30 @@ extension ApplicationModel {
         return client
     }
 
+    /// The chat's workspace, connection and saved state when it opens; a
+    /// window then follows its live state on its `conversation` subscription.
     func refreshFederatedConversation(_ id: String, reloadingConversation: Bool = true) async {
         do {
             let snapshot: FederatedExecutionSnapshot?
             if isBackendFrontend { snapshot = try await sendBackendCommand(.federatedExecution(.refresh(conversationID: id))).federatedExecution }
             else { snapshot = try await performFederatedExecution(.refresh(conversationID: id)) }
-            if let snapshot { federatedExecutionSnapshots[id] = snapshot }
+            if let snapshot { storeFederatedSnapshot(snapshot, conversationID: id) }
             if reloadingConversation { await refreshConversation(id: id) }
         } catch { ensureConversationState(id: id).setError(error.localizedDescription) }
     }
 
-    /// A stream pushed live state for these chats. A background server tells
-    /// its windows; a window showing one of them reads the new snapshot.
+    /// A stream pushed live state for these chats: a background server relays
+    /// it to the windows that follow them.
     func federatedLiveChanged(_ ids: Set<String>) {
         guard !ids.isEmpty else { return }
-        if let service = backendApplicationService {
-            Task { await service.invalidations.publish(scopes: [.execution], conversationIDs: ids) }
-        }
-        // A headless background server shows nothing itself.
-        guard LocalExecutionRole.current != .backend else { return }
-        for id in ids where federatedExecutionSnapshots[id] != nil { refreshLiveFederatedConversation(id) }
+        windowStreamRelayChanged(ids)
     }
 
-    /// One snapshot read at a time per chat; pushes that arrive meanwhile are
-    /// folded into one more read.
-    func refreshLiveFederatedConversation(_ id: String) {
-        if federatedLiveRefreshes[id] != nil { federatedLiveRefreshes[id] = true; return }
-        federatedLiveRefreshes[id] = false
-        Task { @MainActor [weak self] in
-            guard let self else { return }
-            repeat {
-                self.federatedLiveRefreshes[id] = false
-                await self.refreshFederatedConversation(id, reloadingConversation: false)
-            } while self.federatedLiveRefreshes[id] == true
-            self.federatedLiveRefreshes[id] = nil
-        }
-    }
-
-    /// The chat closed: its live subscription ends (streamed workspaces only).
+    /// The chat closed. A window's `conversation` subscription ends with the
+    /// view that held it, and with it the background server's own; a process
+    /// that runs its own execution client ends that subscription here.
     func closeFederatedConversation(_ id: String) {
-        guard federatedExecutionSnapshots[id]?.streamed == true else { return }
+        guard !isBackendFrontend, federatedExecutionSnapshots[id]?.streamed == true else { return }
         Task { @MainActor [weak self] in
             guard let self else { return }
             if self.isBackendFrontend { _ = try? await self.sendBackendCommand(.federatedExecution(.close(conversationID: id))) }
@@ -132,7 +116,7 @@ extension ApplicationModel {
             let snapshot: FederatedExecutionSnapshot?
             if isBackendFrontend { snapshot = try await sendBackendCommand(.federatedExecution(action)).federatedExecution }
             else { snapshot = try await performFederatedExecution(action) }
-            if let snapshot { federatedExecutionSnapshots[conversationID] = snapshot }
+            if let snapshot { storeFederatedSnapshot(snapshot, conversationID: conversationID) }
             ensureConversationState(id: conversationID).setError(nil)
             return snapshot
         } catch { ensureConversationState(id: conversationID).setError(error.localizedDescription) }
@@ -142,14 +126,21 @@ extension ApplicationModel {
     static let quickChatReadOnlyMessage = "Quick Chat runs only on its iPhone or iPad. Synced history is read-only here."
 
     func performFederatedExecution(_ action: FederatedExecutionAction) async throws -> FederatedExecutionSnapshot {
-        if let client = liveLibraryClient { return try await client.desktopExecution(action) }
-        let client = try centralExecutionClient()
         let targetID: String
         switch action {
         case .refresh(let id), .earlier(let id, _), .close(let id): targetID = id
         case .stop(let id, _), .configure(let id, _): targetID = id
         case .respond(let interaction, _): targetID = interaction.conversationID
         }
+        if let client = liveLibraryClient {
+            let snapshot = try await client.desktopExecution(action)
+            switch action {
+            case .refresh, .close, .earlier: break
+            case .stop, .configure, .respond: windowStreamRelayChanged([targetID])
+            }
+            return snapshot
+        }
+        let client = try centralExecutionClient()
         if case .close(let id) = action {
             await client.unwatch(id)
             guard let workspace = try await client.workspace(conversationID: id) else {
@@ -185,7 +176,17 @@ extension ApplicationModel {
         let session = await client.sessionSettings(conversationID: id, workspace: workspace, force: !refreshing)
         let snapshot = federatedSnapshot(id, workspace: workspace, client: client, transcript: earlier ?? client.transcripts[id], session: session)
         federatedExecutionSnapshots[id] = snapshot
+        // An action's effect reaches the windows that follow this chat.
+        if !refreshing { windowStreamRelayChanged([id]) }
         return snapshot
+    }
+
+    /// What this process still holds for a chat whose live read failed: its
+    /// workspace and saved transcript, shown offline.
+    func federatedSnapshotAfterFailure(_ id: String) async -> FederatedExecutionSnapshot? {
+        guard liveLibraryClient == nil, let client = federatedExecutionClient,
+              let workspace = try? await client.workspace(conversationID: id) else { return nil }
+        return federatedSnapshot(id, workspace: workspace, client: client, transcript: client.transcripts[id], session: nil)
     }
 
     private func federatedSnapshot(_ id: String, workspace: ExecutionWorkspace, client: CentralExecutionClient,
