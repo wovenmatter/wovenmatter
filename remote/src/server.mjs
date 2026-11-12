@@ -24,8 +24,8 @@ import { createLibraryServe } from './library-serve.mjs'
 import { createLibraryTimers } from './library-timers.mjs'
 import { createMemberVerifier, hasMemberSignature } from './member-auth.mjs'
 import { createMemberTransport } from './member-client.mjs'
-import { authenticateMemberUpgrade, authorizeBotsUpgrade, createMemberSocketRegistry } from './member-sockets.mjs'
-import { streamCapability } from './stream-protocol.mjs'
+import { authenticateMemberUpgrade, authorizeBotsUpgrade, createMemberSocketRegistry, refuseUpgrade } from './member-sockets.mjs'
+import { streamCapability, streamPath } from './stream-protocol.mjs'
 import { createStreamServer } from './stream-server.mjs'
 import { createHostAdministration, runHostScript } from './host-admin.mjs'
 import { createInstallerBearer } from './installer-bearer.mjs'
@@ -638,6 +638,8 @@ server.maxRequestsPerSocket = 1_000
 server.on('upgrade', (request, socket, head) => {
   socket.on('error', () => {})
   if (stream?.upgrade(request, socket, head) || bots?.upgrade(request, socket, head)) return
+  // A host with no member registry yet has no stream to open.
+  if (String(request.url).split('?')[0] === streamPath) return refuseUpgrade(socket, 503, { code: 'unavailable', message: 'This server has no workspace to stream yet.' })
   socket.end('HTTP/1.1 404 Not Found\r\nConnection: close\r\nContent-Length: 0\r\n\r\n')
 })
 

@@ -45,7 +45,8 @@ export function createClientExecution({ directory, runtime, kind = 'linux', name
   let goalsTickRunning = false
   // Live streams (stream-server.mjs) watch changes in process, as they happen:
   // `record` when a conversation is saved, `journal` once an entry is
-  // committed, `deleted` when a conversation is removed. Durable journaling is
+  // committed, `deleted` when a conversation is removed, `session` after its
+  // settings were changed. Durable journaling is
   // unchanged; watchers read the stored state.
   const watchers = new Set()
   let committedJournal = null
@@ -370,7 +371,10 @@ export function createClientExecution({ directory, runtime, kind = 'linux', name
         else if (action.action === 'move') record.conversation.folderID = action.folderID ?? null
         else throw fail(400,'This conversation action is unavailable on the execution workspace.')
       } else throw fail(400,'This action belongs to the central library, not an execution workspace.')
-      return transaction(() => {publish(record);return receipt(command,'completed')})
+      const configured=transaction(() => {publish(record);return receipt(command,'completed')})
+      // A runtime may keep its settings outside the record (OpenCode): live streams read them again.
+      notify({kind:'session',conversationID:command.conversationID})
+      return configured
     }
     if(command.kind==='respond') {
       const approval=record.pending.find(item=>item.id===command.interactionID&&item.mcpManageAccessID&&item.runID===command.runID)
