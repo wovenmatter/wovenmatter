@@ -10,6 +10,7 @@ data_mode="${WOVENMATTER_DEV_MODE:-auto}"
 instance="${WOVENMATTER_DEV_INSTANCE:-${WOVENMATTER_DEV_VARIANT:-}}"
 source_directory="${WOVENMATTER_DEV_SNAPSHOT_SOURCE:-$HOME/Library/Application Support/Woven Matter}"
 plan_only=false
+fresh=false
 while [ "$#" -gt 0 ]; do
   case "$1" in
     run|debug|logs|verify) mode="$1"; shift ;;
@@ -19,8 +20,9 @@ while [ "$#" -gt 0 ]; do
       case "$1" in --mode) data_mode="$2" ;; --instance) instance="$2" ;; --source) source_directory="$2" ;; esac
       shift 2 ;;
     --plan) plan_only=true; shift ;;
+    --fresh) fresh=true; shift ;;
     --help|-h)
-      printf '%s\n' 'usage: scripts/build_and_run.sh [run|debug|logs|verify] [--mode auto|client|snapshot|live] [--instance name] [--source directory] [--plan]'
+      printf '%s\n' 'usage: scripts/build_and_run.sh [run|debug|logs|verify] [--mode auto|client|snapshot|live] [--instance name] [--source directory] [--fresh] [--plan]'
       exit 0 ;;
     *) printf 'Unknown argument: %s\n' "$1" >&2; exit 64 ;;
   esac
@@ -64,6 +66,20 @@ if ! mkdir "$build_lock" 2>/dev/null; then
   printf 'This instance is already building. If no launcher is running, remove %s.\n' "$build_lock" >&2; exit 75
 fi
 trap 'rmdir "$build_lock" 2>/dev/null || true' EXIT
+# A fresh snapshot under the same instance: same bundle ID, so macOS keeps the
+# privacy permissions it granted. The old data goes to the Trash.
+if "$fresh"; then
+  if [ "$data_mode" != snapshot ]; then
+    printf '%s\n' '--fresh resets snapshot instances only.' >&2; exit 64
+  fi
+  if [ "$(python3 "$repo_root/scripts/dev-build.py" backend-running --executable "$executable")" = true ]; then
+    printf '%s\n' 'Stop the server in this Dev app’s Background Server settings before starting fresh.' >&2
+    exit 75
+  fi
+  swift "$repo_root/scripts/stop-development.swift" "$executable"
+  python3 "$repo_root/scripts/dev-build.py" reset --support "$support_directory" \
+    --bundle "wovenmatter.desktop.dev.$instance.$data_mode"
+fi
 if [ "$data_mode" = snapshot ] && [ ! -e "$support_directory" ]; then
   python3 "$repo_root/scripts/dev-build.py" snapshot --source "$source_directory" --destination "$support_directory"
 fi

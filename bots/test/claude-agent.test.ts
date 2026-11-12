@@ -313,6 +313,21 @@ describe("Claude Agent SDK provider", () => {
     expect(result.errorMessage).toMatch(/outside the active tool inventory/);
   });
 
+  it("reports Claude Code's sign-in failure as not logged in, without /login", async () => {
+    fake.options = {
+      claudeError: { error: "authentication_failed", text: "Not logged in · Please run /login" },
+    };
+    const all = models();
+    const result = (await all.stream(model(all), { messages: [user("hey")] }).result()) as {
+      stopReason: string;
+      errorMessage?: string;
+      pibotIssue?: string;
+    };
+    expect(result.stopReason).toBe("error");
+    expect(result.errorMessage).toBe("Not logged in to Claude.");
+    expect(result.pibotIssue).toBe("signIn");
+  });
+
   it("compacts with Claude Code's /compact and returns the PostCompact summary", async () => {
     const all = models();
     const result = (await all

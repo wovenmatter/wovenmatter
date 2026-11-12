@@ -202,6 +202,8 @@ export type FakeProviderOptions = {
   /** Content blocks for a fake Claude Code turn; default: text echoing the last user frame. */
   // biome-ignore lint/suspicious/noExplicitAny: Anthropic content blocks.
   readonly claudeReply?: (frames: readonly ClaudeSdkFrame[]) => any[] | undefined;
+  /** Fail a Claude Code turn the way the SDK reports it: an assistant message with `error`. */
+  readonly claudeError?: { readonly error: string; readonly text: string };
 };
 
 /** One fake for all four providers; `requests` records every call, in order. */
@@ -377,6 +379,17 @@ export class FakeProviders {
             };
           }
           yield { type: "result", subtype: "success", is_error: false, num_turns: 0 };
+          return;
+        }
+        const failure = fake.options.claudeError;
+        if (failure) {
+          yield {
+            type: "assistant",
+            parent_tool_use_id: null,
+            error: failure.error,
+            message: { id: `msg_claude_${id}`, content: [{ type: "text", text: failure.text }] },
+          };
+          yield { type: "result", subtype: "success", is_error: true, num_turns: 1 };
           return;
         }
         const content = fake.options.claudeReply?.(frames) ?? [

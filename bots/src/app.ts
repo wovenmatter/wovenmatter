@@ -179,10 +179,12 @@ export async function startRuntime(
       });
     const profileSet = normalizeProfiles(settings.current);
     if (!options.models) {
-      const refs: Record<string, ModelRef> = {
-        "titles.model": parseModelRef(settings.current.titles.model),
-      };
-      for (const profile of profileSet.profiles) refs[`profiles.${profile.id}.main`] = parseModelRef(profile.main);
+      const refs: Record<string, ModelRef> = {};
+      const titleModel = settings.current.titles.model;
+      if (titleModel) refs["titles.model"] = parseModelRef(titleModel);
+      for (const profile of profileSet.profiles) {
+        if (profile.main) refs[`profiles.${profile.id}.main`] = parseModelRef(profile.main);
+      }
       for (const problem of checkModelRoles(createBotModels(credentials), refs)) log(`warning: ${problem}`);
     }
     const profiles = new ProfileStore(profileSet, {
@@ -252,7 +254,11 @@ export async function startRuntime(
       },
       titles: new TitleGenerator({
         models,
-        model: () => parseModelRef(settings.current.titles.model),
+        // The title model, or else the default profile's main model; neither: no titles yet.
+        model: () => {
+          const ref = settings.current.titles.model ?? profiles.resolve(undefined).main;
+          return ref ? parseModelRef(ref) : undefined;
+        },
         reasoning: () => settings.current.titles.reasoning,
       }),
       onReport: (error) => log(`thread title: ${String(error)}`),

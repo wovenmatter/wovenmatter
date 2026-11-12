@@ -66,6 +66,9 @@ export class Bot {
   readonly #registry: BotRegistry;
   readonly #titles: ThreadTitles | undefined;
   readonly #note: () => string | undefined;
+  readonly #hasModel: () => boolean;
+  /** Set before greet's first await: two setMainModel calls can't both greet. */
+  #greeting = false;
 
   constructor(
     record: BotRecord,
@@ -74,12 +77,15 @@ export class Bot {
     titles?: ThreadTitles,
     /** The fallback note for new turns while the bot runs a fallback main model. */
     note: () => string | undefined = () => undefined,
+    /** False while the bot's profile has no main model: messages are refused. */
+    hasModel: () => boolean = () => true,
   ) {
     this.record = record;
     this.harness = harness;
     this.#registry = registry;
     this.#titles = titles;
     this.#note = note;
+    this.#hasModel = hasModel;
   }
 
   get id(): string {
@@ -153,8 +159,17 @@ export class Bot {
    * as Woven titles a conversation from its first prompt. While the bot runs a fallback main model,
    * the stored input starts with the fallback note (the chat hides it).
    */
-  async send(text: string, conversationId?: number, round = 0, context?: string) {
+  async send(
+    text: string,
+    conversationId?: number,
+    round = 0,
+    context?: string,
+    options: { readonly hidden?: boolean } = {},
+  ) {
+    if (!this.#hasModel()) throw new Error(NO_MODEL_MESSAGE);
     const conversation = await this.conversation(conversationId);
+    // A just-chosen model reaches each bot's conversations a moment after the profile saves.
+    if (!(await conversation.agent(ctx)).model) throw new Error(NO_MODEL_MESSAGE);
     const note = this.#note();
     const submission = await conversation.submit(
       {
@@ -163,7 +178,8 @@ export class Bot {
           .filter(Boolean)
           .join("\n\n"),
         whenBusy: "followUp",
-        entry: { kind: "pibot.input", data: { round } },
+        // Hidden inputs reach the model but never the chat (transcript.ts).
+        entry: { kind: "pibot.input", data: options.hidden ? { round, hidden: true } : { round } },
       },
       ctx,
     );
@@ -297,6 +313,26 @@ export class Bot {
       }
       cursor = page.next;
     } while (cursor !== undefined);
+  }
+
+  /**
+   * Admin Bot's first turn right after the user picks its model in first-run setup, so its
+   * greeting arrives without the user writing first. Only while its main channel is empty: it
+   * happens once, never for other bots. Returns whether it started.
+   */
+  async greet(): Promise<boolean> {
+    if (this.record.kind !== "admin" || this.#greeting) return false;
+    this.#greeting = true;
+    try {
+      const main = await this.main();
+      const page = await main.entries({ order: "descending" }, 1, undefined, ctx);
+      if (page.items.length > 0) return false;
+      await this.send(GREETING_PROMPT, undefined, 0, undefined, { hidden: true });
+      return true;
+    } catch (error) {
+      this.#greeting = false;
+      throw error;
+    }
   }
 
   /** The newest entry id across the main channel and threads (0 for an empty bot). */
@@ -452,9 +488,17 @@ export type PurgeResult = {
 /** How long a `returned` status is reported after the switch back. */
 export const RETURNED_STATUS_MS = 10 * 60_000;
 
+/** The hidden input that starts Admin Bot's first conversation (`Bot.greet`). */
+export const GREETING_PROMPT =
+  "[Automatic message from Woven Matter, not written by the user] The user just chose your model in first-run setup and opened this chat. Start your first conversation now, as your instructions describe.";
+
+/** Why a bot can't take a message: its profile has no main model yet. */
+export const NO_MODEL_MESSAGE =
+  "No model selected yet. Choose one with Admin Bot or in Bot settings → Profiles.";
+
 /** The model a profile runs right now: the first available of main and its fallbacks. */
 export function effectiveModel(
-  profile: Profile,
+  profile: Profile & { readonly main: string },
   availability: ModelAvailability | undefined,
 ): { readonly model: string; readonly limits: LimitEntry[]; readonly paused: boolean } {
   const limits: LimitEntry[] = [];
@@ -465,6 +509,9 @@ export function effectiveModel(
   }
   return { model: profile.main, limits, paused: true };
 }
+
+const hasMain = (profile: Profile): profile is Profile & { readonly main: string } =>
+  typeof profile.main === "string" && profile.main.length > 0;
 
 /**
  * Hosts every bot in this process. Each opened Harness has scheduling enabled (`resume()`), so
@@ -552,7 +599,7 @@ export class BotManager {
    */
   memoryModels(id: string): string[] {
     const profile = this.profileOf(id);
-    if (!profile) return [];
+    if (!profile || !hasMain(profile)) return [];
     const availability = this.#options.availability;
     const candidates = [profile.memoryModel, effectiveModel(profile, availability).model].filter(
       (ref): ref is string => ref !== undefined && availability?.limit(ref) === undefined,
@@ -573,6 +620,11 @@ export class BotManager {
     const model = conversation ? (await conversation.agent(ctx)).model : undefined;
     const active = this.#status.get(id)?.active;
     return model && `${model.provider}/${model.modelId}` === active ? note : undefined;
+  }
+
+  #hasModel(id: string): boolean {
+    const profiles = this.#options.profiles;
+    return !profiles || hasMain(profiles.resolve(this.#assigned.get(id)));
   }
 
   #noteFor(id: string): string | undefined {
@@ -631,6 +683,8 @@ export class BotManager {
     const profiles = this.#options.profiles;
     if (!profiles) return;
     const profile = profiles.resolve(this.#assigned.get(bot.id));
+    // No main model yet: nothing to apply until the user picks one.
+    if (!hasMain(profile)) return;
     const effective = effectiveModel(profile, this.#options.availability);
     const changed = await bot.applyModel(parseModelRef(effective.model));
     if (changed) {
@@ -641,7 +695,11 @@ export class BotManager {
     this.#updateStatus(bot, profile, effective);
   }
 
-  #updateStatus(bot: Bot, profile: Profile, effective: ReturnType<typeof effectiveModel>): void {
+  #updateStatus(
+    bot: Bot,
+    profile: Profile & { readonly main: string },
+    effective: ReturnType<typeof effectiveModel>,
+  ): void {
     const previous = this.#status.get(bot.id);
     const kind = effective.paused
       ? "paused"
@@ -835,7 +893,14 @@ export class BotManager {
     const { attach, ...options } = this.#options.harnessOptions(record, this);
     const harness = await Harness.open(storage, options, ctx);
     attach?.(harness);
-    const bot = new Bot(record, harness, this.registry, this.titles, () => this.#noteFor(id));
+    const bot = new Bot(
+      record,
+      harness,
+      this.registry,
+      this.titles,
+      () => this.#noteFor(id),
+      () => this.#hasModel(id),
+    );
     let report: RecoveryReport;
     try {
       report = await this.#recover(bot);

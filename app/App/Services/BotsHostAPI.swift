@@ -141,10 +141,14 @@ struct BotsHostAPI: Sendable {
     /// snapshot from the coordinator that owns renewal. Refresh tokens never leave the Mac.
     @MainActor static func storedCredential(provider: String) async throws -> CredentialReply {
         if provider == ProviderConnectionID.claudeSubscription.rawValue {
-            // The selected subscription account's profile, as the default agent uses it.
+            // The selected subscription account's profile, as the default agent uses it. Only a
+            // signed-in account counts: the runtime directory alone outlives a sign-out, and
+            // offering it would route bots to Claude only for Claude Code to answer "Not logged in".
             let id = ProviderConnectionID.claudeSubscription.rawValue
-            let selected = (try? ProviderConnectionAccounts.list(provider: id))?.first { $0.isSelected }
-            let profile = selected.flatMap { try? ProviderConnectionAccounts.nativeProfile($0.id, provider: id) }
+            guard let selected = (try? ProviderConnectionAccounts.list(provider: id))?.first(where: { $0.isSelected }) else {
+                return .init()
+            }
+            let profile = try? ProviderConnectionAccounts.nativeProfile(selected.id, provider: id)
             return .init(credential: nativeClaude(profile: profile))
         }
         let payload = try await ProviderAccountCoordinator.shared.prepare("global")

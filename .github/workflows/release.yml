@@ -54,11 +54,13 @@ jobs:
     if: ${{ !inputs.cache_benchmark_run }}
     needs: linux-library
     name: Signed Apple Silicon release
-    runs-on: macos-26
+    # Xcode 27.2, the toolchain the app is developed with (macos-26 stops at Xcode 26.6).
+    runs-on: xcode-27
     timeout-minutes: 120
     environment: release
     # Shared, non-secret phase settings.
     env:
+      DEVELOPER_DIR: /Applications/Xcode_27.2.app/Contents/Developer
       WOVENMATTER_SIGNING_IDENTITY: Developer ID Application
       WOVENMATTER_RELEASE_WORK_DIR: /private/tmp/wovenmatter-release-build
       WOVENMATTER_RELEASE_OUTPUT_DIR: ${{ github.workspace }}/dist
@@ -283,13 +285,15 @@ jobs:
   cache-benchmark:
     if: github.event_name == 'workflow_dispatch' && inputs.cache_benchmark_run != '' && startsWith(github.ref, 'refs/tags/v-cache-benchmark-')
     name: Signed cache consumer benchmark (no publication)
-    runs-on: macos-26
+    # Xcode 27.2, the toolchain the app is developed with (macos-26 stops at Xcode 26.6).
+    runs-on: xcode-27
     timeout-minutes: 45
     environment: release
     permissions:
       contents: read
       actions: read
     env:
+      DEVELOPER_DIR: /Applications/Xcode_27.2.app/Contents/Developer
       WOVENMATTER_RELEASE_ALLOW_UNTAGGED: '1'
       WOVENMATTER_RELEASE_WORK_DIR: /private/tmp/wovenmatter-release-build
       WOVENMATTER_RELEASE_OUTPUT_DIR: /private/tmp/wovenmatter-cache-benchmark-output

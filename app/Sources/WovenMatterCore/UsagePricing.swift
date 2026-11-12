@@ -103,11 +103,20 @@ public struct UsageRateTable: Codable, Equatable, Sendable {
   }
 
   private static func rate(_ value: Any?) -> Double? {
-    guard let number = value as? NSNumber,
-          // A JSON boolean bridges to NSNumber but is not a price.
-          CFGetTypeID(number) != CFBooleanGetTypeID() else { return nil }
+    // A JSON boolean bridges to NSNumber but is not a price.
+    guard let number = value as? NSNumber, !isBoolean(number) else { return nil }
     let rate = number.doubleValue
     return rate.isFinite && rate >= 0 ? rate : nil
+  }
+
+  private static func isBoolean(_ number: NSNumber) -> Bool {
+    #if canImport(Darwin)
+    CFGetTypeID(number) == CFBooleanGetTypeID()
+    #else
+    // swift-corelibs-foundation (Linux) has no CFGetTypeID in Foundation; JSONSerialization
+    // gives booleans the char type, which no JSON number gets.
+    String(cString: number.objCType) == "c"
+    #endif
   }
 
   private static func addingBareNameAliases(

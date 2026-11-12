@@ -65,10 +65,16 @@ describe("title sanitizer (Woven's sanitize)", () => {
 });
 
 describe("TitleGenerator", () => {
-  it("defaults to openai-codex/gpt-6-luna at high reasoning", () => {
+  it("has no title model by default, at high reasoning", () => {
     const config = parseTestSettings({ profiles: { default: { name: "D", main: "a/b" } } });
-    expect(config.roles.titles).toEqual(LUNA);
+    expect(config.roles.titles).toBeUndefined();
     expect(config.titles.reasoning).toBe("high");
+  });
+
+  it("refuses to title without a model", async () => {
+    const { models } = titleModels();
+    const generator = new TitleGenerator({ models, model: () => undefined, reasoning: "high" });
+    await expect(generator.generate("hi")).rejects.toBeInstanceOf(TitleError);
   });
 
   it("sends Woven's prompt with the configured reasoning level", async () => {
@@ -197,7 +203,7 @@ describe("title model selection", () => {
     return { models, used, faux };
   }
 
-  it("reads only [models.titles] (or its default), whatever the profiles say", () => {
+  it("reads only [models.titles], whatever the profiles say", () => {
     const profiles = {
       default: {
         name: "D",
@@ -206,10 +212,10 @@ describe("title model selection", () => {
         pool: [{ model: "openai-codex/gpt-6-pool" }],
       },
     };
-    expect(parseTestSettings({ profiles }).roles.titles).toEqual(LUNA);
-    expect(parseTestSettings({ profiles, titles: { reasoning: "low" } }).roles.titles).toEqual(
-      LUNA,
-    );
+    expect(parseTestSettings({ profiles }).roles.titles).toBeUndefined();
+    expect(
+      parseTestSettings({ profiles, titles: { reasoning: "low" } }).roles.titles,
+    ).toBeUndefined();
     expect(
       parseTestSettings({ profiles, titles: { model: "openai-codex/gpt-6-pool" } }).roles.titles,
     ).toEqual(POOL);
@@ -223,7 +229,6 @@ describe("title model selection", () => {
   });
 
   it.each([
-    ["the default title model", "", "gpt-6-luna"],
     ["a configured title model", "openai-codex/gpt-6-pool", "gpt-6-pool"],
   ])("titles every thread with %s, never a profile model", async (_name, titles, expected) => {
     const dir = await tempDir();

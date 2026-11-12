@@ -164,11 +164,12 @@ export class SettingsService {
 
   roles(): Roles {
     const titles = this.#options.store.current.titles;
-    return { titles: titles.model, titlesReasoning: titles.reasoning };
+    // "" when unset: threads are titled with the default profile's main model.
+    return { titles: titles.model ?? "", titlesReasoning: titles.reasoning };
   }
 
   async setRoles(roles: Partial<Roles>): Promise<Roles> {
-    if (roles.titles !== undefined) this.checkModel(roles.titles);
+    if (roles.titles) this.checkModel(roles.titles);
     if (
       roles.titlesReasoning !== undefined &&
       !(TITLE_REASONING as readonly string[]).includes(roles.titlesReasoning)
@@ -178,7 +179,7 @@ export class SettingsService {
     await this.#options.store.update((current) => ({
       ...current,
       titles: {
-        model: roles.titles ?? current.titles.model,
+        model: roles.titles === undefined ? current.titles.model : roles.titles || undefined,
         reasoning: (roles.titlesReasoning ?? current.titles.reasoning) as typeof current.titles.reasoning,
       },
     }));

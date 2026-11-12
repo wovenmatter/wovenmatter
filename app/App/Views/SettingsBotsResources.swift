@@ -77,7 +77,7 @@ struct SettingsBotsResourcesView: View {
     private func picker(_ title: String, selection: Int64?, choices: [Int64], onChange: @escaping @MainActor (Int64?) -> Void) -> some View {
         // A stored value outside today's choices (another device set it) still shows.
         let options: [Int64?] = [nil] + (choices.contains(selection ?? -1) || selection == nil ? choices : (choices + [selection!]).sorted())
-        return SettingsPicker(title, selection: Binding(get: { selection }, set: onChange), options: options) {
+        return SettingsPicker(title, selection: Binding(get: { selection }, set: { onChange($0) }), options: options) {
             BotResourcePolicy.format($0)
         }
     }

@@ -13,15 +13,22 @@ public struct PiBotDisplayEntry: Codable, Equatable, Identifiable, Sendable {
     public let role: String
     public let text: String
     public let error: String?
+    /// What the user can do about `error`: "signIn" or "limit" (Pi Bot's issues.ts).
+    public let issue: String?
     public let stopped: Bool?
 
-    public init(id: Int, conversationId: Int, role: String, text: String, error: String? = nil, stopped: Bool? = nil) {
+    public init(id: Int, conversationId: Int, role: String, text: String, error: String? = nil, issue: String? = nil,
+                stopped: Bool? = nil) {
         self.id = id; self.conversationId = conversationId; self.role = role; self.text = text
-        self.error = error; self.stopped = stopped
+        self.error = error; self.issue = issue; self.stopped = stopped
     }
 
     public var isUser: Bool { role == "user" }
     public var isStopped: Bool { stopped == true }
+    /// The model's provider isn't signed in, or its key was refused.
+    public var needsSignIn: Bool { issue == "signIn" }
+    /// The model hit a usage limit or ran out of credits.
+    public var hitLimit: Bool { issue == "limit" }
 }
 
 public struct PiBotConversationSnapshot: Decodable, Sendable {
@@ -231,6 +238,25 @@ public struct PiBotModelCatalog: Codable, Equatable, Sendable {
     }
 
     public func isKnown(_ ref: String) -> Bool { Self.find(providers, ref) != nil }
+
+    /// Newest first: the version numbers in a model's id, highest first (GPT-6.1 before GPT-6
+    /// before GPT-5.6), then by name. Dates (2024-08-06, 20251001, 2508) and parameter counts
+    /// (70b) are not versions. Ids without a version go last.
+    public static func newestFirst(_ models: [PiBotModelOption]) -> [PiBotModelOption] {
+        func version(_ id: String) -> [Int] {
+            let undated = id.replacingOccurrences(of: #"\d{4}-\d{2}-\d{2}"#, with: "", options: .regularExpression)
+            guard let pattern = try? NSRegularExpression(pattern: #"(?<!\d)\d{1,3}(?![\dbB])"#) else { return [] }
+            let range = NSRange(undated.startIndex..., in: undated)
+            return pattern.matches(in: undated, range: range).compactMap { match in
+                Range(match.range, in: undated).flatMap { Int(undated[$0]) }
+            }
+        }
+        return models.sorted { a, b in
+            let x = version(a.id), y = version(b.id)
+            if x != y { return y.lexicographicallyPrecedes(x) }
+            return a.name.localizedStandardCompare(b.name) == .orderedAscending
+        }
+    }
 
     static func find(_ providers: [PiBotProviderModels], _ ref: String) -> (provider: PiBotProviderModels, model: PiBotModelOption)? {
         for provider in providers {

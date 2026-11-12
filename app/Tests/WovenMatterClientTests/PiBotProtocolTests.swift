@@ -27,6 +27,14 @@ struct PiBotConversationStateTests {
         #expect(PiBotStreamEvent(json: json(#"{"kind":"future"}"#)) == nil)
     }
 
+    @Test func aFailedReplyCarriesItsFix() {
+        let event = PiBotStreamEvent(json: json(#"{"kind":"entry","entry":{"id":5,"conversationId":1,"role":"assistant","text":"","error":"Not logged in to Claude.","issue":"signIn"}}"#))
+        guard case .entry(let entry) = event else { Issue.record("not an entry"); return }
+        #expect(entry.needsSignIn)
+        #expect(!entry.hitLimit)
+        #expect(!self.entry(6).needsSignIn)
+    }
+
     @Test func aFinalEntryReplacesTheStreamAndARunEndClearsIt() {
         var state = PiBotConversationState()
         state.apply(.run(started: true))
@@ -109,6 +117,16 @@ struct PiBotConversationStateTests {
 
 @Suite("Pi Bot models and profiles")
 struct PiBotModelFactsTests {
+    @Test func modelsSortNewestFirst() {
+        let ids = ["gpt-5.6-luna", "gpt-6.1-terra", "gpt-6-sol", "gpt-6.1-sol", "claude-opus-4-5", "claude-opus-5-5", "chat-latest"]
+        let sorted = PiBotModelCatalog.newestFirst(ids.map { PiBotModelOption(id: $0, name: $0) }).map(\.id)
+        #expect(sorted == ["gpt-6.1-sol", "gpt-6.1-terra", "gpt-6-sol", "gpt-5.6-luna", "claude-opus-5-5", "claude-opus-4-5", "chat-latest"])
+        // Dates and parameter counts are not versions.
+        let dated = ["gpt-4o-2024-08-06", "gpt-4.1", "mistral-medium-2508", "llama-3.3-70b", "claude-haiku-4-5-20251001", "claude-haiku-5-5"]
+        #expect(PiBotModelCatalog.newestFirst(dated.map { PiBotModelOption(id: $0, name: $0) }).map(\.id)
+            == ["claude-haiku-5-5", "claude-haiku-4-5-20251001", "gpt-4.1", "gpt-4o-2024-08-06", "llama-3.3-70b", "mistral-medium-2508"])
+    }
+
     @Test func pricesKeepTheCatalogValues() {
         #expect(PiBotModelFacts.usd(2.5) == "$2.5")
         #expect(PiBotModelFacts.usd(0.125) == "$0.125")
