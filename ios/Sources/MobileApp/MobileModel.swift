@@ -958,6 +958,17 @@ import MobileInference
         online = true // Fixture presentation only; no transport or inference is configured.
         await reload()
       }
+      if scenario == "message-attachments" {
+        // A streamed remote message with the files its workspace received.
+        let runID = "11111111-1111-4111-8111-111111111111"
+        try await store.cache(.init(conversationID: "fixture-chat", messages: [
+          .init(id: "user", conversationID: "fixture-chat", runID: runID, role: "user", content: "Review these for the launch.", sequence: 0, attachments: [
+            .init(id: "fixture-sha-1", name: "launch-checklist.md", mimeType: "text/markdown", byteCount: 2_048),
+            .init(id: "fixture-sha-2", name: "hero.png", mimeType: "image/png", byteCount: 348_160)]),
+          .init(id: "assistant", conversationID: "fixture-chat", runID: runID, role: "assistant", content: "Both files are ready for review.", status: "completed", sequence: 1)],
+          runs: [.init(id: runID, status: "completed")]), preservingOlderPages: false)
+        await reload()
+      }
       if scenario == "permissions" || scenario == "tools-menu" {
         let descriptor = InferenceModel(id: "gpt-fixture", name: "GPT-6.1 Sol", provider: "openai", api: "openai-responses", baseUrl: "https://example.invalid", reasoning: true)
         executionRecords["fixture-chat"] = .init(id: "fixture-chat", title: "Launch plan", thinkingLevel: "high", connectionID: "fixture", modelJSON: try descriptor.descriptorJSON(), status: "ready", updatedAt: "")

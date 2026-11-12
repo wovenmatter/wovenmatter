@@ -17,8 +17,11 @@ extension MobileModel {
         return try JSONDecoder().decode(AgentRunActivity.self, from: data)
       }
     }
+    // Large details are read on demand from the chat's own owner, on its
+    // transcript route (no per-activity route exists), never streamed ahead.
     let remote: LibraryActivity?
-    if let workspaceID = conversationWorkspaceIDs[conversationID], let client = workspaceClients[workspaceID] {
+    let route = executionRoute(for: conversationID)
+    if route != "central", route != "local", let client = workspaceClients[route] {
       remote = try await client.refreshTranscript(conversationID).activities.first { $0.id == activityID }
     } else if let engine {
       remote = try await engine.transcriptActivityDetail(conversationID, activityID: activityID)
