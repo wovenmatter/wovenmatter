@@ -12,6 +12,18 @@ remain separate transcript content. A checklist control call is hidden only when
 there is a normalized replacement, and failed controls remain visible. Providers
 that do not emit checklists do not get invented progress.
 
+## Live state
+
+A window holds one connection to its own background server and follows each
+open chat there (`backend.stream`, see
+[Woven everywhere](architecture/WOVEN_EVERYWHERE.md), "Streaming"). Live text
+of a message already shown is applied as it arrives; anything else is read
+again from the window's read-only projection. A chat another Mac or a Linux
+host runs is relayed from the background server's member-signed stream to that
+machine and renders in the same view; while that machine is unreachable the
+chat shows the history library sync brought, with an offline notice. Nothing
+polls for a transcript, questions, approvals or settings.
+
 ## Storage and rendering
 
 - Canonical native/wire captures remain in the central SQLite database. The

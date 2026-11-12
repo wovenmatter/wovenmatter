@@ -16,17 +16,15 @@ extension WorkspaceDatabaseConnection {
   func retainedAssociationUnlocked(workspaceID: String, runID: String, nativeSessionID: String?) throws -> RetainedAssociation? {
     guard federationID(runID) else { return nil }
     let statement = try prepareUnlocked("""
-      SELECT r.conversation_id,s.runtime_kind,s.acp_session_id,r.openclaw_session_key,d.native_session_id,d.remote_workspace_id
+      SELECT r.conversation_id,s.runtime_kind,s.acp_session_id,r.openclaw_session_key
       FROM dashboard_runs r JOIN desktop_local_acp_sessions s ON s.conversation_id=r.conversation_id
-      LEFT JOIN desktop_local_acp_durable_runs d ON d.run_id=r.id
       WHERE r.id=? AND s.remote_workspace_id=?
       """)
     defer { sqlite3_finalize(statement) }
     try bind(runID, at: 1, to: statement); try bind(workspaceID, at: 2, to: statement)
     guard sqlite3_step(statement) == SQLITE_ROW, let currentNative = optionalText(statement, column: 2), !currentNative.isEmpty,
           nativeSessionID == nil || nativeSessionID == currentNative else { return nil }
-    let durable = optionalText(statement, column: 5) == workspaceID ? optionalText(statement, column: 4) : nil
-    guard optionalText(statement, column: 3) == currentNative || durable == currentNative else { return nil }
+    guard optionalText(statement, column: 3) == currentNative else { return nil }
     return try .init(conversationID: text(statement, column: 0), runID: runID, nativeSessionID: currentNative, runtimeKind: text(statement, column: 1))
   }
   public func libraryRetainedAssociation(workspaceID: String, runID: String, nativeSessionID: String?) throws -> RetainedAssociation? {

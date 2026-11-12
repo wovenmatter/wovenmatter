@@ -211,6 +211,9 @@ final class PairedMacSyncController {
         }
         do { try await host.applyPeerRevocations() } catch { errors["revocations"] = error.localizedDescription }
         await refreshSyncStatus()
+        // A synchronized workspace registration or member change opens, closes
+        // or retries this Mac's streams.
+        await host.connectExecutionStreams()
         await host.model?.refreshWorkspace()
     }
 

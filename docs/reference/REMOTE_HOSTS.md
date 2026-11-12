@@ -1,9 +1,14 @@
 # Native Linux host workspaces
 
 Host workspaces run Woven Matter directly on a Linux machine in the user's
-Tailnet. The Mac discovers, inspects, installs and manages the service through
-the same verified Tailscale SSH transport used by container workspaces. Docker
-is not required. Native hosts supersede deprecated remote container workspaces,
+Tailnet. The Mac that adds a host discovers, inspects and installs the service
+through the same verified Tailscale SSH transport used by container workspaces,
+and uses it again only to update a host too old for signed updates and to
+repair one. Everything else, from every Mac, goes to the host's own server over
+Tailscale HTTPS, signed with the Mac's device key: sessions and their live
+stream (`GET /v1/stream?protocol=1`), files, Pi Durable settings, logs,
+restarts and updates. Session history reaches other devices by library sync.
+Docker is not required. Native hosts supersede deprecated remote container workspaces,
 which are no longer offered or reconnected. The separate Docker Executor is unchanged.
 
 ## Execution and permissions

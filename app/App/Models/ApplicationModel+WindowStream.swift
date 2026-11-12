@@ -353,7 +353,6 @@ extension ApplicationModel {
         if let session = follow.session { snapshot.session = session }
         if let interactions = follow.interactions { snapshot.interactions = interactions }
         if let owner = follow.owner { snapshot.online = owner.online; snapshot.error = owner.error }
-        snapshot.streamed = follow.subscription != nil && !follow.ended
         return snapshot
     }
 }

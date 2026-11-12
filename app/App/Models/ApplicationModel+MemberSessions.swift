@@ -5,8 +5,10 @@ import WovenMatterClient
 import WovenMatterDashboardStore
 
 /// Where an agent's `woven_sessions_create` lands. Workspaces are named by ID:
-/// this Mac's own, a Linux host it manages over SSH, or another member's
-/// workspace (a paired Mac or any Linux host) reached with signed requests.
+/// this Mac's own, a Linux host this Mac added that is not enrolled in the
+/// library yet, or another member's workspace (a paired Mac or any enrolled
+/// Linux host). Every one but this Mac is reached through its own server with
+/// member-signed requests and its stream; SSH only installs and repairs a host.
 /// The iPhone is never a destination; it runs only its own Quick Chats.
 enum AgentToolDestination: Equatable {
     case thisMac
@@ -202,8 +204,8 @@ extension ApplicationModel {
     }
 
     /// The member workspace that runs session `id`: the one `named` names, or
-    /// the one this Mac created it on. Nil for this Mac and the Linux hosts it
-    /// manages over SSH, whose sessions are in this library.
+    /// the one this Mac created it on. Nil for this Mac's own sessions (and a
+    /// session this Mac did not create there), which this library holds.
     func memberSessionWorkspace(id: String, named: String?) async throws -> ExecutionWorkspace? {
         if let named {
             if case .member(let workspace) = try await resolveAgentToolDestination(named, callerWorkspace: nil) { return workspace }

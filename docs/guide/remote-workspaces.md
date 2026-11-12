@@ -123,7 +123,7 @@ running while the Linux host, agent service and provider access remain available
 Updates preserve the workspace's durable data. Uninstall and removal of workspace
 data are separate explicit actions.
 
-The Mac that adds a host connects over a Tailscale SSH tunnel to a host
+The Mac that adds a host installs it over a Tailscale SSH tunnel to a host
 loopback port. See [Native Linux hosts](../reference/REMOTE_HOSTS.md) for
 permissions, browser verification, storage and service lifecycle details.
 
@@ -144,3 +144,17 @@ server like everyone else's: messages, files, Pi Durable settings and sign-in
 go there with the Mac's device key, never over SSH. A chat that ran over SSH
 in an older version moves to the host's server when you open it, keeping its
 history; if it cannot move, it stays readable and says why.
+
+## Live sessions and history
+
+A host's chats look and work like this Mac's own. Each Mac's background server
+keeps one connection to the host's server, signed with the Mac's device key,
+and an open chat follows it as the host writes: its reply as it streams, run
+state, questions and approvals, the harness's options and the chat's settings.
+Messages, Stop and answers go over the same connection. Nothing checks the host
+on a timer.
+
+History reaches every device through the library: the host writes its chats
+into its own copy of the library, which synchronizes with every Mac and phone.
+While a host is unreachable its chats show their saved history with a notice
+that the host is offline, and become live again when it is back.

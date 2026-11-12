@@ -293,6 +293,9 @@ final class LibraryHostController {
             // Paired-Mac credential storage is independent of phone and library
             // availability. A failure is reported and retried, never fatal.
             await peerSync.restoreRecordingFailures()
+            // This Mac's streams to every other machine open now; afterwards
+            // only a registry or member change opens or closes one.
+            await connectExecutionStreams()
             // Availability alone must not hold the Mac awake. Active execution
             // continues to use the app's existing work/sleep policy.
             healthTask = Task { [weak self] in
@@ -310,9 +313,6 @@ final class LibraryHostController {
                     await self.peerSync.synchronize()
                     await self.retryPendingRevocations()
                     await self.refreshStatus()
-                    if let model = self.model, let client = try? model.centralExecutionClient() {
-                        await client.refreshRegisteredWorkspaces()
-                    }
                     if let expiry = self.pairingExpiresAt, expiry <= Date() {
                         self.pairingPayload = nil; self.pairingExpiresAt = nil
                     }
@@ -631,7 +631,9 @@ final class LibraryHostController {
                 .init(workspace: workspace, expectedRevision: prior?.revision), deviceID: identity.hostDeviceID)
         }
         guard generation == expectedGeneration, !Task.isCancelled else { return }
+        let previous = executionWorkspaces
         executionWorkspaces = try await database.libraryExecutionWorkspaces()
+        if executionWorkspaces != previous { await connectExecutionStreams() }
         for configuration in model.remoteWorkspaces.workspaces {
             // Adoption and enrollment do not wait for an earlier enrollment.
             setUpLinuxHost(configuration)
@@ -1180,6 +1182,15 @@ final class LibraryHostController {
     private func didPair() async {
         pairedDevices = await authentication?.devices() ?? []
         pairingPayload = nil; pairingExpiresAt = nil
+    }
+
+    /// Opens a stream to every registered workspace that serves one and closes
+    /// those that left the registry: on start, and whenever the registry or the
+    /// member list changes (this Mac's registry refresh, a peer sync that
+    /// applied rows). Each stream reconnects by itself; nothing polls.
+    func connectExecutionStreams() async {
+        guard let model, !model.isBackendFrontend, let client = try? model.centralExecutionClient() else { return }
+        await client.connectRegisteredWorkspaces()
     }
 
     func connectLocalDevelopment(_ request: DevelopmentClientRequest) async throws -> DevelopmentClientConnection {

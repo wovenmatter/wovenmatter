@@ -6,8 +6,9 @@ import WovenMatterClient
 @testable import WovenMatterDashboardStore
 @testable import WovenMatterAppFacade
 
-/// A `stream.v1` workspace reaches this Mac on its stream: journal entries,
-/// questions, the open chat's transcript and commands. Nothing polls it.
+/// A `stream.v1` workspace reaches this Mac on its stream: questions and
+/// approvals, the open chat's transcript, capabilities and settings, and
+/// commands. History arrives only by library sync. Nothing polls it.
 @MainActor @Suite(.serialized)
 struct CentralExecutionStreamTests {
     private struct Setup {
@@ -21,7 +22,8 @@ struct CentralExecutionStreamTests {
         let live: LiveChanges
     }
 
-    private func setup(seedingOwner: Bool = false, alsoSeeding others: [String] = []) async throws -> Setup {
+    private func setup(seedingOwner: Bool = false, alsoSeeding others: [String] = [],
+                       retrySleep: @escaping @Sendable (Duration) async throws -> Void = { _ in await Task.yield() }) async throws -> Setup {
         let fixture = try await FacadeFixture()
         let identity = try await fixture.database.libraryIdentity()
         let workspace = try await fixture.database.registerExecutionWorkspace(.init(workspace: .init(
@@ -33,21 +35,20 @@ struct CentralExecutionStreamTests {
         let journalURL = fixture.directory.appending(path: "stream-commands.json")
         let conversationID = UUID().uuidString.lowercased()
         if seedingOwner {
-            // The conversations' owner is known from its journal.
-            let journal = try WorkspaceJournal(file: journalURL)
-            try await journal.upsertWorkspace(workspace, pending: false)
+            // The conversations' owner is known from the library, as library sync brings it.
             let ids = [conversationID] + others
-            try await journal.receiveWorkspace(.init(libraryID: workspace.libraryID, cursor: Int64(ids.count),
+            _ = try await fixture.database.ingestExecutionJournal(.init(libraryID: workspace.libraryID,
                 entries: ids.enumerated().map { index, id in .init(workspaceID: workspace.id,
                     originSequence: Int64(index + 1), conversationID: id, kind: .conversation,
-                    conversation: .init(id: id, title: "Chat \(index)")) }), workspaceID: workspace.id)
+                    conversation: .init(id: id, title: "Chat \(index)", libraryID: workspace.libraryID, workspaceID: workspace.id)) }),
+                deviceID: workspace.executionDeviceID!)
         }
         let client = try CentralExecutionClient(database: fixture.database, commandJournalURL: journalURL,
             provision: { _ in throw LibraryAPIError(code: "unexpected", message: "Nothing is provisioned for a member.") },
             makeTransport: { _ in http }, loadCredential: { _ in nil }, saveCredential: { _ in },
             makeSignedTransport: { _ in http },
             makeStream: { _ in { try server.connect() } },
-            streamConfiguration: .init(pingInterval: .seconds(3600), requestTimeout: .seconds(5), retrySleep: { _ in await Task.yield() }))
+            streamConfiguration: .init(pingInterval: .seconds(3600), requestTimeout: .seconds(5), retrySleep: retrySleep))
         let live = LiveChanges()
         client.onLive = { live.record($0) }
         return Setup(fixture: fixture, workspace: workspace, conversationID: conversationID, journalURL: journalURL,
@@ -63,46 +64,86 @@ struct CentralExecutionStreamTests {
         return socket
     }
 
-    @Test func journalItemsReachTheWorkspaceJournalWithoutPolling() async throws {
+    @Test func theWorkspaceStreamCarriesQuestionsAndNoHistory() async throws {
         let setup = try await setup(); defer { setup.fixture.remove() }
         let (client, workspace, id) = (setup.client, setup.workspace, setup.conversationID)
-        await client.refreshRegisteredWorkspaces()
+        await client.connectRegisteredWorkspaces()
         #expect(client.isStreamed(workspace.id))
         let socket = try await open(setup)
         try await until("workspace subscription") { await socket.subscriptions.count == 1 }
         let subscription = await socket.subscriptions[0]
-        #expect(subscription.stream == "workspace" && subscription.params.after == 0)
+        // No cursor: this Mac never asks for the workspace's journal.
+        #expect(subscription.stream == "workspace" && subscription.params.after == nil)
 
+        // A journal item, were one sent, is not history here: library sync is.
         let conversation = LibraryConversation(id: id, title: "Fix the build", libraryID: workspace.libraryID, workspaceID: workspace.id)
         await socket.push(.item(.init(id: subscription.id, seq: 1, payload: .journal(.init(entry: .init(workspaceID: workspace.id,
             originSequence: 1, conversationID: id, kind: .conversation, conversation: conversation))))))
-        await socket.push(.item(.init(id: subscription.id, seq: 2, payload: .journal(.init(entry: .init(workspaceID: workspace.id,
-            originSequence: 2, conversationID: id, kind: .transcript, transcript: .init(conversationID: id, messages: [
-                .init(id: "m1", conversationID: id, role: "user", content: "Run the tests")
-            ])))))))
         let interaction = PendingInteraction(id: "q1", conversationID: id, runID: "run", kind: .approval, title: "Run npm test?")
         await socket.push(.item(.init(id: subscription.id, payload: .pending(.init(interactions: [interaction])))))
         await socket.push(.item(.init(id: subscription.id, payload: .synchronized)))
         try await until("pending") { client.pending[workspace.id] == [interaction] }
-        let journal = try WorkspaceJournal(file: setup.journalURL)
-        #expect(await journal.snapshot().directCursors[workspace.id] == 2)
-        #expect(await journal.snapshot().conversationWorkspaceIDs[id] == workspace.id)
-        #expect(client.transcripts[id]?.messages.map(\.content) == ["Run the tests"])
         #expect(setup.live.all.contains(id))
+        #expect(client.transcripts[id] == nil)
+        #expect(try await client.workspace(conversationID: id) == nil)
+        let journal = try WorkspaceJournal(file: setup.journalURL)
+        let cached = await journal.snapshot()
+        #expect(cached.entries.isEmpty && cached.directCursors.isEmpty)
+        #expect(await socket.subscriptions.count == 1, "Nothing resubscribes for a journal")
 
-        // A sequence jump is a gap: subscribe again from the journal's cursor.
-        await socket.push(.item(.init(id: subscription.id, seq: 4, payload: .journal(.init(entry: .init(workspaceID: workspace.id,
-            originSequence: 4, conversationID: id, kind: .conversation, conversation: conversation))))))
-        try await until("resubscribe") { await socket.subscriptions.count == 2 }
-        #expect(await socket.subscriptions[1].params.after == 2)
-        #expect(await socket.cancels == [subscription.id])
-
-        // The background refresh never polls a streamed workspace.
-        await client.refreshRegisteredWorkspaces()
-        await client.refreshRegisteredWorkspaces()
+        // Registry changes and time open nothing new and read nothing.
+        await client.connectRegisteredWorkspaces()
+        await client.connectRegisteredWorkspaces()
+        try await Task.sleep(for: .milliseconds(300))
         #expect(await setup.http.eventRequests == 0)
         #expect(await setup.http.pendingRequests == 0)
+        #expect(await setup.http.transcriptRequests == 0)
         #expect(setup.server.sockets.count == 1)
+        #expect(await socket.requests.isEmpty)
+    }
+
+    @Test func aMachineThatIsNotConnectedShowsItsLastKnownStateFromTheLibrary() async throws {
+        // Reconnect attempts back off, as they do in the app.
+        let setup = try await setup(seedingOwner: true, retrySleep: { _ in try await Task.sleep(for: .milliseconds(200)) })
+        defer { setup.fixture.remove() }
+        let (client, workspace, id, model) = (setup.client, setup.workspace, setup.conversationID, setup.fixture.model)
+        _ = try await setup.fixture.database.ingestExecutionJournal(.init(libraryID: workspace.libraryID, entries: [
+            .init(workspaceID: workspace.id, originSequence: 2, conversationID: id, kind: .transcript, transcript: .init(conversationID: id, messages: [
+                .init(id: UUID().uuidString.lowercased(), conversationID: id, role: "user", content: "Run the tests"),
+                .init(id: UUID().uuidString.lowercased(), conversationID: id, role: "assistant", content: "All 214 tests pass.")
+            ]))]), deviceID: workspace.executionDeviceID!)
+        setup.server.offline = true
+        model.federatedExecutionClient = client
+        await client.connectRegisteredWorkspaces()
+        try await until("waiting") { client.errors[workspace.id] != nil }
+
+        await #expect(throws: LibraryAPIError.self) { try await client.refresh(conversationID: id) }
+        #expect(client.transcripts[id]?.messages.map(\.content) == ["Run the tests", "All 214 tests pass."])
+        #expect(client.transcripts[id]?.olderCursor?.hasPrefix("library:") ?? true)
+        let snapshot = try await model.performFederatedExecution(.refresh(conversationID: id))
+        #expect(!snapshot.online)
+        #expect(snapshot.error?.isEmpty == false)
+        #expect(snapshot.transcript?.messages.count == 2)
+
+        // While it stays away, only the stream's own reconnects happen: no reads.
+        try await Task.sleep(for: .milliseconds(600))
+        #expect(await setup.http.eventRequests == 0)
+        #expect(await setup.http.pendingRequests == 0)
+        #expect(await setup.http.transcriptRequests == 0)
+
+        // When it is back, the chat follows its stream again.
+        setup.server.offline = false
+        let socket = try await open(setup)
+        let refresh = Task { try await client.refresh(conversationID: id) }
+        try await until("conversation subscription") { await socket.subscriptions.contains { $0.stream == "conversation" } }
+        let subscription = try #require(await socket.subscriptions.first { $0.stream == "conversation" })
+        await socket.push(.item(.init(id: subscription.id, payload: .transcript(.init(transcript: .init(conversationID: id, messages: [
+            .init(id: "m3", conversationID: id, role: "assistant", content: "Live again", status: "streaming")
+        ], activeRunID: "run"), snapshot: true)))))
+        await socket.push(.item(.init(id: subscription.id, payload: .synchronized)))
+        try await refresh.value
+        #expect(client.onlineWorkspaces.contains(workspace.id))
+        #expect(client.transcripts[id]?.messages.last?.content == "Live again")
     }
 
     @Test func theOpenChatsTranscriptUpdatesMergeByID() async throws {
@@ -146,7 +187,7 @@ struct CentralExecutionStreamTests {
     @Test func commandsUseTheSocketAndALostReplyIsResolvedByReceipt() async throws {
         let setup = try await setup(); defer { setup.fixture.remove() }
         let (client, workspace, id) = (setup.client, setup.workspace, setup.conversationID)
-        await client.refreshRegisteredWorkspaces()
+        await client.connectRegisteredWorkspaces()
         let first = try await open(setup)
         let send = Task { try await client.send(to: workspace, conversationID: id, text: "Exactly once") }
         try await until("command") { await first.requests.contains { $0.method == "execution.command" } }
@@ -327,9 +368,18 @@ private actor StreamFixtureSocket: StreamTransport {
 private final class StreamFixtureServer: @unchecked Sendable {
     private let lock = NSLock()
     private var opened: [StreamFixtureSocket] = []
+    private var unreachable = false
     var sockets: [StreamFixtureSocket] { lock.withLock { opened } }
+    /// The machine cannot be reached: every connection attempt fails.
+    var offline: Bool {
+        get { lock.withLock { unreachable } }
+        set { lock.withLock { unreachable = newValue } }
+    }
     func connect() throws -> any StreamTransport {
-        lock.withLock { let socket = StreamFixtureSocket(); opened.append(socket); return socket }
+        try lock.withLock {
+            if unreachable { throw URLError(.cannotConnectToHost) }
+            let socket = StreamFixtureSocket(); opened.append(socket); return socket
+        }
     }
 }
 

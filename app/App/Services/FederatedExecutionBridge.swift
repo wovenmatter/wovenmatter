@@ -32,8 +32,6 @@ struct FederatedExecutionSnapshot: Codable, Sendable {
     var session: SessionSettings?
     var online: Bool
     var error: String?
-    /// The workspace pushes every change on its stream: nothing polls it.
-    var streamed: Bool? = nil
 }
 
 extension ApplicationModel {
@@ -74,8 +72,8 @@ extension ApplicationModel {
                 return try SignedExecutionWorkspaceTransport(workspace: workspace, signer: directory.identity.signer, audience: audience)
             },
             makeStream: { [weak self] workspace in
-                // The live stream lives where the member key, the command journal
-                // and the history cache are: this process, never a frontend window.
+                // The live stream lives where the member key and the command
+                // journal are: this process, never a frontend window.
                 guard let self, workspace.kind != .ios, let endpoint = workspace.endpoint,
                       let directory = try? await self.libraryHost.peerSync.members(),
                       let audience = await directory.audience(for: workspace) else { return nil }
@@ -84,8 +82,7 @@ extension ApplicationModel {
                     "X-Woven-Workspace": workspace.id, "X-Woven-Device": directory.identity.deviceID
                 ])
             },
-            memberRevision: { [weak self] in try? await self?.libraryHost.peerSync.members().list().revision },
-            onChange: { [weak self] in await self?.refreshWorkspace() })
+            memberRevision: { [weak self] in try? await self?.libraryHost.peerSync.members().list().revision })
         client.onLive = { [weak self] ids in self?.federatedLiveChanged(ids) }
         // A Linux host's Pi Durable vault opens with this Mac's key for that
         // workspace (its registry id is the Keychain scope).
@@ -213,7 +210,7 @@ extension ApplicationModel {
         try? await client.refresh(conversationID: id)
         var refreshing = false
         if case .refresh = action { refreshing = true }
-        let session = await client.sessionSettings(conversationID: id, workspace: workspace, force: !refreshing)
+        let session = client.sessionSettings(conversationID: id, workspace: workspace)
         let snapshot = federatedSnapshot(id, workspace: workspace, client: client, transcript: earlier ?? client.transcripts[id], session: session)
         // An older page is the caller's; the chat's own snapshot stays its live window.
         if earlier == nil { federatedExecutionSnapshots[id] = snapshot; renderRemoteConversation(id) }
@@ -234,8 +231,7 @@ extension ApplicationModel {
                                    transcript: LibraryTranscript?, session: SessionSettings?) -> FederatedExecutionSnapshot {
         FederatedExecutionSnapshot(workspace: workspace, transcript: transcript,
             capability: client.capabilities[id], interactions: client.pending[workspace.id]?.filter { $0.conversationID == id } ?? [],
-            session: session, online: client.onlineWorkspaces.contains(workspace.id), error: client.errors[workspace.id],
-            streamed: client.isStreamed(workspace.id))
+            session: session, online: client.onlineWorkspaces.contains(workspace.id), error: client.errors[workspace.id])
     }
 
     /// A snapshot's copied history has no connection or credential to its former owner.
