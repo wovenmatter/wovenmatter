@@ -234,7 +234,8 @@ struct DashboardNotePane: View {
                                     guard let asset = model.workspaceOverview?.notes.first(where: { $0.id == note.id }) else { return [:] }
                                     return (try? NoteDocument.editableDocument(from: asset.content))?.artifactState ?? [:]
                                 },
-                                saveState: { model.enqueueArtifactInput(noteID: note.id, edit: $0, after: $1) })
+                                saveState: { model.enqueueArtifactInput(noteID: note.id, edit: $0, after: $1) },
+                                reportUnsaved: { model.setArtifactInputsUnsaved(generation: $0, $1) })
                             .accessibilityLabel("Artifact")
                         }
                     }

@@ -9,7 +9,7 @@ final class WovenMatterLifecycleDelegate: NSObject, NSApplicationDelegate {
     var presentNoteSaveFailure: @MainActor () -> Void = {
         let alert = NSAlert()
         alert.messageText = "Some writing or Artifact inputs could not be saved"
-        alert.informativeText = "Quit was cancelled. Review the save error and retry saving before closing the app. Unsaved Artifact inputs remain in the open interface."
+        alert.informativeText = "Quit was cancelled. Review the save error and choose Retry saving. Closing an Artifact discards its unsaved input."
         alert.addButton(withTitle: "Keep editing")
         alert.runModal()
     }

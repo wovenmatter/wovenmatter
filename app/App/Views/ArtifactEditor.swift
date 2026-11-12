@@ -200,13 +200,15 @@ struct DashboardSpreadsheetEditor: View {
 
 struct DashboardHTMLArtifactView: NSViewRepresentable {
     @Environment(\.colorScheme) private var colorScheme
-    @Environment(\.isEnabled) private var isEnabled
     let html: String
     let linkedDataJSON: String?
     var persistentState: [String: ArtifactStateEntry] = [:]
     var readState: (() -> [String: ArtifactStateEntry])?
     var saveState: ((ArtifactStateEdit, Task<ArtifactStateWriteResult, any Error>?) -> Task<ArtifactStateWriteResult, any Error>)?
     var onSaveError: ((String?) -> Void)?
+    /// Reports whether this document generation holds input that failed to save,
+    /// so quitting cannot report success while it is unsaved.
+    var reportUnsaved: ((_ generation: String, _ unsaved: Bool) -> Void)?
     var retrySignal = 0
 
     func makeCoordinator() -> Coordinator { Coordinator(parent: self) }
@@ -234,6 +236,8 @@ struct DashboardHTMLArtifactView: NSViewRepresentable {
             coordinator.html = html
             coordinator.emptyAppearance = emptyAppearance
             coordinator.editable = editable
+            // The replaced document discards its unsaved input along with its WebView state.
+            if !coordinator.saveErrors.isEmpty { reportUnsaved?(coordinator.token, false) }
             coordinator.token = UUID().uuidString
             coordinator.latestWrites.removeAll()
             coordinator.saveErrors.removeAll()
@@ -257,6 +261,7 @@ struct DashboardHTMLArtifactView: NSViewRepresentable {
         webView.configuration.userContentController.removeScriptMessageHandler(forName: "wovenArtifactState")
         webView.navigationDelegate = nil
         coordinator.webView = nil
+        if !coordinator.saveErrors.isEmpty { coordinator.parent.reportUnsaved?(coordinator.token, false) }
     }
 
     @MainActor final class Coordinator: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
@@ -282,6 +287,7 @@ struct DashboardHTMLArtifactView: NSViewRepresentable {
             guard generation == token else { return }
             saveErrors[key] = message
             parent.onSaveError?(saveErrors.sorted { $0.key < $1.key }.first?.value)
+            parent.reportUnsaved?(generation, !saveErrors.isEmpty)
         }
 
         func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {

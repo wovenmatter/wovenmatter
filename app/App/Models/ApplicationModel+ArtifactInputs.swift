@@ -4,12 +4,19 @@ import WovenMatterCore
 extension ApplicationModel {
     /// Settle every input admitted before this barrier without allowing one
     /// failed key to skip other input writes or the Note recovery journal.
+    /// Input that failed earlier and is still waiting for Retry also counts as
+    /// unsaved until it is retried or its Artifact is closed.
     func flushArtifactInputs() async -> Bool {
         var succeeded = true
         for write in Array(artifactInputWrites.values) {
             do { _ = try await write.value } catch { succeeded = false }
         }
-        return succeeded
+        return succeeded && unsavedArtifactGenerations.isEmpty
+    }
+
+    func setArtifactInputsUnsaved(generation: String, _ unsaved: Bool) {
+        if unsaved { unsavedArtifactGenerations.insert(generation) }
+        else { unsavedArtifactGenerations.remove(generation) }
     }
 
     func scheduleArtifactWorkspaceRefresh() {

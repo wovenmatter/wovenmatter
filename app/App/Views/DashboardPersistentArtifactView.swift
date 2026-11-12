@@ -9,6 +9,7 @@ struct DashboardPersistentArtifactView: View {
     var savedState: [String: ArtifactStateEntry]?
     var currentState: (() -> [String: ArtifactStateEntry])?
     var saveState: ((ArtifactStateEdit, Task<ArtifactStateWriteResult, any Error>?) -> Task<ArtifactStateWriteResult, any Error>)?
+    var reportUnsaved: ((String, Bool) -> Void)?
     @State private var saveError: String?
     @State private var retrySignal = 0
 
@@ -25,7 +26,7 @@ struct DashboardPersistentArtifactView: View {
             DashboardHTMLArtifactView(html: document.html, linkedDataJSON: linkedDataJSON,
                 persistentState: savedState ?? document.artifactState ?? [:],
                 readState: { currentState?() ?? savedState ?? document.artifactState ?? [:] }, saveState: saveState,
-                onSaveError: { saveError = $0 }, retrySignal: retrySignal)
+                onSaveError: { saveError = $0 }, reportUnsaved: reportUnsaved, retrySignal: retrySignal)
             if let saveError {
                 HStack(alignment: .top, spacing: 8) {
                     Text(saveError).font(.system(size: 12)).textSelection(.enabled)

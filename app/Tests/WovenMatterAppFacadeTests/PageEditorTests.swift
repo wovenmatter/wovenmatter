@@ -189,6 +189,23 @@ import WovenMatterCore
         f.model.artifactInputWrites[key] = nil
     }
 
+    /// Input that failed before quitting and still waits for Retry blocks the quit
+    /// barrier, even though no write is in flight; retrying or closing releases it.
+    @Test func earlierFailedInputBlocksQuitUntilRetriedOrClosed() async throws {
+        let f = try await FacadeFixture(); defer { f.remove() }
+        let coordinator = DashboardHTMLArtifactView(html: "", linkedDataJSON: nil,
+            reportUnsaved: { f.model.setArtifactInputsUnsaved(generation: $0, $1) }).makeCoordinator()
+        coordinator.token = "current"
+        coordinator.updateSaveError("Conflict", key: "app:a", generation: "current")
+        #expect(f.model.artifactInputWrites.isEmpty)
+        #expect(!(await f.model.flushNotesBeforeBackendClientQuit()))
+        coordinator.updateSaveError(nil, key: "app:a", generation: "current")
+        #expect(await f.model.flushNotesBeforeBackendClientQuit())
+        coordinator.updateSaveError("Conflict", key: "app:a", generation: "current")
+        f.model.setArtifactInputsUnsaved(generation: "current", false)
+        #expect(await f.model.flushNotesBeforeBackendClientQuit())
+    }
+
     @Test func anErrorOnOneKeySurvivesAnotherKeysSuccessAndOldGenerationReplies() {
         var visible: String?
         let coordinator = DashboardHTMLArtifactView(html: "", linkedDataJSON: nil, onSaveError: { visible = $0 }).makeCoordinator()

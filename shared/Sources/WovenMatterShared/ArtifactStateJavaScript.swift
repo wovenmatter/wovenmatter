@@ -18,7 +18,8 @@ public enum ArtifactStateJavaScript {
       let shadow = clone(committed);
       let sequence = 0;
       let tail = Promise.resolve();
-      let pausedError = null;
+      // A failed key pauses only itself until Retry, so other keys keep saving.
+      const failures = new Map();
       let resolveReady;
       const ready = new Promise(resolve => { resolveReady = resolve; });
       const pending = new Map();
@@ -26,7 +27,7 @@ public enum ArtifactStateJavaScript {
       const unsaved = new Map();
       const listeners = new Set();
       const validKey = key => {
-        if (typeof key !== 'string' || !key.length || key.length > 256) throw new Error('Use a state key of 1–256 characters.');
+        if (typeof key !== 'string' || !key.length || key.length > 256 || /[\u0000-\u001f\u007f]/.test(key)) throw new Error('Use a state key of 1–256 characters without control characters.');
         return 'app:' + key;
       };
       const appValues = () => {
@@ -95,7 +96,7 @@ public enum ArtifactStateJavaScript {
         unsaved.set(key, operation);
         notify();
         const run = async () => {
-          if (pausedError) throw pausedError;
+          if (failures.has(key)) throw failures.get(key);
           const requestID = String(++sequence);
           await new Promise((resolve, reject) => {
             pending.set(requestID, {resolve, reject, key});
@@ -113,16 +114,21 @@ public enum ArtifactStateJavaScript {
         // accepted keystrokes survive the WebView closing before an earlier ack.
         const result = run();
         tail = Promise.allSettled([tail, result]).then(() => {});
-        result.catch(error => { pausedError = error; errorEvent(error.message); });
+        result.catch(error => {
+          if (!failures.has(key)) errorEvent(error.message);
+          failures.set(key, error);
+        });
         return result;
       };
-      const flush = async () => { await tail; if (pausedError) throw pausedError; };
+      const flush = async () => { await tail; if (failures.size) throw failures.values().next().value; };
+      // Reapplies every unsaved key against current versions. A key that fails
+      // again stays paused without stopping the keys after it.
       const retry = async () => {
         await tail;
-        pausedError = null;
+        failures.clear();
         for (const [key, operation] of Array.from(unsaved)) {
           lastRequests.delete(key);
-          await save(key, operation.value, operation.removing);
+          await save(key, operation.value, operation.removing).catch(() => {});
         }
         await flush();
       };

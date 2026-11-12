@@ -374,6 +374,8 @@ final class ApplicationModel {
     lazy var libraryHost = LibraryHostController(model: self)
     private var noteWriteBehind: DashboardNoteWriteBehind?
     @ObservationIgnored var artifactInputWrites: [UUID: Task<ArtifactStateWriteResult, any Error>] = [:]
+    /// Open Artifact documents holding input that failed to save and awaits Retry.
+    @ObservationIgnored var unsavedArtifactGenerations: Set<String> = []
     @ObservationIgnored var artifactRefreshTask: Task<Void, Never>?
     @ObservationIgnored var artifactRefreshNeeded = false
     private(set) var noteEditingSuspended = false

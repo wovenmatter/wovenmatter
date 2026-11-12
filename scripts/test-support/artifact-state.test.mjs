@@ -155,17 +155,38 @@ test('data refresh updates custom subscribers without overwriting pending user i
   await h.window.wovenArtifact.flush();
 });
 
-test('save failure retains visible input, pauses queued writes, and explicit retry uses current key versions', async () => {
+test('save failure retains visible input, pauses only that key, and explicit retry uses current key versions', async () => {
   const h = harness();
   h.setSaved({ values: { 'app:x': 'Other editor' }, versions: { 'app:x': 2 } });
   await assert.rejects(h.window.wovenArtifact.set('x', 'My input'), /state conflict/);
   assert.equal(h.window.wovenArtifact.get('x'), 'My input');
-  await assert.rejects(h.window.wovenArtifact.set('y', 'Queued input'), /state conflict/);
-  assert.equal(h.requests.length, 1);
+  // Another key keeps saving; the failed key holds its later edits until Retry.
+  await h.window.wovenArtifact.set('y', 'Other input');
+  assert.equal(h.saved().values['app:y'], 'Other input');
+  await assert.rejects(h.window.wovenArtifact.set('x', 'My later input'), /state conflict/);
+  assert.equal(h.requests.length, 2);
+  await assert.rejects(h.window.wovenArtifact.flush(), /state conflict/);
   await h.window.wovenArtifact.retry();
-  assert.equal(h.saved().values['app:x'], 'My input');
-  assert.equal(h.saved().values['app:y'], 'Queued input');
-  assert.equal(h.requests[1].edit.expectedVersion, 2);
+  assert.equal(h.saved().values['app:x'], 'My later input');
+  assert.equal(h.requests[2].edit.expectedVersion, 2);
+});
+
+test('retry continues past a key that fails again', async () => {
+  const h = harness();
+  h.failNext('offline');
+  await assert.rejects(h.window.wovenArtifact.set('a', 'mine'), /offline/);
+  h.failNext('offline');
+  await assert.rejects(h.window.wovenArtifact.set('b', 'mine'), /offline/);
+  h.failNext('still invalid');
+  await assert.rejects(h.window.wovenArtifact.retry(), /still invalid/);
+  assert.equal(Object.hasOwn(h.saved().values, 'app:a'), false);
+  assert.equal(h.saved().values['app:b'], 'mine');
+  assert.equal(h.window.wovenArtifact.get('a'), 'mine');
+});
+
+test('state keys reject control characters', () => {
+  const h = harness();
+  assert.throws(() => h.window.wovenArtifact.set('bad\nkey', 1), /control characters/);
 });
 
 test('passwords, files, hidden controls and opted-out values are excluded from automatic persistence', async () => {

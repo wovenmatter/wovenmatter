@@ -27,7 +27,7 @@ enum DashboardHTMLArtifactDocument {
         <head>
           <meta charset="utf-8">
           <meta name="viewport" content="width=device-width, initial-scale=1">
-          <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; font-src data:; style-src 'unsafe-inline'; script-src 'unsafe-inline'">
+          <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; font-src data:; style-src 'unsafe-inline'; script-src 'unsafe-inline'; form-action 'none'; base-uri 'none'">
           <style>
             :root { color-scheme: light dark; font-family: -apple-system, BlinkMacSystemFont, sans-serif; }
             html, body { min-height: 100%; margin: 0; }
