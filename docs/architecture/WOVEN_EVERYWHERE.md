@@ -817,8 +817,9 @@ hands them to the macOS job, which checks them with
   Command IDs derive from the caller, request ID, workspace and session, so a
   retry replays the receipt. Reading a session the caller did not create needs
   Conversation history. `stop` and `respond` on this workspace apply only to
-  sessions the caller created or coordinates. There are no notifications back
-  to the caller; it polls `woven_sessions_status`.
+  sessions the caller created or coordinates. The caller does not poll: it
+  waits with `woven_sessions_wait`, and it is woken when a session it created
+  finishes or needs input (see "Streaming", agent to agent).
 - **Bots** get `woven_sessions_create`, `_send`, `_status`, `_list`, `_stop`,
   `_respond` and `_harnesses` from the Node server itself (no Mac): a bot's
   sessions on its own machine's workspace go through that workspace's own
@@ -1009,6 +1010,169 @@ hands them to the macOS job, which checks them with
   reminders, and dictations. Local notes the Mac does not have are kept, and
   Quick Chats stay owned by the phone. Pairing with a Mac of another library
   later still takes the explicit library-change path above.
+
+## Streaming
+
+Every live view of a session streams. Nothing polls an execution workspace.
+
+- **Who is the server.** Each machine's one Woven server (the Mac background
+  server, the Linux Node server) owns its sessions and serves the stream. Every
+  user interface, on any device, is a client of every server it uses: a Mac
+  window holds one connection to its own server and one WebSocket to each
+  other Mac and Linux machine it shows; the iPhone holds one WebSocket to each.
+  Servers also connect to each other, only for agent-to-agent waiting. Harness
+  processes stay ACP children of their own machine's server.
+- **What moves where.** History moves only by library sync. The live view of a
+  session (its transcript as it is written, run state, questions and
+  approvals, capabilities) and commands move on the stream. Older history
+  pages, attachments, the browser screencast, inference, bots and library sync
+  stay on their signed HTTP routes.
+
+### Endpoint and authentication
+
+- `GET /v1/stream?protocol=1`, upgraded to a WebSocket. A Mac serves it under
+  its `/wovenmatter` mount; a Linux host under its execution endpoint
+  (`…/wovenmatter-execution/<id>/v1/stream`). The workspace descriptor's
+  `capabilities` includes `stream.v1`.
+- The upgrade `GET` is member-signed exactly like any other member request
+  (`woven-member-v2`, headers only, empty body, the target including
+  `?protocol=1`). It is the whole credential: no ticket, bearer or grant.
+  Allowed member kinds are those of `/v1/execution/*`: `mac`, `ios`, `linux`.
+  A Mac window has no key; it asks its own server to sign each attempt
+  (`BotsCommand.signSocket`, widened to `/v1/stream`). Every reconnect signs
+  afresh.
+- Refusals happen before the upgrade, as JSON HTTP errors: `426`
+  `{code:"protocol_unsupported", supported:[1]}`; `401`
+  `{code:"member_time_stale", serverTime}` when the signature time is outside
+  the window, so the UI says the device clock is wrong; `401` `unauthorized`;
+  `403` when the request carries `Origin` or `Cookie`.
+- Each server keeps a registry of open sockets by member device ID. When its
+  member list changes it closes every socket whose member was removed, or is no
+  longer an allowed kind, with close code `4401`. A client does not retry after
+  `4401` until its own member list changes. The same registry closes the
+  `/v1/bots/ws` relays on both Mac and Linux, and the Linux bots upgrade accepts
+  signed members only (the installer bearer and device grants no longer open it).
+
+### Frames
+
+JSON text frames, one message per frame, at most 8 MiB (normal frames are far
+smaller). Liveness uses WebSocket ping and pong control frames: the client
+pings every 25 s while connected and the server closes a socket with no pong
+for 60 s. The Swift types live in `shared/Sources/WovenMatterShared/StreamProtocol.swift`;
+`shared/Tests/WovenMatterSharedTests/StreamProtocolFixtures.json` holds one
+example of every frame and item, and the Swift and Node test suites both
+decode and re-encode every fixture.
+
+| Direction | Frame | Meaning |
+|---|---|---|
+| server | `{t:"hello", protocol:1, deviceID, libraryID, workspaceID, serverTime, capabilities:[…], maxFrameBytes}` | First frame after the upgrade. |
+| client | `{t:"req", id, method, params}` | A call. `id` is unique per socket. |
+| server | `{t:"res", id, result}` or `{t:"res", id, error:{code, message, retryable}}` | Exactly one per `req`. |
+| client | `{t:"sub", id, stream, params}` | Open a subscription. |
+| server | `{t:"item", id, kind, seq?, data}` | One subscription item. |
+| server | `{t:"end", id, error?}` | The server closed a subscription. |
+| client | `{t:"cancel", id}` | Close a subscription or abandon a call. |
+
+Unknown frame types and unknown item kinds are ignored. Error codes:
+`unauthorized`, `not_found`, `invalid`, `unavailable`, `conflict`, and
+`resync` (the subscription fell behind: subscribe again). Close codes: `1000`
+normal, `1001` server stopping or sleeping, `4400` protocol violation, `4401`
+member removed.
+
+### Streams
+
+- **`workspace`** `{after?}`, one per server per client:
+  - `conversations` `{conversations:[LibraryConversation], snapshot}`: the
+    full list on subscribe (`snapshot: true`), then changed summaries.
+    `deletedConversationIDs` lists removals.
+  - `pending` `{interactions:[PendingInteraction]}`: the whole list for the
+    workspace whenever it changes, and on subscribe.
+  - `journal` `{entry: ExecutionJournalEntry}`, `seq` = its `originSequence`:
+    only from a server with an execution journal (a Linux host, a secondary
+    Mac), only when the client passed `after`. The server replays every entry
+    after `after`, then sends new entries as they are written. The client feeds
+    them to its `WorkspaceJournal` exactly as it did HTTP pages; a sequence
+    jump means a gap and the client subscribes again with its last cursor.
+  - `synchronized` `{}` after the initial snapshot and replay.
+- **`conversation`** `{conversationID}`, one per open chat:
+  - `transcript` `{transcript: LibraryTranscript, snapshot}`: first the latest
+    window (what `GET …/transcript` returns) with `snapshot: true`; then
+    upserts of the messages and activities that changed, each whole, with the
+    transcript's `activeRunID`, `runs` and `removedMessageIDs`. The client
+    replaces entities by ID. Live text is the whole message so far, never an
+    appended piece.
+  - `capabilities` `{capabilities: HarnessCapabilities}` on subscribe and when
+    they change.
+  - `synchronized` `{}` after the first snapshot.
+- **Coalescing.** A server sends a conversation's changes at most every 50 ms
+  while every changed message is 8 KB or smaller, and at most every 200 ms
+  once one is larger. Durable state is never coalesced away: the last update
+  always reflects the stored state.
+- **Backpressure.** Each socket has a bounded outbound queue (512 items or
+  8 MiB). Updates to the same entity supersede queued ones. A subscription that
+  still overflows ends with `resync`; nothing is lost, because a new
+  subscription starts from a snapshot or a journal cursor.
+- **Mac change source.** A Mac has no execution journal. Triggers on its
+  conversation, message, run and activity tables append to
+  `execution_stream_changes(sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+  conversation_id, entity_kind, entity_id)` in the same transaction, only for
+  conversations this Mac runs (not history synchronized from other machines).
+  Entries are pointers; the server reads the current rows when it sends. The
+  sequence is gap-free, so the stream tail never misses a change. Entries
+  older than the newest 10,000 are deleted.
+
+### Methods
+
+- `execution.command` `{command: LibraryCommand}` → `LibraryCommandReceipt`.
+  The same handler as `POST v1/execution/commands`, with the same idempotent
+  command IDs. Commands are never replayed automatically: a command whose
+  `res` was lost becomes `outcomeUnknown` in the client's command journal and
+  is resolved with `execution.receipt` after reconnecting.
+- `execution.receipt` `{commandID}` → `LibraryCommandReceipt` or `null`.
+- `POST v1/execution/commands` and the read routes stay for server-to-server
+  calls and Woven MCP.
+
+### Clients
+
+- One `StreamConnection` per (client, server) owns reconnection: backoff from
+  1 s to 30 s with jitter, an immediate attempt on wake, network path change
+  and app foreground, and no attempts while Tailscale is down. Subscriptions
+  resume after a reconnect; commands do not.
+- **Mac window to its own server.** The same frames over the existing Unix
+  socket, on one persistent connection, each frame a 4-byte big-endian length
+  and its JSON. Unix socket permissions authenticate it; there is no upgrade or
+  signature. It adds a `server.state` stream whose items are the scopes the
+  background server invalidates (`settings`, `runtime`, `usage`, `bots` and the
+  rest), replacing the `application.changes` long-poll. The window keeps
+  reading bulk history from its read-only SQLite projection and subscribes to
+  live changes on the connection.
+- **iPhone.** Connects to every listed server while the app is in the
+  foreground: `workspace` on each, `conversation` only for the open chat. It
+  closes cleanly when the app goes to the background and resumes on return.
+  Nothing is live while the app is in the background.
+
+### Agent to agent
+
+- `woven_sessions_wait {id, workspace?, until: "idle"|"needsInput"|"either",
+  timeoutSeconds}` returns when the session reaches that state or after
+  `timeoutSeconds` (at most 50, below harness tool-call limits) with
+  `timedOut: true`, then the same body as `woven_sessions_status`.
+- **Wake-ups.** When a session an agent created on another workspace (a
+  remembered `member_sessions` / `member_tool_sessions` row) finishes or asks a
+  question and the calling session is idle, the caller's server delivers a
+  short message into the calling session, which starts a turn. At most 10
+  wake-ups per calling run; after that the agent must wait or check status
+  itself.
+- Behind both, the caller's server holds one stream to the destination server
+  and subscribes to its `workspace` stream, filtered to the sessions it created.
+
+### Linux sessions
+
+Every device, the Mac that added the host included, reaches a Linux host's
+sessions through that host's server and its stream. The Linux server owns
+them; its durable channels (`remote/src/durable-acp.mjs`) keep runs alive.
+SSH is for install, update and repair only: there is no SSH agent launch and
+no stdio relay.
 
 ## Bots
 
