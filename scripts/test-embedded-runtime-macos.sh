@@ -24,7 +24,9 @@ from pathlib import Path
 import subprocess
 import sys
 
-subprocess.run(sys.argv[1:], check=True, timeout=120)
+# About 10 s on a Mac. GitHub's virtualized runners take 10 s or more for each
+# of the 12 steps (each starts a fresh WebKit and Pyodide), so 120 s was too tight.
+subprocess.run(sys.argv[1:], check=True, timeout=600)
 report = json.loads((Path(sys.argv[2]) / "report.json").read_text())
 assert report["status"] == "passed", report
 for check in ("receiptReplay", "sqlitePersistence", "cancel", "symlinkRejected",

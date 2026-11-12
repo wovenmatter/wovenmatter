@@ -314,7 +314,9 @@ struct MemberSyncTests {
     await network.setOffline([])
     await a.sync.resume(reason: "wake")
     #expect(try await Self.settle([a]) { await $0.has(note) })
-    #expect(await a.sync.exchanges["wake", default: 0] >= 1)
+    // A sync already running when the wake arrived can bring the note first;
+    // the wake then runs, and is counted, right after it (scheduleSync coalesces).
+    #expect(try await Self.settle([a]) { await $0.sync.exchanges["wake", default: 0] >= 1 })
   }
 
   /// A Linux host relays every row, but may write registry and ownership rows
