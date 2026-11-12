@@ -41,12 +41,13 @@ public final class WorkspaceDatabase: Sendable {
 
   func write<T: Sendable>(_ operation: @escaping @Sendable (WorkspaceDatabaseConnection) throws -> T) async throws -> T {
     guard let writer else { throw WorkspaceDatabaseError.readOnlyProjection }
-    let changes = changes, streamChanges = workers.streamChanges
+    let changes = changes, streamChanges = workers.streamChanges, libraryChanges = workers.libraryChanges
     return try await writer.worker.perform { _ in
       try writer.use { connection in
         defer {
           if changes.isObserved { changes.check(connection) }
           if streamChanges.isObserved { streamChanges.check(connection) }
+          if libraryChanges.isObserved { libraryChanges.check(connection) }
         }
         return try operation(connection)
       }
@@ -65,6 +66,13 @@ public final class WorkspaceDatabase: Sendable {
   @discardableResult
   public func observeExecutionStreamChanges(_ handler: @escaping @Sendable (Int64) -> Void) -> UUID { workers.streamChanges.add(handler) }
   public func removeExecutionStreamObserver(_ id: UUID) { workers.streamChanges.remove(id) }
+
+  /// Calls `handler` (on the writer's queue; keep it short) after any write,
+  /// through any handle on this database file, that committed new
+  /// `device_sync_changes` entries: the wake of `library` stream items.
+  @discardableResult
+  public func observeLibraryChanges(_ handler: @escaping @Sendable (Int64) -> Void) -> UUID { workers.libraryChanges.add(handler) }
+  public func removeLibraryChangeObserver(_ id: UUID) { workers.libraryChanges.remove(id) }
 
   /// Cleanup of accepted work must survive cancellation of the task driving it.
   /// This still observes admission limits and queue deadlines.

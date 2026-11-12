@@ -57,6 +57,7 @@ extension MobileModel {
     let wanted = Dictionary(executionWorkspaces.filter(streams).map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
     for (id, stream) in workspaceStreams where wanted[id] == nil || wanted[id]?.endpoint != streamEndpoints[id] {
       workspaceStreams.removeValue(forKey: id); streamEndpoints.removeValue(forKey: id)
+      if libraryStream?.workspaceID == id { setLibraryStream(nil) }
       await workspaceClients[id]?.setStream(nil)
       await stream.close()
     }
@@ -92,6 +93,7 @@ extension MobileModel {
 
   /// The app went to the background: every stream closes cleanly (1000).
   func stopWorkspaceStreams() {
+    setLibraryStream(nil)
     let streams = Array(workspaceStreams.values)
     streamLifecycle = Task { [previous = streamLifecycle] in
       await previous?.value
@@ -117,6 +119,7 @@ extension MobileModel {
 
   /// Pairing changed: no stream outlives its connection generation.
   func closeWorkspaceStreams() {
+    setLibraryStream(nil)
     let streams = workspaceStreams
     workspaceStreams = [:]; streamEndpoints = [:]; streamMembersRevision = nil
     for stream in streams.values { Task { await stream.close() } }
@@ -147,6 +150,11 @@ extension MobileModel {
         workspaceReachable[id] = false; workspaceProblems[id] = streamProblem(.memberRemoved, workspaceID: id)
       case .idle, .connecting: break
       }
+      // A closed stream announces nothing: the library timer returns until
+      // the next `library` item on a reconnected stream.
+      if case .open = state {} else if libraryStream?.workspaceID == id { setLibraryStream(nil) }
+    case .library(let cursor, let server):
+      await libraryChanged(cursor: cursor, serverDeviceID: server, workspaceID: id)
     case .pending(let interactions):
       remotePending[id] = interactions
     case .capabilities(let conversationID, let value):

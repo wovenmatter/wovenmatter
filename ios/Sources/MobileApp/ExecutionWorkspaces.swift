@@ -173,7 +173,10 @@ extension MobileModel {
       executionWorkspaces = journal.workspaces.values.filter { !$0.deleted && $0.id != deviceWorkspaceID }.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
       let availableIDs = Set(executionWorkspaces.map(\.id))
       for id in Array(workspaceClients.keys) where !availableIDs.contains(id) {
-        if let stream = workspaceStreams.removeValue(forKey: id) { streamEndpoints.removeValue(forKey: id); Task { await stream.close() } }
+        if let stream = workspaceStreams.removeValue(forKey: id) {
+          streamEndpoints.removeValue(forKey: id); Task { await stream.close() }
+          if libraryStream?.workspaceID == id { setLibraryStream(nil) }
+        }
         workspaceReadTasks.removeValue(forKey: id)?.cancel()
         workspaceClients.removeValue(forKey: id); workspaceProviders.removeValue(forKey: id)
         workspaceReachable.removeValue(forKey: id); remotePending.removeValue(forKey: id)
@@ -391,5 +394,35 @@ extension MobileModel {
       if result.status == .rejected || result.status == .outcomeUnknown { errorMessage = result.message ?? "This workspace could not confirm the command." }
       await refreshDirectWorkspace(owner)
     } catch { errorMessage = error.localizedDescription }
+  }
+  /// A message file of a session another machine runs, for Quick Look: read
+  /// from that workspace (`GET v1/execution/attachments/<sha256>`, the library
+  /// host for a central chat), checked against its digest and kept on this
+  /// iPhone under the name it was sent with. A file read once opens offline.
+  func attachmentURL(_ reference: LibraryAttachmentReference, conversationID: String) async throws -> URL {
+    guard reference.isReadable else { throw MobileConnectionError.http(404, "This file was not saved with its message.") }
+    let directory = attachmentDirectory.appendingPathComponent(reference.id, isDirectory: true)
+    let target = directory.appendingPathComponent(Self.attachmentFileName(reference.name))
+    if FileManager.default.fileExists(atPath: target.path) { return target }
+    let route = executionRoute(for: conversationID)
+    let workspaceID = route == "central" ? centralExecutionWorkspace?.id : route
+    guard let workspaceID, workspaceID != "local", let client = workspaceClients[workspaceID] else {
+      throw MobileConnectionError.http(503, "Connect to the workspace that holds this file to open it.")
+    }
+    let data = try await client.attachment(reference)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    try data.write(to: target, options: [.atomic, .completeFileProtection])
+    return target
+  }
+  /// Where opened message files are kept: caches, so the system may reclaim them.
+  var attachmentDirectory: URL {
+    FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].appendingPathComponent("MessageAttachments", isDirectory: true)
+  }
+  /// The sent name without path separators or control characters.
+  static func attachmentFileName(_ name: String) -> String {
+    let cleaned = String(String.UnicodeScalarView(name.unicodeScalars.filter {
+      !CharacterSet.controlCharacters.contains($0) && !"/\\:".unicodeScalars.contains($0)
+    })).trimmingCharacters(in: .whitespaces)
+    return cleaned.isEmpty || cleaned == "." || cleaned == ".." ? "Attachment" : String(cleaned.prefix(255))
   }
 }

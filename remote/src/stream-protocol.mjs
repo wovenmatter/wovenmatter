@@ -12,7 +12,9 @@ export const maximumFrameBytes = 8 * 1024 * 1024
 export const maximumClientFrameBytes = 1024 * 1024
 export const streamCloseCodes = Object.freeze({ normal: 1000, goingAway: 1001, protocolViolation: 4400, memberRemoved: 4401 })
 export const streamTimings = Object.freeze({ pingMilliseconds: 25_000, pongTimeoutMilliseconds: 60_000, reconnectInitialMilliseconds: 1_000, reconnectMaximumMilliseconds: 30_000,
-  smallMessageBytes: 8 * 1024, smallMessageMilliseconds: 50, largeMessageMilliseconds: 200 })
+  smallMessageBytes: 8 * 1024, smallMessageMilliseconds: 50, largeMessageMilliseconds: 200,
+  // `library` items (the library change cursor) on a `workspace` subscription.
+  libraryMilliseconds: 300 })
 export const streamQueueLimits = Object.freeze({ items: 512, bytes: 8 * 1024 * 1024 })
 // Agent to agent (session-watch.mjs; Swift `StreamProtocol`, `SessionWakeUp`).
 export const maximumWaitSeconds = 50

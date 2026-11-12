@@ -26,6 +26,10 @@ public actor MobileWorkspaceStream {
     /// The server ended the open chat's subscription (it does not serve that
     /// chat, or it is too large for one frame); nothing streams for it now.
     case conversationEnded(conversationID: String, StreamError?)
+    /// The server's library change cursor (`library` items), with the
+    /// server's member device ID from its `hello`: a phone that syncs with
+    /// that server and holds an older cursor synchronizes now.
+    case library(cursor: Int64, serverDeviceID: String)
   }
 
   public nonisolated let workspaceID: String
@@ -153,6 +157,10 @@ public actor MobileWorkspaceStream {
       await update(.history)
     case .pending(let value):
       await update(.pending(value.interactions))
+    case .library(let value):
+      // The socket's own `hello` names the server; cursors are per server.
+      guard let server = await connection.hello?.deviceID.lowercased() else { return .accepted }
+      await update(.library(cursor: value.cursor, serverDeviceID: server))
     case .transcript, .capabilities, .session, .owner, .synchronized, .serverState, .unknown:
       break
     }
@@ -177,7 +185,7 @@ public actor MobileWorkspaceStream {
       case .session(let value):
         guard value.settings.conversationID == conversationID else { return .accepted }
         await update(.session(conversationID: conversationID, value.settings))
-      case .conversations, .pending, .journal, .owner, .synchronized, .serverState, .unknown:
+      case .conversations, .pending, .journal, .owner, .library, .synchronized, .serverState, .unknown:
         break
       }
     }

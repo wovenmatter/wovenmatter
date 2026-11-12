@@ -120,6 +120,16 @@ export function createLibraryHostSupervisor({ binary, dataRoot, harnessCatalog, 
   const layout = libraryHostLayout(dataRoot)
   let child = null, stopping = true, timer = null, backoff = minimumBackoff, startedAt = 0, restarts = 0, lastExit = null, lastError = null
   let ready = null, token = null, generation = 0, waiters = []
+  // The library change cursor the host announces on stdout
+  // (`{"event":"library","cursor":N}`: once after ready, then whenever a
+  // change a phone syncs commits, at most every 300 ms), for `library` stream items.
+  let libraryCursor = null
+  const libraryListeners = new Set()
+  function libraryAnnounced(value) {
+    if (!Number.isSafeInteger(value.cursor) || value.cursor < 0 || value.cursor === libraryCursor) return
+    libraryCursor = value.cursor
+    for (const listener of libraryListeners) { try { listener(libraryCursor) } catch (error) { log('A library change listener failed: ' + error.message) } }
+  }
   const client = createLibraryClient({ socket: () => ready?.socket ?? layout.socket, token: () => (ready ? token : null) })
 
   async function chosenPort() {
@@ -163,6 +173,7 @@ export function createLibraryHostSupervisor({ binary, dataRoot, harnessCatalog, 
       }
       createInterface({ input: process_.stdout }).on('line', line => {
         let value; try { value = JSON.parse(line) } catch { return }
+        if (value?.event === 'library') { if (current === generation) libraryAnnounced(value); return }
         void announce(value)
       })
       process_.stderr?.on('data', data => log('wovenmatter-library: ' + String(data).trim().slice(0, 2000)))
@@ -231,6 +242,10 @@ export function createLibraryHostSupervisor({ binary, dataRoot, harnessCatalog, 
   return {
     layout, client, start, stop, quiesce, terminate, whenReady,
     available: () => !!ready,
+    /** The latest library change cursor the host announced, or null before its first. */
+    libraryCursor: () => libraryCursor,
+    /** Calls `listener(cursor)` whenever the announced cursor moves; returns the unsubscribe. */
+    watchLibrary: listener => { libraryListeners.add(listener); return () => libraryListeners.delete(listener) },
     endpoint: () => ready ? { port: ready.port, socket: ready.socket, pid: ready.pid } : null,
     status: () => ({ running: !!child, ready: !!ready, pid: child?.pid ?? null, port: ready?.port ?? null, version: ready?.version ?? null,
       // The paired-library schema hash, once the library host includes it in its ready line.

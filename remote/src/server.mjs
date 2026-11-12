@@ -236,7 +236,10 @@ const bots = runningAsService && configuration.runtimeKind === 'host' && process
   authorizeClient: request => authorizeBotsUpgrade(request, { members, servedTargets, installerBearer }),
 }) : null
 // The live stream at the execution endpoint (`GET /v1/stream?protocol=1`).
+// Its `workspace` stream also carries the library host's change cursor, so
+// phones sync this machine's library when it changes.
 const stream = clientExecution && members ? createStreamServer({ members, servedTargets, execution: clientExecution, registry: memberSockets,
+  library: library ? { cursor: () => library.libraryCursor(), watch: listener => library.watchLibrary(listener) } : null,
   workspaceEnabled: () => configuration.workspaceEnabled !== false, log: message => process.stderr.write(message + '\n') }) : null
 // A bots-only machine keeps its server, data root and connections but runs no
 // workspace agents, schedules or projects until the workspace is added.
@@ -412,6 +415,15 @@ const server = createServer({ maxHeaderSize: 16_384, headersTimeout: 10_000,
       const bytes = request.wovenBody ?? await readBody(request, 26 * 1024 * 1024)
       return json(response,200,await clientExecution.uploadAttachment({ id: attachmentUpload[1], name: url.searchParams.get('name') ?? 'attachment',
         mimeType: url.searchParams.get('mimeType') ?? request.headers['content-type'], bytes }))
+    }
+    // Its bytes, for a member opening the attachment chip: only from the
+    // attachment store, and only bytes that still match the digest.
+    if (attachmentUpload && request.method === 'GET') {
+      const file = await clientExecution.readAttachment({ id: attachmentUpload[1], name: url.searchParams.get('name') ?? undefined,
+        mimeType: url.searchParams.get('mimeType') ?? undefined })
+      response.writeHead(200, { 'content-type': file.mimeType, 'content-length': file.bytes.length, 'cache-control': 'no-store',
+        'x-content-type-options': 'nosniff', 'content-disposition': 'attachment; filename*=UTF-8\'\'' + encodeURIComponent(file.name) })
+      response.end(file.bytes); return
     }
     // A file an agent wrote, for a Mac's Library retention.
     if (url.pathname === '/v1/execution/library-file' && request.method === 'POST') {

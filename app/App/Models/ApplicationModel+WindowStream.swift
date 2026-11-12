@@ -281,7 +281,7 @@ extension ApplicationModel {
                 case .session(let value): follow.session = value.settings
                 case .pending(let value): follow.interactions = value.interactions.filter { $0.conversationID == id }
                 case .owner(let value): follow.owner = value
-                case .conversations, .journal, .synchronized, .serverState, .unknown: break
+                case .conversations, .journal, .library, .synchronized, .serverState, .unknown: break
                 }
             }
         }

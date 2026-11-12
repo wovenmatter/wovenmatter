@@ -521,6 +521,8 @@ public actor WorkspaceClient {
     try await transport.activityDetails(id, runID: runID, activityID: activityID)
   }
   public func readWorkspace(_ request: LibraryWorkspaceRead) async throws -> LibraryWorkspaceResult { try await verify(); return try await transport.readWorkspace(request) }
+  /// A message file of one of this workspace's sessions, checked against its digest.
+  public func attachment(_ reference: LibraryAttachmentReference) async throws -> Data { try await transport.attachment(reference) }
   private func verify() async throws {
     let workspace = try await transport.identity()
     guard workspace.id == workspaceID, !workspace.deleted else { throw MobileStore.Failure.wrongWorkspace }

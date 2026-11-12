@@ -94,6 +94,7 @@ public final class MacExecutionAPI: ExecutionStreamSource {
           return try .json(ExecutionJournalPage(libraryID: descriptor.libraryID, cursor: 0))
         default: break
         }
+        if parts.count == 4, parts[2] == "attachments" { return try await attachment(contentHash: parts[3], name: query("name")) }
         if parts.count == 4, parts[2] == "commands" {
           guard let receipt = try await localReceipt(commandID: parts[3], deviceID: scope.deviceID) else { return .error("not_found", "No receipt exists for this command.", status: 404) }
           return try .json(receipt)
@@ -192,6 +193,35 @@ public final class MacExecutionAPI: ExecutionStreamSource {
     try await authorize()
     return scoped(try await commands.execute(command, deviceID: deviceID))
   }
+  /// `GET v1/execution/attachments/<sha256>?name=`: a message file of a
+  /// session this Mac runs, from this library's attachment store, with the
+  /// type it was sent with. Nothing outside that store is read, and only
+  /// bytes that still match the digest are served.
+  func attachment(contentHash: String, name: String?) async throws -> LibraryHTTPResponse {
+    guard LibraryAttachmentReference.isDigest(contentHash) else {
+      return .error("invalid_request", "An attachment is named by its SHA-256 digest.", status: 400)
+    }
+    // The named file first, then any other message of a local session that carries these bytes.
+    let rows = try await database.messageAttachmentRows(contentHash: contentHash).sorted { ($0.fileName == name ? 0 : 1) < ($1.fileName == name ? 0 : 1) }
+    var owned: String?
+    for row in rows {
+      guard (try? await requireLocal(row.conversationID)) != nil else { continue }
+      owned = row.mimeType; break
+    }
+    guard let owned else { return .error("not_found", "This attachment is not in a session this Mac runs.", status: 404) }
+    let files = database.libraryFiles
+    let data: Data
+    do { data = try await Task.detached { try files.messageAttachment(contentHash: contentHash) }.value }
+    catch AgentMessageAttachmentError.fileTooLarge { return .error("too_large", "The attachment is larger than the 25 MB limit.", status: 413) }
+    catch AgentMessageAttachmentError.unsupportedForAgent(let message) { return .error("conflict", message, status: 409) }
+    catch { return .error("not_found", "This attachment is not on this Mac.", status: 404) }
+    return .init(status: 200, contentType: Self.attachmentType(owned),
+                 headers: ["Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"], body: data)
+  }
+  nonisolated static func attachmentType(_ value: String) -> String {
+    let lowered = value.lowercased()
+    return lowered.wholeMatch(of: /[a-z0-9][a-z0-9!#$&^_.+-]{0,126}\/[a-z0-9][a-z0-9!#$&^_.+-]{0,126}/) != nil ? lowered : "application/octet-stream"
+  }
   public var workspaceDescriptor: ExecutionWorkspace { descriptor }
   public var isServing: Bool { isActive() }
 
@@ -206,5 +236,22 @@ public final class MacExecutionAPI: ExecutionStreamSource {
   }
   private func scoped(_ receipt: LibraryCommandReceipt) -> LibraryCommandReceipt {
     var value = receipt; value.libraryID = descriptor.libraryID; value.workspaceID = descriptor.id; return value
+  }
+}
+
+extension WorkspaceDatabase {
+  /// The messages that carry a file, by its SHA-256.
+  func messageAttachmentRows(contentHash: String) async throws -> [(conversationID: String, fileName: String, mimeType: String)] {
+    try await read { connection in
+      try connection.withLock {
+        try connection.historyRowsUnlocked("""
+          SELECT conversation_id, file_name, mime_type FROM dashboard_message_attachments
+          WHERE content_hash = ? ORDER BY created_at, id LIMIT 64
+          """, values: [contentHash])
+      }.compactMap { row in
+        guard let value = row.objectValue, let conversation = value["conversation_id"]?.stringValue else { return nil }
+        return (conversation, value["file_name"]?.stringValue ?? "", value["mime_type"]?.stringValue ?? "")
+      }
+    }
   }
 }

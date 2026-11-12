@@ -624,6 +624,12 @@ extension CentralExecutionClient {
         return try await reader.activityDetails(conversationID, runID: runID, activityID: activityID)
     }
 
+    /// A message file of a session another machine runs, from that machine
+    /// (`GET v1/execution/attachments/<sha256>`), checked against its digest.
+    func attachment(conversationID: String, reference: LibraryAttachmentReference) async throws -> Data {
+        try await transport(for: requiredWorkspace(conversationID)).attachment(reference)
+    }
+
     /// The chat closed: its `conversation` subscription ends.
     func unwatch(_ conversationID: String) async {
         watched.removeAll { $0 == conversationID }
@@ -693,7 +699,7 @@ extension CentralExecutionClient {
             onLive(previous.union(value.interactions.map(\.conversationID)))
         // `journal` items come only to a subscriber that asks with `after`;
         // this Mac takes history from library sync and never asks.
-        case .journal, .conversations, .transcript, .capabilities, .session, .owner, .synchronized, .serverState, .unknown:
+        case .journal, .conversations, .transcript, .capabilities, .session, .owner, .library, .synchronized, .serverState, .unknown:
             break
         }
         return .accepted
@@ -721,7 +727,7 @@ extension CentralExecutionClient {
             case .synchronized:
                 stream.synchronizedConversations.insert(conversationID)
                 stream.release(conversationID)
-            case .conversations, .pending, .journal, .owner, .serverState, .unknown:
+            case .conversations, .pending, .journal, .owner, .library, .serverState, .unknown:
                 return .accepted
             }
         }

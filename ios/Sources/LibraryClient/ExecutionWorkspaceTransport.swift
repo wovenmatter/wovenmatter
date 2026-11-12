@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import WovenMatterShared
 #if canImport(FoundationNetworking)
@@ -48,9 +49,15 @@ public protocol ExecutionWorkspaceTransport: Sendable {
   /// One activity's complete projection, read when its disclosure opens
   /// (`GET v1/execution/conversations/<id>/activity?id=&run=`).
   func activityDetails(_ id: String, runID: String, activityID: String) async throws -> LibraryActivity
+  /// A message file's bytes (`GET v1/execution/attachments/<sha256>?name=`),
+  /// checked against its digest.
+  func attachment(_ reference: LibraryAttachmentReference) async throws -> Data
 }
 
 public extension ExecutionWorkspaceTransport {
+  func attachment(_ reference: LibraryAttachmentReference) async throws -> Data {
+    throw MobileConnectionError.http(404, "This workspace does not serve its message files.")
+  }
   func transcript(_ id: String, before: String) async throws -> LibraryTranscript { throw MobileConnectionError.http(400, "Older history is unavailable for this workspace.") }
   func capabilities(_ id: String) async throws -> HarnessCapabilities { throw MobileConnectionError.http(400, "Session capabilities are unavailable for this workspace.") }
   func readWorkspace(_ request: LibraryWorkspaceRead) async throws -> LibraryWorkspaceResult { throw MobileConnectionError.http(400, "This action is unavailable for this execution workspace.") }
@@ -134,6 +141,13 @@ public final class HTTPSExecutionWorkspaceTransport: ExecutionWorkspaceTransport
     try await client.request("v1/execution/conversations/" + TailnetJSONClient.safeID(id) + "/activity",
       query: activityDetailsQuery(runID: runID, activityID: activityID))
   }
+  public func attachment(_ reference: LibraryAttachmentReference) async throws -> Data {
+    guard reference.isReadable else { throw MobileConnectionError.http(404, "This file was not saved with its message.") }
+    let data = try await client.data(reference.readPath, query: [.init(name: "name", value: reference.name)],
+                                     maximumBytes: LibraryAttachmentReference.maximumBytes)
+    guard SHA256.hash(data: data).hexString == reference.id else { throw MobileConnectionError.invalidResponse }
+    return data
+  }
 }
 
 final class TailnetJSONClient: @unchecked Sendable {
@@ -156,6 +170,11 @@ final class TailnetJSONClient: @unchecked Sendable {
     return value
   }
   func request<Value: Decodable>(_ path: String, method: String = "GET", query: [URLQueryItem] = [], body: Data? = nil) async throws -> Value {
+    try JSONDecoder().decode(Value.self, from: await data(path, method: method, query: query, body: body))
+  }
+  /// A 2xx reply's bytes, at most `maximumBytes`.
+  func data(_ path: String, method: String = "GET", query: [URLQueryItem] = [], body: Data? = nil,
+            maximumBytes: Int = 80 * 1_024 * 1_024) async throws -> Data {
     var components = URLComponents(url: endpoint.appendingPathComponent(path), resolvingAgainstBaseURL: false)!
     components.queryItems = query.isEmpty ? nil : query
     var request = URLRequest(url: components.url!); request.httpMethod = method; request.httpBody = body
@@ -165,12 +184,13 @@ final class TailnetJSONClient: @unchecked Sendable {
     for (key, value) in headers { request.setValue(value, forHTTPHeaderField: key) }
     if let signer { try MobileRequestSigning.sign(&request, with: signer, audience: audience) }
     else { request.setValue("Bearer " + token, forHTTPHeaderField: "Authorization") }
-    let (data, response) = try await performer.perform(request, maximumBytes: 80 * 1_024 * 1_024, longLived: false)
+    let (data, response) = try await performer.perform(request, maximumBytes: maximumBytes, longLived: false)
     guard (200..<300).contains(response.statusCode) else {
       throw MobileRequestSigning.failure(status: response.statusCode, data: data, signed: signer != nil,
                                          fallback: "Workspace request failed (\(response.statusCode)).")
     }
-    return try JSONDecoder().decode(Value.self, from: data)
+    guard data.count <= maximumBytes else { throw MobileConnectionError.invalidResponse }
+    return data
   }
 }
 

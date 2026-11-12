@@ -566,6 +566,37 @@ createInterface({ input: process.stdin }).on('line', line => {
   assert.deepEqual(await upload.json(), { id: digest, name: 'photo.png', mimeType: 'image/png', byteCount: image.length })
   const wrong = await fetch(service.url + '/v1/execution/attachments/' + 'a'.repeat(64) + '?name=x', { method: 'PUT', headers: { authorization: headers.authorization }, body: image })
   assert.equal(wrong.status, 400)
+  // Its bytes come back from the attachment store, with their type.
+  const attachmentURL = (id, query = '') => service.url + '/v1/execution/attachments/' + id + query
+  const read = await fetch(attachmentURL(digest, '?name=photo.png'), { headers: { authorization: headers.authorization } })
+  assert.equal(read.status, 200)
+  assert.equal(read.headers.get('content-type'), 'image/png')
+  assert.deepEqual(Buffer.from(await read.arrayBuffer()), image)
+  const unnamed = await fetch(attachmentURL(digest), { headers: { authorization: headers.authorization } })
+  assert.deepEqual(Buffer.from(await unnamed.arrayBuffer()), image, 'the one file under its digest')
+  // Unauthorized, and never a path outside the store.
+  assert.equal((await fetch(attachmentURL(digest, '?name=photo.png'))).status, 401)
+  assert.equal((await fetch(attachmentURL(digest, '?name=photo.png'), { headers: { authorization: 'Bearer wrong' } })).status, 401)
+  await writeFile(resolve(root, 'secret.txt'), 'not an attachment')
+  const secretDigest = createHash('sha256').update('not an attachment').digest('hex')
+  for (const name of ['../../secret.txt', '../../../secret.txt', '/etc/passwd']) {
+    const escaped = await fetch(attachmentURL(digest, '?name=' + encodeURIComponent(name)), { headers: { authorization: headers.authorization } })
+    assert.equal(escaped.status, 404, name)
+  }
+  const traversal = await fetch(service.url + '/v1/execution/attachments/..%2F..%2Fsecret.txt', { headers: { authorization: headers.authorization } })
+  assert.notEqual(traversal.status, 200, 'only a digest names an attachment route')
+  assert.doesNotMatch(await traversal.text(), /not an attachment/)
+  // A staged copy replaced by a link out of the store is refused, as is one an agent edited.
+  const staged = resolve(root, '.wovenmatter/attachments', secretDigest)
+  await mkdir(staged, { recursive: true }); await symlink(resolve(root, 'secret.txt'), resolve(staged, 'secret.txt'))
+  assert.equal((await fetch(attachmentURL(secretDigest, '?name=secret.txt'), { headers: { authorization: headers.authorization } })).status, 403)
+  await rm(staged, { recursive: true }); await symlink(root, staged)
+  assert.equal((await fetch(attachmentURL(secretDigest, '?name=secret.txt'), { headers: { authorization: headers.authorization } })).status, 403)
+  await rm(staged)
+  const edited = resolve(root, '.wovenmatter/attachments', digest, 'photo.png')
+  await writeFile(edited, 'edited by an agent')
+  assert.equal((await fetch(attachmentURL(digest, '?name=photo.png'), { headers: { authorization: headers.authorization } })).status, 409)
+  await writeFile(edited, image)
   const opened = await (await request('/v1/execution/commands', 'POST', { commandID: id(), deviceID: device.deviceID, kind: 'createSession', providerID: 'codex' }, headers)).json()
   assert.equal(opened.status, 'completed', JSON.stringify(opened))
   const input = { commandID: id(), deviceID: device.deviceID, kind: 'send', conversationID: opened.conversationID, text: 'What is this?', attachments: [{ id: digest, name: 'photo.png', mimeType: 'image/png' }] }

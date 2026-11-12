@@ -85,6 +85,9 @@ struct StreamSessionContext: Sendable {
   let serverState: ExecutionServerStateFeed?
   let hello: @Sendable () async -> StreamHello
   let ended: @Sendable (UUID) -> Void
+  /// The mobile library change cursor for `library` items on `workspace`
+  /// subscriptions (member sockets only).
+  var libraryCursor: (@Sendable () async -> Int64?)? = nil
 }
 
 /// One stream socket: its subscriptions, calls and bounded outbound queue.
@@ -281,6 +284,9 @@ actor StreamSession {
     var session: SessionSettings?
     var sessionDirty = true
     var owner: StreamOwner?
+    /// Workspace: the library cursor last sent, and the newest one announced.
+    var library: Int64?
+    var latestLibrary: Int64?
     /// `server.state`: where this subscription listens.
     var feed: (ExecutionServerStateFeed, UUID)?
     init(id: String, kind: Kind) { self.id = id; self.kind = kind }
@@ -360,6 +366,10 @@ actor StreamSession {
     for subscription in subscriptions.values {
       switch (event, subscription.kind) {
       case (_, .serverState): continue
+      case (.library(let cursor), .workspace):
+        subscription.latestLibrary = max(subscription.latestLibrary ?? cursor, cursor)
+        if subscription.snapshotDone { sendLibrary(subscription) }
+      case (.library, _): continue
       case (.reset, .workspace): subscription.reloadAll = true; markDirty(subscription)
       case (.reset, _): subscription.sessionDirty = true; markDirty(subscription)
       case (.changes(let changes), .workspace):
@@ -436,6 +446,12 @@ actor StreamSession {
       subscription.pending = pending
       enqueue(.item(.init(id: subscription.id, payload: .conversations(.init(conversations: conversations, snapshot: true)))), for: subscription)
       enqueue(.item(.init(id: subscription.id, payload: .pending(.init(interactions: pending)))), for: subscription)
+      // The library cursor, so a phone knows at once whether its copy is current.
+      if let cursor = await context.libraryCursor?() {
+        subscription.latestLibrary = max(subscription.latestLibrary ?? cursor, cursor)
+      }
+      try Task.checkCancellation()
+      sendLibrary(subscription)
       // This Mac hosts the library: history moves by library sync, so there are no journal items.
       enqueue(.item(.init(id: subscription.id, payload: .synchronized)), for: subscription)
       subscription.snapshotDone = true
@@ -519,6 +535,13 @@ actor StreamSession {
       enqueue(.item(.init(id: id, payload: .capabilities(.init(capabilities: capabilities)))), for: subscription)
     }
     sendLiveState(session: session, relay: relay, to: subscription)
+  }
+
+  /// The newest library cursor, unless this subscriber already has it.
+  private func sendLibrary(_ subscription: Subscription) {
+    guard let cursor = subscription.latestLibrary, cursor != subscription.library else { return }
+    subscription.library = cursor
+    enqueue(.item(.init(id: subscription.id, payload: .library(.init(cursor: cursor)))), for: subscription)
   }
 
   /// Session settings, and a relayed session's questions and owner, when they changed.
@@ -613,7 +636,7 @@ actor StreamSession {
     guard case .item(let other) = queued else { return false }
     switch (item.payload, other.payload) {
     case (.transcript, .transcript), (.conversations, .conversations), (.pending, .pending), (.capabilities, .capabilities),
-         (.session, .session), (.owner, .owner), (.serverState, .serverState): return true
+         (.session, .session), (.owner, .owner), (.library, .library), (.serverState, .serverState): return true
     default: return false
     }
   }
@@ -644,7 +667,8 @@ actor StreamSession {
       let conversations = old.conversationIDs == nil && new.conversationIDs == nil ? nil
         : union(old.conversationIDs ?? [], new.conversationIDs ?? [])
       result.payload = .serverState(.init(scopes: union(old.scopes, new.scopes), conversationIDs: conversations))
-    case (.pending, .pending), (.capabilities, .capabilities), (.session, .session), (.owner, .owner): result.payload = item.payload
+    case (.pending, .pending), (.capabilities, .capabilities), (.session, .session), (.owner, .owner), (.library, .library):
+      result.payload = item.payload
     default: return nil
     }
     return result

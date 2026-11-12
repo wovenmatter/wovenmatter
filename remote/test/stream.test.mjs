@@ -54,7 +54,15 @@ function fakeClock() {
 const memberEntry = (member, extra = {}) => ({ deviceID: member.deviceID, kind: member.kind, name: member.name ?? 'Studio',
   publicKey: rawPublicKeyFor(member.key).toString('base64'), endpoints: [], revoked: false, ...extra })
 
-async function fixture(t, { clock, limits, timings, refreshMilliseconds = 15_000 } = {}) {
+// The library host's change cursor as library-host.mjs reports it.
+function libraryFeed(initial = null) {
+  let cursor = initial
+  const listeners = new Set()
+  return { cursor: () => cursor, watch: listener => { listeners.add(listener); return () => listeners.delete(listener) },
+    set(value) { cursor = value; for (const listener of listeners) listener(value) }, listeners }
+}
+
+async function fixture(t, { clock, limits, timings, refreshMilliseconds = 15_000, library = null } = {}) {
   const directory = mkdtempSync(join(tmpdir(), 'wm-stream-')), runs = []
   const provider = { id: 'default_agent', runtimeKind: 'default_agent', displayName: 'Pi Durable', routeName: 'This workspace', available: true, canStart: true,
     canResume: true, canSteer: true, canStop: true, supportsApprovals: false, supportsQuestions: false, activeInputMode: 'steer' }
@@ -75,7 +83,7 @@ async function fixture(t, { clock, limits, timings, refreshMilliseconds = 15_000
   const registry = createMemberSocketRegistry()
   verifier.watch(members => registry.sweep(members))
   const servedTargets = async target => [prefix + target]
-  const stream = createStreamServer({ members: verifier, servedTargets, execution, registry, ...(clock ? { clock } : {}), limits, timings })
+  const stream = createStreamServer({ members: verifier, servedTargets, execution, registry, library, ...(clock ? { clock } : {}), limits, timings })
   const upgrades = [stream.upgrade]
   const server = createServer((_, response) => { response.writeHead(404); response.end() })
   server.on('upgrade', (request, socket, head) => { if (!upgrades.some(handler => handler(request, socket, head))) socket.destroy() })
@@ -167,7 +175,7 @@ test('every shared stream fixture decodes and re-encodes to the same JSON', () =
     assert.deepEqual(JSON.parse(encodeFrame(decoded)), frame, `${name} did not round-trip`)
   }
   assert.deepEqual([...types].sort(), ['cancel', 'end', 'hello', 'item', 'req', 'res', 'sub'])
-  for (const kind of ['conversations', 'pending', 'journal', 'transcript', 'capabilities', 'session', 'synchronized', 'server.state']) assert.ok(kinds.has(kind), kind)
+  for (const kind of ['conversations', 'pending', 'journal', 'transcript', 'capabilities', 'session', 'library', 'synchronized', 'server.state']) assert.ok(kinds.has(kind), kind)
   for (const frame of fixtures.unknownFrames) {
     assert.deepEqual(decodeFrame(JSON.stringify(frame)), { t: 'unknown', type: 'futureFrame' })
     assert.throws(() => encodeFrame(frame), StreamFrameError)
@@ -379,6 +387,53 @@ test('the conversation stream sends the session settings on subscribe and whenev
   await f.execution.command(f.command('workspace', { conversationID: id, workspaceAction: { goal: { id, mutation: { set: { objective: 'Ship it' } } } } }), f.device)
   const goal = await client.next(frame => isItem('session', 'c')(frame) && frame.data.settings.goal)
   assert.equal(goal.data.settings.goal.objective, 'Ship it')
+})
+
+test('the workspace stream carries the library change cursor: on subscribe, then at most every 300 ms', async t => {
+  const clock = fakeClock(), library = libraryFeed(41), f = await fixture(t, { clock, library })
+  const client = f.connect()
+  await client.next(frame => frame.t === 'hello')
+  client.send({ t: 'sub', id: 'w', stream: 'workspace', params: {} })
+  assert.deepEqual((await client.next(isItem('library', 'w'))).data, { cursor: 41 })
+  await client.next(isItem('synchronized', 'w'))
+  assert.ok(client.frames.findIndex(isItem('library', 'w')) < client.frames.findIndex(isItem('synchronized', 'w')), 'the cursor comes with the snapshot')
+  const items = () => client.frames.filter(isItem('library', 'w')).map(frame => frame.data.cursor)
+  const quiet = async () => { await new Promise(resolve => setTimeout(resolve, 30)); return items() }
+
+  // Three changes inside one window are one item, 300 ms after the last one sent.
+  library.set(42); library.set(43); library.set(44)
+  await clock.advance(299)
+  assert.deepEqual(await quiet(), [41], 'nothing before 300 ms')
+  await clock.advance(1)
+  await eventually(() => items().length === 2, 'the coalesced cursor arrived')
+  assert.deepEqual(items(), [41, 44])
+  // An announcement that does not move the cursor sends nothing.
+  library.set(44)
+  await clock.advance(300)
+  assert.deepEqual(await quiet(), [41, 44])
+  // Once the window has passed, the next change goes at once.
+  await clock.advance(1_000)
+  library.set(45)
+  await clock.advance(0)
+  await eventually(() => items().length === 3, 'an isolated change is sent at once')
+  assert.deepEqual(items(), [41, 44, 45])
+
+  // A host that has announced nothing yet sends no item; its first announcement does.
+  const empty = libraryFeed(null), g = await fixture(t, { clock, library: empty })
+  const other = g.connect()
+  await other.next(frame => frame.t === 'hello')
+  other.send({ t: 'sub', id: 'w', stream: 'workspace', params: {} })
+  await other.next(isItem('synchronized', 'w'))
+  assert.equal(other.frames.filter(isItem('library', 'w')).length, 0)
+  empty.set(3)
+  await clock.advance(300)
+  assert.deepEqual((await other.next(isItem('library', 'w'))).data, { cursor: 3 })
+  // A closed subscription stops listening.
+  other.send({ t: 'cancel', id: 'w' })
+  await settle()
+  empty.set(4)
+  await clock.advance(300)
+  assert.equal(other.frames.filter(isItem('library', 'w')).length, 1)
 })
 
 test('conversation changes are coalesced every 50 ms, and every 200 ms once a message exceeds 8 KB', async t => {

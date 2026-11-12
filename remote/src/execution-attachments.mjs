@@ -1,6 +1,6 @@
 import { createHash, randomBytes } from 'node:crypto'
 import { constants, existsSync, realpathSync } from 'node:fs'
-import { lstat, mkdir, open, readFile, realpath, rename, rm } from 'node:fs/promises'
+import { lstat, mkdir, open, readdir, readFile, realpath, rename, rm } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { basename, extname, isAbsolute, join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -72,7 +72,45 @@ export function createExecutionAttachments({ directory }) {
     }
     return files
   }
-  return { directory, store, resolve: resolveAll, pathFor }
+  // An uploaded attachment's bytes, for a member opening its chip
+  // (`GET v1/execution/attachments/<sha256>?name=`). Only a regular file
+  // directly in `<directory>/<sha256>/`, reached without a symbolic link and
+  // inside the store; at most the upload limit; and only while its bytes still
+  // match the digest (an agent may have edited the staged copy). Without a
+  // name, the one file stored under that digest.
+  async function read({ id, name, mimeType: type } = {}) {
+    if (typeof id !== 'string' || !/^[0-9a-f]{64}$/.test(id)) throw fail(400, 'An attachment is named by its SHA-256 digest.')
+    const missing = () => fail(404, 'This attachment is not on this workspace.')
+    const folder = join(directory, id)
+    let root, folderInfo
+    try { root = await realpath(directory); folderInfo = await lstat(folder) } catch { throw missing() }
+    if (!folderInfo.isDirectory()) throw fail(403, 'The staged attachment is not in the attachment store.')
+    let fileName
+    if (name !== undefined) fileName = attachmentFileName(name)
+    else {
+      const entries = (await readdir(folder)).filter(entry => !entry.startsWith('.part.'))
+      if (entries.length !== 1) throw fail(entries.length ? 400 : 404, entries.length ? 'Name the attachment to read.' : 'This attachment is not on this workspace.')
+      fileName = attachmentFileName(entries[0])
+    }
+    const path = join(folder, fileName)
+    let file
+    try { file = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK) }
+    catch (error) { throw error.code === 'ELOOP' ? fail(403, 'The staged attachment is a symbolic link.') : missing() }
+    try {
+      const info = await file.stat()
+      if (!info.isFile()) throw fail(403, 'The staged attachment is not a regular file.')
+      if (info.size > attachmentLimits.fileBytes) throw fail(413, 'The attachment is larger than the 25 MB limit.')
+      // The opened file itself, wherever its parents point, is in the store.
+      const opened = existsSync('/proc/self/fd') ? realpathSync('/proc/self/fd/' + file.fd) : await realpath(path)
+      if (!opened.startsWith(root.endsWith('/') ? root : root + '/')) throw fail(403, 'The staged attachment is outside the attachment store.')
+      const bytes = await file.readFile()
+      if (bytes.length > attachmentLimits.fileBytes) throw fail(413, 'The attachment is larger than the 25 MB limit.')
+      if (sha256(bytes) !== id) throw fail(409, `${fileName} changed on the workspace since it was sent.`)
+      return { id, name: fileName, mimeType: type !== undefined ? mimeType(type) : knownTypes[extname(fileName).toLowerCase()] ?? 'application/octet-stream',
+        byteCount: bytes.length, path, bytes }
+    } finally { await file.close() }
+  }
+  return { directory, store, read, resolve: resolveAll, pathFor }
 }
 
 // The ACP prompt for a message and its files, as the Mac builds it

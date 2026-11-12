@@ -76,6 +76,15 @@ import MobileInference
   var centralRefreshAfter = Date.distantPast
   var connectionRefreshTask: Task<Void, Never>?
   @ObservationIgnored var networkMonitor: MobileNetworkMonitor?
+  /// The open stream that announces the library host's changes (`library`
+  /// items), by workspace and the server's member device ID. While it is
+  /// set, the library has no foreground timer.
+  @ObservationIgnored var libraryStream: (workspaceID: String, deviceID: String)?
+  @ObservationIgnored var librarySyncPause: LibrarySyncPause = .none
+  @ObservationIgnored var librarySyncWake: CheckedContinuation<Void, Never>?
+  @ObservationIgnored var librarySyncTimeout: Task<Void, Never>?
+  /// A refresh asked for while one runs: it runs once more afterwards.
+  @ObservationIgnored private var refreshAgain = false
   var offlineProblems: [String: String] = [:]
   var saveStates: [String: String] = [:]
   var draftTitles: [String: String] = [:]
@@ -401,14 +410,30 @@ import MobileInference
       await refreshExecutionWorkspaces(force: true)
     } catch { pairingError = error.localizedDescription }
   }
+  /// Library sync with the current host. A refresh asked for while one runs
+  /// (a `library` item, an edit) runs once more when it finishes, so no
+  /// announced change waits for a later trigger.
   func refresh() async {
+    guard engine != nil else { return }
+    guard !refreshInProgress else { refreshAgain = true; return }
+    repeat {
+      refreshAgain = false
+      await refreshOnce()
+    } while refreshAgain && engine != nil && !Task.isCancelled
+    // The host may have changed: the library stream's timer follows it.
+    libraryStreamChanged()
+  }
+  private func refreshOnce() async {
     guard let engine, !refreshInProgress else { return }
     refreshInProgress = true; connecting = true
     let generation = connectionGeneration
     defer { refreshInProgress = false; connecting = false }
     do {
       // Library sync: notes, calendar, dictation, history and artifacts. It
-      // reads nothing live of a session; the open chat streams.
+      // reads nothing live of a session; the open chat streams, so its
+      // transcript is not read again for the offline cache.
+      await engine.setStreamedTranscripts(Set(workspaceStreams.keys.filter { workspaceReachable[$0] == true }
+        .compactMap { streamedConversationID(for: $0) }))
       try await engine.synchronize()
       guard generation == connectionGeneration, !Task.isCancelled else { return }
       await adoptCurrentLibraryHost(engine)
