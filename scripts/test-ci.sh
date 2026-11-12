@@ -38,6 +38,7 @@ python3 scripts/test-support/test_linux_portability.py
 python3 scripts/check-linux-portability.py
 python3 scripts/test-support/test_workflow_toolchain.py
 python3 scripts/test-support/test_release_validation.py
+python3 scripts/test-support/test_owned_runners.py
 jq -e '.schemaVersion == 4 and (.harnesses | length == 4)' harnesses/catalog.json >/dev/null
 
 selection="$(python3 scripts/ci-scopes.py < "$changed")"

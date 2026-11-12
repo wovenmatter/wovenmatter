@@ -6,10 +6,10 @@ on:
       - 'v[0-9]+.[0-9]+.[0-9]+'
   workflow_dispatch:
     inputs:
-      cache_benchmark_run:
-        description: Successful main cache-preparation run to verify from a benchmark tag (compile only)
-        type: string
-        default: ''
+      rehearsal:
+        description: Rehearse every build, signing and notarization phase from a v-rehearsal-* tag without publishing
+        type: boolean
+        default: false
       refresh:
         description: Refresh the existing public release from an accepted immutable build tag
         type: boolean
@@ -23,14 +23,17 @@ concurrency:
   group: desktop-release-publication
   cancel-in-progress: false
 
+# Every job runs on the owned runners (docs/CI_RUNNERS.md): wovenmatter-linux is
+# Trey's workstation and wovenmatter-macos is his Mac mini. Their job guard admits
+# only collaborator pushes and manual dispatches of this workflow and validation.
 jobs:
   # PR CI never compiles the Linux library or the macOS app. A new version starts
   # only from source that passed manual linux and desktop validation, unless Trey
-  # waived it in the tag message. Same-version update refreshes are exempt.
+  # waived it in the tag message. Same-version update refreshes and rehearsals,
+  # which publish nothing new, are exempt.
   preflight:
-    if: ${{ !inputs.cache_benchmark_run }}
     name: Require validated release source
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, wovenmatter-linux]
     timeout-minutes: 5
     permissions:
       actions: read
@@ -41,20 +44,24 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           REFRESH: ${{ inputs.refresh || false }}
+          REHEARSAL: ${{ inputs.rehearsal || false }}
         run: |
           if [ "$REFRESH" = true ]; then
             echo 'Update refresh build: it reuses the released version and skips this gate.'
             exit 0
           fi
+          if [ "$REHEARSAL" = true ]; then
+            echo 'Rehearsal: nothing is published, so this gate does not apply.'
+            exit 0
+          fi
           scripts/check-release-validation.py --repo "$GITHUB_REPOSITORY" --tag "$GITHUB_REF_NAME" "$GITHUB_SHA"
 
-  # macOS runners have no Docker: the static Linux library host binaries that host
-  # releases ship are built here and handed to the macOS build as an artifact.
+  # The Mac builds without Docker: the static Linux library host binaries that host
+  # releases ship are built on the workstation and handed over as an artifact.
   linux-library:
-    if: ${{ !inputs.cache_benchmark_run }}
     needs: preflight
     name: Linux library binaries
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, wovenmatter-linux]
     timeout-minutes: 60
     permissions:
       contents: read
@@ -62,6 +69,9 @@ jobs:
       # Exact current releases: this workflow holds write tokens and signing
       # material (docs/DEPENDENCIES.md).
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # Release-only caches: validation never writes what a release reads.
+      - name: Use this runner's release caches
+        run: scripts/ci-runner/cache-env.sh release >> "$GITHUB_ENV"
       # The pinned Swift image and Static Linux SDK (remote/library/build-version.json),
       # both architectures, gzip-packed beside each binary's SHA-256.
       - name: Build wovenmatter-library for x86_64 and aarch64
@@ -76,20 +86,17 @@ jobs:
           retention-days: 7
 
   macos:
-    if: ${{ !inputs.cache_benchmark_run }}
     needs: linux-library
     name: Signed Apple Silicon release
-    # The Xcode recorded in app/xcode-version.json (macos-26 stops at Xcode 26.6).
-    runs-on: xcode-27
+    # The Xcode recorded in app/xcode-version.json, on the owned Mac.
+    runs-on: [self-hosted, wovenmatter-macos]
     timeout-minutes: 120
     environment: release
     # Shared, non-secret phase settings.
     env:
-      DEVELOPER_DIR: /Applications/Xcode_27.2.app/Contents/Developer
       WOVENMATTER_SIGNING_IDENTITY: Developer ID Application
-      WOVENMATTER_RELEASE_WORK_DIR: /private/tmp/wovenmatter-release-build
       WOVENMATTER_RELEASE_OUTPUT_DIR: ${{ github.workspace }}/dist
-      WOVENMATTER_RELEASE_ALLOW_UNTAGGED: ${{ inputs.refresh && '1' || '0' }}
+      WOVENMATTER_RELEASE_ALLOW_UNTAGGED: ${{ (inputs.refresh || inputs.rehearsal) && '1' || '0' }}
     steps:
       # Signing secrets and release write access: exact current releases,
       # reviewed during dependency maintenance (docs/DEPENDENCIES.md).
@@ -98,6 +105,13 @@ jobs:
           fetch-depth: 0
       - name: Require the recorded Xcode
         run: scripts/check-xcode.sh
+      # Release-only caches: validation never writes what a release reads, and
+      # only release builds of accepted main source write them. Intermediates
+      # start fresh in this job's temporary directory.
+      - name: Use this runner's release caches
+        run: |
+          scripts/ci-runner/cache-env.sh release >> "$GITHUB_ENV"
+          echo "WOVENMATTER_RELEASE_WORK_DIR=$RUNNER_TEMP/wovenmatter-release-build" >> "$GITHUB_ENV"
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           # The bundled Node stable release, refreshed during dependency maintenance.
@@ -107,8 +121,16 @@ jobs:
         id: source
         env:
           REFRESH: ${{ inputs.refresh || false }}
+          REHEARSAL: ${{ inputs.rehearsal || false }}
           GH_TOKEN: ${{ github.token }}
         run: |
+          if [ "$REHEARSAL" = true ]; then
+            # Any reviewed commit, including an unmerged PR's; nothing is published.
+            [[ "$GITHUB_REF" =~ ^refs/tags/v-rehearsal-[A-Za-z0-9._-]+$ ]]
+            test "$(git rev-list -n 1 "$GITHUB_REF_NAME")" = "$GITHUB_SHA"
+            echo "version=0.0.1" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           git fetch --no-tags origin main
           git merge-base --is-ancestor "$GITHUB_SHA" origin/main
           if [ "$REFRESH" = true ]; then
@@ -142,42 +164,12 @@ jobs:
         run: python3 scripts/validate-release-metadata.py preflight "$VERSION" "$(git rev-list --count HEAD)" "$GITHUB_SHA"
 
       - name: Ensure CEF build tools
-        run: command -v cmake >/dev/null || brew install cmake
+        run: command -v cmake >/dev/null || { echo '::error::Install cmake on this runner (brew install cmake).'; exit 1; }
 
-      - name: Identify component cache keys
-        id: inputs
-        run: scripts/release-cache-key.sh >> "$GITHUB_OUTPUT"
-
-      # Read-only: only the manual main-branch cache workflow saves release inputs.
-      # GitHub does not share a tag's caches with the next tag. Each component
-      # restores independently and is verified again by its consumer.
-      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0; exact release for release caches
-        with:
-          path: ~/Library/Caches/WovenMatter/Downloads
-          key: ${{ steps.inputs.outputs.downloads }}
-          restore-keys: ${{ steps.inputs.outputs.downloads_fallback }}
-      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0; exact release for release caches
-        with:
-          path: ~/Library/Caches/WovenMatter/BrowserBuilds
-          key: ${{ steps.inputs.outputs.browser }}
-      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0; exact release for release caches
-        with:
-          path: ~/Library/Caches/WovenMatter/SourcePackages/repositories
-          key: ${{ steps.inputs.outputs.swiftpm }}
-          restore-keys: ${{ steps.inputs.outputs.swiftpm_fallback }}
-      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0; exact release for release caches
-        with:
-          path: ~/.npm
-          key: ${{ steps.inputs.outputs.npm }}
-          restore-keys: ${{ steps.inputs.outputs.npm_fallback }}
-      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0; exact release for release caches
-        with:
-          path: ~/Library/Caches/WovenMatter/Compiler
-          key: ${{ steps.inputs.outputs.compiler }}${{ github.sha }}
-          restore-keys: |
-            ${{ steps.inputs.outputs.compiler }}
-            ${{ steps.inputs.outputs.compiler_fallback }}
-
+      # The runner is the user's own login session: add the temporary keychain in
+      # front of the user's keychains rather than replacing them, and require
+      # exactly one Developer ID identity. The runner's job guard removes the
+      # entry if this job is killed before its cleanup step.
       - name: Import Developer ID identity
         env:
           CERTIFICATE_P12_BASE64: ${{ secrets.DEVELOPER_ID_P12_BASE64 }}
@@ -192,7 +184,18 @@ jobs:
           security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$keychain"
           security import "$certificate" -k "$keychain" -P "$CERTIFICATE_PASSWORD" -T /usr/bin/codesign -T /usr/bin/security
           security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$keychain"
-          security list-keychains -d user -s "$keychain"
+          rm -f "$certificate"
+          existing=()
+          while IFS= read -r line; do
+            line="${line#"${line%%[![:space:]]*}"}"; line="${line#\"}"; line="${line%\"}"
+            [ -z "$line" ] || [ "$line" = "$keychain" ] || existing+=("$line")
+          done < <(security list-keychains -d user)
+          security list-keychains -d user -s "$keychain" ${existing[@]+"${existing[@]}"}
+          identities="$(security find-identity -v -p codesigning | grep -c 'Developer ID Application:' || true)"
+          if [ "$identities" != 1 ]; then
+            echo "::error::Expected one Developer ID Application identity in the search list, found $identities. Remove other copies from this Mac's keychains."
+            exit 1
+          fi
 
       - name: Prepare notarization key
         env:
@@ -215,8 +218,10 @@ jobs:
           VERSION: ${{ steps.source.outputs.version }}
           WOVENMATTER_SPARKLE_PRIVATE_KEY: ${{ runner.temp }}/sparkle-private-key
           REFRESH: ${{ inputs.refresh || false }}
+          REHEARSAL: ${{ inputs.rehearsal || false }}
           GH_TOKEN: ${{ github.token }}
         run: |
+          if [ "$REHEARSAL" = true ]; then echo reused=false >> "$GITHUB_OUTPUT"; exit 0; fi
           restore=--restore-tagged
           if [ "$REFRESH" = true ]; then restore=--restore-staged; fi
           if python3 scripts/stage-update.py dist "$VERSION" "$restore"; then
@@ -237,10 +242,7 @@ jobs:
         env:
           VERSION: ${{ steps.source.outputs.version }}
           WOVENMATTER_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-        run: |
-          WOVENMATTER_COMPILER_CACHE="$HOME/Library/Caches/WovenMatter/Compiler" \
-          WOVENMATTER_PACKAGE_CACHE="$HOME/Library/Caches/WovenMatter/SourcePackages" \
-            scripts/build-release.sh "$VERSION" compile
+        run: scripts/build-release.sh "$VERSION" compile
 
       - name: 'Release 2/6: sign nested helpers, seal and validate app'
         if: steps.reuse.outputs.reused == 'false'
@@ -289,9 +291,17 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           REFRESH: ${{ inputs.refresh || false }}
+          REHEARSAL: ${{ inputs.rehearsal || false }}
           VERSION: ${{ steps.source.outputs.version }}
           WOVENMATTER_SPARKLE_PRIVATE_KEY: ${{ runner.temp }}/sparkle-private-key
         run: |
+          if [ "$REHEARSAL" = true ]; then
+            # Every phase passed; keep no signed rehearsal artifacts on the runner.
+            ls -l dist
+            rm -rf dist
+            echo 'Rehearsal passed every release phase. Nothing was published.'
+            exit 0
+          fi
           if [ "$REFRESH" != true ] && ! gh release view "v$VERSION" >/dev/null 2>&1; then
             gh release create "v$VERSION" --draft --title "Woven Matter v$VERSION" \
               --notes "Signed and notarized Apple Silicon release."
@@ -309,107 +319,3 @@ jobs:
           security delete-keychain "$keychain" 2>/dev/null || true
           rm -f "$RUNNER_TEMP/developer-id.p12" "$RUNNER_TEMP/notary-private-key.p8" "$RUNNER_TEMP/sparkle-private-key"
 
-  cache-benchmark:
-    if: github.event_name == 'workflow_dispatch' && inputs.cache_benchmark_run != '' && startsWith(github.ref, 'refs/tags/v-cache-benchmark-')
-    name: Signed cache consumer benchmark (no publication)
-    # The Xcode recorded in app/xcode-version.json (macos-26 stops at Xcode 26.6).
-    runs-on: xcode-27
-    timeout-minutes: 45
-    environment: release
-    permissions:
-      contents: read
-      actions: read
-    env:
-      DEVELOPER_DIR: /Applications/Xcode_27.2.app/Contents/Developer
-      WOVENMATTER_RELEASE_ALLOW_UNTAGGED: '1'
-      WOVENMATTER_RELEASE_WORK_DIR: /private/tmp/wovenmatter-release-build
-      WOVENMATTER_RELEASE_OUTPUT_DIR: /private/tmp/wovenmatter-cache-benchmark-output
-      WOVENMATTER_BUILD_NUMBER: '2'
-    steps:
-      - name: Identify successful benchmark source
-        id: seed
-        env:
-          GH_TOKEN: ${{ github.token }}
-          SEED_RUN: ${{ inputs.cache_benchmark_run }}
-        run: |
-          [[ "$SEED_RUN" =~ ^[0-9]+$ ]]
-          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$SEED_RUN" > "$RUNNER_TEMP/seed.json"
-          jq -e '
-            .conclusion == "success" and .head_branch == "main" and
-            .path == ".github/workflows/release-cache.yml"
-          ' "$RUNNER_TEMP/seed.json"
-          echo "revision=$(jq -er .head_sha "$RUNNER_TEMP/seed.json")" >> "$GITHUB_OUTPUT"
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-        with:
-          fetch-depth: 0
-          ref: ${{ steps.seed.outputs.revision }}
-      - name: Require the recorded Xcode
-        run: scripts/check-xcode.sh
-      - name: Verify accepted benchmark source
-        run: |
-          git fetch --no-tags origin main
-          git merge-base --is-ancestor HEAD origin/main
-      - name: Ensure CEF build tools
-        run: command -v cmake >/dev/null || brew install cmake
-      - name: Identify production cache keys
-        id: inputs
-        run: scripts/release-cache-key.sh >> "$GITHUB_OUTPUT"
-      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
-        with:
-          path: ~/Library/Caches/WovenMatter/Downloads
-          key: ${{ steps.inputs.outputs.downloads }}
-          fail-on-cache-miss: true
-      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
-        with:
-          path: ~/Library/Caches/WovenMatter/BrowserBuilds
-          key: ${{ steps.inputs.outputs.browser }}
-          fail-on-cache-miss: true
-      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
-        with:
-          path: ~/Library/Caches/WovenMatter/SourcePackages/repositories
-          key: ${{ steps.inputs.outputs.swiftpm }}
-          fail-on-cache-miss: true
-      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
-        with:
-          path: ~/.npm
-          key: ${{ steps.inputs.outputs.npm }}
-          fail-on-cache-miss: true
-      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
-        with:
-          path: ~/Library/Caches/WovenMatter/Compiler
-          key: ${{ steps.inputs.outputs.compiler }}${{ steps.seed.outputs.revision }}
-          fail-on-cache-miss: true
-      - name: Import Developer ID identity
-        env:
-          CERTIFICATE_P12_BASE64: ${{ secrets.DEVELOPER_ID_P12_BASE64 }}
-          CERTIFICATE_PASSWORD: ${{ secrets.DEVELOPER_ID_P12_PASSWORD }}
-          KEYCHAIN_PASSWORD: ${{ secrets.RELEASE_KEYCHAIN_PASSWORD }}
-        run: |
-          certificate="$RUNNER_TEMP/developer-id.p12"
-          keychain="$RUNNER_TEMP/wovenmatter-release.keychain-db"
-          printf '%s' "$CERTIFICATE_P12_BASE64" | base64 --decode > "$certificate"
-          security create-keychain -p "$KEYCHAIN_PASSWORD" "$keychain"
-          security set-keychain-settings -lut 21600 "$keychain"
-          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$keychain"
-          security import "$certificate" -k "$keychain" -P "$CERTIFICATE_PASSWORD" -T /usr/bin/codesign -T /usr/bin/security
-          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$keychain"
-          security list-keychains -d user -s "$keychain"
-
-      - name: Compile signed Release app from fresh intermediates
-        env:
-          WOVENMATTER_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-        run: |
-          WOVENMATTER_COMPILER_CACHE="$HOME/Library/Caches/WovenMatter/Compiler" \
-          WOVENMATTER_PACKAGE_CACHE="$HOME/Library/Caches/WovenMatter/SourcePackages" \
-            scripts/build-release.sh 0.0.1 compile
-          app="$WOVENMATTER_RELEASE_WORK_DIR/DerivedData/Build/Products/Release/Woven Matter.app"
-          codesign --verify --deep --strict --verbose=2 "$app"
-          python3 scripts/validate-release-metadata.py verify 0.0.1 2 "$(git rev-parse HEAD)" --plist "$app/Contents/Info.plist"
-      - name: Remove temporary signing keychain
-        if: always()
-        env:
-          KEYCHAIN_PASSWORD: ${{ secrets.RELEASE_KEYCHAIN_PASSWORD }}
-        run: |
-          keychain="$RUNNER_TEMP/wovenmatter-release.keychain-db"
-          security delete-keychain "$keychain" 2>/dev/null || true
-          rm -f "$RUNNER_TEMP/developer-id.p12" "$RUNNER_TEMP/notary-private-key.p8" "$RUNNER_TEMP/sparkle-private-key"

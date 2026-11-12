@@ -111,38 +111,28 @@ Reference: [publishing](https://sparkle-project.org/documentation/publishing/).
 
 ## Release performance and cache trust
 
-`Prepare release dependencies` writes only default-branch caches from accepted
-`main`. It runs after a successful `Release` workflow and once when the cache
-workflow itself changes on main, bootstrapping a new cache layout. Ordinary source
-merges do not start native work. It remains available manually. The release does
-not wait for the background cache refresh; warming moves compute to that later
-run rather than eliminating it. Release tags only restore caches; they never
-write them. Default-branch caches are intentional: GitHub does not share one
-release tag's cache with the next tag, so saving from a release would not help
-the next one. No app bundle, signing identity, notarization key, or updater key
-enters a cache, and a miss builds normally.
+Releases build on the owned runners ([CI runners](CI_RUNNERS.md)). Their caches
+persist on those machines, apart from validation caches and from the user's own
+dev builds (`scripts/ci-runner/cache-env.sh`). Only release builds of accepted
+main source, and rehearsals, write the release caches. Validation of any branch
+never writes a cache a release reads. No app bundle, signing identity,
+notarization key or updater key enters a cache, and a miss builds normally.
 
-`scripts/release-cache-key.sh` gives each component its own key, so a routine
-Node, npm, or Swift package refresh no longer discards the others:
+| Cache | Checked on every use |
+| --- | --- |
+| Download archives (CEF, Node, Sparkle, Cua) | Each archive's pinned digest |
+| Browser products, keyed by sources, CEF, architecture, compiler, SDK, CMake and flags | Complete content manifest |
+| SwiftPM repositories | Checkouts at `Package.resolved` revisions |
+| npm store | Lockfile integrity, scripts disabled |
+| Xcode compilation cache | Xcode's per-compilation input keys |
+| Linux library inputs (Static Linux SDK, SQLite) | Pinned SHA-256 in `remote/library/build-version.json` |
 
-| Cache | Key | Checked on every use |
-| --- | --- | --- |
-| Download archives | CEF, Node, Sparkle and Cua pins; falls back to any earlier store | Each archive's pinned digest |
-| Browser products | The exact browser key: sources, CEF, architecture, compiler, SDK, CMake, flags | Complete content manifest |
-| SwiftPM repositories | `Package.resolved`; falls back to earlier clones | Checkouts at resolved revisions |
-| npm store | `package-lock.json`; falls back to an earlier store | Lockfile integrity, scripts disabled |
-| Compiler | Exact toolchain, native graph and commit; falls back within the same toolchain | Xcode's per-compilation input keys |
-
-Corrupt entries rebuild. The producer drops archives for superseded pins and
-starts the npm and compiler stores afresh when they exceed 1.5 GB and 6 GB.
-GitHub evicts entries unused for a week. The compiler warm-up is an unsigned
-**Release** build on main. A release reuses compiler results, not an old app:
-it uses fresh DerivedData, links, stamps version/source metadata, and signs anew.
-A failed cached compilation retries once with fresh intermediates and caching
-disabled. The warm-up moves compute ahead of the release; it does not remove it.
-After a toolchain or browser-source change, the first release without a newer
-warm-up compiles those parts in full. These changes do not guarantee a release
-duration.
+The compilation cache starts over when it exceeds 6 GB. A release reuses compiler
+results, not an old app: it compiles from fresh DerivedData in the job's
+temporary directory, links, stamps version/source metadata, and signs anew. A
+failed cached compilation retries once with fresh intermediates and caching
+disabled. After a toolchain or browser-source change, the next release compiles
+those parts in full. No release duration is guaranteed.
 
 The signed workflow runs six visible phases: compile; seal and validate; notarize
 the app; create and sign the disk image; notarize the disk image; and generate the
@@ -204,35 +194,9 @@ Full DMGs retain ordinary zlib level 6 compression without a legacy size cap or
 maximum-compression retry. Signing, notarization, checksums, and full
 reconstruction verification remain required.
 
-### Measuring cache effectiveness
+### Rehearsing a release
 
-Run `Prepare release dependencies` manually with `benchmark=true` on the branch
-being evaluated. This does not sign, notarize, create a release, install, or publish.
-Its isolated `benchmark-RUN_ID-` namespace cannot seed production default-branch
-caches. The cold job performs an unsigned production-configuration Release build
-and saves only the same five cache paths used by production. Three later jobs on
-separate fresh runners restore those exact entries, discard DerivedData, change
-the version/build metadata, and rebuild. One also makes a controlled app-source edit to expose whole-module
-cache invalidation; its diff is included with the evidence. App metadata is validated afterward.
-Logs and JSON measurements are retained as workflow artifacts, not in Git.
-
-The report requires all three consumers to demonstrate browser-product reuse and
-compiler replay hits, and each build must be at least 20% faster than the cold
-baseline at the same revision. A cache restore alone is not a performance result.
-The build timer excludes cache transfer/setup; use the full job times as well
-when assessing the practical saving. These measurements cover compilation and
-resource preparation, not Developer ID signing or Apple's variable notarization
-time. No fixed total release duration is promised.
-
-For an unsigned-to-signed and default-branch-to-tag parity check, dispatch
-`Release` from an immutable `v-cache-benchmark-*` tag with `cache_benchmark_run`
-set to a successful **main** cache-preparation run ID. This respects the release
-environment's tag-only policy. The separate read-only job checks the run's branch,
-workflow, and successful conclusion, checks out its exact accepted main source,
-restores production default-branch caches, imports only the Developer ID identity,
-and runs the real `build-release.sh` compile phase with fresh intermediates. It
-verifies the resulting signatures and metadata, then removes the temporary
-keychain. It has no notarization/updater key, cache writes, release writes,
-artifact upload, or publication step. Regular releases and their approval gates
-remain separate. These benchmark tags do not match the automatic release tag
-pattern and are excluded from automatic cache replenishment.
+A rehearsal runs every signed phase above on the owned runners, notarization
+included, from a `v-rehearsal-*` tag on any commit. It builds version 0.0.1,
+creates no draft, publishes nothing, and deletes its signed output. See
+[Rehearsing a release](CI_RUNNERS.md#rehearsing-a-release).

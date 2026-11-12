@@ -2,7 +2,10 @@ name: Manual validation
 # The release gate (scripts/check-release-validation.py) reads the scope from this title.
 run-name: Manual validation (${{ inputs.scope }})
 
-# Expensive platform validation runs only when a maintainer requests it.
+# Expensive platform validation runs only when a maintainer requests it, on the
+# owned runners (docs/CI_RUNNERS.md): wovenmatter-linux is Trey's workstation and
+# wovenmatter-macos is his Mac mini. Caches persist on those machines, apart from
+# release caches and from the user's own dev builds (scripts/ci-runner/cache-env.sh).
 on:
   workflow_dispatch:
     inputs:
@@ -24,57 +27,39 @@ jobs:
   portable:
     name: All portable checks
     if: inputs.scope == 'all'
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, wovenmatter-linux]
     timeout-minutes: 12
     steps:
       - uses: actions/checkout@main
+      - name: Use this runner's validation caches
+        run: scripts/ci-runner/cache-env.sh validation >> "$GITHUB_ENV"
       - uses: actions/setup-node@main
         with:
           node-version-file: default-agent/.node-version
-          cache: npm
-          cache-dependency-path: default-agent/package-lock.json
       - run: scripts/test-ci.sh --all
 
   macos:
     name: macOS
     if: inputs.scope == 'all' || inputs.scope == 'desktop'
-    # The Xcode recorded in app/xcode-version.json (macos-26 stops at Xcode 26.6).
-    runs-on: xcode-27
+    # The Xcode recorded in app/xcode-version.json, on the owned Mac.
+    runs-on: [self-hosted, wovenmatter-macos]
     timeout-minutes: 40
-    env:
-      WOVENMATTER_TEST_CACHE_DIR: /private/tmp/wovenmatter-ci
-      DEVELOPER_DIR: /Applications/Xcode_27.2.app/Contents/Developer
     steps:
       - uses: actions/checkout@main
       - name: Require the recorded Xcode
         run: scripts/check-xcode.sh
+      # Build intermediates stay on the Mac between runs.
+      - name: Use this runner's validation caches
+        run: scripts/ci-runner/cache-env.sh validation >> "$GITHUB_ENV"
+      - name: Clear the previous run's diagnostics
+        run: rm -f "$WOVENMATTER_TEST_CACHE_DIR"/*.log "$WOVENMATTER_TEST_CACHE_DIR/embedded-runtime-report.json"
       - uses: actions/setup-node@main
         with:
           # The bundled Node stable release, refreshed during dependency maintenance.
           node-version-file: default-agent/.node-version
-          cache: npm
-          cache-dependency-path: default-agent/package-lock.json
       - name: Ensure CEF build tools
-        run: command -v cmake >/dev/null || brew install cmake
+        run: command -v cmake >/dev/null || { echo '::error::Install cmake on this runner (brew install cmake).'; exit 1; }
 
-      - name: Identify native toolchain
-        id: toolchain
-        run: |
-          { xcodebuild -version; xcrun --sdk macosx --show-sdk-version; cmake --version; } |
-            shasum -a 256 | awk '{print "key=" $1}' >> "$GITHUB_OUTPUT"
-      - name: Reuse native build intermediates
-        uses: actions/cache@main
-        with:
-          path: |
-            ${{ env.WOVENMATTER_TEST_CACHE_DIR }}/SwiftPM
-            ${{ env.WOVENMATTER_TEST_CACHE_DIR }}/ModuleCache
-            ${{ env.WOVENMATTER_TEST_CACHE_DIR }}/DerivedData/Build/Intermediates.noindex
-            ${{ env.WOVENMATTER_TEST_CACHE_DIR }}/DerivedData/SourcePackages
-            ${{ env.WOVENMATTER_TEST_CACHE_DIR }}/SharedSwiftPM
-            ${{ env.WOVENMATTER_TEST_CACHE_DIR }}/Integration
-            ~/Library/Caches/WovenMatter/Downloads
-          key: native-v1-${{ runner.arch }}-${{ steps.toolchain.outputs.key }}-${{ hashFiles('app/Package.resolved', 'app/Package.swift', 'shared/Package.swift', 'integration/Package.swift', 'app/Browser/cef-version.json', 'default-agent/package-lock.json') }}-${{ github.sha }}
-          restore-keys: native-v1-${{ runner.arch }}-${{ steps.toolchain.outputs.key }}-${{ hashFiles('app/Package.resolved', 'app/Package.swift', 'shared/Package.swift', 'integration/Package.swift', 'app/Browser/cef-version.json', 'default-agent/package-lock.json') }}-
       - name: Test native desktop
         shell: bash
         run: |
@@ -101,10 +86,12 @@ jobs:
   linux-library:
     name: Linux library
     if: inputs.scope == 'all' || inputs.scope == 'linux'
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, wovenmatter-linux]
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@main
+      - name: Use this runner's validation caches
+        run: scripts/ci-runner/cache-env.sh validation >> "$GITHUB_ENV"
       # Both steps run in the pinned Swift image (remote/library/build-version.json).
       - name: Build and test the portable Swift targets on Linux
         run: scripts/test-linux-library.sh
@@ -121,30 +108,25 @@ jobs:
   ios:
     name: iOS (${{ matrix.device }})
     if: inputs.scope == 'all' || inputs.scope == 'mobile'
-    runs-on: macos-26
-    # The iPad UI suite outgrew 25 minutes on hosted runners once member and send flows were added.
+    # The owned Mac runs one job at a time, so the two devices run in turn.
+    runs-on: [self-hosted, wovenmatter-macos]
     timeout-minutes: 40
-    env:
-      WOVENMATTER_IOS_TEST_CACHE_DIR: /private/tmp/wovenmatter-ios-${{ matrix.device }}
     strategy:
       fail-fast: false
       matrix:
         device: [iPhone, iPad]
     steps:
       - uses: actions/checkout@main
-      - name: Identify mobile toolchain
-        id: toolchain
-        run: xcodebuild -version | shasum -a 256 | awk '{print "key=" $1}' >> "$GITHUB_OUTPUT"
-      - name: Reuse mobile build intermediates
-        uses: actions/cache@main
-        with:
-          path: |
-            ${{ env.WOVENMATTER_IOS_TEST_CACHE_DIR }}/package
-            ${{ env.WOVENMATTER_IOS_TEST_CACHE_DIR }}/modules
-            ${{ env.WOVENMATTER_IOS_TEST_CACHE_DIR }}/xcode/Build/Intermediates.noindex
-            ${{ env.WOVENMATTER_IOS_TEST_CACHE_DIR }}/xcode/SourcePackages
-          key: ios-v1-${{ runner.arch }}-${{ matrix.device }}-${{ steps.toolchain.outputs.key }}-${{ hashFiles('ios/Package.swift', 'shared/Package.swift', 'ios/WovenMatter.xcodeproj/project.pbxproj') }}-${{ github.sha }}
-          restore-keys: ios-v1-${{ runner.arch }}-${{ matrix.device }}-${{ steps.toolchain.outputs.key }}-${{ hashFiles('ios/Package.swift', 'shared/Package.swift', 'ios/WovenMatter.xcodeproj/project.pbxproj') }}-
+      - name: Require the recorded Xcode
+        run: scripts/check-xcode.sh
+      - name: Use this runner's validation caches
+        run: scripts/ci-runner/cache-env.sh validation >> "$GITHUB_ENV"
+      - name: Use this device's mobile cache and clear its previous results
+        env:
+          DEVICE: ${{ matrix.device }}
+        run: |
+          echo "WOVENMATTER_IOS_TEST_CACHE_DIR=$WOVENMATTER_CI_CACHE_ROOT/IOS-$DEVICE" >> "$GITHUB_ENV"
+          rm -f "$WOVENMATTER_CI_CACHE_ROOT/IOS-$DEVICE"/results.*
       - name: Test native mobile flows
         env:
           WOVENMATTER_IOS_SIMULATOR_DEVICE_TYPE: ${{ matrix.device == 'iPhone' && 'com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro' || 'com.apple.CoreSimulator.SimDeviceType.iPad-Pro-11-inch-M4-8GB' }}
@@ -158,6 +140,8 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
 
+  # Stays on GitHub's runners: arm64 needs arm64 Linux hardware, and the job
+  # tags images (wovenmatter/workspace:latest) a shared Docker host would also see.
   remote:
     name: Remote workspace (${{ matrix.platform }})
     if: inputs.scope == 'all' || inputs.scope == 'images'

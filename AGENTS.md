@@ -33,6 +33,8 @@
   Use `--ci` for CI-only changes. Automatic PR CI is one portable Linux check;
   it statically checks Swift built for Linux but compiles none. Native/mobile/image
   workflows run only when explicitly requested or required before a release.
+  Manual validation and releases run on Trey's Mac mini and Linux workstation
+  ([CI runners](docs/CI_RUNNERS.md)); PR CI stays on GitHub's runners.
   PR CI and explicitly requested platform validation own source validation.
   Release preparation never runs local test suites or reruns PR CI, but the
   release commit needs passing manual `linux` and `desktop` validation before

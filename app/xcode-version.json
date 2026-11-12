@@ -1,6 +1,5 @@
 {
   "xcodeVersion": "27.2",
   "xcodeBuild": "27B52",
-  "runner": "xcode-27",
-  "developerDir": "/Applications/Xcode_27.2.app/Contents/Developer"
+  "runner": "wovenmatter-macos"
 }

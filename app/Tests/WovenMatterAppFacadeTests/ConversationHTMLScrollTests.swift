@@ -24,28 +24,16 @@ struct ConversationHTMLScrollTests {
         var ready = false, failure: (any Error)?
         coordinator.onReady = { ready = true }
         coordinator.onFailure = { failure = $0 }
-        // A deadline, not an attempt count: on a loaded CI runner the main actor
+        // A deadline, not an attempt count: on a loaded machine the main actor
         // this test shares with other suites makes each poll much slower.
-        // On GitHub's virtualized macOS runners the page's sandboxed frame often
-        // never loads, with no WebKit error, though it loads in under a second on
-        // every real Mac. There it is a known issue rather than a failure; false
-        // means stop here. Every other machine still requires the page.
-        func requireReady(_ page: String) async throws -> Bool {
+        func requireReady(_ page: String) async throws {
             let deadline = ContinuousClock.now + .seconds(20)
             while !ready, failure == nil, ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(10)) }
-            let detail: Comment = "The \(page) page never became ready: \(failure.map { "\($0)" } ?? "WebKit reported no error"); console \(coordinator.consoleMessages)"
-            if !ready, ProcessInfo.processInfo.environment["GITHUB_ACTIONS"] == "true" {
-                withKnownIssue("The conversation page's sandboxed frame does not load on GitHub's virtualized macOS runners") {
-                    try #require(ready, detail)
-                }
-                return false
-            }
-            try #require(ready, detail)
-            return true
+            try #require(ready, "The \(page) page never became ready: \(failure.map { "\($0)" } ?? "WebKit reported no error"); console \(coordinator.consoleMessages)")
         }
         coordinator.apply(html: "<div style='height:240px'>A chart fixture</div>",
             theme: ConversationHTMLTheme.value(.green), to: web)
-        guard try await requireReady("inline") else { return }
+        try await requireReady("inline")
         window.contentView?.layoutSubtreeIfNeeded()
         let event = try wheelEvent(window: window, web: web)
         let point = web.convert(NSPoint(x: 100, y: 100), to: scroll)
@@ -83,7 +71,7 @@ struct ConversationHTMLScrollTests {
             addEventListener('message',e=>{if(e.data?.kind==='fixture-scroll')scrollTo(0,240)});
             </script>
             """, theme: ConversationHTMLTheme.value(.green), to: web)
-        guard try await requireReady("expanded") else { return }
+        try await requireReady("expanded")
         target.scrollWheel(with: try wheelEvent(window: window, web: web))
         try await Task.sleep(for: .milliseconds(200))
         #expect(scroll.wheelEvents == count, "Expanded page wheel was redirected to the transcript")

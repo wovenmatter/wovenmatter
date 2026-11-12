@@ -53,6 +53,11 @@ fi
 
 mkdir -p "$cache" "$output"
 cache="$(cd "$cache" && pwd -P)"; output="$(cd "$output" && pwd -P)"
+# The container runs as root; hand what it writes back to the invoking Linux user
+# so a later checkout or cleanup can remove it.
+if [ -n "${WOVENMATTER_HOST_OWNER:-}" ] && [ "$(id -u)" = 0 ]; then
+  trap 'chown -R "$WOVENMATTER_HOST_OWNER" "$output" "$cache"' EXIT
+fi
 
 # Downloads happen on the invoking host, so the container needs no network.
 if [ "${WOVENMATTER_LIBRARY_BUILD_INPUTS:-}" != verified ]; then
@@ -65,7 +70,9 @@ if [ "$mode" = docker ]; then
   selection=()
   [ "${#arches[@]}" -ne 1 ] || selection=(--arch "${arches[0]}")
   [ "$keep" = 0 ] || selection+=(--uncompressed)
-  exec docker run --rm -e WOVENMATTER_LIBRARY_BUILD_INPUTS=verified \
+  owner=()
+  [ "$(uname -s)" != Linux ] || owner=(-e "WOVENMATTER_HOST_OWNER=$(id -u):$(id -g)")
+  exec docker run --rm -e WOVENMATTER_LIBRARY_BUILD_INPUTS=verified ${owner[@]+"${owner[@]}"} \
     -v "$root:/src:ro" -v "$cache:/cache" -v "$output:/out" "$image" \
     /src/scripts/build-linux-library.sh --native --cache /cache --output /out ${selection[@]+"${selection[@]}"}
 fi

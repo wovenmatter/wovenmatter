@@ -14,8 +14,14 @@ cache="${WOVENMATTER_LINUX_TEST_CACHE:-${WOVENMATTER_TEST_CACHE_DIR:-${TMPDIR:-/
 if ! { [ "$(uname -s)" = Linux ] && command -v swift >/dev/null && swift --version 2>/dev/null | grep -q "Swift version $swift_version "; }; then
   command -v docker >/dev/null || { echo "Docker or Swift $swift_version on Linux is required." >&2; exit 1; }
   mkdir -p "$cache"
+  owner=()
+  [ "$(uname -s)" != Linux ] || owner=(-e "WOVENMATTER_HOST_OWNER=$(id -u):$(id -g)")
   exec docker run --rm -v "$root:/src:ro" -v "$(cd "$cache" && pwd -P):/cache" -e WOVENMATTER_LINUX_TEST_CACHE=/cache \
-    "$image" /src/scripts/test-linux-library.sh
+    ${owner[@]+"${owner[@]}"} "$image" /src/scripts/test-linux-library.sh
+fi
+# The container runs as root; hand the cache back to the invoking Linux user.
+if [ -n "${WOVENMATTER_HOST_OWNER:-}" ] && [ "$(id -u)" = 0 ]; then
+  trap 'chown -R "$WOVENMATTER_HOST_OWNER" "$cache"' EXIT
 fi
 
 if ! { [ -f /usr/include/sqlite3.h ] || pkg-config --exists sqlite3 2>/dev/null; }; then

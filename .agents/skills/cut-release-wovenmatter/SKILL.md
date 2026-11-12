@@ -55,12 +55,15 @@ up-to-date PR validated before merging needs nothing more. Otherwise, while
 `gh workflow run validation.yml --ref main -f scope=linux` and `-f scope=desktop`,
 wait for both, and re-run the check. Draft the description while they run.
 The tag-triggered release repeats this check before building anything.
-GitHub's hosted runners are much slower than a real Mac, and some timing-sensitive
-tests fail there intermittently. When a failure is in a test unrelated to the
-release's changes, re-run only the failed jobs once (`gh run rerun RUN_ID --failed`);
-the check reads each run's latest attempt, so a passing re-run counts. Report the
-failure and its re-run. If the same test fails again, or the failure is in changed
-code, fix it in a development PR; do not tag. Only
+Both run on the owned runners ([CI runners](../../../docs/CI_RUNNERS.md)): linux on
+Trey's workstation, desktop on his Mac mini. Each machine runs one job at a time,
+so a queued job is waiting for its machine, not failing; if one stays queued,
+check that the machine is on and its runner online (Settings > Actions > Runners)
+and tell Trey. When a failure is in a test unrelated to the release's changes,
+re-run only the failed jobs once (`gh run rerun RUN_ID --failed`); the check reads
+each run's latest attempt, so a passing re-run counts. Report the failure and its
+re-run. If the same test fails again, or the failure is in changed code, fix it in
+a development PR; do not tag. Only
 Trey can waive the requirement, for one named release, by explicit decision: the
 annotated tag message then carries a `Validation-waiver: <his reason>` line.
 
@@ -76,18 +79,19 @@ Automatic CI runs on PRs only; native/mobile/image validation is manual.
 Lightweight tag/main source checks remain before importing signing secrets.
 Desktop validation and release builds run on the Xcode recorded in
 `app/xcode-version.json`, and fail at once on any other (`scripts/check-xcode.sh`).
+If that check fails, the Mac's Xcode changed: tell Trey rather than moving the record
+during a release.
 Always build a new production Release app; a Debug app is never a distribution
 artifact.
 
 The tag-triggered `.github/workflows/release.yml` builds a signed, notarized
 Apple Silicon app and stages a private draft. Its six named phase steps show live
-progress and record per-phase timings. It restores component caches produced on main by `Prepare release dependencies`.
-That workflow bootstraps changes to its own definition and refreshes after a
-successful release; it can also run manually. Release preparation does not
-dispatch it. Report observed cache hits and timings, rather than assuming that
-configured caches made a release faster. A miss, for example after a
-toolchain or browser-source change, compiles those parts in full; no release
-duration is guaranteed. After its successful run, verify
+progress and record per-phase timings. It reuses the release-only caches on the
+Mac and workstation that earlier releases left; a toolchain or browser-source
+change compiles those parts in full, so no release duration is guaranteed. Report
+observed timings. After a runner, Xcode or release-workflow change, rehearse
+first ([Rehearsing a release](../../../docs/CI_RUNNERS.md#rehearsing-a-release)).
+After its successful run, verify
 through `scripts/publish-release.sh --verify-only vX.Y.Z EXPECTED_COMMIT_SHA`.
 The script checks source, workflow, assets, checksums, signing, notarization,
 and Gatekeeper. GitHub CLI authentication must match the repository's SSH account.
@@ -95,7 +99,7 @@ It keeps downloaded bytes, never results, in a private local store; the later
 `--approved-notes` run rehashes them, repeats every check, and refuses a draft or
 asset changed since verification. Do not clear that store between the two runs.
 
-Once the tag starts the hosted build, list the PRs merged since the previous public
+Once the tag starts the build, list the PRs merged since the previous public
 release and draft the release description while the build runs, so Trey can review
 it without waiting for packaging. Approval of that exact text persists for the same
 release; do not request it again merely because the build finished. Stage the
@@ -175,7 +179,7 @@ through this path; Trey confirmed the installed 0.3.1 → 0.3.2 update worked.
 - Retain feed/payload signatures, provenance, exact asset inventory, checksums,
   notarization, Gatekeeper, and full-update reconstruction verification.
 - Keep generator start/elapsed-time logging. Do not add an arbitrary ten-minute
-  cutoff; the hosted job currently has a 120-minute timeout.
+  cutoff; the release job currently has a 120-minute timeout.
 
 Failed attempts spent a long time generating deltas across a Chromium upgrade
 against two older releases. Memory pressure was suspected, not measured. Do not
@@ -184,7 +188,7 @@ cost. Keep deltas out of ordinary release preparation.
 
 ## Background execution and completion
 
-Start the hosted build promptly after source selection; record its run URL and
+Start the build promptly after source selection; record its run URL and
 exact source SHA. Draft and review the description while the build runs.
 If publication is already explicitly approved, continue after workflow success
 with the standard verification and approved-notes publication commands above.
