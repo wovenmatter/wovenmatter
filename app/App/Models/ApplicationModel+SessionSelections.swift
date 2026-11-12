@@ -170,6 +170,17 @@ extension ApplicationModel {
         guard let saved = sessionSelectionPreferences.conversation(id: conversationID),
               saved.requiresApplication else { return }
         guard let dashboardStore else { throw ApplicationModelError.dashboardStoreUnavailable }
+        // A chat its Linux host runs takes the choices through the host's server.
+        if try await dashboardStore.database.libraryExecutionOwner(conversationID: conversationID) != nil {
+            let native = try await dashboardStore.database.localACPSession(conversationID: conversationID)
+            let desired = selectionsApplyingWorkspaceAccess(saved.desiredSelections, runtime: native.runtimeKind, workspaceID: native.remoteWorkspaceID)
+            if desired.model != nil || desired.thinking != nil || desired.permission != nil {
+                _ = try await centralExecutionClient().perform(conversationID: conversationID, action: .configureSession(id: conversationID,
+                    model: desired.model, thinking: desired.thinking, permission: native.runtimeKind == .pi ? nil : desired.permission))
+            }
+            sessionSelectionPreferences.markApplied(id: conversationID)
+            return
+        }
         let native = try await dashboardStore.database.localACPSession(conversationID: conversationID)
         let forcedPermission = native.remoteWorkspaceID.flatMap { remoteWorkspaces.configuration(id: $0)?.fullRootPermission(for: native.runtimeKind) }
         var desired = selectionsApplyingWorkspaceAccess(saved.desiredSelections, runtime: native.runtimeKind, workspaceID: native.remoteWorkspaceID)

@@ -1,4 +1,5 @@
 import AppKit
+import CryptoKit
 import Foundation
 import Network
 import Observation
@@ -269,16 +270,90 @@ final class CentralExecutionClient {
         if changed { await onChange() }
     }
 
+    /// Creates a session on `workspace` with the caller's choices. A locked Pi
+    /// Durable vault, reported by the provider list or the receipt, is
+    /// unlocked with this Mac's key (`unlockDefaultAgent`) and the creation
+    /// retried once under a new command ID.
     func createSession(workspace: ExecutionWorkspace, runtimeKind: AgentRuntimeKind,
-                       conversationID: String, folderID: String?) async throws -> LibraryCommandReceipt {
+                       conversationID: String, folderID: String?, title: String? = nil,
+                       sessionOptions: LibrarySessionOptions? = nil) async throws -> LibraryCommandReceipt {
         let identity = try await database.libraryIdentity()
-        let providers = try await transport(for: workspace).providers()
-        guard let provider = providers.first(where: { $0.runtimeKind == runtimeKind.rawValue && $0.available && $0.canStart }) else {
-            throw LibraryAPIError(code: "unavailable", message: "Set up this agent on its workspace before starting a chat.")
+        var unlocked = false
+        func provider() async throws -> HarnessCapabilities {
+            let providers = try await transport(for: workspace).providers()
+            if !unlocked, providers.contains(where: { $0.runtimeKind == runtimeKind.rawValue && $0.locked == true }) {
+                try await unlockDefaultAgent(on: workspace); unlocked = true
+                return try await provider()
+            }
+            guard let provider = providers.first(where: { $0.runtimeKind == runtimeKind.rawValue && $0.available && $0.canStart }) else {
+                throw LibraryAPIError(code: "unavailable", message: "Set up this agent on its workspace before starting a chat.")
+            }
+            return provider
         }
-        return try await submit(.init(commandID: conversationID, deviceID: identity.hostDeviceID, kind: .createSession,
-            conversationID: conversationID, providerID: provider.id, runtimeKind: runtimeKind.rawValue, folderID: folderID,
-            libraryID: workspace.libraryID, workspaceID: workspace.id), workspace: workspace)
+        func command(_ id: String, provider: HarnessCapabilities) -> LibraryCommand {
+            .init(commandID: id, deviceID: identity.hostDeviceID, kind: .createSession,
+                  conversationID: conversationID, providerID: provider.id, runtimeKind: runtimeKind.rawValue, folderID: folderID,
+                  libraryID: workspace.libraryID, workspaceID: workspace.id, title: title, sessionOptions: sessionOptions)
+        }
+        do { return try await submit(command(conversationID, provider: provider()), workspace: workspace) }
+        catch let error as LibraryAPIError where error.code == Self.defaultAgentLocked && !unlocked {
+            try await unlockDefaultAgent(on: workspace); unlocked = true
+            return try await submit(command(UUID().uuidString.lowercased(), provider: provider()), workspace: workspace)
+        }
+    }
+
+    nonisolated static let defaultAgentLocked = "default_agent_locked"
+
+    /// Unlocks a host's Pi Durable vault with this Mac's key for it. Set by
+    /// the application model, which holds the Keychain.
+    var unlockDefaultAgentHandler: (@MainActor (ExecutionWorkspace, any MemberExecutionRoutes) async throws -> Void)?
+
+    func unlockDefaultAgent(on workspace: ExecutionWorkspace) async throws {
+        guard let unlockDefaultAgentHandler else {
+            throw LibraryAPIError(code: Self.defaultAgentLocked, message: "Pi Durable is locked on \(workspace.name). Open Woven Matter on the Mac that set it up.")
+        }
+        try await unlockDefaultAgentHandler(workspace, memberRoutes(for: workspace))
+    }
+
+    /// The Linux server's member routes for `workspace`, signed by this Mac.
+    func memberRoutes(for workspace: ExecutionWorkspace) async throws -> any MemberExecutionRoutes {
+        guard let routes = try await transport(for: workspace) as? any MemberExecutionRoutes else {
+            throw LibraryAPIError(code: "workspace_unavailable", message: "\(workspace.name) does not recognize this Mac yet. It does once the two devices synchronize their member list.")
+        }
+        return routes
+    }
+
+    /// A harness's model, thinking and permission choices on `workspace`
+    /// before a session exists (`GET v1/execution/providers/<id>/options`).
+    func sessionOptions(workspace: ExecutionWorkspace, runtimeKind: AgentRuntimeKind,
+                        workingDirectory: String?, model: String?) async throws -> SessionSettings {
+        let providers = try await transport(for: workspace).providers()
+        guard let provider = providers.first(where: { $0.runtimeKind == runtimeKind.rawValue }) else {
+            throw LibraryAPIError(code: "unavailable", message: "\(runtimeKind.displayName) is not set up on \(workspace.name).")
+        }
+        let routes = try await memberRoutes(for: workspace)
+        if provider.locked == true { try await unlockDefaultAgent(on: workspace) }
+        return try await routes.sessionOptions(providerID: provider.id, workingDirectory: workingDirectory, model: model)
+    }
+
+    /// Uploads a message's files to `workspace` by their SHA-256, then
+    /// returns the references a `send` or `steer` names.
+    func uploadAttachments(_ files: [AgentFileAttachmentDraft], to workspace: ExecutionWorkspace) async throws -> [LibraryAttachmentReference] {
+        guard !files.isEmpty else { return [] }
+        try MemberAttachmentLimits.check(files)
+        let routes = try await memberRoutes(for: workspace)
+        var references: [LibraryAttachmentReference] = []
+        for file in files {
+            let data = try Data(contentsOf: file.localURL, options: .mappedIfSafe)
+            try MemberAttachmentLimits.check([AgentFileAttachmentDraft(kind: file.kind, fileName: file.fileName, mimeType: file.mimeType,
+                sizeBytes: Int64(data.count), contentHash: file.contentHash, localURL: file.localURL)])
+            let digest = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+            let mimeType = file.mimeType.isEmpty ? "application/octet-stream" : file.mimeType
+            let uploaded = try await routes.uploadAttachment(data, sha256: digest, name: file.fileName, mimeType: mimeType)
+            guard uploaded.id == digest else { throw MobileConnectionError.invalidResponse }
+            references.append(uploaded)
+        }
+        return references
     }
 
     /// The destination's agent routes, for choosing a harness on another member.
@@ -304,26 +379,45 @@ final class CentralExecutionClient {
     }
 
     @discardableResult
-    func send(conversationID: String, text: String, expectedRunID: String? = nil,
+    func send(conversationID: String, text: String, expectedRunID: String? = nil, files: [AgentFileAttachmentDraft] = [],
+              promptContext: String? = nil, noteID: String? = nil,
               beforeDispatch: @escaping @MainActor () throws -> Void = {}) async throws -> LibraryCommandReceipt {
         try await send(to: requiredWorkspace(conversationID), conversationID: conversationID, text: text,
-            expectedRunID: expectedRunID, beforeDispatch: beforeDispatch)
+            expectedRunID: expectedRunID, files: files, promptContext: promptContext, noteID: noteID, beforeDispatch: beforeDispatch)
     }
 
     /// Sends to a conversation whose workspace is already known, such as one
-    /// just created there before its history has reached this library.
+    /// just created there before its history has reached this library. Files
+    /// are uploaded first and named in the command; `promptContext` reaches the
+    /// harness after the message and `noteID` is the note shown when sending.
     @discardableResult
     func send(to workspace: ExecutionWorkspace, conversationID: String, text: String, expectedRunID: String? = nil,
+              files: [AgentFileAttachmentDraft] = [], promptContext: String? = nil, noteID: String? = nil,
               beforeDispatch: @escaping @MainActor () throws -> Void = {}) async throws -> LibraryCommandReceipt {
         let identity = try await database.libraryIdentity()
         let kind: LibraryCommand.Kind = expectedRunID == nil ? .send : .steer
+        let attachments = try await uploadAttachments(files, to: workspace)
+        // A Pi Durable run would fail after its send was accepted: unlock first.
+        if capabilities[conversationID]?.runtimeKind == AgentRuntimeKind.defaultAgent.rawValue,
+           try await transport(for: workspace).providers().contains(where: { $0.runtimeKind == AgentRuntimeKind.defaultAgent.rawValue && $0.locked == true }) {
+            try await unlockDefaultAgent(on: workspace)
+        }
         let existing = await commandJournal.commandRecords(workspaceID: workspace.id).first {
             ($0.receipt == nil || $0.receipt?.status == .outcomeUnknown) && $0.command.kind == kind &&
-            $0.command.conversationID == conversationID && $0.command.text == text && $0.command.runID == expectedRunID
+            $0.command.conversationID == conversationID && $0.command.text == text && $0.command.runID == expectedRunID &&
+            ($0.command.attachments ?? []) == attachments
         }
-        let command = existing?.command ?? LibraryCommand(deviceID: identity.hostDeviceID, kind: kind,
-            conversationID: conversationID, runID: expectedRunID, text: text, libraryID: workspace.libraryID, workspaceID: workspace.id)
-        return try await submit(command, workspace: workspace, beforeDispatch: beforeDispatch)
+        func command(_ id: String = UUID().uuidString.lowercased()) -> LibraryCommand {
+            LibraryCommand(commandID: id, deviceID: identity.hostDeviceID, kind: kind, conversationID: conversationID, runID: expectedRunID,
+                text: text, noteID: noteID, libraryID: workspace.libraryID, workspaceID: workspace.id,
+                attachments: attachments.isEmpty ? nil : attachments, promptContext: promptContext)
+        }
+        do { return try await submit(existing?.command ?? command(), workspace: workspace, beforeDispatch: beforeDispatch) }
+        catch let error as LibraryAPIError where error.code == Self.defaultAgentLocked {
+            // The refusal is final for its command ID; the retry is a new command.
+            try await unlockDefaultAgent(on: workspace)
+            return try await submit(command(), workspace: workspace, beforeDispatch: beforeDispatch)
+        }
     }
 
     @discardableResult
@@ -416,7 +510,9 @@ final class CentralExecutionClient {
               receipt.workspaceID == nil || receipt.workspaceID == workspace.id else { throw MobileConnectionError.invalidResponse }
         try await commandJournal.rememberReceipt(receipt, workspaceID: workspace.id)
         guard receipt.status == .accepted || receipt.status == .completed else {
-            throw LibraryAPIError(code: "execution_unconfirmed", message: receipt.message ?? "The execution workspace has not confirmed this command. Its durable identity has been retained.")
+            // A coded refusal (`default_agent_locked`, `attachment_unavailable`) is one the caller can act on.
+            throw LibraryAPIError(code: receipt.status == .rejected ? receipt.code ?? "execution_unconfirmed" : "execution_unconfirmed",
+                message: receipt.message ?? "The execution workspace has not confirmed this command. Its durable identity has been retained.")
         }
         // A failed refresh cannot turn an acknowledged command into a failed send.
         // The UI clears the draft after success and refreshes history independently.

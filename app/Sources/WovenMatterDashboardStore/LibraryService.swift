@@ -16,21 +16,40 @@ public struct LibraryLocation: Equatable, Sendable {
 
 public actor LibraryService {
   public typealias RemoteWorkspaceLookup = @Sendable (String) async -> RemoteWorkspaceConfiguration?
+  /// Reads an agent's file from a Linux host's server (`POST
+  /// v1/execution/library-file`): workspace ID, conversation ID, path.
+  public typealias RemoteFileReader = @Sendable (_ workspaceID: String, _ conversationID: String, _ path: String) async throws -> Data
 
   private let database: WorkspaceDatabase
   private let savedArtifacts: SavedArtifactLibraryService
   private let files: LibraryFileStore
-  private let remoteFiles: RemoteLibraryFiles
+  private var remoteFiles: RemoteFileReader?
   private var synchronizing = false
   private var waitingPasses: [CheckedContinuation<Void, Never>] = []
   private var knownLocations: [String: LibraryLocation] = [:]
   private var lastCleanup = Date.distantPast
 
-  public init(database: WorkspaceDatabase, remoteFiles: RemoteLibraryFiles = .init()) {
+  public init(database: WorkspaceDatabase, remoteFiles: RemoteFileReader? = nil) {
     self.database = database
     savedArtifacts = SavedArtifactLibraryService(database: database)
     files = database.libraryFiles
     self.remoteFiles = remoteFiles
+  }
+
+  /// Set once the app can sign for its Linux hosts.
+  public func setRemoteFileReader(_ reader: @escaping RemoteFileReader) { remoteFiles = reader }
+
+  /// Where a shared link points on a Linux host: absolute, relative to the
+  /// chat's root, or `~/` (expanded by the host for its own user).
+  public static func remotePath(source: String, root: String) throws -> String {
+    guard let path = LibraryFileReference.path(source) else {
+      throw RemoteWorkspaceClientError.invalidResponse("The file link does not name a file in this workspace.")
+    }
+    guard !path.contains("\u{0}"), path.utf8.count <= 8192 else {
+      throw RemoteWorkspaceClientError.invalidResponse("The file path is invalid.")
+    }
+    if path.hasPrefix("~/") || path.hasPrefix("/") { return path }
+    return root + "/" + path
   }
 
   public func savedArtifactItems() async throws -> [SavedArtifactLibraryItem] {
@@ -106,8 +125,12 @@ public actor LibraryService {
     guard let root = storedRoot ?? workspace.workspaceRoot ?? (workspace.kind == .container ? "/home/.woven-matter" : nil) else {
       throw WorkspaceToolError.invalid("Reconnect this host workspace to discover its files directory.")
     }
-    let bytes = try await remoteFiles.read(source: item.source, root: root, configuration: workspace)
-    // Credentials, host configuration, or availability may change during SSH.
+    guard let remoteFiles else { throw WorkspaceToolError.invalid("Reconnect this remote workspace to save the file.") }
+    let bytes = try await remoteFiles(item.workspaceID, item.conversationID, Self.remotePath(source: item.source, root: root))
+    guard bytes.count <= AgentMessageAttachmentLimits.maximumFileBytes else {
+      throw RemoteWorkspaceClientError.invalidResponse("The file exceeds the 25 MB retention limit.")
+    }
+    // The host configuration may change during the read.
     guard await remoteWorkspace(item.workspaceID) == workspace else {
       throw WorkspaceToolError.invalid("The remote workspace connection changed. Reconnect and retry.")
     }

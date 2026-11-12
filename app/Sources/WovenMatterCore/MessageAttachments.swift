@@ -164,6 +164,15 @@ public struct AgentMessageInput: Codable, Equatable, Sendable {
     return result
   }
 
+  /// What `transportText` adds after the message: the visible notes and pages,
+  /// then each reference block. A Linux host receives it as `promptContext`,
+  /// which reaches the harness and stays out of the transcript.
+  public var promptContext: String? {
+    let context = AgentMessageInput(text: "", attachments: attachments, visibleWorkspace: visibleWorkspace)
+      .transportText().trimmingCharacters(in: .whitespacesAndNewlines)
+    return context.isEmpty ? nil : context
+  }
+
   /// Notes retain their attachment snapshots. Conversation attachments carry
   /// only an ID and metadata; transcript access is enforced by the app service.
   public func transportText(deliveryText: String? = nil) -> String {

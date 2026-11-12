@@ -25,7 +25,9 @@ extension WorkspaceDatabaseConnection {
         }
         // Retry the immutable original transfer even after the new owner has
         // started another run. Enrollment itself is idempotent at that owner.
-        return saved
+        var retried = saved
+        retried.transcript = try adoptionTranscriptUnlocked(conversationID)
+        return retried
       }
       guard let root = try sessionExecutionRoot(id: conversationID), root.workspaceID == "remote:" + workspaceID else {
         throw federationError("adoption_unavailable", "This archived conversation has no execution root. Start a new chat.")
@@ -33,7 +35,10 @@ extension WorkspaceDatabaseConnection {
       let session = try prepareUnlocked("SELECT runtime_kind,acp_session_id,model,thinking,permission FROM desktop_local_acp_sessions WHERE conversation_id=? AND remote_workspace_id=?")
       defer { sqlite3_finalize(session) }
       try bind(conversationID, at: 1, to: session); try bind(workspaceID, at: 2, to: session)
-      guard sqlite3_step(session) == SQLITE_ROW, let nativeID = optionalText(session, column: 1), !nativeID.isEmpty,
+      // An OpenCode chat names its native session in its OpenCode link.
+      let openCodeID = try libraryIDsUnlocked("SELECT session_id FROM desktop_opencode_sessions WHERE conversation_id=?", bindings: [conversationID]).first
+      guard sqlite3_step(session) == SQLITE_ROW, let nativeID = optionalText(session, column: 1).flatMap({ $0.isEmpty ? nil : $0 })
+              ?? (optionalText(session, column: 0) == AgentRuntimeKind.opencode.rawValue ? openCodeID : nil), !nativeID.isEmpty,
             var conversation = try libraryConversationUnlocked(id: conversationID) else {
         throw federationError("adoption_unavailable", "This conversation has no known native session in the selected remote workspace.")
       }
@@ -71,8 +76,32 @@ extension WorkspaceDatabaseConnection {
       defer { sqlite3_finalize(saved) }
       try bind(conversationID, at: 1, to: saved); try bind(workspaceID, at: 2, to: saved)
       try bind(JSONEncoder().encode(adoption), at: 3, to: saved); try stepDone(saved)
-      return adoption
+      var request = adoption
+      request.transcript = try adoptionTranscriptUnlocked(conversationID)
+      return request
     }
+  }
+
+  /// The legacy history sent with an adoption: the newest messages and
+  /// activities that fit the host's request limit (8 MiB), roles the host
+  /// accepts. The full history stays in this library either way.
+  func adoptionTranscriptUnlocked(_ conversationID: String, limit: Int = 6 * 1_024 * 1_024) throws -> LibraryTranscript {
+    var transcript = try federationLegacyTranscriptUnlocked(conversationID)
+    transcript.messages.removeAll { !["user", "assistant", "system"].contains($0.role) }
+    return Self.fitted(transcript, limit: limit)
+  }
+
+  static func fitted(_ transcript: LibraryTranscript, limit: Int) -> LibraryTranscript {
+    var value = transcript
+    let encoder = JSONEncoder()
+    func size() -> Int { (try? encoder.encode(value).count) ?? Int.max }
+    while size() > limit, !value.messages.isEmpty || !value.activities.isEmpty {
+      // Drop from the oldest end, a quarter at a time, keeping the latest turns.
+      let messages = max(1, value.messages.count / 4), activities = max(1, value.activities.count / 4)
+      if !value.messages.isEmpty { value.messages.removeFirst(min(messages, value.messages.count)) }
+      if !value.activities.isEmpty { value.activities.removeFirst(min(activities, value.activities.count)) }
+    }
+    return value
   }
 
   func federationLegacyTranscriptUnlocked(_ conversationID: String) throws -> LibraryTranscript {

@@ -10,7 +10,7 @@ import WovenMatterClient
 /// workspace as soon as both are members.
 final class SignedExecutionWorkspaceTransport: ExecutionWorkspaceTransport, @unchecked Sendable {
     let workspace: ExecutionWorkspace
-    private let client: MemberSignedHTTPClient
+    let client: MemberSignedHTTPClient
     private var deviceID: String { client.signer.deviceID }
 
     /// `audience` is the member that serves the workspace (`MemberDirectory.audience(for:)`);
