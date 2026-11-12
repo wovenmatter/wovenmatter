@@ -336,7 +336,9 @@ struct StreamingPresentationTests {
         host.setFrameSize(NSSize(width: 600, height: 520))
         defer { window.contentView = nil; window.close() }
 
-        let pending = try await settle(host) { requests == 1 }
+        // At least one: on a slow runner the automatic retry can arrive before
+        // settle's fourth consecutive observation. The count is checked below.
+        let pending = try await settle(host) { requests >= 1 }
         try #require(pending, "The rendered settled disclosure did not request its missing detail")
         if let directory = ProcessInfo.processInfo.environment["WOVENMATTER_STREAMING_SCREENSHOTS"] {
             let output = URL(fileURLWithPath: directory, isDirectory: true)
