@@ -1,0 +1,47 @@
+[
+  {
+    "kind": "finished",
+    "sessionID": "22222222-2222-4222-8222-222222222222",
+    "title": "Index the logs",
+    "workspaceName": "Workstation M",
+    "text": "Your session \"Index the logs\" (22222222-2222-4222-8222-222222222222) on Workstation M finished. Read it with woven_sessions_status."
+  },
+  {
+    "kind": "needsInput",
+    "sessionID": "22222222-2222-4222-8222-222222222222",
+    "title": "Index\n  the\tlogs ",
+    "workspaceName": "Studio Mac",
+    "question": "Which log?",
+    "last": true,
+    "text": "Your session \"Index the logs\" (22222222-2222-4222-8222-222222222222) on Studio Mac is waiting for your answer: Which log? Read it with woven_sessions_status and answer with woven_sessions_respond. This is your last wake-up until something else starts you: wait with woven_sessions_wait or check woven_sessions_status yourself."
+  },
+  {
+    "kind": "finished",
+    "sessionID": "22222222-2222-4222-8222-222222222222",
+    "workspaceName": "Workstation M",
+    "last": true,
+    "text": "Your session 22222222-2222-4222-8222-222222222222 on Workstation M finished. Read it with woven_sessions_status. This is your last wake-up until something else starts you: wait with woven_sessions_wait or check woven_sessions_status yourself."
+  },
+  {
+    "kind": "needsInput",
+    "sessionID": "22222222-2222-4222-8222-222222222222",
+    "title": "   ",
+    "workspaceName": "Workstation M",
+    "text": "Your session 22222222-2222-4222-8222-222222222222 on Workstation M is waiting for your answer: a question. Read it with woven_sessions_status and answer with woven_sessions_respond."
+  },
+  {
+    "kind": "needsInput",
+    "sessionID": "22222222-2222-4222-8222-222222222222",
+    "title": "Deploy",
+    "workspaceName": "Workstation M",
+    "question": "Approve running the migration",
+    "text": "Your session \"Deploy\" (22222222-2222-4222-8222-222222222222) on Workstation M is waiting for your answer: Approve running the migration. Read it with woven_sessions_status and answer with woven_sessions_respond."
+  },
+  {
+    "kind": "finished",
+    "sessionID": "22222222-2222-4222-8222-222222222222",
+    "title": "éééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé",
+    "workspaceName": "Workstation M",
+    "text": "Your session \"éééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé…\" (22222222-2222-4222-8222-222222222222) on Workstation M finished. Read it with woven_sessions_status."
+  }
+]

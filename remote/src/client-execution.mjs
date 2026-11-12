@@ -14,6 +14,8 @@ import { createHash, randomBytes, randomUUID, timingSafeEqual, createCipheriv, c
 import { ordered, sha256 as digest } from './durable-json.mjs'
 import { createMemberMacDelegate } from './member-client.mjs'
 import { createMemberSessions } from './member-sessions.mjs'
+import { createLocalSessionSource, createRemoteSessionSource, createSessionWatch, sessionState } from './session-watch.mjs'
+import { maximumWaitSeconds } from './stream-protocol.mjs'
 
 const fail = (statusCode, message) => Object.assign(new Error(message), { statusCode })
 const identifier = value => typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(value)
@@ -26,7 +28,7 @@ function inputMessages(command,runID) {
 
 // This store is owned by the workspace service (the existing host lock fences
 // competing owners). Neither a phone nor an SSH attachment owns these runs.
-export function createClientExecution({ directory, runtime, kind = 'linux', name = 'Workspace', publisherKey, publisherFetch, publisherIntervalMilliseconds, goalIntervalMilliseconds = 1000, mcpEndpointURL = 'http://127.0.0.1:7337/mcp', managedDataRoot = resolve(directory, '../databases'), externalRunningSessions=()=>0,workspaceBrowser, library = null, members = null, onTimersChanged = () => {}, workspaceRole = () => true, extraCapabilities = () => [] }) {
+export function createClientExecution({ directory, runtime, kind = 'linux', name = 'Workspace', publisherKey, publisherFetch, publisherIntervalMilliseconds, goalIntervalMilliseconds = 1000, mcpEndpointURL = 'http://127.0.0.1:7337/mcp', managedDataRoot = resolve(directory, '../databases'), externalRunningSessions=()=>0,workspaceBrowser, library = null, members = null, onTimersChanged = () => {}, workspaceRole = () => true, extraCapabilities = () => [], deliverBot = null, sessionWatchOptions = {} }) {
   mkdirSync(directory, { recursive: true, mode: 0o700 })
   const path = resolve(directory, 'execution.sqlite')
   const db = new DatabaseSync(path)
@@ -615,7 +617,7 @@ export function createClientExecution({ directory, runtime, kind = 'linux', name
   const allToolGroups=['notes','history','sessions','goals','timers','usage','calendar','library','browser','computer','executor','html']
   const toolLabels={notes:'Notes',history:'Conversation history',sessions:'Session management',timers:'Timers',usage:'Usage data',calendar:'Calendar',library:'Library',browser:'Browser Use',computer:'Computer Use',executor:'Executor'}
   const localMCPTools=['woven_sessions_create','woven_sessions_send','woven_sessions_stop','woven_sessions_respond','woven_sessions_manage','woven_sessions_release','woven_sessions_notifications','woven_sessions_receipts','woven_context','woven_goals_get','woven_goals_set','woven_goals_pause','woven_goals_resume','woven_goals_clear','woven_goals_complete','woven_goals_block','woven_goals_checkpoint',
-    'woven_sessions_list','woven_sessions_status','woven_sessions_harnesses','woven_history_search','woven_history_conversations','woven_history_conversation','woven_history_message','woven_history_runs','woven_history_trace','woven_history_events','woven_history_event',
+    'woven_sessions_list','woven_sessions_status','woven_sessions_wait','woven_sessions_harnesses','woven_history_search','woven_history_conversations','woven_history_conversation','woven_history_message','woven_history_runs','woven_history_trace','woven_history_events','woven_history_event',
     'woven_databases_list','woven_databases_create','woven_databases_query','woven_databases_execute',...(workspaceBrowser?['woven_browser_use','woven_browser_use_cancel']:[])]
   db.exec('CREATE TABLE IF NOT EXISTS mcp_tool_receipts (caller TEXT NOT NULL, request_id TEXT NOT NULL, fingerprint TEXT NOT NULL, response TEXT, PRIMARY KEY(caller,request_id))')
   // `members` ({transport, deviceID, hasMac}) reaches other members with this
@@ -623,12 +625,46 @@ export function createClientExecution({ directory, runtime, kind = 'linux', name
   const memberDelegate=members?createMemberMacDelegate({transport:members.transport,workspaceID:()=>descriptor().id,hasMac:members.hasMac}):null
   // Bots have no conversation here: they reach this workspace through its own
   // execution API, as another member would (`local`).
-  const memberSessions=members?createMemberSessions({transport:members.transport,identity:descriptor,deviceID:members.deviceID,db,workspaceRole,
+  // Waits and wake-ups (session-watch.mjs): one stream per destination
+  // server, signed with this host's member identity, and this workspace's own
+  // changes in process.
+  const enrolledID=()=>{try{return descriptor().id}catch{return null}}
+  const latestRun=record=>record.conversation.activeRunID??record.transcript.messages.findLast(message=>message.runID)?.runID??null
+  const sessionWatch=createSessionWatch({db,log:message=>process.stderr.write(message+'\n'),...sessionWatchOptions,
+    async sourceFor(workspaceID,{interesting}) {
+      if(workspaceID===enrolledID())return createLocalSessionSource({summary:id=>service.summary(id),watch:listener=>{watchers.add(listener);return()=>watchers.delete(listener)},interesting})
+      if(!members)return null
+      const workspace=(await members.transport.workspaces()).find(item=>item.id===workspaceID)
+      if(!workspace?.endpoint||workspace.kind==='ios')return null
+      return createRemoteSessionSource({endpoint:workspace.endpoint,sign:url=>members.transport.signedHeaders(url,{audience:workspace}),interesting,
+        log:message=>process.stderr.write(message+'\n'),...(sessionWatchOptions.stream??{})})
+    },
+    caller(callerID) {
+      const bot=String(callerID).match(/^woven:bot:[^:]+:([0-9a-f-]{36})$/)
+      if(bot)return {kind:'bot',botID:bot[1]}
+      // Called on every change of a caller with a pending wake-up: read the
+      // whole record only once it is idle.
+      const summary=service.summary(callerID)
+      if(!summary)return null
+      if(summary.conversation.activeRunID)return {kind:'conversation',idle:false}
+      return {kind:'conversation',idle:true,latestRunID:latestRun(getRecord(callerID))}
+    },
+    // Like a coordination notification: the session it is about is its
+    // source, and the turn it starts does not notify this caller's coordinator.
+    deliverToConversation({callerID,commandID,text,sessionID,title,harness}) {
+      const self=descriptor()
+      return command({commandID,deviceID:self.executionDeviceID,kind:'send',conversationID:callerID,text,agentSourceID:sessionID,
+        ...(title?{senderSessionTitle:String(title).slice(0,256)}:{}),...(harness?{senderHarness:harness}:{}),senderKind:'notification',coordinationNotification:true},
+        {id:self.executionDeviceID},{internal:true})
+    },
+    deliverToBot:deliverBot})
+  watchers.add(change=>{if(change.kind==='record'||change.kind==='deleted')sessionWatch.callerChanged(change.conversationID)})
+  const memberSessions=members?createMemberSessions({transport:members.transport,identity:descriptor,deviceID:members.deviceID,db,workspaceRole,observe:sessionWatch.observe,
     local:{providers:()=>runtime.providers(),conversations:()=>service.conversations(),transcript:(id,before)=>service.transcript(id,before),
       interactions:()=>service.interactions(),capabilities:id=>service.capabilities(id),command:body=>command(body,{id:body.deviceID},{internal:true})},
     localProviders:async()=>(await runtime.providers()).filter(provider=>provider.available!==false)}):null
   // Bots manage sessions on this and every other workspace with these tools.
-  const botSessionTools=memberSessions?['woven_sessions_create','woven_sessions_send','woven_sessions_status','woven_sessions_list','woven_sessions_stop','woven_sessions_respond','woven_sessions_harnesses']:[]
+  const botSessionTools=memberSessions?['woven_sessions_create','woven_sessions_send','woven_sessions_status','woven_sessions_wait','woven_sessions_list','woven_sessions_stop','woven_sessions_respond','woven_sessions_harnesses']:[]
   const mcp=createWorkspaceMCP({db,identity:descriptor,secret:publisherKey,endpointURL:mcpEndpointURL,
     policy:id=>getRecord(id).enabledTools??mcp.settings().enabledByDefault,localTools:localMCPTools,localCall:performMCP,fetchImpl:publisherFetch,beforeLibraryCall:()=>publisher.syncNow(),
     scopedHistoryAccess:scope=>orchestration.readableConversationIDs(scope.conversationID).size>0,localLibrary:libraryTools,memberDelegate,onTimersChanged,botTools:botSessionTools})
@@ -652,8 +688,25 @@ export function createClientExecution({ directory, runtime, kind = 'linux', name
     return memberSessions.respond({...common,interaction:input.interaction,optionID:input.optionID,answers:input.answers,cancelled:input.cancelled})
   }
   const managed=['woven_sessions_status','woven_sessions_send','woven_sessions_stop','woven_sessions_respond']
+  // `woven_sessions_wait`: the same reads as woven_sessions_status, again
+  // whenever a change reaches `until`, and at the timeout.
+  async function sessionWait(scope,input,signal) {
+    const bot=scope?.kind==='bot',callerID=bot?scope.principal:scope.conversationID,id=String(input.id).toLowerCase()
+    const timeoutMilliseconds=Math.min(input.timeoutSeconds,maximumWaitSeconds)*1000
+    const client=memberSessions?await memberSessions.resolve(callerID,id,input.workspace,{bot}):null
+    if(client) {
+      const canReadAll=bot?mcp.settings().botMCP.groups.includes('history'):(getRecord(callerID).enabledTools??mcp.settings().enabledByDefault).includes('history')
+      return sessionWatch.wait({callerID,workspaceID:client.workspace.id,id,until:input.until,timeoutMilliseconds,signal,
+        read:async()=>{const body=await memberSessions.status({client,callerID,id,canReadAll,signal});return {body,state:body.session.state}}})
+    }
+    if(bot)throw fail(503,'Bots reach sessions through this machine\'s library host, which is not running.')
+    const status={id,requestID:input.requestID,...(input.workspace!=null?{workspace:input.workspace}:{})}
+    return sessionWatch.wait({callerID,workspaceID:descriptor().id,id,until:input.until,timeoutMilliseconds,signal,
+      read:async()=>{const reply=await performMCP(scope,'woven_sessions_status',status,{signal});const summary=service.summary(id);return {body:reply.result,state:summary?sessionState(summary):'idle'}}})
+  }
   async function botSessionCall(scope,name,input,signal) {
     const callerID=scope.principal,canReadAll=mcp.settings().botMCP.groups.includes('history')
+    if(name==='woven_sessions_wait')return sessionWait(scope,input,signal)
     if(name==='woven_sessions_harnesses')return memberSessions.harnesses(input)
     if(name==='woven_sessions_create')return memberSessions.create({callerID,requestID:input.requestID,workspace:await memberSessions.destination(input.workspace),runtimeKind:'default_agent',input,signal})
     if(name==='woven_sessions_list')return memberSessions.list({callerID,workspace:input.workspace,canReadAll,signal,limit:input.limit})
@@ -662,6 +715,7 @@ export function createClientExecution({ directory, runtime, kind = 'linux', name
   }
   async function performMCP(scope,name,input,{signal}={}) {
     if(scope?.kind==='bot')return {success:true,result:await botSessionCall(scope,name,input,signal),requestID:input.requestID}
+    if(name==='woven_sessions_wait')return {success:true,result:await sessionWait(scope,input,signal),requestID:input.requestID}
     let client
     if(memberSessions&&managed.includes(name)&&(client=await memberSessions.resolve(scope.conversationID,input.id,input.workspace))) {
       const canReadAll=(getRecord(scope.conversationID).enabledTools??mcp.settings().enabledByDefault).includes('history')
@@ -782,7 +836,11 @@ export function createClientExecution({ directory, runtime, kind = 'linux', name
       if (!['accepted', 'completed', 'queued'].includes(value.status)) throw Object.assign(fail(409, value.message ?? 'The session did not accept the timer.'), { code: 'not_here' })
       return value
     },
-    async close() { closed=true;clearInterval(goalTimer);mcp.close();await publisher.close(); clearTimeout(flushTimer); for (const id of dirty.keys()) flush(id,true); unlockMaterial = undefined; await runtime.close?.(); await Promise.allSettled([...jobs.values()].map(job => job.completion)); await Promise.allSettled([...queues.values()]); db.close() },
+    // The member list changed: a stream refused with 4401 may try again.
+    retryStreams:()=>sessionWatch.retry(),
+    async close() { closed=true;sessionWatch.close();clearInterval(goalTimer);mcp.close();await publisher.close(); clearTimeout(flushTimer); for (const id of dirty.keys()) flush(id,true); unlockMaterial = undefined; await runtime.close?.(); await Promise.allSettled([...jobs.values()].map(job => job.completion)); await Promise.allSettled([...queues.values()]); db.close() },
   }
+  // What was watched or pending before a restart (its interrupted runs are idle now).
+  setImmediate(()=>{if(!closed)sessionWatch.start()})
   return service
 }

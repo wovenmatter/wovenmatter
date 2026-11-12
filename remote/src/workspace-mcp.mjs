@@ -199,7 +199,7 @@ export function createWorkspaceMCP({db,identity,secret,endpointURL,policy,localT
     return catalog.filter(tool=>{
       const group=groupFor(tool.name)
       const granted=!scope.enabledGroups||scope.enabledGroups.includes(group)
-      const taskSupported=!scope.taskProof||!['goals','timers'].includes(group)&&(!tool.name.startsWith('woven_sessions_')||['woven_sessions_list','woven_sessions_status','woven_sessions_folders','woven_sessions_harnesses'].includes(tool.name))
+      const taskSupported=!scope.taskProof||!['goals','timers'].includes(group)&&(!tool.name.startsWith('woven_sessions_')||['woven_sessions_list','woven_sessions_status','woven_sessions_wait','woven_sessions_folders','woven_sessions_harnesses'].includes(tool.name))
       return granted&&taskSupported&&(!scope.readOnly||tool.annotations?.readOnlyHint===true)
     })
   }

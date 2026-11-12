@@ -9,6 +9,6 @@ let package = Package(
     .executableTarget(name: "WovenMCPCatalogExport", dependencies: ["WovenMatterShared"], path: "Tools/WovenMCPCatalogExport"),
     .testTarget(name: "WovenMatterSharedTests", dependencies: ["WovenMatterShared"],
                 // Shared with the Node server tests, which read the same vectors.
-                exclude: ["MemberSignatureVectors.json", "generate-member-signature-vectors.mjs", "StreamProtocolFixtures.json"])
+                exclude: ["MemberSignatureVectors.json", "generate-member-signature-vectors.mjs", "StreamProtocolFixtures.json", "SessionWakeUpFixtures.json"])
   ]
 )

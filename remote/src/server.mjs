@@ -162,9 +162,15 @@ const clientExecution = runningAsService ? createClientExecution({
   extraCapabilities: () => members ? [streamCapability] : [],
   members: memberTransport ? { transport: memberTransport, deviceID: () => memberIdentityRecord?.deviceID ?? null,
     hasMac: () => library.available() && knownMacMember() } : null,
+  // A wake-up for a bot goes to the bots runtime like a due timer.
+  deliverBot: delivery => bots ? bots.deliver(delivery) : Promise.reject(Object.assign(new Error('Bots are not enabled on this machine.'), { statusCode: 503 })),
   runtime: createClientExecutionRuntime({defaultAgent,durableACP,catalog,workspaceRoot,harnessStatus,
     environment:harnessEnvironment,instances,isExecutionEnabled:()=>taskGateway.enabled()}),
 }) : null
+
+// Streams this server opened to other members, refused with 4401 when this
+// member was removed, try again once the member list changes.
+members?.watch(() => clientExecution?.retryStreams())
 
 // Timers of this machine's sessions and bots fire here, with every Mac offline.
 const timers = library && clientExecution ? createLibraryTimers({ library,

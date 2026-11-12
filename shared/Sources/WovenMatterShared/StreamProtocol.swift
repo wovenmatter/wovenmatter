@@ -29,7 +29,10 @@ public enum StreamProtocol {
   public static let maximumQueuedBytes = 8 * 1_024 * 1_024
   /// Pointer entries the Mac keeps in `execution_stream_changes`.
   public static let maximumRetainedChanges = 10_000
+  /// The longest `woven_sessions_wait` waits, below harness tool-call limits.
   public static let maximumWaitSeconds = 50
+  /// Wake-ups one calling run (and the runs its wake-ups start) receives; see
+  /// `SessionWakeUp`.
   public static let maximumWakeUpsPerRun = 10
 
   public enum CloseCode: Int, Sendable {
