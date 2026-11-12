@@ -56,11 +56,3 @@ public extension NoteDocument {
     }
   }
 }
-
-/// The Page selection captured at Send. Transient view metadata, never persisted.
-public struct CanvasViewportContext: Codable, Equatable, Sendable {
-  public var selectedCardIDs: [String]
-  public init(selectedCardIDs: [String]) {
-    self.selectedCardIDs = Array(selectedCardIDs.sorted().prefix(200))
-  }
-}

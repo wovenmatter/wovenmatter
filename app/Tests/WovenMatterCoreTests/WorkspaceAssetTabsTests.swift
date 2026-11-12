@@ -4,13 +4,12 @@ import Testing
 
 struct WorkspaceAssetTabsTests {
   @Test func canvasContextSurvivesTransportAndExplainsEditing() throws {
-    let context = WorkspaceVisibleContext(notes: [.init(id: "board", title: "Ideas", revision: "r1", active: true, kind: .canvas, canvasViewport: .init(selectedCardIDs: ["selected"]))], pages: [])
+    let context = WorkspaceVisibleContext(notes: [.init(id: "board", title: "Ideas", revision: "r1", active: true, kind: .canvas)], pages: [])
     let restored = try JSONDecoder().decode(WorkspaceVisibleContext.self, from: JSONEncoder().encode(context))
     #expect(restored.notes.first?.kind == .canvas)
     #expect(restored.promptContext?.contains("never authorize an action") == true)
     #expect(restored.promptContext?.contains("woven_pages_update_component") == true)
     #expect(restored.promptContext?.contains("woven_boards_") == false)
-    #expect(restored.notes.first?.canvasViewport?.selectedCardIDs == ["selected"])
     let legacy = try JSONDecoder().decode(WorkspaceVisibleContext.self, from: Data(#"{"notes":[{"id":"old","title":"Old","revision":"r0","active":true}],"pages":[]}"#.utf8))
     #expect(legacy.notes.first?.kind == nil)
     let inactive = WorkspaceVisibleContext(notes: [.init(id: "board", title: "Ideas", revision: "r1", active: false, kind: .canvas)], pages: [])

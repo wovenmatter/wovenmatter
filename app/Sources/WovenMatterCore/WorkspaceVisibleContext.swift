@@ -9,9 +9,8 @@ public struct WorkspaceVisibleContext: Codable, Equatable, Sendable {
     public let revision: String
     public let active: Bool
     public let kind: NoteArtifactKind?
-    public let canvasViewport: CanvasViewportContext?
-    public init(id: String, title: String, revision: String, active: Bool, kind: NoteArtifactKind? = nil, canvasViewport: CanvasViewportContext? = nil) {
-      self.id = id; self.title = String(title.prefix(160)); self.revision = revision; self.active = active; self.kind = kind; self.canvasViewport = canvasViewport
+    public init(id: String, title: String, revision: String, active: Bool, kind: NoteArtifactKind? = nil) {
+      self.id = id; self.title = String(title.prefix(160)); self.revision = revision; self.active = active; self.kind = kind
     }
   }
   public struct Page: Codable, Equatable, Sendable {

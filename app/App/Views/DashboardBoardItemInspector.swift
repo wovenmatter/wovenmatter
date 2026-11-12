@@ -139,7 +139,7 @@ struct DashboardBoardItemInspector: View {
     private func actorName(_ actor: BoardActor) -> String {
         switch actor.kind {
         case .user: "You"
-        case .outside: "External agent"
+        case .outside: actor.label ?? "External agent"
         case .session: actor.sessionID.flatMap { id in conversations.first { $0.id == id }?.title } ?? actor.label ?? "Agent"
         }
     }

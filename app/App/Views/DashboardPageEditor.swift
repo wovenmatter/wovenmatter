@@ -154,7 +154,7 @@ struct DashboardPageEditor: View {
         switch segment {
         case let .flow(id, parent, after, _, ids):
             DashboardPageTextFlow(document: $document, viewState: $viewState,
-                blockIDs: ids, parentID: parent, afterID: after, flowID: id, undoManager: textUndoManager, onFocus: onFocus)
+                blockIDs: ids, parentID: parent, afterID: after, flowID: id, pageID: noteID, undoManager: textUndoManager, onFocus: onFocus)
         case let .section(id, _, _):
             HStack(alignment: .firstTextBaseline, spacing: 5) {
                 Button {
@@ -225,14 +225,15 @@ struct DashboardPageEditor: View {
     /// without persisting empty components merely by opening the document.
     private var editorSegments: [PageSegment] {
         var result: [PageSegment] = []
-        var previous: [String: (flow: Bool, id: String?)] = [:]
+        // Keyed by parent, with nil for the Page itself, so no component ID can collide with it.
+        var previous: [String?: (flow: Bool, id: String?)] = [:]
         for segment in projection.segments {
-            let container = segment.parentID ?? "root"
+            let container = segment.parentID
             if case .flow = segment { previous[container] = (true, nil) }
             else {
                 if previous[container]?.flow != true {
                     let after = previous[container]?.id
-                    result.append(.flow(id: "flow:\(container):\(after ?? "start")", parentID: segment.parentID,
+                    result.append(.flow(id: PageSegment.flowID(parentID: container, afterID: after), parentID: segment.parentID,
                         afterID: after, depth: segment.depth, blockIDs: []))
                 }
                 previous[container] = (false, segment.id)

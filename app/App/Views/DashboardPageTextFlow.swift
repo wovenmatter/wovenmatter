@@ -8,6 +8,7 @@ struct DashboardPageTextFlow: View {
     let parentID: String?
     let afterID: String?
     let flowID: String
+    let pageID: String
     let undoManager: UndoManager
     var onFocus: ((DashboardNoteEditorController) -> Void)?
     @State private var controller = DashboardNoteEditorController()
@@ -17,7 +18,7 @@ struct DashboardPageTextFlow: View {
     var body: some View {
         let base = document.materializedPage()
         DashboardNoteEditor(document: flowBinding(base: base), controller: controller,
-            dictationEditor: dictationEditor, dictationIdentity: "page:\(flowID)",
+            dictationEditor: dictationEditor, dictationIdentity: "page:\(pageID):\(flowID)",
             sizesToContent: true, editsPageFlow: true, onFocus: { controller in
                 if let id = controller.selectedBlockID, document.blocks.contains(where: { $0.id == id }) {
                     viewState.selected = [id]
