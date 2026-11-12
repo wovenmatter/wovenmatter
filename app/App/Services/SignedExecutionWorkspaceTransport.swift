@@ -72,6 +72,10 @@ final class SignedExecutionWorkspaceTransport: ExecutionWorkspaceTransport, @unc
     func readWorkspace(_ request: LibraryWorkspaceRead) async throws -> LibraryWorkspaceResult {
         try await call("v1/execution/workspace-read", method: "POST", body: JSONEncoder().encode(request))
     }
+    func activityDetails(_ id: String, runID: String, activityID: String) async throws -> LibraryActivity {
+        try await call("v1/execution/conversations/" + Self.safeID(id) + "/activity",
+            query: activityDetailsQuery(runID: runID, activityID: activityID))
+    }
 
     static func safeID(_ value: String) throws -> String {
         guard !value.isEmpty, value.utf8.count <= 200,

@@ -102,6 +102,9 @@ public final class MacExecutionAPI: ExecutionStreamSource {
           try await requireLocal(parts[3])
           if parts[4] == "transcript" { return try .json(try await commands.transcript(conversationID: parts[3], before: query("before"))) }
           if parts[4] == "capabilities" { return try .json(try await commands.sessionCapabilities(conversationID: parts[3])) }
+          if parts[4] == "activity" {
+            return try .json(try await database.libraryActivityDetails(conversationID: parts[3], runID: query("run"), activityID: query("id") ?? ""))
+          }
         }
       } else if request.method == "POST" {
         if path == "/v1/execution/commands" {
