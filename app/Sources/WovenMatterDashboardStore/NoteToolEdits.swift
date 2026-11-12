@@ -44,6 +44,7 @@ enum NoteToolEdits {
             operations = [try tableOperation(command)]
         case "apply":
             operations = try decode([NoteEditOperation].self, command: command, label: "operations")
+            try NoteEditOperation.requireGenericNoteOperations(operations)
         case "artifact-state-edit":
             let edits = try decode([ArtifactStateEdit].self, command: command, label: "state edits")
             guard !edits.isEmpty else { throw WorkspaceToolError.invalid("Supply at least one state edit.") }

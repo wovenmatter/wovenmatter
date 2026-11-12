@@ -434,6 +434,16 @@ extension WorkspaceAgentToolsServiceTests {
         let created = await model.handle(.init(arguments: ["pages", "create", "--title", "Plan"]), callerID: caller)
         let page = try #require(created.result?.objectValue?["id"]?.stringValue)
         let pageRevision = try #require(try await database.readNoteForEditing(id: page).revision)
+        // A generic batch cannot carry Page or retired spatial edits, so it cannot pick
+        // component IDs or skip the rules each Page tool enforces.
+        let pageOperation = String(decoding: try JSONEncoder().encode([NoteEditOperation.page(.init(action: .add, id: "chosen", kind: .task, patch: .init(text: "Bypass")))]), as: UTF8.self)
+        for operations in [pageOperation, #"[{"type":"board","edit":{"action":"addItem","id":"chosen"}}]"#,
+                           #"[{"type":"canvas","edit":{"action":"connect","connection":{"id":"c","from":"a","to":"b","label":"","color":"neutral"}}}]"#] {
+            let response = await model.handle(.init(arguments: ["notes", "apply", "--note-id", page, "--revision", pageRevision, "--json", operations]), callerID: caller)
+            #expect(!response.success, "\(operations)")
+            #expect(response.code == "invalid_request", "\(operations)")
+        }
+        #expect(try await database.readNoteForEditing(id: page).revision == pageRevision)
         let arguments = ["pages", "update", "--note-id", page, "--revision", pageRevision, "--title", "Plan v2"]
         let requestID = UUID().uuidString
         #expect(await model.handle(.init(arguments: arguments, requestID: requestID), callerID: caller).success)

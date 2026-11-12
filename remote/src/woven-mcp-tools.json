@@ -1146,7 +1146,7 @@
       "openWorldHint" : true,
       "readOnlyHint" : false
     },
-    "description" : "Apply up to 128 typed note operations. Read the document first for block/table IDs and revision. Destructive edits require revision; append-only operations may omit it. Optionally supply a stable requestID UUID; the response returns one when omitted. Reuse the same UUID only for an identical retry; inspect current state after an uncertain external effect.",
+    "description" : "Apply up to 128 typed note operations. Read the document first for block/table IDs and revision. Destructive edits require revision; append-only operations may omit it. Change Page components with the woven_pages_* tools; this tool does not take Page operations. Optionally supply a stable requestID UUID; the response returns one when omitted. Reuse the same UUID only for an identical retry; inspect current state after an uncertain external effect.",
     "inputSchema" : {
       "additionalProperties" : false,
       "properties" : {

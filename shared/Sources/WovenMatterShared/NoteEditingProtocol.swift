@@ -107,6 +107,8 @@ public struct RemoteNoteEditEnvelope: Codable, Equatable, Sendable {
           envelope.operations.count <= maximumOperationCount else {
       throw RemoteNoteEditError.invalidEnvelope
     }
+    // Agent output edits a Page's components only through the Page tools.
+    guard !envelope.operations.contains(where: \.isPageEdit) else { throw RemoteNoteEditError.operationNotAllowed }
     try Self.validate(operations: envelope.operations, noteKind: noteKind)
     return envelope
   }
@@ -581,6 +583,20 @@ public enum NoteEditOperation: Codable, Equatable, Sendable {
       try values.encode(Kind.setTableDatabaseLink, forKey: .type)
       try values.encode(tableID, forKey: .tableID)
       try values.encodeIfPresent(link, forKey: .databaseLink)
+    }
+  }
+}
+
+public extension NoteEditOperation {
+  /// Page component edits come from the host's own Page paths, which choose component IDs
+  /// and enforce each kind's rules. A generic batch an agent supplies must not carry them.
+  var isPageEdit: Bool {
+    if case .page = self { true } else { false }
+  }
+
+  static func requireGenericNoteOperations(_ operations: [NoteEditOperation]) throws {
+    guard !operations.contains(where: \.isPageEdit) else {
+      throw WorkspaceToolError.invalid("Change Page components with the woven_pages_* tools. woven_notes_apply does not take Page operations.")
     }
   }
 }

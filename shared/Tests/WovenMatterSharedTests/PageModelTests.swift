@@ -496,6 +496,21 @@ struct PageModelTests {
     #expect(NoteArtifactKind.canvas.rawValue == "canvas" && NoteArtifactKind.canvas.displayName == "Page")
   }
 
+  @Test func agentBatchesCannotCarryPageEdits() throws {
+    try NoteEditOperation.requireGenericNoteOperations([.appendText("Fine", .paragraph)])
+    #expect(throws: WorkspaceToolError.self) {
+      try NoteEditOperation.requireGenericNoteOperations([.appendText("Fine", .paragraph), .page(.init(action: .requirePage))])
+    }
+    let nonce = "nonce"
+    let envelope = RemoteNoteEditEnvelope(nonce: nonce, noteID: "p", expectedRevision: "r",
+      operations: [.page(.init(action: .add, id: "chosen", patch: .init(text: "Bypass")))])
+    let content = RemoteNoteEditEnvelope.beginMarker(nonce: nonce) + "\n" + String(decoding: try JSONEncoder().encode(envelope), as: UTF8.self)
+      + "\n" + RemoteNoteEditEnvelope.endMarker(nonce: nonce)
+    #expect(throws: RemoteNoteEditError.operationNotAllowed) {
+      _ = try RemoteNoteEditEnvelope.extract(from: content, nonce: nonce, noteID: "p", expectedRevision: "r", noteKind: .canvas)
+    }
+  }
+
   // MARK: Generic note tools
 
   @Test func genericToolsKeepTheTreeValid() throws {
