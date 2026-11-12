@@ -49,9 +49,22 @@ struct SessionWaitTests {
         func remove() { mac.remove() }
     }
 
+    /// Waits for `condition`; the 10 s bound is only a safety net.
     private func eventually(_ what: String, _ condition: () async throws -> Bool) async throws {
-        for _ in 0..<200 { if try await condition() { return }; try await Task.sleep(for: .milliseconds(10)) }
+        let deadline = ContinuousClock.now + .seconds(10)
+        while ContinuousClock.now < deadline { if try await condition() { return }; try await Task.sleep(for: .milliseconds(10)) }
         Issue.record("Timed out: \(what)")
+    }
+
+    /// Waits until `count` wake-ups reached the caller and the last one was
+    /// accepted: its run is recorded before the delivery is marked accepted,
+    /// while the recorder sees the input before the run begins.
+    private func woken(_ s: Setup, _ what: String, count: Int) async throws {
+        try await eventually(what) {
+            let deliveries = await s.mac.recorder.deliveries
+            guard deliveries.count == count, let id = deliveries.last?.input.historyDeliveryID else { return false }
+            return try await s.mac.database.toolDelivery(id: id)?.status == "accepted"
+        }
     }
 
     @Test func aSessionWakesItsIdleCallerAndWaitsWhileTheCallerRuns() async throws {
@@ -71,7 +84,7 @@ struct SessionWaitTests {
         #expect(await s.mac.recorder.deliveries.isEmpty)
         s.linux.running = [:]
         try await s.stream()
-        try await eventually("the idle caller was woken") { await s.mac.recorder.deliveries.count == 1 }
+        try await woken(s, "the idle caller was woken", count: 1)
         let first = try #require(await s.mac.recorder.deliveries.first)
         // The harness gets the wake-up text first, then this chat's usual guidance.
         #expect(first.input.text.hasPrefix(SessionWakeUp.text(kind: .finished, sessionID: id, title: "Build it", workspaceName: "Linux L")))
@@ -93,17 +106,19 @@ struct SessionWaitTests {
         try await s.mac.database.completeLocalACPRun(runID: run)
         try await s.mac.model.refreshClientExecutionState()
         await wakeUps.deliverPending()
-        try await eventually("woken once its turn ended") { await s.mac.recorder.deliveries.count == 2 }
+        try await woken(s, "woken once its turn ended", count: 2)
         #expect(await s.mac.recorder.deliveries.last?.input.text.contains("is waiting for your answer: Which log? Read it with woven_sessions_status") == true)
         // The second wake-up's run follows one a wake-up started: two in a row.
         #expect(try await s.mac.database.wakeUpRunsInARow(conversationID: caller) == 2)
 
         // A wait resolves from the stream: the session answers and finishes.
         let waiting = Task { try await s.call(caller, "woven_sessions_wait", ["id": .string(id), "until": .string("idle"), "timeoutSeconds": .number(10)]) }
-        try await Task.sleep(for: .milliseconds(100))
+        try await eventually("the wait began") { wakeUps.isTracking(workspaceID: s.workspace.id) }
+        let changed = ContinuousClock.now
         s.linux.pending = []; s.linux.running = [:]
         try await s.stream()
         let waited = try await waiting.value
+        #expect(ContinuousClock.now - changed < .seconds(8), "resolved by the change, not the timeout")
         #expect(waited.success, "\(waited.error ?? "")")
         #expect(waited.result?.objectValue?["state"] == .string("idle") && waited.result?.objectValue?["timedOut"] == .bool(false))
         #expect(waited.result?.objectValue?["session"]?.objectValue?["id"]?.stringValue == id, "the woven_sessions_status body")
@@ -154,7 +169,8 @@ struct SessionWaitTests {
         #expect(try await s.mac.model.dispatchToolDelivery(delivery).success)
         let run = try #require(try await s.mac.database.activeRunID(conversationID: other))
         let waiting = Task { try await s.call(caller, "woven_sessions_wait", ["id": .string(other), "until": .string("idle"), "timeoutSeconds": .number(20)]) }
-        try await Task.sleep(for: .milliseconds(200))
+        let wakeUps = try #require(s.tools.sessionWakeUps)
+        try await eventually("the wait began") { wakeUps.isTracking(workspaceID: ApplicationModel.sessionWaitThisMac) }
         let started = ContinuousClock.now
         try await s.mac.database.completeLocalACPRun(runID: run)
         try await s.mac.model.refreshClientExecutionState()
