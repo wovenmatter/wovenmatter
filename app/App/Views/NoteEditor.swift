@@ -933,6 +933,7 @@ private final class NoteTextView: NSTextView {
     var showsPageTasks = false
     var onToggleTask: ((String) -> Void)?
     private var taskRegions: [(String, NSRect)] = []
+    private var taskElements: [PageTaskAccessibilityElement] = []
     // Each note owns its editing history; the window's title fields and other
     // editors must not become targets of these toolbar actions.
     private let noteUndoManager = UndoManager()
@@ -1008,22 +1009,37 @@ private final class NoteTextView: NSTextView {
     override func mouseDown(with event: NSEvent) {
         let point = convert(event.locationInWindow, from: nil)
         if let (id, _) = taskRegions.first(where: { $0.1.insetBy(dx: -4, dy: -4).contains(point) }), isEditable {
-            window?.makeFirstResponder(self)
-            if let storage = textStorage {
-                storage.enumerateAttributes(in: NSRange(location: 0, length: storage.length)) { values, range, stop in
-                    guard (values[.noteBlockID] as? String ?? values[.noteTableID] as? String) == id else { return }
-                    setSelectedRange(NSRange(location: range.location, length: 0))
-                    stop.pointee = true
-                }
-            }
-            onToggleTask?(id)
+            toggleTask(id)
             return
         }
         super.mouseDown(with: event)
     }
 
+    @discardableResult fileprivate func toggleTask(_ id: String) -> Bool {
+        guard isEditable, let onToggleTask else { return false }
+        window?.makeFirstResponder(self)
+        if let storage = textStorage {
+            storage.enumerateAttributes(in: NSRange(location: 0, length: storage.length)) { values, range, stop in
+                guard (values[.noteBlockID] as? String ?? values[.noteTableID] as? String) == id else { return }
+                setSelectedRange(NSRange(location: range.location, length: 0))
+                stop.pointee = true
+            }
+        }
+        onToggleTask(id)
+        return true
+    }
+
+    /// The checkboxes are drawn, so expose each one to VoiceOver as a checkbox
+    /// that names its task and can be pressed.
+    override func accessibilityChildren() -> [Any]? {
+        let children = super.accessibilityChildren() ?? []
+        return taskElements.isEmpty ? children : children + taskElements
+    }
+
     private func drawPageTasks() {
         taskRegions.removeAll()
+        var tasks: [(id: String, label: String, done: Bool, frame: NSRect)] = []
+        defer { updateTaskElements(tasks) }
         guard showsPageTasks, let storage = textStorage, let window else { return }
         var drawn = Set<String>()
         storage.enumerateAttribute(.notePageItem, in: NSRange(location: 0, length: storage.length)) { value, range, _ in
@@ -1035,6 +1051,10 @@ private final class NoteTextView: NSTextView {
             let line = convert(window.convertFromScreen(screen), from: nil)
             let frame = NSRect(x: 3, y: line.midY - 6, width: 12, height: 12)
             taskRegions.append((id, frame))
+            let paragraph = (storage.string as NSString).paragraphRange(for: NSRange(location: range.location, length: 0))
+            let text = (storage.string as NSString).substring(with: paragraph)
+                .replacingOccurrences(of: "\u{2028}", with: " ").trimmingCharacters(in: .whitespacesAndNewlines)
+            tasks.append((id, text.isEmpty ? "Task" : String(text.prefix(120)), task.status == .done, frame))
             let outline = NSBezierPath(roundedRect: frame, xRadius: 3, yRadius: 3)
             DashboardColors.noteForeground().withAlphaComponent(0.6).setStroke()
             outline.lineWidth = 1
@@ -1049,6 +1069,27 @@ private final class NoteTextView: NSTextView {
                 check.stroke()
             }
         }
+    }
+
+    private func updateTaskElements(_ tasks: [(id: String, label: String, done: Bool, frame: NSRect)]) {
+        let changed = tasks.count != taskElements.count
+            || zip(tasks, taskElements).contains { task, element in
+                task.id != element.taskID || task.label != element.accessibilityLabel()
+                    || task.done != element.isChecked
+            }
+        if changed {
+            taskElements = tasks.map { task in
+                let element = PageTaskAccessibilityElement(taskID: task.id, owner: self)
+                element.setAccessibilityLabel(task.label)
+                element.isChecked = task.done
+                return element
+            }
+        }
+        for (task, element) in zip(tasks, taskElements) {
+            element.setAccessibilityFrameInParentSpace(task.frame.insetBy(dx: -4, dy: -4))
+            element.setAccessibilityEnabled(isEditable)
+        }
+        if changed { NSAccessibility.post(element: self, notification: .layoutChanged) }
     }
 
     private func drawHighlights(in rect: NSRect) {
@@ -1080,6 +1121,31 @@ private final class NoteTextView: NSTextView {
                 return true
             }
         }
+    }
+}
+
+/// A drawn Page task checkbox, as VoiceOver sees it.
+private final class PageTaskAccessibilityElement: NSAccessibilityElement {
+    let taskID: String
+    weak var owner: NoteTextView?
+    var isChecked = false {
+        didSet { setAccessibilityValue(NSNumber(value: isChecked ? 1 : 0)) }
+    }
+
+    init(taskID: String, owner: NoteTextView) {
+        self.taskID = taskID
+        self.owner = owner
+        super.init()
+        setAccessibilityRole(.checkBox)
+        setAccessibilityParent(owner)
+        setAccessibilityValue(NSNumber(value: 0))
+        setAccessibilityHelp("Completes or reopens this task.")
+    }
+
+    override func accessibilityPerformPress() -> Bool {
+        // Accessibility actions arrive on the main thread.
+        let owner = owner, id = taskID
+        return MainActor.assumeIsolated { owner?.toggleTask(id) ?? false }
     }
 }
 
