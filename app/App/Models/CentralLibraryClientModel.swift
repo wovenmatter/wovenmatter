@@ -1,9 +1,11 @@
 import AppKit
+import CryptoKit
 import LibraryClient
 import Foundation
 import Observation
 import WovenMatterShared
 import WovenMatterCore
+import WovenMatterDashboardStore
 
 /// A Dev client build owns a replica, never another copy of the authoritative database.
 /// The portable store journals edits and command identities before network submission.
@@ -92,6 +94,51 @@ final class CentralLibraryClientModel {
     private var engine: MobileSyncEngine?
     private var transport: HTTPSLibraryTransport?
 
+    // MARK: Live host stream (client mode)
+
+    /// Opens a client-mode build's stream to its live host for one credential
+    /// (nil: none, as in every other build). Its connector admits the Dev
+    /// stream key on the same-user socket before each attempt and records the
+    /// route there in `route`.
+    typealias LiveStreamFactory = @MainActor (_ credential: MobileCredential?, _ deviceID: String,
+                                              _ route: DevelopmentLiveStream.Route) -> StreamConnection?
+    private let makeLiveStream: LiveStreamFactory
+    @ObservationIgnored private var liveStream: DevelopmentLiveStream?
+    /// The credential the stream was opened for; a new pairing opens a new one.
+    private var liveStreamCredential: String?
+    /// While the live host's stream is open nothing here runs on a timer:
+    /// `library` items start library sync, and the open chats stream.
+    private(set) var liveStreamOpen = false
+    private(set) var liveStreamProblem: String?
+    /// Chats this server's windows hold open (`followConversation`).
+    private(set) var followedConversationIDs: Set<String> = []
+    private var livePending: [PendingInteraction] = []
+    private var liveTranscripts: [String: LibraryTranscript] = [:]
+    private var liveCapabilities: [String: HarnessCapabilities] = [:]
+    private var liveSessions: [String: SessionSettings] = [:]
+    /// Chats the live host does not serve live; read once instead.
+    private var liveEnded: Set<String> = []
+    private var liveReloadScheduled = false
+    /// Tells the windows that follow these relayed chats to read them again.
+    var liveRelayChanged: ((Set<String>) -> Void)?
+    /// A `library` item, a stream that opened or a local change asks for one library pass.
+    private var centralSyncRequested = false
+    /// The fallback library timer, only while no live host stream is open (an
+    /// older host without `development.stream`, or the host unreachable).
+    static let fallbackCentralInterval: TimeInterval = 15
+    static let fallbackActiveCentralInterval: TimeInterval = 2
+    /// This Mac's own Tailscale Serve child is checked this often while shared (no reads).
+    static let localSharingCheckInterval: TimeInterval = 30
+    private var nextLocalSharingCheck = Date.distantFuture
+    /// This Mac's execution database tells us when its sessions or library
+    /// changed; its history is captured at most this often while they change.
+    static let localCaptureInterval: TimeInterval = 1
+    private var lastLocalCapture = Date.distantPast
+    @ObservationIgnored private var localObservers: (database: WorkspaceDatabase, ids: [UUID])?
+    @ObservationIgnored private var wakeContinuation: CheckedContinuation<Void, Never>?
+    @ObservationIgnored private var wakeTimer: Task<Void, Never>?
+    @ObservationIgnored private var wakeRequested = false
+
     init(store: MobileStore? = nil, transport: (any LibraryTransport)? = nil,
          assets: WorkspaceAssetSession? = nil,
          executionDirectory: URL? = nil,
@@ -104,7 +151,9 @@ final class CentralLibraryClientModel {
          saveWorkspaceCredential: @escaping @MainActor (DirectWorkspaceCredential) throws -> Void = { try WorkspaceCredentialVault.save($0) },
          makeWorkspaceTransport: @escaping @MainActor (DirectWorkspaceCredential) throws -> any ExecutionWorkspaceTransport = {
              try HTTPSExecutionWorkspaceTransport(credential: $0)
-         }) {
+         },
+         makeLiveStream: @escaping LiveStreamFactory = CentralLibraryClientModel.developmentLiveStream) {
+        self.makeLiveStream = makeLiveStream
         self.makeLocalExecution = makeLocalExecution ?? { directory, replica in
             try await SecondaryMacExecutionWorkspace.create(directory: directory, replica: replica, assets: assets)
         }
@@ -178,7 +227,9 @@ final class CentralLibraryClientModel {
         defer { connectingDevelopment = false; nextDevelopmentConnection = Date().addingTimeInterval(5) }
         let generation = connectionGeneration
         do {
-            let connection = try await DevelopmentLaunch.connect(deviceID: state.deviceID)
+            // Only the public half of this instance's stream key leaves it.
+            let key = try? DevelopmentStreamKey.loadOrCreate(deviceID: state.deviceID).publicKey.rawRepresentation
+            let connection = try await DevelopmentLaunch.connect(deviceID: state.deviceID, memberKey: key)
             guard !Task.isCancelled, !preparingTransition, connectionGeneration == generation, credential == nil else { return }
             try await acceptPairing(endpoint: connection.endpoint, response: connection.pairing)
             deviceConnectionsError = nil
@@ -191,13 +242,58 @@ final class CentralLibraryClientModel {
         guard !running else { return }; running = true
         defer { running = false }
         await initializeClientWorkspace()
+        // Nothing here ticks. Each pass does what is due, then waits for the
+        // next event (a stream item, a local change, a write) or the next
+        // retry a failure scheduled. With the live host's stream open and
+        // nothing failing, it waits for events alone.
         while !Task.isCancelled {
             if DevelopmentLaunch.isClient, credential == nil, nextDevelopmentConnection <= Date() {
                 await reconnectDevelopmentLibrary()
             }
             await refresh(background: true)
-            do { try await Task.sleep(for: .seconds(1)) } catch { return }
+            await reconcileLiveStream()
+            await waitForWork(until: nextScheduledWork())
         }
+        await closeLiveStream()
+    }
+
+    /// The earliest retry or fallback that is due, or nil when only events remain.
+    func nextScheduledWork() -> Date? {
+        var dates: [Date] = []
+        if DevelopmentLaunch.isClient, credential == nil { dates.append(nextDevelopmentConnection) }
+        if requiresLocalExecution, engine != nil, !sharingLocalExecution { dates.append(nextLocalSharingAttempt) }
+        if sharingLocalExecution { dates.append(nextLocalSharingCheck) }
+        if engine != nil { dates.append(centralSyncRequested ? .distantPast : nextCentralRefresh) }
+        dates += directClients.keys.map { nextDirectRefresh[$0] ?? .distantPast }
+        return dates.filter { $0 != .distantFuture }.min()
+    }
+
+    /// Wakes the loop now: a stream item, a local change or a write needs a pass.
+    func wakeRun() {
+        wakeRequested = true
+        wakeTimer?.cancel(); wakeTimer = nil
+        let waiter = wakeContinuation; wakeContinuation = nil
+        waiter?.resume()
+    }
+
+    private func waitForWork(until date: Date?) async {
+        guard !wakeRequested else { wakeRequested = false; return }
+        if let date, date <= Date() { return }
+        await withTaskCancellationHandler {
+            await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                wakeContinuation = continuation
+                if let date {
+                    let delay = max(0, date.timeIntervalSinceNow)
+                    wakeTimer = Task { [weak self] in
+                        do { try await Task.sleep(for: .milliseconds(Int64(delay * 1_000) + 1)) } catch { return }
+                        self?.wakeRun()
+                    }
+                }
+            }
+        } onCancel: {
+            Task { @MainActor [weak self] in self?.wakeRun() }
+        }
+        wakeRequested = false
     }
     func initializeClientWorkspace() async {
         requiresLocalExecution = true
@@ -275,6 +371,7 @@ final class CentralLibraryClientModel {
             let workspace = try await makeLocalExecution(executionDirectory, store)
             try await attachExecutionWorkspace(workspace.descriptor, transport: workspace)
             localExecution = workspace
+            observeLocalExecution(workspace.database)
             if DevelopmentLaunch.isClient { workspace.model.liveLibraryClient = self }
             await startLocalSharing()
             await selectExecutionWorkspace(workspace.descriptor.id)
@@ -358,8 +455,172 @@ final class CentralLibraryClientModel {
             _ = try? await engine?.synchronize()
             await engine?.cancelSynchronization()
             try? await transport?.suspendDevelopmentConnection()
+            // The stream closes first; the disconnect then revokes its key on the live host.
+            await closeLiveStream()
             if DevelopmentLaunch.isClient, let credential { try? await DevelopmentLaunch.disconnect(deviceID: state.deviceID, credential: credential.token) }
         }
+    }
+
+    // MARK: Live host stream
+
+    /// The real connector of a client-mode build: before each attempt it
+    /// admits this instance's stream key with its current Dev credential on
+    /// the live host's same-user socket, then opens the host's loopback
+    /// development listener, signed for the member ID the host returned.
+    static func developmentLiveStream(credential: MobileCredential?, deviceID: String,
+                                      route: DevelopmentLiveStream.Route) -> StreamConnection? {
+        guard DevelopmentLaunch.isClient, let credential, let key = try? DevelopmentStreamKey.loadOrCreate(deviceID: deviceID) else { return nil }
+        let signer = MemberRequestSigner(deviceID: deviceID, key: key)
+        let request = DevelopmentStreamRequest(deviceID: deviceID, credential: credential.token, memberKey: key.publicKey.rawRepresentation)
+        return StreamConnection {
+            let admitted = try await DevelopmentLaunch.admitStream(request)
+            route.current = admitted
+            let url = WebSocketStreamTransport.loopbackURL(port: admitted.port)
+            let headers = try signer.headers(method: "GET", target: StreamEndpoint.target(of: url), audience: admitted.audience)
+            return WebSocketStreamTransport.loopback(port: admitted.port, headers: headers)
+        }
+    }
+
+    /// Whether `conversationID` is a live host chat that the stream follows now.
+    func streams(_ conversationID: String) -> Bool {
+        liveStreamOpen && followedConversationIDs.contains(conversationID) && executionOwner(for: conversationID) == nil
+            && !liveEnded.contains(conversationID)
+    }
+
+    /// A window of this server opened a chat another machine runs (the live
+    /// host or another): it follows the host's stream while it stays open.
+    func followConversation(_ id: String) {
+        guard followedConversationIDs.insert(id).inserted else { return }
+        Task { await self.followOnStream() }
+    }
+
+    func unfollowConversation(_ id: String) {
+        guard followedConversationIDs.remove(id) != nil else { return }
+        liveTranscripts.removeValue(forKey: id); liveCapabilities.removeValue(forKey: id)
+        liveSessions.removeValue(forKey: id); liveEnded.remove(id)
+        Task { await self.followOnStream() }
+    }
+
+    private func followOnStream() async {
+        await liveStream?.follow(followedConversationIDs.filter { executionOwner(for: $0) == nil })
+    }
+
+    private func relayChanged(_ ids: Set<String>) {
+        let ids = ids.intersection(followedConversationIDs)
+        guard !ids.isEmpty else { return }
+        if let liveRelayChanged { liveRelayChanged(ids) } else { localExecution?.model.windowStreamRelayChanged(ids) }
+    }
+
+    /// One stream per credential, opened once this replica knows its library.
+    private func reconcileLiveStream() async {
+        guard !preparingTransition, engine != nil, let libraryID = state.workspaceID, let store else { await closeLiveStream(); return }
+        let key = credential?.token ?? ""
+        if liveStream != nil, liveStreamCredential == key { return }
+        await closeLiveStream()
+        let route = DevelopmentLiveStream.Route()
+        guard let connection = makeLiveStream(credential, state.deviceID, route) else { return }
+        let stream = DevelopmentLiveStream(libraryID: libraryID, store: store, connection: connection, route: route) { [weak self] update in
+            await self?.liveStreamUpdate(update)
+        }
+        liveStream = stream; liveStreamCredential = key
+        await stream.start()
+        await followOnStream()
+    }
+
+    func closeLiveStream() async {
+        guard let stream = liveStream else { return }
+        liveStream = nil; liveStreamCredential = nil
+        await stream.close()
+        setLiveStreamOpen(false)
+    }
+
+    private func setLiveStreamOpen(_ open: Bool) {
+        guard open != liveStreamOpen else { return }
+        liveStreamOpen = open
+        if open {
+            // Catch up once on what changed while closed; then items drive sync.
+            centralSyncRequested = true
+        } else {
+            livePending = []; liveTranscripts = [:]; liveCapabilities = [:]; liveSessions = [:]; liveEnded = []
+            // The fallback timer resumes until the stream opens again.
+            nextCentralRefresh = min(nextCentralRefresh, Date().addingTimeInterval(Self.fallbackActiveCentralInterval))
+        }
+        wakeRun()
+        relayChanged(followedConversationIDs)
+    }
+
+    private func liveStreamUpdate(_ update: DevelopmentLiveStream.Update) async {
+        switch update {
+        case .state(let state):
+            switch state {
+            case .open: liveStreamProblem = nil; setLiveStreamOpen(true)
+            case .memberRemoved:
+                liveStreamProblem = "The live library host revoked this development client's stream key."
+                setLiveStreamOpen(false)
+            case .waiting(let error):
+                liveStreamProblem = error?.localizedDescription
+                setLiveStreamOpen(false)
+            case .idle, .connecting: setLiveStreamOpen(false)
+            }
+        case .conversations:
+            scheduleLiveReload()
+        case .pending(let interactions):
+            let changed = Set((livePending + interactions).map(\.conversationID))
+            livePending = interactions
+            relayChanged(changed)
+        case .library(let cursor):
+            guard let store, cursor > (await store.snapshot().cursor) else { return }
+            centralSyncRequested = true; wakeRun()
+        case .transcript(let id, let transcript):
+            liveTranscripts[id] = transcript; relayChanged([id])
+        case .capabilities(let id, let value):
+            liveCapabilities[id] = value; relayChanged([id])
+        case .session(let id, let value):
+            guard liveSessions[id] != value else { return }
+            liveSessions[id] = value; relayChanged([id])
+        case .ended(let id):
+            liveEnded.insert(id); relayChanged([id])
+        }
+    }
+
+    /// Session summaries reach the replica projection at most every 50 ms.
+    private func scheduleLiveReload() {
+        guard !liveReloadScheduled else { return }
+        liveReloadScheduled = true
+        Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(50))
+            guard let self else { return }
+            self.liveReloadScheduled = false
+            await self.reload()
+        }
+    }
+
+    /// This Mac's execution database committed session or library changes:
+    /// its history is captured on the next pass, at most once a second.
+    private func observeLocalExecution(_ database: WorkspaceDatabase) {
+        if let localObservers {
+            for id in localObservers.ids {
+                localObservers.database.removeExecutionStreamObserver(id); localObservers.database.removeLibraryChangeObserver(id)
+            }
+        }
+        let changed: @Sendable (Int64) -> Void = { [weak self] _ in Task { @MainActor in self?.localExecutionChanged() } }
+        localObservers = (database, [database.observeExecutionStreamChanges(changed), database.observeLibraryChanges(changed)])
+    }
+
+    private func localExecutionChanged() {
+        guard let id = localExecution?.descriptor.id else { return }
+        let due = max(Date(), lastLocalCapture.addingTimeInterval(Self.localCaptureInterval))
+        if (nextDirectRefresh[id] ?? .distantPast) > due { nextDirectRefresh[id] = due }
+        wakeRun()
+    }
+
+    /// A captured change or a queued edit waits for the library: one pass now.
+    private func requestCentralSyncIfPending() async {
+        guard let store, engine != nil else { return }
+        let journal = await store.journal.snapshot()
+        let outbox = await store.snapshot().outbox
+        guard !journal.pendingEventIDs.isEmpty || !journal.pendingRegistrations.isEmpty || !outbox.isEmpty else { return }
+        centralSyncRequested = true; wakeRun()
     }
     /// This device's credential for its central library's namespace, or for a
     /// workspace another paired Mac owns, checked against that workspace's
@@ -394,8 +655,14 @@ final class CentralLibraryClientModel {
             }
             guard directClients[workspaceID] === client else { return }
             directOnline.insert(workspaceID); directFailures[workspaceID] = 0
-            let active = state.conversations.values.contains { executionOwner(for: $0.id) == workspaceID && $0.activeRunID != nil }
-            nextDirectRefresh[workspaceID] = Date().addingTimeInterval(workspaceID == localExecution?.descriptor.id || active ? 2 : 15)
+            // Read again only on an event: for this Mac's own execution a change
+            // in its database; for another machine a library pass, an opened
+            // chat or an action. Nothing reads a workspace on a timer.
+            nextDirectRefresh[workspaceID] = .distantFuture
+            if workspaceID == localExecution?.descriptor.id {
+                lastLocalCapture = Date()
+                await requestCentralSyncIfPending()
+            }
         } catch {
             guard directClients[workspaceID] === client else { return }
             directOnline.remove(workspaceID)
@@ -459,6 +726,7 @@ final class CentralLibraryClientModel {
         if sharingLocalExecution, !localSharingBusy, localHost?.isRunning != true {
             await stopLocalSharing()
         }
+        nextLocalSharingCheck = sharingLocalExecution ? Date().addingTimeInterval(Self.localSharingCheckInterval) : .distantFuture
         if requiresLocalExecution, !sharingLocalExecution, !localSharingBusy, engine != nil,
            !background || nextLocalSharingAttempt <= Date() {
             await startLocalSharing()
@@ -470,7 +738,8 @@ final class CentralLibraryClientModel {
             try? await store.journal.upsertWorkspace(descriptor)
         }
         async let directRefresh: Void = refreshAllExecutionWorkspaces(background: background)
-        guard let engine, !background || nextCentralRefresh <= Date() else { await directRefresh; return }
+        guard let engine, !background || centralSyncRequested || nextCentralRefresh <= Date() else { await directRefresh; return }
+        centralSyncRequested = false
         let expectedConnection = connectionGeneration
         do {
             try await flushLocalWrites()
@@ -482,7 +751,7 @@ final class CentralLibraryClientModel {
             }
             guard connectionGeneration == expectedConnection else { await directRefresh; return }
             try await engine.recoverCommandReceipts()
-            if let id = selectedConversationID, executionOwner(for: id) == nil {
+            if let id = selectedConversationID, executionOwner(for: id) == nil, !streams(id) {
                 try await engine.refreshTranscript(id)
             }
             guard connectionGeneration == expectedConnection else { await directRefresh; return }
@@ -504,9 +773,21 @@ final class CentralLibraryClientModel {
         if online { centralFailures = 0 }
         else { centralFailures = min(centralFailures + 1, 5) }
         let hasActiveRuns = state.conversations.values.contains { $0.activeRunID != nil }
-        nextCentralRefresh = Date().addingTimeInterval(online ? (hasActiveRuns ? 2 : 15) : min(60, pow(2, Double(centralFailures))))
+        if !online { nextCentralRefresh = Date().addingTimeInterval(min(60, pow(2, Double(centralFailures)))) }
+        // With the live host's stream open its `library` items start the next
+        // pass; without one the fallback timer runs.
+        else if liveStreamOpen { nextCentralRefresh = .distantFuture }
+        else { nextCentralRefresh = Date().addingTimeInterval(hasActiveRuns ? Self.fallbackActiveCentralInterval : Self.fallbackCentralInterval) }
         await directRefresh
+        if online, background {
+            // History other machines wrote reached the library: read their
+            // workspaces again on the next pass.
+            for id in directClients.keys where id != localExecution?.descriptor.id { nextDirectRefresh[id] = .distantPast }
+        }
         await reload()
+        // Followed chats the stream does not carry are read again from what this pass brought.
+        let unstreamed = followedConversationIDs.filter { !streams($0) }
+        if !unstreamed.isEmpty { relayChanged(unstreamed) }
     }
     func flushLocalWrites() async throws {
         await writeTask?.value
@@ -609,12 +890,17 @@ final class CentralLibraryClientModel {
             id = value
             try requireAccepted(await submit(.init(deviceID: state.deviceID, kind: .workspace, conversationID: id, workspaceAction: command), workspaceID: executionOwner(for: id) ?? "central"))
         case .close(let value):
-            id = value
+            // The window let go of the chat: it leaves the stream. Nothing is read.
+            unfollowConversation(value)
+            return heldSnapshot(value)
         case .earlier(let value, let before):
             id = value
             if let owner = executionOwner(for: id), let client = directClients[owner] { earlier = try await client.earlierTranscript(id, before: before) }
             else { earlier = try await transport?.transcript(id, before: before) }
         }
+        // A chat the live host's stream follows is answered from its items;
+        // an action's effect arrives there too. Nothing is read over HTTP.
+        if earlier == nil, streams(id) { return heldSnapshot(id) }
         let owner = executionOwner(for: id) ?? "central"
         var provider: HarnessCapabilities?
         var interactions: [PendingInteraction] = []
@@ -638,6 +924,19 @@ final class CentralLibraryClientModel {
         return .init(workspace: descriptor, transcript: earlier ?? state.transcripts[id] ?? journal.transcripts[id],
             capability: provider, interactions: interactions.filter { $0.conversationID == id }, session: settings,
             online: refreshError == nil && (owner == "central" ? online : directOnline.contains(owner)), error: refreshError)
+    }
+
+    /// What this server holds for a chat without reading anything: the live
+    /// host's stream items for a followed chat, else the replica's copy.
+    private func heldSnapshot(_ id: String) -> FederatedExecutionSnapshot {
+        let owner = executionOwner(for: id) ?? "central"
+        let descriptor = journal.workspaces[owner] ?? ExecutionWorkspace(id: owner,
+            libraryID: state.workspaceID ?? "", ownerDeviceID: owner, kind: .mac, name: "Production", capabilities: ["execution.v1"])
+        let streamed = streams(id)
+        return .init(workspace: descriptor, transcript: liveTranscripts[id] ?? state.transcripts[id] ?? journal.transcripts[id],
+            capability: liveCapabilities[id], interactions: streamed ? livePending.filter { $0.conversationID == id } : [],
+            session: liveSessions[id], online: streamed || (owner == "central" ? online : directOnline.contains(owner)),
+            error: streamed ? nil : liveStreamProblem)
     }
     func workspace(_ read: LibraryWorkspaceRead) async throws -> LibraryWorkspaceResult {
         if let store {

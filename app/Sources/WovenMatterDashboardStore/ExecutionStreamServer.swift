@@ -129,8 +129,10 @@ public final class ExecutionStreamServer: @unchecked Sendable {
   // Confined to `queue`.
   private var listener: NWListener?
   private var port: UInt16?
-  private var bindings: [UInt16: (member: LibraryMember, expires: Date)] = [:]
+  private var bindings: [UInt16: (member: LibraryMember, development: Bool, expires: Date)] = [:]
   private var sessions: [UUID: StreamSession] = [:]
+  /// Open sockets of client-mode Dev builds (`developmentUpgrade`), by session.
+  private var developmentSessions: [UUID: String] = [:]
   private var observer: UUID?
   /// `library` items: the mobile library change cursor, at most every 300 ms.
   private var library: LibraryChangeAnnouncer?
@@ -200,7 +202,7 @@ public final class ExecutionStreamServer: @unchecked Sendable {
       observer = nil; library = nil
       listener?.cancel(); listener = nil; port = nil; bindings.removeAll()
       for session in sessions.values { Task { await session.close(.goingAway) } }
-      sessions.removeAll()
+      sessions.removeAll(); developmentSessions.removeAll()
     }
   }
 
@@ -217,6 +219,35 @@ public final class ExecutionStreamServer: @unchecked Sendable {
   /// The outer server's decision for `GET /v1/stream`: every refusal happens
   /// here, before the upgrade, as a JSON HTTP error.
   public func upgrade(_ request: LibraryHTTPRequest) async -> WebSocketUpgradeDecision {
+    let members = members
+    return await upgrade(request, development: false) { try await members.authenticate($0, allowing: Self.allowedKinds) }
+  }
+
+  /// `GET /v1/stream` on this live host's loopback development listener,
+  /// which only a client-mode Dev build on this Mac uses: the same refusals,
+  /// but only a key in `roster` is accepted, never a library member's. Its
+  /// socket is outside the member socket registry; `closeDevelopment` closes it.
+  public func developmentUpgrade(_ request: LibraryHTTPRequest, roster: DevelopmentStreamRoster) async -> WebSocketUpgradeDecision {
+    await upgrade(request, development: true) { try await roster.authenticate($0) }
+  }
+
+  /// Closes every development socket of `deviceID`: 4401 when its key was
+  /// revoked, 1001 when it was replaced.
+  public func closeDevelopment(deviceID: String, code: WovenMatterShared.StreamProtocol.CloseCode = .memberRemoved) {
+    let id = deviceID.lowercased()
+    queue.async { [self] in
+      for (session, device) in developmentSessions where device == id {
+        developmentSessions.removeValue(forKey: session)
+        if let stream = sessions[session] { Task { await stream.close(code) } }
+      }
+    }
+  }
+
+  /// Dev devices with an open development socket: their presence on this host.
+  public func developmentDeviceIDs() -> Set<String> { queue.sync { Set(developmentSessions.values) } }
+
+  private func upgrade(_ request: LibraryHTTPRequest, development: Bool,
+                       authenticate: @Sendable (LibraryHTTPRequest) async throws -> LibraryMember) async -> WebSocketUpgradeDecision {
     let components = URLComponents(string: "http://localhost" + request.target)
     let versions = components?.queryItems?.filter { $0.name == "protocol" }.compactMap { $0.value.flatMap(Int.init) } ?? []
     guard versions.count == 1, StreamProtocol.supportedVersions.contains(versions[0]) else {
@@ -230,7 +261,7 @@ public final class ExecutionStreamServer: @unchecked Sendable {
       return .reject(.error("unauthorized", MemberRequestError.missing.message, status: 401))
     }
     let member: LibraryMember
-    do { member = try await members.authenticate(request, allowing: Self.allowedKinds) }
+    do { member = try await authenticate(request) }
     catch let error as MemberRequestError {
       if error == .clock {
         return .reject(ExecutionStreamRefusal.response(StreamProtocol.ErrorCode.memberTimeStale.rawValue, error.message,
@@ -245,7 +276,7 @@ public final class ExecutionStreamServer: @unchecked Sendable {
     let queue = queue
     return .tunnel(port: port, head: head, options: .init(bind: { [weak self] sourcePort in
       // Synchronously, so the binding exists before the handshake is sent.
-      queue.sync { self?.bindings[sourcePort] = (member, Date().addingTimeInterval(30)) }
+      queue.sync { self?.bindings[sourcePort] = (member, development, Date().addingTimeInterval(30)) }
     }))
   }
 
@@ -273,24 +304,32 @@ public final class ExecutionStreamServer: @unchecked Sendable {
     guard case .hostPort(_, let remote) = connection.endpoint, let binding = bindings.removeValue(forKey: remote.rawValue) else {
       connection.cancel(); return
     }
-    let session = StreamSession(context: sessionContext, wire: WebSocketStreamWire(connection: connection, queue: queue, closeTimeout: configuration.closeTimeout), member: binding.member)
+    let session = StreamSession(context: sessionContext(development: binding.development),
+                                wire: WebSocketStreamWire(connection: connection, queue: queue, closeTimeout: configuration.closeTimeout),
+                                member: binding.member)
     sessions[session.id] = session
+    if binding.development { developmentSessions[session.id] = binding.member.deviceID }
     connection.stateUpdateHandler = { [weak session] state in
       switch state { case .failed, .cancelled: Task { await session?.close(nil) }; default: break }
     }
     Task { await session.begin() }
   }
 
-  private var sessionContext: StreamSessionContext {
+  /// A development socket only reads. It is in no member socket registry (a
+  /// member list change never closes it; only its roster entry's removal
+  /// does) and has no member directory, so it answers no call: a Dev client
+  /// sends its commands through the library API with its Dev credential.
+  private func sessionContext(development: Bool) -> StreamSessionContext {
     let database = database
-    return .init(configuration: configuration, conversations: source, workspace: source, members: members, registry: registry,
+    return .init(configuration: configuration, conversations: source, workspace: source, members: development ? nil : members,
+          registry: development ? nil : registry,
           tail: tail, serverState: nil, hello: { [weak self] in
             await self?.hello ?? StreamHello(deviceID: "", libraryID: "", workspaceID: "", serverTime: MemberRequestSignature.now())
           }, ended: { [weak self] id in self?.ended(id) }, libraryCursor: { try? await database.libraryWakeCursor() })
   }
 
   func ended(_ id: UUID) {
-    queue.async { [self] in sessions.removeValue(forKey: id) }
+    queue.async { [self] in sessions.removeValue(forKey: id); developmentSessions.removeValue(forKey: id) }
   }
 
   var hello: StreamHello {

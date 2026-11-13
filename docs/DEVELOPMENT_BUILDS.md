@@ -103,11 +103,47 @@ Subsequent data synchronization uses its HTTPS library endpoint, as on a differe
 production library service and Tailscale must be available for first enrollment
 and live sync; its UI does not have to be open. An already initialized client can run
 against its local database while the library is offline, retaining its device
-identity, executor, and pending edits. Its refresh loop resumes two-way sync when
-the library becomes reachable again without reenrollment. The client server retries
+identity, executor, and pending edits. Two-way sync resumes when the library
+becomes reachable again without reenrollment. The client server retries
 initial connection failures rather than substituting another mode or another UI.
 Credentials stay in this instance's Keychain namespace and its server process.
 The launcher never reads or copies production credentials or opens production SQLite.
+
+The client streams from its live host instead of polling it. Its background
+server holds one WebSocket to the host's stream, subscribed to `workspace`
+and to a `conversation` stream for each of the host's chats a window holds
+open. `conversations` and `pending` items keep run state, questions, and
+approvals current. A `library` item ahead of the replica's cursor starts one
+library sync. `conversation` items carry the open chat's live text,
+capabilities, and settings to the window, and nothing is read over HTTP for
+it. Sessions the client runs itself are captured when its own execution
+database reports a change, at most once a second. Other machines' sessions
+show the history library sync brought: read when a chat opens, after an
+action, and after each library sync. The Dev key cannot reach those machines.
+Nothing runs on a timer while the stream is open. If the stream is
+unavailable, for example from an older live host, library sync falls back to
+every 15 seconds (2 seconds during a run) until the stream opens.
+
+The stream is authenticated by a Dev stream key, not a library member key.
+Each client instance creates an Ed25519 key in its own Keychain namespace and
+sends only the public key on the same-user socket: with `development.connect`,
+and with `development.stream` before every stream attempt. Each of these calls
+is authenticated by the instance's current Dev credential. The live host keeps
+the key in an in-memory list of Dev stream keys. It never writes the key to
+SQLite, the signed member list, or any file another device synchronizes, so no
+other device learns it, and a host restart forgets it. The host refuses a
+device ID that is already a library member. The key opens only the host's
+loopback development listener, a separate `127.0.0.1` port that Tailscale
+Serve never exposes. That listener serves only `GET /v1/stream`, accepts only
+keys in that list, and refuses library members, browsers, and every other
+request. The library's own listener refuses the Dev key. A Dev stream only
+reads: it answers no `execution.command`, so commands still go through the
+library API with the Dev credential. An open stream keeps the Dev identity
+present on the host. Quitting the client closes its stream and then
+disconnects. Disconnecting, unpairing the Dev identity, or that identity's
+credential no longer being current revokes the key, and its socket closes with
+`4401`. The listener exists only while the host is sharing its library, since
+the client syncs over that endpoint too.
 
 Automatic enrollment is not an HTTP route. The Unix socket lives in an owner-only
 0700 directory, is mode 0600, and checks kernel-reported peer user IDs on both ends.
@@ -207,7 +243,10 @@ Launcher fixtures use fake build/signing tools and disposable SQLite databases.
 They cover profile separation, explicit mode overrides, automatic selection,
 committed WAL data, source preservation, snapshot restart protection, and failed
 copy cleanup. Swift fixtures cover client projection, execution ownership,
-credentials, and synchronization without invoking providers.
+credentials, and synchronization without invoking providers. They also cover
+the Dev stream key: local-only enrollment, the loopback upgrade, refusal of
+other keys, revocation with `4401`, and a client that follows a chat from
+stream items without polling.
 
 The acceptance workflow is production plus two client instances, distinct assigned
 execution, a single-owner schedule, shared edits, reconnect, and an independent
