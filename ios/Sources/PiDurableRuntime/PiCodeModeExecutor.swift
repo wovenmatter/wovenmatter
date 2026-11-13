@@ -51,6 +51,9 @@ public final class PiCodeModeExecutor: NSObject, WKScriptMessageHandler, WKNavig
         self.lastHeartbeat = self.now()
         let configuration = WKWebViewConfiguration()
         configuration.websiteDataStore = .nonPersistent()
+        // The code page has no visible view, and WebKit suspends an inactive
+        // one. Keep it scheduled until finish() tears the worker and the view down.
+        configuration.preferences.inactiveSchedulingPolicy = .none
         configuration.userContentController.add(self, name: "wovenCodeMode")
         let view = WKWebView(frame: .zero, configuration: configuration)
         browser = view; view.navigationDelegate = self
@@ -59,6 +62,10 @@ public final class PiCodeModeExecutor: NSObject, WKScriptMessageHandler, WKNavig
           while !Task.isCancelled {
             do { try await Task.sleep(for: .milliseconds(100)) } catch { return }
             guard let self, !self.finished else { return }
+            // A worker free to run answers this with a heartbeat. Its own timer is
+            // not enough: WebKit throttles a hidden page's repeating timers, so one
+            // that only awaits a tool could go quiet for tens of seconds.
+            self.browser?.evaluateJavaScript("window.__wovenPing?.()", completionHandler: nil)
             if self.lastHeartbeat.duration(to: self.now()) >= .seconds(self.policy.unresponsiveCodeSeconds) {
               self.finish(.failure(PiDurableRuntimeError.unavailable("The code worker stopped responding. Yield during long computations with await yield_control(); saved tool effects have not been replayed."))); return
             }
@@ -149,12 +156,14 @@ public final class PiCodeModeExecutor: NSObject, WKScriptMessageHandler, WKNavig
     let worker;
     window.__wovenStop = () => { worker?.terminate(); worker = null; };
     window.__wovenReply = response => worker?.postMessage({type:'reply',...response});
+    window.__wovenPing = () => worker?.postMessage({type:'ping'});
     window.__wovenRun = (source, definitions, initialState) => {
       const boot = async function() {
         let next = 0, started = false;
         const waiting = new Map();
         self.onmessage = async event => {
           const value = event.data;
+          if (value.type === 'ping') { if (started) self.postMessage({type:'heartbeat'}); return; }
           if (value.type === 'reply') {
             const pending = waiting.get(value.id); if (!pending) return;
             waiting.delete(value.id);

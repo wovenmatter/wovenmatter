@@ -154,6 +154,8 @@ import MobileInference
   @ObservationIgnored var streamLifecycle: Task<Void, Never>?
   /// Test sockets for workspace streams; production signs a WebSocket upgrade.
   @ObservationIgnored var streamConnector: ((ExecutionWorkspace) -> StreamConnection.Connect?)?
+  /// Reconnection timing for workspace streams; tests replace the backoff.
+  @ObservationIgnored var streamConfiguration = StreamConnection.Configuration()
   var workspaceProviders: [String: [HarnessCapabilities]] = [:]
   var workspaceReachable: [String: Bool] = [:]
   var executionWorkspaceRefreshInProgress = false

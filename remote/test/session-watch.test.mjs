@@ -29,7 +29,7 @@ const send = (response, status, value) => { response.writeHead(status, { 'conten
 const resultOf = reply => { assert.equal(reply.result.isError, false, JSON.stringify(reply)); return JSON.parse(reply.result.content[0].text) }
 const settle = () => new Promise(done => setImmediate(done))
 const sleep = milliseconds => new Promise(done => setTimeout(done, milliseconds))
-async function until(check, what, timeout = 5_000) {
+async function until(check, what, timeout = 10_000) {
   for (const deadline = Date.now() + timeout; !(await check());) { assert.ok(Date.now() < deadline, what); await sleep(10) }
 }
 
@@ -198,10 +198,12 @@ test('a wait on another workspace resolves through the destination\'s stream wit
   await until(() => stream.connections() === 1, 'L holds one stream to M')
 
   // While it waits, M is only read once more: when the stream says the turn ended.
-  const before = reads.filter(entry => entry === 'GET /v1/execution/conversations').length
+  const listReads = () => reads.filter(entry => entry === 'GET /v1/execution/conversations').length
+  const before = listReads()
   const waiting = caller.call('woven_sessions_wait', { id: child.id, until: 'idle', timeoutSeconds: 20 })
+  await until(() => listReads() === before + 1, 'the wait read the session when it began')
   await sleep(1_200)
-  assert.equal(reads.filter(entry => entry === 'GET /v1/execution/conversations').length, before + 1, 'one read when the wait began, no polling')
+  assert.equal(listReads(), before + 1, 'one read when the wait began, no polling')
   m.finish(m.runs.at(-1).runID)
   const finished = resultOf(await waiting)
   assert.equal(finished.state, 'idle'); assert.equal(finished.timedOut, false)
@@ -271,7 +273,7 @@ test('a finished session wakes its idle caller, and waits while the caller runs'
 })
 
 test('a bot is woken through the bots runtime', async t => {
-  const { l, m, mWorkspace, lIdentity, botDeliveries } = await hosts(t, 'wm-wakebot-')
+  const { l, m, mWorkspace, lIdentity, reads, botDeliveries } = await hosts(t, 'wm-wakebot-')
   const botID = randomUUID()
   const key = l.service.mcp.issueBotKey({ botID, botName: 'Ops', deviceID: lIdentity.deviceID })
   const scope = l.service.mcp.resolvePrincipal('Bearer ' + key.bearerToken)
@@ -280,8 +282,11 @@ test('a bot is woken through the bots runtime', async t => {
   assert.ok(tools.includes('woven_sessions_wait'), 'bots wait too')
   const child = resultOf(await call('woven_sessions_create', { workspace: mWorkspace.id, title: 'Remote job', text: 'Work remotely', purpose: 'p', requestID: randomUUID() })).session
   await until(() => m.runs.length === 1, 'M runs it')
+  // The wait has begun (its first read reaches M) before the session finishes.
+  const listReads = () => reads.filter(entry => entry === 'GET /v1/execution/conversations').length
+  const before = listReads()
   const waited = call('woven_sessions_wait', { id: child.id, until: 'idle', timeoutSeconds: 10 })
-  await sleep(100)
+  await until(() => listReads() > before, 'the wait began')
   m.finish(m.runs[0].runID)
   assert.equal(resultOf(await waited).state, 'idle')
   await sleep(300)

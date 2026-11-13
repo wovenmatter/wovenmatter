@@ -395,7 +395,9 @@ private final class LibraryHTTPConnection: @unchecked Sendable {
           self.relay(from: self.connection, to: upstream)
           self.relay(from: upstream, to: self.connection)
         })
-      case .failed, .cancelled: self?.queue.async { self?.cancel() }
+      // A loopback server that cannot be reached is gone (stopping): waiting
+      // for a path change would hold the client's upgrade open forever.
+      case .failed, .cancelled, .waiting: self?.queue.async { self?.cancel() }
       default: break
       }
     }

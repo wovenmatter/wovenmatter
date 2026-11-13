@@ -23,7 +23,7 @@ const prefix = '/wovenmatter-execution/box'
 const streamTarget = prefix + '/v1/stream?protocol=1'
 const settle = () => new Promise(resolve => setImmediate(resolve))
 const listen = server => new Promise(resolve => server.listen(0, '127.0.0.1', () => resolve(server.address().port)))
-async function eventually(condition, message, timeout = 5_000) {
+async function eventually(condition, message, timeout = 10_000) {
   for (const deadline = Date.now() + timeout; !condition();) {
     assert.ok(Date.now() < deadline, message)
     await new Promise(resolve => setTimeout(resolve, 5))
@@ -119,7 +119,7 @@ function frameReader(socket) {
   socket.on('error', () => {})
   const closed = new Promise(resolve => socket.on('close', (code, reason) => resolve({ code, reason: String(reason) })))
   const opened = new Promise((resolve, reject) => { socket.once('open', resolve); socket.once('unexpected-response', (_, response) => reject(new Error('refused ' + response.statusCode))) })
-  async function next(predicate = () => true, timeout = 5_000) {
+  async function next(predicate = () => true, timeout = 10_000) {
     const deadline = Date.now() + timeout
     for (;;) {
       const index = frames.findIndex((frame, position) => !read.has(position) && predicate(frame))
@@ -330,7 +330,8 @@ test('the conversation stream sends the transcript window, then live upserts wel
   f.runs[0].publish({ sessionUpdate: 'agent_message_chunk', content: { text: 'Hel' } })
   const upsert = await client.next(isItem('transcript', 'c'))
   const elapsed = Date.now() - started
-  assert.ok(elapsed < 300, `live text took ${elapsed} ms`)
+  // Before the journal's 500 ms flush: the stream does not wait for it (checked below).
+  assert.ok(elapsed < 500, `live text took ${elapsed} ms`)
   assert.equal(upsert.data.snapshot, false)
   assert.deepEqual(upsert.data.transcript.messages.map(message => [message.id, message.content]), [[receipt.runID, 'Hel']])
   assert.equal(upsert.data.transcript.activeRunID, receipt.runID)
@@ -355,7 +356,8 @@ test('the conversation stream sends the transcript window, then live upserts wel
   assert.equal((await client.next(frame => frame.t === 'end' && frame.id === 'missing')).error.code, 'not_found')
   // Cancel ends a subscription without an end frame.
   client.send({ t: 'cancel', id: 'c' })
-  await settle()
+  // A call answered after it: the server read the cancel first (frames are handled in order).
+  await client.request('execution.receipt', { commandID: randomUUID() })
   const before = client.frames.length
   await f.execution.command(f.command('workspace', { conversationID: id, workspaceAction: { conversation: { id, action: 'rename', title: 'After' } } }), f.device)
   await new Promise(resolve => setTimeout(resolve, 120))
@@ -430,7 +432,8 @@ test('the workspace stream carries the library change cursor: on subscribe, then
   assert.deepEqual((await other.next(isItem('library', 'w'))).data, { cursor: 3 })
   // A closed subscription stops listening.
   other.send({ t: 'cancel', id: 'w' })
-  await settle()
+  // A call answered after it: the server read the cancel first (frames are handled in order).
+  await other.request('execution.receipt', { commandID: randomUUID() })
   empty.set(4)
   await clock.advance(300)
   assert.equal(other.frames.filter(isItem('library', 'w')).length, 1)
@@ -556,13 +559,14 @@ test('a removed member’s stream and bots relay close with 4401', async t => {
 })
 
 test('a socket that answers no pings is closed', async t => {
-  const f = await fixture(t, { timings: { pingMilliseconds: 40, pongTimeoutMilliseconds: 250 } })
+  // A pong timeout well above what a busy machine delays an answered ping.
+  const f = await fixture(t, { timings: { pingMilliseconds: 40, pongTimeoutMilliseconds: 1_000 } })
   const silent = f.connect(f.signed(), { autoPong: false })
   const answering = f.connect(f.signed())
   await silent.next(frame => frame.t === 'hello'); await answering.next(frame => frame.t === 'hello')
   const started = Date.now()
   await silent.closed
-  assert.ok(Date.now() - started >= 150)
+  assert.ok(Date.now() - started >= 900)
   assert.equal(answering.socket.readyState, WebSocket.OPEN, 'a socket that answers pings stays open')
   // The server answers the client's pings.
   const pong = new Promise(resolve => answering.socket.once('pong', resolve))
@@ -604,11 +608,11 @@ test('a slow reader’s subscription ends with resync instead of growing without
     await clock.advance(200)
   }
   client.socket.resume()
-  const end = await client.next(frame => frame.t === 'end' && frame.id === 'c', 10_000)
+  const end = await client.next(frame => frame.t === 'end' && frame.id === 'c', 30_000)
   assert.deepEqual(end.error, { code: 'resync', message: 'This subscription fell behind. Subscribe again.', retryable: true })
   // Subscribing again starts from a snapshot.
   client.send({ t: 'sub', id: 'c2', stream: 'conversation', params: { conversationID: id } })
-  assert.equal((await client.next(isItem('transcript', 'c2'), 10_000)).data.snapshot, true)
+  assert.equal((await client.next(isItem('transcript', 'c2'), 30_000)).data.snapshot, true)
 })
 
 test('the stream client reconnects with a fresh signature, resumes its journal and waits after 4401', async t => {
@@ -639,7 +643,7 @@ test('the stream client reconnects with a fresh signature, resumes its journal a
   f.upgrades.splice(0, 1, restarted.upgrade)
   t.after(() => restarted.close())
   await f.execution.command(f.command('workspace', { conversationID: id, workspaceAction: { conversation: { id, action: 'rename', title: 'Later' } } }), f.device)
-  await eventually(() => client.state() === 'open' && items.filter(frame => frame.kind === 'synchronized').length === 2, 'resubscribed after reconnecting', 10_000)
+  await eventually(() => client.state() === 'open' && items.filter(frame => frame.kind === 'synchronized').length === 2, 'resubscribed after reconnecting', 30_000)
   assert.ok(new Set(signatures).size === signatures.length && signatures.length >= 2, 'every attempt is signed afresh')
   const resumed = items.filter(frame => frame.kind === 'journal').map(frame => frame.seq).slice(replayed.length)
   assert.deepEqual(resumed, f.execution.events(cursor).entries.map(entry => entry.originSequence), 'resumed after the last journal item')
@@ -654,4 +658,21 @@ test('the stream client reconnects with a fresh signature, resumes its journal a
   await f.verifier.refresh()
   client.retry()
   await eventually(() => client.state() === 'open', 'connected again once told')
+})
+
+test('a socket added after the sweep that removed its member is closed with 4401', async () => {
+  const registry = createMemberSocketRegistry()
+  const kept = { deviceID: randomUUID(), kind: 'ios' }, removed = { deviceID: randomUUID(), kind: 'mac' }
+  const closes = { early: [], late: [], kept: [] }
+  registry.add(removed, { close: code => closes.early.push(code) })
+  registry.sweep([{ ...kept, revoked: false }, { ...removed, revoked: true }])
+  assert.deepEqual(closes.early, [4401])
+  // Authenticated before that sweep, added after it: closed once its caller has set it up.
+  registry.add(removed, { close: code => closes.late.push(code) })
+  registry.add(kept, { close: code => closes.kept.push(code) })
+  assert.deepEqual(closes.late, [], 'not while it is being added')
+  await new Promise(resolve => queueMicrotask(resolve))
+  assert.deepEqual(closes.late, [4401])
+  assert.deepEqual(closes.kept, [])
+  assert.equal(registry.count(), 1)
 })

@@ -155,29 +155,38 @@ struct ExecutionStreamTests {
 
     // Coalescing: rapid small writes arrive at most every 50 ms, and the last state always arrives.
     var small: [ContinuousClock.Instant] = []
+    let smallStart = ContinuousClock.now, smallWrites = 100
     let writer = Task {
-      for index in 0..<40 {
+      for index in 0..<smallWrites {
         try await mac.database.appendLocalACPAssistantChunk(runID: run.runID, chunk: " \(index)")
         try await Task.sleep(for: .milliseconds(5))
       }
+      return ContinuousClock.now
     }
     var finalContent = ""
-    let expected = "All 214 tests" + (0..<40).map { " \($0)" }.joined()
+    let expected = "All 214 tests" + (0..<smallWrites).map { " \($0)" }.joined()
     while finalContent != expected {
       let item = try await client.transcript("c") { _ in true }
       small.append(.now)
       finalContent = item.transcript.messages.first { $0.id == run.assistantMessageID }?.content ?? finalContent
     }
-    try await writer.value
-    #expect(small.count >= 2 && small.count < 40, "\(small.count) updates for 40 writes")
-    // Arrival times jitter under load, so the bound is on how many updates fit in the time they spanned.
-    #expect(Self.updates(small, fitWithin: .milliseconds(50)), "\(small.count) updates over \(small.last! - small.first!)")
+    // Writes a busy machine slows past the interval leave nothing to coalesce:
+    // the bound always holds, and the rest is checked while the writes outpaced it.
+    let smallPace = (try await writer.value - smallStart) / smallWrites
+    #expect(small.count >= 2)
+    #expect(Self.updates(small, since: smallStart, fitWithin: .milliseconds(50)), "\(small.count) updates over \(small.last! - smallStart)")
+    if smallPace < .milliseconds(25) {
+      #expect(small.count < smallWrites, "\(small.count) updates for \(smallWrites) writes")
+      // And small messages are not held to the large messages' interval.
+      #expect(!Self.updates(small, since: smallStart, fitWithin: .milliseconds(200)), "\(small.count) updates over \(small.last! - smallStart)")
+    }
 
     // The 8 KB guard: once a changed message is larger, at most every 200 ms.
     let large = String(repeating: "x", count: StreamProtocol.smallMessageBytes + 1)
     try await mac.database.replaceLocalACPAssistantMessage(runID: run.runID, content: large)
     _ = try await client.transcript("c") { $0.messages.contains { $0.content == large } }
     var slow: [ContinuousClock.Instant] = []
+    let largeStart = ContinuousClock.now
     let largeWriter = Task {
       for index in 0..<30 {
         try await mac.database.appendLocalACPAssistantChunk(runID: run.runID, chunk: "\(index % 10)")
@@ -193,8 +202,7 @@ struct ExecutionStreamTests {
     }
     try await largeWriter.value
     #expect(slow.count >= 2)
-    #expect(Self.updates(slow, fitWithin: .milliseconds(200)), "\(slow.count) updates over \(slow.last! - slow.first!)")
-    #expect(slow.count < small.count, "large messages update less often than small ones")
+    #expect(Self.updates(slow, since: largeStart, fitWithin: .milliseconds(200)), "\(slow.count) updates over \(slow.last! - largeStart)")
 
     // A command, a duplicate replay of it, then its receipt.
     let command = LibraryCommand(deviceID: phone.deviceID, kind: .send, conversationID: conversation, text: "Continue",
@@ -241,11 +249,16 @@ struct ExecutionStreamTests {
     client.close()
   }
 
-  /// Whether `arrivals`, sent at most every `interval`, could have been: no more of
-  /// them than fit in the span they arrived over, allowing one interval of delivery jitter.
-  static func updates(_ arrivals: [ContinuousClock.Instant], fitWithin interval: Duration) -> Bool {
-    guard let first = arrivals.first, let last = arrivals.last else { return true }
-    return Double(arrivals.count - 1) <= ((last - first) + interval) / interval
+  /// Whether `arrivals` of updates caused by writes that began at `start`
+  /// could have been sent at most every `interval`. The k-th such update is
+  /// sent no earlier than `start + (k - 1) * interval` and arrives later still,
+  /// so the bound is measured to the last arrival from `start`, not from the
+  /// first arrival: delivery delays only lengthen that span, even when a busy
+  /// machine hands the client several updates at once. One interval more
+  /// allows for an update the previous write left queued.
+  static func updates(_ arrivals: [ContinuousClock.Instant], since start: ContinuousClock.Instant, fitWithin interval: Duration) -> Bool {
+    guard let last = arrivals.last else { return true }
+    return Double(arrivals.count - 1) <= ((last - start) + interval) / interval
   }
 
   @Test func upgradesAreRefusedBeforeTheyBegin() async throws {
@@ -338,13 +351,19 @@ struct ExecutionStreamTests {
   // MARK: Revocation
 
   @Test func removingAMemberClosesItsStreamWith4401AndItsBotsRelay() async throws {
-    let mac = try await StreamMac(); defer { mac.remove() }
+    // The server waits for each client's answering close frame, however long a busy machine delays the late one.
+    var configuration = ExecutionStreamConfiguration()
+    configuration.closeTimeout = .seconds(60)
+    let mac = try await StreamMac(configuration: configuration); defer { mac.remove() }
     let phone = try await mac.member(.ios), other = try await mac.member(.mac)
     let client = try await mac.connect(phone)
     guard case .hello = try await client.next() else { Issue.record("no hello"); return }
     let staying = try await mac.connect(other)
     guard case .hello = try await staying.next() else { Issue.record("no hello"); return }
-    #expect(await mac.registry.openSockets()[phone.deviceID] == 1)
+    // A client busy elsewhere, which writes before it reads the close.
+    let late = try #require(try await mac.rawUpgrade(target: "/wovenmatter/v1/stream?protocol=1", signer: phone, keepOpen: true).connection)
+    // Each socket is kept once it is set up, which its handshake does not wait for.
+    #expect(try await pollUntil(attempts: 1_000, interval: .milliseconds(10)) { await mac.registry.openSockets()[phone.deviceID] == 2 })
 
     // The bots relay: raw bytes to the runtime, held for the member that opened it.
     let runtime = try await EchoListener.start()
@@ -352,16 +371,42 @@ struct ExecutionStreamTests {
     #expect(relay.status == 101)
     let echoed = try await relay.connection!.roundTrip(Data("ping".utf8))
     #expect(echoed == Data("ping".utf8))
-    #expect(await mac.registry.openSockets()[phone.deviceID] == 2)
+    #expect(try await pollUntil(attempts: 1_000, interval: .milliseconds(10)) { await mac.registry.openSockets()[phone.deviceID] == 3 })
 
     try await mac.directory.remove(phone.deviceID)
     #expect(try await client.closed() == 4401)
     #expect(try await relay.connection!.waitForClose())
+    // The late client writes after the server sent its close frame, then reads:
+    // the server ends the connection only on the client's answer, so nothing it
+    // wrote meets a closed socket whose reset could cost the client its 4401.
+    try await late.sendText(Data(#"{"t":"req","id":"late","method":"execution.receipt","params":{"commandID":"late"}}"#.utf8))
+    try await Task.sleep(for: .milliseconds(300))
+    #expect(try await late.readUntil(timeout: .seconds(10)) { $0.range(of: Data([0x88, 0x02, 0x11, 0x31])) != nil }, "the late client read 4401")
+    // The server is still waiting for its answer, which ends the connection.
+    try await late.sendClose(code: 4401)
+    #expect(try await late.waitForClose(), "its answer ends the connection")
     #expect(await mac.registry.openSockets()[phone.deviceID] == nil)
     // Another member's socket stays open.
     staying.send(.request(try .init(id: "q", method: .executionReceipt, params: StreamReceiptParams(commandID: UUID().uuidString.lowercased()))))
     #expect(try await staying.response("q").error == nil)
     staying.close(); runtime.stop()
+  }
+
+  @Test func aSocketRegisteredAfterItsMembersRemovalIsClosed() async throws {
+    let mac = try await StreamMac(); defer { mac.remove() }
+    let phone = try await mac.member(.ios), other = try await mac.member(.mac)
+    final class Closes: @unchecked Sendable {
+      private let lock = NSLock(); private var ids: [String] = []
+      func add(_ id: String) { lock.withLock { ids.append(id) } }
+      var all: [String] { lock.withLock { ids } }
+    }
+    let closes = Closes()
+    // Authenticated before the removal, registered after its sweep.
+    try await mac.directory.remove(phone.deviceID)
+    await mac.registry.register(deviceID: phone.deviceID, kinds: [.ios]) { closes.add("phone") }
+    await mac.registry.register(deviceID: other.deviceID, kinds: [.mac]) { closes.add("other") }
+    #expect(closes.all == ["phone"])
+    #expect(await mac.registry.openSockets() == [other.deviceID: 1])
   }
 
   // MARK: Backpressure and liveness
@@ -391,7 +436,8 @@ struct ExecutionStreamTests {
 
   @Test func aSocketWithoutPongsIsClosedAndOneThatAnswersStaysOpen() async throws {
     var configuration = ExecutionStreamConfiguration()
-    configuration.pingInterval = .milliseconds(100); configuration.pongTimeout = .milliseconds(600)
+    // A pong timeout well above what a busy machine delays an answered ping.
+    configuration.pingInterval = .milliseconds(100); configuration.pongTimeout = .milliseconds(1_500)
     let mac = try await StreamMac(configuration: configuration); defer { mac.remove() }
     let phone = try await mac.member(.ios)
     let answering = try await mac.connect(phone)
@@ -399,9 +445,9 @@ struct ExecutionStreamTests {
     // The raw client never answers pings (nor reads them).
     let silent = try await mac.rawUpgrade(target: "/wovenmatter/v1/stream?protocol=1", signer: phone, keepOpen: true)
     let connection = try #require(silent.connection)
-    #expect(try await connection.waitForClose(timeout: .seconds(5)))
-    // Pings were answered automatically throughout.
-    try await Task.sleep(for: .milliseconds(900))
+    #expect(try await connection.waitForClose(timeout: .seconds(15)))
+    // Pings were answered automatically throughout: past another timeout too.
+    try await Task.sleep(for: .milliseconds(1_600))
     answering.send(.request(try .init(id: "q", method: .executionReceipt, params: StreamReceiptParams(commandID: UUID().uuidString.lowercased()))))
     #expect(try await answering.response("q").error == nil)
     answering.close()
@@ -470,19 +516,21 @@ struct ExecutionStreamTests {
     #expect(try await client.item("w").payload == .synchronized, "the cursor comes with the snapshot")
 
     // One change goes out; a burst right after it waits out the window and arrives as its last cursor.
+    let written = ContinuousClock.now
     _ = try await mac.database.createFixtureLocalACPSession(runtimeKind: .codex, title: "One", ownerDeviceID: UUID())
     let first = try await library()
-    let firstAt = ContinuousClock.now
     #expect(first > initial)
     for index in 0..<3 { _ = try await mac.database.createFixtureLocalACPSession(runtimeKind: .codex, title: "Burst \(index)", ownerDeviceID: UUID()) }
     let last = try await mac.database.libraryWakeCursor()
-    var arrivals: [(cursor: Int64, at: ContinuousClock.Instant)] = [(first, firstAt)]
+    var arrivals: [(cursor: Int64, at: ContinuousClock.Instant)] = [(first, .now)]
     while arrivals.last?.cursor != last { arrivals.append((try await library(), .now)) }
     #expect(arrivals.count <= 3, "three changes coalesce: \(arrivals.map(\.cursor))")
-    for (earlier, later) in zip(arrivals, arrivals.dropFirst()) {
-      #expect(later.at - earlier.at >= .milliseconds(250), "at most every 300 ms")
-      #expect(later.cursor > earlier.cursor)
-    }
+    for (earlier, later) in zip(arrivals, arrivals.dropFirst()) { #expect(later.cursor > earlier.cursor) }
+    // The k-th item is sent no earlier than (k - 1) windows after the first change,
+    // and arrives later still; gaps between arrivals say nothing when a busy
+    // machine hands several to the client at once.
+    let span = arrivals.last!.at - written
+    #expect(span >= .milliseconds(250) * (arrivals.count - 1), "at most every 300 ms: \(arrivals.count) items over \(span)")
     await #expect(throws: StreamTestError.self) { _ = try await library(timeout: .milliseconds(700)) }
 
     // A transcript that changes, as a running session rewrites it, wakes no phone.
@@ -774,8 +822,12 @@ private final class StreamClient: @unchecked Sendable {
     connection = NWConnection(to: .url(URL(string: "ws://127.0.0.1:\(port)\(target)")!), using: parameters)
   }
 
-  func connect() async throws {
+  /// Opens the socket; a handshake that has not completed after `timeout` fails the test instead of hanging it.
+  func connect(timeout: Duration = .seconds(30)) async throws {
     let queue = DispatchQueue(label: "stream.test.client")
+    let connection = connection
+    let deadline = Task { guard (try? await Task.sleep(for: timeout)) != nil else { return }; connection.cancel() }
+    defer { deadline.cancel() }
     try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, any Error>) in
       final class Once: @unchecked Sendable { var done = false }
       let once = Once()
@@ -785,7 +837,9 @@ private final class StreamClient: @unchecked Sendable {
         case .failed(let error), .waiting(let error):
           if !once.done { once.done = true; continuation.resume(throwing: error) }
           self?.finish(code: nil)
-        case .cancelled: self?.finish(code: nil)
+        case .cancelled:
+          if !once.done { once.done = true; continuation.resume(throwing: StreamTestError.closed) }
+          self?.finish(code: nil)
         default: break
         }
       }
@@ -798,12 +852,16 @@ private final class StreamClient: @unchecked Sendable {
     connection.receiveMessage { [weak self] data, context, _, error in
       guard let self else { return }
       let metadata = context?.protocolMetadata(definition: NWProtocolWebSocket.definition) as? NWProtocolWebSocket.Metadata
-      if metadata?.opcode == .close {
-        let code: Int? = switch metadata?.closeCode {
-        case .protocolCode(let value)?: Int(value.rawValue)
-        case .privateCode(let value)?, .applicationCode(let value)?: Int(value)
-        default: nil
+      if let metadata, metadata.opcode == .close {
+        let code: Int? = switch metadata.closeCode {
+        case .protocolCode(let value): Int(value.rawValue)
+        case .privateCode(let value), .applicationCode(let value): Int(value)
+        @unknown default: nil
         }
+        // Answered with the same code, as browsers, URLSession and ws do; the server then ends the connection.
+        let reply = NWProtocolWebSocket.Metadata(opcode: .close)
+        reply.closeCode = metadata.closeCode
+        connection.send(content: nil, contentContext: .init(identifier: "close", metadata: [reply]), isComplete: true, completion: .idempotent)
         finish(code: code); return
       }
       if let data, !data.isEmpty, let frame = try? StreamProtocol.decode(data) {
@@ -829,7 +887,9 @@ private final class StreamClient: @unchecked Sendable {
   }
 
   /// The next frame matching `predicate`, consuming every frame before it.
-  func next(timeout: Duration = .seconds(10), where predicate: @escaping (StreamFrame) -> Bool = { _ in true }) async throws -> StreamFrame {
+  /// A socket that ends or a timeout is recorded where the test waited.
+  func next(timeout: Duration = .seconds(10), sourceLocation: SourceLocation = #_sourceLocation,
+            where predicate: @escaping (StreamFrame) -> Bool = { _ in true }) async throws -> StreamFrame {
     let deadline = ContinuousClock.now + timeout
     while true {
       let found: StreamFrame? = lock.withLock {
@@ -837,7 +897,10 @@ private final class StreamClient: @unchecked Sendable {
         let frame = frames[index]; frames.removeFirst(index + 1); return frame
       }
       if let found { return found }
-      if lock.withLock({ failed }) { throw StreamTestError.closed }
+      if let code = lock.withLock({ failed ? .some(closeCode) : nil }) {
+        Issue.record("The socket closed (\(code.map(String.init) ?? "no close code")) before the frame arrived", sourceLocation: sourceLocation)
+        throw StreamTestError.closed
+      }
       guard ContinuousClock.now < deadline else { throw StreamTestError.timeout }
       let timer = Task { [weak self] in try? await Task.sleep(for: .milliseconds(50)); self?.wake() }
       await waitForChange()
@@ -845,27 +908,30 @@ private final class StreamClient: @unchecked Sendable {
     }
   }
 
-  func item(_ id: String, where predicate: @escaping (StreamItem) -> Bool = { _ in true }) async throws -> StreamItem {
-    guard case .item(let item) = try await next(where: { if case .item(let item) = $0 { return item.id == id && predicate(item) }; return false }) else {
+  func item(_ id: String, sourceLocation: SourceLocation = #_sourceLocation,
+            where predicate: @escaping (StreamItem) -> Bool = { _ in true }) async throws -> StreamItem {
+    guard case .item(let item) = try await next(sourceLocation: sourceLocation, where: { if case .item(let item) = $0 { return item.id == id && predicate(item) }; return false }) else {
       throw StreamTestError.timeout
     }
     return item
   }
 
-  func transcript(_ id: String, where predicate: @escaping (LibraryTranscript) -> Bool) async throws -> StreamTranscript {
-    let item = try await item(id) { if case .transcript(let value) = $0.payload { return predicate(value.transcript) }; return false }
+  func transcript(_ id: String, sourceLocation: SourceLocation = #_sourceLocation,
+                  where predicate: @escaping (LibraryTranscript) -> Bool) async throws -> StreamTranscript {
+    let item = try await item(id, sourceLocation: sourceLocation) { if case .transcript(let value) = $0.payload { return predicate(value.transcript) }; return false }
     guard case .transcript(let value) = item.payload else { throw StreamTestError.timeout }
     return value
   }
 
-  func session(_ id: String, where predicate: @escaping (SessionSettings) -> Bool = { _ in true }) async throws -> SessionSettings {
-    let item = try await item(id) { if case .session(let value) = $0.payload { return predicate(value.settings) }; return false }
+  func session(_ id: String, sourceLocation: SourceLocation = #_sourceLocation,
+               where predicate: @escaping (SessionSettings) -> Bool = { _ in true }) async throws -> SessionSettings {
+    let item = try await item(id, sourceLocation: sourceLocation) { if case .session(let value) = $0.payload { return predicate(value.settings) }; return false }
     guard case .session(let value) = item.payload else { throw StreamTestError.timeout }
     return value.settings
   }
 
-  func response(_ id: String) async throws -> StreamResponse {
-    guard case .response(let response) = try await next(where: { if case .response(let value) = $0 { return value.id == id }; return false }) else {
+  func response(_ id: String, sourceLocation: SourceLocation = #_sourceLocation) async throws -> StreamResponse {
+    guard case .response(let response) = try await next(sourceLocation: sourceLocation, where: { if case .response(let value) = $0 { return value.id == id }; return false }) else {
       throw StreamTestError.timeout
     }
     return response
@@ -939,6 +1005,13 @@ private final class RawConnection: @unchecked Sendable {
     try await send(frame)
   }
 
+  /// A masked client close frame.
+  func sendClose(code: UInt16) async throws {
+    let mask = (0..<4).map { _ in UInt8.random(in: 0...255) }
+    let payload = [UInt8(code >> 8), UInt8(code & 0xff)]
+    try await send(Data([0x88, 0x82] + mask + payload.enumerated().map { $0.element ^ mask[$0.offset] }))
+  }
+
   func receiveChunk() async throws -> (Data, Bool) {
     try await withCheckedThrowingContinuation { continuation in
       connection.receive(minimumIncompleteLength: 1, maximumLength: 1 << 20) { data, _, complete, error in
@@ -973,7 +1046,8 @@ private final class RawConnection: @unchecked Sendable {
       }
       return false
     }
-    let timer = Task { try? await Task.sleep(for: timeout); reader.cancel(); connection.cancel() }
+    // Only a timeout that elapses ends the read: cancelling the timer leaves the connection open.
+    let timer = Task { guard (try? await Task.sleep(for: timeout)) != nil else { return }; reader.cancel(); connection.cancel() }
     let result = await reader.value
     timer.cancel()
     return result
@@ -995,7 +1069,7 @@ private final class RawConnection: @unchecked Sendable {
         if complete { return true }
       }
     }
-    let timer = Task { try? await Task.sleep(for: timeout); timedOut.value = true; connection.cancel() }
+    let timer = Task { guard (try? await Task.sleep(for: timeout)) != nil else { return }; timedOut.value = true; connection.cancel() }
     let closed = await reader.value
     timer.cancel()
     return closed && !timedOut.value

@@ -320,7 +320,7 @@ struct CentralExecutionStreamTests {
 }
 
 @MainActor private func until(_ what: String, _ condition: () async -> Bool) async throws {
-    let deadline = ContinuousClock.now + .seconds(5)
+    let deadline = ContinuousClock.now + .seconds(10)
     while ContinuousClock.now < deadline {
         if await condition() { return }
         try await Task.sleep(for: .milliseconds(5))

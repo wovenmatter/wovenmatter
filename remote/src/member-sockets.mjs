@@ -66,17 +66,28 @@ export async function authorizeBotsUpgrade(request, { members, servedTargets, in
  */
 export function createMemberSocketRegistry() {
   const sockets = new Map()
+  // The member list of the latest sweep. A socket is authenticated before it
+  // is added; a sweep in between ran without it, so `add` checks it against
+  // that list and closes it (after its caller has set it up) when it is gone.
+  let latest = null
+  const allowed = (member, kinds) => member && !member.revoked && kinds.includes(member.kind)
   function add(member, { kinds = executionMemberKinds, close }) {
     const entry = { kinds, close }
     const set = sockets.get(member.deviceID) ?? new Set()
     set.add(entry); sockets.set(member.deviceID, set)
-    return () => {
+    const unregister = () => {
       set.delete(entry)
       if (!set.size && sockets.get(member.deviceID) === set) sockets.delete(member.deviceID)
     }
+    if (latest && !allowed(latest.get(member.deviceID), kinds)) {
+      unregister()
+      queueMicrotask(() => { try { close(memberRemovedCloseCode, 'This member was removed.') } catch {} })
+    }
+    return unregister
   }
   function sweep(members) {
     const current = new Map(members.map(item => [item.deviceID, item]))
+    latest = current
     let closed = 0
     for (const [deviceID, set] of sockets) {
       const member = current.get(deviceID)
