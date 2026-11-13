@@ -9,7 +9,8 @@ import { createBotConversationLibrary, createMemoryBotLibraryAdapter } from '../
 import { createBotsService } from '../src/bots-service.mjs'
 import { createClientExecution } from '../src/client-execution.mjs'
 import { createMemberVerifier, privateKeyFromSeed, rawPublicKeyFor, signMemberRequest } from '../src/member-auth.mjs'
-import { authenticateMemberUpgrade, createMemberSocketRegistry } from '../src/member-sockets.mjs'
+import { authenticateMemberUpgrade, authorizeBotsUpgrade, createMemberSocketRegistry } from '../src/member-sockets.mjs'
+import { createInstallerBearer } from '../src/installer-bearer.mjs'
 import { createStreamClient } from '../src/stream-client.mjs'
 import { decodeFrame, encodeFrame, StreamFrameError, streamCapability } from '../src/stream-protocol.mjs'
 import { createOutboundQueue, createStreamServer } from '../src/stream-server.mjs'
@@ -753,4 +754,46 @@ test('the stream client uses a server only when its hello names the expected wor
     wrong.client.retry()
     await eventually(() => wrong.signatures.length === attempts + 1 && wrong.client.state() === 'mismatched', 'retry checks again')
   }
+})
+
+test('the bots relay dials no runtime for a bad handshake, and a bearer rotation closes installer relays', async t => {
+  const f = await fixture(t)
+  const runtimeServer = createServer(), runtimeSockets = new WebSocketServer({ server: runtimeServer, path: '/ws' })
+  let dialled = 0
+  runtimeSockets.on('connection', socket => { dialled++; socket.on('message', data => socket.send(data)) })
+  const runtimePort = await listen(runtimeServer)
+  t.after(() => { for (const socket of runtimeSockets.clients) socket.terminate(); runtimeSockets.close(); runtimeServer.close() })
+  const directory = mkdtempSync(join(tmpdir(), 'wm-stream-installer-'))
+  t.after(() => rmSync(directory, { recursive: true, force: true }))
+  const token = 'installer-' + 'a'.repeat(40), next = 'installer-' + 'b'.repeat(40)
+  const installerBearer = createInstallerBearer({ token, rotate: async () => next })
+  const bots = createBotsService({ configuration: { stateDirectory: directory, dataRoot: directory, botsData: join(directory, 'bots'), serviceRoot: directory, botsEnabled: true, workspaceEnabled: true },
+    engine: { status: async () => ({ installed: false }), layout: { socket: join(directory, 'engine.sock') } }, previews: { recover: async () => {}, close: async () => {} },
+    runtime: { start() {}, stop: async () => {}, restart: async () => {}, status: () => ({ running: true }), endpoint: () => ({ host: '127.0.0.1', port: runtimePort, token: 'runtime-token' }) },
+    library: createBotConversationLibrary(createMemoryBotLibraryAdapter()), machine: { deviceID: f.host, name: 'box' }, serverPort: () => f.port, registry: f.registry, log: () => {},
+    installerBearer, authorizeClient: request => authorizeBotsUpgrade(request, { members: f.verifier, servedTargets: f.servedTargets, installerBearer }) })
+  t.after(() => bots.close())
+  f.upgrades.push(bots.upgrade)
+
+  // A signed request whose WebSocket handshake cannot be completed: refused before any upstream exists.
+  for (const headers of [{ 'sec-websocket-key': 'short' }, { 'sec-websocket-version': '12' }]) {
+    const refused = await handshake(f.port, { path: '/v1/bots/ws', headers: { ...f.signed(prefix + '/v1/bots/ws'), ...headers } })
+    assert.equal(refused.status, 400)
+  }
+  assert.equal(dialled, 0)
+
+  const open = headers => { const socket = new WebSocket(`ws://127.0.0.1:${f.port}/v1/bots/ws`, { headers }); f.sockets.push(socket); return frameReader(socket) }
+  const installer = open({ authorization: 'Bearer ' + token }), member = open(f.signed(prefix + '/v1/bots/ws'))
+  await installer.opened; await member.opened
+  installer.send({ t: 'echo' })
+  assert.deepEqual(await installer.next(), { t: 'echo' })
+  await eventually(() => dialled === 2, 'both relays reach the runtime')
+  assert.equal(await installerBearer.rotate(), next)
+  assert.equal((await installer.closed).code, 4401)
+  assert.equal(member.socket.readyState, WebSocket.OPEN, 'a member relay is not the installer\'s')
+  // The old bearer opens nothing; the new one does.
+  assert.equal((await handshake(f.port, { path: '/v1/bots/ws', headers: { authorization: 'Bearer ' + token } })).status, 401)
+  const renewed = open({ authorization: 'Bearer ' + next })
+  await renewed.opened
+  await eventually(() => runtimeSockets.clients.size === 2, 'the closed relay left no runtime socket behind')
 })
