@@ -254,7 +254,7 @@ struct HomePane: View {
     if model.credential == nil {
       SettingsNavigationRow(title: "Connect your Mac", icon: .monitor) { PairingPane(model: model) }
         .accessibilityIdentifier("home-connect-mac")
-      homeCaption("Pair with Woven Matter on your Mac to use its workspaces and agents here and sync your notes and chats. Everything on \(model.deviceWorkspaceName.prefix(1).lowercased())\(model.deviceWorkspaceName.dropFirst()) is kept.")
+      homeCaption("Pair with Woven Matter on your Mac to use its workspaces and agents here and sync your notes and chats. Everything on \(model.deviceWorkspaceInSentence) is kept.")
         .accessibilityIdentifier("home-connect-mac-caption")
     } else {
       if model.needsMemberPairing {
@@ -603,7 +603,7 @@ struct GeneralSettingsPane: View {
       Section("Product analytics") {
         Toggle("Share product analytics",isOn:Binding(get:{model.analytics.enabled},set:{value in Task { await model.analytics.setEnabled(value) } }))
         Text(model.credential == nil
-          ? "Nothing is sent while this iPhone isn’t paired. Once paired, app opens and active use are sampled at most once every six hours and sent through your Mac. No content or action details are sent."
+          ? "Nothing is sent while \(model.deviceWorkspaceInSentence) isn’t paired. Once paired, app opens and active use are sampled at most once every six hours and sent through your Mac. No content or action details are sent."
           : "App opens and active use are sampled at most once every six hours and sent through your Mac. No content or action details are sent. This choice applies to your whole central library; offline devices receive changes when they reconnect.")
           .font(.caption).foregroundStyle(.secondary).accessibilityIdentifier("analytics-explanation")
         if model.analytics.state.pendingEnabled != nil { Text("Preference waiting to sync.").font(.caption).foregroundStyle(.secondary) }
