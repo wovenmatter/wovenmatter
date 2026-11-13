@@ -29,18 +29,23 @@ the catalog by connection type, model lab across connections, or subscriptions.
 
 See [Connections and dictation](connections-and-dictation.md) for account and microphone setup.
 
-Use **All workspaces** for shared Pi Durable settings. Choose a particular workspace and
-turn off **Use settings from All workspaces** to override its preferences.
-Workspace-specific API keys override the global keys; otherwise global keys
-are reused. Changes synchronize to connected workspaces automatically. **Workspace synchronization → Retry synchronization** retries immediately.
-New workspaces inherit these settings automatically. An offline workspace gets
-the current settings when it reconnects.
+Set **Applies to** to **All workspaces** for shared Pi Durable settings. To give
+one workspace its own model, thinking, permission, and tool preferences, choose
+it under **Applies to** and turn off **Use shared chat settings**. Accounts stay
+independent of this switch: workspace-specific API keys override the global
+keys; otherwise global keys are reused. Changes synchronize to connected
+workspaces automatically, and **More → Synchronization → Retry synchronization**
+retries immediately. New workspaces inherit these settings automatically. An
+offline workspace gets the current settings when it reconnects.
 
-SDK versions appear below **Settings for**. Expand a workspace to see its
+**More → Subagents** sets how many subagents can be active in one conversation.
+It applies to new conversations; the parent agent does not count.
+
+SDK versions are under **More → Software**. Expand a workspace to see its
 **Pi Durable SDK** and **Claude SDK** versions. Use **Check for updates**, then **Update**
-for the SDK you want to update. **All workspaces** lists each location; choosing
-one workspace limits the list to that location. Collapsing a workspace hides its
-SDK details without discarding update progress.
+for the SDK you want to update. With **All workspaces** selected the list shows
+each location; choosing one workspace limits the list to that location.
+Collapsing a workspace hides its SDK details without discarding update progress.
 
 SDK installations belong to each location, independently of inherited provider
 preferences. Updating the local SDK does not update remote workspaces or the
@@ -62,10 +67,10 @@ rate limits do not trigger fallback. A turn that has already produced output or
 executed tools is not automatically replayed.
 
 Remote workspaces include the same helper. Their Pi Durable runs continue
-when the Mac app disconnects, while the remote container and service remain
-running. Reopening the conversation recovers the completed response; reconnecting
-to an unfinished response waits for that remote turn to finish. A container or
-service restart interrupts active work and requires an explicit retry.
+when your Mac disconnects, as long as the Linux host and its Woven service keep
+running. Reopening the conversation shows the completed response, and an
+unfinished response keeps streaming when you reconnect. A service restart
+interrupts active work and requires an explicit retry.
 
 Pi Durable and Usage use the same saved provider accounts, managed in Settings → Subscriptions & API Keys.
 Dictation uses on-device speech and needs no account. Subscription connections remain distinct from separately billed API
@@ -73,16 +78,18 @@ keys. Signing in here does not sign in
 Codex, Claude Code, Grok Build, or OpenCode, and their
 credential files are not imported.
 
-API keys can be reused in remote workspaces. For shared OAuth subscriptions,
-the Mac owns and renews the access and refresh tokens. Remote borrowers receive
-only access tokens. Renewed access is saved on the Mac before being sent to
+API keys can be reused in remote workspaces. For shared subscription sign-ins,
+the Mac that added the workspace keeps and renews the credentials. The
+workspace receives only short-lived access, never the long-lived refresh
+credential. Renewed access is saved on the Mac before being sent to
 connected workspaces. Launch, wake, reconnect, settings changes, and an
 expiry-aware background check keep those workspaces current. Ordinary message
 submissions check cached state; opening conversation history does not refresh
 authentication. Token lifetimes come from each provider, not a fixed number of days.
 
-In Pi Durable settings, use **Sign in** with a remote workspace selected for an independent subscription
-connection there. **Use shared sign-in** removes that independent connection and
+For an independent subscription sign-in on one remote workspace, open
+**Settings → Subscriptions & API Keys**, set **Accounts for** to that workspace,
+and use **Sign in**. **Use shared sign-in** removes that independent connection and
 returns to shared credentials. An active remote helper can keep working while
 the Mac is offline. If borrowed access expires, it waits before the next model
 request until access is supplied again; it does not repeat completed tools.
@@ -90,7 +97,7 @@ Starting a new turn can use your configured fallback instead.
 
 ## Code mode and Executor
 
-**Code mode** in Pi Durable settings defaults to **On**, alongside ordinary
+**More → Code mode** in Pi Durable settings defaults to **On**, alongside ordinary
 tools. **Only** presents those tools through code mode; **Off** removes the code
 mode tool. Nested calls retain normal approval. User Pi extensions remain
 disabled. Executor Execute is independent and available when Executor is enabled
@@ -100,14 +107,15 @@ in the conversation. See [Executor apps](executor.md).
 
 App-managed Pi Durable credentials on the Mac, including OAuth refresh tokens, are
 stored in macOS Keychain. Each remote workspace has one encrypted credential
-store using AES-256-GCM. Its separate random key is kept in the Mac's Keychain
-and delivered to the host's server in a request signed with the Mac's device
-key (over the installer's SSH link only before the host is enrolled). The host
+store using AES-256-GCM. Its separate random key is kept in the Keychain of
+the Mac that added the workspace and delivered to the host's server in a
+request signed with that Mac's device key (over the installer's SSH link only before the host is enrolled). The host
 keeps the key in memory; after it restarts, the next action from that Mac
 unlocks it again. Updates do not restart active sessions.
 
-If the Mac's workspace key is lost, use **Reset workspace credentials** on that
-workspace in Pi Durable settings. This removes independent ChatGPT/Grok sign-ins and
+If the Mac's workspace key is lost, open **Settings → Subscriptions & API Keys**,
+set **Accounts for** to that workspace, and use **Account recovery → Reset
+workspace credentials**. This removes independent ChatGPT/Grok sign-ins and
 restores shared connections. Claude’s native sign-in is separate; use its
 **Remove** button to disconnect that account. Files and conversations remain.
 Existing Pi Durable plaintext stores migrate after secure storage succeeds;
@@ -115,7 +123,7 @@ older backups may still contain previous plaintext copies.
 
 Encryption protects stored credential files and disk backups. It does not
 protect credentials from an administrator controlling an unlocked machine.
-Crash dumps are disabled for managed helpers/containers; host swap and memory
+Crash dumps are disabled for managed helpers; host swap and memory
 snapshots remain host responsibilities. Removing stored credentials does not
 revoke copies already obtained elsewhere; revoke those through the provider.
 
@@ -125,9 +133,10 @@ credentials, a harness reporting sign-in, missing sign-in, unsupported checks,
 and failures. These checks do not verify remaining usage. Local harnesses whose
 credential access is disabled stay unchecked.
 
-With remote background execution enabled, the workspace also retains supported
-ACP and Pi sessions across Mac disconnections. Service or container restarts are
-a separate boundary: interrupted sends are not automatically repeated. See
+With **Keep working in the background** on for a remote workspace (in its
+**Settings → Workspaces** page), the workspace also keeps supported sessions
+running across Mac disconnections. A service restart is a separate boundary:
+interrupted sends are not automatically repeated. See
 [Background execution](../architecture/BACKGROUND_EXECUTION.md).
 
 ## Claude models
@@ -147,9 +156,10 @@ underlying libraries as **Pi Durable SDK** and **Claude SDK**.
 
 Claude owns subscription login, storage, and refresh. On this Mac, it uses its
 native Keychain entry; plaintext fallback is blocked if Keychain is unavailable.
-In remote workspaces, sign in separately. Claude’s native state lives in a private
-memory-backed directory and disappears when the container restarts, so sign in
-again afterward. Claude subscription tokens are never copied between workspaces.
+In remote workspaces, sign in separately. On a Linux host, Claude keeps its
+sign-in in private memory-backed storage (`/dev/shm`), which is cleared when the
+host restarts, so sign in again after a reboot. Claude subscription credentials
+are never copied between workspaces.
 API keys retain the existing Keychain/encrypted remote storage behavior.
 
 Subscription entitlement and any enabled extra usage are controlled by your
@@ -163,16 +173,10 @@ limits are checked in Claude; Woven Matter does not extract its token to query
 those limits. Live account acceptance and billing attribution require testing
 with your own account.
 
-## iPhone and iPad subscription accounts
+## iPhone Quick Chat (beta)
 
-Pi Durable on iPhone and iPad supports one subscription connection per provider
-(ChatGPT, Claude, and Grok) per device, including direct and hosted inference.
-Edit the saved connection to reconnect or change its sign-in. Multiple API-key
-connections remain supported.
-
-On upgrade, the selected subscription connection is retained; if no connection for a provider is selected,
-the first saved connection for each provider is retained. Extra subscription
-connections and their device-only credentials are removed. Conversation history
-remains, but chats bound to a removed connection require an explicit connection
-change before they can run again. Reconnecting the same account keeps its chats
-usable; changing to a different subscription account retires the old binding.
+The iPhone app is a beta available through TestFlight. Its Quick Chat runs Pi
+Durable on the phone, with one subscription connection per provider (ChatGPT,
+Claude, and Grok) and multiple API-key connections. Edit a saved
+connection to reconnect it or change its sign-in. To try it, email
+trey@wovenmatter.com with the email address to add as a TestFlight tester.

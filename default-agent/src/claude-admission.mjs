@@ -3,11 +3,9 @@ import { randomBytes } from 'node:crypto';
 import { once } from 'node:events';
 import { DefaultAgentError, accessFailure } from './config.mjs';
 
-// The single-generation boundary follows the MIT-licensed Hermes DirectSDK
-// design. Native maxTurns also permits recovery generations; this gate keeps
-// the first response authoritative while the host retains its agent loop.
-// https://github.com/NousResearch/hermes-plugin-claude-subscription-directsdk/blob/f1c1220/admission.py
-// Attribution and license: claude-hermes-LICENSE.txt.
+// Native maxTurns also permits recovery generations; this single-generation
+// gate keeps the first response authoritative while the host retains its
+// agent loop.
 const maximumBody = 32 * 1024 * 1024;
 const maximumEvent = 8 * 1024 * 1024;
 

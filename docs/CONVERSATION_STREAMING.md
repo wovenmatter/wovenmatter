@@ -26,8 +26,9 @@ polls for a transcript, questions, approvals or settings.
 
 ## Storage and rendering
 
-- Canonical native/wire captures remain in the central SQLite database. The
-  desktop activity index is a disposable compact read model, not the archive.
+- Canonical native/wire captures remain in the Mac's library SQLite database
+  (`workspace.sqlite`). The desktop activity index is a disposable compact read
+  model, not the archive.
 - A revision clock, invalidation triggers and tombstones support incremental
   activity refreshes, including corrections/deletions in retained older runs.
   Older-page loads reconcile with the current presentation before application.

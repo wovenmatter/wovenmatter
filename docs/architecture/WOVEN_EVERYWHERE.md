@@ -1,10 +1,9 @@
 # Woven everywhere: devices, library and bots
 
-This is the working contract for the change that makes every Woven Matter
-surface reach every other one directly, gives every machine its own library
-copy, and moves bots into this repository. Each workstream builds against the
-interfaces here. When an interface has to change, change this document in the
-same commit.
+This is the architecture contract for how every Woven Matter surface reaches
+every other one directly, how every machine keeps its own library copy, and how
+bots run. Code builds against the interfaces here. When an interface has to
+change, change this document in the same commit.
 
 ## Product rules
 
@@ -31,7 +30,7 @@ same commit.
 
 - Every device has a long-lived Curve25519 signing identity: the Mac Keychain,
   the iPhone Keychain, and a 0600 file on Linux under the Woven data root.
-  This generalizes today's paired-Mac identity (`PairedMacIdentity.swift`): a
+  This generalizes the paired-Mac identity (`PairedMacIdentity.swift`): a
   Mac's member key *is* its paired-Mac signing key, and a Mac's or Linux
   host's device ID is its library replica identity
   (`library_identity.host_device_id`, the sync clock's origin). On
@@ -305,7 +304,7 @@ same commit.
     by the Mac that added it: only a fallback for a host without a library
     host or with no Mac member answering.
   - A Mac's saved execution grant for a workspace with no `executionDeviceID`
-    (a library client's secondary execution workspace).
+    (a Dev connected client's execution workspace).
 
 ### Trust model
 
@@ -354,22 +353,21 @@ among Macs that still stand; they never decide who wins a dispute.
 - On Linux this code runs as the `wovenmatter-library` executable, which the
   Node server supervises. It listens on a loopback port and a Unix socket. It
   serves:
-  - the peer sync protocol (today's paired-Mac protocol, generalized to all
+  - the peer sync protocol (the paired-Mac protocol, generalized to all
     members);
-  - the mobile library API that the iPhone uses (today's
-    `DeviceAPI` and `FederationAPI`), so a phone can sync
-    with any Mac or Linux machine;
+  - the mobile library API that the iPhone uses (the Mac's `DeviceAPI` and
+    `FederationAPI`), so a phone can sync with any Mac or Linux machine;
   - the library-backed Woven MCP tool groups (notes, history, calendar,
-    library, artifacts) for the local Node server, replacing today's relay to
-    one Mac's `/mcp/workspace`.
+    library, artifacts) for the local Node server, in place of the earlier
+    relay to one Mac's `/mcp/workspace`.
   The peer and mobile routes are published with Tailscale Serve on the host,
   under the same path layout a Mac uses (`/wovenmatter`).
 - **Sync** is peer-to-peer among every online member, using the existing
   row-level replication (`PairedLibraryStore`: change log, version vectors,
   per-peer cursors, conflict copies). A local change is announced to online
   peers once and batched; a device that comes online catches up once. There is
-  no constant polling: today's 5-second loop becomes change-driven, with a
-  slow presence check.
+  no constant polling: exchange is change-driven, with a slow presence check
+  in place of the earlier 5-second loop.
   - `LibraryPeerSync` (store package) runs it on Macs and Linux hosts, between
     `mac` and `linux` members only, all signed: `POST /v1/peers/sync`
     (`LibraryPeerExchange {deviceID, after, page, version, attachment?}`: push
@@ -544,8 +542,8 @@ one per connection, with `Host`; POST bodies are `application/json`.
   (only `conversationID` is required) →
   `{"conversationID":"<uuid>","enabledGroups":"calendar,notes"}`.
 - `POST /v1/mcp`: stateless MCP JSON-RPC (`initialize`, `ping`, `tools/list`,
-  `tools/call`), the same messages the Node server sends a Mac's
-  `/mcp/workspace` today. Headers: `X-Woven-Conversation-ID` (the caller, a
+  `tools/call`), the same messages the Node server sends to a Mac's
+  `/mcp/workspace`. Headers: `X-Woven-Conversation-ID` (the caller, a
   UUID; registered on first use), `X-Woven-Enabled-Groups` (comma-separated,
   the caller's current selection; the Node server is the authority for its own
   sessions' tool policy), optional `X-Woven-Context-ID` and
@@ -837,11 +835,11 @@ hands them to the macOS job, which checks them with
 - The iPhone connects directly to every Mac and Linux workspace with its own
   member key. It has no home Mac.
 - **Folder owners.** A folder's `execution.workspaceID` names the workspace
-  whose files it is bound to: `device:<id>` (an iPhone, or a library client's
-  secondary Mac, whose registry id is that `<id>`), `remote:<id>` (a Linux
-  workspace, registry id `<id>`), or, for the central Mac,
+  whose files it is bound to: `device:<id>` (an iPhone, or a Dev connected
+  client's execution workspace, whose registry id is that `<id>`), `remote:<id>`
+  (a Linux workspace, registry id `<id>`), or, for a Mac's own workspace,
   `device:<dashboard device id>`, which is neither its registry id (a random
-  per-library value) nor its `hostDeviceID`. The central Mac's registry row
+  per-library value) nor its `hostDeviceID`. Each Mac's own registry row
   therefore names that value as `folderOwnerID` (optional, `device:<UUID>`,
   `.mac` rows only; the library rejects anything else). Devices group a
   folder under the registry row whose own id matches, else under the live row
@@ -1692,7 +1690,7 @@ login until `stop()`.
   listen, and the app to connect, unless `lstat` shows a real directory owned
   by this user (`WovenVMPaths.preparePrivateDirectory`); a wider mode is
   tightened. Always read the socket path from the API, never build it.
-- **Guest.** The pinned Ubuntu 26.04 LTS arm64 cloud image
+- **Guest.** The pinned Ubuntu LTS arm64 cloud image
   (`app/VMHelper/guest-version.json`), converted from QCOW2 to a raw disk on
   first run, EFI boot, cloud-init NoCloud seed. First boot purges
   unattended-upgrades, snapd and SSH, masks the apt timers, formats the data
@@ -1852,7 +1850,7 @@ answers); `PUT /v1/resources`; (optional forwards) `GET /v1/forwards`;
 `POST /v1/update`, `/v1/restart`, `/v1/stop` (202). Errors are
 `{"error": "..."}`.
 
-- **Image:** Ubuntu 26.04 LTS with Chromium and Playwright, git, Node, Python,
+- **Image:** Ubuntu LTS with Chromium and Playwright, git, Node, Python,
   build tools and tini. A bot runs as a user with passwordless sudo, which
   gives it full root inside its container.
 - **Network:** the container has internet access. Outbound traffic to the
@@ -2209,7 +2207,6 @@ before its bots (`BotUpdatePlan.Step.engine`, `BotsCommand.updateEngine`).
 
 ## Out of scope
 
-- TestFlight preparation (its own PR).
 - The `wovenmatter/pi-bot` repository and its workstation preview, which stay
   untouched.
 - Outside-agent MCP on Linux or the iPhone.

@@ -1,11 +1,16 @@
 # Third-party notices
 
+Woven Matter includes, adapts, or installs the third-party software and assets
+below. Each keeps its own license. Where a component ships its own license and
+notice files (for example inside bundled `node_modules`, `Resources/BrowserLicenses`,
+or a container image), those files are retained unchanged. The app's own copy
+of these attributions is `app/App/ThirdPartyNotices.txt`.
+
 ## Executor
 
 Woven Matter integrates [Executor](https://executor.sh), created by Rhys Sullivan,
 through its public API. The local and remote installers use the unmodified
-`executor` npm package, selected from its supported V2 release line at installation,
-and retain its upstream license and bundled dependency notices. Those dependencies remain subject to their own
+`executor` npm package, selected at installation, and retain its upstream license and bundled dependency notices. Those dependencies remain subject to their own
 licenses.
 
 Source: [UsefulSoftwareCo/executor](https://github.com/UsefulSoftwareCo/executor).
@@ -34,27 +39,56 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
-## Pi Durable runtime
+## Harnesses
 
-Pi Durable bundles `@earendil-works/pi-durable` 1.5.2 from
-[Earendil Works Pi](https://github.com/earendil-works/pi/tree/v1.5.2/packages/durable)
+Woven Matter works with these third-party coding agents. It does not bundle
+them: Settings installs each one from its official source, or Woven Matter uses
+the installation you already have. Each remains under its own license and terms.
+
+- [Codex](https://github.com/openai/codex), from OpenAI, through the
+  [Codex ACP adapter](https://github.com/agentclientprotocol/codex-acp)
+- [Claude Code](https://code.claude.com), from Anthropic, through the
+  [Claude Agent ACP adapter](https://github.com/agentclientprotocol/claude-agent-acp)
+- [Grok Build](https://docs.x.ai/build/cli/reference), from xAI
+- [OpenCode](https://opencode.ai)
+
+Their names and marks belong to their owners; see the harness identity marks
+below and [TRADEMARKS.md](TRADEMARKS.md).
+
+## Pi and Pi Durable
+
+Pi Durable, Woven Matter's built-in agent, is built on
+[Pi](https://github.com/earendil-works/pi) from Earendil Works. It bundles
+[`@earendil-works/pi-durable`](https://github.com/earendil-works/pi/tree/main/packages/durable)
 for native execution and persistence. The format-1 JSONL migration reader in
 `default-agent/src/legacy-jsonl-migration.mjs` adapts its recovery and reclamation
 rules under the same license. Its
-[upstream license](https://github.com/earendil-works/pi/blob/v1.5.2/LICENSE)
+[upstream license](https://github.com/earendil-works/pi/blob/main/LICENSE)
 is MIT, with `Copyright (c) 2025 Mario Zechner`.
+
+The Mac and Linux runtime (`default-agent/`) also bundles `@earendil-works/pi-ai`,
+`@earendil-works/chord`, and `@earendil-works/pi-coding-agent` from the same
+project and license, and `typebox` (MIT). The iPhone app (beta) bundles Pi
+Durable, Pi AI, Pi Schema, Chord, Pi Telemetry, and `partial-json` into one
+script, with their licenses in its `THIRD_PARTY_LICENSES.txt`.
 
 Native store ownership uses `proper-lockfile` from
 [Made With MOXY](https://github.com/moxystudio/node-proper-lockfile).
 It is MIT licensed, with
 `Copyright (c) 2018 Made With MOXY Lda <hello@moxy.studio>`.
-The MIT permission and disclaimer terms reproduced above apply to both packages.
+The MIT permission and disclaimer terms reproduced above apply to these packages.
 Bundled dependencies retain their own upstream licenses and notices.
+
+Pi Durable can use Claude models through the
+[Claude Agent SDK](https://github.com/anthropics/claude-agent-sdk-typescript),
+which is © Anthropic PBC and used under
+[Anthropic's terms](https://code.claude.com/docs/en/legal-and-compliance). Its
+native runtime keeps Anthropic's original signature and is never modified.
 
 ## Lucide
 
-The dashboard icon assets are derived from `lucide-static` 1.72.0.
-Published tarball integrity and per-asset hashes are recorded in
+The dashboard icon assets are derived from `lucide-static`. The selected
+release, published tarball integrity, and per-asset hashes are recorded in
 `docs/assets/lucide-provenance.json`.
 
 Copyright (c) 2022 Lucide Contributors
@@ -76,17 +110,11 @@ WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION
 OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR IN
 CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 
-## Usage discovery and presentation
+## Inspiration
 
-The local usage transcript discovery, de-duplication, fork suppression, and
-analytics presentation are adapted from
-[T3 Code](https://github.com/pingdotgg/t3code/tree/afa83098064e7dca524a1e42dea3de03a883a0b6)
-at revision `afa83098064e7dca524a1e42dea3de03a883a0b6`.
-
-Provider-specific account limit retrieval and OpenCode Go local accounting are
-adapted from
-[Codex Bar](https://github.com/steipete/codexbar/tree/27c7f334e3c46c96ff8c063afbe0c7944ba5e0b7)
-at revision `27c7f334e3c46c96ff8c063afbe0c7944ba5e0b7`.
+Woven Matter takes inspiration from [T3 Code](https://github.com/pingdotgg/t3code)
+and [Codex Bar](https://github.com/steipete/codexbar), among other projects,
+for usage tracking, provider account limits, and how assistant text streams in.
 
 Both projects are licensed under the MIT License. T3 Code carries copyright
 `Copyright (c) 2026 T3 Tools Inc.` Codex Bar carries copyright
@@ -96,7 +124,8 @@ Both projects are licensed under the MIT License. T3 Code carries copyright
 
 The app displays third-party marks only to identify the harness used by an
 agent. The marks remain trademarks of their respective owners and are not
-Woven Matter branding.
+Woven Matter branding. OpenClaw, Hermes, Cursor, and the Pi CLI are retired
+harnesses; their marks remain only to label archived conversations.
 
 | Asset | Source | Terms and modifications |
 |---|---|---|
@@ -141,11 +170,22 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
+## Chromium Embedded Framework
+
+The built-in browser bundles the
+[Chromium Embedded Framework](https://github.com/chromiumembedded/cef) (CEF)
+release recorded in `app/Browser/cef-version.json`, with its checksummed upstream binary
+distribution. CEF is licensed under the BSD 3-Clause License, copyright
+Marshall A. Greenblatt with portions copyright Google Inc. Chromium and its
+components are licensed under the BSD 3-Clause License and the licenses listed
+in Chromium's credits. CEF's `LICENSE.txt` and Chromium's `CREDITS.html` ship
+unchanged in the app under `Resources/BrowserLicenses`.
+
 ## Browser and computer automation
 
-Woven Matter bundles [Cua Driver](https://github.com/trycua/cua) 0.38.0
-(source `85e2b1318bd77ccf3cfa88ccdf875a4bb7eaed19`), under MIT, copyright 2025
-Cua AI, Inc. The upstream signed universal executable is retained unchanged.
+Woven Matter bundles [Cua Driver](https://github.com/trycua/cua) under MIT, copyright 2025 Cua AI, Inc., as recorded in
+`app/Automation/cua-version.json`. The upstream signed universal executable is
+retained unchanged.
 Its license and third-party notices are included in `app/Automation` and shipped
 under `Resources/Cua` in the app. No Cua Spaces or perception/model extension is bundled.
 
@@ -155,7 +195,7 @@ and `ws` from [websockets/ws](https://github.com/websockets/ws) under MIT.
 Their upstream licenses remain in the bundled Node dependencies. Playwright
 connects to Woven Matter’s bundled CEF rather than installing another browser.
 
-The automation server and Executor client bundle the v2
+The automation server and Executor client bundle the
 `@modelcontextprotocol/server` and `@modelcontextprotocol/client` packages from
 [the MCP TypeScript SDK](https://github.com/modelcontextprotocol/typescript-sdk)
 under Apache-2.0. Their complete upstream licenses and notices remain in the
@@ -169,8 +209,8 @@ production dependencies in `bots/package-lock.json`, installed unmodified with
 `npm ci --omit=dev`: `@earendil-works/pi-durable`, `@earendil-works/pi-ai` and
 `@earendil-works/chord` from
 [Earendil Works Pi](https://github.com/earendil-works/pi) (MIT,
-`Copyright (c) 2025 Mario Zechner`), `typebox` (MIT), `ws` (MIT) and `zod`
-(MIT), and their dependencies under MIT, Apache-2.0, BSD-2-Clause,
+`Copyright (c) 2025 Mario Zechner`), `typebox` (MIT), `undici` (MIT), `ws`
+(MIT) and `zod` (MIT), and their dependencies under MIT, Apache-2.0, BSD-2-Clause,
 BSD-3-Clause, ISC, 0BSD and Unlicense terms. The
 [Claude Agent SDK](https://github.com/anthropics/claude-agent-sdk-typescript)
 and its native runtime are © Anthropic PBC and used under
@@ -179,7 +219,7 @@ runtime keeps Anthropic's original signature and is never modified. Each
 package's license and notice files remain in the bundled `node_modules`.
 
 The in-container helper (`bots/helper/`) adapts Pi Bot's environment agent.
-Bot containers are built at run time from `bots/image` on Ubuntu 26.04 LTS,
+Bot containers are built at run time from `bots/image` on Ubuntu LTS,
 with Chromium, Playwright, Node.js, Python, git, build tools and tini installed
 from their official distributions inside the bot engine; their licenses and
 notices remain in each image under `/usr/share/doc` and the installed packages.
@@ -188,7 +228,7 @@ No container image is shipped in the app.
 ## Woven VM guest and bot engines
 
 On Apple silicon Macs, the Woven VM downloads the pinned
-[Ubuntu 26.04 LTS server cloud image](https://cloud-images.ubuntu.com/releases/resolute/)
+[Ubuntu LTS server cloud image](https://cloud-images.ubuntu.com/releases/)
 for arm64 from Canonical on first run (`app/VMHelper/guest-version.json`
 records its URL, serial, size and SHA-256, which is checked before use). The
 image is not redistributed in the app. Ubuntu is a trademark of Canonical Ltd.;
@@ -206,7 +246,7 @@ installs Docker's official static binaries, pinned with SHA-256 in
 Apache-2.0, containerd and runc under Apache-2.0; their licenses ship with the
 packages and archives. Docker is a trademark of Docker, Inc.
 
-## Sparkle 2.10.1
+## Sparkle
 
 https://github.com/sparkle-project/Sparkle
 
@@ -345,36 +385,45 @@ STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING
 IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 POSSIBILITY OF SUCH DAMAGE.
 
-## Remote workspace tools
+## Swift packages
 
-The remote workspace image builds unmodified OpenSSH Portable 10.6p2 client
-sources from [OpenSSH](https://www.openssh.org/portable.html). It retains the
-upstream `LICENCE` at `/usr/local/share/licenses/openssh/LICENCE` in the image;
-that file contains the component copyright, permission, and disclaimer notices.
-The source archive's SHA-256 and detached signature are checked during the build.
+The Linux library (`wovenmatter-library`, shipped in Linux host releases) uses
+[Swift Crypto](https://github.com/apple/swift-crypto) and its dependency
+[Swift ASN.1](https://github.com/apple/swift-asn1) in place of Apple's
+CryptoKit, as recorded in `app/Package.resolved`. Both are licensed under the
+Apache License 2.0, copyright Apple Inc. and the SwiftCrypto and SwiftASN1
+project authors. The Mac app uses CryptoKit and does not link them.
 
-The image installs GitHub CLI from its signed official package repository and
-retains its MIT license and dependency notices. npm retains its upstream
-Artistic License 2.0 and dependency notices. Its bundled undici is replaced by the
-locked current security selection in `remote/npm-runtime`; undici retains its
-MIT license in its installed package. This replacement changes dependency
-selection and does not modify undici source.
+## Executor container image
 
-The image includes the official Python 3.15 runtime and the current pip and
-setuptools distributions. Their installed license and notice files are retained.
-Archive::Tar 3.14 is installed from its checksummed CPAN release under the same
-terms as Perl; its module documentation is retained.
+The standalone Executor image (`remote/Executor.Dockerfile`) installs
+Archive::Tar from its checksummed CPAN release under the same terms as
+Perl; its module documentation is retained. It replaces the Executor runtime's
+bundled sharp selection with the locked sharp release and the corresponding prebuilt
+libvips packages. Their Apache-2.0, LGPL-3.0-or-later, and dependency notices
+remain in the installed packages. The replacement changes dependency selection
+and does not modify upstream source.
 
-The standalone Executor image replaces the runtime's bundled sharp selection
-with locked sharp 0.35.5 and the corresponding prebuilt libvips packages.
-Their Apache-2.0, LGPL-3.0-or-later, and dependency notices remain in the
-installed packages. The replacement changes dependency selection and does not
-modify upstream source.
+## Remote workspace image (deprecated)
 
-Selected Debian runtime libraries are rebuilt from authenticated Debian source
-packages. Reviewed Ubuntu or upstream security patches are applied where Debian
-stable has not yet published a fixed binary. Package copyright files remain
-under `/usr/share/doc`; exact source versions, patch origins, hashes, and Debian
-build provenance are retained under
-`/usr/local/share/wovenmatter/security/provenance` in the image and in
+Remote container workspaces are deprecated and no longer offered; native Linux
+hosts replaced them. Until its removal, the repository still builds the former
+workspace image (`remote/Dockerfile`). It builds unmodified OpenSSH Portable
+client sources from [OpenSSH](https://www.openssh.org/portable.html),
+checks the source archive's SHA-256 and detached signature, and retains the
+upstream `LICENCE` at `/usr/local/share/licenses/openssh/LICENCE`. It installs
+GitHub CLI from its signed official package repository (MIT), the official
+Python 3 runtime with current pip and setuptools, and Archive::Tar.
+npm keeps its Artistic License 2.0 and dependency notices; its bundled undici
+is replaced by the locked selection in `remote/npm-runtime`, which keeps its
+MIT license and does not modify undici source.
+
+## Debian security rebuilds
+
+Both images rebuild selected Debian runtime libraries from authenticated
+Debian source packages. Reviewed Ubuntu or upstream security patches are
+applied where Debian stable has not yet published a fixed binary. Package
+copyright files remain under `/usr/share/doc`; exact source versions, patch
+origins, hashes, and Debian build provenance are retained under
+`/usr/local/share/wovenmatter/security/provenance` in each image and in
 `remote/security/backports.json` in this repository.

@@ -53,10 +53,14 @@ Independent scheduled runs keep their scheduler as execution owner and expose
 content, data, automation and metadata tools; they omit goal, timer and session
 lifecycle mutations that would create a competing execution owner.
 
-Device-owned Pi Durable on iPhone and iPad uses the canonical tool definitions
-with native local dispatch for its downloaded/offline content and device
-workspace. Central-library and explicit remote operations use its authenticated
-paired connection. The phone does not need a persistent background HTTP listener.
+Quick Chat (Pi Durable on iPhone and iPad) uses the canonical definitions for a
+fixed subset: notes and `woven_context`, timers and reminders, calendar events,
+web search and reading, `ask_user` and `clock`. It dispatches them natively
+against the phone's own library replica, which syncs with the other members. It
+has no shell, files, Python, subagents, code mode, goals, background work, or
+browser and computer automation, and rejects any `target` other than this phone;
+host operations belong to a Mac or Linux workspace agent. The phone does not need
+a persistent background HTTP listener.
 
 Outside agents use **Settings → Woven MCP → Outside agents**. Turn
 on **Expose Woven MCP**, then choose the same optional tool groups offered to
@@ -196,12 +200,13 @@ receive screenshots inline without saving a file through a shell command.
 
 Browser Use controls the execution owner's shared browser. On a Mac, this is
 Woven Matter's embedded browser with the user's visible tabs, profile, and
-existing signed-in sessions. Secondary Mac agents use their own browser. Linux
+existing signed-in sessions. Another Mac's agents use that Mac's browser. Linux
 agents use their workspace's shared Chromium browser; the Mac's **View browser**
-window can interact with those same pages. An iPhone agent's explicit browser and
-computer calls route to its paired central Mac. Computer Use requires a reachable
-authorized Mac and does not control the Linux desktop or the iPhone UI. Device
-pairing, caller ownership, and conversation tool policy apply between input steps.
+window can interact with those same pages. Quick Chat on iPhone has neither tool;
+use a Mac or Linux workspace agent from the phone instead. Computer Use requires a
+reachable authorized Mac and does not control the Linux desktop or the iPhone UI.
+Device membership, caller ownership, and conversation tool policy apply between
+input steps.
 
 For example, a browser call uses these MCP arguments:
 

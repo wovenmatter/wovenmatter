@@ -64,7 +64,7 @@ Maintenance checks both for newer releases; recorded does not mean frozen.
   same stable major (`node:<major>-trixie-slim`); `--pull --no-cache` picks up its
   newest patch and Debian security updates on every image build. Workspace
   creation may reuse matching local contents for less than 24 hours; an explicit
-  container update always rebuilds. See [image reuse](reference/REMOTE_WORKSPACES.md#image-reuse-and-build-progress). The workspace
+  container update always rebuilds. The workspace
   image also raises npm to its tested current stable minimum (`>=12.2.2`), since
   Node's bundled npm may lag. Dependency maintenance reviews that Dockerfile
   floor; locked installs and the container smoke test validate CLI compatibility.
@@ -211,7 +211,7 @@ Maintenance checks both for newer releases; recorded does not mean frozen.
   0.x minors, and refreshes every record and notice together. Upstream currently
   marks even its numbered driver releases as GitHub prereleases to keep the
   monorepo Latest pointer separate. Its release notes identify plain SemVer
-  driver releases as stable; the current selection is 0.49.3. The driver refuses input to macOS security
+  driver releases as stable. The driver refuses input to macOS security
   and consent prompts.
   The driver is spawned directly by the signed GUI, without a Node SDK or
   additional native libraries. Woven negotiates MCP 2025-06-18 and refuses an

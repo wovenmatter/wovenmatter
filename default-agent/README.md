@@ -56,7 +56,7 @@ Provider contracts follow the [OpenAI guide](https://developers.openai.com/api/d
 and [xAI guide](https://docs.x.ai/developers/advanced-api-usage/context-compaction).
 Connected-account behavior still requires manual verification.
 
-## Central archive transport
+## Native archive transport
 
 `session/update` emits `woven_native_record` batches with stable native source and
 session IDs. Each change has one raw record with its normalized search projection,
@@ -67,8 +67,10 @@ Woven SQLite keeps an additional searchable copy; native stores remain independe
 Spools are fresh and preserve old files without scanning, repairing or replaying
 them. Inline records up to 512 KiB retain complete payloads; larger records use
 bounded 256 KiB checksummed chunks and reconstruction manifests. Pages target
-1 MiB, with cursors expressed as ordinals or `{record, byteOffset}`. Remote UI
-polling uses the same append/paging backend and current operation handles.
+1 MiB, with cursors expressed as ordinals or `{record, byteOffset}`. The Mac's
+ACP client pages it after a reconnect to reconcile native history. Other devices
+never poll it: they follow a session on another machine live over that
+machine's signed stream and receive its history through library sync.
 
 Scheduled native runs use the same chunk format and bounded presentation helper.
 Stored result pages stream into SQLite with global event ordinals; full transcripts

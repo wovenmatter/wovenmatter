@@ -96,7 +96,7 @@ check their external effects before starting a replacement program.
 
 ## Code mode
 
-In **Settings → Agents → Pi Durable → Code mode**, select:
+In **Settings → Agents → Pi Durable → More → Code mode**, select:
 
 - **On** (default): code mode alongside the ordinary file, shell and web tools.
 - **Only:** Pi presents ordinary tools through code mode.
@@ -134,11 +134,13 @@ then explicitly start new work. In-memory Executor continuations do not survive
 an Executor restart. Woven retains receipts, not durable program execution.
 Older large output bodies may be retired while their replay-prevention IDs stay.
 
-Executor calls go to the configured owning service. A Linux workspace's access to
-central-library-backed Executor operations requires its provisioned library grant
-and a reachable central Mac. Hosting Executor on Linux does not make that Mac
-optional for those operations. Separate clients using the Executor endpoint
-directly have their own connection and scope.
+Executor tools are answered by a Mac. In a Linux workspace, the host sends
+each Executor call, signed with its own device key, to whichever of your paired
+Macs is online, so at least one Mac must be reachable for Executor. This is true
+even when Executor itself is deployed on a Linux host. Notes, calendar,
+conversation history, Library, timers and session tools keep working there with
+every Mac offline. Separate clients using the Executor endpoint directly have
+their own connection and scope.
 
 Executor Cloud authentication and Pi Durable are outside this integration.
 
