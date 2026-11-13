@@ -90,7 +90,7 @@ const releaseTaskOwner = runningAsService
   : null
 // Sessions this server runs use durable channels in process, whether or not
 // background execution is on. Nothing outside this server attaches to them.
-const durableACP = createDurableACP({ catalog, workspaceRoot, runtimeKind: configuration.runtimeKind, configuration,
+const durableACP = createDurableACP({ catalog, workspaceRoot, configuration,
   environment: harness => harness.id === 'codex' ? harnessRuntimeEnvironment(harness) : harnessEnvironment(),
   isHarnessEnabled:id => maintenance.isInstalled(id) })
 const taskGateway = runningAsService ? createTaskGateway({
@@ -111,7 +111,7 @@ const taskGateway = runningAsService ? createTaskGateway({
 }) : null
 
 const workspaceBrowser = createWorkspaceBrowser({ profile: configuration.legacyBrowserProfile,
-  profilesRoot: configuration.browserProfilesRoot, runtimeKind: configuration.runtimeKind })
+  profilesRoot: configuration.browserProfilesRoot })
 let browserSelfTestPending
 const browserMCPSchemas = new Map(loadWorkspaceMCPCatalog().filter(tool => ['woven_browser_use', 'woven_browser_use_cancel'].includes(tool.name)).map(tool => [tool.name, tool.inputSchema]))
 
@@ -122,7 +122,7 @@ const browserMCPSchemas = new Map(loadWorkspaceMCPCatalog().filter(tool => ['wov
 // verify signed member requests against its member list.
 // WOVENMATTER_LIBRARY=0 turns it off; WOVENMATTER_LIBRARY_BINARY,
 // _DATA_ROOT, _SERVE=0 and _HTTPS_PORT let isolated tests run side by side.
-const nativeLinuxHost = runningAsService && configuration.runtimeKind === 'host' && process.platform === 'linux'
+const nativeLinuxHost = runningAsService && process.platform === 'linux'
 const libraryState = resolve(configuration.stateDirectory, 'library')
 let memberIdentityRecord = null
 const library = runningAsService && (nativeLinuxHost || process.env.WOVENMATTER_LIBRARY_BINARY) && process.env.WOVENMATTER_LIBRARY !== '0' ? createLibraryHostSupervisor({
@@ -229,7 +229,7 @@ function hostRelease() {
   return { version: configuration.releaseVersion, fingerprint: configuration.serviceFingerprint, librarySchema: ready?.schema ?? null }
 }
 
-const bots = runningAsService && configuration.runtimeKind === 'host' && process.platform === 'linux' ? createBotsService({
+const bots = nativeLinuxHost ? createBotsService({
   configuration, mcp: clientExecution.mcp, release: hostRelease, defaultAgent, serverPort: () => server.address()?.port ?? listenPort,
   libraryHost: library, memberIdentity, registry: memberSockets, installerBearer,
   // Signed members, or the installer bearer on the SSH tunnel only; device grants open nothing.
@@ -318,7 +318,6 @@ const server = createServer({ maxHeaderSize: 16_384, headersTimeout: 10_000,
     }
     if (bots && await bots.handleClient(request, response, url, { readJSON, json, administrator, device })) return
     if (url.pathname === '/v1/host/installer-bearer' && request.method === 'POST') {
-      if (configuration.runtimeKind !== 'host') return json(response, 404, { error: 'not_found' })
       if (!administrator) return json(response, 403, { error: 'administrator_required' })
       const installer = authorized(request), bearer = await installerBearer.rotate()
       // Only the installing Mac, on its own SSH tunnel, learns the new value.
@@ -555,12 +554,10 @@ const server = createServer({ maxHeaderSize: 16_384, headersTimeout: 10_000,
 
     if (request.method === 'GET' && url.pathname === '/v1/directories') {
       if (!administrator) return json(response, 403, { error: 'administrator_required' })
-      if (configuration.runtimeKind !== 'host') return json(response, 409, { error: 'host_workspace_required' })
       return json(response, 200, await listHostDirectories(url.searchParams.get('path') ?? workspaceRoot))
     }
     if (request.method === 'POST' && url.pathname === '/v1/projects/link') {
       if (!administrator) return json(response, 403, { error: 'administrator_required' })
-      if (configuration.runtimeKind !== 'host') return json(response, 409, { error: 'host_workspace_required' })
       return json(response, 200, await linkHostProject((await readJSON(request, 8192)).path))
     }
     if (request.method === 'POST' && url.pathname === '/v1/projects') {

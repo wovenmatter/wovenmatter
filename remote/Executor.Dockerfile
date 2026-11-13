@@ -21,7 +21,7 @@ RUN sed -i 's/^Types: deb$/Types: deb deb-src/' /etc/apt/sources.list.d/debian.s
     && useradd --system --create-home wm-build
 COPY security /security
 RUN chmod -R a+rX /security \
-    && WM_SECURITY_PACKAGES=ncurses,acl,util-linux,curl python3 /security/build-backports.py
+    && python3 /security/build-backports.py
 
 FROM node:26-trixie-slim
 # The published runtime bundles Git/workerd, while Debian supplies their shared

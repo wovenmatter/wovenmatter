@@ -52,12 +52,6 @@ Run:
 scripts/test-changes.sh --all
 ```
 
-When remote container behavior changes and Docker is available, also run:
-
-```sh
-scripts/test-container.sh
-```
-
 Tests must be deterministic, need no provider credentials, and make no real LLM
 calls. Describe any platform or environment limitation in the pull request.
 Continuous integration runs the same repository-owned validation without

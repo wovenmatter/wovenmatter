@@ -109,7 +109,7 @@ Bots are long-running agents, each with its own Linux container.
 | `app/` | macOS app (`WovenMatter.xcodeproj`) and Swift package: core, library store, library host and daemon, client, automation, browser (CEF), VM helper, power helper, updater records |
 | `ios/` | iPhone and iPad app, its on-device Pi Durable runtime, and tests |
 | `shared/` | Foundation-only package of note models and wire contracts used by both apps |
-| `remote/` | Linux Woven server (Node), host install and engine scripts, container workspace images |
+| `remote/` | Linux Woven server (Node), host install and engine scripts, Docker Executor image |
 | `bots/` | Bots runtime, in-container helper, and container image |
 | `default-agent/` | Pi Durable runtime that the Mac app and Linux hosts run |
 | `harnesses/` | Harness catalog, adapter installation, and the bridge that connects harnesses to Woven MCP |
@@ -160,9 +160,8 @@ scripts/test-changes.sh --ci     # the portable Linux check that PR CI runs
 ```
 
 Narrower options are `--desktop`, `--macos`, `--native`, `--cross-device`,
-`--cross-device-desktop`, `--remote`, and `--linux`. Use `scripts/test-container.sh`
-for container lifecycle changes when Docker is available. Tests never call
-provider services.
+`--cross-device-desktop`, `--remote`, and `--linux`. Tests never call provider
+services.
 
 `scripts/with-pinned-node.sh COMMAND` runs a command with the pinned Node first
 on `PATH`. The bots runtime requires it.

@@ -49,7 +49,7 @@ future documentation updates:
 | Workspace layout | [LocalACPWorkspace.swift](../../app/Sources/WovenMatterClient/LocalACPWorkspace.swift) |
 | Notes and agent access | [ApplicationModel.swift](../../app/App/ApplicationModel.swift) and [NoteEditingProtocol.swift](../../shared/Sources/WovenMatterShared/NoteEditingProtocol.swift) |
 | Saved conversations and imports | [WorkspaceDatabase.swift](../../app/Sources/WovenMatterDashboardStore/WorkspaceDatabase.swift) |
-| Remote connection and lifecycle | [RemoteWorkspaceClient.swift](../../app/Sources/WovenMatterClient/RemoteWorkspaceClient.swift) and [remote-workspace.sh](../../scripts/remote-workspace.sh) |
+| Remote connection and lifecycle | [RemoteWorkspaceClient.swift](../../app/Sources/WovenMatterClient/RemoteWorkspaceClient.swift) and [remote-host.sh](../../scripts/remote-host.sh) |
 | Remote data limits | [database-catalog.py](../../remote/src/database-catalog.py) |
 
 User guides describe actions and outcomes. Technical references retain exact

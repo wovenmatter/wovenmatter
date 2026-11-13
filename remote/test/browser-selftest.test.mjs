@@ -61,7 +61,7 @@ test('self-test uses a throwaway production sandbox, loads data and closes it be
   const f = await fixture(t), calls = []
   let profile
   const result = await browserSelfTest({ procRoot: f.root, platform: 'linux', launch: async (directory, options) => {
-    profile = directory; assert.deepEqual(options, { runtimeKind: 'host' })
+    profile = directory; assert.equal(options, undefined)
     return { context: {
       newPage: async () => ({ goto: async url => { assert.ok(url.startsWith('data:')); calls.push('load') } }),
       browser: () => ({ newBrowserCDPSession: async () => ({

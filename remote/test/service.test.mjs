@@ -623,7 +623,7 @@ test('host health reports native paths and source inventory without exposing its
   await mkdir(workspace)
   const token = 'native-host-fixture-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
   const service = await startService({ workspace, home, catalog: catalogPath, token, environmentOverrides: {
-    WOVENMATTER_RUNTIME_KIND: 'host', WOVENMATTER_ACCESS_MODE: 'fullRoot',
+    WOVENMATTER_ACCESS_MODE: 'fullRoot',
     WOVENMATTER_DATA_DIRECTORY: databases, WOVENMATTER_STATE_DIRECTORY: resolve(home, 'data/run'),
     WOVENMATTER_SERVICE_FINGERPRINT: 'a'.repeat(64), WOVENMATTER_RELEASE_VERSION: '1.4.0', WOVENMATTER_LIBRARY: '0',
   } })
@@ -680,61 +680,3 @@ test('authorization input reports acceptance only after the write completes', as
   input.destroy()
 })
 
-test('installation uses latest adapter and fails unless actual components verify', async (context) => {
-  const fixture = await temporaryFixture(context, 'wovenmatter-install-')
-  const home = resolve(fixture, 'home')
-  const workspace = resolve(fixture, 'workspace')
-  const bin = resolve(home, '.local/bin')
-  const npmArguments = resolve(fixture, 'npm-arguments')
-  await mkdir(bin, { recursive: true })
-  await mkdir(workspace, { recursive: true })
-  await writeFile(resolve(bin, 'flock'), '#!/bin/sh\nshift 3\nexec "$@"\n')
-  await chmod(resolve(bin, 'flock'), 0o700)
-  await writeFile(resolve(bin, 'ps'), '#!/bin/sh\nexit 0\n')
-  await chmod(resolve(bin, 'ps'), 0o700)
-  const npm = resolve(bin, 'npm')
-  await writeFile(npm, `#!/bin/sh\nprintf '%s\\n' "$@" >> '${npmArguments}'\n`)
-  await chmod(npm, 0o700)
-
-  const catalog = JSON.parse(await readFile(catalogPath, 'utf8'))
-  const opencode = catalog.harnesses.find((value) => value.id === 'opencode')
-  const testCatalog = resolve(fixture, 'catalog.json')
-  await writeFile(testCatalog, JSON.stringify({
-    schemaVersion: 4,
-    harnesses: [{
-      ...opencode,
-      adapterPackage: '@example/opencode-adapter',
-      minimumAdapterVersion: '1.2.3',
-      command: 'opencode-adapter',
-      transportCheckCommand: null,
-    }],
-  }))
-
-  const service = await startService({
-    workspace,
-    home,
-    catalog: testCatalog,
-    token: 'install-token-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
-  })
-  context.after(() => stopService(service.child))
-  const headers = {
-    authorization: 'Bearer install-token-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
-    'content-type': 'application/json',
-  }
-  const response = await fetch(`${service.url}/v1/harnesses/opencode/install`, {
-    method: 'POST',
-    headers,
-    body: JSON.stringify({ confirmed: true, packageSpec: "@opencode/cli@2.1.0" }),
-  })
-  assert.equal(response.status, 202)
-  const operation = await waitFor(
-    `${service.url}/v1/operations/${(await response.json()).id}`,
-    headers,
-    (value) => value.status !== 'running'
-  )
-  assert.equal(operation.status, 'failed')
-  assert.match(operation.error, /could not be verified/)
-  const argumentsValue = await readFile(npmArguments, 'utf8')
-  assert.match(argumentsValue, /@opencode\/cli/)
-  assert.match(argumentsValue, /@example\/opencode-adapter@latest/)
-})

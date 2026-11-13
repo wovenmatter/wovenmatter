@@ -97,7 +97,7 @@ class ExecTests(unittest.TestCase):
         self.settings={'WOVENMATTER_API_TOKEN':'fixture-'+'x'*48,'WOVENMATTER_LISTEN_PORT':'7337',
             'WOVENMATTER_WORKSPACE':str(self.root/'workspace'),'WOVENMATTER_DATA_DIRECTORY':str(self.root/'databases'),
             'WOVENMATTER_STATE_DIRECTORY':str(self.root/'run'),'WOVENMATTER_HARNESS_PATH':'/fixture path/#literal:$HOME',
-            'PLAYWRIGHT_BROWSERS_PATH':str(self.root/'browsers/current'),'WOVENMATTER_RUNTIME_KIND':'host',
+            'PLAYWRIGHT_BROWSERS_PATH':str(self.root/'browsers/current'),
             'WOVENMATTER_ACCESS_MODE':'fullRoot','UNTRUSTED_SETTING':'must-not-export'}
         (self.root/'workspace').mkdir(); self.write_environment()
         self.env={**os.environ,'HOME':str(self.home),'WOVENMATTER_UNEXPECTED':'must-not-export'}

@@ -85,9 +85,9 @@ permissions apply to the whole workspace; folders retain their ordinary Linux
 permissions. Execution and SQLite state stay on Linux while disconnected. See
 [Native Linux hosts](../reference/REMOTE_HOSTS.md).
 
-The container workspace option is deprecated. Saved container workspaces do not
-reconnect or launch agents. This does not change the separate Docker Executor.
-No host containers or data are removed by this deprecation.
+Remote container workspaces have been removed. A saved container workspace is
+ignored; Woven Matter does not delete its host containers or data. The separate
+Docker Executor is unaffected.
 
 Remote project files stay on their host; centrally saved transcripts do not
 synchronize them. Back up project files and Woven's native service data.

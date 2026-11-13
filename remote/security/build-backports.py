@@ -42,12 +42,7 @@ def run_build(*args, cwd=None, **kwargs):
         cwd=cwd, **kwargs)
 
 
-manifest = json.loads((ROOT / 'backports.json').read_text())
-requested = {name for name in os.environ.get('WM_SECURITY_PACKAGES', '').split(',') if name}
-available = {package['source'] for package in manifest}
-if requested - available:
-    raise RuntimeError('Unknown requested security source: ' + ', '.join(sorted(requested - available)))
-packages = [package for package in manifest if not requested or package['source'] in requested]
+packages = json.loads((ROOT / 'backports.json').read_text())
 
 for package in packages:
     name, version = package['source'], package['version']
@@ -55,13 +50,12 @@ for package in packages:
     work.mkdir(parents=True)
     Path('/build').chmod(0o755)
     work.chmod(0o755)
-    profile = ['--build-profiles=nopython'] if name == 'libxml2' else []
     # curl 8.23 needs the newer HTTP/3 development libraries carried by
     # trixie-backports.  Its source is selected explicitly from the signed sid
     # index, while this target makes APT prefer the compatible backported binary
     # build dependencies instead of declaring the graph unsatisfiable.
     target = ['--target-release', 'trixie-backports'] if name == 'curl' else []
-    run('apt-get', 'build-dep', '-y', '--no-install-recommends', *target, *profile,
+    run('apt-get', 'build-dep', '-y', '--no-install-recommends', *target,
         name + '=' + version)
     # apt verifies source hashes against the signed Debian Sources index.
     shutil.chown(work, user='_apt')
@@ -70,19 +64,14 @@ for package in packages:
     os.chown(work, BUILD_UID, BUILD_GID, follow_symlinks=False)
     for path in work.rglob('*'):
         os.chown(path, BUILD_UID, BUILD_GID, follow_symlinks=False)
-    if name == 'libxml2':
-        run_build('bash', str(ROOT / 'check-libxml-asan.sh'), str(source), 'vulnerable')
     for patch in package['patches']:
         path = ROOT / patch['file']
         if hashlib.sha256(path.read_bytes()).hexdigest() != patch['sha256']:
             raise RuntimeError('Patch checksum mismatch: ' + str(path))
         run_build('patch', '-p1', '--batch', '--fuzz=0', '-i', str(path), cwd=source)
-    if name == 'libxml2':
-        run_build('bash', str(ROOT / 'check-libxml-asan.sh'), str(source), 'fixed')
     run_build('dch', '--newversion', version + '+wmsecurity1', '--distribution', 'trixie',
               '--force-distribution', 'Reviewed upstream security backports; see backports.json.',
               cwd=source)
-    build_profile = ['-Pnopython'] if name == 'libxml2' else []
     # Linux is retiring UDP-Lite. The 2.41.5 lsfd fixtures can block forever
     # when that protocol is unavailable inside Docker; 2.41.6 split those
     # cases into skippable tests. Debian's rules do not forward TS_OPTS, so
@@ -90,8 +79,7 @@ for package in packages:
     # mount, and nsenter integration suites that cover the repaired privilege
     # boundaries. Runtime smoke tests cover the split debs.
     build_env = ['DEB_BUILD_OPTIONS=nocheck'] if name == 'util-linux' else []
-    run_build(*build_env, 'dpkg-buildpackage', '-b', '-us', '-uc', '-j4',
-              *build_profile, cwd=source)
+    run_build(*build_env, 'dpkg-buildpackage', '-b', '-us', '-uc', '-j4', cwd=source)
     if name == 'util-linux':
         run_build('bash', 'tests/run.sh', f'--srcdir={source}',
                   f'--builddir={source}', '--parallel=1', '--nonroot',

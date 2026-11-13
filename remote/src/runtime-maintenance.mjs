@@ -111,7 +111,6 @@ export function createRuntimeMaintenance({ catalog, workspaceRoot, environment, 
   }, workspaceRoot, timeout)
   async function componentSource(path) {
     if (!path) return 'missing'
-    if (configuration.runtimeKind !== 'host') return 'managed'
     const target = await realpath(path).catch(() => path)
     for (const value of states.values()) for (const owned of Object.values(value.managedComponents ?? {})) {
       if (owned.path === path && owned.target === target) return 'managed'
@@ -261,8 +260,7 @@ export function createRuntimeMaintenance({ catalog, workspaceRoot, environment, 
     const script = existsSync(installedScript) ? installedScript : fileURLToPath(new URL('../../harnesses/install-adapter.mjs', import.meta.url))
     const selection = { prefix: resolve(configuration.home, '.local'), adapter: h.adapterPackage,
       adapterVersion: spec.slice(h.adapterPackage.length + 1), engineVersion,
-      npm: configuration.runtimeKind === 'host'
-        ? [process.execPath, resolve(configuration.serviceRoot, 'tooling/lib/node_modules/npm/bin/npm-cli.js')] : ['npm'] }
+      npm: [process.execPath, resolve(configuration.serviceRoot, 'tooling/lib/node_modules/npm/bin/npm-cli.js')] }
     if (h.minimumProtocolSDKVersion) {
       const sdk = await latest('@agentclientprotocol/sdk')
       if (!sdk || precedes(sdk, h.minimumProtocolSDKVersion)) throw failure('latest_protocol_sdk_version_unavailable')
@@ -312,7 +310,7 @@ export function createRuntimeMaintenance({ catalog, workspaceRoot, environment, 
     if (h.minimumEngineVersion) return // The immutable consumer graph already verified both releases.
     // System adapter directories and their bundled engines are never mutated.
     const path = await commandPath(h.command)
-    if (configuration.runtimeKind === 'host' && await componentSource(path) !== 'managed') return
+    if (await componentSource(path) !== 'managed') return
     let root = null
     try { root = await packageRoot(dirname(await realpath(path)), h.adapterPackage) } catch {}
     const dependency = h.id === 'codex' ? '@openai/codex' : '@anthropic-ai/claude-agent-sdk'
@@ -332,25 +330,11 @@ export function createRuntimeMaintenance({ catalog, workspaceRoot, environment, 
       let unlock
       try {
         unlock = await acquireLock(resolve(configuration.stateDirectory, 'runtime-operation.lock'), environment(), workspaceRoot)
-        if (await busy(h, configuration.runtimeKind === 'host' ? [] : undefined)) throw failure('runtime_active_stop_conversations_or_server_first')
+        if (await busy(h, [])) throw failure('runtime_active_stop_conversations_or_server_first')
         const before = await inventory(h)
-        const maintainedNames = configuration.runtimeKind === 'host' ? await hostMaintainedProcesses(h, action, before) : undefined
-        if (configuration.runtimeKind === 'host' && await busy(h, maintainedNames)) throw failure('runtime_active_stop_conversations_or_server_first')
-        let command, installedCommands = []
-        if (configuration.runtimeKind === 'host') {
-          ({ command, installedCommands } = await hostInstallation(h, action, body, before))
-        } else {
-          const pkg = h.install?.kind === 'npm-global' ? validatedPackageSpec(h, body.packageSpec ?? (await npmPreview(h)).packageSpec) : null
-          const adapter = h.adapterPackage ? ' && ' + (h.minimumEngineVersion
-            ? await adapterInstallCommand(h, await adapterPackageSpec(h))
-            : `${npm} install --global --prefix "$HOME/.local" ${quote(h.adapterPackage + '@latest')}`) : ''
-          if (pkg) command = `${npm} install --global --prefix "$HOME/.local" ${quote(pkg)}${adapter}`
-          else {
-            if (typeof body.sourceSHA256 !== 'string') throw failure('source_digest_required')
-            const installer = await verifiedInstaller(h, body.sourceSHA256)
-            command = `${quote(h.install.interpreter)} ${quote(installer.path)} ${(await installerArguments(h)).map(quote).join(' ')}${adapter}`
-          }
-        }
+        const maintainedNames = await hostMaintainedProcesses(h, action, before)
+        if (await busy(h, maintainedNames)) throw failure('runtime_active_stop_conversations_or_server_first')
+        const { command, installedCommands } = await hostInstallation(h, action, body, before)
         if (await busy(h, maintainedNames)) throw failure('runtime_active_stop_conversations_or_server_first')
         const installation = async () => {
           if (command) {
@@ -367,10 +351,9 @@ export function createRuntimeMaintenance({ catalog, workspaceRoot, environment, 
               s.managedComponents[id] = { path, target: await realpath(path).catch(() => path) }
             }
           }
-          if (h.adapterPackage && (configuration.runtimeKind !== 'host' || installedCommands.some(([id]) => id === 'runtime'))) await refreshAdapterDependency(h)
+          if (h.adapterPackage && installedCommands.some(([id]) => id === 'runtime')) await refreshAdapterDependency(h)
         }
-        if (configuration.runtimeKind === 'host') await withInstallerGuard(configuration.home, installation)
-        else await installation()
+        await withInstallerGuard(configuration.home, installation)
         const after = await inventory(h)
         if (!after.installed) throw failure('Installer finished but required components could not be verified.')
         if (action === 'update' && before.components.some(c => c.source !== 'system' && precedes(c.installedVersion, updateTarget(c)) && precedes(after.components.find(a => a.id === c.id)?.installedVersion, updateTarget(c)))) throw failure('Update finished but a required component is still behind the checked version.')
@@ -403,7 +386,7 @@ export function createRuntimeMaintenance({ catalog, workspaceRoot, environment, 
       return { path, source: await componentSource(path) }
     },
     async hostAdapterPreview(h) {
-      if (configuration.runtimeKind !== 'host' || !h.adapterPackage) return null
+      if (!h.adapterPackage) return null
       const row = await inventory(h)
       const cli = row.components.find(c => c.id === 'signin')
       if (!cli?.path) return null

@@ -5,9 +5,8 @@ workspace runs Woven Matter directly as a native Linux service, using the SSH
 account's existing tools and sign-ins. Execution and SQLite state remain on Linux
 while the Mac is disconnected.
 
-Remote container workspaces are deprecated and no longer offered or reconnected.
-Native Linux hosts replace that workflow. The separate Docker Executor feature
-is unchanged.
+Remote container workspaces have been removed; native Linux hosts replace them.
+The separate Docker Executor feature is unaffected.
 
 ## What you need
 

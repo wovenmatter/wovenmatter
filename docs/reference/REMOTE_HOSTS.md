@@ -2,14 +2,14 @@
 
 Host workspaces run Woven Matter directly on a Linux machine in the user's
 Tailnet. The Mac that adds a host discovers, inspects and installs the service
-through the same verified Tailscale SSH transport used by container workspaces,
+through a verified Tailscale SSH transport,
 and uses it again only to update a host too old for signed updates and to
 repair one. Everything else, from every Mac, goes to the host's own server over
 Tailscale HTTPS, signed with the Mac's device key: sessions and their live
 stream (`GET /v1/stream?protocol=1`), files, Pi Durable settings, logs,
 restarts and updates. Session history reaches other devices by library sync.
-Docker is not required. Native hosts supersede deprecated remote container workspaces,
-which are no longer offered or reconnected. The separate Docker Executor is unchanged.
+Docker is not required. Native hosts replaced the retired remote container
+workspaces. The separate Docker Executor is unaffected.
 
 ## Execution and permissions
 
@@ -164,9 +164,7 @@ CDP stays on host loopback. Chromium's renderer sandbox does not contain agent
 shell commands or promise protection from every browser vulnerability. Browser
 profiles separate website state, not Linux execution permissions.
 
-The deprecated container workspace helpers are no longer accessible through the
-remote workspace UI. Native hosts never fall back to a container or an
-unsandboxed browser.
+Native hosts never fall back to a container or an unsandboxed browser.
 
 ## Persistence, updates and removal
 
@@ -195,3 +193,47 @@ and the complete managed data directory before intentional data removal.
 Private execution sharing continues to use Tailscale Serve with the expected
 loopback target; Funnel/public exposure is refused. No listener is opened on
 the host's public or Tailnet interface.
+
+## Harness availability
+
+Installed harnesses are automatically available and shown in the local and
+remote workspace interfaces. Authentication and verified runtime components
+still gate chat readiness; there are no separate harness enable or visibility
+preferences. The host service derives compatibility fields from installed
+components and persists diagnostic failure counts only.
+
+## Pi Durable SDK updates
+
+Each host service owns its Pi Durable SDK and Claude SDK installation. The Pi
+Durable settings page groups their installed versions and update controls
+beneath expandable workspace rows. **All workspaces** lists the local
+installation and each configured host; choosing one workspace limits the list
+to that workspace.
+
+`GET /v1/default-agent/sdks` returns installed package metadata without
+initializing an agent, unlocking credentials, or checking the network. `POST`
+to the same endpoint accepts `{"action":"check","id":"claude"}` for an explicit
+registry check, or `{"action":"update","id":"claude","version":"x.y.z"}` for an
+update. The SDK identifier is `pi` or `claude`; omit it from a check or update
+to manage both SDKs. A combined update stages all outdated components and
+activates them together. The checked version is optional on updates. Responses
+contain `sdks` entries with `id`, `name`, `installedVersion`, `latestVersion`,
+and `updateAvailable`, plus the installation `generation` and an optional
+`notice`. Request bodies are bounded to 4 KiB. Disconnection cancels work
+before activation; an already activated installation remains installed.
+
+Updates run as the host's service account and persist in its managed data
+directory. They do not modify the separately installed agent CLIs. Package
+installation stages an immutable generation and verifies it before activation.
+Running conversations retain their generation; the service only replaces an
+idle worker. Scheduled tasks hold a runtime lease from session setup through
+completion so an update cannot split their model, permission, and prompt setup
+between workers. Opening SDK settings does not update or start a host.
+
+## Security review
+
+Tailscale policy must grant only intended users and devices access to the
+host's SSH and private HTTPS ports. Tailnet membership alone does not establish
+least privilege. Root and the host's SSH account remain trusted operators;
+agents on one host share its credentials and files. Do not use a single host
+as an isolation boundary between untrusted users.

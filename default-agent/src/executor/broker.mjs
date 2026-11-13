@@ -234,10 +234,8 @@ export class ExecutorBroker {
       readFile(resolve(remoteRoot, 'executor-runtime/package-lock.json'), 'utf8'),
     ]);
     const securityManifest = JSON.parse(await readFile(resolve(remoteRoot, 'security/backports.json'), 'utf8'));
-    const executorSecuritySources = new Set(['ncurses', 'acl', 'util-linux', 'curl']);
-    const securityPaths = ['backports.json', 'build-backports.py', ...securityManifest
-      .filter(record => executorSecuritySources.has(record.source))
-      .flatMap(record => record.patches.map(patch => patch.file))];
+    const securityPaths = ['backports.json', 'build-backports.py',
+      ...securityManifest.flatMap(record => record.patches.map(patch => patch.file))];
     const securityFiles = Object.fromEntries(await Promise.all(securityPaths.map(async path => [
       path, (await readFile(resolve(remoteRoot, 'security', path))).toString('base64'),
     ])));

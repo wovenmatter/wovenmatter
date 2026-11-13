@@ -79,7 +79,7 @@ export async function browserSelfTest({ launch = launchBrowser, procRoot = '/pro
   const directory = await mkdtemp(join(tmpdir(), 'wovenmatter-browser-selftest-'))
   let session, cdp
   try {
-    session = await launch(directory, { runtimeKind: 'host' })
+    session = await launch(directory)
     const page = await session.context.newPage()
     await page.goto('data:text/html,<title>Woven Matter sandbox check</title><p>Browser sandbox check</p>', { waitUntil: 'load', timeout: 15000 })
     cdp = await session.context.browser().newBrowserCDPSession()

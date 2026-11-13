@@ -15,13 +15,11 @@ async function deadline(operation, milliseconds = 5000) {
   } finally { clearTimeout(timer) }
 }
 
-export function browserLaunchOptions({ runtimeKind = 'host' } = {}) {
+export function browserLaunchOptions() {
   return {
     headless: true, viewport: { width: 1280, height: 800 }, timeout: 15000,
-    // Native hosts always use Chromium's namespace/seccomp sandbox. Existing
-    // containers keep their established launch contract until their additional
-    // seccomp/AppArmor policy can be validated without weakening containment.
-    ...(runtimeKind === 'host' ? { chromiumSandbox: true } : {}),
+    // Native hosts always use Chromium's namespace/seccomp sandbox.
+    chromiumSandbox: true,
     args: ['--remote-debugging-address=127.0.0.1', '--remote-debugging-port=0'],
     env: Object.fromEntries(Object.entries(process.env).filter(([key]) =>
       !/TOKEN|SECRET|PASSWORD|API_KEY/i.test(key))),
@@ -34,11 +32,11 @@ async function browserRuntime() {
 
 export async function browserExecutablePath() { return (await browserRuntime()).chromium.executablePath() }
 
-export async function launchBrowser(profile, options = {}) {
+export async function launchBrowser(profile) {
   const { chromium } = await browserRuntime()
   await mkdir(profile, { recursive: true, mode: 0o700 })
   await rm(join(profile, 'DevToolsActivePort'), { force: true })
-  const context = await chromium.launchPersistentContext(profile, browserLaunchOptions(options))
+  const context = await chromium.launchPersistentContext(profile, browserLaunchOptions())
   try {
     const [port, path] = (await readFile(join(profile, 'DevToolsActivePort'), 'utf8')).trim().split('\n')
     if (!/^\d+$/.test(port) || +port < 1 || +port > 65535 || !/^\/devtools\/browser\/[a-zA-Z0-9-]+$/.test(path)) {
@@ -456,7 +454,7 @@ const validProfile = id => typeof id === 'string' && /^[a-z0-9-]{1,32}$/.test(id
 
 // Each identity owns its browser, tabs, action receipts and cookies. Choosing a
 // profile never changes another identity's page or shares its browser context.
-export function createWorkspaceBrowser({ profile, profilesRoot, runtimeKind = 'host', launch = launchBrowser }) {
+export function createWorkspaceBrowser({ profile, profilesRoot, launch = launchBrowser }) {
   const profiles = new Map()
   let closed = false
   async function directory(id) {
@@ -485,7 +483,7 @@ export function createWorkspaceBrowser({ profile, profilesRoot, runtimeKind = 'h
     if (closed) throw failure(503, 'browser_unavailable')
     if (!profiles.has(id)) {
       if (profiles.size >= 32) throw failure(409, 'browser_profile_limit')
-      profiles.set(id, createProfileBrowser({ profile: id, launch: async () => launch(await directory(id), { runtimeKind }) }))
+      profiles.set(id, createProfileBrowser({ profile: id, launch: async () => launch(await directory(id)) }))
     }
     return profiles.get(id)
   }

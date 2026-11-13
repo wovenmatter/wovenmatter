@@ -29,7 +29,6 @@ in your installed version.
 
 - [Agent tools, access, and retries](AGENT_TOOLS.md)
 - [Mac access and credentials](MAC_ACCESS.md)
-- [Remote workspace internals](reference/REMOTE_WORKSPACES.md)
 - [Remote database limits](reference/REMOTE_DATABASES.md)
 - [Runtime installation and updates](RUNTIME_MAINTENANCE.md)
 - [OpenCode integration](opencode-v2/PARITY.md) and [testing](opencode-v2/TESTING.md)
