@@ -59,13 +59,16 @@ const pendingKey = pending => [...new Set(pending.map(item => String(item.id)))]
  * synchronized, and `missing` for one the destination removed or a full
  * snapshot left out.
  */
-export function createRemoteSessionSource({ endpoint, sign, interesting = () => new Set(), webSocket, timings, log = () => {}, resubscribeMilliseconds = 5_000 }) {
+export function createRemoteSessionSource({ endpoint, sign, expected = null, interesting = () => new Set(), webSocket, timings, log = () => {}, resubscribeMilliseconds = 5_000 }) {
   const listeners = new Set(), tracked = new Map(), conversations = new Map(), pending = new Map(), known = new Set(), removed = new Set()
   let ready = false, closed = false, subscription = null, timer = null, snapshotting = false
-  const client = createStreamClient({ endpoint, sign, ...(webSocket ? { webSocket } : {}), ...(timings ? { timings } : {}),
+  // `expected` ({workspaceID, libraryID}): a server whose hello names another
+  // workspace is closed, and none of its sessions are used.
+  const client = createStreamClient({ endpoint, sign, expected, ...(webSocket ? { webSocket } : {}), ...(timings ? { timings } : {}),
     onEvent: event => {
       if (event.type === 'closed') ready = false
       if (event.type === 'refused' && event.status) log(`The stream to ${endpoint} was refused (${event.status}).`)
+      if (event.type === 'mismatch') log(`The stream at ${endpoint} serves workspace ${event.hello.workspaceID} of library ${event.hello.libraryID}, not ${expected?.workspaceID}; it is not used.`)
     } })
   const wanted = () => new Set([...tracked.keys(), ...interesting()])
   function emit(ids) {
@@ -119,6 +122,13 @@ export function createRemoteSessionSource({ endpoint, sign, interesting = () => 
     track(id) { tracked.set(id, (tracked.get(id) ?? 0) + 1); return () => { const count = tracked.get(id) - 1; if (count > 0) tracked.set(id, count); else tracked.delete(id) } },
     /** Emits the kept sessions' current state again (after the coordinator's own state changed). */
     sync() { emit(wanted()) },
+    /**
+     * Drops what this source last heard of `id`: the caller acted on it, or
+     * stopped watching it, so that state is superseded; its next change says.
+     * Without this, a session sent to again within the linger would replay
+     * its old idle state as a new finish.
+     */
+    forget(id) { conversations.delete(id); pending.delete(id) },
     retry: () => client.retry(),
     ready: () => ready,
     close() { closed = true; clearTimeout(timer); subscription?.cancel(); client.close() },
@@ -154,6 +164,8 @@ export function createLocalSessionSource({ summary, watch, interesting = () => n
     listen(listener) { listeners.add(listener); return () => listeners.delete(listener) },
     track(id) { tracked.set(id, (tracked.get(id) ?? 0) + 1); return () => { const count = tracked.get(id) - 1; if (count > 0) tracked.set(id, count); else tracked.delete(id) } },
     sync() { defer(() => emit(wanted())) },
+    // The local summary is read when it is emitted, so nothing is cached.
+    forget() {},
     retry() {},
     ready: () => true,
     close() { off() },
@@ -172,7 +184,7 @@ export function createLocalSessionSource({ summary, watch, interesting = () => n
  * - `deliverToBot({botID, text, deliveryID})` hands a wake-up to the bots runtime.
  */
 export function createSessionWatch({ db, sourceFor, caller, deliverToConversation, deliverToBot = null, log = () => {},
-  retryMilliseconds = 30_000, lingerMilliseconds = 60_000, maximumWakeUps = maximumWakeUpsPerRun }) {
+  retryMilliseconds = 30_000, lingerMilliseconds = 60_000, maximumWakeUps = maximumWakeUpsPerRun, maximumDeliveryAttempts = 20 }) {
   db.exec(`CREATE TABLE IF NOT EXISTS member_sessions (id TEXT PRIMARY KEY, caller TEXT NOT NULL, workspace TEXT NOT NULL, created_at TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS member_session_watch (id TEXT PRIMARY KEY, caller TEXT NOT NULL, workspace TEXT NOT NULL, workspace_name TEXT, title TEXT, harness TEXT,
       state TEXT NOT NULL, run_id TEXT, questions TEXT, updated_at TEXT NOT NULL);
@@ -180,7 +192,10 @@ export function createSessionWatch({ db, sourceFor, caller, deliverToConversatio
       title TEXT, workspace_name TEXT, harness TEXT, question TEXT, attempt INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL);
     CREATE INDEX IF NOT EXISTS member_session_wakeups_caller ON member_session_wakeups(caller);
     CREATE TABLE IF NOT EXISTS member_session_wakeup_counts (caller TEXT PRIMARY KEY, run_id TEXT, count INTEGER NOT NULL);`)
-  const sources = new Map(), held = new Map(), chains = new Map(), retries = new Map(), waits = new Map()
+  const sources = new Map(), held = new Map(), chains = new Map(), retries = new Map(), waits = new Map(), failures = new Map()
+  // A transient failure is retried after `retryMilliseconds`, doubling to 16 times that.
+  const backoff = attempt => retryMilliseconds * 2 ** Math.min(Math.max(0, attempt), 4)
+  let listening = 0
   const waitKey = (callerID, id) => callerID + '\0' + id
   // A caller waiting on a session learns its state from the wait itself.
   const awaited = wakeUp => waits.has(waitKey(wakeUp.caller, wakeUp.id))
@@ -189,6 +204,7 @@ export function createSessionWatch({ db, sourceFor, caller, deliverToConversatio
   const interestingIn = workspaceID => () => new Set(db.prepare('SELECT id FROM member_session_watch WHERE workspace=?').all(workspaceID).map(item => item.id))
   const callersWithWakeUps = new Set(db.prepare('SELECT DISTINCT caller FROM member_session_wakeups').all().map(item => item.caller))
   const dropWakeUp = id => db.prepare('DELETE FROM member_session_wakeups WHERE id=?').run(id)
+  const forgetIn = (workspaceID, id) => sources.get(workspaceID)?.source?.forget?.(id)
 
   // One source per workspace, shared by watched sessions and waits; it closes
   // a minute after the last one lets go.
@@ -225,10 +241,23 @@ export function createSessionWatch({ db, sourceFor, caller, deliverToConversatio
     for (const [workspaceID, value] of held) if (!wanted.has(workspaceID)) { held.delete(workspaceID); value.then(entry => entry?.release()) }
     for (const workspaceID of wanted) {
       if (held.has(workspaceID)) continue
-      const holding = hold(workspaceID).then(entry => { entry.source.sync(); return entry }, error => {
-        log(`Sessions on workspace ${workspaceID} cannot be watched yet: ${error.message}`)
-        // Try again later (the registry or the destination may not be ready).
-        const timer = setTimeout(() => { if (held.get(workspaceID) === holding) { held.delete(workspaceID); syncHolds() } }, retryMilliseconds)
+      const holding = hold(workspaceID).then(entry => { failures.delete(workspaceID); entry.source.sync(); return entry }, error => {
+        if (held.get(workspaceID) !== holding) return null
+        if (error.code === 'no_source') {
+          // The workspace is gone from the registry (or cannot stream from
+          // here): nothing will ever report these sessions, so stop watching them.
+          // Wake-ups already queued for them are still delivered.
+          log(`Sessions on workspace ${workspaceID} are no longer watched: ${error.message}`)
+          held.delete(workspaceID); failures.delete(workspaceID)
+          db.prepare('DELETE FROM member_session_watch WHERE workspace=?').run(workspaceID)
+          return null
+        }
+        // The registry or the destination may not be ready: try again later,
+        // less often each time, saying so once.
+        const attempt = failures.get(workspaceID) ?? 0
+        if (attempt === 0) log(`Sessions on workspace ${workspaceID} cannot be watched yet: ${error.message}`)
+        failures.set(workspaceID, attempt + 1)
+        const timer = setTimeout(() => { if (held.get(workspaceID) === holding) { held.delete(workspaceID); syncHolds() } }, backoff(attempt))
         timer.unref?.()
         return null
       })
@@ -248,7 +277,7 @@ export function createSessionWatch({ db, sourceFor, caller, deliverToConversatio
     if (closed) return
     const current = row(id)
     if (!current || current.workspace !== workspaceID) return
-    if (info.state === 'missing') { db.prepare('DELETE FROM member_session_watch WHERE id=?').run(id); dropWakeUp(id); syncHolds(); return }
+    if (info.state === 'missing') { db.prepare('DELETE FROM member_session_watch WHERE id=?').run(id); dropWakeUp(id); forgetIn(workspaceID, id); syncHolds(); return }
     const title = info.conversation?.title ?? current.title
     if (info.state === 'running') {
       const runID = info.conversation?.activeRunID ?? null
@@ -269,6 +298,7 @@ export function createSessionWatch({ db, sourceFor, caller, deliverToConversatio
     }
     // Idle: it finished; nothing more is watched until the caller makes it run again.
     db.prepare('DELETE FROM member_session_watch WHERE id=?').run(id)
+    forgetIn(workspaceID, id)
     addWakeUp({ ...current, title }, 'finished', 'finished:' + (current.run_id ?? 'unknown'))
     syncHolds()
   }
@@ -286,6 +316,7 @@ export function createSessionWatch({ db, sourceFor, caller, deliverToConversatio
     if (owner !== callerID) return
     if (created && isBot(callerID)) db.prepare('DELETE FROM member_session_wakeup_counts WHERE caller=?').run(callerID)
     dropWakeUp(id)
+    forgetIn(workspace.id, id)
     const current = row(id)
     if (state === 'idle') db.prepare('DELETE FROM member_session_watch WHERE id=?').run(id)
     else {
@@ -358,7 +389,15 @@ export function createSessionWatch({ db, sourceFor, caller, deliverToConversatio
     try {
       receipt = await deliverToConversation({ callerID, commandID: stableID([callerID, wakeUp.id, wakeUp.key, wakeUp.attempt].join(':')),
         text: textFor(wakeUp, used + 1 === maximumWakeUps), sessionID: wakeUp.id, title: wakeUp.title, harness: wakeUp.harness })
-    } catch (error) { receipt = { status: 'rejected', message: error.message } }
+    } catch (error) {
+      // A request the caller's workspace can never accept is not retried.
+      if ([400, 403, 404].includes(error.statusCode)) {
+        log(`A wake-up for ${callerID} was dropped: ${error.message}`)
+        dropWakeUp(wakeUp.id); forget(callerID); schedule(callerID)
+        return
+      }
+      receipt = { status: 'rejected', message: error.message }
+    }
     if (['accepted', 'completed'].includes(receipt?.status)) {
       count(callerID, receipt.runID ?? null, used + 1)
       db.prepare('DELETE FROM member_session_wakeups WHERE id=? AND key=?').run(wakeUp.id, wakeUp.key)
@@ -366,9 +405,15 @@ export function createSessionWatch({ db, sourceFor, caller, deliverToConversatio
       return
     }
     // Refused (it started running meanwhile, or the workspace is at its
-    // session limit): a new command next time, when it is idle or soon.
+    // session limit): a new command when it is next idle, or after a backoff.
+    // One refused every time is dropped after `maximumDeliveryAttempts`.
+    if (wakeUp.attempt + 1 >= maximumDeliveryAttempts) {
+      log(`A wake-up for ${callerID} was dropped after ${maximumDeliveryAttempts} refusals: ${receipt?.message ?? receipt?.status ?? 'no receipt'}`)
+      dropWakeUp(wakeUp.id); forget(callerID); schedule(callerID)
+      return
+    }
     db.prepare('UPDATE member_session_wakeups SET attempt=attempt+1 WHERE id=? AND key=?').run(wakeUp.id, wakeUp.key)
-    schedule(callerID, retryMilliseconds)
+    schedule(callerID, backoff(wakeUp.attempt))
   }
 
   /**
@@ -386,6 +431,9 @@ export function createSessionWatch({ db, sourceFor, caller, deliverToConversatio
       release = entry.release
       untrack = entry.source.track(id)
       off = entry.source.listen((changedID, info) => { if (changedID === id && (reaches(info.state, until) || info.state === 'missing')) { hint = true; wake?.() } })
+      listening++
+      const stop = off
+      off = () => { listening--; stop() }
     } catch (error) {
       // No stream to this workspace: the wait still answers, at the timeout.
       if (error.code !== 'no_source') log(`A wait on ${workspaceID} has no live changes: ${error.message}`)
@@ -425,7 +473,11 @@ export function createSessionWatch({ db, sourceFor, caller, deliverToConversatio
     callerChanged(callerID) { if (callersWithWakeUps.has(callerID)) schedule(callerID) },
     /** The member list changed: streams refused with `4401` may try again. */
     retry() { for (const entry of sources.values()) entry.source?.retry() },
-    pending: callerID => db.prepare('SELECT * FROM member_session_wakeups WHERE caller=? ORDER BY created_at, rowid').all(callerID),
+    /** A caller's pending wake-ups, or every caller's. */
+    pending: callerID => callerID === undefined ? db.prepare('SELECT * FROM member_session_wakeups ORDER BY created_at, rowid').all()
+      : db.prepare('SELECT * FROM member_session_wakeups WHERE caller=? ORDER BY created_at, rowid').all(callerID),
+    /** How many waits are following live changes now. */
+    waiting: () => listening,
     watched: () => db.prepare('SELECT * FROM member_session_watch ORDER BY updated_at').all(),
     close() {
       closed = true
