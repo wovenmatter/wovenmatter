@@ -47,7 +47,8 @@ struct RemoteChatMoveDeferredError: LocalizedError, Equatable {
     static func classify(_ error: any Error, workspace: String) -> any Error {
         if error is LegacyRemoteChatError || error is RemoteChatMoveDeferredError || error is CancellationError { return error }
         let message = (error as? LibraryAPIError)?.message ?? error.localizedDescription
-        var busy = message.localizedCaseInsensitiveContains("not idle")
+        // The host's refusals while the session is still working there.
+        var busy = message.localizedCaseInsensitiveContains("not idle") || message.localizedCaseInsensitiveContains("still running")
         guard let refusal = error as? LibraryAPIError else {
             // Network failures, the request timeout and unreadable replies are not the host's decision.
             return Self(workspace: workspace, reason: message, busy: busy)

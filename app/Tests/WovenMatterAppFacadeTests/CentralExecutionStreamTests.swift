@@ -375,6 +375,25 @@ struct CentralExecutionStreamTests {
         #expect(client.endedLiveView(id) == nil)
     }
 
+    /// A `workspace` subscription the server ends for good is not asked for
+    /// again on that connection (no loop), and the next connection asks for it.
+    @Test func aWorkspaceSubscriptionEndedForGoodIsAskedForOnTheNextConnection() async throws {
+        let setup = try await setup(seedingOwner: true); defer { setup.fixture.remove() }
+        let (client, workspace) = (setup.client, setup.workspace)
+        await client.connectRegisteredWorkspaces()
+        let socket = try await open(setup)
+        try await until("workspace subscribed") { await socket.subscriptions.contains { $0.stream == "workspace" } }
+        let first = try #require(await socket.subscriptions.first { $0.stream == "workspace" })
+        await socket.push(.end(.init(id: first.id, error: .init(code: "invalid", message: "Not served here."))))
+        try await until("the end is reported") { client.errors[workspace.id] == "Not served here." }
+        try await Task.sleep(for: .milliseconds(300))
+        #expect(await socket.subscriptions.filter { $0.stream == "workspace" }.count == 1, "subscribed again on the same connection")
+        await socket.serverClose(code: 1006)
+        let second = try await open(setup, socket: 1)
+        try await until("workspace subscribed again") { await second.subscriptions.contains { $0.stream == "workspace" } }
+        #expect(await second.subscriptions.filter { $0.stream == "workspace" }.count == 1)
+    }
+
     @Test func aSnapshotThatArrivesBeforeTheSubscribeReturnsIsKept() async throws {
         let setup = try await setup(seedingOwner: true); defer { setup.fixture.remove() }
         let (client, id) = (setup.client, setup.conversationID)

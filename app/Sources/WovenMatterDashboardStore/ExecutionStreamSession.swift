@@ -303,6 +303,10 @@ actor StreamSession {
     /// Conversation: the settings were last sent, and whether to read them again.
     var session: SessionSettings?
     var sessionDirty = true
+    /// Settings reads that failed in a row. Some chats have none to read (a
+    /// relayed chat before its owner sent them), so retries stop after a few
+    /// until the next change marks them dirty again.
+    var sessionFailures = 0
     var owner: StreamOwner?
     /// Workspace: the library cursor last sent, and the newest one announced.
     var library: Int64?
@@ -477,11 +481,21 @@ actor StreamSession {
     markDirty(subscription)
   }
 
+  /// Failed settings reads in a row that are retried before waiting for a change.
+  static let maximumSessionRetries = 5
+
   static func subscriptionError(_ error: any Error) -> StreamError {
     if let error = error as? LibraryAPIError, error.code == "wrong_workspace" {
       return .init(.notFound, "This conversation is not running on this Mac.")
     }
-    return streamError(error)
+    let mapped = streamError(error)
+    // A library error that is not a refusal (a busy or failing store) may
+    // pass: the subscriber subscribes again after its backoff, as on Linux.
+    let refusals: Set<String> = ["unauthorized", "not_found", "invalid", "conflict", "resync"]
+    if !mapped.retryable, error is LibraryAPIError, !refusals.contains(mapped.code) {
+      return .init(code: StreamProtocol.ErrorCode.unavailable.rawValue, message: mapped.message, retryable: true)
+    }
+    return mapped
   }
 
   private func refreshWorkspace(_ subscription: Subscription) async throws {
@@ -553,8 +567,11 @@ actor StreamSession {
     subscription.sessionDirty = false
     var session: SessionSettings?, complete = true
     if readsSession {
-      do { session = try await source.localSessionSettings(conversationID: conversationID) }
-      catch { subscription.sessionDirty = true; complete = false }
+      do { session = try await source.localSessionSettings(conversationID: conversationID); subscription.sessionFailures = 0 }
+      catch {
+        subscription.sessionFailures += 1
+        if subscription.sessionFailures < Self.maximumSessionRetries { subscription.sessionDirty = true; complete = false }
+      }
     }
     let relay = await source.conversationRelay(conversationID: conversationID)
     try Task.checkCancellation()

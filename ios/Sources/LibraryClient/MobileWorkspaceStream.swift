@@ -166,9 +166,11 @@ public actor MobileWorkspaceStream {
       await update(.state(.waiting(.refused(status: 200, code: "wrong_workspace", message: "It answered as another workspace."))))
       return
     }
+    // Reported before subscribing again, so an end that answers the new
+    // subscription is reported after it, and the fallback reads resume.
+    await update(.state(state))
     // A new connection asks again for a `workspace` the server ended on the last one.
     if case .open = state, workspaceEnded { await subscribeWorkspace() }
-    await update(.state(state))
     guard case .open = state else { return }
     // Commands whose reply was lost are asked about, never resent. Not from
     // a subscription handler: the replies arrive on this same socket.

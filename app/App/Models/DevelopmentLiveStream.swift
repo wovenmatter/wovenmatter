@@ -79,11 +79,22 @@ actor DevelopmentLiveStream {
     }
 
     private func subscribeWorkspace() async {
-        guard workspaceSubscription == nil else { return }
-        workspaceSubscription = await connection.subscribe(.workspace) { [weak self] event in
+        // `start()` and a new `hello` can both ask; one subscription is sent.
+        guard workspaceSubscription == nil, !subscribingWorkspace else { return }
+        subscribingWorkspace = true
+        defer { subscribingWorkspace = false }
+        let ends = workspaceEnds
+        let subscription = await connection.subscribe(.workspace) { [weak self] event in
             await self?.workspaceEvent(event) ?? .accepted
         }
+        // Ended while it was being sent: the connection already dropped it,
+        // and the next `hello` subscribes again.
+        guard workspaceEnds == ends else { return }
+        workspaceSubscription = subscription
     }
+    private var subscribingWorkspace = false
+    /// Terminal ends of the `workspace` subscription so far.
+    private var workspaceEnds = 0
 
     /// Ends the socket (1000) and every subscription.
     func close() async {
@@ -133,7 +144,7 @@ actor DevelopmentLiveStream {
     private func workspaceEvent(_ event: StreamSubscriptionEvent) async -> StreamItemDisposition {
         guard case .item(let item) = event else {
             // `.ended` is final (the connection itself resubscribes a `resync`).
-            if case .ended(let error) = event { workspaceSubscription = nil; await update(.workspaceEnded(error)) }
+            if case .ended(let error) = event { workspaceSubscription = nil; workspaceEnds += 1; await update(.workspaceEnded(error)) }
             return .accepted
         }
         switch item.payload {

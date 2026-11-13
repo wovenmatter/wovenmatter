@@ -1352,15 +1352,17 @@ normal, `1001` server stopping or sleeping, `1009` client frame over 1 MiB,
   the caller's latest run a wake-up did not start, and the tenth says it is the
   last. A refused delivery is tried again as a new attempt at the caller's next
   idle moment or after 30 s; on a Mac that wait doubles with each refusal in a
-  row, to 4 minutes, and a delivery cancelled because the caller may no longer
-  receive it (it lost the Sessions tool) is recorded once and not tried again.
+  row, to 4 minutes, a wake-up refused 20 times in a row is dropped, and a
+  delivery cancelled because the caller may no longer receive it (it lost the
+  Sessions tool) is recorded once and not tried again.
   Bots get theirs through the bots runtime, and a bot's count restarts
   when it creates a session. IDs derive from caller, session and state, so each
   is delivered once; watched sessions and pending wake-ups survive a restart
   (Linux: `remote/src/session-watch.mjs`). On Linux a wake-up refused every
   time backs off and is dropped after 20 attempts (one refused as invalid or
   not found at once), and sessions on a workspace gone from the registry stop
-  being watched; one not reachable yet is retried with a backoff.
+  being watched; one not reachable yet, or listed without an endpoint, is
+  retried with a backoff.
 - Behind both, the caller's server holds one stream to each destination server
   while it watches or waits on a session there, subscribed to its `workspace`
   stream and filtered on the caller's side to those sessions; its own
@@ -1392,8 +1394,8 @@ no stdio relay.
   v1/execution/attachments/<sha256>?name=&mimeType=`, 25 MiB each, stored under
   `.wovenmatter/attachments/<sha256>/<name>`), then named in `send` or `steer`
   `attachments` (8 files, 50 MiB) and checked again before delivery. The
-  store holds at most 2,000 files and 4 GiB; an upload past that is refused
-  with `507` until files are removed from it, and a digest folder that is not
+  store has no lifetime cap; an upload that would leave the host with less
+  than 2 GiB of free disk space is refused with `507`, and a digest folder that is not
   a real directory inside the store is refused with `403`. Images and
   UTF-8 text are inlined up to 5 MiB per message; other files, and anything
   past that, are linked and listed by path. `promptContext` (visible notes and

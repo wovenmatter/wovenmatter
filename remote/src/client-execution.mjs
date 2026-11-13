@@ -888,7 +888,9 @@ export function createClientExecution({ directory, runtime, kind = 'linux', name
       if(!members)return null
       // A list that cannot be read is retried; one without the workspace means it was removed.
       const workspace=(await members.transport.workspaces()).find(item=>item.id===workspaceID)
-      if(!workspace?.endpoint||workspace.kind==='ios'||workspace.deleted)return null
+      if(!workspace||workspace.kind==='ios'||workspace.deleted)return null
+      // Listed but not published right now: retried with a backoff, not dropped.
+      if(!workspace.endpoint)throw new Error(`${workspace.name??workspaceID} has no endpoint yet.`)
       return createRemoteSessionSource({endpoint:workspace.endpoint,sign:url=>members.transport.signedHeaders(url,{audience:workspace}),interesting,
         expected:{workspaceID:workspace.id,libraryID:workspace.libraryID??null},
         log:message=>process.stderr.write(message+'\n'),...(sessionWatchOptions.stream??{})})

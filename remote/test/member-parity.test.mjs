@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync, symlinkSync, realpathSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync, symlinkSync, realpathSync, readdirSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { spawn } from 'node:child_process'
 import { join } from 'node:path'
@@ -176,29 +176,41 @@ test('uploaded attachments reach the harness with the message, verified and list
   assert.equal(refused.code, 'attachment_unavailable')
 })
 
-test('the attachment store never writes through a linked digest folder and refuses uploads past its limits', async t => {
+test('the attachment store never writes through a linked digest folder and keeps the host disk from filling', async t => {
   const workspace = temporary(t, 'wm-attachment-store-'), outside = temporary(t, 'wm-attachment-outside-')
   const directory = join(workspace, '.wovenmatter/attachments')
-  const store = createExecutionAttachments({ directory, storeLimits: { files: 2, bytes: 1024 } })
-  const upload = (text, name = 'note.txt') => { const bytes = Buffer.from(text); return store.store({ id: sha(bytes), name, mimeType: 'text/plain', bytes }) }
+  // A disk with 2 bytes to spare above the minimum; each stored file uses its size.
+  let free = 1_000_002
+  const store = createExecutionAttachments({ directory, storeLimits: { minimumFreeBytes: 1_000_000 }, freeBytes: async () => free })
+  const upload = async (text, name = 'note.txt') => {
+    const bytes = Buffer.from(text), stored = await store.store({ id: sha(bytes), name, mimeType: 'text/plain', bytes })
+    return stored
+  }
   // A digest folder that is a link out of the store is refused, and nothing lands outside.
   const linked = Buffer.from('through a link')
   mkdirSync(directory, { recursive: true }); symlinkSync(outside, join(directory, sha(linked)))
   await assert.rejects(store.store({ id: sha(linked), name: 'note.txt', mimeType: 'text/plain', bytes: linked }), { statusCode: 403 })
   assert.equal(existsSync(join(outside, 'note.txt')), false)
   rmSync(join(directory, sha(linked)))
-  // Two files fit; the third is refused with a clear reason, and storing one again is not a new file.
+  // An upload that would leave less than the minimum free is refused with a clear reason.
+  await assert.rejects(upload('three'), error => error.statusCode === 507 && /too little free disk space/.test(error.message))
+  free = 10_000_000
   await upload('one'); await upload('two')
+  // Storing one again needs no space and is never refused.
+  free = 0
   assert.equal((await upload('one')).byteCount, 3)
-  await assert.rejects(upload('three'), error => error.statusCode === 507 && /attachment store is full \(2 files/.test(error.message))
-  // So is one past the byte limit, even when it is the first file.
-  const big = createExecutionAttachments({ directory: join(workspace, 'big'), storeLimits: { files: 10, bytes: 8 } })
-  const bytes = Buffer.from('more than eight bytes')
-  await assert.rejects(big.store({ id: sha(bytes), name: 'big.txt', bytes }), { statusCode: 507 })
-  // Uploads at once cannot both pass the limit.
-  const racing = createExecutionAttachments({ directory: join(workspace, 'racing'), storeLimits: { files: 1, bytes: 1024 } })
+  // There is no lifetime cap: with room on the disk, many files are stored.
+  free = 10_000_000
+  for (let index = 0; index < 50; index++) await upload('file ' + index)
+  // Uploads at once are checked one after another against what is left.
+  // The disk's free space is 1,000,002 bytes less what the store holds, so two 1-byte files fit.
+  const racingDirectory = join(workspace, 'racing')
+  const held = () => existsSync(racingDirectory) ? readdirSync(racingDirectory, { recursive: true, withFileTypes: true })
+    .filter(entry => entry.isFile()).reduce((sum, entry) => sum + statSync(join(entry.parentPath, entry.name)).size, 0) : 0
+  const racing = createExecutionAttachments({ directory: racingDirectory, storeLimits: { minimumFreeBytes: 1_000_000 },
+    freeBytes: async () => 1_000_002 - held() })
   const results = await Promise.allSettled(['a', 'b', 'c'].map(text => { const value = Buffer.from(text); return racing.store({ id: sha(value), name: 'x.txt', bytes: value }) }))
-  assert.equal(results.filter(result => result.status === 'fulfilled').length, 1)
+  assert.equal(results.filter(result => result.status === 'fulfilled').length, 2)
 })
 
 test('woven_context returns the note the sending device showed for that input', async t => {

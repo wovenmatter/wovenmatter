@@ -539,14 +539,19 @@ public actor StreamConnection {
 
   /// Sends a subscription that is not on the wire again: now (`immediately`
   /// and the first retry in a row), or after the backoff for this many
-  /// retries. Retries further apart than `stableInterval` count from the
-  /// first again. A reconnect meanwhile sends it with every other subscription.
+  /// retries. A subscription that lasted `stableInterval` after its last
+  /// retry was sent counts from the first again; the time is measured from
+  /// the send, not from when the retry was scheduled, so a capped 30 s wait
+  /// never resets the count by itself. A reconnect meanwhile sends it with
+  /// every other subscription.
   private func retrySubscription(_ key: Int, immediately: Bool, generation current: Int) async {
     guard var subscription = subscriptions[key], subscription.wireID == nil else { return }
     let now = ContinuousClock.now
-    if let last = subscription.lastRetry, now - last > configuration.stableInterval { subscription.retries = 0 }
+    if let sent = subscription.lastRetry, now - sent > configuration.stableInterval { subscription.retries = 0 }
     let count = subscription.retries
-    subscription.retries += 1; subscription.lastRetry = now
+    let delay: Duration = immediately && count == 0 ? .zero
+      : Self.retryDelay(attempt: immediately ? count - 1 : count, random: configuration.random())
+    subscription.retries += 1; subscription.lastRetry = now + delay
     subscription.retryTask?.cancel(); subscription.retryTask = nil
     subscriptions[key] = subscription
     if immediately && count == 0 {
@@ -554,7 +559,6 @@ public actor StreamConnection {
       await sendSubscription(key, socket: socket, generation: current)
       return
     }
-    let delay = Self.retryDelay(attempt: immediately ? count - 1 : count, random: configuration.random())
     let sleep = configuration.retrySleep
     subscriptions[key]?.retryTask = Task {
       do { try await sleep(delay) } catch { return }

@@ -323,10 +323,19 @@ import WovenMatterShared
       // or after a wait that doubles with each refusal in a row.
       guard var current = wakeUps[wakeUp.id], current.key == wakeUp.key else { return }
       current.attempt += 1
+      // As on Linux, a wake-up refused this many times in a row is dropped.
+      guard current.attempt < Self.maximumDeliveryAttempts else {
+        hooks.log("A wake-up for session \(callerID) was refused \(Self.maximumDeliveryAttempts) times and is dropped.")
+        await dropWakeUp(wakeUp.id, key: wakeUp.key)
+        return
+      }
       wakeUps[wakeUp.id] = current; retryAt[wakeUp.id] = now + retryDelay(attempt: current.attempt)
       try? await database.saveSessionWakeUp(current)
     }
   }
+
+  /// Refusals in a row after which a wake-up is dropped (Linux: `maximumDeliveryAttempts`).
+  nonisolated static let maximumDeliveryAttempts = 20
 
   /// `retryInterval` after the first refusal, doubling to eight times it.
   func retryDelay(attempt: Int) -> Duration {

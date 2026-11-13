@@ -1,6 +1,6 @@
 import { createHash, randomBytes } from 'node:crypto'
 import { constants, existsSync, realpathSync } from 'node:fs'
-import { lstat, mkdir, open, readdir, readFile, realpath, rename, rm } from 'node:fs/promises'
+import { lstat, mkdir, open, readdir, readFile, realpath, rename, rm, statfs } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { basename, extname, isAbsolute, join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -10,9 +10,11 @@ const sha256 = bytes => createHash('sha256').update(bytes).digest('hex')
 
 // The Mac's message attachment limits (`AgentMessageAttachmentLimits`).
 export const attachmentLimits = Object.freeze({ count: 8, fileBytes: 25 * 1024 * 1024, totalBytes: 50 * 1024 * 1024 })
-// What one workspace's attachment store holds at most: uploads past it are
-// refused until files are removed from it.
-export const attachmentStoreLimits = Object.freeze({ files: 2_000, bytes: 4 * 1024 * 1024 * 1024 })
+// The free space an upload leaves on the host's disk at least. The store has
+// no lifetime cap (nothing prunes it, and messages keep naming their files);
+// this only keeps members' uploads from filling the disk the host runs on.
+export const attachmentStoreLimits = Object.freeze({ minimumFreeBytes: 2 * 1024 * 1024 * 1024 })
+const availableBytes = async directory => { const info = await statfs(directory); return Number(info.bavail) * Number(info.bsize) }
 
 // The original name with path separators and control characters replaced, so
 // agents see the real extension.
@@ -27,7 +29,7 @@ const mimeType = value => typeof value === 'string' && /^[a-z0-9][a-z0-9!#$&^_.+
 // staging put them, so a harness finds them in its working tree. A send names
 // them by digest and name; each is verified again before it is delivered,
 // because an agent may have edited a staged copy.
-export function createExecutionAttachments({ directory, storeLimits = attachmentStoreLimits }) {
+export function createExecutionAttachments({ directory, storeLimits = attachmentStoreLimits, freeBytes = availableBytes }) {
   const pathFor = (id, name) => {
     if (typeof id !== 'string' || !/^[0-9a-f]{64}$/.test(id)) throw fail(400, 'An attachment is named by its SHA-256 digest.')
     return join(directory, id, attachmentFileName(name))
@@ -47,22 +49,7 @@ export function createExecutionAttachments({ directory, storeLimits = attachment
     if (!info.isDirectory() || await realpath(folder) !== join(root, id)) throw fail(403, 'The staged attachment folder is outside the attachment store.')
     return folder
   }
-  // Regular files in the store, and their bytes (partial uploads included).
-  async function usage() {
-    let files = 0, bytes = 0, folders = []
-    try { folders = await readdir(directory, { withFileTypes: true }) } catch { return { files, bytes } }
-    for (const folder of folders) {
-      if (!folder.isDirectory()) continue
-      let entries = []
-      try { entries = await readdir(join(directory, folder.name), { withFileTypes: true }) } catch { continue }
-      for (const entry of entries) {
-        if (!entry.isFile()) continue
-        try { bytes += (await lstat(join(directory, folder.name, entry.name))).size; files++ } catch {}
-      }
-    }
-    return { files, bytes }
-  }
-  // Uploads are stored one at a time, so two cannot both pass the store limit.
+  // Uploads are stored one at a time, so two cannot both pass the free-space check.
   let storing = Promise.resolve()
   function store(input) {
     const result = storing.then(() => storeOne(input))
@@ -76,9 +63,9 @@ export function createExecutionAttachments({ directory, storeLimits = attachment
     if (sha256(bytes) !== id) throw fail(400, 'The attachment does not match its digest.')
     const folder = await folderFor(id)
     if (!await matches(path, bytes.length, id)) {
-      const used = await usage()
-      if (used.files + 1 > storeLimits.files || used.bytes + bytes.length > storeLimits.bytes) {
-        throw fail(507, `This workspace's attachment store is full (${used.files} files, ${Math.round(used.bytes / 1024 / 1024)} MB). Remove files from .wovenmatter/attachments on the host before uploading more.`)
+      const free = await freeBytes(directory)
+      if (free - bytes.length < storeLimits.minimumFreeBytes) {
+        throw fail(507, `The host has too little free disk space for this attachment (${Math.round(free / 1024 / 1024)} MB free). Free up space on it and try again.`)
       }
       const temporary = join(folder, '.part.' + randomBytes(6).toString('hex'))
       try {

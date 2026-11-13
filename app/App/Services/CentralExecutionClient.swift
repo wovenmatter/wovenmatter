@@ -497,6 +497,10 @@ final class LiveWorkspace {
     /// Chats whose subscription the owner ended on this connection, with why.
     /// They are not subscribed again until the next `hello`.
     var ended: [String: String] = [:]
+    /// The `workspace` subscription is being sent.
+    var subscribingWorkspace = false
+    /// Terminal ends of the `workspace` subscription so far.
+    var workspaceEnds = 0
     var synchronizedConversations: Set<String> = []
     var state = StreamConnection.State.idle
     var stateTask: Task<Void, Never>?
@@ -509,7 +513,8 @@ final class LiveWorkspace {
     /// Returns once the open chat's first snapshot arrived, the connection
     /// failed, or `limit` passed.
     func synchronized(_ conversationID: String, within limit: Duration) async {
-        guard conversations[conversationID] != nil, ended[conversationID] == nil,
+        // A chat still being subscribed waits too: its snapshot may be on the way.
+        guard conversations[conversationID] != nil || opening.contains(conversationID), ended[conversationID] == nil,
               !synchronizedConversations.contains(conversationID) else { return }
         switch state {
         case .waiting, .memberRemoved: return
@@ -574,12 +579,27 @@ extension CentralExecutionClient {
         stream.stateTask = Task { [weak self] in
             for await state in connection.states { self?.streamState(state, workspaceID: id) }
         }
-        stream.subscription = await connection.subscribe(.workspace, params: .init()) { [weak self] event in
-            await self?.workspaceEvent(event, workspaceID: id) ?? .accepted
-        }
+        await subscribeWorkspace(stream)
         stream.state = .connecting
         await connection.start()
         return stream
+    }
+
+    /// Subscribes the workspace's `workspace` stream unless it is subscribed
+    /// or being subscribed. Called when the stream is made, and on each new
+    /// connection after the server ended the subscription for good.
+    fileprivate func subscribeWorkspace(_ stream: LiveWorkspace) async {
+        guard stream.subscription == nil, !stream.subscribingWorkspace else { return }
+        stream.subscribingWorkspace = true
+        defer { stream.subscribingWorkspace = false }
+        let id = stream.workspace.id, ends = stream.workspaceEnds
+        let subscription = await stream.connection.subscribe(.workspace, params: .init()) { [weak self] event in
+            await self?.workspaceEvent(event, workspaceID: id) ?? .accepted
+        }
+        // Ended while it was being sent: already dropped; the next connection asks again.
+        guard stream.workspaceEnds == ends else { return }
+        if live[id] === stream { stream.subscription = subscription }
+        else { await stream.connection.unsubscribe(subscription) }
     }
 
     fileprivate func closeStream(_ id: String) async {
@@ -699,6 +719,8 @@ extension CentralExecutionClient {
             onlineWorkspaces.insert(id); errors.removeValue(forKey: id)
             // A new connection: chats the owner ended on the last one are read again, once.
             changed.formUnion(stream.ended.keys); stream.ended = [:]
+            // So is the workspace subscription, if the server ended it for good.
+            if stream.subscription == nil { Task { await self.subscribeWorkspace(stream) } }
             // Commands whose reply was lost are resolved, never resent.
             let connection = stream.connection, journal = commandJournal
             Task { _ = try? await StreamCommands.resolveUnknown(workspaceID: id, journal: journal, connection: connection) }
@@ -729,7 +751,11 @@ extension CentralExecutionClient {
     private func workspaceEvent(_ event: StreamSubscriptionEvent, workspaceID id: String) async -> StreamItemDisposition {
         guard let stream = live[id] else { return .accepted }
         guard case .item(let item) = event else {
-            if case .ended(let error) = event { errors[id] = error?.message ?? Self.streamProblem(nil, workspace: stream.workspace) }
+            if case .ended(let error) = event {
+                // For good on this connection: the next one subscribes again.
+                stream.subscription = nil; stream.workspaceEnds += 1
+                errors[id] = error?.message ?? Self.streamProblem(nil, workspace: stream.workspace)
+            }
             return .accepted
         }
         switch item.payload {
