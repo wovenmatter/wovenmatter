@@ -1,7 +1,7 @@
 # Woven Matter
 
 Woven Matter is one workspace for all of your coding agents. Run Pi Durable,
-Codex, Claude Code, Grok Build, and OpenCode side by side in a Mac app.
+Codex, Claude Code, Grok Build, and OpenCode side by side in a single Mac app.
 
 Any Mac or Linux machine on your Tailscale network (tailnet) can be a Woven
 Matter host: a host for your agents, the host for your bots, or both. All of
