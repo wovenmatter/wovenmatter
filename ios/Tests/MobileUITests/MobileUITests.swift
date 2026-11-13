@@ -1,4 +1,5 @@
 import XCTest
+import UIKit
 
 final class MobileUITests: XCTestCase {
   @MainActor func launch(tab: String = "Folders", scenario: String? = nil) -> XCUIApplication {

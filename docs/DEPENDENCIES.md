@@ -94,7 +94,7 @@ Maintenance checks both for newer releases; recorded does not mean frozen.
   the same curl and base-package refresh before installing its exact resolved
   V2 package.
   They use GitHub CLI's official signed stable APT
-  repository (tested minimum 2.103.3), with the published keyring SHA-256 checked
+  repository (tested minimum 2.104.0), with the published keyring SHA-256 checked
   before trusting it. Debian's older CLI retains CVE-2026-48501. Maintenance
   reviews both the floor and signing-key record against upstream.
   OpenSSH clients are built from the current 10.6p2 source in a separate image
@@ -145,6 +145,13 @@ Maintenance checks both for newer releases; recorded does not mean frozen.
   construction, then repairs its `native/runtime/node_modules` tree and starts
   the prepared native executable directly. The image verifies the
   replacement loads, then runs the unchanged provider-free V2 behavior suite.
+  Executor archives also retain ws 8.21.0, which lacks the automatic-pong
+  queue bound. The Linux overlay installs locked ws 8.23.0; Mac candidates copy
+  the helper's locked ws package before promotion, retain its registry integrity
+  and file digest in provenance, and refuse altered or unrepaired generations.
+  The original archive, executable and Executor manifest remain intact;
+  only the separately loaded transport package is replaced. Candidate-failure,
+  tamper-refusal and real provider-free runtime tests validate this repair.
   Executor also selects only the ncurses, acl, and util-linux source repairs it
   needs; do not install the workspace browser-library repairs into that smaller
   image without a runtime dependency.
@@ -204,7 +211,7 @@ Maintenance checks both for newer releases; recorded does not mean frozen.
   0.x minors, and refreshes every record and notice together. Upstream currently
   marks even its numbered driver releases as GitHub prereleases to keep the
   monorepo Latest pointer separate. Its release notes identify plain SemVer
-  driver releases as stable; the current selection is 0.47.19. The driver refuses input to macOS security
+  driver releases as stable; the current selection is 0.47.24. The driver refuses input to macOS security
   and consent prompts.
   The driver is spawned directly by the signed GUI, without a Node SDK or
   additional native libraries. Woven negotiates MCP 2025-06-18 and refuses an
@@ -250,14 +257,18 @@ Maintenance checks both for newer releases; recorded does not mean frozen.
   Pi refresh and remove it once Pi's own requirement excludes the affected
   releases. Provider-free HTTP security fixtures and the coding-agent suites
   validate the overridden Node dependency; it is not part of the mobile bundle.
+  ws 8.23.0 bounds automatic pong queues when a peer floods ping frames but
+  stops reading responses. A provider-free loopback regression uses the default
+  transport limits, verifies that the flood connection closes, and then checks
+  that a healthy peer still receives pongs.
   Chord 1.5.2 declares an optional exact ws 8.21.0 peer, which conflicts with
-  the app's current ws 8.22.2 transport. A scoped `$ws` override shares the
+  the app's current ws 8.23.0 transport. A scoped `$ws` override shares the
   app's tested current transport without editing vendor manifests or ignoring
   peer validation. Real local WebSocket streaming/cancellation fixtures and the
   Chord/Durable suites validate this selection; review it on each Chord refresh.
   Pi AI 1.5.2 also pins older provider clients. Consumer-scoped minimum-only
-  overrides select the tested OpenAI 7.55.0, Anthropic 1.8.0, Google GenAI 3.2.0,
-  Bedrock Runtime and token providers 3.1167.0, and Smithy Node HTTP handler
+  overrides select the tested OpenAI 7.56.0, Anthropic 1.8.0, Google GenAI 3.3.0,
+  Bedrock Runtime and token providers 3.1168.0, and Smithy Node HTTP handler
   4.14.2 releases without
   changing vendor manifests. Keeping these clients current is required for
   provider API and transport compatibility, including Anthropic's 2026-10-21
@@ -348,12 +359,12 @@ an older configured channel. OpenCode and Executor retain the documented v2 API 
 maintenance must review a newer stable API major and implement its migration.
 
 `harnesses/catalog.json` records tested connector and engine minimums separately:
-Codex ACP 2.6.0 with Codex 0.167.2, and Claude ACP 0.106.0 with Claude SDK 0.3.322
-(native Claude Code 2.1.322). The standalone Codex and Claude sign-in CLIs use their
+Codex ACP 2.6.0 with Codex 0.167.2, and Claude ACP 0.106.0 with Claude SDK 0.3.323
+(native Claude Code 2.1.323). The standalone Codex and Claude sign-in CLIs use their
 official current stable release channels. Codex ACP's `^0.166.0` engine range
 otherwise keeps its chat engine behind; its `~2.4.0` ACP TypeScript SDK range
 also excludes the current 2.6.0. Claude ACP 0.106.0 pins SDK 0.3.322;
-the consumer-scoped override selects SDK 0.3.322 independently so engine-only updates
+the consumer-scoped override selects SDK 0.3.323 independently so engine-only updates
 remain eligible when the connector's pin lags. Transcript-write loss
 invalidates the native resume marker and refuses tool dispatch/continuation commits;
 config-only write loss leaves a valid response intact. Provider-free persistence

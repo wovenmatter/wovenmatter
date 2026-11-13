@@ -8,21 +8,6 @@ enum WorkspaceListMode: String, CaseIterable {
     case notes
 }
 
-enum CompactDrawer: Equatable {
-    case none
-    case left
-    case right
-}
-
-extension DashboardSidebarSide {
-    var compactDrawer: CompactDrawer {
-        switch self {
-        case .left: .left
-        case .right: .right
-        }
-    }
-}
-
 enum CompactWorkspacePane: Equatable {
     case chat
     case note

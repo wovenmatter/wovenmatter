@@ -401,6 +401,9 @@ public actor LibraryPeerSync {
   public func synchronize(with member: LibraryMember, includingFiles forceFiles: Bool = false) async {
     var received = false
     do {
+      // The first exchange after pairing a large library starts once its
+      // recovery backup is written; the peer's reply would be refused before.
+      _ = try await database.peerImportsReady()
       let own = directory.identity.deviceID
       for _ in 0..<16 {
         guard await directory.member(member.deviceID) != nil else { return }
@@ -572,6 +575,14 @@ public actor LibraryPeerSync {
           return try .json(LibraryPeerUpdateRequired(code: "update_required",
             message: "Update Woven Matter on every device: this device runs \(configuration.version), \(resolved.name) runs \(exchange.version).",
             version: configuration.version, schema: schema), status: 409)
+        }
+        // While this library's recovery backup is still being written, the
+        // caller retries later; this device's own exchange with it follows
+        // the backup, so neither side waits for the caller's backoff.
+        guard try await database.peerImportsReady(timeout: 5) else {
+          scheduleSync(member.deviceID, reason: "backup")
+          let refusal = WorkspaceDatabase.peerBackupPending
+          return .error(refusal.code, refusal.message, status: 503)
         }
         if let data = exchange.attachment, let attachments { try await attachments.incoming(data, member.deviceID) }
         try await database.receivePairedLibrary(exchange.page, from: member.deviceID, sender: try await sender(resolved))

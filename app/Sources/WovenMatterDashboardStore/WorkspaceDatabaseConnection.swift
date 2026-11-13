@@ -69,11 +69,6 @@ final class WorkspaceDatabaseConnection {
     }
   }
 
-  func backupPairedLibrary(to url: URL) throws {
-    try Self.copyMainDatabase(from: connection, to: url, openFailure: "Could not create the local recovery backup.",
-      copyFailure: "Could not snapshot the local library.", incompleteFailure: "The local recovery backup did not complete.")
-  }
-
   /// Writes a consistent copy of `source`'s main database, including committed
   /// WAL content, to a new rollback-journal file at `url` and verifies it.
   static func copyMainDatabase(from source: OpaquePointer?, to url: URL,
