@@ -209,9 +209,15 @@ import WovenMatterShared
     await dropWakeUp(id)
     if state == "idle" { await unwatch(id); return }
     let previous = watches[id]
-    await save(.init(id: id, callerID: callerID, workspaceID: workspaceID, workspaceName: workspaceName ?? previous?.workspaceName,
-                     title: title ?? previous?.title, harness: harness ?? previous?.harness, state: state,
-                     runID: runID ?? previous?.runID, questions: state == "needsInput" ? Self.pendingKey(pendingIDs) : nil))
+    let record = SessionWatchRecord(id: id, callerID: callerID, workspaceID: workspaceID, workspaceName: workspaceName ?? previous?.workspaceName,
+                                    title: title ?? previous?.title, harness: harness ?? previous?.harness, state: state,
+                                    runID: runID ?? previous?.runID, questions: state == "needsInput" ? Self.pendingKey(pendingIDs) : nil)
+    await save(record)
+    // Its stream may already have said more, in items not kept for it (it
+    // was not watched yet) or before what the caller saw: that counts too.
+    if let snapshot = projections[workspaceID]?.after(id, runID: record.runID, observed: state) {
+      await changed(workspaceID: workspaceID, id: id, snapshot)
+    }
   }
 
   private func save(_ record: SessionWatchRecord) async {
@@ -299,17 +305,32 @@ import WovenMatterShared
         for pending in pending(callerID: callerID) { await dropWakeUp(pending.id) }
         return
       }
-      if await hooks.deliverToConversation(delivery(wakeUp, last: used + 1 == maximumWakeUps, attempt: true)) {
+      let attempt = delivery(wakeUp, last: used + 1 == maximumWakeUps, attempt: true)
+      if await hooks.deliverToConversation(attempt) {
         await dropWakeUp(wakeUp.id, key: wakeUp.key)
         return
       }
-      // Refused (it started running, or the Mac is at its session limit): a
-      // new attempt, and a new delivery ID, when it is idle again or soon.
+      // The caller may no longer receive it at all (it lost the Sessions
+      // tool): its delivery was cancelled without a reason to try later.
+      // That cancelled delivery is the record; no new attempt is made.
+      if let refused = try? await database.toolDelivery(id: attempt.id), refused.status == "cancelled", refused.failureCode == nil {
+        hooks.log("A wake-up for session \(callerID) was refused: it can no longer be woken by the sessions it created.")
+        await dropWakeUp(wakeUp.id, key: wakeUp.key)
+        return
+      }
+      // Refused for now (it started running, or the Mac is at its session
+      // limit): a new attempt, and a new delivery ID, when it is idle again,
+      // or after a wait that doubles with each refusal in a row.
       guard var current = wakeUps[wakeUp.id], current.key == wakeUp.key else { return }
       current.attempt += 1
-      wakeUps[wakeUp.id] = current; retryAt[wakeUp.id] = now + retryInterval
+      wakeUps[wakeUp.id] = current; retryAt[wakeUp.id] = now + retryDelay(attempt: current.attempt)
       try? await database.saveSessionWakeUp(current)
     }
+  }
+
+  /// `retryInterval` after the first refusal, doubling to eight times it.
+  func retryDelay(attempt: Int) -> Duration {
+    retryInterval * (1 << min(max(attempt, 1) - 1, 3))
   }
 
   nonisolated static func stableID(_ value: String) -> String {
@@ -368,12 +389,16 @@ import WovenMatterShared
 
 /// One destination's `workspace` stream, reduced to the sessions kept.
 /// Only kept sessions' summaries are held; the rest of each snapshot is
-/// reduced to its IDs. After the stream synchronizes, every item yields the
+/// reduced to its IDs and runs. After the stream synchronizes, every item yields the
 /// current snapshot of each kept session it knows, and `missing` for one the
 /// destination removed or a full snapshot left out (Linux: `createRemoteSessionSource`).
 public struct SessionStreamProjection: Sendable {
   private var conversations: [String: LibraryConversation] = [:]
+  /// Every session's pending interactions (the whole list is small).
   private var pending: [String: [PendingInteraction]] = [:]
+  /// Every session's active run and the runs last seen ending, newest last,
+  /// so a watch made after its change still learns of it (`after`).
+  private var runs: [String: (active: String?, ended: [String])] = [:]
   private var known: Set<String> = []
   private var removed: Set<String> = []
   private var ready = false
@@ -388,19 +413,28 @@ public struct SessionStreamProjection: Sendable {
         let id = conversation.id.lowercased()
         known.insert(id); removed.remove(id)
         if keep.contains(id) { conversations[id] = conversation } else { conversations.removeValue(forKey: id) }
+        var run = runs[id] ?? (nil, [])
+        if let active = run.active, active != conversation.activeRunID {
+          run.ended = Array((run.ended.filter { $0 != active } + [active]).suffix(8))
+        }
+        run.active = conversation.activeRunID
+        runs[id] = run
       }
       for raw in value.deletedConversationIDs ?? [] {
         let id = raw.lowercased()
-        known.remove(id); conversations.removeValue(forKey: id); removed.insert(id)
+        known.remove(id); conversations.removeValue(forKey: id); runs.removeValue(forKey: id); removed.insert(id)
       }
     case .pending(let value):
       pending = [:]
-      for interaction in value.interactions where keep.contains(interaction.conversationID.lowercased()) {
+      for interaction in value.interactions {
         pending[interaction.conversationID.lowercased(), default: []].append(interaction)
       }
     case .synchronized:
       // A kept session the whole snapshot left out is gone from there.
-      if snapshotting { for id in keep where !known.contains(id) { removed.insert(id) } }
+      if snapshotting {
+        for id in keep where !known.contains(id) { removed.insert(id) }
+        runs = runs.filter { known.contains($0.key) }
+      }
       snapshotting = false; ready = true
     default: return []
     }
@@ -410,5 +444,19 @@ public struct SessionStreamProjection: Sendable {
       // Not kept when the snapshot came, or not seen yet: its next change says.
       return removed.contains(id) ? (id, .missing) : nil
     }
+  }
+
+  /// What the stream already said about `id` that a caller who saw it in
+  /// `observed` state during run `runID` has not seen: `idle` once that run
+  /// was seen ending, or `needsInput` when it asks for input in that run
+  /// after the caller made it run. Nil otherwise, including while the stream
+  /// has not caught up with what the caller saw (its next change says).
+  public func after(_ id: String, runID: String?, observed: String) -> SessionWakeUps.Snapshot? {
+    guard ready, let runID, let run = runs[id] else { return nil }
+    if run.active == nil, run.ended.contains(runID) { return .init(state: "idle") }
+    if observed == "running", run.active == runID, let asked = pending[id], !asked.isEmpty {
+      return .init(state: "needsInput", runID: runID, pending: asked)
+    }
+    return nil
   }
 }

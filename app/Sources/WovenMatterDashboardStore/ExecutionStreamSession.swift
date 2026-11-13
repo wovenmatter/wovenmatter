@@ -108,7 +108,10 @@ actor StreamSession {
   private var closed = false
   private var lastHeard = ContinuousClock.now
   private var registration: UUID?
+  /// The ping loop.
   private var tasks: [Task<Void, Never>] = []
+  /// Calls in progress, each until it answers.
+  private var callTasks: [UUID: Task<Void, Never>] = [:]
 
   init(context: StreamSessionContext, wire: any ExecutionStreamWire, member: LibraryMember?) {
     self.context = context; self.wire = wire; self.member = member; configuration = context.configuration
@@ -142,9 +145,10 @@ actor StreamSession {
     guard !closed else { return }
     closed = true
     for task in tasks { task.cancel() }
-    tasks.removeAll()
+    for task in callTasks.values { task.cancel() }
+    tasks.removeAll(); callTasks.removeAll()
     let ending = Array(subscriptions.values)
-    for subscription in ending { subscription.task?.cancel() }
+    for subscription in ending { subscription.task?.cancel(); subscription.retry?.cancel() }
     subscriptions.removeAll(); outbox.removeAll(); queuedBytes = 0
     for subscription in ending { await released(subscription) }
     await context.tail.remove(id)
@@ -186,7 +190,7 @@ actor StreamSession {
     case .cancel(let cancel):
       calls.remove(cancel.id)
       if let subscription = subscriptions.removeValue(forKey: cancel.id) {
-        subscription.task?.cancel()
+        subscription.task?.cancel(); subscription.retry?.cancel()
         drop(subscription: cancel.id)
         Task { await released(subscription) }
       }
@@ -207,8 +211,16 @@ actor StreamSession {
       enqueue(.response(.init(id: request.id, error: .init(.invalid, "Send commands through the background service."))))
       return
     }
+    // As on Linux: a socket has at most this many calls in progress (a
+    // cancelled call no longer counts, though its work goes on).
+    guard calls.count < configuration.maximumCalls else {
+      enqueue(.response(.init(id: request.id, error: .init(.unavailable, "Too many calls on this connection.", retryable: true))))
+      return
+    }
     calls.insert(request.id)
-    tasks.append(Task { [weak self] in
+    let key = UUID()
+    // Assigned before the task can finish: its last step runs on this actor.
+    callTasks[key] = Task { [weak self] in
       let response: StreamResponse
       do {
         switch StreamProtocol.Method(rawValue: request.method) {
@@ -227,11 +239,15 @@ actor StreamSession {
           response = .init(id: request.id, error: .init(.invalid, "Unknown method \(request.method)."))
         }
       } catch { response = .init(id: request.id, error: Self.streamError(error)) }
-      await self?.respond(response)
-    })
+      await self?.respond(response, finishing: key)
+    }
   }
 
-  private func respond(_ response: StreamResponse) {
+  /// Calls and the ping loop this socket holds, for tests.
+  var retainedTaskCount: Int { tasks.count + callTasks.count }
+
+  private func respond(_ response: StreamResponse, finishing key: UUID) {
+    callTasks.removeValue(forKey: key)
     // A cancelled call is abandoned: the work it started is not undone, and
     // its receipt stays available through `execution.receipt`.
     guard calls.remove(response.id) != nil else { return }
@@ -261,6 +277,10 @@ actor StreamSession {
     let id: String
     let kind: Kind
     var task: Task<Void, Never>?
+    /// A read that failed without ending the subscription is tried again
+    /// after a backoff (`scheduleRetry`); `failures` in a row so far.
+    var retry: Task<Void, Never>?
+    var failures = 0
     var dirty = false
     var dirtyAgain = false
     var snapshotDone = false
@@ -411,13 +431,21 @@ actor StreamSession {
   private func refresh(_ id: String) async {
     guard let subscription = subscriptions[id], !closed else { return }
     subscription.dirty = false; subscription.dirtyAgain = false
+    var complete = true
     do {
       switch subscription.kind {
       case .workspace: try await refreshWorkspace(subscription)
-      case .conversation(let conversationID): try await refreshConversation(subscription, conversationID)
+      case .conversation(let conversationID): complete = try await refreshConversation(subscription, conversationID)
       case .serverState: break
       }
     } catch is CancellationError {
+      // This subscription ended, or the socket closed.
+      guard subscriptions[id] === subscription, !closed, !Task.isCancelled else { return }
+      // A source read was cancelled underneath it: compare everything again shortly,
+      // since a subscription whose task stays set never refreshes again.
+      subscription.task = nil
+      if case .workspace = subscription.kind { subscription.reloadAll = true }
+      scheduleRetry(subscription)
       return
     } catch {
       guard subscriptions[id] === subscription else { return }
@@ -426,7 +454,27 @@ actor StreamSession {
     }
     guard subscriptions[id] === subscription else { return }
     subscription.task = nil
+    if complete { subscription.failures = 0 } else { scheduleRetry(subscription) }
     if subscription.dirtyAgain { markDirty(subscription) }
+  }
+
+  /// Compares again after 1 s, doubling to 30 s while reads keep failing.
+  private func scheduleRetry(_ subscription: Subscription) {
+    guard subscription.retry == nil else { return }
+    let delay = min(configuration.readRetryInterval * (1 << min(subscription.failures, 5)), configuration.readRetryInterval * 30)
+    subscription.failures += 1
+    let id = subscription.id
+    subscription.retry = Task { [weak self] in
+      try? await Task.sleep(for: delay)
+      guard !Task.isCancelled else { return }
+      await self?.retried(id)
+    }
+  }
+
+  private func retried(_ id: String) {
+    guard let subscription = subscriptions[id] else { return }
+    subscription.retry = nil
+    markDirty(subscription)
   }
 
   static func subscriptionError(_ error: any Error) -> StreamError {
@@ -486,7 +534,8 @@ actor StreamSession {
     }
   }
 
-  private func refreshConversation(_ subscription: Subscription, _ conversationID: String) async throws {
+  /// False when the settings could not be read: they are read again later.
+  private func refreshConversation(_ subscription: Subscription, _ conversationID: String) async throws -> Bool {
     let source = context.conversations
     if !subscription.opened {
       try await source.conversationOpened(conversationID)
@@ -498,9 +547,15 @@ actor StreamSession {
     }
     let transcript = try await source.localTranscript(conversationID: conversationID, before: nil)
     let capabilities = try? await source.localCapabilities(conversationID: conversationID)
+    // Cleared before the read, so a change during it reads them again; set
+    // again when the read fails, so a retry sends what is stored.
     let readsSession = subscription.sessionDirty
     subscription.sessionDirty = false
-    let session = readsSession ? try? await source.localSessionSettings(conversationID: conversationID) : nil
+    var session: SessionSettings?, complete = true
+    if readsSession {
+      do { session = try await source.localSessionSettings(conversationID: conversationID) }
+      catch { subscription.sessionDirty = true; complete = false }
+    }
     let relay = await source.conversationRelay(conversationID: conversationID)
     try Task.checkCancellation()
     let id = subscription.id
@@ -515,7 +570,7 @@ actor StreamSession {
       enqueue(.item(.init(id: id, payload: .synchronized)), for: subscription)
       subscription.snapshotDone = true
       subscription.lastSend = .now
-      return
+      return complete
     }
     let messages = transcript.messages.filter { subscription.messages[$0.id] != $0 }
     let activities = transcript.activities.filter { subscription.activities[$0.id] != $0 }
@@ -535,6 +590,7 @@ actor StreamSession {
       enqueue(.item(.init(id: id, payload: .capabilities(.init(capabilities: capabilities)))), for: subscription)
     }
     sendLiveState(session: session, relay: relay, to: subscription)
+    return complete
   }
 
   /// The newest library cursor, unless this subscriber already has it.
@@ -574,7 +630,7 @@ actor StreamSession {
   private func end(_ subscription: Subscription, error: StreamError?) {
     guard subscriptions[subscription.id] === subscription else { return }
     subscriptions.removeValue(forKey: subscription.id)
-    subscription.task?.cancel()
+    subscription.task?.cancel(); subscription.retry?.cancel()
     drop(subscription: subscription.id)
     enqueue(.end(.init(id: subscription.id, error: error)))
     Task { await released(subscription) }

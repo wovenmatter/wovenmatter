@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+import WorkspaceFixtures
 import WovenMatterCore
 @testable import WovenMatterDashboardStore
 
@@ -20,9 +21,12 @@ struct SessionWakeUpsTests {
     var reconcile: [String: (conversations: [LibraryConversation], pending: [PendingInteraction])] = [:]
     /// Refuses the next send, as when the caller started running meanwhile.
     var refuseNext = false
+    /// Refuses every send, as when the Mac stays at its session limit.
+    var refuseAll = false
     var refused: [SessionWakeUps.Delivery] = []
+    var refusedAt: [ContinuousClock.Instant] = []
 
-    init(root: URL? = nil) async throws {
+    init(root: URL? = nil, retryInterval: Duration = .seconds(30)) async throws {
       self.root = root ?? FileManager.default.temporaryDirectory.appending(path: "session-wake-ups-\(UUID())")
       try FileManager.default.createDirectory(at: self.root, withIntermediateDirectories: true)
       database = try await WorkspaceDatabase(url: self.root.appending(path: "workspace.sqlite"))
@@ -30,14 +34,16 @@ struct SessionWakeUpsTests {
         caller: { [unowned self] id in self.callers[id] ?? .gone },
         deliverToConversation: { [unowned self] delivery in
           guard case .conversation(true, let used) = self.callers[delivery.callerID] else { return false }
-          if self.refuseNext { self.refuseNext = false; self.refused.append(delivery); return false }
+          if self.refuseNext || self.refuseAll {
+            self.refuseNext = false; self.refused.append(delivery); self.refusedAt.append(.now); return false
+          }
           self.delivered.append(delivery)
           // The wake-up starts a run: the caller is busy, and one more run in a row was a wake-up's.
           self.callers[delivery.callerID] = .conversation(idle: false, wokenRunsInARow: used + 1)
           return true
         },
         deliverToBot: { [unowned self] delivery in self.bots.append(delivery) },
-        reconcile: { [unowned self] id in self.reconcile[id] }))
+        reconcile: { [unowned self] id in self.reconcile[id] }), retryInterval: retryInterval)
     }
 
     func remember(_ id: String, caller: String) async throws {
@@ -176,6 +182,106 @@ struct SessionWakeUpsTests {
     await f.wakeUps.deliverPending()
     #expect(f.delivered.count == 1)
     #expect(f.delivered.first?.id != f.refused.first?.id && f.delivered.first?.text == f.refused.first?.text)
+  }
+
+  @Test func aWakeUpItsCallerCanNoLongerReceiveIsRecordedOnceAndNotTriedAgain() async throws {
+    let f = try await Fixture(retryInterval: .milliseconds(20)); defer { f.remove() }
+    let database = f.database
+    // A calling session that has lost the Sessions tool.
+    let caller = try await database.createFixtureLocalACPSession(runtimeKind: .codex, title: "Caller", ownerDeviceID: UUID()).lowercased()
+    try await database.setSessionTools(.init(enabled: [.goals]), sessionID: caller)
+    let session = UUID().uuidString.lowercased()
+    f.callers[caller] = .conversation(idle: true, wokenRunsInARow: 0)
+    try await f.remember(session, caller: caller)
+    // Delivery as the desktop does it: reserve the attempt's row, then claim it,
+    // which cancels a delivery its target may no longer receive.
+    var attempts: [String] = []
+    f.wakeUps.hooks.deliverToConversation = { delivery in
+      attempts.append(delivery.id)
+      guard let reserved = try? await database.reserveSessionWakeUpDelivery(id: delivery.id, callerID: delivery.callerID, sessionID: delivery.sessionID,
+                                                                            title: delivery.title, harness: delivery.harness, text: delivery.text, key: delivery.key),
+            reserved.status == "queued" else { return false }
+      return (try? await database.claimToolDelivery(id: delivery.id)) != nil
+    }
+    await f.observe(caller, session, "running", runID: "r1")
+    await f.emit(session, "idle")
+    #expect(attempts.count == 1)
+    #expect(try await database.toolDelivery(id: attempts[0])?.status == "cancelled", "the refusal is recorded")
+    #expect(f.wakeUps.pending(callerID: caller).isEmpty, "and not kept to try again")
+    // Later idle moments and retry times make no new attempt (and no new cancelled row).
+    try await Task.sleep(for: .milliseconds(100))
+    f.callers[caller] = .conversation(idle: false, wokenRunsInARow: 0)
+    await f.wakeUps.deliverPending()
+    f.callers[caller] = .conversation(idle: true, wokenRunsInARow: 0)
+    await f.wakeUps.deliverPending()
+    #expect(attempts.count == 1)
+  }
+
+  @Test func aWakeUpRefusedForNowIsTriedAgainLessOftenEachTime() async throws {
+    let interval = Duration.milliseconds(40)
+    let f = try await Fixture(retryInterval: interval); defer { f.remove() }
+    let caller = UUID().uuidString.lowercased(), session = UUID().uuidString.lowercased()
+    f.callers[caller] = .conversation(idle: true, wokenRunsInARow: 0)
+    try await f.remember(session, caller: caller)
+    await f.observe(caller, session, "running", runID: "r1")
+    f.refuseAll = true
+    await f.emit(session, "idle")
+    // The caller stays idle and the Mac stays full: what the schedule calls finds it due less often.
+    let deadline = ContinuousClock.now + .seconds(3)
+    while f.refused.count < 5, ContinuousClock.now < deadline {
+      try await Task.sleep(for: .milliseconds(5))
+      await f.wakeUps.deliverPending()
+    }
+    #expect(f.refused.count == 5)
+    let gaps = zip(f.refusedAt.dropFirst(), f.refusedAt).map { $0 - $1 }
+    for (index, gap) in gaps.enumerated() {
+      #expect(gap >= interval * (1 << min(index, 3)), "refusal \(index + 2) came \(gap) after the one before")
+    }
+    #expect(Set(f.refused.map(\.id)).count == 5, "each attempt is a new delivery")
+    // Still pending: accepted once the caller can take it.
+    f.refuseAll = false
+    try await Task.sleep(for: interval * 8)
+    await f.wakeUps.deliverPending()
+    #expect(f.delivered.count == 1 && f.wakeUps.pending(callerID: caller).isEmpty)
+  }
+
+  @Test func aSessionThatChangedBeforeItsWatchExistedStillWakesItsCaller() async throws {
+    let f = try await Fixture(); defer { f.remove() }
+    let caller = UUID().uuidString.lowercased(), session = UUID().uuidString.lowercased()
+    f.callers[caller] = .conversation(idle: true, wokenRunsInARow: 0)
+    try await f.remember(session, caller: caller)
+    func stream(_ payload: StreamItem.Payload) async { await f.wakeUps.remoteItem(workspaceID: Self.workspace, payload) }
+    func summary(running run: String?) -> StreamItem.Payload { .conversations(.init(conversations: [Self.conversation(session, running: run)], snapshot: false)) }
+    await stream(.conversations(.init(conversations: [Self.conversation(session)], snapshot: true)))
+    await stream(.pending(.init(interactions: [])))
+    await stream(.synchronized)
+
+    // The run the caller started finishes on the stream before the caller records it.
+    await stream(summary(running: "r1"))
+    await stream(summary(running: nil))
+    #expect(f.delivered.isEmpty)
+    await f.observe(caller, session, "running", runID: "r1")
+    await f.settle(); await f.wakeUps.deliverPending()
+    #expect(f.delivered.count == 1 && f.delivered.first?.text.contains("finished") == true)
+    #expect(f.wakeUps.watched.isEmpty)
+    f.idle(caller)
+
+    // A run the stream has not shown yet is watched, not taken as finished.
+    await f.observe(caller, session, "running", runID: "r2")
+    await f.settle(); await f.wakeUps.deliverPending()
+    #expect(f.delivered.count == 1 && f.wakeUps.watched.map(\.id) == [session])
+    await stream(summary(running: "r2"))
+    await stream(summary(running: nil))
+    await f.settle(); await f.wakeUps.deliverPending()
+    #expect(f.delivered.count == 2, "it wakes once the stream shows that run finish")
+    f.idle(caller)
+
+    // A question asked in the caller's run before it was watched.
+    await stream(summary(running: "r3"))
+    await stream(.pending(.init(interactions: [Self.question("q1", session, title: "Which branch?")])))
+    await f.observe(caller, session, "running", runID: "r3")
+    await f.settle(); await f.wakeUps.deliverPending()
+    #expect(f.delivered.count == 3 && f.delivered.last?.text.contains("Which branch?") == true)
   }
 
   @Test func aBotsCountStartsAgainWhenItCreatesASession() async throws {

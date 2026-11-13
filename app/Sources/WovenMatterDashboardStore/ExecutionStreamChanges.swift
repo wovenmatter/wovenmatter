@@ -62,7 +62,9 @@ extension WorkspaceDatabaseConnection {
 
   /// Creates `execution_stream_changes` and its triggers, or brings an
   /// existing database's triggers up to date. Runs after every table it names
-  /// exists. Each trigger writes in the transaction of the row it observes.
+  /// exists. Each trigger writes in the transaction of the row it observes. A
+  /// trigger whose stored definition is already this one is left alone, so
+  /// opening a current database changes no schema.
   func migrateExecutionStreamChanges() throws {
     try transaction {
       try executeUnlocked("""
@@ -85,8 +87,8 @@ extension WorkspaceDatabaseConnection {
             ? "OLD.remote_workspace_id IS NULL AND " + Self.executionStreamIsLocal("OLD.conversation_id", requireSession: false)
             : Self.executionStreamIsLocal("\(row).\(conversation)")
           let name = "execution_stream_\(table)_\(operation.lowercased())"
-          try executeUnlocked("""
-            DROP TRIGGER IF EXISTS \(name);
+          // SQLite stores the statement's text as written, without its semicolon.
+          let create = """
             CREATE TRIGGER \(name) AFTER \(operation) ON \(table)
             WHEN \(local)
             BEGIN
@@ -94,8 +96,17 @@ extension WorkspaceDatabaseConnection {
               VALUES (\(row).\(conversation), '\(kind.rawValue)', \(row).\(entity));
               DELETE FROM execution_stream_changes WHERE sequence <=
                 (SELECT MAX(sequence) FROM execution_stream_changes) - \(StreamProtocol.maximumRetainedChanges);
-            END;
-            """)
+            END
+            """
+          // Finalized before any schema change below.
+          let current: String? = try {
+            let stored = try prepareUnlocked("SELECT sql FROM sqlite_master WHERE type = 'trigger' AND name = ? AND tbl_name = ?")
+            defer { sqlite3_finalize(stored) }
+            try bind(name, at: 1, to: stored); try bind(table, at: 2, to: stored)
+            return sqlite3_step(stored) == SQLITE_ROW ? sqlite3_column_text(stored, 0).map { String(cString: $0) } : nil
+          }()
+          guard current != create else { continue }
+          try executeUnlocked("DROP TRIGGER IF EXISTS \(name);\n" + create + ";")
         }
       }
     }

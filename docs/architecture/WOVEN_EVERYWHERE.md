@@ -1100,11 +1100,13 @@ decode and re-encode every fixture.
 | client | `{t:"cancel", id}` | Close a subscription or abandon a call. |
 
 Unknown frame types and unknown item kinds are ignored. A subscription the
-client cancels gets no `end`. Error codes:
+client cancels gets no `end`. A socket holds at most 64 subscriptions and 64
+calls in progress (a cancelled call no longer counts); another is refused with
+a retryable `unavailable` `end` or `res`. Error codes:
 `unauthorized`, `not_found`, `invalid`, `unavailable`, `conflict`, and
 `resync` (the subscription fell behind: subscribe again). Close codes: `1000`
-normal, `1001` server stopping or sleeping, `4400` protocol violation, `4401`
-member removed.
+normal, `1001` server stopping or sleeping, `1009` client frame over 1 MiB,
+`4400` protocol violation, `4401` member removed.
 
 ### Streams
 
@@ -1190,7 +1192,10 @@ member removed.
   conversations this Mac runs (not history synchronized from other machines).
   Entries are pointers; the server reads the current rows when it sends. The
   sequence is gap-free, so the stream tail never misses a change. Entries
-  older than the newest 10,000 are deleted.
+  older than the newest 10,000 are deleted. Opening the database rewrites a
+  trigger only when its stored definition differs. A read that fails without
+  ending a subscription (its session settings, or a read the source cancelled)
+  is tried again after 1 s, doubling to 30 s, so the subscription never stalls.
 
 ### Methods
 
@@ -1306,14 +1311,20 @@ member removed.
   it running or needing input. Becoming idle (finished) or needing input with
   new pending interactions queues one wake-up per session. A newer state
   replaces it; running again, or any status, wait, send or respond by the
-  caller on that session, drops it; a stop by the caller ends the watch. The
-  caller's server delivers it only while the calling conversation is idle, as
-  a send (never a steer) whose source is that session (`senderKind:
+  caller on that session, drops it; a stop by the caller ends the watch. On a
+  Mac, a watch made after its session's stream already showed the run the
+  caller saw end, or a question in the run the caller started, still queues
+  that wake-up. The caller's server delivers it only while the calling
+  conversation is idle, as a send (never a steer) whose source is that session (`senderKind:
   notification`, a coordination notification), with the text of
   `SessionWakeUp.text` (`shared/Sources/WovenMatterShared/SessionWakeUp.swift`,
   fixtures shared with Node). At most 10 per calling run: the count belongs to
   the caller's latest run a wake-up did not start, and the tenth says it is the
-  last. Bots get theirs through the bots runtime, and a bot's count restarts
+  last. A refused delivery is tried again as a new attempt at the caller's next
+  idle moment or after 30 s; on a Mac that wait doubles with each refusal in a
+  row, to 4 minutes, and a delivery cancelled because the caller may no longer
+  receive it (it lost the Sessions tool) is recorded once and not tried again.
+  Bots get theirs through the bots runtime, and a bot's count restarts
   when it creates a session. IDs derive from caller, session and state, so each
   is delivered once; watched sessions and pending wake-ups survive a restart
   (Linux: `remote/src/session-watch.mjs`). On Linux a wake-up refused every
