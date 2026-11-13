@@ -163,6 +163,9 @@ enum DeviceExecutionError: LocalizedError {
 
 extension MobileModel {
   var deviceWorkspaceName: String { UIDevice.current.userInterfaceIdiom == .pad ? "This iPad" : "This iPhone" }
+  /// The device mid-sentence ("Everything on this iPhone is kept"). Not
+  /// `deviceWorkspaceName.lowercased()`, which would read "this iphone".
+  var deviceWorkspaceInSentence: String { UIDevice.current.userInterfaceIdiom == .pad ? "this iPad" : "this iPhone" }
   var deviceConnectionsTitle: String { UIDevice.current.userInterfaceIdiom == .pad ? "iPad Connections" : "iPhone Connections" }
   var deviceWorkspaceID: String { state.deviceID }
   var launcherAgents: [LaunchableAgent] {
