@@ -4,6 +4,7 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
+import { DatabaseSync } from 'node:sqlite'
 import { createClientExecution } from '../src/client-execution.mjs'
 import { enroll } from './fixtures/execution.mjs'
 
@@ -109,4 +110,32 @@ test('retained terminal preflight retries exact proofs before chronological jour
   assert.equal(proofs.length,2);assert.deepEqual(proofs[1].body,first)
   assert.deepEqual([...f.events.keys()],entries.map(entry=>entry.eventID))
   const count=f.requests.length;await f.restart();await f.service.synchronizePublisher();assert.equal(f.requests.length,count)
+})
+
+// A v0.4.2 store also published to one central Mac and kept a library MCP
+// grant: opening it drops both (with the central bearer) and keeps the lanes.
+test('a v0.4.2 execution store loses its central publication and keeps its lanes', async t => {
+  const directory = mkdtempSync(join(tmpdir(), 'wm-v042-store-'))
+  t.after(() => rmSync(directory, { recursive: true, force: true }))
+  const db = new DatabaseSync(join(directory, 'execution.sqlite'))
+  db.exec(`CREATE TABLE central_publication (id INTEGER PRIMARY KEY CHECK(id=1), envelope TEXT NOT NULL, acknowledged INTEGER NOT NULL DEFAULT 0);
+    INSERT INTO central_publication VALUES (1, 'sealed-bearer', 7);
+    CREATE TABLE retained_publication_receipts (event_id TEXT PRIMARY KEY);
+    CREATE TABLE central_publication_lanes (name TEXT PRIMARY KEY, failures INTEGER NOT NULL DEFAULT 0, next_attempt INTEGER NOT NULL DEFAULT 0, last_success TEXT, last_error_code TEXT);
+    INSERT INTO central_publication_lanes(name,failures) VALUES ('journal',3),('artifacts',0);
+    CREATE TABLE saved_execution_artifacts (id TEXT PRIMARY KEY, manifest TEXT NOT NULL, bytes BLOB NOT NULL, uploaded INTEGER NOT NULL DEFAULT 0);
+    INSERT INTO saved_execution_artifacts VALUES ('artifact', '{}', x'01', 1);
+    CREATE TABLE mcp_library_connection (id INTEGER PRIMARY KEY CHECK(id=1), envelope TEXT NOT NULL);
+    INSERT INTO mcp_library_connection VALUES (1, 'sealed-grant');`)
+  db.close()
+  const runtime = { providers: async () => [], create: async () => ({ sessionID: randomUUID() }), run: async () => {}, close: async () => {} }
+  const service = createClientExecution({ directory, runtime, publisherIntervalMilliseconds: 0 })
+  await service.close()
+  const store = new DatabaseSync(join(directory, 'execution.sqlite'))
+  t.after(() => store.close())
+  const tables = store.prepare("SELECT name FROM sqlite_master WHERE type='table'").all().map(row => row.name)
+  for (const name of ['central_publication', 'retained_publication_receipts', 'central_publication_lanes', 'mcp_library_connection']) assert.ok(!tables.includes(name), name)
+  assert.equal(store.prepare("SELECT failures FROM publication_lanes WHERE name='journal'").get().failures, 3)
+  assert.deepEqual(store.prepare('PRAGMA table_info(saved_execution_artifacts)').all().map(column => column.name), ['id', 'manifest', 'bytes'])
+  assert.equal(store.prepare('SELECT count(*) AS n FROM saved_execution_artifacts').get().n, 1)
 })

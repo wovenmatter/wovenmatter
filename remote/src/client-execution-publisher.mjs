@@ -11,9 +11,18 @@ const sameArtifact = (a,b) => ['id','workspaceID','title','mediaType','byteCount
 // library host) through the socket's `/v1/publisher/*` routes and reaches
 // other devices by peer sync. Without a library host nothing is published.
 export function createClientExecutionPublisher({ db, identity, events, flush = () => {}, intervalMilliseconds = 5000, localLibrary = null }) {
-  db.exec(`CREATE TABLE IF NOT EXISTS central_publication_lanes (name TEXT PRIMARY KEY, failures INTEGER NOT NULL DEFAULT 0, next_attempt INTEGER NOT NULL DEFAULT 0, last_success TEXT, last_error_code TEXT);
-    INSERT OR IGNORE INTO central_publication_lanes(name) VALUES ('journal'),('artifacts');
-    CREATE TABLE IF NOT EXISTS saved_execution_artifacts (id TEXT PRIMARY KEY, manifest TEXT NOT NULL, bytes BLOB NOT NULL, uploaded INTEGER NOT NULL DEFAULT 0);
+  // A v0.4.2 host also published to one central Mac: that target (with its
+  // encrypted bearer) and its receipts are gone, and its lanes now serve the
+  // library host alone. Each step is a no-op on a current store.
+  const tables = new Set(db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all().map(row => row.name))
+  db.exec('DROP TABLE IF EXISTS central_publication; DROP TABLE IF EXISTS retained_publication_receipts')
+  if (tables.has('central_publication_lanes') && !tables.has('publication_lanes')) db.exec('ALTER TABLE central_publication_lanes RENAME TO publication_lanes')
+  if (tables.has('saved_execution_artifacts') && db.prepare('PRAGMA table_info(saved_execution_artifacts)').all().some(column => column.name === 'uploaded'))
+    db.exec('ALTER TABLE saved_execution_artifacts DROP COLUMN uploaded')
+  db.exec(`DROP TABLE IF EXISTS central_publication_lanes;
+    CREATE TABLE IF NOT EXISTS publication_lanes (name TEXT PRIMARY KEY, failures INTEGER NOT NULL DEFAULT 0, next_attempt INTEGER NOT NULL DEFAULT 0, last_success TEXT, last_error_code TEXT);
+    INSERT OR IGNORE INTO publication_lanes(name) VALUES ('journal'),('artifacts');
+    CREATE TABLE IF NOT EXISTS saved_execution_artifacts (id TEXT PRIMARY KEY, manifest TEXT NOT NULL, bytes BLOB NOT NULL);
     CREATE TABLE IF NOT EXISTS local_library_publication (id INTEGER PRIMARY KEY CHECK(id=1), acknowledged INTEGER NOT NULL DEFAULT 0);
     INSERT OR IGNORE INTO local_library_publication(id) VALUES (1);
     CREATE TABLE IF NOT EXISTS local_retained_publication_receipts (event_id TEXT PRIMARY KEY);
@@ -22,7 +31,7 @@ export function createClientExecutionPublisher({ db, identity, events, flush = (
   const controllers = new Set()
   const retryBase = intervalMilliseconds > 0 ? intervalMilliseconds : 5000
   const retryMaximum = 300000
-  const laneRow = name => db.prepare('SELECT * FROM central_publication_lanes WHERE name=?').get(name)
+  const laneRow = name => db.prepare('SELECT * FROM publication_lanes WHERE name=?').get(name)
   function status() {
     const value = target()
     const lane = name => { const item=laneRow(name);return {failureCount:item.failures,nextAttemptAt:item.next_attempt,
@@ -118,14 +127,14 @@ export function createClientExecutionPublisher({ db, identity, events, flush = (
     try {
       const sent=await operation()
       if(stopped)return
-      db.prepare('UPDATE central_publication_lanes SET failures=0,next_attempt=?,last_error_code=NULL,last_success=COALESCE(?,last_success) WHERE name=?')
+      db.prepare('UPDATE publication_lanes SET failures=0,next_attempt=?,last_error_code=NULL,last_success=COALESCE(?,last_success) WHERE name=?')
         .run(Date.now()+retryBase,sent?new Date().toISOString():null,name)
     } catch(error) {
       if(!stopped) {
         const failures=Math.min(prior.failures+1,2147483647)
         const delay=Math.min(retryMaximum,retryBase*2**Math.min(failures-1,20))
         const code=Number.isInteger(error.statusCode)?'http_'+error.statusCode:'transport_failure'
-        db.prepare('UPDATE central_publication_lanes SET failures=?,next_attempt=?,last_error_code=? WHERE name=?').run(failures,Date.now()+delay,code,name)
+        db.prepare('UPDATE publication_lanes SET failures=?,next_attempt=?,last_error_code=? WHERE name=?').run(failures,Date.now()+delay,code,name)
       }
       throw error
     }
