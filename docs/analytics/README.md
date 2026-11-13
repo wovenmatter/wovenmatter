@@ -61,8 +61,8 @@ Debug central builds never transmit to production PostHog.
 
 Updater metrics remain separate: manual check clicks, download/install starts,
 completed downloads, installation failures, and verified replacement-app launches.
-Lifecycle callbacks are starts, not button clicks. Older clients' `update_download_clicked`
-and `update_install_clicked` events remain decodable and are grouped with the
+Lifecycle callbacks are starts, not button clicks. Historical `update_download_clicked`
+and `update_install_clicked` events already in PostHog are grouped with the
 corresponding started stages in the report. Expected installation cancellation is
 not a failure, and telemetry never delays backend recovery.
 

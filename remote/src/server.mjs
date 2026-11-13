@@ -144,8 +144,7 @@ const hostAdmin = nativeLinuxHost ? createHostAdministration({ serviceRoot: conf
   extra: async () => ({ library: library?.status() ?? null, memberIdentity: memberIdentityRecord }),
   ...(library ? {
     adoptMembers: async body => { const list = await library.client.adoptMembers(body); await members.refresh().catch(() => {}); return list },
-    // A library host that predates `adopted` reports none: fall back to any Mac member.
-    adopted: async () => { const list = await library.client.members(); return typeof list.adopted === 'boolean' ? list.adopted : (list.members ?? []).some(item => item.kind === 'mac') },
+    adopted: async () => (await library.client.members()).adopted === true,
   } : {}) }) : null
 // Requests this host makes to other members, signed by its library host.
 const memberTransport = library ? createMemberTransport({ library: library.client }) : null

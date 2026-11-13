@@ -108,23 +108,16 @@ enum MacRemoteScripts {
     /usr/bin/codesign --verify --deep --strict "$stage/Woven Matter.app"
     if running; then
       was_running=1
-      if [ "$(field WovenMatterDeviceSetupVersion)" = 1 ]; then
-        /usr/bin/defaults delete wovenmatter.desktop wovenmatter.device-setup.status 2>/dev/null || true
-        update_request_id=$(printf '%s' "$update_request" | /usr/bin/plutil -extract id raw -o - -)
-        /usr/bin/defaults write wovenmatter.desktop wovenmatter.device-setup.request -string "$5"
-        /usr/bin/open "$app"
-      else
-        # Legacy releases still receive an ordinary quit, never a forced stop.
-        /usr/bin/osascript -e 'tell application id "wovenmatter.desktop" to quit' >/dev/null 2>&1 || true
-      fi
+      /usr/bin/defaults delete wovenmatter.desktop wovenmatter.device-setup.status 2>/dev/null || true
+      update_request_id=$(printf '%s' "$update_request" | /usr/bin/plutil -extract id raw -o - -)
+      /usr/bin/defaults write wovenmatter.desktop wovenmatter.device-setup.request -string "$5"
+      /usr/bin/open "$app"
       for attempt in $(seq 1 60); do
         if ! running; then break; fi
         setup_status=$(/usr/bin/defaults read wovenmatter.desktop wovenmatter.device-setup.status 2>/dev/null || true)
-        if [ "$(field WovenMatterDeviceSetupVersion)" = 1 ]; then
-          status_id=$(printf '%s' "$setup_status" | /usr/bin/plutil -extract requestID raw -o - - 2>/dev/null || true)
-          status_phase=$(printf '%s' "$setup_status" | /usr/bin/plutil -extract phase raw -o - - 2>/dev/null || true)
-          if [ "$status_id" = "$update_request_id" ] && [ "$status_phase" = failed ]; then fail 'Woven Matter could not prepare to update. Check its running work and pending approvals, then retry.'; fi
-        fi
+        status_id=$(printf '%s' "$setup_status" | /usr/bin/plutil -extract requestID raw -o - - 2>/dev/null || true)
+        status_phase=$(printf '%s' "$setup_status" | /usr/bin/plutil -extract phase raw -o - - 2>/dev/null || true)
+        if [ "$status_id" = "$update_request_id" ] && [ "$status_phase" = failed ]; then fail 'Woven Matter could not prepare to update. Check its running work and pending approvals, then retry.'; fi
         sleep 1
       done
       if running; then
