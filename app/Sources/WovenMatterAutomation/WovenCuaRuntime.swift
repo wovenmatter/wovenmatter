@@ -37,8 +37,8 @@ final class WovenCuaRuntime {
         directory = nil
     }
 
-    func call(_ tool: String, arguments: [String: GatewayJSONValue], callerID: String,
-              admit: @MainActor () async throws -> Void) async throws -> GatewayJSONValue {
+    func call(_ tool: String, arguments: [String: JSONValue], callerID: String,
+              admit: @MainActor () async throws -> Void) async throws -> JSONValue {
         try await admit()
         do {
             let client = try await connection(callerID: callerID, admit: admit)
@@ -139,7 +139,7 @@ final class WovenCuaRuntime {
 final class WovenCuaMCPProcess {
     private let process = Process()
     private let input = Pipe()
-    private var pending: [String: CheckedContinuation<GatewayJSONValue, any Error>] = [:]
+    private var pending: [String: CheckedContinuation<JSONValue, any Error>] = [:]
     private var bytes = Data()
     private var stopped = false
     var isRunning: Bool { !stopped && process.isRunning }
@@ -174,7 +174,7 @@ final class WovenCuaMCPProcess {
         }
     }
 
-    func call(method: String, params: GatewayJSONValue) async throws -> GatewayJSONValue {
+    func call(method: String, params: JSONValue) async throws -> JSONValue {
         try Task.checkCancellation()
         let id = UUID().uuidString.lowercased()
         return try await withTaskCancellationHandler {
@@ -192,12 +192,12 @@ final class WovenCuaMCPProcess {
         }
     }
 
-    func notify(method: String, params: GatewayJSONValue) throws { try send(method: method, params: params, id: nil) }
-    private func send(method: String, params: GatewayJSONValue, id: String?) throws {
+    func notify(method: String, params: JSONValue) throws { try send(method: method, params: params, id: nil) }
+    private func send(method: String, params: JSONValue, id: String?) throws {
         guard isRunning else { throw CancellationError() }
-        var message: [String: GatewayJSONValue] = ["jsonrpc": .string("2.0"), "method": .string(method), "params": params]
+        var message: [String: JSONValue] = ["jsonrpc": .string("2.0"), "method": .string(method), "params": params]
         if let id { message["id"] = .string(id) }
-        try input.fileHandleForWriting.write(contentsOf: JSONEncoder().encode(GatewayJSONValue.object(message)) + Data([10]))
+        try input.fileHandleForWriting.write(contentsOf: JSONEncoder().encode(JSONValue.object(message)) + Data([10]))
     }
     private func receive(_ chunk: Data) {
         guard !stopped else { return }
@@ -206,7 +206,7 @@ final class WovenCuaMCPProcess {
         while let newline = bytes.firstIndex(of: 10) {
             let line = Data(bytes[..<newline]); bytes.removeSubrange(...newline)
             guard !line.isEmpty else { continue }
-            guard let message = try? JSONDecoder().decode(GatewayJSONValue.self, from: line),
+            guard let message = try? JSONDecoder().decode(JSONValue.self, from: line),
                   let object = message.objectValue else { stop(); return }
             guard let id = object["id"]?.stringValue, let continuation = pending.removeValue(forKey: id) else { continue }
             if object["error"] != nil {

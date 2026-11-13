@@ -23,25 +23,6 @@ public enum WorkspaceFolderMutationError: LocalizedError, Equatable, Sendable {
 
 // Workspace ownership, surface preferences, folders, overview and calendar.
 extension WorkspaceDatabaseConnection {
-  public func bindDeviceOwnership(
-    ownerDeviceID: UUID,
-    boundAt: Date = Date()
-  ) throws {
-    try withLock {
-      let statement = try prepareUnlocked("""
-        INSERT INTO desktop_local_identity (singleton, device_id, bound_at)
-        VALUES (1, ?, ?)
-        ON CONFLICT(singleton) DO UPDATE SET
-          device_id = excluded.device_id,
-          bound_at = excluded.bound_at
-        """)
-      defer { sqlite3_finalize(statement) }
-      try bind(ownerDeviceID.uuidString.lowercased(), at: 1, to: statement)
-      try bind(Self.timestamp(boundAt), at: 2, to: statement)
-      try stepDone(statement)
-    }
-  }
-
   public func macSurfaceProfile(
     ownerDeviceID: UUID,
     bootstrap: SurfaceProfile,
@@ -55,45 +36,32 @@ extension WorkspaceDatabaseConnection {
       ) {
         return existing
       }
-      let discardCollision = try prepareUnlocked("""
-        DELETE FROM surface_profiles
-        WHERE id = ? AND authority_kind != 'device_owned'
-        """)
-      try bind(profileID, at: 1, to: discardCollision)
-      try stepDone(discardCollision)
-      sqlite3_finalize(discardCollision)
       let timestamp = Self.timestamp(createdAt)
       let statement = try prepareUnlocked("""
         INSERT INTO surface_profiles (
-          id, user_id, surface, device_id, theme, sidebar_style,
+          id, device_id, theme, sidebar_style,
           single_sidebar_side, left_rail_visible, right_rail_visible,
           single_rail_visible, chat_width_percent, note_on_left,
-          workspace_mode, agent_order_json, revision, authority_kind, authority_device_id,
-          origin_device_id, created_at, updated_at
-        ) VALUES (?, ?, 'mac_native', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1,
-          'device_owned', ?, ?, ?, ?)
+          workspace_mode, agent_order_json, revision, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
         """)
       defer { sqlite3_finalize(statement) }
       try bind(profileID, at: 1, to: statement)
-      try bind(try localMutationOperatorIDUnlocked(), at: 2, to: statement)
-      let deviceID = ownerDeviceID.uuidString.lowercased()
-      try bind(deviceID, at: 3, to: statement)
-      try bind(bootstrap.theme, at: 4, to: statement)
-      try bind(bootstrap.sidebarStyle, at: 5, to: statement)
-      try bind(bootstrap.singleSidebarSide, at: 6, to: statement)
-      guard sqlite3_bind_int(statement, 7, bootstrap.leftRailVisible ? 1 : 0) == SQLITE_OK,
-            sqlite3_bind_int(statement, 8, bootstrap.rightRailVisible ? 1 : 0) == SQLITE_OK,
-            sqlite3_bind_int(statement, 9, bootstrap.singleRailVisible ? 1 : 0) == SQLITE_OK,
-            sqlite3_bind_double(statement, 10, bootstrap.chatWidthPercent) == SQLITE_OK,
-            sqlite3_bind_int(statement, 11, bootstrap.noteOnLeft ? 1 : 0) == SQLITE_OK else {
+      try bind(ownerDeviceID.uuidString.lowercased(), at: 2, to: statement)
+      try bind(bootstrap.theme, at: 3, to: statement)
+      try bind(bootstrap.sidebarStyle, at: 4, to: statement)
+      try bind(bootstrap.singleSidebarSide, at: 5, to: statement)
+      guard sqlite3_bind_int(statement, 6, bootstrap.leftRailVisible ? 1 : 0) == SQLITE_OK,
+            sqlite3_bind_int(statement, 7, bootstrap.rightRailVisible ? 1 : 0) == SQLITE_OK,
+            sqlite3_bind_int(statement, 8, bootstrap.singleRailVisible ? 1 : 0) == SQLITE_OK,
+            sqlite3_bind_double(statement, 9, bootstrap.chatWidthPercent) == SQLITE_OK,
+            sqlite3_bind_int(statement, 10, bootstrap.noteOnLeft ? 1 : 0) == SQLITE_OK else {
         throw bindError()
       }
-      try bind(bootstrap.workspaceMode, at: 12, to: statement)
-      try bind(Self.agentOrderJSON(bootstrap.localCLIAgentOrder), at: 13, to: statement)
-      try bind(deviceID, at: 14, to: statement)
-      try bind(deviceID, at: 15, to: statement)
-      try bind(timestamp, at: 16, to: statement)
-      try bind(timestamp, at: 17, to: statement)
+      try bind(bootstrap.workspaceMode, at: 11, to: statement)
+      try bind(Self.agentOrderJSON(bootstrap.localCLIAgentOrder), at: 12, to: statement)
+      try bind(timestamp, at: 13, to: statement)
+      try bind(timestamp, at: 14, to: statement)
       try stepDone(statement)
       return try surfaceProfileUnlocked(id: profileID, ownerDeviceID: ownerDeviceID)
         ?? bootstrap
@@ -118,8 +86,7 @@ extension WorkspaceDatabaseConnection {
           left_rail_visible = ?, right_rail_visible = ?, single_rail_visible = ?,
           chat_width_percent = ?, note_on_left = ?, workspace_mode = ?,
           agent_order_json = ?, revision = revision + 1, updated_at = ?
-        WHERE id = ? AND surface = 'mac_native' AND authority_kind = 'device_owned'
-          AND authority_device_id = ?
+        WHERE id = ? AND device_id = ?
         """)
       defer { sqlite3_finalize(statement) }
       try bind(profile.theme, at: 1, to: statement)
@@ -158,41 +125,36 @@ extension WorkspaceDatabaseConnection {
     ownerDeviceID: UUID
   ) throws -> SurfaceProfile? {
     let statement = try prepareUnlocked("""
-      SELECT id, user_id, surface, device_id, theme, sidebar_style,
+      SELECT id, device_id, theme, sidebar_style,
         single_sidebar_side, left_rail_visible, right_rail_visible,
         single_rail_visible, chat_width_percent, note_on_left,
         workspace_mode, agent_order_json, revision, created_at, updated_at
       FROM surface_profiles
-      WHERE id = ? AND surface = 'mac_native' AND authority_kind = 'device_owned'
-        AND authority_device_id = ?
+      WHERE id = ? AND device_id = ?
       """)
     defer { sqlite3_finalize(statement) }
     try bind(id, at: 1, to: statement)
     try bind(ownerDeviceID.uuidString.lowercased(), at: 2, to: statement)
     let code = sqlite3_step(statement)
     if code == SQLITE_DONE { return nil }
-    guard code == SQLITE_ROW,
-          let surface = DashboardSurface(persistedValue: try text(statement, column: 2)) else {
-      throw WorkspaceDatabaseError.corruptRow
-    }
+    guard code == SQLITE_ROW else { throw WorkspaceDatabaseError.corruptRow }
     return SurfaceProfile(
       id: try text(statement, column: 0),
-      userID: try text(statement, column: 1),
-      surface: surface,
-      deviceID: optionalText(statement, column: 3).flatMap(UUID.init(uuidString:)),
-      theme: try text(statement, column: 4),
-      sidebarStyle: try text(statement, column: 5),
-      singleSidebarSide: try text(statement, column: 6),
-      leftRailVisible: sqlite3_column_int(statement, 7) != 0,
-      rightRailVisible: sqlite3_column_int(statement, 8) != 0,
-      singleRailVisible: sqlite3_column_int(statement, 9) != 0,
-      chatWidthPercent: sqlite3_column_double(statement, 10),
-      noteOnLeft: sqlite3_column_int(statement, 11) != 0,
-      workspaceMode: try text(statement, column: 12),
-      localCLIAgentOrder: Self.agentOrder(from: try text(statement, column: 13)),
-      revision: sqlite3_column_int64(statement, 14),
-      createdAt: Self.date(try text(statement, column: 15)) ?? .distantPast,
-      updatedAt: Self.date(try text(statement, column: 16)) ?? .distantPast
+      surface: .mac,
+      deviceID: optionalText(statement, column: 1).flatMap(UUID.init(uuidString:)),
+      theme: try text(statement, column: 2),
+      sidebarStyle: try text(statement, column: 3),
+      singleSidebarSide: try text(statement, column: 4),
+      leftRailVisible: sqlite3_column_int(statement, 5) != 0,
+      rightRailVisible: sqlite3_column_int(statement, 6) != 0,
+      singleRailVisible: sqlite3_column_int(statement, 7) != 0,
+      chatWidthPercent: sqlite3_column_double(statement, 8),
+      noteOnLeft: sqlite3_column_int(statement, 9) != 0,
+      workspaceMode: try text(statement, column: 10),
+      localCLIAgentOrder: Self.agentOrder(from: try text(statement, column: 11)),
+      revision: sqlite3_column_int64(statement, 12),
+      createdAt: Self.date(try text(statement, column: 13)) ?? .distantPast,
+      updatedAt: Self.date(try text(statement, column: 14)) ?? .distantPast
     )
   }
 
@@ -210,15 +172,12 @@ extension WorkspaceDatabaseConnection {
 
     return try transaction {
       let folderID = id.uuidString.lowercased()
-      let operatorID = try localMutationOperatorIDUnlocked()
       let timestamp = Self.timestamp(createdAt)
       let positionStatement = try prepareUnlocked("""
         SELECT COALESCE(MAX(position), -1) + 1
         FROM folders
-        WHERE user_id = ?
         """)
       defer { sqlite3_finalize(positionStatement) }
-      try bind(operatorID, at: 1, to: positionStatement)
       guard sqlite3_step(positionStatement) == SQLITE_ROW else {
         throw stepError()
       }
@@ -226,18 +185,17 @@ extension WorkspaceDatabaseConnection {
 
       let insert = try prepareUnlocked("""
         INSERT INTO folders (
-          id, user_id, name, icon, position, is_pinned, created_at, updated_at
-        ) VALUES (?, ?, ?, 'folder', ?, 0, ?, ?)
+          id, name, icon, position, is_pinned, created_at, updated_at
+        ) VALUES (?, ?, 'folder', ?, 0, ?, ?)
         """)
       defer { sqlite3_finalize(insert) }
       try bind(folderID, at: 1, to: insert)
-      try bind(operatorID, at: 2, to: insert)
-      try bind(normalizedName, at: 3, to: insert)
-      guard sqlite3_bind_int64(insert, 4, position) == SQLITE_OK else {
+      try bind(normalizedName, at: 2, to: insert)
+      guard sqlite3_bind_int64(insert, 3, position) == SQLITE_OK else {
         throw bindError()
       }
+      try bind(timestamp, at: 4, to: insert)
       try bind(timestamp, at: 5, to: insert)
-      try bind(timestamp, at: 6, to: insert)
       try stepDone(insert)
 
       try validateExecutionLocation(location)
@@ -259,17 +217,15 @@ extension WorkspaceDatabaseConnection {
     }
 
     return try transaction {
-      let operatorID = try localMutationOperatorIDUnlocked()
       let update = try prepareUnlocked("""
         UPDATE folders
         SET name = ?, updated_at = ?
-        WHERE id = ? AND user_id = ?
+        WHERE id = ?
         """)
       defer { sqlite3_finalize(update) }
       try bind(normalizedName, at: 1, to: update)
       try bind(Self.timestamp(updatedAt), at: 2, to: update)
       try bind(id, at: 3, to: update)
-      try bind(operatorID, at: 4, to: update)
       try stepDone(update)
       guard changedRowCountUnlocked == 1 else {
         throw WorkspaceFolderMutationError.folderNotFound
@@ -286,11 +242,10 @@ extension WorkspaceDatabaseConnection {
     updatedAt: Date = Date()
   ) throws -> Bool {
     try transaction {
-      let operatorID = try localMutationOperatorIDUnlocked()
       let update = try prepareUnlocked("""
         UPDATE folders
         SET is_pinned = ?, updated_at = ?
-        WHERE id = ? AND user_id = ?
+        WHERE id = ?
         """)
       defer { sqlite3_finalize(update) }
       guard sqlite3_bind_int(update, 1, isPinned ? 1 : 0) == SQLITE_OK else {
@@ -298,7 +253,6 @@ extension WorkspaceDatabaseConnection {
       }
       try bind(Self.timestamp(updatedAt), at: 2, to: update)
       try bind(id, at: 3, to: update)
-      try bind(operatorID, at: 4, to: update)
       try stepDone(update)
       guard changedRowCountUnlocked == 1 else {
         throw WorkspaceFolderMutationError.folderNotFound
@@ -315,16 +269,14 @@ extension WorkspaceDatabaseConnection {
     updatedAt: Date = Date()
   ) throws -> Bool {
     return try transaction {
-      let operatorID = try localMutationOperatorIDUnlocked()
       let isPinned: Bool = try {
         let sourceLookup = try prepareUnlocked("""
           SELECT is_pinned
           FROM folders
-          WHERE id = ? AND user_id = ?
+          WHERE id = ?
           """)
         defer { sqlite3_finalize(sourceLookup) }
         try bind(id, at: 1, to: sourceLookup)
-        try bind(operatorID, at: 2, to: sourceLookup)
         let sourceCode = sqlite3_step(sourceLookup)
         guard sourceCode == SQLITE_ROW else {
           if sourceCode == SQLITE_DONE {
@@ -339,17 +291,15 @@ extension WorkspaceDatabaseConnection {
         let sectionLookup = try prepareUnlocked("""
           SELECT id, name, position
           FROM folders
-          WHERE user_id = ? AND is_pinned = ?
+          WHERE is_pinned = ?
             AND (SELECT workspace_id FROM folder_execution_roots WHERE folder_id = folders.id)
                 IS (SELECT workspace_id FROM folder_execution_roots WHERE folder_id = ?)
           """)
         defer { sqlite3_finalize(sectionLookup) }
-        try bind(operatorID, at: 1, to: sectionLookup)
-        guard sqlite3_bind_int(sectionLookup, 2, isPinned ? 1 : 0) == SQLITE_OK else {
+        guard sqlite3_bind_int(sectionLookup, 1, isPinned ? 1 : 0) == SQLITE_OK else {
           throw bindError()
         }
-
-        try bind(id, at: 3, to: sectionLookup)
+        try bind(id, at: 2, to: sectionLookup)
 
         var values: [(id: String, name: String, position: Int64)] = []
         while true {
@@ -387,7 +337,7 @@ extension WorkspaceDatabaseConnection {
       let update = try prepareUnlocked("""
         UPDATE folders
         SET position = ?, updated_at = ?
-        WHERE id = ? AND user_id = ?
+        WHERE id = ?
         """)
       defer { sqlite3_finalize(update) }
       let timestamp = Self.timestamp(updatedAt)
@@ -402,7 +352,6 @@ extension WorkspaceDatabaseConnection {
         }
         try bind(timestamp, at: 2, to: update)
         try bind(folder.id, at: 3, to: update)
-        try bind(operatorID, at: 4, to: update)
         try stepDone(update)
         guard changedRowCountUnlocked == 1 else {
           throw WorkspaceFolderMutationError.folderNotFound
@@ -419,24 +368,21 @@ extension WorkspaceDatabaseConnection {
     id: String
   ) throws -> Bool {
     try transaction {
-      let operatorID = try localMutationOperatorIDUnlocked()
       let existing = try prepareUnlocked("""
         SELECT 1 FROM folders
-        WHERE id = ? AND user_id = ?
+        WHERE id = ?
         """)
       defer { sqlite3_finalize(existing) }
       try bind(id, at: 1, to: existing)
-      try bind(operatorID, at: 2, to: existing)
       guard sqlite3_step(existing) == SQLITE_ROW else {
         throw WorkspaceFolderMutationError.folderNotFound
       }
       let delete = try prepareUnlocked("""
         DELETE FROM folders
-        WHERE id = ? AND user_id = ?
+        WHERE id = ?
         """)
       defer { sqlite3_finalize(delete) }
       try bind(id, at: 1, to: delete)
-      try bind(operatorID, at: 2, to: delete)
       try stepDone(delete)
       guard changedRowCountUnlocked == 1 else {
         throw WorkspaceFolderMutationError.folderNotFound
@@ -448,46 +394,21 @@ extension WorkspaceDatabaseConnection {
 
   public func dashboardRecordCounts() throws -> DashboardRecordCounts {
     try withLock {
-      let operatorID = try canonicalWorkspaceOperatorIDUnlocked()
       func count(_ table: String, where predicate: String? = nil) throws -> Int {
-        var sql = "SELECT COUNT(*) FROM \(table)"
-        if let predicate {
-          sql += " WHERE \(predicate)"
-        }
-        let statement = try prepareUnlocked(sql)
+        let statement = try prepareUnlocked("SELECT COUNT(*) FROM \(table)" + (predicate.map { " WHERE " + $0 } ?? ""))
         defer { sqlite3_finalize(statement) }
-        if predicate?.contains("?") == true, let operatorID {
-          try bind(operatorID, at: 1, to: statement)
-        }
         guard sqlite3_step(statement) == SQLITE_ROW else { throw stepError() }
         return Int(sqlite3_column_int64(statement, 0))
       }
-
-      let scoped = operatorID == nil ? nil : "user_id = ?"
-      let activeScoped = operatorID == nil ? "deleted_at IS NULL" : "user_id = ? AND deleted_at IS NULL"
-      let activeAgentScoped = operatorID == nil
-        ? "deleted_at IS NULL"
-        : "(user_id = ? OR desktop_owned = 1) AND deleted_at IS NULL"
-      let activeConversationScoped = operatorID == nil
-        ? "deleted_at IS NULL AND is_archived = 0"
-        : "(user_id = ? OR desktop_owned = 1) AND deleted_at IS NULL AND is_archived = 0"
-      let conversationChildScope = operatorID == nil ? nil : """
-        conversation_id IN (
-          SELECT id FROM dashboard_conversations
-          WHERE (user_id = ? OR desktop_owned = 1)
-            AND deleted_at IS NULL AND is_archived = 0
-        )
-        """
-
+      let liveConversation = "conversation_id IN (SELECT id FROM conversations WHERE deleted_at IS NULL AND is_archived = 0)"
       return try DashboardRecordCounts(
-        profiles: count("profiles", where: operatorID == nil ? nil : "id = ?"),
-        folders: count("folders", where: scoped),
-        notes: count("notes", where: activeScoped),
-        agents: count("dashboard_agents", where: activeAgentScoped),
-        conversations: count("dashboard_conversations", where: activeConversationScoped),
-        messages: count("dashboard_messages", where: conversationChildScope),
-        runs: count("dashboard_runs", where: conversationChildScope),
-        calendarItems: count("dashboard_calendar_items", where: activeScoped)
+        folders: count("folders"),
+        notes: count("notes", where: "deleted_at IS NULL"),
+        agents: count("agents", where: "deleted_at IS NULL"),
+        conversations: count("conversations", where: "deleted_at IS NULL AND is_archived = 0"),
+        messages: count("messages", where: liveConversation),
+        runs: count("runs", where: liveConversation),
+        calendarItems: count("calendar_items", where: "deleted_at IS NULL")
       )
     }
   }
@@ -498,11 +419,7 @@ extension WorkspaceDatabaseConnection {
 
   public func workspaceOverview() throws -> WorkspaceSnapshot {
     try withLock {
-      var folders: [WorkspaceFolderRecord] = []
-      var conversations: [WorkspaceConversationRecord] = []
-      var notes: [WorkspaceNoteRecord] = []
-      if let operatorID = try canonicalWorkspaceOperatorIDUnlocked() {
-        folders = try decodeCanonicalRowsUnlocked(
+      let folders: [WorkspaceFolderRecord] = try decodeCanonicalRowsUnlocked(
           """
           SELECT json_object(
             'id', id, 'name', name, 'icon', icon, 'position', position,
@@ -513,51 +430,42 @@ extension WorkspaceDatabaseConnection {
             'reference_paths', json(COALESCE((SELECT reference_paths FROM folder_execution_roots WHERE folder_id=folders.id),'[]'))
           )
           FROM folders
-          WHERE user_id = ?
           ORDER BY is_pinned DESC, position, name, id
           """,
-          bindings: [operatorID],
+          bindings: [],
           as: WorkspaceFolderRecord.self
         )
-        conversations = try decodeCanonicalRowsUnlocked(
+      var conversations: [WorkspaceConversationRecord] = try decodeCanonicalRowsUnlocked(
           """
           SELECT json_object(
             'id', id, 'agent_id', agent_id,
-            'agent_codename', agent_codename,
-            'governing_plane', governing_plane,
-            'authority_device_id', authority_device_id, 'title', title,
+            'agent_codename', agent_codename, 'title', title,
             'local_runtime_kind', (
               SELECT runtime_kind
-              FROM desktop_local_acp_sessions AS local_session
-              WHERE local_session.conversation_id = dashboard_conversations.id
+              FROM harness_sessions AS local_session
+              WHERE local_session.conversation_id = conversations.id
             ),
             'remote_workspace_id', (
               SELECT remote_workspace_id
-              FROM desktop_local_acp_sessions AS local_session
-              WHERE local_session.conversation_id = dashboard_conversations.id
+              FROM harness_sessions AS local_session
+              WHERE local_session.conversation_id = conversations.id
             ),
             'unread', unread, 'last_message_preview', last_message_preview,
-            'is_scheduled_task', EXISTS(SELECT 1 FROM workspace_calendar_sessions WHERE id=dashboard_conversations.id),
+            'is_scheduled_task', EXISTS(SELECT 1 FROM workspace_calendar_sessions WHERE id=conversations.id),
             'imported_at',
-              (SELECT imported_at FROM desktop_session_imports WHERE conversation_id = dashboard_conversations.id),
+              (SELECT imported_at FROM session_imports WHERE conversation_id = conversations.id),
             'last_message_at', last_message_at, 'folder_id', folder_id,
             'is_pinned', is_pinned,
             'is_archived', is_archived
           )
-          FROM dashboard_conversations
-          WHERE (user_id = ? OR desktop_owned = 1)
-            AND deleted_at IS NULL
-            AND (is_archived = 0 OR (desktop_owned = 1
-              AND EXISTS (SELECT 1 FROM retained_execution_history
-                WHERE conversation_id=dashboard_conversations.id)))
-            AND governing_plane = 'wovenmatter_macos'
+          FROM conversations
+          WHERE \(Self.listedConversation("conversations"))
           ORDER BY last_message_at DESC, id DESC
           """,
-          bindings: [operatorID],
+          bindings: [],
           as: WorkspaceConversationRecord.self
         )
-
-        notes = try decodeCanonicalRowsUnlocked(
+      let notes: [WorkspaceNoteRecord] = try decodeCanonicalRowsUnlocked(
           """
           SELECT json_object(
             'id', id, 'folder_id', folder_id, 'title', title,
@@ -566,13 +474,12 @@ extension WorkspaceDatabaseConnection {
             'revision', CAST(COALESCE((SELECT revision FROM device_sync_revisions WHERE kind = 'note' AND resource_id = notes.id), 1) AS TEXT)
           )
           FROM notes
-          WHERE user_id = ? AND deleted_at IS NULL
+          WHERE deleted_at IS NULL
           ORDER BY is_pinned DESC, updated_at DESC, id DESC
           """,
-          bindings: [operatorID],
+          bindings: [],
           as: WorkspaceNoteRecord.self
         )
-      }
 
       let statuses = try programStatusSnapshotsUnlocked()
       for index in conversations.indices {
@@ -580,7 +487,7 @@ extension WorkspaceDatabaseConnection {
           ?? ProgramStatusSnapshot(status: ProgramStatus(state: .idle))
       }
       let revisionStatement = try prepareUnlocked(
-        "SELECT revision FROM desktop_dashboard_revision WHERE singleton = 1"
+        "SELECT revision FROM workspace_revision WHERE singleton = 1"
       )
       defer { sqlite3_finalize(revisionStatement) }
       guard sqlite3_step(revisionStatement) == SQLITE_ROW else { throw stepError() }
@@ -600,47 +507,9 @@ extension WorkspaceDatabaseConnection {
     }
   }
 
-  func canonicalWorkspaceOperatorIDUnlocked() throws -> String? {
-    let inferred = try prepareUnlocked("""
-      SELECT user_id
-      FROM (
-        SELECT user_id FROM dashboard_conversations WHERE deleted_at IS NULL
-        UNION ALL
-        SELECT user_id FROM dashboard_agents WHERE deleted_at IS NULL
-        UNION ALL
-        SELECT user_id FROM notes WHERE deleted_at IS NULL
-        UNION ALL
-        SELECT user_id FROM folders
-        UNION ALL
-        SELECT user_id FROM dashboard_calendar_items
-        UNION ALL
-        SELECT id AS user_id FROM profiles
-      )
-      GROUP BY user_id
-      ORDER BY COUNT(*) DESC, user_id
-      LIMIT 1
-      """)
-    defer { sqlite3_finalize(inferred) }
-    let inferredCode = sqlite3_step(inferred)
-    if inferredCode == SQLITE_ROW { return try text(inferred, column: 0) }
-    guard inferredCode == SQLITE_DONE else { throw stepError() }
-    return nil
-  }
-
-  func localMutationOperatorIDUnlocked() throws -> String {
-    try canonicalWorkspaceOperatorIDUnlocked() ?? "local-operator"
-  }
-
-  func validateFolderUnlocked(id: String?, operatorID: String) throws {
+  func validateFolderUnlocked(id: String?) throws {
     guard let id else { return }
-    let statement = try prepareUnlocked("""
-      SELECT 1 FROM folders
-      WHERE id = ? AND user_id = ?
-      """)
-    defer { sqlite3_finalize(statement) }
-    try bind(id, at: 1, to: statement)
-    try bind(operatorID, at: 2, to: statement)
-    guard sqlite3_step(statement) == SQLITE_ROW else {
+    guard try historyRowsUnlocked("SELECT 1 AS present FROM folders WHERE id = ?", values: [id]).isEmpty == false else {
       throw WorkspaceNoteMutationError.folderNotFound
     }
   }
@@ -667,13 +536,6 @@ extension WorkspaceDatabaseConnection {
 // MARK: - Async worker boundary
 
 extension WorkspaceDatabase {
-  public func bindDeviceOwnership(
-    ownerDeviceID: UUID,
-    boundAt: Date = Date()
-  ) async throws {
-    try await write { try $0.bindDeviceOwnership(ownerDeviceID: ownerDeviceID, boundAt: boundAt) }
-  }
-
   public func macSurfaceProfile(
     ownerDeviceID: UUID,
     bootstrap: SurfaceProfile,
@@ -751,7 +613,7 @@ extension WorkspaceDatabaseConnection {
   public func availableSessionExecutionRoot(id: String) throws -> WorkspaceFolderLocation {
     try withLock {
       guard let root = try sessionExecutionRoot(id: id),
-            try historyRowsUnlocked("SELECT 1 FROM dashboard_conversations WHERE id=? AND deleted_at IS NULL AND is_archived=0 AND NOT EXISTS(SELECT 1 FROM retained_execution_history WHERE conversation_id=?)", values: [id,id]).count == 1 else {
+            try historyRowsUnlocked("SELECT 1 FROM conversations WHERE id=? AND deleted_at IS NULL AND is_archived=0 AND NOT EXISTS(SELECT 1 FROM retained_execution_history WHERE conversation_id=?)", values: [id,id]).count == 1 else {
         throw WorkspaceToolError.invalid("This saved chat is read-only. Start a new chat in an available execution workspace.")
       }
       return root
@@ -793,7 +655,7 @@ extension WorkspaceDatabaseConnection {
     }
     try toolsExecuteUnlocked("INSERT INTO execution_workspace_defaults(workspace_id,default_path) VALUES(?,?) ON CONFLICT(workspace_id) DO UPDATE SET default_path=excluded.default_path", [location.workspaceID,defaultPath])
     try toolsExecuteUnlocked("INSERT INTO session_execution_roots(conversation_id,workspace_id,root_path) VALUES(?,?,?)", [id,location.workspaceID,location.rootPath])
-    try toolsExecuteUnlocked("UPDATE dashboard_conversations SET folder_id=? WHERE id=?", [folderID,id])
+    try toolsExecuteUnlocked("UPDATE conversations SET folder_id=? WHERE id=?", [folderID,id])
   }
 
   public func setFolderReferences(id: String, paths: [String]) throws {
@@ -836,7 +698,7 @@ extension WorkspaceDatabaseConnection {
       guard (try? availableSessionExecutionRoot(id: id)) != nil else { return false }
       guard let row = try historyRowsUnlocked("SELECT folder_locked FROM session_execution_roots WHERE conversation_id=?", values: [id]).first?.objectValue,
             row["folder_locked"]?.intValue == 0 else { return false }
-      return try historyRowsUnlocked("SELECT 1 FROM dashboard_messages WHERE conversation_id=? AND role='user' LIMIT 1", values: [id]).isEmpty
+      return try historyRowsUnlocked("SELECT 1 FROM messages WHERE conversation_id=? AND role='user' LIMIT 1", values: [id]).isEmpty
     }
   }
 }
@@ -851,7 +713,7 @@ extension WorkspaceDatabaseConnection {
   public func clearDraftNativeSession(id: String) throws {
     try transaction {
       guard try canChooseSessionFolder(id: id) else { throw WorkspaceToolError.invalid("Only a draft can change its execution root.") }
-      try toolsExecuteUnlocked("UPDATE desktop_local_acp_sessions SET acp_session_id=NULL WHERE conversation_id=?", [id])
+      try toolsExecuteUnlocked("UPDATE harness_sessions SET native_session_id=NULL WHERE conversation_id=?", [id])
     }
   }
 }

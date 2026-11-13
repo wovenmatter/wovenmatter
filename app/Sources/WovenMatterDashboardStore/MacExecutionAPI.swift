@@ -245,7 +245,7 @@ extension WorkspaceDatabase {
     try await read { connection in
       try connection.withLock {
         try connection.historyRowsUnlocked("""
-          SELECT conversation_id, file_name, mime_type FROM dashboard_message_attachments
+          SELECT conversation_id, file_name, mime_type FROM message_attachments
           WHERE content_hash = ? ORDER BY created_at, id LIMIT 64
           """, values: [contentHash])
       }.compactMap { row in

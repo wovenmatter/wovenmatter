@@ -38,13 +38,12 @@ extension WorkspaceDatabaseConnection {
             if try libraryVersionUnlocked(kind: "note", id: id) != nil {
                 throw WorkspaceNoteMutationError.noteNotFound
             }
-            let owner = try localMutationOperatorIDUnlocked()
             let destination = try folderID.flatMap { try libraryFolderUnlocked(id: $0) }?.id
             let timestamp = Self.timestamp(Date())
             try toolsExecuteUnlocked("""
-                INSERT INTO notes(id, user_id, folder_id, title, content, snippet, position, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?)
-                """, [id, owner, destination, recoveredTitle, content, Self.noteSnippet(content), timestamp, timestamp])
+                INSERT INTO notes(id, folder_id, title, content, snippet, position, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, 0, ?, ?)
+                """, [id, destination, recoveredTitle, content, Self.noteSnippet(content), timestamp, timestamp])
             try checkpointNoteUnlocked(id: id, source: "recovered", force: true)
             return id
         }

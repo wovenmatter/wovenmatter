@@ -62,8 +62,6 @@ public struct WorkspaceConversationRecord: Codable, Equatable, Identifiable, Sen
   public let id: String
   public let agentID: String?
   public let agentCodename: String?
-  public let governingPlane: AgentGoverningPlane?
-  public let authorityDeviceID: UUID?
   public let localRuntimeKind: AgentRuntimeKind?
   public let remoteWorkspaceID: UUID?
   public let title: String
@@ -81,8 +79,6 @@ public struct WorkspaceConversationRecord: Codable, Equatable, Identifiable, Sen
     case id, title, unread
     case agentID = "agent_id"
     case agentCodename = "agent_codename"
-    case governingPlane = "governing_plane"
-    case authorityDeviceID = "authority_device_id"
     case localRuntimeKind = "local_runtime_kind"
     case remoteWorkspaceID = "remote_workspace_id"
     case lastMessagePreview = "last_message_preview"
@@ -100,11 +96,6 @@ public struct WorkspaceConversationRecord: Codable, Equatable, Identifiable, Sen
     id = try values.decode(String.self, forKey: .id)
     agentID = try values.decodeIfPresent(String.self, forKey: .agentID)
     agentCodename = try values.decodeIfPresent(String.self, forKey: .agentCodename)
-    governingPlane = try values.decodeIfPresent(
-      AgentGoverningPlane.self,
-      forKey: .governingPlane
-    )
-    authorityDeviceID = try values.decodeIfPresent(UUID.self, forKey: .authorityDeviceID)
     // An unknown harness identity leaves the chat listed as plain read-only history.
     localRuntimeKind = try values.decodeIfPresent(String.self, forKey: .localRuntimeKind)
       .flatMap(AgentRuntimeKind.init(rawValue:))
@@ -155,8 +146,6 @@ public struct WorkspaceMessageRecord: Codable, Equatable, Identifiable, Sendable
   public let conversationID: String
   public let clientMessageID: String?
   public let runID: String?
-  public let governingPlane: AgentGoverningPlane?
-  public let authorityDeviceID: UUID?
   public let role: String
   public let content: String
   public let status: String?
@@ -172,8 +161,6 @@ public struct WorkspaceMessageRecord: Codable, Equatable, Identifiable, Sendable
     case conversationID = "conversation_id"
     case clientMessageID = "client_message_id"
     case runID = "run_id"
-    case governingPlane = "governing_plane"
-    case authorityDeviceID = "authority_device_id"
     case createdAt = "created_at"
     case updatedAt = "updated_at"
   }
@@ -182,7 +169,7 @@ public struct WorkspaceMessageRecord: Codable, Equatable, Identifiable, Sendable
   public func updating(content: String, status: String?) -> WorkspaceMessageRecord {
     WorkspaceMessageRecord(senderKind: senderKind, senderSessionID: senderSessionID, senderAgent: senderAgent,
       senderSessionTitle: senderSessionTitle, id: id, conversationID: conversationID, clientMessageID: clientMessageID,
-      runID: runID, governingPlane: governingPlane, authorityDeviceID: authorityDeviceID, role: role, content: content,
+      runID: runID, role: role, content: content,
       status: status, createdAt: createdAt, updatedAt: updatedAt)
   }
 }
@@ -220,7 +207,6 @@ public struct WorkspaceNoteRecord: Codable, Equatable, Identifiable, Sendable {
 
 public struct WorkspaceCalendarItemRecord: Codable, Equatable, Identifiable, Sendable {
   public let id: String
-  public let userID: String
   public let kind: String
   public let title: String
   public let details: String?
@@ -238,7 +224,6 @@ public struct WorkspaceCalendarItemRecord: Codable, Equatable, Identifiable, Sen
 
   enum CodingKeys: String, CodingKey {
     case id, kind, title, status, source
-    case userID = "user_id"
     case details = "description"
     case startsAt = "starts_at"
     case endsAt = "ends_at"
@@ -250,7 +235,6 @@ public struct WorkspaceCalendarItemRecord: Codable, Equatable, Identifiable, Sen
 
   public init(
     id: String,
-    userID: String,
     kind: String,
     title: String,
     details: String?,
@@ -264,7 +248,6 @@ public struct WorkspaceCalendarItemRecord: Codable, Equatable, Identifiable, Sen
     calendar: WorkspaceCalendarDetails = .init()
   ) {
     self.id = id
-    self.userID = userID
     self.kind = kind
     self.title = title
     self.details = details
@@ -281,7 +264,6 @@ public struct WorkspaceCalendarItemRecord: Codable, Equatable, Identifiable, Sen
   public init(from decoder: any Decoder) throws {
     let values = try decoder.container(keyedBy: CodingKeys.self)
     id = try values.decode(String.self, forKey: .id)
-    userID = try values.decode(String.self, forKey: .userID)
     kind = try values.decode(String.self, forKey: .kind)
     title = try values.decode(String.self, forKey: .title)
     details = try values.decodeIfPresent(String.self, forKey: .details)
@@ -301,8 +283,6 @@ public struct WorkspaceRunRecord: Codable, Equatable, Identifiable, Sendable {
   public let id: String
   public let conversationID: String
   public let agentID: String?
-  public let governingPlane: AgentGoverningPlane?
-  public let authorityDeviceID: UUID?
   public let userMessageID: String?
   public let assistantMessageID: String?
   public let status: String
@@ -316,8 +296,6 @@ public struct WorkspaceRunRecord: Codable, Equatable, Identifiable, Sendable {
     case id, status, error
     case conversationID = "conversation_id"
     case agentID = "agent_id"
-    case governingPlane = "governing_plane"
-    case authorityDeviceID = "authority_device_id"
     case userMessageID = "user_message_id"
     case assistantMessageID = "assistant_message_id"
     case startedAt = "started_at"

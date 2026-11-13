@@ -16,8 +16,8 @@ extension WorkspaceDatabaseConnection {
   func retainedAssociationUnlocked(workspaceID: String, runID: String, nativeSessionID: String?) throws -> RetainedAssociation? {
     guard federationID(runID) else { return nil }
     let statement = try prepareUnlocked("""
-      SELECT r.conversation_id,s.runtime_kind,s.acp_session_id,r.openclaw_session_key
-      FROM dashboard_runs r JOIN desktop_local_acp_sessions s ON s.conversation_id=r.conversation_id
+      SELECT r.conversation_id,s.runtime_kind,s.native_session_id AS session_native_id,r.native_session_id AS run_native_id
+      FROM runs r JOIN harness_sessions s ON s.conversation_id=r.conversation_id
       WHERE r.id=? AND s.remote_workspace_id=?
       """)
     defer { sqlite3_finalize(statement) }
@@ -82,7 +82,7 @@ extension WorkspaceDatabaseConnection {
         guard owner == nil || owner == workspace.id + "/" + entry.conversationID else {
           throw federationError("wrong_owner", "This retained run belongs to another workspace or conversation.")
         }
-        try toolsExecuteUnlocked("UPDATE dashboard_runs SET status=?,updated_at=?,completed_at=COALESCE(completed_at,?) WHERE id=?", [proof.status, Self.timestamp(Date()), Self.timestamp(Date()), proof.runID])
+        try toolsExecuteUnlocked("UPDATE runs SET status=?,updated_at=?,completed_at=COALESCE(completed_at,?) WHERE id=?", [proof.status, Self.timestamp(Date()), Self.timestamp(Date()), proof.runID])
         let insert = try prepareUnlocked("INSERT INTO execution_retained_settlements VALUES (?,?,?)")
         defer { sqlite3_finalize(insert) }
         try bind(entry.eventID, at: 1, to: insert); try bind(workspace.id, at: 2, to: insert); try bind(fingerprint, at: 3, to: insert); try stepDone(insert)
@@ -94,7 +94,7 @@ extension WorkspaceDatabaseConnection {
   /// after any other live run has settled. Preflight does not relax this fence.
   func acceptRetainedExecutionIdentityUnlocked(_ entry: ExecutionJournalEntry, workspace: ExecutionWorkspace) throws {
     let proof = try validatedRetainedProofUnlocked(entry, workspace: workspace)
-    guard try federationScalarUnlocked("SELECT COUNT(*) FROM dashboard_runs WHERE conversation_id=? AND id<>? AND status IN ('running','queued','pending','cancelling','uncertain')", bindings: [entry.conversationID, proof.runID]) == 0,
+    guard try federationScalarUnlocked("SELECT COUNT(*) FROM runs WHERE conversation_id=? AND id<>? AND status IN ('running','queued','pending','cancelling','uncertain')", bindings: [entry.conversationID, proof.runID]) == 0,
           var conversation = try libraryConversationUnlocked(id: entry.conversationID) else {
       throw federationError("wrong_owner", "Retained ownership cannot replace another active execution.")
     }
@@ -113,7 +113,7 @@ extension WorkspaceDatabaseConnection {
       throw federationError("wrong_owner", "Retained run identity belongs to another execution workspace or conversation.")
     }
     try toolsExecuteUnlocked("INSERT OR IGNORE INTO execution_runs(id,workspace_id,conversation_id) VALUES (?,?,?)", [proof.runID, workspace.id, entry.conversationID])
-    try toolsExecuteUnlocked("UPDATE dashboard_runs SET status=?,updated_at=?,completed_at=COALESCE(completed_at,?) WHERE id=?", [proof.status, Self.timestamp(Date()), Self.timestamp(Date()), proof.runID])
+    try toolsExecuteUnlocked("UPDATE runs SET status=?,updated_at=?,completed_at=COALESCE(completed_at,?) WHERE id=?", [proof.status, Self.timestamp(Date()), Self.timestamp(Date()), proof.runID])
   }
 }
 extension WorkspaceDatabase {

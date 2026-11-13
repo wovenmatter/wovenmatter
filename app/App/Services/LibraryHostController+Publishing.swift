@@ -41,16 +41,16 @@ extension LibraryHostController {
         let identity = try await database.libraryIdentity()
         guard !model.isBackendFrontend, workspace.libraryID == identity.libraryID else { return }
         let settings = try await database.toolSettings()
-        var harnessDefaults: [String: GatewayJSONValue] = [:]
+        var harnessDefaults: [String: JSONValue] = [:]
         let selectionScope = "remote:" + workspace.id
         for runtime in AgentRuntimeKind.allCases {
             let defaults = model.sessionSelectionPreferences.defaults(harness: runtime.rawValue, workspace: selectionScope)
-            var value = try JSONDecoder().decode(GatewayJSONValue.self, from: JSONEncoder().encode(defaults)).objectValue ?? [:]
+            var value = try JSONDecoder().decode(JSONValue.self, from: JSONEncoder().encode(defaults)).objectValue ?? [:]
             value["usesProductPermissionDefault"] = .bool(model.sessionSelectionPreferences.usesProductPermissionDefault(harness: runtime.rawValue, workspace: selectionScope))
             harnessDefaults[runtime.rawValue] = .object(value)
         }
-        let toolSettings: GatewayJSONValue = .object([
-            "enabledByDefault": .array(settings.enabledByDefault.map(\.rawValue).sorted().map(GatewayJSONValue.string)),
+        let toolSettings: JSONValue = .object([
+            "enabledByDefault": .array(settings.enabledByDefault.map(\.rawValue).sorted().map(JSONValue.string)),
             "maximumManagedSessions": .number(Double(settings.maximumManagedSessions)),
             "maximumRunningSessions": .number(Double(settings.maximumRunningSessions)),
             "harnessDefaults": .object(harnessDefaults)

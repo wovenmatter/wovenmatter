@@ -29,7 +29,7 @@ struct SessionWaitTests {
                 makeSignedTransport: { workspace in try SignedExecutionWorkspaceTransport(workspace: workspace, signer: signer.signer, audience: linux.memberID, send: linux.send) })
             tools = try #require(mac.model.agentTools)
         }
-        func call(_ caller: String, _ name: String, _ arguments: [String: GatewayJSONValue]) async throws -> WovenMatterToolResponse {
+        func call(_ caller: String, _ name: String, _ arguments: [String: JSONValue]) async throws -> WovenMatterToolResponse {
             await tools.handle(try WovenMCPCatalog.request(name: name, arguments: .object(arguments)), callerID: caller)
         }
         /// What the Linux host's `workspace` stream sends for its current state.

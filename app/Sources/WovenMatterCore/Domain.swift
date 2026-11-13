@@ -5,20 +5,10 @@ public enum AgentExecutionLocation: String, Codable, CaseIterable, Hashable, Sen
   case remote
 }
 
-/// The product plane that governs an agent. This is intentionally independent
-/// from the process/runtime kind and from where the row is being viewed.
-public enum AgentGoverningPlane: String, Codable, CaseIterable, Hashable, Sendable {
-  case wovenmatterMacOS = "wovenmatter_macos"
-  case remoteWorkspace = "remote_workspace"
-}
-
-public enum DataAuthorityKind: String, Codable, CaseIterable, Hashable, Sendable {
-  case deviceOwned = "device_owned"
-}
-
-public enum AgentBucket: String, Codable, CaseIterable, Hashable, Sendable {
-  case localCLIAgents = "local_cli"
-  case remoteWorkspaceAgents = "remote_workspace"
+/// How the sidebar groups agents: this Mac's harnesses, or a remote workspace's.
+public enum AgentBucket: CaseIterable, Hashable, Sendable {
+  case localCLIAgents
+  case remoteWorkspaceAgents
 
   public var label: String {
     switch self {
@@ -99,20 +89,16 @@ public enum AgentRuntimeStatus: String, Codable, Sendable {
 
 public struct WorkspaceAgent: Codable, Equatable, Identifiable, Sendable {
   public let id: UUID
-  public let userID: String
   public var codename: String
   public var displayName: String
   public var iconKey: String
   public let executionLocation: AgentExecutionLocation
-  public let governingPlane: AgentGoverningPlane
-  public let authorityKind: DataAuthorityKind
-  public let authorityDeviceID: UUID?
+  /// The Mac that created the agent: the one whose harness it is.
+  public let ownerDeviceID: UUID?
   public let runtimeKind: AgentRuntimeKind
   public var runtimeDeviceID: UUID?
   public var platformCodename: String?
   public var runtimeStatus: AgentRuntimeStatus
-  public var runtimeVersion: String?
-  public var imageDigest: String?
   public var revision: Int64
   public let createdAt: Date
   public var updatedAt: Date
@@ -120,40 +106,30 @@ public struct WorkspaceAgent: Codable, Equatable, Identifiable, Sendable {
 
   public init(
     id: UUID = UUID(),
-    userID: String,
     codename: String,
     displayName: String,
     iconKey: String,
     executionLocation: AgentExecutionLocation,
-    governingPlane: AgentGoverningPlane = .wovenmatterMacOS,
-    authorityKind: DataAuthorityKind = .deviceOwned,
-    authorityDeviceID: UUID? = nil,
+    ownerDeviceID: UUID? = nil,
     runtimeKind: AgentRuntimeKind,
     runtimeDeviceID: UUID? = nil,
     platformCodename: String? = nil,
     runtimeStatus: AgentRuntimeStatus = .provisioning,
-    runtimeVersion: String? = nil,
-    imageDigest: String? = nil,
     revision: Int64 = 0,
     createdAt: Date = Date(),
     updatedAt: Date = Date(),
     deletedAt: Date? = nil
   ) {
     self.id = id
-    self.userID = userID
     self.codename = codename
     self.displayName = displayName
     self.iconKey = iconKey
     self.executionLocation = executionLocation
-    self.governingPlane = governingPlane
-    self.authorityKind = authorityKind
-    self.authorityDeviceID = authorityDeviceID
+    self.ownerDeviceID = ownerDeviceID
     self.runtimeKind = runtimeKind
     self.runtimeDeviceID = runtimeDeviceID
     self.platformCodename = platformCodename
     self.runtimeStatus = runtimeStatus
-    self.runtimeVersion = runtimeVersion
-    self.imageDigest = imageDigest
     self.revision = revision
     self.createdAt = createdAt
     self.updatedAt = updatedAt
@@ -161,9 +137,9 @@ public struct WorkspaceAgent: Codable, Equatable, Identifiable, Sendable {
   }
 
   public var bucket: AgentBucket {
-    switch governingPlane {
-    case .wovenmatterMacOS: .localCLIAgents
-    case .remoteWorkspace: .remoteWorkspaceAgents
+    switch executionLocation {
+    case .local: .localCLIAgents
+    case .remote: .remoteWorkspaceAgents
     }
   }
 

@@ -139,25 +139,25 @@ public struct StreamHello: Codable, Equatable, Sendable {
 public struct StreamRequest: Codable, Equatable, Sendable {
   public var id: String
   public var method: String
-  public var params: GatewayJSONValue
-  public init(id: String, method: String, params: GatewayJSONValue = .object([:])) {
+  public var params: JSONValue
+  public init(id: String, method: String, params: JSONValue = .object([:])) {
     self.id = id; self.method = method; self.params = params
   }
   public init<Params: Encodable>(id: String, method: StreamProtocol.Method, params: Params) throws {
-    self.init(id: id, method: method.rawValue, params: try GatewayJSONValue(encoding: params))
+    self.init(id: id, method: method.rawValue, params: try JSONValue(encoding: params))
   }
   public func decodeParams<Params: Decodable>(_ type: Params.Type) throws -> Params { try params.decode(type) }
 }
 
 public struct StreamResponse: Codable, Equatable, Sendable {
   public var id: String
-  public var result: GatewayJSONValue?
+  public var result: JSONValue?
   public var error: StreamError?
-  public init(id: String, result: GatewayJSONValue? = nil, error: StreamError? = nil) {
+  public init(id: String, result: JSONValue? = nil, error: StreamError? = nil) {
     self.id = id; self.result = result; self.error = error
   }
   public init<Result: Encodable>(id: String, encoding result: Result) throws {
-    self.init(id: id, result: try GatewayJSONValue(encoding: result))
+    self.init(id: id, result: try JSONValue(encoding: result))
   }
   public func decodeResult<Result: Decodable>(_ type: Result.Type) throws -> Result {
     if let error { throw error }
@@ -288,7 +288,7 @@ public struct StreamItem: Codable, Equatable, Sendable {
     case synchronized
     case serverState(StreamServerState)
     /// A kind this build does not know. Ignored, but a `seq` still advances.
-    case unknown(kind: String, data: GatewayJSONValue)
+    case unknown(kind: String, data: JSONValue)
 
     public var kind: String {
       switch self {
@@ -331,7 +331,7 @@ public struct StreamItem: Codable, Equatable, Sendable {
     case .library: payload = .library(try container.decode(StreamLibrary.self, forKey: .data))
     case .synchronized: payload = .synchronized
     case .serverState: payload = .serverState(try container.decode(StreamServerState.self, forKey: .data))
-    case nil: payload = .unknown(kind: kind, data: try container.decodeIfPresent(GatewayJSONValue.self, forKey: .data) ?? .null)
+    case nil: payload = .unknown(kind: kind, data: try container.decodeIfPresent(JSONValue.self, forKey: .data) ?? .null)
     }
   }
 
@@ -411,9 +411,9 @@ public struct StreamReceiptParams: Codable, Equatable, Sendable {
   public init(commandID: String) { self.commandID = commandID }
 }
 
-public extension GatewayJSONValue {
+public extension JSONValue {
   init<Value: Encodable>(encoding value: Value) throws {
-    self = try JSONDecoder().decode(GatewayJSONValue.self, from: JSONEncoder().encode(value))
+    self = try JSONDecoder().decode(JSONValue.self, from: JSONEncoder().encode(value))
   }
   func decode<Value: Decodable>(_ type: Value.Type) throws -> Value {
     try JSONDecoder().decode(type, from: JSONEncoder().encode(self))

@@ -35,7 +35,7 @@ extension MobileStore {
       let from = try MobileToolSupport.date(c.required("since")), to = try MobileToolSupport.date(c.required("until"))
       guard to > from, to.timeIntervalSince(from) <= 366 * 86_400 else { throw WorkspaceToolError.invalid("Use an occurrence window up to one year.") }
       var index = LibraryCalendarSchedule.index(existing.event.draft, onOrBefore: from) ?? 0
-      var rows: [GatewayJSONValue] = []
+      var rows: [JSONValue] = []
       while let date = LibraryCalendarSchedule.date(existing.event.draft, index: index), date <= to {
         if date >= from, let event = LibraryCalendarSchedule.occurrence(existing, index: index) { rows.append(try MobileToolSupport.value(event)) }; index += 1
       }

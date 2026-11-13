@@ -60,7 +60,7 @@ struct ACPPermissionLifecycleTests {
     #expect(fixture.factory.drivers.map(\.launchPermission) == ["auto"])
     let reopened = try await fixture.persistence.openDatabase()
     #expect(try await reopened.localACPSession(conversationID: fixture.id).permission == "auto")
-    #expect(try await reopened.localACPSession(conversationID: fixture.id).acpSessionID == "native-0")
+    #expect(try await reopened.localACPSession(conversationID: fixture.id).nativeSessionID == "native-0")
     await fixture.coordinator.shutdown()
   }
 
@@ -86,7 +86,7 @@ struct ACPPermissionLifecycleTests {
     #expect(drivers[2].existingSessionID == "native-0")
     #expect(drivers[2].launchPermission == "dontAsk")
     #expect(changed.permission == "dontAsk")
-    #expect(try await fixture.database.localACPSession(conversationID: fixture.id).acpSessionID == "native-0")
+    #expect(try await fixture.database.localACPSession(conversationID: fixture.id).nativeSessionID == "native-0")
     #expect(try await fixture.database.localACPSession(conversationID: fixture.id).permission == "dontAsk")
     #expect(try await fixture.database.localACPSession(conversationID: other).permission == "default")
     await fixture.coordinator.shutdown()
@@ -173,7 +173,7 @@ struct ACPPermissionLifecycleTests {
       )
     }
     #expect(try await fixture.database.localACPSession(conversationID: fixture.id).permission == "default")
-    #expect(try await fixture.database.localACPSession(conversationID: fixture.id).acpSessionID == "native-0")
+    #expect(try await fixture.database.localACPSession(conversationID: fixture.id).nativeSessionID == "native-0")
     let recovered = try await fixture.coordinator.configuration(
       conversationID: fixture.id, launch: fixture.launch, workspace: fixture.workspace
     )
@@ -195,7 +195,7 @@ struct ACPPermissionLifecycleTests {
         conversationID: fixture.id, permission: "dontAsk", launch: fixture.launch, workspace: fixture.workspace
       )
     }
-    #expect(try await fixture.database.localACPSession(conversationID: fixture.id).acpSessionID == "native-0")
+    #expect(try await fixture.database.localACPSession(conversationID: fixture.id).nativeSessionID == "native-0")
     #expect(try await fixture.database.localACPSession(conversationID: fixture.id).permission == "default")
     #expect(fixture.factory.drivers[1].shutdownCount == 1)
     await fixture.coordinator.shutdown()

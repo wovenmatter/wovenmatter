@@ -43,16 +43,16 @@ struct MemberLibraryFile: Codable, Equatable, Sendable {
 struct DefaultAgentControlSession: Decodable, Sendable {
     var id: String
     var state: String
-    var notifications: [GatewayJSONValue]
-    var prompt: GatewayJSONValue?
-    var result: GatewayJSONValue?
+    var notifications: [JSONValue]
+    var prompt: JSONValue?
+    var result: JSONValue?
     var error: String?
     var promptID: String? { prompt?.objectValue?["id"]?.stringValue }
 
     /// The helper's own output lines, as the SSH launcher delivered them:
     /// the notifications after `seen`, the prompt, then the terminal line.
     func lines(after seen: Int) -> [Data] {
-        var values: [GatewayJSONValue] = notifications.dropFirst(seen).map { .object(["notification": $0]) }
+        var values: [JSONValue] = notifications.dropFirst(seen).map { .object(["notification": $0]) }
         if let prompt, var body = prompt.objectValue, let id = body.removeValue(forKey: "id") {
             values.append(.object(["id": id, "prompt": .object(body)]))
         }
@@ -146,7 +146,7 @@ extension SignedExecutionWorkspaceTransport: MemberExecutionRoutes {
     }
 
     func adopt(_ body: Data) async throws {
-        let _: GatewayJSONValue = try await member("v1/execution/adopt", method: "POST", body: body, timeout: 120)
+        let _: JSONValue = try await member("v1/execution/adopt", method: "POST", body: body, timeout: 120)
     }
 
     func unlockDefaultAgent(workspace: String, unlockKey: String) async throws -> Bool {
@@ -176,6 +176,6 @@ extension SignedExecutionWorkspaceTransport: MemberExecutionRoutes {
     }
 
     func cancelDefaultAgentControl(id: String) async throws {
-        let _: GatewayJSONValue = try await member("v1/default-agent/control-sessions/" + Self.safeID(id), method: "DELETE")
+        let _: JSONValue = try await member("v1/default-agent/control-sessions/" + Self.safeID(id), method: "DELETE")
     }
 }

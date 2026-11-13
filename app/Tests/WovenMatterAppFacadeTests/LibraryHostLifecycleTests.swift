@@ -610,7 +610,7 @@ extension LibraryHostLifecycleTests {
         #expect(try await other.libraryExecutionOwner(conversationID: id) != nil)
         #expect(try await source.libraryExecutionOwner(conversationID: id) == nil)
         #expect(try await other.libraryFederatedTranscript(conversationID: id)?.messages.contains { $0.content == "Saved native input" } == true)
-        #expect(try await other.read { try $0.historyRowsUnlocked("SELECT conversation_id FROM desktop_local_acp_sessions WHERE conversation_id=?", values: [id]).isEmpty })
+        #expect(try await other.read { try $0.historyRowsUnlocked("SELECT conversation_id FROM harness_sessions WHERE conversation_id=?", values: [id]).isEmpty })
         #expect(try await other.read { try $0.historyRowsUnlocked("SELECT id FROM workspace_history_events WHERE conversation_id=?", values: [id]).count } == originalCount)
         let sourceAgent = try #require(try await source.dashboardAgents().first)
         #expect(mini.model.peerAgentWorkspaces[sourceAgent.id] != nil)
@@ -734,14 +734,14 @@ extension LibraryHostLifecycleTests {
         await #expect(throws: (any Error).self) { try await mini.model.mutateConversation(id: id, mutation: .moveToTrash) }
         #expect(await mini.model.moveConversation(id: id, toFolderID: nil) == false)
         let deleted = { (database: WorkspaceDatabase) in
-            try await database.read { try $0.historyRowsUnlocked("SELECT deleted_at FROM dashboard_conversations WHERE id=?", values: [id]).first?.objectValue?["deleted_at"]?.stringValue }
+            try await database.read { try $0.historyRowsUnlocked("SELECT deleted_at FROM conversations WHERE id=?", values: [id]).first?.objectValue?["deleted_at"]?.stringValue }
         }
         #expect(try await deleted(miniDB) == nil)
         // Rename stays a shared edit the observer may make.
         try await mini.model.mutateConversation(id: id, mutation: .rename("Renamed on the Mini"))
         await mini.host.peerSync.synchronize(force: true)
         #expect(try await deleted(airDB) == nil)
-        #expect(try await airDB.read { try $0.historyRowsUnlocked("SELECT title FROM dashboard_conversations WHERE id=?", values: [id]).first?.objectValue?["title"]?.stringValue } == "Renamed on the Mini")
+        #expect(try await airDB.read { try $0.historyRowsUnlocked("SELECT title FROM conversations WHERE id=?", values: [id]).first?.objectValue?["title"]?.stringValue } == "Renamed on the Mini")
     }
 }
 

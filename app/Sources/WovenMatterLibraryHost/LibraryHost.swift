@@ -433,8 +433,8 @@ public final class LibraryHost: @unchecked Sendable {
       return .error("invalid_request", "MCP requires a conversation binding (or a bot caller) and its current tool selection.", status: 400)
     }
     let groups = try Self.groups(rawGroups.split(separator: ",").map(String.init))
-    let message: GatewayJSONValue
-    do { message = try JSONDecoder().decode(GatewayJSONValue.self, from: request.body) }
+    let message: JSONValue
+    do { message = try JSONDecoder().decode(JSONValue.self, from: request.body) }
     catch { return try .json(WovenMCPServer.error(code: -32700, message: "The MCP request could not be decoded.")) }
     guard request.body.count <= WovenMCPServer.maximumRequestBytes(for: message) else {
       return .error("too_large", "The MCP request exceeds its size limit.", status: 413)

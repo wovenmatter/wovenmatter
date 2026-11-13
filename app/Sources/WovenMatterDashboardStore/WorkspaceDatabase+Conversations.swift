@@ -12,7 +12,7 @@ extension WorkspaceDatabaseConnection {
   public func dashboardRevision() throws -> Int64 {
     try withLock {
       let statement = try prepareUnlocked(
-        "SELECT revision FROM desktop_dashboard_revision WHERE singleton = 1"
+        "SELECT revision FROM workspace_revision WHERE singleton = 1"
       )
       defer { sqlite3_finalize(statement) }
       guard sqlite3_step(statement) == SQLITE_ROW else { throw stepError() }
@@ -24,7 +24,7 @@ extension WorkspaceDatabaseConnection {
   public func markConversationRead(id: String) throws -> Bool {
     try transaction {
       let update = try prepareUnlocked("""
-        UPDATE dashboard_conversations
+        UPDATE conversations
         SET unread = 0
         WHERE id = ? AND unread != 0 AND deleted_at IS NULL
         """)
@@ -47,8 +47,8 @@ extension WorkspaceDatabaseConnection {
     return try transaction {
       let authority = try prepareUnlocked("""
         SELECT 1
-        FROM dashboard_conversations
-        WHERE id = ? AND desktop_owned = 1 AND authority_kind = 'device_owned'
+        FROM conversations
+        WHERE id = ?
           AND deleted_at IS NULL
         """)
       defer { sqlite3_finalize(authority) }
@@ -57,11 +57,10 @@ extension WorkspaceDatabaseConnection {
 
       let timestamp = Self.timestamp(updatedAt)
       let conversation = try prepareUnlocked("""
-        UPDATE dashboard_conversations
+        UPDATE conversations
         SET title = ?, updated_at = ?
-        WHERE id = ? AND title = ? AND desktop_owned = 1
-          AND authority_kind = 'device_owned' AND deleted_at IS NULL
-          AND NOT EXISTS (SELECT 1 FROM desktop_conversation_titles WHERE conversation_id = dashboard_conversations.id)
+        WHERE id = ? AND title = ? AND deleted_at IS NULL
+          AND NOT EXISTS (SELECT 1 FROM conversation_titles WHERE conversation_id = conversations.id)
         """)
       defer { sqlite3_finalize(conversation) }
       try bind(cleanTitle, at: 1, to: conversation)
@@ -72,7 +71,7 @@ extension WorkspaceDatabaseConnection {
       guard changedRowCountUnlocked == 1 else { return false }
 
       let session = try prepareUnlocked("""
-        UPDATE desktop_local_acp_sessions
+        UPDATE harness_sessions
         SET title = ?, updated_at = ? WHERE conversation_id = ?
         """)
       defer { sqlite3_finalize(session) }
@@ -94,12 +93,11 @@ extension WorkspaceDatabaseConnection {
     try transaction {
       // A draft's folder is its execution directory; only its executor moves it.
       try requireProtectedConversationMutationUnlocked(id)
-      let operatorID = try localMutationOperatorIDUnlocked()
-      try validateFolderUnlocked(id: folderID, operatorID: operatorID)
+      try validateFolderUnlocked(id: folderID)
       let root = try availableSessionExecutionRoot(id: id)
       guard             let row = try historyRowsUnlocked("SELECT folder_locked FROM session_execution_roots WHERE conversation_id=?", values: [id]).first?.objectValue,
             row["folder_locked"]?.intValue == 0,
-            try historyRowsUnlocked("SELECT 1 FROM dashboard_messages WHERE conversation_id=? AND role='user' LIMIT 1", values: [id]).isEmpty else {
+            try historyRowsUnlocked("SELECT 1 FROM messages WHERE conversation_id=? AND role='user' LIMIT 1", values: [id]).isEmpty else {
         throw WorkspaceToolError.invalid("A chat's folder is fixed after its first message.")
       }
       let path: String
@@ -117,8 +115,8 @@ extension WorkspaceDatabaseConnection {
 
       let authority = try prepareUnlocked("""
         SELECT 1
-        FROM dashboard_conversations
-        WHERE id = ? AND desktop_owned = 1 AND authority_kind = 'device_owned'
+        FROM conversations
+        WHERE id = ?
           AND deleted_at IS NULL
         """)
       defer { sqlite3_finalize(authority) }
@@ -127,10 +125,9 @@ extension WorkspaceDatabaseConnection {
 
       let timestamp = Self.timestamp(updatedAt)
       let update = try prepareUnlocked("""
-        UPDATE dashboard_conversations
+        UPDATE conversations
         SET folder_id = ?, updated_at = ?
-        WHERE id = ? AND desktop_owned = 1
-          AND authority_kind = 'device_owned' AND deleted_at IS NULL
+        WHERE id = ? AND deleted_at IS NULL
         """)
       defer { sqlite3_finalize(update) }
       try bindNullable(folderID, at: 1, to: update)
@@ -150,34 +147,29 @@ extension WorkspaceDatabaseConnection {
   func conversationContentUnlocked(id: String) throws -> WorkspaceConversationContent {
     // Old desktop chats have no execution root, but retain their readable transcript.
     // Other archived chats keep their existing visibility rules.
-    guard let operatorID = try canonicalWorkspaceOperatorIDUnlocked() else {
-      return WorkspaceConversationContent(conversationID: id, messages: [], runs: [])
-    }
     let messages = try decodeCanonicalRowsUnlocked(
       """
       SELECT \(Self.messageProjection)
-      FROM dashboard_messages AS message
-      JOIN dashboard_conversations AS conversation
+      FROM messages AS message
+      JOIN conversations AS conversation
         ON conversation.id = message.conversation_id
       WHERE \(Self.visibleConversationPredicate)
-        AND NOT EXISTS (SELECT 1 FROM desktop_opencode_hidden_messages hidden WHERE hidden.message_id=message.id)
-        AND conversation.governing_plane = 'wovenmatter_macos'
+        AND NOT EXISTS (SELECT 1 FROM opencode_hidden_messages hidden WHERE hidden.message_id=message.id)
       ORDER BY message.created_at, message.id
       """,
-      bindings: [operatorID, id],
+      bindings: [id],
       as: WorkspaceMessageRecord.self
     )
     let runs = try decodeCanonicalRowsUnlocked(
       """
       SELECT \(Self.runProjection)
-      FROM dashboard_runs AS run
-      JOIN dashboard_conversations AS conversation
+      FROM runs AS run
+      JOIN conversations AS conversation
         ON conversation.id = run.conversation_id
       WHERE \(Self.visibleConversationPredicate)
-        AND conversation.governing_plane = 'wovenmatter_macos'
       ORDER BY run.created_at, run.id
       """,
-      bindings: [operatorID, id],
+      bindings: [id],
       as: WorkspaceRunRecord.self
     )
     return WorkspaceConversationContent(
@@ -199,17 +191,9 @@ extension WorkspaceDatabaseConnection {
     knownMessageIDs: [String] = []
   ) throws -> WorkspaceConversationHistoryPage {
     try withLock {
-      guard let operatorID = try canonicalWorkspaceOperatorIDUnlocked() else {
-        return WorkspaceConversationHistoryPage(
-          conversationID: id,
-          messages: [],
-          runs: [],
-          hasOlderMessages: false
-        )
-      }
       let boundedLimit = min(max(limit, 1), 200)
       let cursorPredicate: String
-      var bindings = [operatorID, id]
+      var bindings = [id]
       if let cursor {
         cursorPredicate = """
           AND (
@@ -226,20 +210,15 @@ extension WorkspaceDatabaseConnection {
       if !knownMessageIDs.isEmpty {
         let metadata = try prepareUnlocked("""
           SELECT message.id, coalesce(revision.revision,0)
-          FROM dashboard_messages message
-          JOIN dashboard_conversations conversation ON conversation.id=message.conversation_id
-          LEFT JOIN desktop_message_revisions revision ON revision.id=message.id
+          FROM messages message
+          JOIN conversations conversation ON conversation.id=message.conversation_id
+          LEFT JOIN message_revisions revision ON revision.id=message.id
           WHERE message.conversation_id=? AND message.id IN (SELECT value FROM json_each(?))
-            AND (conversation.user_id=? OR conversation.desktop_owned=1)
-            AND conversation.deleted_at IS NULL
-            AND (conversation.is_archived = 0 OR (conversation.desktop_owned = 1
-              AND EXISTS (SELECT 1 FROM retained_execution_history
-                WHERE conversation_id=conversation.id)))
-            AND conversation.governing_plane='wovenmatter_macos'
-            AND NOT EXISTS (SELECT 1 FROM desktop_opencode_hidden_messages hidden WHERE hidden.message_id=message.id)
+            AND \(Self.listedConversation("conversation"))
+            AND NOT EXISTS (SELECT 1 FROM opencode_hidden_messages hidden WHERE hidden.message_id=message.id)
           """)
         defer { sqlite3_finalize(metadata) }
-        for (i, value) in [id, knownJSON, operatorID].enumerated() { try bind(value, at: Int32(i+1), to: metadata) }
+        for (i, value) in [id, knownJSON].enumerated() { try bind(value, at: Int32(i+1), to: metadata) }
         while true {
           let code = sqlite3_step(metadata)
           if code == SQLITE_DONE { break }
@@ -253,19 +232,18 @@ extension WorkspaceDatabaseConnection {
       let retainedMessages: [WorkspaceMessageRecord] = changedIDs.isEmpty ? [] : try decodeCanonicalRowsUnlocked(
         """
         SELECT \(Self.messageProjection)
-        FROM dashboard_messages AS message
+        FROM messages AS message
         WHERE message.id IN (SELECT value FROM json_each(?)) AND message.conversation_id=?
         ORDER BY message.created_at,message.id
         """, bindings: [changedJSON,id], as: WorkspaceMessageRecord.self)
       var newestFirst = try decodeCanonicalRowsUnlocked(
         """
         SELECT \(Self.messageProjection)
-        FROM dashboard_messages AS message
-        JOIN dashboard_conversations AS conversation
+        FROM messages AS message
+        JOIN conversations AS conversation
           ON conversation.id = message.conversation_id
         WHERE \(Self.visibleConversationPredicate)
-          AND conversation.governing_plane='wovenmatter_macos'
-          AND NOT EXISTS (SELECT 1 FROM desktop_opencode_hidden_messages hidden WHERE hidden.message_id=message.id)
+          AND NOT EXISTS (SELECT 1 FROM opencode_hidden_messages hidden WHERE hidden.message_id=message.id)
           \(cursorPredicate)
         ORDER BY message.created_at DESC, message.id DESC
         LIMIT \(boundedLimit + 1)
@@ -303,8 +281,8 @@ extension WorkspaceDatabaseConnection {
         runs = try decodeCanonicalRowsUnlocked(
           """
           SELECT \(Self.runProjection)
-          FROM dashboard_runs AS run
-          JOIN dashboard_conversations AS conversation
+          FROM runs AS run
+          JOIN conversations AS conversation
             ON conversation.id = run.conversation_id
           WHERE \(Self.visibleConversationPredicate)
             AND (
@@ -313,7 +291,7 @@ extension WorkspaceDatabaseConnection {
             )
           ORDER BY run.created_at, run.id
           """,
-          bindings: [operatorID, id] + messageIDs + messageIDs,
+          bindings: [id] + messageIDs + messageIDs,
           as: WorkspaceRunRecord.self
         )
         if compactActivities {
@@ -353,7 +331,7 @@ extension WorkspaceDatabaseConnection {
     guard conversationID != nil || !messageIDs.isEmpty else { return [] }
     // A full history must not allocate one SQLite parameter per retained message.
     let placeholders = conversationID != nil
-      ? "SELECT id FROM dashboard_messages WHERE conversation_id = ?"
+      ? "SELECT id FROM messages WHERE conversation_id = ?"
       : Array(repeating: "?", count: messageIDs.count).joined(separator: ", ")
     let bindings = conversationID.map { [$0] } ?? messageIDs
     return try decodeCanonicalRowsUnlocked(
@@ -362,9 +340,9 @@ extension WorkspaceDatabaseConnection {
         'id', id, 'conversation_id', conversation_id, 'message_id', message_id,
         'kind', kind, 'file_name', file_name, 'mime_type', mime_type,
         'size_bytes', size_bytes, 'content_hash', content_hash,
-        'gateway_media_ref', gateway_media_ref, 'created_at', created_at
+        'created_at', created_at
       )
-      FROM dashboard_message_attachments
+      FROM message_attachments
       WHERE message_id IN (\(placeholders))
       ORDER BY created_at, id
       """,
@@ -379,7 +357,7 @@ extension WorkspaceDatabaseConnection {
     guard conversationID != nil || !messageIDs.isEmpty else { return [] }
     // A full history must not allocate one SQLite parameter per retained message.
     let placeholders = conversationID != nil
-      ? "SELECT id FROM dashboard_messages WHERE conversation_id = ?"
+      ? "SELECT id FROM messages WHERE conversation_id = ?"
       : Array(repeating: "?", count: messageIDs.count).joined(separator: ", ")
     let bindings = conversationID.map { [$0] } ?? messageIDs
     return try decodeCanonicalRowsUnlocked(
@@ -394,7 +372,7 @@ extension WorkspaceDatabaseConnection {
         'agent_codename_snapshot', agent_codename_snapshot,
         'created_at', created_at
       )
-      FROM dashboard_message_references
+      FROM message_references
       WHERE message_id IN (\(placeholders))
       ORDER BY created_at, id
       """,
@@ -407,12 +385,11 @@ extension WorkspaceDatabaseConnection {
     runIDs: [String] = [],
     assistantOnly: Bool = false,
     conversationID: String? = nil,
-    eventRecordIDs: [String]? = nil,
-    traceRecordIDs: [String]? = nil
+    recordIDs: [String]? = nil
   ) throws -> [WorkspaceRunActivityRecord] {
     guard conversationID != nil || !runIDs.isEmpty else { return [] }
     let placeholders = conversationID != nil
-      ? "SELECT id FROM dashboard_runs WHERE conversation_id = ?"
+      ? "SELECT id FROM runs WHERE conversation_id = ?"
       : Array(repeating: "?", count: runIDs.count).joined(separator: ", ")
     let bindings = conversationID.map { [$0] } ?? runIDs
     func filter(_ ids: [String]?) throws -> String {
@@ -423,18 +400,18 @@ extension WorkspaceDatabaseConnection {
     var records: [WorkspaceRunActivityRecord] = []
     let events = try prepareUnlocked("""
       SELECT id, run_id, conversation_id, event_type, content, created_at, rowid
-      FROM dashboard_run_events
+      FROM run_activities
       WHERE run_id IN (\(placeholders))
         \(assistantOnly ? "AND event_type = 'assistant'" : "")
-        \(try filter(eventRecordIDs))
+        \(try filter(recordIDs))
       ORDER BY created_at, rowid
       """)
     defer { sqlite3_finalize(events) }
     for (index, runID) in bindings.enumerated() {
       try bind(runID, at: Int32(index + 1), to: events)
     }
-    if let eventRecordIDs, !eventRecordIDs.isEmpty {
-      try bind(String(decoding: try JSONEncoder().encode(eventRecordIDs), as: UTF8.self), at: Int32(bindings.count + 1), to: events)
+    if let recordIDs, !recordIDs.isEmpty {
+      try bind(String(decoding: try JSONEncoder().encode(recordIDs), as: UTF8.self), at: Int32(bindings.count + 1), to: events)
     }
     while true {
       let code = sqlite3_step(events)
@@ -466,73 +443,6 @@ extension WorkspaceDatabaseConnection {
       ))
     }
 
-    if assistantOnly { return records.sorted(by: WorkspaceRunActivityRecord.precedes) }
-    let traces = try prepareUnlocked("""
-      SELECT id, run_id, conversation_id, event_type, event_name,
-        event_phase, tool_name, content, raw_event_json, created_at, seq
-      FROM dashboard_run_trace_events
-      WHERE run_id IN (\(placeholders))
-        AND is_visible = 1
-        AND event_type NOT IN ('assistant_delta', 'assistant_replace', 'done')
-        \(try filter(traceRecordIDs))
-      ORDER BY created_at, seq, id
-      """)
-    defer { sqlite3_finalize(traces) }
-    for (index, runID) in bindings.enumerated() {
-      try bind(runID, at: Int32(index + 1), to: traces)
-    }
-    if let traceRecordIDs, !traceRecordIDs.isEmpty {
-      try bind(String(decoding: try JSONEncoder().encode(traceRecordIDs), as: UTF8.self), at: Int32(bindings.count + 1), to: traces)
-    }
-    while true {
-      let code = sqlite3_step(traces)
-      if code == SQLITE_DONE { break }
-      guard code == SQLITE_ROW else { throw stepError() }
-      let recordID = try text(traces, column: 0)
-      let eventType = try text(traces, column: 3)
-      let rawJSON = try text(traces, column: 8)
-      let raw = (try? JSONSerialization.jsonObject(with: Data(rawJSON.utf8)))
-      let payload = Self.tracePayload(raw)
-      let data = Self.dictionary(payload?["data"])
-      let activityID = Self.traceString(data?["itemId"])
-        ?? Self.traceString(data?["toolCallId"])
-        ?? recordID
-      let kind: AgentRunActivity.Kind = switch eventType {
-      case "reasoning": .thought
-      case "tool_call", "tool_result": .tool
-      case "plan": .plan
-      case "file_change": .fileChange
-      case "progress": .progress
-      default: .activity
-      }
-      let content = optionalText(traces, column: 7)
-      records.append(WorkspaceRunActivityRecord(
-        id: "trace-\(recordID)",
-        runID: try text(traces, column: 1),
-        conversationID: try text(traces, column: 2),
-        activity: AgentRunActivity(
-          id: activityID,
-          kind: kind,
-          phase: optionalText(traces, column: 5),
-          title: Self.traceString(data?["title"])
-            ?? Self.traceString(data?["name"])
-            ?? optionalText(traces, column: 4),
-          detail: Self.traceDetail(data),
-          status: Self.traceString(data?["status"]),
-          toolName: optionalText(traces, column: 6),
-          content: content,
-          contentIsDelta: optionalText(traces, column: 4) == "reasoning.delta",
-          locations: Self.traceLocations(data),
-          changes: Self.traceFileChanges(data),
-          planEntries: Self.tracePlanEntries(data),
-          rawInputJSON: Self.traceJSONString(data?["rawInput"] ?? data?["args"]),
-          rawOutputJSON: Self.traceJSONString(data?["rawOutput"] ?? data?["result"]),
-          rawPayloadJSON: rawJSON
-        ),
-        createdAt: try text(traces, column: 9),
-        sequence: sqlite3_column_type(traces, 10) == SQLITE_NULL ? nil : sqlite3_column_int64(traces, 10)
-      ))
-    }
     return records.sorted(by: WorkspaceRunActivityRecord.precedes)
   }
 
@@ -543,10 +453,8 @@ extension WorkspaceDatabaseConnection {
       'sender_kind',COALESCE((SELECT kind FROM workspace_session_deliveries WHERE message_id=message.id),(SELECT kind FROM device_message_provenance WHERE message_id=message.id)),
       'sender_session_id',COALESCE((SELECT source_id FROM workspace_session_deliveries WHERE message_id=message.id),(SELECT source_id FROM device_message_provenance WHERE message_id=message.id)),
       'sender_agent',COALESCE((SELECT source_agent FROM workspace_session_deliveries WHERE message_id=message.id),(SELECT source_agent FROM device_message_provenance WHERE message_id=message.id)),
-      'sender_session_title',COALESCE((SELECT source_title FROM workspace_session_deliveries WHERE message_id=message.id),(SELECT source_title FROM device_message_provenance WHERE message_id=message.id),(SELECT title FROM dashboard_conversations WHERE id=(SELECT source_id FROM device_message_provenance WHERE message_id=message.id))),
+      'sender_session_title',COALESCE((SELECT source_title FROM workspace_session_deliveries WHERE message_id=message.id),(SELECT source_title FROM device_message_provenance WHERE message_id=message.id),(SELECT title FROM conversations WHERE id=(SELECT source_id FROM device_message_provenance WHERE message_id=message.id))),
       'run_id', message.run_id, 'role', message.role,
-      'governing_plane', message.governing_plane,
-      'authority_device_id', message.authority_device_id,
       'content', message.content, 'status', message.status,
       'created_at', message.created_at, 'updated_at', message.updated_at
     )
@@ -556,8 +464,6 @@ extension WorkspaceDatabaseConnection {
     json_object(
       'id', run.id, 'conversation_id', run.conversation_id,
       'agent_id', run.agent_id,
-      'governing_plane', run.governing_plane,
-      'authority_device_id', run.authority_device_id,
       'user_message_id', run.user_message_id,
       'assistant_message_id', run.assistant_message_id,
       'status', run.status, 'error', run.error,
@@ -566,85 +472,17 @@ extension WorkspaceDatabaseConnection {
     )
     """
 
-  /// Rows an operator may read: their own or desktop-owned conversations that are
-  /// live, or archived desktop transcripts retained as execution history.
-  private static let visibleConversationPredicate = """
-    (conversation.user_id = ? OR conversation.desktop_owned = 1)
-    AND conversation.id = ?
-    AND conversation.deleted_at IS NULL
-    AND (conversation.is_archived = 0 OR (conversation.desktop_owned = 1
-      AND EXISTS (SELECT 1 FROM retained_execution_history
-        WHERE conversation_id=conversation.id)))
+  /// A conversation the workspace lists: not deleted, and live or kept as
+  /// retained read-only history.
+  static func listedConversation(_ alias: String) -> String {
     """
-
-  private static func tracePayload(_ value: Any?) -> [String: Any]? {
-    let object = dictionary(value)
-    return dictionary(object?["payload"]) ?? object
+    \(alias).deleted_at IS NULL
+    AND (\(alias).is_archived = 0 OR EXISTS (SELECT 1 FROM retained_execution_history
+      WHERE conversation_id=\(alias).id))
+    """
   }
 
-  private static func dictionary(_ value: Any?) -> [String: Any]? {
-    value as? [String: Any]
-  }
-
-  private static func traceString(_ value: Any?) -> String? {
-    guard let value = value as? String else { return nil }
-    let clean = value.trimmingCharacters(in: .whitespacesAndNewlines)
-    return clean.isEmpty ? nil : clean
-  }
-
-  private static func traceJSONString(_ value: Any?) -> String? {
-    guard let value,
-          JSONSerialization.isValidJSONObject(value),
-          let data = try? JSONSerialization.data(withJSONObject: value, options: [.sortedKeys])
-    else { return nil }
-    return String(data: data, encoding: .utf8)
-  }
-
-  private static func traceDetail(_ data: [String: Any]?) -> String? {
-    let args = dictionary(data?["args"])
-    let result = dictionary(data?["result"])
-    let parts = [
-      traceString(args?["command"]).map { "$ \($0)" },
-      traceString(args?["cwd"]).map { "cwd: \($0)" },
-      traceString(result?["status"]),
-    ].compactMap { $0 }
-    return parts.isEmpty ? nil : parts.joined(separator: "\n")
-  }
-
-  private static func traceLocations(_ data: [String: Any]?) -> [AgentRunLocation] {
-    (data?["locations"] as? [[String: Any]] ?? []).compactMap { location in
-      guard let path = traceString(location["path"]) else { return nil }
-      return AgentRunLocation(path: path, line: location["line"] as? Int)
-    }
-  }
-
-  private static func traceFileChanges(_ data: [String: Any]?) -> [AgentRunFileChange] {
-    let values = (data?["content"] as? [[String: Any]] ?? [])
-      + (data?["changes"] as? [[String: Any]] ?? [])
-      + ((data?["path"] != nil || data?["filename"] != nil) ? [data ?? [:]] : [])
-    return values.compactMap { change in
-      guard let path = traceString(change["path"]) ?? traceString(change["filename"])
-      else { return nil }
-      return AgentRunFileChange(
-        path: path,
-        oldText: (change["oldText"] as? String) ?? (change["old_text"] as? String),
-        newText: (change["newText"] as? String) ?? (change["new_text"] as? String) ?? "",
-        unifiedDiff: (change["unified_diff"] as? String) ?? (change["diff"] as? String)
-      )
-    }
-  }
-
-  private static func tracePlanEntries(_ data: [String: Any]?) -> [AgentRunPlanEntry] {
-    (data?["entries"] as? [[String: Any]] ?? []).compactMap { entry in
-      guard let content = traceString(entry["content"]),
-            let status = traceString(entry["status"]) else { return nil }
-      return AgentRunPlanEntry(
-        content: content,
-        priority: traceString(entry["priority"]),
-        status: status
-      )
-    }
-  }
+  private static let visibleConversationPredicate = "conversation.id = ? AND " + listedConversation("conversation")
 
   func decodeCanonicalRowsUnlocked<Value: Decodable>(
     _ sql: String,

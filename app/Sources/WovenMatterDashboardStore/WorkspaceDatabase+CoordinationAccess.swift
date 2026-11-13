@@ -91,7 +91,7 @@ extension WorkspaceDatabaseConnection {
     """
       SELECT r.*,coalesce(s.title,b.display_name,'Outside agent') AS source_title,t.title AS target_title
       FROM workspace_coordination_access_requests r
-      LEFT JOIN dashboard_conversations s ON s.id=r.source_id LEFT JOIN workspace_mcp_callers b ON b.id=r.source_id JOIN dashboard_conversations t ON t.id=r.target_id AND (s.id IS NOT NULL OR b.id IS NOT NULL)
+      LEFT JOIN conversations s ON s.id=r.source_id LEFT JOIN workspace_mcp_callers b ON b.id=r.source_id JOIN conversations t ON t.id=r.target_id AND (s.id IS NOT NULL OR b.id IS NOT NULL)
       """
   }
 
@@ -99,7 +99,7 @@ extension WorkspaceDatabaseConnection {
     try historyRowsUnlocked(coordinationAccessSelect + " WHERE r.id=?", values: [id]).first.map(coordinationAccessFromRow)
   }
 
-  private func coordinationAccessFromRow(_ row: GatewayJSONValue) -> WorkspaceCoordinationAccessRequest {
+  private func coordinationAccessFromRow(_ row: JSONValue) -> WorkspaceCoordinationAccessRequest {
     let value = row.objectValue ?? [:]
     func text(_ key: String) -> String { value[key]?.stringValue ?? "" }
     return .init(id: text("id"), sourceID: text("source_id"), targetID: text("target_id"),

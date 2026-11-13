@@ -32,17 +32,17 @@ extension WorkspaceDatabaseConnection {
       guard let root = try sessionExecutionRoot(id: conversationID), root.workspaceID == "remote:" + workspaceID else {
         throw federationError("adoption_unavailable", "This archived conversation has no execution root. Start a new chat.")
       }
-      let session = try prepareUnlocked("SELECT runtime_kind,acp_session_id,model,thinking,permission FROM desktop_local_acp_sessions WHERE conversation_id=? AND remote_workspace_id=?")
+      let session = try prepareUnlocked("SELECT runtime_kind,native_session_id,model,thinking,permission FROM harness_sessions WHERE conversation_id=? AND remote_workspace_id=?")
       defer { sqlite3_finalize(session) }
       try bind(conversationID, at: 1, to: session); try bind(workspaceID, at: 2, to: session)
       // An OpenCode chat names its native session in its OpenCode link.
-      let openCodeID = try libraryIDsUnlocked("SELECT session_id FROM desktop_opencode_sessions WHERE conversation_id=?", bindings: [conversationID]).first
+      let openCodeID = try libraryIDsUnlocked("SELECT session_id FROM opencode_sessions WHERE conversation_id=?", bindings: [conversationID]).first
       guard sqlite3_step(session) == SQLITE_ROW, let nativeID = optionalText(session, column: 1).flatMap({ $0.isEmpty ? nil : $0 })
               ?? (optionalText(session, column: 0) == AgentRuntimeKind.opencode.rawValue ? openCodeID : nil), !nativeID.isEmpty,
             var conversation = try libraryConversationUnlocked(id: conversationID) else {
         throw federationError("adoption_unavailable", "This conversation has no known native session in the selected remote workspace.")
       }
-      guard try federationScalarUnlocked("SELECT COUNT(*) FROM dashboard_runs WHERE conversation_id=? AND status IN ('running','queued','pending','cancelling','uncertain')", bindings: [conversationID]) == 0 else {
+      guard try federationScalarUnlocked("SELECT COUNT(*) FROM runs WHERE conversation_id=? AND status IN ('running','queued','pending','cancelling','uncertain')", bindings: [conversationID]) == 0 else {
         throw federationError("execution_busy", "Wait for the current run to settle before transferring this conversation's execution control.")
       }
       var transferredGoal = try goalUnlocked(conversationID)
@@ -62,16 +62,16 @@ extension WorkspaceDatabaseConnection {
         try bind(JSONEncoder().encode(conversation), at: 3, to: statement)
         try bind(JSONEncoder().encode(federationLegacyTranscriptUnlocked(conversationID)), at: 4, to: statement)
         try stepDone(statement)
-        for runID in try libraryIDsUnlocked("SELECT id FROM dashboard_runs WHERE conversation_id=?", bindings: [conversationID]) {
+        for runID in try libraryIDsUnlocked("SELECT id FROM runs WHERE conversation_id=?", bindings: [conversationID]) {
           try toolsExecuteUnlocked("INSERT INTO execution_runs(id,workspace_id,conversation_id) VALUES (?,?,?)", [runID, workspaceID, conversationID])
         }
         // Notify every client that control now belongs to the independent origin.
-        try toolsExecuteUnlocked("UPDATE dashboard_conversations SET updated_at=? WHERE id=?", [Self.timestamp(Date()), conversationID])
+        try toolsExecuteUnlocked("UPDATE conversations SET updated_at=? WHERE id=?", [Self.timestamp(Date()), conversationID])
       }
       let adoption = try ExecutionAdoption(workspaceID: workspaceID, conversation: conversation,
         runtimeKind: text(session, column: 0), nativeSessionID: nativeID, model: optionalText(session, column: 2),
         thinking: optionalText(session, column: 3), permission: optionalText(session, column: 4),
-        knownRunIDs: libraryIDsUnlocked("SELECT id FROM dashboard_runs WHERE conversation_id=? ORDER BY created_at,id", bindings: [conversationID]), nativeWorkingDirectory: root.rootPath, goal: transferredGoal)
+        knownRunIDs: libraryIDsUnlocked("SELECT id FROM runs WHERE conversation_id=? ORDER BY created_at,id", bindings: [conversationID]), nativeWorkingDirectory: root.rootPath, goal: transferredGoal)
       let saved = try prepareUnlocked("INSERT INTO execution_adoptions(conversation_id,workspace_id,payload) VALUES (?,?,?)")
       defer { sqlite3_finalize(saved) }
       try bind(conversationID, at: 1, to: saved); try bind(workspaceID, at: 2, to: saved)
@@ -113,7 +113,7 @@ extension WorkspaceDatabaseConnection {
   }
 
   func federationLegacyTranscriptUnlocked(_ conversationID: String) throws -> LibraryTranscript {
-    let statement = try prepareUnlocked("SELECT id,run_id,role,content,status,created_at,COALESCE((SELECT kind FROM workspace_session_deliveries WHERE message_id=dashboard_messages.id),(SELECT kind FROM device_message_provenance WHERE message_id=dashboard_messages.id)),COALESCE((SELECT source_id FROM workspace_session_deliveries WHERE message_id=dashboard_messages.id),(SELECT source_id FROM device_message_provenance WHERE message_id=dashboard_messages.id)),COALESCE((SELECT source_title FROM workspace_session_deliveries WHERE message_id=dashboard_messages.id),(SELECT source_title FROM device_message_provenance WHERE message_id=dashboard_messages.id)),COALESCE((SELECT source_agent FROM workspace_session_deliveries WHERE message_id=dashboard_messages.id),(SELECT source_agent FROM device_message_provenance WHERE message_id=dashboard_messages.id)) FROM dashboard_messages WHERE conversation_id=? ORDER BY created_at,id")
+    let statement = try prepareUnlocked("SELECT id,run_id,role,content,status,created_at,COALESCE((SELECT kind FROM workspace_session_deliveries WHERE message_id=messages.id),(SELECT kind FROM device_message_provenance WHERE message_id=messages.id)),COALESCE((SELECT source_id FROM workspace_session_deliveries WHERE message_id=messages.id),(SELECT source_id FROM device_message_provenance WHERE message_id=messages.id)),COALESCE((SELECT source_title FROM workspace_session_deliveries WHERE message_id=messages.id),(SELECT source_title FROM device_message_provenance WHERE message_id=messages.id)),COALESCE((SELECT source_agent FROM workspace_session_deliveries WHERE message_id=messages.id),(SELECT source_agent FROM device_message_provenance WHERE message_id=messages.id)) FROM messages WHERE conversation_id=? ORDER BY created_at,id")
     defer { sqlite3_finalize(statement) }
     try bind(conversationID, at: 1, to: statement)
     var transcript = LibraryTranscript(conversationID: conversationID)
@@ -127,7 +127,7 @@ extension WorkspaceDatabaseConnection {
         agentSourceID: optionalText(statement, column: 7), isAgentAuthored: optionalText(statement, column: 7) == nil ? nil : true,
         senderSessionTitle: optionalText(statement, column: 8), senderHarness: optionalText(statement, column: 9), senderKind: optionalText(statement, column: 6)))
     }
-    let events = try prepareUnlocked("SELECT id,run_id,content FROM dashboard_run_events WHERE conversation_id=? ORDER BY created_at,id")
+    let events = try prepareUnlocked("SELECT id,run_id,content FROM run_activities WHERE conversation_id=? ORDER BY created_at,id")
     defer { sqlite3_finalize(events) }
     try bind(conversationID, at: 1, to: events)
     while true {

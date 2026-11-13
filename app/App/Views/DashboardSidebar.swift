@@ -640,7 +640,7 @@ struct DashboardSidebarNavigationPage: View {
 
     private func remoteAgent(for target: RemoteHarnessChatTarget) -> WorkspaceAgent? {
         agents.first {
-            $0.governingPlane == .remoteWorkspace
+            $0.executionLocation == .remote
                 && $0.runtimeDeviceID == target.configuration.id
                 && $0.runtimeKind == target.harness.id
         }
@@ -717,7 +717,7 @@ struct DashboardSidebarNavigationPage: View {
                 actions.onSelectAgent(agent.id)
             }
             newChatButton(label: "New chat with \(presentation.displayName)") { actions.onCreateAgentChat(agent.id) }
-                .disabled(!canCreateChat(workspaceID: agent.governingPlane == .remoteWorkspace
+                .disabled(!canCreateChat(workspaceID: agent.executionLocation == .remote
                     ? agent.runtimeDeviceID.map { ApplicationModel.remoteDatabaseSourceID($0) } : localExecutionWorkspaceID))
         }
     }

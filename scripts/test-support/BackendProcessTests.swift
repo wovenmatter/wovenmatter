@@ -25,14 +25,14 @@ private actor FixtureOwner {
                         location: .init(workspaceID: "local", rootPath: root.path, managed: false), defaultPath: root.path))
                 let run = try await database.beginLocalACPRun(conversationID: id, input: .init(text: "Fixture only"))
                 streamingRun = (id, run.runID)
-                try await database.upsertDeviceOwnedRunActivity(runID: run.runID,
+                try await database.upsertRunActivity(runID: run.runID,
                     activity: .init(id: "shell", kind: .tool, phase: "update", title: "Shell",
                         status: "in_progress", content: "progress one 🧵"))
                 await journal.publish(conversationIDs: [id])
                 return .init(id: request.id, result: try JSONEncoder().encode(id))
             case "finishStream":
                 guard let run = streamingRun else { throw BackendRPCError.unavailable }
-                try await database.upsertDeviceOwnedRunActivity(runID: run.runID,
+                try await database.upsertRunActivity(runID: run.runID,
                     activity: .init(id: "shell", kind: .tool, phase: "end", status: "completed",
                         content: "progress one 🧵\nprogress two"))
                 try await database.completeLocalACPRun(runID: run.runID)

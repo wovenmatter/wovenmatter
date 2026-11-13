@@ -1305,7 +1305,7 @@ final class RemoteWorkspacesModel {
         return credential
     }
 
-    func memberIdentity(configuration: RemoteWorkspaceConfiguration) async throws -> GatewayJSONValue {
+    func memberIdentity(configuration: RemoteWorkspaceConfiguration) async throws -> JSONValue {
         let identity = try requestIdentity(configuration)
         let client = try await serviceClient(for: configuration)
         try requireCurrent(identity)
@@ -1328,7 +1328,7 @@ final class RemoteWorkspacesModel {
         try requireCurrent(identity)
     }
 
-    func configureExecutionMCPSettings(configuration: RemoteWorkspaceConfiguration, settings: GatewayJSONValue) async throws {
+    func configureExecutionMCPSettings(configuration: RemoteWorkspaceConfiguration, settings: JSONValue) async throws {
         let identity = try requestIdentity(configuration)
         let client = try await serviceClient(for: configuration)
         try requireCurrent(identity)
@@ -1482,7 +1482,7 @@ final class RemoteWorkspacesModel {
     }
 
     func browserMCP(configuration: RemoteWorkspaceConfiguration, callerID: String,
-                    input: GatewayJSONValue, requestID: String, cancelling: Bool = false) async throws -> WovenMatterToolResponse {
+                    input: JSONValue, requestID: String, cancelling: Bool = false) async throws -> WovenMatterToolResponse {
         let identity = try requestIdentity(configuration)
         let client = try await serviceClient(for: configuration)
         try requireCurrent(identity)
@@ -1857,7 +1857,7 @@ private extension String {
 
 extension RemoteWorkspacesModel {
     func datasetOperation(action: String, id: String? = nil, sql: String? = nil, name: String? = nil,
-                          snapshot: ManagedDatabaseSnapshot? = nil, in configuration: RemoteWorkspaceConfiguration) async throws -> GatewayJSONValue {
+                          snapshot: ManagedDatabaseSnapshot? = nil, in configuration: RemoteWorkspaceConfiguration) async throws -> JSONValue {
         try await databaseRequest(configuration) { try await $0.managedDatabaseOperation(action: action, id: id, sql: sql, name: name, snapshot: snapshot) }
     }
     func datasetSnapshot(id: String, in configuration: RemoteWorkspaceConfiguration) async throws -> ManagedDatabaseSnapshot {

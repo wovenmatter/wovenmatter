@@ -422,12 +422,10 @@ among Macs that still stand; they never decide who wins a dispute.
   order is not part of it, so a library migrated over many releases (columns
   added at the end) and a freshly created one, such as a Linux host's, agree;
   rows are exchanged by column name. A column that only older libraries still
-  have is removed by a migration rather than tolerated: opening a library
-  drops `dashboard_conversations.is_main` (unused since September 2026) and
-  removes it from the change log and merge state. Builds before this format
-  computed the hash over physical column order, so every device must run a
-  build with this format to sync; an older one answers or receives
-  `update_required`. When peers disagree, every device shows which part
+  have is removed by a migration rather than tolerated, and the migration
+  removes it from the change log and merge state too. The hash is prefixed
+  with a format version (`v3` since the v0.4.2 schema rename); a device on
+  another format answers or receives `update_required`. When peers disagree, every device shows which part
   needs updating and offers "Update everything". There is no compatibility
   layer. A mismatched exchange answers 409 `{code: "update_required",
   message, version, schema}`; `LibrarySyncStatus` (`{deviceID, version,
@@ -440,14 +438,15 @@ among Macs that still stand; they never decide who wins a dispute.
   everything" notice as a bots version mismatch (`ApplicationModel+Bots.swift`).
 
 - **Storage names.** Table names say what a table holds:
+  - The core library: `conversations`, their `messages`, `message_attachments` and `message_references`, the `runs` that answered them with each run's `run_activities` (tool calls, thoughts and other activity rows), `run_visible_notes` (the note a run could see) and `run_program_statuses`, plus `agents`, `folders`, `notes`, `calendar_items`, `conversation_titles` (a title set by the user, which wins over the harness's) and `session_imports`. `harness_sessions` is the native session of every harness, local or on a remote workspace (`native_session_id`); `opencode_sessions`, `opencode_submissions` and `opencode_hidden_messages` are OpenCode's. `workspace_revision`, `activity_revision`, `activity_summaries` and `message_revisions` are the change counters and caches the window reads. A row's `owner_device_id` is the Mac that created it, or the workspace owner of a projected remote session.
   - `library_identity` holds this replica's device ID (`host_device_id`) and the library's ID (`library_id`), which every paired device names.
   - `paired_*` is peer sync between Macs and Linux hosts: the change log, cursors, version vectors and conflicts, plus the owner rows.
   - `execution_*` is execution workspaces, this Mac's own included, with their journals, conversations, runs, adoptions, receipts, settlements, native history, and their scheduled MCP callers. Most of it is peer-synced library content (`PairedLibraryTables`).
-  - `calendar_task_executors` names the device that runs each scheduled item; `paired_calendar_owners` names the Mac that owns the row. `calendar_run_publishers` and `calendar_published_runs` are who may report runs and the runs they reported. `calendar_replica_context` and `calendar_execution_conflicts` belong to a replica that executes another library's schedule.
-  - `device_*` is what the library keeps for devices that reach it over the device API: the phone change feed (`device_sync_revisions`, `device_sync_changes`, written by the `device_sync_*` triggers), mutation, command, draft, tool and calendar receipts, scheduled MCP callers, saved files and message provenance.
+  - `calendar_task_executors` names the device that runs each scheduled item; `paired_calendar_owners` names the Mac that owns the row. `calendar_run_publishers` and `calendar_published_runs` are who may report runs and the runs they reported.
+  - `device_*` is what the library keeps for devices that reach it over the device API: the phone change feed (`device_sync_revisions`, `device_sync_changes`, written by the `<table>_device_sync_*` triggers), mutation, command, draft, tool and calendar receipts, scheduled MCP callers, saved files and message provenance.
   - `library_items`, `library_messages`, `library_settings` and `library_locations` index the Library pane (files and links found in chats); `library_members*` is the signed member list.
 
-  Libraries created before November 2026 used `companion_*` names for all of these, and kept the library ID in `companion_workspace`. Opening such a library renames the tables in place, moves the library ID into `library_identity`, drops the old triggers (each is recreated under its new name) and rewrites the table names in peer sync bookkeeping, so nothing is lost or sent again (`renameLegacyCompanionStorageUnlocked`). The paired-devices file (`companion-devices.json`, now `library-devices.json`), the desktop's `companion.*` settings and its pairing credential and member key in the Keychain (`com.wovenmatter.companion.*`) move once in the same way.
+  v0.4.2 still used the names of the OpenClaw dashboard the library came from (`dashboard_*`, `desktop_*`, OpenClaw gateway tables and columns, and per-row `user_id`, `governing_plane`, `authority_kind`, `authority_agent_id`, `origin_device_id` and `desktop_owned` columns every current writer sets to the same value). Opening such a library converts it in place (`LibrarySchemaUpgrade.swift`, whose tables are the complete old-to-new map): tables and columns are renamed, dead ones dropped, every trigger is recreated under its `<table>_<purpose>_<op>` name and every renamed index as `<table>_<purpose>`, and peer sync bookkeeping is rewritten to the new names, so paired Macs that update together keep their versions and cursors. Rows the old columns hid or kept read-only stay that way: a dashboard chat becomes retained read-only history, and a hidden one stays archived. The paired-devices file (`companion-devices.json`, now `library-devices.json`), the desktop's `companion.*` settings and its pairing credential and member key in the Keychain (`com.wovenmatter.companion.*`) moved once in November 2026.
 
 ### Library host (`wovenmatter-library`)
 

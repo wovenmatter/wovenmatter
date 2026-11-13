@@ -20,7 +20,7 @@ extension WorkspaceDatabaseConnection {
   /// cursor advances. Execution journals are left out: each workspace's own
   /// stream carries them.
   static let deviceSyncWakeTables: [(table: String, kind: String, key: String)] = [
-    ("dashboard_calendar_items", "calendar", "id"),
+    ("calendar_items", "calendar", "id"),
     ("calendar_task_executors", "calendar", "event_id"),
     ("calendar_published_runs", "calendar", "id"),
     ("dictation_history", "dictation", "id"),
@@ -45,7 +45,7 @@ extension WorkspaceDatabaseConnection {
         for operation in ["INSERT", "UPDATE", "DELETE"] {
           let row = operation == "DELETE" ? "OLD" : "NEW"
           try executeUnlocked("""
-            CREATE TRIGGER IF NOT EXISTS device_sync_wake_\(table)_\(operation.lowercased())
+            CREATE TRIGGER IF NOT EXISTS \(table)_device_sync_wake_\(operation.lowercased())
             AFTER \(operation) ON \(table)
             BEGIN
               INSERT INTO device_sync_changes(kind, resource_id, revision, deleted)

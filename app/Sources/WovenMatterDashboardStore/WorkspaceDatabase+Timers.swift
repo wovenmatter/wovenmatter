@@ -9,7 +9,7 @@ extension WorkspaceDatabaseConnection {
   }
 
   public func querySessionTimers(callerID: String, sessionID: String, after: Int64 = 0,
-                                 limit: Int = 100) throws -> GatewayJSONValue {
+                                 limit: Int = 100) throws -> JSONValue {
     try withLock {
       try requireTimerAccessUnlocked(sourceID: callerID, targetID: sessionID)
       guard after >= 0, (1...200).contains(limit) else {
@@ -17,7 +17,7 @@ extension WorkspaceDatabaseConnection {
       }
       var rows = try historyRowsUnlocked("""
         SELECT t.rowid AS sequence,t.* FROM workspace_session_timers t
-        LEFT JOIN dashboard_conversations c ON c.id=t.session_id
+        LEFT JOIN conversations c ON c.id=t.session_id
         WHERE \(Self.liveTimerTarget) AND t.session_id=? AND t.rowid>?
         ORDER BY t.rowid LIMIT ?
         """, values: [sessionID, String(after), String(limit + 1)])
@@ -46,7 +46,7 @@ extension WorkspaceDatabaseConnection {
   static let liveTimerTarget = "((c.id IS NOT NULL AND c.deleted_at IS NULL) OR t.session_id LIKE 'woven:bot:%')"
 
   private func timersUnlocked(sessionID: String? = nil) throws -> [WorkspaceSessionTimer] {
-    let sql = "SELECT t.* FROM workspace_session_timers t LEFT JOIN dashboard_conversations c ON c.id=t.session_id WHERE " + Self.liveTimerTarget
+    let sql = "SELECT t.* FROM workspace_session_timers t LEFT JOIN conversations c ON c.id=t.session_id WHERE " + Self.liveTimerTarget
       + (sessionID == nil ? "" : " AND t.session_id=?") + " ORDER BY t.next_fire_at,t.id"
     return try historyRowsUnlocked(sql, values: sessionID.map { [$0] } ?? []).map { value in
       let r = value.objectValue ?? [:]

@@ -5,12 +5,12 @@ import WovenMatterClient
 // Pure pages use the coherent read lane; coordination mutations and their
 // receipts use one writer.
 extension WorkspaceDatabase {
-  public func queryCalendarRuns(eventID: String, after: Int = 0, limit: Int = 100) async throws -> GatewayJSONValue {
+  public func queryCalendarRuns(eventID: String, after: Int = 0, limit: Int = 100) async throws -> JSONValue {
     try await read { try $0.queryCalendarRuns(eventID: eventID, after: after, limit: limit) }
   }
 
   public func querySessionTimers(callerID: String, sessionID: String, after: Int64 = 0,
-                                 limit: Int = 100) async throws -> GatewayJSONValue {
+                                 limit: Int = 100) async throws -> JSONValue {
     try await read { try $0.querySessionTimers(callerID: callerID, sessionID: sessionID, after: after, limit: limit) }
   }
 

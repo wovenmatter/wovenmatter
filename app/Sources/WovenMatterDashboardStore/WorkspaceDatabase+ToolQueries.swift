@@ -6,7 +6,7 @@ extension WorkspaceDatabaseConnection {
   /// This is the only history entry point exposed to agent endpoints. Identity is
   /// supplied by the service binding, never decoded from the agent's request.
   public func queryAgentHistory(_ input: WorkspaceHistoryQuery, callerID: String,
-                                allWorkspace: Bool = false) throws -> GatewayJSONValue {
+                                allWorkspace: Bool = false) throws -> JSONValue {
     try transaction {
       var query = input
       query.callerConversationID = callerID
@@ -27,9 +27,9 @@ extension WorkspaceDatabaseConnection {
         let lookup: String
         let id: String?
         switch query.command {
-        case "message": lookup = "SELECT conversation_id FROM dashboard_messages WHERE id=?"; id = query.id
+        case "message": lookup = "SELECT conversation_id FROM messages WHERE id=?"; id = query.id
         case "event": lookup = "SELECT conversation_id FROM workspace_history_events WHERE id=?"; id = query.id
-        default: lookup = "SELECT conversation_id FROM dashboard_runs WHERE id=?"; id = query.runID ?? query.id
+        default: lookup = "SELECT conversation_id FROM runs WHERE id=?"; id = query.runID ?? query.id
         }
         guard let id else { throw WorkspaceToolError.invalid("A record ID is required.") }
         var rows = try historyRowsUnlocked(lookup, values: [id])
@@ -52,7 +52,7 @@ extension WorkspaceDatabaseConnection {
       }
       if !allWorkspace, query.folderID == nil, query.conversationID == nil,
          query.command == "search" || (query.command == "conversations" && query.search != nil) {
-        query.folderID = try historyRowsUnlocked("SELECT folder_id FROM dashboard_conversations WHERE id=?", values: [callerID]).first?.objectValue?["folder_id"]?.stringValue
+        query.folderID = try historyRowsUnlocked("SELECT folder_id FROM conversations WHERE id=?", values: [callerID]).first?.objectValue?["folder_id"]?.stringValue
       }
       var result = try queryHistoryUnlocked(query)
       var scope = query.folderID == nil ? "workspace" : "folder"
@@ -78,7 +78,7 @@ extension WorkspaceDatabaseConnection {
           if try !canReadTranscriptUnlocked(sourceID: callerID, targetID: id, enabled: groups) {
             snapshot = snapshot.sessionMetadata
           }
-          fields["programStatus"] = try JSONDecoder().decode(GatewayJSONValue.self, from: JSONEncoder().encode(snapshot))
+          fields["programStatus"] = try JSONDecoder().decode(JSONValue.self, from: JSONEncoder().encode(snapshot))
           fields["executionStatus"] = snapshot.executionStatus.map { .string($0) } ?? fields["status"] ?? .null
           fields["status"] = snapshot.status.map { .string($0.state.rawValue) } ?? .null
           return .object(fields)
@@ -106,7 +106,7 @@ private extension ProgramStatusSnapshot {
 
 extension WorkspaceDatabase {
   public func queryAgentHistory(_ input: WorkspaceHistoryQuery, callerID: String,
-                                allWorkspace: Bool = false) async throws -> GatewayJSONValue {
+                                allWorkspace: Bool = false) async throws -> JSONValue {
     try await write { try $0.queryAgentHistory(input, callerID: callerID, allWorkspace: allWorkspace) }
   }
 }

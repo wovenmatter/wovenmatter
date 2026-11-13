@@ -47,6 +47,7 @@ final class WorkspaceDatabaseConnection {
       }
       try execute("PRAGMA busy_timeout = 5000")
       try execute("PRAGMA journal_mode = WAL")
+      try upgradeLibrarySchemaUnlocked()
       try execute("PRAGMA foreign_keys = ON")
       try migrate()
       try migrateWorkspaceHistory()
@@ -62,7 +63,6 @@ final class WorkspaceDatabaseConnection {
       try migratePairedLibrary()
       try migrateExecutionStreamChanges()
       try migrateDeviceSyncWakes()
-      try dropRetiredOpenClawSchema()
     } catch {
       sqlite3_close(database)
       connection = nil

@@ -94,7 +94,7 @@ struct WorkspaceCalendarTests {
         remoteWorkspaceName: "Fixture", title: "Remote", ownerDeviceID: owner,
         requestedConversationID: UUID(uuidString: run.sessionID))
     }
-    let updates = try JSONDecoder().decode([GatewayJSONValue].self, from: Data(#"[{"sessionUpdate":"agent_thought_chunk","content":{"text":"Check it."}},{"sessionUpdate":"tool_call","toolCallId":"tool-1","title":"Read file","status":"completed"},{"sessionUpdate":"agent_message_chunk","content":{"text":"Done."}}]"#.utf8))
+    let updates = try JSONDecoder().decode([JSONValue].self, from: Data(#"[{"sessionUpdate":"agent_thought_chunk","content":{"text":"Check it."}},{"sessionUpdate":"tool_call","toolCallId":"tool-1","title":"Read file","status":"completed"},{"sessionUpdate":"agent_message_chunk","content":{"text":"Done."}}]"#.utf8))
     func importTranscript(_ database: WorkspaceDatabase) async throws {
       try await database.importRemoteCalendarTranscript(receiptID: "deleted-folder-receipt", run: run,
         workspaceID: workspace, workspaceName: "Fixture", ownerDeviceID: owner,
@@ -109,7 +109,7 @@ struct WorkspaceCalendarTests {
     let session = try await #require(reopened.workspaceOverview().conversations.first { $0.id == run.sessionID })
     #expect(session.folderID == nil)
     #expect(session.title == "Scheduled: " + remoteTask.configuration.title)
-    #expect(try await reopened.localACPSession(conversationID: run.sessionID).acpSessionID == "native-deleted-folder")
+    #expect(try await reopened.localACPSession(conversationID: run.sessionID).nativeSessionID == "native-deleted-folder")
     #expect(try await reopened.calendarRuns().first?.task.configuration.folderID == folder)
     let savedConfiguration = try #require(await reopened.read { connection in
       try connection.historyRowsUnlocked("SELECT configuration_json FROM workspace_calendar_sessions WHERE id=?", values: [run.sessionID])
@@ -117,13 +117,13 @@ struct WorkspaceCalendarTests {
     })
     #expect(try JSONDecoder().decode(WorkspaceSessionCreationConfiguration.self, from: Data(savedConfiguration.utf8)).folderID == folder)
     let counts = try await reopened.read { connection in
-      try connection.historyRowsUnlocked("SELECT (SELECT count(*) FROM dashboard_messages WHERE conversation_id=?) AS messages, (SELECT count(*) FROM workspace_calendar_remote_receipts WHERE id=?) AS receipts",
+      try connection.historyRowsUnlocked("SELECT (SELECT count(*) FROM messages WHERE conversation_id=?) AS messages, (SELECT count(*) FROM workspace_calendar_remote_receipts WHERE id=?) AS receipts",
         values: [run.sessionID, "deleted-folder-receipt"]).first?.objectValue
     }
     #expect(counts?["messages"]?.intValue == 2)
     #expect(counts?["receipts"]?.intValue == 1)
     let activities = try await reopened.read { connection in
-      try connection.historyRowsUnlocked("SELECT id FROM dashboard_run_events WHERE conversation_id=?", values: [run.sessionID])
+      try connection.historyRowsUnlocked("SELECT id FROM run_activities WHERE conversation_id=?", values: [run.sessionID])
     }
     #expect(activities.count == 2)
     #expect(try await reopened.dueCalendarRuns(now: start.addingTimeInterval(100)).isEmpty)

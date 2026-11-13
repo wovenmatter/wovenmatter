@@ -32,9 +32,9 @@ struct ExecutionStreamTests {
     // History synchronized from the machines that run these arrives as rows.
     try await database.write { connection in
       for (conversation, text) in [(paired, "Synced from another Mac"), (federated, "Synced from Linux")] {
-        try connection.toolsExecuteUnlocked("INSERT INTO dashboard_messages(id,conversation_id,role,content,created_at,updated_at) VALUES(?,?,'assistant',?,?,?)",
+        try connection.toolsExecuteUnlocked("INSERT INTO messages(id,conversation_id,role,content,created_at,updated_at) VALUES(?,?,'assistant',?,?,?)",
           [UUID().uuidString.lowercased(), conversation, text, "2026-11-12T10:00:00.000Z", "2026-11-12T10:00:00.000Z"])
-        try connection.toolsExecuteUnlocked("UPDATE dashboard_conversations SET title=? WHERE id=?", [text, conversation])
+        try connection.toolsExecuteUnlocked("UPDATE conversations SET title=? WHERE id=?", [text, conversation])
       }
     }
     try await database.appendLocalACPAssistantChunk(runID: run.runID, chunk: "All 214 tests")
@@ -54,7 +54,7 @@ struct ExecutionStreamTests {
     await #expect(throws: Abort.self) {
       try await database.write { connection in
         try connection.transaction {
-          try connection.toolsExecuteUnlocked("UPDATE dashboard_messages SET content='discarded' WHERE id=?", [run.assistantMessageID])
+          try connection.toolsExecuteUnlocked("UPDATE messages SET content='discarded' WHERE id=?", [run.assistantMessageID])
           throw Abort()
         }
       }
@@ -73,12 +73,12 @@ struct ExecutionStreamTests {
     let total = StreamProtocol.maximumRetainedChanges + 50
     try await database.write { connection in
       // Only this fixture's own speed: the other triggers on messages are unrelated here.
-      for trigger in try connection.historyRowsUnlocked("SELECT name FROM sqlite_master WHERE type='trigger' AND tbl_name='dashboard_messages' AND name NOT LIKE 'execution_stream_%'", values: []) {
+      for trigger in try connection.historyRowsUnlocked("SELECT name FROM sqlite_master WHERE type='trigger' AND tbl_name='messages' AND name NOT LIKE 'messages_execution_stream_%'", values: []) {
         try connection.executeUnlocked("DROP TRIGGER \(trigger.objectValue!["name"]!.stringValue!)")
       }
       try connection.transaction {
         for index in 0..<total {
-          try connection.toolsExecuteUnlocked("UPDATE dashboard_messages SET content=? WHERE id=?", ["chunk \(index)", run.assistantMessageID])
+          try connection.toolsExecuteUnlocked("UPDATE messages SET content=? WHERE id=?", ["chunk \(index)", run.assistantMessageID])
         }
       }
     }
@@ -94,7 +94,7 @@ struct ExecutionStreamTests {
 
     // A database from before the change source: no table and no triggers.
     try await database.write { connection in
-      let triggers = try connection.historyRowsUnlocked("SELECT name FROM sqlite_master WHERE type='trigger' AND name LIKE 'execution_stream_%'", values: [])
+      let triggers = try connection.historyRowsUnlocked("SELECT name FROM sqlite_master WHERE type='trigger' AND name GLOB '*_execution_stream_*'", values: [])
       #expect(triggers.count == WorkspaceDatabaseConnection.executionStreamTables.count * 3)
       for trigger in triggers { try connection.executeUnlocked("DROP TRIGGER \(trigger.objectValue!["name"]!.stringValue!)") }
       try connection.executeUnlocked("DROP TABLE execution_stream_changes")
@@ -114,7 +114,7 @@ struct ExecutionStreamTests {
     func schema() async throws -> (version: Double, triggers: [String: String]) {
       try await database.read { connection in
         let version = try connection.historyRowsUnlocked("PRAGMA schema_version", values: []).first?.objectValue?["schema_version"]?.doubleValue ?? -1
-        let rows = try connection.historyRowsUnlocked("SELECT name, sql FROM sqlite_master WHERE type='trigger' AND name LIKE 'execution_stream_%'", values: [])
+        let rows = try connection.historyRowsUnlocked("SELECT name, sql FROM sqlite_master WHERE type='trigger' AND name GLOB '*_execution_stream_*'", values: [])
         return (version, Dictionary(uniqueKeysWithValues: rows.compactMap { row in
           row.objectValue.flatMap { value in value["name"]?.stringValue.map { ($0, value["sql"]?.stringValue ?? "") } }
         }))
@@ -129,8 +129,8 @@ struct ExecutionStreamTests {
     // An outdated trigger is still replaced.
     try await database.write { connection in
       try connection.executeUnlocked("""
-        DROP TRIGGER execution_stream_dashboard_messages_update;
-        CREATE TRIGGER execution_stream_dashboard_messages_update AFTER UPDATE ON dashboard_messages BEGIN SELECT 1; END;
+        DROP TRIGGER messages_execution_stream_update;
+        CREATE TRIGGER messages_execution_stream_update AFTER UPDATE ON messages BEGIN SELECT 1; END;
         """)
       try connection.migrateExecutionStreamChanges()
     }
@@ -266,7 +266,7 @@ struct ExecutionStreamTests {
     client.send(.subscribe(.init(id: "elsewhere", stream: .conversation, params: .init(conversationID: UUID().uuidString.lowercased()))))
     guard case .end(let refused) = try await client.next(where: { if case .end(let end) = $0 { return end.id == "elsewhere" }; return false }) else { return }
     #expect(refused.error?.code == "not_found")
-    try await mac.database.write { try $0.toolsExecuteUnlocked("UPDATE dashboard_conversations SET is_archived=1 WHERE id=?", [conversation]) }
+    try await mac.database.write { try $0.toolsExecuteUnlocked("UPDATE conversations SET is_archived=1 WHERE id=?", [conversation]) }
     let removal = try await client.item("w") { if case .conversations(let value) = $0.payload { return value.deletedConversationIDs != nil }; return false }
     guard case .conversations(let removed) = removal.payload else { return }
     #expect(removed.deletedConversationIDs == [conversation] && !removed.snapshot)
@@ -918,8 +918,8 @@ private final class BotsPort: @unchecked Sendable {
   func transcript(conversationID: String, before: String?) async throws -> LibraryTranscript {
     if cancelledTranscriptReads > 0 { cancelledTranscriptReads -= 1; throw CancellationError() }
     let (messages, active) = try await database.read { connection in
-      (try connection.historyRowsUnlocked("SELECT id,run_id,role,content,status,created_at FROM dashboard_messages WHERE conversation_id=? ORDER BY created_at,id", values: [conversationID]),
-       try connection.historyRowsUnlocked("SELECT id FROM dashboard_runs WHERE conversation_id=? AND status IN ('queued','running') ORDER BY created_at DESC LIMIT 1", values: [conversationID]))
+      (try connection.historyRowsUnlocked("SELECT id,run_id,role,content,status,created_at FROM messages WHERE conversation_id=? ORDER BY created_at,id", values: [conversationID]),
+       try connection.historyRowsUnlocked("SELECT id FROM runs WHERE conversation_id=? AND status IN ('queued','running') ORDER BY created_at DESC LIMIT 1", values: [conversationID]))
     }
     return LibraryTranscript(conversationID: conversationID, messages: messages.suffix(80).compactMap { row in
       guard let value = row.objectValue, let id = value["id"]?.stringValue else { return nil }

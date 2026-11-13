@@ -18,9 +18,6 @@ extension WorkspaceDatabaseConnection {
         device_id TEXT NOT NULL, request_id TEXT NOT NULL, conversation_id TEXT NOT NULL,
         fingerprint BLOB NOT NULL, response BLOB, PRIMARY KEY(device_id,request_id)
       );
-      CREATE TABLE IF NOT EXISTS execution_workspace_mcp_grants (
-        workspace_id TEXT PRIMARY KEY, digest BLOB NOT NULL UNIQUE, payload BLOB NOT NULL
-      );
       CREATE TABLE IF NOT EXISTS device_scheduled_mcp_callers (
         run_id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL, workspace_id TEXT NOT NULL,
         event_id TEXT NOT NULL, scheduled_at TEXT NOT NULL, native_session_id TEXT,
@@ -46,11 +43,11 @@ extension WorkspaceDatabaseConnection {
     }
     var owners = try libraryIDsUnlocked("""
       SELECT f.workspace_id FROM execution_conversations f
-      JOIN dashboard_conversations c ON c.id=f.id
+      JOIN conversations c ON c.id=f.id
       WHERE f.id=? AND f.deleted=0 AND c.deleted_at IS NULL AND c.is_archived=0
       """, bindings: [value.conversationID])
     if owners.isEmpty {
-      owners = try libraryIDsUnlocked("SELECT DISTINCT f.workspace_id FROM device_scheduled_mcp_callers f JOIN dashboard_conversations c ON c.id=f.conversation_id WHERE f.conversation_id=? AND c.deleted_at IS NULL AND c.is_archived=0", bindings: [value.conversationID])
+      owners = try libraryIDsUnlocked("SELECT DISTINCT f.workspace_id FROM device_scheduled_mcp_callers f JOIN conversations c ON c.id=f.conversation_id WHERE f.conversation_id=? AND c.deleted_at IS NULL AND c.is_archived=0", bindings: [value.conversationID])
       if command.isMutation {
         guard try libraryIDsUnlocked("SELECT run_id FROM device_scheduled_mcp_callers WHERE conversation_id=? AND native_session_id IS NOT NULL", bindings: [value.conversationID]).isEmpty == false else {
           throw LibraryAPIError(code: "unavailable", message: "The scheduled agent has not bound its native session yet.")

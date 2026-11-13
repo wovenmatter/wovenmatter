@@ -83,7 +83,7 @@ public struct WorkspaceToolExecutor: Sendable {
       }
       if command.action == "context" {
         let id = try await database.inputContext(id: request.contextID, callerID: callerID)
-        return .init(result: id.map(GatewayJSONValue.string) ?? .null, requestID: request.requestID)
+        return .init(result: id.map(JSONValue.string) ?? .null, requestID: request.requestID)
       }
       guard let group = command.group else { throw WorkspaceToolError.invalid("Choose a tool.") }
       // Scoped history reads have their own independent attachment/management
@@ -131,7 +131,7 @@ public struct WorkspaceToolExecutor: Sendable {
       case .library: result = try await library(command, callerID: callerID)
       case .html:
         if command.action == "call" {
-          let input = try JSONDecoder().decode(GatewayJSONValue.self, from: Data(command.required("json").utf8))
+          let input = try JSONDecoder().decode(JSONValue.self, from: Data(command.required("json").utf8))
           guard let object = input.objectValue, let html = object["html"]?.stringValue,
                 let action = object["action"]?.stringValue, ["preview", "render"].contains(action) else {
             throw WorkspaceToolError.invalid("Provide an HTML render or preview action.")
@@ -299,9 +299,9 @@ public struct WorkspaceToolExecutor: Sendable {
   }
 
   private static func noteMutationAcknowledgement(_ response: NoteEditingResponse) throws -> WovenMatterToolResponse {
-    var object: [String: GatewayJSONValue] = ["id": .string(response.noteID)]
-    object["title"] = response.title.map(GatewayJSONValue.string) ?? .null
-    object["revision"] = response.revision.map(GatewayJSONValue.string) ?? .null
+    var object: [String: JSONValue] = ["id": .string(response.noteID)]
+    object["title"] = response.title.map(JSONValue.string) ?? .null
+    object["revision"] = response.revision.map(JSONValue.string) ?? .null
     object["replayed"] = .bool(response.replayed == true)
     return .init(success: response.success, result: .object(object), error: response.error,
       code: response.success ? nil : "mutation_failed")
@@ -319,8 +319,8 @@ public struct WorkspaceToolExecutor: Sendable {
     let next = content.distance(from: content.startIndex, to: end)
     return .init(result: .object([
       "id": .string(response.noteID),
-      "title": response.title.map(GatewayJSONValue.string) ?? .null,
-      "revision": response.revision.map(GatewayJSONValue.string) ?? .null,
+      "title": response.title.map(JSONValue.string) ?? .null,
+      "revision": response.revision.map(JSONValue.string) ?? .null,
       "kind": .string(document.kind.rawValue),
       "content": .string(String(content[start..<end])),
       "contentCharacters": .number(Double(content.count)),
@@ -531,7 +531,7 @@ extension WorkspaceDatabase {
   /// Whether a tool caller exists, without loading the workspace overview.
   public func hasActiveConversation(_ id: String) async throws -> Bool {
     try await read { connection in
-      try !connection.historyRowsUnlocked("SELECT id FROM dashboard_conversations WHERE id=? AND deleted_at IS NULL", values: [id]).isEmpty
+      try !connection.historyRowsUnlocked("SELECT id FROM conversations WHERE id=? AND deleted_at IS NULL", values: [id]).isEmpty
     }
   }
 }

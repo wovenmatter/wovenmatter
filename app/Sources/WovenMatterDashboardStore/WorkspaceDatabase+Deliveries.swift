@@ -53,10 +53,10 @@ extension WorkspaceDatabaseConnection {
           coalesce(b.display_name,c.title,'Outside agent'),?,?,coalesce(bt.display_name,t.title,'Bot'),
           coalesce(bt.display_name,d.runtime_kind,t.agent_codename),d.model,?
         FROM workspace_mcp_callers b JOIN workspace_mcp_callers bt ON bt.id=?
-        LEFT JOIN dashboard_conversations c ON c.id=b.id
-        LEFT JOIN dashboard_conversations t ON t.id=bt.id
-        LEFT JOIN desktop_local_acp_sessions s ON s.conversation_id=c.id
-        LEFT JOIN desktop_local_acp_sessions d ON d.conversation_id=t.id WHERE b.id=?
+        LEFT JOIN conversations c ON c.id=b.id
+        LEFT JOIN conversations t ON t.id=bt.id
+        LEFT JOIN harness_sessions s ON s.conversation_id=c.id
+        LEFT JOIN harness_sessions d ON d.conversation_id=t.id WHERE b.id=?
         """, [requestID, sourceID, targetID, text, kind.rawValue, purpose, eventKey, targetID, sourceID])
       guard let result = try deliveryUnlocked(requestID) else { throw WorkspaceToolError.invalid("Unable to reserve delivery.") }
       return result
@@ -142,12 +142,12 @@ extension WorkspaceDatabaseConnection {
        let key = try historyRowsUnlocked("SELECT event_key FROM workspace_session_deliveries WHERE id=?", values: [delivery.id]).first?.objectValue?["event_key"]?.stringValue,
        key.hasPrefix(Self.wakeUpEventPrefix) {
       if !WovenMCPCaller.isAppWide(delivery.targetID) {
-        guard !(try historyRowsUnlocked("SELECT 1 FROM dashboard_conversations WHERE id=? AND deleted_at IS NULL", values: [delivery.targetID])).isEmpty else { return false }
+        guard !(try historyRowsUnlocked("SELECT 1 FROM conversations WHERE id=? AND deleted_at IS NULL", values: [delivery.targetID])).isEmpty else { return false }
       }
       return (try? sessionToolsUnlocked(delivery.targetID))?.enabled.contains(.sessions) == true
     }
     for id in [delivery.sourceID, delivery.targetID] where !WovenMCPCaller.isAppWide(id) {
-      guard !(try historyRowsUnlocked("SELECT 1 FROM dashboard_conversations WHERE id=? AND deleted_at IS NULL", values: [id])).isEmpty else { return false }
+      guard !(try historyRowsUnlocked("SELECT 1 FROM conversations WHERE id=? AND deleted_at IS NULL", values: [id])).isEmpty else { return false }
     }
     guard let source = try? sessionToolsUnlocked(delivery.sourceID),
           let target = try? sessionToolsUnlocked(delivery.targetID) else { return false }
@@ -260,7 +260,7 @@ extension WorkspaceDatabaseConnection {
     return try persistedToolRequestID(id, in: .deliveries)
   }
 
-  private func deliveryFromRow(_ value: GatewayJSONValue) -> WorkspaceSessionDelivery {
+  private func deliveryFromRow(_ value: JSONValue) -> WorkspaceSessionDelivery {
     let r = value.objectValue ?? [:]
     func string(_ key: String) -> String { r[key]?.stringValue ?? "" }
     return WorkspaceSessionDelivery(id: string("id"), sourceID: string("source_id"), targetID: string("target_id"), text: string("content"),

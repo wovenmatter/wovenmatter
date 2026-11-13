@@ -10,7 +10,7 @@ import WovenMatterCore
 /// docs/architecture/WOVEN_EVERYWHERE.md). The server reads the current rows
 /// when it sends; the pointer says only which entity of which conversation changed.
 public struct ExecutionStreamChange: Equatable, Sendable {
-  public enum EntityKind: String, Sendable { case conversation, message, run, runEvent = "run_event", activity, session }
+  public enum EntityKind: String, Sendable { case conversation, message, run, runEvent = "run_event", session }
   public let sequence: Int64
   public let conversationID: String
   public let entityKind: String
@@ -29,16 +29,15 @@ public struct ExecutionStreamChangePage: Equatable, Sendable {
 
 extension WorkspaceDatabaseConnection {
   /// Tables whose rows make up a conversation this Mac runs, with the entity
-  /// each row names. `desktop_local_acp_sessions` is what makes a conversation
+  /// each row names. `harness_sessions` is what makes a conversation
   /// one this Mac runs, so its rows are conversation changes too. A session's
   /// goal and enabled tools are part of its settings (the `session` item).
   static let executionStreamTables: [(table: String, kind: ExecutionStreamChange.EntityKind, conversation: String, entity: String)] = [
-    ("dashboard_conversations", .conversation, "id", "id"),
-    ("desktop_local_acp_sessions", .conversation, "conversation_id", "conversation_id"),
-    ("dashboard_messages", .message, "conversation_id", "id"),
-    ("dashboard_runs", .run, "conversation_id", "id"),
-    ("dashboard_run_events", .runEvent, "conversation_id", "id"),
-    ("dashboard_run_trace_events", .activity, "conversation_id", "id"),
+    ("conversations", .conversation, "id", "id"),
+    ("harness_sessions", .conversation, "conversation_id", "conversation_id"),
+    ("messages", .message, "conversation_id", "id"),
+    ("runs", .run, "conversation_id", "id"),
+    ("run_activities", .runEvent, "conversation_id", "id"),
     ("workspace_session_goals", .session, "session_id", "session_id"),
     ("workspace_session_tools", .session, "session_id", "session_id"),
   ]
@@ -54,7 +53,7 @@ extension WorkspaceDatabaseConnection {
       "NOT EXISTS (SELECT 1 FROM paired_conversation_owners o WHERE o.id = \(conversation) AND o.device_id <> COALESCE((SELECT host_device_id FROM library_identity WHERE singleton = 1), ''))",
     ]
     if requireSession {
-      clauses.append("EXISTS (SELECT 1 FROM desktop_local_acp_sessions s WHERE s.conversation_id = \(conversation) AND s.remote_workspace_id IS NULL)")
+      clauses.append("EXISTS (SELECT 1 FROM harness_sessions s WHERE s.conversation_id = \(conversation) AND s.remote_workspace_id IS NULL)")
     }
     return clauses.joined(separator: " AND ")
   }
@@ -82,10 +81,10 @@ extension WorkspaceDatabaseConnection {
           let row = operation == "DELETE" ? "OLD" : "NEW"
           // A removed session row cannot be looked up any more; its own
           // remote workspace column still tells whether this Mac ran it.
-          let local = table == "desktop_local_acp_sessions" && operation == "DELETE"
+          let local = table == "harness_sessions" && operation == "DELETE"
             ? "OLD.remote_workspace_id IS NULL AND " + Self.executionStreamIsLocal("OLD.conversation_id", requireSession: false)
             : Self.executionStreamIsLocal("\(row).\(conversation)")
-          let name = "execution_stream_\(table)_\(operation.lowercased())"
+          let name = "\(table)_execution_stream_\(operation.lowercased())"
           // SQLite stores the statement's text as written, without its semicolon.
           let create = """
             CREATE TRIGGER \(name) AFTER \(operation) ON \(table)

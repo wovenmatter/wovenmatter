@@ -10,7 +10,7 @@ private struct ConversationArchiveConversationKey: EnvironmentKey {
 
 #if os(macOS)
 private struct ConversationSubagentHistoryKey: EnvironmentKey {
-    static let defaultValue: (@MainActor (BuiltInSubagentArchiveRequest) async throws -> GatewayJSONValue)? = nil
+    static let defaultValue: (@MainActor (BuiltInSubagentArchiveRequest) async throws -> JSONValue)? = nil
 }
 
 #endif
@@ -21,7 +21,7 @@ extension EnvironmentValues {
         set { self[ConversationArchiveConversationKey.self] = newValue }
     }
     #if os(macOS)
-    var conversationSubagentHistory: (@MainActor (BuiltInSubagentArchiveRequest) async throws -> GatewayJSONValue)? {
+    var conversationSubagentHistory: (@MainActor (BuiltInSubagentArchiveRequest) async throws -> JSONValue)? {
         get { self[ConversationSubagentHistoryKey.self] }
         set { self[ConversationSubagentHistoryKey.self] = newValue }
     }
@@ -128,7 +128,7 @@ private struct ConversationSubagentHistory: View {
     @Environment(\.conversationArchiveConversationID) private var conversationID
     @Environment(\.conversationSubagentHistory) private var loadHistory
     @State private var expanded = false
-    @State private var rows: [GatewayJSONValue] = []
+    @State private var rows: [JSONValue] = []
     @State private var cursor: Int64 = 0
     @State private var hasMore = true
     @State private var busy = false
@@ -180,7 +180,7 @@ private struct ConversationSubagentHistory: View {
 
 private struct ConversationSubagentArchiveEvent: View {
     let request: BuiltInSubagentArchiveRequest
-    let fields: [String: GatewayJSONValue]
+    let fields: [String: JSONValue]
     @Environment(\.conversationSubagentHistory) private var loadHistory
     @State private var chunks: [String] = []
     @State private var offset = 0

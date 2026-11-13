@@ -10,13 +10,12 @@ import WovenMatterClient
 extension WorkspaceDatabaseConnection {
   public func listAgentNotes(callerID: String, search: String? = nil, folderID: String? = nil,
                               after: Int64 = Int64(WorkspaceToolExecutor.maximumCursor), limit: Int = 50,
-                              newestFirst: Bool = true) throws -> GatewayJSONValue {
+                              newestFirst: Bool = true) throws -> JSONValue {
     try withLock {
       try requireToolUnlocked(.notes, sessionID: callerID)
       guard after >= 0, (1...200).contains(limit) else { throw WorkspaceToolError.invalid("Invalid pagination.") }
-      let operatorID = try localMutationOperatorIDUnlocked()
-      var values: [String?] = [operatorID, String(after)]
-      var sql = "SELECT rowid AS sequence,id,title,folder_id,CASE WHEN json_valid(content) THEN coalesce(json_extract(content,'$.kind'),'note') ELSE 'note' END AS kind,snippet,updated_at FROM notes WHERE user_id=? AND rowid \(newestFirst ? "<" : ">") ? AND deleted_at IS NULL"
+      var values: [String?] = [String(after)]
+      var sql = "SELECT rowid AS sequence,id,title,folder_id,CASE WHEN json_valid(content) THEN coalesce(json_extract(content,'$.kind'),'note') ELSE 'note' END AS kind,snippet,updated_at FROM notes WHERE rowid \(newestFirst ? "<" : ">") ? AND deleted_at IS NULL"
       if let folderID { sql += " AND folder_id=?"; values.append(folderID) }
       if let search { sql += " AND (instr(lower(title),lower(?))>0 OR instr(lower(content),lower(?))>0)"; values += [search, search] }
       sql += " ORDER BY rowid \(newestFirst ? "DESC" : "ASC") LIMIT ?"; values.append(String(limit + 1))
@@ -28,17 +27,16 @@ extension WorkspaceDatabaseConnection {
   }
 
   public func listAgentFolders(callerID: String, requiredTool: WorkspaceToolGroup = .sessions,
-                               after: Int64 = 0, limit: Int = 100) throws -> GatewayJSONValue {
+                               after: Int64 = 0, limit: Int = 100) throws -> JSONValue {
     try withLock {
       guard requiredTool == .sessions || requiredTool == .notes else {
         throw WorkspaceToolError.invalid("Folders are available through Notes or Session management.")
       }
       try requireToolUnlocked(requiredTool, sessionID: callerID)
       guard after >= 0, (1...200).contains(limit) else { throw WorkspaceToolError.invalid("Invalid pagination.") }
-      let operatorID = try localMutationOperatorIDUnlocked()
       var rows = try historyRowsUnlocked(
-        "SELECT folders.id,name,position,workspace_id AS execution_workspace_id,root_path,reference_paths FROM folders LEFT JOIN folder_execution_roots ON folder_id=folders.id WHERE user_id=? ORDER BY position,folders.id LIMIT ? OFFSET ?",
-        values: [operatorID, String(limit + 1), String(after)])
+        "SELECT folders.id,name,position,workspace_id AS execution_workspace_id,root_path,reference_paths FROM folders LEFT JOIN folder_execution_roots ON folder_id=folders.id ORDER BY position,folders.id LIMIT ? OFFSET ?",
+        values: [String(limit + 1), String(after)])
       let more = rows.count > limit
       if more { rows.removeLast() }
       let (next, overflow) = after.addingReportingOverflow(Int64(rows.count))
@@ -49,20 +47,19 @@ extension WorkspaceDatabaseConnection {
   }
 
   public func listAgentCalendar(callerID: String, since: Date? = nil, until: Date? = nil,
-                                 after: Int64 = 0, limit: Int = 100) throws -> GatewayJSONValue {
+                                 after: Int64 = 0, limit: Int = 100) throws -> JSONValue {
     try withLock {
       try requireToolUnlocked(.calendar, sessionID: callerID)
       guard after >= 0, (1...200).contains(limit) else { throw WorkspaceToolError.invalid("Invalid pagination.") }
-      let operatorID = try localMutationOperatorIDUnlocked()
-      var sql = "SELECT rowid AS sequence,id,kind,title,description,starts_at,ends_at,all_day,status,source,created_at,updated_at,json(calendar_json) AS calendar FROM dashboard_calendar_items WHERE user_id=? AND deleted_at IS NULL AND rowid>?"
-      var values: [String?] = [operatorID, String(after)]
+      var sql = "SELECT rowid AS sequence,id,kind,title,description,starts_at,ends_at,all_day,status,source,created_at,updated_at,json(calendar_json) AS calendar FROM calendar_items WHERE deleted_at IS NULL AND rowid>?"
+      var values: [String?] = [String(after)]
       if let since { sql += " AND (json_extract(calendar_json,'$.recurrence') IS NOT NULL OR coalesce(ends_at,starts_at)>=?)"; values.append(Self.timestamp(since)) }
       if let until { sql += " AND starts_at<=?"; values.append(Self.timestamp(until)) }
       sql += " ORDER BY rowid LIMIT ?"; values.append(String(limit + 1))
       var rows = try historyRowsUnlocked(sql, values: values)
       rows = try rows.map { value in
         guard var row = value.objectValue, let json = row["calendar"]?.stringValue else { return value }
-        row["calendar"] = try JSONDecoder().decode(GatewayJSONValue.self, from: Data(json.utf8))
+        row["calendar"] = try JSONDecoder().decode(JSONValue.self, from: Data(json.utf8))
         return .object(row)
       }
       let more = rows.count > limit
@@ -77,17 +74,17 @@ extension WorkspaceDatabaseConnection {
 extension WorkspaceDatabase {
   public func listAgentNotes(callerID: String, search: String? = nil, folderID: String? = nil,
                               after: Int64 = Int64(WorkspaceToolExecutor.maximumCursor), limit: Int = 50,
-                              newestFirst: Bool = true) async throws -> GatewayJSONValue {
+                              newestFirst: Bool = true) async throws -> JSONValue {
     try await read { try $0.listAgentNotes(callerID: callerID, search: search, folderID: folderID, after: after, limit: limit, newestFirst: newestFirst) }
   }
 
   public func listAgentFolders(callerID: String, requiredTool: WorkspaceToolGroup = .sessions,
-                               after: Int64 = 0, limit: Int = 100) async throws -> GatewayJSONValue {
+                               after: Int64 = 0, limit: Int = 100) async throws -> JSONValue {
     try await read { try $0.listAgentFolders(callerID: callerID, requiredTool: requiredTool, after: after, limit: limit) }
   }
 
   public func listAgentCalendar(callerID: String, since: Date? = nil, until: Date? = nil,
-                                 after: Int64 = 0, limit: Int = 100) async throws -> GatewayJSONValue {
+                                 after: Int64 = 0, limit: Int = 100) async throws -> JSONValue {
     try await read { try $0.listAgentCalendar(callerID: callerID, since: since, until: until, after: after, limit: limit) }
   }
 }

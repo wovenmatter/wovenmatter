@@ -11,7 +11,7 @@ public struct LocalACPSessionDescriptor: Equatable, Sendable {
   public let conversationID: String
   public let runtimeKind: AgentRuntimeKind
   public let title: String
-  public let acpSessionID: String?
+  public let nativeSessionID: String?
   public let model: String?
   public let thinking: String?
   public let permission: String?
@@ -21,7 +21,7 @@ public struct LocalACPSessionDescriptor: Equatable, Sendable {
     conversationID: String,
     runtimeKind: AgentRuntimeKind,
     title: String,
-    acpSessionID: String?,
+    nativeSessionID: String?,
     model: String? = nil,
     thinking: String? = nil,
     permission: String? = nil,
@@ -30,7 +30,7 @@ public struct LocalACPSessionDescriptor: Equatable, Sendable {
     self.conversationID = conversationID
     self.runtimeKind = runtimeKind
     self.title = title
-    self.acpSessionID = acpSessionID
+    self.nativeSessionID = nativeSessionID
     self.model = model
     self.thinking = thinking
     self.permission = permission
@@ -96,7 +96,7 @@ extension WorkspaceDatabaseConnection {
   }
 
   func markSessionImportedUnlocked(conversationID: String) throws {
-    let statement = try prepareUnlocked("INSERT OR IGNORE INTO desktop_session_imports (conversation_id, imported_at) VALUES (?, ?)")
+    let statement = try prepareUnlocked("INSERT OR IGNORE INTO session_imports (conversation_id, imported_at) VALUES (?, ?)")
     defer { sqlite3_finalize(statement) }
     try bind(conversationID, at: 1, to: statement)
     try bind(Self.timestamp(Date()), at: 2, to: statement)
@@ -121,7 +121,7 @@ extension WorkspaceDatabaseConnection {
         location: executionRoot.location, defaultPath: executionRoot.defaultPath)
       if importedOpenCodeSnapshot != nil {
         try toolsExecuteUnlocked("INSERT OR IGNORE INTO retained_execution_history(conversation_id) VALUES(?)", [id])
-        try toolsExecuteUnlocked("UPDATE dashboard_conversations SET is_archived=1 WHERE id=?", [id])
+        try toolsExecuteUnlocked("UPDATE conversations SET is_archived=1 WHERE id=?", [id])
       }
       return id
     }
@@ -151,16 +151,14 @@ extension WorkspaceDatabaseConnection {
     }
 
       if let link = openCodeAssociation {
-        let existing = try prepareUnlocked("SELECT conversation_id FROM desktop_opencode_sessions WHERE connection_id=? AND session_id=?")
+        let existing = try prepareUnlocked("SELECT conversation_id FROM opencode_sessions WHERE connection_id=? AND session_id=?")
         defer { sqlite3_finalize(existing) }
         try bind(link.connectionID, at: 1, to: existing); try bind(link.sessionID, at: 2, to: existing)
         if sqlite3_step(existing) == SQLITE_ROW { return try text(existing, column: 0) }
       }
-      let operatorID = try localMutationOperatorIDUnlocked()
       let agentID = try ensureLocalCLIAgentUnlocked(
         runtimeKind: runtimeKind,
         ownerDeviceID: ownerDeviceID,
-        operatorID: operatorID,
         status: .ready,
         updatedAt: createdAt
       )
@@ -171,48 +169,38 @@ extension WorkspaceDatabaseConnection {
         : cleanTitle
       let timestamp = Self.timestamp(createdAt)
       let conversation = try prepareUnlocked("""
-        INSERT INTO dashboard_conversations (
-          id, user_id, agent_id, agent_codename, governing_plane,
-          authority_kind, authority_device_id, authority_agent_id,
-          title, unread, kind,
-          is_deletable, is_archived, last_message_at, is_pinned,
-          created_at, updated_at, desktop_owned
-        ) VALUES (?, ?, ?, ?, 'wovenmatter_macos', 'device_owned', ?, ?,
-          ?, 0, 'local_acp', 1, 0, ?, 0, ?, ?, 1)
+        INSERT INTO conversations (
+          id, agent_id, agent_codename, owner_device_id, title, unread,
+          is_archived, last_message_at, is_pinned, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, 0, 0, ?, 0, ?, ?)
         """)
       defer { sqlite3_finalize(conversation) }
       try bind(conversationID, at: 1, to: conversation)
-      try bind(operatorID, at: 2, to: conversation)
-      try bind(agentID, at: 3, to: conversation)
-      try bind(codename, at: 4, to: conversation)
-      try bind(ownerDeviceID.uuidString.lowercased(), at: 5, to: conversation)
-      try bind(agentID, at: 6, to: conversation)
-      try bind(sessionTitle, at: 7, to: conversation)
+      try bind(agentID, at: 2, to: conversation)
+      try bind(codename, at: 3, to: conversation)
+      try bind(ownerDeviceID.uuidString.lowercased(), at: 4, to: conversation)
+      try bind(sessionTitle, at: 5, to: conversation)
+      try bind(timestamp, at: 6, to: conversation)
+      try bind(timestamp, at: 7, to: conversation)
       try bind(timestamp, at: 8, to: conversation)
-      try bind(timestamp, at: 9, to: conversation)
-      try bind(timestamp, at: 10, to: conversation)
       try stepDone(conversation)
 
       let session = try prepareUnlocked("""
-        INSERT INTO desktop_local_acp_sessions (
-          conversation_id, agent_id, runtime_kind, governing_plane,
-          authority_kind, authority_device_id, authority_agent_id, revision,
-          title, created_at, updated_at
-        ) VALUES (?, ?, ?, 'wovenmatter_macos', 'device_owned', ?, ?, 1, ?, ?, ?)
+        INSERT INTO harness_sessions (
+          conversation_id, agent_id, runtime_kind, revision, title, created_at, updated_at
+        ) VALUES (?, ?, ?, 1, ?, ?, ?)
         """)
       defer { sqlite3_finalize(session) }
       try bind(conversationID, at: 1, to: session)
       try bind(agentID, at: 2, to: session)
       try bind(runtimeKind.rawValue, at: 3, to: session)
-      try bind(ownerDeviceID.uuidString.lowercased(), at: 4, to: session)
-      try bind(agentID, at: 5, to: session)
-      try bind(sessionTitle, at: 6, to: session)
-      try bind(timestamp, at: 7, to: session)
-      try bind(timestamp, at: 8, to: session)
+      try bind(sessionTitle, at: 4, to: session)
+      try bind(timestamp, at: 5, to: session)
+      try bind(timestamp, at: 6, to: session)
       try stepDone(session)
       try adoptReservedSessionOriginUnlocked(conversationID, allowMissingCalendarFolder: allowMissingCalendarFolder)
       if let link = openCodeAssociation {
-        let association = try prepareUnlocked("INSERT INTO desktop_opencode_sessions(conversation_id, connection_id, session_id, snapshot_json) VALUES (?, ?, ?, '{}')")
+        let association = try prepareUnlocked("INSERT INTO opencode_sessions(conversation_id, connection_id, session_id, snapshot_json) VALUES (?, ?, ?, '{}')")
         defer { sqlite3_finalize(association) }
         try bind(conversationID, at: 1, to: association); try bind(link.connectionID, at: 2, to: association)
         try bind(link.sessionID, at: 3, to: association); try stepDone(association)
@@ -271,19 +259,17 @@ extension WorkspaceDatabaseConnection {
               link.connectionID == "remote-workspace:" + remoteWorkspaceID.uuidString.lowercased() else {
           throw LocalACPSessionDatabaseError.runtimeUnavailable
         }
-        let existing = try prepareUnlocked("SELECT conversation_id FROM desktop_opencode_sessions WHERE connection_id=? AND session_id=?")
+        let existing = try prepareUnlocked("SELECT conversation_id FROM opencode_sessions WHERE connection_id=? AND session_id=?")
         defer { sqlite3_finalize(existing) }
         try bind(link.connectionID, at: 1, to: existing)
         try bind(link.sessionID, at: 2, to: existing)
         if sqlite3_step(existing) == SQLITE_ROW { return try text(existing, column: 0) }
       }
-      let operatorID = try localMutationOperatorIDUnlocked()
       let agentID = try ensureRemoteHarnessAgentUnlocked(
         runtimeKind: runtimeKind,
         remoteWorkspaceID: remoteWorkspaceID,
         remoteWorkspaceName: remoteWorkspaceName,
         ownerDeviceID: ownerDeviceID,
-        operatorID: operatorID,
         status: .ready,
         updatedAt: createdAt
       )
@@ -295,50 +281,40 @@ extension WorkspaceDatabaseConnection {
       let workspaceID = remoteWorkspaceID.uuidString.lowercased()
       let timestamp = Self.timestamp(createdAt)
       let conversation = try prepareUnlocked("""
-        INSERT INTO dashboard_conversations (
-          id, user_id, agent_id, agent_codename, governing_plane,
-          authority_kind, authority_device_id, authority_agent_id,
-          title, unread, kind,
-          is_deletable, is_archived, last_message_at, is_pinned,
-          created_at, updated_at, desktop_owned
-        ) VALUES (?, ?, ?, ?, 'wovenmatter_macos', 'device_owned', ?, ?,
-          ?, 0, 'remote_acp', 1, 0, ?, 0, ?, ?, 1)
+        INSERT INTO conversations (
+          id, agent_id, agent_codename, owner_device_id, title, unread,
+          is_archived, last_message_at, is_pinned, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, 0, 0, ?, 0, ?, ?)
         """)
       defer { sqlite3_finalize(conversation) }
       try bind(conversationID, at: 1, to: conversation)
-      try bind(operatorID, at: 2, to: conversation)
-      try bind(agentID, at: 3, to: conversation)
-      try bind("remote-\(workspaceID.prefix(8))-\(runtimeKind.rawValue)", at: 4, to: conversation)
-      try bind(ownerDeviceID.uuidString.lowercased(), at: 5, to: conversation)
-      try bind(agentID, at: 6, to: conversation)
-      try bind(sessionTitle, at: 7, to: conversation)
+      try bind(agentID, at: 2, to: conversation)
+      try bind("remote-\(workspaceID.prefix(8))-\(runtimeKind.rawValue)", at: 3, to: conversation)
+      try bind(ownerDeviceID.uuidString.lowercased(), at: 4, to: conversation)
+      try bind(sessionTitle, at: 5, to: conversation)
+      try bind(timestamp, at: 6, to: conversation)
+      try bind(timestamp, at: 7, to: conversation)
       try bind(timestamp, at: 8, to: conversation)
-      try bind(timestamp, at: 9, to: conversation)
-      try bind(timestamp, at: 10, to: conversation)
       try stepDone(conversation)
 
       let session = try prepareUnlocked("""
-        INSERT INTO desktop_local_acp_sessions (
-          conversation_id, agent_id, runtime_kind, governing_plane,
-          authority_kind, authority_device_id, authority_agent_id, revision,
+        INSERT INTO harness_sessions (
+          conversation_id, agent_id, runtime_kind, revision,
           title, remote_workspace_id, created_at, updated_at
-        ) VALUES (?, ?, ?, 'wovenmatter_macos', 'device_owned', ?, ?, 1,
-          ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, 1, ?, ?, ?, ?)
         """)
       defer { sqlite3_finalize(session) }
       try bind(conversationID, at: 1, to: session)
       try bind(agentID, at: 2, to: session)
       try bind(runtimeKind.rawValue, at: 3, to: session)
-      try bind(ownerDeviceID.uuidString.lowercased(), at: 4, to: session)
-      try bind(agentID, at: 5, to: session)
-      try bind(sessionTitle, at: 6, to: session)
-      try bind(workspaceID, at: 7, to: session)
-      try bind(timestamp, at: 8, to: session)
-      try bind(timestamp, at: 9, to: session)
+      try bind(sessionTitle, at: 4, to: session)
+      try bind(workspaceID, at: 5, to: session)
+      try bind(timestamp, at: 6, to: session)
+      try bind(timestamp, at: 7, to: session)
       try stepDone(session)
       try adoptReservedSessionOriginUnlocked(conversationID, allowMissingCalendarFolder: allowMissingCalendarFolder)
       if let link = openCodeAssociation {
-        let association = try prepareUnlocked("INSERT INTO desktop_opencode_sessions(conversation_id, connection_id, session_id, snapshot_json) VALUES (?, ?, ?, '{}')")
+        let association = try prepareUnlocked("INSERT INTO opencode_sessions(conversation_id, connection_id, session_id, snapshot_json) VALUES (?, ?, ?, '{}')")
         defer { sqlite3_finalize(association) }
         try bind(conversationID, at: 1, to: association)
         try bind(link.connectionID, at: 2, to: association)
@@ -355,13 +331,12 @@ extension WorkspaceDatabaseConnection {
     try withLock {
       let statement = try prepareUnlocked("""
         SELECT session.conversation_id, session.runtime_kind,
-          session.title, session.acp_session_id, session.model,
+          session.title, session.native_session_id, session.model,
           session.thinking, session.remote_workspace_id, session.permission
-        FROM desktop_local_acp_sessions AS session
-        JOIN dashboard_conversations AS conversation
+        FROM harness_sessions AS session
+        JOIN conversations AS conversation
           ON conversation.id = session.conversation_id
         WHERE session.conversation_id = ?
-          AND conversation.desktop_owned = 1
           AND conversation.deleted_at IS NULL
         """)
       defer { sqlite3_finalize(statement) }
@@ -374,7 +349,7 @@ extension WorkspaceDatabaseConnection {
         conversationID: try text(statement, column: 0),
         runtimeKind: runtimeKind,
         title: try text(statement, column: 2),
-        acpSessionID: optionalText(statement, column: 3),
+        nativeSessionID: optionalText(statement, column: 3),
         model: optionalText(statement, column: 4),
         thinking: optionalText(statement, column: 5),
         permission: optionalText(statement, column: 7),
@@ -389,28 +364,24 @@ extension WorkspaceDatabaseConnection {
   ) throws -> (
     conversationID: String,
     assistantMessageID: String,
-    userID: String,
     agentID: String,
     ownerDeviceID: UUID
   ) {
     let statement = try prepareUnlocked("""
-      SELECT conversation_id, assistant_message_id, user_id, agent_id,
-        authority_device_id
-      FROM dashboard_runs
-      WHERE id = ? AND authority_kind = 'device_owned'
-        AND governing_plane = 'wovenmatter_macos'
+      SELECT conversation_id, assistant_message_id, agent_id, owner_device_id
+      FROM runs
+      WHERE id = ?
       """)
     defer { sqlite3_finalize(statement) }
     try bind(runID, at: 1, to: statement)
     guard sqlite3_step(statement) == SQLITE_ROW,
-          let ownerDeviceID = UUID(uuidString: try text(statement, column: 4)) else {
+          let ownerDeviceID = UUID(uuidString: try text(statement, column: 3)) else {
       throw LocalACPSessionDatabaseError.runNotFound
     }
     return (
       try text(statement, column: 0),
       try text(statement, column: 1),
       try text(statement, column: 2),
-      try text(statement, column: 3),
       ownerDeviceID
     )
   }
@@ -420,18 +391,16 @@ extension WorkspaceDatabaseConnection {
   func discardUnpromptedClaudeDraftSessionID(conversationID: String, expectedSessionID: String) throws -> Bool {
     try transaction {
       let statement = try prepareUnlocked("""
-        UPDATE desktop_local_acp_sessions
-        SET acp_session_id=NULL, revision=revision+1, updated_at=?
-        WHERE conversation_id=? AND acp_session_id=? AND runtime_kind='claude_code'
-          AND remote_workspace_id IS NULL AND governing_plane='wovenmatter_macos' AND authority_kind='device_owned'
-          AND EXISTS (SELECT 1 FROM dashboard_conversations c WHERE c.id=desktop_local_acp_sessions.conversation_id
-            AND c.desktop_owned=1 AND c.deleted_at IS NULL AND c.governing_plane='wovenmatter_macos')
-          AND NOT EXISTS (SELECT 1 FROM dashboard_runs WHERE conversation_id=desktop_local_acp_sessions.conversation_id)
-          AND NOT EXISTS (SELECT 1 FROM dashboard_messages WHERE conversation_id=desktop_local_acp_sessions.conversation_id)
-          AND NOT EXISTS (SELECT 1 FROM dashboard_run_events WHERE conversation_id=desktop_local_acp_sessions.conversation_id)
-          AND NOT EXISTS (SELECT 1 FROM dashboard_run_trace_events WHERE conversation_id=desktop_local_acp_sessions.conversation_id)
-          AND NOT EXISTS (SELECT 1 FROM desktop_session_imports WHERE conversation_id=desktop_local_acp_sessions.conversation_id)
-          AND NOT EXISTS (SELECT 1 FROM retained_execution_history WHERE conversation_id=desktop_local_acp_sessions.conversation_id)
+        UPDATE harness_sessions
+        SET native_session_id=NULL, revision=revision+1, updated_at=?
+        WHERE conversation_id=? AND native_session_id=? AND runtime_kind='claude_code'
+          AND remote_workspace_id IS NULL
+          AND EXISTS (SELECT 1 FROM conversations c WHERE c.id=harness_sessions.conversation_id AND c.deleted_at IS NULL)
+          AND NOT EXISTS (SELECT 1 FROM runs WHERE conversation_id=harness_sessions.conversation_id)
+          AND NOT EXISTS (SELECT 1 FROM messages WHERE conversation_id=harness_sessions.conversation_id)
+          AND NOT EXISTS (SELECT 1 FROM run_activities WHERE conversation_id=harness_sessions.conversation_id)
+          AND NOT EXISTS (SELECT 1 FROM session_imports WHERE conversation_id=harness_sessions.conversation_id)
+          AND NOT EXISTS (SELECT 1 FROM retained_execution_history WHERE conversation_id=harness_sessions.conversation_id)
         """)
       defer { sqlite3_finalize(statement) }
       try bind(Self.timestamp(Date()), at: 1, to: statement)
@@ -451,8 +420,8 @@ extension WorkspaceDatabaseConnection {
     try transaction {
       let timestamp = Self.timestamp(updatedAt)
       let session = try prepareUnlocked("""
-        UPDATE desktop_local_acp_sessions
-        SET acp_session_id = ?, revision = revision + 1, updated_at = ?
+        UPDATE harness_sessions
+        SET native_session_id = ?, revision = revision + 1, updated_at = ?
         WHERE conversation_id = ?
         """)
       defer { sqlite3_finalize(session) }
@@ -466,10 +435,9 @@ extension WorkspaceDatabaseConnection {
 
       if let runID {
         let run = try prepareUnlocked("""
-          UPDATE dashboard_runs
-          SET openclaw_session_key = ?, updated_at = ?
-          WHERE id = ? AND conversation_id = ?
-            AND desktop_owned = 1 AND status = 'running'
+          UPDATE runs
+          SET native_session_id = ?, updated_at = ?
+          WHERE id = ? AND conversation_id = ? AND status = 'running'
           """)
         defer { sqlite3_finalize(run) }
         try bind(sessionID, at: 1, to: run)
@@ -493,7 +461,7 @@ extension WorkspaceDatabaseConnection {
   ) throws {
     try transaction {
       let statement = try prepareUnlocked("""
-        UPDATE desktop_local_acp_sessions
+        UPDATE harness_sessions
         SET model = ?, thinking = ?, permission = COALESCE(?, permission), revision = revision + 1, updated_at = ?
         WHERE conversation_id = ?
         """)
@@ -525,8 +493,8 @@ extension WorkspaceDatabaseConnection {
         throw LibraryAPIError(code: "execution_owner", message: "This conversation is owned by its independent execution workspace. Reconnect it instead of starting a legacy attachment.")
       }
       let active = try prepareUnlocked("""
-        SELECT 1 FROM dashboard_runs
-        WHERE conversation_id = ? AND desktop_owned = 1 AND status IN ('running', 'uncertain')
+        SELECT 1 FROM runs
+        WHERE conversation_id = ? AND status IN ('running', 'uncertain')
         LIMIT 1
         """)
       defer { sqlite3_finalize(active) }
@@ -536,13 +504,13 @@ extension WorkspaceDatabaseConnection {
       }
 
       let context = try prepareUnlocked("""
-        SELECT conversation.user_id, conversation.agent_id,
-          conversation.agent_codename, conversation.authority_device_id,
-          COALESCE(session.acp_session_id, '')
-        FROM dashboard_conversations AS conversation
-        JOIN desktop_local_acp_sessions AS session
+        SELECT conversation.agent_id,
+          conversation.agent_codename, conversation.owner_device_id,
+          COALESCE(session.native_session_id, '')
+        FROM conversations AS conversation
+        JOIN harness_sessions AS session
           ON session.conversation_id = conversation.id
-        WHERE conversation.id = ? AND conversation.desktop_owned = 1
+        WHERE conversation.id = ?
           AND conversation.deleted_at IS NULL AND conversation.is_archived = 0
         """)
       defer { sqlite3_finalize(context) }
@@ -550,13 +518,12 @@ extension WorkspaceDatabaseConnection {
       guard sqlite3_step(context) == SQLITE_ROW else {
         throw LocalACPSessionDatabaseError.sessionNotFound
       }
-      let userID = try text(context, column: 0)
-      let agentID = try text(context, column: 1)
-      let codename = try text(context, column: 2)
-      guard let ownerDeviceID = UUID(uuidString: try text(context, column: 3)) else {
+      let agentID = try text(context, column: 0)
+      let codename = try text(context, column: 1)
+      guard let ownerDeviceID = UUID(uuidString: try text(context, column: 2)) else {
         throw WorkspaceDatabaseError.corruptRow
       }
-      let acpSessionID = try text(context, column: 4)
+      let nativeSessionID = try text(context, column: 3)
       let identifiers = LocalACPRunIdentifiers(
         runID: UUID().uuidString.lowercased(),
         userMessageID: UUID().uuidString.lowercased(),
@@ -568,43 +535,33 @@ extension WorkspaceDatabaseConnection {
       try insertLocalACPTurnMessagesUnlocked(
         conversationID: conversationID, runID: identifiers.runID,
         userMessageID: identifiers.userMessageID, assistantMessageID: identifiers.assistantMessageID,
-        text: input.text, ownerDeviceID: ownerDeviceID, agentID: agentID,
+        text: input.text, ownerDeviceID: ownerDeviceID,
         userTimestamp: userTimestamp, assistantTimestamp: assistantTimestamp
       )
 
       let run = try prepareUnlocked("""
-        INSERT INTO dashboard_runs (
-          id, conversation_id, user_id, agent_id, agent_codename,
-          governing_plane, authority_kind, authority_device_id,
-          authority_agent_id, openclaw_session_key,
-          user_message_id, assistant_message_id, status, started_at,
-          created_at, updated_at, desktop_owned
-        ) VALUES (?, ?, ?, ?, ?, 'wovenmatter_macos', 'device_owned', ?, ?,
-          ?, ?, ?, 'running', ?, ?, ?, 1)
+        INSERT INTO runs (
+          id, conversation_id, agent_id, agent_codename, owner_device_id, native_session_id,
+          user_message_id, assistant_message_id, status, started_at, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'running', ?, ?, ?)
         """)
       defer { sqlite3_finalize(run) }
       try bind(identifiers.runID, at: 1, to: run)
       try bind(conversationID, at: 2, to: run)
-      try bind(userID, at: 3, to: run)
-      try bind(agentID, at: 4, to: run)
-      try bind(codename, at: 5, to: run)
-      try bind(ownerDeviceID.uuidString.lowercased(), at: 6, to: run)
-      try bind(agentID, at: 7, to: run)
-      try bind(acpSessionID, at: 8, to: run)
-      try bind(identifiers.userMessageID, at: 9, to: run)
-      try bind(identifiers.assistantMessageID, at: 10, to: run)
+      try bind(agentID, at: 3, to: run)
+      try bind(codename, at: 4, to: run)
+      try bind(ownerDeviceID.uuidString.lowercased(), at: 5, to: run)
+      try bind(nativeSessionID, at: 6, to: run)
+      try bind(identifiers.userMessageID, at: 7, to: run)
+      try bind(identifiers.assistantMessageID, at: 8, to: run)
+      try bind(userTimestamp, at: 9, to: run)
+      try bind(userTimestamp, at: 10, to: run)
       try bind(userTimestamp, at: 11, to: run)
-      try bind(userTimestamp, at: 12, to: run)
-      try bind(userTimestamp, at: 13, to: run)
       try stepDone(run)
       try insertNoteContextUnlocked(
         noteContext,
         identifiers: identifiers,
         conversationID: conversationID,
-        userID: userID,
-        governingPlane: "wovenmatter_macos",
-        authorityDeviceID: ownerDeviceID.uuidString.lowercased(),
-        authorityAgentID: agentID,
         createdAt: orderedCreatedAt
       )
 
@@ -615,10 +572,6 @@ extension WorkspaceDatabaseConnection {
         input.attachments,
         conversationID: conversationID,
         messageID: identifiers.userMessageID,
-        userID: userID,
-        agentID: agentID,
-        ownerDeviceID: ownerDeviceID,
-        governingPlane: .wovenmatterMacOS,
         createdAt: orderedCreatedAt
       )
 
@@ -633,10 +586,6 @@ extension WorkspaceDatabaseConnection {
     _ attachments: [AgentMessageAttachmentDraft],
     conversationID: String,
     messageID: String,
-    userID: String,
-    agentID: String,
-    ownerDeviceID: UUID,
-    governingPlane: AgentGoverningPlane,
     createdAt: Date
   ) throws {
     let timestamp = Self.timestamp(createdAt)
@@ -644,74 +593,59 @@ extension WorkspaceDatabaseConnection {
       switch attachment {
       case .file(let file):
         let statement = try prepareUnlocked("""
-          INSERT INTO dashboard_message_attachments (
-            id, conversation_id, message_id, kind, governing_plane,
-            authority_kind, authority_device_id, authority_agent_id,
-            desktop_owned, file_name, mime_type, size_bytes, content_hash,
-            created_at
-          ) VALUES (?, ?, ?, ?, ?, 'device_owned', ?, ?, 1, ?, ?, ?, ?, ?)
+          INSERT INTO message_attachments (
+            id, conversation_id, message_id, kind, file_name, mime_type, size_bytes, content_hash, created_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
           """)
         defer { sqlite3_finalize(statement) }
         try bind(file.id, at: 1, to: statement)
         try bind(conversationID, at: 2, to: statement)
         try bind(messageID, at: 3, to: statement)
         try bind(file.kind.rawValue, at: 4, to: statement)
-        try bind(governingPlane.rawValue, at: 5, to: statement)
-        try bind(ownerDeviceID.uuidString.lowercased(), at: 6, to: statement)
-        try bind(agentID, at: 7, to: statement)
-        try bind(file.fileName, at: 8, to: statement)
-        try bind(file.mimeType, at: 9, to: statement)
-        guard sqlite3_bind_int64(statement, 10, file.sizeBytes) == SQLITE_OK else {
+        try bind(file.fileName, at: 5, to: statement)
+        try bind(file.mimeType, at: 6, to: statement)
+        guard sqlite3_bind_int64(statement, 7, file.sizeBytes) == SQLITE_OK else {
           throw bindError()
         }
-        try bind(file.contentHash, at: 11, to: statement)
-        try bind(timestamp, at: 12, to: statement)
+        try bind(file.contentHash, at: 8, to: statement)
+        try bind(timestamp, at: 9, to: statement)
         try stepDone(statement)
       case .reference(let reference):
         if reference.kind == .conversation {
           try grantSessionReadUnlocked(sourceID: conversationID, targetID: reference.resourceID, kind: "attachment")
         }
         let statement = try prepareUnlocked("""
-          INSERT INTO dashboard_message_references (
-            id, conversation_id, message_id, user_id, governing_plane,
-            authority_kind, authority_device_id, authority_agent_id,
-            desktop_owned, resource_type, resource_id, source,
+          INSERT INTO message_references (
+            id, conversation_id, message_id, resource_type, resource_id, source,
             title_snapshot, content_snapshot, folder_id_snapshot,
-            folder_title_snapshot, agent_codename_snapshot, revision_snapshot,
-            created_at
-          ) VALUES (?, ?, ?, ?, ?, 'device_owned', ?, ?, 1, ?, ?, 'attached',
-            ?, ?, ?, ?, ?, ?, ?)
+            folder_title_snapshot, agent_codename_snapshot, revision_snapshot, created_at
+          ) VALUES (?, ?, ?, ?, ?, 'attached', ?, ?, ?, ?, ?, ?, ?)
           """)
         defer { sqlite3_finalize(statement) }
         try bind(reference.id, at: 1, to: statement)
         try bind(conversationID, at: 2, to: statement)
         try bind(messageID, at: 3, to: statement)
-        try bind(userID, at: 4, to: statement)
-        try bind(governingPlane.rawValue, at: 5, to: statement)
-        try bind(ownerDeviceID.uuidString.lowercased(), at: 6, to: statement)
-        try bind(agentID, at: 7, to: statement)
-        try bind(reference.kind.rawValue, at: 8, to: statement)
-        try bind(reference.resourceID, at: 9, to: statement)
-        try bind(reference.titleSnapshot, at: 10, to: statement)
-        try bind(reference.kind == .conversation ? "" : reference.contentSnapshot, at: 11, to: statement)
-        try bindNullable(reference.folderIDSnapshot, at: 12, to: statement)
-        try bindNullable(reference.folderTitleSnapshot, at: 13, to: statement)
-        try bindNullable(reference.agentCodenameSnapshot, at: 14, to: statement)
-        try bind(reference.revisionSnapshot, at: 15, to: statement)
-        try bind(timestamp, at: 16, to: statement)
+        try bind(reference.kind.rawValue, at: 4, to: statement)
+        try bind(reference.resourceID, at: 5, to: statement)
+        try bind(reference.titleSnapshot, at: 6, to: statement)
+        try bind(reference.kind == .conversation ? "" : reference.contentSnapshot, at: 7, to: statement)
+        try bindNullable(reference.folderIDSnapshot, at: 8, to: statement)
+        try bindNullable(reference.folderTitleSnapshot, at: 9, to: statement)
+        try bindNullable(reference.agentCodenameSnapshot, at: 10, to: statement)
+        try bind(reference.revisionSnapshot, at: 11, to: statement)
+        try bind(timestamp, at: 12, to: statement)
         try stepDone(statement)
       }
     }
   }
 
-  public func activeDeviceOwnedConversationIDs() throws -> Set<String> {
+  public func activeLocalConversationIDs() throws -> Set<String> {
     try withLock {
       let statement = try prepareUnlocked("""
         SELECT DISTINCT conversation_id
-        FROM dashboard_runs
-        WHERE desktop_owned = 1 AND authority_kind = 'device_owned'
-          AND status IN ('running', 'uncertain')
-          AND \(PairedLibraryOwnership.localConversation("dashboard_runs.conversation_id"))
+        FROM runs
+        WHERE status IN ('running', 'uncertain')
+          AND \(PairedLibraryOwnership.localConversation("runs.conversation_id"))
         """)
       defer { sqlite3_finalize(statement) }
       var conversationIDs: Set<String> = []
@@ -734,9 +668,9 @@ extension WorkspaceDatabaseConnection {
           m.status AS assistant_status, m.updated_at AS assistant_updated_at,
           c.id AS conversation_id, c.last_message_preview, c.last_message_at,
           c.updated_at AS conversation_updated_at
-        FROM dashboard_runs r JOIN dashboard_messages m ON m.id=r.assistant_message_id
-        JOIN dashboard_conversations c ON c.id=r.conversation_id
-        WHERE r.id=? AND r.desktop_owned=1 AND r.status='running'
+        FROM runs r JOIN messages m ON m.id=r.assistant_message_id
+        JOIN conversations c ON c.id=r.conversation_id
+        WHERE r.id=? AND r.status='running'
         """, values: [runID]).first?.objectValue else { throw LocalACPSessionDatabaseError.runNotFound }
       if let deliveryID = input.historyDeliveryID {
         let target = try historyRowsUnlocked("SELECT target_id FROM workspace_session_deliveries WHERE id=?", values: [deliveryID])
@@ -764,30 +698,30 @@ extension WorkspaceDatabaseConnection {
     try transaction {
       let ids = reservation.identifiers
       guard !(try historyRowsUnlocked("""
-        SELECT 1 FROM dashboard_runs r JOIN dashboard_messages m ON m.id=r.assistant_message_id
+        SELECT 1 FROM runs r JOIN messages m ON m.id=r.assistant_message_id
         WHERE r.id=? AND r.status='running' AND r.assistant_message_id=? AND m.content=''
         """, values: [ids.runID, ids.assistantMessageID])).isEmpty else { return false }
       func value(_ key: String) -> String? { reservation.previous[key] ?? nil }
-      try toolsExecuteUnlocked("UPDATE dashboard_runs SET assistant_message_id=?,updated_at=? WHERE id=?",
+      try toolsExecuteUnlocked("UPDATE runs SET assistant_message_id=?,updated_at=? WHERE id=?",
         [value("assistant_message_id"), value("run_updated_at"), ids.runID])
-      try toolsExecuteUnlocked("UPDATE dashboard_messages SET status=?,updated_at=? WHERE id=?",
+      try toolsExecuteUnlocked("UPDATE messages SET status=?,updated_at=? WHERE id=?",
         [value("assistant_status"), value("assistant_updated_at"), value("assistant_message_id")])
       if let deliveryID = reservation.deliveryID {
         try toolsExecuteUnlocked("UPDATE workspace_session_deliveries SET message_id=NULL,status='sending',transport_started=0 WHERE id=? AND message_id=?",
           [deliveryID, ids.userMessageID])
       }
-      for table in ["dashboard_message_attachments", "dashboard_message_references"] {
+      for table in ["message_attachments", "message_references"] {
         try toolsExecuteUnlocked("DELETE FROM \(table) WHERE message_id IN (?,?)", [ids.userMessageID, ids.assistantMessageID])
       }
-      try toolsExecuteUnlocked("DELETE FROM dashboard_messages WHERE id IN (?,?)", [ids.userMessageID, ids.assistantMessageID])
+      try toolsExecuteUnlocked("DELETE FROM messages WHERE id IN (?,?)", [ids.userMessageID, ids.assistantMessageID])
       for target in reservation.newAttachmentGrants {
         try toolsExecuteUnlocked("""
           DELETE FROM workspace_session_grants WHERE source_id=? AND target_id=? AND kind='attachment'
-            AND NOT EXISTS (SELECT 1 FROM dashboard_message_references WHERE conversation_id=? AND resource_type='conversation' AND resource_id=?)
+            AND NOT EXISTS (SELECT 1 FROM message_references WHERE conversation_id=? AND resource_type='conversation' AND resource_id=?)
           """, [value("conversation_id"), target, value("conversation_id"), target])
       }
       try toolsExecuteUnlocked("""
-        UPDATE dashboard_conversations SET last_message_preview=?,last_message_at=?,updated_at=? WHERE id=?
+        UPDATE conversations SET last_message_preview=?,last_message_at=?,updated_at=? WHERE id=?
         """, [value("last_message_preview"), value("last_message_at"), value("conversation_updated_at"), value("conversation_id")])
       return true
     }
@@ -800,7 +734,7 @@ extension WorkspaceDatabaseConnection {
   ) throws -> (orderedCreatedAt: Date, userTimestamp: String, assistantTimestamp: String) {
     let latestMessage = try prepareUnlocked("""
       SELECT created_at
-      FROM dashboard_messages
+      FROM messages
       WHERE conversation_id = ?
       ORDER BY created_at DESC
       LIMIT 1
@@ -826,15 +760,12 @@ extension WorkspaceDatabaseConnection {
   /// local ACP turn starts with.
   private func insertLocalACPTurnMessagesUnlocked(
     conversationID: String, runID: String, userMessageID: String, assistantMessageID: String,
-    text: String, ownerDeviceID: UUID, agentID: String, userTimestamp: String, assistantTimestamp: String
+    text: String, ownerDeviceID: UUID, userTimestamp: String, assistantTimestamp: String
   ) throws {
     let message = try prepareUnlocked("""
-      INSERT INTO dashboard_messages (
-        id, conversation_id, run_id, role, message_source, content,
-        status, governing_plane, authority_kind, authority_device_id,
-        authority_agent_id, created_at, updated_at, desktop_owned
-      ) VALUES (?, ?, ?, ?, 'local_acp', ?, ?, 'wovenmatter_macos',
-        'device_owned', ?, ?, ?, ?, 1)
+      INSERT INTO messages (
+        id, conversation_id, run_id, role, content, status, owner_device_id, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
       """)
     defer { sqlite3_finalize(message) }
     for (id, role, body, status, timestamp) in [
@@ -850,18 +781,17 @@ extension WorkspaceDatabaseConnection {
       try bind(body, at: 5, to: message)
       try bind(status, at: 6, to: message)
       try bind(ownerDeviceID.uuidString.lowercased(), at: 7, to: message)
-      try bind(agentID, at: 8, to: message)
+      try bind(timestamp, at: 8, to: message)
       try bind(timestamp, at: 9, to: message)
-      try bind(timestamp, at: 10, to: message)
       try stepDone(message)
     }
   }
 
   private func updateConversationPreviewUnlocked(conversationID: String, preview: String, timestamp: String) throws {
     let conversation = try prepareUnlocked("""
-      UPDATE dashboard_conversations
-      SET last_message_preview = ?, last_message_at = MAX(?, COALESCE((SELECT imported_at FROM desktop_session_imports WHERE conversation_id=dashboard_conversations.id), '')), updated_at = ?
-      WHERE id = ? AND desktop_owned = 1
+      UPDATE conversations
+      SET last_message_preview = ?, last_message_at = MAX(?, COALESCE((SELECT imported_at FROM session_imports WHERE conversation_id=conversations.id), '')), updated_at = ?
+      WHERE id = ?
       """)
     defer { sqlite3_finalize(conversation) }
     try bind(preview, at: 1, to: conversation)
@@ -873,11 +803,11 @@ extension WorkspaceDatabaseConnection {
 
   private func updateConversationPreviewUnlocked(runID: String, preview: String, timestamp: String) throws {
     let conversation = try prepareUnlocked("""
-      UPDATE dashboard_conversations
-      SET last_message_preview = ?, last_message_at = MAX(?, COALESCE((SELECT imported_at FROM desktop_session_imports WHERE conversation_id=dashboard_conversations.id), '')), updated_at = ?
+      UPDATE conversations
+      SET last_message_preview = ?, last_message_at = MAX(?, COALESCE((SELECT imported_at FROM session_imports WHERE conversation_id=conversations.id), '')), updated_at = ?
       WHERE id = (
-        SELECT conversation_id FROM dashboard_runs WHERE id = ?
-      ) AND desktop_owned = 1
+        SELECT conversation_id FROM runs WHERE id = ?
+      )
       """)
     defer { sqlite3_finalize(conversation) }
     try bind(preview, at: 1, to: conversation)
@@ -892,8 +822,8 @@ extension WorkspaceDatabaseConnection {
   ) throws -> LocalACPSteeringIdentifiers {
       let authority = try localRunAuthorityUnlocked(runID: runID)
       let active = try prepareUnlocked("""
-        SELECT 1 FROM dashboard_runs
-        WHERE id = ? AND desktop_owned = 1 AND status = 'running'
+        SELECT 1 FROM runs
+        WHERE id = ? AND status = 'running'
         LIMIT 1
         """)
       defer { sqlite3_finalize(active) }
@@ -913,9 +843,9 @@ extension WorkspaceDatabaseConnection {
 
       if completesPreviousAssistant {
         let completedSegment = try prepareUnlocked("""
-          UPDATE dashboard_messages
+          UPDATE messages
           SET status = 'completed', updated_at = ?
-          WHERE id = ? AND desktop_owned = 1
+          WHERE id = ?
           """)
         defer { sqlite3_finalize(completedSegment) }
         try bind(userTimestamp, at: 1, to: completedSegment)
@@ -929,7 +859,7 @@ extension WorkspaceDatabaseConnection {
       try insertLocalACPTurnMessagesUnlocked(
         conversationID: authority.conversationID, runID: runID,
         userMessageID: identifiers.userMessageID, assistantMessageID: identifiers.assistantMessageID,
-        text: input.text, ownerDeviceID: authority.ownerDeviceID, agentID: authority.agentID,
+        text: input.text, ownerDeviceID: authority.ownerDeviceID,
         userTimestamp: userTimestamp, assistantTimestamp: assistantTimestamp
       )
 
@@ -940,17 +870,13 @@ extension WorkspaceDatabaseConnection {
         input.attachments,
         conversationID: authority.conversationID,
         messageID: identifiers.userMessageID,
-        userID: authority.userID,
-        agentID: authority.agentID,
-        ownerDeviceID: authority.ownerDeviceID,
-        governingPlane: .wovenmatterMacOS,
         createdAt: orderedCreatedAt
       )
 
       let run = try prepareUnlocked("""
-        UPDATE dashboard_runs
+        UPDATE runs
         SET assistant_message_id = ?, updated_at = ?
-        WHERE id = ? AND desktop_owned = 1 AND status = 'running'
+        WHERE id = ? AND status = 'running'
         """)
       defer { sqlite3_finalize(run) }
       try bind(identifiers.assistantMessageID, at: 1, to: run)
@@ -976,12 +902,12 @@ extension WorkspaceDatabaseConnection {
     try transaction {
       let timestamp = Self.timestamp(updatedAt)
       let message = try prepareUnlocked("""
-        UPDATE dashboard_messages
+        UPDATE messages
         SET content = content || ?, status = 'streaming', updated_at = ?
         WHERE id = (
-          SELECT assistant_message_id FROM dashboard_runs
-          WHERE id = ? AND desktop_owned = 1 AND status = 'running'
-        ) AND desktop_owned = 1
+          SELECT assistant_message_id FROM runs
+          WHERE id = ? AND status = 'running'
+        )
         """)
       defer { sqlite3_finalize(message) }
       try bind(chunk, at: 1, to: message)
@@ -1006,12 +932,12 @@ extension WorkspaceDatabaseConnection {
       let authority = try localRunAuthorityUnlocked(runID: runID)
       let timestamp = Self.timestamp(updatedAt)
       let message = try prepareUnlocked("""
-        UPDATE dashboard_messages
+        UPDATE messages
         SET content = ?, status = 'streaming', updated_at = ?
         WHERE id = (
-          SELECT assistant_message_id FROM dashboard_runs
-          WHERE id = ? AND desktop_owned = 1 AND status = 'running'
-        ) AND desktop_owned = 1
+          SELECT assistant_message_id FROM runs
+          WHERE id = ? AND status = 'running'
+        )
         """)
       defer { sqlite3_finalize(message) }
       try bind(content, at: 1, to: message)
@@ -1037,13 +963,12 @@ extension WorkspaceDatabaseConnection {
       let timestamp = Self.timestamp(completedAt)
       let status = error == nil ? "completed" : "failed"
       let message = try prepareUnlocked("""
-        UPDATE dashboard_messages
+        UPDATE messages
         SET content = CASE
           WHEN content = '' AND ? IS NOT NULL THEN ?
           ELSE content
         END, status = ?, updated_at = ?
         WHERE id = ? AND run_id = ? AND role = 'assistant'
-          AND desktop_owned = 1
         """)
       defer { sqlite3_finalize(message) }
       try bindNullable(error, at: 1, to: message)
@@ -1075,14 +1000,14 @@ extension WorkspaceDatabaseConnection {
     }
   }
 
-  public func upsertDeviceOwnedRunActivity(
+  public func upsertRunActivity(
     runID: String,
     activity update: AgentRunActivity,
     appendingContent: Bool = false,
     updatedAt: Date = Date()
   ) throws {
     try transaction {
-      try upsertDeviceOwnedRunActivityUnlocked(
+      try upsertRunActivityUnlocked(
         runID: runID,
         activity: update,
         appendingContent: appendingContent,
@@ -1095,8 +1020,8 @@ extension WorkspaceDatabaseConnection {
     runID: String, assistantMessageID: String, finalSegment: Bool, updatedAt: Date
   ) throws {
     let statement = try prepareUnlocked("""
-      SELECT content FROM dashboard_messages
-      WHERE id = ? AND run_id = ? AND role = 'assistant' AND desktop_owned = 1
+      SELECT content FROM messages
+      WHERE id = ? AND run_id = ? AND role = 'assistant'
       """)
     defer { sqlite3_finalize(statement) }
     try bind(assistantMessageID, at: 1, to: statement)
@@ -1113,13 +1038,13 @@ extension WorkspaceDatabaseConnection {
       ?? (content.hasPrefix(prefix) ? String(content.dropFirst(prefix.count)) : content)
     guard !tail.isEmpty else {
       if finalSegment, let last = matchingSegment ?? segments.last {
-        try upsertDeviceOwnedRunActivityUnlocked(runID: runID,
+        try upsertRunActivityUnlocked(runID: runID,
           activity: AgentRunActivity(id: last.id, kind: .assistant, phase: "final"),
           appendingContent: false, updatedAt: updatedAt)
       }
       return
     }
-    try upsertDeviceOwnedRunActivityUnlocked(runID: runID,
+    try upsertRunActivityUnlocked(runID: runID,
       activity: AgentRunActivity(
         id: "assistant:\(assistantMessageID):\(String(format: "%08d", segments.count))",
         kind: .assistant, phase: finalSegment ? "final" : "boundary", status: "completed",
@@ -1128,7 +1053,7 @@ extension WorkspaceDatabaseConnection {
       appendingContent: false, updatedAt: updatedAt)
   }
 
-  func upsertDeviceOwnedRunActivityUnlocked(
+  func upsertRunActivityUnlocked(
     runID: String,
     activity update: AgentRunActivity,
     appendingContent: Bool,
@@ -1140,8 +1065,8 @@ extension WorkspaceDatabaseConnection {
       // may replace a settled run's parts without reopening it.
       let context = try prepareUnlocked("""
         SELECT 1
-        FROM dashboard_runs
-        WHERE id = ? AND authority_kind = 'device_owned' AND (status = 'running' OR ? = 1)
+        FROM runs
+        WHERE id = ? AND (status = 'running' OR ? = 1)
         """)
       defer { sqlite3_finalize(context) }
       try bind(runID, at: 1, to: context)
@@ -1151,7 +1076,7 @@ extension WorkspaceDatabaseConnection {
       }
       let recordID = "\(runID):activity:\(update.id)"
       let existing = try prepareUnlocked("""
-        SELECT content FROM dashboard_run_events WHERE id = ?
+        SELECT content FROM run_activities WHERE id = ?
         """)
       try bind(recordID, at: 1, to: existing)
       let existingCode = sqlite3_step(existing)
@@ -1175,14 +1100,9 @@ extension WorkspaceDatabaseConnection {
       )
       let timestamp = Self.timestamp(updatedAt)
       let statement = try prepareUnlocked("""
-        INSERT INTO dashboard_run_events (
-          id, run_id, conversation_id, user_id, governing_plane,
-          authority_kind, authority_device_id, authority_agent_id,
-          desktop_owned, event_type, content, created_at
-        ) SELECT ?, run.id, run.conversation_id, run.user_id, run.governing_plane,
-            run.authority_kind, run.authority_device_id, run.authority_agent_id,
-            1, ?, ?, ?
-          FROM dashboard_runs AS run WHERE run.id = ?
+        INSERT INTO run_activities (id, run_id, conversation_id, event_type, content, created_at)
+          SELECT ?, run.id, run.conversation_id, ?, ?, ?
+          FROM runs AS run WHERE run.id = ?
         ON CONFLICT(id) DO UPDATE SET
           event_type = excluded.event_type,
           content = excluded.content
@@ -1205,10 +1125,10 @@ extension WorkspaceDatabaseConnection {
     try withLock {
       let rows = try historyRowsUnlocked("""
         SELECT r.id AS run_id,json_extract(h.payload,'$.value.requestId') AS request_id
-        FROM dashboard_runs r JOIN desktop_local_acp_sessions s ON s.conversation_id=r.conversation_id
+        FROM runs r JOIN harness_sessions s ON s.conversation_id=r.conversation_id
         JOIN workspace_history_events h ON h.run_id=r.id AND h.conversation_id=r.conversation_id
-        WHERE r.conversation_id=? AND r.desktop_owned=1 AND r.status='uncertain'
-          AND s.runtime_kind='default_agent' AND s.acp_session_id=?
+        WHERE r.conversation_id=? AND r.status='uncertain'
+          AND s.runtime_kind='default_agent' AND s.native_session_id=?
           AND h.harness='default_agent' AND h.native_session_id=? AND json_valid(h.payload)
           AND json_extract(h.payload,'$.type')='submission'
           AND json_extract(h.payload,'$.value.type')='input'
@@ -1233,7 +1153,7 @@ extension WorkspaceDatabaseConnection {
   public func recoverBuiltInAgentRuns(conversationID: String, sessionID: String, snapshots: [DefaultAgentRunSnapshot]) throws {
     try transaction {
       let route = try localACPSession(conversationID: conversationID)
-      guard route.runtimeKind == .defaultAgent, route.acpSessionID == sessionID else {
+      guard route.runtimeKind == .defaultAgent, route.nativeSessionID == sessionID else {
         throw LocalACPSessionDatabaseError.sessionNotFound
       }
       let allowed = Set(try builtInRunRecoveryRequests(conversationID: conversationID, sessionID: sessionID).map(\.runID))
@@ -1241,13 +1161,12 @@ extension WorkspaceDatabaseConnection {
       for snapshot in snapshots where allowed.contains(snapshot.runID) {
         let status = snapshot.error == nil ? "completed" : "failed"
         try toolsExecuteUnlocked("""
-          UPDATE dashboard_messages SET content=CASE WHEN ?='' THEN content ELSE ? END,status=?,updated_at=?
-          WHERE id IN (SELECT assistant_message_id FROM dashboard_runs WHERE id=? AND conversation_id=?
-            AND desktop_owned=1 AND status='uncertain')
+          UPDATE messages SET content=CASE WHEN ?='' THEN content ELSE ? END,status=?,updated_at=?
+          WHERE id IN (SELECT assistant_message_id FROM runs WHERE id=? AND conversation_id=? AND status='uncertain')
           """, [snapshot.content, snapshot.content, status, now, snapshot.runID, conversationID])
         try toolsExecuteUnlocked("""
-          UPDATE dashboard_runs SET status=?,error=?,completed_at=?,updated_at=?
-          WHERE id=? AND conversation_id=? AND desktop_owned=1 AND status='uncertain'
+          UPDATE runs SET status=?,error=?,completed_at=?,updated_at=?
+          WHERE id=? AND conversation_id=? AND status='uncertain'
           """, [status, snapshot.error, now, now, snapshot.runID, conversationID])
       }
     }
@@ -1262,9 +1181,9 @@ extension WorkspaceDatabaseConnection {
       let timestamp = Self.timestamp(completedAt)
       let status = error == nil ? "completed" : "failed"
       let run = try prepareUnlocked("""
-        UPDATE dashboard_runs
+        UPDATE runs
         SET status = ?, error = ?, completed_at = ?, updated_at = ?
-        WHERE id = ? AND desktop_owned = 1 AND status = 'running'
+        WHERE id = ? AND status = 'running'
         """)
       defer { sqlite3_finalize(run) }
       try bind(status, at: 1, to: run)
@@ -1278,14 +1197,14 @@ extension WorkspaceDatabaseConnection {
       }
 
       let message = try prepareUnlocked("""
-        UPDATE dashboard_messages
+        UPDATE messages
         SET content = CASE
           WHEN content = '' AND ? IS NOT NULL THEN ?
           ELSE content
         END, status = ?, updated_at = ?
         WHERE id = (
-          SELECT assistant_message_id FROM dashboard_runs WHERE id = ?
-        ) AND desktop_owned = 1
+          SELECT assistant_message_id FROM runs WHERE id = ?
+        )
         """)
       defer { sqlite3_finalize(message) }
       try bindNullable(error, at: 1, to: message)
@@ -1307,15 +1226,15 @@ extension WorkspaceDatabaseConnection {
   private func markLocalACPRunUncertainUnlocked(runID: String, detail: String) throws {
       let now = Self.timestamp(Date())
       try toolsExecuteUnlocked("""
-        UPDATE dashboard_runs SET status='uncertain',error=?,completed_at=NULL,updated_at=?
-        WHERE id=? AND desktop_owned=1 AND status='running'
-          AND conversation_id IN (SELECT conversation_id FROM desktop_local_acp_sessions
+        UPDATE runs SET status='uncertain',error=?,completed_at=NULL,updated_at=?
+        WHERE id=? AND status='running'
+          AND conversation_id IN (SELECT conversation_id FROM harness_sessions
             WHERE runtime_kind='default_agent')
         """, [detail, now, runID])
       guard changedRowCountUnlocked == 1 else { throw LocalACPSessionDatabaseError.runNotFound }
       try toolsExecuteUnlocked("""
-        UPDATE dashboard_messages SET status='uncertain',updated_at=?
-        WHERE id=(SELECT assistant_message_id FROM dashboard_runs WHERE id=?) AND desktop_owned=1
+        UPDATE messages SET status='uncertain',updated_at=?
+        WHERE id=(SELECT assistant_message_id FROM runs WHERE id=?)
         """, [now, runID])
   }
 
@@ -1327,9 +1246,9 @@ extension WorkspaceDatabaseConnection {
       let authority = try localRunAuthorityUnlocked(runID: runID)
       let timestamp = Self.timestamp(completedAt)
       let run = try prepareUnlocked("""
-        UPDATE dashboard_runs
+        UPDATE runs
         SET status = 'cancelled', error = NULL, completed_at = ?, updated_at = ?
-        WHERE id = ? AND desktop_owned = 1 AND status = 'running'
+        WHERE id = ? AND status = 'running'
         """)
       defer { sqlite3_finalize(run) }
       try bind(timestamp, at: 1, to: run)
@@ -1341,11 +1260,11 @@ extension WorkspaceDatabaseConnection {
       }
 
       let message = try prepareUnlocked("""
-        UPDATE dashboard_messages
+        UPDATE messages
         SET content = CASE WHEN content = ''
           THEN 'Stopped before the agent produced a response.' ELSE content END,
           status = 'completed', updated_at = ?
-        WHERE id = ? AND desktop_owned = 1
+        WHERE id = ?
         """)
       defer { sqlite3_finalize(message) }
       try bind(timestamp, at: 1, to: message)
@@ -1364,27 +1283,27 @@ extension WorkspaceDatabaseConnection {
       // Nothing launches or reattaches one any more, so a run left running
       // or uncertain before the update is settled as interrupted by it.
       for conversationID in try libraryIDsUnlocked("""
-        SELECT DISTINCT r.conversation_id FROM dashboard_runs r
-        JOIN desktop_local_acp_sessions s ON s.conversation_id=r.conversation_id AND s.remote_workspace_id IS NOT NULL
-        WHERE r.desktop_owned=1 AND r.status IN ('running','uncertain')
-          AND r.conversation_id NOT IN (SELECT conversation_id FROM desktop_opencode_sessions)
+        SELECT DISTINCT r.conversation_id FROM runs r
+        JOIN harness_sessions s ON s.conversation_id=r.conversation_id AND s.remote_workspace_id IS NOT NULL
+        WHERE r.status IN ('running','uncertain')
+          AND r.conversation_id NOT IN (SELECT conversation_id FROM opencode_sessions)
           AND \(PairedLibraryOwnership.localConversation("r.conversation_id"))
         """, bindings: []) {
         try interruptLegacyRemoteRunsUnlocked(conversationID: conversationID)
       }
       // Losing this process ends every local CLI it ran.
       let message = try prepareUnlocked("""
-        UPDATE dashboard_messages
+        UPDATE messages
         SET content = CASE
           WHEN content = '' THEN 'The local agent stopped when Woven Matter closed.'
           ELSE content
         END, status = 'failed', updated_at = ?
-        WHERE desktop_owned = 1 AND id IN (
+        WHERE id IN (
           SELECT assistant_message_id
-          FROM dashboard_runs
-          WHERE desktop_owned = 1 AND status = 'running'
-            AND conversation_id NOT IN (SELECT conversation_id FROM desktop_opencode_sessions)
-            AND \(PairedLibraryOwnership.localConversation("dashboard_runs.conversation_id"))
+          FROM runs
+          WHERE status = 'running'
+            AND conversation_id NOT IN (SELECT conversation_id FROM opencode_sessions)
+            AND \(PairedLibraryOwnership.localConversation("runs.conversation_id"))
         )
         """)
       defer { sqlite3_finalize(message) }
@@ -1392,13 +1311,13 @@ extension WorkspaceDatabaseConnection {
       try stepDone(message)
 
       let run = try prepareUnlocked("""
-        UPDATE dashboard_runs
+        UPDATE runs
         SET status = 'failed',
           error = 'The local agent stopped when Woven Matter closed.',
           completed_at = ?, updated_at = ?
-        WHERE desktop_owned = 1 AND status = 'running'
-          AND conversation_id NOT IN (SELECT conversation_id FROM desktop_opencode_sessions)
-          AND \(PairedLibraryOwnership.localConversation("dashboard_runs.conversation_id"))
+        WHERE status = 'running'
+          AND conversation_id NOT IN (SELECT conversation_id FROM opencode_sessions)
+          AND \(PairedLibraryOwnership.localConversation("runs.conversation_id"))
         """)
       defer { sqlite3_finalize(run) }
       try bind(timestamp, at: 1, to: run)
@@ -1409,9 +1328,9 @@ extension WorkspaceDatabaseConnection {
 
   private func localAssistantPreviewUnlocked(runID: String) throws -> String {
     let statement = try prepareUnlocked("""
-      SELECT content FROM dashboard_messages
+      SELECT content FROM messages
       WHERE id = (
-        SELECT assistant_message_id FROM dashboard_runs WHERE id = ?
+        SELECT assistant_message_id FROM runs WHERE id = ?
       ) AND run_id = ? AND role = 'assistant'
       """)
     defer { sqlite3_finalize(statement) }
@@ -1502,8 +1421,8 @@ extension WorkspaceDatabase {
     try await write { try $0.beginLocalACPRun(conversationID: conversationID, input: input, noteContext: noteContext, createdAt: createdAt) }
   }
 
-  public func activeDeviceOwnedConversationIDs() async throws -> Set<String> {
-    try await read { try $0.activeDeviceOwnedConversationIDs() }
+  public func activeLocalConversationIDs() async throws -> Set<String> {
+    try await read { try $0.activeLocalConversationIDs() }
   }
 
   public func appendLocalACPAssistantChunk(
@@ -1540,13 +1459,13 @@ extension WorkspaceDatabase {
     try await write { try $0.recordAssistantStreamBoundary(runID: runID, assistantMessageID: requestedMessageID, finalSegment: finalSegment, updatedAt: updatedAt) }
   }
 
-  public func upsertDeviceOwnedRunActivity(
+  public func upsertRunActivity(
     runID: String,
     activity update: AgentRunActivity,
     appendingContent: Bool = false,
     updatedAt: Date = Date()
   ) async throws {
-    try await write { try $0.upsertDeviceOwnedRunActivity(runID: runID, activity: update, appendingContent: appendingContent, updatedAt: updatedAt) }
+    try await write { try $0.upsertRunActivity(runID: runID, activity: update, appendingContent: appendingContent, updatedAt: updatedAt) }
   }
 
   public func builtInRunRecoveryRequests(conversationID: String, sessionID: String) async throws -> [DefaultAgentRunRecoveryRequest] {

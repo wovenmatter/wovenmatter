@@ -31,7 +31,7 @@ public nonisolated(nonsending) func pollUntil(attempts: Int, interval: Duration,
   return false
 }
 
-public func rows(_ value: GatewayJSONValue) -> [GatewayJSONValue] {
+public func rows(_ value: JSONValue) -> [JSONValue] {
   value.objectValue?["rows"]?.arrayValue ?? []
 }
 

@@ -605,7 +605,7 @@ public actor LocalACPSessionCoordinator {
                     try await streamWriter.finishSegment()
                 case .activity(let activity, let appendsContent):
                     try await streamWriter.finishSegment(for: activity)
-                    try await self.database.upsertDeviceOwnedRunActivity(
+                    try await self.database.upsertRunActivity(
                         runID: run.runID,
                         activity: activity,
                         appendingContent: appendsContent
@@ -872,7 +872,7 @@ public actor LocalACPSessionCoordinator {
             launch: launch,
             workspace: workspace,
             systemPrompt: systemPrompt,
-            requiredSessionID: permission != nil && permission != stored.permission ? stored.acpSessionID : nil
+            requiredSessionID: permission != nil && permission != stored.permission ? stored.nativeSessionID : nil
         )
         do {
             var configuration = await client.configuration()
@@ -900,7 +900,7 @@ public actor LocalACPSessionCoordinator {
                     }
                     // Saved native sessions must load their exact identity
                     // rather than silently forking history.
-                    guard let sessionID = latest.acpSessionID else {
+                    guard let sessionID = latest.nativeSessionID else {
                         throw LifecycleError.sessionBusy
                     }
                     activeSessions.removeValue(forKey: conversationID)
@@ -949,7 +949,7 @@ public actor LocalACPSessionCoordinator {
     ) -> LocalACPSessionDescriptor {
         LocalACPSessionDescriptor(
             conversationID: descriptor.conversationID, runtimeKind: descriptor.runtimeKind,
-            title: descriptor.title, acpSessionID: descriptor.acpSessionID,
+            title: descriptor.title, nativeSessionID: descriptor.nativeSessionID,
             model: model, thinking: thinking, permission: permission,
             remoteWorkspaceID: descriptor.remoteWorkspaceID
         )
@@ -1290,7 +1290,7 @@ public actor LocalACPSessionCoordinator {
             defer { releaseOperationLease(lease) }
             let unsettled = try await database.read { connection in
                 try connection.withLock {
-                    try connection.federationScalarUnlocked("SELECT COUNT(*) FROM dashboard_runs WHERE conversation_id=? AND status IN ('running','queued','pending','cancelling','uncertain')", bindings: [conversationID])
+                    try connection.federationScalarUnlocked("SELECT COUNT(*) FROM runs WHERE conversation_id=? AND status IN ('running','queued','pending','cancelling','uncertain')", bindings: [conversationID])
                 }
             }
             guard unsettled == 0 else { throw LocalACPSessionDatabaseError.runAlreadyActive }
@@ -1661,7 +1661,7 @@ public actor LocalACPSessionCoordinator {
             }
             var replacedUnpromptedDraft = false
             if descriptor.runtimeKind == .claudeCode, descriptor.remoteWorkspaceID == nil,
-               let previousID = descriptor.acpSessionID, !initialized.loadedExistingSession,
+               let previousID = descriptor.nativeSessionID, !initialized.loadedExistingSession,
                initialized.sessionID != previousID {
                 // Older builds persisted Claude's configuration-only ID. The
                 // adapter could not reload it; atomically prove this local chat
@@ -1675,7 +1675,7 @@ public actor LocalACPSessionCoordinator {
                initialized.sessionID != requiredSessionID || !initialized.loadedExistingSession {
                 throw LifecycleError.sessionIdentityChanged
             }
-            if initialized.sessionID != descriptor.acpSessionID {
+            if initialized.sessionID != descriptor.nativeSessionID {
                 // Codex and Claude allocate IDs before their session stores
                 // are durable. Configuration-only drafts must remain recreatable.
                 if !Self.defersNewSessionPersistence(descriptor.runtimeKind)
@@ -1688,7 +1688,7 @@ public actor LocalACPSessionCoordinator {
                 }
             }
             if descriptor.runtimeKind == .defaultAgent, initialized.loadedExistingSession,
-               initialized.sessionID == descriptor.acpSessionID, let recover = started.recoverBuiltInRuns {
+               initialized.sessionID == descriptor.nativeSessionID, let recover = started.recoverBuiltInRuns {
                 let requests = try await database.builtInRunRecoveryRequests(
                     conversationID: descriptor.conversationID, sessionID: initialized.sessionID)
                 if !requests.isEmpty {
@@ -1855,7 +1855,7 @@ public actor LocalACPSessionCoordinator {
         workspace: LocalACPWorkspaceLaunchConfiguration,
         systemPrompt: String?
     ) async throws -> LocalACPInitializedSession {
-        let sessionID = descriptor.acpSessionID
+        let sessionID = descriptor.nativeSessionID
         return try await withTaskCancellationHandler {
             // Loading a durable Pi session can resume a run that is waiting
             // for approval, before any new prompt handler exists.
@@ -1931,7 +1931,7 @@ public actor LocalACPSessionCoordinator {
 
     private func usageSessionID(descriptor: LocalACPSessionDescriptor) -> String {
         activeSessions[descriptor.conversationID]?.pendingDurableSessionID
-            ?? descriptor.acpSessionID
+            ?? descriptor.nativeSessionID
             ?? descriptor.conversationID
     }
 }

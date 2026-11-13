@@ -10,10 +10,9 @@ extension WorkspaceDatabaseConnection {
   public func activeRunID(conversationID: String) throws -> String? {
     try withLock {
       let statement = try prepareUnlocked("""
-        SELECT id FROM dashboard_runs
+        SELECT id FROM runs
         WHERE conversation_id = ? AND status = 'running'
-          AND desktop_owned = 1 AND authority_kind = 'device_owned'
-          AND \(PairedLibraryOwnership.localConversation("dashboard_runs.conversation_id"))
+          AND \(PairedLibraryOwnership.localConversation("runs.conversation_id"))
         ORDER BY created_at DESC, id DESC LIMIT 1
         """)
       defer { sqlite3_finalize(statement) }

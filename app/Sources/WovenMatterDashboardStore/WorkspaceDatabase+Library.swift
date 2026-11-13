@@ -21,43 +21,39 @@ extension WorkspaceDatabaseConnection {
         INSERT OR IGNORE INTO library_settings VALUES('activated_at',strftime('%Y-%m-%dT%H:%M:%fZ','now'));
         INSERT OR IGNORE INTO library_settings VALUES('revision','0');
         CREATE TABLE IF NOT EXISTS library_messages(
-          message_id TEXT PRIMARY KEY REFERENCES dashboard_messages(id) ON DELETE CASCADE,
+          message_id TEXT PRIMARY KEY REFERENCES messages(id) ON DELETE CASCADE,
           dirty INTEGER NOT NULL DEFAULT 1);
-        CREATE INDEX IF NOT EXISTS library_dirty_messages ON library_messages(message_id) WHERE dirty=1;
+        CREATE INDEX IF NOT EXISTS library_messages_dirty ON library_messages(message_id) WHERE dirty=1;
         CREATE TABLE IF NOT EXISTS library_items(
           id TEXT PRIMARY KEY, message_id TEXT NOT NULL REFERENCES library_messages(message_id) ON DELETE CASCADE,
           conversation_id TEXT NOT NULL, kind TEXT NOT NULL,title TEXT NOT NULL,source TEXT NOT NULL,
           content_hash TEXT,mime_type TEXT,size_bytes INTEGER,storage TEXT NOT NULL,error TEXT,
           retry_at TEXT, UNIQUE(message_id,source));
-        CREATE INDEX IF NOT EXISTS library_message_items ON library_items(message_id);
-        CREATE INDEX IF NOT EXISTS library_conversation_items ON library_items(conversation_id);
-        CREATE INDEX IF NOT EXISTS library_pending_files ON library_items(storage,retry_at);
+        CREATE INDEX IF NOT EXISTS library_items_message ON library_items(message_id);
+        CREATE INDEX IF NOT EXISTS library_items_conversation ON library_items(conversation_id);
+        CREATE INDEX IF NOT EXISTS library_items_pending ON library_items(storage,retry_at);
         CREATE TABLE IF NOT EXISTS library_locations(
           conversation_id TEXT PRIMARY KEY, workspace_name TEXT NOT NULL,root TEXT NOT NULL);
-        CREATE TRIGGER IF NOT EXISTS library_new_message AFTER INSERT ON dashboard_messages
+        CREATE TRIGGER IF NOT EXISTS messages_library_insert AFTER INSERT ON messages
         WHEN NEW.role IN ('user','assistant') AND julianday(NEW.created_at) >=
           (SELECT julianday(value) FROM library_settings WHERE key='activated_at')
         BEGIN INSERT OR IGNORE INTO library_messages(message_id) VALUES(NEW.id); END;
-        CREATE TRIGGER IF NOT EXISTS library_cleared_conversation AFTER UPDATE OF context_generation ON dashboard_conversations
-        WHEN NEW.context_generation > OLD.context_generation
-        BEGIN DELETE FROM library_messages WHERE message_id IN (SELECT id FROM dashboard_messages WHERE conversation_id=NEW.id); END;
-        CREATE TRIGGER IF NOT EXISTS library_deleted_message AFTER DELETE ON dashboard_messages
+        CREATE TRIGGER IF NOT EXISTS messages_library_delete AFTER DELETE ON messages
         BEGIN DELETE FROM library_messages WHERE message_id=OLD.id; END;
-        CREATE TRIGGER IF NOT EXISTS library_changed_message AFTER UPDATE OF content,status ON dashboard_messages
+        CREATE TRIGGER IF NOT EXISTS messages_library_update AFTER UPDATE OF content,status ON messages
         WHEN NEW.content != OLD.content OR NEW.status != OLD.status
         BEGIN UPDATE library_messages SET dirty=1 WHERE message_id=NEW.id; END;
-        CREATE TRIGGER IF NOT EXISTS library_new_attachment AFTER INSERT ON dashboard_message_attachments
+        CREATE TRIGGER IF NOT EXISTS message_attachments_library_insert AFTER INSERT ON message_attachments
         BEGIN UPDATE library_messages SET dirty=1 WHERE message_id=NEW.message_id; END;
-        CREATE TRIGGER IF NOT EXISTS library_deleted_conversation AFTER DELETE ON dashboard_conversations
+        CREATE TRIGGER IF NOT EXISTS conversations_library_delete AFTER DELETE ON conversations
         BEGIN
           DELETE FROM library_messages WHERE message_id IN (SELECT message_id FROM library_items WHERE conversation_id=OLD.id)
-            OR message_id IN (SELECT id FROM dashboard_messages WHERE conversation_id=OLD.id);
+            OR message_id IN (SELECT id FROM messages WHERE conversation_id=OLD.id);
           DELETE FROM library_locations WHERE conversation_id=OLD.id;
         END;
         -- Trash is reversible: visibility filters hide items while their files and
         -- locations stay retained. Permanent deletion still uses the triggers above.
-        DROP TRIGGER IF EXISTS library_trashed_conversation;
-        CREATE TRIGGER library_trashed_conversation AFTER UPDATE OF deleted_at ON dashboard_conversations
+        CREATE TRIGGER IF NOT EXISTS conversations_library_trash_update AFTER UPDATE OF deleted_at ON conversations
         WHEN NEW.deleted_at IS NOT OLD.deleted_at
         BEGIN
           UPDATE library_settings SET value=CAST(value AS INTEGER)+1 WHERE key='revision';
@@ -66,17 +62,16 @@ extension WorkspaceDatabaseConnection {
       for operation in ["INSERT", "UPDATE", "DELETE"] {
         try executeUnlocked(
           """
-          CREATE TRIGGER IF NOT EXISTS library_location_revision_\(operation) AFTER \(operation) ON library_locations
+          CREATE TRIGGER IF NOT EXISTS library_locations_revision_\(operation.lowercased()) AFTER \(operation) ON library_locations
           BEGIN UPDATE library_settings SET value=CAST(value AS INTEGER)+1 WHERE key='revision'; END;
           """)
       }
       try executeUnlocked(
         """
-        DROP TRIGGER IF EXISTS library_conversation_metadata;
-        CREATE TRIGGER library_conversation_metadata AFTER UPDATE OF title,agent_id,agent_codename,user_id,desktop_owned,governing_plane ON dashboard_conversations
+        CREATE TRIGGER IF NOT EXISTS conversations_library_metadata_update AFTER UPDATE OF title,agent_id,agent_codename ON conversations
         WHEN EXISTS(SELECT 1 FROM library_items WHERE conversation_id=NEW.id)
         BEGIN UPDATE library_settings SET value=CAST(value AS INTEGER)+1 WHERE key='revision'; END;
-        CREATE TRIGGER IF NOT EXISTS library_agent_metadata AFTER UPDATE OF display_name ON dashboard_agents
+        CREATE TRIGGER IF NOT EXISTS agents_library_metadata_update AFTER UPDATE OF display_name ON agents
         WHEN NEW.display_name != OLD.display_name
         BEGIN UPDATE library_settings SET value=CAST(value AS INTEGER)+1 WHERE key='revision'; END;
         """)
@@ -88,10 +83,10 @@ extension WorkspaceDatabaseConnection {
           operation == "UPDATE" ? "message_id IN (OLD.message_id,NEW.message_id)" : "message_id=\(session).message_id"
         try executeUnlocked(
           """
-          CREATE TRIGGER IF NOT EXISTS library_session_revision_\(operation) AFTER \(operation)\(sessionUpdate) ON desktop_local_acp_sessions
+          CREATE TRIGGER IF NOT EXISTS harness_sessions_library_revision_\(operation.lowercased()) AFTER \(operation)\(sessionUpdate) ON harness_sessions
           WHEN EXISTS(SELECT 1 FROM library_items WHERE conversation_id=\(session).conversation_id)
           BEGIN UPDATE library_settings SET value=CAST(value AS INTEGER)+1 WHERE key='revision'; END;
-          CREATE TRIGGER IF NOT EXISTS library_delivery_revision_\(operation) AFTER \(operation)\(deliveryUpdate) ON workspace_session_deliveries
+          CREATE TRIGGER IF NOT EXISTS workspace_session_deliveries_library_revision_\(operation.lowercased()) AFTER \(operation)\(deliveryUpdate) ON workspace_session_deliveries
           WHEN EXISTS(SELECT 1 FROM library_items WHERE \(deliveryMatch))
           BEGIN UPDATE library_settings SET value=CAST(value AS INTEGER)+1 WHERE key='revision'; END;
           """)
@@ -99,8 +94,7 @@ extension WorkspaceDatabaseConnection {
       for operation in ["INSERT", "UPDATE", "DELETE"] {
         try executeUnlocked(
           """
-          DROP TRIGGER IF EXISTS library_revision_\(operation);
-          CREATE TRIGGER library_revision_\(operation) AFTER \(operation) ON library_items
+          CREATE TRIGGER IF NOT EXISTS library_items_revision_\(operation.lowercased()) AFTER \(operation) ON library_items
           BEGIN UPDATE library_settings SET value=CAST(value AS INTEGER)+1 WHERE key='revision'; END;
           """)
       }
@@ -114,12 +108,12 @@ extension WorkspaceDatabaseConnection {
       let rows = try historyRowsUnlocked(
         """
         SELECT m.id,m.conversation_id,m.content FROM library_messages q
-        JOIN dashboard_messages m ON m.id=q.message_id
-        JOIN dashboard_conversations c ON c.id=m.conversation_id
+        JOIN messages m ON m.id=q.message_id
+        JOIN conversations c ON c.id=m.conversation_id
         WHERE q.dirty=1 AND m.status NOT IN ('streaming','pending','queued') AND \(Self.libraryVisibility)
           AND \(PairedLibraryOwnership.localConversation("c.id"))
         ORDER BY m.created_at,m.id LIMIT ?
-        """, values: [try localMutationOperatorIDUnlocked(), String(max(1, min(limit, 200)))])
+        """, values: [String(max(1, min(limit, 200)))])
       for row in rows {
         guard let fields = row.objectValue, let id = fields["id"]?.stringValue,
           let conversationID = fields["conversation_id"]?.stringValue
@@ -128,7 +122,7 @@ extension WorkspaceDatabaseConnection {
           try insertLibraryAssetUnlocked(asset, messageID: id, conversationID: conversationID)
         }
         for attachment in try historyRowsUnlocked(
-          "SELECT * FROM dashboard_message_attachments WHERE message_id=?", values: [id])
+          "SELECT * FROM message_attachments WHERE message_id=?", values: [id])
         {
           guard let value = attachment.objectValue, let hash = value["content_hash"]?.stringValue else { continue }
           let name = value["file_name"]?.stringValue ?? "Attachment"
@@ -149,10 +143,10 @@ extension WorkspaceDatabaseConnection {
   private func isLibraryMessageUnlocked(_ messageID: String, conversationID: String) throws -> Bool {
     !(try historyRowsUnlocked(
       """
-      SELECT 1 FROM library_messages q JOIN dashboard_messages m ON m.id=q.message_id
-      JOIN dashboard_conversations c ON c.id=m.conversation_id
+      SELECT 1 FROM library_messages q JOIN messages m ON m.id=q.message_id
+      JOIN conversations c ON c.id=m.conversation_id
       WHERE m.id=? AND m.conversation_id=? AND \(Self.libraryVisibility)
-      """, values: [messageID, conversationID, try localMutationOperatorIDUnlocked()])).isEmpty
+      """, values: [messageID, conversationID])).isEmpty
   }
 
   func insertLibraryAssetUnlocked(
@@ -208,7 +202,7 @@ extension WorkspaceDatabaseConnection {
     // not create a second retained item for the same upload.
     if !(try historyRowsUnlocked(
       """
-      SELECT 1 FROM dashboard_messages m JOIN dashboard_message_attachments a ON a.message_id=m.id
+      SELECT 1 FROM messages m JOIN message_attachments a ON a.message_id=m.id
       WHERE m.id=? AND m.role='user' LIMIT 1
       """, values: [messageID])).isEmpty
     {
@@ -250,7 +244,7 @@ extension WorkspaceDatabaseConnection {
       try toolsExecuteUnlocked(
         """
         INSERT INTO library_locations SELECT ?,?,? WHERE EXISTS(
-          SELECT 1 FROM dashboard_conversations WHERE id=? AND deleted_at IS NULL)
+          SELECT 1 FROM conversations WHERE id=? AND deleted_at IS NULL)
           AND \(PairedLibraryOwnership.localConversation("?"))
         ON CONFLICT(conversation_id) DO UPDATE
         SET workspace_name=excluded.workspace_name,root=excluded.root
@@ -266,16 +260,13 @@ extension WorkspaceDatabaseConnection {
     }
   }
 
-  private static let libraryVisibility = """
-    c.deleted_at IS NULL AND c.governing_plane='wovenmatter_macos'
-    AND (c.desktop_owned=1 OR c.user_id=?)
-    """
+  private static let libraryVisibility = "c.deleted_at IS NULL"
 
   private static let libraryJoins = """
-    FROM library_items i JOIN dashboard_messages m ON m.id=i.message_id
-    JOIN dashboard_conversations c ON c.id=i.conversation_id
-    LEFT JOIN desktop_local_acp_sessions s ON s.conversation_id=c.id
-    LEFT JOIN dashboard_agents a ON a.id=c.agent_id
+    FROM library_items i JOIN messages m ON m.id=i.message_id
+    JOIN conversations c ON c.id=i.conversation_id
+    LEFT JOIN harness_sessions s ON s.conversation_id=c.id
+    LEFT JOIN agents a ON a.id=c.agent_id
     LEFT JOIN library_locations l ON l.conversation_id=c.id
     """
   private static let libraryWorkspace = "coalesce(lower(s.remote_workspace_id),'local')"
@@ -314,7 +305,7 @@ extension WorkspaceDatabaseConnection {
   }
   private func libraryItemsUnlocked(query: LibraryQuery, limit: Int, offset: Int) throws -> [WorkspaceLibraryItem] {
     var sql = Self.libraryProjection + Self.libraryJoins + " WHERE " + Self.libraryVisibility
-    var values = [try localMutationOperatorIDUnlocked()]
+    var values: [String] = []
     func selection(_ selection: Set<String>?, _ column: String) {
       guard let selection else { return }
       let sorted = selection.sorted()
@@ -357,7 +348,7 @@ extension WorkspaceDatabaseConnection {
   private func libraryItemUnlocked(id: String) throws -> WorkspaceLibraryItem? {
     try decodeCanonicalRowsUnlocked(
       Self.libraryProjection + Self.libraryJoins + " WHERE i.id=? AND " + Self.libraryVisibility,
-      bindings: [id, try localMutationOperatorIDUnlocked()], as: WorkspaceLibraryItem.self
+      bindings: [id], as: WorkspaceLibraryItem.self
     ).first
   }
   private func libraryFacetsUnlocked() throws -> [LibraryFacet] {
@@ -368,7 +359,7 @@ extension WorkspaceDatabaseConnection {
         'harness',coalesce(s.runtime_kind,''),'agentID',coalesce(c.agent_id,''),
         'agentName',coalesce(nullif(a.display_name,''),nullif(c.agent_codename,''),'Agent'))
       \(Self.libraryJoins) WHERE \(Self.libraryVisibility)
-      """, bindings: [try localMutationOperatorIDUnlocked()], as: LibraryFacet.self)
+      """, bindings: [], as: LibraryFacet.self)
   }
 
   public func pendingLibraryFiles(limit: Int = 8, now: Date = Date()) throws -> [WorkspaceLibraryItem] {
@@ -378,7 +369,7 @@ extension WorkspaceDatabaseConnection {
            WHERE \(Self.libraryVisibility) AND i.storage IN ('pending','unavailable')
            AND \(PairedLibraryOwnership.localConversation("c.id"))
            AND (i.retry_at IS NULL OR i.retry_at<=?) ORDER BY m.created_at LIMIT ?
-          """, bindings: [try localMutationOperatorIDUnlocked(), Self.timestamp(now), String(max(1, min(limit, 20)))],
+          """, bindings: [Self.timestamp(now), String(max(1, min(limit, 20)))],
         as: WorkspaceLibraryItem.self)
     }
   }
@@ -388,7 +379,7 @@ extension WorkspaceDatabaseConnection {
         """
         UPDATE library_items SET content_hash=?,size_bytes=?,storage=?,error=?,retry_at=? WHERE id=?
         AND storage IN ('pending','unavailable') AND content_hash IS NULL
-        AND EXISTS (SELECT 1 FROM dashboard_conversations c
+        AND EXISTS (SELECT 1 FROM conversations c
           WHERE c.id=library_items.conversation_id AND c.deleted_at IS NULL)
         AND \(PairedLibraryOwnership.localConversation("library_items.conversation_id"))
         """,
@@ -408,7 +399,7 @@ extension WorkspaceDatabaseConnection {
   public func recordLibraryOutput(runID: String, asset: LibraryAsset) throws {
     let identity = try withLock {
       try historyRowsUnlocked(
-        "SELECT conversation_id,assistant_message_id FROM dashboard_runs WHERE id=?", values: [runID]
+        "SELECT conversation_id,assistant_message_id FROM runs WHERE id=?", values: [runID]
       ).first?.objectValue
     }
     guard let conversation = identity?["conversation_id"]?.stringValue,
@@ -448,8 +439,8 @@ extension WorkspaceDatabaseConnection {
     try withLock {
       guard
         let row = try historyRowsUnlocked(
-          "SELECT m.content FROM library_items i JOIN dashboard_messages m ON m.id=i.message_id JOIN dashboard_conversations c ON c.id=i.conversation_id WHERE i.id=? AND \(Self.libraryVisibility)",
-          values: [id, try localMutationOperatorIDUnlocked()]
+          "SELECT m.content FROM library_items i JOIN messages m ON m.id=i.message_id JOIN conversations c ON c.id=i.conversation_id WHERE i.id=? AND \(Self.libraryVisibility)",
+          values: [id]
         ).first?.objectValue,
         let content = row["content"]?.stringValue
       else { throw WorkspaceToolError.invalid("This source message is no longer available.") }
@@ -459,20 +450,20 @@ extension WorkspaceDatabaseConnection {
 
   public func queryAgentLibrary(
     callerID: String, id: String? = nil, query: LibraryQuery = .init(), limit: Int = 100, offset: Int = 0
-  ) throws -> GatewayJSONValue {
+  ) throws -> JSONValue {
     try withLock {
       try requireToolUnlocked(.library, sessionID: callerID)
       if let id {
         guard let item = try libraryItemUnlocked(id: id) else {
           throw WorkspaceToolError.notFound("Library item not found.")
         }
-        return try JSONDecoder().decode(GatewayJSONValue.self, from: JSONEncoder().encode(item))
+        return try JSONDecoder().decode(JSONValue.self, from: JSONEncoder().encode(item))
       }
       let rows = try libraryItemsUnlocked(query: query, limit: max(1, min(limit, 200)) + 1, offset: offset)
       let page = Array(rows.prefix(max(1, min(limit, 200))))
       return .object([
         "available": .bool(true),
-        "items": try JSONDecoder().decode(GatewayJSONValue.self, from: JSONEncoder().encode(page)),
+        "items": try JSONDecoder().decode(JSONValue.self, from: JSONEncoder().encode(page)),
         "hasMore": .bool(rows.count > page.count), "nextOffset": .number(Double(offset + page.count)),
       ])
     }
@@ -534,7 +525,7 @@ extension WorkspaceDatabase {
 
   public func queryAgentLibrary(
     callerID: String, id: String? = nil, query: LibraryQuery = .init(), limit: Int = 100, offset: Int = 0
-  ) async throws -> GatewayJSONValue {
+  ) async throws -> JSONValue {
     try await read { try $0.queryAgentLibrary(callerID: callerID, id: id, query: query, limit: limit, offset: offset) }
   }
 

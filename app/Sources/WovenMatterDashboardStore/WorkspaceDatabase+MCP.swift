@@ -2,56 +2,19 @@ import Foundation
 import WovenMatterCore
 
 extension WorkspaceDatabaseConnection {
-  /// Source identities may be conversations or app-wide callers.
-  /// Target foreign keys remain conversation-bound. Preserve receipts and indexes
-  /// while moving source foreign keys to the shared caller registry.
+  /// Every conversation is an MCP caller, and so is the outside caller.
   func migrateMCPCallersUnlocked() throws {
-    try executeUnlocked("CREATE TABLE IF NOT EXISTS workspace_mcp_callers(id TEXT PRIMARY KEY)")
-    let columns = Set(try historyRowsUnlocked("PRAGMA table_info(workspace_mcp_callers)", values: []).compactMap { $0.objectValue?["name"]?.stringValue })
-    if !columns.contains("display_name") { try executeUnlocked("ALTER TABLE workspace_mcp_callers ADD COLUMN display_name TEXT") }
-    // A bot caller names the machine whose Woven server issued its key. A revoked
-    // key stays registered so receipts keep its name and it can never call again.
-    if !columns.contains("machine_id") { try executeUnlocked("ALTER TABLE workspace_mcp_callers ADD COLUMN machine_id TEXT") }
-    if !columns.contains("revoked") { try executeUnlocked("ALTER TABLE workspace_mcp_callers ADD COLUMN revoked INTEGER NOT NULL DEFAULT 0") }
-    // One row per machine whose bots this instance serves; active=0 pauses them all.
-    try executeUnlocked("CREATE TABLE IF NOT EXISTS workspace_mcp_bot_machines(machine_id TEXT PRIMARY KEY, active INTEGER NOT NULL)")
-    try executeUnlocked("INSERT OR IGNORE INTO workspace_mcp_callers(id) SELECT id FROM dashboard_conversations")
     try toolsExecuteUnlocked("INSERT OR IGNORE INTO workspace_mcp_callers(id) VALUES(?)", [WovenMCPCaller.outside])
     try executeUnlocked("""
-      CREATE TRIGGER IF NOT EXISTS workspace_mcp_caller_insert AFTER INSERT ON dashboard_conversations BEGIN
+      CREATE TRIGGER IF NOT EXISTS conversations_mcp_caller_insert AFTER INSERT ON conversations BEGIN
         INSERT OR IGNORE INTO workspace_mcp_callers(id) VALUES(new.id);
       END;
       """)
-    for table in ["workspace_tool_mutations", "workspace_automation_requests", "workspace_automation_cancellations",
-                  "workspace_session_grants", "workspace_session_relationships", "workspace_coordination_access_requests",
-                  "workspace_session_creations"] {
-      guard let sql = try historyRowsUnlocked("SELECT sql FROM sqlite_master WHERE type='table' AND name=?", values: [table])
-        .first?.objectValue?["sql"]?.stringValue else { continue }
-      var replacement = sql
-      for column in ["source_id TEXT NOT NULL", "created_by TEXT", "coordinator_id TEXT"] {
-        replacement = replacement.replacingOccurrences(of: column + " REFERENCES dashboard_conversations(id)",
-          with: column + " REFERENCES workspace_mcp_callers(id)")
-      }
-      guard replacement != sql else { continue }
-      let indexes = try historyRowsUnlocked("SELECT sql FROM sqlite_master WHERE type='index' AND tbl_name=? AND sql IS NOT NULL", values: [table])
-      guard let declaration = replacement.range(of: "CREATE TABLE(?: IF NOT EXISTS)? \"?" + table + "\"?", options: .regularExpression) else {
-        throw WorkspaceToolError.invalid("Cannot migrate the MCP caller schema for " + table)
-      }
-      replacement.replaceSubrange(declaration, with: "CREATE TABLE " + table + "_mcp")
-      try executeUnlocked(replacement)
-      try executeUnlocked("INSERT INTO \(table)_mcp SELECT * FROM \(table)")
-      try executeUnlocked("DROP TABLE \(table)")
-      try executeUnlocked("ALTER TABLE \(table)_mcp RENAME TO \(table)")
-      for index in indexes {
-        if let sql = index.objectValue?["sql"]?.stringValue { try executeUnlocked(sql) }
-      }
-    }
     // These tables synchronize between paired Macs and the caller registry does not, so a
     // bot hosted elsewhere arrives with no row here. This placeholder satisfies the reference
     // and authorizes nothing: it has no machine, so it can neither call nor be retired.
     // It never conflicts, because an outer statement's conflict policy would override the trigger's.
-    for (table, column) in [("workspace_session_relationships", "created_by"), ("workspace_session_relationships", "coordinator_id"), ("workspace_session_grants", "source_id")]
-    where try !historyRowsUnlocked("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", values: [table]).isEmpty {
+    for (table, column) in [("workspace_session_relationships", "created_by"), ("workspace_session_relationships", "coordinator_id"), ("workspace_session_grants", "source_id")] {
       for (name, event) in [("insert", "INSERT"), ("update", "UPDATE OF " + column)] {
         try executeUnlocked("""
           CREATE TRIGGER IF NOT EXISTS \(table)_\(column)_bot_\(name) BEFORE \(event) ON \(table)
@@ -87,7 +50,7 @@ extension WorkspaceDatabaseConnection {
   func requireMCPCaller(_ sessionID: String) throws {
     try withLock {
       _ = try availableSessionExecutionRoot(id: sessionID)
-      guard !(try historyRowsUnlocked("SELECT id FROM dashboard_conversations WHERE id=? AND deleted_at IS NULL AND is_archived=0", values: [sessionID])).isEmpty,
+      guard !(try historyRowsUnlocked("SELECT id FROM conversations WHERE id=? AND deleted_at IS NULL AND is_archived=0", values: [sessionID])).isEmpty,
             (try historyRowsUnlocked("SELECT conversation_id FROM execution_adoptions WHERE conversation_id=?", values: [sessionID])).isEmpty else {
         throw WorkspaceToolError.invalid("This MCP caller was archived, removed, or moved to another execution owner.")
       }

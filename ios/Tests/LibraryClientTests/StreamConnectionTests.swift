@@ -647,10 +647,10 @@ final class StreamConnectionTests: XCTestCase {
 /// The fixture file the Swift and Node suites share, decoded through this client's own path.
 final class StreamFixtureDecodingTests: XCTestCase {
   private struct Fixtures: Decodable {
-    struct Named: Decodable { let name: String; let frame: GatewayJSONValue }
-    struct Prefixed: Decodable { let frame: GatewayJSONValue; let hex: String }
+    struct Named: Decodable { let name: String; let frame: JSONValue }
+    struct Prefixed: Decodable { let frame: JSONValue; let hex: String }
     let frames: [Named]
-    let unknownFrames: [GatewayJSONValue]
+    let unknownFrames: [JSONValue]
     let lengthPrefixed: Prefixed
   }
   private func fixtures() throws -> Fixtures {

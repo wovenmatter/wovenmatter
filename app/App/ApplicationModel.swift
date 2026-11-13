@@ -157,7 +157,7 @@ final class ApplicationModel {
                 for kind in installed.sorted(by: { $0.presentationRank < $1.presentationRank }) {
                     guard remoteWorkspaces.configuration(id: configuration.id) == configuration else { break }
                     guard !saved.contains(where: {
-                        $0.governingPlane == .remoteWorkspace && $0.authorityDeviceID == ownerID
+                        $0.executionLocation == .remote && $0.ownerDeviceID == ownerID
                             && $0.runtimeDeviceID == configuration.id && $0.runtimeKind == kind
                     }) else { continue }
                     _ = try await dashboardStore.database.ensureRemoteHarnessAgent(
@@ -195,7 +195,7 @@ final class ApplicationModel {
             await refreshWorkspace()
         }
         guard let agent = try await dashboardStore.database.dashboardAgents().first(where: {
-            $0.runtimeKind == .opencode && (workspaceID == nil ? $0.governingPlane == .wovenmatterMacOS : $0.runtimeDeviceID == workspaceID)
+            $0.runtimeKind == .opencode && (workspaceID == nil ? $0.executionLocation == .local : $0.runtimeDeviceID == workspaceID)
         }) else { throw ApplicationModelError.localACPRuntimeUnavailable }
         return agent
     }
@@ -751,7 +751,6 @@ final class ApplicationModel {
         let next = Self.surfaceProfile(
             deviceID: deviceID,
             id: current.id,
-            userID: current.userID,
             localCLIAgentOrder: current.localCLIAgentOrder ?? [],
             revision: current.revision,
             createdAt: current.createdAt
@@ -822,7 +821,6 @@ final class ApplicationModel {
     private static func surfaceProfile(
         deviceID: UUID,
         id: String? = nil,
-        userID: String = "local-operator",
         localCLIAgentOrder: [UUID] = [],
         revision: Int64 = 1,
         createdAt: Date = Date()
@@ -839,7 +837,6 @@ final class ApplicationModel {
         }
         return SurfaceProfile(
             id: id ?? SurfaceProfile.macID(deviceID: deviceID),
-            userID: userID,
             surface: .mac,
             deviceID: deviceID,
             theme: string(DashboardTheme.storageKey, fallback: DashboardTheme.green.rawValue),
@@ -2903,7 +2900,7 @@ final class ApplicationModel {
     }
 
     /// Read one child's existing archive without contacting its execution host.
-    func builtInSubagentHistory(_ request: BuiltInSubagentArchiveRequest) async throws -> GatewayJSONValue {
+    func builtInSubagentHistory(_ request: BuiltInSubagentArchiveRequest) async throws -> JSONValue {
         if isBackendFrontend {
             guard let history = try await sendBackendCommand(.subagentHistory(request)).history else {
                 throw BackendRPCError.remote("Subagent history is unavailable.")
@@ -4074,8 +4071,7 @@ final class ApplicationModel {
         if loggedDashboardRecordCounts != snapshot.recordCounts {
             let counts = snapshot.recordCounts
             NSLog(
-                "Dashboard database counts profiles=%d folders=%d notes=%d agents=%d conversations=%d messages=%d runs=%d calendar_items=%d revision=%lld",
-                counts.profiles,
+                "Library counts folders=%d notes=%d agents=%d conversations=%d messages=%d runs=%d calendar_items=%d revision=%lld",
                 counts.folders,
                 counts.notes,
                 counts.agents,
@@ -4089,17 +4085,15 @@ final class ApplicationModel {
         }
         let presentedAgents = snapshot.agents.map { agent -> WorkspaceAgent in
             guard let workspace = peerAgentWorkspaces[agent.id] else { return agent }
-            return WorkspaceAgent(id: agent.id, userID: agent.userID, codename: agent.codename,
+            return WorkspaceAgent(id: agent.id, codename: agent.codename,
                 displayName: agent.runtimeKind.displayName + " · " + workspace.name, iconKey: agent.iconKey,
-                executionLocation: .remote, governingPlane: .remoteWorkspace, authorityKind: agent.authorityKind,
-                authorityDeviceID: agent.authorityDeviceID, runtimeKind: agent.runtimeKind,
+                executionLocation: .remote, ownerDeviceID: agent.ownerDeviceID, runtimeKind: agent.runtimeKind,
                 runtimeDeviceID: UUID(uuidString: workspace.id), platformCodename: agent.platformCodename,
-                runtimeStatus: agent.runtimeStatus, runtimeVersion: agent.runtimeVersion,
-                imageDigest: agent.imageDigest, revision: agent.revision, createdAt: agent.createdAt,
+                runtimeStatus: agent.runtimeStatus, revision: agent.revision, createdAt: agent.createdAt,
                 updatedAt: agent.updatedAt, deletedAt: agent.deletedAt)
         }
-        let nextLocalCLIAgents = presentedAgents.filter { $0.governingPlane == .wovenmatterMacOS }
-        let nextRemoteWorkspaceAgents = presentedAgents.filter { $0.governingPlane == .remoteWorkspace }
+        let nextLocalCLIAgents = presentedAgents.filter { $0.executionLocation == .local }
+        let nextRemoteWorkspaceAgents = presentedAgents.filter { $0.executionLocation == .remote }
         if localCLIAgents != nextLocalCLIAgents {
             localCLIAgents = nextLocalCLIAgents
         }

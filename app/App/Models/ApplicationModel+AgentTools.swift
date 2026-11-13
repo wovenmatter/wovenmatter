@@ -523,7 +523,7 @@ extension ApplicationModel {
         }
     }
 
-    private func compactToolDelivery(_ delivery: WorkspaceSessionDelivery) throws -> GatewayJSONValue {
+    private func compactToolDelivery(_ delivery: WorkspaceSessionDelivery) throws -> JSONValue {
         guard var value = try WovenMatterToolResponse.value(delivery).result?.objectValue else { return .null }
         let preview = String(delivery.text.prefix(4_096))
         value["text"] = .string(preview)

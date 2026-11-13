@@ -29,7 +29,6 @@ public enum DashboardSurface: String, Codable, CaseIterable, Sendable {
 /// theme on the other.
 public struct SurfaceProfile: Codable, Equatable, Identifiable, Sendable {
   public let id: String
-  public let userID: String
   public let surface: DashboardSurface
   public let deviceID: UUID?
   public var theme: String
@@ -48,7 +47,6 @@ public struct SurfaceProfile: Codable, Equatable, Identifiable, Sendable {
 
   public init(
     id: String,
-    userID: String,
     surface: DashboardSurface,
     deviceID: UUID?,
     theme: String,
@@ -66,7 +64,6 @@ public struct SurfaceProfile: Codable, Equatable, Identifiable, Sendable {
     updatedAt: Date = Date()
   ) {
     self.id = id
-    self.userID = userID
     self.surface = surface
     self.deviceID = deviceID
     self.theme = theme

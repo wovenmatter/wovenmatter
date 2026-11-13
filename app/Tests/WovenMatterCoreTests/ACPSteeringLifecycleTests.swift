@@ -50,7 +50,7 @@ private struct SteeringFixture {
     func messages() async throws -> [WorkspaceMessageRecord] { try await database.conversationContent(id: id).messages }
     func waitForTerminal() async throws {
         let settled = try await pollUntil(attempts: 500, interval: .milliseconds(10)) {
-            try await !database.activeDeviceOwnedConversationIDs().contains(id)
+            try await !database.activeLocalConversationIDs().contains(id)
         }
         if !settled { Issue.record("The steered run did not settle") }
     }

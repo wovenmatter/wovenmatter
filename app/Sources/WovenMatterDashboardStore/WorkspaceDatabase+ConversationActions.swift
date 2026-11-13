@@ -6,9 +6,8 @@ extension WorkspaceDatabaseConnection {
     try transaction {
       let restoring: Bool = if case .restore = mutation { true } else { false }
       let rows = try historyRowsUnlocked("""
-        SELECT id FROM dashboard_conversations
-        WHERE id = ? AND desktop_owned = 1 AND authority_kind = 'device_owned'
-          AND governing_plane = 'wovenmatter_macos' AND is_archived = 0
+        SELECT id FROM conversations
+        WHERE id = ? AND is_archived = 0
           AND deleted_at IS \(restoring ? "NOT NULL" : "NULL")
         """, values: [id])
       guard !rows.isEmpty else { throw WorkspaceConversationActionError.unavailable }
@@ -18,7 +17,7 @@ extension WorkspaceDatabaseConnection {
       let timestamp = Self.timestamp(Date())
       switch mutation {
       case .setPinned(let pinned):
-        try toolsExecuteUnlocked("UPDATE dashboard_conversations SET is_pinned = ?, updated_at = ? WHERE id = ?",
+        try toolsExecuteUnlocked("UPDATE conversations SET is_pinned = ?, updated_at = ? WHERE id = ?",
           [pinned ? "1" : "0", timestamp, id])
       case .rename(let title):
         let cleanTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -27,17 +26,17 @@ extension WorkspaceDatabaseConnection {
           throw WorkspaceConversationActionError.invalidTitle
         }
         try toolsExecuteUnlocked("""
-          INSERT INTO desktop_conversation_titles(conversation_id, title) VALUES (?, ?)
+          INSERT INTO conversation_titles(conversation_id, title) VALUES (?, ?)
           ON CONFLICT(conversation_id) DO UPDATE SET title = excluded.title
           """, [id, cleanTitle])
-        try toolsExecuteUnlocked("UPDATE dashboard_conversations SET title = ?, updated_at = ? WHERE id = ?",
+        try toolsExecuteUnlocked("UPDATE conversations SET title = ?, updated_at = ? WHERE id = ?",
           [cleanTitle, timestamp, id])
-        try toolsExecuteUnlocked("UPDATE desktop_local_acp_sessions SET title = ?, updated_at = ? WHERE conversation_id = ?",
+        try toolsExecuteUnlocked("UPDATE harness_sessions SET title = ?, updated_at = ? WHERE conversation_id = ?",
           [cleanTitle, timestamp, id])
       case .moveToTrash:
         // Recheck at the write boundary, including work admitted after the menu opened.
         if let run = try historyRowsUnlocked("""
-          SELECT status FROM dashboard_runs WHERE conversation_id = ?
+          SELECT status FROM runs WHERE conversation_id = ?
             AND status IN ('queued', 'accepted', 'running', 'uncertain') LIMIT 1
           """, values: [id]).first {
           // A lost continuation receipt is still unresolved native work even if
@@ -47,25 +46,25 @@ extension WorkspaceDatabaseConnection {
         }
         // Native OpenCode work can exist before its first normalized dashboard run.
         guard try historyRowsUnlocked("""
-          SELECT 1 FROM desktop_opencode_sessions WHERE conversation_id = ?
+          SELECT 1 FROM opencode_sessions WHERE conversation_id = ?
             AND json_extract(snapshot_json, '$.active') = 1 LIMIT 1
           """, values: [id]).isEmpty else { throw WorkspaceConversationActionError.running }
         guard try historyRowsUnlocked("""
-          SELECT 1 FROM desktop_opencode_submissions WHERE conversation_id = ?
+          SELECT 1 FROM opencode_submissions WHERE conversation_id = ?
             AND status IN ('sending', 'uncertain') LIMIT 1
           """, values: [id]).isEmpty else { throw WorkspaceConversationActionError.pendingInput }
         try toolsExecuteUnlocked("""
-          UPDATE dashboard_conversations SET deleted_at = ?, updated_at = ?,
+          UPDATE conversations SET deleted_at = ?, updated_at = ?,
             original_folder_id = folder_id WHERE id = ?
           """, [timestamp, timestamp, id])
         try applyOwnerTrashEffectsUnlocked(id, reassertGoal: false)
       case .restore:
         // A folder may have been removed while this chat was in Trash.
         try toolsExecuteUnlocked("""
-          UPDATE dashboard_conversations SET deleted_at = NULL, updated_at = ?,
-            folder_id = (SELECT id FROM folders WHERE id = original_folder_id AND user_id = ?), original_folder_id = NULL
+          UPDATE conversations SET deleted_at = NULL, updated_at = ?,
+            folder_id = (SELECT id FROM folders WHERE id = original_folder_id), original_folder_id = NULL
           WHERE id = ?
-          """, [timestamp, try localMutationOperatorIDUnlocked(), id])
+          """, [timestamp, id])
       }
     }
   }
@@ -73,9 +72,8 @@ extension WorkspaceDatabaseConnection {
   public func trashedConversations() throws -> [WorkspaceTrashedConversation] {
     try withLock {
       try historyRowsUnlocked("""
-        SELECT id, title, deleted_at FROM dashboard_conversations
-        WHERE desktop_owned = 1 AND authority_kind = 'device_owned'
-          AND governing_plane = 'wovenmatter_macos' AND is_archived = 0 AND deleted_at IS NOT NULL
+        SELECT id, title, deleted_at FROM conversations
+        WHERE is_archived = 0 AND deleted_at IS NOT NULL
         ORDER BY deleted_at DESC, id
         """, values: []).map { row in
           guard let value = row.objectValue, let id = value["id"]?.stringValue,

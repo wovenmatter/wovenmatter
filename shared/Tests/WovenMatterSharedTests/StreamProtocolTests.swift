@@ -5,11 +5,11 @@ import WovenMatterShared
 /// The fixture file is shared with the Node server's tests, which decode and
 /// re-encode the same frames.
 private struct StreamFixtures: Decodable {
-  struct Named: Decodable { let name: String; let frame: GatewayJSONValue }
-  struct Prefixed: Decodable { let frame: GatewayJSONValue; let hex: String }
+  struct Named: Decodable { let name: String; let frame: JSONValue }
+  struct Prefixed: Decodable { let frame: JSONValue; let hex: String }
   let `protocol`: Int
   let frames: [Named]
-  let unknownFrames: [GatewayJSONValue]
+  let unknownFrames: [JSONValue]
   let lengthPrefixed: Prefixed
 
   static func load() throws -> Self {
@@ -18,7 +18,7 @@ private struct StreamFixtures: Decodable {
   }
 }
 
-private func json(_ value: GatewayJSONValue) throws -> Data { try JSONEncoder().encode(value) }
+private func json(_ value: JSONValue) throws -> Data { try JSONEncoder().encode(value) }
 
 private func object(_ data: Data) throws -> NSObject {
   try JSONSerialization.jsonObject(with: data, options: [.fragmentsAllowed]) as! NSObject

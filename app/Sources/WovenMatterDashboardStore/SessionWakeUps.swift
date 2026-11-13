@@ -356,7 +356,7 @@ import WovenMatterShared
   /// that reaches `until` (to confirm it), and once at the timeout. The reply
   /// is that body plus `state` and `timedOut`.
   public func wait(callerID: String?, workspaceID: String, id rawID: String, until: String, timeout: Duration,
-                   read: @MainActor () async throws -> (body: GatewayJSONValue, state: String)) async throws -> GatewayJSONValue {
+                   read: @MainActor () async throws -> (body: JSONValue, state: String)) async throws -> JSONValue {
     let id = rawID.lowercased(), clock = ContinuousClock(), deadline = clock.now + timeout
     let waitKey = callerID.map { $0 + "\u{0}" + id }
     if let waitKey { waiting[waitKey, default: 0] += 1 }
@@ -389,7 +389,7 @@ import WovenMatterShared
     }
   }
 
-  nonisolated static func reply(_ body: GatewayJSONValue, state: String, timedOut: Bool) -> GatewayJSONValue {
+  nonisolated static func reply(_ body: JSONValue, state: String, timedOut: Bool) -> JSONValue {
     var value = body.objectValue ?? ["status": body]
     value["state"] = .string(state); value["timedOut"] = .bool(timedOut)
     return .object(value)

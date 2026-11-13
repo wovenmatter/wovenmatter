@@ -13,7 +13,7 @@ extension WorkspaceDatabaseConnection {
     }
   }
 
-  public func reserveToolSessionCreation(sourceID: String, requestID: String, arguments: [String], purpose: String, managed: Bool) throws -> GatewayJSONValue {
+  public func reserveToolSessionCreation(sourceID: String, requestID: String, arguments: [String], purpose: String, managed: Bool) throws -> JSONValue {
     try transaction {
       try requireToolUnlocked(.sessions, sessionID: sourceID)
       let requestID = try persistedToolRequestID(requestID, in: .creations)
@@ -67,8 +67,7 @@ extension WorkspaceDatabaseConnection {
             configuration.nativeWorkspaceID.map({ !$0.isEmpty && $0.utf8.count <= 256 }) ?? true else {
         throw WorkspaceToolError.invalid("A session needs a title and a valid working directory.")
       }
-      let operatorID = try localMutationOperatorIDUnlocked()
-      try validateFolderUnlocked(id: configuration.folderID, operatorID: operatorID)
+      try validateFolderUnlocked(id: configuration.folderID)
       var saved = configuration
       saved.title = title
       try toolsExecuteUnlocked("UPDATE workspace_session_creations SET configuration_json=? WHERE id=?",
@@ -133,10 +132,10 @@ extension WorkspaceDatabaseConnection {
       [targetID, source, row["purpose"]?.stringValue])
     if let json = row["configuration_json"]?.stringValue {
       let configuration = try JSONDecoder().decode(WorkspaceSessionCreationConfiguration.self, from: Data(json.utf8))
-      try validateFolderUnlocked(id: configuration.folderID, operatorID: localMutationOperatorIDUnlocked())
-      try toolsExecuteUnlocked("UPDATE dashboard_conversations SET title=?,folder_id=? WHERE id=?",
+      try validateFolderUnlocked(id: configuration.folderID)
+      try toolsExecuteUnlocked("UPDATE conversations SET title=?,folder_id=? WHERE id=?",
         [configuration.title, configuration.folderID, targetID])
-      try toolsExecuteUnlocked("UPDATE desktop_local_acp_sessions SET title=? WHERE conversation_id=?", [configuration.title, targetID])
+      try toolsExecuteUnlocked("UPDATE harness_sessions SET title=? WHERE conversation_id=?", [configuration.title, targetID])
       try toolsExecuteUnlocked("UPDATE workspace_session_tools SET enabled_json=?,defaults_applied=1 WHERE session_id=?", [try toolsJSON(configuration.tools.enabled), targetID])
       try toolsExecuteUnlocked("UPDATE workspace_executor_sessions SET profiles_json=? WHERE session_id=?", [try toolsJSON(configuration.tools.executorProfiles ?? []), targetID])
     } else {
@@ -154,7 +153,7 @@ extension WorkspaceDatabase {
     try await read { try $0.toolSessionCreationConfiguration(targetID: targetID) }
   }
 
-  public func reserveToolSessionCreation(sourceID: String, requestID: String, arguments: [String], purpose: String, managed: Bool) async throws -> GatewayJSONValue {
+  public func reserveToolSessionCreation(sourceID: String, requestID: String, arguments: [String], purpose: String, managed: Bool) async throws -> JSONValue {
     try await write { try $0.reserveToolSessionCreation(sourceID: sourceID, requestID: requestID, arguments: arguments, purpose: purpose, managed: managed) }
   }
 

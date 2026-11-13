@@ -17,8 +17,8 @@ struct LibraryHostTimersTests {
   }
 
   private func call(_ host: LibraryHost, caller: String, bot: Bool = false, _ name: String,
-                    _ arguments: [String: GatewayJSONValue], groups: Set<WorkspaceToolGroup>) async throws -> WovenMatterToolResponse {
-    let message: GatewayJSONValue = .object(["jsonrpc": .string("2.0"), "id": .number(1), "method": .string("tools/call"),
+                    _ arguments: [String: JSONValue], groups: Set<WorkspaceToolGroup>) async throws -> WovenMatterToolResponse {
+    let message: JSONValue = .object(["jsonrpc": .string("2.0"), "id": .number(1), "method": .string("tools/call"),
       "params": .object(["name": .string(name), "arguments": .object(arguments)])])
     let callerID: String
     if bot { callerID = caller; try await host.database.registerBotCaller(caller, displayName: "Scheduler") }

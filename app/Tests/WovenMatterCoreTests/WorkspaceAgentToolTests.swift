@@ -218,7 +218,7 @@ struct WorkspaceAgentToolTests {
     #expect(try await reopened.sessionTools(target) == saved.tools)
     #expect(try await reopened.sessionRelationship(target).createdBy == source)
     let localTitle = try await reopened.read { connection in
-      try connection.historyRowsUnlocked("SELECT title FROM desktop_local_acp_sessions WHERE conversation_id=?", values: [target])
+      try connection.historyRowsUnlocked("SELECT title FROM harness_sessions WHERE conversation_id=?", values: [target])
         .first?.objectValue?["title"]?.stringValue
     }
     #expect(localTitle == saved.title)

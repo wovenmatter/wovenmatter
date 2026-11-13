@@ -57,7 +57,6 @@ extension WorkspaceDatabaseConnection {
     remoteWorkspaceID: UUID,
     remoteWorkspaceName: String,
     ownerDeviceID: UUID,
-    operatorID: String,
     status: AgentRuntimeStatus,
     updatedAt: Date
   ) throws -> String {
@@ -77,49 +76,38 @@ extension WorkspaceDatabaseConnection {
     let platformCodename = "remote-workspace:\(workspaceID)"
     let timestamp = Self.timestamp(updatedAt)
     let statement = try prepareUnlocked("""
-      INSERT INTO dashboard_agents (
-        id, user_id, codename, display_name, icon, execution_location,
-        agent_bucket, governing_plane, authority_kind, authority_device_id,
-        authority_agent_id, runtime_kind, runtime_device_id, platform_codename,
-        status, revision, created_at, updated_at, desktop_owned
-      ) VALUES (?, ?, ?, ?, 'container', 'remote', 'remote_workspace',
-        'remote_workspace', 'device_owned', ?, ?, ?, ?, ?, ?, 1, ?, ?, 1)
+      INSERT INTO agents (
+        id, codename, display_name, icon, execution_location, owner_device_id,
+        runtime_kind, runtime_device_id, platform_codename,
+        status, revision, created_at, updated_at
+      ) VALUES (?, ?, ?, 'container', 'remote', ?, ?, ?, ?, ?, 1, ?, ?)
       ON CONFLICT(id) DO UPDATE SET
-        user_id = excluded.user_id,
         codename = excluded.codename,
-        display_name = CASE WHEN excluded.runtime_kind = 'opencode' THEN dashboard_agents.display_name ELSE excluded.display_name END,
+        display_name = CASE WHEN excluded.runtime_kind = 'opencode' THEN agents.display_name ELSE excluded.display_name END,
         icon = excluded.icon,
         execution_location = excluded.execution_location,
-        agent_bucket = excluded.agent_bucket,
-        governing_plane = excluded.governing_plane,
-        authority_kind = excluded.authority_kind,
-        authority_device_id = excluded.authority_device_id,
-        authority_agent_id = excluded.authority_agent_id,
+        owner_device_id = excluded.owner_device_id,
         runtime_kind = excluded.runtime_kind,
         runtime_device_id = excluded.runtime_device_id,
         platform_codename = excluded.platform_codename,
         status = excluded.status,
-        revision = dashboard_agents.revision + 1,
+        revision = agents.revision + 1,
         updated_at = excluded.updated_at,
-        deleted_at = NULL,
-        desktop_owned = 1
-      WHERE dashboard_agents.authority_kind = 'device_owned'
-        AND dashboard_agents.governing_plane = 'remote_workspace'
-        AND dashboard_agents.runtime_device_id = excluded.runtime_device_id
+        deleted_at = NULL
+      WHERE agents.execution_location = 'remote'
+        AND agents.runtime_device_id = excluded.runtime_device_id
       """)
     defer { sqlite3_finalize(statement) }
     try bind(id, at: 1, to: statement)
-    try bind(operatorID, at: 2, to: statement)
-    try bind(codename, at: 3, to: statement)
-    try bind(displayName, at: 4, to: statement)
-    try bind(ownerDeviceID.uuidString.lowercased(), at: 5, to: statement)
-    try bind(id, at: 6, to: statement)
-    try bind(runtimeKind.rawValue, at: 7, to: statement)
-    try bind(workspaceID, at: 8, to: statement)
-    try bind(platformCodename, at: 9, to: statement)
-    try bind(status.rawValue, at: 10, to: statement)
-    try bind(timestamp, at: 11, to: statement)
-    try bind(timestamp, at: 12, to: statement)
+    try bind(codename, at: 2, to: statement)
+    try bind(displayName, at: 3, to: statement)
+    try bind(ownerDeviceID.uuidString.lowercased(), at: 4, to: statement)
+    try bind(runtimeKind.rawValue, at: 5, to: statement)
+    try bind(workspaceID, at: 6, to: statement)
+    try bind(platformCodename, at: 7, to: statement)
+    try bind(status.rawValue, at: 8, to: statement)
+    try bind(timestamp, at: 9, to: statement)
+    try bind(timestamp, at: 10, to: statement)
     try stepDone(statement)
     guard changedRowCountUnlocked == 1 else {
       throw WorkspaceDatabaseError.execute("Remote workspace agent identity collision")
@@ -142,7 +130,6 @@ extension WorkspaceDatabaseConnection {
         remoteWorkspaceID: remoteWorkspaceID,
         remoteWorkspaceName: remoteWorkspaceName,
         ownerDeviceID: ownerDeviceID,
-        operatorID: try localMutationOperatorIDUnlocked(),
         status: status,
         updatedAt: updatedAt
       )
@@ -156,7 +143,6 @@ extension WorkspaceDatabaseConnection {
   func ensureLocalCLIAgentUnlocked(
     runtimeKind: AgentRuntimeKind,
     ownerDeviceID: UUID,
-    operatorID: String,
     status: AgentRuntimeStatus?,
     updatedAt: Date
   ) throws -> String {
@@ -169,8 +155,7 @@ extension WorkspaceDatabaseConnection {
     }
     let timestamp = Self.timestamp(updatedAt)
     let existedStatement = try prepareUnlocked("""
-      SELECT status FROM dashboard_agents
-      WHERE id = ? AND authority_kind = 'device_owned'
+      SELECT status FROM agents WHERE id = ?
       """)
     try bind(id, at: 1, to: existedStatement)
     let existingCode = sqlite3_step(existedStatement)
@@ -184,57 +169,41 @@ extension WorkspaceDatabaseConnection {
     }
     let desiredStatus = status ?? existingStatus ?? .offline
     let statement = try prepareUnlocked("""
-      INSERT INTO dashboard_agents (
-        id, user_id, codename, display_name, icon, execution_location,
-        agent_bucket, governing_plane, authority_kind, authority_device_id,
-        authority_agent_id, runtime_kind, status, revision,
-        created_at, updated_at, desktop_owned
-      ) VALUES (?, ?, ?, ?, 'terminal', 'local', 'local_cli', 'wovenmatter_macos',
-        'device_owned', ?, ?, ?, ?, 1, ?, ?, 1)
+      INSERT INTO agents (
+        id, codename, display_name, icon, execution_location, owner_device_id,
+        runtime_kind, status, revision, created_at, updated_at
+      ) VALUES (?, ?, ?, 'terminal', 'local', ?, ?, ?, 1, ?, ?)
       ON CONFLICT(id) DO UPDATE SET
-        user_id = excluded.user_id,
         codename = excluded.codename,
-        display_name = dashboard_agents.display_name,
+        display_name = agents.display_name,
         icon = excluded.icon,
         execution_location = excluded.execution_location,
-        agent_bucket = excluded.agent_bucket,
-        governing_plane = excluded.governing_plane,
-        authority_kind = excluded.authority_kind,
-        authority_device_id = excluded.authority_device_id,
-        authority_agent_id = excluded.authority_agent_id,
+        owner_device_id = excluded.owner_device_id,
         runtime_kind = excluded.runtime_kind,
         status = excluded.status,
-        revision = dashboard_agents.revision + 1,
+        revision = agents.revision + 1,
         updated_at = excluded.updated_at,
-        deleted_at = NULL,
-        desktop_owned = 1
-      WHERE dashboard_agents.authority_kind = 'device_owned'
-        AND dashboard_agents.governing_plane = 'wovenmatter_macos'
+        deleted_at = NULL
+      WHERE agents.execution_location = 'local'
         AND (
-          dashboard_agents.user_id IS NOT excluded.user_id
-          OR dashboard_agents.codename IS NOT excluded.codename
-          OR dashboard_agents.icon IS NOT excluded.icon
-          OR dashboard_agents.execution_location IS NOT excluded.execution_location
-          OR dashboard_agents.agent_bucket IS NOT excluded.agent_bucket
-          OR dashboard_agents.authority_device_id IS NOT excluded.authority_device_id
-          OR dashboard_agents.authority_agent_id IS NOT excluded.authority_agent_id
-          OR dashboard_agents.runtime_kind IS NOT excluded.runtime_kind
-          OR dashboard_agents.status IS NOT excluded.status
-          OR dashboard_agents.deleted_at IS NOT NULL
-          OR dashboard_agents.desktop_owned != 1
+          agents.codename IS NOT excluded.codename
+          OR agents.icon IS NOT excluded.icon
+          OR agents.execution_location IS NOT excluded.execution_location
+          OR agents.owner_device_id IS NOT excluded.owner_device_id
+          OR agents.runtime_kind IS NOT excluded.runtime_kind
+          OR agents.status IS NOT excluded.status
+          OR agents.deleted_at IS NOT NULL
         )
       """)
     defer { sqlite3_finalize(statement) }
     try bind(id, at: 1, to: statement)
-    try bind(operatorID, at: 2, to: statement)
-    try bind(codename, at: 3, to: statement)
-    try bind(runtimeKind.displayName, at: 4, to: statement)
-    try bind(ownerDeviceID.uuidString.lowercased(), at: 5, to: statement)
-    try bind(id, at: 6, to: statement)
-    try bind(runtimeKind.rawValue, at: 7, to: statement)
-    try bind(desiredStatus.rawValue, at: 8, to: statement)
-    try bind(timestamp, at: 9, to: statement)
-    try bind(timestamp, at: 10, to: statement)
+    try bind(codename, at: 2, to: statement)
+    try bind(runtimeKind.displayName, at: 3, to: statement)
+    try bind(ownerDeviceID.uuidString.lowercased(), at: 4, to: statement)
+    try bind(runtimeKind.rawValue, at: 5, to: statement)
+    try bind(desiredStatus.rawValue, at: 6, to: statement)
+    try bind(timestamp, at: 7, to: statement)
+    try bind(timestamp, at: 8, to: statement)
     try stepDone(statement)
     let changed = changedRowCountUnlocked == 1
     guard changed || agentAlreadyExisted else {
@@ -249,12 +218,10 @@ extension WorkspaceDatabaseConnection {
     updatedAt: Date = Date()
   ) throws {
     try transaction {
-      let operatorID = try localMutationOperatorIDUnlocked()
       for definition in LocalACPRuntimeCatalog.definitions {
         _ = try ensureLocalCLIAgentUnlocked(
           runtimeKind: definition.runtimeKind,
           ownerDeviceID: ownerDeviceID,
-          operatorID: operatorID,
           status: statuses[definition.runtimeKind],
           updatedAt: updatedAt
         )
@@ -264,36 +231,16 @@ extension WorkspaceDatabaseConnection {
 
   public func dashboardAgents() throws -> [WorkspaceAgent] {
     try withLock {
-      let operatorID = try canonicalWorkspaceOperatorIDUnlocked()
-      let statement = try prepareUnlocked(operatorID == nil ? """
-        SELECT id, user_id, codename, display_name, icon, execution_location,
-          governing_plane, authority_kind, authority_device_id,
+      let statement = try prepareUnlocked("""
+        SELECT id, codename, display_name, icon, execution_location, owner_device_id,
           runtime_kind, runtime_device_id, platform_codename, status,
-          runtime_metadata_json, revision, created_at, updated_at, deleted_at
-        FROM dashboard_agents
+          revision, created_at, updated_at, deleted_at
+        FROM agents
         WHERE deleted_at IS NULL
-          AND (
-            (governing_plane = 'wovenmatter_macos' AND runtime_device_id IS NULL)
-            OR governing_plane = 'remote_workspace'
-          )
-        ORDER BY execution_location DESC, created_at, id
-        """ : """
-        SELECT id, user_id, codename, display_name, icon, execution_location,
-          governing_plane, authority_kind, authority_device_id,
-          runtime_kind, runtime_device_id, platform_codename, status,
-          runtime_metadata_json, revision, created_at, updated_at, deleted_at
-        FROM dashboard_agents
-        WHERE (user_id = ? OR desktop_owned = 1) AND deleted_at IS NULL
-          AND (
-            (governing_plane = 'wovenmatter_macos' AND runtime_device_id IS NULL)
-            OR governing_plane = 'remote_workspace'
-          )
+          AND ((execution_location = 'local' AND runtime_device_id IS NULL) OR execution_location = 'remote')
         ORDER BY execution_location DESC, created_at, id
         """)
       defer { sqlite3_finalize(statement) }
-      if let operatorID {
-        try bind(operatorID, at: 1, to: statement)
-      }
       var agents: [WorkspaceAgent] = []
       while true {
         let code = sqlite3_step(statement)
@@ -301,18 +248,14 @@ extension WorkspaceDatabaseConnection {
         guard code == SQLITE_ROW else { throw stepError() }
         do {
           let rawID = try text(statement, column: 0)
-          let rawLocation = try text(statement, column: 5)
-          let rawPlane = try text(statement, column: 6)
-          let rawAuthority = try text(statement, column: 7)
-          let rawRuntime = try text(statement, column: 9)
-          let rawStatus = try text(statement, column: 12)
+          let rawLocation = try text(statement, column: 4)
+          let rawRuntime = try text(statement, column: 6)
+          let rawStatus = try text(statement, column: 9)
           guard let location = AgentExecutionLocation(rawValue: rawLocation),
-                let governingPlane = AgentGoverningPlane(rawValue: rawPlane),
-                let authority = DataAuthorityKind(rawValue: rawAuthority),
                 let runtime = AgentRuntimeKind(rawValue: rawRuntime),
                 let status = AgentRuntimeStatus(rawValue: rawStatus) else {
             NSLog(
-              "Ignoring incompatible dashboard agent projection id=%@ location=%@ runtime=%@ status=%@",
+              "Ignoring incompatible agent id=%@ location=%@ runtime=%@ status=%@",
               rawID,
               rawLocation,
               rawRuntime,
@@ -321,32 +264,24 @@ extension WorkspaceDatabaseConnection {
             continue
           }
           guard let id = UUID(uuidString: rawID) else {
-            NSLog("Ignoring local dashboard agent with invalid UUID id=%@", rawID)
+            NSLog("Ignoring agent with invalid UUID id=%@", rawID)
             continue
           }
-          let runtimeMetadata = Self.agentRuntimeMetadata(
-            optionalText(statement, column: 13)
-          )
           agents.append(WorkspaceAgent(
             id: id,
-            userID: try text(statement, column: 1),
-            codename: try text(statement, column: 2),
-            displayName: runtime == .defaultAgent ? runtime.displayName : try text(statement, column: 3),
-            iconKey: try text(statement, column: 4),
+            codename: try text(statement, column: 1),
+            displayName: runtime == .defaultAgent ? runtime.displayName : try text(statement, column: 2),
+            iconKey: try text(statement, column: 3),
             executionLocation: location,
-            governingPlane: governingPlane,
-            authorityKind: authority,
-            authorityDeviceID: optionalText(statement, column: 8).flatMap(UUID.init(uuidString:)),
+            ownerDeviceID: optionalText(statement, column: 5).flatMap(UUID.init(uuidString:)),
             runtimeKind: runtime,
-            runtimeDeviceID: optionalText(statement, column: 10).flatMap(UUID.init(uuidString:)),
-            platformCodename: optionalText(statement, column: 11),
+            runtimeDeviceID: optionalText(statement, column: 7).flatMap(UUID.init(uuidString:)),
+            platformCodename: optionalText(statement, column: 8),
             runtimeStatus: status,
-            runtimeVersion: runtimeMetadata.runtimeVersion,
-            imageDigest: runtimeMetadata.image,
-            revision: sqlite3_column_int64(statement, 14),
-            createdAt: Self.dashboardDate(optionalText(statement, column: 15)) ?? .distantPast,
-            updatedAt: Self.dashboardDate(optionalText(statement, column: 16)) ?? .distantPast,
-            deletedAt: Self.dashboardDate(optionalText(statement, column: 17))
+            revision: sqlite3_column_int64(statement, 10),
+            createdAt: Self.dashboardDate(optionalText(statement, column: 11)) ?? .distantPast,
+            updatedAt: Self.dashboardDate(optionalText(statement, column: 12)) ?? .distantPast,
+            deletedAt: Self.dashboardDate(optionalText(statement, column: 13))
           ))
         } catch WorkspaceDatabaseError.corruptRow {
           NSLog("Ignoring dashboard agent projection with missing required text")
@@ -370,10 +305,8 @@ extension WorkspaceDatabaseConnection {
       let rawID = id.uuidString.lowercased()
       let ownership = try prepareUnlocked("""
         SELECT 1
-        FROM dashboard_agents
-        WHERE id = ? AND runtime_kind = 'opencode'
-          AND authority_kind = 'device_owned' AND desktop_owned = 1
-          AND deleted_at IS NULL
+        FROM agents
+        WHERE id = ? AND runtime_kind = 'opencode' AND deleted_at IS NULL
         """)
       defer { sqlite3_finalize(ownership) }
       try bind(rawID, at: 1, to: ownership)
@@ -385,7 +318,7 @@ extension WorkspaceDatabaseConnection {
       }
 
       let statement = try prepareUnlocked("""
-        UPDATE dashboard_agents
+        UPDATE agents
         SET display_name = ?, revision = revision + 1, updated_at = ?
         WHERE id = ? AND display_name IS NOT ?
         """)
@@ -398,21 +331,6 @@ extension WorkspaceDatabaseConnection {
     }
   }
 
-  private static func agentRuntimeMetadata(
-    _ value: String?
-  ) -> (runtimeVersion: String?, image: String?) {
-    guard let value,
-          let data = value.data(using: .utf8),
-          let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-      return (nil, nil)
-    }
-    return (
-      object["runtimeVersion"] as? String ?? object["runtime_version"] as? String,
-      object["image"] as? String
-        ?? object["imageDigest"] as? String
-        ?? object["image_digest"] as? String
-    )
-  }
 }
 
 // MARK: - Async worker boundary

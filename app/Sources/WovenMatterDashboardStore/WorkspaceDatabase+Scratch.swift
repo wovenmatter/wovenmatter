@@ -41,7 +41,7 @@ extension WorkspaceDatabaseConnection {
             root.workspaceID == scratch.workspaceID else { throw WorkspaceToolError.invalid("This chat has no scratch directory reservation.") }
       if root.rootPath == scratch.rootPath { return }
       guard try canChooseSessionFolder(id: id),
-            try historyRowsUnlocked("SELECT 1 FROM dashboard_conversations WHERE id=? AND folder_id IS NULL AND deleted_at IS NULL", values: [id]).count == 1,
+            try historyRowsUnlocked("SELECT 1 FROM conversations WHERE id=? AND folder_id IS NULL AND deleted_at IS NULL", values: [id]).count == 1,
             let base = try historyRowsUnlocked("SELECT workspace_root FROM session_scratch_directories WHERE session_id=?", values: [id]).first?.objectValue?["workspace_root"]?.stringValue,
             root.rootPath == base else { throw WorkspaceToolError.invalid("Only an Ungrouped draft can bind its scratch directory.") }
       try toolsExecuteUnlocked("UPDATE session_execution_roots SET root_path=? WHERE conversation_id=?", [scratch.rootPath,id])

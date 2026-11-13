@@ -37,8 +37,8 @@ extension ApplicationModel {
         try await agentTools?.reload()
     }
 
-    func executorJSON<T: Encodable>(_ value: T) throws -> GatewayJSONValue {
-        try JSONDecoder().decode(GatewayJSONValue.self, from: JSONEncoder().encode(value))
+    func executorJSON<T: Encodable>(_ value: T) throws -> JSONValue {
+        try JSONDecoder().decode(JSONValue.self, from: JSONEncoder().encode(value))
     }
 
     func executeExecutorControl(_ control: ExecutorControl) async throws -> URL? {
@@ -169,7 +169,7 @@ extension ApplicationModel {
         switch command.action {
         case "execute": code = try command.required("code")
         case "search":
-            let input: GatewayJSONValue = .object(["query": .string(command.options["query"] ?? ""), "limit": .number(Double(try command.integer("limit", default: 30, range: 1...100)))])
+            let input: JSONValue = .object(["query": .string(command.options["query"] ?? ""), "limit": .number(Double(try command.integer("limit", default: 30, range: 1...100)))])
             code = "return await tools.search(" + String(decoding: try JSONEncoder().encode(input), as: UTF8.self) + ");"
         case "skills": code = ""
         default: throw WorkspaceToolError.invalid("Unknown Executor command.")
@@ -197,7 +197,7 @@ extension ApplicationModel {
     }
 
     private func driveExecutorJob(_ id: String, session: String, code: String, readOnly: Bool, client: ExecutorBrokerClient) async {
-        func message(_ operation: String, _ extra: [String: GatewayJSONValue] = [:]) -> GatewayJSONValue {
+        func message(_ operation: String, _ extra: [String: JSONValue] = [:]) -> JSONValue {
             .object(["operation": .string(operation), "id": .string(id), "session": .string(session)].merging(extra) { _, new in new })
         }
         do {
@@ -211,7 +211,7 @@ extension ApplicationModel {
                 if ["completed", "cancelled", "interrupted"].contains(status) { return }
                 if ["awaiting-approval", "approval-required", "input-required"].contains(status) {
                     let pending = try await client.call(message("interaction"))
-                    let response: GatewayJSONValue
+                    let response: JSONValue
                     if status == "input-required" {
                         var answer = await executorInput(pending, session: session)
                         while !Task.isCancelled {
@@ -253,7 +253,7 @@ extension ApplicationModel {
         } catch { _ = try? await client.call(message("cancel")) }
     }
 
-    private func executorInput(_ pending: GatewayJSONValue, session: String, invalid: Bool = false) async -> GatewayJSONValue {
+    private func executorInput(_ pending: JSONValue, session: String, invalid: Bool = false) async -> JSONValue {
         let form = pending.objectValue?["elicitation"]?.objectValue ?? [:]
         let schema = form["requestedSchema"]?.objectValue ?? [:]
         let fields = schema["properties"]?.objectValue ?? [:]
@@ -281,13 +281,13 @@ extension ApplicationModel {
         }
         let answer = await requestLocalACPInteraction(conversationID: session, request: .questions(.init(title: title, questions: questions)))
         guard case let .answers(values) = answer else { return .object(["action": .string("cancel")]) }
-        func typed(_ value: String, type: String?) -> GatewayJSONValue {
+        func typed(_ value: String, type: String?) -> JSONValue {
             if type == "boolean", ["true", "false"].contains(value) { return .bool(value == "true") }
             if type == "number" || type == "integer", let number = Double(value), number.isFinite { return .number(number) }
-            if type == "array" || type == "object", let json = try? JSONDecoder().decode(GatewayJSONValue.self, from: Data(value.utf8)) { return json }
+            if type == "array" || type == "object", let json = try? JSONDecoder().decode(JSONValue.self, from: Data(value.utf8)) { return json }
             return .string(value)
         }
-        var content: [String: GatewayJSONValue] = [:]
+        var content: [String: JSONValue] = [:]
         for key in keys {
             let type = fields[key]?.objectValue?["type"]?.stringValue
             switch values[key] {

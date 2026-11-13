@@ -11,7 +11,6 @@ struct WorkspaceHistoryTextWindowTests {
     let persistence = try PersistenceFixture(); defer { persistence.remove() }
     let database = try await persistence.openDatabase()
     let owner = UUID()
-    try await database.bindDeviceOwnership(ownerDeviceID: owner)
     let session = try await database.createFixtureLocalACPSession(runtimeKind: .codex, title: "Windows", ownerDeviceID: owner)
     for value in ["\0é🪡z", "é\0🪡z", "é🪡z\0", "e\u{0301}\0🪡z"] {
       let run = try await database.beginLocalACPRun(conversationID: session, input: .init(text: value))

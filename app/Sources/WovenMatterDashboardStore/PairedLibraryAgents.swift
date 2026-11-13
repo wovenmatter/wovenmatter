@@ -12,11 +12,11 @@ extension WorkspaceDatabase {
       let own = try connection.libraryIdentityUnlocked().hostDeviceID
       let workspaces = try connection.libraryExecutionWorkspaces()
       var result: [UUID: ExecutionWorkspace] = [:]
-      for row in try connection.historyRowsUnlocked("SELECT a.id,a.governing_plane,a.runtime_device_id,p.device_id FROM dashboard_agents a JOIN paired_agent_owners p ON p.id=a.id WHERE p.device_id<>? AND a.deleted_at IS NULL", values: [own]) {
+      for row in try connection.historyRowsUnlocked("SELECT a.id,a.execution_location,a.runtime_device_id,p.device_id FROM agents a JOIN paired_agent_owners p ON p.id=a.id WHERE p.device_id<>? AND a.deleted_at IS NULL", values: [own]) {
         guard let fields = row.objectValue, let id = fields["id"]?.stringValue.flatMap(UUID.init(uuidString:)),
               let owner = fields["device_id"]?.stringValue else { continue }
         let workspace: ExecutionWorkspace?
-        if fields["governing_plane"]?.stringValue == "remote_workspace", let remote = fields["runtime_device_id"]?.stringValue {
+        if fields["execution_location"]?.stringValue == "remote", let remote = fields["runtime_device_id"]?.stringValue {
           workspace = workspaces.first { $0.id == remote.lowercased() && !$0.deleted }
         } else { workspace = workspaces.first { $0.kind == .mac && $0.ownerDeviceID == owner && !$0.deleted } }
         if let workspace { result[id] = workspace }
@@ -32,8 +32,8 @@ extension WorkspaceDatabase {
       try connection.transaction {
         try connection.executeUnlocked("UPDATE paired_library_clock SET applying=1")
         let now = WorkspaceDatabaseConnection.timestamp(Date())
-        try connection.toolsExecuteUnlocked("INSERT OR IGNORE INTO dashboard_conversations(id,user_id,agent_id,title,desktop_owned,created_at,updated_at) VALUES(?,?,?,'New conversation',1,?,?)",
-          [id, try connection.localMutationOperatorIDUnlocked(), agentID.uuidString.lowercased(), now, now])
+        try connection.toolsExecuteUnlocked("INSERT OR IGNORE INTO conversations(id,agent_id,title,created_at,updated_at) VALUES(?,?,'New conversation',?,?)",
+          [id, agentID.uuidString.lowercased(), now, now])
         if workspace.kind == .mac {
           try connection.toolsExecuteUnlocked("INSERT OR IGNORE INTO paired_conversation_owners VALUES(?,?)", [id, workspace.ownerDeviceID])
         }

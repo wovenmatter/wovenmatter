@@ -334,10 +334,10 @@ final class WovenMCPHost {
         guard request.headers["origin"] == nil, request.body.count <= WovenMatterToolRequest.maximumHTMLRequestBytes else {
             return .error("invalid_request", "Invalid or oversized MCP request.", status: 400)
         }
-        var rpcID: GatewayJSONValue = .null
+        var rpcID: JSONValue = .null
         var decodedMessage = false
         do {
-            let message = try JSONDecoder().decode(GatewayJSONValue.self, from: request.body)
+            let message = try JSONDecoder().decode(JSONValue.self, from: request.body)
             if request.body.count > 4 * 1_024 * 1_024 {
                 guard message.objectValue?["method"] == .string("tools/call"),
                       ["woven_html_preview", "woven_html_render"].contains(message.objectValue?["params"]?.objectValue?["name"]?.stringValue ?? "") else {

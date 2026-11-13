@@ -126,7 +126,7 @@ extension WorkspaceDatabase {
 
   /// Whether a calling conversation still exists here.
   public func sessionWakeUpCallerExists(_ id: String) async throws -> Bool {
-    try await read { !(try $0.historyRowsUnlocked("SELECT 1 FROM dashboard_conversations WHERE id=? AND deleted_at IS NULL", values: [id])).isEmpty }
+    try await read { !(try $0.historyRowsUnlocked("SELECT 1 FROM conversations WHERE id=? AND deleted_at IS NULL", values: [id])).isEmpty }
   }
 
   public func botWakeUpCount(callerID: String) async throws -> Int {
@@ -148,7 +148,7 @@ extension WorkspaceDatabase {
       let rows = try connection.historyRowsUnlocked("""
         SELECT EXISTS(SELECT 1 FROM workspace_session_deliveries d WHERE d.message_id=r.user_message_id
           AND d.event_key LIKE '\(WorkspaceDatabaseConnection.wakeUpEventPrefix)%') AS woken
-        FROM dashboard_runs r WHERE r.conversation_id=? ORDER BY r.created_at DESC, r.id DESC LIMIT \(max(1, limit + 1))
+        FROM runs r WHERE r.conversation_id=? ORDER BY r.created_at DESC, r.id DESC LIMIT \(max(1, limit + 1))
         """, values: [conversationID])
       return rows.prefix { $0.objectValue?["woken"]?.intValue == 1 }.count
     }
@@ -168,8 +168,8 @@ extension WorkspaceDatabase {
             target_title,target_harness,target_model,event_key)
           SELECT ?,?,?,?,'queued',?,?,'notification',coalesce(bt.display_name,t.title,'Bot'),
             coalesce(bt.display_name,d.runtime_kind,t.agent_codename),d.model,?
-          FROM workspace_mcp_callers bt LEFT JOIN dashboard_conversations t ON t.id=bt.id
-          LEFT JOIN desktop_local_acp_sessions d ON d.conversation_id=t.id WHERE bt.id=?
+          FROM workspace_mcp_callers bt LEFT JOIN conversations t ON t.id=bt.id
+          LEFT JOIN harness_sessions d ON d.conversation_id=t.id WHERE bt.id=?
           """, [id, sessionID, callerID, text, harness ?? "wovenmatter", title ?? "Session",
                 WorkspaceDatabaseConnection.wakeUpEventPrefix + id, callerID])
       }

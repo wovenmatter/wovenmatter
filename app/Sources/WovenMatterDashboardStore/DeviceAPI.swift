@@ -20,7 +20,7 @@ public protocol DeviceCommandServing: AnyObject {
 }
 
 private extension DeviceAPI {
-    func mcpInput(_ request: LibraryHTTPRequest) throws -> (GatewayJSONValue, String, [WorkspaceToolGroup], String?) {
+    func mcpInput(_ request: LibraryHTTPRequest) throws -> (JSONValue, String, [WorkspaceToolGroup], String?) {
         guard request.method == "POST" else {
             throw LibraryAPIError(code: "method_not_allowed", message: "Woven MCP uses HTTP POST for JSON-RPC requests.")
         }
@@ -42,8 +42,8 @@ private extension DeviceAPI {
         guard groups.count == names.count else {
             throw LibraryAPIError(code: "invalid_request", message: "An unknown tool group was selected.")
         }
-        let message: GatewayJSONValue
-        do { message = try JSONDecoder().decode(GatewayJSONValue.self, from: request.body) }
+        let message: JSONValue
+        do { message = try JSONDecoder().decode(JSONValue.self, from: request.body) }
         catch { throw MCPMalformedJSON() }
         guard request.body.count <= WovenMCPServer.maximumRequestBytes(for: message) else {
             throw LibraryAPIError(code: "too_large", message: "The MCP request exceeds its size limit.")

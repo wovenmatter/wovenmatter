@@ -4,7 +4,7 @@ import WovenMatterCore
 
 /// What one Mac knows about a Linux host it manages without SSH.
 struct SharedHostState: Codable, Equatable, Sendable {
-    var status: GatewayJSONValue?
+    var status: JSONValue?
     var logs: String?
     var error: String?
     var progress: String?

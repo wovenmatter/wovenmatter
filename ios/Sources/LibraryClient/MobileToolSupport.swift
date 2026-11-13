@@ -76,9 +76,9 @@ public enum MobileToolSupport {
     let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
     return SHA256.hash(data: try encoder.encode(note)).hexString
   }
-  public static func value<T: Encodable>(_ value: T) throws -> GatewayJSONValue {
+  public static func value<T: Encodable>(_ value: T) throws -> JSONValue {
     let encoder = JSONEncoder(); encoder.dateEncodingStrategy = .iso8601
-    return try JSONDecoder().decode(GatewayJSONValue.self, from: encoder.encode(value))
+    return try JSONDecoder().decode(JSONValue.self, from: encoder.encode(value))
   }
   public static func date(_ string: String) throws -> Date {
     let parser = ISO8601DateFormatter()
@@ -87,13 +87,13 @@ public enum MobileToolSupport {
     guard let date = parser.date(from: string) else { throw WorkspaceToolError.invalid("Use an ISO8601 date with a time zone.") }
     return date
   }
-  public static func page(_ rows: [GatewayJSONValue], command: WovenMatterToolCommand, offsetKey: String = "after") throws -> GatewayJSONValue {
+  public static func page(_ rows: [JSONValue], command: WovenMatterToolCommand, offsetKey: String = "after") throws -> JSONValue {
     let offset = try command.integer(offsetKey, default: 0, range: 0...Int.max)
     let limit = try command.integer("limit", default: 100, range: 1...200)
     let page = Array(rows.dropFirst(offset).prefix(limit)), end = min(rows.count, offset > rows.count ? rows.count : offset + page.count)
     return .object(["rows": .array(page), "hasMore": .bool(end < rows.count), "nextCursor": end < rows.count ? .string(String(end)) : .null])
   }
-  public static func chunk(_ text: String, command: WovenMatterToolCommand) throws -> [String: GatewayJSONValue] {
+  public static func chunk(_ text: String, command: WovenMatterToolCommand) throws -> [String: JSONValue] {
     let offset = min(text.count, try command.integer("offset", default: 0, range: 0...Int.max))
     let count = try command.integer("characters", default: 65_536, range: 1...65_536)
     let start = text.index(text.startIndex, offsetBy: offset), end = text.index(start, offsetBy: min(count, text.distance(from: start, to: text.endIndex)))

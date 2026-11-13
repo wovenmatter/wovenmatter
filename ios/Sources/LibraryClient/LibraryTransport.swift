@@ -25,7 +25,7 @@ public struct MobileCredential: Codable, Sendable, Equatable {
 }
 
 public protocol LibraryTransport: Sendable {
-  func executeMCP(_ message: GatewayJSONValue, conversationID: String, enabledGroups: [WorkspaceToolGroup], contextID: String?) async throws -> GatewayJSONValue
+  func executeMCP(_ message: JSONValue, conversationID: String, enabledGroups: [WorkspaceToolGroup], contextID: String?) async throws -> JSONValue
   func readWorkspace(_ request: LibraryWorkspaceRead) async throws -> LibraryWorkspaceResult
   func workspaceIdentity() async throws -> String
   func snapshot() async throws -> LibrarySnapshot
@@ -44,7 +44,7 @@ public protocol LibraryTransport: Sendable {
 }
 
 public extension LibraryTransport {
-  func executeMCP(_ message: GatewayJSONValue, conversationID: String, enabledGroups: [WorkspaceToolGroup], contextID: String? = nil) async throws -> GatewayJSONValue { throw MobileConnectionError.offline }
+  func executeMCP(_ message: JSONValue, conversationID: String, enabledGroups: [WorkspaceToolGroup], contextID: String? = nil) async throws -> JSONValue { throw MobileConnectionError.offline }
   func readWorkspace(_ request: LibraryWorkspaceRead) async throws -> LibraryWorkspaceResult { throw MobileConnectionError.offline }
   func linkedData(_ id: String, tableID: String?) async throws -> LinkedDataPreview { throw MobileConnectionError.offline }
   func transcript(_ id: String, before: String) async throws -> LibraryTranscript { throw MobileConnectionError.http(400, "This connection does not support older transcript pages.") }
@@ -164,7 +164,7 @@ public final class HTTPSLibraryTransport: LibraryTransport, MobilePairingRequest
       hostDeviceID: result.hostDeviceID.flatMap { MemberRequestSignature.isDeviceID($0.lowercased()) ? $0 : nil },
       libraryIDs: result.libraryIDs)
   }
-  public func executeMCP(_ message: GatewayJSONValue, conversationID: String, enabledGroups: [WorkspaceToolGroup], contextID: String? = nil) async throws -> GatewayJSONValue {
+  public func executeMCP(_ message: JSONValue, conversationID: String, enabledGroups: [WorkspaceToolGroup], contextID: String? = nil) async throws -> JSONValue {
     guard UUID(uuidString: conversationID) != nil else { throw MobileConnectionError.invalidResponse }
     var headers = ["X-Woven-Conversation-ID": conversationID,
       "X-Woven-Enabled-Groups": Set(enabledGroups).sorted { $0.rawValue < $1.rawValue }.map(\.rawValue).joined(separator: ","),
@@ -172,12 +172,12 @@ public final class HTTPSLibraryTransport: LibraryTransport, MobilePairingRequest
     if let contextID { headers["X-Woven-Context-ID"] = contextID }
     let initializationHeaders = headers
     let negotiated = try await mcpConnections.connect(conversationID) { [self] in
-      let initialize: GatewayJSONValue = .object(["jsonrpc": .string("2.0"), "id": .string(UUID().uuidString.lowercased()),
+      let initialize: JSONValue = .object(["jsonrpc": .string("2.0"), "id": .string(UUID().uuidString.lowercased()),
         "method": .string("initialize"), "params": .object(["protocolVersion": .string(WovenMCPServer.protocolVersion),
           "capabilities": .object([:]), "clientInfo": .object(["name": .string("woven-ios"), "version": .string("1.0.0")])])])
       let (bytes, response) = try await data("mcp", method: "POST", body: JSONEncoder().encode(initialize),
         maximumBytes: 1_048_576, timeout: 30, headers: initializationHeaders)
-      let reply = try JSONDecoder().decode(GatewayJSONValue.self, from: bytes)
+      let reply = try JSONDecoder().decode(JSONValue.self, from: bytes)
       guard let version = reply.objectValue?["result"]?.objectValue?["protocolVersion"]?.stringValue,
             WovenMCPServer.supportedProtocolVersions.contains(version) else { throw MobileConnectionError.versionMismatch }
       let sessionID = response.value(forHTTPHeaderField: "MCP-Session-Id")
@@ -185,7 +185,7 @@ public final class HTTPSLibraryTransport: LibraryTransport, MobilePairingRequest
       var notificationHeaders = initializationHeaders
       notificationHeaders["MCP-Protocol-Version"] = version
       if let sessionID { notificationHeaders["MCP-Session-Id"] = sessionID }
-      let initialized: GatewayJSONValue = .object(["jsonrpc": .string("2.0"), "method": .string("notifications/initialized")])
+      let initialized: JSONValue = .object(["jsonrpc": .string("2.0"), "method": .string("notifications/initialized")])
       _ = try await data("mcp", method: "POST", body: JSONEncoder().encode(initialized),
         maximumBytes: 1_048_576, timeout: 30, headers: notificationHeaders)
       return MCPSessionCache.Session(protocolVersion: version, id: sessionID)
@@ -194,7 +194,7 @@ public final class HTTPSLibraryTransport: LibraryTransport, MobilePairingRequest
     if let sessionID = negotiated.id { headers["MCP-Session-Id"] = sessionID }
     let (responseData, _) = try await data("mcp", method: "POST", body: JSONEncoder().encode(message),
       maximumBytes: 80 * 1_024 * 1_024, timeout: 24 * 60 * 60, headers: headers)
-    return try JSONDecoder().decode(GatewayJSONValue.self, from: responseData)
+    return try JSONDecoder().decode(JSONValue.self, from: responseData)
   }
   public func readWorkspace(_ value: LibraryWorkspaceRead) async throws -> LibraryWorkspaceResult { try await request("v1/workspace-read", method: "POST", body: JSONEncoder().encode(value)) }
   public func workspaceIdentity() async throws -> String {

@@ -48,56 +48,69 @@ extension WorkspaceDatabaseConnection {
 
   func migrateAgentTools() throws {
     try transaction {
+      // A source (`source_id`, `created_by`, `coordinator_id`) is any MCP
+      // caller: a conversation or an app-wide caller such as a bot. A target
+      // is always a conversation.
       try executeUnlocked("""
+        CREATE TABLE IF NOT EXISTS workspace_mcp_callers(id TEXT PRIMARY KEY, display_name TEXT, machine_id TEXT,
+          revoked INTEGER NOT NULL DEFAULT 0);
+        CREATE TABLE IF NOT EXISTS workspace_mcp_bot_machines(machine_id TEXT PRIMARY KEY, active INTEGER NOT NULL);
         CREATE TABLE IF NOT EXISTS workspace_input_contexts(
-          id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL REFERENCES dashboard_conversations(id),
+          id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL REFERENCES conversations(id),
           note_id TEXT, created_at TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS workspace_tool_mutations(
-          source_id TEXT NOT NULL REFERENCES dashboard_conversations(id), request_id TEXT NOT NULL,
+          source_id TEXT NOT NULL REFERENCES workspace_mcp_callers(id), request_id TEXT NOT NULL,
           operation TEXT NOT NULL, input_digest TEXT NOT NULL, result_json TEXT NOT NULL,
           PRIMARY KEY(source_id,request_id));
         CREATE TABLE IF NOT EXISTS workspace_tool_settings(id INTEGER PRIMARY KEY CHECK(id=1), value TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS workspace_opencode_input_context(
           id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL, visible_text TEXT NOT NULL, delivery_id TEXT);
-        CREATE TABLE IF NOT EXISTS workspace_tool_schema(version INTEGER PRIMARY KEY);
         CREATE TABLE IF NOT EXISTS workspace_automation_requests(
-          source_id TEXT NOT NULL REFERENCES dashboard_conversations(id), request_id TEXT NOT NULL,
+          source_id TEXT NOT NULL REFERENCES workspace_mcp_callers(id), request_id TEXT NOT NULL,
           input_digest TEXT NOT NULL, PRIMARY KEY(source_id,request_id));
         CREATE TABLE IF NOT EXISTS workspace_automation_cancellations(
-          source_id TEXT NOT NULL REFERENCES dashboard_conversations(id), request_id TEXT NOT NULL,
+          source_id TEXT NOT NULL REFERENCES workspace_mcp_callers(id), request_id TEXT NOT NULL,
           PRIMARY KEY(source_id,request_id));
         CREATE TABLE IF NOT EXISTS workspace_session_tools(
-          session_id TEXT PRIMARY KEY REFERENCES dashboard_conversations(id), enabled_json TEXT NOT NULL,
+          session_id TEXT PRIMARY KEY REFERENCES conversations(id), enabled_json TEXT NOT NULL,
           defaults_applied INTEGER NOT NULL DEFAULT 0);
         CREATE TABLE IF NOT EXISTS workspace_executor_sessions(
-          session_id TEXT PRIMARY KEY REFERENCES dashboard_conversations(id), profiles_json TEXT NOT NULL);
+          session_id TEXT PRIMARY KEY REFERENCES conversations(id), profiles_json TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS workspace_session_grants(
-          source_id TEXT NOT NULL REFERENCES dashboard_conversations(id),
-          target_id TEXT NOT NULL REFERENCES dashboard_conversations(id),
+          source_id TEXT NOT NULL REFERENCES workspace_mcp_callers(id),
+          target_id TEXT NOT NULL REFERENCES conversations(id),
           kind TEXT NOT NULL CHECK(kind IN ('attachment','approved')),
           PRIMARY KEY(source_id,target_id,kind));
         CREATE TABLE IF NOT EXISTS workspace_session_relationships(
-          session_id TEXT PRIMARY KEY REFERENCES dashboard_conversations(id),
-          created_by TEXT REFERENCES dashboard_conversations(id),
-          coordinator_id TEXT REFERENCES dashboard_conversations(id),
+          session_id TEXT PRIMARY KEY REFERENCES conversations(id),
+          created_by TEXT REFERENCES workspace_mcp_callers(id),
+          coordinator_id TEXT REFERENCES workspace_mcp_callers(id),
           purpose TEXT, notifications_enabled INTEGER NOT NULL DEFAULT 1,
+          coordination_epoch TEXT, coordination_since TEXT,
           CHECK(session_id != created_by), CHECK(session_id != coordinator_id));
-        CREATE INDEX IF NOT EXISTS workspace_coordinator ON workspace_session_relationships(coordinator_id);
+        CREATE INDEX IF NOT EXISTS workspace_session_relationships_coordinator ON workspace_session_relationships(coordinator_id);
+        -- A timer's target is a conversation or a bot principal (a bot's own
+        -- schedule), so it references neither. Timers of a missing conversation
+        -- are never listed or fired.
         CREATE TABLE IF NOT EXISTS workspace_session_timers(
           id TEXT PRIMARY KEY, session_id TEXT NOT NULL,
           instruction TEXT NOT NULL, next_fire_at REAL NOT NULL, interval_seconds REAL,
-          is_paused INTEGER NOT NULL DEFAULT 0, pending_delivery_id TEXT);
-        CREATE INDEX IF NOT EXISTS workspace_timer_due ON workspace_session_timers(is_paused,next_fire_at);
+          is_paused INTEGER NOT NULL DEFAULT 0, pending_delivery_id TEXT, outside_mcp INTEGER NOT NULL DEFAULT 0);
+        CREATE INDEX IF NOT EXISTS workspace_session_timers_due ON workspace_session_timers(is_paused,next_fire_at);
         CREATE TABLE IF NOT EXISTS workspace_coordination_access_requests(
-          id TEXT PRIMARY KEY, source_id TEXT NOT NULL REFERENCES dashboard_conversations(id),
-          target_id TEXT NOT NULL REFERENCES dashboard_conversations(id), purpose TEXT NOT NULL,
+          id TEXT PRIMARY KEY, source_id TEXT NOT NULL REFERENCES workspace_mcp_callers(id),
+          target_id TEXT NOT NULL REFERENCES conversations(id), purpose TEXT NOT NULL,
           notifications INTEGER NOT NULL, state TEXT NOT NULL, error TEXT,
-          created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')));
-        CREATE INDEX IF NOT EXISTS workspace_access_requests_state ON workspace_coordination_access_requests(state,created_at);
+          created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')), coordination_epoch TEXT);
+        CREATE INDEX IF NOT EXISTS workspace_coordination_access_requests_state ON workspace_coordination_access_requests(state,created_at);
+        CREATE TABLE IF NOT EXISTS workspace_coordination_observations(
+          epoch TEXT NOT NULL, event_key TEXT NOT NULL, PRIMARY KEY(epoch,event_key));
         CREATE TABLE IF NOT EXISTS workspace_session_creations(
-          id TEXT PRIMARY KEY, source_id TEXT NOT NULL REFERENCES dashboard_conversations(id),
+          id TEXT PRIMARY KEY, source_id TEXT NOT NULL REFERENCES workspace_mcp_callers(id),
           target_id TEXT NOT NULL UNIQUE, arguments_json TEXT NOT NULL,
-          purpose TEXT NOT NULL, managed INTEGER NOT NULL, status TEXT NOT NULL DEFAULT 'planned');
+          purpose TEXT NOT NULL, managed INTEGER NOT NULL, status TEXT NOT NULL DEFAULT 'planned',
+          configuration_json TEXT, configuration_applied INTEGER NOT NULL DEFAULT 0);
+        CREATE UNIQUE INDEX IF NOT EXISTS workspace_session_deliveries_event ON workspace_session_deliveries(event_key) WHERE event_key IS NOT NULL;
         """)
       for table in [ToolReceiptTable.mutations, .deliveries, .creations, .coordination] {
         let columns = table == .mutations ? "source_id,request_id COLLATE NOCASE" : "id COLLATE NOCASE"
@@ -105,105 +118,15 @@ extension WorkspaceDatabaseConnection {
       }
       try toolsExecuteUnlocked("INSERT OR IGNORE INTO workspace_tool_settings(id,value) VALUES(1,?)",
                                [try toolsJSON(WorkspaceToolSettings())])
-      let toolColumns = Set(try historyRowsUnlocked("PRAGMA table_info(workspace_session_tools)", values: []).compactMap { $0.objectValue?["name"]?.stringValue })
-      if !toolColumns.contains("defaults_applied") {
-        // Existing sessions have already chosen their tools. Only new insertions
-        // may consume captured defaults after this migration.
-        try executeUnlocked("ALTER TABLE workspace_session_tools ADD COLUMN defaults_applied INTEGER NOT NULL DEFAULT 1")
-      }
-      let creationColumns = Set(try historyRowsUnlocked("PRAGMA table_info(workspace_session_creations)", values: []).compactMap { $0.objectValue?["name"]?.stringValue })
-      if !creationColumns.contains("configuration_json") {
-        try executeUnlocked("ALTER TABLE workspace_session_creations ADD COLUMN configuration_json TEXT")
-      }
-      if !creationColumns.contains("configuration_applied") {
-        try executeUnlocked("ALTER TABLE workspace_session_creations ADD COLUMN configuration_applied INTEGER NOT NULL DEFAULT 0")
-      }
-      let accessColumns = Set(try historyRowsUnlocked("PRAGMA table_info(workspace_coordination_access_requests)", values: [])
-        .compactMap { $0.objectValue?["name"]?.stringValue })
-      if !accessColumns.contains("coordination_epoch") {
-        try executeUnlocked("ALTER TABLE workspace_coordination_access_requests ADD COLUMN coordination_epoch TEXT")
-      }
-      let relationshipColumns = Set(try historyRowsUnlocked("PRAGMA table_info(workspace_session_relationships)", values: []).compactMap { $0.objectValue?["name"]?.stringValue })
-      for column in ["coordination_epoch", "coordination_since"] where !relationshipColumns.contains(column) {
-        try executeUnlocked("ALTER TABLE workspace_session_relationships ADD COLUMN \(column) TEXT")
-      }
+      // Each new session takes a snapshot of the tool and executor defaults.
       try executeUnlocked("""
-        CREATE TABLE IF NOT EXISTS workspace_coordination_observations(
-          epoch TEXT NOT NULL, event_key TEXT NOT NULL, PRIMARY KEY(epoch,event_key));
-        UPDATE workspace_session_relationships SET coordination_epoch=lower(hex(randomblob(16))),
-          coordination_since=strftime('%Y-%m-%dT%H:%M:%fZ','now')
-          WHERE coordinator_id IS NOT NULL AND coordination_epoch IS NULL;
-        """)
-      let columns = Set(try historyRowsUnlocked("PRAGMA table_info(workspace_session_deliveries)", values: []).compactMap { $0.objectValue?["name"]?.stringValue })
-      for (name, type) in [("kind", "TEXT NOT NULL DEFAULT 'message'"), ("purpose", "TEXT"),
-                           ("target_title", "TEXT"), ("target_harness", "TEXT"), ("target_model", "TEXT"), ("event_key", "TEXT"),
-                           ("transport_started", "INTEGER NOT NULL DEFAULT 1"), ("retry_after", "REAL"),
-                           ("native_command", "TEXT"), ("failure_code", "TEXT"),
-                           ("failure_reason", "TEXT")] where !columns.contains(name) {
-        try executeUnlocked("ALTER TABLE workspace_session_deliveries ADD COLUMN \(name) \(type)")
-      }
-      try executeUnlocked("CREATE UNIQUE INDEX IF NOT EXISTS workspace_delivery_event ON workspace_session_deliveries(event_key) WHERE event_key IS NOT NULL")
-      if try historyRowsUnlocked("SELECT 1 FROM workspace_tool_schema WHERE version=1", values: []).isEmpty {
-        try executeUnlocked("""
-          INSERT OR IGNORE INTO workspace_session_grants(source_id,target_id,kind)
-            SELECT r.conversation_id,r.resource_id,'attachment' FROM dashboard_message_references r
-            JOIN dashboard_conversations source ON source.id=r.conversation_id
-            JOIN dashboard_conversations target ON target.id=r.resource_id
-            WHERE r.resource_type='conversation' AND r.source='attached'
-              AND source.deleted_at IS NULL AND target.deleted_at IS NULL;
-          INSERT INTO workspace_tool_schema(version) VALUES(1);
-          """)
-      }
-      // Browser Use is default-on, including existing installs. Computer Use
-      // is never introduced by migration and always requires the user's choice.
-      if try historyRowsUnlocked("SELECT 1 FROM workspace_tool_schema WHERE version=2", values: []).isEmpty {
-        var settings = try toolSettingsUnlocked()
-        settings.enabledByDefault.insert(.browser)
-        try toolsExecuteUnlocked("UPDATE workspace_tool_settings SET value=? WHERE id=1", [try toolsJSON(settings)])
-        for row in try historyRowsUnlocked("SELECT session_id,enabled_json FROM workspace_session_tools", values: []) {
-          guard let id = row.objectValue?["session_id"]?.stringValue,
-                let json = row.objectValue?["enabled_json"]?.stringValue else { continue }
-          var groups = try JSONDecoder().decode(Set<WorkspaceToolGroup>.self, from: Data(json.utf8))
-          groups.insert(.browser)
-          try toolsExecuteUnlocked("UPDATE workspace_session_tools SET enabled_json=? WHERE session_id=?", [try toolsJSON(groups), id])
-        }
-        try executeUnlocked("INSERT INTO workspace_tool_schema(version) VALUES(2)")
-      }
-      // Existing and newly imported sessions take a snapshot of the defaults.
-      try executeUnlocked("""
-        INSERT OR IGNORE INTO workspace_session_tools(session_id,enabled_json,defaults_applied)
-          SELECT id,(SELECT json_extract(value,'$.enabledByDefault') FROM workspace_tool_settings WHERE id=1),1
-          FROM dashboard_conversations;
-        INSERT OR IGNORE INTO workspace_executor_sessions(session_id,profiles_json)
-          SELECT id,'[]' FROM dashboard_conversations;
-        DROP TRIGGER IF EXISTS workspace_session_tool_defaults;
-        CREATE TRIGGER workspace_session_tool_defaults AFTER INSERT ON dashboard_conversations BEGIN
+        CREATE TRIGGER IF NOT EXISTS conversations_session_tools_insert AFTER INSERT ON conversations BEGIN
           INSERT OR IGNORE INTO workspace_session_tools(session_id,enabled_json,defaults_applied)
             VALUES(new.id,(SELECT json_extract(value,'$.enabledByDefault') FROM workspace_tool_settings WHERE id=1),0);
           INSERT OR IGNORE INTO workspace_executor_sessions(session_id,profiles_json)
             VALUES(new.id,COALESCE((SELECT json_extract(value,'$.executor.defaultProfiles') FROM workspace_tool_settings WHERE id=1),'[]'));
         END;
         """)
-      let timerColumns = Set(try historyRowsUnlocked("PRAGMA table_info(workspace_session_timers)", values: []).compactMap { $0.objectValue?["name"]?.stringValue })
-      if !timerColumns.contains("outside_mcp") {
-        try executeUnlocked("ALTER TABLE workspace_session_timers ADD COLUMN outside_mcp INTEGER NOT NULL DEFAULT 0")
-      }
-      // A timer's target is a conversation or a bot principal (a bot's own
-      // schedule), so the table no longer references conversations. Timers of a
-      // missing conversation are never listed or fired.
-      if !(try historyRowsUnlocked("PRAGMA foreign_key_list(workspace_session_timers)", values: [])).isEmpty {
-        try executeUnlocked("""
-          CREATE TABLE workspace_session_timers_v2(
-            id TEXT PRIMARY KEY, session_id TEXT NOT NULL,
-            instruction TEXT NOT NULL, next_fire_at REAL NOT NULL, interval_seconds REAL,
-            is_paused INTEGER NOT NULL DEFAULT 0, pending_delivery_id TEXT, outside_mcp INTEGER NOT NULL DEFAULT 0);
-          INSERT INTO workspace_session_timers_v2(id,session_id,instruction,next_fire_at,interval_seconds,is_paused,pending_delivery_id,outside_mcp)
-            SELECT id,session_id,instruction,next_fire_at,interval_seconds,is_paused,pending_delivery_id,outside_mcp FROM workspace_session_timers;
-          DROP TABLE workspace_session_timers;
-          ALTER TABLE workspace_session_timers_v2 RENAME TO workspace_session_timers;
-          CREATE INDEX IF NOT EXISTS workspace_timer_due ON workspace_session_timers(is_paused,next_fire_at);
-          """)
-      }
       try migrateMCPCallersUnlocked()
     }
   }
@@ -331,7 +254,7 @@ extension WorkspaceDatabaseConnection {
       }
       return
     }
-    guard !(try historyRowsUnlocked("SELECT id FROM dashboard_conversations WHERE id=? AND deleted_at IS NULL", values: [id])).isEmpty else {
+    guard !(try historyRowsUnlocked("SELECT id FROM conversations WHERE id=? AND deleted_at IS NULL", values: [id])).isEmpty else {
       throw WorkspaceToolError.invalid("The session is unavailable.")
     }
   }
@@ -356,7 +279,7 @@ extension WorkspaceDatabaseConnection {
   }
 
   func canReadTranscriptUnlocked(sourceID: String, targetID: String, enabled: Set<WorkspaceToolGroup>) throws -> Bool {
-    guard !(try historyRowsUnlocked("SELECT 1 FROM dashboard_conversations WHERE id=? AND deleted_at IS NULL", values: [targetID])).isEmpty else { return false }
+    guard !(try historyRowsUnlocked("SELECT 1 FROM conversations WHERE id=? AND deleted_at IS NULL", values: [targetID])).isEmpty else { return false }
     if sourceID == targetID || enabled.contains(.history) { return true }
     if !(try historyRowsUnlocked("SELECT 1 FROM workspace_session_grants WHERE source_id=? AND target_id=? AND kind='attachment'", values: [sourceID, targetID])).isEmpty { return true }
     return try enabled.contains(.sessions) && relationshipUnlocked(targetID).coordinatorID == sourceID
@@ -377,7 +300,7 @@ extension WorkspaceDatabaseConnection {
     return rows.first.map(relationshipFromRow) ?? WorkspaceSessionRelationship(sessionID: id)
   }
 
-  private func relationshipFromRow(_ value: GatewayJSONValue) -> WorkspaceSessionRelationship {
+  private func relationshipFromRow(_ value: JSONValue) -> WorkspaceSessionRelationship {
     let r = value.objectValue ?? [:]
     return WorkspaceSessionRelationship(sessionID: r["session_id"]?.stringValue ?? "",
       createdBy: r["created_by"]?.stringValue, coordinatorID: r["coordinator_id"]?.stringValue,
@@ -406,7 +329,7 @@ extension WorkspaceDatabaseConnection {
     let rows = try historyRowsUnlocked("""
       SELECT count(*) AS n FROM (
         SELECT r.session_id AS id FROM workspace_session_relationships r
-          JOIN dashboard_conversations c ON c.id=r.session_id WHERE r.coordinator_id=? AND c.deleted_at IS NULL
+          JOIN conversations c ON c.id=r.session_id WHERE r.coordinator_id=? AND c.deleted_at IS NULL
         UNION SELECT target_id AS id FROM workspace_session_creations WHERE source_id=? AND managed=1 AND status='planned'
       ) WHERE id != coalesce(?,'')
       """, values: [sourceID, sourceID, targetID])

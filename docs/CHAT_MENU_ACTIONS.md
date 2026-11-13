@@ -10,7 +10,7 @@ Right-click a chat in either sidebar layout or in navigation Recents:
 - **Export messages** saves the complete retained transcript as Markdown, with
   roles, timestamps, attachment metadata, and note/chat reference snapshots.
 - **Export full run** saves JSON containing conversation metadata, all retained
-  messages and runs, normalized activities, run events, trace events, and recorded
+  messages and runs, normalized activities, run activity rows, and recorded
   history events. It includes older messages beyond the visible history page.
 - **Move to Trash** hides the chat without deleting its messages. Stop active work
   first. Trash checks active runs again when committing and shares the message

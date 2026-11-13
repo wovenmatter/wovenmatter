@@ -18,50 +18,27 @@ extension WorkspaceDatabaseConnection {
   /// also cover native records and immutable activity revisions.
   func createNativeRunArchive() throws {
     try transaction {
-      let columns = Set(try historyRowsUnlocked("PRAGMA table_info(workspace_history_events)", values: [])
-        .compactMap { $0.objectValue?["name"]?.stringValue })
-      for column in ["source_id", "native_record_id", "native_revision_id", "content_mode", "text_content", "projection_json"] where !columns.contains(column) {
-        try executeUnlocked("ALTER TABLE workspace_history_events ADD COLUMN \(column) TEXT")
-      }
-      try executeUnlocked("""
-        CREATE INDEX IF NOT EXISTS history_native_record ON workspace_history_events(harness,source_id,native_session_id,native_record_id,sequence);
-        """)
-      try executeUnlocked("""
-        DROP TRIGGER IF EXISTS history_search_insert;
-        DROP TRIGGER IF EXISTS history_search_delete;
-        """)
-      try executeUnlocked("""
-        CREATE TRIGGER IF NOT EXISTS history_search_insert AFTER INSERT ON workspace_history_events
-          WHEN new.kind NOT LIKE 'cli.%' BEGIN
-          INSERT INTO workspace_history_search(rowid,payload)
-            VALUES(new.sequence,new.payload||' '||coalesce(new.text_content,'')||' '||coalesce(new.projection_json,''));
-        END;
-        CREATE TRIGGER IF NOT EXISTS history_search_delete AFTER DELETE ON workspace_history_events
-          WHEN old.kind NOT LIKE 'cli.%' BEGIN
-          INSERT INTO workspace_history_search(workspace_history_search,rowid,payload)
-            VALUES('delete',old.sequence,old.payload||' '||coalesce(old.text_content,'')||' '||coalesce(old.projection_json,''));
-        END;
-        """)
       for (table, kind, textColumn) in [
-        ("dashboard_message_attachments", "attachment", "file_name"),
-        ("dashboard_message_references", "reference", "title_snapshot")
+        ("message_attachments", "attachment", "file_name"),
+        ("message_references", "reference", "title_snapshot")
       ] {
+        // Sorted, so the trigger is the same whatever the columns' order.
         let names = try historyRowsUnlocked("PRAGMA table_info(\(table))", values: [])
-          .compactMap { $0.objectValue?["name"]?.stringValue }
+          .compactMap { $0.objectValue?["name"]?.stringValue }.sorted()
         func object(_ alias: String) -> String {
           "json_object(" + names.map {
             "'\($0.replacingOccurrences(of: "'", with: "''"))',\(alias).\"\($0.replacingOccurrences(of: "\"", with: "\"\""))\""
           }.joined(separator: ",") + ")"
         }
         let newObject = object("new")
-        let conversation = "coalesce(nullif(new.conversation_id,''),(SELECT conversation_id FROM dashboard_messages WHERE id=new.message_id))"
+        let conversation = "coalesce(nullif(new.conversation_id,''),(SELECT conversation_id FROM messages WHERE id=new.message_id))"
         for operation in ["INSERT", "UPDATE"] {
           let condition = operation == "UPDATE" ? "WHEN \(object("old")) IS NOT \(newObject)" : ""
           try executeUnlocked("""
-            CREATE TRIGGER IF NOT EXISTS history_\(kind)_\(operation.lowercased()) AFTER \(operation) ON \(table) \(condition) BEGIN
+            CREATE TRIGGER IF NOT EXISTS \(table)_history_\(operation.lowercased()) AFTER \(operation) ON \(table) \(condition) BEGIN
               INSERT INTO workspace_history_events(id,conversation_id,run_id,harness,kind,payload,source_id,native_session_id,native_record_id,content_mode,text_content)
-              VALUES(lower(hex(randomblob(16))),\(conversation),(SELECT run_id FROM dashboard_messages WHERE id=new.message_id),
-                coalesce((SELECT runtime_kind FROM desktop_local_acp_sessions WHERE conversation_id=\(conversation)),'unknown'),
+              VALUES(lower(hex(randomblob(16))),\(conversation),(SELECT run_id FROM messages WHERE id=new.message_id),
+                coalesce((SELECT runtime_kind FROM harness_sessions WHERE conversation_id=\(conversation)),'unknown'),
                 '\(kind).snapshot',woven_history_redact(\(newObject)),'woven:\(kind)',\(conversation),new.id,'snapshot',woven_history_redact(new.\(textColumn)));
             END;
             """)
@@ -87,12 +64,11 @@ extension WorkspaceDatabaseConnection {
           ? "woven_text_substr(json_extract(new.content,'$.content'),woven_text_length(json_extract(old.content,'$.content'))+1)"
           : "NULL"
         let savedProjection = "CASE WHEN \(incremental) THEN json_set(new.content,'$.content',\(delta)) ELSE new.content END"
-        try executeUnlocked("DROP TRIGGER IF EXISTS history_activity_\(suffix)")
         try executeUnlocked("""
-          CREATE TRIGGER IF NOT EXISTS history_activity_\(suffix) AFTER \(operation) ON dashboard_run_events \(condition) BEGIN
+          CREATE TRIGGER IF NOT EXISTS run_activities_history_\(suffix) AFTER \(operation) ON run_activities \(condition) BEGIN
             INSERT INTO workspace_history_events(id,conversation_id,run_id,harness,kind,payload,source_id,native_session_id,native_record_id,content_mode,text_content,projection_json)
             VALUES(lower(hex(randomblob(16))),new.conversation_id,new.run_id,
-              coalesce((SELECT runtime_kind FROM desktop_local_acp_sessions WHERE conversation_id=new.conversation_id),'unknown'),
+              coalesce((SELECT runtime_kind FROM harness_sessions WHERE conversation_id=new.conversation_id),'unknown'),
               CASE WHEN \(incremental) THEN 'activity.delta' ELSE 'activity.snapshot' END,
               woven_history_redact(\(savedProjection)),'woven:activity',new.conversation_id,new.id,
               CASE WHEN \(incremental) THEN 'delta' ELSE 'snapshot' END,
@@ -100,27 +76,16 @@ extension WorkspaceDatabaseConnection {
               woven_history_redact(\(savedProjection)));
           END;
           """)
-        let traceCondition = operation == "UPDATE" ? "WHEN old.raw_event_json IS NOT new.raw_event_json OR old.stream_event_json IS NOT new.stream_event_json" : ""
-        try executeUnlocked("DROP TRIGGER IF EXISTS history_trace_\(suffix)")
-        try executeUnlocked("""
-          CREATE TRIGGER IF NOT EXISTS history_trace_\(suffix) AFTER \(operation) ON dashboard_run_trace_events \(traceCondition) BEGIN
-            INSERT INTO workspace_history_events(id,conversation_id,run_id,agent_id,harness,kind,payload,source_id,native_session_id,native_record_id,content_mode,text_content,projection_json)
-            VALUES(lower(hex(randomblob(16))),new.conversation_id,new.run_id,(SELECT agent_id FROM dashboard_runs WHERE id=new.run_id),
-              coalesce((SELECT runtime_kind FROM desktop_local_acp_sessions WHERE conversation_id=new.conversation_id),'unknown'),'trace.snapshot',
-              woven_history_redact(new.raw_event_json),'woven:trace',new.openclaw_session_key,new.id,'snapshot',
-              woven_history_redact(new.content),woven_history_redact(new.stream_event_json));
-          END;
-          """)
       }
       try executeUnlocked("""
-        CREATE TRIGGER IF NOT EXISTS history_activity_final AFTER UPDATE ON dashboard_runs
+        CREATE TRIGGER IF NOT EXISTS runs_final_activity_history_update AFTER UPDATE ON runs
           WHEN new.status IN ('completed','failed','cancelled','interrupted') AND old.status IS NOT new.status BEGIN
           INSERT INTO workspace_history_events(id,conversation_id,run_id,harness,kind,payload,source_id,native_session_id,native_record_id,content_mode,text_content,projection_json)
           SELECT lower(hex(randomblob(16))),e.conversation_id,e.run_id,
-            coalesce((SELECT runtime_kind FROM desktop_local_acp_sessions WHERE conversation_id=e.conversation_id),'unknown'),
+            coalesce((SELECT runtime_kind FROM harness_sessions WHERE conversation_id=e.conversation_id),'unknown'),
             'activity.final',woven_history_redact(e.content),'woven:activity',e.conversation_id,e.id,'snapshot',
             woven_history_redact(json_extract(e.content,'$.content')),woven_history_redact(e.content)
-          FROM dashboard_run_events e WHERE e.run_id=new.id
+          FROM run_activities e WHERE e.run_id=new.id
             AND CASE WHEN json_valid(e.content) THEN json_extract(e.content,'$.contentIsDelta')=1 ELSE 0 END;
         END;
         """)
@@ -141,7 +106,7 @@ extension WorkspaceDatabaseConnection {
       }
       var mappedRunID: String?
       if let proposed = record.runID ?? runID {
-        if let target = try historyRowsUnlocked("SELECT conversation_id FROM dashboard_runs WHERE id=?", values: [proposed]).first?.objectValue?["conversation_id"]?.stringValue {
+        if let target = try historyRowsUnlocked("SELECT conversation_id FROM runs WHERE id=?", values: [proposed]).first?.objectValue?["conversation_id"]?.stringValue {
           guard conversationID == nil || target == conversationID else { throw WorkspaceDatabaseError.open("Native archive run belongs to another conversation") }
           mappedRunID = proposed
         } else if let pendingRunID, record.runID == pendingRunID {

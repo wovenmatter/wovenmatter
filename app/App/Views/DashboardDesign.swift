@@ -17,7 +17,7 @@ enum DashboardNewChatSource: String, CaseIterable, Identifiable {
 }
 
 /// Left-rail agent groupings for Woven Matter's product terminology.
-/// Persistence still uses `AgentBucket` / governing-plane raw values.
+/// Each agent's `AgentBucket` follows its execution location.
 enum DashboardAgentSidebarGroup: String, CaseIterable, Identifiable, Hashable, Sendable {
     case pinned
     case localWorkspace
@@ -146,7 +146,7 @@ struct DashboardRemoteWorkspaceSidebarLink: Equatable, Identifiable {
 enum DashboardRemoteWorkspaceSidebarModel {
     /// Membership is persisted separately from transient connection/readiness checks.
     static func agents(_ saved: [WorkspaceAgent], in workspaceID: UUID) -> [WorkspaceAgent] {
-        saved.filter { $0.governingPlane == .remoteWorkspace && $0.runtimeDeviceID == workspaceID }
+        saved.filter { $0.executionLocation == .remote && $0.runtimeDeviceID == workspaceID }
     }
 
     static func links(

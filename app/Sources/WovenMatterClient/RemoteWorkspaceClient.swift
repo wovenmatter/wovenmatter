@@ -882,16 +882,16 @@ public struct RemoteTaskGatewayResult: Codable, Equatable, Sendable {
     public let id: String
     public let run: WorkspaceCalendarRun
     public let nativeSessionID: String?
-    public let updates: [GatewayJSONValue]
+    public let updates: [JSONValue]
     public let updateOffset: Int
     public let complete: Bool
-    public let result: GatewayJSONValue?
+    public let result: JSONValue?
     public let error: String?
     public let completedAt: Date
     public let eventRevision: Int?
     public init(id: String, run: WorkspaceCalendarRun, nativeSessionID: String? = nil,
-                updates: [GatewayJSONValue] = [], updateOffset: Int = 0, complete: Bool = true,
-                result: GatewayJSONValue? = nil, error: String? = nil, completedAt: Date, eventRevision: Int? = nil) {
+                updates: [JSONValue] = [], updateOffset: Int = 0, complete: Bool = true,
+                result: JSONValue? = nil, error: String? = nil, completedAt: Date, eventRevision: Int? = nil) {
         self.id = id; self.run = run; self.nativeSessionID = nativeSessionID; self.updates = updates
         self.updateOffset = updateOffset; self.complete = complete
         self.result = result; self.error = error; self.completedAt = completedAt; self.eventRevision = eventRevision
@@ -943,7 +943,7 @@ public struct RemoteWorkspaceServiceClient: Sendable {
 
     /// `GET /v1/host/status`, whose `memberIdentity` is the Linux host's
     /// `{deviceID, kind, name, publicKey, endpoints, libraryEndpoint}`.
-    public func hostStatus() async throws -> GatewayJSONValue {
+    public func hostStatus() async throws -> JSONValue {
         try await request(path: "v1/host/status", method: "GET", body: nil)
     }
     /// Hands the Linux host the signed member records (a `LibraryMemberAdoption`);
@@ -951,12 +951,12 @@ public struct RemoteWorkspaceServiceClient: Sendable {
     /// The server accepts the installer bearer only for the first adoption;
     /// after that it needs a signed `mac` member, so `signer` signs the request.
     /// `audience` is the host's member device ID from its `memberIdentity`.
-    public func adoptMembers(_ adoption: Data, signer: MemberRequestSigner? = nil, audience: String? = nil) async throws -> GatewayJSONValue {
+    public func adoptMembers(_ adoption: Data, signer: MemberRequestSigner? = nil, audience: String? = nil) async throws -> JSONValue {
         try await request(path: "v1/host/members/adopt", method: "POST", body: adoption, signer: signer.map { ($0, audience ?? "") })
     }
 
     /// The host replies with the settings it saved.
-    public func configureExecutionMCPSettings(_ settings: GatewayJSONValue) async throws -> GatewayJSONValue {
+    public func configureExecutionMCPSettings(_ settings: JSONValue) async throws -> JSONValue {
         try await request(path: "v1/execution/mcp-settings", method: "POST", body: JSONEncoder().encode(settings))
     }
 
@@ -1050,7 +1050,7 @@ public struct RemoteWorkspaceServiceClient: Sendable {
 
     /// The native execution owner chooses the caller and the authenticated
     /// workspace. Neither authority is accepted from model tool arguments.
-    public func browserMCP(callerID: String, input: GatewayJSONValue, requestID: String,
+    public func browserMCP(callerID: String, input: JSONValue, requestID: String,
                            cancelling: Bool = false) async throws -> WovenMatterToolResponse {
         guard let callerUUID = UUID(uuidString: callerID), let requestUUID = UUID(uuidString: requestID),
               var arguments = input.objectValue else {
@@ -1060,10 +1060,10 @@ public struct RemoteWorkspaceServiceClient: Sendable {
         if cancelling, let target = arguments["id"]?.stringValue, let uuid = UUID(uuidString: target) {
             arguments["id"] = .string(uuid.uuidString.lowercased())
         }
-        let body = GatewayJSONValue.object(["callerID": .string(callerUUID.uuidString.lowercased()), "input": .object(arguments)])
+        let body = JSONValue.object(["callerID": .string(callerUUID.uuidString.lowercased()), "input": .object(arguments)])
         struct Response: Decodable {
             let success: Bool
-            let result: GatewayJSONValue?
+            let result: JSONValue?
             let error: String?
             let code: String?
             let requestID: String
@@ -1636,7 +1636,7 @@ extension RemoteWorkspaceServiceClient {
 
 extension RemoteWorkspaceServiceClient {
     public func managedDatabaseOperation(action: String, id: String? = nil, sql: String? = nil, name: String? = nil,
-                                         snapshot: ManagedDatabaseSnapshot? = nil) async throws -> GatewayJSONValue {
+                                         snapshot: ManagedDatabaseSnapshot? = nil) async throws -> JSONValue {
         struct Request: Encodable { let databaseID: String?; let sql: String?; let name: String?; let snapshot: ManagedDatabaseSnapshot? }
         return try await request(path: "v1/databases/" + action, method: "POST",
             body: JSONEncoder().encode(Request(databaseID: id, sql: sql, name: name, snapshot: snapshot)))

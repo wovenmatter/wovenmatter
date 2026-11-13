@@ -32,7 +32,7 @@ public final class DeviceToolDispatcher {
       // A published page's small reference retains the ordinary retry receipt.
       let command = try? WovenMatterToolCommand(request.arguments)
       let htmlPublication = command?.group == .html
-        && (try? JSONDecoder().decode(GatewayJSONValue.self, from: Data((command?.options["json"] ?? "").utf8)))?.objectValue?["action"]?.stringValue == "render"
+        && (try? JSONDecoder().decode(JSONValue.self, from: Data((command?.options["json"] ?? "").utf8)))?.objectValue?["action"]?.stringValue == "render"
       let automation = command?.group?.isAutomation == true && command?.action == "call" && !htmlPublication
       let receipt = automation ? WovenMatterToolResponse(success: false,
         error: "This automation call finished. Its output is not retained in the transport receipt. Inspect fresh state before further input; this request will not run again.",

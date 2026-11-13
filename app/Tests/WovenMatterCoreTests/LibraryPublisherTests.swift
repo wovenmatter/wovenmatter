@@ -19,7 +19,7 @@ struct LibraryPublisherTests {
     let firstRun = try await f.database.beginLocalACPRun(conversationID: conversationID, input: .init(text: "First"))
     try await f.database.updateLocalACPSessionID(conversationID: conversationID, runID: firstRun.runID, sessionID: "native")
     let secondRun = UUID().uuidString.lowercased()
-    try await f.database.write { try $0.toolsExecuteUnlocked("INSERT INTO dashboard_runs(id,conversation_id,status,openclaw_session_key) VALUES (?,?,'running','native')", [secondRun, conversationID]) }
+    try await f.database.write { try $0.toolsExecuteUnlocked("INSERT INTO runs(id,conversation_id,status,native_session_id) VALUES (?,?,'running','native')", [secondRun, conversationID]) }
     func entry(_ run: String, _ sequence: Int64) -> ExecutionJournalEntry {
       .init(workspaceID: f.workspace.id, originSequence: sequence, conversationID: conversationID, runID: run, kind: .conversation,
         conversation: .init(id: conversationID, title: "Offline history", runtimeKind: "codex"),
@@ -37,11 +37,11 @@ struct LibraryPublisherTests {
     var changed = first; changed.entries[0].retainedExecution?.status = "failed"
     await #expect(throws: (any Error).self) { _ = try await f.database.settleLibraryRetainedRuns(changed, deviceID: f.workspace.executionDeviceID!) }
     let active = UUID().uuidString.lowercased()
-    try await f.database.write { try $0.toolsExecuteUnlocked("INSERT INTO dashboard_runs(id,conversation_id,status,openclaw_session_key) VALUES (?,?,'running','native')", [active, conversationID]) }
+    try await f.database.write { try $0.toolsExecuteUnlocked("INSERT INTO runs(id,conversation_id,status,native_session_id) VALUES (?,?,'running','native')", [active, conversationID]) }
     await #expect(throws: (any Error).self) { _ = try await f.database.ingestExecutionJournal(all, deviceID: f.workspace.executionDeviceID!) }
-    #expect(try await f.database.read { try $0.libraryIDsUnlocked("SELECT status FROM dashboard_runs WHERE id=?", bindings: [active]).first } == "running")
+    #expect(try await f.database.read { try $0.libraryIDsUnlocked("SELECT status FROM runs WHERE id=?", bindings: [active]).first } == "running")
     #expect(try await f.database.libraryExecutionOwner(conversationID: conversationID) == nil)
-    try await f.database.write { try $0.toolsExecuteUnlocked("UPDATE dashboard_runs SET status='completed' WHERE id=?", [active]) }
+    try await f.database.write { try $0.toolsExecuteUnlocked("UPDATE runs SET status='completed' WHERE id=?", [active]) }
     _ = try await f.database.ingestExecutionJournal(all, deviceID: f.workspace.executionDeviceID!)
     #expect(try await f.database.libraryExecutionOwner(conversationID: conversationID) == f.workspace.id)
     #expect(try await f.database.executionJournal(after: 0).entries.map(\.eventID) == entries.map(\.eventID))
@@ -291,29 +291,29 @@ struct LibraryPublisherTests {
     let chat = try await f.database.createFixtureRemoteACPSession(runtimeKind: .codex, remoteWorkspaceID: UUID(uuidString: f.workspace.id)!,
       remoteWorkspaceName: "Linux", title: "Ran over SSH", ownerDeviceID: UUID(uuidString: f.identity.hostDeviceID)!)
     let running = try await f.database.beginLocalACPRun(conversationID: chat, input: .init(text: "Still running"))
-    try await f.database.write { try $0.toolsExecuteUnlocked("UPDATE dashboard_messages SET content='partial' WHERE id=?", [running.assistantMessageID]) }
+    try await f.database.write { try $0.toolsExecuteUnlocked("UPDATE messages SET content='partial' WHERE id=?", [running.assistantMessageID]) }
     let local = try await f.database.createFixtureLocalACPSession(runtimeKind: .codex, title: "On this Mac", ownerDeviceID: UUID(uuidString: f.identity.hostDeviceID)!)
     let localRun = try await f.database.beginLocalACPRun(conversationID: local, input: .init(text: "Local"))
     try await f.database.recoverInterruptedLocalACPRuns()
-    func row(_ sql: String, _ id: String) async throws -> [String: GatewayJSONValue] {
+    func row(_ sql: String, _ id: String) async throws -> [String: JSONValue] {
       try #require(try await f.database.read { try $0.historyRowsUnlocked(sql, values: [id]) }.first?.objectValue)
     }
     let detail = "This run on Linux was interrupted when Woven Matter updated."
-    var run = try await row("SELECT status,error FROM dashboard_runs WHERE id=?", running.runID)
+    var run = try await row("SELECT status,error FROM runs WHERE id=?", running.runID)
     #expect(run["status"]?.stringValue == "interrupted" && run["error"]?.stringValue == detail)
-    var reply = try await row("SELECT status,content FROM dashboard_messages WHERE id=?", running.assistantMessageID)
+    var reply = try await row("SELECT status,content FROM messages WHERE id=?", running.assistantMessageID)
     #expect(reply["status"]?.stringValue == "interrupted" && reply["content"]?.stringValue == "partial")
-    #expect(try await row("SELECT status FROM dashboard_runs WHERE id=?", localRun.runID)["status"]?.stringValue == "failed")
+    #expect(try await row("SELECT status FROM runs WHERE id=?", localRun.runID)["status"]?.stringValue == "failed")
     // A run an earlier release left uncertain settles with its reply when the chat moves.
     let uncertain = try await f.database.beginLocalACPRun(conversationID: chat, input: .init(text: "Unknown outcome"))
     try await f.database.write {
-      try $0.toolsExecuteUnlocked("UPDATE dashboard_runs SET status='uncertain' WHERE id=?", [uncertain.runID])
-      try $0.toolsExecuteUnlocked("UPDATE dashboard_messages SET status='uncertain',content='' WHERE id=?", [uncertain.assistantMessageID])
+      try $0.toolsExecuteUnlocked("UPDATE runs SET status='uncertain' WHERE id=?", [uncertain.runID])
+      try $0.toolsExecuteUnlocked("UPDATE messages SET status='uncertain',content='' WHERE id=?", [uncertain.assistantMessageID])
     }
     try await f.database.interruptLegacyRemoteRuns(conversationID: chat)
-    run = try await row("SELECT status,error FROM dashboard_runs WHERE id=?", uncertain.runID)
+    run = try await row("SELECT status,error FROM runs WHERE id=?", uncertain.runID)
     #expect(run["status"]?.stringValue == "interrupted" && run["error"]?.stringValue == detail)
-    reply = try await row("SELECT status,content FROM dashboard_messages WHERE id=?", uncertain.assistantMessageID)
+    reply = try await row("SELECT status,content FROM messages WHERE id=?", uncertain.assistantMessageID)
     #expect(reply["status"]?.stringValue == "interrupted" && reply["content"]?.stringValue == detail)
     let sent = try await f.database.read { try $0.adoptionTranscriptUnlocked(chat) }
     #expect(!sent.messages.contains { ["running", "uncertain", "streaming"].contains($0.status ?? "") })

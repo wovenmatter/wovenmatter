@@ -111,7 +111,7 @@ struct MemberSyncTests {
   @Test func sharedVectorsVerifyWithThisPlatformsEd25519() async throws {
     let url = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
       .appending(path: "../../../shared/Tests/WovenMatterSharedTests/MemberSignatureVectors.json").standardizedFileURL
-    let vectors = try #require(try JSONDecoder().decode(GatewayJSONValue.self, from: Data(contentsOf: url)).objectValue)
+    let vectors = try #require(try JSONDecoder().decode(JSONValue.self, from: Data(contentsOf: url)).objectValue)
     let key = try #require(vectors["publicKeyBase64"]?.stringValue.flatMap { Data(base64Encoded: $0) })
     let device = try #require(vectors["deviceID"]?.stringValue), audience = try #require(vectors["audience"]?.stringValue)
     for vector in try #require(vectors["cases"]?.arrayValue).compactMap(\.objectValue) {

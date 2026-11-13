@@ -8,7 +8,7 @@ import WovenMatterCore
 @Suite("Compact activity persistence", .serialized)
 struct ActivitySummaryPersistenceTests {
 
-  @Test("direct reconciliation SQL updates, deletes, and hides traces through the same delta contract")
+  @Test("direct reconciliation SQL updates and deletes through the same delta contract")
   func directReconciliationAndTombstones() async throws {
     let fixture = try PersistenceFixture()
     defer { fixture.remove() }
@@ -17,41 +17,29 @@ struct ActivitySummaryPersistenceTests {
       title: "Reconcile", ownerDeviceID: UUID())
     let run = try await database.beginLocalACPRun(conversationID: conversation, input: .init(text: "Inspect"))
     for id in ["keep", "obsolete"] {
-      try await database.upsertDeviceOwnedRunActivity(runID: run.runID,
+      try await database.upsertRunActivity(runID: run.runID,
         activity: .init(id: id, kind: .tool, content: "old", rawOutputJSON: "old detail"))
     }
     let sql = try PersistenceSQL(url: fixture.databaseURL)
-    try sql.execute("""
-      INSERT INTO dashboard_run_trace_events(id,conversation_id,run_id,event_type,is_visible,content,created_at)
-      VALUES('visible','\(conversation)','\(run.runID)','reasoning',1,'trace thought','2026-01-01');
-      """)
     let before = try await database.conversationHistoryPage(id: conversation, limit: 20, compactActivities: true)
     try await database.completeLocalACPRun(runID: run.runID)
     let replacement = AgentRunActivity(id: "keep", kind: .tool, status: "failed", content: "corrected", rawOutputJSON: "new detail")
     try sql.execute("""
       BEGIN;
-      UPDATE dashboard_run_events SET content='\(try encodedSQL(replacement))' WHERE id='\(run.runID):activity:keep';
-      DELETE FROM dashboard_run_events WHERE id='\(run.runID):activity:obsolete';
-      UPDATE dashboard_run_trace_events SET is_visible=0 WHERE id='visible';
+      UPDATE run_activities SET content='\(try encodedSQL(replacement))' WHERE id='\(run.runID):activity:keep';
+      DELETE FROM run_activities WHERE id='\(run.runID):activity:obsolete';
       COMMIT;
       """)
     let delta = try await database.conversationHistoryPage(id: conversation, limit: 20, compactActivities: true,
       activityCursor: before.activityRevision, knownActivityRunIDs: [run.runID])
     #expect(delta.activities.map(\.activity.id) == ["keep"])
-    #expect(Set(delta.removedActivityIDs) == ["\(run.runID):activity:obsolete", "trace-visible"])
+    #expect(Set(delta.removedActivityIDs) == ["\(run.runID):activity:obsolete"])
     #expect(delta.activityReadMetrics.fullRowsDecoded == 1)
     let current = try await database.conversationHistoryPage(id: conversation, limit: 20, compactActivities: true)
     #expect(applying(delta, to: before.activities) == current.activities)
     assertSummaryParity(current, try await database.conversationHistoryPage(id: conversation, limit: 20))
     #expect(try await database.conversationActivityDetails(conversationID: conversation,
       runID: run.runID, activityID: "obsolete") == nil)
-    // A previously hidden legacy row can become visible again, with a fresh revision.
-    try sql.execute("UPDATE dashboard_run_trace_events SET is_visible=1,content='repaired trace' WHERE id='visible'")
-    let visible = try await database.conversationHistoryPage(id: conversation, limit: 20, compactActivities: true,
-      activityCursor: delta.activityRevision, knownActivityRunIDs: [run.runID])
-    #expect(visible.activities.map(\.id) == ["trace-visible"])
-    #expect(visible.activities.first?.activity.content == "repaired trace")
-    #expect(visible.removedActivityIDs.isEmpty)
   }
 
   @Test("OpenCode replacement reorders parts and empty snapshots remove obsolete activity", arguments: [false, true])
@@ -121,14 +109,14 @@ struct ActivitySummaryPersistenceTests {
       AgentRunActivity(id: "plan", kind: .plan, content: large, planEntries: entries),
       AgentRunActivity(id: "change", kind: .fileChange, content: large,
         locations: [.init(path: "fixture.swift", line: 1)], changes: changes), children
-    ] { try await database.upsertDeviceOwnedRunActivity(runID: run.runID, activity: activity) }
-    try await database.upsertDeviceOwnedRunActivity(runID: run.runID,
+    ] { try await database.upsertRunActivity(runID: run.runID, activity: activity) }
+    try await database.upsertRunActivity(runID: run.runID,
       activity: .init(id: "tool", kind: .tool, status: "completed"))
-    try await database.upsertDeviceOwnedRunActivity(runID: run.runID,
+    try await database.upsertRunActivity(runID: run.runID,
       activity: .init(id: "thought", kind: .thought, content: "second", contentIsDelta: true))
     try await database.appendLocalACPAssistantChunk(runID: run.runID, chunk: answer)
     try await database.recordAssistantStreamBoundary(runID: run.runID, finalSegment: true)
-    try await database.upsertDeviceOwnedRunActivity(runID: run.runID,
+    try await database.upsertRunActivity(runID: run.runID,
       activity: .init(id: "late", kind: .thought, content: "Late reasoning"))
     let full = try await database.conversationHistoryPage(id: conversation, limit: 20)
     let compact = try await database.conversationHistoryPage(id: conversation, limit: 20, compactActivities: true)

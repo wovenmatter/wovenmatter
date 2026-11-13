@@ -35,7 +35,7 @@ extension MobileModel {
   /// The same fixed allowlist is enforced here and at the native tool entry point.
   /// Quick Chat can change its notes, timers and calendar replicas, never invoke
   /// host MCP automation or schedule agent work on this phone.
-  func performDeviceMCP(name: String, arguments: [String: GatewayJSONValue], conversationID: String, requestID: String) async throws -> String {
+  func performDeviceMCP(name: String, arguments: [String: JSONValue], conversationID: String, requestID: String) async throws -> String {
     let id = Self.deviceMCPRequestID(requestID)
     let response: WovenMatterToolResponse
     do {

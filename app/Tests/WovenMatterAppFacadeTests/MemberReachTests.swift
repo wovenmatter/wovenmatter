@@ -167,7 +167,7 @@ struct MemberReachTests {
         let botID = UUID().uuidString.lowercased()
         _ = try await tools.issueBotKey(machineID: identity.hostDeviceID, botID: botID, botName: "Builder")
         let caller = WovenMCPCaller.bot(machineID: identity.hostDeviceID, botID: botID)
-        func call(_ name: String, _ arguments: [String: GatewayJSONValue]) async throws -> WovenMatterToolResponse {
+        func call(_ name: String, _ arguments: [String: JSONValue]) async throws -> WovenMatterToolResponse {
             await tools.handle(try WovenMCPCatalog.request(name: name, arguments: .object(arguments)), callerID: caller)
         }
 

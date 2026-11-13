@@ -105,7 +105,7 @@ struct PairedLibraryTests {
   @Test func runtimeQueuesAndPrivateCredentialsStayLocal() async throws {
     let a = try await Mac(), b = try await Mac(); defer { a.remove(); b.remove() }
     let tables = try await a.database.pairedLibraryPage(after: 0).entries.map(\.table)
-    #expect(!tables.contains("desktop_local_acp_sessions"))
+    #expect(!tables.contains("harness_sessions"))
     #expect(!tables.contains("workspace_session_deliveries"))
     #expect(!tables.contains("workspace_session_timers"))
     #expect(!tables.contains("execution_workspace_publishers"))
@@ -319,37 +319,6 @@ extension PairedLibraryTests {
     #expect(titles.contains { $0.hasSuffix("(Recovered edit)") })
   }
 
-  @Test func anOlderStoreWithAnArrivalOrderWinnerRecomputesTheCanonicalWinner() async throws {
-    let a = try await Mac(), b = try await Mac(); defer { a.remove(); b.remove() }
-    let id = UUID().uuidString.lowercased(), key = "[\"\(id)\"]"
-    try await a.note(id, title: "Shared")
-    try await a.send(to: b); try await b.send(to: a)
-    try await a.note(id, title: "Air edit", revision: a.database.libraryNote(id: id)?.revision)
-    try await b.note(id, title: "Mini edit", revision: b.database.libraryNote(id: id)?.revision)
-    try await a.send(to: b); try await b.send(to: a)
-    let canonical = try await noteState(a.database, id)
-    let (winner, loser) = try await a.database.read { connection -> (String, String) in
-      let winner = try #require(try connection.historyRowsUnlocked("SELECT payload FROM paired_library_rows WHERE table_name='notes' AND record_key=?", values: [key]).first?.objectValue?["payload"]?.stringValue)
-      let loser = try #require(try connection.historyRowsUnlocked("SELECT payload FROM paired_library_frontier WHERE table_name='notes' AND record_key=?", values: [key]).first?.objectValue?["payload"]?.stringValue)
-      return (winner, loser)
-    }
-    let losing = try JSONDecoder().decode(PairedLibraryRecord.self, from: Data(loser.utf8))
-    // Recreate what an earlier build left behind: the loser materialized as the
-    // winner, the true winner only in conflicts, and no frontier at all.
-    try await b.database.write { connection in
-      try connection.executeUnlocked("UPDATE paired_library_clock SET applying=1")
-      try connection.toolsExecuteUnlocked("UPDATE notes SET title=? WHERE id=?", [losing.row["title"]?.value, id])
-      try connection.toolsExecuteUnlocked("UPDATE paired_library_rows SET payload=? WHERE table_name='notes' AND record_key=?", [loser, key])
-      try connection.executeUnlocked("DELETE FROM paired_library_frontier; DELETE FROM paired_library_conflicts; DELETE FROM paired_library_state WHERE name LIKE 'frontier.%'")
-      try connection.toolsExecuteUnlocked("INSERT INTO paired_library_conflicts VALUES('legacy',?)", [winner])
-      try connection.executeUnlocked("UPDATE paired_library_clock SET applying=0")
-    }
-    #expect(try await noteState(b.database, id) != canonical)
-    let upgraded = try await WorkspaceDatabase(url: b.database.fileURL)
-    #expect(try await noteState(upgraded, id) == canonical)
-    #expect(try await upgraded.libraryNote(id: id)?.title == a.database.libraryNote(id: id)?.title)
-  }
-
   @Test func observersNeverRecoverPauseOrAccountForAnotherMacsActiveWork() async throws {
     let a = try await Mac(), b = try await Mac(); defer { a.remove(); b.remove() }
     let session = try await a.database.createFixtureLocalACPSession(runtimeKind: .codex, title: "Owner's work", ownerDeviceID: UUID())
@@ -367,9 +336,9 @@ extension PairedLibraryTests {
     await #expect(throws: WorkspaceToolError.self) { try await reopened.mutateGoal(sessionID: session, mutation: .pause(id: goal.id)) }
     #expect(try await lastChange(reopened) == before)
     #expect(try await reopened.activeRunID(conversationID: session) == nil)
-    #expect(try await reopened.activeDeviceOwnedConversationIDs().isEmpty)
+    #expect(try await reopened.activeLocalConversationIDs().isEmpty)
     #expect(try await !reopened.read { try $0.locallyOwnsConversationUnlocked(session) })
-    let status = try await reopened.read { try $0.historyRowsUnlocked("SELECT status FROM dashboard_runs WHERE id=?", values: [run.runID]).first?.objectValue?["status"]?.stringValue }
+    let status = try await reopened.read { try $0.historyRowsUnlocked("SELECT status FROM runs WHERE id=?", values: [run.runID]).first?.objectValue?["status"]?.stringValue }
     #expect(status == "running")
     try await b.send(to: a)
     #expect(try await a.database.activeRunID(conversationID: session) == run.runID)
@@ -389,7 +358,7 @@ extension PairedLibraryTests {
     #expect(try await !reopened.read { try $0.locallyOwnsConversationUnlocked(session) })
     #expect(try await reopened.read { try $0.historyRowsUnlocked("SELECT id FROM paired_conversation_owners WHERE id=?", values: [session]).isEmpty })
     #expect(try await lastChange(reopened) == before)
-    let status = try await reopened.read { try $0.historyRowsUnlocked("SELECT status FROM dashboard_runs WHERE id=?", values: [run.runID]).first?.objectValue?["status"]?.stringValue }
+    let status = try await reopened.read { try $0.historyRowsUnlocked("SELECT status FROM runs WHERE id=?", values: [run.runID]).first?.objectValue?["status"]?.stringValue }
     #expect(status == "running")
   }
 }
@@ -501,7 +470,7 @@ extension PairedLibraryTests {
     }
     try await a.send(to: b)
     #expect(try await marker() == nil)
-    try await a.database.write { try $0.toolsExecuteUnlocked("UPDATE dashboard_conversations SET title='Renamed by owner' WHERE id=?", [session]) }
+    try await a.database.write { try $0.toolsExecuteUnlocked("UPDATE conversations SET title='Renamed by owner' WHERE id=?", [session]) }
     try await a.send(to: b)
     #expect(try await marker() != nil)
   }
@@ -511,7 +480,7 @@ extension PairedLibraryTests {
     let session = try await a.database.createFixtureLocalACPSession(runtimeKind: .codex, title: "Report", ownerDeviceID: UUID())
     _ = try await a.database.beginLocalACPRun(conversationID: session, input: .init(text: "Write reports/result.pdf"))
     try await a.database.write { connection in
-      let message = try #require(try connection.historyRowsUnlocked("SELECT id FROM dashboard_messages WHERE conversation_id=? LIMIT 1", values: [session]).first?.objectValue?["id"]?.stringValue)
+      let message = try #require(try connection.historyRowsUnlocked("SELECT id FROM messages WHERE conversation_id=? LIMIT 1", values: [session]).first?.objectValue?["id"]?.stringValue)
       try connection.insertLibraryAssetUnlocked(.init(source: "reports/result.pdf", title: "result.pdf", kind: .file), messageID: message, conversationID: session)
     }
     let owned = try await a.database.pendingLibraryFiles()
@@ -546,25 +515,6 @@ extension PairedLibraryTests {
     #expect(try await !b.database.librarySnapshot().notes.contains { $0.title.contains("Recovered edit") })
   }
 
-  @Test func schedulesOwnedByThisMacStayLocalAfterUpgrade() async throws {
-    let mac = try await Mac(); defer { mac.remove() }
-    let start = Date().addingTimeInterval(-30)
-    let task = WorkspaceCalendarTask(prompt: "Fixture", configuration: .init(runtimeKind: .codex, title: "Fixture", model: "fixture", permission: "read-only"))
-    let local = try await mac.database.saveCalendarEvent(draft: .init(title: "Mac schedule", startsAt: start, timeZoneID: "UTC", task: task), creating: true, now: start)
-    let phone = try await mac.database.saveCalendarEvent(draft: .init(title: "Phone schedule", startsAt: start, timeZoneID: "UTC", task: task), creating: true, now: start)
-    let phoneID = UUID().uuidString.lowercased()
-    // Recreate a database from before paired ownership existed.
-    try await mac.database.write { connection in
-      try connection.executeUnlocked("UPDATE paired_library_clock SET applying=1")
-      try connection.executeUnlocked("DELETE FROM paired_calendar_owners; DELETE FROM paired_library_state WHERE name='owners.bootstrap'")
-      try connection.toolsExecuteUnlocked("INSERT INTO calendar_task_executors(event_id,device_id) VALUES(?,?),(?,?)",
-        [local, try connection.libraryIdentityUnlocked().hostDeviceID, phone, phoneID])
-      try connection.executeUnlocked("UPDATE paired_library_clock SET applying=0")
-    }
-    let upgraded = try await WorkspaceDatabase(url: mac.database.fileURL)
-    let due = try await upgraded.dueCalendarRuns()
-    #expect(due.map(\.eventID) == [local])
-  }
 }
 
 
@@ -579,62 +529,38 @@ extension PairedLibraryTests {
     try await database.read { try $0.historyRowsUnlocked("SELECT workspace_id FROM execution_conversations WHERE id=?", values: [id]).first?.objectValue?["workspace_id"]?.stringValue }
   }
 
-  @Test func aSyntheticProjectionGuessedForTheWrongMacIsRepairedFromTheOwnerRecord() async throws {
-    let a = try await Mac(), b = try await Mac(), c = try await Mac(); defer { a.remove(); b.remove(); c.remove() }
-    let owner = try await registerMacWorkspace(a), wrong = try await registerMacWorkspace(c)
-    try await c.send(to: b)
-    let session = try await a.database.createFixtureLocalACPSession(runtimeKind: .codex, title: "Owner's chat", ownerDeviceID: UUID())
-    try await a.send(to: b)
-    #expect(try await projectedWorkspace(b.database, session) == owner.id)
-    // An earlier build guessed routing from an editor's origin.
-    try await b.database.write { connection in
-      try connection.executeUnlocked("UPDATE paired_library_clock SET applying=1")
-      try connection.toolsExecuteUnlocked("UPDATE execution_conversations SET workspace_id=? WHERE id=?", [wrong.id, session])
-      try connection.executeUnlocked("DELETE FROM paired_library_state WHERE name='projection.v2'; UPDATE paired_library_clock SET applying=0")
-    }
-    #expect(try await projectedWorkspace(b.database, session) == wrong.id)
-    let reopened = try await WorkspaceDatabase(url: b.database.fileURL)
-    #expect(try await projectedWorkspace(reopened, session) == owner.id)
-    // A later owner edit keeps it on the right Mac; the owner never routes to itself.
-    try await a.database.write { try $0.toolsExecuteUnlocked("UPDATE dashboard_conversations SET title='Renamed' WHERE id=?", [session]) }
-    try await a.send(to: b)
-    #expect(try await projectedWorkspace(b.database, session) == owner.id)
-    try await b.send(to: a)
-    #expect(try await projectedWorkspace(a.database, session) == nil)
-  }
-
   @Test func theExecutionOwnersNativeRowsSurviveAStaleFederatedProjection() async throws {
     let node = try await Mac(), central = try await Mac(); defer { node.remove(); central.remove() }
     let session = try await node.database.createFixtureLocalACPSession(runtimeKind: .codex, title: "Native session", ownerDeviceID: UUID())
     let run = try await node.database.beginLocalACPRun(conversationID: session, input: .init(text: "Native input"))
     let native = try await node.database.read { connection in
-      try #require(try connection.historyRowsUnlocked("SELECT agent_id,governing_plane,authority_kind,desktop_owned FROM dashboard_conversations WHERE id=?", values: [session]).first?.objectValue)
+      try #require(try connection.historyRowsUnlocked("SELECT agent_id,owner_device_id FROM conversations WHERE id=?", values: [session]).first?.objectValue)
     }
     // The central library held a federated projection of the same chat and run.
     try await central.database.write { connection in
-      try connection.toolsExecuteUnlocked("INSERT INTO dashboard_conversations(id,title,governing_plane,authority_kind,desktop_owned,created_at,updated_at) VALUES(?,?,?,?,1,?,?)",
-        [session, "Projected title", "remote_workspace", "remote", "2020-01-01T00:00:00Z", "2020-01-01T00:00:00Z"])
-      try connection.toolsExecuteUnlocked("INSERT INTO dashboard_runs(id,conversation_id,status,created_at) VALUES(?,?,'completed','2020-01-01T00:00:00Z')", [run.runID, session])
+      try connection.toolsExecuteUnlocked("INSERT INTO conversations(id,title,owner_device_id,created_at,updated_at) VALUES(?,?,?,?,?)",
+        [session, "Projected title", UUID().uuidString.lowercased(), "2020-01-01T00:00:00Z", "2020-01-01T00:00:00Z"])
+      try connection.toolsExecuteUnlocked("INSERT INTO runs(id,conversation_id,status,created_at) VALUES(?,?,'completed','2020-01-01T00:00:00Z')", [run.runID, session])
     }
     // Make the central copies win the deterministic order, as a busy central would.
     try await central.database.write { try $0.executeUnlocked("UPDATE paired_library_clock SET tick=tick+1000000") }
-    try await central.database.write { try $0.toolsExecuteUnlocked("UPDATE dashboard_conversations SET title='Projected title ' WHERE id=?", [session]) }
-    try await central.database.write { try $0.toolsExecuteUnlocked("UPDATE dashboard_runs SET status='completed',error='projection' WHERE id=?", [run.runID]) }
+    try await central.database.write { try $0.toolsExecuteUnlocked("UPDATE conversations SET title='Projected title ' WHERE id=?", [session]) }
+    try await central.database.write { try $0.toolsExecuteUnlocked("UPDATE runs SET status='completed',error='projection' WHERE id=?", [run.runID]) }
     try await central.send(to: node)
     let after = try await node.database.read { connection in
-      try #require(try connection.historyRowsUnlocked("SELECT agent_id,governing_plane,authority_kind,desktop_owned,title FROM dashboard_conversations WHERE id=?", values: [session]).first?.objectValue)
+      try #require(try connection.historyRowsUnlocked("SELECT agent_id,owner_device_id,title FROM conversations WHERE id=?", values: [session]).first?.objectValue)
     }
     // Native binding and run state are the owner's truth; the shared title edit applies.
-    for key in ["agent_id", "governing_plane", "authority_kind", "desktop_owned"] { #expect(after[key] == native[key]) }
+    for key in ["agent_id", "owner_device_id"] { #expect(after[key] == native[key]) }
     #expect(after["title"]?.stringValue == "Projected title ")
     #expect(try await node.database.activeRunID(conversationID: session) == run.runID)
     // The owner republishes its native rows, so the central library converges.
     try await node.send(to: central)
     let converged = try await central.database.read { connection in
-      try #require(try connection.historyRowsUnlocked("SELECT agent_id,governing_plane FROM dashboard_conversations WHERE id=?", values: [session]).first?.objectValue)
+      try #require(try connection.historyRowsUnlocked("SELECT agent_id,owner_device_id FROM conversations WHERE id=?", values: [session]).first?.objectValue)
     }
-    #expect(converged["agent_id"] == native["agent_id"] && converged["governing_plane"] == native["governing_plane"])
-    let status = try await central.database.read { try $0.historyRowsUnlocked("SELECT status FROM dashboard_runs WHERE id=?", values: [run.runID]).first?.objectValue?["status"]?.stringValue }
+    #expect(converged["agent_id"] == native["agent_id"] && converged["owner_device_id"] == native["owner_device_id"])
+    let status = try await central.database.read { try $0.historyRowsUnlocked("SELECT status FROM runs WHERE id=?", values: [run.runID]).first?.objectValue?["status"]?.stringValue }
     #expect(status == "running")
   }
 
@@ -689,11 +615,11 @@ extension PairedLibraryTests {
     // A starts work after B last saw it idle; a stale trash from B still arrives.
     _ = try await a.database.beginLocalACPRun(conversationID: busy, input: .init(text: "Started after B looked"))
     try await b.database.write { connection in
-      for id in [busy, idle] { try connection.toolsExecuteUnlocked("UPDATE dashboard_conversations SET deleted_at='2026-10-30T00:00:00Z' WHERE id=?", [id]) }
+      for id in [busy, idle] { try connection.toolsExecuteUnlocked("UPDATE conversations SET deleted_at='2026-10-30T00:00:00Z' WHERE id=?", [id]) }
     }
     try await b.send(to: a)
     let deleted = { (database: WorkspaceDatabase, id: String) in
-      try await database.read { try $0.historyRowsUnlocked("SELECT deleted_at FROM dashboard_conversations WHERE id=?", values: [id]).first?.objectValue?["deleted_at"]?.stringValue }
+      try await database.read { try $0.historyRowsUnlocked("SELECT deleted_at FROM conversations WHERE id=?", values: [id]).first?.objectValue?["deleted_at"]?.stringValue }
     }
     #expect(try await deleted(a.database, busy) == nil)
     #expect(try await a.database.activeRunID(conversationID: busy) != nil)
@@ -717,17 +643,17 @@ extension PairedLibraryTests {
     try await a.send(to: b)
     try await b.database.mutateConversation(id: session, mutation: .rename("Renamed on B"))
     // The owner's later native update carries its own, older title.
-    try await a.database.write { try $0.toolsExecuteUnlocked("UPDATE dashboard_conversations SET last_message_preview='native update' WHERE id=?", [session]) }
-    let override = try #require(try await journal(b.database).last { $0.table == "desktop_conversation_titles" })
-    let native = try #require(try await journal(a.database).last { $0.table == "dashboard_conversations" && $0.key == "[\"\(session)\"]" })
-    let base = try await journal(a.database).filter { $0.table != "dashboard_conversations" || $0.key != "[\"\(session)\"]" || $0.vector != native.vector }
+    try await a.database.write { try $0.toolsExecuteUnlocked("UPDATE conversations SET last_message_preview='native update' WHERE id=?", [session]) }
+    let override = try #require(try await journal(b.database).last { $0.table == "conversation_titles" })
+    let native = try #require(try await journal(a.database).last { $0.table == "conversations" && $0.key == "[\"\(session)\"]" })
+    let base = try await journal(a.database).filter { $0.table != "conversations" || $0.key != "[\"\(session)\"]" || $0.vector != native.vector }
     for (index, order) in [[override, native], [native, override]].enumerated() {
       let receiver = index == 0 ? c.database : try await Mac().database
       try await deliver(base, to: receiver, from: a.id)
       for record in order { try await deliver([record], to: receiver, from: record.origin) }
-      #expect(try await receiver.read { try $0.historyRowsUnlocked("SELECT title FROM dashboard_conversations WHERE id=?", values: [session]).first?.objectValue?["title"]?.stringValue } == "Renamed on B")
+      #expect(try await receiver.read { try $0.historyRowsUnlocked("SELECT title FROM conversations WHERE id=?", values: [session]).first?.objectValue?["title"]?.stringValue } == "Renamed on B")
       let reopened = try await WorkspaceDatabase(url: receiver.fileURL)
-      #expect(try await reopened.read { try $0.historyRowsUnlocked("SELECT title FROM dashboard_conversations WHERE id=?", values: [session]).first?.objectValue?["title"]?.stringValue } == "Renamed on B")
+      #expect(try await reopened.read { try $0.historyRowsUnlocked("SELECT title FROM conversations WHERE id=?", values: [session]).first?.objectValue?["title"]?.stringValue } == "Renamed on B")
     }
   }
 
@@ -746,9 +672,9 @@ extension PairedLibraryTests {
     }
     try await a.send(to: b)
     // Runtime updates from the new executor's history, relayed by B, apply on A.
-    try await b.database.write { try $0.toolsExecuteUnlocked("UPDATE dashboard_runs SET status='completed',error=NULL WHERE id=?", [run.runID]) }
+    try await b.database.write { try $0.toolsExecuteUnlocked("UPDATE runs SET status='completed',error=NULL WHERE id=?", [run.runID]) }
     try await b.send(to: a)
-    let status = try await a.database.read { try $0.historyRowsUnlocked("SELECT status FROM dashboard_runs WHERE id=?", values: [run.runID]).first?.objectValue?["status"]?.stringValue }
+    let status = try await a.database.read { try $0.historyRowsUnlocked("SELECT status FROM runs WHERE id=?", values: [run.runID]).first?.objectValue?["status"]?.stringValue }
     #expect(status == "completed")
   }
 }
@@ -772,7 +698,7 @@ extension PairedLibraryTests {
     await #expect(throws: (any Error).self) { _ = try await b.database.moveConversation(id: session, toFolderID: nil) }
     #expect(try await lastChange(b.database) == before)
     #expect(try await goalValue() == originalGoal)
-    #expect(try await b.database.read { try $0.historyRowsUnlocked("SELECT deleted_at FROM dashboard_conversations WHERE id=?", values: [session]).first?.objectValue?["deleted_at"]?.stringValue } == nil)
+    #expect(try await b.database.read { try $0.historyRowsUnlocked("SELECT deleted_at FROM conversations WHERE id=?", values: [session]).first?.objectValue?["deleted_at"]?.stringValue } == nil)
     // Once the owner metadata arrives, the chat routes to its owner instead.
     try await deliver(metadata, to: b.database, from: a.id)
     await #expect(throws: WorkspaceConversationActionError.ownedByAnotherMac) { try await b.database.mutateConversation(id: session, mutation: .moveToTrash) }
@@ -802,7 +728,7 @@ extension PairedLibraryTests {
     #expect(try await b.database.libraryConversationExecutionWorkspace(conversationID: session)?.kind == .linux)
     try await b.database.mutateConversation(id: session, mutation: .moveToTrash)
     try await b.database.mutateConversation(id: session, mutation: .restore)
-    #expect(try await b.database.read { try $0.historyRowsUnlocked("SELECT deleted_at FROM dashboard_conversations WHERE id=?", values: [session]).first?.objectValue?["deleted_at"]?.stringValue } == nil)
+    #expect(try await b.database.read { try $0.historyRowsUnlocked("SELECT deleted_at FROM conversations WHERE id=?", values: [session]).first?.objectValue?["deleted_at"]?.stringValue } == nil)
   }
 
 }
@@ -975,130 +901,6 @@ extension PairedLibraryTests {
       if !page.hasMore { return }
     }
     Issue.record("Peer replay did not finish")
-  }
-
-  /// Nothing runs a chat over SSH, so the durable-run table that path kept is
-  /// gone: a library that still has it, with rows, drops it when it opens,
-  /// and its chats' runs stay as they were.
-  @Test func aLibraryWithTheSSHDurableRunTableDropsItOnOpening() async throws {
-    let legacy = try await Mac(); defer { legacy.remove() }
-    let session = try await legacy.database.createFixtureLocalACPSession(runtimeKind: .codex, title: "Ran over SSH", ownerDeviceID: UUID())
-    try await legacy.database.write { connection in
-      try connection.executeUnlocked("""
-        CREATE TABLE desktop_local_acp_durable_runs (run_id TEXT PRIMARY KEY, remote_workspace_id TEXT NOT NULL, native_session_id TEXT NOT NULL);
-        CREATE TRIGGER desktop_local_acp_durable_runs_delete AFTER DELETE ON dashboard_runs BEGIN
-          DELETE FROM desktop_local_acp_durable_runs WHERE run_id=OLD.id;
-        END;
-        INSERT INTO desktop_local_acp_durable_runs VALUES ('run', 'workspace', 'native');
-        """)
-    }
-    let upgraded = try await WorkspaceDatabase(url: legacy.database.fileURL)
-    #expect(try await upgraded.read { try $0.historyRowsUnlocked(
-      "SELECT name FROM sqlite_master WHERE name LIKE 'desktop_local_acp_durable_runs%'", values: []) }.isEmpty)
-    #expect(try await upgraded.read { try $0.historyRowsUnlocked("SELECT title FROM dashboard_conversations WHERE id=?", values: [session])
-      .first?.objectValue?["title"]?.stringValue } == "Ran over SSH")
-  }
-
-  @Test func aMigratedLibraryAndAFreshOneShareOneSchemaAndExchangeRowsByName() async throws {
-    let legacy = try await Mac(), fresh = try await Mac(); defer { legacy.remove(); fresh.remove() }
-    let session = try await legacy.database.createFixtureLocalACPSession(runtimeKind: .codex, title: "Written before the upgrade", ownerDeviceID: UUID())
-    // Older releases added projection_applied with ALTER TABLE, so it sits last.
-    try await legacy.database.write { connection in
-      let sql = try #require(try connection.historyRowsUnlocked("SELECT sql FROM sqlite_master WHERE name='dashboard_run_trace_events'", values: [])
-        .first?.objectValue?["sql"]?.stringValue)
-      #expect(sql.contains("projection_applied INTEGER NOT NULL DEFAULT 0,"))
-      try connection.executeUnlocked("DROP TABLE dashboard_run_trace_events")
-      try connection.executeUnlocked(sql.replacingOccurrences(of: "projection_applied INTEGER NOT NULL DEFAULT 0,", with: ""))
-      try connection.executeUnlocked("ALTER TABLE dashboard_run_trace_events ADD COLUMN projection_applied INTEGER NOT NULL DEFAULT 0")
-    }
-    #expect(try await legacy.database.pairedLibrarySchema() == fresh.database.pairedLibrarySchema())
-    // Libraries from before September 2026 also keep the unused is_main, and
-    // their recorded versions of each chat carry it.
-    try await legacy.database.write { connection in
-      try connection.executeUnlocked("ALTER TABLE dashboard_conversations ADD COLUMN is_main INTEGER NOT NULL DEFAULT 0")
-      let value = #"json('{"type":"integer","value":"0"}')"#
-      try connection.executeUnlocked("""
-        UPDATE paired_library_changes SET payload=json_set(payload,'$.row.is_main',\(value)) WHERE json_extract(payload,'$.table')='dashboard_conversations';
-        UPDATE paired_library_rows SET payload=json_set(payload,'$.row.is_main',\(value)) WHERE table_name='dashboard_conversations';
-        """)
-    }
-    #expect(try await legacy.database.pairedLibrarySchema() != fresh.database.pairedLibrarySchema())
-
-    // Opening the library with this version drops the column and its traces.
-    let upgraded = try await WorkspaceDatabase(url: legacy.database.fileURL)
-    #expect(try await upgraded.read { try $0.historyRowsUnlocked("SELECT name FROM pragma_table_info('dashboard_conversations') WHERE name='is_main'", values: []) }.isEmpty)
-    #expect(try await upgraded.read { try $0.historyRowsUnlocked("SELECT 1 AS present FROM paired_library_changes WHERE json_type(payload,'$.row.is_main') IS NOT NULL", values: []) }.isEmpty)
-    #expect(try await upgraded.pairedLibrarySchema() == fresh.database.pairedLibrarySchema())
-
-    let event = UUID().uuidString.lowercased()
-    try await upgraded.write { try $0.toolsExecuteUnlocked("INSERT INTO dashboard_run_trace_events(id,conversation_id,content,projection_applied) VALUES(?,?,'step',1)", [event, session]) }
-    try await exchange(from: upgraded, legacy.id, to: fresh.database)
-    #expect(try await fresh.database.read { try $0.historyRowsUnlocked("SELECT title FROM dashboard_conversations WHERE id=?", values: [session]).first?.objectValue?["title"]?.stringValue } == "Written before the upgrade")
-    #expect(try await fresh.database.read { try $0.historyRowsUnlocked("SELECT projection_applied FROM dashboard_run_trace_events WHERE id=?", values: [event]).first?.objectValue?["projection_applied"]?.intValue } == 1)
-    #expect(try await fresh.database.pairedLibraryQuarantineCount() == 0)
-
-    let note = UUID().uuidString.lowercased()
-    try await fresh.note(note, title: "Written on the fresh library")
-    try await exchange(from: fresh.database, fresh.id, to: upgraded)
-    try await exchange(from: upgraded, legacy.id, to: fresh.database)
-    #expect(try await upgraded.libraryNote(id: note)?.title == "Written on the fresh library")
-    #expect(try await upgraded.pairedLibraryQuarantineCount() == 0)
-    #expect(try await fresh.database.pairedLibraryQuarantineCount() == 0)
-  }
-
-  /// A library from before November 2026 keeps its device state in
-  /// companion_* tables, its library ID in companion_workspace, sync
-  /// bookkeeping that names those tables, and an owner trigger that reads one.
-  /// Opening it renames everything in place: the library ID, a phone's
-  /// schedule, an execution chat and the sync history all survive, and new
-  /// chats and notes still save.
-  @Test func aLibraryWithCompanionTablesKeepsItsIDAndDeviceStateWhenRenamed() async throws {
-    let mac = try await Mac(), fresh = try await Mac(); defer { mac.remove(); fresh.remove() }
-    let libraryID = try await mac.database.libraryID()
-    try await mac.database.write { connection in
-      try connection.executeUnlocked("""
-        INSERT INTO calendar_task_executors(event_id,device_id) VALUES('event','phone');
-        INSERT INTO execution_conversations(id,workspace_id,conversation) VALUES('chat','linux',x'7b7d');
-        """)
-    }
-    #expect(try await mac.database.read { try $0.historyRowsUnlocked("SELECT 1 AS present FROM paired_library_rows WHERE table_name='calendar_task_executors'", values: []) }.count == 1)
-    // Turn it back into the old layout, as origin/main wrote it.
-    try await mac.database.write { connection in
-      try connection.executeUnlocked("""
-        CREATE TABLE companion_workspace(singleton INTEGER PRIMARY KEY CHECK(singleton = 1), workspace_id TEXT NOT NULL);
-        INSERT INTO companion_workspace SELECT 1,library_id FROM library_identity;
-        ALTER TABLE library_identity DROP COLUMN library_id;
-        """)
-      let present = Set(try connection.historyRowsUnlocked("SELECT name FROM sqlite_master WHERE type='table'", values: [])
-        .compactMap { $0.objectValue?["name"]?.stringValue })
-      for (old, new) in WorkspaceDatabaseConnection.legacyCompanionTables where present.contains(new) {
-        try connection.executeUnlocked("ALTER TABLE \(new) RENAME TO \(old)")
-        try connection.toolsExecuteUnlocked("UPDATE paired_library_rows SET table_name=?,payload=json_set(payload,'$.table',?) WHERE table_name=?", [old, old, new])
-        try connection.toolsExecuteUnlocked("UPDATE paired_library_changes SET payload=json_set(payload,'$.table',?) WHERE json_extract(payload,'$.table')=?", [old, new])
-      }
-      try connection.executeUnlocked("""
-        DROP TRIGGER paired_conversation_owner;
-        CREATE TRIGGER paired_conversation_owner_v2 AFTER INSERT ON dashboard_conversations
-        WHEN NOT EXISTS(SELECT 1 FROM companion_execution_conversations c WHERE c.id=NEW.id) BEGIN SELECT 1; END;
-        CREATE TRIGGER companion_folder_detach BEFORE DELETE ON folders BEGIN SELECT 1; END;
-        """)
-    }
-
-    let upgraded = try await WorkspaceDatabase(url: mac.database.fileURL)
-    #expect(try await upgraded.libraryID() == libraryID)
-    #expect(try await upgraded.read { try $0.historyRowsUnlocked("SELECT name FROM sqlite_master WHERE name LIKE 'companion%' OR sql LIKE '%companion\\_%' ESCAPE '\\'", values: []) }.isEmpty)
-    #expect(try await upgraded.read { try $0.historyRowsUnlocked("SELECT device_id FROM calendar_task_executors WHERE event_id='event'", values: []).first?.objectValue?["device_id"]?.stringValue } == "phone")
-    #expect(try await upgraded.read { try $0.historyRowsUnlocked("SELECT workspace_id FROM execution_conversations WHERE id='chat'", values: []).first?.objectValue?["workspace_id"]?.stringValue } == "linux")
-    #expect(try await upgraded.read { try $0.historyRowsUnlocked("SELECT 1 AS present FROM paired_library_rows WHERE table_name='calendar_task_executors' AND json_extract(payload,'$.table')='calendar_task_executors'", values: []) }.count == 1)
-    #expect(try await upgraded.read { try $0.historyRowsUnlocked("SELECT 1 AS present FROM paired_library_changes WHERE payload LIKE '%companion%' UNION ALL SELECT 1 FROM paired_library_rows WHERE table_name LIKE 'companion%'", values: []) }.isEmpty)
-    #expect(try await upgraded.pairedLibrarySchema() == fresh.database.pairedLibrarySchema())
-
-    let session = try await upgraded.createFixtureLocalACPSession(runtimeKind: .codex, title: "After the upgrade", ownerDeviceID: UUID())
-    #expect(try await upgraded.read { try $0.historyRowsUnlocked("SELECT device_id FROM paired_conversation_owners WHERE id=?", values: [session]) }.count == 1)
-    try await mac.note(UUID().uuidString.lowercased(), title: "Still saves")
-    try await exchange(from: upgraded, mac.id, to: fresh.database)
-    #expect(try await fresh.database.read { try $0.historyRowsUnlocked("SELECT device_id FROM calendar_task_executors WHERE event_id='event'", values: []).first?.objectValue?["device_id"]?.stringValue } == "phone")
-    #expect(try await fresh.database.pairedLibraryQuarantineCount() == 0)
   }
 
   @Test func aTrulyDifferentSchemaStillMismatches() async throws {

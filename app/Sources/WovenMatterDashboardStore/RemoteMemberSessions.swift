@@ -64,7 +64,7 @@ extension WorkspaceDatabaseConnection {
   public func interruptLegacyRemoteRuns(conversationID: String) throws {
     try transaction {
       guard try federationScalarUnlocked("""
-        SELECT COUNT(*) FROM desktop_local_acp_sessions s WHERE s.conversation_id=? AND s.remote_workspace_id IS NOT NULL
+        SELECT COUNT(*) FROM harness_sessions s WHERE s.conversation_id=? AND s.remote_workspace_id IS NOT NULL
           AND NOT EXISTS (SELECT 1 FROM execution_conversations x WHERE x.id=s.conversation_id)
         """, bindings: [conversationID]) != 0 else { return }
       try interruptLegacyRemoteRunsUnlocked(conversationID: conversationID)
@@ -77,7 +77,7 @@ extension WorkspaceDatabaseConnection {
   /// this Mac; the update that removed the SSH path is what interrupted it.
   func interruptLegacyRemoteRunsUnlocked(conversationID: String) throws {
     let workspaceID = try libraryIDsUnlocked("""
-      SELECT remote_workspace_id FROM desktop_local_acp_sessions WHERE conversation_id=? AND remote_workspace_id IS NOT NULL
+      SELECT remote_workspace_id FROM harness_sessions WHERE conversation_id=? AND remote_workspace_id IS NOT NULL
       """, bindings: [conversationID]).first
     let name = try workspaceID.flatMap { try federationWorkspaceUnlocked($0)?.name }
       .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.flatMap { $0.isEmpty ? nil : $0 }
@@ -85,12 +85,12 @@ extension WorkspaceDatabaseConnection {
     let now = Self.timestamp(Date())
     let unsettled = "('running','queued','pending','cancelling','uncertain')"
     try toolsExecuteUnlocked("""
-      UPDATE dashboard_messages SET content=CASE WHEN content='' THEN ? ELSE content END,status='interrupted',updated_at=?
-      WHERE role='assistant' AND id IN (SELECT assistant_message_id FROM dashboard_runs
+      UPDATE messages SET content=CASE WHEN content='' THEN ? ELSE content END,status='interrupted',updated_at=?
+      WHERE role='assistant' AND id IN (SELECT assistant_message_id FROM runs
         WHERE conversation_id=? AND status IN \(unsettled))
       """, [detail, now, conversationID])
     try toolsExecuteUnlocked("""
-      UPDATE dashboard_runs SET status='interrupted',error=?,updated_at=?,completed_at=COALESCE(completed_at,?)
+      UPDATE runs SET status='interrupted',error=?,updated_at=?,completed_at=COALESCE(completed_at,?)
       WHERE conversation_id=? AND status IN \(unsettled)
       """, [detail, now, now, conversationID])
   }

@@ -32,7 +32,7 @@ public struct PiBotDisplayEntry: Codable, Equatable, Identifiable, Sendable {
 }
 
 public struct PiBotConversationSnapshot: Decodable, Sendable {
-    public let subscriptionId: GatewayJSONValue?
+    public let subscriptionId: JSONValue?
     public let botId: String
     public let conversationId: Int
     public let mainConversationId: Int
@@ -41,7 +41,7 @@ public struct PiBotConversationSnapshot: Decodable, Sendable {
     public let running: Bool
     public let streaming: String?
 
-    public init(subscriptionId: GatewayJSONValue? = nil, botId: String, conversationId: Int, mainConversationId: Int,
+    public init(subscriptionId: JSONValue? = nil, botId: String, conversationId: Int, mainConversationId: Int,
                 threadOrigin: PiBotDisplayEntry? = nil, entries: [PiBotDisplayEntry] = [], running: Bool = false,
                 streaming: String? = nil) {
         self.subscriptionId = subscriptionId; self.botId = botId; self.conversationId = conversationId
@@ -65,7 +65,7 @@ public enum PiBotStreamEvent: Equatable, Sendable {
         let message: String?
     }
 
-    public init?(json: GatewayJSONValue) {
+    public init?(json: JSONValue) {
         guard let data = try? JSONEncoder().encode(json), let wire = try? JSONDecoder().decode(Wire.self, from: data) else { return nil }
         switch wire.kind {
         case "run": self = .run(started: wire.state == "start")
@@ -398,12 +398,12 @@ public struct PiBotProfileDraft: Equatable, Sendable {
             && (!isNew || !id.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty) && fallbackProblem == nil
     }
 
-    public var wire: GatewayJSONValue {
-        var fields: [String: GatewayJSONValue] = [
+    public var wire: JSONValue {
+        var fields: [String: JSONValue] = [
             "id": .string(id.trimmingCharacters(in: .whitespacesAndNewlines)),
             "name": .string(name.trimmingCharacters(in: .whitespacesAndNewlines)),
             "main": .string(main),
-            "fallbacks": .array(fallbackModels.map(GatewayJSONValue.string)),
+            "fallbacks": .array(fallbackModels.map(JSONValue.string)),
             "pool": .array(pool.filter { !$0.model.isEmpty }.map {
                 .object(["model": .string($0.model), "useFor": .string($0.useFor.trimmingCharacters(in: .whitespacesAndNewlines))])
             }),

@@ -20,10 +20,9 @@ extension WorkspaceDatabaseConnection {
 
   public func librarySnapshot(bodyByteBudget: Int = 1_024 * 1_024) throws -> LibrarySnapshot {
     try transaction {
-      let operatorID = try localMutationOperatorIDUnlocked()
-      let folders = try libraryIDsUnlocked("SELECT id FROM folders WHERE user_id = ? ORDER BY position, id", bindings: [operatorID])
-      let notes = try libraryIDsUnlocked("SELECT id FROM notes WHERE user_id = ? AND deleted_at IS NULL ORDER BY updated_at DESC, id", bindings: [operatorID])
-      let conversations = try libraryIDsUnlocked("SELECT id FROM dashboard_conversations WHERE (user_id = ? OR desktop_owned = 1) AND deleted_at IS NULL AND is_archived = 0 ORDER BY updated_at DESC, id", bindings: [operatorID])
+      let folders = try libraryIDsUnlocked("SELECT id FROM folders ORDER BY position, id", bindings: [])
+      let notes = try libraryIDsUnlocked("SELECT id FROM notes WHERE deleted_at IS NULL ORDER BY updated_at DESC, id", bindings: [])
+      let conversations = try libraryIDsUnlocked("SELECT id FROM conversations WHERE deleted_at IS NULL AND is_archived = 0 ORDER BY updated_at DESC, id", bindings: [])
       var remainingBodyBytes = max(0, min(bodyByteBudget, 4 * 1_024 * 1_024))
       return try LibrarySnapshot(
         workspaceID: libraryIDUnlocked(), cursor: libraryCursorUnlocked(),
@@ -125,9 +124,9 @@ extension WorkspaceDatabaseConnection {
   }
 
   func libraryFolderUnlocked(id: String) throws -> LibraryFolder? {
-    let statement = try prepareUnlocked("SELECT id, name, updated_at, (SELECT workspace_id FROM folder_execution_roots WHERE folder_id=folders.id), (SELECT root_path FROM folder_execution_roots WHERE folder_id=folders.id) FROM folders WHERE id = ? AND user_id = ?")
+    let statement = try prepareUnlocked("SELECT id, name, updated_at, (SELECT workspace_id FROM folder_execution_roots WHERE folder_id=folders.id), (SELECT root_path FROM folder_execution_roots WHERE folder_id=folders.id) FROM folders WHERE id = ?")
     defer { sqlite3_finalize(statement) }
-    try bind(id, at: 1, to: statement); try bind(localMutationOperatorIDUnlocked(), at: 2, to: statement)
+    try bind(id, at: 1, to: statement)
     let code = sqlite3_step(statement)
     if code == SQLITE_DONE { return nil }
     guard code == SQLITE_ROW else { throw stepError() }
@@ -140,9 +139,9 @@ extension WorkspaceDatabaseConnection {
   }
 
   func libraryNoteUnlocked(id: String) throws -> LibraryNote? {
-    let statement = try prepareUnlocked("SELECT id, folder_id, title, content, updated_at, is_pinned FROM notes WHERE id = ? AND user_id = ? AND deleted_at IS NULL")
+    let statement = try prepareUnlocked("SELECT id, folder_id, title, content, updated_at, is_pinned FROM notes WHERE id = ? AND deleted_at IS NULL")
     defer { sqlite3_finalize(statement) }
-    try bind(id, at: 1, to: statement); try bind(localMutationOperatorIDUnlocked(), at: 2, to: statement)
+    try bind(id, at: 1, to: statement)
     let code = sqlite3_step(statement)
     if code == SQLITE_DONE { return nil }
     guard code == SQLITE_ROW else { throw stepError() }
@@ -181,13 +180,13 @@ extension WorkspaceDatabaseConnection {
           ELSE NULL END,
         s.runtime_kind,
         c.last_message_preview, c.updated_at,
-        (SELECT id FROM dashboard_runs WHERE conversation_id = c.id AND status = 'running' ORDER BY created_at DESC LIMIT 1),
+        (SELECT id FROM runs WHERE conversation_id = c.id AND status = 'running' ORDER BY created_at DESC LIMIT 1),
         s.remote_workspace_id, c.is_pinned
-      FROM dashboard_conversations c LEFT JOIN desktop_local_acp_sessions s ON s.conversation_id = c.id
-      WHERE c.id = ? AND (c.user_id = ? OR c.desktop_owned = 1) AND c.deleted_at IS NULL AND c.is_archived = 0
+      FROM conversations c LEFT JOIN harness_sessions s ON s.conversation_id = c.id
+      WHERE c.id = ? AND c.deleted_at IS NULL AND c.is_archived = 0
       """)
     defer { sqlite3_finalize(statement) }
-    try bind(id, at: 1, to: statement); try bind(localMutationOperatorIDUnlocked(), at: 2, to: statement)
+    try bind(id, at: 1, to: statement)
     let code = sqlite3_step(statement)
     if code == SQLITE_DONE { return nil }
     guard code == SQLITE_ROW else { throw stepError() }

@@ -45,8 +45,8 @@ struct PairedWorkspaceSidebarTests {
     /// not those this Mac already offers through a Linux host it manages.
     @Test func newChatListsEveryOtherMacAndLinuxWorkspaceButNeverThePhone() throws {
         func agent(_ runtime: AgentRuntimeKind) -> WorkspaceAgent {
-            .init(userID: "user", codename: runtime.rawValue, displayName: runtime.displayName, iconKey: "bot",
-                  executionLocation: .remote, governingPlane: .remoteWorkspace, runtimeKind: runtime)
+            .init(codename: runtime.rawValue, displayName: runtime.displayName, iconKey: "bot",
+                  executionLocation: .remote, runtimeKind: runtime)
         }
         let mac = ExecutionWorkspace(id: UUID().uuidString.lowercased(), libraryID: "library", ownerDeviceID: "mac-b", kind: .mac, name: "Studio")
         let linux = ExecutionWorkspace(id: UUID().uuidString.lowercased(), libraryID: "library", ownerDeviceID: "mac-b", kind: .linux, name: "Workstation")

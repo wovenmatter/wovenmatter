@@ -212,7 +212,6 @@ public struct WorkspaceMessageAttachmentRecord: Codable, Equatable, Identifiable
   public let mimeType: String
   public let sizeBytes: Int64
   public let contentHash: String?
-  public let gatewayMediaRef: String?
   public let createdAt: String
 
   enum CodingKeys: String, CodingKey {
@@ -223,7 +222,6 @@ public struct WorkspaceMessageAttachmentRecord: Codable, Equatable, Identifiable
     case mimeType = "mime_type"
     case sizeBytes = "size_bytes"
     case contentHash = "content_hash"
-    case gatewayMediaRef = "gateway_media_ref"
     case createdAt = "created_at"
   }
 }

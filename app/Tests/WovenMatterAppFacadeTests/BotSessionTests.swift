@@ -35,7 +35,7 @@ struct BotSessionTests {
         let other = try #require(try await fixture.database.workspaceOverview().conversations.first { $0.id != child.id })
         #expect(try await fixture.database.sessionRelationship(other.id).coordinatorID == nil)
         let context = await tools.handle(.init(arguments: ["context"]), callerID: caller)
-        #expect(context.success && context.result == GatewayJSONValue.null)
+        #expect(context.success && context.result == JSONValue.null)
     }
 
     /// A bot's own timers appear under the bot (its principal), never under a chat.

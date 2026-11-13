@@ -804,13 +804,13 @@ struct WorkspaceView: View {
                         finishChatCreation(selection, conversationID: id)
                     } catch { finishChatCreation(selection, conversationID: nil); showNotice(error.localizedDescription) }
                 }
-            } else if agent.governingPlane == .remoteWorkspace,
+            } else if agent.executionLocation == .remote,
                let target = model.remoteWorkspaces.readyChatTargets.first(where: {
                    $0.configuration.id == agent.runtimeDeviceID && $0.harness.id == agent.runtimeKind
                }) {
                 startRemoteChat(target)
 
-            } else if agent.governingPlane != .remoteWorkspace {
+            } else if agent.executionLocation != .remote {
                 startDirectChat(agent.runtimeKind)
             } else {
                 showNotice("Connect this workspace before starting a chat.")
@@ -1098,7 +1098,7 @@ struct WorkspaceView: View {
     private func startDirectChat(_ runtimeKind: AgentRuntimeKind) {
         let requestedFolderID = selectedFolderID
         let selection = beginChatCreation(agentID: allAgents.first {
-            $0.governingPlane != .remoteWorkspace && $0.runtimeKind == runtimeKind
+            $0.executionLocation != .remote && $0.runtimeKind == runtimeKind
         }?.id)
         Task {
             guard let conversationID = await model.createLocalACPSession(
@@ -1119,7 +1119,7 @@ struct WorkspaceView: View {
     private func startRemoteChat(_ target: RemoteHarnessChatTarget) {
         let requestedFolderID = selectedFolderID
         let selection = beginChatCreation(agentID: allAgents.first {
-            $0.governingPlane == .remoteWorkspace && $0.runtimeDeviceID == target.configuration.id && $0.runtimeKind == target.harness.id
+            $0.executionLocation == .remote && $0.runtimeDeviceID == target.configuration.id && $0.runtimeKind == target.harness.id
         }?.id)
         Task {
             guard let conversationID = await model.createRemoteACPSession(

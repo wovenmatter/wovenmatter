@@ -40,10 +40,6 @@ extension WorkspaceDatabaseConnection {
     _ context: AgentNoteContext?,
     identifiers: LocalACPRunIdentifiers,
     conversationID: String,
-    userID: String,
-    governingPlane: String,
-    authorityDeviceID: String?,
-    authorityAgentID: String?,
     createdAt: Date
   ) throws {
     guard let context else { return }
@@ -51,64 +47,50 @@ extension WorkspaceDatabaseConnection {
       // This executes inside run acceptance, after any asynchronous discovery or
       // attachment staging, so a phone cannot grant editing from a stale base.
       try requireToolUnlocked(.notes, sessionID: conversationID)
-      let current = try noteForEditingUnlocked(id: context.noteID,
-        operatorID: localMutationOperatorIDUnlocked())
+      let current = try noteForEditingUnlocked(id: context.noteID)
       guard current.revision == context.revision else {
         throw WorkspaceNoteMutationError.revisionConflict
       }
     }
     let timestamp = Self.timestamp(createdAt)
     let reference = try prepareUnlocked("""
-      INSERT INTO dashboard_message_references (
-        id, conversation_id, message_id, user_id, governing_plane,
-        authority_kind, authority_device_id, authority_agent_id, desktop_owned,
-        resource_type, resource_id, source, title_snapshot, folder_id_snapshot,
-        revision_snapshot, created_at
-      ) VALUES (?, ?, ?, ?, ?, 'device_owned', ?, ?, 1,
-        'note', ?, 'open_note', ?, ?, ?, ?)
+      INSERT INTO message_references (
+        id, conversation_id, message_id, resource_type, resource_id, source,
+        title_snapshot, folder_id_snapshot, revision_snapshot, created_at
+      ) VALUES (?, ?, ?, 'note', ?, 'open_note', ?, ?, ?, ?)
       """)
     defer { sqlite3_finalize(reference) }
     try bind(UUID().uuidString.lowercased(), at: 1, to: reference)
     try bind(conversationID, at: 2, to: reference)
     try bind(identifiers.userMessageID, at: 3, to: reference)
-    try bind(userID, at: 4, to: reference)
-    try bind(governingPlane, at: 5, to: reference)
-    try bindNullable(authorityDeviceID, at: 6, to: reference)
-    try bindNullable(authorityAgentID, at: 7, to: reference)
-    try bind(context.noteID, at: 8, to: reference)
-    try bind(context.title, at: 9, to: reference)
-    try bindNullable(context.folderID, at: 10, to: reference)
-    try bind(context.revision, at: 11, to: reference)
-    try bind(timestamp, at: 12, to: reference)
+    try bind(context.noteID, at: 4, to: reference)
+    try bind(context.title, at: 5, to: reference)
+    try bindNullable(context.folderID, at: 6, to: reference)
+    try bind(context.revision, at: 7, to: reference)
+    try bind(timestamp, at: 8, to: reference)
     try stepDone(reference)
 
     let visibleContext = try prepareUnlocked("""
-      INSERT INTO dashboard_run_visible_context (
-        run_id, message_id, conversation_id, user_id, governing_plane,
-        authority_kind, authority_device_id, authority_agent_id, desktop_owned,
-        note_id, note_title_snapshot, folder_id_snapshot, revision_snapshot,
-        created_at
-      ) VALUES (?, ?, ?, ?, ?, 'device_owned', ?, ?, 1, ?, ?, ?, ?, ?)
+      INSERT INTO run_visible_notes (
+        run_id, message_id, conversation_id, note_id, note_title_snapshot,
+        folder_id_snapshot, revision_snapshot, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
       """)
     defer { sqlite3_finalize(visibleContext) }
     try bind(identifiers.runID, at: 1, to: visibleContext)
     try bind(identifiers.userMessageID, at: 2, to: visibleContext)
     try bind(conversationID, at: 3, to: visibleContext)
-    try bind(userID, at: 4, to: visibleContext)
-    try bind(governingPlane, at: 5, to: visibleContext)
-    try bindNullable(authorityDeviceID, at: 6, to: visibleContext)
-    try bindNullable(authorityAgentID, at: 7, to: visibleContext)
-    try bind(context.noteID, at: 8, to: visibleContext)
-    try bind(context.title, at: 9, to: visibleContext)
-    try bindNullable(context.folderID, at: 10, to: visibleContext)
-    try bind(context.revision, at: 11, to: visibleContext)
-    try bind(timestamp, at: 12, to: visibleContext)
+    try bind(context.noteID, at: 4, to: visibleContext)
+    try bind(context.title, at: 5, to: visibleContext)
+    try bindNullable(context.folderID, at: 6, to: visibleContext)
+    try bind(context.revision, at: 7, to: visibleContext)
+    try bind(timestamp, at: 8, to: visibleContext)
     try stepDone(visibleContext)
 
     if let nonce = context.remoteEditNonce,
        let kind = context.artifactKind {
       let pending = try prepareUnlocked("""
-        INSERT INTO desktop_remote_note_edits (
+        INSERT INTO remote_note_edits (
           run_id, assistant_message_id, note_id, expected_revision,
           nonce, note_kind, state, created_at, updated_at
         ) VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?)
@@ -131,9 +113,9 @@ extension WorkspaceDatabaseConnection {
       let statement = try prepareUnlocked("""
         SELECT edit.run_id, edit.assistant_message_id, edit.note_id,
           edit.expected_revision, edit.nonce, edit.note_kind, message.content
-        FROM desktop_remote_note_edits AS edit
-        JOIN dashboard_runs AS run ON run.id = edit.run_id
-        JOIN dashboard_messages AS message
+        FROM remote_note_edits AS edit
+        JOIN runs AS run ON run.id = edit.run_id
+        JOIN messages AS message
           ON message.id = edit.assistant_message_id AND message.run_id = edit.run_id
         WHERE edit.state = 'pending' AND run.status = 'completed'
         ORDER BY edit.created_at, edit.run_id
@@ -165,9 +147,9 @@ extension WorkspaceDatabaseConnection {
     try transaction {
       let authorization = try prepareUnlocked("""
         SELECT run.status
-        FROM desktop_remote_note_edits AS edit
-        JOIN dashboard_runs AS run ON run.id = edit.run_id
-        JOIN dashboard_run_visible_context AS context ON context.run_id = edit.run_id
+        FROM remote_note_edits AS edit
+        JOIN runs AS run ON run.id = edit.run_id
+        JOIN run_visible_notes AS context ON context.run_id = edit.run_id
         WHERE edit.run_id = ? AND edit.state = 'pending'
           AND edit.assistant_message_id = ? AND edit.note_id = ?
           AND edit.expected_revision = ? AND edit.nonce = ? AND edit.note_kind = ?
@@ -188,8 +170,7 @@ extension WorkspaceDatabaseConnection {
             envelope.expectedRevision == pending.expectedRevision else {
         throw RemoteNoteEditError.invalidEnvelope
       }
-      let operatorID = try localMutationOperatorIDUnlocked()
-      let note = try noteForEditingUnlocked(id: pending.noteID, operatorID: operatorID)
+      let note = try noteForEditingUnlocked(id: pending.noteID)
       guard note.revision == pending.expectedRevision else {
         throw WorkspaceNoteMutationError.revisionConflict
       }
@@ -202,7 +183,7 @@ extension WorkspaceDatabaseConnection {
       ))
       let timestamp = Self.timestamp(Date())
       let message = try prepareUnlocked("""
-        UPDATE dashboard_messages SET content = ?, updated_at = ?
+        UPDATE messages SET content = ?, updated_at = ?
         WHERE id = ? AND run_id = ? AND role = 'assistant'
         """)
       defer { sqlite3_finalize(message) }
@@ -215,15 +196,15 @@ extension WorkspaceDatabaseConnection {
         throw RemoteNoteEditError.invalidEnvelope
       }
       let conversation = try prepareUnlocked("""
-        UPDATE dashboard_conversations
+        UPDATE conversations
         SET last_message_preview = ?, updated_at = ?
         WHERE id = (
-          SELECT conversation_id FROM dashboard_messages WHERE id = ?
+          SELECT conversation_id FROM messages WHERE id = ?
         ) AND NOT EXISTS (
-          SELECT 1 FROM dashboard_messages AS newer
-          WHERE newer.conversation_id = dashboard_conversations.id
+          SELECT 1 FROM messages AS newer
+          WHERE newer.conversation_id = conversations.id
             AND newer.created_at > (
-              SELECT created_at FROM dashboard_messages WHERE id = ?
+              SELECT created_at FROM messages WHERE id = ?
             )
         )
         """)
@@ -234,7 +215,7 @@ extension WorkspaceDatabaseConnection {
       try bind(pending.assistantMessageID, at: 4, to: conversation)
       try stepDone(conversation)
       let complete = try prepareUnlocked("""
-        UPDATE desktop_remote_note_edits
+        UPDATE remote_note_edits
         SET state = 'applied', updated_at = ?
         WHERE run_id = ? AND state = 'pending'
         """)
@@ -253,8 +234,8 @@ extension WorkspaceDatabaseConnection {
     try transaction {
       let lookup = try prepareUnlocked("""
         SELECT message.id, message.content
-        FROM desktop_remote_note_edits AS edit
-        JOIN dashboard_messages AS message
+        FROM remote_note_edits AS edit
+        JOIN messages AS message
           ON message.id = edit.assistant_message_id AND message.run_id = edit.run_id
         WHERE edit.run_id = ? AND edit.state = 'pending'
         """)
@@ -267,7 +248,7 @@ extension WorkspaceDatabaseConnection {
           in: try text(lookup, column: 1)
         )
         let message = try prepareUnlocked("""
-          UPDATE dashboard_messages SET content = ?, updated_at = ? WHERE id = ?
+          UPDATE messages SET content = ?, updated_at = ? WHERE id = ?
           """)
         defer { sqlite3_finalize(message) }
         try bind(visible, at: 1, to: message)
@@ -275,13 +256,13 @@ extension WorkspaceDatabaseConnection {
         try bind(messageID, at: 3, to: message)
         try stepDone(message)
         let conversation = try prepareUnlocked("""
-          UPDATE dashboard_conversations SET last_message_preview = ?, updated_at = ?
-          WHERE id = (SELECT conversation_id FROM dashboard_messages WHERE id = ?)
+          UPDATE conversations SET last_message_preview = ?, updated_at = ?
+          WHERE id = (SELECT conversation_id FROM messages WHERE id = ?)
             AND NOT EXISTS (
-              SELECT 1 FROM dashboard_messages AS newer
-              WHERE newer.conversation_id = dashboard_conversations.id
+              SELECT 1 FROM messages AS newer
+              WHERE newer.conversation_id = conversations.id
                 AND newer.created_at > (
-                  SELECT created_at FROM dashboard_messages WHERE id = ?
+                  SELECT created_at FROM messages WHERE id = ?
                 )
             )
           """)
@@ -293,7 +274,7 @@ extension WorkspaceDatabaseConnection {
         try stepDone(conversation)
       }
       let statement = try prepareUnlocked("""
-        UPDATE desktop_remote_note_edits SET state = 'dismissed', updated_at = ?
+        UPDATE remote_note_edits SET state = 'dismissed', updated_at = ?
         WHERE run_id = ? AND state = 'pending'
         """)
       defer { sqlite3_finalize(statement) }
@@ -306,8 +287,8 @@ extension WorkspaceDatabaseConnection {
   public func dismissTerminalRemoteNoteEdits() throws {
     let runIDs = try withLock {
       let statement = try prepareUnlocked("""
-        SELECT edit.run_id FROM desktop_remote_note_edits AS edit
-        JOIN dashboard_runs AS run ON run.id = edit.run_id
+        SELECT edit.run_id FROM remote_note_edits AS edit
+        JOIN runs AS run ON run.id = edit.run_id
         WHERE edit.state = 'pending' AND run.status IN ('failed', 'cancelled')
         """)
       defer { sqlite3_finalize(statement) }
@@ -347,32 +328,29 @@ extension WorkspaceDatabaseConnection {
           throw WorkspaceToolError.invalid("A note document must be at most 1 MiB.")
         }
         let noteID = id.uuidString.lowercased()
-        let operatorID = try localMutationOperatorIDUnlocked()
-        try validateFolderUnlocked(id: folderID, operatorID: operatorID)
+        try validateFolderUnlocked(id: folderID)
         let timestamp = Self.timestamp(createdAt)
         let position = try nextNotePositionUnlocked(
-          folderID: folderID,
-          operatorID: operatorID
+          folderID: folderID
         )
 
         let note = try prepareUnlocked("""
           INSERT INTO notes (
-            id, user_id, folder_id, title, content, snippet, is_pinned, position,
+            id, folder_id, title, content, snippet, is_pinned, position,
             created_at, updated_at
-          ) VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?, ?)
+          ) VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?)
           """)
         defer { sqlite3_finalize(note) }
         try bind(noteID, at: 1, to: note)
-        try bind(operatorID, at: 2, to: note)
-        try bindNullable(folderID, at: 3, to: note)
-        try bind(title, at: 4, to: note)
-        try bind(content, at: 5, to: note)
-        try bind(Self.noteSnippet(content), at: 6, to: note)
-        guard sqlite3_bind_int64(note, 7, Int64(position)) == SQLITE_OK else {
+        try bindNullable(folderID, at: 2, to: note)
+        try bind(title, at: 3, to: note)
+        try bind(content, at: 4, to: note)
+        try bind(Self.noteSnippet(content), at: 5, to: note)
+        guard sqlite3_bind_int64(note, 6, Int64(position)) == SQLITE_OK else {
           throw bindError()
         }
+        try bind(timestamp, at: 7, to: note)
         try bind(timestamp, at: 8, to: note)
-        try bind(timestamp, at: 9, to: note)
         try stepDone(note)
 
         try checkpointNoteUnlocked(id: noteID, source: "created", force: true)
@@ -400,8 +378,7 @@ extension WorkspaceDatabaseConnection {
         }
         return true
       }
-      let operatorID = try localMutationOperatorIDUnlocked()
-      let note = try noteForEditingUnlocked(id: id, operatorID: operatorID)
+      let note = try noteForEditingUnlocked(id: id)
       if note.title == title, note.content == content {
         try saveLibraryDraftReceiptUnlocked(operationID: operationID, id: id,
           title: title, content: content, revision: note.revision)
@@ -418,12 +395,12 @@ extension WorkspaceDatabaseConnection {
       }
       try checkpointNoteUnlocked(id: id, source: "editor", force: false)
       try toolsExecuteUnlocked(
-        "UPDATE notes SET title = ?, content = ?, snippet = ?, updated_at = ? WHERE id = ? AND user_id = ? AND deleted_at IS NULL",
-        [title, content, Self.noteSnippet(content), try nextNoteUpdatedAtUnlocked(id: id, now: updatedAt), id, operatorID]
+        "UPDATE notes SET title = ?, content = ?, snippet = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL",
+        [title, content, Self.noteSnippet(content), try nextNoteUpdatedAtUnlocked(id: id, now: updatedAt), id]
       )
       guard changedRowCountUnlocked == 1 else { throw WorkspaceNoteMutationError.noteNotFound }
       try checkpointNoteUnlocked(id: id, source: "editor", force: false)
-      let revision = try noteForEditingUnlocked(id: id, operatorID: operatorID).revision
+      let revision = try noteForEditingUnlocked(id: id).revision
       try saveLibraryDraftReceiptUnlocked(operationID: operationID, id: id,
         title: title, content: content, revision: revision)
       return true
@@ -433,8 +410,7 @@ extension WorkspaceDatabaseConnection {
   public func readNoteForEditing(id: String, callerConversationID: String? = nil) throws -> NoteEditingResponse {
     try withLock {
       if let callerConversationID { try requireToolUnlocked(.notes, sessionID: callerConversationID) }
-      let operatorID = try localMutationOperatorIDUnlocked()
-      let note = try noteForEditingUnlocked(id: id, operatorID: operatorID)
+      let note = try noteForEditingUnlocked(id: id)
       return NoteEditingResponse(
         success: true,
         noteID: id,
@@ -466,8 +442,7 @@ extension WorkspaceDatabaseConnection {
   private func applyNoteEditsUnlocked(
     _ request: NoteEditingRequest
   ) throws -> NoteEditingResponse {
-    let operatorID = try localMutationOperatorIDUnlocked()
-    let note = try noteForEditingUnlocked(id: request.noteID, operatorID: operatorID)
+    let note = try noteForEditingUnlocked(id: request.noteID)
     if let expected = request.expectedRevision, expected != note.revision {
       throw WorkspaceNoteMutationError.revisionConflict
     }
@@ -492,7 +467,7 @@ extension WorkspaceDatabaseConnection {
     let updatedAt = try nextNoteUpdatedAtUnlocked(id: request.noteID)
     let update = try prepareUnlocked("""
       UPDATE notes SET title = ?, content = ?, snippet = ?, updated_at = ?
-      WHERE id = ? AND user_id = ? AND deleted_at IS NULL
+      WHERE id = ? AND deleted_at IS NULL
       """)
     defer { sqlite3_finalize(update) }
     try bind(updatedTitle, at: 1, to: update)
@@ -500,7 +475,6 @@ extension WorkspaceDatabaseConnection {
     try bind(Self.noteSnippet(content), at: 3, to: update)
     try bind(updatedAt, at: 4, to: update)
     try bind(request.noteID, at: 5, to: update)
-    try bind(operatorID, at: 6, to: update)
     try stepDone(update)
     guard changedRowCountUnlocked == 1 else {
       throw WorkspaceNoteMutationError.noteNotFound
@@ -508,44 +482,40 @@ extension WorkspaceDatabaseConnection {
     try checkpointNoteUnlocked(id: request.noteID, source: "agent", force: true)
     return NoteEditingResponse(
       success: true, noteID: request.noteID, title: updatedTitle,
-      revision: try noteForEditingUnlocked(id: request.noteID, operatorID: operatorID).revision, document: document
+      revision: try noteForEditingUnlocked(id: request.noteID).revision, document: document
     )
   }
 
   private func nextNotePositionUnlocked(
-    folderID: String?,
-    operatorID: String
+    folderID: String?
   ) throws -> Int {
     let statement = try prepareUnlocked(folderID == nil ? """
       SELECT COALESCE(MAX(position), -1) + 1
       FROM notes
-      WHERE user_id = ? AND folder_id IS NULL AND deleted_at IS NULL
+      WHERE folder_id IS NULL AND deleted_at IS NULL
       """ : """
       SELECT COALESCE(MAX(position), -1) + 1
       FROM notes
-      WHERE user_id = ? AND folder_id = ? AND deleted_at IS NULL
+      WHERE folder_id = ? AND deleted_at IS NULL
       """)
     defer { sqlite3_finalize(statement) }
-    try bind(operatorID, at: 1, to: statement)
     if let folderID {
-      try bind(folderID, at: 2, to: statement)
+      try bind(folderID, at: 1, to: statement)
     }
     guard sqlite3_step(statement) == SQLITE_ROW else { throw stepError() }
     return Int(sqlite3_column_int64(statement, 0))
   }
 
   func noteForEditingUnlocked(
-    id: String,
-    operatorID: String
+    id: String
   ) throws -> (title: String, content: String, revision: String) {
     let statement = try prepareUnlocked("""
       SELECT title, content, CAST(COALESCE((SELECT revision FROM device_sync_revisions WHERE kind = 'note' AND resource_id = notes.id), 1) AS TEXT)
       FROM notes
-      WHERE id = ? AND user_id = ? AND deleted_at IS NULL
+      WHERE id = ? AND deleted_at IS NULL
       """)
     defer { sqlite3_finalize(statement) }
     try bind(id, at: 1, to: statement)
-    try bind(operatorID, at: 2, to: statement)
     guard sqlite3_step(statement) == SQLITE_ROW else {
       throw WorkspaceNoteMutationError.noteNotFound
     }

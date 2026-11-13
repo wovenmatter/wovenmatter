@@ -358,7 +358,7 @@ struct CrossDeviceFlowTests {
     let command = LibraryCommand(deviceID: fixture.credential.deviceID, kind: .send, conversationID: conversationID, text: "Continue on Mac")
     let sending = Task { try await engine.submit(command) }
     await fixture.commands.waitUntilStarted()
-    #expect(try await fixture.database.activeDeviceOwnedConversationIDs().contains(conversationID))
+    #expect(try await fixture.database.activeLocalConversationIDs().contains(conversationID))
     sending.cancel() // The HTTP client's task does not own the retained dispatcher work.
     fixture.activity.active = false
     let pending = try await fixture.mobile.createNote(folderID: nil, title: "Offline while stopped", content: richDocument("Saved locally"))
@@ -374,7 +374,7 @@ struct CrossDeviceFlowTests {
     let receipt = try #require(try await fixture.database.libraryCommandReceipt(deviceID: command.deviceID, commandID: command.commandID))
     #expect(receipt.status == .completed)
     #expect(fixture.commands.received.count == 1)
-    #expect(try await fixture.database.activeDeviceOwnedConversationIDs().isEmpty)
+    #expect(try await fixture.database.activeLocalConversationIDs().isEmpty)
   }
 
   private func richDocument(_ text: String) throws -> String {

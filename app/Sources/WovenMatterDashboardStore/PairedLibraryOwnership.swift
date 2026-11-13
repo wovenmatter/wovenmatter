@@ -6,7 +6,7 @@ import WovenMatterCore
 /// Mac's library identity. Unknown ownership, such as a partially received peer
 /// import whose owner record has not arrived yet, is read-only.
 ///
-/// Native `authority_device_id` values use the dashboard device identity and are
+/// Native `owner_device_id` values use the `dashboard-device-id` identity and are
 /// deliberately not compared with the library `host_device_id` here.
 enum PairedLibraryOwnership {
   /// SQL boolean for a conversation executed natively by this Mac. Independent

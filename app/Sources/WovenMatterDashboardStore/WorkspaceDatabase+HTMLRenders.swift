@@ -17,7 +17,7 @@ extension WorkspaceDatabaseConnection {
       let activityID = "html-render:" + requestID
       let payload = String(decoding: try JSONEncoder().encode(page), as: UTF8.self)
       let prior = try historyRowsUnlocked("""
-        SELECT content FROM dashboard_run_events
+        SELECT content FROM run_activities
         WHERE conversation_id=? AND id LIKE ?
         """, values: [target, "%:activity:" + activityID]).first?.objectValue?["content"]?.stringValue
       if let prior {
@@ -30,13 +30,12 @@ extension WorkspaceDatabaseConnection {
         return reference
       }
       guard let runID = try historyRowsUnlocked("""
-        SELECT id FROM dashboard_runs WHERE conversation_id=? AND status='running'
-          AND authority_kind='device_owned' ORDER BY created_at DESC LIMIT 1
+        SELECT id FROM runs WHERE conversation_id=? AND status='running' ORDER BY created_at DESC LIMIT 1
         """, values: [target]).first?.objectValue?["id"]?.stringValue else {
         throw WorkspaceToolError.invalid("HTML pages can only be published by an active run in this conversation.")
       }
       let reference = ConversationHTMLRenderReference(id: requestID, title: page.title, height: page.height)
-      try upsertDeviceOwnedRunActivityUnlocked(runID: runID,
+      try upsertRunActivityUnlocked(runID: runID,
         activity: .init(id: activityID, kind: .activity, phase: "completed", title: page.title,
           status: "completed", toolName: "html_render", rawOutputJSON: payload, htmlRender: reference),
         appendingContent: false, updatedAt: Date())

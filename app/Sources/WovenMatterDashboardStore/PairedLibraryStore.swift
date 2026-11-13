@@ -56,37 +56,7 @@ extension WorkspaceDatabaseConnection {
     let graph = try peerTables().map { table in
       table.name + ":" + table.columns.map { $0 + " " + (table.types[$0] ?? "") }.joined(separator: ",") + ":" + table.keys.joined(separator: ",")
     }.joined(separator: "\n")
-    return SHA256.hash(data: Data(("v2\n" + graph).utf8)).hexString
-  }
-
-  /// Libraries created before September 2026 still carry
-  /// `dashboard_conversations.is_main`, which nothing reads or writes any
-  /// more. It would make the shared schema differ from a fresh library's, so
-  /// it is dropped, and the change log and merge state stop carrying it, so
-  /// already-recorded versions still match what every peer now exchanges.
-  /// The paired triggers that name it are recreated by the caller.
-  private func dropLegacyConversationColumnsUnlocked() throws {
-    guard try historyRowsUnlocked("SELECT 1 AS present FROM pragma_table_info('dashboard_conversations') WHERE name='is_main'", values: []).isEmpty == false else { return }
-    try executeUnlocked("SAVEPOINT legacy_columns")
-    do {
-      for operation in ["INSERT", "UPDATE", "DELETE"] { try executeUnlocked("DROP TRIGGER IF EXISTS paired_dashboard_conversations_\(operation)") }
-      try executeUnlocked("ALTER TABLE dashboard_conversations DROP COLUMN is_main")
-    } catch {
-      // Something else still names the column. Opening never fails over
-      // this: the library keeps the column, and its schema still differs.
-      try executeUnlocked("ROLLBACK TO legacy_columns"); try executeUnlocked("RELEASE legacy_columns")
-      return
-    }
-    try executeUnlocked("RELEASE legacy_columns")
-    let stripped = "json_remove(payload,'$.row.is_main')"
-    let present = "json_type(payload,'$.row.is_main') IS NOT NULL"
-    try executeUnlocked("""
-      UPDATE paired_library_rows SET payload=\(stripped) WHERE table_name='dashboard_conversations' AND \(present);
-      UPDATE paired_library_frontier SET payload=\(stripped) WHERE table_name='dashboard_conversations' AND \(present);
-      UPDATE paired_library_changes SET payload=\(stripped) WHERE json_extract(payload,'$.table')='dashboard_conversations' AND \(present);
-      UPDATE paired_library_pending SET payload=\(stripped) WHERE json_extract(payload,'$.table')='dashboard_conversations' AND \(present);
-      UPDATE paired_library_conflicts SET payload=\(stripped) WHERE json_extract(payload,'$.table')='dashboard_conversations' AND \(present);
-      """)
+    return SHA256.hash(data: Data(("v3\n" + graph).utf8)).hexString
   }
 
   /// Triggers commit a durable change in the same transaction as the content.
@@ -110,46 +80,25 @@ extension WorkspaceDatabaseConnection {
         CREATE TABLE IF NOT EXISTS paired_calendar_owners(id TEXT PRIMARY KEY,device_id TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS paired_library_file_cursors(peer_id TEXT PRIMARY KEY,cursor TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS paired_library_pending(id TEXT PRIMARY KEY,payload TEXT NOT NULL,peer_id TEXT NOT NULL,cursor INTEGER NOT NULL);
-        CREATE TABLE IF NOT EXISTS paired_library_seen(id TEXT PRIMARY KEY);
         CREATE TABLE IF NOT EXISTS paired_library_seeded(table_name TEXT PRIMARY KEY);
         CREATE TABLE IF NOT EXISTS paired_library_reassert(table_name TEXT NOT NULL,record_key TEXT NOT NULL,PRIMARY KEY(table_name,record_key));
         """)
-      try dropLegacyConversationColumnsUnlocked()
-      // Ownership of pre-existing rows is claimed exactly once, before any peer
-      // data can arrive. Rows later received without their owner record stay
-      // read-only and are never adopted by a restart. A schedule assigned to
-      // this Mac stays local; one assigned to a phone keeps that executor.
-      if try pairedStateUnlocked("owners.bootstrap") == nil {
-        let received = try historyRowsUnlocked("SELECT 1 AS present FROM paired_library_cursors UNION ALL SELECT 1 FROM paired_library_pending LIMIT 1", values: []).isEmpty == false
-        if !received {
-          try executeUnlocked("""
-            INSERT OR IGNORE INTO paired_agent_owners SELECT id,(SELECT device_id FROM paired_library_clock WHERE singleton=1) FROM dashboard_agents;
-            INSERT OR IGNORE INTO paired_conversation_owners SELECT id,(SELECT device_id FROM paired_library_clock WHERE singleton=1) FROM dashboard_conversations
-              WHERE NOT EXISTS(SELECT 1 FROM execution_conversations c WHERE c.id=dashboard_conversations.id);
-            INSERT OR IGNORE INTO paired_calendar_owners SELECT i.id,CASE
-                WHEN o.device_id IS NULL OR o.device_id=(SELECT host_device_id FROM library_identity WHERE singleton=1)
-                THEN (SELECT device_id FROM paired_library_clock WHERE singleton=1) ELSE o.device_id END
-              FROM dashboard_calendar_items i LEFT JOIN calendar_task_executors o ON o.event_id=i.id;
-            """)
-        }
-        try setPairedStateUnlocked("owners.bootstrap", "1")
-      }
       // A local writer owns what it creates. Federation inserts its execution
       // projection first, so independent workspaces are never claimed here.
       // The conversation trigger is recreated on every open so its body always
       // names the current execution table.
       try executeUnlocked("""
-        DROP TRIGGER IF EXISTS paired_conversation_owner;
-        CREATE TRIGGER IF NOT EXISTS paired_agent_owner AFTER INSERT ON dashboard_agents
+        DROP TRIGGER IF EXISTS conversations_owner_insert;
+        CREATE TRIGGER IF NOT EXISTS agents_owner_insert AFTER INSERT ON agents
         WHEN (SELECT applying FROM paired_library_clock WHERE singleton=1)=0 BEGIN
           INSERT OR IGNORE INTO paired_agent_owners VALUES(NEW.id,(SELECT device_id FROM paired_library_clock WHERE singleton=1));
         END;
-        CREATE TRIGGER paired_conversation_owner AFTER INSERT ON dashboard_conversations
+        CREATE TRIGGER conversations_owner_insert AFTER INSERT ON conversations
         WHEN (SELECT applying FROM paired_library_clock WHERE singleton=1)=0
           AND NOT EXISTS(SELECT 1 FROM execution_conversations c WHERE c.id=NEW.id) BEGIN
           INSERT OR IGNORE INTO paired_conversation_owners VALUES(NEW.id,(SELECT device_id FROM paired_library_clock WHERE singleton=1));
         END;
-        CREATE TRIGGER IF NOT EXISTS paired_calendar_owner AFTER INSERT ON dashboard_calendar_items
+        CREATE TRIGGER IF NOT EXISTS calendar_items_owner_insert AFTER INSERT ON calendar_items
         WHEN (SELECT applying FROM paired_library_clock WHERE singleton=1)=0 BEGIN
           INSERT OR IGNORE INTO paired_calendar_owners VALUES(NEW.id,(SELECT device_id FROM paired_library_clock WHERE singleton=1));
         END;
@@ -157,9 +106,18 @@ extension WorkspaceDatabaseConnection {
       // Replaying observed rows must not manufacture fresh native history or
       // derived library work. FTS indexing still runs on the original, stable
       // incoming event IDs.
-      for item in try historyRowsUnlocked("SELECT name,sql FROM sqlite_master WHERE type='trigger' AND (name LIKE 'history_%' OR name IN ('library_new_message','library_changed_message','library_new_attachment','library_cleared_conversation'))", values: []) {
+      let derived = [
+        "messages_history_insert", "messages_history_update", "runs_history_insert", "runs_history_update",
+        "message_attachments_history_insert", "message_attachments_history_update",
+        "message_references_history_insert", "message_references_history_update",
+        "run_activities_history_insert", "run_activities_history_update", "runs_final_activity_history_update",
+        "opencode_sessions_history_insert", "messages_library_insert", "messages_library_update",
+        "message_attachments_library_insert",
+      ]
+      for item in try historyRowsUnlocked(
+        "SELECT name,sql FROM sqlite_master WHERE type='trigger' AND name IN (" + derived.map { _ in "?" }.joined(separator: ",") + ")",
+        values: derived) {
         guard let name = item.objectValue?["name"]?.stringValue,
-              !["history_search_insert", "history_search_delete"].contains(name),
               let sql = item.objectValue?["sql"]?.stringValue, !sql.contains("paired_library_clock"),
               let begin = sql.range(of: #"\bBEGIN\b"#, options: [.regularExpression, .caseInsensitive]) else { continue }
         var header = String(sql[..<begin.lowerBound])
@@ -173,18 +131,21 @@ extension WorkspaceDatabaseConnection {
       for table in try peerTables() {
         for operation in ["INSERT", "UPDATE", "DELETE"] {
           let row = operation == "DELETE" ? "OLD" : "NEW"
-          let name = "paired_\(table.name)_\(operation)"
-          if let sql = try historyRowsUnlocked("SELECT sql FROM sqlite_master WHERE type='trigger' AND name=?", values: [name]).first?.objectValue?["sql"]?.stringValue,
-             !sql.contains("paired_library_pending") { try executeUnlocked("DROP TRIGGER " + Self.peerQuote(name)) }
+          let name = "\(table.name)_paired_library_\(operation.lowercased())"
           let condition = operation == "UPDATE" ? " AND (" + table.columns.map { "OLD.\(Self.peerQuote($0)) IS NOT NEW.\(Self.peerQuote($0))" }.joined(separator: " OR ") + ")" : ""
-          try executeUnlocked("""
-            CREATE TRIGGER IF NOT EXISTS paired_\(table.name)_\(operation) AFTER \(operation) ON \(Self.peerQuote(table.name))
+          // SQLite stores the statement as written, without its semicolon. A
+          // trigger written for other columns is replaced.
+          let create = """
+            CREATE TRIGGER \(name) AFTER \(operation) ON \(Self.peerQuote(table.name))
             WHEN (SELECT applying FROM paired_library_clock WHERE singleton=1)=0\(condition)
             BEGIN
               UPDATE paired_library_clock SET tick=tick+1,vector=json_set(vector,'$."' || device_id || '"',tick+1) WHERE singleton=1;
               \(peerCapture(table, row: row, deleted: operation == "DELETE"))
-            END;
-            """)
+            END
+            """
+          let stored = try historyRowsUnlocked("SELECT sql FROM sqlite_master WHERE type='trigger' AND name=?", values: [name]).first?.objectValue?["sql"]?.stringValue
+          guard stored != create else { continue }
+          try executeUnlocked("DROP TRIGGER IF EXISTS \(name);\n" + create + ";")
         }
         let seeded = try historyRowsUnlocked("SELECT table_name FROM paired_library_seeded WHERE table_name=?", values: [table.name])
         if seeded.isEmpty {
@@ -192,28 +153,6 @@ extension WorkspaceDatabaseConnection {
           try executeUnlocked(peerCapture(table, row: "s", deleted: false, source: " FROM \(Self.peerQuote(table.name)) s"))
           try toolsExecuteUnlocked("INSERT INTO paired_library_seeded VALUES(?)", [table.name])
         }
-      }
-      // Earlier builds kept only one winner per row. Retained concurrent
-      // versions that are still causally maximal become frontier members.
-      if try pairedStateUnlocked("frontier.v1") == nil {
-        for conflict in try pairedLibraryConflicts() {
-          let record = conflict.record
-          let winner = try pairedWinnerUnlocked(table: record.table, key: record.key)
-          guard let winner, winner.vector != record.vector, !winner.dominates(record) else { continue }
-          try toolsExecuteUnlocked("INSERT OR IGNORE INTO paired_library_frontier VALUES(?,?,?,?)", [record.table, record.key, try peerVersion(record), try peerJSON(record)])
-        }
-        try setPairedStateUnlocked("frontier.v1", "1")
-      }
-      if try pairedStateUnlocked("projection.v2") == nil {
-        let owners = Set(try historyRowsUnlocked("SELECT DISTINCT device_id FROM paired_conversation_owners", values: []).compactMap { $0.objectValue?["device_id"]?.stringValue })
-        try executeUnlocked("UPDATE paired_library_clock SET applying=1 WHERE singleton=1")
-        try projectPairedConversationOwners(.init(conversations: [], owners: owners))
-        try executeUnlocked("UPDATE paired_library_clock SET applying=0 WHERE singleton=1")
-        try setPairedStateUnlocked("projection.v2", "1")
-      }
-      if try pairedStateUnlocked("frontier.v2") == nil {
-        try recomputeFrontiersUnlocked()
-        try setPairedStateUnlocked("frontier.v2", "1")
       }
     }
   }
@@ -541,7 +480,7 @@ extension WorkspaceDatabaseConnection {
     if next.vector != winner?.vector {
       try materializePeerRecord(next, table: table)
       try toolsExecuteUnlocked("INSERT INTO paired_library_rows VALUES(?,?,?) ON CONFLICT(table_name,record_key) DO UPDATE SET payload=excluded.payload", [next.table, next.key, try peerJSON(next)])
-      for name in ["dashboard_conversations", "paired_conversation_owners", "execution_conversations"] where next.table == name {
+      for name in ["conversations", "paired_conversation_owners", "execution_conversations"] where next.table == name {
         if let id = next.row["id"]?.value { scope.conversations.insert(id) }
       }
       if table.columns.contains("conversation_id"), let id = next.row["conversation_id"]?.value { scope.conversations.insert(id) }
@@ -669,8 +608,8 @@ extension WorkspaceDatabaseConnection {
 
   /// Runtime rows of a conversation are authored only by its execution owner.
   private static let ownerRuntimeTables: Set<String> = [
-    "dashboard_messages", "dashboard_message_attachments", "dashboard_message_references", "dashboard_runs",
-    "dashboard_run_visible_context", "dashboard_run_events", "dashboard_run_trace_events", "session_execution_roots",
+    "messages", "message_attachments", "message_references", "runs",
+    "run_visible_notes", "run_activities", "session_execution_roots",
   ]
   /// Presentation any Mac may change without runtime effects. Trash and
   /// restore are owner-validated below; folder, archive and every other column
@@ -694,9 +633,9 @@ extension WorkspaceDatabaseConnection {
   /// The owner's own trash check: running, uncertain or pending native work.
   private func conversationBusyUnlocked(_ id: String) throws -> Bool {
     try historyRowsUnlocked("""
-      SELECT 1 AS busy FROM dashboard_runs WHERE conversation_id=?1 AND status IN ('queued','accepted','running','uncertain')
-      UNION ALL SELECT 1 FROM desktop_opencode_sessions WHERE conversation_id=?1 AND json_extract(snapshot_json,'$.active')=1
-      UNION ALL SELECT 1 FROM desktop_opencode_submissions WHERE conversation_id=?1 AND status IN ('sending','uncertain') LIMIT 1
+      SELECT 1 AS busy FROM runs WHERE conversation_id=?1 AND status IN ('queued','accepted','running','uncertain')
+      UNION ALL SELECT 1 FROM opencode_sessions WHERE conversation_id=?1 AND json_extract(snapshot_json,'$.active')=1
+      UNION ALL SELECT 1 FROM opencode_submissions WHERE conversation_id=?1 AND status IN ('sending','uncertain') LIMIT 1
       """, values: [id]).isEmpty == false
   }
 
@@ -708,7 +647,7 @@ extension WorkspaceDatabaseConnection {
   /// inserted, and the owner republishes the result so other Macs converge.
   private func preservingOwnerNativeRow(_ record: PairedLibraryRecord, table: PeerTable) throws -> PairedLibraryRecord? {
     let conversation: String?
-    if table.name == "dashboard_conversations" { conversation = record.row["id"]?.value }
+    if table.name == "conversations" { conversation = record.row["id"]?.value }
     else if Self.ownerRuntimeTables.contains(table.name) { conversation = record.row["conversation_id"]?.value }
     else { return record }
     guard let conversation,
@@ -719,7 +658,7 @@ extension WorkspaceDatabaseConnection {
       .first?.objectValue?["payload"]?.stringValue.map(decodePeerRecord) else { return record }
     try toolsExecuteUnlocked("INSERT OR IGNORE INTO paired_library_reassert VALUES(?,?)", [table.name, record.key])
     // Only the owner removes its native rows.
-    guard table.name == "dashboard_conversations", !(record.deleted && record.row["deleted_at"]?.value == nil) else { return nil }
+    guard table.name == "conversations", !(record.deleted && record.row["deleted_at"]?.value == nil) else { return nil }
     var row = current.row
     for column in Self.sharedConversationColumns { if let value = record.row[column] { row[column] = value } }
     let requested = record.row["deleted_at"]?.value, existing = current.row["deleted_at"]?.value
@@ -759,9 +698,9 @@ extension WorkspaceDatabaseConnection {
   /// the conversation row arrives last, on every Mac, across restarts.
   private func applyTitleOverrideUnlocked(_ id: String) throws {
     try toolsExecuteUnlocked("""
-      UPDATE dashboard_conversations SET title=(SELECT title FROM desktop_conversation_titles WHERE conversation_id=?1)
-      WHERE id=?1 AND EXISTS(SELECT 1 FROM desktop_conversation_titles WHERE conversation_id=?1)
-        AND title IS NOT (SELECT title FROM desktop_conversation_titles WHERE conversation_id=?1)
+      UPDATE conversations SET title=(SELECT title FROM conversation_titles WHERE conversation_id=?1)
+      WHERE id=?1 AND EXISTS(SELECT 1 FROM conversation_titles WHERE conversation_id=?1)
+        AND title IS NOT (SELECT title FROM conversation_titles WHERE conversation_id=?1)
       """, [id])
   }
 
@@ -776,7 +715,6 @@ extension WorkspaceDatabaseConnection {
     let fields = hardDelete ? table.keys : names
     for (index, name) in fields.enumerated() {
       var value = record.row[name]!
-      if name == "user_id", value.type == "text" { value = .init(type: "text", value: try localMutationOperatorIDUnlocked()) }
       if !hardDelete, table.name == "workspace_tool_settings", name == "value" { value = try preservingLocalExposure(value, record: record, table: table) }
       try bindPeer(value, query, Int32(index + 1))
     }
@@ -788,8 +726,8 @@ extension WorkspaceDatabaseConnection {
       // to silently discard a row or block every independent resource stream.
       if recoverConstraint { try retainPeerConflict(record, recoverCopy: false) }
     } else if status != SQLITE_DONE { throw stepError() }
-    if table.name == "dashboard_conversations", let id = record.row["id"]?.value { try applyTitleOverrideUnlocked(id) }
-    if table.name == "desktop_conversation_titles", let id = record.row["conversation_id"]?.value { try applyTitleOverrideUnlocked(id) }
+    if table.name == "conversations", let id = record.row["id"]?.value { try applyTitleOverrideUnlocked(id) }
+    if table.name == "conversation_titles", let id = record.row["conversation_id"]?.value { try applyTitleOverrideUnlocked(id) }
   }
 
   /// Network exposure is a property of one Mac. Shared tool choices synchronize,
@@ -846,7 +784,7 @@ extension WorkspaceDatabaseConnection {
       guard let workspace = workspaces.first(where: { $0.kind == .mac && $0.ownerDeviceID == owner && !$0.deleted }),
             let conversation = try libraryConversationUnlocked(id: id) else { continue }
       var projected = conversation; projected.workspaceID = workspace.id; projected.libraryID = workspace.libraryID
-      if let current = try historyRowsUnlocked("SELECT title,folder_id,is_pinned FROM dashboard_conversations WHERE id=?", values: [id]).first?.objectValue {
+      if let current = try historyRowsUnlocked("SELECT title,folder_id,is_pinned FROM conversations WHERE id=?", values: [id]).first?.objectValue {
         projected.title = current["title"]?.stringValue ?? projected.title
         projected.folderID = current["folder_id"]?.stringValue
         projected.isPinned = current["is_pinned"]?.doubleValue == 1

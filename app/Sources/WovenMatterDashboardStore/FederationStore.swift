@@ -202,8 +202,8 @@ extension WorkspaceDatabaseConnection {
     }
   }
   func federationConversationUnlocked(_ id: String) throws -> LibraryConversation? {
-    guard var value = try federationValuesUnlocked("SELECT f.conversation FROM execution_conversations f JOIN dashboard_conversations c ON c.id=f.id WHERE f.id=? AND f.deleted=0 AND c.deleted_at IS NULL AND c.is_archived=0", bindings: [id], as: LibraryConversation.self).first else { return nil }
-    let statement = try prepareUnlocked("SELECT title,folder_id,is_pinned,updated_at FROM dashboard_conversations WHERE id=?")
+    guard var value = try federationValuesUnlocked("SELECT f.conversation FROM execution_conversations f JOIN conversations c ON c.id=f.id WHERE f.id=? AND f.deleted=0 AND c.deleted_at IS NULL AND c.is_archived=0", bindings: [id], as: LibraryConversation.self).first else { return nil }
+    let statement = try prepareUnlocked("SELECT title,folder_id,is_pinned,updated_at FROM conversations WHERE id=?")
     defer { sqlite3_finalize(statement) }
     try bind(id, at: 1, to: statement)
     guard sqlite3_step(statement) == SQLITE_ROW else { throw WorkspaceDatabaseError.corruptRow }

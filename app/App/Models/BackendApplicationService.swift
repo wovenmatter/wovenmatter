@@ -80,7 +80,7 @@ struct BackendApplicationResult: Codable, Sendable {
     var usesSharedDefaults: Bool?
     var attachments: [AgentMessageAttachmentDraft]?
     var requiresTimerPauseConfirmation: Bool = false
-    var history: GatewayJSONValue?
+    var history: JSONValue?
     var mcpAccess: WovenMCPAccessSnapshot?
     var bots: BotsCommandResult?
 }

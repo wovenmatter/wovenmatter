@@ -54,7 +54,6 @@ extension WorkspaceDatabaseConnection {
           (request.title?.utf8.count ?? 0) <= 4_096 else {
       return result(.invalid, "Use stable UUID identities and a title shorter than 4 KiB.")
     }
-    let operatorID = try localMutationOperatorIDUnlocked()
     let now = Self.timestamp(Date())
     switch request.kind {
     case .createFolder:
@@ -69,7 +68,7 @@ extension WorkspaceDatabaseConnection {
       guard (try? validateExecutionLocation(location)) != nil else {
         return result(.invalid, "A folder needs a valid execution workspace and absolute directory.")
       }
-      try toolsExecuteUnlocked("INSERT INTO folders(id, user_id, name, position, created_at, updated_at) VALUES (?, ?, ?, (SELECT COALESCE(MAX(position), -1) + 1 FROM folders), ?, ?)", [request.resourceID, operatorID, title, now, now])
+      try toolsExecuteUnlocked("INSERT INTO folders(id, name, position, created_at, updated_at) VALUES (?, ?, (SELECT COALESCE(MAX(position), -1) + 1 FROM folders), ?, ?)", [request.resourceID, title, now, now])
       try toolsExecuteUnlocked("INSERT INTO folder_execution_roots(folder_id,workspace_id,root_path,managed) VALUES(?,?,?,0)",
         [request.resourceID, binding.workspaceID, binding.rootPath])
       return try result(.accepted, folder: libraryFolderUnlocked(id: request.resourceID))
@@ -77,11 +76,11 @@ extension WorkspaceDatabaseConnection {
       guard let folder = try libraryFolderUnlocked(id: request.resourceID) else { return result(.notFound, "The folder was deleted. Your writing is retained on this device.") }
       guard request.expectedRevision == folder.revision else { return result(.conflict, "The folder changed since it was read.", folder: folder) }
       if request.kind == .deleteFolder {
-        try toolsExecuteUnlocked("DELETE FROM folders WHERE id = ? AND user_id = ?", [request.resourceID, operatorID])
+        try toolsExecuteUnlocked("DELETE FROM folders WHERE id = ?", [request.resourceID])
         return result(.accepted)
       }
       guard let title = request.title?.trimmingCharacters(in: .whitespacesAndNewlines), !title.isEmpty else { return result(.invalid, "Enter a folder name.") }
-      try toolsExecuteUnlocked("UPDATE folders SET name = ?, updated_at = ? WHERE id = ? AND user_id = ?", [title, now, request.resourceID, operatorID])
+      try toolsExecuteUnlocked("UPDATE folders SET name = ?, updated_at = ? WHERE id = ?", [title, now, request.resourceID])
       return try result(.accepted, folder: libraryFolderUnlocked(id: request.resourceID))
     case .createNote:
       if try libraryVersionUnlocked(kind: "note", id: request.resourceID) != nil {
@@ -101,8 +100,8 @@ extension WorkspaceDatabaseConnection {
       if let folderID = request.folderID, try libraryFolderUnlocked(id: folderID) == nil {
         return result(.notFound, "The destination folder does not exist. Sync its creation first or choose another folder.")
       }
-      try toolsExecuteUnlocked("INSERT INTO notes(id, user_id, folder_id, title, content, snippet, position, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?)",
-        [request.resourceID, operatorID, request.folderID, title, content, Self.noteSnippet(content), now, now])
+      try toolsExecuteUnlocked("INSERT INTO notes(id, folder_id, title, content, snippet, position, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 0, ?, ?)",
+        [request.resourceID, request.folderID, title, content, Self.noteSnippet(content), now, now])
       try checkpointNoteUnlocked(id: request.resourceID, source: "device", force: true)
       return try result(.accepted, note: libraryNoteUnlocked(id: request.resourceID))
     case .updateNote, .deleteNote:
@@ -112,7 +111,7 @@ extension WorkspaceDatabaseConnection {
       guard request.expectedRevision == note.revision else { return result(.conflict, "The note changed on another device or agent. Both versions are retained.", note: note) }
       if request.kind == .deleteNote {
         try checkpointNoteUnlocked(id: request.resourceID, source: "before-device-delete", force: true)
-        try toolsExecuteUnlocked("UPDATE notes SET deleted_at = ?, updated_at = ? WHERE id = ? AND user_id = ?", [now, now, request.resourceID, operatorID])
+        try toolsExecuteUnlocked("UPDATE notes SET deleted_at = ?, updated_at = ? WHERE id = ?", [now, now, request.resourceID])
         return result(.accepted)
       }
       guard let title = request.title, let content = request.content else { return result(.invalid, "The note needs a title and a document.") }
@@ -130,7 +129,7 @@ extension WorkspaceDatabaseConnection {
       }
       try checkpointNoteUnlocked(id: request.resourceID, source: "before-device-edit", force: true)
       let updatedAt = try nextNoteUpdatedAtUnlocked(id: request.resourceID)
-      try toolsExecuteUnlocked("UPDATE notes SET title = ?, content = ?, snippet = ?, folder_id = ?, updated_at = ? WHERE id = ? AND user_id = ? AND deleted_at IS NULL", [title, content, Self.noteSnippet(content), request.folderID, updatedAt, request.resourceID, operatorID])
+      try toolsExecuteUnlocked("UPDATE notes SET title = ?, content = ?, snippet = ?, folder_id = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL", [title, content, Self.noteSnippet(content), request.folderID, updatedAt, request.resourceID])
       try checkpointNoteUnlocked(id: request.resourceID, source: "device", force: true)
       return try result(.accepted, note: libraryNoteUnlocked(id: request.resourceID))
     }

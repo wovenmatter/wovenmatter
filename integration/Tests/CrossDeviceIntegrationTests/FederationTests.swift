@@ -189,7 +189,7 @@ struct FederationTests {
       try await db.beginLocalACPRun(conversationID: conversationID, input: .init(text: "Legacy execution must stay fenced"))
     }
     #expect(try await db.libraryFederatedTranscript(conversationID: conversationID)?.messages.contains(where: { $0.content == "Preserve this history" }) == true)
-    #expect(try await db.localACPSession(conversationID: conversationID).acpSessionID == "native-existing")
+    #expect(try await db.localACPSession(conversationID: conversationID).nativeSessionID == "native-existing")
     let repeated = try await db.prepareExecutionAdoption(conversationID: conversationID, workspaceID: descriptor.id, deviceID: identity.hostDeviceID)
     #expect(repeated.knownRunIDs == transfer.knownRunIDs)
     let event = ExecutionJournalEntry(workspaceID: descriptor.id, originSequence: 1, conversationID: conversationID,
@@ -201,7 +201,7 @@ struct FederationTests {
     #expect(try await db.libraryExecutionOriginCursor(workspaceID: descriptor.id) == 1)
     try await db.write { connection in
       try connection.transaction {
-        try connection.toolsExecuteUnlocked("UPDATE dashboard_runs SET status='running' WHERE id=?", [run.runID])
+        try connection.toolsExecuteUnlocked("UPDATE runs SET status='running' WHERE id=?", [run.runID])
       }
     }
     let reopened = try await WorkspaceDatabase(url: directory.appendingPathComponent("workspace.sqlite"))
@@ -236,7 +236,7 @@ struct FederationTests {
     _ = try await db.ingestExecutionJournal(.init(libraryID: workspace.libraryID, entries: [first]), deviceID: owner)
     try await db.write { connection in
       try connection.transaction {
-        try connection.toolsExecuteUnlocked("UPDATE dashboard_conversations SET title='Central title',deleted_at='deleted' WHERE id=?", [first.conversationID])
+        try connection.toolsExecuteUnlocked("UPDATE conversations SET title='Central title',deleted_at='deleted' WHERE id=?", [first.conversationID])
       }
     }
     var replay = first; replay.eventID = uuid(); replay.originSequence = 2; replay.conversation?.title = "Stale title"

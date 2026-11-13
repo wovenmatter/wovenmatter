@@ -15,9 +15,6 @@ extension WorkspaceDatabaseConnection {
         id TEXT PRIMARY KEY, owner_device_id TEXT NOT NULL, revision INTEGER NOT NULL,
         deleted INTEGER NOT NULL DEFAULT 0, payload BLOB NOT NULL
       );
-      CREATE TABLE IF NOT EXISTS execution_workspace_publishers (
-        workspace_id TEXT PRIMARY KEY, digest BLOB NOT NULL UNIQUE, payload BLOB NOT NULL
-      );
       CREATE TABLE IF NOT EXISTS execution_journal (
         cursor INTEGER PRIMARY KEY AUTOINCREMENT, event_id TEXT NOT NULL UNIQUE,
         workspace_id TEXT NOT NULL, origin_sequence INTEGER NOT NULL,
@@ -67,20 +64,10 @@ extension WorkspaceDatabaseConnection {
         bytes BLOB NOT NULL, PRIMARY KEY(artifact_id, revision, offset)
       );
       """)
-    // library_identity holds this replica's device ID (host_device_id) and the
+    // library_identity holds this replica's device ID (host_device_id), the
+    // paired-library clock's origin that ownership records name, and the
     // library's ID (library_id), which every device paired with it names.
-    // A library from before library_id moved here gains the column; its value
-    // is carried over by renameLegacyCompanionStorageUnlocked.
-    let columns = Set(try historyRowsUnlocked("PRAGMA table_info(library_identity)", values: [])
-      .compactMap { $0.objectValue?["name"]?.stringValue })
-    if !columns.contains("library_id") { try executeUnlocked("ALTER TABLE library_identity ADD COLUMN library_id TEXT") }
-    // The host device ID is the paired-library clock's origin, and ownership
-    // records name it. A library that already has a clock keeps that identity.
-    let libraryID = UUID().uuidString.lowercased()
-    if try historyRowsUnlocked("SELECT 1 AS present FROM sqlite_master WHERE type='table' AND name='paired_library_clock'", values: []).isEmpty == false {
-      try toolsExecuteUnlocked("INSERT OR IGNORE INTO library_identity SELECT 1,device_id,? FROM paired_library_clock WHERE singleton=1", [libraryID])
-    }
-    try toolsExecuteUnlocked("INSERT OR IGNORE INTO library_identity VALUES (1, ?, ?)", [UUID().uuidString.lowercased(), libraryID])
-    try toolsExecuteUnlocked("UPDATE library_identity SET library_id=? WHERE library_id IS NULL", [libraryID])
+    try toolsExecuteUnlocked("INSERT OR IGNORE INTO library_identity VALUES (1, ?, ?)",
+                             [UUID().uuidString.lowercased(), UUID().uuidString.lowercased()])
   }
 }

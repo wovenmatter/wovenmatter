@@ -44,8 +44,8 @@ public struct RemoteConversationRecords: Equatable, Sendable {
       else if let value = reply?.status, Self.settled.contains(value) { status = value }
       else { status = "completed" }
       let startedAt = info?.startedAt ?? own.first?.createdAt
-      runs.append(WorkspaceRunRecord(id: id, conversationID: conversationID, agentID: nil, governingPlane: nil,
-        authorityDeviceID: nil, userMessageID: user, assistantMessageID: assistant, status: status, error: nil,
+      runs.append(WorkspaceRunRecord(id: id, conversationID: conversationID, agentID: nil,
+        userMessageID: user, assistantMessageID: assistant, status: status, error: nil,
         startedAt: startedAt, completedAt: info?.completedAt, createdAt: startedAt, updatedAt: info?.completedAt ?? startedAt))
     }
     let runStatus = Dictionary(runs.map { ($0.id, $0.status) }, uniquingKeysWith: { _, latest in latest })
@@ -58,8 +58,8 @@ public struct RemoteConversationRecords: Equatable, Sendable {
       }
       return WorkspaceMessageRecord(senderKind: message.senderKind.flatMap(WorkspaceSessionDeliveryKind.init(rawValue:)),
         senderSessionID: message.agentSourceID, senderAgent: message.senderHarness, senderSessionTitle: message.senderSessionTitle,
-        id: message.id, conversationID: conversationID, clientMessageID: nil, runID: message.runID, governingPlane: nil,
-        authorityDeviceID: nil, role: message.role, content: message.content, status: status, createdAt: message.createdAt,
+        id: message.id, conversationID: conversationID, clientMessageID: nil, runID: message.runID,
+        role: message.role, content: message.content, status: status, createdAt: message.createdAt,
         updatedAt: nil)
     }
     self.runs = runs
@@ -84,7 +84,7 @@ public struct RemoteConversationRecords: Equatable, Sendable {
       (message.attachments ?? []).map { file in
         WorkspaceMessageAttachmentRecord(id: message.id + ":" + file.id, conversationID: conversationID, messageID: message.id,
           kind: file.mimeType.hasPrefix("image/") ? .image : .file, fileName: file.name, mimeType: file.mimeType,
-          sizeBytes: file.byteCount ?? 0, contentHash: Self.isDigest(file.id) ? file.id : nil, gatewayMediaRef: nil,
+          sizeBytes: file.byteCount ?? 0, contentHash: Self.isDigest(file.id) ? file.id : nil,
           createdAt: message.createdAt)
       }
     }

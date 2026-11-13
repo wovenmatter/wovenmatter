@@ -36,7 +36,7 @@ struct WovenMCPHostTests {
         #expect(replacement != original)
         #expect(try await fixture.host.start() == original)
         // The new port is persisted for the next launch, with no external grants.
-        let saved = try JSONDecoder().decode(GatewayJSONValue.self,
+        let saved = try JSONDecoder().decode(JSONValue.self,
             from: Data(contentsOf: fixture.directory.appending(path: "mcp-access.json")))
         #expect(saved.objectValue?["port"]?.doubleValue == Double(try #require(URL(string: replacement)?.port)))
         #expect(saved.objectValue?["credentials"] == nil)
@@ -68,7 +68,7 @@ struct WovenMCPHostTests {
             return (process.terminationStatus, String(decoding: data, as: UTF8.self))
         }.value
         #expect(result.0 == 0, "\(result.1)")
-        let summary = try JSONDecoder().decode(GatewayJSONValue.self, from: Data(result.1.utf8))
+        let summary = try JSONDecoder().decode(JSONValue.self, from: Data(result.1.utf8))
         #expect(summary.objectValue?["callerID"] == .string(outside ? WovenMCPCaller.outside : fixture.caller))
         #expect(summary.objectValue?["unauthorizedRejected"] == .bool(true))
         #expect(fixture.calls.callers == [outside ? WovenMCPCaller.outside : fixture.caller])
@@ -86,14 +86,14 @@ struct WovenMCPHostTests {
         // Disabling every tool on the existing chat does not limit outside access.
         try await fixture.database.setSessionTools(.init(enabled: []), sessionID: fixture.caller)
         let response = try #require(await fixture.host.handle(request, allowOutside: true))
-        let result = try JSONDecoder().decode(GatewayJSONValue.self, from: response.body)
+        let result = try JSONDecoder().decode(JSONValue.self, from: response.body)
         #expect(result.objectValue?["result"]?.objectValue?["isError"] == .bool(false))
         #expect(fixture.calls.callers == [WovenMCPCaller.outside])
         #expect(await fixture.host.handle(try mcpHostRequest(token: "old-revoked-token", name: "woven_notes_list"), allowOutside: true) == nil)
         settings.externalMCP?.groups.remove(.notes)
         try await fixture.database.saveToolSettings(settings)
         let disabled = try #require(await fixture.host.handle(request, allowOutside: true))
-        #expect(try JSONDecoder().decode(GatewayJSONValue.self, from: disabled.body).objectValue?["error"] != nil)
+        #expect(try JSONDecoder().decode(JSONValue.self, from: disabled.body).objectValue?["error"] != nil)
         settings.externalMCP?.isEnabled = false
         try await fixture.database.saveToolSettings(settings)
         #expect(await fixture.host.handle(request, allowOutside: true)?.status == 403)
@@ -117,7 +117,7 @@ struct WovenMCPHostTests {
         request.httpBody = try mcpHostRequest(token: nil, name: "woven_notes_list").body
         let (body, response) = try await session.data(for: request)
         #expect((response as? HTTPURLResponse)?.statusCode == 200)
-        #expect(try JSONDecoder().decode(GatewayJSONValue.self, from: body).objectValue?["result"]?.objectValue?["isError"] == .bool(false))
+        #expect(try JSONDecoder().decode(JSONValue.self, from: body).objectValue?["result"]?.objectValue?["isError"] == .bool(false))
         let disabled = try await fixture.host.access(.setEnabled(false))
         #expect(!disabled.settings.isEnabled && !child.isRunning)
         let (_, blocked) = try await session.data(for: request)
@@ -142,7 +142,7 @@ struct WovenMCPHostTests {
         #expect(restarted.exposureError == nil)
         #expect(URL(string: restarted.endpointURL)?.port == 10_000)
         #expect(serving.existingPorts == [8443])
-        let saved = try JSONDecoder().decode(GatewayJSONValue.self,
+        let saved = try JSONDecoder().decode(JSONValue.self,
             from: Data(contentsOf: fixture.directory.appending(path: "mcp-access.json")))
         #expect(saved.objectValue?["httpsPort"] == .number(10_000))
     }
@@ -156,47 +156,17 @@ struct WovenMCPHostTests {
         let discovery = LibraryHTTPRequest(method: "POST", target: "/mcp", headers: [:],
             body: Data(#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#.utf8))
         let response = try #require(await fixture.host.handle(discovery, allowOutside: true))
-        let tools = try #require(JSONDecoder().decode(GatewayJSONValue.self, from: response.body).objectValue?["result"]?.objectValue?["tools"]?.arrayValue)
+        let tools = try #require(JSONDecoder().decode(JSONValue.self, from: response.body).objectValue?["result"]?.objectValue?["tools"]?.arrayValue)
         let names = tools.compactMap { $0.objectValue?["name"]?.stringValue }
         #expect(names.contains("woven_timers_list") && !names.contains("woven_notes_list"))
         let goal = try #require(tools.first { $0.objectValue?["name"] == .string("woven_goals_get") })
         #expect(goal.objectValue?["inputSchema"]?.objectValue?["required"]?.arrayValue?.contains(.string("sessionID")) == true)
         let targetless = try #require(await fixture.host.handle(try mcpHostRequest(token: nil, name: "woven_goals_get"), allowOutside: true))
-        #expect(try JSONDecoder().decode(GatewayJSONValue.self, from: targetless.body).objectValue?["error"] != nil)
+        #expect(try JSONDecoder().decode(JSONValue.self, from: targetless.body).objectValue?["error"] != nil)
         let targeted = try #require(await fixture.host.handle(try mcpHostRequest(token: nil, name: "woven_goals_get", arguments: ["sessionID": .string(fixture.caller)]), allowOutside: true))
-        #expect(try JSONDecoder().decode(GatewayJSONValue.self, from: targeted.body).objectValue?["result"]?.objectValue?["isError"] == .bool(false))
+        #expect(try JSONDecoder().decode(JSONValue.self, from: targeted.body).objectValue?["result"]?.objectValue?["isError"] == .bool(false))
         #expect(fixture.calls.callers == [WovenMCPCaller.outside])
         #expect(fixture.calls.requests.first?.targetSessionID == fixture.caller)
-    }
-
-    @Test func upgradePreservesLegacyMutationReceiptsAndNativePolicy() async throws {
-        let fixture = try await MCPHostFixture()
-        defer { fixture.remove() }
-        let requestID = UUID().uuidString
-        let note = try await fixture.database.createNote(folderID: nil, title: "Before upgrade", callerConversationID: fixture.caller, requestID: requestID)
-        var connection: OpaquePointer?
-        #expect(sqlite3_open(fixture.directory.appending(path: "workspace.sqlite").path, &connection) == SQLITE_OK)
-        defer { sqlite3_close(connection) }
-        let sql = """
-          CREATE TABLE workspace_tool_mutations_legacy(
-            source_id TEXT NOT NULL REFERENCES dashboard_conversations(id), request_id TEXT NOT NULL,
-            operation TEXT NOT NULL, input_digest TEXT NOT NULL, result_json TEXT NOT NULL,
-            PRIMARY KEY(source_id,request_id));
-          INSERT INTO workspace_tool_mutations_legacy SELECT * FROM workspace_tool_mutations;
-          DROP TABLE workspace_tool_mutations;
-          ALTER TABLE workspace_tool_mutations_legacy RENAME TO workspace_tool_mutations;
-          """
-        #expect(sqlite3_exec(connection, sql, nil, nil, nil) == SQLITE_OK)
-        let reopened = try await fixture.persistence.openDatabase()
-        let replay = try await reopened.createNote(folderID: nil, title: "Before upgrade", callerConversationID: fixture.caller, requestID: requestID)
-        #expect(replay == note)
-        #expect(try await reopened.sessionTools(fixture.caller).enabled.contains(.notes))
-        var settings = try await reopened.toolSettings()
-        #expect(settings.externalMCP?.isEnabled != true)
-        settings.externalMCP = .init(isEnabled: true, groups: [.notes])
-        try await reopened.saveToolSettings(settings)
-        let outside = try await reopened.createNote(folderID: nil, title: "After upgrade", callerConversationID: WovenMCPCaller.outside, requestID: UUID().uuidString)
-        #expect(outside != note)
     }
 
     @Test func nativeCredentialsRetainConversationPolicyAndDoNotPersist() async throws {
@@ -283,10 +253,10 @@ private struct MCPHostFixture {
         }
     }
 
-    func call(_ connection: WovenMCPConnection, name: String, arguments: [String: GatewayJSONValue] = [:]) async throws -> GatewayJSONValue {
+    func call(_ connection: WovenMCPConnection, name: String, arguments: [String: JSONValue] = [:]) async throws -> JSONValue {
         let response = try #require(await host.handle(try mcpHostRequest(token: connection.bearerToken, name: name, arguments: arguments)))
         #expect(response.status == 200)
-        return try JSONDecoder().decode(GatewayJSONValue.self, from: response.body)
+        return try JSONDecoder().decode(JSONValue.self, from: response.body)
     }
 
     func remove() {
@@ -295,8 +265,8 @@ private struct MCPHostFixture {
     }
 }
 
-private func mcpHostRequest(token: String?, name: String, arguments: [String: GatewayJSONValue] = [:], headers: [String: String] = [:]) throws -> LibraryHTTPRequest {
-    let message: GatewayJSONValue = .object(["jsonrpc": .string("2.0"), "id": .string(UUID().uuidString),
+private func mcpHostRequest(token: String?, name: String, arguments: [String: JSONValue] = [:], headers: [String: String] = [:]) throws -> LibraryHTTPRequest {
+    let message: JSONValue = .object(["jsonrpc": .string("2.0"), "id": .string(UUID().uuidString),
         "method": .string("tools/call"), "params": .object(["name": .string(name), "arguments": .object(arguments)])])
     var headers = headers
     if let token { headers["authorization"] = "Bearer " + token }
@@ -388,7 +358,7 @@ extension WovenMCPHostTests {
             purpose: "Coordinate", requestID: UUID().uuidString)
         try await fixture.host.setBotsPaused(machineID: Self.machine, paused: true)
         let paused = try #require(await fixture.host.handle(try mcpHostRequest(token: grant.bearerToken, name: "woven_notes_list")))
-        #expect(try JSONDecoder().decode(GatewayJSONValue.self, from: paused.body).objectValue?["error"] != nil)
+        #expect(try JSONDecoder().decode(JSONValue.self, from: paused.body).objectValue?["error"] != nil)
         #expect(try await fixture.database.sessionRelationship(fixture.caller).coordinatorID == nil)
         #expect(try await fixture.database.botCallers().allSatisfy(\.paused))
         #expect(try await fixture.database.isBotMachinePaused(Self.machine))
@@ -423,11 +393,11 @@ extension WovenMCPHostTests {
         settings.botMCP.groups.remove(.notes)
         try await fixture.database.saveToolSettings(settings)
         let disabledGroup = try #require(await fixture.host.handle(request, allowOutside: outside))
-        #expect(try JSONDecoder().decode(GatewayJSONValue.self, from: disabledGroup.body).objectValue?["error"] != nil)
+        #expect(try JSONDecoder().decode(JSONValue.self, from: disabledGroup.body).objectValue?["error"] != nil)
         settings.botMCP.isEnabled = false
         try await fixture.database.saveToolSettings(settings)
         let disabled = try #require(await fixture.host.handle(request, allowOutside: outside))
-        #expect(try JSONDecoder().decode(GatewayJSONValue.self, from: disabled.body).objectValue?["error"] != nil)
+        #expect(try JSONDecoder().decode(JSONValue.self, from: disabled.body).objectValue?["error"] != nil)
         #expect(fixture.calls.callers.count == 1)
         _ = await fixture.host.handle(try mcpHostRequest(token: nil, name: "woven_notes_list"), allowOutside: outside)
         #expect(fixture.calls.callers.allSatisfy { WovenMCPCaller.parseBot($0) != nil } == !outside)
@@ -444,7 +414,7 @@ extension WovenMCPHostTests {
             noteRestoreHandler: { _, _, _, _, _ in throw CancellationError() }, usageHandler: { _ in throw CancellationError() }, onMutation: {})
         defer { service.stop() }
         let context = await service.handle(.init(arguments: ["context"]), callerID: caller)
-        #expect(context.success && context.result == GatewayJSONValue.null)
+        #expect(context.success && context.result == JSONValue.null)
         var goalRequest = WovenMatterToolRequest(arguments: ["goals", "get"])
         goalRequest.targetSessionID = fixture.caller
         let goal = await service.handle(goalRequest, callerID: caller)

@@ -676,7 +676,10 @@ final class UsageStore {
         provider TEXT NOT NULL,
         harness TEXT,
         fingerprint TEXT NOT NULL,
-        imported_at REAL NOT NULL
+        imported_at REAL NOT NULL,
+        source_kind TEXT NOT NULL DEFAULT 'local-history',
+        installation_id TEXT,
+        indexed_after REAL
       );
       CREATE TABLE IF NOT EXISTS usage_events (
         event_id TEXT PRIMARY KEY,
@@ -712,17 +715,17 @@ final class UsageStore {
         imported_at REAL NOT NULL,
         UNIQUE(source_id, source_event_id)
       );
-      CREATE INDEX IF NOT EXISTS usage_events_timestamp_idx
+      CREATE INDEX IF NOT EXISTS usage_events_timestamp
         ON usage_events(timestamp, event_id);
-      CREATE INDEX IF NOT EXISTS usage_events_source_idx
+      CREATE INDEX IF NOT EXISTS usage_events_source
         ON usage_events(source_id, timestamp);
-      CREATE INDEX IF NOT EXISTS usage_events_model_idx
+      CREATE INDEX IF NOT EXISTS usage_events_model
         ON usage_events(model_family, timestamp);
-      CREATE INDEX IF NOT EXISTS usage_events_route_idx
+      CREATE INDEX IF NOT EXISTS usage_events_route
         ON usage_events(billing_route, timestamp);
-      CREATE INDEX IF NOT EXISTS usage_events_harness_idx
+      CREATE INDEX IF NOT EXISTS usage_events_harness
         ON usage_events(harness, timestamp);
-      CREATE INDEX IF NOT EXISTS usage_events_dedupe_idx
+      CREATE INDEX IF NOT EXISTS usage_events_dedupe
         ON usage_events(dedupe_key) WHERE dedupe_key IS NOT NULL;
       CREATE TABLE IF NOT EXISTS usage_metadata (
         key TEXT PRIMARY KEY,
@@ -737,57 +740,6 @@ final class UsageStore {
         detail TEXT NOT NULL
       );
       """)
-    try ensureColumn(
-      table: "usage_events",
-      column: "request_count",
-      definition: "INTEGER NOT NULL DEFAULT 1"
-    )
-    try ensureColumn(
-      table: "usage_sources",
-      column: "source_kind",
-      definition: "TEXT NOT NULL DEFAULT 'local-history'"
-    )
-    try ensureColumn(
-      table: "usage_sources",
-      column: "installation_id",
-      definition: "TEXT"
-    )
-    try ensureColumn(
-      table: "usage_sources",
-      column: "indexed_after",
-      definition: "REAL"
-    )
-    // Existing v1 indexes predate the explicit coverage watermark. Seed them
-    // from their oldest retained event before any shorter refresh can replace
-    // that source. Sources with no events remain nil and will be reparsed.
-    try execute("""
-      UPDATE usage_sources
-      SET indexed_after = (
-        SELECT MIN(timestamp)
-        FROM usage_events
-        WHERE usage_events.source_id = usage_sources.source_id
-      )
-      WHERE indexed_after IS NULL
-        AND EXISTS (
-          SELECT 1
-          FROM usage_events
-          WHERE usage_events.source_id = usage_sources.source_id
-        )
-      """)
-  }
-
-  private func ensureColumn(table: String, column: String, definition: String) throws {
-    let statement = try prepare("PRAGMA table_info(\(table))")
-    defer { sqlite3_finalize(statement) }
-    var found = false
-    while true {
-      let status = sqlite3_step(statement)
-      if status == SQLITE_DONE { break }
-      guard status == SQLITE_ROW else { throw stepError() }
-      if text(statement, 1) == column { found = true }
-    }
-    if found { return }
-    try execute("ALTER TABLE \(table) ADD COLUMN \(column) \(definition)")
   }
 
   private func execute(_ sql: String) throws {

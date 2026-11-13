@@ -90,14 +90,14 @@ public struct PairedLibraryConflict: Codable, Identifiable, Sendable {
 /// identities, cursors and projections are deliberately absent from this list.
 enum PairedLibraryTables {
   static let names = [
-    "profiles", "surface_profiles", "folders", "folder_execution_roots", "notes", "dictation_history",
-    "paired_agent_owners", "paired_conversation_owners", "dashboard_agents", "dashboard_conversations", "desktop_conversation_titles",
-    "session_execution_roots", "dashboard_messages", "dashboard_message_attachments",
-    "dashboard_message_references", "dashboard_runs", "dashboard_run_visible_context",
-    "dashboard_run_events", "dashboard_run_trace_events", "workspace_history_events", "note_asset_versions",
+    "surface_profiles", "folders", "folder_execution_roots", "notes", "dictation_history",
+    "paired_agent_owners", "paired_conversation_owners", "agents", "conversations", "conversation_titles",
+    "session_execution_roots", "messages", "message_attachments",
+    "message_references", "runs", "run_visible_notes",
+    "run_activities", "workspace_history_events", "note_asset_versions",
     "workspace_tool_settings", "workspace_session_tools", "workspace_session_relationships",
     "workspace_session_grants", "workspace_session_goals", "workspace_goal_runs", "workspace_goal_usage",
-    "paired_calendar_owners", "dashboard_calendar_items", "calendar_task_executors", "calendar_run_publishers", "calendar_published_runs",
+    "paired_calendar_owners", "calendar_items", "calendar_task_executors", "calendar_run_publishers", "calendar_published_runs",
     "execution_workspaces", "execution_journal", "execution_retained_settlements",
     "execution_conversations", "execution_adoptions", "device_message_provenance",
     "execution_runs", "execution_native_history", "execution_native_history_parts",

@@ -2,8 +2,8 @@ import Foundation
 import Testing
 @testable import WovenMatterClient
 
-private func json(_ text: String) -> GatewayJSONValue {
-    try! JSONDecoder().decode(GatewayJSONValue.self, from: Data(text.utf8))
+private func json(_ text: String) -> JSONValue {
+    try! JSONDecoder().decode(JSONValue.self, from: Data(text.utf8))
 }
 
 private func decoded<T: Decodable>(_ text: String, as type: T.Type = T.self) throws -> T {

@@ -158,7 +158,7 @@ struct LibraryToolFacadeTests {
             deviceName: "Fixture phone", protocolVersion: LibraryProtocol.version), workspaceID: workspaceID)
         let api = DeviceAPI(database: fixture.database, authentication: auth,
             commands: fixture.model.libraryCommands, isActive: { true })
-        let call: GatewayJSONValue = .object(["jsonrpc": .string("2.0"), "id": .number(1),
+        let call: JSONValue = .object(["jsonrpc": .string("2.0"), "id": .number(1),
             "method": .string("tools/call"), "params": .object(["name": .string("woven_notes_list"), "arguments": .object([:])])])
         var headers = ["x-woven-protocol": String(LibraryProtocol.version), "x-woven-workspace": workspaceID,
             "x-woven-conversation-id": caller, "x-woven-enabled-groups": "notes"]
@@ -168,7 +168,7 @@ struct LibraryToolFacadeTests {
         let accepted = await api.handle(.init(method: "POST", target: "/wovenmatter/mcp", headers: headers,
             body: try JSONEncoder().encode(call)))
         #expect(accepted.status == 200)
-        let result = try JSONDecoder().decode(GatewayJSONValue.self, from: accepted.body)
+        let result = try JSONDecoder().decode(JSONValue.self, from: accepted.body)
         #expect(result.objectValue?["result"]?.objectValue?["isError"] == .bool(false))
         headers["x-woven-conversation-id"] = try await fixture.database.createFixtureLocalACPSession(runtimeKind: .codex, title: "Unrelated Mac chat", ownerDeviceID: UUID())
         #expect(await api.handle(.init(method: "POST", target: "/mcp", headers: headers,

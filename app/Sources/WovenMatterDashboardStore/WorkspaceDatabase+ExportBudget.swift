@@ -34,17 +34,17 @@ extension WorkspaceDatabaseConnection {
 
   func checkConversationExportBudget(id: String, format: WorkspaceConversationExportFormat,
     budget: inout WorkspaceExportBudget) throws {
-    try consumeExportRows(table: "dashboard_conversations", predicate: "id = ?", values: [id], budget: &budget)
-    for table in ["dashboard_messages", "dashboard_runs"] {
+    try consumeExportRows(table: "conversations", predicate: "id = ?", values: [id], budget: &budget)
+    for table in ["messages", "runs"] {
       try consumeExportRows(table: table, predicate: "conversation_id = ?", values: [id], budget: &budget)
     }
-    for table in ["dashboard_message_attachments", "dashboard_message_references", "workspace_session_deliveries"] {
-      try consumeExportRows(table: table, predicate: "message_id IN (SELECT id FROM dashboard_messages WHERE conversation_id = ?)",
+    for table in ["message_attachments", "message_references", "workspace_session_deliveries"] {
+      try consumeExportRows(table: table, predicate: "message_id IN (SELECT id FROM messages WHERE conversation_id = ?)",
         values: [id], budget: &budget)
     }
     if format == .fullRun {
-      for table in ["workspace_history_events", "dashboard_run_events", "dashboard_run_trace_events"] {
-        try consumeExportRows(table: table, predicate: "conversation_id = ? OR run_id IN (SELECT id FROM dashboard_runs WHERE conversation_id = ?)",
+      for table in ["workspace_history_events", "run_activities"] {
+        try consumeExportRows(table: table, predicate: "conversation_id = ? OR run_id IN (SELECT id FROM runs WHERE conversation_id = ?)",
           values: [id, id], budget: &budget)
       }
     }

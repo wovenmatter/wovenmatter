@@ -10,7 +10,6 @@ import WovenMatterClient
 import WovenMatterCore
 
 public struct DashboardRecordCounts: Equatable, Sendable {
-  public let profiles: Int
   public let folders: Int
   public let notes: Int
   public let agents: Int
@@ -215,7 +214,6 @@ public actor DashboardStore {
     guard !database.isReadOnlyProjection else { throw WorkspaceDatabaseError.readOnlyProjection }
     guard !localWorkspacePrepared else { return }
     let deviceID = try await deviceIdentity.id()
-    try await database.bindDeviceOwnership(ownerDeviceID: deviceID)
     try await database.reconcileLocalCLIAgentCatalog(ownerDeviceID: deviceID)
     localWorkspacePrepared = true
   }
@@ -445,7 +443,7 @@ public actor DashboardStore {
   }
 
   public func activeAgentConversationIDs() async throws -> Set<String> {
-    try await database.activeDeviceOwnedConversationIDs()
+    try await database.activeLocalConversationIDs()
   }
 
   public func macSurfaceProfile(

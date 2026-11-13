@@ -23,7 +23,7 @@ extension WorkspaceDatabaseConnection {
     } else {
       guard entry.kind == .conversation else { throw federationError("unknown_conversation", "Archive the conversation identity before its execution records.") }
     }
-    let collidesWithLocalConversation = !exists ? try federationScalarUnlocked("SELECT COUNT(*) FROM dashboard_conversations WHERE id = ?", bindings: [entry.conversationID]) != 0 : false
+    let collidesWithLocalConversation = !exists ? try federationScalarUnlocked("SELECT COUNT(*) FROM conversations WHERE id = ?", bindings: [entry.conversationID]) != 0 : false
     if entry.retainedExecution != nil || collidesWithLocalConversation {
       try acceptRetainedExecutionIdentityUnlocked(entry, workspace: workspace)
       exists = true
@@ -43,7 +43,7 @@ extension WorkspaceDatabaseConnection {
       conversation.workspaceID = workspace.id; conversation.libraryID = workspace.libraryID
       if exists {
         if entry.retainedExecution != nil { conversation.activeRunID = try federationConversationUnlocked(entry.conversationID)?.activeRunID }
-        let canonical = try prepareUnlocked("SELECT title,folder_id,is_pinned FROM dashboard_conversations WHERE id=?")
+        let canonical = try prepareUnlocked("SELECT title,folder_id,is_pinned FROM conversations WHERE id=?")
         defer { sqlite3_finalize(canonical) }
         try bind(entry.conversationID, at: 1, to: canonical)
         if sqlite3_step(canonical) == SQLITE_ROW {
@@ -55,18 +55,18 @@ extension WorkspaceDatabaseConnection {
       if let folderID = conversation.folderID, try libraryFolderUnlocked(id: folderID) == nil { conversation.folderID = nil }
       if entry.kind == .restoredConversation {
         try toolsExecuteUnlocked("UPDATE execution_conversations SET deleted=0 WHERE id=?", [entry.conversationID])
-        try toolsExecuteUnlocked("UPDATE dashboard_conversations SET deleted_at=NULL,is_archived=0 WHERE id=?", [entry.conversationID])
+        try toolsExecuteUnlocked("UPDATE conversations SET deleted_at=NULL,is_archived=0 WHERE id=?", [entry.conversationID])
       }
       let statement = try prepareUnlocked("INSERT INTO execution_conversations(id,workspace_id,conversation) VALUES (?,?,?) ON CONFLICT(id) DO UPDATE SET conversation=excluded.conversation")
       defer { sqlite3_finalize(statement) }
       try bind(conversation.id, at: 1, to: statement); try bind(workspace.id, at: 2, to: statement)
       try bind(JSONEncoder().encode(conversation), at: 3, to: statement); try stepDone(statement)
       try toolsExecuteUnlocked("""
-        INSERT INTO dashboard_conversations(id,user_id,title,last_message_preview,folder_id,authority_device_id,origin_device_id,created_at,updated_at,desktop_owned)
-        VALUES (?,?,?,?,?,?,?,?,?,1) ON CONFLICT(id) DO UPDATE SET title=excluded.title,last_message_preview=excluded.last_message_preview,
+        INSERT INTO conversations(id,title,last_message_preview,folder_id,owner_device_id,created_at,updated_at)
+        VALUES (?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET title=excluded.title,last_message_preview=excluded.last_message_preview,
         folder_id=excluded.folder_id,updated_at=excluded.updated_at
-        """, [conversation.id, try localMutationOperatorIDUnlocked(), conversation.title, conversation.preview, conversation.folderID,
-                         workspace.ownerDeviceID, workspace.ownerDeviceID, now, conversation.updatedAt.isEmpty ? now : conversation.updatedAt])
+        """, [conversation.id, conversation.title, conversation.preview, conversation.folderID,
+                         workspace.ownerDeviceID, now, conversation.updatedAt.isEmpty ? now : conversation.updatedAt])
     case .transcript:
       guard let incoming = entry.transcript, incoming.conversationID == entry.conversationID,
             incoming.olderCursor == nil, entry.conversation == nil, entry.receipt == nil, entry.nativeRecord == nil,
@@ -103,7 +103,7 @@ extension WorkspaceDatabaseConnection {
           }
         }
         if let runID = message.runID { try claimFederationRunUnlocked(runID, conversationID: entry.conversationID, workspaceID: workspace.id) }
-        let previous = try prepareUnlocked("SELECT conversation_id,run_id,role,origin_device_id,desktop_owned FROM dashboard_messages WHERE id=?")
+        let previous = try prepareUnlocked("SELECT conversation_id,run_id,role,owner_device_id FROM messages WHERE id=?")
         defer { sqlite3_finalize(previous) }
         try bind(message.id, at: 1, to: previous)
         let previousCode = sqlite3_step(previous)
@@ -111,7 +111,7 @@ extension WorkspaceDatabaseConnection {
           let priorRun = optionalText(previous, column: 1)
           let canBackfillNativeRun = workspace.kind == .ios && priorRun == nil && message.runID != nil
             && message.sequence != nil && ((incoming.runs ?? []) + (transcript.runs ?? [])).contains(where: { $0.id == message.runID })
-            && optionalText(previous, column: 3) == workspace.ownerDeviceID && sqlite3_column_int(previous, 4) == 1
+            && optionalText(previous, column: 3) == workspace.ownerDeviceID
           guard try text(previous, column: 0) == entry.conversationID,
                 priorRun == message.runID || canBackfillNativeRun,
                 try text(previous, column: 2) == message.role else {
@@ -121,10 +121,10 @@ extension WorkspaceDatabaseConnection {
         if let index = transcript.messages.firstIndex(where: { $0.id == message.id }) { transcript.messages[index] = message }
         else { transcript.messages.append(message) }
         try toolsExecuteUnlocked("""
-          INSERT INTO dashboard_messages(id,conversation_id,run_id,role,content,status,authority_device_id,origin_device_id,created_at,updated_at,desktop_owned)
-          VALUES (?,?,?,?,?,?,?,?,?,?,1) ON CONFLICT(id) DO UPDATE SET content=excluded.content,status=excluded.status,updated_at=excluded.updated_at,run_id=COALESCE(dashboard_messages.run_id,excluded.run_id)
+          INSERT INTO messages(id,conversation_id,run_id,role,content,status,owner_device_id,created_at,updated_at)
+          VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET content=excluded.content,status=excluded.status,updated_at=excluded.updated_at,run_id=COALESCE(messages.run_id,excluded.run_id)
           """, [message.id, entry.conversationID, message.runID, message.role, message.content, message.status ?? "completed",
-                           workspace.ownerDeviceID, workspace.ownerDeviceID, message.createdAt.isEmpty ? now : message.createdAt, now])
+                           workspace.ownerDeviceID, message.createdAt.isEmpty ? now : message.createdAt, now])
         if let source = message.agentSourceID {
           try toolsExecuteUnlocked("""
             INSERT INTO device_message_provenance(message_id,source_id,source_title,source_agent,kind)
@@ -136,7 +136,7 @@ extension WorkspaceDatabaseConnection {
         try claimFederationRunUnlocked(activity.runID, conversationID: entry.conversationID, workspaceID: workspace.id)
         if let index = transcript.activities.firstIndex(where: { $0.id == activity.id }) { transcript.activities[index] = activity }
         else { transcript.activities.append(activity) }
-        let existingActivity = try libraryIDsUnlocked("SELECT conversation_id || '/' || run_id FROM dashboard_run_events WHERE id=?", bindings: [activity.id])
+        let existingActivity = try libraryIDsUnlocked("SELECT conversation_id || '/' || run_id FROM run_activities WHERE id=?", bindings: [activity.id])
         guard existingActivity.isEmpty || existingActivity.first == entry.conversationID + "/" + activity.runID else {
           throw federationError("wrong_owner", "An activity identity belongs to another conversation.")
         }
@@ -144,29 +144,27 @@ extension WorkspaceDatabaseConnection {
           ?? AgentRunActivity(id: activity.id, kind: .activity, title: activity.title, detail: activity.detail, status: activity.status)
         let encoded = String(decoding: try JSONEncoder().encode(display), as: UTF8.self)
         try toolsExecuteUnlocked("""
-          INSERT INTO dashboard_run_events(id,run_id,conversation_id,user_id,authority_device_id,origin_device_id,desktop_owned,event_type,content,created_at)
-          VALUES (?,?,?,?,?,?,1,'activity',?,?) ON CONFLICT(id) DO UPDATE SET content=excluded.content
-          """, [activity.id, activity.runID, entry.conversationID, try localMutationOperatorIDUnlocked(),
-                           workspace.executionDeviceID ?? workspace.ownerDeviceID, workspace.ownerDeviceID, encoded, activity.createdAt ?? now])
+          INSERT INTO run_activities(id,run_id,conversation_id,event_type,content,created_at)
+          VALUES (?,?,?,'activity',?,?) ON CONFLICT(id) DO UPDATE SET content=excluded.content
+          """, [activity.id, activity.runID, entry.conversationID, encoded, activity.createdAt ?? now])
       }
       if let runID = incoming.activeRunID { try claimFederationRunUnlocked(runID, conversationID: entry.conversationID, workspaceID: workspace.id) }
       var observedRuns = Set(incoming.messages.compactMap(\.runID) + incoming.activities.map(\.runID))
       if let active = incoming.activeRunID { observedRuns.insert(active) }
       for runID in observedRuns {
         try toolsExecuteUnlocked("""
-          INSERT OR IGNORE INTO dashboard_runs(id,conversation_id,user_id,status,authority_device_id,origin_device_id,desktop_owned,created_at,updated_at)
-          VALUES (?,?,?,'completed',?,?,1,?,?)
-          """, [runID, entry.conversationID, try localMutationOperatorIDUnlocked(), workspace.executionDeviceID ?? workspace.ownerDeviceID,
-                         workspace.ownerDeviceID, now, now])
+          INSERT OR IGNORE INTO runs(id,conversation_id,status,owner_device_id,created_at,updated_at)
+          VALUES (?,?,'completed',?,?,?)
+          """, [runID, entry.conversationID, workspace.executionDeviceID ?? workspace.ownerDeviceID, now, now])
       }
       let activeRunID = incoming.activeRunID ?? (entry.runID != nil && entry.runID != transcript.activeRunID ? transcript.activeRunID : nil)
       if let previous = transcript.activeRunID, previous != activeRunID {
         let terminal = incoming.messages.last(where: { $0.runID == previous && $0.role == "assistant" })?.status ?? "completed"
         let status = ["completed", "failed", "cancelled", "interrupted"].contains(terminal) ? terminal : "completed"
-        try toolsExecuteUnlocked("UPDATE dashboard_runs SET status=?,updated_at=?,completed_at=? WHERE id=?", [status, now, now, previous])
+        try toolsExecuteUnlocked("UPDATE runs SET status=?,updated_at=?,completed_at=? WHERE id=?", [status, now, now, previous])
       }
       if let active = incoming.activeRunID {
-        try toolsExecuteUnlocked("UPDATE dashboard_runs SET status='running',updated_at=? WHERE id=?", [now, active])
+        try toolsExecuteUnlocked("UPDATE runs SET status='running',updated_at=? WHERE id=?", [now, active])
       }
       if let runs = incoming.runs {
         var values = transcript.runs ?? []
@@ -177,11 +175,11 @@ extension WorkspaceDatabaseConnection {
           }
           try claimFederationRunUnlocked(run.id, conversationID: entry.conversationID, workspaceID: workspace.id)
           try toolsExecuteUnlocked("""
-            INSERT INTO dashboard_runs(id,conversation_id,user_id,status,authority_device_id,origin_device_id,desktop_owned,created_at,updated_at,started_at,completed_at)
-            VALUES (?,?,?,?,?,?,1,?,?,?,?) ON CONFLICT(id) DO UPDATE SET status=excluded.status,
-            updated_at=excluded.updated_at,started_at=COALESCE(dashboard_runs.started_at,excluded.started_at),completed_at=excluded.completed_at
-            """, [run.id, entry.conversationID, try localMutationOperatorIDUnlocked(), run.status,
-              workspace.executionDeviceID ?? workspace.ownerDeviceID, workspace.ownerDeviceID,
+            INSERT INTO runs(id,conversation_id,status,owner_device_id,created_at,updated_at,started_at,completed_at)
+            VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET status=excluded.status,
+            updated_at=excluded.updated_at,started_at=COALESCE(runs.started_at,excluded.started_at),completed_at=excluded.completed_at
+            """, [run.id, entry.conversationID, run.status,
+              workspace.executionDeviceID ?? workspace.ownerDeviceID,
               run.startedAt ?? now, now, run.startedAt, run.completedAt])
           if let index = values.firstIndex(where: { $0.id == run.id }) { values[index] = run }
           else { values.append(run) }
@@ -203,7 +201,7 @@ extension WorkspaceDatabaseConnection {
         let update = try prepareUnlocked("UPDATE execution_conversations SET conversation = ? WHERE id = ?")
         defer { sqlite3_finalize(update) }
         try bind(JSONEncoder().encode(conversation), at: 1, to: update); try bind(entry.conversationID, at: 2, to: update); try stepDone(update)
-        try toolsExecuteUnlocked("UPDATE dashboard_conversations SET last_message_preview=?,updated_at=? WHERE id=?", [conversation.preview, now, entry.conversationID])
+        try toolsExecuteUnlocked("UPDATE conversations SET last_message_preview=?,updated_at=? WHERE id=?", [conversation.preview, now, entry.conversationID])
       }
     case .receipt:
       guard let receipt = entry.receipt, entry.conversation == nil, entry.transcript == nil, entry.nativeRecord == nil,
@@ -233,7 +231,7 @@ extension WorkspaceDatabaseConnection {
     case .deletedConversation:
       guard entry.conversation == nil, entry.transcript == nil, entry.receipt == nil, entry.nativeRecord == nil else { throw federationError("invalid_event", "A deletion event cannot contain executable or replacement data.") }
       try toolsExecuteUnlocked("UPDATE execution_conversations SET deleted=1 WHERE id=?", [entry.conversationID])
-      try toolsExecuteUnlocked("UPDATE dashboard_conversations SET deleted_at=?,updated_at=? WHERE id=?", [now, now, entry.conversationID])
+      try toolsExecuteUnlocked("UPDATE conversations SET deleted_at=?,updated_at=? WHERE id=?", [now, now, entry.conversationID])
     }
   }
   private func claimFederationRunUnlocked(_ runID: String, conversationID: String, workspaceID: String) throws {
@@ -248,7 +246,7 @@ extension WorkspaceDatabaseConnection {
       }
     } else {
       guard code == SQLITE_DONE else { throw stepError() }
-      guard try federationScalarUnlocked("SELECT COUNT(*) FROM dashboard_runs WHERE id=?", bindings: [runID]) == 0 else {
+      guard try federationScalarUnlocked("SELECT COUNT(*) FROM runs WHERE id=?", bindings: [runID]) == 0 else {
         throw federationError("wrong_owner", "An existing local run cannot be claimed by an execution archive.")
       }
       try toolsExecuteUnlocked("INSERT INTO execution_runs VALUES (?,?,?)", [runID, workspaceID, conversationID])

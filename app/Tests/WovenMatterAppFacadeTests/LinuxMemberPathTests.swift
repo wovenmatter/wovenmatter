@@ -217,8 +217,8 @@ struct LinuxMemberPathTests {
         let id = try await fixture.createConversation()
         let run = try await fixture.database.beginLocalACPRun(conversationID: id, input: .init(text: "Earlier question"))
         try await fixture.database.write { connection in try connection.transaction {
-            try connection.toolsExecuteUnlocked("UPDATE desktop_local_acp_sessions SET acp_session_id='native-session' WHERE conversation_id=?", [id])
-            try connection.toolsExecuteUnlocked("UPDATE dashboard_messages SET content='Earlier answer' WHERE id=?", [run.assistantMessageID])
+            try connection.toolsExecuteUnlocked("UPDATE harness_sessions SET native_session_id='native-session' WHERE conversation_id=?", [id])
+            try connection.toolsExecuteUnlocked("UPDATE messages SET content='Earlier answer' WHERE id=?", [run.assistantMessageID])
         } }
         let record = try #require(try await fixture.database.workspaceOverview().conversations.first { $0.id == id })
         // Its run was left running when the app that ran it over SSH quit.
@@ -263,7 +263,7 @@ struct LinuxMemberPathTests {
         // A host that refuses the adoption leaves the chat readable, with the reason.
         let adoptable = try await fixture.createConversation()
         try await fixture.database.write { connection in try connection.transaction {
-            try connection.toolsExecuteUnlocked("UPDATE desktop_local_acp_sessions SET acp_session_id='gone' WHERE conversation_id=?", [adoptable])
+            try connection.toolsExecuteUnlocked("UPDATE harness_sessions SET native_session_id='gone' WHERE conversation_id=?", [adoptable])
         } }
         await fake.refuseAdoptions()
         let second = try #require(try await fixture.database.workspaceOverview().conversations.first { $0.id == adoptable })
@@ -320,7 +320,7 @@ struct LinuxMemberPathTests {
         let id = try await fixture.createConversation()
         _ = try await fixture.database.beginLocalACPRun(conversationID: id, input: .init(text: "Earlier question"))
         try await fixture.database.write { connection in try connection.transaction {
-            try connection.toolsExecuteUnlocked("UPDATE desktop_local_acp_sessions SET acp_session_id='native-session' WHERE conversation_id=?", [id])
+            try connection.toolsExecuteUnlocked("UPDATE harness_sessions SET native_session_id='native-session' WHERE conversation_id=?", [id])
         } }
         let record = try #require(try await fixture.database.workspaceOverview().conversations.first { $0.id == id })
 

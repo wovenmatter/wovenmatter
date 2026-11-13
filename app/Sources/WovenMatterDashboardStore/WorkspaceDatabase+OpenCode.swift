@@ -10,12 +10,12 @@ import WovenMatterCore
 // Canonical OpenCode projections; legacy ACP rows are never migrated.
 extension WorkspaceDatabaseConnection {
   public func knownOpenCodeSessionIDs(connectionID: String) throws -> Set<String> {
-    try knownSessionIDs(sql: "SELECT session_id FROM desktop_opencode_sessions WHERE connection_id = ?", scope: connectionID)
+    try knownSessionIDs(sql: "SELECT session_id FROM opencode_sessions WHERE connection_id = ?", scope: connectionID)
   }
 
   public func openCodeLinks() throws -> [OpenCodeSessionLink] {
     try withLock {
-      let statement = try prepareUnlocked("SELECT conversation_id, connection_id, session_id FROM desktop_opencode_sessions")
+      let statement = try prepareUnlocked("SELECT conversation_id, connection_id, session_id FROM opencode_sessions")
       defer { sqlite3_finalize(statement) }
       var result: [OpenCodeSessionLink] = []
       while sqlite3_step(statement) == SQLITE_ROW {
@@ -32,8 +32,8 @@ extension WorkspaceDatabaseConnection {
       let statement = try prepareUnlocked("""
         SELECT r.workspace_id, r.root_path
         FROM session_execution_roots r
-        JOIN dashboard_conversations c ON c.id=r.conversation_id
-        JOIN desktop_opencode_sessions o ON o.conversation_id=c.id
+        JOIN conversations c ON c.id=r.conversation_id
+        JOIN opencode_sessions o ON o.conversation_id=c.id
         WHERE c.id=? AND c.is_archived=0 AND c.deleted_at IS NULL
           AND NOT EXISTS(SELECT 1 FROM retained_execution_history WHERE conversation_id=c.id)
         """)
@@ -53,14 +53,14 @@ extension WorkspaceDatabaseConnection {
 
   public func archiveImportedOpenCodeSession(conversationID: String) throws {
     try transaction {
-      try toolsExecuteUnlocked("INSERT OR IGNORE INTO retained_execution_history SELECT conversation_id FROM desktop_opencode_sessions WHERE conversation_id=?", [conversationID])
-      try toolsExecuteUnlocked("UPDATE dashboard_conversations SET is_archived=1 WHERE id=? AND EXISTS(SELECT 1 FROM desktop_opencode_sessions WHERE conversation_id=?)", [conversationID,conversationID])
+      try toolsExecuteUnlocked("INSERT OR IGNORE INTO retained_execution_history SELECT conversation_id FROM opencode_sessions WHERE conversation_id=?", [conversationID])
+      try toolsExecuteUnlocked("UPDATE conversations SET is_archived=1 WHERE id=? AND EXISTS(SELECT 1 FROM opencode_sessions WHERE conversation_id=?)", [conversationID,conversationID])
     }
   }
 
   public func openCodeSnapshot(conversationID: String) throws -> OpenCodeSessionSnapshot? {
     try withLock {
-      let statement = try prepareUnlocked("SELECT snapshot_json FROM desktop_opencode_sessions WHERE conversation_id = ?")
+      let statement = try prepareUnlocked("SELECT snapshot_json FROM opencode_sessions WHERE conversation_id = ?")
       defer { sqlite3_finalize(statement) }
       try bind(conversationID, at: 1, to: statement)
       guard sqlite3_step(statement) == SQLITE_ROW else { return nil }
@@ -92,12 +92,12 @@ extension WorkspaceDatabaseConnection {
       } else { covered = [] }
       for removed in covered where !nativeIDs.contains(removed["id"].text) {
         let messageID = "opencode:\(conversationID):\(removed["id"].text)"
-        let hide = try prepareUnlocked("INSERT OR IGNORE INTO desktop_opencode_hidden_messages VALUES(?,?)")
+        let hide = try prepareUnlocked("INSERT OR IGNORE INTO opencode_hidden_messages VALUES(?,?)")
         defer { sqlite3_finalize(hide) }
         try bind(messageID, at: 1, to: hide); try bind(conversationID, at: 2, to: hide); try stepDone(hide)
-        try executeUnlocked("UPDATE desktop_activity_revision SET revision=revision+1 WHERE singleton=1")
+        try executeUnlocked("UPDATE activity_revision SET revision=revision+1 WHERE singleton=1")
         let invalidate = try prepareUnlocked("""
-          UPDATE desktop_activity_index SET deleted=1,revision=(SELECT revision FROM desktop_activity_revision WHERE singleton=1)
+          UPDATE activity_summaries SET deleted=1,revision=(SELECT revision FROM activity_revision WHERE singleton=1)
           WHERE run_id=? AND conversation_id=? AND deleted=0
           """)
         defer { sqlite3_finalize(invalidate) }
@@ -105,14 +105,14 @@ extension WorkspaceDatabaseConnection {
         try bind(conversationID, at: 2, to: invalidate); try stepDone(invalidate)
       }
       for nativeID in nativeIDs {
-        let show = try prepareUnlocked("DELETE FROM desktop_opencode_hidden_messages WHERE message_id=? AND conversation_id=?")
+        let show = try prepareUnlocked("DELETE FROM opencode_hidden_messages WHERE message_id=? AND conversation_id=?")
         defer { sqlite3_finalize(show) }
         try bind("opencode:\(conversationID):\(nativeID)", at: 1, to: show)
         try bind(conversationID, at: 2, to: show); try stepDone(show)
       }
       let now = Self.timestamp(Date())
       let json = String(decoding: try JSONEncoder().encode(snapshot), as: UTF8.self)
-      let state = try prepareUnlocked("UPDATE desktop_opencode_sessions SET snapshot_json = ? WHERE conversation_id = ?")
+      let state = try prepareUnlocked("UPDATE opencode_sessions SET snapshot_json = ? WHERE conversation_id = ?")
       defer { sqlite3_finalize(state) }
       try bind(json, at: 1, to: state); try bind(conversationID, at: 2, to: state); try stepDone(state)
       guard changedRowCountUnlocked == 1 else { throw LocalACPSessionDatabaseError.sessionNotFound }
@@ -128,12 +128,12 @@ extension WorkspaceDatabaseConnection {
         let created = Self.timestamp(Date(timeIntervalSince1970: (message["time"]["created"].number ?? 0) / 1000))
         let status = assistant && message["time"]["completed"].isNull && snapshot.active ? "streaming" : "completed"
         let insert = try prepareUnlocked("""
-          INSERT INTO dashboard_messages(id, conversation_id, client_message_id, run_id, role, content,
-            status, created_at, updated_at, desktop_owned, authority_device_id, authority_agent_id)
-          SELECT ?, c.id, ?, ?, ?, ?, ?, ?, ?, 1, c.authority_device_id, c.authority_agent_id
-          FROM dashboard_conversations c WHERE c.id = ?
+          INSERT INTO messages(id, conversation_id, client_message_id, run_id, role, content,
+            status, created_at, updated_at, owner_device_id)
+          SELECT ?, c.id, ?, ?, ?, ?, ?, ?, ?, c.owner_device_id
+          FROM conversations c WHERE c.id = ?
           ON CONFLICT(id) DO UPDATE SET content=excluded.content, status=excluded.status, updated_at=excluded.updated_at
-            WHERE dashboard_messages.content IS NOT excluded.content OR dashboard_messages.status IS NOT excluded.status
+            WHERE messages.content IS NOT excluded.content OR messages.status IS NOT excluded.status
           """)
         defer { sqlite3_finalize(insert) }
         try bind(id, at: 1, to: insert); try bind(nativeID, at: 2, to: insert)
@@ -144,7 +144,7 @@ extension WorkspaceDatabaseConnection {
         try bind(visibleText, at: 5, to: insert)
         try bind(status, at: 6, to: insert); try bind(created, at: 7, to: insert); try bind(now, at: 8, to: insert)
         try bind(conversationID, at: 9, to: insert); try stepDone(insert)
-        let hasStoredInputFiles = !(try historyRowsUnlocked("SELECT 1 FROM dashboard_message_attachments WHERE message_id=? LIMIT 1", values: [id])).isEmpty
+        let hasStoredInputFiles = !(try historyRowsUnlocked("SELECT 1 FROM message_attachments WHERE message_id=? LIMIT 1", values: [id])).isEmpty
         if status != "streaming", assistant || !hasStoredInputFiles {
           for file in message["files"].array + message["content"].array.filter({ $0["type"].text == "file" }) {
             let source = file["uri"].string ?? file["source"]["uri"].text
@@ -160,13 +160,13 @@ extension WorkspaceDatabaseConnection {
         if let runID {
           let runStatus = status == "streaming" ? "running" : message["error"].isNull ? "completed" : "failed"
           let run = try prepareUnlocked("""
-            INSERT INTO dashboard_runs(id, conversation_id, user_id, agent_id, agent_codename,
-              authority_device_id, authority_agent_id, assistant_message_id, status, started_at,
-              completed_at, created_at, updated_at, desktop_owned)
-            SELECT ?, c.id, c.user_id, c.agent_id, c.agent_codename, c.authority_device_id,
-              c.authority_agent_id, ?, ?, ?, ?, ?, ?, 1 FROM dashboard_conversations c WHERE c.id = ?
+            INSERT INTO runs(id, conversation_id, agent_id, agent_codename,
+              owner_device_id, assistant_message_id, status, started_at,
+              completed_at, created_at, updated_at)
+            SELECT ?, c.id, c.agent_id, c.agent_codename, c.owner_device_id,
+              ?, ?, ?, ?, ?, ? FROM conversations c WHERE c.id = ?
             ON CONFLICT(id) DO UPDATE SET completed_at=excluded.completed_at, updated_at=excluded.updated_at
-              WHERE dashboard_runs.completed_at IS NOT excluded.completed_at
+              WHERE runs.completed_at IS NOT excluded.completed_at
             """)
           defer { sqlite3_finalize(run) }
           try bind(runID, at: 1, to: run); try bind(id, at: 2, to: run); try bind("running", at: 3, to: run)
@@ -190,7 +190,7 @@ extension WorkspaceDatabaseConnection {
           let placeholders = Array(repeating: "?", count: activityIDs.count).joined(separator: ",")
           // Published HTML belongs to the thread, independently of OpenCode's
           // current native part list. Reconciliation must keep those pages.
-          let obsolete = try prepareUnlocked("DELETE FROM dashboard_run_events WHERE run_id = ? AND id NOT LIKE '%:activity:html-render:%'"
+          let obsolete = try prepareUnlocked("DELETE FROM run_activities WHERE run_id = ? AND id NOT LIKE '%:activity:html-render:%'"
             + (activityIDs.isEmpty ? "" : " AND id NOT IN (\(placeholders))"))
           defer { sqlite3_finalize(obsolete) }
           try bind(runID, at: 1, to: obsolete)
@@ -202,42 +202,42 @@ extension WorkspaceDatabaseConnection {
           // Restore from current source rows, including tombstones left by an older
           // build that already removed the message's hidden marker.
           let revival = try prepareUnlocked("""
-            UPDATE desktop_activity_revision SET revision=revision+1 WHERE singleton=1
-              AND EXISTS(SELECT 1 FROM desktop_activity_index i
-                JOIN dashboard_run_events e ON e.id=i.source_id
-                WHERE i.run_id=? AND i.conversation_id=? AND i.source_kind='event' AND i.deleted=1)
+            UPDATE activity_revision SET revision=revision+1 WHERE singleton=1
+              AND EXISTS(SELECT 1 FROM activity_summaries i
+                JOIN run_activities e ON e.id=i.id
+                WHERE i.run_id=? AND i.conversation_id=? AND i.deleted=1)
             """)
           defer { sqlite3_finalize(revival) }
           try bind(runID, at: 1, to: revival)
           try bind(conversationID, at: 2, to: revival); try stepDone(revival)
           if changedRowCountUnlocked > 0 {
             let restore = try prepareUnlocked("""
-              UPDATE desktop_activity_index SET deleted=0,
-                revision=(SELECT revision FROM desktop_activity_revision WHERE singleton=1)
-              WHERE run_id=? AND conversation_id=? AND source_kind='event' AND deleted=1
-                AND EXISTS(SELECT 1 FROM dashboard_run_events e WHERE e.id=source_id)
+              UPDATE activity_summaries SET deleted=0,
+                revision=(SELECT revision FROM activity_revision WHERE singleton=1)
+              WHERE run_id=? AND conversation_id=? AND deleted=1
+                AND EXISTS(SELECT 1 FROM run_activities e WHERE e.id=activity_summaries.id)
               """)
             defer { sqlite3_finalize(restore) }
             try bind(runID, at: 1, to: restore)
             try bind(conversationID, at: 2, to: restore); try stepDone(restore)
           }
           for activity in activities {
-            try upsertDeviceOwnedRunActivityUnlocked(runID: runID, activity: activity, appendingContent: false, updatedAt: Date(),
+            try upsertRunActivityUnlocked(runID: runID, activity: activity, appendingContent: false, updatedAt: Date(),
               replacingActivity: true, allowingSettledRun: true)
           }
           // A new run settles after its parts, so its final activity archive
           // sees them. An unchanged status is not rewritten.
-          let finish = try prepareUnlocked("UPDATE dashboard_runs SET status=?1, updated_at=?2 WHERE id=?3 AND status IS NOT ?1")
+          let finish = try prepareUnlocked("UPDATE runs SET status=?1, updated_at=?2 WHERE id=?3 AND status IS NOT ?1")
           defer { sqlite3_finalize(finish) }
           try bind(runStatus, at: 1, to: finish); try bind(now, at: 2, to: finish); try bind(runID, at: 3, to: finish); try stepDone(finish)
         }
       }
       // ?1 title, ?2 preview (NULL keeps the current one), ?3 activity time, ?4 now, ?5 conversation.
-      let title = "COALESCE((SELECT title FROM desktop_conversation_titles WHERE conversation_id=?5), ?1)"
-      let lastAt = "MAX(?3, COALESCE((SELECT imported_at FROM desktop_session_imports WHERE conversation_id=?5), ''))"
+      let title = "COALESCE((SELECT title FROM conversation_titles WHERE conversation_id=?5), ?1)"
+      let lastAt = "MAX(?3, COALESCE((SELECT imported_at FROM session_imports WHERE conversation_id=?5), ''))"
       let preview = "COALESCE(?2, last_message_preview)"
       let update = try prepareUnlocked("""
-        UPDATE dashboard_conversations SET title=\(title), last_message_preview=\(preview), last_message_at=\(lastAt), updated_at=?4
+        UPDATE conversations SET title=\(title), last_message_preview=\(preview), last_message_at=\(lastAt), updated_at=?4
         WHERE id=?5 AND (title IS NOT \(title) OR last_message_preview IS NOT \(preview) OR last_message_at IS NOT \(lastAt))
         """)
       defer { sqlite3_finalize(update) }
@@ -268,20 +268,18 @@ extension WorkspaceDatabaseConnection {
       let deliveryID = try deliveryID.map(canonicalDeliveryID)
       if let deliveryID { try markToolDeliveryTransportStartedUnlocked(id: deliveryID) }
       let statement = try prepareUnlocked("""
-        INSERT INTO desktop_opencode_submissions(id, conversation_id, payload_json, status) VALUES (?, ?, ?, ?)
+        INSERT INTO opencode_submissions(id, conversation_id, payload_json, status) VALUES (?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET status=excluded.status
         """)
       defer { sqlite3_finalize(statement) }
       try bind(id, at: 1, to: statement); try bind(conversationID, at: 2, to: statement)
       try bind(payload.json, at: 3, to: statement); try bind(status, at: 4, to: statement); try stepDone(statement)
       if let input, !input.attachments.isEmpty,
-         let row = try historyRowsUnlocked("SELECT user_id,agent_id,authority_device_id FROM dashboard_conversations WHERE id=?", values: [conversationID]).first?.objectValue,
-         let device = row["authority_device_id"]?.stringValue.flatMap(UUID.init(uuidString:)) {
+         try historyRowsUnlocked("SELECT 1 AS present FROM conversations WHERE id=?", values: [conversationID]).isEmpty == false {
         let messageID = "opencode:\(conversationID):\(id)"
-        if (try historyRowsUnlocked("SELECT 1 FROM dashboard_message_attachments WHERE message_id=? UNION ALL SELECT 1 FROM dashboard_message_references WHERE message_id=?", values: [messageID, messageID])).isEmpty {
+        if (try historyRowsUnlocked("SELECT 1 FROM message_attachments WHERE message_id=? UNION ALL SELECT 1 FROM message_references WHERE message_id=?", values: [messageID, messageID])).isEmpty {
           try insertMessageAttachmentsUnlocked(input.attachments, conversationID: conversationID, messageID: messageID,
-            userID: row["user_id"]?.stringValue ?? "", agentID: row["agent_id"]?.stringValue ?? "",
-            ownerDeviceID: device, governingPlane: .wovenmatterMacOS, createdAt: Date())
+            createdAt: Date())
         }
       }
       if let visibleText {
@@ -302,7 +300,7 @@ extension WorkspaceDatabaseConnection {
   }
   public func openCodeUncertainSubmissions(conversationID: String) throws -> [OpenCodeValue] {
     try withLock {
-      let statement = try prepareUnlocked("SELECT id, payload_json, status FROM desktop_opencode_submissions WHERE conversation_id=? AND status IN ('sending', 'uncertain')")
+      let statement = try prepareUnlocked("SELECT id, payload_json, status FROM opencode_submissions WHERE conversation_id=? AND status IN ('sending', 'uncertain')")
       defer { sqlite3_finalize(statement) }; try bind(conversationID, at: 1, to: statement)
       var values: [OpenCodeValue] = []
       while sqlite3_step(statement) == SQLITE_ROW {
