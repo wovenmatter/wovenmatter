@@ -6,8 +6,7 @@ Codex, Claude Code, Grok Build, and OpenCode side by side in a Mac app.
 Any Mac or Linux machine on your Tailscale network (tailnet) can be a Woven
 Matter host: a host for your agents, the host for your bots, or both. All of
 them share one synced library, and you manage every one of them from the Mac
-app. There is no
-Woven Matter account and no hosted service in between.
+app. There is no Woven Matter account and no hosted service in between.
 
 [Download for Mac](https://github.com/wovenmatter/wovenmatter/releases/latest) ·
 [Getting started](docs/guide/getting-started.md) ·
@@ -25,8 +24,8 @@ Woven Matter account and no hosted service in between.
   ongoing work: watching a project, running a dev server, or coming back to a
   task on a timer. Your bots run together on one machine you choose (this
   Mac, another Mac, or a Linux host), each in its own isolated Linux
-  container. Admin Bot creates and organizes the rest,
-  and bots can work in teams with a manager that hands out the work.
+  container. Admin Bot creates and organizes the rest, and bots can work in
+  teams with a manager that hands out the work.
 - **Connect all of your machines.** Run Woven Matter on as many Macs and Linux
   machines on your tailnet as you want. Each one can host agents, your bots,
   or both. They all work at the same time, and you manage all of them from
