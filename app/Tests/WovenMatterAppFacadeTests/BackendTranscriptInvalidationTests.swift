@@ -119,8 +119,45 @@ struct BackendTranscriptInvalidationTests {
         #expect(model.federatedExecutionSnapshots[id]?.session == settings)
     }
 
+    /// A `server.state` the server keeps ending is subscribed again after a
+    /// wait that grows (1 s doubling to 30 s), never at once in a loop.
+    @Test func serverStateEndsAreSubscribedAgainWithBackoff() async throws {
+        let fixture = try await FacadeFixture()
+        defer { fixture.remove() }
+        let model = fixture.model, live = model.windowLive
+        let waits = DurationLog()
+        live.retrySleep = { delay in await waits.add(delay) }
+        // Not started: a subscription is only recorded until it opens.
+        live.connection = StreamConnection { throw CancellationError() }
+        for attempt in 1...7 {
+            model.receiveServerState(.ended(nil), generation: live.generation)
+            try await waitUntil { live.serverState != nil }
+            #expect(await waits.all.count == attempt)
+            live.serverState = nil
+        }
+        let all = await waits.all
+        #expect(all[0] >= .milliseconds(750) && all[0] <= .milliseconds(1_250))
+        // Jitter is ±25 %: the first six waits cannot overlap; later ones stay at the 30 s cap.
+        let growing = Array(all.prefix(6))
+        #expect(zip(growing, growing.dropFirst()).allSatisfy { $0 < $1 }, "\(all)")
+        #expect(all.allSatisfy { $0 <= .seconds(30) } && all.last! >= .milliseconds(22_500))
+
+        // An item resets it: the next end waits a second again.
+        model.receiveServerState(.item(.init(id: "s1", payload: .synchronized)), generation: live.generation)
+        model.receiveServerState(.ended(nil), generation: live.generation)
+        try await waitUntil { live.serverState != nil }
+        let reset = try #require(await waits.all.last)
+        #expect(reset <= .milliseconds(1_250))
+        await model.stopWindowStream()
+    }
+
     private func waitUntil(sourceLocation: SourceLocation = #_sourceLocation, _ condition: () -> Bool) async throws {
         if try await pollUntil(attempts: 300, interval: .milliseconds(10), { condition() }) { return }
         try #require(condition(), sourceLocation: sourceLocation)
     }
+}
+
+private actor DurationLog {
+    private(set) var all: [Duration] = []
+    func add(_ value: Duration) { all.append(value) }
 }

@@ -27,6 +27,12 @@ final class WindowLiveState {
     var reloadScopes = false
     var scopeWorker: Task<Void, Never>?
     var scopeRetry: Task<Void, Never>?
+    /// `server.state` ends in a row without an item between: each waits
+    /// longer before subscribing again (1 s doubling to 30 s, with jitter).
+    var serverStateEnds = 0
+    var serverStateRetry: Task<Void, Never>?
+    /// Waits before subscribing `server.state` again (tests replace it).
+    var retrySleep: @Sendable (Duration) async throws -> Void = { try await Task.sleep(for: $0) }
     /// Open chats and their `conversation` subscriptions.
     var follows: [String: LiveConversation] = [:]
 
@@ -94,6 +100,7 @@ extension ApplicationModel {
         live.conversationWorker?.cancel(); live.conversationWorker = nil
         live.scopeWorker?.cancel(); live.scopeWorker = nil
         live.scopeRetry?.cancel(); live.scopeRetry = nil
+        live.serverStateRetry?.cancel(); live.serverStateRetry = nil; live.serverStateEnds = 0
         live.pendingConversationIDs = []; live.pendingScopes = []
         live.reloadConversations = false; live.reloadScopes = false
         let connection = live.connection
@@ -117,18 +124,26 @@ extension ApplicationModel {
         guard generation == live.generation else { return }
         switch event {
         case .ended:
-            // Ended for good: subscribe again, which starts from `synchronized`.
+            // Ended for good: subscribe again, which starts from `synchronized`,
+            // after a wait that grows while the server keeps ending it.
             live.serverState = nil
             guard let connection = live.connection else { return }
-            Task { [weak self] in
+            let delay = StreamConnection.retryDelay(attempt: live.serverStateEnds, random: Double.random(in: 0...1))
+            live.serverStateEnds += 1
+            let sleep = live.retrySleep
+            live.serverStateRetry?.cancel()
+            live.serverStateRetry = Task { [weak self] in
+                do { try await sleep(delay) } catch { return }
+                guard let self, generation == self.windowLive.generation, self.windowLive.connection === connection else { return }
                 let subscription = await connection.subscribe(.serverState) { [weak self] event in
                     await self?.receiveServerState(event, generation: generation)
                     return .accepted
                 }
-                guard let self, generation == self.windowLive.generation else { await connection.unsubscribe(subscription); return }
+                guard generation == self.windowLive.generation else { await connection.unsubscribe(subscription); return }
                 self.windowLive.serverState = subscription
             }
         case .item(let item):
+            live.serverStateEnds = 0
             switch item.payload {
             case .synchronized:
                 applyServerState(scopes: [], conversationIDs: [], reloadAll: true)
