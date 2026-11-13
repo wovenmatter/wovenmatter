@@ -483,48 +483,6 @@ final class PairedMacSyncController {
                 return try .json(try await model.exportDeviceUsage(
                     try JSONDecoder().decode(UsageDeviceExportRequest.self, from: request.body)))
             }
-            if path == "/v1/peers/files", request.method == "POST", request.body.count <= 4096 {
-                let cursor = try JSONDecoder().decode(String.self, from: request.body)
-                let files = files ?? PairedLibraryFiles(root: database.supportDirectory)
-                return try .json(try await files.page(after: cursor))
-            }
-            if path == "/v1/peers/file", request.method == "POST", request.body.count <= 4096 {
-                let chunk = try JSONDecoder().decode(PairedLibraryFileRequest.self, from: request.body)
-                let files = files ?? PairedLibraryFiles(root: database.supportDirectory)
-                return try .json(try await files.chunk(chunk))
-            }
-            if path == "/v1/peers/exchange", request.method == "POST", request.body.count <= 48 * 1_024 * 1_024 {
-                let exchange = try JSONDecoder().decode(PairedMacExchange.self, from: request.body)
-                guard exchange.deviceID == principal.id, exchange.after >= 0,
-                      try await database.pairedMacRoutes().contains(where: { $0.deviceID == principal.id }) else {
-                    return .error("wrong_peer", "Finish pairing before exchanging library content.", status: 403)
-                }
-                database.prepareForPeerSync()
-                guard try await database.peerImportsReady(timeout: 5) else {
-                    let refusal = WorkspaceDatabase.peerBackupPending
-                    return .error(refusal.code, refusal.message, status: 503)
-                }
-                // Membership and its revocations apply before, and independently
-                // of, any library row that might be rejected or still waiting.
-                try await authentication.mergeMembership(exchange.membership, own: identity())
-                do { try await host.applyPeerRevocations(); errors.removeValue(forKey: "revocations") }
-                catch { errors["revocations"] = error.localizedDescription }
-                // An unpair learned in this exchange, or made here meanwhile, ends
-                // the requester's access before any page is accepted or returned.
-                guard await authentication.isAuthorizedPeer(principal) else {
-                    return .error("unauthorized", "This Mac is no longer paired.", status: 401)
-                }
-                try await database.receivePairedLibrary(exchange.page, from: principal.id)
-                let own = try await host.peerRoute()
-                let reply = try await PairedMacExchange(deviceID: own.deviceID, after: exchange.page.cursor,
-                    page: database.pairedLibraryPage(after: exchange.after), membership: authentication.peerMembership())
-                guard await authentication.isAuthorizedPeer(principal) else {
-                    return .error("unauthorized", "This Mac is no longer paired.", status: 401)
-                }
-                lastSynchronized[principal.id] = Date(); errors.removeValue(forKey: principal.id)
-                Task { await host.model?.refreshWorkspace() }
-                return try .json(reply)
-            }
             return .error("not_found", "Unknown paired Mac endpoint.", status: 404)
         } catch let error as LibraryAPIError { return .error(error.code, error.message, status: error.code == "unauthorized" ? 401 : 409) }
         catch { return .error("peer_sync", "Synchronization paused; all local writing is retained. " + error.localizedDescription, status: 409) }

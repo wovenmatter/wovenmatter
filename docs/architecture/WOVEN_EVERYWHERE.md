@@ -200,12 +200,10 @@ same commit.
   `LibraryHostController.authenticateMember`). On a Mac, signed requests are
   accepted on peer sync (`mac`, `linux`), the mobile API and `/mcp` (`ios`,
   `mac`), `/v1/execution/*` (`mac`, `ios`, `linux`; no execution grant
-  needed), `/mcp/workspace` and `/mcp/workspace/prepare` (`linux`, in place
-  of the single-Mac library grant; see "Sessions across devices") and
-  `/v1/bots/*` (`mac`, `ios`; signed only, no grant). The inference host
-  takes signed `ios` and `mac` members too ("iPhone reach"). Grants for
-  phones paired before members keep working on the mobile, execution and
-  inference routes.
+  needed), `/mcp/workspace` and `/mcp/workspace/prepare` (`linux` only; see
+  "Sessions across devices") and `/v1/bots/*` (`mac`, `ios`; signed only, no
+  grant). The inference host takes signed `ios` and `mac` members too
+  ("iPhone reach").
 - Swift clients sign with `MemberSignedHTTPClient(endpoint:signer:audience:)`
   (`app/Sources/WovenMatterClient`): the target is the exact path sent, so a
   Mac endpoint (`https://<mac>.<tailnet>.ts.net:<port>/wovenmatter`, no
@@ -214,10 +212,8 @@ same commit.
   `SignedExecutionWorkspaceTransport` replaces execution grants for every
   other Mac and Linux workspace with a known `executionDeviceID`; a signed
   refusal is final ("does not recognize this Mac yet" until the member lists
-  synchronize), with no saved-grant fallback, and nothing is provisioned
-  (`/v1/peers/credential` no longer requires the workspace's owner Mac). A
-  workspace without an `executionDeviceID` still uses a saved grant. A phone grant for a Linux workspace is issued by that host
-  (signed `POST /v1/execution/devices`) from any Mac.
+  synchronize). Nothing is provisioned or saved: a workspace this Mac cannot
+  sign for (its serving member is unknown) is not reachable yet.
 - Node signs through its library host: `POST /v1/members/sign` on the
   library socket returns the headers for one request, so the Linux private
   key never leaves `wovenmatter-library` (`remote/src/member-client.mjs`).
@@ -288,24 +284,14 @@ same commit.
     installer on its own tunnel. A Mac that removes another Mac queues a
     rotation (durably, retried with pending revocations,
     user-defaults key `library.execution.pending-installer-rotations`) on every Linux host in
-    the registry whose `ownerDeviceID` is the removed Mac. Publisher and MCP
-    grants at rest are keyed by `WOVENMATTER_SERVICE_SECRET`, the first
-    install's bearer, which installs and rotations keep, so rotation never
-    orphans them.
+    the registry whose `ownerDeviceID` is the removed Mac.
   - Outside-client and session MCP bearers (`/mcp`, agent tool sessions),
     bot MCP keys (bots are not members), the runtime host API
     (`/v1/bots-host/*`) and runtime token, and the library socket's local
     bearer: none of these is a call between members.
-  - Grants for phones paired before members: the Mac's mobile API pairing
-    credential and execution and inference grants
-    (`ExecutionAuthentication`), Linux device grants
-    (`POST /v1/execution/devices`, issued from any Mac), and the phone's
-    saved grants for workspaces too old for signatures.
-  - The Linux host's single-Mac library MCP grant and publisher grant, issued
-    by the Mac that added it: only a fallback for a host without a library
-    host or with no Mac member answering.
-  - A Mac's saved execution grant for a workspace with no `executionDeviceID`
-    (a library client's secondary execution workspace).
+  - The phone's pairing credential, which confirms (`POST /v1/pair/confirm`)
+    and ends (`/v1/pair/unpair`) a pairing. Every other request the phone
+    makes is signed.
 
 ### Trust model
 
@@ -458,7 +444,7 @@ among Macs that still stand; they never decide who wins a dispute.
 - **Storage names.** Table names say what a table holds:
   - `library_identity` holds this replica's device ID (`host_device_id`) and the library's ID (`library_id`), which every paired device names.
   - `paired_*` is peer sync between Macs and Linux hosts: the change log, cursors, version vectors and conflicts, plus the owner rows.
-  - `execution_*` is execution workspaces, this Mac's own included, with their journals, conversations, runs, adoptions, receipts, settlements, native history, and the MCP and publisher grants issued to them. Most of it is peer-synced library content (`PairedLibraryTables`).
+  - `execution_*` is execution workspaces, this Mac's own included, with their journals, conversations, runs, adoptions, receipts, settlements, native history, and their scheduled MCP callers. Most of it is peer-synced library content (`PairedLibraryTables`).
   - `calendar_task_executors` names the device that runs each scheduled item; `paired_calendar_owners` names the Mac that owns the row. `calendar_run_publishers` and `calendar_published_runs` are who may report runs and the runs they reported. `calendar_replica_context` and `calendar_execution_conflicts` belong to a replica that executes another library's schedule.
   - `device_*` is what the library keeps for devices that reach it over the device API: the phone change feed (`device_sync_revisions`, `device_sync_changes`, written by the `device_sync_*` triggers), mutation, command, draft, tool and calendar receipts, scheduled MCP callers, saved files and message provenance.
   - `library_items`, `library_messages`, `library_settings` and `library_locations` index the Library pane (files and links found in chats); `library_members*` is the signed member list.
@@ -610,8 +596,8 @@ Membership, publishing and bot routes on the local API
   /v1/timers/settle {timerID, deliveryID, outcome: "accepted"|"retry"|"cancelled",
   reason?}` (`LibraryHostTimers`); see "Timers on a library host".
 - `POST /v1/publisher/{journal,retained/settle,association,artifacts/register,artifacts/chunk,artifacts/commit}`:
-  the bodies and replies of a Mac's `/v1/federation/publisher/*`, written into
-  this library copy. The workspace is the one the entries (or the artifact
+  this machine's execution history and saved artifacts, written into this
+  library copy (the only way a Linux host publishes history). The workspace is the one the entries (or the artifact
   manifest, or `association`'s body `workspaceID` / `X-Woven-Workspace-ID`)
   name; it must be a Linux execution workspace this library knows (its
   descriptor arrives with the adding Mac's records; until then 403
@@ -661,7 +647,7 @@ with the new version left installed. Isolated tests use
 
 The server sends a session's notes, history, calendar, library and timer tools to
 `POST /v1/mcp` (registering it with `POST /v1/callers` first), so they work
-with every Mac offline and no single-Mac library grant. History the caller may
+with every Mac offline. History the caller may
 read only through its managed sessions, and all history while the library host
 is down, comes from the Node journal. Databases, `woven_context` and
 `woven_html_render` stay in Node, and so do sessions on other workspaces
@@ -686,14 +672,13 @@ synced, so another Mac refuses the task's calls until the session's own row
 reaches it. The Node delegate therefore sends a task's calls to the Mac that
 last prepared it first, and prepares any other Mac (the same idempotent
 request) before asking it, so prepare and call always land on the same Mac. Bots
-never use this route or the legacy grant (a Mac's `/mcp/workspace` binds every
-call to a conversation), so a Linux bot has no Mac-only tools. Its notes,
-calendar, history, library and timers come from this host's library copy, and
-its session tools run on this server. The single-Mac grant
-(`/v1/execution/mcp-library`, `mcp_library_connection`) is no longer
-required for anything; it stays as a fallback when no Mac member answers and
-for hosts without a library host. Session history is published to the local
-publisher routes (the Mac grant is only a fallback without a library host),
+never use this route (a Mac's `/mcp/workspace` binds every call to a
+conversation), so a Linux bot has no Mac-only tools. Its notes, calendar,
+history, library and timers come from this host's library copy, and its
+session tools run on this server. A Mac accepts `/mcp/workspace` only as a
+signed request from a Linux member; no Mac issues a library MCP or publisher
+grant. Without a running library host nothing is published and Mac-only tools
+are unavailable. Session history is published to the local publisher routes,
 and bot conversation batches go to `/v1/bots/{botID}/entries`, waiting in the
 outbox while the host is down.
 
@@ -913,9 +898,10 @@ hands them to the macOS job, which checks them with
   (`MobileRequestSigning`: the target is the percent-encoded path and query as
   sent, `/wovenmatter` included) and send no bearer. A signed 401 means "this
   host does not know this phone yet" (`memberUnknown`, skipped like an offline
-  host); a host that answers that it does not accept member requests
-  (`memberUnsupported`) keeps the phone on its bearer grant and shows "Update
-  everything"; 409 `update_required` becomes `updateRequired`.
+  host); a host that has not loaded its member list yet answers that it does
+  not accept member requests, which is retried like any other failure; 409
+  `update_required` becomes `updateRequired`. A phone that is not a member
+  (the Mac refused its key) syncs nothing and asks to pair again.
 - **Members.** The mobile API serves `GET /v1/members` (the resolved member
   list, as on the library socket) on every Mac and Linux host. The phone
   learns it from whichever host it syncs with, when the host changes and at
@@ -947,8 +933,7 @@ hands them to the macOS job, which checks them with
 - **Sessions.** "Central" means the library host the phone is syncing with;
   its own sessions use the mobile API, and every other workspace with an
   endpoint (each Mac's own and each Linux workspace) gets a signed direct
-  client, with no execution grant. A workspace too old for signatures keeps
-  its bearer grant.
+  client. No execution grant is issued, stored or presented.
 - **Inference.** A Mac's inference host (`/v1/inference/catalog`,
   `/v1/inference/stream`, `InferenceHost`) accepts signed `ios` and
   `mac` members: the principal is the member's device ID, a named
@@ -965,8 +950,8 @@ hands them to the macOS job, which checks them with
   Mac, otherwise the preferred Mac from `candidates` (the paired Mac, then
   other Macs). Pairing and host changes therefore re-bind it without a
   relaunch, and an unpaired phone has no analytics connection at all.
-- **Migration.** Existing phone data stays. A phone paired before members
-  shows "Pair again once with any Mac"; pairing with a Mac of the same
+- **Migration.** Existing phone data stays. A phone that is not a member
+  shows "Pair again with any Mac"; pairing with a Mac of the same
   library set (its registry holds the phone's previous library) keeps the
   replica and rebinds on the next sync instead of the destructive library
   change.

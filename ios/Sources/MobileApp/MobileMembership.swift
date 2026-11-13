@@ -157,7 +157,8 @@ extension MobileModel {
       // The pairing connection confirmed the pairing; from here on every
       // request is signed, or nothing syncs.
       let previousEngine = engine
-      if rejected || !(try configureMemberTransport()) {
+      let member = rejected ? false : try configureMemberTransport()
+      if !member {
         libraryHosts = nil; transport = nil; engine = nil; connectionLabel = "Pair again"
       }
       await previousEngine?.cancelSynchronization()
