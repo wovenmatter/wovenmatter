@@ -45,7 +45,10 @@ final class DatabaseWorker: @unchecked Sendable {
   private struct Job {
     let id: UUID
     let context: DatabaseJobContext
-    let run: @Sendable () -> Void
+    /// Runs the operation and returns what resumes its caller. The worker
+    /// releases the job's capacity first, so a caller that resumes and submits
+    /// again at once is never refused for the job that just finished.
+    let run: @Sendable () -> @Sendable () -> Void
     let fail: @Sendable (any Error) -> Void
   }
   private let lock = NSLock()
@@ -82,12 +85,14 @@ final class DatabaseWorker: @unchecked Sendable {
       return try await withCheckedThrowingContinuation { continuation in
         let job = Job(id: id, context: context,
           run: {
+            let result: Result<T, any Error>
             do {
               try context.check()
               let value = try operation(context)
               if interruptible { try context.check() }
-              continuation.resume(returning: value)
-            } catch { continuation.resume(throwing: error) }
+              result = .success(value)
+            } catch { result = .failure(error) }
+            return { continuation.resume(with: result) }
           }, fail: { continuation.resume(throwing: $0) })
         enqueue(job)
       }
@@ -149,11 +154,12 @@ final class DatabaseWorker: @unchecked Sendable {
         return job
       }
       guard let next else { return }
-      next.run()
+      let resume = next.run()
       lock.withLock {
         running = nil
         counters.pending -= 1
       }
+      resume()
     }
   }
 }
