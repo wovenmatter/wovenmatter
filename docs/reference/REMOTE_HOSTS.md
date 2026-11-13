@@ -2,12 +2,14 @@
 
 Host workspaces run Woven Matter directly on a Linux machine in the user's
 Tailnet. The Mac that adds a host discovers, inspects and installs the service
-through the same verified Tailscale SSH transport used by container workspaces,
-and uses it again only to update a host too old for signed updates and to
-repair one. Everything else, from every Mac, goes to the host's own server over
+through a verified Tailscale SSH transport. It keeps that SSH tunnel, with the
+installer's API token, for the host's runtime inventory and maintenance, its
+**View browser** window, updating a host too old for signed updates, and
+repair. Everything else, from every Mac, goes to the host's own server over
 Tailscale HTTPS, signed with the Mac's device key: sessions and their live
 stream (`GET /v1/stream?protocol=1`), files, Pi Durable settings, logs,
-restarts and updates. Session history reaches other devices by library sync.
+restarts and updates. Each host is a library member with its own full library
+copy; session history reaches other devices by library sync.
 Docker is not required. Native hosts supersede deprecated remote container workspaces,
 which are no longer offered or reconnected. The separate Docker Executor is unchanged.
 
@@ -101,13 +103,25 @@ All paths below belong to the SSH account. Managed private directories use
   browsers/current -> playwright-<version>
   browser-profiles/<profile>/
   workspace/                    managed projects and scratch chats
-    .wovenmatter/               durable execution, outbox and agent state
+    .wovenmatter/               durable execution, publisher and agent state
   databases/                    managed SQLite dataset files
-  run/                          runtime maintenance lock and browser result
-  installation.json            workspace identity, port and runtime versions
+  library/                      this host's library copy (workspace.sqlite)
+  secrets/member-signing.key    this host's member signing key (0600)
+  run/                          runtime maintenance lock, browser result,
+                                library socket and its local token
+    library/                    member identity, library host and Serve state
+  bots/                         bot data, when the bots role is installed
+  installation.json            workspace identity, roles, port and runtime versions
 ~/.config/wovenmatter/service.env
 ~/.config/systemd/user/wovenmatter.service
 ```
+
+A host has a **workspace** role, a **bots** role, or both, recorded in
+`installation.json`. A bots-only host installs no browser and can add the
+workspace later on the same server; the bots role also installs the bot engine
+under `/etc`, `/var/lib` and `/usr/local/lib` (`<instance>-bots`) with sudo.
+The server supervises the release's `wovenmatter-library` executable with this
+directory as its data root.
 
 The port is chosen once, beginning at the requested loopback port, and retained
 on updates. A second workspace identity cannot replace an existing native
@@ -171,14 +185,15 @@ unsandboxed browser.
 ## Persistence, updates and removal
 
 See [validation and manual review](REMOTE_HOST_VALIDATION.md) for reproducible
-provider-free tests, actual workstation evidence and untested configurations.
+provider-free tests and manual review.
 
-The existing SQLite execution owner, its durable channels, publisher and outbox
-continue to own work on Linux. Dropping the Mac connection does not move
-execution to the Mac or replay an accepted prompt. On reconnection, persisted
-events synchronize through the existing protocol. Linger keeps the service
-available without an interactive login. Project files themselves are not
-automatically synchronized to the Mac.
+The host's SQLite execution owner and its durable channels own work on Linux.
+Its publisher writes session history into the host's own library copy, and peer
+sync carries it to the other members. Losing contact with a Mac does not move
+execution to the Mac or replay an accepted prompt; members that were offline
+catch up when they next synchronize. Linger keeps the service available without
+an interactive login. Project files themselves are not automatically
+synchronized to the Mac.
 
 Updates stage a verified release and dependencies before activation. The
 installer saves prior runtime links, service environment, unit and installation

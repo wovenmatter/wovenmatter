@@ -1,6 +1,6 @@
 # OpenCode v2 local integration
 
-WovenMatter connects conversations to the standard local OpenCode v2 service.
+Woven Matter connects conversations to the standard local OpenCode v2 service.
 This reference covers its connection, session, and persistence behavior. For
 setup in the app, see [Agent setup](../guide/agents.md).
 
@@ -9,10 +9,10 @@ Other harness integrations keep their own transports.
 
 ## User experience
 
-- **Settings → Local Agent Workspace** lists OpenCode under **Runtimes** with
-  **Settings**, update controls, **Hide/Show**, and **Install** or **Enable/Disable**.
-  Its **Settings** button opens the local server and model controls. The
-  **Settings → Agents → OpenCode** page lists local and remote OpenCode workspaces.
+- **Settings → Agents → OpenCode** shows each workspace's OpenCode under
+  **Software**, with **Install**, or **Check for updates** and **Update** once
+  installed. Its **OpenCode service** section lists the local and remote
+  OpenCode services; expanding one opens its server and model controls.
 - Connect reuses OpenCode's standard authenticated local service, or starts it when absent. New Chat can also connect/start it. After a successful connection, reopening Woven Matter reconnects according to the saved lifecycle preferences.
 - New OpenCode chats use the same Woven Matter workspace root as the other local harnesses. OpenCode owns the backend session; its v2 clients can access that same session through the same service.
 - The OpenCode page contains connection status, **Open in browser**, **Manage models**, Connect, server controls, and lifecycle preferences. Model visibility is saved by Woven Matter; OpenCode browser show/hide preferences remain separate. Selected models sort first in Manage models.
@@ -27,8 +27,8 @@ and patch updates, rather than one exact release. Install/update resolves the
 current `@opencode/cli` **latest** release for each operation. V1 remains
 unsupported. An explicit Stop can authenticate an older v2 beta through its legacy
 identity endpoint so users can stop it before upgrading; session connections and
-new starts require the stable v2 contract. The stable API contract was checked against `@opencode/client@2.0.22`
-and [upstream v2.0.22](https://github.com/anomalyco/opencode/tree/v2.0.22); this is
+new starts require the stable v2 contract. The stable API contract was checked against the published `@opencode/client`
+and [upstream source](https://github.com/anomalyco/opencode); this is
 validation evidence, not an installation or compatibility pin.
 
 Discovery uses `$XDG_STATE_HOME/opencode/service.json`, defaulting to `~/.local/state/opencode/service.json`, just as OpenCode does. The service registration supplies the dynamic loopback URL, PID, and Basic password. Authenticated `/api/info` verifies the PID, the 2.x release family, and the registration's current version. Woven Matter does not choose a private data directory, fixed port, separate service password, or alternate workspace.
@@ -56,12 +56,12 @@ tool identity. These volatile events never acknowledge the durable recovery
 cursor. Completed native messages replace the live projection; interrupted
 executions settle even when their message has no completion timestamp. A
 reconnect discards incomplete delta baselines and recovers canonical history.
-The event shapes were checked against `@opencode/protocol@2.1.3` and its public
+The event shapes were checked against the published `@opencode/protocol` and its public
 service schema; provider-free fixtures cover live publication and recovery.
 
 The Woven MCP plugin handshake uses `POST /api/rpc/woven-mcp/connect` with
 `{ "input": ... }` and reads `{ "output": ... }`, as specified by the running
-OpenCode 2.1.3 service's `Rpc.Input` and `Rpc.Output` OpenAPI schemas. This differs
+OpenCode service's `Rpc.Input` and `Rpc.Output` OpenAPI schemas. This differs
 from session APIs' `data` envelope. Desktop and remote callers reject a missing
 or malformed connection result before registering MCP or submitting input.
 

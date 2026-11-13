@@ -110,131 +110,111 @@ still stop the page.
 
 ## Pairing, membership and revocation
 
-Both Macs negotiate `library.peers.v2`. Initial pairing keeps the existing
-explicit approval and secret-bound claim flow, marked as a Mac pairing; only that
-explicit purpose can produce a paired-Mac grant, and device metadata never
-chooses a grant's role. Macs can also paste a pairing link from the other Mac.
-Each Mac has a device-only Curve25519 signing key. At the explicitly paired
-endpoint the requester learns the revocation context the other Mac holds for
-it, proves its key for exactly that context, and supplies the bearer it issued
-for the other Mac; the reply proves the other Mac's key for that reciprocal
-grant. Each Mac pins the other's key by device UUID in its local credential
-store, outside replicated SQL. The signed join is persisted before it is sent
-and repeated verbatim after a lost reply; the other Mac accepts only that exact
-transcript. Pending pairing secrets and bearers are absent from discovery, shared
-SQLite data, UI snapshots and the peer journal. Grants from earlier unreleased
-builds of this feature are not upgraded; pair those Macs again.
+Every device has a long-lived Curve25519 signing key that never leaves it: a
+Mac's is in its Keychain and is both its paired-Mac key and its member key. The
+member list, request signatures and trust rules are specified in
+[Woven everywhere](architecture/WOVEN_EVERYWHERE.md) ("Membership and device
+keys", "Trust model"); this section covers how paired Macs use them.
 
-Each Mac authenticates only bearers it issued itself. Paired Macs exchange
-membership that authenticates nothing: signed Mac admissions (introductions that
-bind a device UUID, library and key, signed by both the introduced Mac and the
-introducing Mac), names of mobile devices, and signed unpair events. A Mac
-introduced by another can then obtain its own grant directly: the target signs a
-one-use challenge with its pinned key, the requester signs it with its own
-pinned key, and the target issues a grant valid only at itself. Challenges are
-held in memory, so a restart invalidates them. This keeps paired Macs
-synchronizing when the Mac that introduced them is offline or later unpaired.
-An unpaired Mac cannot introduce anyone new, and pins are never replaced by
-synchronized membership. Every paired-Mac endpoint, and the ordinary library and
-federation endpoints, accept only grants the receiving Mac issued, so a bearer a
-Mac minted or holds for another Mac is useless anywhere else.
+**Pairing two Macs.** Initial pairing keeps the explicit approval and
+secret-bound claim flow, marked as a Mac pairing; only that explicit purpose can
+produce a paired-Mac grant, and device metadata never chooses a grant's role.
+Macs can also paste a pairing link from the other Mac. The join is the one
+Mac-to-Mac step that still uses bearers: with the grant it was issued, the
+requester calls `POST /v1/peers/join/prepare` at the paired endpoint to learn
+the revocation context the other Mac holds for it, then `POST /v1/peers/join`,
+proving its key for exactly that context and supplying the bearer it issued for
+the other Mac; the reply proves the other Mac's key for that reciprocal grant.
+Each Mac pins the other's key by device UUID in its local credential store,
+outside replicated SQL. The signed join is persisted before it is sent and
+repeated verbatim after a lost reply; the other Mac accepts only that exact
+transcript. When the join completes, each Mac records the other as a signed
+`mac` member entry. Pending pairing secrets and bearers are absent from
+discovery, shared SQLite data, UI snapshots and the peer journal.
 
-An unpair is a distinct signed event. It needs this Mac's signing key: if the key
-cannot be loaded, the unpair fails with an error before anything changes and the
-device stays paired until a retry succeeds. A grant or admission stays valid only while
-it acknowledges every known unpair event for its device, and an admission's
-subject signs the exact set it acknowledges. Concurrent unpairs on different Macs
-therefore all apply when they meet, and only a pairing made after learning them
-survives; a grant issued without knowledge of an unpair made elsewhere is
-revoked when that unpair arrives. An exchange stops as soon as either Mac
-learns, from the other's membership or locally, that the other is unpaired:
-no further page is accepted or returned. Each exchange advances trust by one hop. The
-Macs this Mac admits when an exchange begins are the only signers it trusts in
-that exchange: every new unpair they signed is accepted together, as concurrent
-events, before any introduction is judged, and only those Macs (if still
-admitted after those unpairs) can introduce new Macs. A Mac learned in an
-exchange can unpair or introduce others only in a later exchange; repeated full
-membership synchronization carries its events and introductions again, so its
-own unpairs always apply before anything it introduced. Unpairs accepted earlier
-always remain, and an introduction accepted earlier survives its introducer's
-later unpair. An unpair signed by a Mac that was already unpaired when the
-exchange began is rejected: its random event identifier cannot show whether it
-was made before or after that Mac's removal. A legitimate unpair made offline by
-a Mac that was then itself unpaired can therefore be declined by Macs that
-learned of its removal first; such an unpair must be repeated from an active Mac.
-This design does not preserve every offline concurrent unpair.
-Identifiers in signed membership must be canonical lowercase UUIDs and contexts
-are bounded. A learned address must sign a fresh challenge naming the expected
-Mac, library and contacted endpoint with that Mac's pinned key before it
-receives a bearer; an authenticated display-name change is adopted. There is no
-shared-secret fallback, and redirects and cookies are disabled. Merely appearing
-on the tailnet grants nothing.
+**Member list.** Membership is a signed record set kept in shared library rows
+and synchronized like any other content. Trust comes only from the signatures,
+resolved on each device from its own local anchors, never from what a row or an
+endpoint says about itself. Any Mac member can add a device. A Mac that one Mac
+added is trusted by every other member through that signed entry, with no grant
+or handshake of its own, so Macs keep synchronizing when the Mac that introduced
+them is offline or later removed. A Mac this device has trusted continuously for
+24 hours is pinned as a local anchor. Macs paired before members existed are
+converted into members on launch from their pinned keys; library content is
+never touched.
 
-Within the trusted boundary, a Mac that is still admitted can introduce a device
-UUID that no other Mac has pinned yet; pins prevent that binding from being
-replaced later, but cannot undo an introduction made while that Mac was trusted.
-A still-admitted Mac can also publish unpair events for others. Recovering from
-a lost signing key needs that Mac to be unpaired everywhere and paired again.
+**Signed synchronization.** Library exchange runs in `LibraryPeerSync` between
+every `mac` and `linux` member, with each request signed by the caller's device
+key: `POST /v1/peers/sync`, `/v1/peers/notify`, `/v1/peers/files` and
+`/v1/peers/file`. A local commit is announced once, debounced, to online peers,
+and each pulls with one exchange; a peer that reappears is caught up once; a
+60-second presence check, backing off to 15 minutes for an offline peer,
+replaces constant polling. Peers must share the exact shared-table schema, and
+a mismatch is reported as "update required" rather than partially applied.
+Requests go only to tailnet HTTPS endpoints (`https://*.ts.net`) taken from
+signed member entries; there is no public directory, redirects and cookies are
+disabled, and merely appearing on the tailnet grants nothing. Once membership
+has propagated, every Mac and Linux host reaches every other directly. Ordinary
+network loss retains local work and retries quietly.
 
-Once routes and membership have propagated, Macs can contact each other directly,
-including when the Mac that joined them is offline. There is no public directory:
-a Mac must first learn a route through pairing, discovery or a connected peer.
-Ordinary network loss retains local work and retries quietly. A revoked Mac
-retains its local data but cannot use revoked credentials to resume syncing.
-Unreachable execution owners apply queued revocations on reconnection; a
-revocation is recorded as applied only after this Mac's own access is revoked.
+**Removal.** Removing a device publishes a signed revocation, and every device
+refuses that device's signed requests as soon as the revocation synchronizes.
+Removing a Mac voids everything it signed; the removing Mac first re-signs the
+entries it holds from the removed Mac, so the devices it added stay (review the
+device list afterwards). It also queues a rotation of the installer bearer on
+every Linux host the removed Mac added. A removed device retains its local data
+but cannot resume syncing. Unreachable execution owners apply queued revocations
+on reconnection; a revocation is recorded as applied only after this Mac's own
+access is revoked. Recovering from a lost signing key needs that Mac to be
+removed everywhere and paired again.
 
-Mobile devices keep their offline replica and approved Mac connection, and their
-bearer works only at that Mac. Other paired Macs list them for display. When a
-Mac enrolls one of its bearer phones in another Mac's workspace, it asks that
-Mac directly, and that Mac records the requesting Mac as that issued grant's
-provenance; for a Linux workspace the host issues the grant to any Mac's
-signed request. A replacement request is staged: earlier provenance is
-retired only once the replacement is actually issued (which replaces the earlier
-token), so a failed or offline replacement never hides a grant from cleanup. A
-direct grant the managing Mac issues to a device it paired itself likewise
-retires that device's delegated provenance for the workspace, after any queued
-device-only cleanup for it has run, so a later unpair of the delegating Mac never
-revokes the direct grant. Provenance is retired while the workspace's enrollment
-is still in progress. For a remote workspace, which keeps one token per device,
-cleanup queued during an enrollment for the provenance being replaced is
-satisfied once the replacement is committed; a failed replacement, a
-replacement from the Mac being unpaired, or the device's own unpair keeps that
-cleanup queued.
-Execution and inference requests served by the managing Mac's own services are
-authorized live by their grant's provenance before credentials are prepared and
-again before a model stream starts. Unpairing the requesting Mac therefore ends
-grants derived through it on those services immediately and leaves grants the
-managing Mac issued for its own devices. Remote workspaces (Linux, or the
-retired node's execution host) authorize by token: their grants end when the
-queued remote cleanup reaches them, which is eventual while they are offline. Execution grants
-from before provenance was recorded cannot show who received them and are
-retired, except the Mac's own. A phone whose grant is rejected clears that
-workspace's credential and, while connected to its Mac, requests a new one on its
-next workspace refresh; a workspace owned by another paired Mac keeps that
-workspace's registered library namespace and endpoint. Every new or renewed
-workspace credential the phone installs, whether requested automatically or
-from Settings, also replaces the token of each inference connection bound to
-that workspace's exact host scope and endpoint; a reconnect or re-pair during
-installation installs nothing further. Concurrent requests for one workspace
-share a single issuance, and its inference connections and workspace client
-always follow the credential the phone's workspace vault holds. A Dev connected client that keeps a
-direct workspace credential clears it when the workspace rejects it and
-requests a replacement through its central library, retrying on each reachable
-central refresh until it succeeds, including after a restart; it never presents
-the rejected token again. Like a phone, it accepts a credential for a workspace
-another paired Mac owns only for that workspace's registered library namespace
-and endpoint. The pending request records only workspace IDs, bound
-to that client's library and device, and is cleared on success, on unpairing,
-or when the workspace is removed.
-The retired node's execution host, which runs only for a Dev connected client,
-is a remote execution workspace with the same trust boundary as a Linux
-workspace its chosen managing Mac enrolled: it issues grants through its own
-management grant and authorizes requests by token validity, so revocation there
-takes effect when queued cleanup reaches it.
-This change does not
-turn phones into full desktop replicas or automatically replace a mobile
-device's chosen library endpoint.
+**Bearers that remain.** Each Mac authenticates only bearers it issued itself,
+so a bearer a Mac minted or holds for another Mac is useless anywhere else.
+Besides the join, paired-Mac bearers serve only:
+
+- `/v1/peers/usage`, read with the grant from pairing with that Mac (see
+  "Usage across devices");
+- `/v1/peers/credential`, which enrolls a pre-member phone in another Mac's
+  workspace. A Mac without its own grant at that Mac first obtains one through
+  a one-use challenge signed with both pinned keys (`/v1/peers/challenge`,
+  `/v1/peers/handshake`); challenges are held in memory, so a restart
+  invalidates them;
+- the bearer-era roster (phone names, Mac introductions and signed unpair
+  events), which rides along each signed exchange as an attachment so that
+  grants issued before members are revoked with their device. It authenticates
+  nothing, and pins are never replaced by it.
+
+**Phones.** A phone that pairs with a member key gets an `ios` entry signed by
+the Mac it pairs with, added when the phone confirms the pairing. It signs its
+requests and syncs its offline replica with whichever Mac or Linux host answers,
+trying the last one that worked first; the Mac it paired with is only a starting
+point, and other members never need it. Pairing a phone again replaces its key,
+as after restoring a backup. Phones are not full desktop replicas.
+
+A phone without a member key, or one whose Mac answers that it does not list
+its key, keeps its bearer grant at the Mac it paired with. When that Mac enrolls
+such a phone in another Mac's workspace, it asks that Mac directly, and that Mac
+records the requesting Mac as the grant's provenance; a Linux host issues the
+grant to any Mac's signed request. A replacement is staged: earlier provenance
+is retired only once the replacement is actually issued, so a failed or offline
+replacement never hides a grant from cleanup. Execution and inference requests
+served by a Mac are authorized live by their grant's provenance, before
+credentials are prepared and again before a model stream starts, so removing
+the requesting Mac ends grants derived through it immediately. A Linux host
+authorizes by token, so its grants end when the queued cleanup reaches it,
+which is eventual while it is offline. A phone whose grant is rejected clears
+that workspace's credential and requests a new one on its next workspace
+refresh. Every new or renewed workspace credential also replaces the token of
+each inference connection bound to that workspace's exact host scope and
+endpoint.
+
+A Dev connected client (`scripts/build_and_run.sh --mode client`) is a library
+client of the production Mac it connects to and follows the same rule: it
+clears a rejected direct workspace credential, requests a replacement through
+that Mac until it succeeds (including after a restart), and never presents the
+rejected token again. The execution host it runs for its own sessions
+authorizes requests by token, so revocation there takes effect when queued
+cleanup reaches it.
 
 ## Upgrade and recovery
 
@@ -259,8 +239,8 @@ Older node preferences no longer select a reduced desktop interface. Upgrade
 preserves the old replica and command journal, takes backups, and imports a
 WAL-aware copy of a former node's native database on the same physical Mac; the
 original execution directory is never modified. Notes, folders and schedules
-that the node held only as projections of the central library are not imported,
-so the central Mac's current writing wins; writing that existed only in the
+that the node held only as projections of the Mac it was connected to are not
+imported, so that Mac's current writing wins; writing that existed only in the
 node's workspace is preserved. The import commits with its completion marker, so
 a retry never duplicates rows. Cached notes, conflicts and unsent composer text
 get deterministic **Saved before pairing upgrade** notes. Pending note and folder
@@ -300,10 +280,10 @@ provider services or real pairing credentials are consumed.
 - Delete a note on one Mac while editing it on the other. The original should
   stay deleted and the concurrent writing should remain in a recovered note.
 - Add a remote workspace and an Apple connection from either Mac. Reconnect the
-  other Mac and inspect the single workspace inventory. The new device's bearer
-  works only at the Mac it paired with.
+  other Mac and inspect the single workspace inventory and member list.
 - Pair a third Mac, let membership synchronize, then take the joining Mac
-  offline. The other two should still exchange notes and new connections.
+  offline. The other two should still exchange notes and new connections, and
+  a phone should sync with whichever Mac answers.
 - Save a large library file, interrupt its download and restart the receiving
   app. Other notes should synchronize while the file resumes and verifies.
 - Open a conversation owned by the other Mac. Read its saved history offline,
@@ -311,8 +291,9 @@ provider services or real pairing credentials are consumed.
   Send/Stop address its original execution workspace.
 - Confirm scheduled work runs only on its owner. Disconnecting another Mac must
   not start a duplicate execution or move an accepted run.
-- Unpair a device from one Mac. After the other peers reconnect, its old library,
-  direct execution and inference credentials must be rejected. Retained local
+- Remove a device from one Mac. After the other peers synchronize, its signed
+  requests and any remaining library, execution and inference grants must be
+  rejected. Retained local
   writing must remain available on the unpaired device.
 - For a former node, confirm recovered writing and its original native sessions
   survive the upgrade. Do not delete the original replica or recovery backups.
@@ -323,7 +304,7 @@ real-account execution require Trey's hands-on acceptance before merging.
 ## Usage across devices
 
 Usage is not a shared library table: each Mac keeps its own index and reads other
-devices over `/v1/peers/usage` with the same grant as library exchange. A Mac reports
+Macs over `/v1/peers/usage` with the bearer grant from pairing with that Mac. A Mac reports
 its own usage plus the Linux machines it reads, as hourly counts and labels with
 folder names only, never transcript content or paths. A Linux machine's rows keep
 the host's own IDs when passed on, so a Mac that also reads that host directly keeps

@@ -2,25 +2,28 @@
 
 This is the storage, execution and synchronization contract for Woven Matter.
 
-## Equal Macs
+## Equal members
 
 Each paired Mac owns a complete local SQLite library, runs the normal desktop
-app, and accepts local edits while disconnected. Paired Macs exchange changes in
-both directions over Tailscale. There is no designated central database, promotion,
-handoff, or replacement authority. The Mac used to pair two other Macs does not
-need to remain online for those Macs to synchronize with each other.
+app, and accepts local edits while disconnected. Each Linux host keeps the same
+complete library through the `wovenmatter-library` executable. Macs and Linux
+hosts exchange changes peer-to-peer in both directions over tailnet HTTPS.
+There is no designated central database, promotion, handoff, or replacement
+authority. The Mac used to pair two other devices does not need to remain
+online for them to synchronize with each other.
 
-A Mac can add remote workspaces and pair additional Apple devices. Workspace
-identities and connection membership propagate through the paired graph. Each
-new connection requires the existing explicit approval. Discovery does not grant
-access. Each Mac authenticates only bearers it issued itself. Each Mac has a
-device-only signing key pinned by device UUID on the Macs it pairs with;
-membership learned through another Mac carries signed admissions, and a Mac
-introduced that way obtains its own grant from each Mac through a pinned
-challenge handshake. A Mac address must sign a fresh challenge with its pinned
-key before it receives a bearer credential. Unpairs are distinct signed events;
-revocation propagates when peers reconnect and remains effective across stale
-membership replay, concurrent unpairs and re-pairing.
+A Mac can add Linux hosts and pair other Macs and iPhones. Every device has a
+long-lived signing key, and the member list is a signed record set that syncs
+to every device (see [Woven everywhere](architecture/WOVEN_EVERYWHERE.md),
+"Membership and device keys" and "Trust model"). Each new device needs explicit
+approval on a Mac; discovery does not grant access. Library sync and execution
+requests between members are signed with the caller's device key, and no
+bearer is issued for them. Bearers remain only for the pairing handshake
+(`join/prepare`, `join`), `/v1/peers/usage`, `/v1/peers/credential`, phones
+paired before member keys existed, and the installing Mac's administrative
+link to a Linux host. Removing a device is a signed revocation that each device
+applies as soon as it syncs; it stays effective across stale membership replay,
+concurrent removals and re-pairing.
 
 ## Shared storage and local execution
 
@@ -92,20 +95,39 @@ this Mac; Settings → Workspaces holds the workspace inventory. It has no datab
 writing have visible **Recovered edit** copies; Pages and Artifact inputs merge instead. Existing pre-upgrade writing and
 original databases are preserved; see [upgrade and recovery](PAIRED_MAC_LIBRARIES.md#upgrade-and-recovery).
 
-Mobile devices retain their existing offline replicas and connect to an approved
-Mac for library synchronization. Their authenticated workspace registry can contain
-execution workspaces from other paired Macs, retaining each workspace's actual
-credential namespace. Native device inference sign-ins remain device-only.
+iPhones (beta) are signed members too. A phone keeps its offline replica and
+syncs with whichever Mac or Linux host answers first: the last host that
+worked, then the Mac it paired with, other Macs, then Linux hosts. The Mac it
+paired with is only a starting point and is never required. The phone reaches
+each Mac and Linux workspace directly with signed requests (see
+[Woven everywhere](architecture/WOVEN_EVERYWHERE.md), "iPhone reach"). Quick
+Chat's provider sign-ins remain device-only.
 
-## Pi Durable on iOS and iPadOS
+## Quick Chat on iPhone and iPad (beta)
 
-Pi Durable executes on the iOS device. Its SDK owns the agent loop, submissions, tools, checkpoints and recovery. Inference is exclusively through supported cloud connections or an inference service on another Tailscale device. On-device inference is outside scope for all versions.
+The iPhone app is a TestFlight beta. Its Quick Chat runs Pi Durable on the
+device; the SDK owns the agent loop, submissions, tools, checkpoints and
+recovery. Inference is exclusively through supported cloud connections or an
+inference service on another Tailscale device. On-device inference is outside
+scope.
 
-The reviewed SDK is bundled with the app and hosted through JavaScriptCore. Native bridges provide durable storage, network streams, credentials, cancellation and mobile tools. The mobile workspace exposes only supported local capabilities. Mac/Linux workspace operations require an explicit target; a suspended local run is never silently moved elsewhere.
+The reviewed SDK is bundled with the app and hosted through JavaScriptCore.
+Native bridges provide durable storage, network streams, credentials,
+cancellation and the phone's tools: notes, web search and read, questions to the
+user, timers and reminders, and calendar. There is no shell, file tools,
+Python, code mode, subagents, goals, browser or computer automation. Quick Chat
+rejects any target other than the phone; work on a Mac or Linux workspace is a
+session on that workspace. See [Quick Chat lifecycle](IOS_CONTINUED_EXECUTION.md).
 
 Provider connections are independent of Apple-device pairing. ChatGPT and Grok use native device-code sign-in; Claude uses native PKCE sign-in with the provider’s returned code. API-key connections, including OpenCode Zen and Go, save their keys on the device. Access and refresh tokens stay in the device-only Keychain, and refresh calls the provider directly. Native Claude requests identify Woven Matter and retain Pi’s actual prompt and tool names; they do not claim to be Claude Code. Real provider authorization and inference acceptance require user testing. An explicitly selected hosted connection can still use an authenticated inference-only adapter. That adapter may translate model requests but cannot execute the phone's tools or own its agent loop. The selected adapter's availability is a model-connection dependency, separate from library synchronization.
 
-Accepted work and tool intent are persisted before display/dispatch. iOS background execution is opportunistic: interruption recovery uses native checkpoints and tool receipts. User cancellation remains cancellation after restart. Ambiguous external effects are reconciled or surfaced rather than blindly replayed.
+Accepted work and tool intent are persisted before display/dispatch. Quick Chat
+runs only in the foreground: when the app backgrounds, a short allowance saves
+and interrupts an in-flight response, and resuming is explicit. Interruption
+recovery uses native checkpoints and tool receipts. User cancellation remains
+cancellation after restart. Ambiguous external effects are reconciled or
+surfaced rather than blindly replayed. Other devices see Quick Chats as
+read-only synced history.
 
 ## Compatibility and acceptance
 

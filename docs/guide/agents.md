@@ -1,6 +1,6 @@
 # Agent setup
 
-WovenMatter has dedicated integrations for Pi Durable, Codex, Claude Code,
+Woven Matter has dedicated integrations for Pi Durable, Codex, Claude Code,
 Grok Build, and OpenCode. Use your existing installations or
 install harnesses in the settings page. Use your existing provider accounts
 and/or API keys; models, authentication, and controls depend on the harness.
@@ -17,7 +17,7 @@ A **harness** is the software that runs the agent. Settings also calls it a
 3. Installed harnesses appear in the sidebar automatically. Choose **Sign in** on the harness's agent page if its account is not connected. A link and one-time code appear right there; Claude Code opens its sign-in in your browser. **Remove account** signs the harness out.
 4. Choose **New chat** and select the agent in that workspace.
 
-Start with a harness you already use and have provider access for. WovenMatter
+Start with a harness you already use and have provider access for. Woven Matter
 can discover supported installations and account access. Installation, enabling,
 and authentication are separate steps; completing one does not complete the others.
 A remote workspace has its own installations and credentials.
@@ -51,8 +51,8 @@ For adapter details, component versions, and update behavior, see
 
 Goals keep a chat working toward an outcome across turns. They are available for
 Pi Durable, Codex, Claude Code, Grok Build and OpenCode. Goals belong to the
-chat’s execution owner: the Mac, an independent Linux workspace, or on-device
-Pi Durable on iPhone/iPad. Controls on other clients route to that owner; goals
+chat’s execution owner: a Mac, a Linux workspace, or Quick Chat in the iPhone
+beta. Controls on other clients route to that owner; goals
 continue there when an observing client disconnects. On iOS, continuation runs
 while the operating system grants execution time. An interrupted device goal
 pauses and requires explicit resume. Archived chats remain read-only.

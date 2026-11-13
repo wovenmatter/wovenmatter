@@ -32,7 +32,7 @@ command output, account data, paths, or credentials.
 
 | Runtime | Actual local architecture | Release source and action |
 | --- | --- | --- |
-| Codex | `codex-acp`, bundled `@openai/codex`, standalone `codex` for sign-in; inherited `CODEX_PATH` overrides are reported | Newest official npm adapter release; official Codex installer for outdated sign-in CLI. Adapter minimum is 2.3.0; it is a compatibility floor, never an installation fallback. No `CODEX_PATH` is set. |
+| Codex | `codex-acp`, bundled `@openai/codex`, standalone `codex` for sign-in; inherited `CODEX_PATH` overrides are reported | Newest official npm adapter release; official Codex installer for outdated sign-in CLI. The adapter minimum in the harness catalog is a compatibility floor, never an installation fallback. No `CODEX_PATH` is set. |
 | Claude Code | `claude-agent-acp`, bundled `@anthropic-ai/claude-agent-sdk` and its platform-native Claude engine (legacy `cli.js` also supported), standalone `claude` sign-in CLI; inherited executable override is reported | Official npm adapter release; `claude update` for an outdated standalone CLI. |
 | OpenCode | `opencode` (with `opencode2` fallback) and separately running standard v2 service | Newest stable `@opencode/cli` 2.x release; each install/update resolves a fresh compatible release even if upstream `latest` advances to a new major. Minor and patch updates are independently supported. Registered service version is shown separately and is not a live-health assertion. Existing service is not restarted. |
 | Grok Build | `grok … agent stdio` | Official stable release endpoint used by installer; `grok update`. |
@@ -54,9 +54,10 @@ operation. No operation cancels an active turn.
 
 ## Remote installation
 
-Each remote agent workspace has its own inventory, preferences, latest checks and
-verified maintenance actions, served by that workspace's authenticated service
-through its SSH tunnel. Installers execute on the selected host. Remote services
+Each Linux host has its own inventory, preferences, latest checks and verified
+maintenance actions, served by the host's service. The Mac that installed the
+host reaches them through an SSH tunnel with the host's API token. Installers
+execute on the selected host. Remote services
 must include these endpoints before the controls are available.
 Local package presence never verifies a remote
 installation or a linked gateway's runtime.
@@ -71,7 +72,7 @@ from the compatible update target resolved using the adapter's dependency range.
 Updates refresh that dependency within the declared range and verify the result;
 unknown compatibility does not produce an update claim.
 
-Remote maintenance takes an exclusive lock in the workspace container. Remote conversation processes
+Remote maintenance takes an exclusive lock on the host. Remote conversation processes
 and managed OpenCode servers hold shared locks for their lifetime, so an
 update cannot replace their runtime while they are using it. A busy workspace requires
 the user to finish conversations or stop its server before retrying maintenance.
@@ -81,25 +82,25 @@ Installer timeouts terminate the process group before permitting another attempt
 
 OpenCode settings open the selected workspace's server and model settings. Each
 remote workspace owns a distinct v2 service state directory and conversation
-association; the app routes requests and event streams to its authenticated
-workspace proxy. The service's Basic credential stays on the remote host. The
-native client uses the workspace bearer credential over a loopback SSH tunnel;
-no public OpenCode listener or remote browser credential URL is created. Local
+association; the app routes requests and event streams to the host's member
+proxy, which accepts requests signed with the Mac's device key over the
+tailnet. The service's Basic credential stays on the remote host; no public
+OpenCode listener or remote browser credential URL is created. Local
 OpenCode retains its existing registered service and explicit lifecycle controls.
 
 ## Upstream reference snapshot — September 11, 2026
 
-The versions below record the earlier source review. For the app's declared
+For the app's declared
 packages and checks, use [the harness catalog](../harnesses/catalog.json),
 [local maintenance](../app/Sources/WovenMatterClient/RuntimeMaintenance.swift),
 and [remote maintenance](../remote/src/runtime-maintenance.mjs).
 
 - [Codex adapter](https://github.com/agentclientprotocol/codex-acp) and
   [npm metadata](https://registry.npmjs.org/@agentclientprotocol%2fcodex-acp/latest):
-  1.11.0 declares `@openai/codex ^0.153.4`.
+  each release declares its `@openai/codex` range.
 - [Claude adapter](https://github.com/agentclientprotocol/claude-agent-acp) and
   [npm metadata](https://registry.npmjs.org/@agentclientprotocol%2fclaude-agent-acp/latest):
-  0.76.0 declares SDK 0.3.257.
+  each release declares its Claude Agent SDK range.
 - [OpenCode package](https://registry.npmjs.org/@opencode%2fcli/latest): the current
   stable v2 release; each install/update resolves this tag afresh.
 - [Grok CLI reference](https://docs.x.ai/build/cli/reference) and

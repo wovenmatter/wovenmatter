@@ -20,7 +20,7 @@ def scopes(paths):
                                 r'test-remote-workspace|test-container)\.sh$)'),
         pi=agent or changed(r'^(ios/Runtime/|ios/Sources/PiDurableRuntime/Resources/|'
                             r'ios/Sources/MobileInference/PiSDKVersion\.swift$|'
-                            r'scripts/build-ios-pi-runtime\.mjs$|THIRD_PARTY_NOTICES\.md$)'),
+                            r'scripts/build-ios-pi-runtime\.mjs$)'),
         embedded=infrastructure or changed(r'^(ios/EmbeddedRuntime/|'
                                           r'ios/Sources/EmbeddedExecution/Resources/|'
                                           r'scripts/build-ios-embedded-runtime\.mjs$)'),

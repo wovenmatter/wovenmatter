@@ -1,6 +1,5 @@
-T3 Code paragraph streaming algorithm
+T3 Code
 https://github.com/pingdotgg/t3code
-Reference: 611132c171f3a821bd2e32f22261135cef6330ac
 
 MIT License
 
@@ -25,9 +24,8 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 
-Cua Driver 0.38.0
+Cua Driver
 https://github.com/trycua/cua
-Reference: 85e2b1318bd77ccf3cfa88ccdf875a4bb7eaed19
 
 MIT License
 
@@ -54,8 +52,8 @@ SOFTWARE.
 Cua Driver third-party notices are included in Resources/Cua/THIRD-PARTY-NOTICES.md.
 
 
-Lucide Static 1.72.0
-https://github.com/lucide-icons/lucide/tree/1.72.0
+Lucide Static
+https://github.com/lucide-icons/lucide
 
 The complete upstream license, including Feather-derived icon notices, is
 included in Resources/LUCIDE_LICENSE.txt.

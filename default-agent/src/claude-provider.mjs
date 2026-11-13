@@ -14,8 +14,7 @@ export { canUseClaudeNativeCompaction } from './claude-session.mjs';
 
 // Pi owns the agent loop and tools. Claude's official SDK owns its native
 // context, compaction and persistence; its supported transcript callback copies
-// exposed native records to the central archive. Replay/admission follows
-// Hermes DirectSDK; see claude-hermes-LICENSE.txt for source and attribution.
+// exposed native records to the central archive.
 const api = 'woven-claude-native';
 const prefix = 'mcp__woven__';
 const inventoryProgram = fileURLToPath(new URL('./claude-inventory.mjs', import.meta.url));

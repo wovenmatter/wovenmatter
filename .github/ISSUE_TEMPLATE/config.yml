@@ -1,5 +1,5 @@
 blank_issues_enabled: false
 contact_links:
-  - name: Security vulnerability
-    url: https://github.com/wovenmatter/wovenmatter/security/advisories/new
-    about: Report vulnerabilities privately.
+  - name: Security issue
+    url: https://github.com/wovenmatter/wovenmatter/blob/main/SECURITY.md
+    about: If you have a security issue, email security@wovenmatter.com.

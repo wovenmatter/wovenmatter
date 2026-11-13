@@ -3,7 +3,8 @@
 The app bundles the actual `@earendil-works/pi-durable`, `pi-ai`, `chord`, and `pi-telemetry`
 packages locked in `default-agent/package-lock.json`, the same release as the
 desktop runtime. It does not ship Node, run a remote agent loop, or download
-executable SDK code, so SDK updates reach iOS only in an App Store build. Rebuild
+executable SDK code, so SDK updates reach iOS only in a new app build (currently
+a TestFlight beta). Rebuild
 with `node scripts/build-ios-pi-runtime.mjs`; use `--check` to verify committed
 resources match the reviewed sources and installed locked dependencies.
 
@@ -32,14 +33,14 @@ Swift task cancellation. They default to unsafe replay: interrupted side
 effects are reported as interrupted, not blindly repeated.
 
 Woven capabilities use the shared `WovenMCPCatalog` names and structured schemas.
-The phone registers those definitions directly with Pi Durable and dispatches
-local operations through its offline mobile services. Explicit `target: central`
-requests use the paired Mac's authenticated HTTP MCP endpoint; device and
-conversation headers identify the existing execution owner, while each call
-rechecks the user's tool selection. Browser and computer tools retain the Mac's
-execution owner and inline MCP image results. There is no Woven command-line
-bridge. Sandboxed Python can call the same tools with
-`await woven_mcp("woven_notes_read", {"noteID": "..."})`.
+The app registers those definitions directly with Pi Durable and dispatches them
+natively against the phone's offline library replica, which syncs with the other
+members. Quick Chat registers only a fixed subset (`QuickChatCapabilities`):
+notes and `woven_context`, timers and reminders, and calendar, plus native web
+search and reading, `ask_user` and `clock`. It refuses any `target` other than
+the phone, so it has no host-routed, browser or computer tools. The app has no
+Woven command-line bridge or Python; the confined Python package in
+`ios/Sources/EmbeddedExecution` is a test package that the app does not link.
 
 `open()` is a read-only execution viewer after its migration/configuration
 commits; it does not schedule saved work. `resume()` explicitly enables the
@@ -58,10 +59,15 @@ separate operations. No mobile background execution guarantee is made.
 
 `snapshot()` is active UI context, which can omit compacted/reset history.
 `conversations()` and paginated `history(nativeConversationID:cursorJSON:)`
-provide the complete immutable records for central synchronization, including
+provide the complete immutable records for library synchronization, including
 children and old context. Runtime checkpoint files stay on the execution device.
 
 ## Subagents and code mode
+
+The package provides both tools and its tests exercise them; the app does not
+enable them. Quick Chat opens every runtime with `quickChat: true`, which
+installs neither tool and refuses code execution. The rest of this section
+describes the package.
 
 The built-in `subagent` tool creates a real SDK task-owned conversation. It
 inherits the parent's exact inference model/account and native tools, returns
