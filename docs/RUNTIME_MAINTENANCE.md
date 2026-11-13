@@ -54,9 +54,10 @@ operation. No operation cancels an active turn.
 
 ## Remote installation
 
-Each remote agent workspace has its own inventory, preferences, latest checks and
-verified maintenance actions, served by that workspace's authenticated service
-through its SSH tunnel. Installers execute on the selected host. Remote services
+Each Linux host has its own inventory, preferences, latest checks and verified
+maintenance actions, served by the host's service. The Mac that installed the
+host reaches them through an SSH tunnel with the host's API token. Installers
+execute on the selected host. Remote services
 must include these endpoints before the controls are available.
 Local package presence never verifies a remote
 installation or a linked gateway's runtime.
@@ -71,7 +72,7 @@ from the compatible update target resolved using the adapter's dependency range.
 Updates refresh that dependency within the declared range and verify the result;
 unknown compatibility does not produce an update claim.
 
-Remote maintenance takes an exclusive lock in the workspace container. Remote conversation processes
+Remote maintenance takes an exclusive lock on the host. Remote conversation processes
 and managed OpenCode servers hold shared locks for their lifetime, so an
 update cannot replace their runtime while they are using it. A busy workspace requires
 the user to finish conversations or stop its server before retrying maintenance.
@@ -81,10 +82,10 @@ Installer timeouts terminate the process group before permitting another attempt
 
 OpenCode settings open the selected workspace's server and model settings. Each
 remote workspace owns a distinct v2 service state directory and conversation
-association; the app routes requests and event streams to its authenticated
-workspace proxy. The service's Basic credential stays on the remote host. The
-native client uses the workspace bearer credential over a loopback SSH tunnel;
-no public OpenCode listener or remote browser credential URL is created. Local
+association; the app routes requests and event streams to the host's member
+proxy, which accepts requests signed with the Mac's device key over the
+tailnet. The service's Basic credential stays on the remote host; no public
+OpenCode listener or remote browser credential URL is created. Local
 OpenCode retains its existing registered service and explicit lifecycle controls.
 
 ## Upstream reference snapshot — September 11, 2026

@@ -1,6 +1,6 @@
 # OpenCode v2 local integration
 
-WovenMatter connects conversations to the standard local OpenCode v2 service.
+Woven Matter connects conversations to the standard local OpenCode v2 service.
 This reference covers its connection, session, and persistence behavior. For
 setup in the app, see [Agent setup](../guide/agents.md).
 
@@ -9,10 +9,10 @@ Other harness integrations keep their own transports.
 
 ## User experience
 
-- **Settings → Local Agent Workspace** lists OpenCode under **Runtimes** with
-  **Settings**, update controls, **Hide/Show**, and **Install** or **Enable/Disable**.
-  Its **Settings** button opens the local server and model controls. The
-  **Settings → Agents → OpenCode** page lists local and remote OpenCode workspaces.
+- **Settings → Agents → OpenCode** shows each workspace's OpenCode under
+  **Software**, with **Install**, or **Check for updates** and **Update** once
+  installed. Its **OpenCode service** section lists the local and remote
+  OpenCode services; expanding one opens its server and model controls.
 - Connect reuses OpenCode's standard authenticated local service, or starts it when absent. New Chat can also connect/start it. After a successful connection, reopening Woven Matter reconnects according to the saved lifecycle preferences.
 - New OpenCode chats use the same Woven Matter workspace root as the other local harnesses. OpenCode owns the backend session; its v2 clients can access that same session through the same service.
 - The OpenCode page contains connection status, **Open in browser**, **Manage models**, Connect, server controls, and lifecycle preferences. Model visibility is saved by Woven Matter; OpenCode browser show/hide preferences remain separate. Selected models sort first in Manage models.

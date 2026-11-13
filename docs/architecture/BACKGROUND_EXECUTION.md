@@ -1,15 +1,17 @@
 # Background execution
 
 Background execution moves execution ownership out of the macOS window process.
-The production Mac library host always executes in the background server. Its visible app
-is a client; legacy off preferences no longer select a foreground execution owner.
+Every production Mac hosts its own full library and always executes in its
+background server. Its visible app is a client; legacy off preferences no longer
+select a foreground execution owner.
 Development profiles use isolated background servers and never install login jobs.
 Remote workspaces retain their own independent execution preferences.
 
-The separate paired-library-client architecture still hosts its optional secondary
-Mac execution workspace inside the client process. This change does not convert
-that federation transport into a background service. Client development profiles
-continue to use that architecture; snapshot profiles test the library host server.
+A Dev connected client (`scripts/build_and_run.sh --mode client`) is the only
+library client left. Its own background server owns its replica of the production
+library, its synchronization journal and its native execution workspace (see
+[development builds](../DEVELOPMENT_BUILDS.md)). Snapshot profiles test the
+library host server that every production Mac runs.
 
 
 ## Local ownership
@@ -55,10 +57,9 @@ the cursor so reconnect cannot silently miss the update. OpenCode transfers
 session revisions rather than transcript bodies; visible sessions load through
 the existing database presentation path. The backend does not render chat text.
 
-Library-role changes require idle sessions and completed approvals. Admission
-is fenced before shutdown. Notes flush before the frontend exits or switches
-library roles. Failed transitions restore the previous role and restart its owner.
-Quitting the frontend does not shut down backend-owned sessions.
+There is no library role to switch. Admission is fenced before shutdown. Notes
+flush before the frontend exits. Quitting the frontend does not shut down
+backend-owned sessions.
 
 ## Harness entry points and failures
 
@@ -99,8 +100,6 @@ system sleep. This does not end the work or its dispatch leases.
 Both levels apply in development-host and backend modes; the frontend never owns an
 assertion. Preferences and actual protection state are published by the execution
 owner. Keeping the backend awake lets active work continue after the frontend quits.
-On a secondary Mac, Background Server settings target that Mac's local execution model
-for both sleep levels, rather than its read-only central-library client model.
 
 A dispatch lease starts before asynchronous session preparation and ends on every
 return, error, or cancellation. Running conversation state retains the same

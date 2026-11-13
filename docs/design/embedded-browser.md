@@ -37,13 +37,13 @@ utility worlds and domain cleanup preserve repeated connections and iframes.
 The helper receives no MCP bearer or provider credentials. Shared tabs remain
 owned by ApplicationModel's WorkspaceAssetSession across pane visibility changes.
 
-Secondary Macs inject the visible client's same asset session into their native
-execution workspace and dispatch automation in process, without replacing the
-central library's automation socket. Browser tabs remain accessible in the
-client's Browser pane. Device-owned iPhone tools route these two capabilities to
-the paired central Mac; they do not control iPhone UI. Central device execution
-access is checked before acceptance and between native input steps. Cancellation
-retains caller ownership and works after capability or execution-access revocation.
+Each Mac's agents drive that Mac's own embedded browser; there is no shared
+browser across Macs. A Dev connected client injects its window's asset session
+into its own execution workspace and dispatches automation in process, so its
+tabs remain accessible in its Browser pane. Quick Chat on iPhone offers neither
+capability and never controls iPhone UI. Execution access is checked before
+acceptance and between native input steps. Cancellation retains caller
+ownership and works after capability or execution-access revocation.
 Automation receipts retain completion metadata, without page or desktop captures;
 retries after completion inspect fresh state instead of replaying input.
 

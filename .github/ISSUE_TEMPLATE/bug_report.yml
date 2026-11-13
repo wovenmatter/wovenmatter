@@ -22,10 +22,14 @@ body:
     attributes:
       label: Area
       options:
-        - Native macOS app
-        - Local workspace or harness
-        - Remote workspace or container
-        - OpenClaw Gateway
+        - Mac app
+        - Harness or conversation
+        - Linux host or remote workspace
+        - Library sync or device pairing
+        - Bots
+        - Executor apps
+        - Browser or Computer Use
+        - iPhone app (beta)
         - Build, validation, or release tooling
         - Documentation
         - Not sure
@@ -71,7 +75,7 @@ body:
     id: environment
     attributes:
       label: Environment
-      description: macOS, Xcode, harness, and remote Docker details if relevant. Remove private host and account data.
+      description: macOS version, Woven Matter version on each device involved, harness, and Linux distribution if relevant. Remove private host and account data.
   - type: textarea
     id: logs
     attributes:

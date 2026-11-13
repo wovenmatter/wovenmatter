@@ -1,7 +1,8 @@
 # Product analytics
 
-The central Mac sends explicit events to PostHog Cloud US. One random analytics
-ID belongs to the central library and is shared by its connected devices. It is
+Each Mac sends explicit events to PostHog Cloud US, for itself and for the
+iPhones and iPads that report through it; Linux hosts send none. One random
+analytics ID belongs to the library and synchronizes to every device in it. It is
 independent of operational device, workspace, provider, and account IDs. Separate
 libraries count separately; these are active-library estimates, not identified
 people. There is no analytics SDK, autocapture, person profile, or session replay.
@@ -12,8 +13,10 @@ people. There is no analytics SDK, autocapture, person profile, or session repla
 - `app_active`: a deliberate content change, session creation, or message submission
   can send one generic activity signal. The action type is not recorded or sent.
 
-Each signal has its own rolling six-hour limit, enforced by the central library
-across all devices and restarts. A qualifying action at 9 am can send immediately;
+Each signal has its own rolling six-hour limit, enforced by each Mac for its own
+events and those of the phones it admits, across restarts. Several Macs in one
+library can each send a signal within the same window; distinct-ID counts are
+unaffected. A qualifying action at 9 am can send immediately;
 more activity is suppressed until 3 pm. Nothing fires at 3 pm: another qualifying
 action is required. Opens never consume the activity allowance, or vice versa.
 Browsing, background synchronization, agent writes/outcomes, scheduled work, and
@@ -35,8 +38,10 @@ subsequent edit to retry. Future eligible actions can make a new attempt.
 iPhone and iPad sends do not block content synchronization or user actions.
 
 Privacy choices persist and synchronize to every device: the preference row, with
-its library-wide analytics ID, is part of library sync between Macs and Linux hosts,
-and iPhones and iPads read it from the Mac they connect to. When devices chose
+its library-wide analytics ID, is part of library sync between Macs and Linux hosts.
+iPhones and iPads read and change it through a Mac: their current library host
+when that is a Mac, otherwise another Mac member (Linux hosts answer that
+analytics are unsupported). When devices chose
 differently while apart, opting out wins. Analytics default to on, with the toggle and explanation in General settings;
 there is no launch disclosure or acknowledgement step. Opt-out stops local collection and
 cancels outstanding requests; an already-sent request cannot be recalled. Offline
@@ -45,17 +50,18 @@ choices. Re-enabling collects only future activity, without resetting signal lim
 
 The toggle and policy link are at the bottom of General settings on Mac, iPhone,
 and iPad. The policy lives at [wovenmatter.com/privacy](https://wovenmatter.com/privacy).
-There is no user-facing analytics log. The central library retains bounded
-receipts solely to deduplicate attempts, never for delivery. Acceptance from an iPhone or iPad
-means the central library accepted the attempt, not that PostHog received it.
+There is no user-facing analytics log. The Mac that admits an event retains
+bounded receipts solely to deduplicate attempts, never for delivery. Acceptance
+for an iPhone or iPad means that Mac accepted the attempt, not that PostHog
+received it.
 
 Only platform, app version, OS major version, and updater target version are
 allowlisted. No action categories, agent outcomes, content, titles, messages,
 files, paths, account identifiers, arbitrary errors, or model labels are sent.
 The country-only transform in `country-only.hog` removes IP and precise location
-fields and disables person profiles. Country describes the central Mac's network.
+fields and disables person profiles. Country describes the sending Mac's network.
 Verify that transform and IP discard in the live project before shipping.
-Debug central builds never transmit to production PostHog.
+Debug builds never transmit to production PostHog.
 
 ## Updates
 

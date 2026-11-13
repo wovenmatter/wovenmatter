@@ -49,8 +49,8 @@ and optional `appearance` (`light` or `dark`, default `dark`). It returns a
 screenshot, console messages, and measured height. Preview uses an ephemeral
 WebKit view through the existing GUI automation relay; the app must be open.
 Publishing needs no browser and remains available to a connected local or
-remote harness. Phone tools use the existing central Mac route. This does not
-add an offline phone publishing service.
+remote harness. Quick Chat on iPhone offers neither tool; the phone shows the
+pages that Mac and Linux sessions publish.
 
 The invoking MCP adapter/device validates authored HTML (512,000 UTF-16 code units,
 matching T3's JavaScript schema) and embeds absolute local image paths before
@@ -62,12 +62,8 @@ Preview reports missing/unreadable/nonimage paths in `missingImages`; publishing
 rejects them. Nonimage text is never embedded. Images stay with the saved page
 when the source files move or disappear.
 
-Preparation runs on the executing Mac, remote host, or phone, never on a Mac
-merely observing a remote caller. Phone paths use the conversation's existing
-workspace resolver and sandbox: absolute `/workspace/...` image paths map to the
-conversation's private device files, as in the on-device command runtime. Phone
-SDK result metadata retains prepared HTML
-without returning the image bytes as model-visible tool text. Ordinary tool
+Preparation runs on the executing Mac or remote host, never on a Mac merely
+observing a remote caller. Ordinary tool
 requests keep their existing limits; HTML requests and the underlying bounded
 RPC/library transports accommodate prepared pages. The same canonical catalog
 is generated for remote workspaces. Visual replies remain available with older
@@ -84,11 +80,12 @@ activity-details API. Pages inherit the conversation/run's retention and sync
 behavior without separate files or orphaned attachments. HTML never becomes an
 assistant-text segment or a hidden generic tool result.
 
-Device-owned phone sessions also reconstruct a page from the successful native
-HTML call/result pair, retaining its full detail in the native journal and its
-small reference in transcript summaries. Reopening and replicating that journal
-preserve the page. References are deduplicated when the native projection and
-the central publication meet. OpenCode server reconciliation preserves published
+Chats from earlier on-device iPhone agents, which could publish pages, still
+reconstruct a page from the successful native HTML call/result pair, retaining
+its full detail in the native journal and its small reference in transcript
+summaries. Reopening and replicating that journal preserve the page. References
+are deduplicated when the native projection and the library's published
+activity meet. OpenCode server reconciliation preserves published
 pages independently of its current native tool-part list.
 
 `ConversationHTMLDocument` creates an app-owned wrapper with an opaque

@@ -5,9 +5,11 @@ workspace runs Woven Matter directly as a native Linux service, using the SSH
 account's existing tools and sign-ins. Execution and SQLite state remain on Linux
 while the Mac is disconnected.
 
-Remote container workspaces are deprecated and no longer offered or reconnected.
-Native Linux hosts replace that workflow. The separate Docker Executor feature
-is unchanged.
+A Linux machine can also run bots without being a workspace; see [Bots](bots.md).
+Adding a workspace to it later reuses the same Woven server.
+
+Remote container workspaces are no longer offered or reconnected. Native Linux
+hosts replace that workflow. The separate Docker Executor feature is unchanged.
 
 ## What you need
 
@@ -19,9 +21,10 @@ is unchanged.
 
 Tailscale is required for every remote connection. Select an online Tailnet
 Linux machine or enter its Tailscale name, MagicDNS name, or Tailscale IP. The
-picker lists all online, unexpired Linux devices. Connect Macs, iPhones, and
-iPads through **Settings → Apple Devices**. SSH uses the local Tailscale daemon for the transport and your existing SSH configuration
-and agent for authentication. Arbitrary SSH aliases, LAN addresses, and public
+picker lists all online, unexpired Linux devices. Pair Macs, and the iPhone
+beta, in **Settings → Apple Devices** instead (see [Apple devices](apple-devices.md)).
+SSH uses the local Tailscale daemon for the transport and your existing SSH
+configuration and agent for authentication. Arbitrary SSH aliases, LAN addresses, and public
 hosts are unsupported. Existing configurations must name an online Tailnet peer;
 there is no fallback connection mode.
 
@@ -61,8 +64,9 @@ to `woven_browser_use`. Host browsing is headless and runs directly on Linux.
 
 ### See the agent's tabs in Woven Matter
 
-Right-click a remote workspace heading in the sidebar and choose **View browser**,
-or open the workspace in **Settings → Workspaces** and choose **Manage → View browser**. Select a
+On the Mac that added the host, right-click the workspace heading in the sidebar
+and choose **View browser**, or open the workspace in **Settings → Workspaces**
+and choose **Manage → View browser**. Other Macs do not offer the viewer. Select a
 tab to interact with its live page. Click, type, scroll, select text or drag on the
 page while the agent keeps the same tab open. Use the address field and Back,
 Forward and Reload controls to navigate. Mac shortcuts include Command-A,
@@ -104,9 +108,9 @@ batched in order. Closing the viewer stops image capture and leaves agent tabs
 open. See [performance validation](../reference/REMOTE_BROWSER_PERFORMANCE.md)
 for measurements and limits.
 
-Each workspace has its own browser; viewing uses the existing authenticated SSH
-connection. The browser-control endpoint is execution-host-loopback-only and is never
-forwarded to the Mac or published on the host.
+Each workspace has its own browser. The viewer uses the adding Mac's existing
+authenticated SSH connection. The browser-control endpoint stays private to the
+host and is never forwarded to the Mac or published on the network.
 
 Use `woven_browser_use` for the shared native browser, including local development
 servers on the host. Woven installs the matching browser runtime under its
@@ -114,25 +118,28 @@ managed data directory; use **Update server** to refresh that installation.
 
 ## Manage ongoing work
 
-Use the workspace's Start, Stop, Restart, Update server and Logs controls to
-manage its native service. Workspace storage uses the host's available disk
-space. The host operating system controls memory and swap.
+On the Mac that added the host, the workspace's **Manage** menu has **Start**,
+**Stop**, **Restart**, **Update server**, **View browser**, **Logs**, and
+**Uninstall…** for its native service. **Uninstall…** offers **Uninstall; keep
+data**, which stops the service and keeps workspace files and databases, or
+**Uninstall and remove data**, which cannot be undone. Workspace storage uses
+the host's available disk space. The host operating system controls memory and
+swap.
 
 Closing the Mac app does not stop the remote service. Supported scheduling keeps
 running while the Linux host, agent service and provider access remain available.
-Updates preserve the workspace's durable data. Uninstall and removal of workspace
-data are separate explicit actions.
+Updates preserve the workspace's durable data.
 
-The Mac that adds a host installs it over a Tailscale SSH tunnel to a host
-loopback port. See [Native Linux hosts](../reference/REMOTE_HOSTS.md) for
-permissions, browser verification, storage and service lifecycle details.
+The Mac that adds a host installs it over SSH through Tailscale. See
+[Native Linux hosts](../reference/REMOTE_HOSTS.md) for permissions, browser
+verification, storage and service lifecycle details.
 
 ## Use a host from every Mac
 
 A Linux host belongs to all your devices, not to the Mac that added it. Every
 paired Mac lists every Linux host under **Settings → Workspaces → From other
-devices**, with its status, and can show its logs, restart it and update it
-from its **Manage** menu. Those Macs reach the host directly over Tailscale HTTPS with their own
+devices**, with its status. Its **Manage** menu there has **Refresh status**,
+**Restart**, **Update server**, and **Logs**. Those Macs reach the host directly over Tailscale HTTPS with their own
 device key; no SSH setup or sign-in is needed on them. Agents on any Mac or Linux
 host can start sessions on it, and its agents can start sessions on every other
 Mac and Linux workspace, with every Mac offline if the destination is a Linux
@@ -155,6 +162,7 @@ Messages, Stop and answers go over the same connection. Nothing checks the host
 on a timer.
 
 History reaches every device through the library: the host writes its chats
-into its own copy of the library, which synchronizes with every Mac and phone.
+into its own copy of the library, which synchronizes with your Macs and the
+iPhone beta.
 While a host is unreachable its chats show their saved history with a notice
 that the host is offline, and become live again when it is back.

@@ -60,8 +60,9 @@ backpressure, disconnect cleanup, late-frame rejection, metadata-independent ima
 refresh, unchanged image reuse, frame-feed expiry and workspace identity changes.
 The opt-in native fixture exercises the production AppKit input view through the
 HTTP batch and live-stream clients against actual shared Chromium, including IME
-text. Container smoke tests repeat stream and batch checks on fresh and preserved
-homes. Hosted CI and Trey's live workspace acceptance remain separate checks.
+text. On a deployed native Linux host, `remote/test-support/host-smoke.mjs`
+repeats the frame and live-stream checks against the host's shared Chromium (see
+[native host validation](REMOTE_HOST_VALIDATION.md)). Hosted CI and Trey's live workspace acceptance remain separate checks.
 
 To exercise the real native input path, run
 `node remote/test-support/browser-native-fixture.mjs` with the same browser-cache

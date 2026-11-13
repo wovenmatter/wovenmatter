@@ -1,7 +1,7 @@
 # OpenCode v2 testing
 
 Build the current checkout with the repository script. A named snapshot
-instance keeps its WovenMatter database and process separate from other
+instance keeps its Woven Matter database and process separate from other
 development builds:
 
 ```sh
@@ -15,13 +15,13 @@ base). The instance isolates only Woven Matter's database/settings; it connects 
 
 ## Manual acceptance
 
-1. In **Settings → Local Agent Workspace**, a missing v2 CLI shows **Install**.
-   It resolves the current `@opencode/cli` release and adds OpenCode to the sidebar
-   without starting its service automatically. Check the runtime row's **Settings**, update, and
-   **Hide/Show** controls. The server settings page may show **Download** when
-   the local CLI is missing.
-2. Confirm installed OpenCode appears in the sidebar without an Enable step. Open its runtime **Settings**, or choose the local
-   workspace from **Settings → Agents → OpenCode**. **Connect** reuses the standard local
+1. In **Settings → Agents → OpenCode**, a missing v2 CLI shows **Install** under
+   **Software**. It resolves the current `@opencode/cli` release and adds OpenCode
+   to the sidebar without starting its service automatically. Check the
+   **Software** row's **Check for updates** and **Update** controls.
+2. Confirm installed OpenCode appears in the sidebar without an Enable step. In
+   **Settings → Agents → OpenCode**, expand **Local workspace** under **OpenCode
+   service**. **Connect** reuses the standard local
    service or starts it if absent. **Open in browser** opens that service without
    a manual sign-in prompt. Configure provider accounts in OpenCode itself.
 3. Use New chat → OpenCode. The session must use the Woven Matter workspace root (`~/.woven-matter` by default). The default model must appear before the first message.
