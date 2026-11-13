@@ -181,8 +181,7 @@ closed-display behavior on Apple silicon. No Amphetamine code is included.
 
 ### Codex research
 
-The installed Codex desktop app (ChatGPT bundle version `26.917.71314`, inspected
-2026-09-27) uses Electron `powerSaveBlocker.start('prevent-app-suspension')` for
+The installed Codex desktop app (inspected 2026-09-27) uses Electron `powerSaveBlocker.start('prevent-app-suspension')` for
 active-work sleep protection and stops the blocker when no requester needs it.
 Its separate display blocker is stronger and is not needed here. A read-only
 `pmset -g assertions` check during a Codex run showed an Electron

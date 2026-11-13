@@ -1690,7 +1690,7 @@ login until `stop()`.
   listen, and the app to connect, unless `lstat` shows a real directory owned
   by this user (`WovenVMPaths.preparePrivateDirectory`); a wider mode is
   tightened. Always read the socket path from the API, never build it.
-- **Guest.** The pinned Ubuntu 26.04 LTS arm64 cloud image
+- **Guest.** The pinned Ubuntu LTS arm64 cloud image
   (`app/VMHelper/guest-version.json`), converted from QCOW2 to a raw disk on
   first run, EFI boot, cloud-init NoCloud seed. First boot purges
   unattended-upgrades, snapd and SSH, masks the apt timers, formats the data
@@ -1850,7 +1850,7 @@ answers); `PUT /v1/resources`; (optional forwards) `GET /v1/forwards`;
 `POST /v1/update`, `/v1/restart`, `/v1/stop` (202). Errors are
 `{"error": "..."}`.
 
-- **Image:** Ubuntu 26.04 LTS with Chromium and Playwright, git, Node, Python,
+- **Image:** Ubuntu LTS with Chromium and Playwright, git, Node, Python,
   build tools and tini. A bot runs as a user with passwordless sudo, which
   gives it full root inside its container.
 - **Network:** the container has internet access. Outbound traffic to the

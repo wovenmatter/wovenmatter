@@ -91,7 +91,7 @@ there. `--archive` and `--upload` stop before building if the Apple Distribution
 certificate is missing, and `--upload` also stops if the API key is missing.
 
 **Version and build number.** The version is `MARKETING_VERSION` in
-[project.yml](project.yml), now `0.0.1`. You never set a build number: every
+[project.yml](project.yml). You never set a build number: every
 `--archive` and `--upload` stamps one from the UTC clock and prints it. The form
 is `YYYYMMDD.T`, where `T` is hour × 10000 + minute × 100 + second, so
 18:34:02 UTC on 11 November 2026 is `20261111.183402` and 09:05:07 is

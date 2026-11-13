@@ -18,8 +18,9 @@ service in between.
 
 - **Use every harness in one place.** Pi Durable is built in. Codex, Claude
   Code, Grok Build, and OpenCode use the installations and provider accounts
-  you already have, or Settings installs them. Choose the model, thinking
-  level, and permissions for each conversation.
+  you already have, or Settings installs them. Pi Durable can also use local
+  model servers on your network. Choose the model, thinking level, and
+  permissions for each conversation.
 - **Work in parallel.** Run many sessions at once across harnesses and view up
   to five side by side in panels while the rest keep running. Agents can
   start, message, and check on other sessions, including sessions on your
@@ -39,7 +40,7 @@ service in between.
 - **See what you use.** Usage shows tokens and estimated cost across harnesses
   and devices, plus each provider account's current limits.
 - **Talk instead of type.** Dictation uses Apple's on-device speech
-  recognition. Pi Durable can also use local model servers on your network.
+  recognition, so your voice stays on your Mac.
 - **Hand work to Linux.** Add a Linux machine from your Mac and its agents keep
   running, with their own files and sign-ins, while your Mac sleeps.
 - **Run bots.** Bots are long-running agents, each with its own isolated Linux

@@ -10,8 +10,7 @@ of these attributions is `app/App/ThirdPartyNotices.txt`.
 
 Woven Matter integrates [Executor](https://executor.sh), created by Rhys Sullivan,
 through its public API. The local and remote installers use the unmodified
-`executor` npm package, selected from its supported V2 release line at installation,
-and retain its upstream license and bundled dependency notices. Those dependencies remain subject to their own
+`executor` npm package, selected at installation, and retain its upstream license and bundled dependency notices. Those dependencies remain subject to their own
 licenses.
 
 Source: [UsefulSoftwareCo/executor](https://github.com/UsefulSoftwareCo/executor).
@@ -42,12 +41,12 @@ SOFTWARE.
 
 ## Pi Durable runtime
 
-Pi Durable bundles `@earendil-works/pi-durable` 1.5.2 from
-[Earendil Works Pi](https://github.com/earendil-works/pi/tree/v1.5.2/packages/durable)
+Pi Durable bundles `@earendil-works/pi-durable` from
+[Earendil Works Pi](https://github.com/earendil-works/pi/tree/main/packages/durable)
 for native execution and persistence. The format-1 JSONL migration reader in
 `default-agent/src/legacy-jsonl-migration.mjs` adapts its recovery and reclamation
 rules under the same license. Its
-[upstream license](https://github.com/earendil-works/pi/blob/v1.5.2/LICENSE)
+[upstream license](https://github.com/earendil-works/pi/blob/main/LICENSE)
 is MIT, with `Copyright (c) 2025 Mario Zechner`.
 
 The Mac and Linux runtime (`default-agent/`) also bundles `@earendil-works/pi-ai`,
@@ -78,8 +77,8 @@ native runtime keeps Anthropic's original signature and is never modified.
 
 ## Lucide
 
-The dashboard icon assets are derived from `lucide-static` 1.72.0.
-Published tarball integrity and per-asset hashes are recorded in
+The dashboard icon assets are derived from `lucide-static`. The selected
+release, published tarball integrity, and per-asset hashes are recorded in
 `docs/assets/lucide-provenance.json`.
 
 Copyright (c) 2022 Lucide Contributors
@@ -175,8 +174,7 @@ SOFTWARE.
 
 The built-in browser bundles the
 [Chromium Embedded Framework](https://github.com/chromiumembedded/cef) (CEF)
-`156.0.30+g6028375+chromium-156.0.8078.96`, as recorded in
-`app/Browser/cef-version.json`, with its checksummed upstream binary
+release recorded in `app/Browser/cef-version.json`, with its checksummed upstream binary
 distribution. CEF is licensed under the BSD 3-Clause License, copyright
 Marshall A. Greenblatt with portions copyright Google Inc. Chromium and its
 components are licensed under the BSD 3-Clause License and the licenses listed
@@ -185,9 +183,7 @@ unchanged in the app under `Resources/BrowserLicenses`.
 
 ## Browser and computer automation
 
-Woven Matter bundles [Cua Driver](https://github.com/trycua/cua) 0.49.3
-(`cua-driver-rs-v0.49.3`, source `63bd9cdb82d6160b05a965d2d0e26e0a3c17cdc2`),
-under MIT, copyright 2025 Cua AI, Inc., as recorded in
+Woven Matter bundles [Cua Driver](https://github.com/trycua/cua) under MIT, copyright 2025 Cua AI, Inc., as recorded in
 `app/Automation/cua-version.json`. The upstream signed universal executable is
 retained unchanged.
 Its license and third-party notices are included in `app/Automation` and shipped
@@ -199,7 +195,7 @@ and `ws` from [websockets/ws](https://github.com/websockets/ws) under MIT.
 Their upstream licenses remain in the bundled Node dependencies. Playwright
 connects to Woven Matter’s bundled CEF rather than installing another browser.
 
-The automation server and Executor client bundle the v2
+The automation server and Executor client bundle the
 `@modelcontextprotocol/server` and `@modelcontextprotocol/client` packages from
 [the MCP TypeScript SDK](https://github.com/modelcontextprotocol/typescript-sdk)
 under Apache-2.0. Their complete upstream licenses and notices remain in the
@@ -223,7 +219,7 @@ runtime keeps Anthropic's original signature and is never modified. Each
 package's license and notice files remain in the bundled `node_modules`.
 
 The in-container helper (`bots/helper/`) adapts Pi Bot's environment agent.
-Bot containers are built at run time from `bots/image` on Ubuntu 26.04 LTS,
+Bot containers are built at run time from `bots/image` on Ubuntu LTS,
 with Chromium, Playwright, Node.js, Python, git, build tools and tini installed
 from their official distributions inside the bot engine; their licenses and
 notices remain in each image under `/usr/share/doc` and the installed packages.
@@ -232,7 +228,7 @@ No container image is shipped in the app.
 ## Woven VM guest and bot engines
 
 On Apple silicon Macs, the Woven VM downloads the pinned
-[Ubuntu 26.04 LTS server cloud image](https://cloud-images.ubuntu.com/releases/resolute/)
+[Ubuntu LTS server cloud image](https://cloud-images.ubuntu.com/releases/)
 for arm64 from Canonical on first run (`app/VMHelper/guest-version.json`
 records its URL, serial, size and SHA-256, which is checked before use). The
 image is not redistributed in the app. Ubuntu is a trademark of Canonical Ltd.;
@@ -250,7 +246,7 @@ installs Docker's official static binaries, pinned with SHA-256 in
 Apache-2.0, containerd and runc under Apache-2.0; their licenses ship with the
 packages and archives. Docker is a trademark of Docker, Inc.
 
-## Sparkle 2.10.1
+## Sparkle
 
 https://github.com/sparkle-project/Sparkle
 
@@ -392,8 +388,8 @@ POSSIBILITY OF SUCH DAMAGE.
 ## Swift packages
 
 The Linux library (`wovenmatter-library`, shipped in Linux host releases) uses
-[Swift Crypto](https://github.com/apple/swift-crypto) 5.1.1 and its dependency
-[Swift ASN.1](https://github.com/apple/swift-asn1) 1.7.4 in place of Apple's
+[Swift Crypto](https://github.com/apple/swift-crypto) and its dependency
+[Swift ASN.1](https://github.com/apple/swift-asn1) in place of Apple's
 CryptoKit, as recorded in `app/Package.resolved`. Both are licensed under the
 Apache License 2.0, copyright Apple Inc. and the SwiftCrypto and SwiftASN1
 project authors. The Mac app uses CryptoKit and does not link them.
@@ -401,9 +397,9 @@ project authors. The Mac app uses CryptoKit and does not link them.
 ## Executor container image
 
 The standalone Executor image (`remote/Executor.Dockerfile`) installs
-Archive::Tar 3.14 from its checksummed CPAN release under the same terms as
+Archive::Tar from its checksummed CPAN release under the same terms as
 Perl; its module documentation is retained. It replaces the Executor runtime's
-bundled sharp selection with locked sharp 0.35.5 and the corresponding prebuilt
+bundled sharp selection with the locked sharp release and the corresponding prebuilt
 libvips packages. Their Apache-2.0, LGPL-3.0-or-later, and dependency notices
 remain in the installed packages. The replacement changes dependency selection
 and does not modify upstream source.
@@ -413,11 +409,11 @@ and does not modify upstream source.
 Remote container workspaces are deprecated and no longer offered; native Linux
 hosts replaced them. Until its removal, the repository still builds the former
 workspace image (`remote/Dockerfile`). It builds unmodified OpenSSH Portable
-10.6p2 client sources from [OpenSSH](https://www.openssh.org/portable.html),
+client sources from [OpenSSH](https://www.openssh.org/portable.html),
 checks the source archive's SHA-256 and detached signature, and retains the
 upstream `LICENCE` at `/usr/local/share/licenses/openssh/LICENCE`. It installs
 GitHub CLI from its signed official package repository (MIT), the official
-Python 3.15 runtime with current pip and setuptools, and Archive::Tar 3.14.
+Python 3 runtime with current pip and setuptools, and Archive::Tar.
 npm keeps its Artistic License 2.0 and dependency notices; its bundled undici
 is replaced by the locked selection in `remote/npm-runtime`, which keeps its
 MIT license and does not modify undici source.
