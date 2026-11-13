@@ -580,6 +580,11 @@ final class CentralLibraryClientModel {
             liveSessions[id] = value; relayChanged([id])
         case .ended(let id):
             liveEnded.insert(id); relayChanged([id])
+        case .workspaceEnded(let error):
+            // Without `workspace` items nothing says when to sync: the 15 s / 2 s
+            // fallback runs until the next connection subscribes again.
+            liveStreamProblem = error?.message ?? "The live library host stopped its stream. Woven Matter reconnects automatically."
+            setLiveStreamOpen(false)
         }
     }
 

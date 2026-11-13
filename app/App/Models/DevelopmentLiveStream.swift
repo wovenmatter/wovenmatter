@@ -29,6 +29,10 @@ actor DevelopmentLiveStream {
         case session(String, SessionSettings)
         /// The host does not serve this chat live (another machine runs it).
         case ended(String)
+        /// The host ended the `workspace` subscription for good: nothing says
+        /// when to sync until the next connection subscribes again, so the
+        /// client's fallback timer runs meanwhile.
+        case workspaceEnded(StreamError?)
     }
 
     /// The route the current socket was opened with, written by its connector.
@@ -64,16 +68,21 @@ actor DevelopmentLiveStream {
     var followedConversationIDs: Set<String> { Set(followed.keys) }
 
     func start() async {
-        if workspaceSubscription == nil {
-            workspaceSubscription = await connection.subscribe(.workspace) { [weak self] event in
-                await self?.workspaceEvent(event) ?? .accepted
-            }
+        if stateTask == nil {
             let connection = connection
             stateTask = Task { [weak self] in
                 for await state in connection.states { await self?.stateChanged(state) }
             }
         }
+        await subscribeWorkspace()
         await connection.start()
+    }
+
+    private func subscribeWorkspace() async {
+        guard workspaceSubscription == nil else { return }
+        workspaceSubscription = await connection.subscribe(.workspace) { [weak self] event in
+            await self?.workspaceEvent(event) ?? .accepted
+        }
     }
 
     /// Ends the socket (1000) and every subscription.
@@ -115,12 +124,18 @@ actor DevelopmentLiveStream {
                 return
             }
             if !ended.isEmpty { ended.removeAll(); await follow(wanted) }
+            // A `workspace` subscription the host ended on the last socket starts again on this one.
+            await subscribeWorkspace()
         }
         await update(.state(state))
     }
 
     private func workspaceEvent(_ event: StreamSubscriptionEvent) async -> StreamItemDisposition {
-        guard case .item(let item) = event else { return .accepted }
+        guard case .item(let item) = event else {
+            // `.ended` is final (the connection itself resubscribes a `resync`).
+            if case .ended(let error) = event { workspaceSubscription = nil; await update(.workspaceEnded(error)) }
+            return .accepted
+        }
         switch item.payload {
         case .conversations(let value):
             try? await store.cacheLibraryHostConversations(value.conversations)

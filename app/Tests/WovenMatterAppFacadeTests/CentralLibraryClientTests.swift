@@ -476,6 +476,41 @@ extension CentralLibraryClientTests {
         try await client.prepareForQuit()
     }
 
+    /// The host ending the `workspace` subscription for good leaves nothing to
+    /// say when to sync: the fallback timer runs until the next connection
+    /// subscribes again.
+    @Test func aWorkspaceStreamTheHostEndsFallsBackToTheTimerUntilItReconnects() async throws {
+        let fixture = try await FacadeFixture(); defer { fixture.remove() }
+        let replica = try MobileStore(file: fixture.directory.appending(path: "client/library.json"))
+        let library = "00000000-0000-4000-8000-000000000001"
+        try await replica.bindWorkspace(library)
+        let serving = FixtureTailscaleServe(dnsName: "secondary.test.ts.net")
+        let host = FakeLiveHost(route: .init(port: 1, audience: UUID().uuidString.lowercased(), libraryID: library,
+                                             workspaceID: UUID().uuidString.lowercased()))
+        let client = CentralLibraryClientModel(store: replica, transport: MacClientFakeCentral(), executionDirectory: fixture.directory,
+            makeLocalExecution: { directory, store in
+                try await SecondaryMacExecutionWorkspace.create(directory: directory, replica: store, executionModel: fixture.model)
+            }, makeLocalHost: { workspace, directory in
+                SecondaryMacExecutionHost(workspace: workspace, directory: directory, makeExposure: { serving.exposure() })
+            }, makeLiveStream: { _, _, route in host.connection(route) })
+        let running = Task { await client.run() }
+        defer { running.cancel() }
+        try await waitFor { client.liveStreamOpen }
+        let socket = try #require(host.sockets.first)
+        let workspace = try await socket.subscription(.workspace)
+
+        await socket.push(.end(.init(id: workspace, error: .init(code: "unavailable", message: "The host is stopping its stream."))))
+        try await waitFor { !client.liveStreamOpen }
+        try await waitFor { client.nextScheduledWork().map { $0.timeIntervalSinceNow <= Double(CentralLibraryClientModel.fallbackCentralInterval) + 1 } ?? false }
+
+        // The next connection subscribes `workspace` again and items drive sync once more.
+        await socket.close(.goingAway)
+        try await waitFor { host.sockets.count == 2 && client.liveStreamOpen }
+        _ = try await host.sockets[1].subscription(.workspace)
+        running.cancel()
+        try await client.prepareForQuit()
+    }
+
     /// Waits until the fake library has seen no read for longer than a local capture interval.
     private func settle(_ central: MacClientFakeCentral) async throws {
         var settled = await central.reads
