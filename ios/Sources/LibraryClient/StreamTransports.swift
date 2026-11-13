@@ -112,11 +112,41 @@ public final class WebSocketStreamTransport: StreamTransport, @unchecked Sendabl
     do { try await task.send(.string(text)) } catch { throw failure(error) }
   }
 
+  /// Returns when the pong arrives. Cancelling it gives up at once: a
+  /// black-holed socket never calls `sendPing`'s handler.
   public func ping() async throws {
-    try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, any Error>) in
-      task.sendPing { error in
-        if let error { continuation.resume(throwing: error) } else { continuation.resume() }
+    let pong = PingReply()
+    try await withTaskCancellationHandler {
+      try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, any Error>) in
+        guard pong.start(continuation) else { return }
+        task.sendPing { error in pong.finish(error) }
       }
+    } onCancel: { pong.finish(CancellationError()) }
+  }
+
+  /// One ping's continuation, resumed once: by the pong, its error or a cancellation.
+  private final class PingReply: @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<Void, any Error>?
+    private var outcome: (any Error)??
+    /// False when the ping already ended (cancelled before it was sent).
+    func start(_ continuation: CheckedContinuation<Void, any Error>) -> Bool {
+      let ended = lock.withLock { () -> (any Error)?? in
+        if let outcome { return outcome }
+        self.continuation = continuation; return nil
+      }
+      guard let ended else { return true }
+      if let error = ended { continuation.resume(throwing: error) } else { continuation.resume() }
+      return false
+    }
+    func finish(_ error: (any Error)?) {
+      let waiting = lock.withLock { () -> CheckedContinuation<Void, any Error>? in
+        guard outcome == nil else { return nil }
+        outcome = .some(error)
+        defer { continuation = nil }
+        return continuation
+      }
+      if let error { waiting?.resume(throwing: error) } else { waiting?.resume() }
     }
   }
 

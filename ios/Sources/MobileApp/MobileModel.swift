@@ -42,9 +42,14 @@ import MobileInference
   var folderContentsUnfiled = false
   var folderContentsPresented = false
   var selectedNoteID: String?
-  /// The open chat. Every stream follows it (`followSelectedConversation`).
+  /// The open chat. Every stream follows it (`followSelectedConversation`);
+  /// a chat no connected stream carries starts the foreground tick.
   var selectedConversationID: String? {
-    didSet { if selectedConversationID != oldValue, !workspaceStreams.isEmpty { Task { await self.followSelectedConversation() } } }
+    didSet {
+      guard selectedConversationID != oldValue else { return }
+      if !workspaceStreams.isEmpty { Task { await self.followSelectedConversation() } }
+      libraryStreamChanged()
+    }
   }
   var providerID = ""
   var draftBuffer: [String: MobileChatDraft] = [:]
@@ -147,6 +152,8 @@ import MobileInference
   var workspaceClients: [String: WorkspaceClient] = [:]
   /// Live streams to `stream.v1` workspaces, foreground only.
   @ObservationIgnored var workspaceStreams: [String: MobileWorkspaceStream] = [:]
+  /// Streams that are connected and serve their `workspace` subscription.
+  @ObservationIgnored var liveStreamIDs: Set<String> = []
   @ObservationIgnored var streamEndpoints: [String: URL] = [:]
   @ObservationIgnored var streamMembersRevision: String?
   @ObservationIgnored var streamReloadScheduled = false
@@ -434,7 +441,7 @@ import MobileInference
       // Library sync: notes, calendar, dictation, history and artifacts. It
       // reads nothing live of a session; the open chat streams, so its
       // transcript is not read again for the offline cache.
-      await engine.setStreamedTranscripts(Set(workspaceStreams.keys.filter { workspaceReachable[$0] == true }
+      await engine.setStreamedTranscripts(Set(workspaceStreams.keys.filter { streamConnected($0) }
         .compactMap { streamedConversationID(for: $0) }))
       try await engine.synchronize()
       guard generation == connectionGeneration, !Task.isCancelled else { return }

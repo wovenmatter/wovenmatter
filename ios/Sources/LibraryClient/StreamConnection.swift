@@ -128,7 +128,10 @@ public enum StreamItemDisposition: Sendable, Equatable {
 
 public enum StreamSubscriptionEvent: Sendable, Equatable {
   case item(StreamItem)
-  /// The server ended the subscription for good (anything but `resync`).
+  /// The server ended the subscription for good: an end with no error or a
+  /// non-retryable one. The subscription is gone; nothing asks for it again.
+  /// A `resync` or a retryable end is never delivered: the connection
+  /// subscribes again by itself.
   case ended(StreamError?)
 }
 
@@ -138,11 +141,15 @@ public struct StreamSubscription: Hashable, Sendable {
 }
 
 /// One connection from a client to one Woven server. It owns reconnection
-/// (backoff 1 s to 30 s with jitter, an immediate attempt on demand, nothing
-/// after close code 4401 until the member list changes), pings every 25 s,
-/// re-sends every subscription after a reconnect with its latest `after`, and
-/// correlates `req` / `res`. Calls are never replayed: one in flight when the
-/// socket closes fails with `disconnected`.
+/// (backoff 1 s to 30 s with jitter, reset once a connection has stayed open
+/// for `stableInterval`; an immediate attempt on demand; nothing after close
+/// code 4401 until the member list changes), fails an attempt whose `hello`
+/// does not arrive within `helloTimeout`, pings every 25 s and drops a socket
+/// whose pong does not arrive within `pongTimeout`, re-sends every
+/// subscription after a reconnect with its latest `after`, subscribes again
+/// after a `resync` or retryable end (repeated ones back off), and correlates
+/// `req` / `res`. Calls are never replayed: one in flight when the socket
+/// closes fails with `disconnected`.
 public actor StreamConnection {
   /// Opens one socket. Called afresh for every attempt, so a member-signed
   /// upgrade is signed again each time (a signature's nonce is single use).
@@ -171,15 +178,23 @@ public actor StreamConnection {
     public var requestTimeout: Duration
     /// How long a call waits for a connection that is still opening.
     public var openWait: Duration
-    /// Waits between attempts (tests replace it).
+    /// How long an attempt may take from its start (the upgrade included) to
+    /// the server's `hello` before it fails and the backoff runs.
+    public var helloTimeout: Duration
+    /// How long a connection, or a subscription after a retried end, must
+    /// last before its backoff starts again from the first step.
+    public var stableInterval: Duration
+    /// Waits between attempts, and before a repeated subscription retry (tests replace it).
     public var retrySleep: Sleep
     public var random: @Sendable () -> Double
     public init(pingInterval: Duration = StreamProtocol.pingInterval, pongTimeout: Duration = .seconds(20),
                 requestTimeout: Duration = .seconds(30), openWait: Duration = .seconds(10),
+                helloTimeout: Duration = .seconds(30), stableInterval: Duration = .seconds(30),
                 retrySleep: @escaping Sleep = { try await Task.sleep(for: $0) },
                 random: @escaping @Sendable () -> Double = { Double.random(in: 0...1) }) {
       self.pingInterval = pingInterval; self.pongTimeout = pongTimeout; self.requestTimeout = requestTimeout
-      self.openWait = openWait; self.retrySleep = retrySleep; self.random = random
+      self.openWait = openWait; self.helloTimeout = helloTimeout; self.stableInterval = stableInterval
+      self.retrySleep = retrySleep; self.random = random
     }
   }
 
@@ -196,6 +211,10 @@ public actor StreamConnection {
     var params: StreamSubscribeParams
     let handler: Handler
     var wireID: String?
+    /// Retried ends (`resync`, retryable errors, a subscriber's gap) in a row.
+    var retries = 0
+    var lastRetry: ContinuousClock.Instant?
+    var retryTask: Task<Void, Never>?
   }
   private var running = false
   private var memberRemoved = false
@@ -205,6 +224,10 @@ public actor StreamConnection {
   private var greeted = false
   private var retryTask: Task<Void, Never>?
   private var pingTask: Task<Void, Never>?
+  private var helloTask: Task<Void, Never>?
+  private var stableTask: Task<Void, Never>?
+  /// The generation whose pong is awaited: one probe per socket at a time.
+  private var probing: Int?
   private var nextKey = 0
   private var nextWireID = 0
   private var nextRequestID = 0
@@ -247,11 +270,9 @@ public actor StreamConnection {
     running = false
     generation += 1
     retryTask?.cancel(); retryTask = nil
-    pingTask?.cancel(); pingTask = nil
     let socket = transport
-    transport = nil; greeted = false; hello = nil
-    wire.removeAll()
-    for key in subscriptions.keys { subscriptions[key]?.wireID = nil }
+    transport = nil
+    dropSocketState()
     failPending(.disconnected)
     failOpenWaiters(.notConnected)
     setState(.idle)
@@ -286,6 +307,14 @@ public actor StreamConnection {
     let current = generation
     greeted = false
     setState(.connecting)
+    // An upgrade or hello that never comes fails the attempt, so the backoff
+    // (and `connectNow()`) is never stuck behind a hung handshake.
+    let limit = configuration.helloTimeout
+    helloTask?.cancel()
+    helloTask = Task {
+      do { try await Task.sleep(for: limit) } catch { return }
+      await self.helloOverdue(generation: current)
+    }
     let connect = self.connect
     Task {
       do {
@@ -327,13 +356,35 @@ public actor StreamConnection {
     await settle(Self.classify(error), generation: current)
   }
 
-  private func settle(_ error: StreamConnectionError, generation current: Int) async {
-    greeted = false; hello = nil
+  /// No `hello` within `helloTimeout`: this attempt fails as a timeout. A
+  /// late upgrade or frame from it is ignored (its generation is over).
+  private func helloOverdue(generation current: Int) async {
+    guard current == generation, running, !greeted else { return }
+    let socket = transport
+    transport = nil
+    generation += 1
+    await socket?.close(.goingAway)
+    await settle(.timedOut, generation: generation)
+  }
+
+  /// What belongs to one socket: its greeting, timers and wire IDs.
+  private func dropSocketState() {
+    greeted = false; hello = nil; probing = nil
     pingTask?.cancel(); pingTask = nil
+    helloTask?.cancel(); helloTask = nil
+    stableTask?.cancel(); stableTask = nil
     wire.removeAll()
-    for key in subscriptions.keys { subscriptions[key]?.wireID = nil }
+    for key in subscriptions.keys {
+      subscriptions[key]?.wireID = nil
+      subscriptions[key]?.retryTask?.cancel(); subscriptions[key]?.retryTask = nil
+    }
+  }
+
+  private func settle(_ error: StreamConnectionError, generation current: Int) async {
+    dropSocketState()
     failPending(.disconnected)
-    failOpenWaiters(error)
+    // A call still waiting for the socket sent nothing: its outcome is known.
+    failOpenWaiters(error.outcomeUnknown ? .notConnected : error)
     guard running else { setState(.idle); return }
     if error == .memberRemoved {
       memberRemoved = true
@@ -361,18 +412,26 @@ public actor StreamConnection {
     return .disconnected
   }
 
+  /// One ping; a pong that does not arrive within `pongTimeout` drops the
+  /// socket whether or not the transport's ping ever returns. One probe runs
+  /// per socket: a wake while one is out does not stack another.
   private func probe(_ current: Int) async {
-    guard current == generation, let socket = transport else { return }
-    let timeout = configuration.pongTimeout
-    do {
-      try await withThrowingTaskGroup(of: Void.self) { group in
-        group.addTask { try await socket.ping() }
-        group.addTask { try await Task.sleep(for: timeout); throw StreamConnectionError.timedOut }
-        try await group.next()
-        group.cancelAll()
-      }
-    } catch {
-      await lost(StreamConnectionError.disconnected, generation: current)
+    guard current == generation, greeted, let socket = transport, probing != current else { return }
+    probing = current
+    let answered = await Self.pong(socket, within: configuration.pongTimeout)
+    if probing == current { probing = nil }
+    guard !answered else { return }
+    await lost(StreamConnectionError.disconnected, generation: current)
+  }
+
+  /// Whether `socket` answered a ping in time. The ping runs in its own task,
+  /// so a transport that never answers (a black-holed socket) cannot hold this up.
+  private static func pong(_ socket: any StreamTransport, within timeout: Duration) async -> Bool {
+    let outcome = ResumeOnce<Bool>()
+    return await withCheckedContinuation { continuation in
+      outcome.start(continuation)
+      outcome.attach(Task { do { try await socket.ping(); outcome.resume(true) } catch { outcome.resume(false) } })
+      outcome.attach(Task { do { try await Task.sleep(for: timeout) } catch { return }; outcome.resume(false) })
     }
   }
 
@@ -389,11 +448,20 @@ public actor StreamConnection {
         await lost(StreamConnectionError.protocolUnsupported(supported: [value.protocol]), generation: current)
         return
       }
-      greeted = true; hello = value; attempt = 0
+      greeted = true; hello = value
+      helloTask?.cancel(); helloTask = nil
       setState(.open(value))
       for (_, waiter) in openWaiters { waiter.resume() }
       openWaiters.removeAll()
       startPings(generation: current)
+      // A server that greets and then closes keeps backing off; the backoff
+      // starts again only once a connection has lasted.
+      let stable = configuration.stableInterval
+      stableTask?.cancel()
+      stableTask = Task {
+        do { try await Task.sleep(for: stable) } catch { return }
+        await self.stayedOpen(generation: current)
+      }
       for key in subscriptions.keys.sorted() { await sendSubscription(key, socket: socket, generation: current) }
       return
     }
@@ -417,9 +485,15 @@ public actor StreamConnection {
       guard let key = wire.removeValue(forKey: end.id), let subscription = subscriptions[key] else { return }
       subscriptions[key]?.wireID = nil
       if end.error?.code == StreamProtocol.ErrorCode.resync.rawValue {
-        await sendSubscription(key, socket: socket, generation: current)
+        // Behind: subscribe again from the latest `after`, at once the first time.
+        await retrySubscription(key, immediately: true, generation: current)
+      } else if end.error?.retryable == true {
+        // A passing failure there (a store error, too many subscriptions):
+        // the subscription comes back after a backoff and is not reported.
+        await retrySubscription(key, immediately: false, generation: current)
       } else {
         subscriptions.removeValue(forKey: key)
+        subscription.retryTask?.cancel()
         _ = await subscription.handler(.ended(end.error))
       }
     case .hello, .request, .subscribe, .cancel, .unknown:
@@ -449,6 +523,10 @@ public actor StreamConnection {
     catch { await lost(error, generation: current) }
   }
 
+  /// The subscriber asked for different parameters (a journal gap, its own
+  /// cursor after a failed write): the old wire subscription is cancelled and
+  /// the new one sent, at once the first time and after a backoff when it
+  /// keeps happening, so a subscriber that cannot keep up does not loop.
   private func restart(_ key: Int, params: StreamSubscribeParams, socket: any StreamTransport, generation current: Int) async {
     guard subscriptions[key] != nil else { return }
     subscriptions[key]?.params = params
@@ -456,7 +534,44 @@ public actor StreamConnection {
       wire.removeValue(forKey: old); subscriptions[key]?.wireID = nil
       do { try await socket.send(.cancel(.init(id: old))) } catch { await lost(error, generation: current); return }
     }
+    await retrySubscription(key, immediately: true, generation: current)
+  }
+
+  /// Sends a subscription that is not on the wire again: now (`immediately`
+  /// and the first retry in a row), or after the backoff for this many
+  /// retries. Retries further apart than `stableInterval` count from the
+  /// first again. A reconnect meanwhile sends it with every other subscription.
+  private func retrySubscription(_ key: Int, immediately: Bool, generation current: Int) async {
+    guard var subscription = subscriptions[key], subscription.wireID == nil else { return }
+    let now = ContinuousClock.now
+    if let last = subscription.lastRetry, now - last > configuration.stableInterval { subscription.retries = 0 }
+    let count = subscription.retries
+    subscription.retries += 1; subscription.lastRetry = now
+    subscription.retryTask?.cancel(); subscription.retryTask = nil
+    subscriptions[key] = subscription
+    if immediately && count == 0 {
+      guard greeted, let socket = transport else { return }
+      await sendSubscription(key, socket: socket, generation: current)
+      return
+    }
+    let delay = Self.retryDelay(attempt: immediately ? count - 1 : count, random: configuration.random())
+    let sleep = configuration.retrySleep
+    subscriptions[key]?.retryTask = Task {
+      do { try await sleep(delay) } catch { return }
+      await self.retryDue(key, generation: current)
+    }
+  }
+
+  private func retryDue(_ key: Int, generation current: Int) async {
+    guard current == generation, greeted, let socket = transport, subscriptions[key]?.wireID == nil else { return }
+    subscriptions[key]?.retryTask = nil
     await sendSubscription(key, socket: socket, generation: current)
+  }
+
+  /// The connection lasted: the next disconnect waits from the first step again.
+  private func stayedOpen(generation current: Int) {
+    guard current == generation, greeted else { return }
+    attempt = 0
   }
 
   // MARK: Subscriptions
@@ -482,6 +597,7 @@ public actor StreamConnection {
 
   public func unsubscribe(_ subscription: StreamSubscription) async {
     guard let removed = subscriptions.removeValue(forKey: subscription.key) else { return }
+    removed.retryTask?.cancel()
     guard let id = removed.wireID else { return }
     wire.removeValue(forKey: id)
     if greeted, let socket = transport {
@@ -567,6 +683,36 @@ public actor StreamConnection {
     guard next != state else { return }
     state = next
     stateContinuation.yield(next)
+  }
+}
+
+/// Resumes a continuation once, with the first value offered, and cancels
+/// the tasks racing to offer one.
+final class ResumeOnce<Value: Sendable>: @unchecked Sendable {
+  private let lock = NSLock()
+  private var continuation: CheckedContinuation<Value, Never>?
+  private var finished = false
+  private var tasks: [Task<Void, Never>] = []
+
+  func start(_ continuation: CheckedContinuation<Value, Never>) { lock.withLock { self.continuation = continuation } }
+
+  func attach(_ task: Task<Void, Never>) {
+    let late = lock.withLock { () -> Bool in
+      if finished { return true }
+      tasks.append(task); return false
+    }
+    if late { task.cancel() }
+  }
+
+  func resume(_ value: Value) {
+    let (continuation, tasks) = lock.withLock { () -> (CheckedContinuation<Value, Never>?, [Task<Void, Never>]) in
+      guard !finished else { return (nil, []) }
+      finished = true
+      defer { self.continuation = nil; self.tasks = [] }
+      return (self.continuation, self.tasks)
+    }
+    continuation?.resume(returning: value)
+    for task in tasks { task.cancel() }
   }
 }
 

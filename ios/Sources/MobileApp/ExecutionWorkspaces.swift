@@ -230,12 +230,14 @@ extension MobileModel {
           created = true
         }
         guard workspaceClients[workspace.id] != nil, workspaceReadTasks[workspace.id] == nil else { continue }
-        // A streamed workspace pushes its history, questions and the open chat.
-        guard !streams(workspace) else { continue }
-        // Nothing polls a workspace. One without a stream is read when its
+        // A connected stream pushes its history, questions and the open chat.
+        guard !streamConnected(workspace.id) else { continue }
+        // A workspace without a connected stream is read whole when its
         // client is made and on the app's explicit refreshes (foreground,
-        // network return, New Chat, opening a chat), never on the 15 s tick.
-        guard force || created else { continue }
+        // network return, New Chat, opening a chat). The 15 s tick reads only
+        // its open chat and questions (`refreshLiveViewsWithoutStream`). One
+        // whose stream is about to open is not read just because its client is new.
+        guard force || (created && !streams(workspace)) else { continue }
         let id = workspace.id
         workspaceReadTasks[id] = Task { [weak self] in
           guard let self else { return }
@@ -250,9 +252,11 @@ extension MobileModel {
   }
   func refreshDirectWorkspace(_ workspaceID: String,
                               clearCredential: ((String) throws -> Void)? = nil) async {
-    // Its stream already holds everything; only the open chat may have changed.
-    if workspaceStreams[workspaceID] != nil { await openStreamedConversation(workspaceID); return }
+    // Its stream follows the open chat; a connected one already holds everything else.
+    if workspaceStreams[workspaceID] != nil { await openStreamedConversation(workspaceID) }
+    if streamConnected(workspaceID) { return }
     guard let client = workspaceClients[workspaceID] else { return }
+    // A workspace with a stream is reported reachable or not by its stream's state.
     do {
       try await client.refresh()
       let discoveredProviders = try await client.providers()
@@ -267,18 +271,18 @@ extension MobileModel {
         }
       }
       guard !Task.isCancelled, workspaceClients[workspaceID] === client else { return }
-      workspaceReachable[workspaceID] = true
+      if workspaceStreams[workspaceID] == nil { workspaceReachable[workspaceID] = true }
       for id in state.pinnedTranscriptIDs ?? [] where executionOwner(of: id) == workspaceID && (state.transcripts[id] == nil || state.transcripts[id]?.olderCursor != nil) {
         do { try await downloadOfflineConversation(id) }
         catch { offlineProblems["chat:" + id] = error.localizedDescription }
       }
       rememberAgentCatalog()
-      workspaceReachable[workspaceID] = true; workspaceProblems.removeValue(forKey: workspaceID)
+      if workspaceStreams[workspaceID] == nil { workspaceReachable[workspaceID] = true; workspaceProblems.removeValue(forKey: workspaceID) }
       if providerID.isEmpty { providerID = availableExecutionProviders.first { $0.available && $0.canStart }?.id ?? "" }
       await reload()
     } catch {
       guard !Task.isCancelled, workspaceClients[workspaceID] === client else { return }
-      workspaceReachable[workspaceID] = false; workspaceProblems[workspaceID] = error.localizedDescription
+      if workspaceStreams[workspaceID] == nil { workspaceReachable[workspaceID] = false; workspaceProblems[workspaceID] = error.localizedDescription }
       if case MobileConnectionError.revoked = error {
         // Workspace access is independent of central pairing. A disabled or
         // revoked execution grant must not disconnect the library replica.
