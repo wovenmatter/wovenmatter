@@ -20,9 +20,12 @@ public actor MemberSocketRegistry {
     let deviceID: String
     let kinds: Set<MemberKind>
     let close: @Sendable () -> Void
+    /// Registrations are numbered in order, so a sweep knows which it may judge.
+    let sequence: Int
   }
   private let members: MemberDirectory
   private var entries: [UUID: Entry] = [:]
+  private var registrations = 0
   private var observer: UUID?
   private var sweeping = false
   private var sweepAgain = false
@@ -43,10 +46,20 @@ public actor MemberSocketRegistry {
     observer = nil
   }
 
+  /// Keeps a socket whose member was authenticated when it opened. A removal
+  /// between that check and this registration was swept without it, so the
+  /// member is checked once more here, and the socket closed if it is gone.
   @discardableResult
-  public func register(deviceID: String, kinds: Set<MemberKind>, close: @escaping @Sendable () -> Void) -> UUID {
-    let id = UUID()
-    entries[id] = .init(deviceID: deviceID.lowercased(), kinds: kinds, close: close)
+  public func register(deviceID: String, kinds: Set<MemberKind>, close: @escaping @Sendable () -> Void) async -> UUID {
+    registrations += 1
+    let id = UUID(), entry = Entry(deviceID: deviceID.lowercased(), kinds: kinds, close: close, sequence: registrations)
+    entries[id] = entry
+    // As in a sweep, a list that cannot be read closes nothing.
+    if let list = try? await members.list(), entries[id] != nil,
+       !(list.active(entry.deviceID).map { kinds.contains($0.kind) } ?? false) {
+      entries.removeValue(forKey: id)
+      close()
+    }
     return id
   }
 
@@ -68,10 +81,14 @@ public actor MemberSocketRegistry {
     var closed = 0
     repeat {
       sweepAgain = false
+      // A socket registered while the list was read may belong to a member
+      // added after it was read: that list cannot judge it, and its own
+      // registration checks it against a newer one.
+      let judged = registrations
       // A list that cannot be read closes nothing: 4401 tells a client not
       // to retry, so only a list that names the change may cause it.
       guard let list = try? await members.list() else { return closed }
-      for (id, entry) in entries {
+      for (id, entry) in entries where entry.sequence <= judged {
         if let member = list.active(entry.deviceID), entry.kinds.contains(member.kind) { continue }
         entries.removeValue(forKey: id)
         entry.close()

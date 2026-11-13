@@ -92,7 +92,7 @@ final class StreamEvents: @unchecked Sendable {
   }
 }
 
-func eventually(_ message: String = "condition", timeout: Duration = .seconds(3), _ condition: () async -> Bool,
+func eventually(_ message: String = "condition", timeout: Duration = .seconds(10), _ condition: () async -> Bool,
                 file: StaticString = #filePath, line: UInt = #line) async {
   let deadline = ContinuousClock.now + timeout
   while ContinuousClock.now < deadline {

@@ -73,7 +73,7 @@ extension MobileModel {
               "X-Woven-Workspace": workspace.id, "X-Woven-Device": memberIdentity.deviceID
             ])) else { continue }
       let id = workspace.id
-      let stream = MobileWorkspaceStream(workspace: workspace, store: store, connection: StreamConnection(connect: connect)) { [weak self] update in
+      let stream = MobileWorkspaceStream(workspace: workspace, store: store, connection: StreamConnection(configuration: streamConfiguration, connect: connect)) { [weak self] update in
         await self?.streamUpdate(update, workspaceID: id)
       }
       workspaceStreams[id] = stream; streamEndpoints[id] = endpoint

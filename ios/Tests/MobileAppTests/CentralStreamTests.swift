@@ -104,7 +104,7 @@ private final class TestStreamServer: @unchecked Sendable {
   }
 }
 
-@MainActor private func waitUntil(_ message: String, timeout: Duration = .seconds(5), _ condition: () async -> Bool,
+@MainActor private func waitUntil(_ message: String, timeout: Duration = .seconds(10), _ condition: () async -> Bool,
                                   file: StaticString = #filePath, line: UInt = #line) async {
   let deadline = ContinuousClock.now + timeout
   while ContinuousClock.now < deadline {
@@ -338,6 +338,12 @@ final class CentralStreamTests: XCTestCase {
   @MainActor func testBackgroundForegroundAndNetworkChanges() async throws {
     let fixture = try await makeFixture(); let model = fixture.model
     defer { try? FileManager.default.removeItem(at: fixture.root); model.stopDeviceScheduler() }
+    // The first wait after a lost socket (1 s) passes at once; the backoff
+    // after a refusal (2 s) never ends by itself, so only an immediate
+    // attempt can reconnect then.
+    model.streamConfiguration = .init(retrySleep: { delay in
+      if delay >= .seconds(2) { try await Task.sleep(for: .seconds(3_600)) } else { await Task.yield() }
+    }, random: { 0.5 })
     await model.refreshExecutionWorkspaces(force: true)
     let socket = await openHost(fixture)
     await model.selectConversation("central-chat")
@@ -364,7 +370,7 @@ final class CentralStreamTests: XCTestCase {
     await resumed.serverClose(code: 1006)
     await waitUntil("refused") { fixture.server.attempts == 3 }
     model.connectionDidBecomeReachable()
-    await waitUntil("immediate retry", timeout: .milliseconds(700)) { fixture.server.sockets.count == 3 }
+    await waitUntil("immediate retry") { fixture.server.sockets.count == 3 }
   }
 
   /// A stale clock says so in the open chat; a 4401 close stops retries until

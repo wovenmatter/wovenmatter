@@ -24,11 +24,15 @@ function fixture(t) {
 }
 async function running(f, text = 'work') {
   const opened = await f.service.command(f.command('createSession'), f.principal)
+  const count = f.runs.length
   const receipt = await f.service.command(f.command('send', { conversationID: opened.conversationID, text }), f.principal)
-  await turn()
+  await until(() => f.runs.length > count, 'the run started')
   return { id: opened.conversationID, runID: receipt.runID, run: f.runs.at(-1) }
 }
-const flushed = () => new Promise(resolve => setTimeout(resolve, 600))
+// Waits for `condition`; the bound is only a safety net.
+async function until(condition, what, timeout = 10_000) {
+  for (const deadline = Date.now() + timeout; !condition();) { assert.ok(Date.now() < deadline, what); await new Promise(resolve => setTimeout(resolve, 10)) }
+}
 const projection = activity => JSON.parse(activity.projectionJSON)
 
 test('a tool row carries the compact projection; its disclosure reads the full one', async t => {
@@ -78,9 +82,8 @@ test('text written before work becomes commentary at its position, then the work
   // The run's timing reaches the transcript.
   const timing = transcript.runs.find(item => item.id === runID)
   assert.equal(timing.status, 'completed'); assert.ok(timing.startedAt <= timing.completedAt)
-  // The journal's transcript entries carry the run too.
-  await flushed()
-  assert.ok(f.service.events().entries.some(entry => entry.transcript?.runs?.some(item => item.id === runID && item.status === 'completed')))
+  // The journal's transcript entries carry the run too, once it flushes.
+  await until(() => f.service.events().entries.some(entry => entry.transcript?.runs?.some(item => item.id === runID && item.status === 'completed')), 'the journal carries the run')
 })
 
 test('the session settings carry the harness command palette', async t => {

@@ -257,7 +257,10 @@ struct SessionWakeUpsTests {
     state.value = "idle"
     await f.emit(session, "idle")
     #expect(try await waiting.value.objectValue?["state"] == .string("idle"))
-    await f.settle()
+    // Delivery runs once more after the wait (its own and this one, in order):
+    // nothing is left to deliver, rather than not delivered yet.
+    await f.wakeUps.deliverPending(callerID: caller)
+    #expect(f.wakeUps.pending(callerID: caller).isEmpty)
     #expect(f.bots.isEmpty, "the wait already told the bot")
   }
 

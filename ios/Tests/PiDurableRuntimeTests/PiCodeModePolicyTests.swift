@@ -23,7 +23,7 @@ final class PiCodeModePolicyTests: XCTestCase {
           let seen = executor.heartbeats, deadline = ContinuousClock.now.advanced(by: .seconds(30))
           while executor.heartbeats == seen {
             guard ContinuousClock.now < deadline else {
-              XCTFail("The worker stopped heartbeating while it awaited a tool.")
+              XCTFail("The worker stopped heartbeating while it awaited a tool (after \(seen) heartbeats, \(elapsed) on the budget clock).")
               throw CancellationError()
             }
             try await Task.sleep(for: .milliseconds(10))
