@@ -3,16 +3,19 @@ import Testing
 @testable import WovenMatterClient
 
 struct BackendInvalidationJournalTests {
-
-
-    @Test func waitingClientWakesOnChange() async {
-        let journal = BackendInvalidationJournal()
-        let initial = await journal.changes(after: nil)
-        let waiting = Task { await journal.waitForChanges(after: initial.cursor) }
-        await journal.publish(scopes: [.permissions], conversationIDs: ["active"])
-        let delta = await waiting.value
-        #expect(delta.conversationIDs == ["active"])
-        #expect(delta.scopes == [.permissions])
+    private actor Received {
+        var scopes: [Set<BackendInvalidationScope>] = []
+        var conversations: [Set<String>] = []
+        func add(_ scopes: Set<BackendInvalidationScope>, _ ids: Set<String>) { self.scopes.append(scopes); conversations.append(ids) }
     }
 
+    @Test func everyPublicationReachesTheListenerInOrder() async {
+        let journal = BackendInvalidationJournal(), received = Received()
+        await journal.setListener { scopes, ids in await received.add(scopes, ids) }
+        await journal.publish(scopes: [.permissions], conversationIDs: ["active"])
+        await journal.publish()
+        await journal.publish(conversationIDs: ["other"])
+        #expect(await received.scopes == [[.permissions], []])
+        #expect(await received.conversations == [["active"], ["other"]])
+    }
 }

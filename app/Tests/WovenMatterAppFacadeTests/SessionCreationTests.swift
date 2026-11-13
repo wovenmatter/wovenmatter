@@ -26,7 +26,8 @@ struct SessionCreationTests {
         try #require(try await f.database.workspaceOverview().conversations.first { $0.id == id })
     }
 
-    @Test(arguments: runtimes, [false, true])
+    // A Linux host applies its sessions' choices itself, at creation (LinuxMemberPathTests).
+    @Test(arguments: runtimes, [false])
     func capturesSavedDefaultsOnceAndOpeningOnlyReads(runtime: AgentRuntimeKind, remote: Bool) async throws {
         let f = try await FacadeFixture(); defer { f.remove(); f.recorder.configurationGate.open() }
         let saved = SessionSelectionPreferences(defaults: f.defaults)
@@ -55,7 +56,7 @@ struct SessionCreationTests {
         #expect(await f.recorder.configurations.count == 2)
     }
 
-    @Test(arguments: runtimes, [false, true])
+    @Test(arguments: runtimes, [false])
     func rejectedInitialSettingsDoNotBlockOpeningSendingOrDropdownCorrections(runtime: AgentRuntimeKind, remote: Bool) async throws {
         let f = try await FacadeFixture(); defer { f.remove() }
         f.model.sessionSelectionPreferences.saveDefaults(.init(model: "unavailable-model", thinking: "obsolete-thinking"), harness: runtime.rawValue)
@@ -84,6 +85,7 @@ struct SessionCreationTests {
     @Test(arguments: [false, true])
     func requestedTitleNamesTheNewSession(remote: Bool) async throws {
         let f = try await FacadeFixture(); defer { f.remove() }
+        let linux = remote ? try await f.enrollLinuxHost().1 : nil
         let owner = try await f.model.executionWorkspaceIdentity(workspaceID: remote ? f.remote.id : nil)
         let folder = try await f.database.createFolder(name: "Chats", location: .init(workspaceID: owner, rootPath: f.directory.path, managed: false))
         let named: String?
@@ -103,6 +105,8 @@ struct SessionCreationTests {
             conversationID: id, providerID: providerID, folderID: folder, title: "From a member"), deviceID: f.device)
         #expect(receipt.status == .completed, "\(receipt.message ?? "")")
         #expect(try await record(f, id).title == "From a member")
+        // The host names each session as it creates it.
+        if let linux { #expect(await linux.commands.compactMap(\.title) == ["Release notes", "New Codex chat", "From a member"]) }
     }
 
     @Test func legacyUnappliedDefaultsAreNotRetriedWhenOpeningOrSending() async throws {

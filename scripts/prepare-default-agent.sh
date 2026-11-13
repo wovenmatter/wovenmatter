@@ -50,9 +50,6 @@ output="${1:-$agent_root}"
 if [ "$output" != "$agent_root" ]; then
   mkdir -p "$output"
   rsync -a --delete --exclude=/bin --exclude=/lib --exclude=/node_modules --exclude=/test --exclude=/.build --exclude=/.node-version --exclude=.DS_Store "$agent_root/" "$output/"
-  # The remote bootstrap serves authenticated HTTP MCP inside the workspace.
-  # Copy the canonical relay source beside the bundled agent; no CLI is shipped.
-  cp "$repo_root/remote/src/mcp-relay.mjs" "$(dirname "$output")/mcp-relay.mjs"
   # Native-host source fingerprints use the same canonical paths in a checkout
   # and in the signed app's resources. These records are not runtime caches.
   cp "$agent_root/.node-version" "$output/.node-version"

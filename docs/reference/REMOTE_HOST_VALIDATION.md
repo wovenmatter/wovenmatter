@@ -21,6 +21,8 @@ swift test --force-resolved-versions --package-path app \
 ```
 
 The test prints the exact required preparation actions before running them.
+It validates Full root by default; set `WOVENMATTER_LIVE_HOST_ACCESS_MODE=user`
+to validate a Normal user account, which needs no sudo.
 Use a disposable workspace, not an existing library host. By default its ID is
 `host-mode-validation`. The optional rollback experiment is intentionally
 restricted to the designated development validation host and that workspace ID:
@@ -53,11 +55,11 @@ without changing the installed workspace's access mode.
 scoped device authority, device revocation, managed projects/datasets, snapshots,
 browser storage isolation, shared MCP/viewer tabs, input, screenshots and the
 live frame stream. Its private public-ID receipt can be checked after replacing
-the Mac tunnel, restarting or updating the service. A separate
-`--durable-fixture /absolute/path/to/src/server.mjs` mode runs the real service
-with a temporary HOME and fake ACP harness on Linux, covering external project
-directories, idempotent delivery, disconnect continuation, reattachment,
-replacement-client fencing and restart recovery without replaying prompts.
+the Mac tunnel, restarting or updating the service. Durable sessions (external
+project directories, idempotent delivery, runs that continue without any client,
+restart recovery without replaying prompts, adoption of chats that ran over SSH
+before) are covered in process by `remote/test/member-parity.test.mjs` and
+`remote/test/durable-acp.test.mjs`; no device attaches to a channel directly.
 
 ## Manual review
 

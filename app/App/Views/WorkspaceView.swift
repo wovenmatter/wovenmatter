@@ -1632,8 +1632,12 @@ struct DashboardWorkspaceSurface: View {
             if showNoteButton { compactAssetsButton }
         }
         .task(id: conversation?.id) {
-            guard let conversation, model.libraryMessageTarget?.conversationID != conversation.id else { return }
-            await model.refreshConversation(id: conversation.id)
+            guard let conversation else { return }
+            if model.libraryMessageTarget?.conversationID != conversation.id {
+                await model.refreshConversation(id: conversation.id)
+            }
+            // The open chat follows its live state until it closes.
+            await model.followLiveConversation(conversation.id)
         }
     }
 

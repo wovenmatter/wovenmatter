@@ -136,6 +136,16 @@ extension WorkspaceDatabaseConnection {
   }
 
   private func toolDeliveryAuthorizedUnlocked(_ delivery: WorkspaceSessionDelivery) throws -> Bool {
+    // A wake-up's source is a session on another workspace (SessionWakeUps):
+    // only its target, the caller that created that session, must still allow it.
+    if delivery.kind == .notification,
+       let key = try historyRowsUnlocked("SELECT event_key FROM workspace_session_deliveries WHERE id=?", values: [delivery.id]).first?.objectValue?["event_key"]?.stringValue,
+       key.hasPrefix(Self.wakeUpEventPrefix) {
+      if !WovenMCPCaller.isAppWide(delivery.targetID) {
+        guard !(try historyRowsUnlocked("SELECT 1 FROM dashboard_conversations WHERE id=? AND deleted_at IS NULL", values: [delivery.targetID])).isEmpty else { return false }
+      }
+      return (try? sessionToolsUnlocked(delivery.targetID))?.enabled.contains(.sessions) == true
+    }
     for id in [delivery.sourceID, delivery.targetID] where !WovenMCPCaller.isAppWide(id) {
       guard !(try historyRowsUnlocked("SELECT 1 FROM dashboard_conversations WHERE id=? AND deleted_at IS NULL", values: [id])).isEmpty else { return false }
     }

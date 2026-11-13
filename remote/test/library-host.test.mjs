@@ -65,6 +65,24 @@ test('the supervisor creates a private token, waits for ready, keeps its port ac
   await assert.rejects(library.client.health(), error => error.statusCode === 503)
 })
 
+test('the supervisor follows the library change cursor the host announces on stdout', async t => {
+  const directory = scratch(t, 'wl-feed-')
+  const library = await startedLibrary(t, directory), seen = []
+  // Announced right after the ready line.
+  for (let i = 0; i < 200 && library.libraryCursor() === null; i++) await new Promise(r => setTimeout(r, 10))
+  assert.equal(library.libraryCursor(), 7)
+  const unwatch = library.watchLibrary(cursor => seen.push(cursor))
+  await library.client.json('POST', '/v1/debug/library-change')
+  await library.client.json('POST', '/v1/debug/library-change')
+  for (let i = 0; i < 200 && seen.length < 2; i++) await new Promise(r => setTimeout(r, 10))
+  assert.deepEqual(seen, [8, 9])
+  assert.equal(library.libraryCursor(), 9)
+  unwatch()
+  await library.client.json('POST', '/v1/debug/library-change')
+  for (let i = 0; i < 200 && library.libraryCursor() !== 10; i++) await new Promise(r => setTimeout(r, 10))
+  assert.deepEqual(seen, [8, 9], 'an unsubscribed listener hears nothing')
+})
+
 test('a missing binary is reported and retried instead of crashing the server', async t => {
   const directory = scratch(t, 'wl-miss-'), logs = []
   const library = createLibraryHostSupervisor({ binary: join(directory, 'missing'), dataRoot: join(directory, 'data'), statePath: join(directory, 'host.json'), log: line => logs.push(line), minimumBackoff: 20 })

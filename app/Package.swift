@@ -88,7 +88,9 @@ let package = Package(
       name: "WovenMatterCoreTests",
       dependencies: [
         "WovenMatterCore",
-        "WovenMatterDashboardStore", "WorkspaceFixtures", linuxCrypto, linuxSQLite
+        "WovenMatterDashboardStore", "WorkspaceFixtures", linuxCrypto, linuxSQLite,
+        // The window's stream client, for the Unix-socket stream tests.
+        .product(name: "LibraryClient", package: "ios", condition: .when(platforms: [.macOS]))
       ]
     ),
     .testTarget(

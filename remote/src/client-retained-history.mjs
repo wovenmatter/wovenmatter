@@ -2,7 +2,6 @@ import { updateReasoningDetails, flushReasoningDetails } from './reasoning-detai
 import { mkdirSync, readdirSync, statSync, openSync, readSync, closeSync } from 'node:fs'
 import { createReadStream } from 'node:fs'
 import { resolve } from 'node:path'
-import { randomUUID } from 'node:crypto'
 import { createInterface } from 'node:readline'
 import { durableJSON, read, sha256 as hash } from './durable-json.mjs'
 import { assemblePresentationFrame } from './presentation-frames.mjs'
@@ -15,15 +14,16 @@ const uuid = value => typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-
 const textParts = value => { const result=[];for(let start=0;start<value.length;) {let end=Math.min(start+16384,value.length);if(end<value.length&&/[\uD800-\uDBFF]/.test(value[end-1]))end--;result.push(value.slice(start,end));start=end}return result.length?result:[''] }
 const stableID = value => { const h=hash('woven-retained-v1\0'+value); return `${h.slice(0,8)}-${h.slice(8,12)}-5${h.slice(13,16)}-a${h.slice(17,20)}-${h.slice(20,32)}` }
 
-/// Workspace-owned archive bridge for the pre-client RPC and scheduled-task
-/// paths. It reads their existing durable output; it never invokes a prompt,
-/// adopts a live native session, or relies on a connected observer's polling.
-export function createRetainedExecutionCapture({directory, defaultDirectory, taskGateway, defaultAgent, execution,
+/// Workspace-owned archive bridge for scheduled tasks and for spools a
+/// retired Pi Durable RPC run left behind. It reads their durable output into
+/// this host's execution journal (from which its library copy takes it); it
+/// never invokes a prompt, adopts a live native session, or reads another
+/// machine.
+export function createRetainedExecutionCapture({directory, defaultDirectory, taskGateway, execution,
   resolveAssociation = async()=>null, intervalMilliseconds=2000}) {
   mkdirSync(directory,{recursive:true,mode:0o700})
   const checkpointPath=resolve(directory,'checkpoint.json')
   let checkpoint=read(checkpointPath,{taskCursor:'0'})
-  const active = new Set()
   let timer,pending,closed=false,lastError=null,unmapped=0
   const path = (kind,id)=>resolve(directory,kind+'-'+id+'.json')
   const save = (kind,id,value)=>durableJSON(path(kind,id),value)
@@ -137,22 +137,6 @@ export function createRetainedExecutionCapture({directory, defaultDirectory, tas
       if(!page.entries.length)return
     }
   }
-  // Persist only public identity and message text, never attachment tokens,
-  // provider configuration, MCP credentials, tool capabilities, or the RPC envelope.
-  function prepareRPC(message) {
-    if(message.method!=='session/prompt')return message
-    const operationID=message.operationID??randomUUID(),meta=message.params?._meta??{}
-    if(!uuid(operationID))throw new Error('Invalid retained operation identity.')
-    const intent={operationID,conversationID:uuid(meta.wovenConversationID)?meta.wovenConversationID:null,
-      runID:uuid(meta.wovenRunID)?meta.wovenRunID:operationID,inputID:uuid(meta.wovenInputID)?meta.wovenInputID:operationID,
-      nativeSessionID:message.params?.sessionId,runtimeKind:'default_agent',prompt:(message.params?.prompt??[]).filter(item=>item.type==='text').map(item=>item.text).join('\n')}
-    const old=read(path('intent',operationID),null)
-    if(old) {
-      if(old.fingerprint!==hash(JSON.stringify(intent)))throw new Error('Retained operation identity belongs to different input.')
-    } else save('intent',operationID,{...intent,fingerprint:hash(JSON.stringify(intent)),startedAt:new Date().toISOString()})
-    return {...message,operationID}
-  }
-  function acceptedRPC(message,result) {if(message.method==='session/prompt'&&result.operationID===message.operationID)active.add(result.operationID)}
   async function* lines(file) {
     // A crash may leave the final JSONL write incomplete. Retain that suffix
     // verbatim on disk, and publish only complete records; never trim the spool.
@@ -171,34 +155,15 @@ export function createRetainedExecutionCapture({directory, defaultDirectory, tas
     for(const name of names) {
       const operationID=name.slice(-42,-6),key='default:'+operationID
       if(stateFor(key).finished || taskRuns.has(operationID) || execution.hasRun?.(operationID))continue
-      let intent=read(path('intent',operationID),null)
-      if(active.has(operationID)) {
-        try {
-          const page=await defaultAgent.poll(operationID,0)
-          // done describes a page's end, so drain the owner cursor independently
-          // of whether any desktop is still polling this run.
-          let last=page
-          while(last.hasMore)last=await defaultAgent.poll(operationID,last.cursor)
-          if(!last.done)continue
-          intent={...intent,completedAt:intent?.completedAt??new Date().toISOString(),status:last.error?'failed':'completed',completion:{result:last.result,error:last.error}}
-          save('intent',operationID,intent);active.delete(operationID)
-        } catch(error) {
-          if(!error.message?.includes('This operation is no longer available in the workspace process.'))continue
-          // A replaced SDK process fences accepted input; retain its stopped
-          // spool without attempting to resume or redispatch the old prompt.
-          intent={...intent,completedAt:intent?.completedAt??new Date().toISOString(),status:'interrupted'}
-          save('intent',operationID,intent);active.delete(operationID)
-        }
-      }
       const file=resolve(defaultDirectory,name),runIDs=new Set()
-      let nativeSessionID=intent?.nativeSessionID
+      let nativeSessionID
       for await(const item of lines(file)) {
         nativeSessionID??=item.recordBatch?.nativeSessionID
         for(const id of [item._meta?.wovenRunID,...(item.recordBatch?.records??[]).map(record=>record.runID)])if(uuid(id))runIDs.add(id)
       }
-      let association=intent?.conversationID?intent:read(path('association',operationID),null)
+      let association=read(path('association',operationID),null)
       if(!association) {
-        const runID=intent?.runID??(runIDs.size===1?[...runIDs][0]:undefined)
+        const runID=runIDs.size===1?[...runIDs][0]:undefined
         if(runID||nativeSessionID) {
           try {
             const value=await resolveAssociation({operationID,runID,nativeSessionID})
@@ -211,15 +176,17 @@ export function createRetainedExecutionCapture({directory, defaultDirectory, tas
           catch { /* Exact mapping can wait; other known identities still archive offline. */ }
         }
       }
-      if(!association||!uuid(association.conversationID)||!uuid(association.runID??intent?.runID)||!(association.nativeSessionID??nativeSessionID)){unmapped++;continue}
-      const stamp=statSync(resolve(defaultDirectory,name)).mtime.toISOString()
-      const binding={...intent,...association,key,source:'default-agent-rpc',runID:association.runID??intent.runID,
-        nativeSessionID:association.nativeSessionID??nativeSessionID,runtimeKind:'default_agent',title:intent?.prompt?.slice(0,100)||'Pi Durable',
-        startedAt:intent?.startedAt??stamp,completedAt:intent?.completedAt??stamp,status:intent?.status??'interrupted'}
+      if(!association||!uuid(association.conversationID)||!uuid(association.runID)||!(association.nativeSessionID??nativeSessionID)){unmapped++;continue}
+      // A spool this archive finds was left by a run nothing follows any more:
+      // it is retained as interrupted, never resumed.
+      const stamp=statSync(file).mtime.toISOString()
+      const binding={...association,key,source:'default-agent-rpc',runID:association.runID,
+        nativeSessionID:association.nativeSessionID??nativeSessionID,runtimeKind:'default_agent',title:'Pi Durable',
+        startedAt:stamp,completedAt:stamp,status:'interrupted'}
       const state=await begin(binding)
       let index=0
       for await(const value of lines(file))await update(binding,state,value,index++)
-      await update(binding,state,{sessionUpdate:'woven_retained_completion',completion:intent?.completion??{status:'interrupted'}},index)
+      await update(binding,state,{sessionUpdate:'woven_retained_completion',completion:{status:'interrupted'}},index)
       await finish(binding,state)
     }
   }
@@ -237,7 +204,7 @@ export function createRetainedExecutionCapture({directory, defaultDirectory, tas
     try {await pending}finally {pending=null}
   }
   function tick(){void pump().catch(()=>{lastError='Retained execution history is saved locally and waiting to synchronize.'})}
-  return {prepareRPC,acceptedRPC,pump,status:()=>({pendingAssociationCount:unmapped,lastError}),
+  return {pump,status:()=>({pendingAssociationCount:unmapped,lastError}),
     start(){if(!timer){timer=setInterval(tick,intervalMilliseconds);timer.unref();tick()}},
     async close(){closed=true;clearInterval(timer);await pending?.catch(()=>{})}}
 }

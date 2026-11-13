@@ -69,6 +69,12 @@ without a workspace. Adding the workspace later reuses the same server.
   request goes straight to that workspace, so it works while other Macs are
   offline. Woven MCP also covers notes, calendar, history, the library,
   timers, the browser, and more.
+- A session on another machine opens in the same conversation view as a local
+  one. Its live state (the reply as it streams, questions, approvals, and
+  settings) and its commands move on that machine's stream, a WebSocket signed
+  with the device key; nothing polls. Its history reaches every device by
+  library sync, so a machine that is offline still shows its sessions' saved
+  history, marked offline.
 - iPhone Quick Chat runs Pi Durable on the phone in full access. Its tools
   are notes, web search and read (Exa, Brave, or Firecrawl), questions to you,
   timers and reminders, and calendar. It has no shell or file tools and no

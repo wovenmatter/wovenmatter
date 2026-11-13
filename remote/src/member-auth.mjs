@@ -81,8 +81,8 @@ export const hasMemberSignature = headers => Object.values(memberHeaders).some(n
  */
 export function createMemberVerifier({ loadMembers, audience, now = Date.now, windowMilliseconds = memberSignatureWindowMilliseconds,
   refreshMilliseconds = 15_000, missRefreshMilliseconds = 2_000, maximumNonces = 200_000 } = {}) {
-  let current = { revision: null, members: new Map() }, loadedAt = 0, missAt = 0, loading = null, ownDeviceID = null
-  const nonces = new Map()
+  let current = { revision: null, members: new Map() }, loadedAt = 0, missAt = 0, loading = null, ownDeviceID = null, watching = null
+  const nonces = new Map(), watchers = new Set()
   // This machine's own member device ID: a request signed for any other
   // member is refused, whatever its signature. `audience` is the ID or a
   // function that resolves it (the library host's identity), cached once known.
@@ -111,7 +111,14 @@ export function createMemberVerifier({ loadMembers, audience, now = Date.now, wi
 
   async function refresh() {
     loading ??= (async () => {
-      try { current = index(await loadMembers()); loadedAt = now() } finally { loading = null }
+      let changed = false
+      try {
+        const next = index(await loadMembers())
+        changed = next !== current
+        current = next; loadedAt = now()
+      } finally { loading = null }
+      // Open sockets are closed by their owners when a member leaves the list.
+      if (changed) for (const watcher of watchers) { try { watcher(list()) } catch {} }
       return current
     })()
     return loading
@@ -173,11 +180,28 @@ export function createMemberVerifier({ loadMembers, audience, now = Date.now, wi
     return { deviceID: found.deviceID, kind: found.kind, name: found.name, endpoints: found.endpoints }
   }
 
+  const list = () => [...current.members.values()].map(({ key, ...rest }) => rest)
+
+  /**
+   * Calls `listener(members)` whenever the list changes, and from then on
+   * reloads it every `refreshMilliseconds` even without signed requests, so
+   * a removal reaches long-lived sockets. Returns a function that stops it.
+   */
+  function watch(listener) {
+    watchers.add(listener)
+    if (!watching) { watching = setInterval(() => { void refresh().catch(() => {}) }, refreshMilliseconds); watching.unref?.() }
+    return () => {
+      watchers.delete(listener)
+      if (!watchers.size) { clearInterval(watching); watching = null }
+    }
+  }
+
   const periodic = setInterval(() => {
     const clock = now()
     for (const [key, expires] of nonces) if (expires < clock) nonces.delete(key)
   }, 60_000)
   periodic.unref?.()
 
-  return { verify, refresh, audience: own, revision: () => current.revision, members: () => [...current.members.values()].map(({ key, ...rest }) => rest), close: () => clearInterval(periodic) }
+  return { verify, refresh, watch, audience: own, revision: () => current.revision, members: list,
+    close: () => { clearInterval(periodic); clearInterval(watching); watching = null; watchers.clear() } }
 }

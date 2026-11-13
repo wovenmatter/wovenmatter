@@ -28,6 +28,7 @@ const digest = value => createHash('sha256').update(value).digest()
 export function createInstallerBearer({ token, rotate }) {
   let current = digest(token)
   let rotating = null
+  const listeners = new Set()
   function matches(request) {
     const value = request.headers.authorization ?? ''
     if (!value.startsWith('Bearer ')) return false
@@ -44,10 +45,13 @@ export function createInstallerBearer({ token, rotate }) {
           const next = await rotate()
           if (typeof next !== 'string' || !/^[A-Za-z0-9+/=_-]{32,256}$/.test(next)) throw Object.assign(new Error('installer_rotation_failed'), { statusCode: 502 })
           current = digest(next)
+          for (const listener of listeners) { try { listener() } catch {} }
           return next
         } finally { rotating = null }
       })()
       return rotating
     },
+    /** Calls `listener` after each rotation, so what the old bearer opened can close; returns its removal. */
+    onRotate(listener) { listeners.add(listener); return () => listeners.delete(listener) },
   }
 }

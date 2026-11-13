@@ -28,6 +28,8 @@ export function createNativeClientSessions({workspaceRoot,instances,
     }
     const health = await call('GET','/api/info')
     if (health.pid!==registration.pid || !supportsOpenCodeVersion(health.version) || registration.version && registration.version!==health.version) throw fail('OpenCode service identity changed.')
+    // Options without a session: the model catalog of a directory.
+    if (operation==='options') return options_(call, native.nativeWorkingDirectory??workspaceRoot, options.model)
     const id=native.sessionID??'ses_'+randomUUID().replaceAll('-',''),path='/api/session/'+encodeURIComponent(id)
     let session=(await call(native.sessionID?'GET':'POST',native.sessionID?path:'/api/session',native.sessionID?undefined:{id,title:'New conversation',location:{directory:native.nativeWorkingDirectory??workspaceRoot},metadata:{wovenmatter:{origin:'created'}}})).data
     if (session?.id!==id) throw fail('OpenCode returned a different session.')
@@ -66,6 +68,19 @@ export function createNativeClientSessions({workspaceRoot,instances,
     const last=session.permissions?.at(-1)
     return {...emptyTools,model:key,thinking:current?.variant??(variants.length?'default':null),
       permission:last?.action==='*'&&last.resource==='*'&&['ask','allow','deny'].includes(last.effect)?last.effect:null,models:models.map(item=>selection(modelKey(item),item.name??item.id)),
+      thinkingLevels:variants.length?[selection('default'),...variants.map(item=>selection(item.id,item.name??item.id))]:[],
+      permissions:presentPermissionChoices('opencode',[selection('ask','Ask for approval'),selection('allow','Full access'),selection('deny','Deny')])}
+  }
+  async function options_(call, directory, model) {
+    const query='?'+new URLSearchParams({'location[directory]':directory})
+    const catalog=(await call('GET','/api/model'+query)).data
+    if (!Array.isArray(catalog)) throw fail('OpenCode model catalog is unavailable.')
+    const models=catalog.filter(item=>item.enabled===true&&modelKey(item))
+    const fallback=(await call('GET','/api/model/default'+query)).data
+    const key=model??modelKey(fallback),choice=models.find(item=>modelKey(item)===key)
+    if (model&&!choice) throw fail('Choose an available OpenCode model.')
+    const variants=choice?.variants??[]
+    return {...emptyTools,canConfigure:true,model:key,thinking:variants.length?'default':null,permission:'allow',models:models.map(item=>selection(modelKey(item),item.name??item.id)),
       thinkingLevels:variants.length?[selection('default'),...variants.map(item=>selection(item.id,item.name??item.id))]:[],
       permissions:presentPermissionChoices('opencode',[selection('ask','Ask for approval'),selection('allow','Full access'),selection('deny','Deny')])}
   }

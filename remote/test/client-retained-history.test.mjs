@@ -1,13 +1,12 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, mkdirSync, readFileSync, readdirSync, writeFileSync, rmSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { createClientExecution } from '../src/client-execution.mjs'
 import { createTaskGateway } from '../src/task-gateway.mjs'
 import { createRetainedExecutionCapture } from '../src/client-retained-history.mjs'
-import { createDefaultAgentService } from '../../default-agent/src/service.mjs'
 import { enroll } from './fixtures/execution.mjs'
 
 const turn=()=>new Promise(done=>setTimeout(done,5))
@@ -23,7 +22,7 @@ function fixture(t){
 }
 function entries(execution){let all=[],after=0;for(;;){const page=execution.events(after);all.push(...page.entries);if(!page.hasMore)return all;after=page.cursor}}
 function capture(f,options={}){return createRetainedExecutionCapture({directory:f.directory,defaultDirectory:f.defaultDirectory,
-  execution:f.execution,taskGateway:{results:()=>({entries:[],cursor:'0'}),retainedRunIDs:()=>[]},defaultAgent:{poll:async()=>assert.fail('Historical replay invoked the agent')},...options})}
+  execution:f.execution,taskGateway:{results:()=>({entries:[],cursor:'0'}),retainedRunIDs:()=>[]},...options})}
 function rawUpdateBytes(events){const records=new Map();for(const item of events){const part=item.nativeRecord;if(part){const parts=records.get(part.recordID)??[];parts[part.partIndex]=Buffer.from(part.data,'base64');records.set(part.recordID,parts)}}return [...records.values()].map(parts=>Buffer.concat(parts).toString('utf8'))}
 
 test('workspace startup captures durable scheduled output without a client, survives ACK loss and restart',async t=>{
@@ -98,30 +97,6 @@ test('mismatched historical association cannot relabel a native record',async t=
   writeFileSync(join(f.defaultDirectory,`run-${randomUUID()}-${operationID}.jsonl`),JSON.stringify({sessionUpdate:'woven_native_record',recordBatch:{nativeSessionID:'native',records:[{runID}]}})+'\n')
   const bridge=capture(f,{resolveAssociation:async()=>({conversationID:randomUUID(),runID:randomUUID(),nativeSessionID:'different',runtimeKind:'default_agent'})})
   await bridge.pump();assert.equal(bridge.status().pendingAssociationCount,1);assert.equal(entries(f.execution).length,0);await bridge.close()
-})
-
-test('legacy RPC admission saves identity without credentials and owner polling archives its completed output',async t=>{
-  const f=fixture(t),conversationID=randomUUID(),runID=randomUUID(),inputID=randomUUID();let prompts=0
-  const service=createDefaultAgentService({cwd:f.root,directory:f.defaultDirectory,attachmentState:{tokens:[['native-rpc','test-private-attachment']]},engineFactory:()=>({handle:async(method,params,publish)=>{
-    assert.equal(method,'session/prompt');prompts++;await publish({sessionUpdate:'agent_message_chunk',content:{type:'text',text:'First'}})
-    await publish({sessionUpdate:'agent_message_chunk',content:{type:'text',text:' answer'}});return {stopReason:'end_turn'}
-  }})})
-  const bridge=capture(f,{defaultAgent:service,intervalMilliseconds:5})
-  const message=bridge.prepareRPC({method:'session/prompt',operationID:inputID,attachmentToken:'test-private-attachment',params:{sessionId:'native-rpc',prompt:[{type:'text',text:'Hello'}],
-    _meta:{wovenConversationID:conversationID,wovenRunID:runID,wovenInputID:inputID,wovenMCP:{endpointURL:'http://127.0.0.1:12345/mcp',bearerToken:'private-capability',captureID:'input-capture'}}}})
-  bridge.prepareRPC(message)
-  assert.throws(()=>bridge.prepareRPC({...message,params:{...message.params,prompt:[{type:'text',text:'Changed'}]}}),/different input/)
-  assert.equal(readdirSync(f.directory).filter(name=>name.startsWith('intent-')).length,1)
-  const intent=readFileSync(join(f.directory,'intent-'+inputID+'.json'),'utf8')
-  assert.equal(intent.includes('test-private-attachment'),false);assert.equal(intent.includes('private-capability'),false);assert.equal(intent.includes('/test/private/tool'),false)
-  bridge.acceptedRPC(message,await service.invoke(message));bridge.start()
-  await until(()=>entries(f.execution).some(item=>item.transcript?.runs?.[0]?.status==='completed'))
-  await bridge.close()
-  assert.equal(prompts,1)
-  const saved=entries(f.execution)
-  assert.ok(saved.some(item=>item.transcript?.messages?.some(message=>message.id===inputID&&message.content==='Hello')))
-  assert.ok(saved.some(item=>item.transcript?.messages?.some(message=>message.id===runID&&message.content==='First answer')))
-  assert.equal(saved[0].retainedExecution.status,'completed')
 })
 
 test('retained snapshot assembly survives checkpoint restart and ignores an unfinished replacement',async t=>{

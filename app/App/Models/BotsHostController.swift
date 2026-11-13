@@ -30,8 +30,9 @@ enum BotsCommand: Codable, Sendable {
     /// that machine: `updating`, then `engineUpdateFailure` if it was rolled back.
     case updateEngine(machineID: String)
     case restartRuntime
-    /// Fresh headers for one signed upgrade of another member's bots socket
-    /// (`audience`: its member device ID). The window process holds no member key.
+    /// Fresh headers for one signed upgrade of another member's bots socket or
+    /// live stream (`…/v1/stream?protocol=1`; `audience`: its member device ID).
+    /// The window process holds no member key.
     case signSocket(url: URL, audience: String)
 }
 

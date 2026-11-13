@@ -36,7 +36,12 @@ struct ChatComposerSettings<Accessory: View, Submission: View>: View {
   @ViewBuilder var accessory: () -> Accessory
   @ViewBuilder var submission: () -> Submission
   @Environment(\.dashboardTheme) private var theme
-  @State private var settings: SessionSettings?
+  @State private var readSettings: SessionSettings?
+  /// A streamed workspace sends the open chat's settings as they change; any other is read.
+  private var streamed: Bool { model.selectedConversationID.map(model.streamsSessionSettings) ?? false }
+  private var settings: SessionSettings? {
+    streamed ? model.selectedConversationID.flatMap { model.streamedSessionSettings[$0] } : readSettings
+  }
   @State private var modelOpen = false
   @State private var thinkingOpen = false
   @State private var toolsOpen = false
@@ -170,7 +175,7 @@ struct ChatComposerSettings<Accessory: View, Submission: View>: View {
       submission()
     }
     .task(id: context) {
-      settings = nil; problem = nil
+      readSettings = nil; problem = nil
       if !local { await loadSession() }
       if model.fixture, MobileModel.uiScenario == "tools-menu" { toolsOpen = true }
     }
@@ -218,12 +223,12 @@ struct ChatComposerSettings<Accessory: View, Submission: View>: View {
     options.sort { $0.descriptor.name.localizedStandardCompare($1.descriptor.name) == .orderedAscending }
   }
   private func loadSession() async {
-    guard let id = model.selectedConversationID else { return }
+    guard let id = model.selectedConversationID, !streamed else { return }
     let target = context
     loading = true; defer { loading = false }
     do {
       guard case .session(let result) = try await model.workspace(.session(id: id)) else { throw MobileConnectionError.invalidResponse }
-      if !Task.isCancelled, target == context { settings = result }
+      if !Task.isCancelled, target == context { readSettings = result }
     } catch { if !Task.isCancelled, target == context { problem = "Couldn’t load this agent’s settings." } }
   }
   private func apply(_ operation: () async throws -> Void) async {

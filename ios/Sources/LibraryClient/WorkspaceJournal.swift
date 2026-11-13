@@ -503,16 +503,26 @@ public actor WorkspaceClient {
   private var refreshTask: Task<Void, Error>?
   private var launchTasks: [String: Task<MobileLaunchRecord, Error>] = [:]
   private var centralHistory = false
+  private var stream: StreamConnection?
   public init(store: MobileStore, workspaceID: String, transport: any ExecutionWorkspaceTransport) {
     self.store = store; self.workspaceID = workspaceID; self.transport = transport
   }
+  /// Commands go over the workspace's live stream while it has one.
+  public func setStream(_ connection: StreamConnection?) { stream = connection }
+  public var isStreamed: Bool { stream != nil }
   /// Confirms this host still answers for the registered workspace before a new remote creation.
   public func checkConnection() async throws { try await verify() }
   public func providers() async throws -> [HarnessCapabilities] { try await transport.providers() }
   public func pending() async throws -> [PendingInteraction] { try await transport.pending() }
   public func capabilities(_ id: String) async throws -> HarnessCapabilities { try await verify(); return try await transport.capabilities(id) }
   public func earlierTranscript(_ id: String, before: String) async throws -> LibraryTranscript { try await verify(); return try await transport.transcript(id, before: before) }
+  /// One activity's complete projection, read when its disclosure opens.
+  public func activityDetails(_ id: String, runID: String, activityID: String) async throws -> LibraryActivity {
+    try await transport.activityDetails(id, runID: runID, activityID: activityID)
+  }
   public func readWorkspace(_ request: LibraryWorkspaceRead) async throws -> LibraryWorkspaceResult { try await verify(); return try await transport.readWorkspace(request) }
+  /// A message file of one of this workspace's sessions, checked against its digest.
+  public func attachment(_ reference: LibraryAttachmentReference) async throws -> Data { try await transport.attachment(reference) }
   private func verify() async throws {
     let workspace = try await transport.identity()
     guard workspace.id == workspaceID, !workspace.deleted else { throw MobileStore.Failure.wrongWorkspace }
@@ -552,7 +562,10 @@ public actor WorkspaceClient {
   }
   public func submit(_ requested: LibraryCommand) async throws -> LibraryCommandReceipt {
     guard requested.workspaceID == nil || requested.workspaceID == workspaceID else { throw MobileStore.Failure.wrongWorkspace }
-    try await verify()
+    // A stream's hello names its workspace; otherwise ask the workspace who it is.
+    if let stream, await store.journal.snapshot().workspaces[workspaceID] != nil {
+      if let hello = await stream.hello, hello.workspaceID != workspaceID { throw MobileStore.Failure.wrongWorkspace }
+    } else { try await verify() }
     var scoped = requested
     scoped.workspaceID = workspaceID
     let saved = await store.journal.commandRecords(workspaceID: workspaceID).first { $0.id == requested.commandID }?.command
@@ -564,7 +577,21 @@ public actor WorkspaceClient {
     // has since changed. Recording a different payload under that ID is rejected.
     // Recover an acknowledgement before resubmitting the exact same command.
     let receipt: LibraryCommandReceipt
-    if let existing = try await transport.receipt(command.commandID) { receipt = existing }
+    if let stream {
+      // `execution.command` is the handler of `POST v1/execution/commands`,
+      // which checks the command against its authenticated scope: it names
+      // this workspace and its own library (the one its `hello` names), as
+      // the HTTP transport's body does.
+      let hello = await stream.hello
+      guard let libraryID = await store.journal.snapshot().workspaces[workspaceID]?.libraryID ?? hello?.libraryID,
+            hello == nil || hello?.libraryID == libraryID else { throw MobileStore.Failure.wrongWorkspace }
+      var wire = command
+      wire.libraryID = libraryID; wire.workspaceID = workspaceID
+      // A lost reply is recorded as outcomeUnknown and resolved by receipt after reconnecting.
+      receipt = try await StreamCommands.deliver(wire, retrying: saved != nil, workspaceID: workspaceID,
+                                                 journal: store.journal, connection: stream)
+      guard receipt.commandID == command.commandID, receipt.deviceID == command.deviceID else { throw MobileConnectionError.invalidResponse }
+    } else if let existing = try await transport.receipt(command.commandID) { receipt = existing }
     else { receipt = try await transport.command(command) }
     try await store.journal.rememberReceipt(receipt, workspaceID: workspaceID)
     return receipt

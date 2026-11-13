@@ -60,6 +60,13 @@ that Mac. Remote workspace definitions appear in the shared inventory; SSH
 credentials stay on the Mac that installed the host and do not become shared
 configuration.
 
+Another machine's chats arrive in this library by synchronization like any
+other history; there is no separate per-Mac cache of them. While one is open,
+this Mac's background server follows it live on that machine's member-signed
+stream (`GET /v1/stream?protocol=1`) and sends its commands there; nothing
+polls the other machine. When it is unreachable, the chat shows the
+synchronized history and says the machine is offline.
+
 ## Change exchange and conflicts
 
 Shared table mutations and their journal entries commit in one SQLite
@@ -297,8 +304,9 @@ provider services or real pairing credentials are consumed.
   offline. The other two should still exchange notes and new connections.
 - Save a large library file, interrupt its download and restart the receiving
   app. Other notes should synchronize while the file resumes and verifies.
-- Open a conversation owned by the other Mac. Read its saved history offline;
-  when reachable, Send/Stop should address its original execution workspace.
+- Open a conversation owned by the other Mac. Read its saved history offline,
+  with its offline notice; when reachable, it follows that Mac live and
+  Send/Stop address its original execution workspace.
 - Confirm scheduled work runs only on its owner. Disconnecting another Mac must
   not start a duplicate execution or move an accepted run.
 - Unpair a device from one Mac. After the other peers reconnect, its old library,

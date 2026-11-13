@@ -574,6 +574,10 @@ public final class DeviceAPI {
                     if components[3] == "capabilities" {
                         return try .json(try await commands.sessionCapabilities(conversationID: components[2]))
                     }
+                    if components[3] == "activity" {
+                        return try .json(try await database.libraryActivityDetails(conversationID: components[2],
+                            runID: query("run"), activityID: query("id") ?? ""))
+                    }
                 }
                 if components.count == 3, components[0] == "v1", ["assets", "notes"].contains(components[1]) {
                     guard let note = try await database.libraryNote(id: components[2]) else {

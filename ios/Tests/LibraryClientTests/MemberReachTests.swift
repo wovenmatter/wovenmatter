@@ -59,6 +59,36 @@ final class MemberReachTests: XCTestCase {
     XCTAssertThrowsError(try HTTPSLibraryTransport(host: URL(string: "https://box.tail1.ts.net/wovenmatter")!, hostDeviceID: "paired", identity: identity, performer: http))
   }
 
+  /// An expanded row reads its activity once from the owner's details route,
+  /// with free-form activity and run IDs in the query; a central chat's from
+  /// the library host's. An owner without the route falls back to its transcript.
+  func testExpandedActivitiesReadTheDetailsRouteOnce() async throws {
+    let identity = try MobileMemberKeyVault.loadOrCreate(deviceID: phoneID, storage: .memory())
+    let full = LibraryActivity(id: "tool/1 #a", runID: "run 1", title: "Edit", status: "completed", projectionJSON: #"{"id":"tool/1 #a","kind":"tool","content":"full"}"#)
+    let body = try JSONEncoder().encode(full)
+    let http = RecordingHTTP { request in request.url!.path.hasSuffix("/activity") ? (200, body) : (404, Data()) }
+    let mac = UUID().uuidString.lowercased()
+    let workspace = ExecutionWorkspace(id: UUID().uuidString.lowercased(), libraryID: "library", ownerDeviceID: mac, kind: .mac, name: "Studio",
+                                       endpoint: URL(string: "https://studio.tail1.ts.net/wovenmatter")!, executionDeviceID: mac)
+    let direct = try HTTPSExecutionWorkspaceTransport(workspace: workspace, identity: identity, performer: http)
+    let conversation = UUID().uuidString.lowercased()
+    let read = try await direct.activityDetails(conversation, runID: "run 1", activityID: "tool/1 #a")
+    XCTAssertEqual(read, full)
+    let request = try XCTUnwrap(http.requests.last?.url)
+    XCTAssertEqual(request.path, "/wovenmatter/v1/execution/conversations/\(conversation)/activity")
+    let items = URLComponents(url: request, resolvingAgainstBaseURL: false)?.queryItems ?? []
+    XCTAssertEqual(items.first { $0.name == "id" }?.value, "tool/1 #a")
+    XCTAssertEqual(items.first { $0.name == "run" }?.value, "run 1")
+    XCTAssertEqual(http.requests.count, 1)
+
+    let library = try HTTPSLibraryTransport(host: URL(string: "https://studio.tail1.ts.net/wovenmatter")!, hostDeviceID: mac, identity: identity, performer: http)
+    let store = try MobileStore(file: FileManager.default.temporaryDirectory.appending(path: UUID().uuidString).appending(path: "store.json"))
+    let central = try await MobileSyncEngine(store: store, transport: library).transcriptActivityDetail(conversation, runID: "run 1", activityID: "tool/1 #a")
+    XCTAssertEqual(central, full)
+    XCTAssertEqual(http.requests.last?.url?.path, "/wovenmatter/v1/sessions/\(conversation)/activity")
+    XCTAssertEqual(http.requests.count, 2, "One read per expansion; no transcript read when the route answers")
+  }
+
   func testSignedFailuresDistinguishUnknownOldAndUpdateRequired() {
     func body(_ code: String, _ message: String) -> Data { try! JSONEncoder().encode(LibraryAPIError(code: code, message: message)) }
     guard case .memberUnsupported = MobileRequestSigning.failure(status: 401, data: body("unauthorized", "This device does not accept member requests yet."), signed: true, fallback: "") else { return XCTFail() }

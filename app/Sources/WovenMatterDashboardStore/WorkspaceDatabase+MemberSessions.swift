@@ -18,6 +18,8 @@ extension WorkspaceDatabaseConnection {
       CREATE TABLE IF NOT EXISTS member_tool_sessions(id TEXT PRIMARY KEY, caller_id TEXT NOT NULL, workspace_id TEXT NOT NULL, created_at TEXT NOT NULL);
       CREATE INDEX IF NOT EXISTS member_tool_sessions_caller ON member_tool_sessions(caller_id, created_at);
       """)
+    // What waits and wake-ups keep of these sessions (SessionWakeUps).
+    try migrateSessionWakeUps()
   }
 
   fileprivate func memberToolSessionsUnlocked(_ sql: String, _ values: [String?]) throws -> [MemberToolSession] {

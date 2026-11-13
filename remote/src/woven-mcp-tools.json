@@ -1466,7 +1466,7 @@
       "openWorldHint" : true,
       "readOnlyHint" : true
     },
-    "description" : "Read status and coordination epoch. Permission, question and authentication states require the user; status never grants approval. For a session on another workspace (one you created there, or one named with workspace) it returns its state, pending questions and recent transcript; page older messages with before.",
+    "description" : "Read status and coordination epoch. Permission, question and authentication states require the user; status never grants approval. For a session on another workspace (one you created there, or one named with workspace) it returns its state, pending questions and recent transcript; page older messages with before. To wait for a change, use woven_sessions_wait instead of calling this repeatedly.",
     "inputSchema" : {
       "additionalProperties" : false,
       "properties" : {
@@ -1490,6 +1490,48 @@
       "type" : "object"
     },
     "name" : "woven_sessions_status"
+  },
+  {
+    "annotations" : {
+      "openWorldHint" : true,
+      "readOnlyHint" : true
+    },
+    "description" : "Wait until a session is idle (its turn ended), needs input (a pending question or approval), or either, for at most timeoutSeconds (50 at most). Returns as soon as it gets there, or at the timeout with timedOut true; either way the woven_sessions_status body plus state and timedOut. Prefer this to repeated woven_sessions_status calls, and call it again after a timeout. A session you created also wakes you with a short message when it finishes or asks a question while you are idle. Sessions you created on another workspace are reached there; name workspace for any other.",
+    "inputSchema" : {
+      "additionalProperties" : false,
+      "properties" : {
+        "id" : {
+          "type" : "string"
+        },
+        "requestID" : {
+          "format" : "uuid",
+          "type" : "string"
+        },
+        "timeoutSeconds" : {
+          "maximum" : 50,
+          "minimum" : 1,
+          "type" : "integer"
+        },
+        "until" : {
+          "enum" : [
+            "idle",
+            "needsInput",
+            "either"
+          ],
+          "type" : "string"
+        },
+        "workspace" : {
+          "type" : "string"
+        }
+      },
+      "required" : [
+        "id",
+        "timeoutSeconds",
+        "until"
+      ],
+      "type" : "object"
+    },
+    "name" : "woven_sessions_wait"
   },
   {
     "annotations" : {

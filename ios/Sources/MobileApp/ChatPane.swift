@@ -1,4 +1,5 @@
 import SwiftUI
+import QuickLook
 import MobileInference
 import LibraryClient
 import WovenMatterShared
@@ -19,6 +20,9 @@ struct ChatPane: View {
   @State private var scrollInteractionRevision = 0
   /// Whether a web search key is saved on this device; nil until read.
   @State private var webSearchConnected: Bool?
+  /// A message file read from its workspace, previewed with Quick Look.
+  @State private var attachmentPreview: URL?
+  @State private var openingAttachmentID: String?
   var body: some View {
     VStack(spacing: 0) {
       HStack {
@@ -56,8 +60,9 @@ struct ChatPane: View {
             if let transcript = model.displayedTranscript {
               MobileConversationTranscript(transcript: transcript, disclosureState: model.transcriptStates.state(for: transcript.conversationID),
                 agentSourceTitle: { model.state.conversations[$0]?.title },
-                openAgentSource: { id in Task { await model.selectConversation(id) } }) { activityID in
-                try await model.conversationActivityDetail(conversationID: transcript.conversationID, activityID: activityID)
+                openAgentSource: { id in Task { await model.selectConversation(id) } },
+                openAttachment: { openAttachment($0, conversationID: transcript.conversationID) }) { runID, activityID in
+                try await model.conversationActivityDetail(conversationID: transcript.conversationID, runID: runID, activityID: activityID)
               }
             }
             if let progress = model.sendProgress {
@@ -69,7 +74,11 @@ struct ChatPane: View {
             ForEach(model.currentPending) { interaction in
               PendingInteractionView(model: model, interaction: interaction)
             }
-            if model.activeRunID != nil && !model.executionOnline {
+            if let problem = model.selectedStreamProblem {
+              // The live view is not connected; saved history stays readable.
+              Text(problem).font(.caption).foregroundStyle(DashboardPalette.mutedForeground)
+                .accessibilityIdentifier("chat-stream-problem")
+            } else if model.activeRunID != nil && !model.executionOnline {
               Text("Workspace connection interrupted · execution stays there")
                 .font(.caption).foregroundStyle(DashboardPalette.mutedForeground)
             }
@@ -79,6 +88,7 @@ struct ChatPane: View {
             Color.clear.frame(height: 1).id("latest")
           }.padding(20)
         }.scrollDismissesKeyboard(.interactively)
+        .quickLookPreview($attachmentPreview)
         .defaultScrollAnchor(.bottom, for: .initialOffset)
         .defaultScrollAnchor(.top, for: .sizeChanges)
         .environment(\.conversationTranscriptInteraction, takeScrollOwnership)
@@ -202,6 +212,17 @@ struct ChatPane: View {
       isPrependingHistory: model.loadingHistory)
     if action != .none { followBottom(using: proxy) }
   }
+  /// Reads a message file from the workspace that holds it and previews it.
+  private func openAttachment(_ attachment: LibraryAttachmentReference, conversationID: String) {
+    guard openingAttachmentID == nil else { return }
+    openingAttachmentID = attachment.id
+    Task {
+      defer { openingAttachmentID = nil }
+      do { attachmentPreview = try await model.attachmentURL(attachment, conversationID: conversationID) }
+      catch { model.errorMessage = error.localizedDescription }
+    }
+  }
+
   private func showLatest(using proxy: ScrollViewProxy) {
     model.showLatestMessages()
     transcriptOwnsScroll = false
@@ -338,10 +359,14 @@ private struct MobileGoalControls: View {
   @Environment(\.dashboardTheme) private var theme
   @Bindable var model: MobileModel
   let conversationID: String
-  @State private var goal: WorkspaceGoal?
+  @State private var readGoal: WorkspaceGoal?
   @State private var showingDetails = false
   @State private var saving = false
   @State private var problem: String?
+  /// A streamed workspace sends the goal with the session settings; any other
+  /// is read when the chat opens and after each change, never polled.
+  private var streamed: Bool { model.streamsSessionSettings(conversationID) }
+  private var goal: WorkspaceGoal? { streamed ? model.streamedSessionSettings[conversationID]?.goal : readGoal }
   var body: some View {
     Group {
       if let goal {
@@ -390,17 +415,13 @@ private struct MobileGoalControls: View {
     )) {
       Button("OK", role: .cancel) { problem = nil }
     } message: { Text(problem ?? "") }
-    .task(id: conversationID) {
-      while !Task.isCancelled {
-        await load()
-        do { try await Task.sleep(for: .seconds(2)) } catch { return }
-      }
-    }
+    .task(id: "\(conversationID):\(streamed)") { await load() }
   }
   private func load() async {
+    guard !streamed else { return }
     do {
       guard case .session(let settings) = try await model.workspace(.session(id: conversationID)), !Task.isCancelled else { return }
-      goal = settings.goal
+      readGoal = settings.goal
     } catch { /* Saved goal remains visible during disconnection. */ }
   }
   private func change(_ mutation: WorkspaceGoalMutation) {

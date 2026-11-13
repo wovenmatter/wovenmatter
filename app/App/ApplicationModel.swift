@@ -364,6 +364,20 @@ final class ApplicationModel {
     @ObservationIgnored var federatedAdoptionTasks: [String: Task<Void, any Error>] = [:]
     @ObservationIgnored var adoptedExecutionConversations: Set<String> = []
     var federatedExecutionSnapshots: [String: FederatedExecutionSnapshot] = [:]
+    /// Chats that ran over SSH and could not move to their Linux host's server:
+    /// read-only history, with the reason (`LegacyRemoteChatError`).
+    var legacyRemoteChatReasons: [String: String] = [:]
+    /// Chats that ran over SSH whose move to their host did not finish this
+    /// time (`RemoteChatMoveDeferredError`): not read-only; tried again on the
+    /// next open or send. Their snapshots show this reason, offline.
+    @ObservationIgnored var remoteChatMoveRetries: [String: String] = [:]
+    /// A window's one live connection to its background server and what it follows.
+    @ObservationIgnored let windowLive = WindowLiveState()
+    /// Chats another machine runs, as the conversation view renders them.
+    @ObservationIgnored let remoteConversations = RemoteConversationState()
+    /// A background server's side of its windows' live connections.
+    @ObservationIgnored var backendWindowStream: ExecutionWindowStreamServer?
+    @ObservationIgnored var backendWindowSource: BackendWindowStreamSource?
     private(set) var peerAgentWorkspaces: [UUID: ExecutionWorkspace] = [:]
     var federatedExecutionOwners: [String: String] = [:]
     /// The synced execution workspace registry, including iPhone and iPad Quick Chat workspaces.
@@ -378,8 +392,6 @@ final class ApplicationModel {
     @ObservationIgnored var backendRPCClient: BackendRPCClient?
     @ObservationIgnored var backendRPCServer: BackendRPCServer?
     @ObservationIgnored var backendApplicationService: BackendApplicationService?
-    @ObservationIgnored var backendClientTask: Task<Void, Never>?
-    @ObservationIgnored var backendConversationClientTask: Task<Void, Never>?
     @ObservationIgnored var backendStopping = false
     @ObservationIgnored var backgroundServerTermination: @MainActor () -> Void = { WovenMatterLifecycleDelegate.requestTerminationAfterUpdate() }
     @ObservationIgnored var backendCommandsInFlight = 0
@@ -393,6 +405,9 @@ final class ApplicationModel {
     private var conversationChangeWorkers: [String: Task<Void, Never>] = [:]
     private var conversationChangeWorkerTokens: [String: UUID] = [:]
     private var pendingConversationChanges: [String: [DashboardConversationChange]] = [:]
+    /// The library host's live stream, told when in-memory session state
+    /// changes: questions and approvals, run state and capabilities (empty: every conversation).
+    @ObservationIgnored var executionStreamChanged: (@MainActor (Set<String>) -> Void)?
     private var terminalRunIDsByConversation: [String: String] = [:]
     private var surfaceProfilePersistenceTask: Task<Void, Never>?
     private var surfaceProfilePersistenceGeneration = 0
@@ -559,7 +574,7 @@ final class ApplicationModel {
                 database: dashboardStore.database)
         }
         if agentTools == nil { try await configureAgentTools(store: dashboardStore) }
-        agentTools?.facadeFixtureMCPConnection = { _, local, _ in local }
+        agentTools?.facadeFixtureMCPConnection = { _, local in local }
         await refreshWorkspace()
         state = .ready
     }
@@ -705,6 +720,22 @@ final class ApplicationModel {
             }
             remoteWorkspaces.onHostInstalled = { [weak self] configuration in
                 self?.libraryHost.setUpLinuxHost(configuration, restart: true)
+            }
+            // A Linux host's files, settings and Pi sign-in go through its server.
+            await dashboardStore.library.setRemoteFileReader { [weak self] workspaceID, conversationID, path, underRoot in
+                guard let self else { throw CancellationError() }
+                return try await self.readLinuxLibraryFile(workspaceID: workspaceID, conversationID: conversationID, path: path, underRoot: underRoot)
+            }
+            connections.memberRoutes = { [weak self] configuration in
+                guard let self else { throw CancellationError() }
+                return try await self.linuxMemberRoutes(configuration.id)
+            }
+            remoteWorkspaces.memberClient = { [weak self] configuration in
+                guard let self, let database = self.dashboardStore?.database,
+                      let workspace = try await database.libraryExecutionWorkspaces().first(where: { $0.id == configuration.id.uuidString.lowercased() && !$0.deleted }) else {
+                    throw RemoteWorkspaceClientError.invalidResponse("This host is no longer in the workspace registry.")
+                }
+                return try await self.botsClient(for: workspace)
             }
             remoteWorkspaces.onRuntimeMaintenanceChanged = { [weak self] in
                 await self?.synchronizeRemoteAgentCatalog()
@@ -1065,6 +1096,7 @@ final class ApplicationModel {
     private func enqueueConversationChange(
         _ change: DashboardConversationChange
     ) {
+        switch change.phase { case .configuration, .terminal: executionStreamChanged?([change.conversationID]); default: break }
         if let backendApplicationService {
             let scopes: Set<BackendInvalidationScope>
             switch change.phase { case .configuration, .terminal: scopes = [.runtime]; default: scopes = [] }
@@ -1293,9 +1325,15 @@ final class ApplicationModel {
     }
 
     func refreshConversation(id: String) async {
-        if liveLibraryClient?.isForeignConversation(id) == true || backendReplica.owners[id] != nil { return }
         // Presentation work belongs to the UI; execution and terminal bookkeeping stay in the backend.
         guard LocalExecutionRole.current != .backend else { return }
+        // Another machine runs it: render what its owner streams, as this view
+        // renders its own sessions. Until anything arrives, saved history shows.
+        if isRemoteConversation(id) {
+            _ = ensureConversationState(id: id)
+            if refreshRemoteConversation(id) { return }
+        }
+        if liveLibraryClient?.isForeignConversation(id) == true || backendReplica.owners[id] != nil { return }
         let state = ensureConversationState(id: id)
         let generation = state.beginRefresh()
         do {
@@ -1391,6 +1429,7 @@ final class ApplicationModel {
 
     @discardableResult
     func loadOlderConversationMessages(id: String) async -> Bool {
+        if isRemoteConversation(id), remoteTranscript(id) != nil { return await loadOlderRemoteMessages(id) }
         guard let state = conversationStatesByID[id],
               !state.isLoadingOlderMessages,
               let current = state.presentation,
@@ -1484,7 +1523,7 @@ final class ApplicationModel {
         }
     }
 
-    private nonisolated static func renderMessagePresentations(
+    nonisolated static func renderMessagePresentations(
         _ messages: [WorkspaceMessageRecord],
         activities: [WorkspaceRunActivityRecord],
         runs: [WorkspaceRunRecord],
@@ -1541,7 +1580,7 @@ final class ApplicationModel {
         return result
     }
 
-    private nonisolated static func renderRunPresentations(
+    nonisolated static func renderRunPresentations(
         _ runs: [WorkspaceRunRecord],
         reusing previous: [String: DashboardRunPresentation]
     ) -> [String: DashboardRunPresentation] {
@@ -2495,6 +2534,11 @@ final class ApplicationModel {
 
         if try await dispatchFederatedMessage(conversationID: conversation.id, input: input, note: note,
             expectedRunID: expectedRunID, requiresIdle: requiresIdle, dispatchFence: dispatchFence) { return (true, nil) }
+        // A Linux host's chats run only on its server; one that did not move there is history.
+        if let workspaceID = conversation.remoteWorkspaceID {
+            throw LegacyRemoteChatError(workspace: remoteWorkspaces.configuration(id: workspaceID)?.name ?? "its Linux workspace",
+                reason: conversation.isArchived ? "It is archived" : "It has not moved to the host's server yet")
+        }
         let goalPrompt = input.historyDeliveryID == nil && WorkspaceGoal.supports(conversation.localRuntimeKind)
             ? WorkspaceGoalCommand(input.text)?.agentPrompt : nil
 
@@ -2564,11 +2608,9 @@ final class ApplicationModel {
             context = AgentNoteContext(noteID: note.id, title: response.title ?? note.title, folderID: note.folderID,
                 revision: revision, requireCurrentRevision: expectedNoteRevision != nil ? true : nil)
         }
-        let remote = conversation.remoteWorkspaceID.flatMap { remoteWorkspaces.configuration(id: $0) }
-        if conversation.remoteWorkspaceID != nil, remote == nil { throw ApplicationModelError.remoteHarnessUnavailable }
         let capturedInputID = try await dashboardStore.database.captureInputContext(conversationID: conversation.id,
             noteID: normalized.historyDeliveryID == nil ? context?.noteID : nil)
-        normalized.mcpContext = try await agentTools.mcpContext(sessionID: conversation.id, remote: remote, captureID: capturedInputID)
+        normalized.mcpContext = try await agentTools.mcpContext(sessionID: conversation.id, captureID: capturedInputID)
         let deliveryContent = normalized.text
         if WorkspaceGoal.supports(conversation.localRuntimeKind),
            try await dashboardStore.database.sessionTools(conversation.id).enabled.contains(.goals) {
@@ -2611,11 +2653,10 @@ final class ApplicationModel {
                 _ = try await openCode.send(conversation.id, input: normalized,
                     requiresIdle: requiresIdle, dispatchFence: dispatchFence)
             } else if steering {
-                let staged = try await remoteWorkspaces.stagingFiles(of: normalized, in: conversation.remoteWorkspaceID)
                 try await validateCommandTarget()
                 try dispatchFence.check()
                 let ids = try await dashboardStore.sendActiveLocalACPPrompt(conversationID: conversation.id,
-                    input: staged, deliveryContent: deliveryContent, expectedRunID: expectedRunID, dispatchFence: dispatchFence)
+                    input: normalized, deliveryContent: deliveryContent, expectedRunID: expectedRunID, dispatchFence: dispatchFence)
                 accepted = LocalACPRunIdentifiers(runID: ids.runID, userMessageID: ids.userMessageID, assistantMessageID: ids.assistantMessageID)
             } else {
                 accepted = try await acceptLocalAgentMessage(conversation: conversation, input: normalized,
@@ -2720,13 +2761,8 @@ final class ApplicationModel {
             conversation: conversation,
             runtimeKind: runtimeKind
         )
-        if runtimeKind == .defaultAgent, let workspaceID = conversation.remoteWorkspaceID,
-           let remote = remoteWorkspaces.configuration(id: workspaceID) {
-            try await remoteWorkspaces.ensureDefaultAgent(remote)
-        }
         let launch = context.launch
         let workspace = context.workspace
-        let input = try await remoteWorkspaces.stagingFiles(of: input, in: conversation.remoteWorkspaceID)
         try dispatchFence.check()
         return try await store.acceptLocalACPPrompt(
             conversationID: conversation.id,
@@ -2779,16 +2815,39 @@ final class ApplicationModel {
     func refreshLocalACPSession(
         conversation: WorkspaceConversationRecord
     ) async {
+        var moveDeferred: String?
         if !isBackendFrontend {
-            do { try await adoptRegisteredRemoteConversationIfNeeded(conversation) }
-            catch { ensureConversationState(id: conversation.id).setError(error.localizedDescription); return }
+            do {
+                try await adoptRegisteredRemoteConversationIfNeeded(conversation)
+                legacyRemoteChatReasons.removeValue(forKey: conversation.id)
+            } catch let error as LegacyRemoteChatError {
+                // Read-only history: the conversation view says why and offers no composer.
+                legacyRemoteChatReasons[conversation.id] = error.localizedDescription; return
+            } catch let error as RemoteChatMoveDeferredError {
+                // Not read-only: the composer stays, and reopening or sending tries the move again.
+                legacyRemoteChatReasons.removeValue(forKey: conversation.id)
+                moveDeferred = error.localizedDescription
+            } catch { ensureConversationState(id: conversation.id).setError(error.localizedDescription); return }
         }
-        if (try? await dashboardStore?.database.libraryExecutionOwner(conversationID: conversation.id)) != nil {
+        let owned = (try? await dashboardStore?.database.libraryExecutionOwner(conversationID: conversation.id)) != nil
+        if let moveDeferred, !owned {
+            ensureConversationState(id: conversation.id).setError(moveDeferred); return
+        }
+        if isBackendFrontend, owned, conversation.remoteWorkspaceID != nil {
+            // Only the background server knows whether a chat that ran over SSH moved to its host.
+            if let result = try? await sendBackendCommand(.sessionMetadata(conversationID: conversation.id)) {
+                legacyRemoteChatReasons[conversation.id] = result.readOnlyReason
+            }
+            if legacyRemoteChatReasons[conversation.id] != nil { return }
+        }
+        if owned {
             await refreshFederatedConversation(conversation.id); return
         }
         if isBackendFrontend {
             do {
-                if let metadata = try await sendBackendCommand(.sessionMetadata(conversationID: conversation.id)).metadata {
+                let result = try await sendBackendCommand(.sessionMetadata(conversationID: conversation.id))
+                legacyRemoteChatReasons[conversation.id] = result.readOnlyReason
+                if let metadata = result.metadata {
                     localACPSessionMetadata[conversation.id] = metadata
                 }
             } catch { ensureConversationState(id: conversation.id).setError(error.localizedDescription) }
@@ -3135,36 +3194,24 @@ final class ApplicationModel {
         do { resolvedRoot = try await folderWorkingDirectory(folderID: folderID, workspaceID: target.configuration.id, explicit: nativeWorkingDirectory, calendarExecutionRoot: calendarExecutionRoot) }
         catch { localRunError = error.localizedDescription; return nil }
         let selectionWorkspace = Self.remoteDatabaseSourceID(target.configuration.id)
-        let capturedDefaults = sessionSelectionPreferences.defaults(harness: target.harness.id.rawValue, workspace: selectionWorkspace)
-        let usesProductPermissionDefault = sessionSelectionPreferences.usesProductPermissionDefault(
+        let id = requestedConversationID ?? UUID()
+        // A scheduled task stages its own choices for its session; others use the destination's defaults.
+        let staged = sessionSelectionPreferences.conversation(id: id.uuidString.lowercased()).flatMap { $0.requiresApplication ? $0 : nil }
+        let capturedDefaults = staged?.desiredSelections
+            ?? sessionSelectionPreferences.defaults(harness: target.harness.id.rawValue, workspace: selectionWorkspace)
+        let usesProductPermissionDefault = staged?.usesProductPermissionDefault ?? sessionSelectionPreferences.usesProductPermissionDefault(
             harness: target.harness.id.rawValue, workspace: selectionWorkspace)
         do {
-            if target.harness.id == .opencode {
-                await synchronizeRemoteOpenCodeInstances()
-                guard let instance = remoteOpenCodes[target.configuration.id] else {
-                    throw ApplicationModelError.remoteHarnessUnavailable
-                }
-                try await instance.connectLocal()
-                let id = try await instance.create(workspace: resolvedRoot, requestedConversationID: requestedConversationID, title: initialTitle, nativeWorkspaceID: nativeWorkspaceID, allowMissingCalendarFolder: calendarExecutionRoot != nil,
-                    executionRoot: try await sessionCreationRoot(folderID: folderID, workspaceID: target.configuration.id, root: resolvedRoot))
-                await refreshWorkspace()
-                return id
-            }
-            guard let dashboardStore else {
-                throw ApplicationModelError.dashboardStoreUnavailable
-            }
-            let conversationID = try await dashboardStore.createRemoteACPSession(
-                runtimeKind: target.harness.id,
-                remoteWorkspaceID: target.configuration.id,
-                remoteWorkspaceName: target.configuration.name,
-                title: Self.initialSessionTitle(initialTitle, harness: target.harness.displayName),
-                requestedConversationID: requestedConversationID,
-                allowMissingCalendarFolder: calendarExecutionRoot != nil,
-                executionRoot: try await sessionCreationRoot(folderID: folderID, workspaceID: target.configuration.id, root: resolvedRoot)
-            )
-            do { try await initializeNewSessionSelections(conversationID: conversationID, capturedDefaults: capturedDefaults,
-                usesProductPermissionDefault: usesProductPermissionDefault) }
-            catch { NSLog("Could not read the new chat’s saved settings; opening with native defaults.") }
+            let conversationID = try await createLinuxMemberSession(target: target,
+                conversationID: id, root: resolvedRoot,
+                // A folder or a scheduled task fixes the directory; a chat in
+                // All Workspaces gets its own scratch folder on the host.
+                workingDirectory: folderID != nil || calendarExecutionRoot != nil || nativeWorkingDirectory != nil ? resolvedRoot.path : nil,
+                title: Self.initialSessionTitle(initialTitle, harness: target.harness.displayName), folderID: folderID,
+                selections: capturedDefaults, usesProductPermissionDefault: usesProductPermissionDefault,
+                allowMissingCalendarFolder: calendarExecutionRoot != nil)
+            // The host applied them as it created the session.
+            if staged != nil { sessionSelectionPreferences.markApplied(id: conversationID) }
             localRunError = nil
             await refreshWorkspace()
             return conversationID
@@ -3174,50 +3221,63 @@ final class ApplicationModel {
         }
     }
 
+    /// A new chat on a Linux host this Mac added, created by the host's own
+    /// server with this Mac's choices (signed `createSession` with
+    /// `sessionOptions` and `folderID`). The host runs it; every message goes
+    /// through its server. Nothing is launched over SSH.
+    func createLinuxMemberSession(target: RemoteHarnessChatTarget, conversationID: UUID, root: URL, workingDirectory: String?,
+                                  title: String, folderID: String?, selections: SessionSelections,
+                                  usesProductPermissionDefault: Bool, allowMissingCalendarFolder: Bool) async throws -> String {
+        guard let dashboardStore else { throw ApplicationModelError.dashboardStoreUnavailable }
+        let database = dashboardStore.database
+        let registryID = target.configuration.id.uuidString.lowercased()
+        guard let workspace = try await database.libraryExecutionWorkspaces().first(where: { $0.id == registryID && !$0.deleted }) else {
+            throw LibraryAPIError(code: "unknown_workspace", message: "\(target.configuration.name) is not in this library's workspaces yet. Reconnect it in Settings → Workspaces.")
+        }
+        let runtime = target.harness.id
+        let forced = target.configuration.fullRootPermission(for: runtime)
+        let permission = runtime == .pi ? nil : forced ?? (usesProductPermissionDefault ? nil : selections.permission)
+        let tools = selections.tools?.filter { WorkspaceToolGroup(rawValue: $0) != nil }
+        let options = LibrarySessionOptions(workingDirectory: workingDirectory, model: selections.model,
+            thinking: selections.thinking, permission: permission, enabledTools: tools)
+        let id = conversationID.uuidString.lowercased()
+        let executionRoot = try await sessionCreationRoot(folderID: folderID, workspaceID: target.configuration.id, root: root)
+        let client = try centralExecutionClient()
+        let receipt = try await client.createSession(workspace: workspace, runtimeKind: runtime, conversationID: id,
+            folderID: folderID, title: title, sessionOptions: options)
+        let providerID = try await client.providers(workspace: workspace).first { $0.runtimeKind == runtime.rawValue }?.id ?? runtime.rawValue
+        guard receipt.conversationID == nil || receipt.conversationID == id else {
+            throw LibraryAPIError(code: "invalid_response", message: "\(target.configuration.name) created a different chat than this Mac requested.")
+        }
+        return try await dashboardStore.createRemoteMemberSession(runtimeKind: runtime, remoteWorkspaceID: target.configuration.id,
+            remoteWorkspaceName: target.configuration.name, title: title,
+            providerID: providerID, conversationID: conversationID, allowMissingCalendarFolder: allowMissingCalendarFolder,
+            executionRoot: executionRoot)
+    }
+
     private func sessionMCPConnection(_ conversationID: String) async throws -> WovenMCPConnection? {
         guard let agentTools, let database = dashboardStore?.database else { return nil }
         let session = try await database.localACPSession(conversationID: conversationID)
         let root = try await database.availableSessionExecutionRoot(id: conversationID)
-        guard root.workspaceID == (try await executionWorkspaceIdentity(workspaceID: session.remoteWorkspaceID)) else {
+        guard session.remoteWorkspaceID == nil, root.workspaceID == (try await executionWorkspaceIdentity(workspaceID: nil)) else {
             throw WorkspaceToolError.invalid("This chat belongs to a different execution workspace.")
         }
-        let remote = session.remoteWorkspaceID.flatMap { remoteWorkspaces.configuration(id: $0) }
-        guard session.remoteWorkspaceID == nil || remote != nil else { throw ApplicationModelError.remoteHarnessUnavailable }
-        return try await agentTools.mcpContext(sessionID: conversationID, remote: remote, captureID: "")
+        return try await agentTools.mcpContext(sessionID: conversationID, captureID: "")
     }
 
+    /// The launch of a chat that runs on this Mac. A Linux host's chats run
+    /// on its own server, never from here.
     func directACPLaunchContext(
         conversation: WorkspaceConversationRecord,
         runtimeKind: AgentRuntimeKind
-    ) async throws -> RemoteHarnessLaunchContext {
+    ) async throws -> LocalHarnessLaunchContext {
+        guard conversation.remoteWorkspaceID == nil else { throw ApplicationModelError.remoteHarnessUnavailable }
         guard !conversation.isArchived,
               let savedRoot = try await dashboardStore?.database.availableSessionExecutionRoot(id: conversation.id),
-              savedRoot.workspaceID == (try await executionWorkspaceIdentity(workspaceID: conversation.remoteWorkspaceID)) else {
+              savedRoot.workspaceID == (try await executionWorkspaceIdentity(workspaceID: nil)) else {
             throw WorkspaceToolError.invalid("This chat has no available execution workspace. Start a new chat.")
         }
         let inheritedRoot = URL(fileURLWithPath: savedRoot.rootPath)
-        if let remoteWorkspaceID = conversation.remoteWorkspaceID {
-            guard let configuration = remoteWorkspaces.configuration(
-                id: remoteWorkspaceID
-            ), remoteWorkspaces.isHarnessReady(runtimeKind, in: configuration) else {
-                throw ApplicationModelError.remoteHarnessUnavailable
-            }
-            let processDirectory = localACPWorkspaceLaunchConfiguration?.rootURL
-                ?? FileManager.default.homeDirectoryForCurrentUser
-
-            var sshOptions: @Sendable (String) throws -> [String] = RemoteWorkspaceTailnet.sshOptions
-            #if APP_FACADE_TESTS
-            if isFacadeFixture { sshOptions = { _ in [] } }
-            #endif
-            return try RemoteHarnessLaunchResolver.resolve(
-                configuration: configuration,
-                runtimeKind: runtimeKind,
-                processWorkingDirectory: processDirectory,
-                workingDirectory: inheritedRoot,
-                durableChannelID: conversation.id,
-                tailnetSSHOptions: sshOptions
-            )
-        }
         guard let launch = localACPLaunchConfigurations[runtimeKind],
               let workspace = localACPWorkspaceLaunchConfiguration else {
             throw localACPLaunchUnavailableError(for: runtimeKind)
@@ -3565,6 +3625,7 @@ final class ApplicationModel {
         await botsHost?.shutdown()
         shutdownLocalACPSessions()
         await localSessionShutdownTask?.value
+        backendWindowStream?.stop()
         backendRPCServer?.stop()
     }
 
@@ -4247,7 +4308,7 @@ extension ApplicationModel {
         guard backendRPCServer == nil else { return }
         let server = BackendRPCServer(socketURL: try socketURL ?? LocalExecutionRole.backendSocketURL(workspaceDirectory: Self.dashboardSupportDirectory()))
         try server.start { [weak self] request in
-            guard ["development.connect", "development.disconnect"].contains(request.method) else {
+            guard ["development.connect", "development.stream", "development.disconnect"].contains(request.method) else {
                 return BackendRPCResponse(id: request.id, error: "This foreground host only accepts development connections.")
             }
             guard let self else { return BackendRPCResponse(id: request.id, error: "The development host stopped.") }
@@ -4281,10 +4342,16 @@ extension ApplicationModel {
             let server = BackendRPCServer(socketURL: LocalExecutionRole.backendSocketURL(workspaceDirectory: try Self.dashboardSupportDirectory()))
             backendApplicationService = service
             backendRPCServer = server
-            try server.start { [weak self] request in
+            try server.start(handler: { [weak self] request in
                 guard let self else { return BackendRPCResponse(id: request.id, error: "The background service stopped.") }
                 return await self.handleBackendRequest(request)
-            }
+            }, stream: { [weak self] channel in
+                // A window's persistent connection, past the same peer check.
+                Task { @MainActor in
+                    guard let self else { channel.close(); return }
+                    self.acceptWindowStream(channel)
+                }
+            })
             observeBackendApplicationState()
             observeBackendRemoteState()
             observeBackendDatabasesState()
@@ -4322,6 +4389,12 @@ extension ApplicationModel {
                 let value = try JSONDecoder().decode(DevelopmentClientRequest.self, from: request.payload)
                 let connection = try await libraryHost.connectLocalDevelopment(value)
                 return .init(id: request.id, result: try JSONEncoder().encode(connection))
+            }
+            if request.method == "development.stream" {
+                guard request.payload.count <= 4_096 else { throw BackendRPCError.invalidFrame }
+                let value = try JSONDecoder().decode(DevelopmentStreamRequest.self, from: request.payload)
+                let route = try await libraryHost.admitDevelopmentStream(value)
+                return .init(id: request.id, result: try JSONEncoder().encode(route))
             }
             if request.method == "analytics.preference" {
                 await analytics.refresh()
@@ -4371,7 +4444,11 @@ extension ApplicationModel {
                     let result = BackendLibraryResult(url: url)
                     return .init(id: request.id, result: try JSONEncoder().encode(result))
                 }
-                let result = try await BackendLibraryService(service: dashboardStore.library).execute(command)
+                // A file of a session another machine runs is read from there once.
+                let result = try await BackendLibraryService(service: dashboardStore.library, remoteAttachment: { [weak self] conversationID, reference in
+                    guard let self else { throw ApplicationModelError.dashboardStoreUnavailable }
+                    return try await self.centralExecutionClient().attachment(conversationID: conversationID, reference: reference)
+                }).execute(command)
                 return .init(id: request.id, result: try JSONEncoder().encode(result))
             }
             if request.method.hasPrefix("usage.") {
@@ -4472,6 +4549,7 @@ extension ApplicationModel {
             Task { @MainActor in
                 guard let self, let service = self.backendApplicationService else { return }
                 self.observeBackendApplicationState()
+                self.executionStreamChanged?([])
                 await service.invalidations.publish(scopes: [.runtime, .permissions])
             }
         }
@@ -4519,10 +4597,11 @@ extension ApplicationModel {
             from: await callBackend(method: "remoteWorkspaces.snapshot")))
     }
 
+    static let backendDisconnectedMessage = "Background service disconnected. Your sessions remain owned by the backend."
+    func reportBackendDisconnected() { workspaceError = Self.backendDisconnectedMessage }
+
     func startBackendClient() async {
-        backendClientTask?.cancel()
-        backendConversationClientTask?.cancel()
-        let disconnectedMessage = "Background service disconnected. Your sessions remain owned by the backend."
+        await stopWindowStream()
         do {
             let support = try Self.dashboardSupportDirectory()
             let client = BackendRPCClient(socketURL: LocalExecutionRole.backendSocketURL(workspaceDirectory: support))
@@ -4556,6 +4635,9 @@ extension ApplicationModel {
                     startupMessage = status.startupMessage
                     if status.ready {
                         guard status.protocolVersion == 1, status.capabilities.contains("session.dispatch-epochs") else { throw AgentDispatchAdmissionError.invalid }
+                        guard status.capabilities.contains(BackendApplicationReadiness.windowStreamCapability) else {
+                            throw BackendRPCError.remote("The background service is incompatible with this app. Restart Woven Matter after finishing current work.")
+                        }
                         guard status.completeClientRouting else {
                             throw BackendRPCError.remote("The background server is unavailable. Open Background Server in Settings to start it or try again.")
                         }
@@ -4602,65 +4684,44 @@ extension ApplicationModel {
             try Task.checkCancellation()
             state = .ready
             startBotsClient()
-            backendClientTask?.cancel()
-            backendConversationClientTask?.cancel()
-            // The journal supports independent bounded waiters. Transcript
-            // delivery must never wait for runtime/settings/usage inventory.
-            backendConversationClientTask = Task { [weak self] in
-                await BackendInvalidationConsumer.run(receive: { cursor in
-                    let data = try await client.call(method: "application.changes", payload: JSONEncoder().encode(cursor))
-                    return try JSONDecoder().decode(BackendInvalidations.self, from: data)
-                }, apply: { [weak self] change in
-                    guard let self else { throw CancellationError() }
-                    if !change.conversationIDs.isEmpty { try await Task.sleep(for: .milliseconds(16)) }
-                    let visible = Set(self.conversationStatesByID.keys)
-                    for id in change.requiresReload ? visible : change.conversationIDs.intersection(visible) {
-                        try Task.checkCancellation()
-                        await self.refreshConversation(id: id)
-                    }
-                }, failed: { [weak self] _ in
-                    self?.workspaceError = disconnectedMessage
-                })
-            }
-            backendClientTask = Task { [weak self] in
-                await BackendInvalidationConsumer.run(receive: { cursor in
-                    let data = try await client.call(method: "application.changes", payload: JSONEncoder().encode(cursor))
-                    return try JSONDecoder().decode(BackendInvalidations.self, from: data)
-                }, apply: { [weak self] change in
-                    guard let self else { throw CancellationError() }
-                    if change.requiresReload || !change.scopes.isDisjoint(with: [.workspace, .calendar]) {
-                        if DevelopmentLaunch.isClient {
-                            self.backendReplica = try JSONDecoder().decode(DevelopmentReplicaSnapshot.self,
-                                from: await client.call(method: "development.replica"))
-                            // Replica changes can leave the local execution DB revision unchanged.
-                            await self.refreshWorkspace()
-                        } else {
-                            await self.refreshWorkspaceIfChanged()
-                        }
-                    }
-                    if change.requiresReload || !change.scopes.isDisjoint(with: [.runtime, .permissions]) {
-                        try await self.refreshBackendApplicationState()
-                    }
-                    if change.requiresReload || change.scopes.contains(.databases) { try await self.refreshBackendDatabasesState() }
-                    if change.requiresReload || change.scopes.contains(.bots) { await self.bots.refresh() }
-                    if change.requiresReload || change.scopes.contains(.remoteWorkspaces) { try await self.refreshBackendRemoteState() }
-                    if change.requiresReload || change.scopes.contains(.openCode) { try await self.refreshBackendOpenCodeState() }
-                    if change.requiresReload || change.scopes.contains(.settings) {
-                        try await self.refreshBackendConnectionsState()
-                        try await self.refreshBackendSurfaceProfile()
-                        await self.analytics.refresh()
-                    }
-                    if change.requiresReload || change.scopes.contains(.usage) { await self.usage.refreshBackendSnapshot() }
-                    if change.requiresReload || change.scopes.contains(.settings) { try await self.agentTools?.reload() }
-                    if self.workspaceError == disconnectedMessage { self.workspaceError = nil }
-                }, failed: { [weak self] _ in
-                    self?.workspaceError = disconnectedMessage
-                })
-            }
+            // One persistent connection follows the background server:
+            // `server.state` carries what it invalidates, and each open chat
+            // follows its `conversation` subscription. After a reconnect both
+            // resubscribe and everything is read again from the projection.
+            await startWindowStream(socketURL: client.socketURL)
         } catch {
             if Task.isCancelled { return }
             state = .failed(error.localizedDescription)
         }
+    }
+
+    /// `server.state` scopes: the background-server state the window reads
+    /// again (everything when `reloadAll`, on subscribe and after a reconnect).
+    /// Transcript reloads never wait on this.
+    func applyServerScopes(_ scopes: Set<BackendInvalidationScope>, reloadAll: Bool) async throws {
+        if reloadAll || !scopes.isDisjoint(with: [.workspace, .calendar]) {
+            if DevelopmentLaunch.isClient {
+                backendReplica = try JSONDecoder().decode(DevelopmentReplicaSnapshot.self,
+                    from: await callBackend(method: "development.replica"))
+                // Replica changes can leave the local execution DB revision unchanged.
+                await refreshWorkspace()
+            } else {
+                await refreshWorkspaceIfChanged()
+            }
+        }
+        if reloadAll || !scopes.isDisjoint(with: [.runtime, .permissions]) { try await refreshBackendApplicationState() }
+        if reloadAll || scopes.contains(.databases) { try await refreshBackendDatabasesState() }
+        if reloadAll || scopes.contains(.bots) { await bots.refresh() }
+        if reloadAll || scopes.contains(.remoteWorkspaces) { try await refreshBackendRemoteState() }
+        if reloadAll || scopes.contains(.openCode) { try await refreshBackendOpenCodeState() }
+        if reloadAll || scopes.contains(.settings) {
+            try await refreshBackendConnectionsState()
+            try await refreshBackendSurfaceProfile()
+            await analytics.refresh()
+        }
+        if reloadAll || scopes.contains(.usage) { await usage.refreshBackendSnapshot() }
+        if reloadAll || scopes.contains(.settings) { try await agentTools?.reload() }
+        if workspaceError == Self.backendDisconnectedMessage { workspaceError = nil }
     }
 
     private func refreshBackendApplicationState() async throws {
@@ -4791,7 +4852,8 @@ extension ApplicationModel {
                 let status = try JSONDecoder().decode(BackendApplicationReadiness.self, from: data)
                 if let error = status.startupError { throw BackendRPCError.remote(error) }
                 guard status.protocolVersion == 1, status.completeClientRouting,
-                      status.capabilities.contains("session.dispatch-epochs") else {
+                      status.capabilities.contains("session.dispatch-epochs"),
+                      status.capabilities.contains(BackendApplicationReadiness.windowStreamCapability) else {
                     throw BackendRPCError.remote("The background service is incompatible with this app. Restart Woven Matter after finishing current work.")
                 }
                 return status.ready

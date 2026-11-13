@@ -7,20 +7,12 @@
 // node remote/test-support/host-smoke.mjs --state /private/tmp/host-state.json
 // Repeat with --verify-state after replacing the SSH tunnel or restarting the
 // service. The receipt contains public IDs only; it never stores credentials.
-//
-// For isolated real-service durable ACP checks, run on the Linux host with its
-// pinned Node: node host-smoke.mjs --durable-fixture /path/current/src/server.mjs
-// This mode creates a temporary HOME, catalog and fake CLI; no real CLI sign-in,
-// configuration or provider is used. Root access can be checked separately via:
-// current/bin/wm-exec harness sudo -n /bin/sh -c 'id -u'
+// Root access can be checked separately via:
+// current/bin/wm-exec exec sudo -n /bin/sh -c 'id -u'
 import assert from 'node:assert/strict'
-import { randomBytes, randomUUID } from 'node:crypto'
-import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
-import { createServer } from 'node:net'
-import { tmpdir } from 'node:os'
-import { dirname, isAbsolute, join, resolve } from 'node:path'
-import { spawn } from 'node:child_process'
-import { once } from 'node:events'
+import { randomUUID } from 'node:crypto'
+import { chmod, readFile, writeFile } from 'node:fs/promises'
+import { isAbsolute } from 'node:path'
 
 const arguments_ = process.argv.slice(2)
 const option = name => {
@@ -240,128 +232,8 @@ async function deployedSmoke() {
   return report
 }
 
-async function unusedPort() {
-  const socket = createServer()
-  socket.listen(0, '127.0.0.1')
-  await once(socket, 'listening')
-  const port = socket.address().port
-  await new Promise((resolve_, reject) => socket.close(error => error ? reject(error) : resolve_()))
-  return port
-}
-
-async function stopProcess(child) {
-  if (!child || child.exitCode !== null || child.signalCode !== null) return
-  const done = once(child, 'close')
-  const timer = setTimeout(() => child.kill('SIGKILL'), 5000)
-  try { child.kill('SIGTERM'); await done } finally { clearTimeout(timer) }
-}
-
-async function durableFixture(servicePath) {
-  assert.equal(process.platform, 'linux', 'Run --durable-fixture on the deployed Linux host')
-  const root = await mkdtemp(join(tmpdir(), 'woven-host-durable-smoke-'))
-  const workspace = join(root, 'workspace'), external = join(root, 'external-project'), bin = join(root, 'bin')
-  const token = randomBytes(32).toString('base64url'), promptLog = join(root, 'prompt-count')
-  secrets.add(token)
-  let child
-  try {
-    await Promise.all([workspace, external, bin].map(path => mkdir(path, { mode: 0o700 })))
-    const cli = join(bin, 'host-fixture-acp')
-    await writeFile(cli, `#!${process.execPath}
-const {appendFileSync}=require('node:fs'),{createInterface}=require('node:readline');
-if(process.argv.includes('--version')){console.log('9.9.9');process.exit(0)}
-const send=value=>process.stdout.write(JSON.stringify({jsonrpc:'2.0',...value})+'\\n');
-createInterface({input:process.stdin}).on('line',line=>{let m;try{m=JSON.parse(line)}catch{return}
-if(m.method==='initialize')send({id:m.id,result:{protocolVersion:1,agentInfo:{name:'provider-free-host-fixture'}}});
-else if(m.method==='session/new')send({id:m.id,result:{sessionId:'fixture-session',_meta:{cwd:process.cwd()}}});
-else if(m.method==='session/prompt'){appendFileSync(process.env.WOVENMATTER_FIXTURE_PROMPTS,'prompt\\n');
-send({method:'session/update',params:{sessionId:'fixture-session',update:{sessionUpdate:'agent_message_chunk',content:{type:'text',text:'before-disconnect;'}}}});
-setTimeout(()=>{send({method:'session/update',params:{sessionId:'fixture-session',update:{sessionUpdate:'agent_message_chunk',content:{type:'text',text:'after-disconnect;'}}}});send({id:m.id,result:{stopReason:'end_turn'}})},1000)}
-});
-`, { mode: 0o700 })
-    const catalog = join(root, 'catalog.json')
-    await writeFile(catalog, JSON.stringify({ schemaVersion: 4, harnesses: [{
-      id: 'host_fixture', displayName: 'Provider-free fixture', transport: 'acp', command: cli, cliCommand: cli,
-      arguments: [], capabilities: ['conversations', 'resume'], authentication: { statusCommands: ['true'], discoveries: [], methods: [] },
-      install: { kind: 'npm-global', package: 'host-fixture@9.9.9', command: 'false' },
-    }] }))
-    const port = await unusedPort(), request = client('http://127.0.0.1:' + port, token)
-    const environment = { ...process.env, HOME: root, PATH: dirname(process.execPath) + ':' + bin + ':' + process.env.PATH,
-      WOVENMATTER_API_TOKEN: token, WOVENMATTER_RUNTIME_KIND: 'host', WOVENMATTER_ACCESS_MODE: 'fullRoot',
-      WOVENMATTER_LISTEN_HOST: '127.0.0.1', WOVENMATTER_LISTEN_PORT: String(port),
-      WOVENMATTER_WORKSPACE: workspace, WOVENMATTER_HARNESS_CATALOG: catalog,
-      WOVENMATTER_DATA_DIRECTORY: join(root, 'databases'), WOVENMATTER_STATE_DIRECTORY: join(root, 'run'),
-      WOVENMATTER_FIXTURE_PROMPTS: promptLog,
-    }
-    async function start() {
-      const started = spawn(process.execPath, [resolve(servicePath)], { cwd: workspace, env: environment, stdio: ['ignore', 'pipe', 'pipe'] })
-      let diagnostics = ''
-      started.stdout.resume()
-      started.stderr.on('data', chunk => { diagnostics = (diagnostics + chunk).slice(-2048) })
-      const deadline = Date.now() + 20000
-      while (Date.now() < deadline) {
-        if (started.exitCode !== null || started.signalCode !== null) throw new Error('Isolated production service exited before becoming healthy: ' + diagnostics)
-        try { await request('/v1/health'); return started } catch {}
-        await new Promise(resolve_ => setTimeout(resolve_, 100))
-      }
-      await stopProcess(started)
-      throw new Error('Isolated production service did not become healthy')
-    }
-    child = await start()
-    const base = { channelID: 'durable-host-fixture', harnessID: 'host_fixture', cwd: external }
-    const relay = (operation, body = {}) => request('/v1/durable-acp/' + operation, { method: 'POST', body: { ...base, ...body } })
-    let attached = await relay('attach', { attachmentProtocol: 1 })
-    assert.equal(attached.state, 'running')
-    let attachmentToken = attached.attachmentToken
-    const send = (id, method, params = {}, deliveryID = randomUUID()) => relay('message', { attachmentToken, deliveryID, message: { jsonrpc: '2.0', id, method, params } })
-    await send('initialize', 'initialize')
-    await send('new', 'session/new')
-    const deadline = Date.now() + 5000
-    let polled
-    do {
-      polled = await relay('poll', { after: 0, attachmentToken })
-      if (polled.snapshot.session) break
-      await new Promise(resolve_ => setTimeout(resolve_, 25))
-    } while (Date.now() < deadline)
-    assert.equal(polled.snapshot.session?._meta?.cwd, external, 'Host rejected or changed an external linked working directory')
-    const runID = randomUUID(), deliveryID = randomUUID()
-    const prompt = { sessionId: 'fixture-session', prompt: [{ type: 'text', text: 'Provider-free reconnect fixture' }], _meta: { wovenRunID: runID } }
-    await send('prompt', 'session/prompt', prompt, deliveryID)
-    assert.equal((await send('prompt', 'session/prompt', prompt, deliveryID)).duplicate, true)
-    let cursor = 0
-    for (let attempt = 0; attempt < 100; attempt++) {
-      polled = await relay('poll', { after: 0, attachmentToken })
-      cursor = polled.events.at(-1)?.sequence ?? 0
-      if (polled.events.some(event => event.message?.params?.update?.content?.text === 'before-disconnect;')) break
-      await new Promise(resolve_ => setTimeout(resolve_, 10))
-    }
-    check(cursor > 0 && polled.snapshot.busy, 'Fixture did not enter a running state')
-    const disconnect = new AbortController()
-    const polling = request('/v1/durable-acp/poll', { method: 'POST', signal: disconnect.signal, body: { ...base, attachmentToken, after: cursor, waitMs: 10000 } })
-    setTimeout(() => disconnect.abort(), 30)
-    await assert.rejects(polling, { name: 'AbortError' })
-    await new Promise(resolve_ => setTimeout(resolve_, 1300))
-    attached = await relay('attach', { attachmentProtocol: 1 })
-    assert.equal(attached.snapshot.busy, false)
-    const recovered = attached.snapshot.recoveredRuns.find(run => run.runID === runID)
-    assert.equal(recovered?.content, 'before-disconnect;after-disconnect;')
-    assert.equal((await readFile(promptLog, 'utf8')).trim(), 'prompt', 'A delivery retry executed the prompt twice')
-    const previousToken = attachmentToken
-    attachmentToken = attached.attachmentToken
-    check(previousToken !== attachmentToken, 'Reattachment did not fence the old client')
-    const stale = await fetch('http://127.0.0.1:' + port + '/v1/durable-acp/message', { method: 'POST', headers: { authorization: 'Bearer ' + token, 'content-type': 'application/json' }, body: JSON.stringify({ ...base, attachmentToken: previousToken, deliveryID: randomUUID(), message: { jsonrpc: '2.0', id: 'stale', method: 'session/prompt', params: prompt } }) })
-    check(!stale.ok, 'A replaced attachment was allowed to submit work')
-    await stopProcess(child); child = await start()
-    attached = await relay('attach', { attachmentProtocol: 1 })
-    assert.ok(['stopped', 'interrupted'].includes(attached.state), 'Service restart silently replayed a native session')
-    assert.equal(attached.snapshot.recoveredRuns.find(run => run.runID === runID)?.content, recovered.content)
-    assert.equal((await readFile(promptLog, 'utf8')).trim(), 'prompt', 'Service restart replayed an accepted prompt')
-    return { ok: true, mode: 'durable-fixture', checks: ['external-linked-directory', 'idempotent-prompt-delivery', 'disconnected-client-run-continuation', 'reattachment-output-recovery', 'stale-attachment-fencing', 'service-restart-journal-recovery-without-prompt-replay'] }
-  } finally { await stopProcess(child); await rm(root, { recursive: true, force: true }) }
-}
-
 try {
-  const fixture = option('--durable-fixture')
-  process.stdout.write(JSON.stringify(fixture ? await durableFixture(fixture) : await deployedSmoke()) + '\n')
+  process.stdout.write(JSON.stringify(await deployedSmoke()) + '\n')
 } catch (error) {
   process.stderr.write(JSON.stringify({ ok: false, error: redact(error?.message ?? error) }) + '\n')
   process.exitCode = 1

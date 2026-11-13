@@ -451,8 +451,7 @@ public actor LocalACPSessionCoordinator {
                 phase: .content
             )
             acceptingActiveInputRunIDs.insert(run.runID)
-            if descriptor.runtimeKind == .defaultAgent
-                || (descriptor.remoteWorkspaceID != nil && launch.environment["WOVEN_DURABLE_REMOTE_ACP"] == "1") {
+            if descriptor.runtimeKind == .defaultAgent {
                 durableRunIDs.insert(run.runID)
             }
             runDispatchFences[run.runID] = [operationFence]
@@ -527,13 +526,6 @@ public actor LocalACPSessionCoordinator {
                 }
                 input.mcpContext = .init(endpointURL: current.endpointURL, bearerToken: current.bearerToken,
                     captureID: captured.captureID, sessionID: captured.sessionID)
-            }
-            if durableRunIDs.contains(run.runID), let workspaceID = descriptor.remoteWorkspaceID {
-                let stored = try await database.localACPSession(conversationID: descriptor.conversationID)
-                guard let sessionID = activeSessions[descriptor.conversationID]?.pendingDurableSessionID ?? stored.acpSessionID else {
-                    throw LocalACPClientError.sessionNotInitialized
-                }
-                try await database.registerDurableLocalACPRun(runID: run.runID, remoteWorkspaceID: workspaceID, sessionID: sessionID)
             }
             if cancellationRequestedRunIDs.contains(run.runID) {
                 try await database.cancelLocalACPRun(runID: run.runID)
@@ -1703,20 +1695,6 @@ public actor LocalACPSessionCoordinator {
                     )
                 }
             }
-            if descriptor.runtimeKind != .defaultAgent, let workspaceID = descriptor.remoteWorkspaceID,
-               initialized.loadedExistingSession,
-               initialized.sessionID == descriptor.acpSessionID,
-               initialized.confirmedRemoteIdleSessionID == initialized.sessionID {
-                try await database.reconcileUncertainRemoteRuns(conversationID: descriptor.conversationID,
-                    remoteWorkspaceID: workspaceID, sessionID: initialized.sessionID,
-                    snapshots: initialized.recoveredDefaultAgentRuns)
-                confirmRecoveredStop(conversationID: descriptor.conversationID,
-                    nativeSessionID: initialized.sessionID, remoteWorkspaceID: workspaceID)
-                publishChange(conversationID: descriptor.conversationID, runID: "", phase: .terminal)
-            } else if descriptor.runtimeKind != .defaultAgent, !initialized.recoveredDefaultAgentRuns.isEmpty {
-                try await database.recoverRemoteAgentRuns(conversationID: descriptor.conversationID, snapshots: initialized.recoveredDefaultAgentRuns)
-                publishChange(conversationID: descriptor.conversationID, runID: "", phase: .terminal)
-            }
             if descriptor.runtimeKind == .defaultAgent, initialized.loadedExistingSession,
                initialized.sessionID == descriptor.acpSessionID, let recover = started.recoverBuiltInRuns {
                 let requests = try await database.builtInRunRecoveryRequests(
@@ -1887,10 +1865,9 @@ public actor LocalACPSessionCoordinator {
     ) async throws -> LocalACPInitializedSession {
         let sessionID = descriptor.acpSessionID
         return try await withTaskCancellationHandler {
-            // Loading a durable session can resume a remote run that is
-            // waiting for approval, before any new prompt handler exists.
-            if descriptor.runtimeKind == .defaultAgent || descriptor.remoteWorkspaceID != nil,
-               let handler = resumePermissionHandler {
+            // Loading a durable Pi session can resume a run that is waiting
+            // for approval, before any new prompt handler exists.
+            if descriptor.runtimeKind == .defaultAgent, let handler = resumePermissionHandler {
                 await client.setResumePermissionHandler? { request in
                     await handler(descriptor.conversationID, request)
                 }

@@ -36,8 +36,9 @@ struct WorkspaceLibraryTests {
     #expect(!FileManager.default.fileExists(atPath: blob.path))
     #expect(FileManager.default.fileExists(atPath: file.path))
     #expect(
-      try RemoteLibraryFiles.path(source: "./my%20report.txt#section", root: "/home/work")
+      try LibraryService.remotePath(source: "./my%20report.txt#section", root: "/home/work")
         == "/home/work/./my report.txt")
+    #expect(try LibraryService.remotePath(source: "~/out.txt", root: "/home/work") == "~/out.txt")
     #expect(LibraryFileReference.path("file://other-host/report.txt") == nil)
     #expect(LibraryFileReference.path("./bad%00path.txt") == nil)
     let chat = try await f.session()
@@ -186,6 +187,8 @@ struct WorkspaceLibraryTests {
     #expect(item.storage == .retained && item.sizeBytes == Int64(bytes.count))
   }
 
+  /// A Linux host's file is read through its server (`POST
+  /// v1/execution/library-file`), named by workspace, chat and path.
   @Test("retained remote handback opens offline and copies deduplicate by content")
   func remoteRetention() async throws {
     let f = try await Fixture()
@@ -202,13 +205,13 @@ struct WorkspaceLibraryTests {
     let bytes = Data("PDF fixture".utf8)
     let service = LibraryService(
       database: f.db,
-      remoteFiles: .init(runner: { destination, command, input in
-        #expect(destination == "host.invalid")
-        #expect(command.contains("/srv/wovenmatter-test/current/bin/wm-exec"))
-        #expect(!command.contains("docker exec"))
-        #expect(input == nil)
+      remoteFiles: { workspaceID, conversationID, path, underRoot in
+        #expect(workspaceID == configuration.id.uuidString.lowercased())
+        #expect(conversationID == chat)
+        #expect(path == "./report.pdf")
+        #expect(underRoot == "/srv/wovenmatter-test/workspace/./report.pdf")
         return bytes
-      }))
+      })
     try await service.synchronize(locations: [], remoteWorkspace: { _ in nil })
     let unavailable = try await #require(f.db.libraryItems().first { $0.sender == .agent })
     #expect(unavailable.storage == .unavailable)

@@ -392,6 +392,207 @@ struct CentralLibraryClientTests {
     }
 }
 
+extension CentralLibraryClientTests {
+    /// A client-mode build follows its live host on one stream: a chat the
+    /// window holds open comes from `conversation` items, its questions from
+    /// `pending`, library sync waits for `library` items, and nothing reads
+    /// the library on a timer while the stream is open.
+    @Test func aClientFollowsALiveHostChatFromStreamItemsAndDoesNotPoll() async throws {
+        let fixture = try await FacadeFixture(); defer { fixture.remove() }
+        let replica = try MobileStore(file: fixture.directory.appending(path: "client/library.json"))
+        let library = "00000000-0000-4000-8000-000000000001"
+        try await replica.bindWorkspace(library)
+        let serving = FixtureTailscaleServe(dnsName: "secondary.test.ts.net")
+        let central = MacClientFakeCentral()
+        let host = FakeLiveHost(route: .init(port: 1, audience: UUID().uuidString.lowercased(), libraryID: library,
+                                             workspaceID: UUID().uuidString.lowercased()))
+        var relayed: [Set<String>] = []
+        let client = CentralLibraryClientModel(store: replica, transport: central, executionDirectory: fixture.directory,
+            makeLocalExecution: { directory, store in
+                try await SecondaryMacExecutionWorkspace.create(directory: directory, replica: store, executionModel: fixture.model)
+            }, makeLocalHost: { workspace, directory in
+                SecondaryMacExecutionHost(workspace: workspace, directory: directory, makeExposure: { serving.exposure() })
+            }, makeLiveStream: { _, _, route in host.connection(route) })
+        client.liveRelayChanged = { relayed.append($0) }
+        let running = Task { await client.run() }
+        defer { running.cancel() }
+        try await waitFor { client.liveStreamOpen }
+        let socket = try #require(host.sockets.first)
+        let workspace = try await socket.subscription(.workspace)
+
+        // The host's own session, unassigned in its library (the central route).
+        let id = UUID().uuidString.lowercased()
+        await socket.push(.item(.init(id: workspace, payload: .conversations(.init(conversations: [
+            .init(id: id, title: "Live on the host", activeRunID: "run-1")], snapshot: true)))))
+        await socket.push(.item(.init(id: workspace, payload: .pending(.init(interactions: [])))))
+        await socket.push(.item(.init(id: workspace, payload: .synchronized)))
+        try await waitFor { client.state.conversations[id]?.activeRunID == "run-1" }
+        #expect(client.executionOwner(for: id) == nil)
+
+        // The window opens the chat: it is followed on the same socket.
+        client.followConversation(id)
+        let conversation = try await socket.subscription(.conversation, conversationID: id)
+        let message = LibraryMessage(id: "m1", conversationID: id, runID: "run-1", role: "assistant", content: "All 214", status: "streaming")
+        await socket.push(.item(.init(id: conversation, payload: .transcript(.init(transcript: .init(conversationID: id,
+            messages: [message], activeRunID: "run-1"), snapshot: true)))))
+        var longer = message; longer.content = "All 214 tests pass"
+        await socket.push(.item(.init(id: conversation, payload: .transcript(.init(transcript: .init(conversationID: id,
+            messages: [longer], activeRunID: "run-1"), snapshot: false)))))
+        let question = PendingInteraction(id: "q1", conversationID: id, runID: "run-1", kind: .question, title: "Ship it?")
+        await socket.push(.item(.init(id: workspace, payload: .pending(.init(interactions: [question])))))
+        try await waitFor { relayed.contains([id]) && client.streams(id) }
+        // The pass the opened stream asked for, and the passes the executor's
+        // first captures ask for (each a local database change), finish first.
+        try await settle(central)
+
+        let readsBefore = await central.reads
+        let snapshot = try await client.desktopExecution(.refresh(conversationID: id))
+        #expect(snapshot.transcript?.messages.map(\.content) == ["All 214 tests pass"], "live text is the whole message so far")
+        #expect(snapshot.transcript?.activeRunID == "run-1")
+        #expect(snapshot.interactions == [question] && snapshot.online)
+        #expect(await central.reads == readsBefore, "a streamed chat is answered without reading the library")
+
+        // Time passes with the stream open and nothing changing: nothing reads
+        // the library and the socket is the same one.
+        let idleReads = await central.reads
+        try await Task.sleep(for: .seconds(3))
+        #expect(await central.reads == idleReads, "no timer reads the live host while its stream is open")
+        #expect(host.sockets.count == 1)
+        #expect(client.nextScheduledWork().map { $0.timeIntervalSinceNow > 20 } ?? true, "the loop waits for events, not a tick")
+
+        // A `library` item ahead of this replica's cursor starts one library pass.
+        let cursor = await replica.snapshot().cursor
+        await socket.push(.item(.init(id: workspace, payload: .library(.init(cursor: cursor + 1)))))
+        try await waitFor { await central.reads > idleReads }
+        try await settle(central)
+
+        // The window closes the chat: its subscription is cancelled, nothing is read.
+        let closingReads = await central.reads
+        _ = try await client.desktopExecution(.close(conversationID: id))
+        try await socket.cancelled(conversation)
+        #expect(!client.streams(id))
+        #expect(await central.reads == closingReads)
+        running.cancel()
+        try await client.prepareForQuit()
+    }
+
+    /// The host ending the `workspace` subscription for good leaves nothing to
+    /// say when to sync: the fallback timer runs until the next connection
+    /// subscribes again.
+    @Test func aWorkspaceStreamTheHostEndsFallsBackToTheTimerUntilItReconnects() async throws {
+        let fixture = try await FacadeFixture(); defer { fixture.remove() }
+        let replica = try MobileStore(file: fixture.directory.appending(path: "client/library.json"))
+        let library = "00000000-0000-4000-8000-000000000001"
+        try await replica.bindWorkspace(library)
+        let serving = FixtureTailscaleServe(dnsName: "secondary.test.ts.net")
+        let host = FakeLiveHost(route: .init(port: 1, audience: UUID().uuidString.lowercased(), libraryID: library,
+                                             workspaceID: UUID().uuidString.lowercased()))
+        let client = CentralLibraryClientModel(store: replica, transport: MacClientFakeCentral(), executionDirectory: fixture.directory,
+            makeLocalExecution: { directory, store in
+                try await SecondaryMacExecutionWorkspace.create(directory: directory, replica: store, executionModel: fixture.model)
+            }, makeLocalHost: { workspace, directory in
+                SecondaryMacExecutionHost(workspace: workspace, directory: directory, makeExposure: { serving.exposure() })
+            }, makeLiveStream: { _, _, route in host.connection(route) })
+        let running = Task { await client.run() }
+        defer { running.cancel() }
+        try await waitFor { client.liveStreamOpen }
+        let socket = try #require(host.sockets.first)
+        let workspace = try await socket.subscription(.workspace)
+
+        await socket.push(.end(.init(id: workspace, error: .init(code: "unavailable", message: "The host is stopping its stream."))))
+        try await waitFor { !client.liveStreamOpen }
+        try await waitFor { client.nextScheduledWork().map { $0.timeIntervalSinceNow <= Double(CentralLibraryClientModel.fallbackCentralInterval) + 1 } ?? false }
+
+        // The next connection subscribes `workspace` again and items drive sync once more.
+        await socket.close(.goingAway)
+        try await waitFor { host.sockets.count == 2 && client.liveStreamOpen }
+        _ = try await host.sockets[1].subscription(.workspace)
+        running.cancel()
+        try await client.prepareForQuit()
+    }
+
+    /// Waits until the fake library has seen no read for longer than a local capture interval.
+    private func settle(_ central: MacClientFakeCentral) async throws {
+        var settled = await central.reads
+        for _ in 0..<40 {
+            try await Task.sleep(for: .milliseconds(1_500))
+            let now = await central.reads
+            if now == settled { return }
+            settled = now
+        }
+        Issue.record("The library kept being read.")
+    }
+
+    private func waitFor(_ condition: @MainActor () async -> Bool) async throws {
+        for _ in 0..<500 {
+            if await condition() { return }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        Issue.record("The condition was not reached in time.")
+        throw CancellationError()
+    }
+}
+
+/// A live host that accepts every stream attempt on an in-memory socket.
+@MainActor private final class FakeLiveHost {
+    let route: DevelopmentStreamRoute
+    private(set) var sockets: [FakeLiveSocket] = []
+    init(route: DevelopmentStreamRoute) { self.route = route }
+    func connection(_ route: DevelopmentLiveStream.Route) -> StreamConnection {
+        let value = self.route
+        return StreamConnection { [weak self] in
+            let socket = FakeLiveSocket()
+            route.current = value
+            await socket.push(.hello(.init(deviceID: value.audience, libraryID: value.libraryID, workspaceID: value.workspaceID,
+                                           serverTime: MemberRequestSignature.now(), capabilities: [WovenMatterShared.StreamProtocol.capability])))
+            await MainActor.run { self?.sockets.append(socket) }
+            return socket
+        }
+    }
+}
+
+private actor FakeLiveSocket: StreamTransport {
+    private var inbox: [StreamFrame] = []
+    private var receivers: [CheckedContinuation<StreamFrame, any Error>] = []
+    private(set) var sent: [StreamFrame] = []
+    private var closed = false
+
+    func push(_ frame: StreamFrame) {
+        if receivers.isEmpty { inbox.append(frame) } else { receivers.removeFirst().resume(returning: frame) }
+    }
+    func receive() async throws -> StreamFrame {
+        if !inbox.isEmpty { return inbox.removeFirst() }
+        if closed { throw StreamTransportClosed(code: 1000) }
+        return try await withCheckedThrowingContinuation { receivers.append($0) }
+    }
+    func send(_ frame: StreamFrame) async throws { sent.append(frame) }
+    func ping() async throws {}
+    func close(_ code: WovenMatterShared.StreamProtocol.CloseCode) async {
+        closed = true
+        for receiver in receivers { receiver.resume(throwing: StreamTransportClosed(code: code.rawValue)) }
+        receivers.removeAll()
+    }
+
+    /// The wire ID of the client's subscription to `stream`.
+    func subscription(_ stream: WovenMatterShared.StreamProtocol.Stream, conversationID: String? = nil) async throws -> String {
+        for _ in 0..<500 {
+            for frame in sent {
+                if case .subscribe(let value) = frame, value.stream == stream.rawValue,
+                   conversationID == nil || value.params.conversationID == conversationID { return value.id }
+            }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        throw CancellationError()
+    }
+    func cancelled(_ id: String) async throws {
+        for _ in 0..<500 {
+            if sent.contains(where: { if case .cancel(let value) = $0 { return value.id == id }; return false }) { return }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        throw CancellationError()
+    }
+}
+
 private actor MacClientFakeCentral: LibraryTransport {
     var notes: [String: LibraryNote] = [:]
     var folders: [String: LibraryFolder] = [:]
@@ -407,9 +608,11 @@ private actor MacClientFakeCentral: LibraryTransport {
     func setOffline(_ value: Bool) { offline = value }
     var libraryID = "00000000-0000-4000-8000-000000000001"
     func setLibraryID(_ value: String) { libraryID = value }
-    func workspaceIdentity() throws -> String { if offline { throw MobileConnectionError.offline }; return libraryID }
-    func snapshot() -> LibrarySnapshot { .init(workspaceID: libraryID, cursor: Int64(publishedChanges.count), folders: Array(folders.values), notes: Array(notes.values)) }
-    func changes(after: Int64) -> LibraryChangePage { .init(workspaceID: libraryID, cursor: Int64(publishedChanges.count), changes: publishedChanges.filter { $0.cursor > after }) }
+    /// Every read of the library, as the HTTPS library API would see it.
+    var reads = 0
+    func workspaceIdentity() throws -> String { reads += 1; if offline { throw MobileConnectionError.offline }; return libraryID }
+    func snapshot() -> LibrarySnapshot { reads += 1; return .init(workspaceID: libraryID, cursor: Int64(publishedChanges.count), folders: Array(folders.values), notes: Array(notes.values)) }
+    func changes(after: Int64) -> LibraryChangePage { reads += 1; return .init(workspaceID: libraryID, cursor: Int64(publishedChanges.count), changes: publishedChanges.filter { $0.cursor > after }) }
     func mutate(_ mutation: LibraryMutation) throws -> LibraryMutationResult {
         if mutation.kind == .createFolder {
             let folder = LibraryFolder(id: mutation.resourceID, name: mutation.title ?? "", revision: 1)
@@ -422,8 +625,8 @@ private actor MacClientFakeCentral: LibraryTransport {
     }
     func note(_ id: String) throws -> LibraryNote { try #require(notes[id]) }
     func providers() -> [HarnessCapabilities] { [.init(id: "local:default_agent", runtimeKind: "default_agent", displayName: "Pi Durable", available: true)] }
-    func pending() -> [PendingInteraction] { [] }
-    func transcript(_ id: String) -> LibraryTranscript { .init(conversationID: id) }
+    func pending() -> [PendingInteraction] { reads += 1; return [] }
+    func transcript(_ id: String) -> LibraryTranscript { reads += 1; return .init(conversationID: id) }
     func command(_ command: LibraryCommand) throws -> LibraryCommandReceipt {
         if let receipt = receipts[command.commandID] { return receipt }
         let receipt = LibraryCommandReceipt(commandID: command.commandID, deviceID: command.deviceID, status: .completed, conversationID: command.conversationID)

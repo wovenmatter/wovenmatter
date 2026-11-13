@@ -138,11 +138,13 @@ final class LibraryModel {
         return url
     }
 
-    func attachmentURL(contentHash: String, fileName: String, mimeType: String) async throws -> URL {
+    /// `remoteConversationID` names a session another machine runs: its file
+    /// is read from there by the background server the first time.
+    func attachmentURL(contentHash: String, fileName: String, mimeType: String, remoteConversationID: String? = nil) async throws -> URL {
         let url: URL?
         if let backendExecutor {
             url = try await backendExecutor(.openAttachment(
-                contentHash: contentHash, fileName: fileName, mimeType: mimeType)).url
+                contentHash: contentHash, fileName: fileName, mimeType: mimeType, remoteConversationID: remoteConversationID)).url
         } else {
             url = try await service?.openAttachmentURL(
                 contentHash: contentHash, fileName: fileName, mimeType: mimeType)

@@ -128,7 +128,8 @@ public struct RemoteWorkspaceConfiguration: Codable, Equatable, Identifiable, Se
 
 }
 
-public struct RemoteHarnessLaunchContext: Sendable {
+/// How a chat that runs on this Mac launches its harness.
+public struct LocalHarnessLaunchContext: Sendable {
     public let launch: LocalACPRuntimeLaunchConfiguration
     public let workspace: LocalACPWorkspaceLaunchConfiguration
 
@@ -138,92 +139,6 @@ public struct RemoteHarnessLaunchContext: Sendable {
     ) {
         self.launch = launch
         self.workspace = workspace
-    }
-}
-
-public enum RemoteHarnessLaunchResolver {
-    public static func resolve(
-        configuration: RemoteWorkspaceConfiguration,
-        runtimeKind: AgentRuntimeKind,
-        processWorkingDirectory: URL,
-        workingDirectory: URL? = nil,
-        durableChannelID: String? = nil,
-        tailnetSSHOptions: @Sendable (String) throws -> [String] = RemoteWorkspaceTailnet.sshOptions
-    ) throws -> RemoteHarnessLaunchContext {
-        try configuration.kind.requireSupported()
-        let idPattern = /^[a-z0-9][a-z0-9-]{0,47}$/
-        guard configuration.workspaceID.wholeMatch(of: idPattern) != nil else {
-            throw RemoteWorkspaceClientError.invalidWorkspaceID
-        }
-        let harness = try HarnessCatalog.loadBundled().harnesses.first(
-            where: { $0.id == runtimeKind }
-        )
-        guard harness != nil || runtimeKind == .defaultAgent else { throw RemoteWorkspaceClientError.harnessUnavailable }
-        let destination = try RemoteWorkspaceSSHClient.validatedDestination(
-            hostName: configuration.hostName,
-            userName: configuration.userName
-        )
-        let target = RemoteWorkspaceExecTarget(configuration: configuration)
-        let remoteRoot = try workingDirectory ?? URL(fileURLWithPath: target.workspaceRoot)
-        guard remoteRoot.isFileURL, remoteRoot.path.hasPrefix("/"), !remoteRoot.path.contains("\0") else {
-            throw WorkspaceToolError.invalid("The remote working directory must be an absolute path.")
-        }
-        let supportsDurableRelay = harness.map {
-            ["acp", "agent-stdio", "acp-and-gateway"].contains($0.transport)
-        } ?? false
-        let usesDurableRelay = configuration.backgroundExecutionEnabled
-            && durableChannelID != nil && runtimeKind != .defaultAgent && supportsDurableRelay
-        let environment: [String: String] = [:]
-        let workspacePermission = configuration.fullRootPermission(for: runtimeKind)
-        let hostSubcommand = usesDurableRelay ? "durable-acp" : runtimeKind == .defaultAgent ? "default-agent" : "harness"
-        var command = try target.prefix(workingDirectory: remoteRoot.path, interactive: true,
-            environment: environment, hostSubcommand: hostSubcommand)
-        var harnessArgumentsStartIndex = command.count
-        if usesDurableRelay, let durableChannelID {
-            guard UUID(uuidString: durableChannelID) != nil else {
-                throw WorkspaceToolError.invalid("The background session identifier is invalid.")
-            }
-            // Invocation wrapping inserts harness defaults immediately before
-            // these relay arguments, independently of the transport prefix.
-            harnessArgumentsStartIndex = command.count
-            command += ["--channel-id", durableChannelID, "--harness-id", runtimeKind.rawValue,
-                        "--cwd", remoteRoot.path]
-            if let workspacePermission { command += ["--permission-mode", workspacePermission] }
-        } else if runtimeKind != .defaultAgent, let harness {
-            command.append(harness.command)
-            harnessArgumentsStartIndex = command.count
-            command.append(contentsOf: harness.arguments)
-        }
-        let remoteCommand = command.map(RemoteWorkspaceExecTarget.quote).joined(separator: " ")
-        let sshArguments = try tailnetSSHOptions(destination) + [
-            "-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", destination, remoteCommand,
-        ]
-        var launchEnvironment = ["WOVEN_EXECUTION_SCOPE": configuration.id.uuidString.lowercased()]
-        launchEnvironment["WOVENMATTER_HOST_ACCESS_MODE"] = configuration.accessMode.rawValue
-        if runtimeKind == .defaultAgent {
-            launchEnvironment["WOVEN_DEFAULT_AGENT_SCOPE"] = configuration.id.uuidString.lowercased()
-        } else if usesDurableRelay {
-            launchEnvironment["WOVEN_DURABLE_REMOTE_ACP"] = "1"
-        }
-        return RemoteHarnessLaunchContext(
-            launch: LocalACPRuntimeLaunchConfiguration(
-                runtimeKind: runtimeKind,
-                executableURL: URL(fileURLWithPath: "/usr/bin/ssh"),
-                arguments: sshArguments,
-                environment: launchEnvironment,
-                processWorkingDirectoryURL: processWorkingDirectory,
-                requestedPermission: workspacePermission,
-                wrappedCommand: LocalACPRuntimeWrappedCommand(
-                    argumentIndex: sshArguments.count - 1,
-                    command: command,
-                    harnessArgumentsStartIndex: harnessArgumentsStartIndex
-                )
-            ),
-            workspace: LocalACPWorkspaceLaunchConfiguration(
-                rootURL: remoteRoot,
-                databasesURL: URL(fileURLWithPath: try target.databasesDirectory, isDirectory: true)
-            )
-        )
     }
 }
 
@@ -1153,9 +1068,6 @@ public struct RemoteWorkspaceServiceClient: Sendable {
         try await request(path: "v1/execution/mcp-settings", method: "POST", body: JSONEncoder().encode(settings))
     }
 
-    public func adoptExecutionConversation(_ adoption: ExecutionAdoption) async throws -> LibraryConversation {
-        try await request(path: "v1/execution/adopt", method: "POST", body: JSONEncoder().encode(adoption))
-    }
 
     public func revokeExecutionDevice(deviceID: String) async throws {
         guard UUID(uuidString: deviceID) != nil else { throw RemoteWorkspaceClientError.invalidResponse("Invalid client device identity.") }

@@ -105,6 +105,22 @@ struct DashboardConversationWindow: Equatable, Sendable {
         )
     }
 
+    /// This window with live text from the stream applied to messages it
+    /// already holds, or nil when one of them is not in it (the projection
+    /// is read instead).
+    func updatingMessages(_ updates: [String: (content: String, status: String?)]) -> DashboardConversationWindow? {
+        guard !updates.isEmpty else { return self }
+        var remaining = Set(updates.keys)
+        let updated = messages.map { message -> WorkspaceMessageRecord in
+            guard let update = updates[message.id] else { return message }
+            remaining.remove(message.id)
+            return message.updating(content: update.content, status: update.status)
+        }
+        guard remaining.isEmpty else { return nil }
+        return DashboardConversationWindow(conversationID: conversationID, messages: updated, runs: runs, activities: activities,
+            attachments: attachments, references: references, hasOlderMessages: hasOlderMessages, loadedOlderMessages: loadedOlderMessages)
+    }
+
     func prepending(_ page: WorkspaceConversationHistoryPage, requestedFrom prior: DashboardConversationWindow? = nil) -> DashboardConversationWindow {
         guard page.conversationID == conversationID else {
             return DashboardConversationWindow(page: page)

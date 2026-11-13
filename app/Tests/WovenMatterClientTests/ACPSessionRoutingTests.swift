@@ -6,36 +6,6 @@ import WovenMatterCore
 @Suite(.timeLimit(.minutes(1)))
 struct ACPSessionRoutingTests {
 
-    @Test @MainActor func disconnectDismissesAnApprovalDuringNativeResume() async throws {
-        let fixture = try SessionRoutingFixture(bootstrapFrames: [
-            permission(id: "resumed-approval"), update("agent_message_chunk", text: "queued after approval"),
-        ])
-        defer { fixture.remove() }
-        let events = AsyncStream<String>.makeStream()
-        let client = try fixture.client(historyRecorder: { direction, data in
-            // The load response follows both notifications on the reader. This
-            // proves shutdown cancels the queued tail while an earlier dialog waits.
-            if direction == "in", String(decoding: data, as: UTF8.self).contains(#""result":{"sessionId":"parent"}"#) {
-                events.continuation.yield("queued")
-            }
-        }, durableRemoteACP: true)
-        defer { Task { await client.shutdown() } }
-        await client.setResumePermissionHandler { _ in
-            events.continuation.yield("opened")
-            try? await Task.sleep(for: .seconds(30))
-            events.continuation.yield("closed")
-            return nil
-        }
-        let loading = Task { try await client.initializeSession(
-            workingDirectory: fixture.root, existingSessionID: "parent", title: nil) }
-        var iterator = events.stream.makeAsyncIterator(), observed = Set<String>()
-        while observed != ["opened", "queued"] { observed.insert(try #require(await iterator.next())) }
-        await client.shutdown()
-        #expect(await iterator.next() == "closed")
-        _ = try? await loading.value
-        events.continuation.finish()
-    }
-
     @Test func foreignPermissionsCancelWithoutCallingTheParentHandlerAndPreserveRequestIDs() async throws {
         let fixture = try SessionRoutingFixture(promptFrames: [
             permission(id: "child-approval", session: "child"),
@@ -152,9 +122,9 @@ struct SessionRoutingFixture {
     }
 
     func client(runtimeKind: AgentRuntimeKind = .grokBuild, accountCoordinator: ProviderAccountCoordinator? = nil,
-                historyRecorder: WorkspaceWireRecorder? = nil, durableRemoteACP: Bool = false) throws -> LocalACPClient {
+                historyRecorder: WorkspaceWireRecorder? = nil) throws -> LocalACPClient {
         var launch = LocalACPRuntimeLaunchConfiguration(runtimeKind: runtimeKind, executableURL: executable, arguments: [],
-            environment: durableRemoteACP ? ["WOVEN_DURABLE_REMOTE_ACP": "1"] : [:])
+            environment: [:])
         launch.historyRecorder = historyRecorder
         return try LocalACPClient.start(launch: launch, workingDirectory: root, accountCoordinator: accountCoordinator)
     }

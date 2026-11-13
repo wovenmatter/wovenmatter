@@ -26,6 +26,8 @@ const memberPublicKey = Buffer.from(createPublicKey(memberKey).export({ format: 
 // Timers as LibraryHostTimers keeps them: due occurrences are offered until settled.
 const timers = new Map(), settlements = []
 const notes = new Map(), callers = new Map(), journal = [], botEntries = [], adoptions = [], selfUpdates = [], signatures = []
+// The mobile library change cursor, announced on stdout after the ready line.
+let libraryCursor = 7
 const readJSONFile = (name, fallback) => process.env[name] ? JSON.parse(readFileSync(process.env[name], 'utf8')) : fallback
 const log = value => { if (process.env.FAKE_LIBRARY_LOG) appendFileSync(process.env.FAKE_LIBRARY_LOG, JSON.stringify(value) + '\n') }
 
@@ -121,6 +123,8 @@ const local = createServer(async (request, response) => {
   if (deletion && request.method === 'DELETE' && process.env.FAKE_LIBRARY_BOTS !== '0') { botEntries.push({ deleted: deletion[1] }); return reply(response, 200, { deleted: true }) }
   const bots = path.match(/^\/v1\/bots\/([0-9a-f-]{36})\/entries$/)
   if (bots && process.env.FAKE_LIBRARY_BOTS !== '0') { botEntries.push(body); return reply(response, 200, { conversations: body.conversations.length, entries: body.entries.length }) }
+  // A change a phone syncs: the next library change cursor, announced on stdout as the real host does.
+  if (path === '/v1/debug/library-change') { libraryCursor += 1; process.stdout.write(JSON.stringify({ event: 'library', cursor: libraryCursor }) + '\n'); return reply(response, 200, { cursor: libraryCursor }) }
   if (path === '/v1/debug/state') return reply(response, 200, { notes: [...notes.values()], timers: [...timers.values()], settlements, callers: Object.fromEntries(callers), journal, botEntries, adoptions, selfUpdates, signatures })
   reply(response, 404, { code: 'not_found', message: 'Unknown library API route.' })
 })
@@ -135,6 +139,7 @@ network.listen(Number(option('--port') ?? 0), '127.0.0.1', () => local.listen(so
   const ready = { event: 'ready', pid: process.pid, port: network.address().port, socket: socketPath, version: '1', schema: 'fake-library-schema' }
   writeFileSync(join(dataRoot, 'run/library.json'), JSON.stringify(ready) + '\n', { mode: 0o600 })
   process.stdout.write(JSON.stringify(ready) + '\n')
+  process.stdout.write(JSON.stringify({ event: 'library', cursor: libraryCursor }) + '\n')
 }))
 const stop = () => { rmSync(join(dataRoot, 'run/library.json'), { force: true }); local.close(); network.close(); process.exit(0) }
 process.on('SIGTERM', stop); process.on('SIGINT', stop)
