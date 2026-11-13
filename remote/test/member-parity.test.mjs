@@ -176,6 +176,31 @@ test('uploaded attachments reach the harness with the message, verified and list
   assert.equal(refused.code, 'attachment_unavailable')
 })
 
+test('the attachment store never writes through a linked digest folder and refuses uploads past its limits', async t => {
+  const workspace = temporary(t, 'wm-attachment-store-'), outside = temporary(t, 'wm-attachment-outside-')
+  const directory = join(workspace, '.wovenmatter/attachments')
+  const store = createExecutionAttachments({ directory, storeLimits: { files: 2, bytes: 1024 } })
+  const upload = (text, name = 'note.txt') => { const bytes = Buffer.from(text); return store.store({ id: sha(bytes), name, mimeType: 'text/plain', bytes }) }
+  // A digest folder that is a link out of the store is refused, and nothing lands outside.
+  const linked = Buffer.from('through a link')
+  mkdirSync(directory, { recursive: true }); symlinkSync(outside, join(directory, sha(linked)))
+  await assert.rejects(store.store({ id: sha(linked), name: 'note.txt', mimeType: 'text/plain', bytes: linked }), { statusCode: 403 })
+  assert.equal(existsSync(join(outside, 'note.txt')), false)
+  rmSync(join(directory, sha(linked)))
+  // Two files fit; the third is refused with a clear reason, and storing one again is not a new file.
+  await upload('one'); await upload('two')
+  assert.equal((await upload('one')).byteCount, 3)
+  await assert.rejects(upload('three'), error => error.statusCode === 507 && /attachment store is full \(2 files/.test(error.message))
+  // So is one past the byte limit, even when it is the first file.
+  const big = createExecutionAttachments({ directory: join(workspace, 'big'), storeLimits: { files: 10, bytes: 8 } })
+  const bytes = Buffer.from('more than eight bytes')
+  await assert.rejects(big.store({ id: sha(bytes), name: 'big.txt', bytes }), { statusCode: 507 })
+  // Uploads at once cannot both pass the limit.
+  const racing = createExecutionAttachments({ directory: join(workspace, 'racing'), storeLimits: { files: 1, bytes: 1024 } })
+  const results = await Promise.allSettled(['a', 'b', 'c'].map(text => { const value = Buffer.from(text); return racing.store({ id: sha(value), name: 'x.txt', bytes: value }) }))
+  assert.equal(results.filter(result => result.status === 'fulfilled').length, 1)
+})
+
 test('woven_context returns the note the sending device showed for that input', async t => {
   const f = directService(t)
   const opened = await f.service.command(f.command('createSession', { providerID: 'codex', sessionOptions: { enabledTools: ['notes'] } }), f.principal)
@@ -454,6 +479,8 @@ test('workspace files are read for Library retention only inside the session roo
   await assert.rejects(readWorkspaceFile({ path: 'missing.txt', root }), { statusCode: 404 })
   await assert.rejects(readWorkspaceFile({ path: 'nested', root }), { statusCode: 400 })
   await assert.rejects(readWorkspaceFile({ path: 'report.md', root, maximumBytes: 3 }), { statusCode: 413 })
+  // A malformed file URL is the caller's mistake, not a server error.
+  for (const path of ['file://%E0%A4%A', 'file://host:99999/x', 'file:///a%00b']) await assert.rejects(readWorkspaceFile({ path, root }), { statusCode: 400 }, path)
   // The service resolves a session's working directory.
   const f = directService(t)
   const opened = await f.service.command(f.command('createSession', { providerID: 'codex', sessionOptions: { workingDirectory: root } }), f.mac)

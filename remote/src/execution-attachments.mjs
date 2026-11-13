@@ -10,6 +10,9 @@ const sha256 = bytes => createHash('sha256').update(bytes).digest('hex')
 
 // The Mac's message attachment limits (`AgentMessageAttachmentLimits`).
 export const attachmentLimits = Object.freeze({ count: 8, fileBytes: 25 * 1024 * 1024, totalBytes: 50 * 1024 * 1024 })
+// What one workspace's attachment store holds at most: uploads past it are
+// refused until files are removed from it.
+export const attachmentStoreLimits = Object.freeze({ files: 2_000, bytes: 4 * 1024 * 1024 * 1024 })
 
 // The original name with path separators and control characters replaced, so
 // agents see the real extension.
@@ -24,7 +27,7 @@ const mimeType = value => typeof value === 'string' && /^[a-z0-9][a-z0-9!#$&^_.+
 // staging put them, so a harness finds them in its working tree. A send names
 // them by digest and name; each is verified again before it is delivered,
 // because an agent may have edited a staged copy.
-export function createExecutionAttachments({ directory }) {
+export function createExecutionAttachments({ directory, storeLimits = attachmentStoreLimits }) {
   const pathFor = (id, name) => {
     if (typeof id !== 'string' || !/^[0-9a-f]{64}$/.test(id)) throw fail(400, 'An attachment is named by its SHA-256 digest.')
     return join(directory, id, attachmentFileName(name))
@@ -35,14 +38,49 @@ export function createExecutionAttachments({ directory }) {
       return info.isFile() && info.size === bytes && sha256(await readFile(path)) === id
     } catch { return false }
   }
-  async function store({ id, name, mimeType: type, bytes }) {
+  // The digest folder, created if needed: a real directory directly in the
+  // store, never one reached through a symbolic link.
+  async function folderFor(id) {
+    const folder = join(directory, id)
+    await mkdir(folder, { recursive: true, mode: 0o700 })
+    const root = await realpath(directory), info = await lstat(folder)
+    if (!info.isDirectory() || await realpath(folder) !== join(root, id)) throw fail(403, 'The staged attachment folder is outside the attachment store.')
+    return folder
+  }
+  // Regular files in the store, and their bytes (partial uploads included).
+  async function usage() {
+    let files = 0, bytes = 0, folders = []
+    try { folders = await readdir(directory, { withFileTypes: true }) } catch { return { files, bytes } }
+    for (const folder of folders) {
+      if (!folder.isDirectory()) continue
+      let entries = []
+      try { entries = await readdir(join(directory, folder.name), { withFileTypes: true }) } catch { continue }
+      for (const entry of entries) {
+        if (!entry.isFile()) continue
+        try { bytes += (await lstat(join(directory, folder.name, entry.name))).size; files++ } catch {}
+      }
+    }
+    return { files, bytes }
+  }
+  // Uploads are stored one at a time, so two cannot both pass the store limit.
+  let storing = Promise.resolve()
+  function store(input) {
+    const result = storing.then(() => storeOne(input))
+    storing = result.catch(() => {})
+    return result
+  }
+  async function storeOne({ id, name, mimeType: type, bytes }) {
     const path = pathFor(id, name)
     if (!Buffer.isBuffer(bytes) || !bytes.length) throw fail(400, 'An attachment needs its bytes.')
     if (bytes.length > attachmentLimits.fileBytes) throw fail(413, 'The attachment is larger than the 25 MB limit.')
     if (sha256(bytes) !== id) throw fail(400, 'The attachment does not match its digest.')
+    const folder = await folderFor(id)
     if (!await matches(path, bytes.length, id)) {
-      await mkdir(join(directory, id), { recursive: true, mode: 0o700 })
-      const temporary = join(directory, id, '.part.' + randomBytes(6).toString('hex'))
+      const used = await usage()
+      if (used.files + 1 > storeLimits.files || used.bytes + bytes.length > storeLimits.bytes) {
+        throw fail(507, `This workspace's attachment store is full (${used.files} files, ${Math.round(used.bytes / 1024 / 1024)} MB). Remove files from .wovenmatter/attachments on the host before uploading more.`)
+      }
+      const temporary = join(folder, '.part.' + randomBytes(6).toString('hex'))
       try {
         const file = await open(temporary, 'wx', 0o600)
         try { await file.writeFile(bytes); await file.sync() } finally { await file.close() }
@@ -152,7 +190,11 @@ const knownTypes = { '.txt': 'text/plain', '.md': 'text/markdown', '.csv': 'text
 // `sharedRoots` are the scratch places an agent may also leave a file (`/tmp`, `/mnt/data`).
 export async function readWorkspaceFile({ path: requestedPath, root, maximumBytes = attachmentLimits.fileBytes, sharedRoots = ['/tmp', '/mnt/data'] }) {
   if (typeof requestedPath !== 'string' || !requestedPath || requestedPath.includes('\0') || Buffer.byteLength(requestedPath) > 8192) throw fail(400, 'The file path is invalid.')
-  let path = requestedPath.startsWith('file://') ? decodeURIComponent(new URL(requestedPath).pathname) : requestedPath
+  let path = requestedPath
+  if (path.startsWith('file://')) {
+    try { path = decodeURIComponent(new URL(path).pathname) } catch { throw fail(400, 'The file path is invalid.') }
+    if (!path || path.includes('\0')) throw fail(400, 'The file path is invalid.')
+  }
   if (path.startsWith('~/')) path = join(homedir(), path.slice(2))
   if (!isAbsolute(path)) path = resolve(root, path)
   path = resolve(path)
