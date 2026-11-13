@@ -10,11 +10,11 @@ import WovenMatterShared
 /// when a chat opens, after a command, and for the open chat and its
 /// questions on the 15 s foreground tick (`refreshLiveViewsWithoutStream`).
 extension MobileModel {
-  /// Whether this workspace is (or will be) reached by its stream: member
-  /// mode, a known serving member, and a workspace that offers one.
+  /// Whether this workspace is (or will be) reached by its stream: a known
+  /// serving member, and a workspace that offers one.
   func streams(_ workspace: ExecutionWorkspace) -> Bool {
-    memberMode && memberIdentity != nil && workspace.endpoint != nil && !workspace.deleted &&
-      workspace.capabilities.contains(StreamProtocol.capability) && !memberUnsupportedWorkspaceIDs.contains(workspace.id) &&
+    memberIdentity != nil && workspace.endpoint != nil && !workspace.deleted &&
+      workspace.capabilities.contains(StreamProtocol.capability) &&
       membership?.audience(for: workspace) != nil
   }
 

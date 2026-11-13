@@ -6,7 +6,7 @@ import WovenMatterDashboardStore
 
 /// Hosts model inference for authorized mobile clients. Pi's agent and all tools stay on the requesting device.
 /// A phone or Mac member signs its requests (docs/architecture/WOVEN_EVERYWHERE.md,
-/// "Membership and device keys"); a device paired before members presents its grant.
+/// "Membership and device keys"); nothing else is accepted.
 @MainActor
 final class InferenceHost {
     typealias Prepare = @MainActor @Sendable () async throws -> Data
@@ -58,16 +58,9 @@ final class InferenceHost {
                 guard await members.member(deviceID) != nil else { throw LibraryAPIError(code: "unauthorized", message: "This device was removed.") }
             })
         }
-        guard let bearer = request.bearer else { throw LibraryAPIError(code: "unauthorized", message: "An authorized inference-host connection is required.") }
-        let grant = try await authentication.authenticateGrant(bearer: bearer)
-        let scope = grant.scope
-        guard scope.libraryID == descriptor.libraryID, scope.workspaceID == descriptor.id,
-              request.headers["x-woven-library"] == scope.libraryID,
-              request.headers["x-woven-workspace"] == scope.workspaceID,
-              request.headers["x-woven-device"] == scope.deviceID else { return nil }
-        let authorize = authorize, provisionedBy = grant.provisionedBy
-        return Principal(deviceID: scope.deviceID, recheck: { try await authorize(scope.deviceID, provisionedBy) })
+        throw LibraryAPIError(code: "unauthorized", message: "Only a signed member may use this inference host.")
     }
+
     func handle(_ request: LibraryHTTPRequest) async -> LibraryHTTPResponse {
         guard isActive() else { return .error("unavailable", "This inference host is stopped.", status: 503) }
         do {

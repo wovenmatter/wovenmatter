@@ -104,53 +104,40 @@ private extension DeviceAPI {
         }
     }
 
-    /// The caller of `/mcp/workspace`: a library MCP grant, or a signed request
-    /// from the Linux member that executes the workspace named by
-    /// `X-Woven-Workspace-ID` (so a Linux host needs no grant from any one Mac).
+    /// The caller of `/mcp/workspace`: a signed request from the Linux member
+    /// that executes the workspace named by `X-Woven-Workspace-ID`.
     /// `current` re-checks it during and after a long call.
     struct WorkspaceMCPCaller: Sendable {
         let principal: ExecutionWorkspaceMCPPrincipal
         let current: @Sendable () async throws -> ExecutionWorkspaceMCPPrincipal
     }
     func authenticateWorkspaceMCP(_ request: LibraryHTTPRequest) async throws -> Result<WorkspaceMCPCaller, LibraryAPIError> {
-        if MemberRequestVerifier.isSigned(request.headers) {
-            guard let members else { return .failure(.init(code: "unauthorized", message: "This Mac does not accept member requests yet.")) }
-            let key: MemberKey
-            do {
-                key = try await members.verifier.verify(method: request.method, target: request.target, headers: request.headers,
-                                                        body: request.body, allowing: [.linux])
-            } catch let error as MemberRequestError { return .failure(.init(code: error.code, message: error.message)) }
-            guard let workspaceID = request.headers["x-woven-workspace-id"]?.lowercased() else {
-                return .failure(.init(code: "invalid_request", message: "Name the Linux workspace in X-Woven-Workspace-ID."))
-            }
-            let database = database
-            let current: @Sendable () async throws -> ExecutionWorkspaceMCPPrincipal = {
-                guard await members.member(key.deviceID) != nil else { throw LibraryAPIError(code: "unauthorized", message: MemberRequestError.unknown.message) }
-                // Any Mac checks the same synced rows: the registry and the member list.
-                let workspace = try await database.libraryExecutionWorkspaces().first { $0.id == workspaceID }
-                let serving = if let workspace { await members.audience(for: workspace) } else { String?.none }
-                return try await database.executionWorkspaceMCPMember(workspaceID: workspaceID, deviceID: key.deviceID, serving: serving)
-            }
-            return .success(.init(principal: try await current(), current: current))
+        guard MemberRequestVerifier.isSigned(request.headers) else {
+            return .failure(.init(code: "unauthorized", message: "Only a signed Linux member may call this route."))
         }
-        guard let bearer = request.bearer else { return .failure(.init(code: "unauthorized", message: "A library MCP grant is required.")) }
-        let principal = try await database.authenticateExecutionWorkspaceMCP(bearer: bearer)
-        guard request.headers["x-woven-workspace"] == principal.libraryID else {
-            return .failure(.init(code: "library_mismatch", message: "This MCP grant belongs to another library."))
+        guard let members else { return .failure(.init(code: "unauthorized", message: "This Mac does not accept member requests yet.")) }
+        let key: MemberKey
+        do {
+            key = try await members.verifier.verify(method: request.method, target: request.target, headers: request.headers,
+                                                    body: request.body, allowing: [.linux])
+        } catch let error as MemberRequestError { return .failure(.init(code: error.code, message: error.message)) }
+        guard let workspaceID = request.headers["x-woven-workspace-id"]?.lowercased() else {
+            return .failure(.init(code: "invalid_request", message: "Name the Linux workspace in X-Woven-Workspace-ID."))
         }
         let database = database
-        return .success(.init(principal: principal, current: {
-            let current = try await database.authenticateExecutionWorkspaceMCP(bearer: bearer)
-            guard current.grantID == principal.grantID else {
-                throw LibraryAPIError(code: "unauthorized", message: "The workspace's library MCP grant changed.")
-            }
-            return current
-        }))
+        let current: @Sendable () async throws -> ExecutionWorkspaceMCPPrincipal = {
+            guard await members.member(key.deviceID) != nil else { throw LibraryAPIError(code: "unauthorized", message: MemberRequestError.unknown.message) }
+            // Any Mac checks the same synced rows: the registry and the member list.
+            let workspace = try await database.libraryExecutionWorkspaces().first { $0.id == workspaceID }
+            let serving = if let workspace { await members.audience(for: workspace) } else { String?.none }
+            return try await database.executionWorkspaceMCPMember(workspaceID: workspaceID, deviceID: key.deviceID, serving: serving)
+        }
+        return .success(.init(principal: try await current(), current: current))
     }
 
     func handleWorkspaceMCP(_ request: LibraryHTTPRequest) async throws -> LibraryHTTPResponse {
         guard request.headers["x-woven-protocol"] == String(LibraryProtocol.version) else {
-            return .error("unauthorized", "A library MCP grant is required.", status: 401)
+            return .error("version_mismatch", "Update Woven Matter on both devices.", status: 426)
         }
         let caller: WorkspaceMCPCaller
         switch try await authenticateWorkspaceMCP(request) {
@@ -342,16 +329,6 @@ public final class DeviceAPI {
                 try await authentication.cancelPairing(poll)
                 await onPair()
                 return try .json(["cancelled": true])
-            }
-            if path.hasPrefix("/v1/federation/publisher/") {
-                guard request.headers["x-woven-protocol"] == String(LibraryProtocol.version) else {
-                    return .error("version_mismatch", "Update Woven Matter on both devices.", status: 426)
-                }
-                guard isActive() else { return .error("unavailable", "Sharing with devices stopped.", status: 503) }
-                let response = try await DevicePublisherAPI.handle(request, path: path, database: database)
-                guard isActive() else { return .error("unavailable", "Sharing with devices stopped.", status: 503) }
-                if request.method == "POST", response.status == 200 { onMutation() }
-                return response
             }
             if request.method == "POST", path == "/v1/pair/preview" {
                 guard request.body.count <= 8_192 else { return .error("too_large", "The pairing request is too large.", status: 413) }

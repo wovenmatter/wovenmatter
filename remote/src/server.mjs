@@ -144,8 +144,7 @@ const hostAdmin = nativeLinuxHost ? createHostAdministration({ serviceRoot: conf
   extra: async () => ({ library: library?.status() ?? null, memberIdentity: memberIdentityRecord }),
   ...(library ? {
     adoptMembers: async body => { const list = await library.client.adoptMembers(body); await members.refresh().catch(() => {}); return list },
-    // A library host that predates `adopted` reports none: fall back to any Mac member.
-    adopted: async () => { const list = await library.client.members(); return typeof list.adopted === 'boolean' ? list.adopted : (list.members ?? []).some(item => item.kind === 'mac') },
+    adopted: async () => (await library.client.members()).adopted === true,
   } : {}) }) : null
 // Requests this host makes to other members, signed by its library host.
 const memberTransport = library ? createMemberTransport({ library: library.client }) : null
@@ -173,8 +172,6 @@ const defaultAgentControl = createDefaultAgentControl({
 
 const clientExecution = runningAsService ? createClientExecution({
   directory: resolve(workspaceRoot, '.wovenmatter/client-execution'),
-  // Stable across bearer rotations: it keys the publisher and MCP grants at rest.
-  publisherKey: configuration.serviceSecret || apiToken,
   mcpEndpointURL: () => `http://127.0.0.1:${server.address()?.port ?? listenPort}/mcp`, managedDataRoot,externalRunningSessions:()=>taskGateway.status().activeRuns, workspaceRoot, performanceLog,
   attachments: createExecutionAttachments({ directory: resolve(workspaceRoot, '.wovenmatter/attachments') }),
   // Chats named by their first message get a title from this host's Codex
@@ -344,12 +341,6 @@ const server = createServer({ maxHeaderSize: 16_384, headersTimeout: 10_000,
       if(request.method==='GET')return json(response,200,clientExecution.mcp.settings())
       if(request.method==='POST')return json(response,200,clientExecution.mcp.configureSettings(await readJSON(request)))
     }
-    if (url.pathname === '/v1/execution/mcp-library') {
-      if(!administrator)return json(response,403,{error:'administrator_required'})
-      if(request.method==='GET')return json(response,200,clientExecution.mcp.libraryStatus())
-      if(request.method==='POST')return json(response,200,clientExecution.mcp.configureLibrary(await readJSON(request)))
-      if(request.method==='DELETE')return json(response,200,clientExecution.mcp.clearLibrary())
-    }
     if (url.pathname === '/v1/mcp/clients') {
       if(!administrator)return json(response,403,{error:'administrator_required'})
       if(request.method==='GET')return json(response,200,{clients:clientExecution.mcp.clients()})
@@ -359,11 +350,6 @@ const server = createServer({ maxHeaderSize: 16_384, headersTimeout: 10_000,
     if(revokeMCP&&request.method==='DELETE') {
       if(!administrator)return json(response,403,{error:'administrator_required'})
       return json(response,200,clientExecution.mcp.revokeClient(revokeMCP[1]))
-    }
-    if (url.pathname === '/v1/execution/publisher') {
-      if (!administrator) return json(response,403,{error:'administrator_required'})
-      if (request.method === 'GET') return json(response,200,clientExecution.publisherStatus())
-      if (request.method === 'POST') return json(response,200,clientExecution.configurePublisher(await readJSON(request)))
     }
     if (url.pathname === '/v1/execution/artifacts' && request.method === 'POST') {
       const body=await readJSON(request,8*1024*1024)
@@ -591,8 +577,6 @@ const server = createServer({ maxHeaderSize: 16_384, headersTimeout: 10_000,
     if (maintenanceMatch) {
       const harness = requireHarness(maintenanceMatch[1])
       if (request.method === 'POST' && maintenanceMatch[2] === 'check') return json(response, 200, await maintenance.inventory(harness, true))
-      // Older apps may send retired visibility/enable preferences. Ignore them.
-      if (request.method === 'PATCH' && !maintenanceMatch[2]) { await readJSON(request); return json(response, 200, await maintenance.inventory(harness)) }
       if (request.method === 'POST' && maintenanceMatch[2]) return json(response, 202, await maintenance.start(harness, maintenanceMatch[2], await readJSON(request)))
     }
 

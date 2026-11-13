@@ -312,9 +312,6 @@ public struct RemoteRuntimeComponent: Codable, Equatable, Identifiable, Sendable
 public struct RemoteRuntimeMaintenance: Codable, Equatable, Identifiable, Sendable {
     public let id: AgentRuntimeKind
     public let displayName: String
-    // Decoded only for compatibility with workspaces created by older apps.
-    public let enabled: Bool
-    public let visible: Bool
     public let installed: Bool
     public let components: [RemoteRuntimeComponent]
     public let operation: RemoteHarnessOperation?
@@ -958,21 +955,8 @@ public struct RemoteWorkspaceServiceClient: Sendable {
         try await request(path: "v1/host/members/adopt", method: "POST", body: adoption, signer: signer.map { ($0, audience ?? "") })
     }
 
-    public func executionPublisherStatus() async throws -> ExecutionWorkspacePublisherStatus {
-        try await request(path: "v1/execution/publisher", method: "GET", body: nil)
-    }
-    public func configureExecutionPublisher(_ grant: ExecutionWorkspacePublisherGrant) async throws -> ExecutionWorkspacePublisherStatus {
-        try await request(path: "v1/execution/publisher", method: "POST", body: JSONEncoder().encode(grant))
-    }
-
-    public func executionMCPLibraryStatus() async throws -> ExecutionWorkspacePublisherStatus {
-        try await request(path: "v1/execution/mcp-library", method: "GET", body: nil)
-    }
-    public func configureExecutionMCPLibrary(_ grant: GatewayJSONValue) async throws -> ExecutionWorkspacePublisherStatus {
-        try await request(path: "v1/execution/mcp-library", method: "POST", body: JSONEncoder().encode(grant))
-    }
-
-    public func configureExecutionMCPSettings(_ settings: GatewayJSONValue) async throws -> ExecutionWorkspacePublisherStatus {
+    /// The host replies with the settings it saved.
+    public func configureExecutionMCPSettings(_ settings: GatewayJSONValue) async throws -> GatewayJSONValue {
         try await request(path: "v1/execution/mcp-settings", method: "POST", body: JSONEncoder().encode(settings))
     }
 
@@ -1135,19 +1119,7 @@ public struct RemoteWorkspaceServiceClient: Sendable {
             path: checkLatest ? "v1/runtime-maintenance/check" : "v1/runtime-maintenance",
             method: checkLatest ? "POST" : "GET", body: nil
         )
-        var runtimes = document.runtimes
-        for index in runtimes.indices {
-            let runtime = runtimes[index]
-            // Existing containers may still persist the removed opt-in flags.
-            // Retire those flags on verified installations without rebuilding the workspace.
-            if runtime.installed && (!runtime.enabled || !runtime.visible) {
-                runtimes[index] = try await request(
-                    path: "v1/runtime-maintenance/\(runtime.id.rawValue)", method: "PATCH",
-                    body: JSONEncoder().encode(["enabled": true, "visible": true])
-                )
-            }
-        }
-        return runtimes
+        return document.runtimes
     }
 
     public func checkRuntimeUpdates(_ id: AgentRuntimeKind) async throws -> RemoteRuntimeMaintenance {

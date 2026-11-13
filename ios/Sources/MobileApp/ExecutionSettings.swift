@@ -468,9 +468,7 @@ private struct InferenceConnectionEditor: View {
         let result = try await MobileInferenceService(connection: catalog, credentials: InferenceSetupCredential(value: credential.token)).hostCatalog()
         guard !Task.isCancelled, state.catalogGeneration == generation else { return }
         state.endpoint = credential.endpoint.absoluteString
-        // Older hosts may still advertise backup subscription accounts.
-        state.accounts = InferenceConnectionPolicy.isSingleSubscription(provider)
-          ? Array(result.accounts.filter { $0.provider == provider }.prefix(1)) : result.accounts
+        state.accounts = result.accounts
         state.receiveModels(result.models, generation: generation)
         let accounts = state.accounts.filter { $0.provider == provider && $0.connected }
         if !accounts.contains(where: { $0.id == state.accountID }) { state.accountID = accounts.count == 1 ? accounts[0].id : "" }

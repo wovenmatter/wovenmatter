@@ -17,7 +17,7 @@ struct RemoteRuntimeMaintenanceClientTests {
         let second = RemoteWorkspaceServiceClient(baseURL: URL(string: "http://127.0.0.1:41002")!, token: "workspace-two", session: session)
         let initial = try await first.runtimeMaintenance()
         #expect(initial.count == 1)
-        #expect(initial[0].enabled && initial[0].visible) // Legacy flags retired automatically.
+        #expect(initial[0].installed)
         #expect(initial[0].components[0].installedVersion == "1.7.0")
         #expect(initial[0].components[1].installedVersion == "0.148.0")
         #expect(initial[0].failureCount == 2)
@@ -58,12 +58,11 @@ private final class RemoteMaintenanceFixtureProtocol: URLProtocol, @unchecked Se
         }
         let payload = (try? JSONSerialization.jsonObject(with: body)) as? [String: Any]
 
-        var row = #"{"id":"codex","displayName":"Codex","enabled":false,"visible":false,"installed":true,"components":[{"id":"adapter","displayName":"codex-acp","path":"/home/woven/.local/bin/codex-acp","installedVersion":"1.7.0","latestVersion":"1.11.0","required":true,"installed":true},{"id":"engine","displayName":"Bundled Codex","path":null,"installedVersion":"0.148.0","latestVersion":null,"required":true,"installed":true}],"operation":null,"failureCount":2,"diagnosticPrompt":"Sanitized failure","notice":null,"updateAvailable":true,"versionCheckAvailable":true}"#
-        if request.url?.port == 41003 { row = row.replacingOccurrences(of: "\"installed\":true", with: "\"installed\":false") }
+        let row = #"{"id":"codex","displayName":"Codex","installed":true,"components":[{"id":"adapter","displayName":"codex-acp","path":"/home/woven/.local/bin/codex-acp","installedVersion":"1.7.0","latestVersion":"1.11.0","required":true,"installed":true},{"id":"engine","displayName":"Bundled Codex","path":null,"installedVersion":"0.148.0","latestVersion":null,"required":true,"installed":true}],"operation":null,"failureCount":2,"diagnosticPrompt":"Sanitized failure","notice":null,"updateAvailable":true,"versionCheckAvailable":true}"#
         let value: String
         switch path {
         case "/v1/runtime-maintenance":
-            #expect(first || request.url?.port == 41003)
+            #expect(first)
             #expect(request.httpMethod == "GET")
             value = "{\"runtimes\":[\(row)]}"
         case "/v1/runtime-maintenance/check":
@@ -75,13 +74,6 @@ private final class RemoteMaintenanceFixtureProtocol: URLProtocol, @unchecked Se
             #expect(request.httpMethod == "POST")
             #expect(body.isEmpty)
             value = row
-        case "/v1/runtime-maintenance/codex":
-            #expect(request.url?.port != 41003, "Missing harnesses must never be activated")
-            #expect(payload?["enabled"] as? Bool == true)
-            #expect(payload?["visible"] as? Bool == true)
-            #expect(request.httpMethod == "PATCH")
-            value = row.replacingOccurrences(of: "\"enabled\":false", with: "\"enabled\":true")
-                .replacingOccurrences(of: "\"visible\":false", with: "\"visible\":true")
         case "/v1/runtime-maintenance/codex/update":
             #expect(!first)
             #expect(payload?["confirmed"] as? Bool == true)

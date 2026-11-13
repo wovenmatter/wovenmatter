@@ -48,8 +48,8 @@ function service(t, extra = {}) {
   const directory = mkdtempSync(join(tmpdir(), 'woven-member-reach-')), runs = []
   const runtime = { providers: async () => [{ id: 'default_agent', runtimeKind: 'default_agent', available: true, canStart: true }, { id: 'codex', runtimeKind: 'codex', available: true, canStart: true }],
     create: async () => ({ sessionID: randomUUID() }), run: async input => { runs.push(input) }, close: async () => {} }
-  const value = createClientExecution({ directory, runtime, managedDataRoot: join(directory, 'databases'), publisherKey: 'k'.repeat(40),
-    publisherFetch: async () => { throw new Error('No Mac is reachable.') }, publisherIntervalMilliseconds: 0, ...extra })
+  const value = createClientExecution({ directory, runtime, managedDataRoot: join(directory, 'databases'),
+    publisherIntervalMilliseconds: 0, ...extra })
   t.after(async () => { await value.close(); rmSync(directory, { recursive: true, force: true }) })
   return { service: value, runs, ...enroll(value) }
 }
@@ -160,7 +160,6 @@ test('Mac-only tools go to any reachable Mac member with a signed request', asyn
   writeFileSync(syncFile, JSON.stringify({ peers: [{ deviceID: offline.deviceID, state: 'online' }, { deviceID: online.deviceID, state: 'offline' }] }))
   const l = service(t, { library: { client: lHost.client, available: lHost.available },
     members: { transport: createMemberTransport({ library: lHost.client, allowEndpoint: loopback }), deviceID: () => lIdentity.deviceID, hasMac: () => true } })
-  assert.equal(l.service.mcp.libraryStatus().configured, false, 'no Mac grant exists')
   const caller = await session(l)
   const usage = await caller.call('woven_usage_read')
   assert.equal(usage.result.isError, false, JSON.stringify(usage))

@@ -161,7 +161,6 @@ final class CentralStreamTests: XCTestCase {
     membership.membersRevision = "r1"
     model.libraryHosts = try MobileLibraryHosts(state: membership, identity: identity, file: nil, performer: http)
     model.membership = membership
-    model.workspaceCredentials = .init(load: { _ in nil }, save: { _ in XCTFail("Saved a grant") }, clear: { _ in })
     let server = TestStreamServer()
     let studioID = studio.id
     model.streamConnector = { workspace in workspace.id == studioID ? server.connect : nil }

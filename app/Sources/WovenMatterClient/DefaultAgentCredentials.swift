@@ -77,11 +77,6 @@ public struct AgentSignInStatus: Codable, Identifiable, Sendable {
     public var accounts: [Account]? = nil
     public var displayName: String {
         if id == AgentRuntimeKind.defaultAgent.rawValue { return AgentRuntimeKind.defaultAgent.displayName }
-        // Normalize provider labels returned by older workspace services.
-        let legacyPrefix = "Built-in · "
-        if name.hasPrefix(legacyPrefix) {
-            return AgentRuntimeKind.defaultAgent.displayName + " · " + name.dropFirst(legacyPrefix.count)
-        }
         return name
     }
     public var label: String {

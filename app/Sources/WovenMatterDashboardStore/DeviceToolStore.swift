@@ -65,11 +65,6 @@ extension WorkspaceDatabaseConnection {
               && (workspace.executionDeviceID ?? workspace.ownerDeviceID) == deviceID else {
       throw LibraryAPIError(code: "wrong_owner", message: "Sync this device's conversation before using the central library tools.")
     }
-    if workspace.kind == .linux {
-      guard try activeExecutionWorkspaceMCPGrantUnlocked(workspaceID: workspaceID, executionDeviceID: deviceID) else {
-        throw LibraryAPIError(code: "unauthorized", message: "This execution workspace has no current library MCP grant.")
-      }
-    }
     if let supplied = command.options["request-id"] {
       guard UUID(uuidString: supplied) == UUID(uuidString: value.request.requestID) else {
         throw LibraryAPIError(code: "invalid_request", message: "--request-id must match the request envelope.")

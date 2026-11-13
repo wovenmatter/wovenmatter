@@ -99,7 +99,7 @@ import MobileInference
   var engine: MobileSyncEngine?
   var transport: HTTPSLibraryTransport?
   /// This phone's member identity and the Mac and Linux hosts it can sync
-  /// with. Nil until the phone pairs with its member key (or for an older Mac).
+  /// with. Nil until the phone pairs with its member key.
   var memberIdentity: MobileMemberIdentity?
   var libraryHosts: MobileLibraryHosts?
   var membership: MobileMembershipState?
@@ -109,8 +109,6 @@ import MobileInference
   @ObservationIgnored var httpPerformer: (any MobileHTTPPerforming)?
   /// The endpoint each signed workspace client was made for.
   var memberClientEndpoints: [String: URL] = [:]
-  /// Workspaces too old for member requests keep their bearer grant.
-  var memberUnsupportedWorkspaceIDs: Set<String> = []
   /// Pairing confirmation and unpairing for a paired transport. Tests record
   /// these requests instead of contacting central.
   @ObservationIgnored var pairingRequests: (HTTPSLibraryTransport) -> any MobilePairingRequests = { $0 }
@@ -167,20 +165,11 @@ import MobileInference
   var workspaceReachable: [String: Bool] = [:]
   var executionWorkspaceRefreshInProgress = false
   var remotePending: [String: [PendingInteraction]] = [:]
-  var workspaceAuthorizationRetryAt: [String: Date] = [:]
-  /// One in-flight credential issuance per workspace. Each issuance replaces
-  /// the device's earlier token there, so concurrent requests share it.
-  @ObservationIgnored var workspaceIssuances: [String: (generation: UUID, task: Task<DirectWorkspaceCredential, any Error>)] = [:]
-  /// The latest inference binding per workspace; each binding waits for the
-  /// one before it, so binders of one workspace never interleave.
-  @ObservationIgnored var workspaceBindings: [String: Task<Void, any Error>] = [:]
   var workspaceProblems: [String: String] = [:]
   var inferenceProblem: String?
   var executionDirectory: URL?
   var executionRefreshTasks: [String: Task<Void, Never>] = [:]
   var executionCredentialStore: any InferenceCredentialUpdating = InferenceCredentialStore()
-  /// Device-only storage for direct workspace credentials; tests inject memory.
-  var workspaceCredentials = WorkspaceCredentialStorage.keychain
   var quickChatSearchResults: [String: Set<String>] = [:]
   /// Web search requests; tests inject a fixture transport.
   @ObservationIgnored var searchTransport: any InferenceHTTPTransport = InferenceURLSessionTransport()
@@ -351,9 +340,11 @@ import MobileInference
   func configureTransport() throws {
     guard let credential, let store else { connectionLabel = "Saved on this device"; return }
     guard credential.deviceID == state.deviceID else { throw LibraryAPIError(code: "device_identity_changed", message: "Pair this local library with your Mac again. The saved credential belongs to a previous app installation; your local notes are safe.") }
+    // Every connection is signed. Until this phone is a member (the Mac
+    // refused its key, or the pairing never learned the Mac's member ID) it
+    // does not sync, and Settings asks to pair again.
     if try configureMemberTransport() { return }
-    let client = try HTTPSLibraryTransport(credential: credential, metadata: deviceMetadata, performer: httpPerformer)
-    transport = client; engine = MobileSyncEngine(store: store, transport: client)
+    transport = nil; engine = nil; connectionLabel = "Pair again"
   }
   func pair(url: URL) async {
     guard !isolatedTestHost, !fixture, let store, !pairingInProgress else { return }
@@ -409,9 +400,6 @@ import MobileInference
         && (paired.libraryIDs ?? []).contains(previous ?? "")
       try await acceptPairing(paired, allowingLibraryChange: true, keepLibrary: keepLibrary) { try MobileCredentialVault.save($0) }
       await completeMemberPairing(endpoint: payload.endpoint, hostDeviceID: paired.hostDeviceID)
-      // Kept for member sync, which this Mac refused after all: bind the
-      // replica to it the way a first pairing does.
-      if keepLibrary, membership?.memberRequestsAccepted == false { try await store.prepareForPairing(paired.workspaceID) }
       pairingText = ""
       // Analytics start with the new pairing, not at the next launch.
       await analytics.configure(store.analytics, transport: await analyticsTransport())

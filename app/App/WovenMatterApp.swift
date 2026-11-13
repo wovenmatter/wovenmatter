@@ -507,37 +507,11 @@ struct WovenMatterApp: App {
             : WorkspaceProcessLease.acquireOrExit()
         _applicationModel = State(initialValue: ApplicationModel())
         if !isRunningUnitTests {
-            Self.markUpdateReadyIfRequested()
             if let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String,
                let build = Int(Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "") {
                 ProductAnalyticsModel.markUpdateLaunched(version: version, build: build)
             }
         }
-    }
-
-    private static func markUpdateReadyIfRequested() {
-        guard let flagIndex = CommandLine.arguments.firstIndex(
-            of: "--woven-update-ready"
-        ),
-        CommandLine.arguments.indices.contains(flagIndex + 1) else {
-            return
-        }
-        let marker = URL(
-            fileURLWithPath: CommandLine.arguments[flagIndex + 1]
-        ).standardizedFileURL
-        let updatesDirectory = LocalACPManagedRuntimePaths.applicationSupportDirectory
-            .appending(path: "Updates", directoryHint: .isDirectory)
-            .standardizedFileURL
-        guard marker.deletingLastPathComponent() == updatesDirectory,
-              marker.lastPathComponent.hasPrefix(".ready-") else {
-            return
-        }
-        guard let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String,
-              let buildString = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String,
-              let build = Int(buildString) else { return }
-        // A helper launch confirms replacement; clicking Install alone never does.
-        ProductAnalyticsModel.markUpdateLaunched(marker: marker, version: version, build: build)
-        try? Data().write(to: marker, options: .atomic)
     }
 
     var body: some Scene {

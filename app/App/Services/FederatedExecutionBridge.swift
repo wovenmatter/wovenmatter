@@ -96,16 +96,11 @@ extension ApplicationModel {
         // The command journal lives beside the library it addresses, never in a
         // global directory a fixture or another instance could share.
         let directory = dashboardStore.database.supportDirectory
-        let storage = libraryHost.peerStorage
         let client = try CentralExecutionClient(database: dashboardStore.database,
             commandJournalURL: directory.appending(path: "central-execution-commands.json"),
-            provision: { [weak self] id in
-                guard let self else { throw CancellationError() }
-                return try await self.libraryHost.provisionCentralExecutionWorkspace(id: id)
-            }, loadCredential: storage.loadExecutionCredential, saveCredential: storage.saveExecutionCredential,
             makeSignedTransport: { [weak self] workspace in
                 // The iPhone is never an execution destination for signed calls.
-                // A workspace whose serving member is unknown cannot be addressed; its saved grant (if any) still works.
+                // A workspace whose serving member is unknown cannot be addressed.
                 guard let self, workspace.kind != .ios, let directory = try? await self.libraryHost.peerSync.members(),
                       let audience = await directory.audience(for: workspace) else { return nil }
                 return try SignedExecutionWorkspaceTransport(workspace: workspace, signer: directory.identity.signer, audience: audience)

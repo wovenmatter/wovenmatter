@@ -28,20 +28,18 @@ async function eventually(condition, message, timeout = 10_000) {
 }
 const listen = server => new Promise(resolve => server.listen(0, '127.0.0.1', () => resolve(server.address().port)))
 
-async function execution(t, fetchImpl, extra = {}) {
+async function execution(t, extra = {}) {
   const directory = temporary(t)
   const runtime = { providers: async () => [], create: async () => ({ sessionID: randomUUID() }), close: async () => {} }
-  const service = createClientExecution({ directory, runtime, managedDataRoot: join(directory, 'databases'), publisherKey: 'k'.repeat(40), publisherFetch: fetchImpl, publisherIntervalMilliseconds: 0,
+  const service = createClientExecution({ directory, runtime, managedDataRoot: join(directory, 'databases'), publisherIntervalMilliseconds: 0,
     mcpEndpointURL: () => 'http://127.0.0.1:7337/mcp', ...extra })
   t.after(() => service.close())
   return service
 }
 
 test('bot MCP keys rotate, attribute library calls to the bot, honor botMCP groups and pause-all, and revoke', async t => {
-  const requests = []
   // This host's library copy exists but is down, so the list stays stable while calls wait.
-  const service = await execution(t, async (url, options) => { requests.push({ url, options }); return { ok: true, status: 200, text: async () => JSON.stringify({ jsonrpc: '2.0', id: 'x', result: { content: [] } }) } },
-    { library: { client: {}, available: () => false } })
+  const service = await execution(t, { library: { client: {}, available: () => false } })
   const { enroll } = await import('./fixtures/execution.mjs'); enroll(service)
   const mcp = service.mcp, deviceID = randomUUID(), botID = randomUUID()
   assert.throws(() => mcp.issueBotKey({ botID: 'nope', botName: 'x', deviceID }), /bot UUID/)
@@ -66,15 +64,11 @@ test('bot MCP keys rotate, attribute library calls to the bot, honor botMCP grou
   for (const name of ['woven_usage_read', 'woven_html_preview', 'woven_html_render', 'woven_html_cancel', 'woven_context', 'woven_databases_query']) assert.ok(!names.includes(name), name + ' is not offered to bots')
   // While the library copy is down a bot's call waits for it.
   assert.equal((await mcp.handle(scope, { jsonrpc: '2.0', id: 'n', method: 'tools/call', params: { name: 'woven_notes_read', arguments: { noteID: randomUUID() } } })).result.structuredContent.code, 'unavailable')
-  const own = service.descriptor()
-  mcp.configureLibrary({ grantID: randomUUID(), libraryID: own.libraryID, workspaceID: own.id, executionDeviceID: own.executionDeviceID, endpointURL: 'https://central.example.ts.net/wovenmatter/mcp/workspace', bearerToken: 't'.repeat(43) })
-  // A Mac's /mcp/workspace binds conversations, so the single-Mac grant never serves bots:
+  // A Mac's /mcp/workspace binds conversations, so a Mac never serves bots:
   // their library tools come only from this host's own library copy.
-  const before = requests.length
   const called = await mcp.handle(scope, { jsonrpc: '2.0', id: 'n', method: 'tools/call', params: { name: 'woven_notes_read', arguments: { noteID: randomUUID() } } })
   assert.equal(called.result?.structuredContent?.code, 'unavailable', JSON.stringify(called))
   assert.equal((await mcp.handle(scope, { jsonrpc: '2.0', id: 'u', method: 'tools/call', params: { name: 'woven_usage_read', arguments: {} } })).error?.code, -32602)
-  assert.equal(requests.length, before, 'nothing is sent to the Mac for a bot')
 
   mcp.configureBots({ groups: ['calendar'] })
   assert.ok(!(await list()).includes('woven_notes_read'))
@@ -91,7 +85,7 @@ test('bot MCP keys rotate, attribute library calls to the bot, honor botMCP grou
 })
 
 test('a user revoke of a bot MCP key sticks through the runtime refresh until reinstated', async t => {
-  const service = await execution(t, async () => ({ ok: true, status: 200, text: async () => '{}' }))
+  const service = await execution(t)
   const { enroll } = await import('./fixtures/execution.mjs'); enroll(service)
   const mcp = service.mcp, deviceID = randomUUID(), botID = randomUUID(), other = randomUUID()
   const key = mcp.issueBotKey({ botID, botName: 'Helper', deviceID })

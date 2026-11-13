@@ -910,7 +910,8 @@ extension WorkspaceDatabase {
   public func materializePendingPeerRecords() async throws { try await write { try $0.materializePendingPeerRecords() } }
   public func pairedLibraryPage(after cursor: Int64) async throws -> PairedLibraryPage { try await read { try $0.pairedLibraryPage(after: cursor) } }
   /// `sender`: the member that sent the page, for the checks in
-  /// `peerRecordAllowed`; nil for a Mac's bearer-era pairing.
+  /// `peerRecordAllowed` (`LibraryPeerSync` always names it; fixtures that
+  /// stand in for a Mac pass nil).
   /// Refused with `peer_unavailable` until the recovery backup this library
   /// asked for exists (`prepareForPeerSync`).
   public func receivePairedLibrary(_ page: PairedLibraryPage, from peer: String, sender: PairedLibrarySender? = nil) async throws {

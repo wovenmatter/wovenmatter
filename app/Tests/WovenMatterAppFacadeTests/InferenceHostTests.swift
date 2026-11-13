@@ -7,31 +7,6 @@ import WovenMatterDashboardStore
 
 @MainActor @Suite(.serialized)
 struct InferenceHostTests {
-    @Test func authenticationAndRevocationFenceCredentialPreparation() async throws {
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent("InferenceHost-" + UUID().uuidString)
-        defer { try? FileManager.default.removeItem(at: root) }
-        let auth = try ExecutionAuthentication(fileURL: root.appendingPathComponent("devices.json"))
-        let library = UUID().uuidString, workspace = UUID().uuidString, device = UUID().uuidString
-        let descriptor = ExecutionWorkspace(id: workspace, libraryID: library, ownerDeviceID: UUID().uuidString, kind: .mac, name: "Mac")
-        let bearer = try await auth.provision(deviceID: device, libraryID: library, workspaceID: workspace)
-        let probe = InferenceHostProbe()
-        let host = InferenceHost(authentication: auth, descriptor: descriptor, directory: root, isActive: { true }, authorize: { _, _ in }, preparePayload: {
-            await probe.prepared(); return Data("{\"config\":{},\"credentials\":{}}".utf8)
-        }, run: { _, emit in try await emit(Data("{\"models\":[],\"accounts\":[]}\n".utf8)) })
-        let headers = ["authorization": "Bearer " + bearer, "x-woven-protocol": String(LibraryProtocol.version),
-            "x-woven-library": library, "x-woven-workspace": workspace, "x-woven-device": device]
-        var wrong = headers; wrong["x-woven-device"] = UUID().uuidString
-        #expect(await host.handle(.init(method: "GET", target: "/v1/inference/catalog", headers: wrong)).status == 403)
-        #expect(await probe.preparationCount == 0)
-        let response = await host.handle(.init(method: "GET", target: "/v1/inference/catalog", headers: headers))
-        #expect(response.status == 200)
-        #expect(String(decoding: response.body, as: UTF8.self).contains("models"))
-        #expect(await probe.preparationCount == 1)
-        try await auth.revoke(deviceID: device)
-        #expect(await host.handle(.init(method: "GET", target: "/v1/inference/catalog", headers: headers)).status == 401)
-        #expect(await probe.preparationCount == 1)
-    }
-
     /// A phone member signs its inference requests: no grant exists, the
     /// principal is its member device, and removing it ends access at once.
     @Test func signedMembersUseInferenceWithoutAGrant() async throws {
@@ -71,44 +46,6 @@ struct InferenceHostTests {
         try await mac.remove(phone.deviceID)
         #expect(try await catalog(phone) == 401)
         #expect(await probe.preparationCount == 1)
-    }
-
-    @Test func aDelegatedGrantLosesInferenceAsSoonAsItsProvisioningMacIsUnpaired() async throws {
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent("InferenceLive-" + UUID().uuidString)
-        defer { try? FileManager.default.removeItem(at: root) }
-        let auth = try ExecutionAuthentication(fileURL: root.appendingPathComponent("devices.json"))
-        let library = UUID().uuidString.lowercased(), workspace = UUID().uuidString.lowercased(), device = UUID().uuidString.lowercased()
-        let provisioner = UUID().uuidString.lowercased()
-        let descriptor = ExecutionWorkspace(id: workspace, libraryID: library, ownerDeviceID: UUID().uuidString, kind: .mac, name: "Mac")
-        let bearer = try await auth.provision(deviceID: device, libraryID: library, workspaceID: workspace, provisionedBy: provisioner)
-        let probe = InferenceHostProbe()
-        let gate = InferenceAuthorizationGate()
-        // A fake provider: nothing leaves the process.
-        let host = InferenceHost(authentication: auth, descriptor: descriptor, directory: root, isActive: { true },
-            authorize: { deviceID, provisionedBy in try await gate.check(deviceID, provisionedBy) },
-            preparePayload: { await probe.prepared(); return Data("{\"config\":{},\"credentials\":{}}".utf8) },
-            run: { _, emit in await probe.ran(); try await emit(Data("{\"type\":\"done\"}\n".utf8)) })
-        let headers = ["authorization": "Bearer " + bearer, "x-woven-protocol": String(LibraryProtocol.version),
-            "x-woven-library": library, "x-woven-workspace": workspace, "x-woven-device": device]
-        #expect(await host.handle(.init(method: "GET", target: "/v1/inference/catalog", headers: headers)).status == 200)
-        // Checked before credentials are prepared and again before the helper runs.
-        #expect(await gate.seen == [provisioner, provisioner])
-        // The provisioning Mac is unpaired; the token itself is still on disk
-        // (its asynchronous cleanup has not run), yet nothing is prepared.
-        await gate.deny()
-        #expect(await host.handle(.init(method: "GET", target: "/v1/inference/catalog", headers: headers)).status == 401)
-        #expect(await probe.preparationCount == 1)
-        // A stream admitted before the unpair is checked again before it starts.
-        await gate.allow()
-        let body = try JSONSerialization.data(withJSONObject: ["model": ["provider": "fixture", "id": "fixture"]])
-        let response = await host.handle(.init(method: "POST", target: "/v1/inference/stream", headers: headers, body: body))
-        #expect(response.status == 200)
-        await gate.deny()
-        let stream = try #require(response.stream)
-        let lines = InferenceLines()
-        try? await stream { data in lines.append(data) }
-        #expect(lines.text.contains("\"type\":\"error\""))
-        #expect(await probe.runs == 1)
     }
 
     @Test func helperCancellationTerminatesOnlyItsOwnedControlledProcess() async throws {

@@ -29,8 +29,6 @@ struct PairedMacDeviceStorage {
     var loadClaim: (String) throws -> StoredPairingClaim?
     var saveClaim: (StoredPairingClaim?, String) throws -> Void
     var loadLegacyCredential: @MainActor () throws -> MobileCredential?
-    var loadExecutionCredential: @MainActor (String) throws -> DirectWorkspaceCredential?
-    var saveExecutionCredential: @MainActor (DirectWorkspaceCredential) throws -> Void
     /// This Mac's device-only Curve25519 signing key (raw representation).
     var loadSigningKey: @MainActor () throws -> Data?
     var saveSigningKey: @MainActor (Data) throws -> Void
@@ -49,23 +47,18 @@ struct PairedMacDeviceStorage {
               loadClaim: { try PendingPairingVault.load(deviceID: $0) },
               saveClaim: { try PendingPairingVault.save($0, deviceID: $1) },
               loadLegacyCredential: { try MobileCredentialVault.load() },
-              loadExecutionCredential: CentralExecutionCredentialVault.load,
-              saveExecutionCredential: CentralExecutionCredentialVault.save,
               loadSigningKey: PairedMacCredentialVault.loadSigningKey, saveSigningKey: PairedMacCredentialVault.saveSigningKey)
     }
     /// Isolated storage for fixtures. Nothing is shared with other instances.
     @MainActor static func memory(credentials: [PairedMacCredential] = [], legacy: MobileCredential? = nil) -> Self {
         final class Box: @unchecked Sendable {
             var credentials: [PairedMacCredential] = []; var claims: [String: StoredPairingClaim] = [:]
-            var execution: [String: DirectWorkspaceCredential] = [:]
             var signingKey: Data?
         }
         let box = Box(); box.credentials = credentials
         return .init(loadCredentials: { box.credentials }, saveCredentials: { box.credentials = $0 },
                      loadClaim: { box.claims[$0] }, saveClaim: { claim, id in box.claims[id] = claim },
                      loadLegacyCredential: { legacy },
-                     loadExecutionCredential: { box.execution[$0] },
-                     saveExecutionCredential: { box.execution[CentralExecutionCredentialVault.account(libraryID: $0.libraryID, workspaceID: $0.workspaceID, deviceID: $0.deviceID)] = $0 },
                      loadSigningKey: { box.signingKey }, saveSigningKey: { box.signingKey = $0 },
                      restoresPairing: false)
     }

@@ -4,7 +4,6 @@ import Foundation
 import Network
 import Observation
 import os
-import Security
 import WovenMatterShared
 import LibraryClient
 import WovenMatterCore
@@ -18,10 +17,8 @@ import WovenMatterDashboardStore
 /// machine that is not connected shows what the library holds, marked offline.
 @MainActor @Observable
 final class CentralExecutionClient {
-    typealias Provision = @MainActor (String) async throws -> ExecutionCredential
-    typealias MakeTransport = @MainActor (DirectWorkspaceCredential) throws -> any ExecutionWorkspaceTransport
     /// A transport signed with this Mac's member key, or nil when this Mac has
-    /// no member identity yet. It replaces provisioned grants for every member.
+    /// no member identity yet or the workspace's serving member is unknown.
     typealias MakeSignedTransport = @MainActor (ExecutionWorkspace) async throws -> (any ExecutionWorkspaceTransport)?
     /// Opens the live stream to a `stream.v1` workspace (one signed socket per
     /// attempt), or nil when this Mac cannot sign for it yet.
@@ -29,11 +26,7 @@ final class CentralExecutionClient {
     private let database: WorkspaceDatabase
     /// Command identities and receipts, so a retried command is never run twice.
     private let commandJournal: WorkspaceJournal
-    private let provision: Provision
-    private let makeTransport: MakeTransport
-    private let makeSignedTransport: MakeSignedTransport?
-    private let loadCredential: @MainActor (String) throws -> DirectWorkspaceCredential?
-    private let saveCredential: @MainActor (DirectWorkspaceCredential) throws -> Void
+    private let makeSignedTransport: MakeSignedTransport
     private let makeStream: MakeStream?
     private let streamConfiguration: StreamConnection.Configuration
     /// The member list's revision: a change lets a stream closed with 4401 try again.
@@ -62,17 +55,12 @@ final class CentralExecutionClient {
     private(set) var onlineWorkspaces: Set<String> = []
     private(set) var errors: [String: String] = [:]
 
-    init(database: WorkspaceDatabase, commandJournalURL: URL, provision: @escaping Provision,
-         makeTransport: @escaping MakeTransport = { try HTTPSExecutionWorkspaceTransport(credential: $0) },
-         loadCredential: @escaping @MainActor (String) throws -> DirectWorkspaceCredential? = CentralExecutionCredentialVault.load,
-         saveCredential: @escaping @MainActor (DirectWorkspaceCredential) throws -> Void = CentralExecutionCredentialVault.save,
-         makeSignedTransport: MakeSignedTransport? = nil,
+    init(database: WorkspaceDatabase, commandJournalURL: URL,
+         makeSignedTransport: @escaping MakeSignedTransport,
          makeStream: MakeStream? = nil, memberRevision: (@MainActor () async -> String?)? = nil,
          streamConfiguration: StreamConnection.Configuration = .init()) throws {
         self.makeSignedTransport = makeSignedTransport
         self.database = database; self.commandJournal = try WorkspaceJournal(file: commandJournalURL)
-        self.provision = provision; self.makeTransport = makeTransport
-        self.loadCredential = loadCredential; self.saveCredential = saveCredential
         self.makeStream = makeStream; self.memberRevision = memberRevision; self.streamConfiguration = streamConfiguration
         if makeStream != nil { wakeMonitor = StreamWakeMonitor { [weak self] in self?.reconnectStreams() } }
     }
@@ -173,7 +161,7 @@ final class CentralExecutionClient {
         if let transport = transports[workspace.id], transportEndpoints[workspace.id] == workspace.endpoint { return transport }
         transports.removeValue(forKey: workspace.id)
         // A copied owner (a Dev snapshot's, or a Mac unpaired from this one) is
-        // history only: it is never signed for, granted or provisioned.
+        // history only: it is never signed for.
         guard workspace.retainedHistory != true else {
             throw LibraryAPIError(code: "workspace_unavailable", message: "\(workspace.name) is retained history here. Its chats stay readable; start a new session to run work.")
         }
@@ -181,54 +169,22 @@ final class CentralExecutionClient {
             throw LibraryAPIError(code: "workspace_unavailable", message: "Open Woven Matter on the device that owns this conversation to continue its on-device agent.")
         }
         // Members sign every request; nothing is provisioned, so the Mac that
-        // added the workspace does not need to be online.
-        if workspace.endpoint != nil, let signed = try await makeSignedTransport?(workspace) {
-            do {
-                let remote = try await signed.identity()
-                guard remote.id == workspace.id, remote.libraryID == workspace.libraryID else { throw MobileStore.Failure.wrongWorkspace }
-                transports[workspace.id] = signed; transportEndpoints[workspace.id] = workspace.endpoint
-                return signed
-            } catch MobileConnectionError.revoked {
-                // No grant stands in for a member: the peer has not synchronized
-                // this Mac's membership yet, or it removed this Mac.
-                throw LibraryAPIError(code: "unauthorized", message: "\(workspace.name) does not recognize this Mac yet. It does once the two devices synchronize their member list.")
-            }
+        // added the workspace does not need to be online. A refusal is final
+        // until the member lists synchronize.
+        let unrecognized = LibraryAPIError(code: "unauthorized", message: "\(workspace.name) does not recognize this Mac yet. It does once the two devices synchronize their member list.")
+        guard workspace.endpoint != nil else {
+            throw LibraryAPIError(code: "workspace_unavailable", message: Self.unstreamedProblem(workspace))
         }
-        let identity = try await database.libraryIdentity()
-        let account = CentralExecutionCredentialVault.account(libraryID: workspace.libraryID, workspaceID: workspace.id, deviceID: identity.hostDeviceID)
-        if let saved = try loadCredential(account), saved.libraryID == workspace.libraryID,
-           saved.workspaceID == workspace.id, saved.deviceID == identity.hostDeviceID,
-           saved.endpoint == workspace.endpoint {
-            let transport = try makeTransport(saved)
-            do {
-                let remote = try await transport.identity()
-                guard remote.id == workspace.id, remote.libraryID == workspace.libraryID else { throw MobileStore.Failure.wrongWorkspace }
-                transports[workspace.id] = transport; transportEndpoints[workspace.id] = remote.endpoint
-                return transport
-            } catch MobileConnectionError.revoked {
-                // Explicit revocation may be renewed by the authoritative host.
-            } catch let error as LibraryAPIError where ["unauthorized", "revoked", "invalid_token"].contains(error.code) {
-                // Only a definitive authorization rejection renews the grant.
-                // A network failure retains the existing scoped credential.
-            }
+        guard let signed = try await makeSignedTransport(workspace) else { throw unrecognized }
+        do {
+            let remote = try await signed.identity()
+            guard remote.id == workspace.id, remote.libraryID == workspace.libraryID else { throw MobileStore.Failure.wrongWorkspace }
+            transports[workspace.id] = signed; transportEndpoints[workspace.id] = workspace.endpoint
+            return signed
+        } catch MobileConnectionError.revoked {
+            // The peer has not synchronized this Mac's membership yet, or it removed this Mac.
+            throw unrecognized
         }
-        let issued: ExecutionCredential
-        do { issued = try await provision(workspace.id) }
-        catch where makeSignedTransport != nil {
-            throw LibraryAPIError(code: "unauthorized", message: "\(workspace.name) does not recognize this Mac yet. It does once the two devices synchronize their member list.")
-        }
-        guard issued.workspace.id == workspace.id, issued.workspace.libraryID == workspace.libraryID,
-              issued.deviceID == identity.hostDeviceID, let endpoint = issued.workspace.endpoint else { throw MobileConnectionError.invalidResponse }
-        let credential = DirectWorkspaceCredential(endpoint: endpoint, libraryID: workspace.libraryID,
-            workspaceID: workspace.id, deviceID: identity.hostDeviceID, token: issued.token)
-        let transport = try makeTransport(credential)
-        // Provisioning has acknowledged this scoped grant. Preserve it before
-        // probing reachability so a lost probe does not rotate it on reconnect.
-        try saveCredential(credential)
-        let remote = try await transport.identity()
-        guard remote.id == workspace.id, remote.libraryID == workspace.libraryID else { throw MobileStore.Failure.wrongWorkspace }
-        transports[workspace.id] = transport; transportEndpoints[workspace.id] = remote.endpoint
-        return transport
     }
 
     /// Creates a session on `workspace` with the caller's choices. A locked Pi
@@ -672,7 +628,6 @@ extension CentralExecutionClient {
     /// One activity's complete projection, from the workspace that runs it.
     func activityDetails(conversationID: String, runID: String, activityID: String) async throws -> LibraryActivity {
         let workspace = try await requiredWorkspace(conversationID)
-        // Members sign the read; a provisioned grant's transport has no details route.
         guard let reader = try await transport(for: workspace) as? any ExecutionActivityDetailsReading else {
             throw LibraryAPIError(code: "unavailable", message: "Activity details are unavailable for this workspace.")
         }
@@ -870,32 +825,5 @@ final class StreamWakeMonitor {
     isolated deinit {
         path.cancel()
         if let observer { NSWorkspace.shared.notificationCenter.removeObserver(observer) }
-    }
-}
-
-/// Separate from phone/client grants: an execution owner's authority must never
-/// overwrite a paired user's bearer for the same workspace on this Mac.
-enum CentralExecutionCredentialVault {
-    static let service = "com.wovenmatter.central-execution"
-    static func account(libraryID: String, workspaceID: String, deviceID: String) -> String {
-        [libraryID, workspaceID, deviceID].joined(separator: ":")
-    }
-    static func load(_ account: String) throws -> DirectWorkspaceCredential? {
-        var item: CFTypeRef?
-        let status = SecItemCopyMatching([kSecClass: kSecClassGenericPassword, kSecAttrService: service,
-            kSecAttrAccount: account, kSecReturnData: true, kSecMatchLimit: kSecMatchLimitOne] as CFDictionary, &item)
-        if status == errSecItemNotFound { return nil }
-        guard status == errSecSuccess, let data = item as? Data else { throw NSError(domain: NSOSStatusErrorDomain, code: Int(status)) }
-        return try JSONDecoder().decode(DirectWorkspaceCredential.self, from: data)
-    }
-    static func save(_ credential: DirectWorkspaceCredential) throws {
-        let key = account(libraryID: credential.libraryID, workspaceID: credential.workspaceID, deviceID: credential.deviceID)
-        let query: [CFString: Any] = [kSecClass: kSecClassGenericPassword, kSecAttrService: service, kSecAttrAccount: key]
-        let values: [CFString: Any] = [kSecValueData: try JSONEncoder().encode(credential), kSecAttrAccessible: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly]
-        let status = SecItemUpdate(query as CFDictionary, values as CFDictionary)
-        if status == errSecItemNotFound {
-            let inserted = SecItemAdd(query.merging(values) { _, value in value } as CFDictionary, nil)
-            guard inserted == errSecSuccess else { throw NSError(domain: NSOSStatusErrorDomain, code: Int(inserted)) }
-        } else if status != errSecSuccess { throw NSError(domain: NSOSStatusErrorDomain, code: Int(status)) }
     }
 }

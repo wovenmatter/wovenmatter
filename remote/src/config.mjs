@@ -13,7 +13,7 @@ export function defaultAgentModule(name) {
 
 // This is shared by the HTTP service, maintenance and host launch helpers. The
 // service runs only on native hosts (remote-host.sh installs it as a systemd
-// user unit); older installs may still set WOVENMATTER_RUNTIME_KIND, which is ignored.
+// user unit).
 export function loadRuntimeConfiguration(environment = process.env) {
   const home = environment.HOME ?? homedir()
   const serviceRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
@@ -27,9 +27,6 @@ export function loadRuntimeConfiguration(environment = process.env) {
     home, serviceRoot, accessMode, listenHost,
     listenPort: Number.isInteger(port) && port > 0 && port <= 65535 ? port : 7337,
     apiToken: environment.WOVENMATTER_API_TOKEN ?? '',
-    // Keys the publisher and MCP grants at rest; set once the installer bearer
-    // rotates (remote-host.sh rotate-token), older installs use the bearer.
-    serviceSecret: environment.WOVENMATTER_SERVICE_SECRET || null,
     catalogPath: environment.WOVENMATTER_HARNESS_CATALOG ?? resolve(serviceRoot, 'harnesses/catalog.json'),
     workspaceRoot: environment.WOVENMATTER_WORKSPACE ?? resolve(home, '.woven-matter'),
     managedDataRoot,

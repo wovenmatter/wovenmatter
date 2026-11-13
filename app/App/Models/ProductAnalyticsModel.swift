@@ -181,14 +181,6 @@ final class ProductAnalyticsModel {
   func cancelUpdateInstallation() {
     defaults.removeObject(forKey: Self.updateReceiptKey)
   }
-  static func markUpdateLaunched(marker: URL, version: String, build: Int) {
-    let defaults = UserDefaults.standard
-    guard let data = defaults.data(forKey: updateReceiptKey),
-      var receipt = try? JSONDecoder().decode(ProductAnalyticsUpdateReceipt.self, from: data),
-      receipt.confirmLaunch(marker: marker, version: version, build: build),
-      let updated = try? JSONEncoder().encode(receipt) else { return }
-    defaults.set(updated, forKey: updateReceiptKey)
-  }
   static func markUpdateLaunched(version: String, build: Int) {
     let defaults = UserDefaults.standard
     guard let data = defaults.data(forKey: updateReceiptKey),
@@ -322,11 +314,6 @@ struct ProductAnalyticsUpdateReceipt: Codable, Equatable {
   var event: ProductAnalyticsEvent
   var confirmed = false
 
-  mutating func confirmLaunch(marker: URL, version: String, build: Int, now: Date = Date()) -> Bool {
-    guard marker.lastPathComponent == ".ready-" + event.id else { return false }
-    return confirmLaunch(version: version, build: build, now: now)
-  }
-  // Sparkle relaunches without the legacy installer's command-line marker.
   // The running app must match the exact intended version AND build.
   mutating func confirmLaunch(version: String, build: Int, now: Date = Date()) -> Bool {
     guard !confirmed, self.version == version, self.build == build,

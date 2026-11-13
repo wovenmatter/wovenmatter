@@ -81,7 +81,7 @@ final class PairingSettingsTests: XCTestCase {
     let final = await store.snapshot(); XCTAssertEqual(final, expected)
   }
 
-  @MainActor func testDisabledWorkspaceDiscardsOnlyItsGrantAndRemainsDimmed() async throws {
+  @MainActor func testDisabledWorkspaceDropsOnlyItsClientAndRemainsDimmed() async throws {
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     defer { try? FileManager.default.removeItem(at: directory) }
     let store = try MobileStore(file: directory.appendingPathComponent("library.json"))
@@ -92,9 +92,7 @@ final class PairingSettingsTests: XCTestCase {
     model.workspaceClients[workspace.id] = WorkspaceClient(store: store, workspaceID: workspace.id, transport: DisabledPairingWorkspace())
     model.workspaceReachable[workspace.id] = true
     model.workspaceProviders[workspace.id] = [.init(id: "pi", runtimeKind: "default_agent", displayName: "Pi Durable", available: true)]
-    var cleared: [String] = []
-    await model.refreshDirectWorkspace(workspace.id) { cleared.append($0) }
-    XCTAssertEqual(cleared, [workspace.id])
+    await model.refreshDirectWorkspace(workspace.id)
     XCTAssertNil(model.workspaceClients[workspace.id])
     XCTAssertEqual(model.workspaceReachable[workspace.id], false)
     XCTAssertFalse(try XCTUnwrap(model.launcherAgents.first { $0.workspaceID == workspace.id }).isAvailable)

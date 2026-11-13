@@ -197,9 +197,7 @@ struct FederationTests {
     await #expect(throws: LibraryAPIError.self) {
       try await db.ingestExecutionJournal(.init(libraryID: identity.libraryID, entries: [event]), deviceID: identity.hostDeviceID)
     }
-    let publisher = try await db.issueExecutionWorkspacePublisher(workspaceID: descriptor.id,
-      endpoint: URL(string: "https://central.test.ts.net/wovenmatter")!, deviceID: identity.hostDeviceID)
-    _ = try await db.ingestExecutionJournal(.init(libraryID: identity.libraryID, entries: [event]), deviceID: publisher.executionDeviceID)
+    _ = try await db.ingestExecutionJournal(.init(libraryID: identity.libraryID, entries: [event]), deviceID: try #require(descriptor.executionDeviceID))
     #expect(try await db.libraryExecutionOriginCursor(workspaceID: descriptor.id) == 1)
     try await db.write { connection in
       try connection.transaction {

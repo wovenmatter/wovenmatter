@@ -177,7 +177,6 @@ final class LibraryHostCommandTests: XCTestCase {
     model.libraryHosts = try MobileLibraryHosts(state: membership, identity: identity, file: nil, performer: http)
     model.membership = membership
     model.transport = try HTTPSLibraryTransport(host: devEndpoint, hostDeviceID: hostDevice, identity: identity, performer: http)
-    model.workspaceCredentials = .init(load: { _ in nil }, save: { _ in XCTFail("Saved a grant") }, clear: { _ in })
     let devServer = MacStreamServer(descriptor: dev, memberDeviceID: identity.deviceID)
     let miniServer = MacStreamServer(descriptor: mini, memberDeviceID: identity.deviceID)
     let servers = [dev.id: devServer, mini.id: miniServer]
