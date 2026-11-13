@@ -5,6 +5,7 @@ import Network
 import Observation
 import os
 import Security
+import WovenMatterShared
 import LibraryClient
 import WovenMatterCore
 import WovenMatterDashboardStore
@@ -122,12 +123,27 @@ final class CentralExecutionClient {
             await restoreSaved(conversationID: conversationID)
             return
         }
+        // A chat whose subscription the owner ended is read once, from the
+        // library, and not subscribed again on this connection: an owner that
+        // ended it for good (too large to send, unknown there) is not asked
+        // again until it reconnects.
+        if let reason = stream.ended[conversationID] {
+            await restoreSaved(conversationID: conversationID)
+            throw LibraryAPIError(code: Self.liveViewEnded, message: reason)
+        }
         await watch(conversationID, on: stream)
         await stream.synchronized(conversationID, within: .seconds(5))
+        if let reason = stream.ended[conversationID] {
+            await restoreSaved(conversationID: conversationID)
+            throw LibraryAPIError(code: Self.liveViewEnded, message: reason)
+        }
         if onlineWorkspaces.contains(descriptor.id), transcripts[conversationID] != nil { return }
         await restoreSaved(conversationID: conversationID)
         throw LibraryAPIError(code: "workspace_unavailable", message: errors[descriptor.id] ?? "\(descriptor.name) is not connected yet.")
     }
+
+    /// A chat's live view that its owner ended on this connection.
+    nonisolated static let liveViewEnded = "live_view_ended"
 
     /// Last known state: the history library sync brought, which every device
     /// holds. Without any, the chat keeps what its stream last sent.
@@ -475,6 +491,12 @@ final class LiveWorkspace {
     let connection: StreamConnection
     var subscription: StreamSubscription?
     var conversations: [String: StreamSubscription] = [:]
+    /// Chats whose `conversation` subscription is being sent: their items
+    /// count before `subscribe` returns, so a fast first snapshot is kept.
+    var opening: Set<String> = []
+    /// Chats whose subscription the owner ended on this connection, with why.
+    /// They are not subscribed again until the next `hello`.
+    var ended: [String: String] = [:]
     var synchronizedConversations: Set<String> = []
     var state = StreamConnection.State.idle
     var stateTask: Task<Void, Never>?
@@ -487,7 +509,8 @@ final class LiveWorkspace {
     /// Returns once the open chat's first snapshot arrived, the connection
     /// failed, or `limit` passed.
     func synchronized(_ conversationID: String, within limit: Duration) async {
-        guard conversations[conversationID] != nil, !synchronizedConversations.contains(conversationID) else { return }
+        guard conversations[conversationID] != nil, ended[conversationID] == nil,
+              !synchronizedConversations.contains(conversationID) else { return }
         switch state {
         case .waiting, .memberRemoved: return
         case .idle, .connecting, .open: break
@@ -539,7 +562,12 @@ extension CentralExecutionClient {
             connect = value
         } catch { errors[workspace.id] = error.localizedDescription; return nil }
         if let existing = live[workspace.id] { return existing }
-        let connection = StreamConnection(configuration: streamConfiguration, connect: connect)
+        // Nothing the socket sends counts until its `hello` names the workspace
+        // this Mac meant to reach, as `identity()` checks over HTTP.
+        let checked: StreamConnection.Connect = { [id = workspace.id, libraryID = workspace.libraryID, name = workspace.name] in
+            HelloCheckedStreamTransport(try await connect(), workspaceID: id, libraryID: libraryID, name: name)
+        }
+        let connection = StreamConnection(configuration: streamConfiguration, connect: checked)
         let stream = LiveWorkspace(workspace: workspace, connection: connection)
         live[workspace.id] = stream
         let id = workspace.id
@@ -583,13 +611,20 @@ extension CentralExecutionClient {
     fileprivate func watch(_ conversationID: String, on stream: LiveWorkspace) async {
         watched.removeAll { $0 == conversationID }
         watched.append(conversationID)
-        if stream.conversations[conversationID] == nil {
+        if stream.conversations[conversationID] == nil, !stream.opening.contains(conversationID), stream.ended[conversationID] == nil {
             let workspaceID = stream.workspace.id
+            // Items can arrive while `subscribe` is still sending: they count.
+            stream.opening.insert(conversationID)
             let subscription = await stream.connection.subscribe(.conversation, params: .init(conversationID: conversationID)) { [weak self] event in
                 await self?.conversationEvent(event, workspaceID: workspaceID, conversationID: conversationID) ?? .accepted
             }
-            if stream.conversations[conversationID] == nil { stream.conversations[conversationID] = subscription }
-            else { await stream.connection.unsubscribe(subscription) }
+            let opened = stream.opening.remove(conversationID) != nil
+            if !opened || live[workspaceID] !== stream || stream.ended[conversationID] != nil || stream.conversations[conversationID] != nil {
+                // The chat closed or its stream closed meanwhile, or the owner already ended it.
+                await stream.connection.unsubscribe(subscription)
+            } else {
+                stream.conversations[conversationID] = subscription
+            }
         }
         while let evicted = watched.first(where: { held[$0] == nil }),
               watched.count(where: { held[$0] == nil }) > Self.maximumUnheldWatches {
@@ -636,6 +671,7 @@ extension CentralExecutionClient {
         // No longer pushed: the next subscription sends it again.
         sessions.removeValue(forKey: conversationID)
         for stream in live.values {
+            stream.opening.remove(conversationID)
             guard let subscription = stream.conversations.removeValue(forKey: conversationID) else { continue }
             stream.synchronizedConversations.remove(conversationID)
             stream.release(conversationID)
@@ -643,18 +679,26 @@ extension CentralExecutionClient {
         }
     }
 
+    /// Why the chat's owner ended its live view on this connection, if it did.
+    func endedLiveView(_ conversationID: String) -> String? {
+        live.values.lazy.compactMap { $0.ended[conversationID] }.first
+    }
+
+    /// The owner may stream this chat again (it runs it now): its next read subscribes it.
+    func resumeLiveView(_ conversationID: String) {
+        for stream in live.values { stream.ended.removeValue(forKey: conversationID) }
+    }
+
     private func streamState(_ state: StreamConnection.State, workspaceID id: String) {
         guard let stream = live[id] else { return }
         stream.state = state
+        var changed = Set(stream.conversations.keys)
         switch state {
-        case .open(let hello):
-            // The server must answer for the registered workspace, as `identity()` does over HTTP.
-            guard hello.workspaceID == id, hello.libraryID == stream.workspace.libraryID else {
-                onlineWorkspaces.remove(id); errors[id] = "\(stream.workspace.name) answered as another workspace."
-                Task { await stream.connection.stop() }
-                return
-            }
+        case .open:
+            // `HelloCheckedStreamTransport` already refused a `hello` naming another workspace.
             onlineWorkspaces.insert(id); errors.removeValue(forKey: id)
+            // A new connection: chats the owner ended on the last one are read again, once.
+            changed.formUnion(stream.ended.keys); stream.ended = [:]
             // Commands whose reply was lost are resolved, never resent.
             let connection = stream.connection, journal = commandJournal
             Task { _ = try? await StreamCommands.resolveUnknown(workspaceID: id, journal: journal, connection: connection) }
@@ -668,7 +712,7 @@ extension CentralExecutionClient {
             onlineWorkspaces.remove(id); stream.synchronizedConversations = []; stream.releaseAll()
         case .connecting: break
         }
-        onLive(Set(stream.conversations.keys))
+        onLive(changed)
     }
 
     static func streamProblem(_ error: StreamConnectionError?, workspace: ExecutionWorkspace) -> String {
@@ -706,10 +750,19 @@ extension CentralExecutionClient {
     }
 
     private func conversationEvent(_ event: StreamSubscriptionEvent, workspaceID: String, conversationID: String) async -> StreamItemDisposition {
-        guard let stream = live[workspaceID], stream.conversations[conversationID] != nil else { return .accepted }
+        guard let stream = live[workspaceID],
+              stream.conversations[conversationID] != nil || stream.opening.contains(conversationID) else { return .accepted }
         switch event {
-        case .ended:
+        case .ended(let error):
+            // For good: the owner does not send this chat now (too large to
+            // send, unknown there). It is not subscribed again on this
+            // connection; the read that follows shows its library history.
             stream.conversations.removeValue(forKey: conversationID)
+            let reason = error?.message.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            stream.ended[conversationID] = reason.isEmpty
+                ? "\(stream.workspace.name) stopped sending this chat's live view. It shows its saved history until \(stream.workspace.name) reconnects."
+                : reason
+            watched.removeAll { $0 == conversationID }
             sessions.removeValue(forKey: conversationID)
             stream.synchronizedConversations.remove(conversationID)
             stream.release(conversationID)
@@ -742,6 +795,32 @@ extension CentralExecutionClient {
         guard onlineWorkspaces.contains(workspace.id), live[workspace.id]?.conversations[conversationID] != nil else { return nil }
         return sessions[conversationID]
     }
+}
+
+/// One member-signed socket whose first frame must be a `hello` naming the
+/// workspace this Mac meant to reach. Any other `hello` fails the attempt
+/// before an item is read, and the connection retries with its backoff.
+actor HelloCheckedStreamTransport: StreamTransport {
+    private let base: any StreamTransport
+    private let workspaceID: String, libraryID: String, name: String
+    private var greeted = false
+
+    init(_ base: any StreamTransport, workspaceID: String, libraryID: String, name: String) {
+        self.base = base; self.workspaceID = workspaceID; self.libraryID = libraryID; self.name = name
+    }
+
+    func receive() async throws -> StreamFrame {
+        let frame = try await base.receive()
+        guard !greeted, case .hello(let hello) = frame else { return frame }
+        guard hello.workspaceID == workspaceID, hello.libraryID == libraryID else {
+            throw StreamConnectionError.refused(status: 101, code: "wrong_workspace", message: "\(name) answered as another workspace.")
+        }
+        greeted = true
+        return frame
+    }
+    func send(_ frame: StreamFrame) async throws { try await base.send(frame) }
+    func ping() async throws { try await base.ping() }
+    func close(_ code: WovenMatterShared.StreamProtocol.CloseCode) async { await base.close(code) }
 }
 
 /// Wake and network path changes: every stream tries at once instead of

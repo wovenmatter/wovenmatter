@@ -276,6 +276,76 @@ struct LinuxMemberPathTests {
         #expect(fixture.model.legacyRemoteChatReasons[id]?.contains("read-only") == true)
         #expect(try await fixture.database.workspaceOverview().conversations.contains { $0.id == adoptable })
     }
+
+    /// The host deciding a chat cannot move is read-only history; anything
+    /// that may pass by itself is tried again.
+    @Test func onlyTheHostsRefusalMakesAMoveReadOnly() {
+        func deferred(_ error: any Error) -> RemoteChatMoveDeferredError? {
+            RemoteChatMoveDeferredError.classify(error, workspace: "Build server") as? RemoteChatMoveDeferredError
+        }
+        func permanent(_ error: any Error) -> Bool {
+            RemoteChatMoveDeferredError.classify(error, workspace: "Build server") is LegacyRemoteChatError
+        }
+        // Not reachable, too slow, a server error, not yet a member there: tried again.
+        for error: any Error in [URLError(.cannotConnectToHost), URLError(.timedOut), MobileConnectionError.invalidResponse,
+                                  LibraryAPIError(code: "http_503", message: "Service unavailable"),
+                                  LibraryAPIError(code: "internal_error", message: "internal_error"),
+                                  LibraryAPIError(code: "unauthorized", message: "Build server does not recognize this Mac yet."),
+                                  LibraryAPIError(code: "workspace_unavailable", message: "Build server is not connected.")] {
+            let value = deferred(error)
+            #expect(value != nil && value?.busy == false, "\(error)")
+        }
+        // The host's session was still working.
+        for error in [LibraryAPIError(code: "http_409", message: "This session is not idle; client ownership was not changed"),
+                      LibraryAPIError(code: "execution_busy", message: "Wait for the current run to settle.")] {
+            #expect(deferred(error)?.busy == true, "\(error)")
+        }
+        // The host or the library refused it: read-only history.
+        for error in [LibraryAPIError(code: "http_409", message: "This native session was interrupted. It cannot move until it is reopened where it last ran."),
+                      LibraryAPIError(code: "adoption_unavailable", message: "This conversation has no known native session."),
+                      LibraryAPIError(code: "wrong_owner", message: "This conversation was transferred to another execution workspace.")] {
+            #expect(permanent(error), "\(error)")
+        }
+        let offline = RemoteChatMoveDeferredError(workspace: "Build server", reason: "The request timed out.")
+        #expect(offline.localizedDescription == "This chat is moving to Build server's server, but Build server could not be reached: "
+            + "The request timed out. Woven Matter tries again when you reopen this chat or send a message.")
+        let busy = RemoteChatMoveDeferredError(workspace: "Build server", reason: "not idle", busy: true)
+        #expect(busy.localizedDescription.hasPrefix("This chat moves to Build server's server once its current work there finishes."))
+        #expect(!offline.localizedDescription.contains("read-only") && !busy.localizedDescription.contains("read-only"))
+    }
+
+    @Test func aMoveThatCouldNotReachTheHostIsNotReadOnlyAndIsTriedAgain() async throws {
+        let fixture = try await FacadeFixture(); defer { fixture.remove() }
+        let (workspace, fake) = try await enrolled(fixture)
+        let id = try await fixture.createConversation()
+        _ = try await fixture.database.beginLocalACPRun(conversationID: id, input: .init(text: "Earlier question"))
+        try await fixture.database.write { connection in try connection.transaction {
+            try connection.toolsExecuteUnlocked("UPDATE desktop_local_acp_sessions SET acp_session_id='native-session' WHERE conversation_id=?", [id])
+        } }
+        let record = try #require(try await fixture.database.workspaceOverview().conversations.first { $0.id == id })
+
+        // The host is offline when the chat opens: it keeps its composer and says it tries again.
+        await fake.failAdoptions(URLError(.timedOut))
+        await #expect(throws: RemoteChatMoveDeferredError.self) { try await fixture.model.adoptRegisteredRemoteConversationIfNeeded(record) }
+        await fixture.model.refreshLocalACPSession(conversation: record)
+        #expect(fixture.model.legacyRemoteChatReasons[id] == nil, "a host that could not be reached does not make the chat read-only")
+        let shown = try #require(fixture.model.federatedExecutionSnapshots[id])
+        #expect(!shown.online && shown.error?.contains("tries again") == true)
+        #expect(await fake.adoptions.isEmpty)
+
+        // The host is busy with the session: the same.
+        await fake.failAdoptions(LibraryAPIError(code: "http_409", message: "This session is not idle; client ownership was not changed"))
+        await fixture.model.refreshLocalACPSession(conversation: record)
+        #expect(fixture.model.legacyRemoteChatReasons[id] == nil)
+        #expect(fixture.model.remoteChatMoveRetries[id]?.contains("once its current work there finishes") == true)
+
+        // Reopened once the host answers: the same adoption moves it.
+        await fake.failAdoptions(nil)
+        await fixture.model.refreshLocalACPSession(conversation: record)
+        #expect(await fake.adoptions.count == 1)
+        #expect(fixture.model.remoteChatMoveRetries[id] == nil && fixture.model.legacyRemoteChatReasons[id] == nil)
+        #expect(try await fixture.database.libraryExecutionOwner(conversationID: id) == workspace.id)
+    }
 }
 
 extension FacadeFixture {
@@ -322,6 +392,8 @@ actor LinuxMemberFake: ExecutionWorkspaceTransport, MemberExecutionRoutes {
     private var receipts: [String: LibraryCommandReceipt] = [:]
     private var piLocked = false, keysRefused = false, lockedSend = false, directoriesRefused = false
     private var file = Data(), knowsConversations = true, damaged = false, adoptionsRefused = false
+    /// Adoptions fail with this until cleared, as an unreachable or busy host does.
+    private var adoptionFailure: (any Error)?
 
     init(workspace: ExecutionWorkspace) { self.workspace = workspace }
     func lockPi() { piLocked = true }
@@ -332,6 +404,7 @@ actor LinuxMemberFake: ExecutionWorkspaceTransport, MemberExecutionRoutes {
     func forgetConversations() { knowsConversations = false }
     func damageFiles() { damaged = true }
     func refuseAdoptions() { adoptionsRefused = true }
+    func failAdoptions(_ error: (any Error)?) { adoptionFailure = error }
 
     func identity() -> ExecutionWorkspace { workspace }
     func providers() -> [HarnessCapabilities] {
@@ -386,6 +459,7 @@ actor LinuxMemberFake: ExecutionWorkspaceTransport, MemberExecutionRoutes {
     }
     func adopt(_ body: Data) throws {
         if adoptionsRefused { throw LibraryAPIError(code: "http_409", message: "The native session could not be reopened.") }
+        if let adoptionFailure { throw adoptionFailure }
         adoptions.append(body)
     }
     func unlockDefaultAgent(workspace: String, unlockKey: String) -> Bool {

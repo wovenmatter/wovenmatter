@@ -317,6 +317,93 @@ struct CentralExecutionStreamTests {
         _ = try await model.remoteActivityDetails(conversationID: id, runID: "run", activityID: "run:edit")
         #expect(await setup.http.detailRequests.count == 2, "A settled activity's details are read once per version")
     }
+
+    @Test func aChatItsOwnerEndsIsReadFromTheLibraryOnceAndNotSubscribedAgain() async throws {
+        let setup = try await setup(seedingOwner: true); defer { setup.fixture.remove() }
+        let (client, workspace, id, model) = (setup.client, setup.workspace, setup.conversationID, setup.fixture.model)
+        _ = try await setup.fixture.database.ingestExecutionJournal(.init(libraryID: workspace.libraryID, entries: [
+            .init(workspaceID: workspace.id, originSequence: 2, conversationID: id, kind: .transcript, transcript: .init(conversationID: id, messages: [
+                .init(id: UUID().uuidString.lowercased(), conversationID: id, role: "assistant", content: "Saved history")
+            ]))]), deviceID: workspace.executionDeviceID!)
+        model.federatedExecutionClient = client
+        // As the background server's window source does: every live change of the chat reads it again.
+        let reads = LiveChanges()
+        client.onLive = { ids in
+            guard ids.contains(id) else { return }
+            reads.record([UUID().uuidString])
+            Task { _ = try? await model.performFederatedExecution(.refresh(conversationID: id)) }
+        }
+        await client.connectRegisteredWorkspaces()
+        let socket = try await open(setup)
+        // The owner ends every subscription of the chat for good (its snapshot is too large to send).
+        let ending = Task {
+            var answered: Set<String> = []
+            while !Task.isCancelled {
+                for subscription in await socket.subscriptions where subscription.stream == "conversation" && !answered.contains(subscription.id) {
+                    answered.insert(subscription.id)
+                    await socket.push(.end(.init(id: subscription.id, error: .init(code: "unavailable",
+                        message: "This chat is too large to stream. Its saved history shows here."))))
+                }
+                try? await Task.sleep(for: .milliseconds(2))
+            }
+        }
+        defer { ending.cancel() }
+        do {
+            try await client.refresh(conversationID: id)
+            Issue.record("A chat whose live view ended was read as live")
+        } catch let error as LibraryAPIError {
+            #expect(error.code == CentralExecutionClient.liveViewEnded && error.message.contains("too large"))
+        }
+        try await Task.sleep(for: .milliseconds(500))
+        #expect(await socket.subscriptions.filter { $0.stream == "conversation" }.count == 1, "the ended chat was subscribed again")
+        #expect(reads.all.count <= 2, "the ended chat kept being read")
+        // It shows its library history, offline, with why.
+        #expect(client.transcripts[id]?.messages.map(\.content) == ["Saved history"])
+        let snapshot = try await model.performFederatedExecution(.refresh(conversationID: id))
+        #expect(!snapshot.online && snapshot.error?.contains("too large") == true)
+        #expect(snapshot.transcript?.messages.map(\.content) == ["Saved history"])
+        #expect(await socket.subscriptions.filter { $0.stream == "conversation" }.count == 1)
+        ending.cancel()
+
+        // A new connection asks for it once more.
+        await socket.serverClose(code: 1006)
+        let second = try await open(setup, socket: 1)
+        let server = serveConversations(second)
+        defer { server.cancel() }
+        try await until("live again") { client.transcripts[id]?.messages.map(\.content) == ["Hello"] }
+        #expect(await second.subscriptions.filter { $0.stream == "conversation" }.count == 1)
+        #expect(client.endedLiveView(id) == nil)
+    }
+
+    @Test func aSnapshotThatArrivesBeforeTheSubscribeReturnsIsKept() async throws {
+        let setup = try await setup(seedingOwner: true); defer { setup.fixture.remove() }
+        let (client, id) = (setup.client, setup.conversationID)
+        await client.connectRegisteredWorkspaces()
+        let socket = try await open(setup)
+        await socket.answerAtOnce()
+        let started = ContinuousClock.now
+        try await client.refresh(conversationID: id)
+        #expect(client.transcripts[id]?.messages.map(\.content) == ["Fast snapshot"])
+        #expect(ContinuousClock.now - started < .seconds(4), "the refresh waited out the first snapshot it had dropped")
+    }
+
+    @Test func aStreamThatAnswersAsAnotherWorkspaceIsNotTrusted() async throws {
+        let setup = try await setup(retrySleep: { _ in try await Task.sleep(for: .seconds(3600)) })
+        defer { setup.fixture.remove() }
+        let (client, workspace) = (setup.client, setup.workspace)
+        await client.connectRegisteredWorkspaces()
+        try await until("socket") { setup.server.sockets.count == 1 }
+        let socket = setup.server.sockets[0]
+        await socket.push(.hello(.init(deviceID: workspace.executionDeviceID!, libraryID: workspace.libraryID,
+            workspaceID: UUID().uuidString.lowercased(), serverTime: MemberRequestSignature.now(), capabilities: [StreamProtocol.capability])))
+        let interaction = PendingInteraction(id: "q1", conversationID: UUID().uuidString.lowercased(), runID: "run", kind: .approval, title: "Run it?")
+        await socket.push(.item(.init(id: "s1", payload: .pending(.init(interactions: [interaction])))))
+        try await until("refused") { client.errors[workspace.id]?.contains("answered as another workspace") == true }
+        try await Task.sleep(for: .milliseconds(100))
+        #expect(!client.onlineWorkspaces.contains(workspace.id))
+        #expect(client.pending[workspace.id] == nil)
+        #expect(await socket.subscriptions.isEmpty, "nothing was subscribed on a socket that answered as another workspace")
+    }
 }
 
 @MainActor private func until(_ what: String, _ condition: () async -> Bool) async throws {
@@ -345,9 +432,20 @@ private actor StreamFixtureSocket: StreamTransport {
         if closed { throw StreamTransportClosed() }
         return try await withCheckedThrowingContinuation { receiver = $0 }
     }
-    func send(_ frame: StreamFrame) throws {
+    /// Answers a `conversation` subscription while its frame is still being
+    /// sent (a server faster than the client's write completing).
+    private var answersAtOnce = false
+    func answerAtOnce() { answersAtOnce = true }
+    func send(_ frame: StreamFrame) async throws {
         guard !closed else { throw StreamTransportClosed() }
         sent.append(frame)
+        guard answersAtOnce, case .subscribe(let value) = frame, value.stream == "conversation" else { return }
+        let id = value.params.conversationID ?? ""
+        push(.item(.init(id: value.id, payload: .transcript(.init(transcript: .init(conversationID: id, messages: [
+            .init(id: id + "-m1", conversationID: id, role: "assistant", content: "Fast snapshot")
+        ]), snapshot: true)))))
+        push(.item(.init(id: value.id, payload: .synchronized)))
+        try? await Task.sleep(for: .milliseconds(100))
     }
     func ping() {}
     func close(_ code: StreamProtocol.CloseCode) { serverClose(code: code.rawValue) }

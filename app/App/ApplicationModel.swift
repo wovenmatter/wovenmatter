@@ -367,6 +367,10 @@ final class ApplicationModel {
     /// Chats that ran over SSH and could not move to their Linux host's server:
     /// read-only history, with the reason (`LegacyRemoteChatError`).
     var legacyRemoteChatReasons: [String: String] = [:]
+    /// Chats that ran over SSH whose move to their host did not finish this
+    /// time (`RemoteChatMoveDeferredError`): not read-only; tried again on the
+    /// next open or send. Their snapshots show this reason, offline.
+    @ObservationIgnored var remoteChatMoveRetries: [String: String] = [:]
     /// A window's one live connection to its background server and what it follows.
     @ObservationIgnored let windowLive = WindowLiveState()
     /// Chats another machine runs, as the conversation view renders them.
@@ -2811,6 +2815,7 @@ final class ApplicationModel {
     func refreshLocalACPSession(
         conversation: WorkspaceConversationRecord
     ) async {
+        var moveDeferred: String?
         if !isBackendFrontend {
             do {
                 try await adoptRegisteredRemoteConversationIfNeeded(conversation)
@@ -2818,9 +2823,16 @@ final class ApplicationModel {
             } catch let error as LegacyRemoteChatError {
                 // Read-only history: the conversation view says why and offers no composer.
                 legacyRemoteChatReasons[conversation.id] = error.localizedDescription; return
+            } catch let error as RemoteChatMoveDeferredError {
+                // Not read-only: the composer stays, and reopening or sending tries the move again.
+                legacyRemoteChatReasons.removeValue(forKey: conversation.id)
+                moveDeferred = error.localizedDescription
             } catch { ensureConversationState(id: conversation.id).setError(error.localizedDescription); return }
         }
         let owned = (try? await dashboardStore?.database.libraryExecutionOwner(conversationID: conversation.id)) != nil
+        if let moveDeferred, !owned {
+            ensureConversationState(id: conversation.id).setError(moveDeferred); return
+        }
         if isBackendFrontend, owned, conversation.remoteWorkspaceID != nil {
             // Only the background server knows whether a chat that ran over SSH moved to its host.
             if let result = try? await sendBackendCommand(.sessionMetadata(conversationID: conversation.id)) {
