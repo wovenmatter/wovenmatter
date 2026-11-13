@@ -360,8 +360,7 @@ extension FacadeFixture {
         let fake = LinuxMemberFake(workspace: workspace)
         let client = try CentralExecutionClient(database: database,
             commandJournalURL: directory.appending(path: "member-commands-\(UUID()).json"),
-            provision: { _ in throw MobileConnectionError.revoked },
-            loadCredential: { _ in nil }, saveCredential: { _ in }, makeSignedTransport: { _ in fake })
+            makeSignedTransport: { _ in fake })
         client.unlockDefaultAgentHandler = { workspace, routes in
             try await DefaultAgentHostUnlock.unlock(scope: workspace.id, routes: routes, existingKey: { _ in "fixture-key" },
                 prepare: { scope in DefaultAgentPayload(config: .init(), credentials: [:], workspace: scope) })

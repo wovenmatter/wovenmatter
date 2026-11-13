@@ -868,8 +868,10 @@ final class LibraryHostController {
         }
     }
 
-    /// Internal execution-owner path for this desktop itself. It cannot
-    /// choose an arbitrary principal and is never exposed as a client HTTP route.
+    /// Enrolls a Linux host this Mac added (`setUpLinuxHost`): exposes its
+    /// execution API and registers the row's endpoint and `executionDeviceID`.
+    /// Every member then reaches it with signed requests. Never exposed as a
+    /// client HTTP route.
     func provisionCentralExecutionWorkspace(id: String) async throws -> ExecutionCredential {
         guard let model, !model.isBackendFrontend,
               let database = model.dashboardStore?.database, UUID(uuidString: id) != nil,
@@ -879,27 +881,18 @@ final class LibraryHostController {
         provisioningWorkspaceIDs.insert(id)
         defer { provisioningWorkspaceIDs.remove(id) }
         let identity = try await database.libraryIdentity()
-        if let workspace = try await database.libraryExecutionWorkspaces().first(where: { $0.id == id && !$0.deleted }) {
-            // Copied history is never enrolled, whatever grant path it names.
-            guard workspace.retainedHistory != true else {
-                throw LibraryAPIError(code: "unavailable", message: "\(workspace.name) is retained history here and runs no work.")
-            }
-            if workspace.libraryID != identity.libraryID {
-                return try await peerSync.provision(workspace: workspace, deviceID: identity.hostDeviceID)
-            }
+        let registered = try await database.libraryExecutionWorkspaces().first { $0.id == id && !$0.deleted }
+        // Copied history is never enrolled.
+        if let registered, registered.retainedHistory == true {
+            throw LibraryAPIError(code: "unavailable", message: "\(registered.name) is retained history here and runs no work.")
+        }
+        guard let configuration = model.remoteWorkspaces.workspaces.first(where: { $0.id.uuidString.lowercased() == id }) else {
+            throw LibraryAPIError(code: "unavailable", message: "Only the Mac that added this Linux host enrolls its workspace.")
         }
         try await completePendingRevocation(workspaceID: id, deviceID: identity.hostDeviceID)
-        let registered = try await database.libraryExecutionWorkspaces().first { $0.id == id && !$0.deleted }
-        var credential: ExecutionCredential
-        if let configuration = model.remoteWorkspaces.workspaces.first(where: { $0.id.uuidString.lowercased() == id }) {
-            credential = try await model.remoteWorkspaces.provisionExecutionDevice(configuration: configuration,
-                libraryID: identity.libraryID, ownerDeviceID: identity.hostDeviceID,
-                deviceID: identity.hostDeviceID, deviceName: Host.current().localizedName ?? "Mac")
-        } else if let registered, registered.kind == .mac {
-            credential = try await managedExecutionRequest(workspace: registered, deviceID: identity.hostDeviceID, revoke: false)
-        } else {
-            throw LibraryAPIError(code: "unavailable", message: "This execution workspace must be reachable and enrolled before this Mac can control it.")
-        }
+        var credential = try await model.remoteWorkspaces.provisionExecutionDevice(configuration: configuration,
+            libraryID: identity.libraryID, ownerDeviceID: identity.hostDeviceID,
+            deviceID: identity.hostDeviceID, deviceName: Host.current().localizedName ?? "Mac")
         guard credential.deviceID == identity.hostDeviceID, credential.workspace.id == id,
               credential.workspace.libraryID == identity.libraryID,
               registered.map({ original in

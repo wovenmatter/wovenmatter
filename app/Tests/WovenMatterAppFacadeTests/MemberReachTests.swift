@@ -67,8 +67,6 @@ struct MemberReachTests {
         let workspace = try await macA.database.receiveSyncedWorkspace(linux.descriptor)
         macA.model.federatedExecutionClient = try CentralExecutionClient(database: macA.database,
             commandJournalURL: macA.directory.appending(path: "commands.json"),
-            provision: { _ in throw LibraryAPIError(code: "unauthorized", message: "No grants in this test.") },
-            loadCredential: { _ in nil }, saveCredential: { _ in },
             makeSignedTransport: { workspace in try SignedExecutionWorkspaceTransport(workspace: workspace, signer: signer.signer, audience: linux.memberID, send: linux.send) })
 
         #expect(try await macA.model.resolveAgentToolDestination(workspace.id, callerWorkspace: nil) == .member(workspace))
@@ -122,8 +120,6 @@ struct MemberReachTests {
         final class Signed { var ids: [String] = [] }; let signed = Signed()
         macA.model.federatedExecutionClient = try CentralExecutionClient(database: macA.database,
             commandJournalURL: macA.directory.appending(path: "commands.json"),
-            provision: { _ in throw LibraryAPIError(code: "unauthorized", message: "No grants in this test.") },
-            loadCredential: { _ in nil }, saveCredential: { _ in },
             makeSignedTransport: { workspace in
                 signed.ids.append(workspace.id)
                 return try SignedExecutionWorkspaceTransport(workspace: workspace, signer: signer.signer, audience: linux.memberID, send: linux.send)
@@ -166,8 +162,6 @@ struct MemberReachTests {
         let workspace = try await macA.database.receiveSyncedWorkspace(linux.descriptor)
         macA.model.federatedExecutionClient = try CentralExecutionClient(database: macA.database,
             commandJournalURL: macA.directory.appending(path: "commands.json"),
-            provision: { _ in throw LibraryAPIError(code: "unauthorized", message: "No grants in this test.") },
-            loadCredential: { _ in nil }, saveCredential: { _ in },
             makeSignedTransport: { workspace in try SignedExecutionWorkspaceTransport(workspace: workspace, signer: signer.signer, audience: linux.memberID, send: linux.send) })
         let tools = try #require(macA.model.agentTools)
         let botID = UUID().uuidString.lowercased()
@@ -249,8 +243,6 @@ struct MemberReachTests {
         let workspace = try await macB.database.receiveSyncedWorkspace(linux.descriptor)
         macB.model.federatedExecutionClient = try CentralExecutionClient(database: macB.database,
             commandJournalURL: macB.directory.appending(path: "commands.json"),
-            provision: { _ in throw LibraryAPIError(code: "unauthorized", message: "No grants in this test.") },
-            loadCredential: { _ in nil }, saveCredential: { _ in },
             makeSignedTransport: { workspace in try SignedExecutionWorkspaceTransport(workspace: workspace, signer: signer.signer, audience: linux.memberID, send: linux.send) })
         // Mac A's agent for the host, as peer sync delivers it.
         let macA = UUID()

@@ -17,10 +17,8 @@ struct CentralExecutionClientTests {
         let remote: CentralExecutionFixtureTransport
         let journal: URL
         func client() throws -> CentralExecutionClient {
-            let workspace = workspace
-            return try CentralExecutionClient(database: fixture.database, commandJournalURL: journal,
-                provision: { _ in .init(workspace: workspace, deviceID: workspace.ownerDeviceID, token: "fixture-only") },
-                makeTransport: { [remote] _ in remote }, loadCredential: { _ in nil }, saveCredential: { _ in })
+            try CentralExecutionClient(database: fixture.database, commandJournalURL: journal,
+                makeSignedTransport: { [remote] _ in remote })
         }
     }
 

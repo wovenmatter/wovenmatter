@@ -867,10 +867,7 @@ extension LibraryHostLifecycleTests {
         #expect(mini.model.peerAgentWorkspaces[sourceAgent.id] != nil)
         #expect(!mini.model.localCLIAgents.contains { $0.id == sourceAgent.id })
         #expect(mini.model.remoteWorkspaceAgents.contains { $0.id == sourceAgent.id })
-        let workspace = try #require(try await other.libraryConversationExecutionWorkspace(conversationID: id))
-        let own = try await mini.host.peerRoute()
-        let credential = try await mini.host.provisionCentralExecutionWorkspace(id: workspace.id)
-        #expect(credential.deviceID == own.deviceID && credential.workspace.libraryID == workspace.libraryID)
+        _ = try #require(try await other.libraryConversationExecutionWorkspace(conversationID: id))
         await mini.host.peerSync.synchronize(force: true)
         #expect(try await source.libraryExecutionOwner(conversationID: id) == nil)
     }
@@ -1089,8 +1086,7 @@ extension LibraryHostLifecycleTests {
         // The owner is unreachable: no transport, so routing fails closed.
         mini.model.federatedExecutionClient = try CentralExecutionClient(database: miniDB,
             commandJournalURL: mini.directory.appending(path: "route-commands.json"),
-            provision: { _ in throw URLError(.notConnectedToInternet) },
-            loadCredential: { _ in nil }, saveCredential: { _ in })
+            makeSignedTransport: { _ in throw URLError(.notConnectedToInternet) })
         await #expect(throws: (any Error).self) { try await mini.model.mutateConversation(id: id, mutation: .moveToTrash) }
         #expect(await mini.model.moveConversation(id: id, toFolderID: nil) == false)
         let deleted = { (database: WorkspaceDatabase) in

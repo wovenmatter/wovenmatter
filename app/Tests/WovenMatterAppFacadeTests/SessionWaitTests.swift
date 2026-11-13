@@ -26,8 +26,6 @@ struct SessionWaitTests {
             let linux = linux
             mac.model.federatedExecutionClient = try CentralExecutionClient(database: mac.database,
                 commandJournalURL: mac.directory.appending(path: "commands.json"),
-                provision: { _ in throw LibraryAPIError(code: "unauthorized", message: "No grants in this test.") },
-                loadCredential: { _ in nil }, saveCredential: { _ in },
                 makeSignedTransport: { workspace in try SignedExecutionWorkspaceTransport(workspace: workspace, signer: signer.signer, audience: linux.memberID, send: linux.send) })
             tools = try #require(mac.model.agentTools)
         }

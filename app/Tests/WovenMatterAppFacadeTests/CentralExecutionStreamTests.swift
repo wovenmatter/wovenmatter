@@ -44,8 +44,6 @@ struct CentralExecutionStreamTests {
                 deviceID: workspace.executionDeviceID!)
         }
         let client = try CentralExecutionClient(database: fixture.database, commandJournalURL: journalURL,
-            provision: { _ in throw LibraryAPIError(code: "unexpected", message: "Nothing is provisioned for a member.") },
-            makeTransport: { _ in http }, loadCredential: { _ in nil }, saveCredential: { _ in },
             makeSignedTransport: { _ in http },
             makeStream: { _ in { try server.connect() } },
             streamConfiguration: .init(pingInterval: .seconds(3600), requestTimeout: .seconds(5), retrySleep: retrySleep))
