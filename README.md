@@ -4,8 +4,9 @@ Woven Matter is one workspace for all of your coding agents. Run Pi Durable,
 Codex, Claude Code, Grok Build, and OpenCode side by side in a Mac app.
 
 Any Mac or Linux machine on your Tailscale network (tailnet) can be a Woven
-Matter host. Each host runs its own agents and bots, all of them share one
-synced library, and you manage every one of them from the Mac app. There is no
+Matter host: a host for your agents, the host for your bots, or both. All of
+them share one synced library, and you manage every one of them from the Mac
+app. There is no
 Woven Matter account and no hosted service in between.
 
 [Download for Mac](https://github.com/wovenmatter/wovenmatter/releases/latest) ·
@@ -22,12 +23,13 @@ Woven Matter account and no hosted service in between.
 - **Run bots.** Bots are long-running agents that keep their own files,
   memory, browser sign-ins, and services between conversations. Hand them
   ongoing work: watching a project, running a dev server, or coming back to a
-  task on a timer. Each bot works in its own isolated Linux container, on this
-  Mac, another Mac, or a Linux host. Admin Bot creates and organizes the rest,
+  task on a timer. Your bots run together on one machine you choose (this
+  Mac, another Mac, or a Linux host), each in its own isolated Linux
+  container. Admin Bot creates and organizes the rest,
   and bots can work in teams with a manager that hands out the work.
 - **Connect all of your machines.** Run Woven Matter on as many Macs and Linux
-  machines on your tailnet as you want. They all work at the same time, each
-  with its own agents, files, and sign-ins, and you manage all of them from
+  machines on your tailnet as you want. Each one can host agents, your bots,
+  or both. They all work at the same time, and you manage all of them from
   the Mac app. A session on another machine opens just like a local one.
 - **Keep one library everywhere.** Every host keeps a full copy of your
   conversations, notes, calendar, and files, and syncs it with the others.
@@ -59,7 +61,8 @@ Woven Matter account and no hosted service in between.
 - **Linux hosts (optional):** amd64 or arm64 machines on your tailnet with
   OpenSSH, Python 3, and a systemd user manager. You set them up from the Mac
   app.
-- **Tailscale** on every machine that should reach another.
+- **Tailscale (only for more than one machine):** a single Mac needs nothing
+  else. To use more machines, put each one on your tailnet.
 - **Provider access** for the harnesses you use: a subscription account or an
   API key.
 
@@ -67,8 +70,8 @@ Woven Matter account and no hosted service in between.
 
 | Machine | Role |
 | --- | --- |
-| Mac | The full interface. A background server holds a library copy, runs agents and bots, and serves Woven MCP. Closing the window leaves that server running. |
-| Linux host | Headless. One Woven server runs agents, bots, or both, along with a library copy and Woven MCP. The Mac app installs and updates it over Tailscale SSH. |
+| Mac | The full interface. A background server holds a library copy, runs agents, serves Woven MCP, and runs your bots if you choose this Mac for them. Closing the window leaves that server running. |
+| Linux host | Headless. One Woven server hosts agents, your bots, or both, along with a library copy and Woven MCP. The Mac app installs and updates it over Tailscale SSH. |
 
 You can have as many Macs and Linux hosts as you want, and they all work in
 parallel. Every host is an equal member: none is the central one, any of them
@@ -110,8 +113,9 @@ can be offline, and the rest keep working.
 
 ### Bots
 
-- One Node runtime per machine runs every bot's agent loop on Pi Durable. Each
-  bot's tools run inside its own Ubuntu container.
+- All of your bots run on one machine at a time, chosen in **Settings →
+  Bots**. A Node runtime there runs every bot's agent loop on Pi Durable, and
+  each bot's tools run inside its own Ubuntu container.
 - Linux hosts use a Woven-owned Docker Engine, separate from any Docker you run
   yourself; installing it needs `sudo` once. Macs use a Woven-managed Ubuntu VM
   through Apple's Virtualization framework.
@@ -122,9 +126,8 @@ can be offline, and the rest keep working.
   port at a tailnet HTTPS address.
 - A bot stops after 15 minutes idle and starts again on its next tool call. Its
   browser profile and registered long-running services come back on restart.
-- Manage bots from **Settings → Bots**. **Find devices** lists the Macs and
-  Linux machines on your tailnet and what each one needs before it can run
-  bots.
+- **Find devices** in Settings → Bots lists the Macs and Linux machines on
+  your tailnet and what each one needs before it can run your bots.
 
 ## Documentation
 
