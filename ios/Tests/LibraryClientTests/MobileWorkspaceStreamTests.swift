@@ -263,10 +263,14 @@ final class MobileWorkspaceStreamTests: XCTestCase {
     let (_, server, stream, _) = try await make()
     await stream.start()
     let socket = await open(server, stream)
-    async let first: Void = stream.open(conversationID: "a")
-    async let second: Void = stream.open(conversationID: "a")
-    async let third: Void = stream.open(conversationID: "b")
-    _ = await (first, second, third)
+    await eventually("workspace subscription") { await socket.subscriptions.count == 1 }
+    // Each subscription takes a while to send, so the later calls overlap the first.
+    await socket.setReplies { _ in [] }
+    let first = Task { await stream.open(conversationID: "a") }
+    await eventually("first chat being sent") { await socket.subscriptions.count == 2 }
+    await stream.open(conversationID: "a")
+    await stream.open(conversationID: "b")
+    await first.value
     await eventually("settled") { await stream.conversationID == "b" }
     try await Task.sleep(for: .milliseconds(30))
     let subscriptions = await socket.subscriptions.filter { $0.stream == "conversation" }

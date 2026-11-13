@@ -235,8 +235,9 @@ extension MobileModel {
         // A workspace without a connected stream is read whole when its
         // client is made and on the app's explicit refreshes (foreground,
         // network return, New Chat, opening a chat). The 15 s tick reads only
-        // its open chat and questions (`refreshLiveViewsWithoutStream`).
-        guard force || created else { continue }
+        // its open chat and questions (`refreshLiveViewsWithoutStream`). One
+        // whose stream is about to open is not read just because its client is new.
+        guard force || (created && !streams(workspace)) else { continue }
         let id = workspace.id
         workspaceReadTasks[id] = Task { [weak self] in
           guard let self else { return }
@@ -255,6 +256,7 @@ extension MobileModel {
     if workspaceStreams[workspaceID] != nil { await openStreamedConversation(workspaceID) }
     if streamConnected(workspaceID) { return }
     guard let client = workspaceClients[workspaceID] else { return }
+    // A workspace with a stream is reported reachable or not by its stream's state.
     do {
       try await client.refresh()
       let discoveredProviders = try await client.providers()
@@ -269,18 +271,18 @@ extension MobileModel {
         }
       }
       guard !Task.isCancelled, workspaceClients[workspaceID] === client else { return }
-      workspaceReachable[workspaceID] = true
+      if workspaceStreams[workspaceID] == nil { workspaceReachable[workspaceID] = true }
       for id in state.pinnedTranscriptIDs ?? [] where executionOwner(of: id) == workspaceID && (state.transcripts[id] == nil || state.transcripts[id]?.olderCursor != nil) {
         do { try await downloadOfflineConversation(id) }
         catch { offlineProblems["chat:" + id] = error.localizedDescription }
       }
       rememberAgentCatalog()
-      workspaceReachable[workspaceID] = true; workspaceProblems.removeValue(forKey: workspaceID)
+      if workspaceStreams[workspaceID] == nil { workspaceReachable[workspaceID] = true; workspaceProblems.removeValue(forKey: workspaceID) }
       if providerID.isEmpty { providerID = availableExecutionProviders.first { $0.available && $0.canStart }?.id ?? "" }
       await reload()
     } catch {
       guard !Task.isCancelled, workspaceClients[workspaceID] === client else { return }
-      workspaceReachable[workspaceID] = false; workspaceProblems[workspaceID] = error.localizedDescription
+      if workspaceStreams[workspaceID] == nil { workspaceReachable[workspaceID] = false; workspaceProblems[workspaceID] = error.localizedDescription }
       if case MobileConnectionError.revoked = error {
         // Workspace access is independent of central pairing. A disabled or
         // revoked execution grant must not disconnect the library replica.
