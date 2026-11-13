@@ -63,7 +63,7 @@ function inputExtras(command) {
 // `directory`). `attachments` (execution-attachments.mjs) holds uploaded
 // message files; `titleGenerator(text)` names a chat from its first message
 // (title-generation.mjs); `performanceLog(line)` receives command timings.
-export function createClientExecution({ directory, runtime, kind = 'linux', name = 'Workspace', publisherKey, publisherFetch, publisherIntervalMilliseconds, goalIntervalMilliseconds = 1000, mcpEndpointURL = 'http://127.0.0.1:7337/mcp', managedDataRoot = resolve(directory, '../databases'), externalRunningSessions=()=>0,workspaceBrowser, library = null, members = null, onTimersChanged = () => {}, workspaceRole = () => true, extraCapabilities = () => [], deliverBot = null, sessionWatchOptions = {},
+export function createClientExecution({ directory, runtime, kind = 'linux', name = 'Workspace', publisherIntervalMilliseconds, goalIntervalMilliseconds = 1000, mcpEndpointURL = 'http://127.0.0.1:7337/mcp', managedDataRoot = resolve(directory, '../databases'), externalRunningSessions=()=>0,workspaceBrowser, library = null, members = null, onTimersChanged = () => {}, workspaceRole = () => true, extraCapabilities = () => [], deliverBot = null, sessionWatchOptions = {},
   workspaceRoot = resolve(directory, '../..'), attachments = null, titleGenerator = null, performanceLog = null }) {
   mkdirSync(directory, { recursive: true, mode: 0o700 })
   const path = resolve(directory, 'execution.sqlite')
@@ -861,8 +861,8 @@ export function createClientExecution({ directory, runtime, kind = 'linux', name
     })
   }
   // `library` is this machine's library host ({client, available}); see library-host.mjs.
-  const publisher = createClientExecutionPublisher({db,identity:descriptor,secret:publisherKey,events,
-    flush:()=>{for(const id of dirty.keys())flush(id)},fetchImpl:publisherFetch,intervalMilliseconds:publisherIntervalMilliseconds,
+  const publisher = createClientExecutionPublisher({db,identity:descriptor,events,
+    flush:()=>{for(const id of dirty.keys())flush(id)},intervalMilliseconds:publisherIntervalMilliseconds,
     localLibrary:library?{available:library.available,post:(path,body,headers,options)=>library.client.publisher(path,body,headers,options)}:null})
   const libraryTools=library?createLocalLibraryTools({client:library.client,available:library.available,
     callerInfo:id=>{const {conversation}=getRecord(id);return {...(conversation.title?{title:String(conversation.title).slice(0,512)}:{}),runtimeKind:conversation.runtimeKind}}}):null
@@ -921,8 +921,8 @@ export function createClientExecution({ directory, runtime, kind = 'linux', name
     localProviders:async()=>(await runtime.providers()).filter(provider=>provider.available!==false)}):null
   // Bots manage sessions on this and every other workspace with these tools.
   const botSessionTools=memberSessions?['woven_sessions_create','woven_sessions_send','woven_sessions_status','woven_sessions_wait','woven_sessions_list','woven_sessions_stop','woven_sessions_respond','woven_sessions_harnesses']:[]
-  const mcp=createWorkspaceMCP({db,identity:descriptor,secret:publisherKey,endpointURL:mcpEndpointURL,
-    policy:id=>getRecord(id).enabledTools??mcp.settings().enabledByDefault,localTools:localMCPTools,localCall:performMCP,fetchImpl:publisherFetch,beforeLibraryCall:()=>publisher.syncNow(),
+  const mcp=createWorkspaceMCP({db,identity:descriptor,endpointURL:mcpEndpointURL,
+    policy:id=>getRecord(id).enabledTools??mcp.settings().enabledByDefault,localTools:localMCPTools,localCall:performMCP,beforeLibraryCall:()=>publisher.syncNow(),
     scopedHistoryAccess:scope=>orchestration.readableConversationIDs(scope.conversationID).size>0,localLibrary:libraryTools,memberDelegate,onTimersChanged,botTools:botSessionTools})
   // Workspaces are named by ID; `local` is not one. Without a library host
   // this workspace can only create sessions on itself.
@@ -1036,7 +1036,7 @@ export function createClientExecution({ directory, runtime, kind = 'linux', name
     return {success:true,result:value,requestID}
   }
   const service = { runningSessionCount:()=>Number(db.prepare("SELECT count(*) AS count FROM conversations WHERE json_extract(body,'$.conversation.activeRunID') IS NOT NULL").get().count), descriptor, provision, principal, revoke, adopt, importRetainedEvents, mcp, prepareTaskMCP:mcp.prepareTask,
-    configurePublisher:publisher.configure, publisherStatus:publisher.status, synchronizePublisher:publisher.syncNow, kickPublisher:publisher.kick, saveArtifact:publisher.saveArtifact,
+    publisherStatus:publisher.status, synchronizePublisher:publisher.syncNow, kickPublisher:publisher.kick, saveArtifact:publisher.saveArtifact,
     resolveRetainedAssociation:publisher.resolveRetainedAssociation, hasRun:runID=>!!db.prepare('SELECT id FROM runs WHERE id=?').get(runID),
     hasActiveRuntime:kind => [...jobs.values()].some(job=>job.runtimeKind===kind),
     async cancelActive(){await runtime.cancelActive?.();await Promise.allSettled([...jobs.values()].map(job=>job.completion))},

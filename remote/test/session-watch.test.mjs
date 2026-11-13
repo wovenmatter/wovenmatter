@@ -49,8 +49,8 @@ function workspace(t, { enrolled = true, ...extra } = {}) {
     stop: async ({ command }) => { live.get(command.runID)?.(); live.delete(command.runID) },
     close: async () => { for (const done of live.values()) done() },
   }
-  const service = createClientExecution({ directory, runtime, managedDataRoot: join(directory, 'databases'), publisherKey: 'k'.repeat(40),
-    publisherFetch: async () => { throw new Error('No Mac is reachable.') }, publisherIntervalMilliseconds: 0, extraCapabilities: () => [streamCapability],
+  const service = createClientExecution({ directory, runtime, managedDataRoot: join(directory, 'databases'),
+    publisherIntervalMilliseconds: 0, extraCapabilities: () => [streamCapability],
     sessionWatchOptions: { retryMilliseconds: 100, lingerMilliseconds: 50, log: () => {}, stream: { timings: { initial: 20, maximum: 200 } } }, ...extra })
   t.after(async () => { await service.close(); rmSync(directory, { recursive: true, force: true }) })
   const finish = runID => { live.get(runID)?.(); live.delete(runID) }

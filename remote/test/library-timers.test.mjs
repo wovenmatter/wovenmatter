@@ -16,7 +16,6 @@ import { enroll } from './fixtures/execution.mjs'
 // offline (docs/architecture/WOVEN_EVERYWHERE.md, "Timers on a library host").
 
 const fakeHost = resolve(import.meta.dirname, '../test-support/fake-library-host.mjs')
-const noMac = async () => { throw new Error('No Mac is reachable.') }
 
 function scratch(t, prefix) {
   const directory = mkdtempSync(join('/tmp', prefix))
@@ -36,7 +35,7 @@ async function workspace(t, library, { onTimersChanged } = {}) {
   const directory = mkdtempSync(join(tmpdir(), 'woven-timers-')), runs = []
   const runtime = { providers: async () => [{ id: 'default_agent', runtimeKind: 'default_agent', available: true }], create: async () => ({ sessionID: randomUUID() }),
     run: async ({ command }) => { runs.push(command) }, close: async () => {} }
-  const service = createClientExecution({ directory, runtime, managedDataRoot: join(directory, 'databases'), publisherKey: 'k'.repeat(40), publisherFetch: noMac,
+  const service = createClientExecution({ directory, runtime, managedDataRoot: join(directory, 'databases'),
     publisherIntervalMilliseconds: 0, library: { client: library.client, available: library.available }, onTimersChanged })
   t.after(async () => { await service.close(); rmSync(directory, { recursive: true, force: true }) })
   const { principal: device } = enroll(service)

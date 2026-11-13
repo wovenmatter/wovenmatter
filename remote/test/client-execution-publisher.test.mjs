@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, rmSync, readFileSync } from 'node:fs'
+import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
@@ -9,55 +9,50 @@ import { enroll } from './fixtures/execution.mjs'
 
 const tick=()=>new Promise(resolve=>setTimeout(resolve,5))
 async function until(predicate){for(let n=0;n<200;n++){if(predicate())return;await tick()}assert.fail('owner publisher did not retry')}
+// History goes into this machine's library host through its `/v1/publisher/*`
+// socket routes; `online` stands for the host answering them.
 function fixture(t,{automatic=false}={}) {
   const directory=mkdtempSync(join(tmpdir(),'wm-owner-publish-')),events=new Map(),artifacts=new Map(),requests=[]
   let online=false,loseReply=false,loseRetainedReply=false,cursor=0,rejectJournal=false,rejectArtifacts=false
-  const token='publisher-token-'+randomUUID(),secret='existing-admin-'+randomUUID()
-  const fetchImpl=async(url,options)=>{
-    requests.push({url,options});if(!online)throw Error('Central offline')
-    assert.equal(options.redirect,'error');assert.equal(options.headers.authorization,'Bearer '+token)
-    if((rejectJournal&&url.endsWith('/journal'))||(rejectArtifacts&&url.includes('/artifacts/')))return {ok:false,status:503}
-    const body=JSON.parse(options.body);let result
-    if(url.endsWith('/retained/settle')) {
+  const publisher=async(url,body,headers)=>{
+    requests.push({url,body,headers});if(!online)throw Error('Library host offline')
+    if((rejectJournal&&url.endsWith('journal'))||(rejectArtifacts&&url.startsWith('artifacts/')))throw Object.assign(Error('Unavailable'),{statusCode:503})
+    let result
+    if(url.endsWith('retained/settle')) {
       result={libraryID:body.libraryID,acceptedEventIDs:body.entries.map(entry=>entry.eventID),cursor:0}
       if(loseRetainedReply){loseRetainedReply=false;throw Error('Retained receipt lost')}
-    } else if(url.endsWith('/journal')) {
+    } else if(url.endsWith('journal')) {
       for(const entry of body.entries){const previous=events.get(entry.eventID);if(previous)assert.deepEqual(previous,entry);else{events.set(entry.eventID,entry);cursor++}}
       result={libraryID:body.libraryID,acceptedEventIDs:body.entries.map(x=>x.eventID),cursor}
       if(loseReply){loseReply=false;throw Error('Reply lost after commit')}
-    } else if(url.endsWith('/artifacts/register')) {
+    } else if(url.endsWith('artifacts/register')) {
       let item=artifacts.get(body.manifest.id)
       if(!item){item={manifest:{...body.manifest,revision:1},bytes:Buffer.alloc(0),complete:false};artifacts.set(body.manifest.id,item)}
       result={manifest:item.manifest,nextOffset:item.bytes.length,complete:item.complete}
-    } else if(url.endsWith('/artifacts/chunk')) {
+    } else if(url.endsWith('artifacts/chunk')) {
       const item=artifacts.get(body.id);assert.equal(body.offset,item.bytes.length);item.bytes=Buffer.concat([item.bytes,Buffer.from(body.data,'base64')]);result={manifest:item.manifest,nextOffset:item.bytes.length,complete:false}
-    } else if(url.endsWith('/artifacts/commit')) {const item=artifacts.get(body.id);item.complete=true;result=item.manifest}
+    } else if(url.endsWith('artifacts/commit')) {const item=artifacts.get(body.id);item.complete=true;result=item.manifest}
     else throw Error('Unexpected publisher capability')
-    return {ok:true,status:200,json:async()=>result}
+    return result
   }
   const runtime={providers:async()=>[{id:'default_agent',runtimeKind:'default_agent',available:true,canStart:true}],create:async()=>({sessionID:randomUUID()}),run:async()=>{},close:async()=>{}}
-  const create=()=>createClientExecution({directory,runtime,publisherKey:secret,publisherFetch:fetchImpl,publisherIntervalMilliseconds:automatic?5:0})
+  const library={available:()=>true,client:{publisher}}
+  const create=()=>createClientExecution({directory,runtime,publisherIntervalMilliseconds:automatic?5:0,library})
   let service=create()
-  const {enrollment,grant:client,principal}=enroll(service)
-  const grant={grantID:randomUUID(),libraryID:enrollment.libraryID,workspaceID:enrollment.workspaceID,executionDeviceID:client.workspace.executionDeviceID,endpoint:'https://central.tail.ts.net/wovenmatter',token}
-  service.configurePublisher(grant)
+  const {enrollment,principal}=enroll(service)
   const createSession=()=>service.command({commandID:randomUUID(),deviceID:enrollment.deviceID,libraryID:enrollment.libraryID,workspaceID:enrollment.workspaceID,kind:'createSession'},principal)
   t.after(async()=>{await service.close();rmSync(directory,{recursive:true,force:true})})
-  return {directory,events,artifacts,requests,grant,createSession,get service(){return service},set online(x){online=x},set loseReply(x){loseReply=x},set loseRetainedReply(x){loseRetainedReply=x},set rejectJournal(x){rejectJournal=x},set rejectArtifacts(x){rejectArtifacts=x},async restart(){await service.close();service=create()}}
+  return {directory,events,artifacts,requests,enrollment,createSession,get service(){return service},set online(x){online=x},set loseReply(x){loseReply=x},set loseRetainedReply(x){loseRetainedReply=x},set rejectJournal(x){rejectJournal=x},set rejectArtifacts(x){rejectArtifacts=x},async restart(){await service.close();service=create()}}
 }
 test('owner executes offline and restart retries original immutable events without any observer',async t=>{
   const f=fixture(t,{automatic:true})
-  assert.throws(()=>f.service.configurePublisher({...f.grant,workspaceID:randomUUID()}),{statusCode:400})
-  assert.throws(()=>f.service.configurePublisher({...f.grant,executionDeviceID:randomUUID()}),{statusCode:400})
-  assert.throws(()=>f.service.configurePublisher({...f.grant,endpoint:'https://example.com'}),{statusCode:400})
-  for(const suffix of ['', '-wal']){let data;try{data=readFileSync(join(f.directory,'execution.sqlite'+suffix))}catch{continue};assert.equal(data.includes(Buffer.from(f.grant.token)),false)}
   const local=await f.createSession();assert.equal(local.status,'completed')
   await until(()=>f.requests.length>0);assert.equal(f.events.size,0)
   const before=f.service.events().entries;await f.restart();f.online=true
-  assert.equal(f.service.publisherStatus().configured,true);assert.equal(f.service.publisherStatus().grantID,f.grant.grantID)
+  assert.equal(f.service.publisherStatus().configured,true);assert.equal(f.service.publisherStatus().target,'local')
   await until(()=>f.events.size===before.length)
   assert.deepEqual([...f.events.values()],before)
-  assert.ok(f.requests.every(x=>x.url.includes('/v1/federation/publisher/')))
+  assert.ok(f.requests.every(x=>x.headers['x-woven-workspace-id']===f.enrollment.workspaceID))
   assert.equal(f.service.descriptor().journalDeviceIDs.length,0)
 })
 test('lost acknowledgement and restart re-send the same IDs then advance durable origin cursor',async t=>{
@@ -108,10 +103,10 @@ test('retained terminal preflight retries exact proofs before chronological jour
   f.service.importRetainedEvents(entries);f.online=true;f.loseRetainedReply=true
   await assert.rejects(f.service.synchronizePublisher(),/Retained receipt lost/)
   assert.equal(f.events.size,0)
-  const first=JSON.parse(f.requests[0].options.body)
+  const first=f.requests[0].body
   await f.restart();await f.service.synchronizePublisher()
-  const proofs=f.requests.filter(request=>request.url.endsWith('/retained/settle'))
-  assert.equal(proofs.length,2);assert.deepEqual(JSON.parse(proofs[1].options.body),first)
+  const proofs=f.requests.filter(request=>request.url.endsWith('retained/settle'))
+  assert.equal(proofs.length,2);assert.deepEqual(proofs[1].body,first)
   assert.deepEqual([...f.events.keys()],entries.map(entry=>entry.eventID))
   const count=f.requests.length;await f.restart();await f.service.synchronizePublisher();assert.equal(f.requests.length,count)
 })

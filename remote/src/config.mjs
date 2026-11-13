@@ -28,9 +28,6 @@ export function loadRuntimeConfiguration(environment = process.env) {
     home, serviceRoot, runtimeKind, accessMode, listenHost,
     listenPort: Number.isInteger(port) && port > 0 && port <= 65535 ? port : 7337,
     apiToken: environment.WOVENMATTER_API_TOKEN ?? '',
-    // Keys the publisher and MCP grants at rest; set once the installer bearer
-    // rotates (remote-host.sh rotate-token), older installs use the bearer.
-    serviceSecret: environment.WOVENMATTER_SERVICE_SECRET || null,
     catalogPath: environment.WOVENMATTER_HARNESS_CATALOG ?? resolve(serviceRoot, 'harnesses/catalog.json'),
     workspaceRoot: environment.WOVENMATTER_WORKSPACE ?? resolve(home, '.woven-matter'),
     managedDataRoot,
