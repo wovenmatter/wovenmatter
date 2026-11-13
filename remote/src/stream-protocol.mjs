@@ -96,3 +96,12 @@ export function streamErrorFor(error) {
   if (status === 409) return streamFailure('conflict', message)
   return streamFailure('unavailable', (status && status < 500) || status === 503 ? message : 'The server could not complete this request.', status === 503 || status === 504)
 }
+
+/** A failure that ended a subscription. A store or server error is not the
+ * subscriber's fault and may pass: it subscribes again after its backoff, as
+ * the Mac server marks it. A refusal (4xx) stays terminal. */
+export function subscriptionErrorFor(error) {
+  if (error?.stream) return error.stream
+  const failure = streamErrorFor(error), status = error?.statusCode
+  return failure.code === 'unavailable' && !(status && status < 500) ? { ...failure, retryable: true } : failure
+}

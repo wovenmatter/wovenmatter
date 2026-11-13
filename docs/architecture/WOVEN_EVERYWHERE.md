@@ -1105,7 +1105,10 @@ client cancels gets no `end`. A socket holds at most 64 subscriptions and 64
 calls in progress (a cancelled call no longer counts); another is refused with
 a retryable `unavailable` `end` or `res`. Error codes:
 `unauthorized`, `not_found`, `invalid`, `unavailable`, `conflict`, and
-`resync` (the subscription fell behind: subscribe again). Close codes: `1000`
+`resync` (the subscription fell behind: subscribe again). A subscription
+ended by a store or server error, not a refusal, ends with a retryable
+`unavailable` on both servers, so its client subscribes again after the
+backoff. Close codes: `1000`
 normal, `1001` server stopping or sleeping, `1009` client frame over 1 MiB,
 `4400` protocol violation, `4401` member removed.
 

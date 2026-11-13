@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto'
 import { WebSocketServer } from './websocket.mjs'
 import { authenticateMemberUpgrade, executionMemberKinds, refuseUpgrade } from './member-sockets.mjs'
-import { decodeFrame, encodeFrame, maximumClientFrameBytes, maximumFrameBytes, streamCloseCodes, streamErrorFor, streamFailure,
+import { decodeFrame, encodeFrame, maximumClientFrameBytes, maximumFrameBytes, streamCloseCodes, streamErrorFor, streamFailure, subscriptionErrorFor,
   streamPath, streamProtocolVersion, streamQueueLimits, streamTimings, supportedStreamProtocols } from './stream-protocol.mjs'
 
 // The Linux host's live stream (docs/architecture/WOVEN_EVERYWHERE.md,
@@ -212,7 +212,7 @@ export function createStreamServer({ members, servedTargets = async () => [], ex
       const subscription = { id: frame.id, ended: false, stop() {}, changed() {} }
       subscriptions.set(frame.id, subscription)
       const context = { subscription, enqueue, waitForRoom, room, end: error => endSubscription(subscription, error) }
-      Promise.resolve().then(() => make(context, frame.params)).catch(error => endSubscription(subscription, error.stream ?? streamErrorFor(error)))
+      Promise.resolve().then(() => make(context, frame.params)).catch(error => endSubscription(subscription, subscriptionErrorFor(error)))
     }
 
     async function call(frame) {
@@ -360,7 +360,7 @@ export function createStreamServer({ members, servedTargets = async () => [], ex
             if (!page.hasMore) break
           }
         }
-      } catch (error) { end(error.stream ?? streamErrorFor(error)); return }
+      } catch (error) { end(subscriptionErrorFor(error)); return }
       finally { pumping = false }
       if (!synchronized && !subscription.ended) { synchronized = true; item('synchronized', {}) }
     }
@@ -465,7 +465,7 @@ export function createStreamServer({ members, servedTargets = async () => [], ex
       timer = null
       if (subscription.ended) return
       let record
-      try { record = read() } catch (error) { end(error.stream ?? streamErrorFor(error)); return }
+      try { record = read() } catch (error) { end(subscriptionErrorFor(error)); return }
       const changed = (list, prefix, ids) => list.filter(entity => ids === null || ids.has(entity.id))
         .map(entity => ({ entity, json: JSON.stringify(entity) })).filter(value => sent.get(prefix + value.entity.id) !== hash(value.json))
       const messages = changed(record.transcript.messages, 'm:', hints.all ? null : hints.messages)

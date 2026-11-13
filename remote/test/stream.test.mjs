@@ -797,3 +797,13 @@ test('the bots relay dials no runtime for a bad handshake, and a bearer rotation
   await renewed.opened
   await eventually(() => runtimeSockets.clients.size === 2, 'the closed relay left no runtime socket behind')
 })
+
+test('a subscription a store error ends is retryable, and a refusal is not', async () => {
+  const { subscriptionErrorFor } = await import('../src/stream-protocol.mjs')
+  assert.equal(subscriptionErrorFor(new Error('database is locked')).retryable, true)
+  assert.equal(subscriptionErrorFor(Object.assign(new Error('busy'), { statusCode: 500 })).retryable, true)
+  assert.deepEqual(subscriptionErrorFor(Object.assign(new Error('gone'), { statusCode: 404 })), { code: 'not_found', message: 'gone', retryable: false })
+  assert.equal(subscriptionErrorFor(Object.assign(new Error('no'), { statusCode: 403 })).retryable, false)
+  const explicit = { code: 'unavailable', message: 'Too large.', retryable: false }
+  assert.equal(subscriptionErrorFor(Object.assign(new Error('x'), { stream: explicit })), explicit)
+})
