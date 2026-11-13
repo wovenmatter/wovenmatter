@@ -120,52 +120,6 @@ import WovenMatterCore
         #expect(try await auth.preparePairingCancellation(poll) == nil)
     }
 
-    @Test func developmentPresenceDisappearsOnQuitOrExpiryAndCanReturnWithoutUndoingUnpair() async throws {
-        let fixture = try PairingFixture(); defer { fixture.remove() }
-        let clock = PairingClock()
-        let auth = try fixture.authentication(now: { clock.now })
-        let id = UUID().uuidString.lowercased(), name = "Dev · review"
-        let first = try await auth.enrollLocalDevelopment(deviceID: id, name: name, workspaceID: fixture.libraryID)
-        #expect(await auth.deviceConnections().first?.name == "review (Dev)")
-        try await auth.suspendLocalDevelopment(deviceID: id, credential: first.credential)
-        #expect(await auth.devices().isEmpty)
-        let resumed = try await auth.enrollLocalDevelopment(deviceID: id, name: name, workspaceID: fixture.libraryID)
-        await #expect(throws: LibraryAPIError.self) { try await auth.authenticate(bearer: first.credential) }
-        await #expect(throws: LibraryAPIError.self) {
-            try await auth.suspendLocalDevelopment(deviceID: id, credential: first.credential)
-        }
-        #expect(await auth.devices().count == 1)
-        clock.advance(46)
-        #expect(await auth.devices().isEmpty)
-        _ = try await auth.authenticate(bearer: resumed.credential)
-        #expect(await auth.devices().count == 1)
-    }
-
-    @Test func localDevelopmentEnrollmentCannotTakeOverPairedDevicesOrUndoRevocation() async throws {
-        let fixture = try PairingFixture(); defer { fixture.remove() }
-        let auth = try fixture.authentication()
-        let deviceID = UUID().uuidString.lowercased(), name = "Dev · fixture"
-        let first = try await auth.enrollLocalDevelopment(deviceID: deviceID, name: name, workspaceID: fixture.libraryID)
-        let retry = try await auth.enrollLocalDevelopment(deviceID: deviceID, name: name, workspaceID: fixture.libraryID)
-        #expect(first.credential != retry.credential)
-        #expect(try await auth.authenticate(bearer: retry.credential).id == deviceID)
-        await #expect(throws: LibraryAPIError.self) { try await auth.authenticate(bearer: first.credential) }
-        #expect(await auth.devices().count == 1)
-        try await auth.revoke(deviceID: deviceID)
-        // A normal pairing compacts revoked records; revocation must survive it.
-        _ = try await fixture.pair(auth, kind: .mac)
-        let reopened = try fixture.authentication()
-        await #expect(throws: LibraryAPIError.self) {
-            try await reopened.enrollLocalDevelopment(deviceID: deviceID, name: name, workspaceID: fixture.libraryID)
-        }
-        let offer = try await reopened.createOffer(endpoint: URL(string: "https://fixture.test.ts.net/wovenmatter")!)
-        let ordinaryID = UUID().uuidString.lowercased()
-        _ = try await reopened.pair(.init(token: offer.payload.token, deviceID: ordinaryID, deviceName: name), workspaceID: fixture.libraryID)
-        await #expect(throws: LibraryAPIError.self) {
-            try await reopened.enrollLocalDevelopment(deviceID: ordinaryID, name: name, workspaceID: fixture.libraryID)
-        }
-    }
-
 }
 
 private struct PairingFixture {

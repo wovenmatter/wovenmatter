@@ -74,12 +74,11 @@ struct MacDeviceSetupModelTests {
         let defaults = try #require(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
         let application = ApplicationModel(applicationDefaults: defaults, startsAutomatically: false, ownsExecutionOverride: false)
-        let pairing = MacPairingController(identity: { .init(deviceID: UUID().uuidString, deviceName: "Fixture", metadata: .init(kind: .mac)) }, onPaired: { _, _ in })
         for theme in DashboardTheme.allCases {
             for width: CGFloat in [440, 920] {
                 let view = SettingsPage(title: "Apple Devices") {
                     SettingsSection(title: "Find devices", detail: "Find other Macs on your Tailscale network, even when Woven Matter is closed.") {
-                        MacTailnetDiscoveryView(devices: devices, pairing: pairing, host: application.libraryHost)
+                        MacTailnetDiscoveryView(devices: devices, host: application.libraryHost)
                     }
                 }.background(theme.palette.workspace).environment(\.dashboardTheme, theme).preferredColorScheme(theme.colorScheme)
                 let host = NSHostingView(rootView: view)

@@ -1,4 +1,3 @@
-import LibraryClient
 import Foundation
 import Observation
 import WovenMatterClient
@@ -11,7 +10,6 @@ final class ProductAnalyticsModel {
   var errorMessage: String?
   private let defaults: UserDefaults
   init(defaults: UserDefaults = .standard) { self.defaults = defaults }
-  private var client: MobileProductAnalytics?
   private var database: WorkspaceDatabase?
   private var rpc: BackendRPCClient?
   private var uploads: [UUID: Task<Void, Never>] = [:]
@@ -29,16 +27,6 @@ final class ProductAnalyticsModel {
     self.publisher = publisher
   }
   func configure(rpc: BackendRPCClient) { self.rpc = rpc }
-  /// The secondary Mac relays updater events through its central library too.
-  /// Its interface/open lifecycle belongs to MobileAnalyticsModel.
-  func configure(client: MobileProductAnalytics) async {
-    self.client = client
-    database = nil
-    rpc = nil
-    cancelUploads()
-    interface = true
-    await refresh()
-  }
   func openInterface() async {
     interface = true
     await refresh()
@@ -48,11 +36,7 @@ final class ProductAnalyticsModel {
   func refresh() async {
     let epoch = generation
     do {
-      if let client {
-        let state = await client.snapshot()
-        locallyDisabled = state.pendingEnabled != nil || state.preference?.collects != true
-        preference = state.preference
-      } else if let rpc {
+      if let rpc {
         let current = try JSONDecoder().decode(
           ProductAnalyticsPreference.self,
           from: await rpc.call(method: "analytics.preference", payload: Data(), timeout: 5))
@@ -108,10 +92,6 @@ final class ProductAnalyticsModel {
     } catch { errorMessage = "The analytics preference could not be saved. Please retry." }
   }
   func record(_ name: ProductAnalyticsEvent.Name, properties: [String: String] = [:]) async {
-    if let client {
-      try? await client.record(name, properties: properties, platform: "macos")
-      return
-    }
     guard !locallyDisabled,
       let preference, preference.collects else {
       return
@@ -139,9 +119,7 @@ final class ProductAnalyticsModel {
     let epoch = generation
     guard let preference else { return }
     do {
-      if let client {
-        await client.sendUpdateReceipt(event, analyticsID: preference.analyticsID)
-      } else if let rpc {
+      if let rpc {
         let acknowledgement = try JSONDecoder().decode(
           ProductAnalyticsAcknowledgement.self,
           from: await rpc.call(

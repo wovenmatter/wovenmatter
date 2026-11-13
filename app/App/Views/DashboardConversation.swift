@@ -795,9 +795,7 @@ struct DashboardCloudConversation: View {
     }
 
     private func generatedFileURL(_ source: String, message: WorkspaceMessageRecord) async throws -> URL {
-        let id = WorkspaceLibraryItem.identifier(messageID: message.id, source: source)
-        if isRemote { return try await model.sharedLibraryFileURL(id: id) }
-        return try await model.library.fileURL(id: id)
+        try await model.library.fileURL(id: WorkspaceLibraryItem.identifier(messageID: message.id, source: source))
     }
 
     private var sessionIdentity: LocalACPSessionMetadataTaskIdentity? {

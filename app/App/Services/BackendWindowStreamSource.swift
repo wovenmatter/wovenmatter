@@ -10,10 +10,7 @@ import WovenMatterDashboardStore
 /// one WebSocket it keeps to that machine (`CentralExecutionClient`), read
 /// again only when that stream pushes or an action finishes. A machine this
 /// server cannot reach shows the history library sync brought, marked offline;
-/// nothing polls it. A client-mode Dev build relays what its one stream to its
-/// live host carries (`CentralLibraryClientModel`, signed with its local-only
-/// Dev stream key): it reads a chat again only when that stream pushes, a
-/// library pass lands, or an action finishes.
+/// nothing polls it.
 @MainActor
 final class BackendWindowStreamSource: ExecutionConversationSource {
     private unowned let model: ApplicationModel
@@ -45,8 +42,7 @@ final class BackendWindowStreamSource: ExecutionConversationSource {
         openCounts[conversationID, default: 0] += 1
         guard kind == .remote, openCounts[conversationID] == 1 else { return }
         // Every chat open in a window stays live, however many are open.
-        if let client = model.liveLibraryClient { client.followConversation(conversationID) }
-        else { (try? model.centralExecutionClient())?.hold(conversationID) }
+        (try? model.centralExecutionClient())?.hold(conversationID)
         await read(conversationID)
     }
 
@@ -67,7 +63,6 @@ final class BackendWindowStreamSource: ExecutionConversationSource {
     /// else (OpenCode, remote-workspace and gateway sessions) the window keeps
     /// reading from its projection when `server.state` names it.
     private func classify(_ id: String) async throws -> Kind {
-        if model.liveLibraryClient?.isForeignConversation(id) == true { return .remote }
         let database = try database
         if try await database.libraryExecutionOwner(conversationID: id) != nil { return .remote }
         guard let conversation = try await database.libraryConversations(ids: [id])[id], MacExecutionAPI.runsLocally(conversation) else {

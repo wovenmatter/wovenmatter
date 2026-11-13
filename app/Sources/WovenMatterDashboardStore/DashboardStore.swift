@@ -131,7 +131,6 @@ public actor DashboardStore {
     get throws { guard let value = ownedMessageAttachments else { throw WorkspaceDatabaseError.readOnlyProjection }; return value }
   }
   private var localWorkspacePrepared = false
-  private var executionWorkspaceDeviceID: UUID?
 
   public init(supportDirectory: URL, readOnlyProjection: Bool = false) async throws {
     try await self.init(supportDirectory: supportDirectory, readOnlyProjection: readOnlyProjection, runControls: nil)
@@ -212,20 +211,9 @@ public actor DashboardStore {
     try await database.recoverInterruptedLocalACPRuns()
   }
 
-  public func prepareLocalWorkspace(executionWorkspaceDeviceID: UUID? = nil) async throws {
+  public func prepareLocalWorkspace() async throws {
     guard !database.isReadOnlyProjection else { throw WorkspaceDatabaseError.readOnlyProjection }
-    guard !localWorkspacePrepared else {
-      guard executionWorkspaceDeviceID == nil || executionWorkspaceDeviceID == self.executionWorkspaceDeviceID else {
-        throw WorkspaceToolError.invalid("This instance's execution workspace is already fixed.")
-      }
-      return
-    }
-    if let executionWorkspaceDeviceID {
-      guard self.executionWorkspaceDeviceID == nil || self.executionWorkspaceDeviceID == executionWorkspaceDeviceID else {
-        throw WorkspaceToolError.invalid("This instance's execution workspace is already fixed.")
-      }
-      self.executionWorkspaceDeviceID = executionWorkspaceDeviceID
-    }
+    guard !localWorkspacePrepared else { return }
     let deviceID = try await deviceIdentity.id()
     try await database.bindDeviceOwnership(ownerDeviceID: deviceID)
     try await database.reconcileLocalCLIAgentCatalog(ownerDeviceID: deviceID)
@@ -481,10 +469,7 @@ public actor DashboardStore {
   }
 
   public func executionWorkspaceID() async throws -> String {
-    let id: UUID
-    if let executionWorkspaceDeviceID { id = executionWorkspaceDeviceID }
-    else { id = try await deviceIdentity.id() }
-    return "device:" + id.uuidString.lowercased()
+    "device:" + (try await deviceIdentity.id()).uuidString.lowercased()
   }
 
   public func dashboardDeviceID() async throws -> UUID {

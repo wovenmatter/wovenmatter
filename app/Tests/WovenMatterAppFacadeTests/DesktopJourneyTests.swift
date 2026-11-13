@@ -287,7 +287,7 @@ struct DesktopJourneyTests {
         let run = try #require(try await f.database.activeRunID(conversationID: child.id))
         try await f.model.cancelCanonicalRun(conversationID: child.id, runID: run)
         try await f.model.waitForAgentStop(conversationID: child.id)
-        try await f.model.refreshClientExecutionState()
+        try await f.model.reconcileLocalRunState()
         let send = WovenMatterToolRequest(arguments: ["sessions", "send", child.id, "--text", "Revoked work"])
         let preparation = FacadeGate(); preparation.hold(); defer { preparation.open() }
         tools.facadeFixtureMCPConnection = { _, local in await preparation.pass(); return local }
@@ -346,7 +346,7 @@ struct DesktopJourneyTests {
         let run = try #require(try await f.database.activeRunID(conversationID: id))
         try await f.model.cancelCanonicalRun(conversationID: id, runID: run)
         try await f.model.waitForAgentStop(conversationID: id)
-        try await f.model.refreshClientExecutionState()
+        try await f.model.reconcileLocalRunState()
         let pending = UUID().uuidString.lowercased()
         _ = try await f.database.reserveToolDelivery(sourceID: source, targetID: id, text: "Never after trash", requestID: pending)
         #expect(try await f.database.claimToolDelivery(id: pending) != nil)

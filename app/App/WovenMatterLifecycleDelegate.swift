@@ -364,7 +364,6 @@ enum LocalExecutionTransition {
 enum LocalExecutionRole: String {
     case developmentHost, frontend, backend
 
-    nonisolated static let libraryClientPreferenceKey = "wovenmatter.library.client-mode"
     #if APP_FACADE_TESTS
     // Test processes own explicitly injected, isolated stores and never connect
     // to or install the user's production server.
@@ -377,9 +376,7 @@ enum LocalExecutionRole: String {
         if developmentMode != nil {
             return arguments.contains("--backend") ? .backend : .frontend
         }
-        if arguments.contains("--backend") { return .backend }
-        // Older node preferences are migration input; every desktop runs the full local app.
-        return .frontend
+        return arguments.contains("--backend") ? .backend : .frontend
     }
 
     var ownsExecution: Bool { self == .developmentHost || self == .backend }

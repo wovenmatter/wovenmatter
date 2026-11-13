@@ -4,17 +4,15 @@ import WovenMatterDashboardStore
 
 struct MacTailnetDiscoveryView: View {
     @Bindable var devices: MacDeviceSetupModel
-    @Bindable var pairing: MacPairingController
     @Bindable var host: LibraryHostController
     @State private var confirmation: DeviceSetupConfirmation?
-    private var busy: Bool { devices.searching || pairing.isDiscovering || host.isDiscovering || devices.rows.contains(where: \.busy) }
+    private var busy: Bool { devices.searching || host.isDiscovering || devices.rows.contains(where: \.busy) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Button(devices.searching || pairing.isDiscovering || host.isDiscovering ? "Searching…" : "Find devices") {
+            Button(devices.searching || host.isDiscovering ? "Searching…" : "Find devices") {
                 Task {
                     async let inventory: Void = devices.discover()
-                    await pairing.refreshDiscovery()
                     await host.refreshDiscovery()
                     await inventory
                 }
@@ -51,7 +49,7 @@ struct MacTailnetDiscoveryView: View {
     }
     private func rowError(_ row: MacDeviceRow) { row.error = "Update both Macs to a version that supports paired Mac synchronization." }
     private func peer(for row: MacDeviceRow) -> DiscoveredPeer? {
-        (pairing.peers + host.discoveredPeers).first { $0.endpoint.host == row.mac.dnsName }
+        host.discoveredPeers.first { $0.endpoint.host == row.mac.dnsName }
     }
     private func isPaired(_ row: MacDeviceRow) -> Bool {
         guard let id = row.installation?.deviceID ?? peer(for: row)?.advertisement.identity.deviceID else { return false }

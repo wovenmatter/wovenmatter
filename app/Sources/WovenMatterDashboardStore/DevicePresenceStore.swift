@@ -16,25 +16,9 @@ extension WorkspaceDatabaseConnection {
       }
     }
   }
-
-  /// An explicit Dev quit withdraws its advertised routes, retaining identities
-  /// and history so the same instance can register again on its next launch.
-  public func withdrawDevelopmentWorkspaces(ownedBy deviceID: String) throws {
-    let identity = try libraryIdentity()
-    for var workspace in try libraryExecutionWorkspaces() where !workspace.deleted
-        && workspace.ownerDeviceID == deviceID && workspace.kind == .mac && workspace.endpoint != nil {
-      workspace.developmentInstance = workspace.developmentInstance ?? deviceID
-      workspace.endpoint = nil
-      _ = try registerExecutionWorkspace(.init(workspace: workspace, expectedRevision: workspace.revision), deviceID: identity.hostDeviceID)
-    }
-  }
 }
 
 extension WorkspaceDatabase {
   public func libraryConnectionWorkspaces(activeDeviceIDs: Set<String>) async throws -> [ExecutionWorkspace] {
     try await read { try $0.libraryConnectionWorkspaces(activeDeviceIDs: activeDeviceIDs) }
-  }
-  public func withdrawDevelopmentWorkspaces(ownedBy deviceID: String) async throws {
-    try await write { try $0.withdrawDevelopmentWorkspaces(ownedBy: deviceID) }
-  }
-}
+  }}

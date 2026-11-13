@@ -419,8 +419,7 @@ final class CentralExecutionClient {
                 throw LibraryAPIError(code: "workspace_unavailable", message: errors[workspace.id] ?? error.localizedDescription)
             }
         } else {
-            // A workspace without `stream.v1` (a client-mode Dev build's own
-            // execution) takes one signed request per command.
+            // A workspace without `stream.v1` takes one signed request per command.
             let transport = try await transport(for: workspace)
             if let existing = try await transport.receipt(command.commandID) { receipt = existing }
             else { try beforeDispatch(); receipt = try await transport.command(command) }

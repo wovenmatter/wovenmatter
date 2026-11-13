@@ -52,9 +52,16 @@ elif name == 'ps':
         path.write_text(stub)
         path.chmod(0o755)
 
+    # An existing snapshot under a fixture home: the launcher never copies the
+    # user's library or writes under their real Application Support.
+    home = fixture / 'home'
+    snapshot = home / 'Library/Application Support/Woven Matter Dev/signing-test/snapshot'
+    snapshot.mkdir(parents=True)
+    (snapshot / 'development-snapshot.json').write_text('{"version": 1}')
+
     def run(cache, count, identity=None, fail=False, backend="", rewrite=False):
         calls.write_text('')
-        env = dict(os.environ, PATH=str(binaries) + os.pathsep + os.environ['PATH'],
+        env = dict(os.environ, HOME=str(home), PATH=str(binaries) + os.pathsep + os.environ['PATH'],
                    WOVENMATTER_DEV_CACHE_DIR=str(cache), DEV_SIGNING_CALLS=str(calls),
                    DEV_SIGNING_IDENTITIES=str(count), DEV_SIGNING_BUILD_FAIL='1' if fail else '0',
                    DEV_SIGNING_BACKEND_PATH=backend, WOVENMATTER_DEV_LINUX_LIBRARY='skip',
@@ -63,7 +70,7 @@ elif name == 'ps':
         env.pop('WOVENMATTER_DEV_VARIANT', None)
         if identity is not None:
             env['WOVENMATTER_DEV_SIGNING_IDENTITY'] = identity
-        result = subprocess.run(['bash', str(root / 'scripts/build_and_run.sh'), 'debug', '--mode', 'client', '--instance', 'signing-test'],
+        result = subprocess.run(['bash', str(root / 'scripts/build_and_run.sh'), 'debug', '--mode', 'snapshot', '--instance', 'signing-test'],
                                 env=env, capture_output=True, text=True)
         recorded = [json.loads(line) for line in calls.read_text().splitlines()]
         return result, recorded
@@ -72,12 +79,12 @@ elif name == 'ps':
     result, recorded = run(cache, 1)
     assert result.returncode == 0, result.stderr
     args = next(args for name, args in recorded if name == 'xcodebuild')
-    assert 'WOVENMATTER_DEV_MODE=client' in args
+    assert 'WOVENMATTER_DEV_MODE=snapshot' in args
     assert 'WOVENMATTER_DEV_INSTANCE=signing-test' in args
-    assert 'WOVENMATTER_DEV_BUNDLE_ID=wovenmatter.desktop.dev.signing-test.client' in args
+    assert 'WOVENMATTER_DEV_BUNDLE_ID=wovenmatter.desktop.dev.signing-test.snapshot' in args
     assert 'CODE_SIGNING_ALLOWED=YES' in args and 'CODE_SIGNING_ALLOWED=NO' not in args
     assert 'CODE_SIGN_IDENTITY=' + '1' * 40 in args
-    assert (cache / 'signing-test/client/signing-identity').read_text().strip() == '1' * 40
+    assert (cache / 'signing-test/snapshot/signing-identity').read_text().strip() == '1' * 40
 
     # Keychain unavailability must not silently change the identity on a rebuild.
     result, recorded = run(cache, 0, fail=True)
@@ -101,7 +108,7 @@ elif name == 'ps':
     assert not any(name == 'codesign' for name, _ in recorded)
     # A running backend may report the logical /tmp path while the build cache
     # uses /private/tmp. Neither spelling may be overwritten by a rebuild.
-    executable = cache / 'signing-test/client/DerivedData/Build/Products/Debug/Woven Matter signing-test client Dev.app/Contents/MacOS/Woven Matter signing-test client Dev'
+    executable = cache / 'signing-test/snapshot/DerivedData/Build/Products/Debug/Woven Matter signing-test snapshot Dev.app/Contents/MacOS/Woven Matter signing-test snapshot Dev'
     for path in (str(executable.resolve()), str(executable.resolve()).replace('/private/tmp/', '/tmp/', 1)):
         result, recorded = run(cache, 1, backend=path)
         assert result.returncode == 75, result.stderr

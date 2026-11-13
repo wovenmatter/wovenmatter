@@ -26,13 +26,14 @@ extension ApplicationModel {
                             requestID: UUID().uuidString.lowercased(), cancelling: true)
                     })
                 })
-            // Secondary Mac execution lives in this GUI process. It must not
-            // replace the primary library's GUI/backend automation socket.
-            if LocalExecutionRole.current != .backend, clientExecutionDirectory == nil {
+            #if !APP_FACADE_TESTS
+            // Facade test processes never bind the user's automation socket.
+            if LocalExecutionRole.current != .backend {
                 let url = try Self.automationSocket()
                 try WovenMatterBackendProcess.removeStaleSocketAfterAcquiringLease(url)
                 try host.start(at: url)
             }
+            #endif
             automationHost = host
         } catch { workspaceAssets.notice = error.localizedDescription }
     }

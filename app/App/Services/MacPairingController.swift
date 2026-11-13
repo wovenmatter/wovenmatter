@@ -6,15 +6,12 @@ import WovenMatterDashboardStore
 
 @Observable @MainActor
 final class MacPairingController {
-    private(set) var peers: [DiscoveredPeer] = []
-    private(set) var isDiscovering = false
     private(set) var isRequestPending = false
     private(set) var hasSubmittedRequest = false
     private(set) var status = ""
     private(set) var errorMessage: String?
     private let identity: @MainActor () -> PairingDeviceIdentity
     private let onPaired: @MainActor (URL, PairResponse) async throws -> Void
-    private let discovery = MacDiscovery()
     private let network = PairingNetwork()
     private var requestGeneration = UUID()
     private var pollTask: Task<Void, Never>?
@@ -38,13 +35,6 @@ final class MacPairingController {
     static var metadata: DeviceMetadata {
         .init(kind: .mac, osVersion: ProcessInfo.processInfo.operatingSystemVersionString,
               appVersion: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String, developmentInstance: DevelopmentLaunch.instance)
-    }
-    func refreshDiscovery() async {
-        guard !isDiscovering else { return }
-        isDiscovering = true; errorMessage = nil
-        defer { isDiscovering = false }
-        do { peers = try await discovery.discover().filter { $0.advertisement.identity.deviceID != identity().deviceID } }
-        catch { errorMessage = error.localizedDescription }
     }
     func requestPairing(with peer: DiscoveredPeer) async {
         guard !isRequestPending, pendingClaim == nil, peer.advertisement.role == .central else { return }

@@ -73,9 +73,9 @@ class FreshSnapshotTests(unittest.TestCase):
             dev_root = root / "Woven Matter Dev"
             production = root / "Woven Matter"; production.mkdir()
             unmarked = dev_root / "x" / "snapshot"; unmarked.mkdir(parents=True)
-            client = dev_root / "x" / "client"; client.mkdir(parents=True)
+            live = dev_root / "x" / "live"; live.mkdir(parents=True)
             security = FakeSecurity([])
-            for path in (production, client, dev_root):
+            for path in (production, live, dev_root):
                 with self.assertRaises(ValueError):
                     dev.reset(path, self.bundle, dev_root=dev_root, trash=root / "Trash", run=security)
             with self.assertRaises(ValueError):  # right bundle ID, but not a development snapshot
@@ -112,7 +112,7 @@ class DevelopmentBuildTests(unittest.TestCase):
             binaries = root / "bin"; binaries.mkdir()
             compiler = binaries / "xcrun"
             compiler.write_text("#!/bin/sh\nexit 77\n"); compiler.chmod(0o755)
-            for suffix in ("a.client", "c.live", "b.snapshot", "a.unrecognized.extra"):
+            for suffix in ("c.live", "b.snapshot", "a.unrecognized.extra"):
                 identifier = "wovenmatter.desktop.dev." + suffix
                 scratch = root / suffix
                 environment = dict(os.environ, PATH=str(binaries) + os.pathsep + os.environ["PATH"],
@@ -130,17 +130,16 @@ class DevelopmentBuildTests(unittest.TestCase):
                                      {"wovenmatter.desktop", "wovenmatter.desktop.dev", identifier})
 
     def test_profile_identity_and_modes_are_independent(self):
-        a = dev.profile(Path("/tmp/work-a/repo"), None, "client")
-        b = dev.profile(Path("/tmp/work-b/repo"), None, "client")
+        a = dev.profile(Path("/tmp/work-a/repo"), None, "snapshot")
+        b = dev.profile(Path("/tmp/work-b/repo"), None, "snapshot")
         self.assertNotEqual(a["bundle"], b["bundle"])
-        self.assertNotEqual(a["support"], dev.profile(Path("/tmp/work-a/repo"), None, "snapshot")["support"])
-        self.assertEqual(a, dev.profile(Path("/tmp/work-a/repo"), None, "client"))
-        with self.assertRaises(ValueError): dev.profile(Path("/tmp/a"), "../production", "client")
+        self.assertNotEqual(a["support"], dev.profile(Path("/tmp/work-a/repo"), None, "live")["support"])
+        self.assertEqual(a, dev.profile(Path("/tmp/work-a/repo"), None, "snapshot"))
+        with self.assertRaises(ValueError): dev.profile(Path("/tmp/a"), "../production", "snapshot")
 
-    def test_auto_always_launches_full_app_and_client_remains_explicit(self):
+    def test_auto_always_launches_the_full_snapshot_app(self):
         root = Path("/tmp/work-a/repo")
         self.assertEqual(dev.profile(root, "fixture", "auto")["mode"], "snapshot")
-        self.assertEqual(dev.profile(root, "fixture", "client")["mode"], "client")
 
     def test_default_launcher_plan_selects_the_standalone_snapshot(self):
         root = Path(__file__).resolve().parents[2]
@@ -154,7 +153,7 @@ class DevelopmentBuildTests(unittest.TestCase):
     def test_live_host_is_explicit_and_shares_only_the_production_data_path(self):
         root = Path(__file__).resolve().parents[2]
         profiles = {}
-        for mode in ("client", "snapshot", "live"):
+        for mode in ("snapshot", "live"):
             result = subprocess.run(["bash", str(root / "scripts/build_and_run.sh"), "--plan",
                                      "--mode", mode, "--instance", "fixture"], check=True, capture_output=True, text=True)
             profiles[mode] = json.loads(result.stdout)
@@ -162,8 +161,7 @@ class DevelopmentBuildTests(unittest.TestCase):
             self.assertEqual(profiles[mode]["bundle"], "wovenmatter.desktop.dev.fixture." + mode)
         production = str(Path.home() / "Library/Application Support/Woven Matter")
         self.assertEqual(profiles["live"]["support"], production)
-        for mode in ("client", "snapshot"):
-            self.assertNotEqual(profiles[mode]["support"], production)
+        self.assertNotEqual(profiles["snapshot"]["support"], production)
         other = dev.profile(root, "other", "live")
         self.assertEqual(other["support"], production)
         self.assertNotEqual(other["bundle"], profiles["live"]["bundle"])

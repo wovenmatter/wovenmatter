@@ -135,20 +135,6 @@ final class WorkspaceJournalTests: XCTestCase {
     XCTAssertEqual(state.commands.values.first?.command, command)
   }
 
-  func testWorkspaceNoteImportPreservesIdentityAndDoesNotResurrectDeletedNote() async throws {
-    let store = try MobileStore(file: path())
-    let note = LibraryNote(id: "agent-note", title: "Result", content: "saved output", revision: 3)
-    try await store.apply(LibrarySnapshot(workspaceID: "library", cursor: 1, notes: [note]))
-    try await store.apply(LibraryChangePage(workspaceID: "library", cursor: 2, changes: [.init(cursor: 2, resourceKind: .note, resourceID: note.id, operation: .delete, revision: 4)]))
-    var changed = note; changed.content = "agent output after deletion"
-    try await store.importWorkspaceNote(changed, base: note)
-    let state = await store.snapshot()
-    XCTAssertEqual(state.conflicts[note.id]?.local.content, changed.content)
-    XCTAssertTrue(state.outbox.isEmpty)
-    let created = LibraryNote(id: "created-by-agent", title: "New", content: "new output", revision: 0)
-    try await store.importWorkspaceNote(created)
-    let saved = await store.snapshot(); XCTAssertEqual(saved.outbox.first?.mutation.resourceID, created.id)
-  }
   func testWorkspaceDeletionRetainsBackupUntilAcknowledgementAndRestoresConflict() async throws {
     let file = path(); let store = try MobileStore(file: file)
     let note = LibraryNote(id: "note", title: "Keep", content: "original", revision: 4)

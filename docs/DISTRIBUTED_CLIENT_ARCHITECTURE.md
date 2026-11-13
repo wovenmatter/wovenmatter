@@ -40,8 +40,7 @@ that workspace. Replaying shared observations cannot execute a command, resume a
 foreign agent, manufacture a second native history event, or run another Mac's
 schedule. Workspace roots, repositories, dependencies, caches and ordinary working
 files follow [the workspace data model](WORKSPACE_DATA_MODEL.md), outside library
-synchronization. A local upgrade can import a former node's native database on
-the same physical Mac; that path is never available over the network.
+synchronization.
 
 Workspace provider credentials stay with their installation. Macs and Linux
 hosts reach every other Mac and Linux workspace with signed member requests
@@ -131,8 +130,7 @@ read-only synced history.
 
 ## Compatibility and acceptance
 
-Every desktop Mac runs its full local app and background server. Former node
-preferences are upgrade input, rather than a role selector. Both Macs must
+Every desktop Mac runs its full local app and background server. Both Macs must
 advertise `library.peers.v2` before a new Mac pairing completes. Existing mobile
 pairing and execution protocol identifiers remain compatible; a workspace keeps
 its original library namespace and execution scope when its inventory is shared.

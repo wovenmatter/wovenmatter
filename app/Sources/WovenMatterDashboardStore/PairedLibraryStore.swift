@@ -118,8 +118,7 @@ extension WorkspaceDatabaseConnection {
       // Ownership of pre-existing rows is claimed exactly once, before any peer
       // data can arrive. Rows later received without their owner record stay
       // read-only and are never adopted by a restart. A schedule assigned to
-      // this Mac's own execution context stays local; one assigned to a client
-      // device keeps that executor.
+      // this Mac stays local; one assigned to a phone keeps that executor.
       if try pairedStateUnlocked("owners.bootstrap") == nil {
         let received = try historyRowsUnlocked("SELECT 1 AS present FROM paired_library_cursors UNION ALL SELECT 1 FROM paired_library_pending LIMIT 1", values: []).isEmpty == false
         if !received {
@@ -128,8 +127,7 @@ extension WorkspaceDatabaseConnection {
             INSERT OR IGNORE INTO paired_conversation_owners SELECT id,(SELECT device_id FROM paired_library_clock WHERE singleton=1) FROM dashboard_conversations
               WHERE NOT EXISTS(SELECT 1 FROM execution_conversations c WHERE c.id=dashboard_conversations.id);
             INSERT OR IGNORE INTO paired_calendar_owners SELECT i.id,CASE
-                WHEN o.device_id IS NULL OR o.device_id=(SELECT workspace_id FROM calendar_replica_context WHERE singleton=1)
-                  OR o.device_id=(SELECT host_device_id FROM library_identity WHERE singleton=1)
+                WHEN o.device_id IS NULL OR o.device_id=(SELECT host_device_id FROM library_identity WHERE singleton=1)
                 THEN (SELECT device_id FROM paired_library_clock WHERE singleton=1) ELSE o.device_id END
               FROM dashboard_calendar_items i LEFT JOIN calendar_task_executors o ON o.event_id=i.id;
             """)

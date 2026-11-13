@@ -26,13 +26,9 @@ public struct PairedDevice: Codable, Equatable, Sendable, Identifiable {
   public var metadata: DeviceMetadata?
   public var lastSeenAt: Date?
   public var kind: DeviceKind { metadata?.kind ?? .unknown }
-  public var isDevelopment: Bool { localDevelopment == true || metadata?.developmentInstance != nil }
-  public var displayName: String {
-    if localDevelopment == true { return String(name.dropFirst("Dev · ".count)) + " (Dev)" }
-    return isDevelopment && !name.contains("(Dev)") ? name + " (Dev)" : name
-  }
+  public var isDevelopment: Bool { metadata?.developmentInstance != nil }
+  public var displayName: String { isDevelopment && !name.contains("(Dev)") ? name + " (Dev)" : name }
   fileprivate let credentialHash: Data
-  fileprivate var localDevelopment: Bool? = nil
   /// Fixed at issuance from the explicit pairing purpose, never from metadata.
   fileprivate var role: DeviceGrantRole? = nil
   /// Revocation events for this device known when this grant was issued. Any
@@ -100,7 +96,6 @@ public actor DeviceAuthentication {
     var devices: [PairedDevice] = []
     var approvals: [Approval]?
     var pendingQRPairings: [PendingQRPairing]?
-    var revokedDevelopmentIDs: Set<String>?
     /// Immutable device-UUID pins for paired Macs' signing keys. Local only.
     var pins: [String: PeerPin]?
     var admissionVersion: Int?
@@ -177,47 +172,6 @@ public actor DeviceAuthentication {
     return state.devices.filter { Self.isActive($0, in: state) && (!$0.isDevelopment || now().timeIntervalSince($0.lastSeenAt ?? .distantPast) < 45) && seen.insert($0.id).inserted }
   }
 
-  /// Normal Dev quit withdraws presence without making the identity permanently
-  /// revoked. Explicit Unpair continues to block automatic reenrollment.
-  public func suspendLocalDevelopment(deviceID: String, credential: String) throws {
-    guard let index = state.devices.firstIndex(where: { $0.id == deviceID && $0.isDevelopment && $0.revokedAt == nil && GrantSecrets.constantTimeEqual($0.credentialHash, Self.digest(credential)) }) else { throw Self.unauthorized }
-    var next = state; next.devices[index].lastSeenAt = nil
-    try persist(next); state = next; lastSeenSaved.removeValue(forKey: deviceID)
-  }
-
-  /// The same-user socket's check before a Dev stream key is admitted: the
-  /// credential must be the current one of a local development identity
-  /// named `deviceID` (never a normal paired device). Like any request with
-  /// that credential, it marks the identity present.
-  public func authenticateLocalDevelopment(deviceID: String, credential: String) throws -> PairedDevice {
-    let device = try authenticate(bearer: credential)
-    guard device.localDevelopment == true, device.id.lowercased() == deviceID.lowercased() else { throw Self.unauthorized }
-    return device
-  }
-
-  /// Whether `deviceID` is a current (unrevoked) local development identity.
-  public func isLocalDevelopment(_ deviceID: String) -> Bool {
-    state.devices.contains { $0.id.lowercased() == deviceID.lowercased() && $0.localDevelopment == true && Self.isActive($0, in: state) }
-  }
-
-  /// A Dev client whose stream socket is open is present, though it sends no
-  /// HTTP request while nothing changes: its live host marks it seen.
-  public func touchLocalDevelopment(deviceIDs: Set<String>) throws {
-    let ids = Set(deviceIDs.map { $0.lowercased() })
-    guard !ids.isEmpty else { return }
-    var next = state
-    let instant = now()
-    var persistNeeded = false
-    for index in next.devices.indices where ids.contains(next.devices[index].id.lowercased())
-      && next.devices[index].localDevelopment == true && Self.isActive(next.devices[index], in: next) {
-      next.devices[index].lastSeenAt = instant
-      if instant.timeIntervalSince(lastSeenSaved[next.devices[index].id] ?? .distantPast) >= 10 {
-        persistNeeded = true; lastSeenSaved[next.devices[index].id] = instant
-      }
-    }
-    if persistNeeded { try persist(next) }
-    state = next
-  }
 
   // MARK: Paired-Mac identity, membership and target-local peer grants
 
@@ -609,30 +563,6 @@ public actor DeviceAuthentication {
       .filter { id, _ in !Self.isActiveMac(id, in: state, own: identity?.deviceID) && !devices().contains { $0.id == id } }
   }
 
-  /// Called only by the same-user Unix socket, never by an HTTP route. A local
-  /// development instance receives its own revocable identity, not the host's.
-  public func enrollLocalDevelopment(deviceID: String, name: String, workspaceID: String) throws -> PairResponse {
-    guard UUID(uuidString: deviceID) != nil, name.hasPrefix("Dev · "), name.utf8.count <= 120,
-          !name.unicodeScalars.contains(where: { $0.value < 32 || $0.value == 127 }) else {
-      throw Self.error("invalid_device", "Invalid development instance identity.")
-    }
-    guard !(state.revokedDevelopmentIDs ?? []).contains(deviceID.lowercased()) else {
-      throw Self.error("revoked_device", "This development identity was revoked. Use a new development instance.")
-    }
-    if let existing = state.devices.first(where: { $0.id.lowercased() == deviceID.lowercased() }) {
-      guard existing.id == deviceID, existing.name == name, existing.localDevelopment == true,
-            existing.revokedAt == nil else {
-        throw Self.error("invalid_device", "This device identity is already in use or was revoked.")
-      }
-    }
-    let token = try Self.randomToken()
-    var next = state
-    next.devices.removeAll { $0.id == deviceID }
-    next.devices.append(.init(id: deviceID, name: name, pairedAt: now(), revokedAt: nil,
-      metadata: .init(kind: .mac), lastSeenAt: now(), credentialHash: Self.digest(token), localDevelopment: true))
-    try persist(next); state = next
-    return .init(workspaceID: workspaceID, deviceID: deviceID, credential: token)
-  }
   public func deviceConnections() -> [DeviceConnection] {
     devices().map { .init(id: $0.id, name: $0.displayName, metadata: $0.metadata ?? .init(), pairedAt: $0.pairedAt, lastSeenAt: $0.lastSeenAt) }
   }
@@ -809,11 +739,8 @@ public actor DeviceAuthentication {
     let event = try identity.map { try PeerRevocation.signed(deviceID: deviceID, by: $0) }
       ?? PeerRevocation(eventID: UUID().uuidString.lowercased(), deviceID: deviceID, revokerDeviceID: deviceID, signature: Data())
     next.revocations = (next.revocations ?? []) + [event]
-    for index in next.devices.indices where next.devices[index].id == deviceID {
-      if next.devices[index].revokedAt == nil { next.devices[index].revokedAt = instant }
-      if next.devices[index].localDevelopment == true {
-        next.revokedDevelopmentIDs = (next.revokedDevelopmentIDs ?? []).union([deviceID.lowercased()])
-      }
+    for index in next.devices.indices where next.devices[index].id == deviceID && next.devices[index].revokedAt == nil {
+      next.devices[index].revokedAt = instant
     }
     next.pendingQRPairings?.removeAll { $0.device.id == deviceID }
     try persist(next); state = next

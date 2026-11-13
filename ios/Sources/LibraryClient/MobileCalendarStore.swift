@@ -4,7 +4,6 @@ import WovenMatterShared
 public struct MobileCalendarConflict: Codable, Equatable, Sendable {
   public var local: LibraryCalendarRecord
   public var remote: LibraryCalendarRecord?
-  public var executionConflict: Bool?
 }
 public enum MobileCalendarReassignmentError: Error, LocalizedError, Equatable {
   case alreadyRan
@@ -48,43 +47,6 @@ public actor MobileCalendarStore {
     if FileManager.default.fileExists(atPath: file.path) { try? MobileStorePersistence.applyBackupIfChanged(.include, at: file) }
   }
   public func allRecords() -> [LibraryCalendarRecord] { state.records.values.sorted { $0.id < $1.id } }
-  /// Merge native execution-database edits against the exact replica version
-  /// originally projected there. Both sides survive a concurrent offline edit.
-  public func importExecutionRecord(_ record: LibraryCalendarRecord, base: LibraryCalendarRecord?) throws {
-    try LibraryCalendarSchedule.validate(record.event.draft)
-    guard UUID(uuidString: record.id) != nil else { throw LibraryCalendarError.invalid }
-    let current = state.records[record.id]
-    func sameContent(_ lhs: LibraryCalendarRecord?, _ rhs: LibraryCalendarRecord?) -> Bool {
-      var left = lhs, right = rhs; left?.event.revision = 0; right?.event.revision = 0
-      return left == right
-    }
-    guard !sameContent(current, record) else { return }
-    if state.conflicts[record.id] != nil { return }
-    if !sameContent(current, base) {
-      try update { next in
-        next.conflicts[record.id] = .init(local: record, remote: current, executionConflict: true)
-        next.records[record.id] = record
-        next.outbox.removeAll { $0.mutation.record.id == record.id }
-        cancelPending(record.id, in: &next)
-      }
-      return
-    }
-    var incoming = record; incoming.event.revision = max((current?.event.revision ?? -1) + 1, record.event.revision)
-    try update { next in enqueue(incoming, into: &next); cancelPending(record.id, in: &next) }
-  }
-  public func importExecutionRuns(_ runs: [LibraryCalendarRun]) throws {
-    try update { next in
-      for var run in runs {
-        guard run.ownerDeviceID == deviceID else { throw LibraryCalendarError.invalid }
-        run.revision = next.runs[run.id]?.revision
-        if next.runs[run.id] == run { continue }
-        run.revision = (next.runs[run.id]?.revision ?? -1) + 1
-        next.runs[run.id] = run
-        if next.dirtyRuns == nil { next.dirtyRuns = [] }; next.dirtyRuns?.insert(run.id)
-        next.through[run.eventID] = max(next.through[run.eventID] ?? .distantPast, run.scheduledAt)
-      }
-    }
-  }
   public func records() -> [LibraryCalendarRecord] { state.records.values.filter { !$0.deleted }.sorted { $0.id < $1.id } }
   public func conflicts() -> [String: MobileCalendarConflict] { state.conflicts }
   public func pendingCount() -> Int { state.outbox.count }
@@ -240,7 +202,7 @@ public actor MobileCalendarStore {
       let previousIDs = Set(next.outbox.filter { $0.mutation.record.id == id }.map { $0.mutation.id })
       let dependentIDs = next.outbox.filter { $0.dependsOn.map(previousIDs.contains) == true }.map { $0.mutation.record.id }
       next.conflicts[id] = nil; next.outbox.removeAll { $0.mutation.record.id == id }
-      if conflict.executionConflict != true { next.bases[id] = conflict.remote }
+      next.bases[id] = conflict.remote
       if keepLocal {
         guard conflict.remote?.deleted != true else { throw LibraryCalendarError.conflict }
         var local = conflict.local; local.event.revision += 1; enqueue(local, into: &next)
@@ -248,7 +210,6 @@ public actor MobileCalendarStore {
         for index in next.outbox.indices where next.outbox[index].dependsOn.map(previousIDs.contains) == true { next.outbox[index].dependsOn = replacement }
       } else {
         next.records[id] = conflict.remote
-        if conflict.executionConflict == true, let remote = conflict.remote { enqueue(remote, into: &next) }
         // A detached copy must not upload when exclusion of the original
         // occurrence conflicted. Preserve it for an explicit user decision.
         for child in dependentIDs {

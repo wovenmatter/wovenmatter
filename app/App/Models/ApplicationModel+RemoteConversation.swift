@@ -174,9 +174,6 @@ extension ApplicationModel {
         func decode(_ activity: LibraryActivity) throws -> AgentRunActivity? {
             try activity.projectionJSON.map { try JSONDecoder().decode(AgentRunActivity.self, from: Data($0.utf8)) }
         }
-        if let client = liveLibraryClient {
-            return try decode(await client.desktopActivityDetails(conversationID: conversationID, runID: runID, activityID: activityID))
-        }
         var failure: (any Error)?
         if let client = try? centralExecutionClient() {
             do { return try decode(await client.activityDetails(conversationID: conversationID, runID: runID, activityID: activityID)) }
