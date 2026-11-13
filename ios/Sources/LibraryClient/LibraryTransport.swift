@@ -57,8 +57,6 @@ public enum MobileConnectionError: Error, LocalizedError {
   case http(Int, String), revoked, versionMismatch, invalidResponse, responseTooLarge, insecureEndpoint, offline
   /// Signed: this host does not list this phone as a member (yet, or any more).
   case memberUnknown
-  /// Signed: this host is too old to accept member requests.
-  case memberUnsupported
   /// Devices disagree on versions; every device shows "Update everything".
   case updateRequired(String)
   public var errorDescription: String? {
@@ -71,7 +69,6 @@ public enum MobileConnectionError: Error, LocalizedError {
     case .insecureEndpoint: "Pair using the Tailscale HTTPS address shown by Woven Matter on your Mac."
     case .offline: "This workspace is unavailable. Locally saved work remains available."
     case .memberUnknown: "The device you reached doesn’t recognize this one yet. It learns about it after it syncs with a Mac you paired with."
-    case .memberUnsupported: "Update everything: the device you reached needs a newer Woven Matter before this one can connect directly."
     case .updateRequired(let message): "Update everything. " + message
     }
   }
@@ -106,7 +103,8 @@ public protocol MobilePairingRequests: Sendable {
 
 public final class HTTPSLibraryTransport: LibraryTransport, MobilePairingRequests, @unchecked Sendable {
   let credential: MobileCredential
-  /// Signed member requests (no bearer). Nil for bearer-era pairing.
+  /// Signed member requests (no bearer). Nil only for the pairing requests
+  /// (`pair`, `confirmPairing`, `unpair`), which present the pairing credential.
   let signer: MemberRequestSigner?
   /// The host's member device ID, which every signed request names.
   let audience: String

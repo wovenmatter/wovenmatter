@@ -37,8 +37,9 @@ extension MobileModel {
     let committed = try await MobilePairingCommit.complete(paired, store: store,
       allowingLibraryChange: allowingLibraryChange, keepLibrary: keepLibrary, saveCredential: saveCredential,
       confirm: { try await pairingRequests(connection).confirmPairing() })
+    // The pairing connection only confirms the pairing (and unpairs);
+    // `completeMemberPairing` then signs every request, or nothing syncs.
     credential = committed; transport = connection
-    engine = MobileSyncEngine(store: store, transport: connection)
     synchronizationStatus = .init(); online = false; connectionLabel = "Connecting"
     centralRetryCount = 0; centralRefreshAfter = .distantPast; centralProvidersRefreshDue = true
     pairingError = nil

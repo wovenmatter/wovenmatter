@@ -685,7 +685,6 @@ private struct WorkspaceSettingsPane: View {
         }
       }
       Section {
-        Button("Refresh device access") { Task { await model.renewWorkspaceAccess(workspace.id) } }.disabled(!model.online)
         if let problem = model.workspaceProblems[workspace.id] { Text(problem).font(.caption).foregroundStyle(DashboardPalette.mutedForeground) }
       }
     }.listStyle(.insetGrouped).mobileNavigationPage(workspace.name)

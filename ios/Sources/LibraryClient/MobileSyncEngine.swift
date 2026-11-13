@@ -5,7 +5,7 @@ public actor MobileSyncEngine {
   public let store: MobileStore
   private var transport: any LibraryTransport
   /// Member mode: the phone syncs with any online Mac or Linux library host,
-  /// failing over automatically. Nil for a bearer-era pairing with one Mac.
+  /// failing over automatically. Nil for one fixed connection.
   public nonisolated let hosts: MobileLibraryHosts?
   private var learnedAt: Date?
   private var syncTask: Task<Void, Error>?

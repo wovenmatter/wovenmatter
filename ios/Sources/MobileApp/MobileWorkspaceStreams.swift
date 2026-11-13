@@ -14,7 +14,7 @@ extension MobileModel {
   /// mode, a known serving member, and a workspace that offers one.
   func streams(_ workspace: ExecutionWorkspace) -> Bool {
     memberMode && memberIdentity != nil && workspace.endpoint != nil && !workspace.deleted &&
-      workspace.capabilities.contains(StreamProtocol.capability) && !memberUnsupportedWorkspaceIDs.contains(workspace.id) &&
+      workspace.capabilities.contains(StreamProtocol.capability) &&
       membership?.audience(for: workspace) != nil
   }
 

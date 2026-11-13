@@ -73,7 +73,7 @@ final class MemberModeTests: XCTestCase {
     model.credential = .init(endpoint: URL(string: "https://studio.tail1.ts.net/wovenmatter")!, workspaceID: "library-a",
                              deviceID: model.state.deviceID, token: "synthetic-test-token")
     XCTAssertTrue(model.needsMemberPairing)
-    XCTAssertNotNil(model.membershipNotice, "A phone paired before members is asked to pair again once")
+    XCTAssertNotNil(model.membershipNotice, "A paired phone that is not a member is asked to pair again")
 
     let mini = ExecutionWorkspace(id: UUID().uuidString.lowercased(), libraryID: "library-b", ownerDeviceID: "b0000000-0000-0000-0000-00000000000b",
       kind: .mac, name: "Mini", endpoint: URL(string: "https://mini.tail1.ts.net/wovenmatter")!, capabilities: ["execution.v1", "history.central.v1"],
@@ -95,8 +95,6 @@ final class MemberModeTests: XCTestCase {
     model.libraryHosts = try MobileLibraryHosts(state: membership, identity: identity, file: nil, performer: http)
     model.membership = membership
     XCTAssertFalse(model.needsMemberPairing)
-    // No grant may be issued or read in member mode.
-    model.workspaceCredentials = .init(load: { _ in XCTFail("Read a grant"); return nil }, save: { _ in XCTFail("Saved a grant") }, clear: { _ in })
 
     await model.refreshExecutionWorkspaces(force: true)
     await model.workspaceReadTasks[mini.id]?.value
