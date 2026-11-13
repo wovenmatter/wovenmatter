@@ -2,9 +2,12 @@
 
 Pi's authoritative conversations, entries, submissions, tasks, ownership, and
 document checkpoints live in the execution owner's `workspace.sqlite`. Local
-launches receive that path from `WorkspaceDatabase.fileURL`; the remote service
-uses `<workspace>/.wovenmatter/workspace.sqlite` on its persistent volume. Remote
-execution does not open or depend on the Mac's database.
+launches receive that path from `WorkspaceDatabase.fileURL`; a Linux host's
+service uses `<workspace>/.wovenmatter/workspace.sqlite` under its workspace
+directory (`~/.local/share/wovenmatter/workspace` on a native host). That
+execution database is separate from the host's library copy
+(`~/.local/share/wovenmatter/library/workspace.sqlite`), and remote execution
+never opens or depends on a Mac's database.
 
 The existing per-session Harness model is retained. Each manifest's stable store
 ID selects its own `wm_pi_<storeID>_` namespace using the upstream Pi Durable 1.4
@@ -50,4 +53,4 @@ rewindable and latest-document checkpoints, migration rollback/retry, namespace
 isolation, and recovery after SIGKILL immediately following an acknowledged
 submission. The existing engine recovery and subagent suites run against SQLite.
 Power-loss durability relies on SQLite FULL synchronization and the host's
-persistent-volume guarantees; the tests do not simulate physical disk failure.
+storage guarantees; the tests do not simulate physical disk failure.

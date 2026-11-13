@@ -64,7 +64,7 @@ Maintenance checks both for newer releases; recorded does not mean frozen.
   same stable major (`node:<major>-trixie-slim`); `--pull --no-cache` picks up its
   newest patch and Debian security updates on every image build. Workspace
   creation may reuse matching local contents for less than 24 hours; an explicit
-  container update always rebuilds. See [image reuse](reference/REMOTE_WORKSPACES.md#image-reuse-and-build-progress). The workspace
+  container update always rebuilds. The workspace
   image also raises npm to its tested current stable minimum (`>=12.2.2`), since
   Node's bundled npm may lag. Dependency maintenance reviews that Dockerfile
   floor; locked installs and the container smoke test validate CLI compatibility.

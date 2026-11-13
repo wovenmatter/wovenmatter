@@ -8,16 +8,18 @@ level, permissions, tools, prompt, and repeat schedule. Standalone tasks stay of
 the calendar by default. Use **Add to calendar**, **Remove from calendar**, or
 **Show on calendar** to change where a task appears without changing its runs.
 
-Scheduling belongs to the execution workspace. A remote service can continue
-while WovenMatter is closed or the Mac is disconnected; its host and container
-must keep running. Remote agents can update their managed databases through
+Scheduling belongs to the execution workspace. A Linux host keeps running its
+tasks while Woven Matter is closed or your Macs are disconnected, as long as the
+host and its Woven service keep running. Remote agents can update their managed databases through
 owner-local Woven MCP tools, and the Mac displays the last complete synced data.
 
 ## Session timers
 
 With **Timers** enabled, ask an agent to schedule a one-time or recurring follow-up
-in its conversation. Timers persist across app restarts, but fire only while
-WovenMatter is running. Missed recurring firings coalesce into one follow-up.
+in its conversation. Timers fire on the machine that runs the session: on a Mac
+they need its background server, and on a Linux host they keep firing with
+every Mac off. Timers persist across restarts, and missed recurring firings
+coalesce into one follow-up.
 Use the session controls to edit, pause, or remove a timer. Disabling Timers asks
 you to confirm pausing active timers.
 
@@ -31,7 +33,7 @@ independent copy.
 
 Choose **Scheduled task** to save a prompt with an agent, model, thinking level,
 access setting, and enabled tools. Choose a folder owned by the selected
-execution workspace, or use its default directory for an ungrouped session.
+execution workspace, or use its default directory for a session without a folder.
 The folder's root supplies its working directory. Model and session options
 come from the selected agent. The agent must be connected to load its available
 options and run the task. Normal session permission requests
@@ -84,7 +86,7 @@ than one place, such as an archived Codex chat or a Pi Durable session and its b
 file, keeps one record. Older rows saved under **Built-in** show as Pi Durable.
 
 Other Macs, every Linux machine in your library (workspace hosts and bots-only
-machines, whichever Mac added them), and iPhones and iPads appear under **Devices**.
+machines, whichever Mac added them), and phones in the iPhone beta appear under **Devices**.
 Click a device to show or hide its usage. Devices share only token counts, model and
 billing labels, session IDs, folder names, and bot names, never prompts, responses, or
 file paths. A Linux machine is one device however many Macs added it, and reports all
@@ -113,5 +115,5 @@ accounts in **Settings → Subscriptions & API Keys**. These accounts are shared
 Pi Durable. Providers without a supported limits response link to their usage
 dashboard; unavailable data is never shown as zero usage or a full allowance.
 
-Saved keys use Apple Keychain. Allow access under Saved sign-ins in
+Saved keys use your Mac's Keychain. Allow access under **Keychain** in
 **Settings → Permissions & Access**.

@@ -1,9 +1,14 @@
 # Woven Matter iOS app
 
 The Woven Matter iOS app runs on iPhone and iPad; the Mac app is the Woven Matter
-desktop app. Native clients share a central Woven Matter database. On the device,
-Quick Chat runs Pi Durable for notes, web search, simple questions, timers and reminders; Mac
-and Linux workspace agents handle everything else. Inference uses provider
+desktop app. The iOS app is a TestFlight beta and is not generally available; to
+request access, email [trey@wovenmatter.com](mailto:trey@wovenmatter.com).
+
+Every Mac and Linux host keeps a full copy of the Woven Matter library. The phone
+is a signed member with its own offline replica and syncs with whichever Mac or
+Linux host answers; no single Mac is required. On the device, Quick Chat runs Pi
+Durable for notes, web search, simple questions, timers, reminders and calendar
+events; Mac and Linux workspace agents handle everything else. Inference uses provider
 connections signed in on that device or an explicitly selected Tailscale host.
 See [Quick Chat](../docs/IOS_CONTINUED_EXECUTION.md).
 
@@ -51,8 +56,8 @@ covers it.
 ## Source layout
 
 - `MobileApp`: SwiftUI/UIKit navigation, Quick Chat, timers and lifecycle.
-- `LibraryClient`: durable local data, offline mutations and owner journal; the
-  Woven Matter desktop app uses it too when it is a client of another library host.
+- `LibraryClient`: durable local data, offline mutations, owner journal and
+  library membership; a Dev connected client of the desktop app uses it too.
 - `MobileInference`: provider connections, credentials and streaming.
 - `PiDurableRuntime`: bundled SDK hosted by JavaScriptCore; see [runtime](Runtime/README.md).
 - `EmbeddedExecution`: confined Python/WASM test package, not linked in the app; see [execution](../docs/IOS_EMBEDDED_EXECUTION.md).
@@ -131,10 +136,11 @@ Disk space and active keyboard APIs are not used.
 | User ID | no | Analytics | The random library analytics ID ([analytics](../docs/analytics/README.md)) |
 | Product interaction | no | Analytics | The six-hourly `app_opened` and `app_active` signals |
 
-The phone sends analytics only to its paired Mac, which forwards them to
-PostHog. Without a paired Mac nothing is sent: there is no analytics
-destination until the phone holds a pairing credential, and unpairing stops
-the connection. Notes and chats synced to your own Mac or Linux
+The phone sends analytics only to a Mac in its library, which forwards them to
+PostHog: its current library host when that is a Mac, otherwise another Mac
+member. Linux hosts do not accept analytics. Without a paired Mac nothing is
+sent: there is no analytics destination until the phone is paired, and
+unpairing stops the connection. Notes and chats synced to your own Mac or Linux
 host, and on-device dictation, are not collected by Woven Matter and are not
 declared. Answer App Store Connect's **App Privacy** questions the same way.
 

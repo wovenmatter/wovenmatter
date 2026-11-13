@@ -1,7 +1,12 @@
-# Accounts and dictation
+# Connections and dictation
 
 Open **Settings → Subscriptions & API Keys** to manage shared accounts. Account links in Usage and
 Pi Durable lead here.
+
+**Accounts for** at the top chooses whose accounts you are editing: **All
+workspaces** for the shared accounts, or one workspace. Accounts saved for one
+workspace take priority for each provider there; shared accounts fill in when
+none are saved.
 
 The page groups **Model providers**, **Web search**, and **Local model servers**.
 Expand a provider to see its subscription, with API keys folded below it. OpenAI, Anthropic,
@@ -16,10 +21,11 @@ It does not switch for ordinary throttling or replay after output/tools begin.
 
 **Sign in** opens instructions beneath that connection. ChatGPT shows its device
 link and code; Claude uses its bundled runtime’s native browser flow. Keys and
-app-owned OAuth credentials stay in macOS Keychain. Shared remote credentials
-use encrypted storage; native Claude credentials stay with Claude. A remote
-workspace can also own one independent ChatGPT/Grok sign-in ahead of its shared
-accounts. **Use shared sign-in** removes that independent override.
+app-owned sign-in credentials stay in macOS Keychain. Shared remote credentials
+use encrypted storage; native Claude credentials stay with Claude. With a remote
+workspace selected under **Accounts for**, you can add one independent
+ChatGPT/Grok sign-in ahead of its shared accounts. **Use shared sign-in**
+removes that independent override.
 
 Workspace overrides apply to Pi Durable. Usage uses global accounts.
 **Usage → Limits** shows separate rows for each saved account, plus a line naming
@@ -54,8 +60,17 @@ are not written to files or sent to a workspace, provider, or agent.
 Dictation is always available. **Settings → Dictation** on Mac has a
 language selector and shows whether the microphone is allowed; Microphone itself
 is set up in **Settings → Permissions & Access**. Automatic follows your preferred
-languages. On iPhone, touch and hold the microphone to choose a language. Language
+languages. In the iPhone beta, touch and hold the microphone to choose a language. Language
 changes apply to the next recording. Standard keyboard dictation remains available.
+
+### Dictation history
+
+**Settings → Dictation → History** lists your completed dictations, newest
+first. Click an entry to read it in full. A transcript is saved there when you
+stop recording; audio is never saved. History is part of your library, so it
+synchronizes with your other paired devices.
+
+### While you record
 
 Recording continues as you switch conversations and notes. Click the recording
 button in the destination editor to stop: the entire finalized transcript is
@@ -73,24 +88,12 @@ there is no cloud transcription fallback.
 
 ### How dictation works
 
-`DictationSession` owns one native recording on the interface device, shared by
-Mac and iPhone. `AppleDictationEngine` uses SpeechAnalyzer with SpeechTranscriber,
-or DictationTranscriber for a supported language/device where appropriate.
-Apple-managed language assets are prepared only on an explicit recording action.
-The microphone stream is converted to the analyzer's negotiated audio format;
-audio is neither stored nor forwarded through workspace RPC. Finalized text
-segments are accumulated by audio range, and volatile revisions are preview-only.
-Stop drains and finalizes the analyzer before insertion. Cancellation fences late
-results and retains resource ownership until native work has settled. Capture
-interruptions retain completed text for explicit insertion where possible.
-
-Each native editor exposes a `DictationEditor` bridge. Stop captures its logical
-identity, current text, and UTF-16 selection. Insertion uses the platform's native
-text system for rich text and one undo group. Non-overlapping edits can be
-reconciled; a reused/closed editor or conflicting edit retains the final
-transcript for explicit insertion. Leaving the workspace always stops capture.
-Test fixtures inject permission, credentials, transport, and audio without
-accessing providers, Keychain, or the microphone.
+Dictation runs Apple's on-device speech recognition on the device you are
+using. Apple language assets download only when you start a recording that
+needs them. Live preview text can change while you speak; only the finalized
+text is inserted, as one undoable edit. If the editor changed in a way that
+conflicts with the insertion point, the transcript is kept for you to insert
+or discard.
 
 ## Local Model Server
 
@@ -107,6 +110,6 @@ server address requires a new connection, keeping existing sessions and keys
 bound to their original server.
 
 A remote workspace must be able to reach the server address itself. `localhost`
-refers to the machine/container running that agent; use a reachable network
-address to share a server across devices. Woven Matter does not install Tailscale
+refers to the machine running that agent; use a reachable network address, such
+as the server's Tailscale name, to share a server across devices. Woven Matter does not install Tailscale
 or start model servers.

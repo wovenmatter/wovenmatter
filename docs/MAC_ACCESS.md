@@ -65,9 +65,9 @@ spawned by the signed GUI for the same reason. Exceptions:
 Each Mac publishes its status as `MacAccessStatus` inside its
 `ExecutionWorkspace` record (`macAccess`): a map from item to
 `ready`/`needsAttention`/`unknown` plus the app name, with no credentials, paths
-or timestamps, so only a real change bumps the record. The central Mac includes
-it in its five-second registry refresh; a secondary Mac republishes on change
-during its library refresh. The fields are transport-agnostic Codable values;
+or timestamps, so only a real change bumps the record. Each Mac includes it in
+its own workspace record during its five-second registry refresh, and library
+sync carries the changed record to every other member. The fields are transport-agnostic Codable values;
 unknown items and states from newer Macs decode as unknown, and older Macs that
 never checked report nothing. The background server combines prompt-free probes
 with the last Keychain and Automation results saved by Settings

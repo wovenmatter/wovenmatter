@@ -16,10 +16,14 @@ body:
     attributes:
       label: Area
       options:
-        - Native macOS app
-        - Local workspace or harness
-        - Remote workspace or container
-        - OpenClaw Gateway
+        - Mac app
+        - Harness or conversation
+        - Linux host or remote workspace
+        - Library sync or device pairing
+        - Bots
+        - Executor apps
+        - Browser or Computer Use
+        - iPhone app (beta)
         - Maintainer tooling or documentation
         - Not sure
     validations:

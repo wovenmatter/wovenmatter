@@ -19,7 +19,7 @@ workspace and harness defaults are retained. New conversations use this order:
 1. A choice supplied for that conversation.
 2. The workspace default for that harness.
 3. The harness default.
-4. WovenMatter's starting default: **Full access** for permissions on supported
+4. Woven Matter's starting default: **Full access** for permissions on supported
    harnesses; the harness's own default for other selections.
 
 New conversations start with Full access unless you choose a different policy
@@ -50,30 +50,33 @@ Only supported choices appear. A harness may also offer more specific policies:
   approval.
 - Claude Code offers its available native **Ask for approval**, **Auto-accept
   edits**, **Auto**, and **Full access** modes. Auto appears only when supported.
+  It can also offer **Plan**, which plans without running commands or editing
+  files, and **Don't ask**, which declines actions that would need approval.
 - Grok Build offers its native approval policies. Changing the policy reconnects
   the same conversation before the next message.
-- OpenCode offers **Ask for approval**, **Auto-accept edits**, and **Full access**.
-  These apply to the
-  conversation while WovenMatter is connected. They do not run a smart reviewer
-  or save permissions for other conversations. Native deny rules remain in
-  effect; questions and sign-in steps still need your response. Returning to Ask
-  stops accepting new requests and preserves permissions already allowed by the
-  harness.
-
+- OpenCode offers **Ask for approval**, **Full access**, and **Deny**, using
+  OpenCode's own permission rules for that conversation. They do not run a smart
+  reviewer or save permissions for other conversations. Questions and sign-in
+  steps still need your response.
 
 Wait for a settings change to finish before sending. If a saved choice is no
 longer available, choose a supported value before continuing the conversation.
 
 ## App tools and session access
 
-Use **Tools** in the composer to control Notes, Conversation history, Session
-management, Timers, Usage data, Calendar, and Library independently. General
-settings supplies defaults for new sessions. Calendar can be Full access or Read
-only; Usage data and Library are read-only tools. Library lets an agent find
-exchanged files, links, and photos and identify their source messages.
+Use **Tools** in the composer to turn Notes, Conversation history, Session
+management, Timers, Usage data, Calendar, Library, Executor, Browser Use, and
+Computer Use on or off for that conversation. Defaults for new chats are in
+**Settings → Woven MCP → Tools for new chats**. Calendar can be Full access or
+Read only; Usage data and Library are read-only tools. Library lets an agent find
+exchanged files, links, and photos and identify their source messages. Browser
+Use controls the browser inside Woven Matter. Computer Use lets an agent see and
+use other apps on your Mac once Accessibility and Screen Recording are allowed in
+**Settings → Permissions & Access**. Executor starts off; see
+[Executor apps](executor.md). Goals and visual replies are always available.
 
-Use the plus button to **Attach or upload photos or files**, **Attach notes**,
-or **Attach conversation**. You can also drop files onto the composer or paste
+Use the plus button to **Upload photos or files**, **Attach note**, or
+**Attach conversation**. You can also drop files onto the composer or paste
 a screenshot. Attachments remain drafts until you send the message. Files and
 photos appear in [Library](notes-and-data.md#library) after sending; note and
 conversation references stay attached to the message.
@@ -97,8 +100,9 @@ permission requests in the conversation; the available choices come from the har
 ## Organize and continue your work
 
 Use folders to keep related conversations and notes together. **Recents** lets
-you return to work across your harnesses. WovenMatter saves conversation
-transcripts in its local SQLite database alongside your notes and other items.
+you return to work across your harnesses. Woven Matter saves conversation
+transcripts in your library alongside your notes and other items, and each
+paired Mac and Linux host keeps its own copy.
 
 Reopen a conversation to review the work or continue a supported session.
 Reconnect an unavailable agent before sending another request. Agents in the
@@ -119,6 +123,10 @@ Use the attachment picker to add files or references. Supported file attachments
 are copied into managed remote workspaces when you send them. Attachment support
 still depends on the harness. Entering a Mac path in message text does not upload
 that file to a remote workspace.
+
+A chat running on another Mac or a Linux host streams live from that machine
+while it is open. When that machine is offline, the chat shows its saved
+history and goes live again when the machine is back.
 
 If a connection drops while sending, review the conversation status before
 retrying. The agent may have accepted the request even if the app did not receive

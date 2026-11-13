@@ -25,9 +25,9 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 
-Cua Driver 0.38.0
+Cua Driver 0.49.3
 https://github.com/trycua/cua
-Reference: 85e2b1318bd77ccf3cfa88ccdf875a4bb7eaed19
+Reference: 63bd9cdb82d6160b05a965d2d0e26e0a3c17cdc2
 
 MIT License
 

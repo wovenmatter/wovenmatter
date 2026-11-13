@@ -1,103 +1,107 @@
 # Distributed client acceptance
 
-Use Mac, iOS and Linux service builds from the same revision. Updating the phone
-does not update remote workspace services. Start with iPhone, then iPad layout,
-then physical devices and real network transitions.
+Manual acceptance for Macs, Linux hosts, and the iPhone app (beta) working
+together. Use Mac, Linux host, and iOS builds from the same revision: peers
+must have matching library schemas to sync, and updating one device does not
+update the others. Start with two Macs and a Linux host, then add an iPhone,
+then iPad layout and real network transitions.
 
 ## Build and automation
 
-See [iOS setup](../ios/README.md) for build commands. User acceptance uses the
-normal Dev app and the user's existing data; disposable tests use a distinct
-`--instance` with a separate cache. Never pair or unpair a user's
-device as part of a build/install. Users complete provider sign-in themselves.
+See [development builds](DEVELOPMENT_BUILDS.md) for the Mac and
+[iOS setup](../ios/README.md) for the phone. User acceptance uses the normal Dev
+app and the user's existing data; disposable tests use a distinct `--instance`.
+Never pair or unpair a user's device as part of a build or install. Users
+complete provider sign-in themselves.
 
-`scripts/test-changes.sh --all` runs source checks, native/runtime/remote fixtures,
-Swift packages, builds, integration tests, and iPhone/iPad app-hosted UI tests.
-Fixtures use synthetic libraries and providers. Record toolchain failures
-separately; compilation does not prove UI, Tailscale or real-account acceptance.
+`scripts/test-changes.sh --all` runs source checks, native, runtime, and remote
+fixtures, Swift packages, builds, integration tests, and iPhone/iPad app-hosted
+UI tests. `--cross-device` and `--cross-device-desktop` run the cross-device
+integration suites. Fixtures use synthetic libraries and providers. Compilation
+and fixtures do not prove UI, Tailscale, or real-account acceptance.
 
-## Mobile navigation and standalone execution
+## Membership and pairing
 
-- Confirm Home, Folders, Chats, Notes, Settings; opening a folder stays inside
-  Folders with Back. Trash belongs at the bottom of Folders.
-- Home has New Chat/New Note, device and workspace agents, then Calendar,
-  Scheduled tasks, Library, Databases and Usage. Ordinary offline states remain
-  quiet. Settings details use pages with Back; New Chat uses an agent chooser.
-- Exercise Green/Cognac, shared icons, notes, Markdown, collapsed tools, rotation,
-  iPad sidebar and compact windows. Keyboard opens on field tap and dismisses on
-  outside tap without discarding writing. There is no Done strip or Refresh menu.
-- Add a device provider connection in Settings. Test sign-in cancellation,
-  invalid/expired credentials, persistence and provider token refresh. Keys and
-  tokens stay on the device and never appear in logs or synchronized data.
-- Set Pi Durable's default connection/model/think level and Woven MCP
-  tools; new chats inherit these, while per-session changes remain independent.
-- Run on-device Pi Durable with other devices disconnected. Exercise files,
-  notes, calendar, timers, history, usage, tools, Stop, children and explicit
-  Resume. Model/account selection must survive catalog outages and refreshes.
-- Verify embedded Python/SQLite and native MCP effects, completed-command replay,
-  cancellation and interruption. See [embedded execution](IOS_EMBEDDED_EXECUTION.md)
-  for the real WebKit smoke and [continued execution](IOS_CONTINUED_EXECUTION.md)
-  for physical background admission, expiration and cancellation checks.
+1. On a Mac, open **Settings → Apple Devices → Pair a device**. Pair a second
+   Mac through **Find on your network** (**Pair**, or **Download & pair** when
+   Woven Matter is not installed there), by approving a request under
+   **Pairing requests** on the other Mac, and with **Paste a pairing link**.
+   Discovery alone grants no access. Both Macs keep their full app and
+   existing library.
+2. Repeat lost confirmation, restart during setup, an expired link, a duplicate
+   request, and pairing with a Mac of a different library. A pending pairing
+   must not appear paired or grant data access. Interrupted setup must leave
+   the installed app and both libraries intact.
+3. Add a Linux host from either Mac in **Settings → Workspaces**. Then manage it
+   from the other Mac under **From other devices**: refresh status, restart,
+   update, and logs must work without the installing Mac online.
+4. Pair an iPhone with any Mac. Confirm it appears as a member on every Mac and
+   the Linux host after they sync.
+5. Use **Unpair device** on one Mac. Reachable devices must refuse the removed
+   device's requests as soon as they sync; a device that was offline must apply
+   the revocation when it returns. Ordinary network loss must not remove anyone.
+   Re-pairing must add the device again with its current key.
 
-## Pairing and workspace control
+## Library sync
 
-1. On the central database, open Settings → Devices. Tailscale sharing
-   starts automatically; QR/link controls remain visible when unavailable.
-   Pair a phone/tablet with a fresh QR/link. Repeat lost confirmation, restart
-   during setup, expired code, duplicate scan and pairing to a different database.
-   Pending enrollment must not appear paired or grant data access. Local writing
-   and device provider connections must survive interrupted setup and re-pairing.
-2. On a second Mac, pair from Settings → Apple Devices → Pair a device → Find on your network (Pair, or
-   Download & pair when Woven Matter is not installed there) or start pairing
-   from the other Mac; test discovery, approval on the other Mac and the pairing
-   link fallback. Discovery alone grants no access. Both Macs keep their full
-   desktop app and existing library; the second Mac has its own local execution
-   workspace. Interrupted or failed setup must leave the installed app and the
-   existing library intact.
-3. Paired clients automatically receive all available workspace routes. Empty workspaces have no
-   invented agents; central/direct routes to the same Mac appear once with its
-   device name. Temporarily unavailable workspaces acquire access on reconnect.
-   Linux provisioning stays on the central database.
-4. For each retained harness, create/send/reopen, change model/effort/tools,
-   answer approvals/questions and Stop. Verify new chats retain the correct
-   workspace root, independent scratch directories and fixed owner after send.
-   Archived chats from retired harnesses remain readable and cannot execute.
-5. Disconnect the central Mac, keeping a Linux or secondary Mac workspace online.
-   Start/control work directly. Closing the viewing phone must not stop it.
-   Reconnect central and verify that workspace publishes its own history even
-   with the phone closed. The phone publishes only its own workspace history.
-6. Interrupt an accepted command's reply and restart either side. Recover the
-   original receipt without duplicate execution. A stale Stop or approval must
-   never affect a newer run. Test provider cancellation and prompt uncertainty.
-7. Unpair a device centrally. Check immediate denial on reachable services and
-   queued revocation after an offline service returns.
-   Ordinary network loss preserves direct grants; explicit Unpair removes them.
-   Restart an authorized Linux service while central is offline and verify its
-   device-scoped provider grant still works without exposing administrator keys.
+- Create notes, folders, and calendar events on each device while the others
+  are offline; reopen the app, reconnect, and verify they converge. Edit while
+  an earlier change is still in flight.
+- Edit the same note on two Macs while disconnected, then reconnect. Both
+  versions must remain, with a **Recovered edit** copy. Deleting an item never
+  resurrects its identity. One conflict or an interrupted file transfer must not
+  block other changes.
+- Save an artifact, interrupt its transfer, reconnect, and verify exact bytes.
+  Workspace files and runtime checkpoints stay with their owner.
+- Run devices on different versions. Each must show which part needs updating
+  and offer **Update everything**; after updating, sync resumes.
+- With the iPhone's paired Mac offline, the phone must sync with another Mac or
+  the Linux host. Nothing on the phone should wait for its paired Mac.
 
-## Offline data and ownership
+## Sessions across machines
 
-- Create notes, folders and calendar events offline; terminate/reopen, reconnect
-  and verify durable convergence. Edit while an earlier mutation is in flight.
-  Conflicts keep both versions; deleting an item never resurrects its identity.
-- Edit separate notes on two clients while central is offline, then reconnect.
-  One conflict or interrupted artifact must not block other sync streams.
-- Read recent cached conversations and fetch older pages. Save an artifact,
-  interrupt its transfer, reconnect and verify exact bytes. Ordinary workspace
-  files and runtime checkpoints stay at their owner. Cache cleanup must preserve
-  pending writing, conflicts and locally originated execution history.
-- Create an offline phone calendar task, then sync it. Missed one-time phone
-  tasks run when iOS next permits; recurring misses coalesce. They never move
-  silently to another device. Calendar/task claims must not duplicate runs.
-- Exercise managed datasets, linked tables/inline values and copies according to
-  [the workspace data model](WORKSPACE_DATA_MODEL.md). A client must not interpret
-  an owner-local file path as a path on its own device. Unsupported note features
-  remain preserved when read or edited on a smaller client.
+1. For each harness, create, send, reopen, change model, effort, and tools,
+   answer approvals and questions, and Stop, on a local workspace, another Mac,
+   and the Linux host. New chats keep the right workspace root, their own
+   scratch directory, and a fixed owner after send. Archived chats from retired
+   harnesses stay readable and cannot run.
+2. Open a session on another machine. The reply must stream live, and
+   questions, approvals, and setting changes must arrive without polling.
+   Close it and confirm its history still arrives through library sync.
+3. Take a machine offline. Its sessions must show saved history marked offline,
+   and the stream must reconnect by itself when it returns.
+4. With every Mac but one offline, have an agent on the Linux host create,
+   message, and stop a session on another workspace through Woven MCP.
+5. Interrupt an accepted command's reply and restart either side. The original
+   receipt must be recovered without duplicate execution. A stale Stop or
+   approval must never affect a newer run.
+
+## iPhone app (beta)
+
+- Check Home, Folders, Chats, Notes, and Settings; opening a folder stays inside
+  Folders with Back, and Trash sits at the bottom of Folders. Home leads to
+  Calendar, Scheduled tasks, Library, Databases, and Usage once paired.
+- Unpaired, the app must work on its own: Quick Chat, notes, folders, calendar,
+  timers and reminders, and dictation, with **Connect your Mac** in Settings and
+  no connection banner. Pairing later must keep everything local.
+- Add a provider connection and a web search key in Settings. Test sign-in
+  cancellation, invalid or expired credentials, persistence, and token refresh.
+  Keys and tokens stay on the device and never appear in logs or synced data.
+- Run Quick Chat with other devices disconnected: notes, web search and read,
+  questions, timers and reminders, calendar, Stop, and explicit resume after
+  backgrounding. Model selection must survive catalog outages. Quick Chats
+  appear on other devices as read-only history.
+- Start and control sessions on a Mac and on the Linux host from the phone.
+  Closing the phone must not stop them.
+- Exercise rotation, iPad sidebar and compact windows, Markdown, and collapsed
+  tools. The keyboard opens on field tap and dismisses on outside tap without
+  discarding writing.
 
 ## Acceptance boundary
 
-Automated tests cover persistence, receipts, scoped authorization, history replay,
-conflicts, cancellation and artifact integrity. Real provider plans/sign-in,
-Tailscale ACLs, second-Mac behavior, physical iPad layout and iOS background
-scheduling require the corresponding devices and accounts. Keep those results
-separate from build/fixture success in the PR handoff.
+Automated tests cover persistence, receipts, signed authorization, history
+replay, conflicts, cancellation, and artifact integrity. Real provider plans and
+sign-in, Tailscale ACLs, multi-Mac behavior, physical iPad layout, and
+notifications while the app is closed need the corresponding devices and
+accounts. Record those results in the PR description, separate from build and
+fixture success.

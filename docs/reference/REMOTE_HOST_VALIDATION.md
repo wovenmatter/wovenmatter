@@ -51,11 +51,14 @@ It also exercises Normal user execution through the production wrapper with a
 temporary HOME, verifying its UID, no-new-privileges and refusal of direct sudo
 without changing the installed workspace's access mode.
 
-`remote/test-support/host-smoke.mjs` additionally exercises administrative versus
-scoped device authority, device revocation, managed projects/datasets, snapshots,
-browser storage isolation, shared MCP/viewer tabs, input, screenshots and the
-live frame stream. Its private public-ID receipt can be checked after replacing
-the Mac tunnel, restarting or updating the service. Durable sessions (external
+`remote/test-support/host-smoke.mjs` runs from the installing Mac over its
+loopback SSH tunnel with the installer's API token. It additionally exercises
+administrative versus scoped device authority, device revocation, managed
+projects/datasets, snapshots, browser storage isolation, shared MCP/viewer tabs,
+input, screenshots and the live frame stream. Its private public-ID receipt can
+be checked with `--verify-state` after replacing that SSH tunnel, restarting or
+updating the service. Signed member requests, which every other Mac uses, are
+covered in process by `remote/test/member-auth.test.mjs`. Durable sessions (external
 project directories, idempotent delivery, runs that continue without any client,
 restart recovery without replaying prompts, adoption of chats that ran over SSH
 before) are covered in process by `remote/test/member-parity.test.mjs` and
