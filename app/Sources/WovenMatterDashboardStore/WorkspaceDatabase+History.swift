@@ -576,7 +576,7 @@ extension WorkspaceDatabaseConnection {
     try bind(id, at: 1, to: note)
     guard sqlite3_step(note) == SQLITE_ROW else { return }
     let title = try text(note, column: 0)
-    let content = try text(note, column: 1)
+    let content = NoteSync.strip(try text(note, column: 1))
     let revision = try text(note, column: 2)
     let last = try prepareUnlocked(
       "SELECT title,content,(julianday('now')-julianday(created_at))*86400 FROM note_asset_versions WHERE note_id=? ORDER BY sequence DESC LIMIT 1"
@@ -675,7 +675,7 @@ extension WorkspaceDatabaseConnection {
         defer { sqlite3_finalize(update) }
         let updatedAt = try nextNoteUpdatedAtUnlocked(id: noteID)
         for (index, value) in [
-          title, content, Self.noteSnippet(content), updatedAt, noteID, operatorID,
+          title, try syncedNoteContentUnlocked(id: noteID, content: content, title: title), Self.noteSnippet(content), updatedAt, noteID, operatorID,
         ].enumerated() {
           try bind(value, at: Int32(index + 1), to: update)
         }

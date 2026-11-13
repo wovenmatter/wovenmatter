@@ -537,11 +537,16 @@ extension WorkspaceDatabaseConnection {
   private func settleFrontierUnlocked(_ members: [PairedLibraryRecord], table: PeerTable, scope: inout ProjectionScope) throws {
     guard let next = PairedLibraryRecord.winner(members) else { return }
     let winner = try pairedWinnerUnlocked(table: next.table, key: next.key)
-    for loser in members where loser.vector != next.vector && (loser.row != next.row || loser.deleted != next.deleted) {
-      try retainPeerConflict(loser)
+    // Concurrent versions of a Page or an Artifact merge into one, the same on every
+    // replica, so none of their writing needs a recovered copy.
+    let merged = mergedNoteVersion(members)
+    if merged == nil {
+      for loser in members where loser.vector != next.vector && (loser.row != next.row || loser.deleted != next.deleted) {
+        try retainPeerConflict(loser)
+      }
     }
-    if next.vector != winner?.vector {
-      try materializePeerRecord(next, table: table)
+    if next.vector != winner?.vector || merged != nil {
+      try materializePeerRecord(merged ?? next, table: table)
       try toolsExecuteUnlocked("INSERT INTO paired_library_rows VALUES(?,?,?) ON CONFLICT(table_name,record_key) DO UPDATE SET payload=excluded.payload", [next.table, next.key, try peerJSON(next)])
       for name in ["dashboard_conversations", "paired_conversation_owners", "execution_conversations"] where next.table == name {
         if let id = next.row["id"]?.value { scope.conversations.insert(id) }
@@ -553,6 +558,33 @@ extension WorkspaceDatabaseConnection {
     for member in members where member.vector != next.vector {
       try toolsExecuteUnlocked("INSERT INTO paired_library_frontier VALUES(?,?,?,?)", [member.table, member.key, try peerVersion(member), try peerJSON(member)])
     }
+  }
+
+  /// The row every replica materializes for concurrent live versions of one Page or
+  /// Artifact: the winner's row with the merged document, title and folder. The frontier
+  /// keeps the original versions; the next local write supersedes them with this content.
+  /// Nil keeps whole-document versions, as for Notes and Sheets.
+  private func mergedNoteVersion(_ members: [PairedLibraryRecord]) -> PairedLibraryRecord? {
+    guard members.count > 1, members.allSatisfy({ $0.table == "notes" && !$0.deleted }) else { return nil }
+    var ordered: [PairedLibraryRecord] = [], remaining = members
+    while let next = PairedLibraryRecord.winner(remaining) {
+      ordered.append(next)
+      remaining.removeAll { $0.vector == next.vector }
+    }
+    let versions = ordered.compactMap { record -> NoteSync.Version? in
+      guard let content = record.row["content"]?.value, let title = record.row["title"]?.value else { return nil }
+      return .init(content: content, title: title, folderID: record.row["folder_id"]?.value,
+                   origin: record.origin, clock: record.clock, vector: record.vector)
+    }
+    guard versions.count == ordered.count, let merged = NoteSync.merge(versions), let winner = ordered.first else { return nil }
+    var row = winner.row
+    row["content"] = .init(type: "text", value: merged.content)
+    row["title"] = .init(type: "text", value: merged.title)
+    row["folder_id"] = merged.folderID.map { .init(type: "text", value: $0) } ?? .init(type: "null")
+    row["snippet"] = .init(type: "text", value: Self.noteSnippet(merged.content))
+    if let latest = ordered.compactMap({ $0.row["updated_at"]?.value }).max() { row["updated_at"] = .init(type: "text", value: latest) }
+    return PairedLibraryRecord(table: winner.table, key: winner.key, row: row, deleted: false,
+                               clock: winner.clock, origin: winner.origin, vector: winner.vector)
   }
 
   /// Older builds kept one arrival-order winner. Recompute the canonical winner

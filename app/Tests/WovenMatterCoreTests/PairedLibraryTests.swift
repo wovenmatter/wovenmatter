@@ -110,8 +110,8 @@ struct PairedLibraryTests {
     let synchronized = try #require(try await a.database.readNoteForEditing(id: board).document)
     #expect(synchronized.boardItems?[task.id]?.task?.status == .done)
     #expect(synchronized.boardItems?[task.id]?.review == .needed)
-    // Paired Macs replicate complete documents. Concurrent writing is retained,
-    // rather than being described as a distributed per-item claim or merge.
+    // Both Macs write the same task's outcome while apart. The Page merges: one outcome
+    // stays on the task and the other on a copy beside it, marked for review.
     for (mac, outcome) in [(a, "Air offline outcome"), (b, "Mini offline outcome")] {
       let current = try #require(try await mac.database.readNoteForEditing(id: board).document)
       _ = try await mac.database.applyNoteEdits(.init(command: .apply, noteID: board, operations: [
@@ -123,10 +123,12 @@ struct PairedLibraryTests {
     let aNotes = try await a.database.librarySnapshot().notes.filter { $0.kind == .canvas }
     let bNotes = try await b.database.librarySnapshot().notes.filter { $0.kind == .canvas }
     #expect(Set(aNotes.map(\.id)) == Set(bNotes.map(\.id)))
-    #expect(aNotes.count == 2)
-    let outcomes = try aNotes.map { try NoteDocument.editableDocument(from: $0.content).boardItems?[task.id]?.task?.outcome }
-    #expect(Set(outcomes.compactMap { $0 }) == ["Air offline outcome", "Mini offline outcome"])
-    #expect(aNotes.contains { $0.title.contains("Recovered edit") })
+    #expect(aNotes.count == 1)
+    #expect(try await a.database.libraryNote(id: board)?.content == b.database.libraryNote(id: board)?.content)
+    let merged = try NoteDocument.editableDocument(from: try #require(aNotes.first).content)
+    #expect(Set(merged.boardItems?.values.compactMap { $0.task?.outcome } ?? []) == ["Air offline outcome", "Mini offline outcome"])
+    #expect(merged.blocks.contains { $0.id.hasPrefix("conflict-") && merged.boardItems?[$0.id]?.review == .needed })
+    #expect(!aNotes.contains { $0.title.contains("Recovered edit") })
     for note in aNotes {
       let document = try NoteDocument.editableDocument(from: note.content)
       #expect(document.canvas?[reference.id]?.assetID == asset)

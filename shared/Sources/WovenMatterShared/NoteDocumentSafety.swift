@@ -15,6 +15,8 @@ extension NoteDocument {
   /// Decodes an editable document only if every original JSON field survives
   /// typed decoding. Unknown versions, blocks and attributes remain read-only.
   public static func editableDocument(from content: String) throws -> NoteDocument {
+    // Synchronization clocks belong to the library store, not to the document.
+    let content = NoteSync.strip(content)
     guard content.utf8.count <= LibraryProtocol.maximumNoteBytes else { throw NoteDocumentSafetyError.tooLarge }
     guard let bytes = content.data(using: .utf8) else { throw NoteDocumentSafetyError.unsupportedFormat }
     guard let object = try? JSONSerialization.jsonObject(with: bytes) else {

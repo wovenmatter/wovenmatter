@@ -87,7 +87,7 @@ public struct NoteDocument: Codable, Equatable, Sendable {
   }
 
   public static func decode(_ content: String) -> NoteDocument {
-    guard let data = content.data(using: .utf8),
+    guard let data = NoteSync.strip(content).data(using: .utf8),
           let document = try? JSONDecoder().decode(NoteDocument.self, from: data),
           document.version == currentVersion,
           (try? document.validateEditableShape()) != nil else {

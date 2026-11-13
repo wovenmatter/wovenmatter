@@ -368,7 +368,7 @@ extension WorkspaceDatabaseConnection {
         try bind(operatorID, at: 2, to: note)
         try bindNullable(folderID, at: 3, to: note)
         try bind(title, at: 4, to: note)
-        try bind(content, at: 5, to: note)
+        try bind(try syncedNoteContentUnlocked(id: noteID, content: content, title: title, folderID: .some(folderID)), at: 5, to: note)
         try bind(Self.noteSnippet(content), at: 6, to: note)
         guard sqlite3_bind_int64(note, 7, Int64(position)) == SQLITE_OK else {
           throw bindError()
@@ -435,7 +435,8 @@ extension WorkspaceDatabaseConnection {
       try checkpointNoteUnlocked(id: id, source: "editor", force: false)
       try toolsExecuteUnlocked(
         "UPDATE notes SET title = ?, content = ?, snippet = ?, updated_at = ? WHERE id = ? AND user_id = ? AND deleted_at IS NULL",
-        [resolved.title, resolved.content, Self.noteSnippet(resolved.content), try nextNoteUpdatedAtUnlocked(id: id, now: updatedAt), id, operatorID]
+        [resolved.title, try syncedNoteContentUnlocked(id: id, content: resolved.content, title: resolved.title), Self.noteSnippet(resolved.content),
+         try nextNoteUpdatedAtUnlocked(id: id, now: updatedAt), id, operatorID]
       )
       guard changedRowCountUnlocked == 1 else { throw WorkspaceNoteMutationError.noteNotFound }
       try checkpointNoteUnlocked(id: id, source: "editor", force: false)
@@ -525,7 +526,7 @@ extension WorkspaceDatabaseConnection {
       try checkpointNoteUnlocked(id: noteID, source: "artifact-state", force: false)
       try toolsExecuteUnlocked(
         "UPDATE notes SET content = ?, updated_at = ? WHERE id = ? AND user_id = ? AND deleted_at IS NULL",
-        [content, try nextNoteUpdatedAtUnlocked(id: noteID), noteID, operatorID])
+        [try syncedNoteContentUnlocked(id: noteID, content: content), try nextNoteUpdatedAtUnlocked(id: noteID), noteID, operatorID])
       guard changedRowCountUnlocked == 1 else { throw WorkspaceNoteMutationError.noteNotFound }
       try checkpointNoteUnlocked(id: noteID, source: "artifact-state", force: false)
       return ArtifactStateWriteResult(noteID: noteID, key: edit.key, version: document.artifactState?[edit.key]?.version ?? 0,
@@ -631,7 +632,7 @@ extension WorkspaceDatabaseConnection {
       """)
     defer { sqlite3_finalize(update) }
     try bind(updatedTitle, at: 1, to: update)
-    try bind(content, at: 2, to: update)
+    try bind(try syncedNoteContentUnlocked(id: request.noteID, content: content, title: updatedTitle), at: 2, to: update)
     try bind(Self.noteSnippet(content), at: 3, to: update)
     try bind(updatedAt, at: 4, to: update)
     try bind(request.noteID, at: 5, to: update)
@@ -686,7 +687,8 @@ extension WorkspaceDatabaseConnection {
     }
     return (
       try text(statement, column: 0),
-      try text(statement, column: 1),
+      // Synchronization clocks stay in the store; every write recomputes them.
+      NoteSync.strip(try text(statement, column: 1)),
       try text(statement, column: 2)
     )
   }

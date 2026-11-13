@@ -32,6 +32,44 @@ struct MobilePageSyncTests {
     return (store, root, stored)
   }
 
+  /// A secondary Mac's agent edits its Page projection while a person edits the same Page
+  /// on that Mac's library copy. Reconciling combines them instead of leaving a conflict.
+  @Test func anAgentEditOnASecondaryMacCombinesWithThePersonsEdit() async throws {
+    let (store, root) = try store()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let synced = LibraryNote(id: UUID().uuidString.lowercased(), title: "Plan", content: try page("one", "two"), revision: 1, kind: .canvas)
+    try await store.apply(LibrarySnapshot(workspaceID: "library", cursor: 1, notes: [synced]))
+    try await store.editNote(id: synced.id, title: "Plan", content: try page("one, typed here", "two"), folderID: nil, base: synced)
+    var agent = synced; agent.content = try page("one", "two, from the agent")
+    try await store.importWorkspaceNote(agent, base: synced)
+    let state = await store.snapshot()
+    #expect(state.conflicts[synced.id] == nil)
+    let merged = try #require(state.notes[synced.id])
+    #expect(try NoteDocument.editableDocument(from: merged.content).blocks.map(\.plainText) == ["one, typed here", "two, from the agent"])
+    #expect(state.outbox.last?.mutation.content == merged.content)
+  }
+
+  @Test func artifactInputsFromBothDevicesCombine() async throws {
+    let (store, root) = try store()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let at = "2026-11-13T00:00:00Z"
+    var artifact = NoteDocument(kind: .html, html: "<input id=from><input id=to>")
+    let synced = LibraryNote(id: UUID().uuidString.lowercased(), title: "Trip", content: try artifact.encoded(), revision: 1, kind: .html)
+    try await store.apply(LibrarySnapshot(workspaceID: "library", cursor: 1, notes: [synced]))
+    artifact.artifactState = ["form:from": .init(value: .string("Lisbon"), version: 1, updatedAt: at)]
+    try await store.editNote(id: synced.id, title: "Trip", content: try artifact.encoded(), folderID: nil, base: synced)
+    let sent = try #require(try await store.nextMutation())
+    var stored = synced; stored.revision = 2
+    artifact.artifactState = ["form:to": .init(value: .string("Porto"), version: 1, updatedAt: at)]
+    stored.content = try artifact.encoded()
+    try await store.acknowledge(.init(operationID: sent.operationID, status: .conflict, note: stored))
+    let state = await store.snapshot()
+    #expect(state.conflicts[synced.id] == nil)
+    let merged = try NoteDocument.editableDocument(from: try #require(state.notes[synced.id]).content)
+    #expect(merged.artifactState?["form:from"]?.value == .string("Lisbon") && merged.artifactState?["form:to"]?.value == .string("Porto"))
+    #expect(state.outbox.last?.mutation.expectedRevision == 2)
+  }
+
   @Test func editsToDifferentComponentsCombineAndResync() async throws {
     let (store, root, stored) = try await conflict(local: try page("one, edited on the phone", "two"), remote: try page("one", "two, edited on the Mac"))
     defer { try? FileManager.default.removeItem(at: root) }

@@ -316,6 +316,8 @@ public actor MobileStore {
           reason: "The note was edited on this device while its workspace was running. Both versions have been preserved.")
         next.notes[note.id] = note
         next.outbox.removeAll { $0.mutation.resourceID == note.id }
+        // An agent's Page edit and this device's merge component by component instead.
+        Self.mergePageConflict(note.id, state: &next)
       }
     } else if state.notes[note.id] != nil {
       try editNote(id: note.id, title: note.title, content: note.content, folderID: note.folderID, base: base)
@@ -677,16 +679,18 @@ public actor MobileStore {
   /// A Page that changed on another device while this one edited it combines
   /// component by component, as a Mac combines its own drafts, so neither side
   /// needs to choose a version. Both versions of a component changed on both sides
-  /// stay on the Page. Anything else, or a Page whose bodies are not all here
-  /// yet, stays an ordinary conflict until they are.
+  /// stay on the Page. An Artifact's saved inputs combine key by key. Anything
+  /// else, or a document whose bodies are not all here yet, stays an ordinary
+  /// conflict until they are.
   static func mergePageConflict(_ id: String, state: inout MobileStoreState) {
     guard let conflict = state.conflicts[id], let base = conflict.base, let remote = conflict.remote,
           base.contentIncluded, remote.contentIncluded, !state.deletedNotes.contains(id),
           let baseDocument = try? NoteDocument.editableDocument(from: base.content),
           let localDocument = try? NoteDocument.editableDocument(from: conflict.local.content),
           let remoteDocument = try? NoteDocument.editableDocument(from: remote.content),
-          baseDocument.kind == .canvas, localDocument.kind == .canvas, remoteDocument.kind == .canvas,
-          let merged = try? NoteDocument.mergeClientPage(base: baseDocument, local: localDocument, remote: remoteDocument),
+          let merged = baseDocument.kind == .canvas && localDocument.kind == .canvas && remoteDocument.kind == .canvas
+            ? try? NoteDocument.mergeClientPage(base: baseDocument, local: localDocument, remote: remoteDocument)
+            : NoteDocument.mergeClientArtifact(base: baseDocument, local: localDocument, remote: remoteDocument),
           let content = try? merged.encoded(), content.utf8.count <= LibraryProtocol.maximumNoteBytes else { return }
     var note = remote
     note.content = content; note.contentByteCount = content.utf8.count; note.contentIncluded = true

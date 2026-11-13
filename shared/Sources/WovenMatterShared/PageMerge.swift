@@ -62,6 +62,18 @@ public extension NoteDocument {
     return result
   }
 
+  /// Merges two concurrent replica versions of one Page against an ancestor their clocks
+  /// imply. `conflicts` are components both changed at once, kept as the remote's with the
+  /// local's beside it. `localPositions` are components whose local placement is the newer one.
+  static func mergeReplicaPage(base: NoteDocument, local: NoteDocument, remote: NoteDocument,
+                               conflicts: Set<String>, localPositions: Set<String>) throws -> PageMerge {
+    guard base.kind == .canvas, local.kind == .canvas, remote.kind == .canvas else { throw NoteEditError.artifactKindMismatch }
+    var merger = PageMerger(base: base, local: local.materializedPage(), remote: remote.materializedPage())
+    merger.forcedConflicts = conflicts
+    merger.localPositions = localPositions
+    return try merger.merge()
+  }
+
   private func remappingPageComponents(_ mapping: [String: String]) -> NoteDocument {
     var page = materializedPage()
     guard !mapping.isEmpty else { return page }
@@ -109,6 +121,10 @@ private struct PageMerger {
   var extraBlocks: [String: NoteBlock] = [:]
   var extraItems: [String: BoardItem] = [:]
   var extraPlacements: [String: CanvasCardPlacement] = [:]
+  /// Components a replica merge knows both sides changed at once, whatever the ancestor shows.
+  var forcedConflicts: Set<String> = []
+  /// Set by a replica merge: the local components whose placement wins, instead of reading moves from the ancestor.
+  var localPositions: Set<String>?
 
   init(base: NoteDocument, local: NoteDocument, remote: NoteDocument) {
     self.base = Snapshot(base); self.local = Snapshot(local); self.remote = Snapshot(remote)
@@ -163,13 +179,16 @@ private struct PageMerger {
   private mutating func mergedContent(_ id: String) -> (Content, Content?) {
     guard let localContent = local.content(id) else { return (remote.content(id)!, nil) }
     guard let remoteContent = remote.content(id) else { return (localContent, nil) }
+    let forced = forcedConflicts.contains(id) && localContent != remoteContent
     guard let baseContent = base.content(id) else {
       if localContent == remoteContent { return (remoteContent, nil) }
       conflicted.append(id)
       return (remoteContent, localContent)
     }
-    if localContent == baseContent || localContent == remoteContent { return (remoteContent, nil) }
-    if remoteContent == baseContent { return (localContent, nil) }
+    if !forced {
+      if localContent == baseContent || localContent == remoteContent { return (remoteContent, nil) }
+      if remoteContent == baseContent { return (localContent, nil) }
+    }
 
     var collision = false
     func choose<T: Equatable>(_ b: T, _ l: T, _ r: T) -> T {
@@ -204,7 +223,7 @@ private struct PageMerger {
     if localContent.lastChange != baseContent.lastChange, remoteContent.lastChange == baseContent.lastChange {
       merged.lastChange = localContent.lastChange
     }
-    guard collision else { return (merged, nil) }
+    guard collision || forced else { return (merged, nil) }
     conflicted.append(id)
     return (merged, localContent)
   }
@@ -269,6 +288,7 @@ private struct PageMerger {
   private func locallyPositioned(parent: String?) -> Set<String> {
     let current = local.children[parent] ?? []
     guard !current.isEmpty else { return [] }
+    if let localPositions { return Set(current).intersection(localPositions) }
     let baseIndex = Dictionary((base.children[parent] ?? []).enumerated().map { ($0.element, $0.offset) }, uniquingKeysWith: { first, _ in first })
     var positioned = Set<String>()
     var kept: [(id: String, index: Int)] = []

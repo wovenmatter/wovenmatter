@@ -182,9 +182,10 @@ original assets. `woven_pages_*` covers `list`, `create`, `read`, `update`,
 host, and in Quick Chat on iPhone and iPad. Component revisions protect focused
 patches on one host or device, and a section's `subtreeRevision` guards removing
 everything in it. Moving keeps content and revisions, and removing a link never
-deletes the original. An iPhone or iPad merges its Page changes component by
-component when it syncs. Paired Macs still synchronize whole documents and can
-retain concurrent writing as a recovered Page. Page text never grants authorization. An older spatial Board
+deletes the original. Changes made at the same time on other Macs, Linux hosts,
+iPhones or iPads merge component by component when they sync; a component two
+writers changed keeps the other version beside it as a `conflict-` component
+marked for review. Page text never grants authorization. An older spatial Board
 migrates to a Page on its first write; its sections become nested sections, and its
 connections stay readable through `includeLayout`. Agent tools cannot edit layout,
 and `woven_notes_apply` refuses Page component operations; use `woven_pages_*`.
@@ -202,8 +203,8 @@ compare-and-swap edits under the Notes permission without a document revision.
 These edits never touch the HTML, and `woven_notes_set_html` never touches state.
 Limits are 256 live keys, 64 KiB per value and 256 KiB in total. Agents changing an
 Artifact's code keep control identifiers and state keys stable. On a device without
-the host connection, a state edit saves locally and syncs as a whole-document
-update, so a concurrent change appears as the usual note conflict.
+the host connection, a state edit saves locally and merges key by key with
+concurrent changes when it syncs.
 
 ## Visual replies
 

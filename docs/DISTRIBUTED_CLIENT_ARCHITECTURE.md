@@ -89,7 +89,7 @@ bounded and ordinary disconnection is quiet.
 
 Settings → Apple Devices presents this Mac, pairing and the devices paired with
 this Mac; Settings → Workspaces holds the workspace inventory. It has no database-role selector. Notes with concurrent
-writing have visible **Recovered edit** copies. Existing pre-upgrade writing and
+writing have visible **Recovered edit** copies; Pages and Artifact inputs merge instead. Existing pre-upgrade writing and
 original databases are preserved; see [upgrade and recovery](PAIRED_MAC_LIBRARIES.md#upgrade-and-recovery).
 
 Mobile devices retain their existing offline replicas and connect to an approved

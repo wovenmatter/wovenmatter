@@ -192,7 +192,7 @@ public struct WorkspaceNoteRecord: Codable, Equatable, Identifiable, Sendable {
   public let id: String
   public let folderID: String?
   public let title: String
-  public let content: String
+  public var content: String
   public let createdAt: String?
   public let updatedAt: String?
   public let isPinned: Bool

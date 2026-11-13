@@ -149,13 +149,28 @@ autosave merges independent component changes where possible. Conflicting edits
 are retained for review instead of silently replacing another participant's
 work. Incoming changes fence local undo history.
 
-Paired Macs still replicate complete documents. Concurrent writes on different
-Macs can preserve a losing version as a **(Recovered edit)** Page or Artifact.
-An iPhone or iPad merges its Page changes instead; see below.
-Review and reconcile that copy. Component/key revisions are not distributed
-locks. Remote Linux agents using one Mac's authenticated MCP path share that
-host's atomic write path. A disconnected remote workspace has no local Page
-replica.
+Pages and Artifacts merge wherever they sync: between paired Macs, Linux library
+hosts, iPhones and iPads, and a Mac using another Mac's library. Changes to
+different components all stay, as do moves, title and purpose changes made
+alongside them. When two writers changed the same component while apart, one
+version keeps its place and the other sits next to it, marked for review, the
+same on every machine. A removal stands unless the other side changed that
+component; then the change stays. An Artifact's saved inputs merge key by key;
+when both changed one key, the higher version stands. Only two different
+concurrent versions of an Artifact's code still leave a **(Recovered edit)**
+copy, as Notes and Sheets do.
+
+Between Macs and Linux hosts, each host records with every Page and Artifact
+write which machine last changed each component, its placement and its
+metadata, and when in that machine's synchronization order. Together with the
+causal vector every synchronized version carries, that tells each machine which
+side changed what, so every machine computes the same merge from the same
+versions, with no shared ancestor and no central host. The clocks stay inside
+the library store: editors, devices and agents never see them, and every write
+recomputes them from what it changed. Component/key revisions are not
+distributed locks. Remote Linux agents using one Mac's authenticated MCP path
+share that host's atomic write path. A disconnected remote workspace has no
+local Page replica.
 
 ## iPhone and iPad
 
@@ -168,9 +183,10 @@ chat**. A Page with linked data stays a read-only flowing document on every clie
 because its linked tables come from the library host.
 
 The device stamps each change with whoever made it: you, or the Quick Chat that
-changed it. It syncs the Page as one document. When a Mac changed the same Page in
-the meantime, the device merges the two component by component, the same merge a
-Mac uses for its own autosave, and sends the result. Changes to different
+changed it. It syncs the Page as one document. When its library host (a Mac or a
+Linux host) changed the same Page in the meantime, the device merges the two
+component by component, the same merge a Mac uses for its own autosave, and
+sends the result. Changes to different
 components both stay. When both sides changed the same component, the Mac's
 version keeps its place and the device's version sits next to it, marked for
 review. Nothing waits for you to choose a version.
@@ -190,10 +206,9 @@ copy, and the write path depends on the asset:
   revisions protect concurrent chats there. Across devices, its changes merge on
   sync as described above.
 - **Artifact state:** `woven_notes_artifact_state_edit` changes the device's copy
-  and queues it through the existing whole-document note sync. Key versions are
-  checked against that copy only, so a concurrent change on a Mac follows the
-  existing sync conflict path rather than a key-level conflict. An Artifact with
-  linked data cannot be edited on the device.
+  and queues it through the note sync. Key versions are checked against that copy;
+  a concurrent change on the library host merges key by key when the device syncs.
+  An Artifact with linked data cannot be edited on the device.
 
 Focused fixtures cover model persistence, conflict handling, native editing, MCP
 and the state bridge without providers. A local fixture is not proof of real

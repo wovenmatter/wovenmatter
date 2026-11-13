@@ -578,6 +578,8 @@ extension WorkspaceDatabaseConnection {
           bindings: [operatorID],
           as: WorkspaceNoteRecord.self
         )
+        // Editors see the document; synchronization clocks stay in this store.
+        for index in notes.indices { notes[index].content = NoteSync.strip(notes[index].content) }
       }
 
       let statuses = try programStatusSnapshotsUnlocked()

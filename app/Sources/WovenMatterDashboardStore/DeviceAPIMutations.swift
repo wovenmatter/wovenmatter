@@ -103,7 +103,8 @@ extension WorkspaceDatabaseConnection {
         return result(.notFound, "The destination folder does not exist. Sync its creation first or choose another folder.")
       }
       try toolsExecuteUnlocked("INSERT INTO notes(id, user_id, folder_id, title, content, snippet, position, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?)",
-        [request.resourceID, operatorID, request.folderID, title, content, Self.noteSnippet(content), now, now])
+        [request.resourceID, operatorID, request.folderID, title,
+         try syncedNoteContentUnlocked(id: request.resourceID, content: content, title: title, folderID: .some(request.folderID)), Self.noteSnippet(content), now, now])
       try checkpointNoteUnlocked(id: request.resourceID, source: "device", force: true)
       return try result(.accepted, note: libraryNoteUnlocked(id: request.resourceID))
     case .updateNote, .deleteNote:
@@ -132,7 +133,8 @@ extension WorkspaceDatabaseConnection {
       }
       try checkpointNoteUnlocked(id: request.resourceID, source: "before-device-edit", force: true)
       let updatedAt = try nextNoteUpdatedAtUnlocked(id: request.resourceID)
-      try toolsExecuteUnlocked("UPDATE notes SET title = ?, content = ?, snippet = ?, folder_id = ?, updated_at = ? WHERE id = ? AND user_id = ? AND deleted_at IS NULL", [title, content, Self.noteSnippet(content), request.folderID, updatedAt, request.resourceID, operatorID])
+      try toolsExecuteUnlocked("UPDATE notes SET title = ?, content = ?, snippet = ?, folder_id = ?, updated_at = ? WHERE id = ? AND user_id = ? AND deleted_at IS NULL", [title, try syncedNoteContentUnlocked(id: request.resourceID, content: content, title: title, folderID: .some(request.folderID)),
+        Self.noteSnippet(content), request.folderID, updatedAt, request.resourceID, operatorID])
       try checkpointNoteUnlocked(id: request.resourceID, source: "device", force: true)
       return try result(.accepted, note: libraryNoteUnlocked(id: request.resourceID))
     }
