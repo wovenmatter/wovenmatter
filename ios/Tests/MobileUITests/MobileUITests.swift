@@ -676,7 +676,7 @@ final class MobileUITests: XCTestCase {
     XCTAssertTrue(app.descendants(matching: .any)["chat-composer"].firstMatch.exists)
     saveScreenshot("standalone-quick-chat")
     setup.tap()
-    XCTAssertTrue(app.navigationBars["iPhone Connections"].waitForExistence(timeout: 5))
+    XCTAssertTrue(app.navigationBars["\(device) Connections"].waitForExistence(timeout: 5))
     XCTAssertTrue(app.buttons["Web search"].exists)
     saveScreenshot("standalone-connections")
 
