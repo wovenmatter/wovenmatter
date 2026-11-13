@@ -1042,6 +1042,8 @@ Every live view of a session streams. Nothing polls an execution workspace.
   (`woven-member-v2`, headers only, empty body, the target including
   `?protocol=1`). It is the whole credential: no ticket, bearer or grant.
   Allowed member kinds are those of `/v1/execution/*`: `mac`, `ios`, `linux`.
+  A live host's loopback development listener accepts the same upgrade signed
+  by a Dev stream key instead (see "Client-mode Dev builds").
   A Mac window has no key; it asks its own server to sign each attempt
   (`BotsCommand.signSocket`, widened to `/v1/stream`). Every reconnect signs
   afresh.
@@ -1215,11 +1217,28 @@ member removed.
   offline notice. Its live state, questions, approvals and settings come only
   from its stream; no device keeps a per-machine cache of another machine's
   history.
-- **Client-mode Dev builds** have no member key for their live host's stream.
-  They read their live host on the window's behalf (`CentralLibraryClientModel`)
-  until a local-only Dev member key exists; their own execution does not
-  advertise `stream.v1`, so the live host shows its sessions as library
-  history.
+- **Client-mode Dev builds** stream from their live library host with a Dev
+  stream key, never a member key. Each client instance keeps an Ed25519 key in
+  its own Keychain namespace and sends only the public half on the host's
+  same-user Unix socket, with `development.connect` and again with
+  `development.stream` before every attempt, both authenticated by its current
+  Dev device credential. The host keeps the key in an in-memory roster (never
+  SQLite, the signed member list or anything synchronized) and refuses a device
+  ID that is a library member. The key opens only the host's loopback
+  development listener (`ws://127.0.0.1:<port>/v1/stream?protocol=1`), a
+  separate port Tailscale Serve never exposes that serves `GET /v1/stream`
+  only and accepts only roster keys signed for the host's member ID; the
+  library's own listener refuses it. Its sockets are outside the member socket
+  registry and answer no call; commands go through the library API with the
+  Dev credential. Disconnecting (as quitting does), unpairing the Dev identity,
+  or that credential no longer being current revokes the key and closes its
+  sockets with `4401`; a host restart forgets the roster and the client admits
+  its key again. The client's background server subscribes to `workspace` and
+  to a `conversation` stream for each host chat its windows hold open and
+  relays them to the window; a `library` item ahead of its cursor starts one
+  library sync. Without a stream (an older host) library sync falls back to
+  15 s, 2 s during a run. Other machines' sessions show library history, read
+  on open, after an action and after each library sync.
 - **Mac window to its own server.** The window opens an ordinary RPC
   connection on its server's socket and sends `backend.stream` as its first
   request (readiness advertises `window.stream`). After the reply both ends
