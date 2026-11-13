@@ -28,6 +28,13 @@ public struct ExecutionStreamConfiguration: Sendable {
   public var maximumQueuedItems = StreamProtocol.maximumQueuedItems
   public var maximumQueuedBytes = StreamProtocol.maximumQueuedBytes
   public var maximumSubscriptions = 64
+  /// Calls in progress on one socket; another is refused until one answers.
+  public var maximumCalls = 64
+  /// The largest frame a client may send; a larger one closes the socket with 1009.
+  public var maximumClientFrameBytes = 1_024 * 1_024
+  /// A subscription whose read failed without ending it reads again after
+  /// this, doubling to 30 times it while reads keep failing.
+  public var readRetryInterval: Duration = .seconds(1)
   /// How long a close this server starts waits for the client's answering close frame.
   public var closeTimeout: Duration = .seconds(2)
   public init() {}
@@ -158,7 +165,8 @@ public final class ExecutionStreamServer: @unchecked Sendable {
         do {
           let options = NWProtocolWebSocket.Options()
           options.autoReplyPing = true
-          options.maximumMessageSize = StreamProtocol.maximumFrameBytes
+          // A client's frames are far smaller than the server's (contract: 1 MiB, close 1009).
+          options.maximumMessageSize = configuration.maximumClientFrameBytes
           let secret = secret
           options.setClientRequestHandler(queue) { _, headers in
             let authorized = headers.contains { $0.name.lowercased() == "authorization" && $0.value == "Bearer " + secret }
@@ -215,6 +223,13 @@ public final class ExecutionStreamServer: @unchecked Sendable {
 
   /// Open stream sockets, for diagnostics and tests.
   public func openSessionCount() -> Int { queue.sync { sessions.count } }
+
+  /// The tasks each open socket holds (its ping loop and calls in progress), for tests.
+  func retainedTaskCounts() async -> [Int] {
+    var counts: [Int] = []
+    for session in queue.sync(execute: { Array(sessions.values) }) { counts.append(await session.retainedTaskCount) }
+    return counts
+  }
 
   /// The outer server's decision for `GET /v1/stream`: every refusal happens
   /// here, before the upgrade, as a JSON HTTP error.
@@ -305,7 +320,8 @@ public final class ExecutionStreamServer: @unchecked Sendable {
       connection.cancel(); return
     }
     let session = StreamSession(context: sessionContext(development: binding.development),
-                                wire: WebSocketStreamWire(connection: connection, queue: queue, closeTimeout: configuration.closeTimeout),
+                                wire: WebSocketStreamWire(connection: connection, queue: queue, closeTimeout: configuration.closeTimeout,
+                                                          maximumFrameBytes: configuration.maximumClientFrameBytes),
                                 member: binding.member)
     sessions[session.id] = session
     if binding.development { developmentSessions[session.id] = binding.member.deviceID }
@@ -358,7 +374,10 @@ final class WebSocketStreamWire: ExecutionStreamWire, @unchecked Sendable {
   private let connection: NWConnection
   private let queue: DispatchQueue
   private let closeTimeout: Duration
+  private let maximumFrameBytes: Int
   private let lock = NSLock()
+  /// The client sent a frame over `maximumFrameBytes`: the close says 1009.
+  private var tooLarge = false
   /// This side's close frame was written.
   private var closeSent = false
   /// The client sent its close frame, or the connection ended.
@@ -366,8 +385,8 @@ final class WebSocketStreamWire: ExecutionStreamWire, @unchecked Sendable {
   /// This side is closing: frames from the client are no longer delivered.
   private var closing = false
 
-  init(connection: NWConnection, queue: DispatchQueue, closeTimeout: Duration) {
-    self.connection = connection; self.queue = queue; self.closeTimeout = closeTimeout
+  init(connection: NWConnection, queue: DispatchQueue, closeTimeout: Duration, maximumFrameBytes: Int = 1_024 * 1_024) {
+    self.connection = connection; self.queue = queue; self.closeTimeout = closeTimeout; self.maximumFrameBytes = maximumFrameBytes
   }
 
   func start(_ session: StreamSession) { receive(session) }
@@ -383,9 +402,13 @@ final class WebSocketStreamWire: ExecutionStreamWire, @unchecked Sendable {
       let ended = error != nil || metadata?.opcode == .close
       if self.lock.withLock({ closing }) { if ended { self.peerFinished() } else { self.drain() }; return }
       guard let session else { self.connection.cancel(); return }
+      // The listener reads at most `maximumFrameBytes` of one message; a larger one fails the read.
+      let tooLarge = (data?.count ?? 0) > self.maximumFrameBytes || Self.isTooLarge(error)
+      if tooLarge { self.lock.withLock { self.tooLarge = true } }
       Task {
         let input: StreamWireInput
-        if error != nil { input = .closed(nil) }
+        if tooLarge { input = .closed(.protocolViolation) }
+        else if error != nil { input = .closed(nil) }
         else {
           switch metadata?.opcode {
           case .close?: input = .closed(.normal)
@@ -402,6 +425,11 @@ final class WebSocketStreamWire: ExecutionStreamWire, @unchecked Sendable {
         else if ended { self.peerFinished() } else { self.drain() }
       }
     }
+  }
+
+  private static func isTooLarge(_ error: NWError?) -> Bool {
+    if case .posix(let code)? = error { return code == .EMSGSIZE }
+    return false
   }
 
   /// Reads (and drops) what the client sends until its close frame.
@@ -439,7 +467,8 @@ final class WebSocketStreamWire: ExecutionStreamWire, @unchecked Sendable {
     lock.withLock { closing = true }
     guard let code else { connection.cancel(); return }
     let metadata = NWProtocolWebSocket.Metadata(opcode: .close)
-    metadata.closeCode = code.rawValue < 4000 ? .protocolCode(code == .normal ? .normalClosure : .goingAway) : .privateCode(UInt16(code.rawValue))
+    metadata.closeCode = lock.withLock({ tooLarge }) ? .protocolCode(.messageTooBig)
+      : code.rawValue < 4000 ? .protocolCode(code == .normal ? .normalClosure : .goingAway) : .privateCode(UInt16(code.rawValue))
     let context = NWConnection.ContentContext(identifier: "close", metadata: [metadata])
     connection.send(content: nil, contentContext: context, isComplete: true, completion: .contentProcessed { [weak self] error in
       guard let self, error == nil else { connection.cancel(); return }

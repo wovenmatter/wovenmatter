@@ -108,6 +108,36 @@ struct ExecutionStreamTests {
     #expect(page.changes.first?.sequence == 1 && Set(page.changes.map(\.conversationID)) == [local])
   }
 
+  @Test func openingACurrentDatabaseLeavesTheStreamTriggersAsTheyAre() async throws {
+    let fixture = try PersistenceFixture(); defer { fixture.remove() }
+    let database = try await fixture.openDatabase()
+    func schema() async throws -> (version: Double, triggers: [String: String]) {
+      try await database.read { connection in
+        let version = try connection.historyRowsUnlocked("PRAGMA schema_version", values: []).first?.objectValue?["schema_version"]?.doubleValue ?? -1
+        let rows = try connection.historyRowsUnlocked("SELECT name, sql FROM sqlite_master WHERE type='trigger' AND name LIKE 'execution_stream_%'", values: [])
+        return (version, Dictionary(uniqueKeysWithValues: rows.compactMap { row in
+          row.objectValue.flatMap { value in value["name"]?.stringValue.map { ($0, value["sql"]?.stringValue ?? "") } }
+        }))
+      }
+    }
+    let before = try await schema()
+    #expect(before.triggers.count == WorkspaceDatabaseConnection.executionStreamTables.count * 3)
+    // What every writer open runs: nothing is dropped or created again.
+    try await database.write { try $0.migrateExecutionStreamChanges() }
+    let again = try await schema()
+    #expect(again.version == before.version && again.triggers == before.triggers)
+    // An outdated trigger is still replaced.
+    try await database.write { connection in
+      try connection.executeUnlocked("""
+        DROP TRIGGER execution_stream_dashboard_messages_update;
+        CREATE TRIGGER execution_stream_dashboard_messages_update AFTER UPDATE ON dashboard_messages BEGIN SELECT 1; END;
+        """)
+      try connection.migrateExecutionStreamChanges()
+    }
+    let replaced = try await schema()
+    #expect(replaced.triggers == before.triggers && replaced.version > before.version)
+  }
+
   // MARK: End to end
 
   @Test func aSignedClientStreamsTheWorkspaceAndALiveConversationAndSendsCommands() async throws {
@@ -348,6 +378,79 @@ struct ExecutionStreamTests {
     client.close()
   }
 
+  @Test func settingsWhoseReadFailedAreReadAgainWithoutAnotherChange() async throws {
+    var configuration = ExecutionStreamConfiguration()
+    configuration.readRetryInterval = .milliseconds(100)
+    let mac = try await StreamMac(configuration: configuration); defer { mac.remove() }
+    let conversation = try await mac.database.createFixtureLocalACPSession(runtimeKind: .codex, title: "Settings", ownerDeviceID: UUID())
+    let client = try await mac.connect(try await mac.member(.ios))
+    guard case .hello = try await client.next() else { Issue.record("no hello"); return }
+    client.send(.subscribe(.init(id: "c", stream: .conversation, params: .init(conversationID: conversation))))
+    #expect(try await client.session("c").model == "gpt-5.5")
+    #expect(try await client.item("c").payload == .synchronized)
+    // The read this change causes fails twice; nothing changes after it, and the stored value still arrives.
+    await mac.commands.failSessionReads(2)
+    await mac.commands.setModel("gpt-5.5-mini")
+    mac.stream.liveStateChanged(conversationIDs: [conversation])
+    #expect(try await client.session("c").model == "gpt-5.5-mini")
+    client.close()
+  }
+
+  @Test func aSourceReadCancelledUnderneathASubscriptionDoesNotStopIt() async throws {
+    var configuration = ExecutionStreamConfiguration()
+    configuration.readRetryInterval = .milliseconds(100)
+    let mac = try await StreamMac(configuration: configuration); defer { mac.remove() }
+    let conversation = try await mac.database.createFixtureLocalACPSession(runtimeKind: .codex, title: "Cancelled", ownerDeviceID: UUID())
+    let run = try await mac.database.beginLocalACPRun(conversationID: conversation, input: .init(text: "Go"))
+    let client = try await mac.connect(try await mac.member(.ios))
+    guard case .hello = try await client.next() else { Issue.record("no hello"); return }
+    // The snapshot's read is cancelled: the snapshot still comes.
+    await mac.commands.cancelTranscriptReads(1)
+    client.send(.subscribe(.init(id: "c", stream: .conversation, params: .init(conversationID: conversation))))
+    #expect(try await client.transcript("c") { _ in true }.snapshot)
+    #expect(try await client.item("c") { $0.payload == .synchronized }.payload == .synchronized)
+    // A change's read is cancelled: that change, and the ones after it, still arrive.
+    await mac.commands.cancelTranscriptReads(1)
+    try await mac.database.appendLocalACPAssistantChunk(runID: run.runID, chunk: "First")
+    _ = try await client.transcript("c") { $0.messages.contains { $0.content == "First" } }
+    try await mac.database.appendLocalACPAssistantChunk(runID: run.runID, chunk: " second")
+    _ = try await client.transcript("c") { $0.messages.contains { $0.content == "First second" } }
+    client.close()
+  }
+
+  // MARK: Calls
+
+  @Test func aSocketHasAtMost64CallsInProgressAndKeepsNoFinishedOnes() async throws {
+    let mac = try await StreamMac(); defer { mac.remove() }
+    let client = try await mac.connect(try await mac.member(.ios))
+    guard case .hello = try await client.next() else { Issue.record("no hello"); return }
+    let limit = ExecutionStreamConfiguration().maximumCalls
+    #expect(limit == 64, "as on Linux")
+    func receipt(_ id: String) throws -> StreamFrame {
+      .request(try .init(id: id, method: .executionReceipt, params: StreamReceiptParams(commandID: UUID().uuidString.lowercased())))
+    }
+    await mac.commands.holdReceipts()
+    for index in 0..<limit { client.send(try receipt("r\(index)")) }
+    #expect(try await pollUntil(attempts: 1_000, interval: .milliseconds(10)) { await mac.commands.heldReceiptCount == limit })
+    // One more is refused while they are in progress, as the Linux server refuses it.
+    client.send(try receipt("extra"))
+    let refused = try await client.response("extra").error
+    #expect(refused == .init(.unavailable, "Too many calls on this connection.", retryable: true))
+    await mac.commands.releaseReceipts()
+    var answered: Set<String> = []
+    while answered.count < limit {
+      guard case .response(let response) = try await client.next(where: { if case .response = $0 { return true }; return false }) else { continue }
+      #expect(response.error == nil)
+      answered.insert(response.id)
+    }
+    #expect(answered == Set((0..<limit).map { "r\($0)" }))
+    // Answered calls are let go: only the ping loop is held.
+    #expect(try await pollUntil(attempts: 1_000, interval: .milliseconds(10)) { await mac.stream.retainedTaskCounts() == [1] })
+    client.send(try receipt("after"))
+    #expect(try await client.response("after").error == nil)
+    client.close()
+  }
+
   // MARK: Revocation
 
   @Test func removingAMemberClosesItsStreamWith4401AndItsBotsRelay() async throws {
@@ -454,6 +557,25 @@ struct ExecutionStreamTests {
   }
 
   // MARK: Frames
+
+  @Test func aClientFrameOver1MiBClosesTheSocketWith1009() async throws {
+    let mac = try await StreamMac(); defer { mac.remove() }
+    let phone = try await mac.member(.ios)
+    let client = try await mac.connect(phone)
+    guard case .hello = try await client.next() else { Issue.record("no hello"); return }
+    let limit = ExecutionStreamConfiguration().maximumClientFrameBytes
+    #expect(limit == 1_024 * 1_024, "the contract's limit, as on Linux")
+    func receipt(_ id: String, bytes: Int) -> String {
+      let head = #"{"t":"req","id":""# + id + #"","method":"execution.receipt","params":{"commandID":""#, tail = #""}}"#
+      return head + String(repeating: "a", count: bytes - head.utf8.count - tail.utf8.count) + tail
+    }
+    // A frame of exactly the limit is read and answered.
+    client.sendRaw(receipt("fits", bytes: limit))
+    _ = try await client.response("fits")
+    // One byte more closes the socket with 1009 (message too big).
+    client.sendRaw(receipt("over", bytes: limit + 1))
+    #expect(try await client.closed() == 1009)
+  }
 
   @Test func everySharedFixtureRoundTripsThroughTheServersEncoder() throws {
     let url = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
@@ -766,12 +888,25 @@ private final class BotsPort: @unchecked Sendable {
   private var receipts: [String: LibraryCommandReceipt] = [:]
   private var pending: [PendingInteraction] = []
   private var model = "gpt-5.5"
+  /// Receipt reads wait for `releaseReceipts` while this is set.
+  private var holdingReceipts = false
+  private var heldReceipts: [CheckedContinuation<Void, Never>] = []
+  /// The next reads of each kind fail: settings with an error, transcripts
+  /// cancelled as by a source shutting down underneath the stream.
+  private var failingSessionReads = 0
+  private var cancelledTranscriptReads = 0
   init(database: WorkspaceDatabase) { self.database = database }
   func setPending(_ value: [PendingInteraction]) { pending = value }
   func setModel(_ value: String) { model = value }
+  func holdReceipts() { holdingReceipts = true }
+  var heldReceiptCount: Int { heldReceipts.count }
+  func releaseReceipts() { holdingReceipts = false; for held in heldReceipts { held.resume() }; heldReceipts = [] }
+  func failSessionReads(_ count: Int) { failingSessionReads = count }
+  func cancelTranscriptReads(_ count: Int) { cancelledTranscriptReads = count }
   /// As the desktop reads them: the model from memory, the goal from its table.
   func readWorkspace(_ request: LibraryWorkspaceRead) async throws -> LibraryWorkspaceResult {
     guard case .session(let id) = request else { throw LibraryAPIError(code: "unsupported", message: "Not in this fixture.") }
+    if failingSessionReads > 0 { failingSessionReads -= 1; throw LibraryAPIError(code: "unavailable", message: "The session is busy.") }
     let goal = try await database.sessionGoals().first { $0.sessionID == id }
     return .session(.init(conversationID: id, model: model, thinking: "high", permission: nil, models: [.init(id: model, label: model)],
                           thinkingLevels: [.init(id: "high", label: "High")], permissions: [], availableTools: [], enabledTools: [],
@@ -781,6 +916,7 @@ private final class BotsPort: @unchecked Sendable {
   func pendingInteractions() async -> [PendingInteraction] { pending }
   func sessionCapabilities(conversationID: String) async throws -> HarnessCapabilities { providers()[0] }
   func transcript(conversationID: String, before: String?) async throws -> LibraryTranscript {
+    if cancelledTranscriptReads > 0 { cancelledTranscriptReads -= 1; throw CancellationError() }
     let (messages, active) = try await database.read { connection in
       (try connection.historyRowsUnlocked("SELECT id,run_id,role,content,status,created_at FROM dashboard_messages WHERE conversation_id=? ORDER BY created_at,id", values: [conversationID]),
        try connection.historyRowsUnlocked("SELECT id FROM dashboard_runs WHERE conversation_id=? AND status IN ('queued','running') ORDER BY created_at DESC LIMIT 1", values: [conversationID]))
@@ -791,7 +927,10 @@ private final class BotsPort: @unchecked Sendable {
                             content: value["content"]?.stringValue ?? "", status: value["status"]?.stringValue, createdAt: value["created_at"]?.stringValue ?? "")
     }, activeRunID: active.first?.objectValue?["id"]?.stringValue)
   }
-  func receipt(commandID: String, deviceID: String) async throws -> LibraryCommandReceipt? { receipts[deviceID + ":" + commandID] }
+  func receipt(commandID: String, deviceID: String) async throws -> LibraryCommandReceipt? {
+    if holdingReceipts { await withCheckedContinuation { heldReceipts.append($0) } }
+    return receipts[deviceID + ":" + commandID]
+  }
   func execute(_ command: LibraryCommand, deviceID: String) async throws -> LibraryCommandReceipt {
     if let receipt = receipts[deviceID + ":" + command.commandID] { return receipt }
     executed.append(command)
