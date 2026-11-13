@@ -378,6 +378,7 @@ struct DashboardPalette {
 }
 
 enum DashboardMetrics {
+    static let windowMinimumWidth: CGFloat = 760
     static let desktopBreakpoint: CGFloat = 904
     static let splitBreakpoint: CGFloat = 800
     static let railWidth: CGFloat = 256
