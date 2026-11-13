@@ -120,7 +120,7 @@
   },
   {
     "source": "curl",
-    "version": "8.23.0-1",
+    "version": "8.23.0-2",
     "binaries": [
       "curl",
       "libcurl4t64",

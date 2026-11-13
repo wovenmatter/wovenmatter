@@ -112,7 +112,7 @@ docker exec "$container_a" sh -ec '
   pip --version >/dev/null
   pydoc --help >/dev/null
   python-config --prefix >/dev/null
-  dpkg --compare-versions "$(dpkg-query -W -f=\${Version} curl)" ge "8.23.0-1+wmsecurity1"
+  dpkg --compare-versions "$(dpkg-query -W -f=\${Version} curl)" ge "8.23.0-2+wmsecurity1"
   perl -MArchive::Tar -e '\''exit(Archive::Tar->VERSION ge "3.14" ? 0 : 1)'\''
   dpkg --compare-versions "$(dpkg-query -W -f=\${Version} libxml2)" ge "2.12.7+dfsg+really2.9.14-2.1+deb13u3+wmsecurity1"
   dpkg --compare-versions "$(dpkg-query -W -f=\${Version} libtiff6)" ge "4.7.2-1"
