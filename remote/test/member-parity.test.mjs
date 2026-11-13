@@ -383,6 +383,50 @@ test('adoption reopens a stopped or missing durable channel and never leaves a f
   assert.equal((await relay.peek(stopped)).state, 'running')
 })
 
+test('adoption reopens a durable channel its owner left interrupted, never one a process still holds', async t => {
+  const workspaceRoot = temporary(t, 'wm-adopt-interrupted-', { keep: true })
+  const fixture = acpFixture(workspaceRoot, { loadable: ['native-left'], reply: 'after the crash' })
+  const catalog = new Map([['fixture', fixture.harness]])
+  // The former owner ran the channel and died without recording a stop.
+  const former = createDurableACP({ catalog, workspaceRoot, environment: () => process.env })
+  const channelID = randomUUID()
+  const page = await former.handle('POST', '/v1/durable-acp/attach', { channelID, harnessID: 'fixture', cwd: workspaceRoot, attachmentProtocol: 1 })
+  const message = value => former.handle('POST', '/v1/durable-acp/message', { channelID, attachmentToken: page.attachmentToken, deliveryID: randomUUID(), message: value })
+  await message({ jsonrpc: '2.0', id: randomUUID(), method: 'initialize', params: { protocolVersion: 1 } })
+  await message({ jsonrpc: '2.0', id: randomUUID(), method: 'session/load', params: { sessionId: 'native-left', cwd: workspaceRoot } })
+  await until(() => former.handle('POST', '/v1/durable-acp/poll', { channelID, after: 0 }), value => value.snapshot.session?.sessionId === 'native-left')
+  await former.stopAll()
+  await former.peek(channelID) // after the stop its process exit queued
+  const path = join(workspaceRoot, '.wovenmatter/durable-acp', channelID + '.jsonl')
+  writeFileSync(path, readFileSync(path, 'utf8').split('\n').filter(line => line && JSON.parse(line).type !== 'stopped').map(line => line + '\n').join(''))
+  const relay = createDurableACP({ catalog, workspaceRoot, environment: () => process.env })
+  const runtime = createClientExecutionRuntime({ defaultAgent: { status: async () => ({ locked: true }), cancelActive: async () => {} }, durableACP: relay, catalog, workspaceRoot,
+    harnessStatus: async harness => ({ id: harness.id, displayName: harness.displayName, state: 'ready' }) })
+  const service = createClientExecution({ directory: join(workspaceRoot, 'store'), workspaceRoot, runtime })
+  t.after(async () => { await service.close(); await relay.stopAll(); rmSync(workspaceRoot, { recursive: true, force: true }) })
+  const { enrollment, principal } = enroll(service)
+  assert.deepEqual(await relay.peek(channelID), { state: 'interrupted', live: false, sessionID: 'native-left', busy: false, pendingRequests: 0 })
+  const body = { workspaceID: enrollment.workspaceID, conversation: { id: channelID, title: 'Left running', preview: '', updatedAt: '', runtimeKind: 'fixture' },
+    runtimeKind: 'fixture', nativeSessionID: 'native-left', nativeWorkingDirectory: workspaceRoot }
+  await assert.rejects(service.adopt({ ...body, nativeSessionID: 'another-session' }), /different native session/)
+  assert.equal((await relay.peek(channelID)).state, 'interrupted')
+  assert.equal((await service.adopt(body)).id, channelID)
+  assert.equal((await relay.peek(channelID)).state, 'running')
+  const input = { commandID: randomUUID(), deviceID: enrollment.deviceID, kind: 'send', conversationID: channelID, text: 'continue' }
+  await service.command(input, principal)
+  await until(() => service.receipt(input.commandID, enrollment.deviceID), receipt => receipt.status === 'completed')
+  assert.equal(service.transcript(channelID).messages.at(-1).content, 'after the crash')
+  // A channel whose process still runs is never released.
+  await assert.rejects(relay.release(channelID), /still running/)
+  let released = false
+  const held = createClientExecutionRuntime({ defaultAgent: { status: async () => ({ locked: true }), cancelActive: async () => {} }, catalog, workspaceRoot,
+    durableACP: { peek: async () => ({ state: 'interrupted', live: true, sessionID: 'native-held', busy: false, pendingRequests: 0 }), release: async () => { released = true }, stopAll: async () => {} },
+    harnessStatus: async harness => ({ id: harness.id, displayName: harness.displayName, state: 'ready' }) })
+  t.after(() => held.close?.())
+  await assert.rejects(held.adopt({ native: { sessionID: 'native-held', channelID: randomUUID(), nativeWorkingDirectory: workspaceRoot }, runtimeKind: 'fixture' }), /still running on this host/)
+  assert.equal(released, false)
+})
+
 test('ephemeral ACP refuses client RPCs and stops its process', async t => {
   const directory = temporary(t, 'wm-ephemeral-')
   const fixture = acpFixture(directory)

@@ -32,6 +32,10 @@ export function harnessLaunch(harness, selected, permission) {
     : { command: harness.command, arguments: args }
 }
 
+// A journal that does not end its last start with a stop belongs to an owner
+// that died without recording one.
+const journalState = history => history.filter(item => ['stopped', 'recovered'].includes(item.type)).at(-1)?.type === 'stopped' ? 'stopped' : 'interrupted'
+
 const identifier = value => {
   if (typeof value !== 'string' || !/^[a-zA-Z0-9_-]{1,128}$/.test(value)) throw new Error('Invalid channel identifier')
   return value
@@ -238,7 +242,7 @@ export function createDurableACP({ catalog, workspaceRoot, environment, isEnable
     if (permission && metadata && metadata.permission !== permission) throw new Error('Permission changed; start a new remote session')
     const channel = { id, harnessID: selected, permission: metadata?.permission ?? permission, path, events: history.filter(item => item.type === 'output'),
       journalBytes: Buffer.byteLength(history.map(JSON.stringify).join('\n')), snapshot: newSnapshot(history), accepted: new Set(history.filter(item => item.type === 'accepted').map(item => item.deliveryID)),
-      process: null, state: metadata ? (history.filter(item => ['stopped', 'recovered'].includes(item.type)).at(-1)?.type === 'stopped' ? 'stopped' : 'interrupted') : 'starting', failure: null }
+      process: null, state: metadata ? journalState(history) : 'starting', failure: null }
     // An existing journal means the former service owner stopped. Do not replay
     // accepted inputs or quietly start a fresh session under the same identity.
     if (metadata && !recovering) { channels.set(id, channel); return channel }
@@ -295,6 +299,15 @@ export function createDurableACP({ catalog, workspaceRoot, environment, isEnable
     })
     return channel
   }
+  // A channel's journal, or null when it never existed.
+  async function journal(id) {
+    let history
+    try { history = (await readFile(resolve(directory, id + '.jsonl'), 'utf8')).split('\n').filter(Boolean).map(JSON.parse) }
+    catch (error) { if (error.code === 'ENOENT') return null; throw new Error('Channel journal is unreadable; refusing to replay work') }
+    return history.some(item => item.type === 'created') ? history : null
+  }
+  const peeked = (state, snapshot, live) => ({ state, live, sessionID: snapshot.session?.sessionId ?? null,
+    busy: snapshot.busy, pendingRequests: snapshot.pendingRequests.length })
   function wakePolls(channel) {
     for (const wake of channel.pollWaiters ?? []) wake()
   }
@@ -399,14 +412,32 @@ export function createDurableACP({ catalog, workspaceRoot, environment, isEnable
     peek: id => serialize(async () => {
       identifier(id)
       const known = channels.get(id)
-      if (known) return { state: known.state, sessionID: known.snapshot.session?.sessionId ?? null, busy: known.snapshot.busy, pendingRequests: known.snapshot.pendingRequests.length }
-      let history
-      try { history = (await readFile(resolve(directory, id + '.jsonl'), 'utf8')).split('\n').filter(Boolean).map(JSON.parse) }
-      catch (error) { if (error.code === 'ENOENT') return null; throw new Error('Channel journal is unreadable; refusing to replay work') }
-      if (!history.some(item => item.type === 'created')) return null
-      const snapshot = newSnapshot(history)
-      return { state: history.filter(item => ['stopped', 'recovered'].includes(item.type)).at(-1)?.type === 'stopped' ? 'stopped' : 'interrupted',
-        sessionID: snapshot.session?.sessionId ?? null, busy: snapshot.busy, pendingRequests: snapshot.pendingRequests.length }
+      if (known) return peeked(known.state, known.snapshot, !!known.process)
+      const history = await journal(id)
+      if (!history) return null
+      return peeked(journalState(history), newSnapshot(history), false)
+    }),
+    // A channel left `interrupted` (its former owner died without recording
+    // a stop) that no process of this server holds is recorded stopped, so
+    // it can be reopened with `session/load`; its unfinished runs settle as
+    // stopped. A channel whose process still runs is refused. Null when it
+    // never existed.
+    release: id => serialize(async () => {
+      identifier(id)
+      let channel = channels.get(id)
+      if (!channel) {
+        if (!await journal(id)) return null
+        channel = await channelFor(id)
+      }
+      if (channel.process) throw new Error('This session is still running on this host')
+      if (channel.state === 'interrupted') {
+        const entry = { type: 'stopped' }
+        await record(channel, entry)
+        updateSnapshot(channel.snapshot, entry)
+        channel.state = 'stopped'
+        wakePolls(channel)
+      }
+      return peeked(channel.state, channel.snapshot, false)
     }),
     // Removes a channel this server opened for an operation that then failed
     // (a native session that could not be reopened): no process or journal
