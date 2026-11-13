@@ -41,14 +41,14 @@ extension MobileModel {
   /// "Update everything" and re-pairing notices for Settings and the sync status.
   var membershipNotice: String? {
     if membership?.memberRejected == true {
-      return "Pair again: \(membership?.pairedName ?? "your Mac") did not accept this iPhone's key, so it syncs only through that Mac. In that Mac's device list remove this iPhone if it is listed, then pair again."
+      return "Pair again: \(membership?.pairedName ?? "your Mac") did not accept \(deviceWorkspaceInSentence)'s key, so it syncs only through that Mac. In that Mac's device list remove \(deviceWorkspaceInSentence) if it is listed, then pair again."
     }
     if membership?.memberRequestsAccepted == false {
-      return "Update everything: \(membership?.pairedName ?? "your Mac") needs a newer Woven Matter so this iPhone can reach every device directly. Until then it syncs only through that Mac."
+      return "Update everything: \(membership?.pairedName ?? "your Mac") needs a newer Woven Matter so \(deviceWorkspaceInSentence) can reach every device directly. Until then it syncs only through that Mac."
     }
     if let message = synchronizationStatus.updateRequired { return message }
     if needsMemberPairing {
-      return "Pair again once with any Mac so this iPhone connects directly to every Mac and Linux machine, even when the Mac it first paired with is offline. Your notes and chats stay on this iPhone."
+      return "Pair again once with any Mac so \(deviceWorkspaceInSentence) connects directly to every Mac and Linux machine, even when the Mac it first paired with is offline. Your notes and chats stay on \(deviceWorkspaceInSentence)."
     }
     return nil
   }

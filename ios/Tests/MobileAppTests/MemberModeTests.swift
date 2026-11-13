@@ -1,4 +1,5 @@
 import XCTest
+import UIKit
 import LibraryClient
 import WovenMatterShared
 @testable import WovenMatterMobileApp
@@ -36,6 +37,29 @@ private final class SignedWorkspaceHTTP: MobileHTTPPerforming, @unchecked Sendab
 }
 
 final class MemberModeTests: XCTestCase {
+  /// Every name for this device comes from one noun, so iPad never reads
+  /// "iPhone" and a name mid-sentence never reads "this iphone".
+  @MainActor func testDeviceIsNamedByItsOwnIdiomAtSentenceStartAndMidSentence() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let store = try MobileStore(file: root.appendingPathComponent("library.json"))
+    try await store.bindWorkspace("library-a")
+    let model = MobileModel(store: store, transport: MemberModeLibrary())
+    let noun = UIDevice.current.userInterfaceIdiom == .pad ? "iPad" : "iPhone"
+    XCTAssertEqual(model.deviceNoun, noun)
+    XCTAssertEqual(model.deviceWorkspaceName, "This " + noun)
+    XCTAssertEqual(model.deviceWorkspaceInSentence, "this " + noun)
+    XCTAssertEqual(model.deviceConnectionsTitle, noun + " Connections")
+
+    model.credential = .init(endpoint: URL(string: "https://studio.tail1.ts.net/wovenmatter")!, workspaceID: "library-a",
+                             deviceID: model.state.deviceID, token: "synthetic-test-token")
+    let notice = try XCTUnwrap(model.membershipNotice)
+    XCTAssertTrue(notice.contains("so this \(noun) connects directly"), notice)
+    XCTAssertTrue(notice.hasSuffix("stay on this \(noun)."), notice)
+    let other = noun == "iPad" ? "iPhone" : "iPad"
+    XCTAssertFalse(notice.contains(other), notice)
+  }
+
   /// In member mode the phone reaches another Mac's workspace with signed
   /// requests and no execution grant, and "central" is the host it syncs with.
   @MainActor func testMemberModeReachesWorkspacesWithSignaturesAndCentralFollowsTheHost() async throws {

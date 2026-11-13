@@ -42,7 +42,7 @@ extension MobileStore {
               outbox.append(.init(mutation: Self.mutation(for: local, kind: .updateNote, deviceID: deviceID)))
             } else {
               next.conflicts[id] = .init(base: next.bases[id], local: local, remote: current,
-                reason: "This note changed on another device while your iPhone edit waited to sync. Both versions are preserved.")
+                reason: "This note changed on another device while your edit waited to sync here. Both versions are preserved.")
               next.bases[id] = current
             }
           } else {

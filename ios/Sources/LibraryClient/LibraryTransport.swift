@@ -70,8 +70,8 @@ public enum MobileConnectionError: Error, LocalizedError {
     case .responseTooLarge: "This response exceeds the client download limit."
     case .insecureEndpoint: "Pair using the Tailscale HTTPS address shown by Woven Matter on your Mac."
     case .offline: "This workspace is unavailable. Locally saved work remains available."
-    case .memberUnknown: "This device doesn’t recognize your iPhone yet. It learns about it after it syncs with a Mac you paired with."
-    case .memberUnsupported: "Update everything: this device needs a newer Woven Matter before your iPhone can connect directly."
+    case .memberUnknown: "The device you reached doesn’t recognize this one yet. It learns about it after it syncs with a Mac you paired with."
+    case .memberUnsupported: "Update everything: the device you reached needs a newer Woven Matter before this one can connect directly."
     case .updateRequired(let message): "Update everything. " + message
     }
   }
