@@ -15,10 +15,8 @@ public enum QuickChatCapabilities {
   ]
   /// Native tools that are always available inside the boundary.
   public static let nativeTools: Set<String> = ["ask_user", "clock"]
-  /// Page writes need a Mac's atomic write path, so the phone offers only Page reads.
   public static var toolNames: Set<String> {
-    Set(WovenMCPCatalog.tools.filter { $0.group.map(groups.contains) == true }
-      .filter { !($0.name.hasPrefix("woven_pages_") && $0.isMutation) }.map(\.name))
+    Set(WovenMCPCatalog.tools.filter { $0.group.map(groups.contains) == true }.map(\.name))
       .union(["woven_context", "web_search", "web_read"]).union(nativeTools)
   }
   public static func enabled(_ name: String, selection: [String]?) -> Bool {

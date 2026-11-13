@@ -151,15 +151,29 @@ work. Incoming changes fence local undo history.
 
 Paired Macs still replicate complete documents. Concurrent writes on different
 Macs can preserve a losing version as a **(Recovered edit)** Page or Artifact.
+An iPhone or iPad merges its Page changes instead; see below.
 Review and reconcile that copy. Component/key revisions are not distributed
 locks. Remote Linux agents using one Mac's authenticated MCP path share that
 host's atomic write path. A disconnected remote workspace has no local Page
 replica.
 
-iPhone/iPad retain their existing editing boundary: Pages and Sheets are
-previews, while supported Notes remain editable. Pages show nested content and
-links to originals. Mac library clients show a Page that has linked data the same
-way: a read-only flowing document whose linked tables come from the library host.
+## iPhone and iPad
+
+Pages are fully editable on iPhone and iPad, paired or standalone. Create one from
+**New Asset → Page** and use the same components as on a Mac: text with the Notes
+editor's formatting, undo and dictation; tasks with checkboxes; nested,
+collapsible sections; tables; embedded originals that open in their own pane;
+**Add component**, **Component actions**, **Component details** and **Send to
+chat**. A Page with linked data stays a read-only flowing document on every client,
+because its linked tables come from the library host.
+
+The device stamps each change with whoever made it: you, or the Quick Chat that
+changed it. It syncs the Page as one document. When a Mac changed the same Page in
+the meantime, the device merges the two component by component, the same merge a
+Mac uses for its own autosave, and sends the result. Changes to different
+components both stay. When both sides changed the same component, the Mac's
+version keeps its place and the device's version sits next to it, marked for
+review. Nothing waits for you to choose a version.
 
 A read-only Artifact preview restores saved inputs and custom state, and disables
 the controls whose values would be saved. Buttons, opted-out controls, and controls
@@ -169,9 +183,12 @@ without a stable identity stay usable for that view; nothing they do is saved, a
 Quick Chat on iPhone and iPad runs its tools against the device's own library
 copy, and the write path depends on the asset:
 
-- **Pages:** writes never apply on the device. Page tools and note edits of a
-  Page are refused before approval is requested, with nothing changed. Edit Pages
-  on a Mac, where agents share the host's atomic write path and component revisions.
+- **Pages:** the `woven_pages_*` tools and note edits of a Page apply on the device
+  with the same rules, component and subtree revisions, request-ID replay and
+  conflict replies as on a Mac. Each write asks for approval first, like every
+  other Quick Chat change. The device is one serialized writer, so component
+  revisions protect concurrent chats there. Across devices, its changes merge on
+  sync as described above.
 - **Artifact state:** `woven_notes_artifact_state_edit` changes the device's copy
   and queues it through the existing whole-document note sync. Key versions are
   checked against that copy only, so a concurrent change on a Mac follows the

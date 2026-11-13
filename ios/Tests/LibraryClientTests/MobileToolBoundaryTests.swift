@@ -19,7 +19,7 @@ struct MobileToolBoundaryTests {
     }
     try context.authorize(WovenMatterToolCommand(["computer", "cancel", "--id", "all"]))
   }
-  @Test func pageReadsWorkLocallyAndEveryAgentPageWriteRequiresTheCentralTarget() async throws {
+  @Test func pageReadsWorkLocally() async throws {
     let (store, root, context) = try fixture()
     defer { try? FileManager.default.removeItem(at: root) }
     let document = NoteDocument(kind: .canvas, blocks: [
@@ -46,30 +46,69 @@ struct MobileToolBoundaryTests {
     #expect(listed.result?.objectValue?["rows"]?.arrayValue?.first?.objectValue?["purpose"]?.stringValue == "Launch")
     #expect(listed.result?.objectValue?["rows"]?.arrayValue?.first?.objectValue?["needsReview"]?.intValue == 1)
 
-    let revision = document.boardItemRevision(for: "task")
-    let writes: [[String]] = [
-      ["pages", "create", "--title", "Other"],
-      ["pages", "update", "--note-id", page.id, "--revision", "r", "--title", "New"],
-      ["pages", "add-component", "--note-id", page.id, "--text", "New"],
-      ["pages", "update-component", "--note-id", page.id, "--id", "task", "--component-revision", revision, "--status", "done"],
-      ["pages", "move-component", "--note-id", page.id, "--id", "task"],
-      ["pages", "remove-component", "--note-id", page.id, "--id", "task", "--component-revision", revision],
-      ["pages", "link-session", "--note-id", page.id, "--id", "task", "--session", UUID().uuidString],
-      ["pages", "unlink-session", "--note-id", page.id, "--id", "task", "--session", UUID().uuidString],
-      ["notes", "append", "--note-id", page.id, "--text", "Whole-document write"],
-    ]
-    for arguments in writes {
-      let response = await call(store, arguments, context: context)
-      #expect(!response.success, "\(arguments)")
-      #expect(response.error?.contains("edited on a Mac") == true, "\(arguments)")
-    }
     #expect(await store.snapshot().notes[page.id] == before)
     let created = await call(store, ["notes", "create", "--title", "Page", "--kind", "canvas"], context: context)
-    #expect(!created.success)
+    #expect(!created.success && created.error?.contains("woven_pages_create") == true)
 
     var disabled = context; disabled.enabled.remove(.notes)
     let denied = await call(store, ["pages", "read", "--note-id", page.id], context: disabled)
     #expect(!denied.success && denied.code == "tool_disabled")
+  }
+
+  /// Quick Chat on a phone edits Pages with the same rules, revisions and replies as on a Mac.
+  @Test func quickChatEditsPagesLocallyWithComponentRevisions() async throws {
+    let (store, root, base) = try fixture()
+    defer { try? FileManager.default.removeItem(at: root) }
+    var context = base; context.sessionTitle = "Planning"
+    let created = await call(store, ["pages", "create", "--title", "Launch", "--purpose", "Ship it"], context: context)
+    #expect(created.success && created.result?.objectValue?["kind"]?.stringValue == "page")
+    let pageID = try #require(created.result?.objectValue?["id"]?.stringValue)
+    #expect(await store.snapshot().notes[pageID]?.kind == .canvas)
+    #expect(await store.snapshot().outbox.contains { $0.mutation.resourceID == pageID && $0.mutation.kind == .createNote })
+
+    let sectionID = UUID().uuidString.lowercased(), taskID = UUID().uuidString.lowercased()
+    #expect(await call(store, ["pages", "add-component", "--note-id", pageID, "--kind", "section", "--title", "Week one"], context: context, id: sectionID).success)
+    let added = await call(store, ["pages", "add-component", "--note-id", pageID, "--kind", "task", "--text", "Write copy", "--parent-id", sectionID], context: context, id: taskID)
+    #expect(added.success, "\(added.error ?? "")")
+    #expect(added.result?.objectValue?["componentID"]?.stringValue == taskID)
+    let revision = try #require(added.result?.objectValue?["componentRevision"]?.stringValue)
+    // A retry of the same request replays the reply instead of adding a second task.
+    let replay = await call(store, ["pages", "add-component", "--note-id", pageID, "--kind", "task", "--text", "Write copy", "--parent-id", sectionID], context: context, id: taskID)
+    #expect(replay == added)
+
+    let done = await call(store, ["pages", "update-component", "--note-id", pageID, "--id", taskID, "--component-revision", revision, "--status", "done", "--outcome", "Drafted"], context: context)
+    #expect(done.success)
+    let afterDone = try #require(await store.snapshot().notes[pageID])
+    let stale = await call(store, ["pages", "update-component", "--note-id", pageID, "--id", taskID, "--component-revision", revision, "--status", "todo"], context: context)
+    #expect(!stale.success && stale.code == "revision_conflict")
+    #expect(stale.result?.objectValue?["currentComponentRevision"]?.stringValue == done.result?.objectValue?["componentRevision"]?.stringValue)
+    #expect(await store.snapshot().notes[pageID] == afterDone, "A conflicting write changes nothing")
+
+    let session = UUID().uuidString.lowercased()
+    #expect(await call(store, ["pages", "link-session", "--note-id", pageID, "--id", taskID, "--session", session], context: context).success)
+    #expect(await call(store, ["pages", "move-component", "--note-id", pageID, "--id", taskID, "--at-start"], context: context).success)
+    #expect(await call(store, ["notes", "append", "--note-id", pageID, "--text", "Notes from the phone"], context: context).success)
+    let read = await call(store, ["pages", "read", "--note-id", pageID], context: context)
+    let pageRevision = try #require(read.result?.objectValue?["revision"]?.stringValue)
+    #expect(await call(store, ["pages", "update", "--note-id", pageID, "--revision", pageRevision, "--title", "Launch v2"], context: context).success)
+
+    let saved = try #require(await store.snapshot().notes[pageID])
+    #expect(saved.title == "Launch v2")
+    let document = try NoteDocument.editableDocument(from: saved.content).materializedPage()
+    #expect(document.blocks.first?.id == taskID, "Moved to the start, out of its section")
+    #expect(document.pageNodes?[taskID]?.parentID == nil)
+    let task = try #require(document.boardItems?[taskID])
+    #expect(task.task?.status == .done && task.task?.outcome == "Drafted" && task.sessions.contains(session))
+    #expect(task.updatedBy == BoardActor(kind: .session, sessionID: "parent", label: "Planning"))
+    #expect(document.blocks.contains { $0.plainText == "Notes from the phone" })
+    // The phone queues the Page for sync as one document.
+    #expect(await store.snapshot().outbox.filter { $0.mutation.resourceID == pageID }.count == 1)
+
+    let missing = await call(store, ["pages", "add-component", "--note-id", pageID, "--asset-id", UUID().uuidString.lowercased()], context: context)
+    #expect(!missing.success && missing.code == "not_found")
+    let note = try await store.createNote(folderID: nil, title: "Plain", content: NoteDocument().encoded())
+    let notPage = await call(store, ["pages", "add-component", "--note-id", note.id, "--text", "x"], context: context)
+    #expect(!notPage.success && notPage.error?.contains("not a Page") == true)
   }
 
   @Test func artifactStateIsReadableAndKeyedEditsWorkLocally() async throws {

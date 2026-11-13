@@ -19,6 +19,19 @@ extension MobileStore {
       }
       let result: GatewayJSONValue
       switch command.group {
+      case .notes where command.isPageCommand && command.isMutation:
+        let id = uuid.uuidString.lowercased()
+        var response = WovenMatterToolResponse(success: false, requestID: id)
+        // Like the Mac's database, a conflicting write changes nothing and keeps no receipt.
+        try transaction { next in
+          response = try Self.pageWrite(command, requestID: id, context: context, state: &next)
+          if response.success {
+            var receipts = next.toolReceipts ?? [:]
+            receipts[key] = .init(requestID: id, sessionID: context.sessionID, arguments: command.operationArguments, response: response)
+            next.toolReceipts = receipts
+          }
+        }
+        return response.bounded()
       case .notes:
         var response: GatewayJSONValue = .null
         // Receipt, version snapshot, note body, and sync outbox commit together.
@@ -79,7 +92,7 @@ extension MobileStore {
     }
     let id = command.action == "create" ? requestID : try command.required("note-id", allowPositional: true)
     if command.action == "create" {
-      guard state.notes[id] == nil, !state.deletedNotes.contains(id), let kind = NoteArtifactKind(rawValue: command.options["kind"] ?? "note"), kind != .canvas else { throw WorkspaceToolError.invalid("Choose a new note, spreadsheet or HTML artifact. Pages are created on a Mac.") }
+      guard state.notes[id] == nil, !state.deletedNotes.contains(id), let kind = NoteArtifactKind(rawValue: command.options["kind"] ?? "note"), kind != .canvas else { throw WorkspaceToolError.invalid("Choose a new note, spreadsheet or HTML artifact. Create a Page with woven_pages_create.") }
       let folder = command.options["folder"] ?? context.folderID
       if let folder, state.folders[folder] == nil { throw WorkspaceToolError.notFound("This folder is not available on this device.") }
       let content = try NoteDocument(kind: kind).encoded()
@@ -96,7 +109,7 @@ extension MobileStore {
       return .object(["id": .string(id), "revision": .string(try MobileToolSupport.fingerprint(note)), "state": try MobileToolSupport.value(document.artifactStateSnapshot)])
     }
     if command.action == "versions" { return try MobileToolSupport.page((state.toolNoteVersions ?? []).filter { $0.note.id == id }.reversed().map { .object(["id": .string($0.id), "noteID": .string(id), "title": .string($0.note.title), "createdAt": .string($0.savedAt)]) }, command: command) }
-    if (note.kind ?? NoteDocument.decode(note.content).kind) == .canvas { throw pageWriteRequiresMac }
+    let isPage = (note.kind ?? NoteDocument.decode(note.content).kind) == .canvas
     guard state.conflicts[id] == nil else { throw WorkspaceToolError.revisionConflict("Resolve this note's sync conflict before editing.") }
     let revision = try MobileToolSupport.fingerprint(note)
     // A state edit carries a compare-and-swap for each key instead of a document revision.
@@ -110,11 +123,22 @@ extension MobileStore {
       let versionID = try command.required("version")
       guard let version = state.toolNoteVersions?.first(where: { $0.id == versionID && $0.note.id == id }) else { throw WorkspaceToolError.notFound("The requested version is not saved on this device.") }
       note.title = version.note.title; note.content = version.note.content; note.kind = version.note.kind
+    } else if isPage {
+      // Text edits to a Page follow the same Page rules and attribution as on a Mac.
+      let edit = try PageTool.apply(noteOperations(command), title: note.title, content: note.content, pageID: id,
+        actor: context.pageActor, at: ISO8601DateFormatter().string(from: Date())) { missingAsset($0, state: state) }
+      note.title = edit.title; note.content = try edit.document.encoded()
     } else {
       var document = try NoteDocument.editableDocument(from: note.content)
       if let title = try document.apply(noteOperations(command)) { note.title = title }
       note.content = try document.encoded(); note.kind = document.kind
     }
+    try storeToolEdit(&note, original: original, revision: revision, state: &state)
+    return .object(["id": .string(id), "title": .string(note.title), "revision": .string(try MobileToolSupport.fingerprint(note)), "replayed": .bool(false)])
+  }
+
+  /// Saves an agent's edit with a version of what it replaced, and queues it for sync.
+  private static func storeToolEdit(_ note: inout LibraryNote, original: LibraryNote, revision: String, state: inout MobileStoreState) throws {
     guard note.content.utf8.count <= LibraryProtocol.maximumNoteBytes else { throw Failure.noteTooLarge }
     let candidateDocument = try NoteDocument.editableDocument(from: note.content)
     let hasLinkedTable = candidateDocument.blocks.contains { block in if case .table(let table) = block { return table.databaseLink != nil }; return false }
@@ -122,21 +146,86 @@ extension MobileStore {
     note.updatedAt = ISO8601DateFormatter().string(from: Date()); note.contentByteCount = note.content.utf8.count
     var versions = state.toolNoteVersions ?? []
     if !versions.contains(where: { $0.id == revision }) { versions.append(.init(id: revision, note: original, savedAt: note.updatedAt)) }
-    state.toolNoteVersions = versions; state.notes[id] = note
-    if let index = state.outbox.firstIndex(where: { $0.mutation.resourceID == id && !$0.submitted }) {
+    state.toolNoteVersions = versions; state.notes[note.id] = note
+    if let index = state.outbox.firstIndex(where: { $0.mutation.resourceID == note.id && !$0.submitted }) {
       state.outbox[index].mutation.title = note.title; state.outbox[index].mutation.content = note.content; state.outbox[index].mutation.folderID = note.folderID
-    } else if !state.outbox.contains(where: { $0.mutation.resourceID == id }) {
+    } else if !state.outbox.contains(where: { $0.mutation.resourceID == note.id }) {
       state.outbox.append(.init(mutation: mutation(for: note, kind: .updateNote, deviceID: state.deviceID)))
     }
-    return .object(["id": .string(id), "title": .string(note.title), "revision": .string(try MobileToolSupport.fingerprint(note)), "replayed": .bool(false)])
-  }
-  private static var pageWriteRequiresMac: WorkspaceToolError {
-    .invalid("Pages are edited on a Mac, where concurrent agents share one atomic write path. This phone has not changed the Page.")
   }
 
-  /// Reads work from the downloaded replica, including nesting. Agent writes are refused
-  /// rather than queued as whole-document updates, which could not honor component
-  /// revisions offline. A person's own edits on this device use the note editing route.
+  /// The first newly linked asset that is not a note on this device.
+  private static func missingAsset(_ ids: Set<String>, state: MobileStoreState) -> String? {
+    ids.sorted().first { state.notes[$0] == nil || state.deletedNotes.contains($0) }
+  }
+
+  private static func assetSummaries(_ ids: [String], state: MobileStoreState) throws -> [String: BoardAssetSummary] {
+    var assets: [String: BoardAssetSummary] = [:]
+    for assetID in ids {
+      guard let asset = state.notes[assetID], !state.deletedNotes.contains(assetID) else { continue }
+      assets[assetID] = BoardAssetSummary(id: assetID, available: !state.uncachedNoteIDs.contains(assetID), title: asset.title,
+        kind: asset.kind?.rawValue, revision: try MobileToolSupport.fingerprint(asset))
+    }
+    return assets
+  }
+
+  /// `woven_pages_*` writes on this device. This store is one serialized writer, so
+  /// component and subtree revisions mean here what they mean on a Mac. The result
+  /// syncs as a whole document; a Page another device changed meanwhile is merged
+  /// component by component when it syncs.
+  private static func pageWrite(_ command: WovenMatterToolCommand, requestID: String, context: MobileToolContext,
+                                state: inout MobileStoreState) throws -> WovenMatterToolResponse {
+    if command.action == "page-create" {
+      guard state.notes[requestID] == nil, !state.deletedNotes.contains(requestID) else { throw WorkspaceToolError.invalid("This request ID was already used.") }
+      let folder = command.options["folder"] ?? context.folderID
+      if let folder, state.folders[folder] == nil { throw WorkspaceToolError.notFound("This folder is not available on this device.") }
+      let title = try command.required("title")
+      guard !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, title.utf8.count <= 1_024 else {
+        throw WorkspaceToolError.invalid("A Page title must contain text and be at most 1,024 bytes.")
+      }
+      let note = LibraryNote(id: requestID, folderID: folder, title: title, content: try PageTool.newPageContent(purpose: command.options["purpose"]),
+        revision: 0, updatedAt: ISO8601DateFormatter().string(from: Date()), kind: .canvas)
+      state.notes[requestID] = note
+      state.outbox.append(.init(mutation: mutation(for: note, kind: .createNote, deviceID: state.deviceID)))
+      return .init(result: .object(["id": .string(requestID), "kind": .string("page"), "revision": .string(try MobileToolSupport.fingerprint(note))]), requestID: requestID)
+    }
+    let request = try PageTool.request(command, requestID: requestID)
+    let id = request.noteID
+    guard var note = state.notes[id], !state.deletedNotes.contains(id) else { throw WorkspaceToolError.notFound("This Page is not available on this device.") }
+    guard !state.uncachedNoteIDs.contains(id) else { throw WorkspaceToolError.notFound("This Page is not saved on this device. Download it from the central library first.") }
+    guard (note.kind ?? NoteDocument.decode(note.content).kind) == .canvas else { throw WorkspaceToolError.invalid("This asset is not a Page. Use the woven_notes tools.") }
+    guard state.conflicts[id] == nil else { throw WorkspaceToolError.revisionConflict("Resolve this Page's sync conflict before editing it.") }
+    let revision = try MobileToolSupport.fingerprint(note)
+    let componentID = command.action == "page-add-component" ? requestID : command.options["id"]
+    func conflict(_ componentID: String?) throws -> WovenMatterToolResponse {
+      let stored = try? NoteDocument.editableDocument(from: note.content)
+      let assets = try assetSummaries(PageTool.linkedAssetIDs(stored?.materializedPage(), componentID: componentID), state: state)
+      let reply = PageTool.conflict(pageID: id, componentID: componentID, stored: stored, revision: revision, assets: assets)
+      return .init(success: false, result: reply.result, error: reply.error, code: reply.code, requestID: requestID)
+    }
+    if let expected = request.expectedRevision, expected != revision { return try conflict(nil) }
+    let edit: PageTool.Edit
+    do {
+      edit = try PageTool.apply(request.operations, title: note.title, content: note.content, pageID: id,
+        actor: context.pageActor, at: ISO8601DateFormatter().string(from: Date())) { missingAsset($0, state: state) }
+    } catch let error where PageTool.conflictComponent(error) != nil {
+      return try conflict(PageTool.conflictComponent(error)!)
+    } catch NoteEditError.artifactKindMismatch {
+      throw WorkspaceToolError.invalid("This asset is not a Page. Use the woven_notes tools.")
+    } catch RemoteNoteEditError.operationNotAllowed {
+      throw WorkspaceToolError.invalid("This component is not valid for a Page. Check its size, table shape and links.")
+    }
+    if edit.changed {
+      let original = note
+      note.title = edit.title; note.content = try edit.document.encoded()
+      try storeToolEdit(&note, original: original, revision: revision, state: &state)
+    }
+    let assets = try assetSummaries(PageTool.linkedAssetIDs(edit.document, componentID: componentID), state: state)
+    return .init(result: try PageTool.acknowledgement(pageID: id, title: note.title, revision: try MobileToolSupport.fingerprint(note),
+      replayed: false, componentID: componentID, document: edit.document, assets: assets), requestID: requestID)
+  }
+
+  /// Reads from the downloaded replica, including nesting.
   private static func pageTool(_ command: WovenMatterToolCommand, state: MobileStoreState) throws -> GatewayJSONValue {
     func document(_ note: LibraryNote) -> NoteDocument? {
       guard !state.uncachedNoteIDs.contains(note.id), let value = try? NoteDocument.editableDocument(from: note.content), value.kind == .canvas else { return nil }
@@ -166,14 +255,10 @@ extension MobileStore {
       guard !state.uncachedNoteIDs.contains(id) else { throw WorkspaceToolError.notFound("This Page is not saved on this device. Download it from the central library first.") }
       guard let current = document(note) else { throw WorkspaceToolError.invalid("This asset is not a Page. Use woven_notes_read.") }
       let filter = try BoardReadFilter(command: command)
-      var assets: [String: BoardAssetSummary] = [:]
-      for assetID in current.boardAssetIDs(filter: filter) {
-        guard let asset = state.notes[assetID], !state.deletedNotes.contains(assetID) else { continue }
-        assets[assetID] = BoardAssetSummary(id: assetID, available: !state.uncachedNoteIDs.contains(assetID), title: asset.title, kind: asset.kind?.rawValue, revision: try MobileToolSupport.fingerprint(asset))
-      }
+      let assets = try assetSummaries(current.boardAssetIDs(filter: filter), state: state)
       return try current.pageReadValue(id: id, title: note.title, revision: try MobileToolSupport.fingerprint(note), filter: filter, assets: assets)
     default:
-      throw pageWriteRequiresMac
+      throw WorkspaceToolError.invalid("Unsupported Page operation: \(command.action).")
     }
   }
 

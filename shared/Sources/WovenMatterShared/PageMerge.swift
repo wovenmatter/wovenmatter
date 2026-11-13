@@ -443,3 +443,30 @@ private struct PageMerger {
     SHA256.hash(data: Data(text.utf8)).map { String(format: "%02x", $0) }.joined().prefix(24).description
   }
 }
+
+public extension NoteDocument {
+  /// Merges a client's Page, saved after another device changed it, into the stored
+  /// version. Components keep the attribution of whoever wrote the version that was
+  /// kept: the client's own stamps (the person or a chat on that device) stay on its
+  /// changes, and the stored version's stay on everything else.
+  static func mergeClientPage(base: NoteDocument, local: NoteDocument, remote: NoteDocument) throws -> NoteDocument {
+    var merged = try mergePage(base: base, local: local, remote: remote).document
+    let stored = remote.materializedPage(), edited = local.materializedPage()
+    merged.stampBoardChanges(from: stored, actor: BoardActor(kind: .user))
+    let storedBlocks = Dictionary(stored.blocks.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+    let editedBlocks = Dictionary(edited.blocks.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+    for block in merged.blocks {
+      let content = merged.pageComponentContent(of: block)
+      guard storedBlocks[block.id].map(stored.pageComponentContent) != content,
+            let localBlock = editedBlocks[block.id], edited.pageComponentContent(of: localBlock) == content,
+            let localItem = edited.boardItems?[block.id], localItem.updatedBy != nil else { continue }
+      merged.boardItems?[block.id]?.updatedBy = localItem.updatedBy
+      merged.boardItems?[block.id]?.updatedAt = localItem.updatedAt
+      if storedBlocks[block.id] == nil {
+        merged.boardItems?[block.id]?.createdBy = localItem.createdBy
+        merged.boardItems?[block.id]?.createdAt = localItem.createdAt
+      }
+    }
+    return merged
+  }
+}

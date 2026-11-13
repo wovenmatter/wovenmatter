@@ -25,7 +25,8 @@ extension MobileModel {
     let enabled = Set(Self.deviceToolGroups.filter { Self.deviceToolEnabled(Self.deviceToolSelectionID($0), selection: record.enabledTools) })
     return .init(sessionID: conversationID, workspaceID: deviceWorkspaceID,
       folderID: state.conversations[conversationID]?.folderID, enabled: enabled,
-      nativeToolIDs: Self.deviceToolDefinitions.compactMap { $0["name"] as? String }.filter { Self.deviceToolEnabled($0, selection: record.enabledTools) })
+      nativeToolIDs: Self.deviceToolDefinitions.compactMap { $0["name"] as? String }.filter { Self.deviceToolEnabled($0, selection: record.enabledTools) },
+      sessionTitle: state.conversations[conversationID]?.title)
   }
   static func deviceMCPRequestID(_ string: String) -> String {
     if let uuid = UUID(uuidString: string) { return uuid.uuidString.lowercased() }
@@ -52,15 +53,6 @@ extension MobileModel {
       let request = try WovenMCPCatalog.request(name: name, arguments: .object(input), contextID: executionRecords[conversationID]?.inputAssetID)
       let command = try WovenMatterToolCommand(request.arguments)
       try context.authorize(command)
-      // Refuse Page writes before reserving the call or asking for approval.
-      if command.isMutation, command.group == .notes {
-        let notes = await store.snapshot().notes
-        let editsPage = (command.options["note-id"] ?? command.positional.first).flatMap { notes[$0] }
-          .map { NoteDocument.decode($0.content).kind == .canvas } ?? false
-        if command.isPageCommand || editsPage {
-          throw WorkspaceToolError.invalid("Pages are edited on a Mac. This phone has not changed the Page.")
-        }
-      }
       if name == "woven_context", !context.enabled.contains(.notes) { throw WorkspaceToolError.disabled(.notes) }
       if command.group == .timers, command.options["every"] != nil { throw WorkspaceToolError.invalid(MobileStore.recurringTimerMessage) }
       await flushLocalWrites()

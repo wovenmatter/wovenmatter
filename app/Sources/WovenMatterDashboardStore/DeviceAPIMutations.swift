@@ -97,6 +97,7 @@ extension WorkspaceDatabaseConnection {
       do {
         let document = try NoteDocument.editableDocument(from: content)
         guard libraryEditableArtifact(document) else { return result(.invalid, "Linked database content is read-only on clients.") }
+        guard clientPageFits(document, content: content) else { return result(.invalid, Self.clientPageTooLarge) }
       } catch { return result(.invalid, error.localizedDescription) }
       if let folderID = request.folderID, try libraryFolderUnlocked(id: folderID) == nil {
         return result(.notFound, "The destination folder does not exist. Sync its creation first or choose another folder.")
@@ -123,6 +124,7 @@ extension WorkspaceDatabaseConnection {
           guard previous.kind == replacement.kind, libraryEditableArtifact(previous), libraryEditableArtifact(replacement) else {
             return result(.invalid, "Preserve the document kind; linked database content is read-only on clients.")
           }
+          guard clientPageFits(replacement, content: content) else { return result(.invalid, Self.clientPageTooLarge, note: note) }
         } catch { return result(.invalid, error.localizedDescription, note: note) }
       }
       if let folderID = request.folderID, try libraryFolderUnlocked(id: folderID) == nil {
@@ -135,6 +137,13 @@ extension WorkspaceDatabaseConnection {
       return try result(.accepted, note: libraryNoteUnlocked(id: request.resourceID))
     }
   }
+
+  /// A Page edited on a phone must stay within the size every other writer,
+  /// including agents, can still change.
+  private func clientPageFits(_ document: NoteDocument, content: String) -> Bool {
+    document.kind != .canvas || content.utf8.count <= NoteDocument.maximumBoardBytes
+  }
+  private static let clientPageTooLarge = "This Page is too large to save. Move some content into a linked note."
 
   private func libraryEditableArtifact(_ document: NoteDocument) -> Bool {
     document.databaseLink == nil && document.blocks.allSatisfy { block in

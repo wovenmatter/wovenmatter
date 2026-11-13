@@ -85,6 +85,9 @@ public actor MobileStore {
   public nonisolated let artifacts: SavedArtifactStore
   private let file: URL
   var state: MobileStoreState
+  /// The last text each Page editor saved, in memory only. An editor keeps sending
+  /// its own whole document; this is what that document derives from.
+  private var pageEditorContents: [String: String] = [:]
   public init(file: URL) throws {
     self.file = file
     dictations = try MobileDictationStore(file: file.appendingPathExtension("dictations.sqlite"))
@@ -322,6 +325,21 @@ public actor MobileStore {
   }
   public func editNote(id: String, title: String, content: String, folderID: String?, base: LibraryNote? = nil) throws {
     guard content.utf8.count <= LibraryProtocol.maximumNoteBytes else { throw Failure.noteTooLarge }
+    let edited = content
+    var content = content, base = base
+    // A Page changed underneath its open editor, by Quick Chat or a sync merge. The
+    // editor's document lacks that change, so combine them instead of overwriting it.
+    if let current = state.notes[id], state.conflicts[id] == nil, (current.kind ?? NoteDocument.decode(current.content).kind) == .canvas,
+       let ancestor = pageEditorContents[id] ?? base?.content, current.content != ancestor, content != current.content,
+       let ancestorDocument = try? NoteDocument.editableDocument(from: ancestor),
+       let localDocument = try? NoteDocument.editableDocument(from: content),
+       let currentDocument = try? NoteDocument.editableDocument(from: current.content),
+       ancestorDocument.kind == .canvas, localDocument.kind == .canvas, currentDocument.kind == .canvas,
+       let merged = try? NoteDocument.mergeClientPage(base: ancestorDocument, local: localDocument, remote: currentDocument),
+       let encoded = try? merged.encoded(), encoded.utf8.count <= LibraryProtocol.maximumNoteBytes {
+      content = encoded
+      base = current
+    }
     try transaction { next in
       guard var note = next.notes[id] else { throw Failure.missingNote }
       if next.uncachedNoteIDs.contains(id), base?.contentIncluded != true { throw Failure.missingNote }
@@ -336,6 +354,7 @@ public actor MobileStore {
           next.conflicts[id] = .init(base: base, local: local, remote: note, reason: "The Mac changed this note while your edit was being saved. Both versions are preserved.")
           next.notes[id] = local
           next.outbox.removeAll { $0.mutation.resourceID == id }
+          Self.mergePageConflict(id, state: &next)
           return
         }
       }
@@ -350,6 +369,7 @@ public actor MobileStore {
         next.outbox.append(.init(mutation: Self.mutation(for: note, kind: .updateNote, deviceID: next.deviceID)))
       }
     }
+    if let note = state.notes[id], (note.kind ?? NoteDocument.decode(note.content).kind) == .canvas { pageEditorContents[id] = edited }
   }
   /// Marking submitted is itself durable. A retry must resend exactly these bytes and ID.
   public func nextMutation(excludingOperationIDs: Set<String> = []) throws -> LibraryMutation? {
@@ -417,6 +437,7 @@ public actor MobileStore {
         }
         // Folder failures remain visible in outbox; they do not permit dependent notes to run.
         if next.notes[mutation.resourceID] != nil { next.outbox.removeAll { $0.mutation.resourceID == mutation.resourceID } }
+        if result.status == .conflict { Self.mergePageConflict(mutation.resourceID, state: &next) }
       }
     }
   }
@@ -622,6 +643,7 @@ public actor MobileStore {
         }
         if remote.revision >= (conflict.remote?.revision ?? 0) { conflict.remote = remote }
         state.conflicts[note.id] = conflict
+        mergePageConflict(note.id, state: &state)
       }
       // A submitted mutation may be visible before its acknowledgement; do not
       // interpret the feed as an acknowledgement or advance the edit precondition.
@@ -637,6 +659,36 @@ public actor MobileStore {
     }
     state.notes[note.id] = note; state.bases[note.id] = note; state.deletedNotes.remove(note.id)
     if note.contentIncluded { state.uncachedNoteIDs.remove(note.id) }
+  }
+  /// A Page that changed on another device while this one edited it combines
+  /// component by component, as a Mac combines its own drafts, so neither side
+  /// needs to choose a version. Both versions of a component changed on both sides
+  /// stay on the Page. Anything else, or a Page whose bodies are not all here
+  /// yet, stays an ordinary conflict until they are.
+  static func mergePageConflict(_ id: String, state: inout MobileStoreState) {
+    guard let conflict = state.conflicts[id], let base = conflict.base, let remote = conflict.remote,
+          base.contentIncluded, remote.contentIncluded, !state.deletedNotes.contains(id),
+          let baseDocument = try? NoteDocument.editableDocument(from: base.content),
+          let localDocument = try? NoteDocument.editableDocument(from: conflict.local.content),
+          let remoteDocument = try? NoteDocument.editableDocument(from: remote.content),
+          baseDocument.kind == .canvas, localDocument.kind == .canvas, remoteDocument.kind == .canvas,
+          let merged = try? NoteDocument.mergeClientPage(base: baseDocument, local: localDocument, remote: remoteDocument),
+          let content = try? merged.encoded(), content.utf8.count <= LibraryProtocol.maximumNoteBytes else { return }
+    var note = remote
+    note.content = content; note.contentByteCount = content.utf8.count; note.contentIncluded = true
+    note.title = conflict.local.title != base.title ? conflict.local.title : remote.title
+    note.folderID = conflict.local.folderID != base.folderID ? conflict.local.folderID : remote.folderID
+    state.conflicts.removeValue(forKey: id)
+    state.notes[id] = note; state.uncachedNoteIDs.remove(id)
+    // The base is the host's last version. When an editor's stale save is merged into
+    // this device's own pending copy, that copy is not the host's and the base stays.
+    if remote.revision > (state.bases[id]?.revision ?? -1) { state.bases[id] = remote }
+    state.localRevisionParents.removeValue(forKey: id)
+    state.outbox.removeAll { $0.mutation.resourceID == id }
+    if note.content != remote.content || note.title != remote.title || note.folderID != remote.folderID {
+      note.updatedAt = now; state.notes[id] = note
+      state.outbox.append(.init(mutation: mutation(for: note, kind: .updateNote, deviceID: state.deviceID)))
+    }
   }
   private static func remoteDeletion(_ id: String, state: inout MobileStoreState) {
     state.deletedNotes.insert(id)

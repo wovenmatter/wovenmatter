@@ -8,10 +8,18 @@ public struct MobileToolContext: Sendable {
   public var folderID: String?
   public var enabled: Set<WorkspaceToolGroup>
   public var nativeToolIDs: [String]?
+  /// The calling chat's title, shown on the Page components it changes.
+  public var sessionTitle: String?
   public init(sessionID: String, workspaceID: String, folderID: String? = nil,
-              enabled: Set<WorkspaceToolGroup> = Set(WorkspaceToolGroup.allCases.filter { $0 != .computer }), nativeToolIDs: [String]? = nil) {
+              enabled: Set<WorkspaceToolGroup> = Set(WorkspaceToolGroup.allCases.filter { $0 != .computer }), nativeToolIDs: [String]? = nil,
+              sessionTitle: String? = nil) {
     self.sessionID = sessionID; self.workspaceID = workspaceID; self.folderID = folderID
-    self.enabled = enabled.union([.html]); self.nativeToolIDs = nativeToolIDs
+    self.enabled = enabled.union([.html]); self.nativeToolIDs = nativeToolIDs; self.sessionTitle = sessionTitle
+  }
+  /// Who a Page write from this caller is attributed to. It comes from the
+  /// authorized context, never from tool arguments.
+  public var pageActor: BoardActor {
+    BoardActor(kind: .session, sessionID: sessionID, label: sessionTitle.map { String($0.prefix(160)) })
   }
   public func authorize(_ command: WovenMatterToolCommand) throws {
     guard let group = command.group else { return }

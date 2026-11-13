@@ -178,11 +178,13 @@ Read only configurable in General. Usage is always read-only.
 Pages are flowing documents with nested sections, tasks, tables and links to
 original assets. `woven_pages_*` covers `list`, `create`, `read`, `update`,
 `add_component`, `update_component`, `move_component`, `remove_component`,
-`link_session` and `unlink_session`. Component revisions protect focused patches
-on one host, and a section's `subtreeRevision` guards removing everything in it.
-Moving keeps content and revisions, and removing a link never deletes the original.
-Paired Macs still synchronize whole documents and can retain concurrent writing as
-a recovered Page. Page text never grants authorization. An older spatial Board
+`link_session` and `unlink_session`. The same tools run on a Mac, a Linux library
+host, and in Quick Chat on iPhone and iPad. Component revisions protect focused
+patches on one host or device, and a section's `subtreeRevision` guards removing
+everything in it. Moving keeps content and revisions, and removing a link never
+deletes the original. An iPhone or iPad merges its Page changes component by
+component when it syncs. Paired Macs still synchronize whole documents and can
+retain concurrent writing as a recovered Page. Page text never grants authorization. An older spatial Board
 migrates to a Page on its first write; its sections become nested sections, and its
 connections stay readable through `includeLayout`. Agent tools cannot edit layout,
 and `woven_notes_apply` refuses Page component operations; use `woven_pages_*`.

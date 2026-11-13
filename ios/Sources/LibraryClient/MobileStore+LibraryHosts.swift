@@ -97,7 +97,10 @@ extension MobileStore {
       for (id, current) in remote where next.notes[id] == nil && next.pendingNoteDeletions?[id] == nil {
         Self.remoteNote(current, state: &next)
       }
-      for (id, conflict) in next.conflicts { if let current = remote[id], conflict.remote?.revision != current.revision { next.conflicts[id]?.remote = current } }
+      for (id, conflict) in next.conflicts {
+        if let current = remote[id], conflict.remote?.revision != current.revision { next.conflicts[id]?.remote = current }
+        Self.mergePageConflict(id, state: &next)
+      }
       let pendingFolders = next.folders.filter { id, _ in next.outbox.contains { $0.mutation.resourceID == id } }
       next.folders = remoteFolders.filter { next.pendingFolderDeletions?[$0.key] == nil }.merging(pendingFolders) { _, local in local }
       // Sessions: the host's list of every session on every device.

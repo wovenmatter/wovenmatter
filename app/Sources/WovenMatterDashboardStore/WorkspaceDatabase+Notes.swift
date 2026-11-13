@@ -592,22 +592,13 @@ extension WorkspaceDatabaseConnection {
     return BoardActor(kind: .session, sessionID: id, label: title.map { String($0.prefix(160)) })
   }
 
-  /// A newly linked original must exist now. A link that already existed is kept
-  /// even if its original is gone, and reads report it as unavailable.
-  private func requireNewPageAssetsUnlocked(old: NoteDocument, new: NoteDocument, pageID: String, operatorID: String) throws {
-    // Compare per component: a new one must not inherit another's retained missing link.
-    let added = Set((new.canvas ?? [:]).compactMap { id, placement -> String? in
-      placement.assetID == old.canvas?[id]?.assetID ? nil : placement.assetID
-    })
-    guard !added.isEmpty else { return }
-    guard !added.contains(pageID) else { throw WorkspaceToolError.invalid("A Page cannot link to itself.") }
-    let ids = String(decoding: try JSONEncoder().encode(added.sorted()), as: UTF8.self)
+  /// The newly linked asset IDs that are not notes in this library.
+  private func firstMissingAssetUnlocked(_ ids: Set<String>, operatorID: String) throws -> String? {
+    let list = String(decoding: try JSONEncoder().encode(ids.sorted()), as: UTF8.self)
     let found = Set(try historyRowsUnlocked(
       "SELECT id FROM notes WHERE user_id=? AND deleted_at IS NULL AND id IN (SELECT value FROM json_each(?))",
-      values: [operatorID, ids]).compactMap { $0.objectValue?["id"]?.stringValue })
-    if let missing = added.subtracting(found).sorted().first {
-      throw WorkspaceToolError.notFound("The linked asset \(missing) is not available. Create it first, then link its ID.")
-    }
+      values: [operatorID, list]).compactMap { $0.objectValue?["id"]?.stringValue })
+    return ids.subtracting(found).sorted().first
   }
 
   private func applyNoteEditsUnlocked(
@@ -625,44 +616,14 @@ extension WorkspaceDatabaseConnection {
         revision: note.revision, document: try NoteDocument.editableDocument(from: note.content)
       )
     }
-    let currentDocument = try NoteDocument.editableDocument(from: note.content)
-    try RemoteNoteEditEnvelope.validate(operations: request.operations, applyingTo: currentDocument)
-    // Task updates and saved inputs are frequent and small. Coalesce their retained versions
-    // so a busy Page keeps a usable span of history and does not crowd out other notes.
-    let forceCheckpoint = !request.operations.allSatisfy {
-      switch $0 {
-      case .page(let edit): edit.action != .setPurpose && edit.action != .remove
-      case .artifactState: true
-      default: false
-      }
-    }
-    var document = currentDocument
-    if document.kind == .html,
-       request.operations.contains(where: {
-         if case .setTitle = $0 { true } else { false }
-       }) {
-      throw NoteEditError.artifactKindMismatch
-    }
-    let updatedTitle = try document.apply(request.operations) ?? note.title
-    // Repeating an idempotent edit must not make other writers' revisions stale, and a
-    // first read-only pass over an older Board must not migrate it.
-    let unchanged = updatedTitle == note.title && (document == currentDocument.normalized()
-      || (document.kind == .canvas && document == currentDocument.materializedPage().normalized()))
-    if (document.kind == .canvas || document.kind == .html), unchanged {
+    let edit = try PageTool.apply(request.operations, title: note.title, content: note.content, pageID: request.noteID,
+      actor: actor, at: Self.timestamp(Date())) { try firstMissingAssetUnlocked($0, operatorID: operatorID) }
+    let document = edit.document, updatedTitle = edit.title
+    if (document.kind == .canvas || document.kind == .html), !edit.changed {
       return NoteEditingResponse(success: true, noteID: request.noteID, title: note.title, revision: note.revision, document: document)
     }
-    try checkpointNoteUnlocked(id: request.noteID, source: "before-agent-edit", force: forceCheckpoint)
-    if document.kind == .canvas {
-      // A first write migrates an older Board. Compare it to its own migrated form, so the
-      // migration itself is attributed to nobody and only this edit is stamped.
-      let old = document.pageNodes == nil ? currentDocument : currentDocument.materializedPage()
-      try requireNewPageAssetsUnlocked(old: old, new: document, pageID: request.noteID, operatorID: operatorID)
-      document.stampBoardChanges(from: old, actor: actor, at: Self.timestamp(Date()))
-    }
+    try checkpointNoteUnlocked(id: request.noteID, source: "before-agent-edit", force: edit.forceCheckpoint)
     let content = try document.encoded()
-    if document.kind == .canvas, content.utf8.count > NoteDocument.maximumBoardBytes {
-      throw RemoteNoteEditError.operationTooLarge
-    }
     let updatedAt = try nextNoteUpdatedAtUnlocked(id: request.noteID)
     let update = try prepareUnlocked("""
       UPDATE notes SET title = ?, content = ?, snippet = ?, updated_at = ?
@@ -679,7 +640,7 @@ extension WorkspaceDatabaseConnection {
     guard changedRowCountUnlocked == 1 else {
       throw WorkspaceNoteMutationError.noteNotFound
     }
-    try checkpointNoteUnlocked(id: request.noteID, source: "agent", force: forceCheckpoint)
+    try checkpointNoteUnlocked(id: request.noteID, source: "agent", force: edit.forceCheckpoint)
     return NoteEditingResponse(
       success: true, noteID: request.noteID, title: updatedTitle,
       revision: try noteForEditingUnlocked(id: request.noteID, operatorID: operatorID).revision, document: document
