@@ -12,20 +12,32 @@ actor FakeStreamSocket: StreamTransport {
   private var receiver: CheckedContinuation<StreamFrame, any Error>?
   private var closed = false
   var failPings = false
+  /// A black-holed socket: a ping that never returns, not even when cancelled.
+  var hangPings = false
+  private var hung: [CheckedContinuation<Void, Never>] = []
+  /// A server that answers a subscription at once, before `send` returns.
+  var replies: (@Sendable (StreamSubscribe) -> [StreamFrame])?
 
   func receive() async throws -> StreamFrame {
     if !inbox.isEmpty { return try inbox.removeFirst().get() }
     if closed { throw StreamTransportClosed() }
     return try await withCheckedThrowingContinuation { receiver = $0 }
   }
-  func send(_ frame: StreamFrame) throws {
+  func send(_ frame: StreamFrame) async throws {
     guard !closed else { throw StreamTransportClosed() }
     sent.append(frame)
+    guard case .subscribe(let value) = frame, let replies else { return }
+    for reply in replies(value) { deliver(.success(reply)) }
+    // The reply is handled before the client's `send` returns.
+    try? await Task.sleep(for: .milliseconds(30))
   }
-  func ping() throws {
+  func ping() async throws {
     pings += 1
     if failPings { throw StreamTransportClosed() }
+    if hangPings { await withCheckedContinuation { hung.append($0) } }
   }
+  func setHangPings(_ value: Bool) { hangPings = value }
+  func setReplies(_ value: (@Sendable (StreamSubscribe) -> [StreamFrame])?) { replies = value }
   func close(_ code: StreamProtocol.CloseCode) { closedWith = closedWith ?? code; serverClose(code: code.rawValue) }
 
   func push(_ frame: StreamFrame) { deliver(.success(frame)) }
@@ -67,9 +79,11 @@ final class FakeStreamServer: @unchecked Sendable {
   }
   func recordDelay(_ delay: Duration) { lock.withLock { _delays.append(delay) } }
 
-  func connection(pingInterval: Duration = .seconds(3600), requestTimeout: Duration = .seconds(5)) -> StreamConnection {
-    StreamConnection(configuration: .init(pingInterval: pingInterval, pongTimeout: .seconds(1), requestTimeout: requestTimeout,
-      openWait: .seconds(2), retrySleep: { [weak self] delay in self?.recordDelay(delay); await Task.yield() }, random: { 0.5 })) { [weak self] in
+  func connection(pingInterval: Duration = .seconds(3600), pongTimeout: Duration = .seconds(1), requestTimeout: Duration = .seconds(5),
+                  helloTimeout: Duration = .seconds(30), stableInterval: Duration = .seconds(30)) -> StreamConnection {
+    StreamConnection(configuration: .init(pingInterval: pingInterval, pongTimeout: pongTimeout, requestTimeout: requestTimeout,
+      openWait: .seconds(2), helloTimeout: helloTimeout, stableInterval: stableInterval,
+      retrySleep: { [weak self] delay in self?.recordDelay(delay); await Task.yield() }, random: { 0.5 })) { [weak self] in
       guard let self else { throw StreamTransportClosed() }
       return try self.connect()
     }
@@ -224,6 +238,57 @@ final class StreamConnectionTests: XCTestCase {
     XCTAssertEqual(cancels, [id])
     let next = await socket.subscriptions[1]
     XCTAssertEqual(next.params.after, 3)
+  }
+
+  /// Repeated resyncs back off: the first subscribes again at once, the
+  /// next ones after 1 s, then 2 s.
+  func testRepeatedResyncsBackOff() async throws {
+    let server = FakeStreamServer()
+    let connection = server.connection()
+    let events = StreamEvents()
+    await connection.subscribe(.workspace, params: .init(after: 0), handler: events.handler())
+    await connection.start()
+    let socket = await open(server, connection)
+    for round in 1...3 {
+      await eventually("subscription \(round)") { await socket.subscriptions.count == round }
+      let id = await socket.subscriptions[round - 1].id
+      await socket.push(.end(.init(id: id, error: .init(.resync, "This subscription fell behind. Subscribe again.", retryable: true))))
+    }
+    await eventually("fourth subscription") { await socket.subscriptions.count == 4 }
+    XCTAssertEqual(server.delays, [.seconds(1), .seconds(2)], "The first resync is immediate, repeated ones wait")
+    XCTAssertTrue(events.events.isEmpty, "A resync is never reported")
+  }
+
+  /// A retryable end (a passing failure on the server) is not reported: the
+  /// subscription comes back after a backoff with its latest `after`. A
+  /// non-retryable end is reported once and not asked for again.
+  func testARetryableEndSubscribesAgainAfterABackoffAndATerminalOneIsReported() async throws {
+    let server = FakeStreamServer()
+    let connection = server.connection()
+    let events = StreamEvents()
+    let subscription = await connection.subscribe(.workspace, params: .init(after: 0), handler: events.handler())
+    await connection.start()
+    let socket = await open(server, connection)
+    await eventually("subscribe") { await socket.subscriptions.count == 1 }
+    let first = await socket.subscriptions[0].id
+    await socket.push(journalItem(first, 1))
+    await socket.push(.end(.init(id: first, error: .init(.unavailable, "The store is busy.", retryable: true))))
+    await eventually("subscribed again") { await socket.subscriptions.count == 2 }
+    let second = await socket.subscriptions[1]
+    XCTAssertEqual(second.params.after, 1)
+    XCTAssertEqual(server.delays, [.seconds(1)], "A retryable end waits out the backoff")
+    XCTAssertEqual(events.kinds, ["journal"], "A retryable end is not reported")
+    let kept = await connection.parameters(subscription)
+    XCTAssertNotNil(kept)
+
+    await socket.push(.end(.init(id: second.id, error: .init(.invalid, "No such stream."))))
+    await eventually("ended") { events.events.count == 2 }
+    XCTAssertEqual(events.events.last, .ended(.init(.invalid, "No such stream.")))
+    try await Task.sleep(for: .milliseconds(30))
+    let count = await socket.subscriptions.count
+    XCTAssertEqual(count, 2, "A terminal end is not asked for again")
+    let gone = await connection.parameters(subscription)
+    XCTAssertNil(gone)
   }
 
   func testEndWithoutResyncEndsTheSubscription() async throws {
@@ -383,12 +448,53 @@ final class StreamConnectionTests: XCTestCase {
 
     let server = FakeStreamServer()
     for _ in 0..<7 { server.refuse(StreamConnectionError.unauthorized) }
-    let connection = server.connection()
+    let connection = server.connection(stableInterval: .milliseconds(100))
     await connection.start()
-    _ = await open(server, connection)
+    let greeted = await open(server, connection)
     XCTAssertEqual(server.delays, [1, 2, 4, 8, 16, 30, 30].map { Duration.seconds($0) })
-    let state = await connection.state
-    XCTAssertEqual(state, .open(streamHello), "Hello resets the backoff")
+    // A server that greets and closes at once does not reset the backoff...
+    await greeted.serverClose(code: 1006)
+    let lasted = await open(server, connection, socket: 1)
+    XCTAssertEqual(server.delays.last, .seconds(30), "Hello alone does not reset the backoff")
+    // ...a connection that lasts does.
+    try await Task.sleep(for: .milliseconds(250))
+    await lasted.serverClose(code: 1006)
+    _ = await open(server, connection, socket: 2)
+    XCTAssertEqual(server.delays.last, .seconds(1), "A connection that lasted starts the backoff again")
+  }
+
+  /// An attempt whose upgrade or `hello` never comes fails as a timeout, and
+  /// the next attempt follows.
+  func testAHandshakeThatHangsTimesOut() async throws {
+    let server = FakeStreamServer()
+    let connection = server.connection(helloTimeout: .milliseconds(50))
+    await connection.start()
+    await eventually("first socket") { server.sockets.count == 1 }
+    await connection.connectNow()
+    let silent = server.sockets[0]
+    await eventually("timed out") { server.sockets.count == 2 }
+    let closed = await silent.closedWith
+    XCTAssertEqual(closed, .goingAway)
+    _ = await open(server, connection, socket: 1)
+    XCTAssertEqual(server.delays.first, .seconds(1))
+  }
+
+  /// A black-holed socket: the ping never returns. The pong timeout still
+  /// drops it and reconnects, and wakes meanwhile do not stack more probes.
+  func testAPingThatNeverReturnsTimesOutAndReconnects() async throws {
+    let server = FakeStreamServer()
+    let connection = server.connection(pongTimeout: .milliseconds(100))
+    await connection.start()
+    let socket = await open(server, connection)
+    await socket.setHangPings(true)
+    for _ in 0..<5 { await connection.connectNow() }
+    await eventually("probe") { await socket.pings >= 1 }
+    try await Task.sleep(for: .milliseconds(30))
+    let pings = await socket.pings
+    XCTAssertEqual(pings, 1, "One probe per socket at a time")
+    _ = await open(server, connection, socket: 1)
+    let closed = await socket.closedWith
+    XCTAssertEqual(closed, .goingAway)
   }
 
   func testWakeTriesAtOnceAndAStaleClockIsReportedDistinctly() async throws {
