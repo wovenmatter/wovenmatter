@@ -8,7 +8,9 @@ import { WebSocket } from './websocket.mjs'
 // with backoff from 1 s to 30 s plus jitter. Subscriptions resume after a
 // reconnect (a `workspace` journal from its last sequence); calls do not. A
 // `4401` close means this member was removed there: no attempt is made until
-// `retry()`, which the owner calls when its member list changes.
+// `retry()`, which the owner calls when its member list changes. A `hello`
+// naming another workspace or library than `expected` closes the stream,
+// and no attempt is made until `retry()` either.
 
 const fail = (code, message, extra = {}) => Object.assign(new Error(message), { code, ...extra })
 
@@ -23,12 +25,17 @@ export function streamURL(endpoint) {
  * `endpoint` is the member's execution endpoint (https on the tailnet).
  * `sign(url)` returns the member signature headers for `GET url`; on a Linux
  * host, `url => transport.signedHeaders(url, {audience})` (member-client.mjs).
+ * `expected` is `{workspaceID, libraryID}` of the workspace meant: a server
+ * whose `hello` names another is not used.
  */
-export function createStreamClient({ endpoint, sign, webSocket = WebSocket, onEvent = () => {}, timings = {}, random = Math.random }) {
+export function createStreamClient({ endpoint, sign, expected = null, webSocket = WebSocket, onEvent = () => {}, timings = {}, random = Math.random }) {
   const time = { initial: streamTimings.reconnectInitialMilliseconds, maximum: streamTimings.reconnectMaximumMilliseconds,
     ping: streamTimings.pingMilliseconds, pongTimeout: streamTimings.pongTimeoutMilliseconds, ...timings }
   const subscriptions = new Map(), calls = new Map()
-  let socket = null, state = 'idle', attempts = 0, retryTimer = null, counter = 0, hello = null, stopped = false
+  let socket = null, state = 'idle', attempts = 0, retryTimer = null, counter = 0, hello = null, stopped = false, mismatched = false
+  const same = (a, b) => typeof a === 'string' && typeof b === 'string' && a.toLowerCase() === b.toLowerCase()
+  const identifies = frame => !expected || ((expected.workspaceID == null || same(frame.workspaceID, expected.workspaceID))
+    && (expected.libraryID == null || same(frame.libraryID, expected.libraryID)))
   const emit = event => { try { onEvent(event) } catch {} }
   const send = frame => { if (state === 'open' && socket?.readyState === 1) socket.send(encodeFrame(frame)) }
 
@@ -36,7 +43,7 @@ export function createStreamClient({ endpoint, sign, webSocket = WebSocket, onEv
   const delay = n => Math.min(time.maximum, Math.min(time.maximum, time.initial * 2 ** n) * (0.8 + 0.4 * random()))
 
   function schedule() {
-    if (stopped || state === 'removed') return
+    if (stopped || state === 'removed' || state === 'mismatched') return
     const wait = delay(attempts++)
     state = 'waiting'
     emit({ type: 'retrying', delay: wait })
@@ -45,7 +52,7 @@ export function createStreamClient({ endpoint, sign, webSocket = WebSocket, onEv
   }
 
   async function attempt() {
-    if (stopped || state === 'removed' || state === 'connecting' || state === 'open') return
+    if (stopped || state === 'removed' || state === 'mismatched' || state === 'connecting' || state === 'open') return
     state = 'connecting'
     emit({ type: 'connecting' })
     const url = streamURL(endpoint)
@@ -90,6 +97,7 @@ export function createStreamClient({ endpoint, sign, webSocket = WebSocket, onEv
       emit({ type: 'closed', code })
       if (stopped) { state = 'closed'; return }
       if (code === streamCloseCodes.memberRemoved) { state = 'removed'; emit({ type: 'removed' }); return }
+      if (mismatched) { state = 'mismatched'; return }
       state = 'idle'
       schedule()
     })
@@ -103,6 +111,13 @@ export function createStreamClient({ endpoint, sign, webSocket = WebSocket, onEv
   function receive(frame) {
     if (frame.t === 'hello') {
       if (frame.protocol !== streamProtocolVersion) { socket?.close(streamCloseCodes.protocolViolation); return }
+      if (!identifies(frame)) {
+        // Another workspace answers at this endpoint: nothing it says is used.
+        mismatched = true
+        emit({ type: 'mismatch', hello: { workspaceID: frame.workspaceID ?? null, libraryID: frame.libraryID ?? null } })
+        socket?.close(streamCloseCodes.normal)
+        return
+      }
       hello = frame; state = 'open'; attempts = 0
       emit({ type: 'open', hello })
       for (const subscription of subscriptions.values()) send(subscribeFrame(subscription))
@@ -140,7 +155,8 @@ export function createStreamClient({ endpoint, sign, webSocket = WebSocket, onEv
     /** After a `4401` close, once this member's list has changed. */
     retry() {
       if (stopped) return
-      if (state === 'removed') state = 'idle'
+      if (state === 'removed' || state === 'mismatched') state = 'idle'
+      mismatched = false
       clearTimeout(retryTimer); retryTimer = null; attempts = 0
       if (state === 'idle' || state === 'waiting') { state = 'idle'; void attempt() }
     },

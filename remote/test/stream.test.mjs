@@ -574,6 +574,57 @@ test('a socket that answers no pings is closed', async t => {
   assert.equal(String(await pong), 'x')
 })
 
+test('any frame from the client keeps its socket alive, not only a pong', async t => {
+  const f = await fixture(t, { timings: { pingMilliseconds: 40, pongTimeoutMilliseconds: 600 } })
+  const talking = f.connect(f.signed(), { autoPong: false })
+  await talking.next(frame => frame.t === 'hello')
+  for (const deadline = Date.now() + 1_500; Date.now() < deadline;) {
+    await talking.request('execution.receipt', { commandID: randomUUID() })
+    await new Promise(resolve => setTimeout(resolve, 100))
+  }
+  assert.equal(talking.socket.readyState, WebSocket.OPEN)
+  // Its own pings count too.
+  for (const deadline = Date.now() + 1_000; Date.now() < deadline;) { talking.socket.ping(); await new Promise(resolve => setTimeout(resolve, 100)) }
+  assert.equal(talking.socket.readyState, WebSocket.OPEN)
+  // Silence still closes it.
+  await talking.closed
+})
+
+test('a stream name that is an Object prototype key is not a stream', async t => {
+  const f = await fixture(t)
+  const client = f.connect()
+  await client.next(frame => frame.t === 'hello')
+  for (const stream of ['constructor', '__proto__', 'toString', 'hasOwnProperty']) {
+    client.send({ t: 'sub', id: stream, stream, params: {} })
+    const end = await client.next(frame => frame.t === 'end' && frame.id === stream)
+    assert.equal(end.error.code, 'invalid', stream)
+  }
+  // The connection still serves real streams.
+  client.send({ t: 'sub', id: 'w', stream: 'workspace', params: {} })
+  await client.next(isItem('synchronized', 'w'))
+})
+
+test('a transcript snapshot or entity too large for one frame ends the subscription with unavailable', async t => {
+  const f = await fixture(t, { limits: { frameBytes: 4 * 1024 } })
+  const id = await f.session()
+  await f.execution.command(f.command('send', { conversationID: id, text: 'go' }), f.device)
+  await eventually(() => f.runs.length === 1, 'the run started')
+  const client = f.connect()
+  await client.next(frame => frame.t === 'hello')
+  client.send({ t: 'sub', id: 'live', stream: 'conversation', params: { conversationID: id } })
+  await client.next(isItem('synchronized', 'live'))
+  // An entity over the frame limit: the subscription ends; it is not dropped quietly.
+  f.runs[0].publish({ sessionUpdate: 'agent_message_chunk', content: { text: 'x'.repeat(40 * 1024) } })
+  const ended = await client.next(frame => frame.t === 'end' && frame.id === 'live')
+  assert.equal(ended.error.code, 'unavailable'); assert.equal(ended.error.retryable, false)
+  // A snapshot that does not fit even one message ends before `synchronized`.
+  client.send({ t: 'sub', id: 'snapshot', stream: 'conversation', params: { conversationID: id } })
+  const refused = await client.next(frame => frame.t === 'end' && frame.id === 'snapshot')
+  assert.equal(refused.error.code, 'unavailable'); assert.equal(refused.error.retryable, false)
+  assert.equal(client.unread(frame => frame.id === 'snapshot').length, 0)
+  assert.ok(!client.frames.some(frame => frame.id === 'snapshot' && frame.t === 'item'))
+})
+
 test('inbound frames are limited to 1 MiB and must be JSON text', async t => {
   const f = await fixture(t)
   const large = f.connect()
@@ -675,4 +726,31 @@ test('a socket added after the sweep that removed its member is closed with 4401
   assert.deepEqual(closes.late, [4401])
   assert.deepEqual(closes.kept, [])
   assert.equal(registry.count(), 1)
+})
+
+test('the stream client uses a server only when its hello names the expected workspace and library', async t => {
+  const f = await fixture(t)
+  const connect = expected => {
+    const events = [], items = [], signatures = []
+    const client = createStreamClient({ endpoint: `http://127.0.0.1:${f.port}`, expected,
+      sign: async url => { signatures.push(url); return f.signed(url.pathname + url.search) }, timings: { initial: 20, maximum: 100 }, onEvent: event => events.push(event) })
+    t.after(() => client.close())
+    client.subscribe('workspace', {}, { onItem: frame => items.push(frame) })
+    client.connect()
+    return { client, events, items, signatures }
+  }
+  const right = connect({ workspaceID: f.enrollment.workspaceID.toUpperCase(), libraryID: f.enrollment.libraryID })
+  await eventually(() => right.items.some(frame => frame.kind === 'synchronized'), 'the expected workspace streams')
+  for (const expected of [{ workspaceID: randomUUID(), libraryID: f.enrollment.libraryID }, { workspaceID: f.enrollment.workspaceID, libraryID: randomUUID() }]) {
+    const wrong = connect(expected)
+    await eventually(() => wrong.client.state() === 'mismatched', 'another workspace is not used')
+    assert.deepEqual(wrong.events.find(event => event.type === 'mismatch').hello, { workspaceID: f.enrollment.workspaceID, libraryID: f.enrollment.libraryID })
+    assert.equal(wrong.items.length, 0, 'nothing it sent was used')
+    // No reconnecting to it until told.
+    const attempts = wrong.signatures.length
+    await new Promise(resolve => setTimeout(resolve, 200))
+    assert.equal(wrong.signatures.length, attempts)
+    wrong.client.retry()
+    await eventually(() => wrong.signatures.length === attempts + 1 && wrong.client.state() === 'mismatched', 'retry checks again')
+  }
 })
