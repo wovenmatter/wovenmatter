@@ -21,6 +21,8 @@ swift test --force-resolved-versions --package-path app \
 ```
 
 The test prints the exact required preparation actions before running them.
+It validates Full root by default; set `WOVENMATTER_LIVE_HOST_ACCESS_MODE=user`
+to validate a Normal user account, which needs no sudo.
 Use a disposable workspace, not an existing library host. By default its ID is
 `host-mode-validation`. The optional rollback experiment is intentionally
 restricted to the designated development validation host and that workspace ID:

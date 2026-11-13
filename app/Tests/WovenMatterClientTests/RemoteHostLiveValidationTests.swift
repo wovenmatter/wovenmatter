@@ -29,6 +29,8 @@ struct RemoteHostLiveValidationTests {
         let host = try #require(environment["WOVENMATTER_LIVE_HOST"])
         let user = environment["WOVENMATTER_LIVE_HOST_USER"] ?? "trey"
         let workspaceID = environment["WOVENMATTER_LIVE_HOST_ID"] ?? "host-mode-validation"
+        // `user` validates a Normal user account, which needs no sudo; the default is Full root.
+        let accessMode = try #require(RemoteWorkspaceAccessMode(rawValue: environment["WOVENMATTER_LIVE_HOST_ACCESS_MODE"] ?? "fullRoot"))
         let stateURL = URL(fileURLWithPath: environment["WOVENMATTER_LIVE_HOST_STATE"] ?? "/private/tmp/wovenmatter-host-test-state.json")
         var state: State
         let existing = FileManager.default.fileExists(atPath: stateURL.path)
@@ -46,7 +48,7 @@ struct RemoteHostLiveValidationTests {
             }
         } else {
             state = State(configuration: .init(name: "Native host validation", workspaceID: workspaceID,
-                hostName: host, userName: user, kind: .host, accessMode: .fullRoot),
+                hostName: host, userName: user, kind: .host, accessMode: accessMode),
                 token: UUID().uuidString.replacingOccurrences(of: "-", with: "") + UUID().uuidString.replacingOccurrences(of: "-", with: ""))
         }
         let client: RemoteWorkspaceSSHClient
@@ -63,13 +65,13 @@ struct RemoteHostLiveValidationTests {
         } else {
             client = RemoteWorkspaceSSHClient()
         }
-        var inspection = try await client.preflight(hostName: host, userName: user, kind: .host, accessMode: .fullRoot)
+        var inspection = try await client.preflight(hostName: host, userName: user, kind: .host, accessMode: accessMode)
         if !inspection.ready {
             print("Host preparation actions: " + (inspection.requiredPrivilegedActions ?? inspection.preparationActions ?? []).joined(separator: "\n"))
             guard environment["WOVENMATTER_LIVE_HOST_PREPARE"] == "1" else {
                 throw RemoteWorkspaceClientError.invalidResponse("Review the reported host preparation actions and set WOVENMATTER_LIVE_HOST_PREPARE=1 to execute them.")
             }
-            inspection = try await client.prepareHost(hostName: host, userName: user, kind: .host, accessMode: .fullRoot)
+            inspection = try await client.prepareHost(hostName: host, userName: user, kind: .host, accessMode: accessMode)
         }
         #expect(inspection.ready)
         guard inspection.workspaceID == nil || inspection.workspaceID == workspaceID else {
@@ -100,7 +102,7 @@ struct RemoteHostLiveValidationTests {
             let port = try #require(await tunnel.localPort)
             let service = RemoteWorkspaceServiceClient(baseURL: URL(string: "http://127.0.0.1:\(port)")!, token: token)
             let health = try await service.health()
-            #expect(health.runtimeKind == .host && health.accessMode == .fullRoot)
+            #expect(health.runtimeKind == .host && health.accessMode == accessMode)
             #expect(health.workspaceRoot == state.configuration.workspaceRoot)
             #expect(health.serviceFingerprint != nil)
             if environment["WOVENMATTER_LIVE_HOST_ROLLBACK"] == "1" {
