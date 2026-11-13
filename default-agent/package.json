@@ -10,7 +10,7 @@
     "test": "node --test --test-concurrency=1 test/*.test.mjs"
   },
   "dependencies": {
-    "@anthropic-ai/claude-agent-sdk": ">=0.3.322",
+    "@anthropic-ai/claude-agent-sdk": ">=0.3.323",
     "@earendil-works/chord": ">=1.5.2",
     "@earendil-works/pi-ai": ">=1.5.2",
     "@earendil-works/pi-coding-agent": ">=1.5.2",
@@ -19,8 +19,8 @@
     "@modelcontextprotocol/server": ">=2.4.0",
     "playwright-core": ">=1.65.0",
     "proper-lockfile": ">=4.1.2",
-    "typebox": ">=1.4.6",
-    "ws": ">=8.22.2"
+    "typebox": ">=1.4.7",
+    "ws": ">=8.23.0"
   },
   "devDependencies": {
     "esbuild": ">=0.28.2"
@@ -31,12 +31,12 @@
       "minimatch": ">=11.0.8"
     },
     "@earendil-works/pi-ai": {
-      "openai": ">=7.55.0",
+      "openai": ">=7.56.0",
       "@anthropic-ai/sdk": ">=1.8.0",
-      "@google/genai": ">=3.2.0",
-      "@aws-sdk/client-bedrock-runtime": ">=3.1167.0",
+      "@google/genai": ">=3.3.0",
+      "@aws-sdk/client-bedrock-runtime": ">=3.1168.0",
       "@smithy/node-http-handler": ">=4.14.2",
-      "@aws-sdk/token-providers": ">=3.1167.0"
+      "@aws-sdk/token-providers": ">=3.1168.0"
     },
     "@earendil-works/chord": {
       "ws": "$ws"

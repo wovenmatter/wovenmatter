@@ -12,6 +12,7 @@ npm --version | awk -F. '$1 > 12 || ($1 == 12 && ($2 > 2 || ($2 == 2 && $3 >= 2)
 node -e 'const {createRequire}=require("node:module"); const npm=createRequire("/usr/local/lib/node_modules/npm/package.json"); if(npm("undici/package.json").version!=="8.12.4"||npm("ip-address/package.json").version!=="10.7.6")process.exit(1)'
 runtime_modules=/opt/executor/native/runtime/node_modules
 node -e 'const sharp=require(process.argv[1]); if(sharp.versions.sharp!=="0.35.5"||sharp.versions.rsvg!=="2.63.2")process.exit(1)' "$runtime_modules/sharp"
+node -e 'if(require(process.argv[1]+"/package.json").version!=="8.23.0")process.exit(1)' "$runtime_modules/ws"
 test -z "$(find /usr -xdev -type f -perm /6000 -print -quit)"
 
 wm_helpers=0
