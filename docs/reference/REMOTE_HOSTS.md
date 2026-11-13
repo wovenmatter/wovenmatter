@@ -178,9 +178,7 @@ CDP stays on host loopback. Chromium's renderer sandbox does not contain agent
 shell commands or promise protection from every browser vulnerability. Browser
 profiles separate website state, not Linux execution permissions.
 
-The deprecated container workspace helpers are no longer accessible through the
-remote workspace UI. Native hosts never fall back to a container or an
-unsandboxed browser.
+Native hosts never fall back to a container or an unsandboxed browser.
 
 ## Persistence, updates and removal
 

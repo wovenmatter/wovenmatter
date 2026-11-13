@@ -13,8 +13,6 @@ Names and marks of third parties belong to their respective owners, including:
 
 - **Harnesses and providers:** Codex and OpenAI; Claude and Anthropic; Grok and
   xAI; OpenCode; Pi.
-- **Retired harnesses:** Hermes, Cursor, and OpenClaw. Their marks remain in the
-  app only to label archived conversations.
 - **Platforms and components:** Apple, macOS, iPhone, TestFlight, Tailscale,
   Docker, Ubuntu, Chromium, and Executor.
 

@@ -125,8 +125,7 @@ Both projects are licensed under the MIT License. T3 Code carries copyright
 
 The app displays third-party marks only to identify the harness used by an
 agent. The marks remain trademarks of their respective owners and are not
-Woven Matter branding. OpenClaw, Hermes, Cursor, and the Pi CLI are retired
-harnesses; their marks remain only to label archived conversations.
+Woven Matter branding.
 
 | Asset | Source | Terms and modifications |
 |---|---|---|
@@ -134,10 +133,7 @@ harnesses; their marks remain only to label archived conversations.
 | OpenAI | [T3 Code `openai_dark.svg`](https://github.com/pingdotgg/t3code/blob/afa83098064e7dca524a1e42dea3de03a883a0b6/apps/marketing/public/harnesses/openai_dark.svg) | T3 Code is MIT licensed; white fill changed to a template-compatible black fill and offered as the alternate Codex harness mark |
 | Claude | [Anthropic press kit](https://www.anthropic.com/press-kit) | Official `Claude Spark - Clay.svg`; unmodified |
 | Grok | [xAI brand guidelines](https://x.ai/legal/brand-guidelines) | Official `Grok_Logomark_Dark.svg`; unmodified and used referentially as required by xAI |
-| OpenClaw | [OpenClaw](https://github.com/openclaw/openclaw/blob/main/ui/public/favicon.svg) | MIT licensed; SMIL animation removed to retain the static upstream rest pose |
-| Hermes | [Ollama launcher asset](https://github.com/ollama/ollama/blob/main/app/ui/app/public/launch-icons/hermes-agent.svg) | Ollama is MIT licensed; downstream vectorization of the portrait published by the MIT-licensed [Hermes Agent](https://github.com/NousResearch/hermes-agent) repository |
-| Pi | [Pi press kit](https://pi.dev/press-kit), [primary color SVG](https://pi.dev/logo-auto.svg) | Official color pixel mark from the MIT-licensed Pi project retained at `docs/assets/harness-logos/pi-color.svg`; the app places it on the same circular black badge as the black-and-white variant, preserving matching canvas dimensions, padding, and mark bounds, and uses it by default for Pi Durable. The existing circular black-and-white badge remains an alternate Pi Durable icon and the Pi CLI icon |
-| Cursor | [Cursor favicon](https://cursor.com/favicon.svg) | Official logomark; unmodified |
+| Pi | [Pi press kit](https://pi.dev/press-kit), [primary color SVG](https://pi.dev/logo-auto.svg) | Official color pixel mark from the MIT-licensed Pi project retained at `docs/assets/harness-logos/pi-color.svg`; the app places it on the same circular black badge as the black-and-white variant, preserving matching canvas dimensions, padding, and mark bounds, and uses it by default for Pi Durable. The existing circular black-and-white badge remains an alternate Pi Durable icon |
 | OpenCode | [OpenCode brand guidelines](https://opencode.ai/brand) | Official pixel logomark reconstructed from the published brand “O”; two-tone fills retained |
 
 An open-source repository license does not transfer ownership of the underlying
@@ -148,9 +144,6 @@ The MIT-licensed sources above carry these copyright notices:
 
 - Copyright (c) 2023 LobeHub
 - Copyright (c) 2026 T3 Tools Inc.
-- Copyright (c) 2026 OpenClaw Foundation
-- Copyright (c) Ollama
-- Copyright (c) 2025 Nous Research
 - Copyright (c) 2025 Mario Zechner
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
@@ -408,26 +401,12 @@ libvips packages. Their Apache-2.0, LGPL-3.0-or-later, and dependency notices
 remain in the installed packages. The replacement changes dependency selection
 and does not modify upstream source.
 
-## Remote workspace image (deprecated)
-
-Remote container workspaces are deprecated and no longer offered; native Linux
-hosts replaced them. Until its removal, the repository still builds the former
-workspace image (`remote/Dockerfile`). It builds unmodified OpenSSH Portable
-10.6p2 client sources from [OpenSSH](https://www.openssh.org/portable.html),
-checks the source archive's SHA-256 and detached signature, and retains the
-upstream `LICENCE` at `/usr/local/share/licenses/openssh/LICENCE`. It installs
-GitHub CLI from its signed official package repository (MIT), the official
-Python 3.15 runtime with current pip and setuptools, and Archive::Tar 3.14.
-npm keeps its Artistic License 2.0 and dependency notices; its bundled undici
-is replaced by the locked selection in `remote/npm-runtime`, which keeps its
-MIT license and does not modify undici source.
-
 ## Debian security rebuilds
 
-Both images rebuild selected Debian runtime libraries from authenticated
+The Executor image rebuilds selected Debian runtime libraries from authenticated
 Debian source packages. Reviewed Ubuntu or upstream security patches are
 applied where Debian stable has not yet published a fixed binary. Package
 copyright files remain under `/usr/share/doc`; exact source versions, patch
 origins, hashes, and Debian build provenance are retained under
-`/usr/local/share/wovenmatter/security/provenance` in each image and in
+`/usr/local/share/wovenmatter/security/provenance` in the image and in
 `remote/security/backports.json` in this repository.

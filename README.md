@@ -180,9 +180,8 @@ scripts/test-changes.sh --ci     # the portable Linux check that PR CI runs
 ```
 
 Narrower options are `--desktop`, `--macos`, `--native`, `--cross-device`,
-`--cross-device-desktop`, `--remote`, and `--linux`. Use `scripts/test-container.sh`
-for container lifecycle changes when Docker is available. Tests never call
-provider services.
+`--cross-device-desktop`, `--remote`, and `--linux`. Tests never call provider
+services.
 
 `scripts/with-pinned-node.sh COMMAND` runs a command with the pinned Node first
 on `PATH`. The bots runtime requires it.

@@ -44,13 +44,6 @@ scripts/test-changes.sh          # suites chosen from the files you changed
 scripts/test-changes.sh --all    # changes that span components
 ```
 
-When container lifecycle behavior changes (bots or the Executor image) and
-Docker is available, also run:
-
-```sh
-scripts/test-container.sh
-```
-
 Tests must be deterministic, need no provider credentials, and make no real
 model calls. Describe any platform or environment limitation in the pull
 request. Pull request CI runs one portable Linux check without provider,
