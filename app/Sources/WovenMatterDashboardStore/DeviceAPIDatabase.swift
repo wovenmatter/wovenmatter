@@ -176,16 +176,14 @@ extension WorkspaceDatabaseConnection {
     if let federated = try federationConversationUnlocked(id) { return federated }
     let statement = try prepareUnlocked("""
       SELECT c.id, c.title, c.folder_id,
-        CASE WHEN g.agent_id IS NOT NULL THEN 'gateway:' || g.agent_id
-          WHEN s.remote_workspace_id IS NOT NULL THEN 'remote:' || s.remote_workspace_id || ':' || s.runtime_kind
+        CASE WHEN s.remote_workspace_id IS NOT NULL THEN 'remote:' || s.remote_workspace_id || ':' || s.runtime_kind
           WHEN s.runtime_kind IS NOT NULL THEN 'local:' || s.runtime_kind
           ELSE NULL END,
-        COALESCE(s.runtime_kind, CASE WHEN g.agent_id IS NOT NULL THEN 'openclaw' ELSE NULL END),
+        s.runtime_kind,
         c.last_message_preview, c.updated_at,
         (SELECT id FROM dashboard_runs WHERE conversation_id = c.id AND status = 'running' ORDER BY created_at DESC LIMIT 1),
         s.remote_workspace_id, c.is_pinned
       FROM dashboard_conversations c LEFT JOIN desktop_local_acp_sessions s ON s.conversation_id = c.id
-      LEFT JOIN desktop_openclaw_gateway_sessions g ON g.conversation_id = c.id
       WHERE c.id = ? AND (c.user_id = ? OR c.desktop_owned = 1) AND c.deleted_at IS NULL AND c.is_archived = 0
       """)
     defer { sqlite3_finalize(statement) }

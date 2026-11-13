@@ -24,12 +24,11 @@ struct DeviceConnectionIcon: View {
 struct DevicePairingDiscoveryCard: View {
     @Bindable var pairing: MacPairingController
     @Bindable var host: LibraryHostController
-    var canPairWithCentral: Bool
     @State private var devices = MacDeviceSetupModel()
     var body: some View {
         SettingsSummaryRow("Find on your network") {
             SettingsNote("Find other Macs on your Tailscale network, even when Woven Matter is closed.")
-            MacTailnetDiscoveryView(devices: devices, pairing: pairing, host: host, canPairWithCentral: canPairWithCentral)
+            MacTailnetDiscoveryView(devices: devices, pairing: pairing, host: host)
         }
         // Stays visible when the row above is collapsed.
         if let error = pairing.errorMessage { SettingsError(error) }

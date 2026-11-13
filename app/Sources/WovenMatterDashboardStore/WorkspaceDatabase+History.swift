@@ -7,34 +7,6 @@ import CSQLite
 import WovenMatterCore
 import WovenMatterClient
 
-/// One recorder belongs to one native connection. Gateway responses omit the
-/// session key, so retain bounded request correlation without altering raw bytes.
-private final class GatewayHistoryRequestCorrelation: @unchecked Sendable {
-  private let lock = NSLock()
-  private var requests: [String: (key: String, order: UInt64)] = [:]
-  private var sequence: UInt64 = 0
-
-  func sessionKey(direction: String, data: Data) -> String? {
-    guard let frame = (try? JSONDecoder().decode(GatewayJSONValue.self, from: data))?.objectValue else { return nil }
-    let payload = frame["params"]?.objectValue ?? frame["payload"]?.objectValue ?? [:]
-    let key = payload["sessionKey"]?.stringValue ?? payload["key"]?.stringValue
-    return lock.withLock {
-      if direction == "out", frame["type"]?.stringValue == "req",
-         let id = frame["id"]?.stringValue, let key {
-        sequence &+= 1
-        requests[id] = (key, sequence)
-        if requests.count > 1_024, let oldest = requests.min(by: { $0.value.order < $1.value.order })?.key {
-          requests.removeValue(forKey: oldest)
-        }
-      }
-      if direction == "in", frame["type"]?.stringValue == "res", let id = frame["id"]?.stringValue {
-        return requests.removeValue(forKey: id)?.key ?? key
-      }
-      return key
-    }
-  }
-}
-
 // MARK: - User-owned history (same workspace.sqlite; independent of UI projections)
 extension WorkspaceDatabaseConnection {
   func migrateWorkspaceHistory() throws {
@@ -84,11 +56,6 @@ extension WorkspaceDatabaseConnection {
           WHERE conversation_id IS NULL AND harness='opencode'
             AND source_connection_id=new.connection_id AND native_session_id=new.session_id;
         END;
-        CREATE TRIGGER IF NOT EXISTS history_openclaw_import AFTER INSERT ON desktop_openclaw_gateway_sessions BEGIN
-          UPDATE workspace_history_events SET conversation_id=new.conversation_id
-          WHERE conversation_id IS NULL AND harness='openclaw'
-            AND agent_id=new.agent_id AND native_session_id=new.session_key;
-        END;
         """)
       // Import only surviving projections once. Never imply that old raw traces existed.
       let hasVersion1: Bool = try {
@@ -110,7 +77,7 @@ extension WorkspaceDatabaseConnection {
             'activity.snapshot',json_object('id',e.id,'eventType',e.event_type,'content',e.content,'createdAt',e.created_at),'legacy-partial'
           FROM dashboard_run_events e LEFT JOIN desktop_local_acp_sessions s ON s.conversation_id=e.conversation_id;
           INSERT OR IGNORE INTO workspace_history_events(id,conversation_id,run_id,harness,kind,payload,completeness)
-          SELECT 'legacy-trace:'||id,conversation_id,run_id,'openclaw','trace.snapshot',raw_event_json,'legacy-partial'
+          SELECT 'legacy-trace:'||id,conversation_id,run_id,'unknown','trace.snapshot',raw_event_json,'legacy-partial'
           FROM dashboard_run_trace_events;
           INSERT INTO workspace_history_schema(version) VALUES(1);
           """)
@@ -219,27 +186,9 @@ extension WorkspaceDatabaseConnection {
       : WorkspaceHistoryPrivacy.redactingToolEndpoints(event.payload)
     event.textContent = event.textContent.map(WorkspaceHistoryPrivacy.redactingToolEndpoints)
     event.projectionJSON = event.projectionJSON.map(WorkspaceHistoryPrivacy.redactingToolEndpoints)
-    if event.nativeSessionID == nil, event.harness == "openclaw",
-      let object = try? JSONSerialization.jsonObject(with: Data(event.payload.utf8))
-        as? [String: Any]
-    {
-      let payload =
-        (object["payload"] as? [String: Any]) ?? (object["params"] as? [String: Any]) ?? object
-      let key = (payload["sessionKey"] as? String) ?? (payload["key"] as? String)
-      event.nativeSessionID = key
-    }
-    if event.conversationID == nil, let key = event.nativeSessionID {
-      if event.harness == "openclaw" {
-        let rows = try historyRowsUnlocked(
-          "SELECT conversation_id FROM desktop_openclaw_gateway_sessions WHERE session_key=? AND agent_id=?",
-          values: [key, event.agentID])
-        if rows.count == 1 {
-          event.conversationID = rows.first?.objectValue?["conversation_id"]?.stringValue
-        }
-      } else if event.harness == "opencode" {
-        event.conversationID = try historyRowsUnlocked("SELECT conversation_id FROM desktop_opencode_sessions WHERE connection_id=? AND session_id=?",
-          values: [event.sourceConnectionID, key]).first?.objectValue?["conversation_id"]?.stringValue
-      }
+    if event.conversationID == nil, let key = event.nativeSessionID, event.harness == "opencode" {
+      event.conversationID = try historyRowsUnlocked("SELECT conversation_id FROM desktop_opencode_sessions WHERE connection_id=? AND session_id=?",
+        values: [event.sourceConnectionID, key]).first?.objectValue?["conversation_id"]?.stringValue
     }
     let existing = try prepareUnlocked(
       "SELECT payload,kind,harness,conversation_id,agent_id,run_id,completeness,native_session_id,source_connection_id,source_id,native_record_id,native_revision_id,content_mode,text_content,projection_json FROM workspace_history_events WHERE id=?")
@@ -464,7 +413,7 @@ extension WorkspaceDatabaseConnection {
       let newest = query.sort == "newest"
       sql = """
         SELECT c.rowid AS sequence,c.id,c.title,c.agent_codename,c.folder_id,c.created_at,c.updated_at,c.deleted_at,
-          coalesce(s.runtime_kind,CASE WHEN o.session_id IS NOT NULL THEN 'opencode' END,'openclaw') AS harness,
+          coalesce(s.runtime_kind,CASE WHEN o.session_id IS NOT NULL THEN 'opencode' END,'unknown') AS harness,
           s.model,s.thinking,s.remote_workspace_id,
           (SELECT status FROM dashboard_runs WHERE conversation_id=c.id ORDER BY rowid DESC LIMIT 1) AS status
         FROM dashboard_conversations c LEFT JOIN desktop_local_acp_sessions s ON s.conversation_id=c.id
@@ -746,17 +695,15 @@ extension WorkspaceDatabase {
 
   public func historyWireRecorder(conversationID: String? = nil, agentID: String? = nil,
     harness: String, sourceScope: String? = nil) -> WorkspaceWireRecorder {
-    let correlation = GatewayHistoryRequestCorrelation()
-    return { [self] direction, data in
+    { [self] direction, data in
       if direction == "native" {
         var batch = try JSONDecoder().decode(WorkspaceNativeRunRecordBatch.self, from: data)
         if let sourceScope { batch.sourceID = sourceScope + ":" + batch.sourceID }
         try await recordNativeRunRecords(batch, conversationID: conversationID, agentID: agentID, harness: harness)
         return
       }
-      let key = harness == "openclaw" ? correlation.sessionKey(direction: direction, data: data) : nil
       try await recordHistory(.init(conversationID: conversationID, agentID: agentID,
-        harness: harness, kind: "wire.\(direction)", payload: String(decoding: data, as: UTF8.self), nativeSessionID: key))
+        harness: harness, kind: "wire.\(direction)", payload: String(decoding: data, as: UTF8.self)))
     }
   }
 

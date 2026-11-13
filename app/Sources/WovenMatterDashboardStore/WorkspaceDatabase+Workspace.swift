@@ -537,15 +537,9 @@ extension WorkspaceDatabaseConnection {
               WHERE local_session.conversation_id = dashboard_conversations.id
             ),
             'unread', unread, 'last_message_preview', last_message_preview,
-            'openclaw_session_key', COALESCE(openclaw_session_key,
-              (SELECT session_key FROM desktop_openclaw_gateway_sessions
-               WHERE conversation_id = dashboard_conversations.id)),
             'is_scheduled_task', EXISTS(SELECT 1 FROM workspace_calendar_sessions WHERE id=dashboard_conversations.id),
-            'imported_at', COALESCE(
+            'imported_at',
               (SELECT imported_at FROM desktop_session_imports WHERE conversation_id = dashboard_conversations.id),
-              (SELECT imported_at FROM desktop_openclaw_import_activity WHERE conversation_id = dashboard_conversations.id
-                AND instr(COALESCE(dashboard_conversations.openclaw_session_key, ''), ':wovenmatter:') = 0)
-            ),
             'last_message_at', last_message_at, 'folder_id', folder_id,
             'is_pinned', is_pinned,
             'is_archived', is_archived

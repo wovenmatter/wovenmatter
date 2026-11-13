@@ -108,10 +108,6 @@ enum DashboardHarnessLogo: String, CaseIterable, Sendable {
     case codex
     case claude
     case grok
-    case openClaw
-    case hermes
-    case pi
-    case cursor
     case openCode
 
     static func resolve(
@@ -121,14 +117,11 @@ enum DashboardHarnessLogo: String, CaseIterable, Sendable {
             .lowercased()
             .filter { $0.isLetter || $0.isNumber }
         return switch identity {
-        case "defaultagent", "wovendefaultagent": .defaultAgent
+        // An iPhone's on-device Pi Durable runtime reports itself as `pi`.
+        case "defaultagent", "wovendefaultagent", "pidurable": .defaultAgent
         case "codex", "codexcli", "openaicodex": .codex
         case "claude", "claudecode", "claudeai": .claude
         case "grok", "grokbuild": .grok
-        case "openclaw": .openClaw
-        case "hermes", "hermesagent": .hermes
-        case "pi", "piagent", "pimono", "picodingagent": .pi
-        case "cursor", "cursoragent", "cursorcli": .cursor
         case "opencode", "opencodeai": .openCode
         default: nil
         }
@@ -139,11 +132,7 @@ enum DashboardHarnessLogo: String, CaseIterable, Sendable {
         case .codex: "harness-codex"
         case .claude: "harness-claude"
         case .grok: "harness-grok"
-        case .openClaw: "harness-openclaw"
-        case .hermes: "harness-hermes"
         case .defaultAgent: DashboardPiDurableLogoStyle.defaultStyle.assetName
-        case .pi: "harness-pi"
-        case .cursor: "harness-cursor"
         case .openCode: "harness-opencode"
         }
     }
@@ -243,7 +232,7 @@ struct DashboardHarnessLogoIcon: View {
 
     private var usesTemplateRendering: Bool {
         // The original monochrome marks need a contrasting tint on dark surfaces.
-        if colorScheme == .dark && [.grok, .hermes].contains(logo) { return true }
+        if colorScheme == .dark && logo == .grok { return true }
         return logo == .codex ? codexLogoStyle.usesTemplateRendering : logo.usesTemplateRendering
     }
 

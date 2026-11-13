@@ -278,6 +278,26 @@ public struct RemoteHarnessStatus: Codable, Equatable, Identifiable, Sendable {
     }
 }
 
+/// A workspace service that predates an update may still list a harness Woven
+/// no longer runs. Skip rows whose `id` names no current harness; every other
+/// row must decode exactly.
+struct KnownHarnessRows<Row: Decodable>: Decodable {
+    let rows: [Row]
+
+    private struct Identity: Decodable { let id: String }
+
+    init(from decoder: any Decoder) throws {
+        var container = try decoder.unkeyedContainer()
+        var rows: [Row] = []
+        while !container.isAtEnd {
+            let element = try container.superDecoder()
+            guard AgentRuntimeKind(rawValue: try Identity(from: element).id) != nil else { continue }
+            rows.append(try Row(from: element))
+        }
+        self.rows = rows
+    }
+}
+
 public struct RemoteWorkspaceInstanceStatus: Codable, Equatable, Sendable {
     public let kind: String
     public let state: String
@@ -1110,13 +1130,13 @@ public struct RemoteWorkspaceServiceClient: Sendable {
     }
 
     public func harnesses() async throws -> [RemoteHarnessStatus] {
-        struct Document: Decodable { let harnesses: [RemoteHarnessStatus] }
+        struct Document: Decodable { let harnesses: KnownHarnessRows<RemoteHarnessStatus> }
         let document: Document = try await request(
             path: "v1/harnesses",
             method: "GET",
             body: nil
         )
-        return document.harnesses
+        return document.harnesses.rows
     }
 
     public func workspaceInstance(
@@ -1129,12 +1149,12 @@ public struct RemoteWorkspaceServiceClient: Sendable {
     }
 
     public func runtimeMaintenance(checkLatest: Bool = false) async throws -> [RemoteRuntimeMaintenance] {
-        struct Document: Decodable { let runtimes: [RemoteRuntimeMaintenance] }
+        struct Document: Decodable { let runtimes: KnownHarnessRows<RemoteRuntimeMaintenance> }
         let document: Document = try await request(
             path: checkLatest ? "v1/runtime-maintenance/check" : "v1/runtime-maintenance",
             method: checkLatest ? "POST" : "GET", body: nil
         )
-        var runtimes = document.runtimes
+        var runtimes = document.runtimes.rows
         for index in runtimes.indices {
             let runtime = runtimes[index]
             // Existing containers may still persist the removed opt-in flags.

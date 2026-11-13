@@ -176,7 +176,7 @@ extension ApplicationModel {
             let desired = selectionsApplyingWorkspaceAccess(saved.desiredSelections, runtime: native.runtimeKind, workspaceID: native.remoteWorkspaceID)
             if desired.model != nil || desired.thinking != nil || desired.permission != nil {
                 _ = try await centralExecutionClient().perform(conversationID: conversationID, action: .configureSession(id: conversationID,
-                    model: desired.model, thinking: desired.thinking, permission: native.runtimeKind == .pi ? nil : desired.permission))
+                    model: desired.model, thinking: desired.thinking, permission: desired.permission))
             }
             sessionSelectionPreferences.markApplied(id: conversationID)
             return

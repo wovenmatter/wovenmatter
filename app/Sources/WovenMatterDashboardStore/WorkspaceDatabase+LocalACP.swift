@@ -776,8 +776,6 @@ extension WorkspaceDatabaseConnection {
         try toolsExecuteUnlocked("UPDATE workspace_session_deliveries SET message_id=NULL,status='sending',transport_started=0 WHERE id=? AND message_id=?",
           [deliveryID, ids.userMessageID])
       }
-      try toolsExecuteUnlocked("DELETE FROM desktop_openclaw_run_inputs WHERE local_run_id=? AND user_message_id=?",
-        [ids.runID, ids.userMessageID])
       for table in ["dashboard_message_attachments", "dashboard_message_references"] {
         try toolsExecuteUnlocked("DELETE FROM \(table) WHERE message_id IN (?,?)", [ids.userMessageID, ids.assistantMessageID])
       }
@@ -1369,7 +1367,6 @@ extension WorkspaceDatabaseConnection {
         SELECT DISTINCT r.conversation_id FROM dashboard_runs r
         JOIN desktop_local_acp_sessions s ON s.conversation_id=r.conversation_id AND s.remote_workspace_id IS NOT NULL
         WHERE r.desktop_owned=1 AND r.status IN ('running','uncertain')
-          AND r.conversation_id NOT IN (SELECT conversation_id FROM desktop_openclaw_gateway_sessions)
           AND r.conversation_id NOT IN (SELECT conversation_id FROM desktop_opencode_sessions)
           AND \(PairedLibraryOwnership.localConversation("r.conversation_id"))
         """, bindings: []) {
@@ -1386,9 +1383,8 @@ extension WorkspaceDatabaseConnection {
           SELECT assistant_message_id
           FROM dashboard_runs
           WHERE desktop_owned = 1 AND status = 'running'
-            AND conversation_id NOT IN (SELECT conversation_id FROM desktop_openclaw_gateway_sessions)
-          AND conversation_id NOT IN (SELECT conversation_id FROM desktop_opencode_sessions)
-          AND \(PairedLibraryOwnership.localConversation("dashboard_runs.conversation_id"))
+            AND conversation_id NOT IN (SELECT conversation_id FROM desktop_opencode_sessions)
+            AND \(PairedLibraryOwnership.localConversation("dashboard_runs.conversation_id"))
         )
         """)
       defer { sqlite3_finalize(message) }
@@ -1401,7 +1397,6 @@ extension WorkspaceDatabaseConnection {
           error = 'The local agent stopped when Woven Matter closed.',
           completed_at = ?, updated_at = ?
         WHERE desktop_owned = 1 AND status = 'running'
-          AND conversation_id NOT IN (SELECT conversation_id FROM desktop_openclaw_gateway_sessions)
           AND conversation_id NOT IN (SELECT conversation_id FROM desktop_opencode_sessions)
           AND \(PairedLibraryOwnership.localConversation("dashboard_runs.conversation_id"))
         """)

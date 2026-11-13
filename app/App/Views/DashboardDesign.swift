@@ -380,11 +380,7 @@ extension DashboardHarnessLogo {
         case .codex: self = .codex
         case .claudeCode: self = .claude
         case .grokBuild: self = .grok
-        case .openclaw: self = .openClaw
-        case .hermes: self = .hermes
         case .defaultAgent: self = .defaultAgent
-        case .pi: self = .pi
-        case .cursor: self = .cursor
         case .opencode: self = .openCode
         }
     }

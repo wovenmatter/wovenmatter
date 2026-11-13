@@ -63,9 +63,7 @@ struct DashboardCalendarTaskFields: View {
             }
             optionPicker("Model", selection: choice(\.model), choices: metadata?.selectableModels ?? [], metadata: metadata?.modelOptionMetadata ?? [:])
             optionPicker("Thinking level", selection: choice(\.thinking), choices: metadata?.selectableThinkingLevels ?? [], metadata: metadata?.thinkingOptionMetadata ?? [:])
-            if task.configuration.runtimeKind != .pi {
-                optionPicker("Access", selection: choice(\.permission), choices: metadata?.permissionOptions ?? [], metadata: metadata?.permissionOptionMetadata ?? [:])
-            }
+            optionPicker("Access", selection: choice(\.permission), choices: metadata?.permissionOptions ?? [], metadata: metadata?.permissionOptionMetadata ?? [:])
             if let error { Text(error).font(.system(size: 11.5)).foregroundStyle(DashboardPalette.danger).fixedSize(horizontal: false, vertical: true) }
             DisclosureGroup {
                 VStack(alignment: .leading, spacing: 9) {

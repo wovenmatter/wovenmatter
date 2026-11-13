@@ -101,10 +101,12 @@ extension WorkspaceDatabaseConnection {
           END;
           """)
         let traceCondition = operation == "UPDATE" ? "WHEN old.raw_event_json IS NOT new.raw_event_json OR old.stream_event_json IS NOT new.stream_event_json" : ""
+        try executeUnlocked("DROP TRIGGER IF EXISTS history_trace_\(suffix)")
         try executeUnlocked("""
           CREATE TRIGGER IF NOT EXISTS history_trace_\(suffix) AFTER \(operation) ON dashboard_run_trace_events \(traceCondition) BEGIN
             INSERT INTO workspace_history_events(id,conversation_id,run_id,agent_id,harness,kind,payload,source_id,native_session_id,native_record_id,content_mode,text_content,projection_json)
-            VALUES(lower(hex(randomblob(16))),new.conversation_id,new.run_id,(SELECT agent_id FROM dashboard_runs WHERE id=new.run_id),'openclaw','trace.snapshot',
+            VALUES(lower(hex(randomblob(16))),new.conversation_id,new.run_id,(SELECT agent_id FROM dashboard_runs WHERE id=new.run_id),
+              coalesce((SELECT runtime_kind FROM desktop_local_acp_sessions WHERE conversation_id=new.conversation_id),'unknown'),'trace.snapshot',
               woven_history_redact(new.raw_event_json),'woven:trace',new.openclaw_session_key,new.id,'snapshot',
               woven_history_redact(new.content),woven_history_redact(new.stream_event_json));
           END;

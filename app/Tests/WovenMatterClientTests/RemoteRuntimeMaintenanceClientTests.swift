@@ -30,8 +30,8 @@ struct RemoteRuntimeMaintenanceClientTests {
         #expect(operation.status == "running")
         let polled = try await second.operation(id: operation.id)
         #expect(polled.id == operation.id)
-        let hermes = try await second.maintainRuntime(.hermes, action: "update", sourceSHA256: nil)
-        #expect(hermes.harnessID == .hermes)
+        let claude = try await second.maintainRuntime(.claudeCode, action: "update", sourceSHA256: nil)
+        #expect(claude.harnessID == .claudeCode)
         let status = try await second.workspaceInstance(.opencode, action: "start")
         #expect(status.state == "running")
     }
@@ -65,7 +65,9 @@ private final class RemoteMaintenanceFixtureProtocol: URLProtocol, @unchecked Se
         case "/v1/runtime-maintenance":
             #expect(first || request.url?.port == 41003)
             #expect(request.httpMethod == "GET")
-            value = "{\"runtimes\":[\(row)]}"
+            // A service that predates an update can still list a retired harness.
+            let retired = row.replacingOccurrences(of: "\"id\":\"codex\"", with: "\"id\":\"hermes\"")
+            value = "{\"runtimes\":[\(retired),\(row)]}"
         case "/v1/runtime-maintenance/check":
             #expect(!first)
             #expect(request.httpMethod == "POST")
@@ -93,13 +95,13 @@ private final class RemoteMaintenanceFixtureProtocol: URLProtocol, @unchecked Se
             #expect(!first)
             #expect(request.httpMethod == "GET")
             value = #"{"id":"abcdef01-abcd-abcd-abcd-abcdef012345","harnessID":"codex","action":"update","status":"succeeded","output":"","error":null,"startedAt":"2026-09-11T00:00:00Z","finishedAt":null}"#
-        case "/v1/runtime-maintenance/hermes/update":
+        case "/v1/runtime-maintenance/claude_code/update":
             #expect(!first)
             #expect(request.httpMethod == "POST")
             #expect(payload?["confirmed"] as? Bool == true)
             #expect(payload?["sourceSHA256"] == nil)
             #expect(payload?["packageSpec"] == nil)
-            value = #"{"id":"00000000-0000-0000-0000-000000000002","harnessID":"hermes","action":"update","status":"running","output":"","error":null,"startedAt":"2026-09-11T00:00:00Z","finishedAt":null}"#
+            value = #"{"id":"00000000-0000-0000-0000-000000000002","harnessID":"claude_code","action":"update","status":"running","output":"","error":null,"startedAt":"2026-09-11T00:00:00Z","finishedAt":null}"#
         case "/v1/workspace-instances/opencode/start":
             #expect(!first)
             #expect(request.httpMethod == "POST")

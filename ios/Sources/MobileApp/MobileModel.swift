@@ -1021,7 +1021,7 @@ import MobileInference
       if scenario == "offline-device" {
         let workspace = ExecutionWorkspace(id: "11111111-2222-4333-8444-555555555555", libraryID: "fixture", ownerDeviceID: "fixture-host", kind: .linux, name: "Offline Linux")
         executionWorkspaces = [workspace]
-        workspaceProviders[workspace.id] = [.init(id: "pi", runtimeKind: "pi", displayName: "Pi Durable", available: true)]
+        workspaceProviders[workspace.id] = [.init(id: "pi", runtimeKind: "default_agent", displayName: "Pi Durable", available: true)]
         workspaceReachable[workspace.id] = false
       }
       if scenario == "workspace-organization" || scenario == "remote-folders-empty" {
@@ -1031,7 +1031,7 @@ import MobileInference
           .init(id: linux, libraryID: "fixture", ownerDeviceID: mac, kind: .linux, name: "Linux workspace"),
           .init(id: ipad, libraryID: "fixture", ownerDeviceID: ipad, kind: .ios, name: "Travel iPad", capabilities: ["quick-chat", "notes"])
         ]
-        providers = [.init(id: "pi", runtimeKind: "pi", displayName: "Pi Durable", available: true)]
+        providers = [.init(id: "pi", runtimeKind: "default_agent", displayName: "Pi Durable", available: true)]
         workspaceProviders[mac] = providers; workspaceProviders[linux] = providers
         workspaceReachable[mac] = true; workspaceReachable[linux] = true
         let localFolder = LibraryFolder(id: "dddddddd-4444-4444-8444-444444444444", name: "Phone ideas", execution: .init(workspaceID: "device:" + state.deviceID, rootPath: "/fixture/phone"))
@@ -1040,7 +1040,7 @@ import MobileInference
         let document = try NoteDocument().encoded()
         let localNote = LibraryNote(id: "organization-local-note", title: "Unfiled phone idea", content: document)
         let ipadNote = LibraryNote(id: "organization-ipad-note", folderID: ipadFolder.id, title: "Packing list", content: document)
-        let chat = LibraryConversation(id: "organization-ipad-chat", title: "Weekend plans", providerID: "pi-durable-device", runtimeKind: "pi", workspaceID: ipad)
+        let chat = LibraryConversation(id: "organization-ipad-chat", title: "Weekend plans", providerID: "pi-durable-device", runtimeKind: "default_agent", workspaceID: ipad)
         let fixtureFolders = [localFolder, macFolder, ipadFolder]
         let fixtureNotes = [localNote, ipadNote]
         // Fixture launches can reuse a namespace to verify persistence. Replace

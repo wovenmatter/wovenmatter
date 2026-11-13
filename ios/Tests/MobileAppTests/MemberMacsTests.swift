@@ -43,9 +43,9 @@ private actor SlowWorkspace: ExecutionWorkspaceTransport {
   var holding: Bool { held != nil }
   func release() { held?.resume(); held = nil }
   func identity() async throws -> ExecutionWorkspace { workspace }
-  func providers() async throws -> [HarnessCapabilities] { [.init(id: "pi", runtimeKind: "pi", displayName: "Pi Durable", available: true)] }
+  func providers() async throws -> [HarnessCapabilities] { [.init(id: "pi", runtimeKind: "default_agent", displayName: "Pi Durable", available: true)] }
   func pending() async throws -> [PendingInteraction] { [] }
-  func capabilities(_ id: String) async throws -> HarnessCapabilities { .init(id: "pi", runtimeKind: "pi", displayName: "Pi Durable", available: true) }
+  func capabilities(_ id: String) async throws -> HarnessCapabilities { .init(id: "pi", runtimeKind: "default_agent", displayName: "Pi Durable", available: true) }
   func command(_ command: LibraryCommand) async throws -> LibraryCommandReceipt {
     await withCheckedContinuation { held = $0 }
     let runID = "run-" + command.commandID
@@ -150,7 +150,7 @@ final class MemberMacsTests: XCTestCase {
     defer { try? FileManager.default.removeItem(at: root) }
     let store = try MobileStore(file: root.appendingPathComponent("library.json"))
     try await store.apply(LibrarySnapshot(workspaceID: "library-a", cursor: 0, conversations: [
-      .init(id: "chat", title: "Hello", providerID: "pi", runtimeKind: "pi", workspaceID: air.id)]))
+      .init(id: "chat", title: "Hello", providerID: "pi", runtimeKind: "default_agent", workspaceID: air.id)]))
     let earlier = LibraryTranscript(conversationID: "chat", messages: [
       .init(id: "hello", conversationID: "chat", runID: "run-1", role: "user", content: "Hey"),
       .init(id: "reply", conversationID: "chat", runID: "run-1", role: "assistant", content: "Hi", status: "completed")])

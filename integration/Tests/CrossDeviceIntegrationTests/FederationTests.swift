@@ -23,7 +23,7 @@ struct FederationTests {
   func creation(_ workspace: ExecutionWorkspace, id: String? = nil, sequence: Int64 = 1) -> ExecutionJournalEntry {
     let id = id ?? uuid()
     return .init(workspaceID: workspace.id, originSequence: sequence, conversationID: id, kind: .conversation,
-      conversation: .init(id: id, title: "Mobile execution", runtimeKind: "pi"))
+      conversation: .init(id: id, title: "Mobile execution", runtimeKind: "default_agent"))
   }
 
   @Test("additive migration keeps library identity and existing notes across restart")

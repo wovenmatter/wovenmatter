@@ -438,7 +438,7 @@ extension ApplicationModel {
         tools.executorProfiles = settings.executor?.defaultProfiles ?? []
         return .init(runtimeKind: runtime, workspaceID: workspaceID, folderID: destinationFolder,
             title: title, model: resolved.model, thinking: resolved.thinking,
-            permission: runtime == .pi ? nil : resolved.permission,
+            permission: resolved.permission,
             usesProductPermissionDefault: sessionSelectionPreferences.usesProductPermissionDefault(harness: runtime.rawValue, workspace: scope),
             selectionWorkspace: scope,
             nativeWorkingDirectory: directory,

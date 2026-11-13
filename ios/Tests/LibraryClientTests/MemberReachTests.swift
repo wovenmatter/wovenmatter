@@ -256,7 +256,7 @@ final class MemberReachTests: XCTestCase {
     let device = phoneID
     try await journal.upsertWorkspace(.init(id: device, libraryID: "library-a", ownerDeviceID: device, kind: .ios, name: "iPhone"))
     let conversation = UUID().uuidString.lowercased()
-    _ = try await journal.append(workspaceID: device, conversation: .init(id: conversation, title: "Quick chat", runtimeKind: "pi"))
+    _ = try await journal.append(workspaceID: device, conversation: .init(id: conversation, title: "Quick chat", runtimeKind: "default_agent"))
     let entries = await journal.pendingOwnerEntries(deviceID: device)
     try await journal.acknowledge(.init(libraryID: "library-a", acceptedEventIDs: entries.map(\.eventID), cursor: 1), submitted: entries)
     let drained = await journal.pendingOwnerEntries(deviceID: device)

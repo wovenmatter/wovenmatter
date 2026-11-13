@@ -111,10 +111,9 @@ actor UsageRunRecorder {
     case .codex: (.codex, "OpenAI", "Codex subscription")
     case .claudeCode: (.claude, "Anthropic", "Claude account")
     case .grokBuild: (.grok, "xAI", "Grok account")
-    case .cursor: (.cursor, "Cursor", "Cursor subscription")
-    // OpenCode, Pi, OpenClaw, and Hermes are harnesses rather than billing
-    // authorities. Their durable histories provide the actual provider route.
-    case .defaultAgent, .opencode, .openclaw, .pi, .hermes: (.unknown, "Unknown", "Unknown")
+    // Pi Durable and OpenCode are harnesses rather than billing authorities.
+    // Their durable histories provide the actual provider route.
+    case .defaultAgent, .opencode: (.unknown, "Unknown", "Unknown")
     }
   }
 }

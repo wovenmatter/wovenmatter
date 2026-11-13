@@ -91,7 +91,7 @@ final class PairingSettingsTests: XCTestCase {
     model.executionWorkspaces = [workspace]
     model.workspaceClients[workspace.id] = WorkspaceClient(store: store, workspaceID: workspace.id, transport: DisabledPairingWorkspace())
     model.workspaceReachable[workspace.id] = true
-    model.workspaceProviders[workspace.id] = [.init(id: "pi", runtimeKind: "pi", displayName: "Pi Durable", available: true)]
+    model.workspaceProviders[workspace.id] = [.init(id: "pi", runtimeKind: "default_agent", displayName: "Pi Durable", available: true)]
     var cleared: [String] = []
     await model.refreshDirectWorkspace(workspace.id) { cleared.append($0) }
     XCTAssertEqual(cleared, [workspace.id])

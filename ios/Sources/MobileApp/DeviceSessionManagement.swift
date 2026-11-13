@@ -13,7 +13,7 @@ extension MobileModel {
     do {
       record.isTrashed = false; record.updatedAt = Self.executionTimestamp()
       let conversation = LibraryConversation(id: id, title: record.title, folderID: record.folderID, providerID: "pi-durable-device",
-        routeID: deviceWorkspaceID, runtimeKind: "pi", updatedAt: record.updatedAt, isPinned: record.isPinned)
+        routeID: deviceWorkspaceID, runtimeKind: "default_agent", updatedAt: record.updatedAt, isPinned: record.isPinned)
       try await store?.journal.restoreConversation(workspaceID: deviceWorkspaceID, conversation: conversation)
       executionRecords[id] = record; try persistExecutionConfiguration()
       try await store?.restoreExecutionProjection(); await reload()

@@ -87,7 +87,7 @@ const checks=['health','verified native Chromium sandbox','separate persistent b
 const ordinaryHome=mkdtempSync(join(tmpdir(),'wovenmatter-normal-user-'));
 try {
  for(const path of ['.config/wovenmatter','run','workspace']) mkdirSync(join(ordinaryHome,path),{recursive:true,mode:0o700});
- const ordinary={WOVENMATTER_RUNTIME_KIND:'host',WOVENMATTER_ACCESS_MODE:'user',
+ const ordinary={WOVENMATTER_ACCESS_MODE:'user',
   WOVENMATTER_WORKSPACE:join(ordinaryHome,'workspace'),WOVENMATTER_STATE_DIRECTORY:join(ordinaryHome,'run')};
  writeFileSync(join(ordinaryHome,'.config/wovenmatter/service.env'),Object.entries(ordinary).map(([key,value])=>key+'='+JSON.stringify(value)+'\n').join(''),{mode:0o600});
  const options={env:{...process.env,HOME:ordinaryHome},encoding:'utf8'};

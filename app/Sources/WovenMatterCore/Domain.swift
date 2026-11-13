@@ -30,17 +30,11 @@ public enum AgentBucket: String, Codable, CaseIterable, Hashable, Sendable {
 
 public enum AgentRuntimeKind: String, Codable, CaseIterable, Hashable, Sendable {
   case defaultAgent = "default_agent"
-  case openclaw
-  case pi
   case codex
   case claudeCode = "claude_code"
   case grokBuild = "grok_build"
-  case hermes
-  case cursor
   case opencode
 
-  // Retired identities above remain decodable for archived history only.
-  public static let allCases: [Self] = [.defaultAgent, .codex, .claudeCode, .grokBuild, .opencode]
   public static let presentationOrder: [Self] = allCases
 
   public var presentationRank: Int {
@@ -50,13 +44,9 @@ public enum AgentRuntimeKind: String, Codable, CaseIterable, Hashable, Sendable 
   public var displayName: String {
     switch self {
     case .defaultAgent: "Pi Durable"
-    case .openclaw: "OpenClaw"
-    case .pi: "Pi"
     case .codex: "Codex"
     case .claudeCode: "Claude Code"
     case .grokBuild: "Grok Build"
-    case .hermes: "Hermes"
-    case .cursor: "Cursor"
     case .opencode: "OpenCode"
     }
   }
@@ -67,11 +57,8 @@ public enum AgentRuntimeKind: String, Codable, CaseIterable, Hashable, Sendable 
     switch self {
     case .codex: "agent-full-access"
     case .claudeCode, .grokBuild: "bypassPermissions"
-    case .defaultAgent, .openclaw, .hermes: "full"
+    case .defaultAgent: "full"
     case .opencode: "allow"
-    // Cursor Full Access uses its documented native --force process flag.
-    case .cursor: "force"
-    case .pi: nil
     }
   }
 

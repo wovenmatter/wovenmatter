@@ -89,7 +89,7 @@ private actor FakeMac: LibraryTransport, FederationTransport, LibraryCalendarTra
     return result
   }
   func providers() async throws -> [HarnessCapabilities] {
-    ["codex", "claude", "grok", "hermes", "cursor", "opencode", "pi", "openclaw"].map { .init(id: "local:" + $0, runtimeKind: $0, displayName: $0, available: true, canSteer: $0 == "codex") }
+    ["default_agent", "codex", "claude_code", "grok_build", "opencode"].map { .init(id: "local:" + $0, runtimeKind: $0, displayName: $0, available: true, canSteer: $0 == "codex") }
   }
   func pending() async throws -> [PendingInteraction] { [] }
   func transcript(_ id: String) async throws -> LibraryTranscript {

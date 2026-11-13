@@ -45,14 +45,13 @@ extension WorkspaceDatabaseConnection {
 
   /// Whether `conversation` (an SQL expression) is a conversation this Mac
   /// runs, as `MacExecutionAPI.isLocal` decides it: a local ACP session that
-  /// is neither a remote-workspace nor a gateway session, and no execution
+  /// is not a remote-workspace session, and no execution
   /// record or paired owner naming another machine. History synchronized from
   /// another Mac, iPhone or Linux host always has one of those.
   static func executionStreamIsLocal(_ conversation: String, requireSession: Bool = true) -> String {
     var clauses = [
       "NOT EXISTS (SELECT 1 FROM execution_conversations f WHERE f.id = \(conversation) AND f.deleted = 0)",
       "NOT EXISTS (SELECT 1 FROM paired_conversation_owners o WHERE o.id = \(conversation) AND o.device_id <> COALESCE((SELECT host_device_id FROM library_identity WHERE singleton = 1), ''))",
-      "NOT EXISTS (SELECT 1 FROM desktop_openclaw_gateway_sessions g WHERE g.conversation_id = \(conversation))",
     ]
     if requireSession {
       clauses.append("EXISTS (SELECT 1 FROM desktop_local_acp_sessions s WHERE s.conversation_id = \(conversation) AND s.remote_workspace_id IS NULL)")

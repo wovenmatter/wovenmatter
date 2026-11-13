@@ -2938,8 +2938,7 @@ final class ApplicationModel {
 
         guard let runtimeKind = conversation.localRuntimeKind,
               model != nil || thinking != nil || permission != nil else { return }
-        let permission = runtimeKind == .pi ? nil
-            : conversation.remoteWorkspaceID.flatMap { remoteWorkspaces.configuration(id: $0)?.fullRootPermission(for: runtimeKind) } ?? permission
+        let permission = conversation.remoteWorkspaceID.flatMap { remoteWorkspaces.configuration(id: $0)?.fullRootPermission(for: runtimeKind) } ?? permission
         guard !localRunningConversationIDs.contains(conversation.id),
               updatingLocalACPSessionIDs.insert(conversation.id).inserted else {
             return
@@ -3236,7 +3235,7 @@ final class ApplicationModel {
         }
         let runtime = target.harness.id
         let forced = target.configuration.fullRootPermission(for: runtime)
-        let permission = runtime == .pi ? nil : forced ?? (usesProductPermissionDefault ? nil : selections.permission)
+        let permission = forced ?? (usesProductPermissionDefault ? nil : selections.permission)
         let tools = selections.tools?.filter { WorkspaceToolGroup(rawValue: $0) != nil }
         let options = LibrarySessionOptions(workingDirectory: workingDirectory, model: selections.model,
             thinking: selections.thinking, permission: permission, enabledTools: tools)
@@ -3453,7 +3452,7 @@ final class ApplicationModel {
                     _ = try await installer.install(definition, component: .cli,
                         expectedSourceSHA256: preview.sha256, expectedPackageSpec: preview.packageSpec)
                 }
-                if let package = definition.adapterPackage ?? (kind == .pi && preview == nil ? RuntimeMaintenance.npmPackage(kind) : nil) {
+                if let package = definition.adapterPackage {
                     // Resolve a concrete version before npm is allowed to mutate anything.
                     let version = try await RuntimeMaintenance.registryVersion(package)
                     if let minimum = definition.minimumAdapterVersion, RuntimeMaintenance.version(version, precedes: minimum) {

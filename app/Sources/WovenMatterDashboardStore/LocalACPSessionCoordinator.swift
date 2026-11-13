@@ -684,14 +684,10 @@ public actor LocalACPSessionCoordinator {
                 conversationID: descriptor.conversationID,
                 initialResult: initialResult
             )
-            // Hermes slash commands need not create a durable native row. Its
-            // client publishes the identity immediately before a provider submit.
-            if descriptor.runtimeKind != .hermes {
-                try await persistPendingDurableSessionID(
-                    conversationID: descriptor.conversationID,
-                    runID: run.runID
-                )
-            }
+            try await persistPendingDurableSessionID(
+                conversationID: descriptor.conversationID,
+                runID: run.runID
+            )
             try await persistConfiguration(
                 await client.configuration(),
                 conversationID: descriptor.conversationID
@@ -902,13 +898,9 @@ public actor LocalACPSessionCoordinator {
                           active.activeUseCount == 1 else {
                         throw LifecycleError.sessionBusy
                     }
-                    let sessionID = latest.acpSessionID
-                    // Cursor does not durably save a configuration-only draft.
-                    // It can be recreated before its first prompt with the new
-                    // native process flag. Saved native sessions must still load
-                    // their exact identity rather than silently forking history.
-                    guard sessionID != nil || (latest.runtimeKind == .cursor
-                        && active.pendingDurableSessionID != nil) else {
+                    // Saved native sessions must load their exact identity
+                    // rather than silently forking history.
+                    guard let sessionID = latest.acpSessionID else {
                         throw LifecycleError.sessionBusy
                     }
                     activeSessions.removeValue(forKey: conversationID)
@@ -1684,7 +1676,7 @@ public actor LocalACPSessionCoordinator {
                 throw LifecycleError.sessionIdentityChanged
             }
             if initialized.sessionID != descriptor.acpSessionID {
-                // Codex, Claude, Cursor, Pi and Hermes allocate IDs before their session stores
+                // Codex and Claude allocate IDs before their session stores
                 // are durable. Configuration-only drafts must remain recreatable.
                 if !Self.defersNewSessionPersistence(descriptor.runtimeKind)
                     || initialized.loadedExistingSession {
@@ -1889,7 +1881,7 @@ public actor LocalACPSessionCoordinator {
     private static func defersNewSessionPersistence(
         _ runtimeKind: AgentRuntimeKind
     ) -> Bool {
-        runtimeKind == .codex || runtimeKind == .claudeCode || runtimeKind == .cursor || runtimeKind == .pi || runtimeKind == .hermes
+        runtimeKind == .codex || runtimeKind == .claudeCode
     }
 
     private func persistConfiguration(

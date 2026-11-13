@@ -70,7 +70,7 @@ struct SettingsAppleDevicesView: View {
     /// Three ways to pair, closed until needed.
     private var pairSection: some View {
         SettingsSection(title: "Pair a device") {
-            DevicePairingDiscoveryCard(pairing: client.devicePairing, host: host, canPairWithCentral: true)
+            DevicePairingDiscoveryCard(pairing: client.devicePairing, host: host)
             DevicePairingCodeCard(host: host)
             SettingsSummaryRow("Paste a pairing link") {
                 SettingsNote("Copy a pairing link from the other Mac’s Apple Devices settings.")

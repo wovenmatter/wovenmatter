@@ -22,9 +22,9 @@ private actor ExecutionTestWorkspace: ExecutionWorkspaceTransport {
     if identityOffline { throw MobileConnectionError.offline }
     return workspace
   }
-  func providers() async throws -> [HarnessCapabilities] { [.init(id: "pi", runtimeKind: "pi", displayName: "Pi Durable", available: true)] }
+  func providers() async throws -> [HarnessCapabilities] { [.init(id: "pi", runtimeKind: "default_agent", displayName: "Pi Durable", available: true)] }
   func pending() async throws -> [PendingInteraction] { [] }
-  func capabilities(_ id: String) async throws -> HarnessCapabilities { .init(id: "pi", runtimeKind: "pi", displayName: "Pi Durable", available: true) }
+  func capabilities(_ id: String) async throws -> HarnessCapabilities { .init(id: "pi", runtimeKind: "default_agent", displayName: "Pi Durable", available: true) }
   func command(_ command: LibraryCommand) async throws -> LibraryCommandReceipt {
     commands.append(command)
     let receipt = LibraryCommandReceipt(commandID: command.commandID, deviceID: command.deviceID, status: .completed, conversationID: command.conversationID)
@@ -91,7 +91,7 @@ final class ExecutionRoutingTests: XCTestCase {
     defer { try? FileManager.default.removeItem(at: root) }
     let store = try MobileStore(file: root.appendingPathComponent("library.json"))
     let model = MobileModel(store: store, transport: ExecutionTestLibrary())
-    model.providers = [.init(id: "local:pi", runtimeKind: "pi", displayName: "Pi Durable", available: true)]
+    model.providers = [.init(id: "local:pi", runtimeKind: "default_agent", displayName: "Pi Durable", available: true)]
     model.online = false
     model.newChat()
     await model.startNewChat(with: try XCTUnwrap(model.launcherAgents.first { $0.workspaceID == "central" }))
@@ -211,7 +211,7 @@ final class ExecutionRoutingTests: XCTestCase {
     let disconnected = ExecutionWorkspace(id: "disconnected", libraryID: "library", ownerDeviceID: "owner", kind: .linux, name: "Disconnected")
     model.executionWorkspaces = [connected, disconnected]
     model.workspaceReachable = [connected.id: true, disconnected.id: false]
-    let agent = HarnessCapabilities(id: "pi", runtimeKind: "pi", displayName: "Pi Durable", available: true)
+    let agent = HarnessCapabilities(id: "pi", runtimeKind: "default_agent", displayName: "Pi Durable", available: true)
     model.workspaceProviders = [connected.id: [agent], disconnected.id: [agent]]
     model.workspaceClients[connected.id] = WorkspaceClient(store: try XCTUnwrap(model.store), workspaceID: connected.id, transport: ExecutionTestWorkspace(connected))
     model.providers = [agent]; model.online = false; model.selectedConversationID = "existing-chat"
@@ -230,7 +230,7 @@ final class ExecutionRoutingTests: XCTestCase {
     XCTAssertEqual(model.selectedExecutionWorkspaceID, "local")
     XCTAssertEqual(model.providerID, "pi-durable-device")
     model.online = true
-    model.providers = [agent, .init(id: "remote:" + connected.id + ":pi", runtimeKind: "pi", displayName: "Pi Durable", routeName: connected.name, available: true)]
+    model.providers = [agent, .init(id: "remote:" + connected.id + ":pi", runtimeKind: "default_agent", displayName: "Pi Durable", routeName: connected.name, available: true)]
     XCTAssertEqual(model.launcherAgents.filter { $0.workspaceID == "central" }.map(\.providerID), [agent.id])
     XCTAssertEqual(model.launcherAgents.filter { $0.workspaceID == connected.id }.count, 1)
   }

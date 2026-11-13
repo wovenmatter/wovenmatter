@@ -91,7 +91,7 @@ extension WorkspaceDatabaseConnection {
         governing_plane TEXT NOT NULL DEFAULT 'wovenmatter_macos',
         authority_kind TEXT NOT NULL DEFAULT 'device_owned', authority_device_id TEXT,
         authority_agent_id TEXT,
-        runtime_kind TEXT NOT NULL DEFAULT 'openclaw', runtime_device_id TEXT,
+        runtime_kind TEXT NOT NULL, runtime_device_id TEXT,
         platform_codename TEXT, model TEXT, fallback_model TEXT,
         status TEXT NOT NULL DEFAULT 'offline', is_primary INTEGER NOT NULL DEFAULT 0,
         runtime_metadata_json TEXT NOT NULL DEFAULT '{}', revision INTEGER NOT NULL DEFAULT 1,
@@ -232,36 +232,11 @@ extension WorkspaceDatabaseConnection {
         conversation_id TEXT PRIMARY KEY REFERENCES dashboard_conversations(id) ON DELETE CASCADE,
         imported_at TEXT NOT NULL
       );
-      CREATE TABLE IF NOT EXISTS desktop_openclaw_import_activity (
-        conversation_id TEXT PRIMARY KEY REFERENCES dashboard_conversations(id) ON DELETE CASCADE,
-        imported_at TEXT NOT NULL
-      );
-      CREATE TABLE IF NOT EXISTS desktop_openclaw_run_inputs (
-        conversation_id TEXT NOT NULL, local_run_id TEXT NOT NULL, remote_run_id TEXT NOT NULL,
-        user_message_id TEXT NOT NULL, assistant_message_id TEXT NOT NULL,
-        PRIMARY KEY (conversation_id, remote_run_id)
-      );
-      CREATE INDEX IF NOT EXISTS desktop_openclaw_run_inputs_local ON desktop_openclaw_run_inputs(local_run_id);
       -- Runs a Linux host's service kept for a chat that ran over SSH. Nothing
       -- runs a chat over SSH any more (such chats move to the host's server),
       -- so a library that still has the table drops it.
       DROP TRIGGER IF EXISTS desktop_local_acp_durable_runs_delete;
       DROP TABLE IF EXISTS desktop_local_acp_durable_runs;
-      CREATE TRIGGER IF NOT EXISTS desktop_openclaw_run_inputs_delete
-      AFTER DELETE ON dashboard_conversations BEGIN
-        DELETE FROM desktop_openclaw_run_inputs WHERE conversation_id = OLD.id;
-      END;
-      CREATE TABLE IF NOT EXISTS desktop_openclaw_gateway_sessions (
-        conversation_id TEXT PRIMARY KEY,
-        agent_id TEXT NOT NULL,
-        session_key TEXT NOT NULL,
-        model TEXT,
-        thinking_level TEXT,
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL,
-        FOREIGN KEY (conversation_id) REFERENCES dashboard_conversations(id)
-          ON DELETE CASCADE
-      );
       CREATE TABLE IF NOT EXISTS dashboard_calendar_items (
         id TEXT PRIMARY KEY, user_id TEXT NOT NULL DEFAULT '', kind TEXT NOT NULL DEFAULT '',
         title TEXT NOT NULL DEFAULT '', description TEXT, starts_at TEXT NOT NULL DEFAULT '',
@@ -291,8 +266,6 @@ extension WorkspaceDatabaseConnection {
         ON dashboard_runs(conversation_id, assistant_message_id);
       CREATE INDEX IF NOT EXISTS desktop_cache_notes_user_updated
         ON notes(user_id, deleted_at, updated_at DESC);
-      CREATE INDEX IF NOT EXISTS desktop_openclaw_gateway_sessions_agent
-        ON desktop_openclaw_gateway_sessions(agent_id, updated_at DESC);
       """)
   }
 
@@ -307,6 +280,39 @@ extension WorkspaceDatabaseConnection {
       // is never used to make newly created sessions executable.
       try executeUnlocked("INSERT OR IGNORE INTO retained_execution_history SELECT id FROM dashboard_conversations WHERE desktop_owned=1 AND NOT EXISTS(SELECT 1 FROM session_execution_roots WHERE conversation_id=dashboard_conversations.id) AND NOT EXISTS(SELECT 1 FROM execution_conversations WHERE id=dashboard_conversations.id)")
       try executeUnlocked("UPDATE dashboard_conversations SET is_archived=1 WHERE id IN (SELECT conversation_id FROM retained_execution_history)")
+    }
+  }
+
+  /// OpenClaw gateway chats ran on a gateway Woven no longer connects to. An
+  /// older library keeps their transcripts in the generic conversation,
+  /// message, run and history tables, so they still open as plain read-only
+  /// history; only the gateway's own link and bookkeeping tables are dropped.
+  /// Runs once every other migration has rewritten the triggers that looked
+  /// those tables up (the execution stream's locality check among them).
+  func dropRetiredOpenClawSchema() throws {
+    try transaction {
+      let tables = ["desktop_openclaw_gateway_sessions", "desktop_openclaw_import_activity", "desktop_openclaw_run_inputs"]
+      let present = try historyRowsUnlocked(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name IN (?,?,?)", values: tables)
+        .compactMap { $0.objectValue?["name"]?.stringValue }
+      guard !present.isEmpty else { return }
+      if present.contains("desktop_openclaw_import_activity") {
+        // Keep an imported chat's import time; Woven's own gateway runs never had one.
+        try executeUnlocked("""
+          INSERT OR IGNORE INTO desktop_session_imports(conversation_id, imported_at)
+          SELECT a.conversation_id, a.imported_at FROM desktop_openclaw_import_activity a
+          JOIN dashboard_conversations c ON c.id = a.conversation_id
+          WHERE instr(COALESCE(c.openclaw_session_key, ''), ':wovenmatter:') = 0
+          """)
+      }
+      // Triggers on these tables go with them; also drop any trigger elsewhere
+      // whose body still names one, so no later write can reach a missing table.
+      let triggers = try historyRowsUnlocked("""
+        SELECT name FROM sqlite_master WHERE type='trigger'
+          AND (instr(sql,'desktop_openclaw_') > 0 OR name = 'history_openclaw_import')
+        """, values: []).compactMap { $0.objectValue?["name"]?.stringValue }
+      for trigger in triggers { try executeUnlocked("DROP TRIGGER IF EXISTS \"\(trigger)\"") }
+      for table in present { try executeUnlocked("DROP TABLE IF EXISTS \(table)") }
     }
   }
 
@@ -354,7 +360,6 @@ extension WorkspaceDatabaseConnection {
       "desktop_local_acp_sessions",
       "desktop_opencode_sessions",
       "desktop_opencode_submissions",
-      "desktop_openclaw_gateway_sessions",
     ] {
       for operation in ["INSERT", "UPDATE", "DELETE"] {
         let trigger = "desktop_dashboard_revision_\(table)_\(operation.lowercased())"

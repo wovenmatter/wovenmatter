@@ -36,14 +36,14 @@ struct WorkspaceNativeRunArchiveTests {
       .init(id: "first", kind: "event", payload: #"{"text":"rollback-violet-marker"}"#),
       .init(id: "invalid", kind: "event", payload: #"{"text":"second"}"#, contentMode: "invalid-mode")])
     await #expect(throws: (any Error).self) {
-      try await db.recordNativeRunRecords(batch, conversationID: conversation, harness: "pi")
+      try await db.recordNativeRunRecords(batch, conversationID: conversation, harness: "default_agent")
     }
     #expect(rows(try await db.queryHistory(.init(command: "events", conversationID: conversation, kind: "native.event"))).isEmpty)
     #expect(rows(try await db.queryHistory(.init(command: "search", search: "rollback-violet-marker", conversationID: conversation))).isEmpty)
     batch.records[1].contentMode = "event"
-    try await db.recordNativeRunRecords(batch, conversationID: conversation, harness: "pi")
+    try await db.recordNativeRunRecords(batch, conversationID: conversation, harness: "default_agent")
     let reopened = try await persistence.openDatabase()
-    try await reopened.recordNativeRunRecords(batch, conversationID: conversation, harness: "pi")
+    try await reopened.recordNativeRunRecords(batch, conversationID: conversation, harness: "default_agent")
     let first = try await reopened.queryHistory(.init(command: "events", conversationID: conversation, kind: "native.event", limit: 1))
     #expect(rows(first).count == 1 && first.objectValue?["hasMore"]?.boolValue == true)
     let next = try await reopened.queryHistory(.init(command: "events", conversationID: conversation, kind: "native.event",
@@ -57,11 +57,11 @@ struct WorkspaceNativeRunArchiveTests {
     defer { persistence.remove() }
     let conversation = try await session(db)
     let raw = "{ \"toolResult\": {\"method\":\"connect\",\"token\":\"lexical-token\",\"headers\":{\"Authorization\":\"content evidence\"}}, \"future\": [1,2] }"
-    try await db.historyWireRecorder(conversationID: conversation, harness: "pi", sourceScope: "local")("native", JSONEncoder().encode(
-      WorkspaceNativeRunRecordBatch(sourceID: "pi:/store", nativeSessionID: "s", records: [.init(id: "r", kind: "tool.result", payload: raw)])))
+    try await db.historyWireRecorder(conversationID: conversation, harness: "default_agent", sourceScope: "local")("native", JSONEncoder().encode(
+      WorkspaceNativeRunRecordBatch(sourceID: "default_agent:/store", nativeSessionID: "s", records: [.init(id: "r", kind: "tool.result", payload: raw)])))
     let retained = try #require(rows(try await db.queryHistory(.init(command: "events", conversationID: conversation, kind: "native.tool.result"))).first?.objectValue)
     #expect(retained["payload"]?.stringValue == raw)
-    #expect(retained["source_id"]?.stringValue == "local:pi:/store")
+    #expect(retained["source_id"]?.stringValue == "local:default_agent:/store")
     let credentials = #"{"jsonrpc":"2.0","method":"woven/credentials","params":{"apiKey":"secret-key","scope":"provider","nested":{"accessToken":"secret-token"}}}"#
     let body = try String(decoding: JSONEncoder().encode(WorkspaceHTTPObservation(method: "POST", path: "/rpc", query: [:], status: 200, body: credentials)), as: UTF8.self)
     let envelope = "{\"method\":\"POST\",\"path\":\"/rpc\",\"headers\":{\"Authorization\":\"earlier-secret\"},\"body\":\(try String(decoding: JSONEncoder().encode(body), as: UTF8.self))}"

@@ -322,7 +322,7 @@ extension MobileModel {
     return workspaceProviders[selectedExecutionWorkspaceID] ?? []
   }
   var deviceProvider: HarnessCapabilities {
-    .init(id: "pi-durable-device", runtimeKind: "pi", displayName: "Quick Chat", routeName: deviceWorkspaceName,
+    .init(id: "pi-durable-device", runtimeKind: "default_agent", displayName: "Quick Chat", routeName: deviceWorkspaceName,
           available: selectedInferenceConnection != nil && executionOnline && selectedConversationID.flatMap { executionRecords[$0]?.quickChatVersion } != 0, canStart: true, canResume: true,
           canSteer: false, canStop: true, supportsApprovals: true, supportsQuestions: true,
           unavailableReason: selectedInferenceConnection == nil ? "Add an inference connection in Settings." : nil)
@@ -673,7 +673,7 @@ extension MobileModel {
   func adoptDeviceConversation(_ record: DeviceConversationRecord, transcript: LibraryTranscript?) async throws {
     guard record.isTrashed != true else { return }
     let conversation = LibraryConversation(id: record.id, title: record.title, folderID: record.folderID,
-      providerID: "pi-durable-device", routeID: deviceWorkspaceID, runtimeKind: "pi", activeRunID: record.status == "running" ? record.runID : nil,
+      providerID: "pi-durable-device", routeID: deviceWorkspaceID, runtimeKind: "default_agent", activeRunID: record.status == "running" ? record.runID : nil,
       preview: String((transcript?.messages.last?.content ?? state.conversations[record.id]?.preview ?? "").unicodeScalars.prefix(512)), updatedAt: record.updatedAt, isPinned: record.isPinned)
     try await store?.adoptExecution(conversation: conversation, transcript: transcript)
     // The durable workspace journal also retains history for central synchronization.

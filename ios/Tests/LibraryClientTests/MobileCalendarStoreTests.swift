@@ -38,7 +38,7 @@ final class MobileCalendarStoreTests: XCTestCase, @unchecked Sendable {
   private func legacyPhoneTask(_ store: MobileCalendarStore, startsAt: Date, recurring: Bool) async throws -> LibraryCalendarRecord {
     // Earlier builds assigned tasks to the phone itself, which no longer runs schedules.
     let draft = LibraryCalendarDraft(title: "Digest", startsAt: startsAt, recurrenceUnit: recurring ? "day" : nil,
-      task: .init(prompt: "Summarize", runtime: "pi", workspaceID: device))
+      task: .init(prompt: "Summarize", runtime: "default_agent", workspaceID: device))
     let saved = try await store.save(expectedRevision: nil, draft: draft, ownerDeviceID: device)
     let upload = try await XCTUnwrapAsync(try await store.nextMutation())
     var accepted = saved; accepted.event.revision = 0

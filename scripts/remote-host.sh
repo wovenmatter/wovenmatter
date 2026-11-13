@@ -813,7 +813,7 @@ def install(workspace_id,requested_port,mode,fingerprint,updating=False,roles=No
                 if not intact: fail('existing_release_corrupt','The existing release source differs from its verified fingerprint. Repair the native installation before updating.',78)
             shutil.rmtree(release)
         else: os.replace(release,destination)
-        settings={'WOVENMATTER_RUNTIME_KIND':'host','WOVENMATTER_ACCESS_MODE':mode,'WOVENMATTER_WORKSPACE':str(ROOT/'workspace'),
+        settings={'WOVENMATTER_ACCESS_MODE':mode,'WOVENMATTER_WORKSPACE':str(ROOT/'workspace'),
             'WOVENMATTER_DATA_DIRECTORY':str(ROOT/'databases'),'WOVENMATTER_STATE_DIRECTORY':str(ROOT/'run'),
             'WOVENMATTER_BROWSER_PROFILES':str(ROOT/'browser-profiles'),'PLAYWRIGHT_BROWSERS_PATH':str(ROOT/'browsers/current'),
             'WOVENMATTER_LISTEN_HOST':'127.0.0.1','WOVENMATTER_LISTEN_PORT':str(port),'WOVENMATTER_API_TOKEN':TOKEN,'WOVENMATTER_SERVICE_SECRET':service_secret,

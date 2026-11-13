@@ -204,29 +204,21 @@ test('natural process exit settles interrupted prompts and survives service rest
   assert.equal(f.launches(), 1)
 })
 
-test('native host durable sessions permit linked external folders while containers retain containment', async t => {
+test('native host durable sessions permit linked external folders', async t => {
   const external = await mkdtemp(join(tmpdir(), 'woven-linked-project-'))
   t.after(() => rm(external, { recursive: true, force: true }))
-  for (const runtimeKind of ['container', 'host']) {
-    const f = await fixture(t)
-    const relay = createDurableACP({ ...f.options, runtimeKind })
-    const body = { channelID: 'external-project', harnessID: 'test', cwd: external }
-    const attaching = relay.handle('POST', '/v1/durable-acp/attach', body)
-    if (runtimeKind === 'container') {
-      await assert.rejects(attaching, /outside this workspace/)
-      assert.equal(f.launches(), 0)
-    } else {
-      assert.equal((await attaching).state, 'running')
-      assert.equal(f.launches(), 1)
-    }
-    await relay.stopAll()
-  }
+  const f = await fixture(t)
+  const relay = createDurableACP(f.options)
+  const attached = await relay.handle('POST', '/v1/durable-acp/attach', { channelID: 'external-project', harnessID: 'test', cwd: external })
+  assert.equal(attached.state, 'running')
+  assert.equal(f.launches(), 1)
+  await relay.stopAll()
 })
 
 test('full-root durable relay enforces its workspace permission on stale client settings', async t => {
   const f = await fixture(t)
-  const relay = createDurableACP({ ...f.options, runtimeKind: 'host',
-    configuration: loadRuntimeConfiguration({ WOVENMATTER_RUNTIME_KIND: 'host', WOVENMATTER_ACCESS_MODE: 'fullRoot' }),
+  const relay = createDurableACP({ ...f.options,
+    configuration: loadRuntimeConfiguration({ WOVENMATTER_ACCESS_MODE: 'fullRoot' }),
     catalog: new Map([['codex', { transport: 'acp', command: 'codex-acp', arguments: [] }]]) })
   await relay.handle('POST', '/v1/durable-acp/attach', { channelID: 'root-session', harnessID: 'codex', cwd: f.options.workspaceRoot })
   await relay.handle('POST', '/v1/durable-acp/message', { channelID: 'root-session', deliveryID: 'config',

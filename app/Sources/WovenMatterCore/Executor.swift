@@ -45,10 +45,9 @@ public enum ExecutorApprovalPolicy: String, Sendable {
         switch (runtime, mode) {
         case (.defaultAgent, "full"), (.codex, "agent-full-access"),
              (.claudeCode, "bypassPermissions"), (.grokBuild, "bypassPermissions"),
-             (.cursor, "auto"), (.cursor, "force"), (.opencode, "allow"), (.opencode, "full"), (.opencode, "auto"), (.hermes, "full"),
-             (.openclaw, "full"): return .full
+             (.opencode, "allow"), (.opencode, "full"), (.opencode, "auto"): return .full
         case (.claudeCode, "dontAsk"), (.claudeCode, "plan"), (.grokBuild, "dontAsk"),
-             (.openclaw, "read-only"), (.opencode, "deny"): return .deny
+             (.opencode, "deny"): return .deny
         // Native sandbox and smart-review policies govern the harness's tools.
         // External app calls still need review unless Full Access is confirmed.
         default: return .ask

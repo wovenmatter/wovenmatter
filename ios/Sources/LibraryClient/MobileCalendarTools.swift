@@ -73,7 +73,7 @@ extension MobileStore {
       guard context.enabled.contains(.sessions) else { throw WorkspaceToolError.disabled(.sessions) }
       var task = draft.task ?? .init()
       if let prompt = c.options["prompt"] { task.prompt = prompt }
-      if let runtime = c.options["harness"], !["default_agent", "pi-durable", "pi"].contains(runtime) { throw WorkspaceToolError.invalid("This device runs Pi Durable. Assign other harnesses on their execution workspace.") }
+      if let runtime = c.options["harness"], !["default_agent", "pi-durable"].contains(runtime) { throw WorkspaceToolError.invalid("This device runs Pi Durable. Assign other harnesses on their execution workspace.") }
       if let workspace = c.options["workspace"], workspace != "local" && workspace != context.workspaceID { throw WorkspaceToolError.invalid("Device-owned tasks must run in this device workspace.") }
       if c.options["directory"] != nil { throw WorkspaceToolError.invalid("Choose the task's files in its device workspace; host filesystem paths are not available on iOS.") }
       if c.options["harness"] != nil || existing?.event.draft.task == nil { task.runtime = "default_agent" }

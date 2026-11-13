@@ -51,7 +51,7 @@ public struct LaunchableAgent: Identifiable, Equatable, Sendable {
     }
     let workspaces = workspaces.filter { !$0.deleted }.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
     let central = ExecutionWorkspace.liveCentralMac(in: workspaces, id: centralWorkspaceID)
-    var result: [Self] = [.init(workspaceID: "local", workspaceName: deviceName, providerID: "pi-durable-device", name: "Quick Chat", runtimeKind: "pi")]
+    var result: [Self] = [.init(workspaceID: "local", workspaceName: deviceName, providerID: "pi-durable-device", name: "Quick Chat", runtimeKind: "default_agent")]
     var representedDirectAgents = Set<String>()
     for provider in providers where known(provider, workspace: "central") {
       let parts = provider.id.split(separator: ":", omittingEmptySubsequences: false)

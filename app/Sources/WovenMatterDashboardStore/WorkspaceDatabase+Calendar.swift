@@ -302,12 +302,19 @@ extension WorkspaceDatabaseConnection {
       values += [String(limit), String(offset)]
     }
     let rows = try historyRowsUnlocked(sql, values: values)
-    return try rows.map { value in
+    return try rows.compactMap { value in
       guard let r = value.objectValue, let id = r["id"]?.stringValue, let eventID = r["event_id"]?.stringValue,
             let scheduled = r["scheduled_at"]?.stringValue.flatMap(Self.date), let json = r["task_json"]?.stringValue,
             let sessionID = r["session_id"]?.stringValue else { throw WorkspaceDatabaseError.corruptRow }
+      // A run an older build scheduled for a harness Woven no longer runs
+      // stays in its session's history; it is not listed as a calendar run.
+      let task: WorkspaceCalendarTask
+      do { task = try JSONDecoder().decode(WorkspaceCalendarTask.self, from: Data(json.utf8)) } catch {
+        NSLog("Ignoring calendar run %@ with an unsupported task: %@", id, String(describing: error))
+        return nil
+      }
       return WorkspaceCalendarRun(id: id, eventID: eventID, occurrenceIndex: r["occurrence_index"]?.intValue ?? 0,
-        scheduledAt: scheduled, sessionID: sessionID, task: try JSONDecoder().decode(WorkspaceCalendarTask.self, from: Data(json.utf8)),
+        scheduledAt: scheduled, sessionID: sessionID, task: task,
         status: r["delivery_status"]?.stringValue ?? "pending", error: r["error"]?.stringValue,
         title: r["title"]?.stringValue ?? "Scheduled task")
     }
@@ -691,29 +698,12 @@ extension WorkspaceDatabaseConnection {
       var assistantAssembly = NativeTextSnapshotAssembler()
       var assistantPrefix = "", frozenPrefix = ""
       var boundarySequence = 0
-      var hermesChecklistRevision: Double = 0
       try forEachRemoteCalendarUpdateUnlocked(receiptID: receiptID, workspaceID: workspaceID, conversationID: run.sessionID) { value in
         guard let object = value.objectValue, let kind = object["sessionUpdate"]?.stringValue else { return }
         let raw = try toolsJSON(value)
         var activity: AgentRunActivity?
         var appending = false
         let meta = object["_meta"]?.objectValue
-        if kind == "woven_hermes_tool_complete" || kind == "woven_cursor_todos" {
-          guard let nativeSessionID, !nativeSessionID.isEmpty,
-                object["nativeSessionID"]?.stringValue == nativeSessionID,
-                let payload = object["payload"] else { return }
-          if kind == "woven_hermes_tool_complete", configuration.runtimeKind == .hermes {
-            let native = try HermesValue.decode(JSONEncoder().encode(payload))
-            if let checklist = HermesSessionArchive.checklistUpdate(native),
-               let revision = native["result"]["revision"].number, revision > hermesChecklistRevision {
-              hermesChecklistRevision = revision
-              activity = checklist
-            }
-          } else if kind == "woven_cursor_todos", configuration.runtimeKind == .cursor {
-            activity = Self.remoteCursorChecklist(payload, sessionID: nativeSessionID, rawPayloadJSON: raw)
-          }
-          guard activity != nil else { return }
-        }
         if kind == "agent_message_chunk" {
           let text = object["content"]?.objectValue?["text"]?.stringValue ?? ""
           if configuration.runtimeKind == .defaultAgent, meta?["wovenAssistantSnapshot"]?.boolValue == true {
@@ -725,7 +715,7 @@ extension WorkspaceDatabaseConnection {
           return
         }
         if assistantPrefix != frozenPrefix, !assistantPrefix.isEmpty,
-           ["agent_thought_chunk", "tool_call", "plan", "woven_assistant_boundary", "woven_hermes_tool_complete", "woven_cursor_todos"].contains(kind) {
+           ["agent_thought_chunk", "tool_call", "plan", "woven_assistant_boundary"].contains(kind) {
           let segment = assistantPrefix.hasPrefix(frozenPrefix)
             ? String(assistantPrefix.dropFirst(frozenPrefix.count)) : assistantPrefix
           boundarySequence += 1
@@ -786,31 +776,6 @@ extension WorkspaceDatabaseConnection {
     }
     try toolsExecuteUnlocked("INSERT INTO workspace_calendar_remote_receipts(id,workspace_id,session_id,payload_json) VALUES(?,?,?,?)",
       [receiptID,workspaceID.uuidString.lowercased(),run.sessionID,try toolsJSON(updates)])
-  }
-
-  private static func remoteCursorChecklist(_ payload: GatewayJSONValue, sessionID: String, rawPayloadJSON: String) -> AgentRunActivity? {
-    guard let fields = payload.objectValue, fields["sessionId"]?.stringValue == sessionID,
-          let toolID = fields["toolCallId"]?.stringValue, !toolID.isEmpty,
-          let merge = fields["merge"]?.boolValue, let todos = fields["todos"]?.arrayValue else { return nil }
-    var entries: [AgentRunPlanEntry] = []
-    var ids: Set<String> = []
-    for todo in todos {
-      guard let row = todo.objectValue,
-            let content = [row["content"]?.stringValue, row["title"]?.stringValue]
-              .compactMap({ $0?.trimmingCharacters(in: .whitespacesAndNewlines) }).first(where: { !$0.isEmpty }),
-            let id = row["id"]?.stringValue, !id.isEmpty, ids.insert(id).inserted else { return nil }
-      let status = switch row["status"]?.stringValue {
-      case "completed": "completed"
-      case "in_progress", "inProgress": "in_progress"
-      case "cancelled", "canceled": "cancelled"
-      default: "pending"
-      }
-      entries.append(.init(content: content, status: status, nativeID: id))
-    }
-    return .init(id: "cursor-todos", kind: .plan, phase: !merge && entries.isEmpty ? "clear" : "update",
-      title: "Plan", status: entries.allSatisfy { $0.status == "completed" } ? "completed" : "running",
-      planEntries: entries, rawPayloadJSON: rawPayloadJSON, planKind: "checklist",
-      planOperation: merge ? "merge" : entries.isEmpty ? "clear" : "replace")
   }
 
   /// Stream the retained ACP projection in its host-assigned ordinal order.

@@ -1199,8 +1199,6 @@ public actor LocalACPClient {
             .grokInterjection
         case .opencode:
             .concurrentPrompt
-        case .hermes, .cursor, .openclaw, .pi:
-            .unsupported
         }
     }
 

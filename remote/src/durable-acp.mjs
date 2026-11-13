@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { harnessResource } from './harness-resources.mjs'
 import { mkdir, open, readFile, realpath, rm } from 'node:fs/promises'
-import { resolve, sep } from 'node:path'
+import { resolve } from 'node:path'
 import { createInterface } from 'node:readline'
 import { randomUUID } from 'node:crypto'
 import { runtimeConfiguration, workspacePermission } from './config.mjs'
@@ -171,7 +171,7 @@ function updateSnapshot(state, item) {
 // ACP processes belong to the service, never to the transient SSH attachment.
 // Journaling acceptance before writing prevents a retry from submitting a prompt twice.
 export function createDurableACP({ catalog, workspaceRoot, environment, isEnabled = async () => true, isHarnessEnabled = async () => true,
-  runtimeKind = runtimeConfiguration.runtimeKind, configuration = runtimeConfiguration, directory = resolve(workspaceRoot, '.wovenmatter/durable-acp'), spawnProcess = spawn, openJournal = open, journalFlushInterval = 75 }) {
+  configuration = runtimeConfiguration, directory = resolve(workspaceRoot, '.wovenmatter/durable-acp'), spawnProcess = spawn, openJournal = open, journalFlushInterval = 75 }) {
   const channels = new Map()
   let queue = Promise.resolve()
   const serialize = action => {
@@ -247,9 +247,7 @@ export function createDurableACP({ catalog, workspaceRoot, environment, isEnable
     // accepted inputs or quietly start a fresh session under the same identity.
     if (metadata && !recovering) { channels.set(id, channel); return channel }
     if (recovering && channel.state !== 'stopped') throw new Error('Unknown execution state; explicit recovery is required')
-    const base = await realpath(workspaceRoot)
     const workingDirectory = await realpath(cwd ?? metadata?.cwd ?? workspaceRoot)
-    if (runtimeKind !== 'host' && workingDirectory !== base && !workingDirectory.startsWith(base + sep)) throw new Error('Working directory is outside this workspace')
     const launch = harnessLaunch(harness, selected, permission)
     if (!await isEnabled()) throw new Error('Background execution is disabled')
     if (!await isHarnessEnabled(selected)) throw new Error('This harness is not installed')

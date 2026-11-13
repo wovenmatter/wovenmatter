@@ -191,7 +191,7 @@ final class MobileModelTests: XCTestCase {
     let notReady = HarnessCapabilities(id: "local:codex", runtimeKind: "codex", displayName: "Codex", available: false, canStart: false)
     // The saved catalog from an earlier connection.
     model.providers = [ready, notReady]
-    model.workspaceProviders = [macID: [ready, notReady], linuxID: [.init(id: "pi", runtimeKind: "pi", displayName: "Pi Durable", available: true)]]
+    model.workspaceProviders = [macID: [ready, notReady], linuxID: [.init(id: "pi", runtimeKind: "default_agent", displayName: "Pi Durable", available: true)]]
     model.knownAgentIDs = ["central:local:codex", macID + ":local:codex", linuxID + ":pi"]
     let orphan = LibraryFolder(id: "orphan", name: "Old Mac folder", execution: .init(workspaceID: "device:" + UUID().uuidString.lowercased(), rootPath: "/old"))
     let linuxFolder = LibraryFolder(id: "linux-folder", name: "Releases", execution: .init(workspaceID: "remote:" + linuxID, rootPath: "/srv"))

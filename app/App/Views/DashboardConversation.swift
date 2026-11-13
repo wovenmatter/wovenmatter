@@ -797,9 +797,6 @@ struct DashboardCloudConversation: View {
     private func generatedFileURL(_ source: String, message: WorkspaceMessageRecord) async throws -> URL {
         let id = WorkspaceLibraryItem.identifier(messageID: message.id, source: source)
         if isRemote { return try await model.sharedLibraryFileURL(id: id) }
-        if let client = model.liveLibraryClient, client.isForeignConversation(message.conversationID) {
-            return try await client.exportFile(.libraryFile(id: id))
-        }
         return try await model.library.fileURL(id: id)
     }
 

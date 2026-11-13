@@ -6,7 +6,6 @@ struct MacTailnetDiscoveryView: View {
     @Bindable var devices: MacDeviceSetupModel
     @Bindable var pairing: MacPairingController
     @Bindable var host: LibraryHostController
-    var canPairWithCentral: Bool
     @State private var confirmation: DeviceSetupConfirmation?
     private var busy: Bool { devices.searching || pairing.isDiscovering || host.isDiscovering || devices.rows.contains(where: \.busy) }
 
@@ -32,7 +31,6 @@ struct MacTailnetDiscoveryView: View {
             }
             ForEach(devices.rows) { row in
                 MacTailnetDeviceRow(row: row, release: devices.release, peer: peer(for: row), paired: isPaired(row),
-                    canPairWithCentral: canPairWithCentral,
                     onAction: { action in
                         let item = DeviceSetupConfirmation(row: row, action: action)
                         if action == .open { Task { await perform(item) } } else { confirmation = item }
@@ -99,7 +97,6 @@ private struct MacTailnetDeviceRow: View {
     var release: MacRelease?
     var peer: DiscoveredPeer?
     var paired: Bool
-    var canPairWithCentral: Bool
     var onAction: (MacDeviceSetupModel.Action) -> Void
     var onInspect: () -> Void
     @State private var showConnection = false
@@ -153,10 +150,10 @@ private struct MacTailnetDeviceRow: View {
     @ViewBuilder private var actions: some View {
         HStack(spacing: 8) {
             if !paired {
-                if canUseService || row.installation?.supportsSetup == true || (canPairWithCentral && row.installation?.installed == true) {
+                if canUseService || row.installation?.supportsSetup == true || row.installation?.installed == true {
                     Button("Pair") { onAction(.pair) }.buttonStyle(SettingsQuietButtonStyle())
                 } else if let installation = row.installation, let release,
-                          (canPairWithCentral || release.supportsRemoteSetup), !installation.installed || release.isNewer(than: installation) {
+                          !installation.installed || release.isNewer(than: installation) {
                     Button(installation.installed ? "Update & pair" : "Download & pair") { onAction(.installAndPair) }
                         .buttonStyle(SettingsQuietButtonStyle())
                 } else if row.installation?.installed == true {
