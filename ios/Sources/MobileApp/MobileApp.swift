@@ -254,7 +254,7 @@ struct HomePane: View {
     if model.credential == nil {
       SettingsNavigationRow(title: "Connect your Mac", icon: .monitor) { PairingPane(model: model) }
         .accessibilityIdentifier("home-connect-mac")
-      homeCaption("Pair with Woven Matter on your Mac to use its workspaces and agents here and sync your notes and chats. Everything on \(model.deviceWorkspaceName.lowercased()) is kept.")
+      homeCaption("Pair with Woven Matter on your Mac to use its workspaces and agents here and sync your notes and chats. Everything on \(model.deviceWorkspaceName.prefix(1).lowercased())\(model.deviceWorkspaceName.dropFirst()) is kept.")
         .accessibilityIdentifier("home-connect-mac-caption")
     } else {
       if model.needsMemberPairing {

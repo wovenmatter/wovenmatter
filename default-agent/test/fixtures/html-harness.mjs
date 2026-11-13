@@ -90,7 +90,7 @@ try {
 
   const missing = join(root, 'missing.png');
   const preview = await invoke('woven_html_preview', { html: `<img src="${missing}">` });
-  assert.ok(!preview.isError);
+  assert.ok(!preview.isError, JSON.stringify(preview));
   assert.deepEqual(JSON.parse(preview.content.find(part => part.type === 'text').text).missingImages, [missing]);
   let rejected = false;
   try { rejected = (await invoke('woven_html_render', { ...page, html: `<img src="${missing}">` })).isError === true; }
