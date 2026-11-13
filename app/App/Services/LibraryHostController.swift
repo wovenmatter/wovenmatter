@@ -658,7 +658,7 @@ final class LibraryHostController {
             setUpLinuxHost(configuration)
             if let workspace = executionWorkspaces.first(where: { $0.id == configuration.id.uuidString.lowercased() }),
                workspace.kind == .linux, workspace.executionDeviceID != nil, !workspace.deleted {
-                try? await ensureExecutionPublisher(workspace: workspace, configuration: configuration)
+                try? await ensureExecutionToolSettings(workspace: workspace, configuration: configuration)
             }
         }
     }
@@ -843,7 +843,7 @@ final class LibraryHostController {
                 try await removeJournalGrants(deviceID: deviceID)
                 throw LibraryAPIError(code: "unauthorized", message: "This device was revoked during enrollment.")
             }
-            if let configuration { try? await ensureExecutionPublisher(workspace: credential.workspace, configuration: configuration) }
+            if let configuration { try? await ensureExecutionToolSettings(workspace: credential.workspace, configuration: configuration) }
             guard try await deviceMayExecute(deviceID, workspaceID: id, current: current) else {
                 throw LibraryAPIError(code: "unauthorized", message: "This device's execution access changed during enrollment.")
             }
@@ -908,7 +908,7 @@ final class LibraryHostController {
         credential.workspace = try await database.registerExecutionWorkspace(
             .init(workspace: credential.workspace, expectedRevision: prior?.revision), deviceID: identity.hostDeviceID)
         if let configuration = model.remoteWorkspaces.workspaces.first(where: { $0.id.uuidString.lowercased() == id }) {
-            try? await ensureExecutionPublisher(workspace: credential.workspace, configuration: configuration)
+            try? await ensureExecutionToolSettings(workspace: credential.workspace, configuration: configuration)
         }
         return credential
     }

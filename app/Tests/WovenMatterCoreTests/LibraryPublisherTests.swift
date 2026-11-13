@@ -28,12 +28,12 @@ struct LibraryPublisherTests {
     let entries = [entry(firstRun.runID, 1), entry(secondRun, 2)]
     let first = ExecutionJournalBatch(libraryID: f.identity.libraryID, entries: [entries[0]])
     let all = ExecutionJournalBatch(libraryID: f.identity.libraryID, entries: entries)
-    let path = "/v1/federation/publisher/retained/settle"
-    #expect(try await DevicePublisherAPI.handle(f.request(path, first), path: path, database: f.database).status == 200)
+    let path = "/v1/publisher/retained/settle"
+    #expect(try await DevicePublisherAPI.handleLocal(f.request(path, first), path: path, database: f.database).status == 200)
     #expect(try await f.database.libraryExecutionOwner(conversationID: conversationID) == nil)
     await #expect(throws: (any Error).self) { _ = try await f.database.ingestExecutionJournal(first, deviceID: f.workspace.executionDeviceID!) }
-    #expect(try await DevicePublisherAPI.handle(f.request(path, all), path: path, database: f.database).status == 200)
-    #expect(try await DevicePublisherAPI.handle(f.request(path, all), path: path, database: f.database).status == 200)
+    #expect(try await DevicePublisherAPI.handleLocal(f.request(path, all), path: path, database: f.database).status == 200)
+    #expect(try await DevicePublisherAPI.handleLocal(f.request(path, all), path: path, database: f.database).status == 200)
     var changed = first; changed.entries[0].retainedExecution?.status = "failed"
     await #expect(throws: (any Error).self) { _ = try await f.database.settleLibraryRetainedRuns(changed, deviceID: f.workspace.executionDeviceID!) }
     let active = UUID().uuidString.lowercased()
@@ -320,18 +320,18 @@ struct LibraryPublisherTests {
   }
 
   private struct Fixture {
-    let persistence: PersistenceFixture, database: WorkspaceDatabase, identity: LibraryIdentity, workspace: ExecutionWorkspace, grant: ExecutionWorkspacePublisherGrant
+    let persistence: PersistenceFixture, database: WorkspaceDatabase, identity: LibraryIdentity, workspace: ExecutionWorkspace
     init() async throws {
       persistence = try PersistenceFixture()
       database = try await persistence.openDatabase()
       identity = try await database.libraryIdentity()
       workspace = try await database.registerExecutionWorkspace(.init(workspace: .init(id: UUID().uuidString.lowercased(), libraryID: identity.libraryID,
         ownerDeviceID: identity.hostDeviceID, kind: .linux, name: "Linux", executionDeviceID: UUID().uuidString.lowercased(), journalDeviceIDs: [identity.hostDeviceID, "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"])), deviceID: identity.hostDeviceID)
-      grant = try await database.issueExecutionWorkspacePublisher(workspaceID: workspace.id, endpoint: URL(string: "https://central.tail.ts.net/wovenmatter")!, deviceID: identity.hostDeviceID)
     }
     func remove() { persistence.remove() }
     func request<T: Encodable>(_ path: String, _ value: T, libraryID: String? = nil) throws -> LibraryHTTPRequest {
-      .init(method: "POST", target: path, headers: ["authorization": "Bearer " + grant.token, "x-woven-workspace": libraryID ?? identity.libraryID], body: try JSONEncoder().encode(value))
+      // The library host's local socket: its own Node server publishes there.
+      .init(method: "POST", target: path, headers: ["x-woven-workspace": libraryID ?? identity.libraryID], body: try JSONEncoder().encode(value))
     }
   }
 

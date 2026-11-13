@@ -1047,21 +1047,8 @@ public struct RemoteWorkspaceServiceClient: Sendable {
         try await request(path: "v1/host/members/adopt", method: "POST", body: adoption, signer: signer.map { ($0, audience ?? "") })
     }
 
-    public func executionPublisherStatus() async throws -> ExecutionWorkspacePublisherStatus {
-        try await request(path: "v1/execution/publisher", method: "GET", body: nil)
-    }
-    public func configureExecutionPublisher(_ grant: ExecutionWorkspacePublisherGrant) async throws -> ExecutionWorkspacePublisherStatus {
-        try await request(path: "v1/execution/publisher", method: "POST", body: JSONEncoder().encode(grant))
-    }
-
-    public func executionMCPLibraryStatus() async throws -> ExecutionWorkspacePublisherStatus {
-        try await request(path: "v1/execution/mcp-library", method: "GET", body: nil)
-    }
-    public func configureExecutionMCPLibrary(_ grant: GatewayJSONValue) async throws -> ExecutionWorkspacePublisherStatus {
-        try await request(path: "v1/execution/mcp-library", method: "POST", body: JSONEncoder().encode(grant))
-    }
-
-    public func configureExecutionMCPSettings(_ settings: GatewayJSONValue) async throws -> ExecutionWorkspacePublisherStatus {
+    /// The host replies with the settings it saved.
+    public func configureExecutionMCPSettings(_ settings: GatewayJSONValue) async throws -> GatewayJSONValue {
         try await request(path: "v1/execution/mcp-settings", method: "POST", body: JSONEncoder().encode(settings))
     }
 

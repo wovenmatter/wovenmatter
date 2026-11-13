@@ -108,13 +108,11 @@ struct FederatedExecutionFlowTests {
     let identity = try await fixture.database.libraryIdentity()
     var workspace = ExecutionWorkspace(id: UUID().uuidString.lowercased(), libraryID: fixture.libraryID,
       ownerDeviceID: identity.hostDeviceID, kind: .linux, name: "Linux",
-      // Deliberately collide with a paired client's ID: only the dedicated
-      // publisher credential may publish Linux history, even in this case.
+      // Deliberately collide with a paired client's ID: only the workspace's
+      // own library host may publish Linux history, even in this case.
       executionDeviceID: mac.credential.deviceID,
       journalDeviceIDs: [phone.credential.deviceID, mac.credential.deviceID])
     workspace = try await fixture.database.registerExecutionWorkspace(.init(workspace: workspace), deviceID: identity.hostDeviceID)
-    let grant = try await fixture.database.issueExecutionWorkspacePublisher(workspaceID: workspace.id,
-      endpoint: URL(string: "https://central.test-tailnet.ts.net/wovenmatter")!, deviceID: identity.hostDeviceID)
     let conversationID = UUID().uuidString.lowercased()
     let conversation = LibraryConversation(id: conversationID, title: "One execution owner", workspaceID: workspace.id)
     let message = LibraryMessage(id: UUID().uuidString.lowercased(), conversationID: conversationID,
@@ -144,15 +142,14 @@ struct FederatedExecutionFlowTests {
       try await fixture.database.ingestExecutionJournal(batch, deviceID: identity.hostDeviceID)
     }
 
-    // No observing client participates: the workspace's scoped publisher reaches
-    // the real central API. Replaying its lost acknowledgement is idempotent.
-    let request = LibraryHTTPRequest(method: "POST", target: "/wovenmatter/v1/federation/publisher/journal", headers: [
-      "authorization": "Bearer " + grant.token, "x-woven-workspace": fixture.libraryID,
-      "x-woven-protocol": String(LibraryProtocol.version)
-    ], body: try JSONEncoder().encode(batch))
-    let published = await fixture.api.handle(request)
+    // No observing client participates: the workspace publishes into its library
+    // host's local socket. Replaying its lost acknowledgement is idempotent.
+    let path = "/v1/publisher/journal"
+    let request = LibraryHTTPRequest(method: "POST", target: path, headers: ["x-woven-workspace": fixture.libraryID],
+      body: try JSONEncoder().encode(batch))
+    let published = try await DevicePublisherAPI.handleLocal(request, path: path, database: fixture.database)
     #expect(published.status == 200)
-    let replay = await fixture.api.handle(request)
+    let replay = try await DevicePublisherAPI.handleLocal(request, path: path, database: fixture.database)
     #expect(replay.status == 200)
     #expect(try await fixture.database.executionJournal(after: 0).entries == entries)
     #expect(try await fixture.database.libraryFederatedTranscript(conversationID: conversationID)?.messages == [message])

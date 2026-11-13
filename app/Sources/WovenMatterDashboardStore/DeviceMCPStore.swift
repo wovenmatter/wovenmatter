@@ -11,39 +11,18 @@ import CSQLite
 #endif
 import WovenMatterCore
 
-/// A library-tool grant is separate from the write-only execution publisher.
-/// The secret is returned once for provisioning; only its digest is retained.
-public struct ExecutionWorkspaceMCPGrant: Codable, Sendable {
-  public let grantID: String
-  public let libraryID: String
-  public let workspaceID: String
-  public let executionDeviceID: String
-  public let endpointURL: String
-  public let bearerToken: String
-}
-
 public struct ExecutionWorkspaceMCPPrincipal: Sendable {
   public let grantID: String
   public let libraryID: String
   public let workspaceID: String
+  /// The Linux member that executes the workspace (its signed requests).
   public let executionDeviceID: String
-  /// A signed request from the workspace's own execution device (a Linux
-  /// member) rather than a library MCP grant; `grantID` is then `member:<device>`.
-  public var isMember = false
 }
 
 public struct ScheduledMCPPreparation: Codable, Sendable {
   public let run: WorkspaceCalendarRun
   public let eventRevision: Int
   public let nativeSessionID: String?
-}
-
-private struct WorkspaceMCPRecord: Codable {
-  var grantID: String
-  var libraryID: String
-  var workspaceID: String
-  var executionDeviceID: String
-  var endpointURL: String
 }
 
 extension WorkspaceDatabaseConnection {
@@ -116,75 +95,9 @@ extension WorkspaceDatabaseConnection {
     }
   }
 
-  public func issueExecutionWorkspaceMCP(workspaceID: String, endpoint: URL, deviceID: String) throws -> ExecutionWorkspaceMCPGrant {
-    try transaction {
-      let identity = try libraryIdentityUnlocked()
-      guard deviceID == identity.hostDeviceID, PairingPayload.isValidEndpoint(endpoint),
-            let workspace = try federationWorkspaceUnlocked(workspaceID), !workspace.deleted,
-            workspace.libraryID == identity.libraryID, workspace.kind == .linux,
-            let executor = workspace.executionDeviceID, federationID(executor) else {
-        throw federationError("wrong_owner", "Only the central library host can authorize a registered Linux execution owner.")
-      }
-      guard let token = GrantSecrets.randomToken() else {
-        throw federationError("unavailable", "Unable to create a library MCP grant.")
-      }
-      let url = endpoint.appending(path: "mcp/workspace").absoluteString
-      let record = WorkspaceMCPRecord(grantID: UUID().uuidString.lowercased(), libraryID: identity.libraryID,
-        workspaceID: workspaceID, executionDeviceID: executor, endpointURL: url)
-      let statement = try prepareUnlocked("INSERT INTO execution_workspace_mcp_grants(workspace_id,digest,payload) VALUES (?,?,?) ON CONFLICT(workspace_id) DO UPDATE SET digest=excluded.digest,payload=excluded.payload")
-      defer { sqlite3_finalize(statement) }
-      try bind(workspaceID, at: 1, to: statement)
-      try bind(Data(SHA256.hash(data: Data(token.utf8))), at: 2, to: statement)
-      try bind(JSONEncoder().encode(record), at: 3, to: statement); try stepDone(statement)
-      return .init(grantID: record.grantID, libraryID: record.libraryID, workspaceID: workspaceID,
-        executionDeviceID: executor, endpointURL: url, bearerToken: token)
-    }
-  }
-
-  public func executionWorkspaceMCPMatches(workspaceID: String, grantID: String, endpoint: URL) throws -> Bool {
-    try withLock {
-      guard let record = try federationValuesUnlocked("SELECT payload FROM execution_workspace_mcp_grants WHERE workspace_id=?",
-              bindings: [workspaceID], as: WorkspaceMCPRecord.self).first,
-            let workspace = try federationWorkspaceUnlocked(workspaceID), !workspace.deleted else { return false }
-      let libraryID = try libraryIDUnlocked()
-      return record.grantID == grantID && record.endpointURL == endpoint.appending(path: "mcp/workspace").absoluteString
-        && record.executionDeviceID == workspace.executionDeviceID
-        && record.libraryID == libraryID
-    }
-  }
-
-  func activeExecutionWorkspaceMCPGrantUnlocked(workspaceID: String, executionDeviceID: String) throws -> Bool {
-    guard let record = try federationValuesUnlocked("SELECT payload FROM execution_workspace_mcp_grants WHERE workspace_id=?",
-      bindings: [workspaceID], as: WorkspaceMCPRecord.self).first else { return false }
-    let libraryID = try libraryIDUnlocked()
-    return record.executionDeviceID == executionDeviceID && record.libraryID == libraryID
-  }
-
-  public func authenticateExecutionWorkspaceMCP(bearer: String) throws -> ExecutionWorkspaceMCPPrincipal {
-    try withLock {
-      guard (32...256).contains(bearer.utf8.count) else { throw federationError("unauthorized", "Invalid library MCP grant.") }
-      let statement = try prepareUnlocked("SELECT payload FROM execution_workspace_mcp_grants WHERE digest=?")
-      defer { sqlite3_finalize(statement) }
-      try bind(Data(SHA256.hash(data: Data(bearer.utf8))), at: 1, to: statement)
-      guard sqlite3_step(statement) == SQLITE_ROW else { throw federationError("unauthorized", "Invalid library MCP grant.") }
-      let record = try JSONDecoder().decode(WorkspaceMCPRecord.self, from: blob(statement, column: 0))
-      guard record.libraryID == (try libraryIDUnlocked()),
-            let workspace = try federationWorkspaceUnlocked(record.workspaceID), !workspace.deleted,
-            workspace.kind == .linux, workspace.libraryID == record.libraryID,
-            workspace.executionDeviceID == record.executionDeviceID else {
-        throw federationError("unauthorized", "This execution workspace's library MCP access was revoked.")
-      }
-      return .init(grantID: record.grantID, libraryID: record.libraryID,
-        workspaceID: record.workspaceID, executionDeviceID: record.executionDeviceID)
-    }
-  }
-
-  /// A grant principal is current while its grant is; a member principal was
-  /// just verified by signature against the current member list.
+  /// A member principal was just verified by signature against the current member list.
   func workspaceMCPPrincipalCurrentUnlocked(_ principal: ExecutionWorkspaceMCPPrincipal) throws -> Bool {
-    if principal.isMember { return principal.grantID == "member:" + principal.executionDeviceID }
-    return try federationValuesUnlocked("SELECT payload FROM execution_workspace_mcp_grants WHERE workspace_id=?",
-      bindings: [principal.workspaceID], as: WorkspaceMCPRecord.self).first?.grantID == principal.grantID
+    principal.grantID == "member:" + principal.executionDeviceID
   }
 
   /// The principal for a signed request from a Linux member: allowed only for
@@ -199,18 +112,7 @@ extension WorkspaceDatabaseConnection {
         throw federationError("wrong_owner", "This member does not execute that Linux workspace.")
       }
       return .init(grantID: "member:" + executor, libraryID: workspace.libraryID, workspaceID: workspace.id,
-                   executionDeviceID: executor, isMember: true)
-    }
-  }
-
-  public func revokeExecutionWorkspaceMCP(workspaceID: String, deviceID: String) throws {
-    try transaction {
-      guard deviceID == (try libraryIdentityUnlocked()).hostDeviceID else {
-        throw federationError("wrong_owner", "Only the central library host can revoke library MCP grants.")
-      }
-      let statement = try prepareUnlocked("DELETE FROM execution_workspace_mcp_grants WHERE workspace_id=?")
-      defer { sqlite3_finalize(statement) }
-      try bind(workspaceID, at: 1, to: statement); try stepDone(statement)
+                   executionDeviceID: executor)
     }
   }
 
@@ -223,7 +125,7 @@ extension WorkspaceDatabaseConnection {
             workspace.libraryID == principal.libraryID, workspace.kind == .linux,
             workspace.executionDeviceID == principal.executionDeviceID,
             try workspaceMCPPrincipalCurrentUnlocked(principal) else {
-        throw federationError("wrong_owner", "A library MCP grant may act only for its execution workspace's conversations.")
+        throw federationError("wrong_owner", "A Linux member may act only for its execution workspace's conversations.")
       }
     }
   }
@@ -233,18 +135,6 @@ extension WorkspaceDatabase {
   public func prepareLibraryScheduledMCP(_ preparation: ScheduledMCPPreparation,
       principal: ExecutionWorkspaceMCPPrincipal) async throws -> [WorkspaceToolGroup] {
     try await write { try $0.prepareLibraryScheduledMCP(preparation, principal: principal) }
-  }
-  public func issueExecutionWorkspaceMCP(workspaceID: String, endpoint: URL, deviceID: String) async throws -> ExecutionWorkspaceMCPGrant {
-    try await write { try $0.issueExecutionWorkspaceMCP(workspaceID: workspaceID, endpoint: endpoint, deviceID: deviceID) }
-  }
-  public func executionWorkspaceMCPMatches(workspaceID: String, grantID: String, endpoint: URL) async throws -> Bool {
-    try await read { try $0.executionWorkspaceMCPMatches(workspaceID: workspaceID, grantID: grantID, endpoint: endpoint) }
-  }
-  public func authenticateExecutionWorkspaceMCP(bearer: String) async throws -> ExecutionWorkspaceMCPPrincipal {
-    try await read { try $0.authenticateExecutionWorkspaceMCP(bearer: bearer) }
-  }
-  public func revokeExecutionWorkspaceMCP(workspaceID: String, deviceID: String) async throws {
-    try await write { try $0.revokeExecutionWorkspaceMCP(workspaceID: workspaceID, deviceID: deviceID) }
   }
   public func executionWorkspaceMCPMember(workspaceID: String, deviceID: String, serving: String? = nil) async throws -> ExecutionWorkspaceMCPPrincipal {
     try await read { try $0.executionWorkspaceMCPMember(workspaceID: workspaceID, deviceID: deviceID, serving: serving) }

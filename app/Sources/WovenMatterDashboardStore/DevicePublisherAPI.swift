@@ -3,48 +3,7 @@ import WovenMatterCore
 
 @MainActor
 public enum DevicePublisherAPI {
-  static func handle(_ request: LibraryHTTPRequest, path: String, database: WorkspaceDatabase) async throws -> LibraryHTTPResponse {
-    guard request.method == "POST", let bearer = request.bearer else { return .error("unauthorized", "A workspace publisher is required.", status: 401) }
-    let principal = try await database.authenticateExecutionWorkspacePublisher(bearer: bearer)
-    guard request.headers["x-woven-workspace"] == principal.libraryID else { return .error("library_mismatch", "This publisher belongs to another library.", status: 409) }
-    switch path {
-    case "/v1/federation/publisher/association":
-      struct Request: Decodable { var runID: String?; var nativeSessionID: String? }
-      let value = try JSONDecoder().decode(Request.self, from: request.body)
-      guard let runID = value.runID, (value.nativeSessionID?.utf8.count ?? 0) <= 4096,
-            let association = try await database.libraryRetainedAssociation(workspaceID: principal.workspaceID, runID: runID, nativeSessionID: value.nativeSessionID) else {
-        return .error("not_found", "No exact retained execution association exists in this workspace.", status: 404)
-      }
-      return try .json(association)
-    case "/v1/federation/publisher/retained/settle":
-      let batch = try JSONDecoder().decode(ExecutionJournalBatch.self, from: request.body)
-      guard batch.libraryID == principal.libraryID, batch.entries.allSatisfy({ $0.workspaceID == principal.workspaceID }) else {
-        return .error("wrong_owner", "A publisher may settle only exact retained runs from its workspace.", status: 403)
-      }
-      return try .json(try await database.settleLibraryRetainedRuns(batch, deviceID: principal.executionDeviceID))
-    case "/v1/federation/publisher/journal":
-      let batch = try JSONDecoder().decode(ExecutionJournalBatch.self, from: request.body)
-      guard batch.libraryID == principal.libraryID, batch.entries.allSatisfy({ $0.workspaceID == principal.workspaceID }) else {
-        return .error("wrong_owner", "A publisher may submit only its own workspace history.", status: 403)
-      }
-      return try .json(try await database.ingestExecutionJournal(batch, deviceID: principal.executionDeviceID))
-    case "/v1/federation/publisher/artifacts/register":
-      let value = try JSONDecoder().decode(LibraryArtifactRegistration.self, from: request.body)
-      guard value.manifest.workspaceID == principal.workspaceID else { return .error("wrong_owner", "A publisher may save only its own workspace artifacts.", status: 403) }
-      return try .json(try await database.registerLibraryArtifact(value, deviceID: principal.executionDeviceID))
-    case "/v1/federation/publisher/artifacts/chunk":
-      let value = try JSONDecoder().decode(LibraryArtifactChunk.self, from: request.body)
-      guard try await database.libraryArtifactTransfer(id: value.id)?.manifest.workspaceID == principal.workspaceID else { return .error("wrong_owner", "This artifact belongs to another workspace.", status: 403) }
-      return try .json(try await database.appendLibraryArtifactChunk(value, deviceID: principal.executionDeviceID))
-    case "/v1/federation/publisher/artifacts/commit":
-      let value = try JSONDecoder().decode(LibraryArtifactCommit.self, from: request.body)
-      guard try await database.libraryArtifactTransfer(id: value.id)?.manifest.workspaceID == principal.workspaceID else { return .error("wrong_owner", "This artifact belongs to another workspace.", status: 403) }
-      return try .json(try await database.commitLibraryArtifact(value, deviceID: principal.executionDeviceID))
-    default: return .error("not_found", "This publisher can submit workspace history and saved artifacts only.", status: 404)
-    }
-  }
-
-  /// The same publisher bodies on a library host's local socket
+  /// Execution history on a library host's local socket
   /// (`POST /v1/publisher/...`), for this machine's own Node server. The
   /// socket's bearer already proves the caller; the workspace named in the
   /// body must be a Linux execution workspace this library knows (its
