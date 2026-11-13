@@ -13,17 +13,16 @@ struct LibraryToolFacadeTests {
         let caller = try await importPhone(fixture)
         let identity = try await fixture.database.libraryIdentity()
         let localID = UUID().uuidString.lowercased()
-        let remoteID = fixture.remote.id.uuidString.lowercased()
-        for (id, kind) in [(localID, ExecutionWorkspace.Kind.mac), (remoteID, .linux)] {
-            _ = try await fixture.database.registerExecutionWorkspace(.init(workspace: .init(
-                id: id, libraryID: identity.libraryID, ownerDeviceID: identity.hostDeviceID,
-                kind: kind, name: "Paired workspace", executionDeviceID: kind == .mac ? identity.hostDeviceID : nil)),
-                deviceID: identity.hostDeviceID)
-        }
+        _ = try await fixture.database.registerExecutionWorkspace(.init(workspace: .init(
+            id: localID, libraryID: identity.libraryID, ownerDeviceID: identity.hostDeviceID,
+            kind: .mac, name: "Paired workspace", executionDeviceID: identity.hostDeviceID)),
+            deviceID: identity.hostDeviceID)
+        // The Linux host's chat runs on its server; this Mac relays the phone's send there.
+        let (_, linux) = try await fixture.enrollLinuxHost()
         let device = fixture.device
         try await fixture.database.requireLibraryAutomationAccess(callerID: caller)
         let localChat = try #require(await fixture.model.createLocalACPSession(runtimeKind: .codex))
-        let remoteChat = try await fixture.createConversation()
+        let remoteChat = try #require(await fixture.model.createRemoteACPSession(target: try fixture.linuxTarget()))
         for chat in [localChat, remoteChat] {
             let response = try await fixture.model.libraryCommands.executeTool(.init(conversationID: caller,
                 request: .init(arguments: ["sessions", "manage", chat, "--purpose", "Shared access"]),
@@ -34,7 +33,8 @@ struct LibraryToolFacadeTests {
             let receipt = try await fixture.model.libraryCommands.execute(command, deviceID: device)
             #expect(receipt.status == .completed, "\(receipt.message ?? "")")
         }
-        #expect(await fixture.recorder.deliveries.count == 2)
+        #expect(await fixture.recorder.deliveries.count == 1)
+        #expect(await linux.commands.contains { $0.kind == .send && $0.conversationID == remoteChat })
     }
 
     @Test func importedPhoneCallerUsesActualNotesCalendarAndHistoryWithoutProvider() async throws {

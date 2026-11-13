@@ -265,6 +265,60 @@ struct LibraryPublisherTests {
     #expect(PairingPayload.isValidExecutionEndpoint(URL(string: "https://mac.tail.ts.net:8443/wovenmatter")!, linux: false))
   }
 
+  /// A Linux host refuses an adopted transcript of more than 10,000 messages
+  /// or activities; a longer chat sends its newest ones, as the byte limit
+  /// does, so a retry never repeats a refused shape.
+  @Test func federationAdoptionSendsTheNewestMessagesAndActivitiesTheHostAccepts() {
+    var transcript = LibraryTranscript(conversationID: "chat")
+    transcript.messages = (0..<10_050).map { LibraryMessage(id: "m\($0)", conversationID: "chat", role: "user", content: "") }
+    transcript.activities = (0..<10_003).map { LibraryActivity(id: "a\($0)", runID: "run", title: "Read", status: "completed") }
+    let fitted = WorkspaceDatabaseConnection.fitted(transcript, limit: 6 * 1_024 * 1_024)
+    #expect(fitted.messages.count == WorkspaceDatabaseConnection.adoptionEntityLimit && fitted.activities.count == 10_000)
+    #expect(fitted.messages.first?.id == "m50" && fitted.messages.last?.id == "m10049")
+    #expect(fitted.activities.first?.id == "a3" && fitted.activities.last?.id == "a10002")
+    // The byte limit still trims from the oldest end below the count.
+    let small = WorkspaceDatabaseConnection.fitted(transcript, limit: 64 * 1_024)
+    #expect(small.messages.count < 10_000 && small.messages.last?.id == "m10049" && small.activities.last?.id == "a10002")
+    let short = WorkspaceDatabaseConnection.fitted(LibraryTranscript(conversationID: "chat", messages: Array(transcript.messages.prefix(3))), limit: 6 * 1_024 * 1_024)
+    #expect(short.messages.map(\.id) == ["m0", "m1", "m2"])
+  }
+
+  /// A chat that ran over SSH ran on its Linux host. A run it left running or
+  /// uncertain before the update is settled as interrupted by the update, with
+  /// its reply, naming the host; nothing says the local agent stopped.
+  @Test func remoteMemberSSHRunsLeftUnsettledAreInterruptedByTheUpdateWithTheirReplies() async throws {
+    let f = try await Fixture(); defer { f.remove() }
+    let chat = try await f.database.createFixtureRemoteACPSession(runtimeKind: .codex, remoteWorkspaceID: UUID(uuidString: f.workspace.id)!,
+      remoteWorkspaceName: "Linux", title: "Ran over SSH", ownerDeviceID: UUID(uuidString: f.identity.hostDeviceID)!)
+    let running = try await f.database.beginLocalACPRun(conversationID: chat, input: .init(text: "Still running"))
+    try await f.database.write { try $0.toolsExecuteUnlocked("UPDATE dashboard_messages SET content='partial' WHERE id=?", [running.assistantMessageID]) }
+    let local = try await f.database.createFixtureLocalACPSession(runtimeKind: .codex, title: "On this Mac", ownerDeviceID: UUID(uuidString: f.identity.hostDeviceID)!)
+    let localRun = try await f.database.beginLocalACPRun(conversationID: local, input: .init(text: "Local"))
+    try await f.database.recoverInterruptedLocalACPRuns()
+    func row(_ sql: String, _ id: String) async throws -> [String: GatewayJSONValue] {
+      try #require(try await f.database.read { try $0.historyRowsUnlocked(sql, values: [id]) }.first?.objectValue)
+    }
+    let detail = "This run on Linux was interrupted when Woven Matter updated."
+    var run = try await row("SELECT status,error FROM dashboard_runs WHERE id=?", running.runID)
+    #expect(run["status"]?.stringValue == "interrupted" && run["error"]?.stringValue == detail)
+    var reply = try await row("SELECT status,content FROM dashboard_messages WHERE id=?", running.assistantMessageID)
+    #expect(reply["status"]?.stringValue == "interrupted" && reply["content"]?.stringValue == "partial")
+    #expect(try await row("SELECT status FROM dashboard_runs WHERE id=?", localRun.runID)["status"]?.stringValue == "failed")
+    // A run an earlier release left uncertain settles with its reply when the chat moves.
+    let uncertain = try await f.database.beginLocalACPRun(conversationID: chat, input: .init(text: "Unknown outcome"))
+    try await f.database.write {
+      try $0.toolsExecuteUnlocked("UPDATE dashboard_runs SET status='uncertain' WHERE id=?", [uncertain.runID])
+      try $0.toolsExecuteUnlocked("UPDATE dashboard_messages SET status='uncertain',content='' WHERE id=?", [uncertain.assistantMessageID])
+    }
+    try await f.database.interruptLegacyRemoteRuns(conversationID: chat)
+    run = try await row("SELECT status,error FROM dashboard_runs WHERE id=?", uncertain.runID)
+    #expect(run["status"]?.stringValue == "interrupted" && run["error"]?.stringValue == detail)
+    reply = try await row("SELECT status,content FROM dashboard_messages WHERE id=?", uncertain.assistantMessageID)
+    #expect(reply["status"]?.stringValue == "interrupted" && reply["content"]?.stringValue == detail)
+    let sent = try await f.database.read { try $0.adoptionTranscriptUnlocked(chat) }
+    #expect(!sent.messages.contains { ["running", "uncertain", "streaming"].contains($0.status ?? "") })
+  }
+
   private struct Fixture {
     let persistence: PersistenceFixture, database: WorkspaceDatabase, identity: LibraryIdentity, workspace: ExecutionWorkspace, grant: ExecutionWorkspacePublisherGrant
     init() async throws {

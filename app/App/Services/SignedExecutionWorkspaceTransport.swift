@@ -1,16 +1,28 @@
+import CryptoKit
 import Foundation
 import LibraryClient
 import WovenMatterCore
 import WovenMatterClient
+
+/// A transport that reads one activity's complete projection when its
+/// disclosure opens (`GET v1/execution/conversations/<id>/activity?id=&run=`).
+protocol ExecutionActivityDetailsReading: Sendable {
+    func activityDetails(_ id: String, runID: String, activityID: String) async throws -> LibraryActivity
+}
+
+/// Activity IDs are free-form, so they travel as query values.
+func activityDetailsQuery(runID: String, activityID: String) -> [URLQueryItem] {
+    [.init(name: "id", value: activityID), .init(name: "run", value: runID)]
+}
 
 /// Execution transport to another member's workspace (a paired Mac's
 /// `/wovenmatter/v1/execution/*` or a Linux host's Node server behind
 /// `/wovenmatter-execution/<id>/`), authenticated by this Mac's member
 /// signature. Nothing is provisioned or stored for it, so any Mac reaches any
 /// workspace as soon as both are members.
-final class SignedExecutionWorkspaceTransport: ExecutionWorkspaceTransport, @unchecked Sendable {
+final class SignedExecutionWorkspaceTransport: ExecutionWorkspaceTransport, ExecutionActivityDetailsReading, @unchecked Sendable {
     let workspace: ExecutionWorkspace
-    private let client: MemberSignedHTTPClient
+    let client: MemberSignedHTTPClient
     private var deviceID: String { client.signer.deviceID }
 
     /// `audience` is the member that serves the workspace (`MemberDirectory.audience(for:)`);
@@ -71,6 +83,26 @@ final class SignedExecutionWorkspaceTransport: ExecutionWorkspaceTransport, @unc
     }
     func readWorkspace(_ request: LibraryWorkspaceRead) async throws -> LibraryWorkspaceResult {
         try await call("v1/execution/workspace-read", method: "POST", body: JSONEncoder().encode(request))
+    }
+    func activityDetails(_ id: String, runID: String, activityID: String) async throws -> LibraryActivity {
+        try await call("v1/execution/conversations/" + Self.safeID(id) + "/activity",
+            query: activityDetailsQuery(runID: runID, activityID: activityID))
+    }
+    /// A message file of one of this workspace's sessions
+    /// (`GET v1/execution/attachments/<sha256>?name=`), checked against its digest.
+    func attachment(_ reference: LibraryAttachmentReference) async throws -> Data {
+        guard reference.isReadable else { throw MobileConnectionError.http(404, "This file was not saved with its message.") }
+        let (data, response) = try await client.data(reference.readPath, query: [.init(name: "name", value: reference.name)],
+                                                     headers: ["Accept": "*/*"], timeout: 120)
+        guard (200..<300).contains(response.statusCode) else {
+            throw MobileConnectionError.http(response.statusCode, response.statusCode == 404
+                ? "\(workspace.name) no longer has this file." : "\(workspace.name) could not send this file (\(response.statusCode)).")
+        }
+        guard data.count <= LibraryAttachmentReference.maximumBytes,
+              SHA256.hash(data: data).map({ String(format: "%02x", $0) }).joined() == reference.id else {
+            throw MobileConnectionError.invalidResponse
+        }
+        return data
     }
 
     static func safeID(_ value: String) throws -> String {

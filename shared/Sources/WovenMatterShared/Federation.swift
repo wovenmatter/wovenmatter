@@ -248,8 +248,14 @@ public struct ExecutionAdoption: Codable, Equatable, Sendable {
   public var nativeWorkingDirectory: String?
   public var knownRunIDs: [String]?
   public var goal: WorkspaceGoal?
+  /// The history the adopting Mac already shows (messages and activities),
+  /// so the new owner's transcript starts with it. Sent with the request,
+  /// never kept in the saved adoption.
+  public var transcript: LibraryTranscript?
   public init(workspaceID: String, conversation: LibraryConversation, runtimeKind: String, nativeSessionID: String,
-              model: String? = nil, thinking: String? = nil, permission: String? = nil, knownRunIDs: [String]? = nil, nativeWorkingDirectory: String? = nil, goal: WorkspaceGoal? = nil) {
+              model: String? = nil, thinking: String? = nil, permission: String? = nil, knownRunIDs: [String]? = nil, nativeWorkingDirectory: String? = nil, goal: WorkspaceGoal? = nil,
+              transcript: LibraryTranscript? = nil) {
+    self.transcript = transcript
     self.workspaceID = workspaceID; self.conversation = conversation; self.runtimeKind = runtimeKind
     self.nativeWorkingDirectory = nativeWorkingDirectory
     self.knownRunIDs = knownRunIDs; self.goal = goal

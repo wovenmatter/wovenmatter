@@ -40,13 +40,50 @@ public struct LibraryHTTPResponse: Sendable {
     (try? .json(LibraryAPIError(code: code, message: message), status: status))
       ?? Self(status: 500, body: Data())
   }
+
+  /// This response as a refused upgrade: the JSON body's code repeated in
+  /// `X-Woven-Error` (`URLSessionWebSocketTask` cannot read a refused
+  /// upgrade's body), and a `Date`, so a client can tell its clock is wrong.
+  public func refusal(at date: Date = Date()) -> Self {
+    guard stream == nil else { return self }
+    struct Coded: Decodable { let code: String }
+    var headers = headers
+    let named = { (name: String) in headers.keys.contains { $0.caseInsensitiveCompare(name) == .orderedSame } }
+    if !named("X-Woven-Error"), let code = (try? JSONDecoder().decode(Coded.self, from: body))?.code, !code.isEmpty,
+       code.utf8.allSatisfy({ (97...122).contains($0) || (48...57).contains($0) || $0 == 95 }) {
+      headers["X-Woven-Error"] = code
+    }
+    if !named("Date") { headers["Date"] = Self.httpDate(date) }
+    return Self(status: status, contentType: contentType, headers: headers, body: body)
+  }
+
+  /// An HTTP `Date` value (IMF-fixdate).
+  public static func httpDate(_ date: Date) -> String {
+    let formatter = DateFormatter()
+    formatter.locale = Locale(identifier: "en_US_POSIX"); formatter.timeZone = TimeZone(identifier: "GMT")
+    formatter.dateFormat = "EEE, dd MMM yyyy HH:mm:ss 'GMT'"
+    return formatter.string(from: date)
+  }
 }
 
 /// What a server with an upgrade handler does with a WebSocket upgrade request.
 public enum WebSocketUpgradeDecision: Sendable {
   case reject(LibraryHTTPResponse)
   /// Relay raw bytes with a loopback port after sending `head` there as the request.
-  case tunnel(port: UInt16, head: Data)
+  case tunnel(port: UInt16, head: Data, options: TunnelOptions = .init())
+
+  public struct TunnelOptions: Sendable {
+    /// Called with the tunnel's loopback source port once it is connected and
+    /// before `head` is sent, so the target can tell this tunnel's connection
+    /// from any other local connection.
+    public var bind: (@Sendable (UInt16) -> Void)?
+    /// The member holding this relay. Its registry closes the relay when the
+    /// member is removed or no longer an allowed kind.
+    public var owner: MemberSocketRegistry.Owner?
+    public init(bind: (@Sendable (UInt16) -> Void)? = nil, owner: MemberSocketRegistry.Owner? = nil) {
+      self.bind = bind; self.owner = owner
+    }
+  }
 
   /// A WebSocket handshake for `path` on the loopback target, carrying only the
   /// client's handshake fields and the target's own bearer.
@@ -115,8 +152,8 @@ public struct LibraryHTTPParser: Sendable {
     guard upgrade == nil || (allowsUpgrade && parts[0] == "GET" && upgrade?.lowercased() == "websocket"
                              && headers["connection"]?.lowercased().contains("upgrade") == true) else { throw malformed }
     guard headers["host"] != nil, headers["transfer-encoding"] == nil,
-          headers["expect"] == nil,
-          headers["origin"] == nil, headers["cookie"] == nil else { throw malformed }
+          headers["expect"] == nil else { throw malformed }
+    guard headers["origin"] == nil, headers["cookie"] == nil else { throw Self.browserRequest }
     let length: Int
     if let raw = headers["content-length"] {
       guard !raw.isEmpty, raw.utf8.allSatisfy({ (48...57).contains($0) }),
@@ -133,6 +170,8 @@ public struct LibraryHTTPParser: Sendable {
                                 body: Data(buffer[separator.upperBound...]))
   }
   private var malformed: LibraryAPIError { LibraryAPIError(code: "invalid_request", message: "Invalid library request.") }
+  /// A browser origin or cookie: refused with 403 before any route sees it.
+  public static let browserRequest = LibraryAPIError(code: "browser_request", message: "Browser requests are not accepted here.")
 }
 
 #if canImport(Network)
@@ -149,6 +188,10 @@ public final class LibraryHTTPServer: @unchecked Sendable {
   private let deadlines: LibraryHTTPParser.Deadlines
   private var listener: NWListener?
   private var clients: [UUID: LibraryHTTPConnection] = [:]
+  /// Long-lived WebSocket relays, which do not count against ordinary requests.
+  private var tunnels: Set<UUID> = []
+  public static let maximumConnections = 32
+  public static let maximumTunnels = 128
   private var startContinuation: CheckedContinuation<UInt16, any Error>?
   public init(streamIdleTimeout: TimeInterval = 180, deadlines: LibraryHTTPParser.Deadlines = .init(),
               upgradeHandler: UpgradeHandler? = nil, handler: @escaping Handler) {
@@ -200,11 +243,14 @@ public final class LibraryHTTPServer: @unchecked Sendable {
     startContinuation?.resume(throwing: error); startContinuation = nil
   }
   private func accept(_ connection: NWConnection) {
-    guard clients.count < 32 else { connection.cancel(); return }
+    guard clients.count - tunnels.count < Self.maximumConnections else { connection.cancel(); return }
     let id = UUID()
     let client = LibraryHTTPConnection(connection: connection, queue: queue, handler: handler, upgradeHandler: upgradeHandler,
-                                         streamIdleTimeout: streamIdleTimeout, deadlines: deadlines) { [weak self] in
-      self?.clients.removeValue(forKey: id)
+                                         streamIdleTimeout: streamIdleTimeout, deadlines: deadlines, onTunnel: { [weak self] in
+      guard let self, self.tunnels.count < Self.maximumTunnels else { return false }
+      self.tunnels.insert(id); return true
+    }) { [weak self] in
+      self?.clients.removeValue(forKey: id); self?.tunnels.remove(id)
     }
     clients[id] = client
     client.start()
@@ -219,10 +265,14 @@ private final class LibraryHTTPConnection: @unchecked Sendable {
   private let streamIdleTimeout: TimeInterval
   private let deadlines: LibraryHTTPParser.Deadlines
   private let onClose: @Sendable () -> Void
+  /// Called on the queue when this connection becomes a relay; false refuses it.
+  private let onTunnel: () -> Bool
   private var parser: LibraryHTTPParser
   private var bodyIdle: DispatchWorkItem?
   private var replying = false
   private var tunnel: NWConnection?
+  private var tunnelRegistration: (registry: MemberSocketRegistry, id: Task<UUID, Never>)?
+  private var tunnelStarted = false
   // All mutable connection state is confined to queue, including NW callbacks.
   private var closed = false
   private var processing = false
@@ -232,9 +282,10 @@ private final class LibraryHTTPConnection: @unchecked Sendable {
   private var streamIdleTimer: (any DispatchSourceTimer)?
   init(connection: NWConnection, queue: DispatchQueue, handler: @escaping LibraryHTTPServer.Handler,
        upgradeHandler: LibraryHTTPServer.UpgradeHandler? = nil,
-       streamIdleTimeout: TimeInterval, deadlines: LibraryHTTPParser.Deadlines, onClose: @escaping @Sendable () -> Void) {
+       streamIdleTimeout: TimeInterval, deadlines: LibraryHTTPParser.Deadlines, onTunnel: @escaping () -> Bool = { true },
+       onClose: @escaping @Sendable () -> Void) {
     self.connection = connection; self.queue = queue; self.handler = handler; self.upgradeHandler = upgradeHandler
-    self.streamIdleTimeout = streamIdleTimeout; self.deadlines = deadlines; self.onClose = onClose
+    self.streamIdleTimeout = streamIdleTimeout; self.deadlines = deadlines; self.onTunnel = onTunnel; self.onClose = onClose
     parser = LibraryHTTPParser(allowsUpgrade: upgradeHandler != nil)
   }
   func start() {
@@ -272,6 +323,10 @@ private final class LibraryHTTPConnection: @unchecked Sendable {
     streamIdleTimer?.cancel(); streamIdleTimer = nil
     bodyIdle?.cancel(); bodyIdle = nil
     tunnel?.cancel(); tunnel = nil
+    if let tunnelRegistration {
+      Task { let id = await tunnelRegistration.id.value; await tunnelRegistration.registry.unregister(id) }
+      self.tunnelRegistration = nil
+    }
     connection.cancel(); onClose()
   }
   private func receive() {
@@ -285,8 +340,8 @@ private final class LibraryHTTPConnection: @unchecked Sendable {
               let decision = await upgradeHandler(request)
               queue.async { [self] in
                 switch decision {
-                case .reject(let response): send(response)
-                case let .tunnel(port, head): openTunnel(port: port, head: head)
+                case .reject(let response): send(response.refusal())
+                case let .tunnel(port, head, options): openTunnel(port: port, head: head, options: options)
                 }
               }
             }
@@ -303,27 +358,50 @@ private final class LibraryHTTPConnection: @unchecked Sendable {
           if self.parser.headersComplete, data?.isEmpty == false { self.armBodyIdle() }
           self.receive()
         }
+      } catch let error as LibraryAPIError where error.code == LibraryHTTPParser.browserRequest.code {
+        // Also the stream's refusal of a browser upgrade, so it carries the refusal headers.
+        self.send(LibraryHTTPResponse.error(error.code, error.message, status: 403).refusal())
       } catch {
         self.send(.error("invalid_request", "Invalid or oversized library request.", status: 400))
       }
     }
   }
   /// After the handshake this is a byte relay; WebSocket framing passes through unchanged.
-  private func openTunnel(port: UInt16, head: Data) {
+  private func openTunnel(port: UInt16, head: Data, options: WebSocketUpgradeDecision.TunnelOptions) {
     guard !closed, let target = NWEndpoint.Port(rawValue: port) else { cancel(); return }
+    guard onTunnel() else { send(.error("unavailable", "Too many open sockets on this server.", status: 503)); return }
     streaming = true
+    if let owner = options.owner {
+      let queue = queue
+      let registration = Task { [weak self] in
+        await owner.registry.register(deviceID: owner.deviceID, kinds: owner.kinds) { queue.async { self?.cancel() } }
+      }
+      tunnelRegistration = (owner.registry, registration)
+    }
     let upstream = NWConnection(host: "127.0.0.1", port: target, using: .tcp)
     tunnel = upstream
     upstream.stateUpdateHandler = { [weak self] state in
-      switch state { case .failed, .cancelled: self?.queue.async { self?.cancel() }; default: break }
+      switch state {
+      case .ready:
+        guard let self, !self.tunnelStarted, !self.closed else { return }
+        self.tunnelStarted = true
+        if let bind = options.bind {
+          guard case .hostPort(_, let local)? = upstream.currentPath?.localEndpoint else { self.cancel(); return }
+          bind(local.rawValue)
+        }
+        upstream.send(content: head, completion: .contentProcessed { [weak self] error in
+          guard let self, !self.closed else { return }
+          if error != nil { self.cancel(); return }
+          self.relay(from: self.connection, to: upstream)
+          self.relay(from: upstream, to: self.connection)
+        })
+      // A loopback server that cannot be reached is gone (stopping): waiting
+      // for a path change would hold the client's upgrade open forever.
+      case .failed, .cancelled, .waiting: self?.queue.async { self?.cancel() }
+      default: break
+      }
     }
     upstream.start(queue: queue)
-    upstream.send(content: head, completion: .contentProcessed { [weak self] error in
-      guard let self else { return }
-      if error != nil { self.cancel(); return }
-      self.relay(from: self.connection, to: upstream)
-      self.relay(from: upstream, to: self.connection)
-    })
   }
 
   private func relay(from source: NWConnection, to destination: NWConnection) {

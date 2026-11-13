@@ -522,6 +522,20 @@ public actor MobileStore {
       for conversation in conversations { next.conversations[conversation.id] = conversation }
     }
   }
+  /// The library host's own sessions as its stream names them. Its execution
+  /// API names them as its registered workspace's, but the library it serves
+  /// holds them unassigned (the "central" route), so they keep the library's
+  /// identity here: a summary pushed live never moves a chat to another route.
+  /// A conversation the library deleted stays deleted.
+  public func cacheLibraryHostConversations(_ conversations: [LibraryConversation]) throws {
+    try transaction { next in
+      for var conversation in conversations where next.centralDeletedConversationIDs?.contains(conversation.id) != true {
+        let stored = next.conversations[conversation.id]
+        conversation.workspaceID = stored?.workspaceID; conversation.libraryID = stored?.libraryID
+        next.conversations[conversation.id] = conversation
+      }
+    }
+  }
   /// Projection only: execution history remains durable in the separate journal.
   public func adoptExecution(conversation: LibraryConversation? = nil, transcript: LibraryTranscript? = nil) throws {
     try transaction { next in

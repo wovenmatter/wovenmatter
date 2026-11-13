@@ -99,7 +99,7 @@ final class MemberModeTests: XCTestCase {
     model.workspaceCredentials = .init(load: { _ in XCTFail("Read a grant"); return nil }, save: { _ in XCTFail("Saved a grant") }, clear: { _ in })
 
     await model.refreshExecutionWorkspaces(force: true)
-    await model.workspacePollTasks[mini.id]?.value
+    await model.workspaceReadTasks[mini.id]?.value
     XCTAssertEqual(model.workspaceReachable[mini.id], true, model.workspaceProblems[mini.id] ?? "")
     XCTAssertEqual(model.workspaceProviders[mini.id]?.map(\.id), ["local:codex"])
     XCTAssertFalse(http.requests.isEmpty)

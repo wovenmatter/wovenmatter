@@ -6,166 +6,150 @@ import WovenMatterClient
 @testable import WovenMatterDashboardStore
 @testable import WovenMatterAppFacade
 
+/// A machine this Mac holds no stream to is never read on a timer: its
+/// sessions show the history library sync brought, marked offline.
 @MainActor @Suite(.serialized)
 struct CentralExecutionClientTests {
-    @Test func importedConversationRoutesThroughBackendAndRetainsLostAcknowledgement() async throws {
-        let fixture = try await FacadeFixture(); defer { fixture.remove() }
-        let identity = try await fixture.database.libraryIdentity()
-        let workspace = try await fixture.database.registerExecutionWorkspace(.init(workspace: .init(
-            id: UUID().uuidString.lowercased(), libraryID: identity.libraryID, ownerDeviceID: identity.hostDeviceID,
-            kind: .linux, name: "Independent owner", endpoint: URL(string: "https://fixture.ts.net/wovenmatter"), executionDeviceID: UUID().uuidString.lowercased())), deviceID: identity.hostDeviceID)
-        let conversation = LibraryConversation(id: UUID().uuidString.lowercased(), title: "Remote", providerID: "pi-durable", routeID: workspace.id,
-            libraryID: identity.libraryID, workspaceID: workspace.id)
-        let origin = ExecutionJournalEntry(workspaceID: workspace.id, originSequence: 1, conversationID: conversation.id,
-            kind: .conversation, conversation: conversation)
-        let publisher = try await fixture.database.issueExecutionWorkspacePublisher(workspaceID: workspace.id,
-            endpoint: URL(string: "https://central.ts.net/wovenmatter")!, deviceID: identity.hostDeviceID)
-        try await publish([origin], grant: publisher, database: fixture.database)
-        let remote = CentralExecutionFixtureTransport(workspace: workspace, conversation: conversation, entries: [origin])
-        let journal = fixture.directory.appending(path: "central-commands.json")
-        func make() throws -> CentralExecutionClient {
-            try CentralExecutionClient(database: fixture.database, commandJournalURL: journal,
-                provision: { _ in .init(workspace: workspace, deviceID: identity.hostDeviceID, token: "fixture-only") },
-                makeTransport: { _ in remote }, loadCredential: { _ in nil }, saveCredential: { _ in })
+    @MainActor private struct Setup {
+        let fixture: FacadeFixture
+        let workspace: ExecutionWorkspace
+        let conversation: LibraryConversation
+        let remote: CentralExecutionFixtureTransport
+        let journal: URL
+        func client() throws -> CentralExecutionClient {
+            let workspace = workspace
+            return try CentralExecutionClient(database: fixture.database, commandJournalURL: journal,
+                provision: { _ in .init(workspace: workspace, deviceID: workspace.ownerDeviceID, token: "fixture-only") },
+                makeTransport: { [remote] _ in remote }, loadCredential: { _ in nil }, saveCredential: { _ in })
         }
-        fixture.model.federatedExecutionClient = try make()
-        await remote.loseNextAcknowledgement()
-        let record = try #require(try await fixture.database.workspaceOverview().conversations.first { $0.id == conversation.id })
-        await #expect(throws: (any Error).self) { _ = try await fixture.model.dispatchAgentMessage(conversation: record, input: .init(text: "Exactly once")) }
-        fixture.model.federatedExecutionClient = try make()
-        await fixture.model.federatedExecutionClient?.refreshRegisteredWorkspaces()
-        #expect(fixture.model.federatedExecutionClient?.transcripts[conversation.id]?.messages.map(\.content) == ["Exactly once"])
-        #expect(try await fixture.database.libraryFederatedTranscript(conversationID: conversation.id)?.messages.isEmpty != false)
-        #expect(try await fixture.database.libraryExecutionOriginCursor(workspaceID: workspace.id) == 1)
-        let observer = try WorkspaceJournal(file: journal)
-        #expect(await observer.snapshot().directCursors[workspace.id] == 2)
-        #expect(await observer.snapshot().pendingEntries.isEmpty)
-        #expect(await observer.snapshot().pendingRegistrations.isEmpty)
-        await remote.setOffline(true)
-        fixture.model.federatedExecutionClient = try make()
-        await #expect(throws: (any Error).self) { try await fixture.model.federatedExecutionClient?.refresh(conversationID: conversation.id) }
-        #expect(fixture.model.federatedExecutionClient?.transcripts[conversation.id]?.messages.map(\.content) == ["Exactly once"])
-        await remote.setOffline(false)
-        let backend = BackendApplicationService(model: fixture.model)
-        let request = BackendRPCRequest(method: "application.command", payload: try JSONEncoder().encode(
-            BackendApplicationCommand.sendMessageFenced(conversationID: conversation.id, input: .init(text: "Exactly once"), noteID: nil,
-                admission: .init(instanceID: backend.instanceID, clientID: UUID(), stopSequence: 0, observedStopRevision: 0))))
-        let response = await backend.handle(request)
-        #expect(response.error == nil, "\(response.error ?? "")")
-        #expect(await remote.executions == 1)
-        let stoppedPreparation = AgentDispatchFence(); stoppedPreparation.cancel()
-        await #expect(throws: CancellationError.self) {
-            _ = try await fixture.model.federatedExecutionClient?.send(conversationID: conversation.id, text: "Stopped before transport",
-                beforeDispatch: { try stoppedPreparation.claimDispatch() })
-        }
-        #expect(await remote.executions == 1)
-        #expect(await fixture.recorder.deliveries.isEmpty)
-        let state = try await fixture.model.performFederatedExecution(.refresh(conversationID: conversation.id))
-        #expect(state.online)
-        #expect(state.transcript?.messages.map(\.content) == ["Exactly once"])
-        #expect(try await fixture.database.libraryExecutionOriginCursor(workspaceID: workspace.id) == 1)
-        #expect(await remote.requestedCursors.last == 2)
-        try await publish(await remote.entries, grant: publisher, database: fixture.database)
-        #expect(try await fixture.database.libraryFederatedTranscript(conversationID: conversation.id)?.messages.map(\.content) == ["Exactly once"])
-        #expect(try await fixture.database.libraryExecutionOriginCursor(workspaceID: workspace.id) == 2)
     }
 
-    @Test func malformedReplayCannotAdvanceAuthoritativeOrigin() async throws {
-        let fixture = try await FacadeFixture(); defer { fixture.remove() }
+    /// A workspace without a stream, whose history (a conversation and 100
+    /// saved messages) reached this library by sync.
+    private func setup() async throws -> Setup {
+        let fixture = try await FacadeFixture()
         let identity = try await fixture.database.libraryIdentity()
         let workspace = try await fixture.database.registerExecutionWorkspace(.init(workspace: .init(
             id: UUID().uuidString.lowercased(), libraryID: identity.libraryID, ownerDeviceID: identity.hostDeviceID,
-            kind: .linux, name: "Independent owner", endpoint: URL(string: "https://fixture.ts.net/wovenmatter"), executionDeviceID: UUID().uuidString.lowercased())), deviceID: identity.hostDeviceID)
+            kind: .linux, name: "Build server", endpoint: URL(string: "https://fixture.ts.net/wovenmatter"),
+            capabilities: ["execution.v1"], executionDeviceID: UUID().uuidString.lowercased())), deviceID: identity.hostDeviceID)
         let conversation = LibraryConversation(id: UUID().uuidString.lowercased(), title: "Remote", providerID: "pi-durable", routeID: workspace.id,
             libraryID: identity.libraryID, workspaceID: workspace.id)
         let origin = ExecutionJournalEntry(workspaceID: workspace.id, originSequence: 1, conversationID: conversation.id,
             kind: .conversation, conversation: conversation)
-        let publisher = try await fixture.database.issueExecutionWorkspacePublisher(workspaceID: workspace.id,
-            endpoint: URL(string: "https://central.ts.net/wovenmatter")!, deviceID: identity.hostDeviceID)
-        try await publish([origin], grant: publisher, database: fixture.database)
         let history = ExecutionJournalEntry(workspaceID: workspace.id, originSequence: 2, conversationID: conversation.id,
             kind: .transcript, transcript: .init(conversationID: conversation.id, messages: (0..<100).map { index in
                 .init(id: UUID().uuidString.lowercased(), conversationID: conversation.id, role: "user", content: "Saved \(index)")
             }))
-        try await publish([history], grant: publisher, database: fixture.database)
-        let remote = CentralExecutionFixtureTransport(workspace: workspace, conversation: conversation, entries: [origin, history])
-        await remote.breakReplay()
-        let client = try CentralExecutionClient(database: fixture.database, commandJournalURL: fixture.directory.appending(path: "commands.json"),
-            provision: { _ in .init(workspace: workspace, deviceID: identity.hostDeviceID, token: "fixture-only") },
-            makeTransport: { _ in remote }, loadCredential: { _ in nil }, saveCredential: { _ in })
-        await #expect(throws: (any Error).self) { try await client.refresh(conversationID: conversation.id) }
-        #expect(try await fixture.database.libraryExecutionOriginCursor(workspaceID: workspace.id) == 2)
-        #expect(client.onlineWorkspaces.isEmpty)
-        let observer = try WorkspaceJournal(file: fixture.directory.appending(path: "commands.json"))
-        #expect(await observer.snapshot().directCursors[workspace.id] == nil)
-        #expect(await observer.snapshot().entries.isEmpty)
-        #expect(await observer.snapshot().pendingEntries.isEmpty)
-        let saved = try #require(client.transcripts[conversation.id])
-        let cursor = try #require(saved.olderCursor)
-        #expect(cursor.hasPrefix("library:"))
-        let earlier = try await client.earlierTranscript(conversationID: conversation.id, before: cursor)
-        #expect(saved.messages.count + earlier.messages.count == 100)
-        await client.refreshRegisteredWorkspaces()
-        let attempts = await remote.eventRequests
-        await client.refreshRegisteredWorkspaces()
-        #expect(await remote.eventRequests == attempts)
-        #expect(client.errors[workspace.id] != nil)
-        #expect(await fixture.recorder.deliveries.isEmpty)
-    }
-    private func publish(_ entries: [ExecutionJournalEntry], grant: ExecutionWorkspacePublisherGrant, database: WorkspaceDatabase) async throws {
-        let path = "/v1/federation/publisher/journal"
-        let request = LibraryHTTPRequest(method: "POST", target: path,
-            headers: ["authorization": "Bearer " + grant.token, "x-woven-workspace": grant.libraryID],
-            body: try JSONEncoder().encode(ExecutionJournalBatch(libraryID: grant.libraryID, entries: entries)))
-        let response = try await DevicePublisherAPI.handle(request, path: path, database: database)
-        #expect(response.status == 200)
+        _ = try await fixture.database.ingestExecutionJournal(.init(libraryID: identity.libraryID, entries: [origin, history]),
+            deviceID: workspace.executionDeviceID!)
+        let remote = CentralExecutionFixtureTransport(workspace: workspace, conversation: conversation)
+        return Setup(fixture: fixture, workspace: workspace, conversation: conversation, remote: remote,
+                     journal: fixture.directory.appending(path: "central-commands.json"))
     }
 
+    @Test func aMachineWithoutAStreamShowsItsLibraryHistoryOfflineAndIsNeverRead() async throws {
+        let setup = try await setup(); defer { setup.fixture.remove() }
+        let (fixture, workspace, id) = (setup.fixture, setup.workspace, setup.conversation.id)
+        let client = try setup.client()
+        fixture.model.federatedExecutionClient = client
+
+        try await client.refresh(conversationID: id)
+        #expect(client.onlineWorkspaces.isEmpty)
+        #expect(client.errors[workspace.id]?.contains("does not stream its sessions") == true)
+        let saved = try #require(client.transcripts[id])
+        let cursor = try #require(saved.olderCursor)
+        #expect(cursor.hasPrefix("library:"))
+        let earlier = try await client.earlierTranscript(conversationID: id, before: cursor)
+        #expect(saved.messages.count + earlier.messages.count == 100)
+
+        // The window's relay shows the same last known state with an offline notice.
+        let snapshot = try await fixture.model.performFederatedExecution(.refresh(conversationID: id))
+        #expect(!snapshot.online)
+        #expect(snapshot.error?.contains("does not stream its sessions") == true)
+        #expect(snapshot.transcript?.messages.count == saved.messages.count)
+        #expect(snapshot.session == nil)
+
+        // Opening the chat in a window reads it once; nothing reads it again later.
+        let source = BackendWindowStreamSource(model: fixture.model)
+        try await source.conversationOpened(id)
+        let relay = await source.conversationRelay(conversationID: id)
+        #expect(relay?.owner.online == false && relay?.owner.error != nil)
+
+        // Neither registry changes nor time make anything read the workspace.
+        await client.connectRegisteredWorkspaces()
+        await client.connectRegisteredWorkspaces()
+        try await Task.sleep(for: .milliseconds(1_200))
+        try? await client.refresh(conversationID: id)
+        #expect(await setup.remote.reads == 0, "History, questions, transcripts and settings are never read from it")
+        #expect(!client.isStreamed(workspace.id))
+        await source.conversationClosed(id)
+    }
+
+    @Test func aCommandToAWorkspaceWithoutAStreamRunsOnceAcrossALostAcknowledgement() async throws {
+        let setup = try await setup(); defer { setup.fixture.remove() }
+        let (workspace, id) = (setup.workspace, setup.conversation.id)
+        await setup.remote.loseNextAcknowledgement()
+        await #expect(throws: (any Error).self) { _ = try await setup.client().send(to: workspace, conversationID: id, text: "Exactly once") }
+        // A new client (a restart) resolves the same command by its receipt.
+        let receipt = try await setup.client().send(to: workspace, conversationID: id, text: "Exactly once")
+        #expect(receipt.status == .completed)
+        #expect(await setup.remote.executions == 1)
+        let journal = try WorkspaceJournal(file: setup.journal)
+        #expect(await journal.commandRecords(workspaceID: workspace.id).count == 1)
+        #expect(await journal.snapshot().entries.isEmpty, "The command journal holds commands, not history")
+        #expect(await setup.remote.reads == 0)
+        #expect(await setup.fixture.recorder.deliveries.isEmpty)
+    }
+
+    @Test func aSessionJustCreatedOnAWorkspaceIsFoundByItsCreationCommand() async throws {
+        let setup = try await setup(); defer { setup.fixture.remove() }
+        let client = try setup.client()
+        let created = UUID().uuidString.lowercased()
+        #expect(try await client.workspace(conversationID: created) == nil)
+        let identity = try await setup.fixture.database.libraryIdentity()
+        _ = try await client.submit(.init(commandID: created, deviceID: identity.hostDeviceID, kind: .createSession,
+            conversationID: created, providerID: "pi-durable", runtimeKind: "default_agent",
+            libraryID: setup.workspace.libraryID, workspaceID: setup.workspace.id), workspace: setup.workspace)
+        // Before its history reaches this library, the recorded command names its workspace.
+        #expect(try await client.workspace(conversationID: created)?.id == setup.workspace.id)
+    }
 }
 
 private actor CentralExecutionFixtureTransport: ExecutionWorkspaceTransport {
     let workspace: ExecutionWorkspace
     let conversation: LibraryConversation
-    var entries: [ExecutionJournalEntry]
     var receipts: [String: LibraryCommandReceipt] = [:]
     var executions = 0
-    var eventRequests = 0
-    var requestedCursors: [Int64] = []
-    var offline = false
-    func setOffline(_ value: Bool) { offline = value }
+    /// Every read of live state or history: none may happen.
+    var reads = 0
     var lostACK = false
-    var broken = false
-    init(workspace: ExecutionWorkspace, conversation: LibraryConversation, entries: [ExecutionJournalEntry]) {
-        self.workspace = workspace; self.conversation = conversation; self.entries = entries
+    init(workspace: ExecutionWorkspace, conversation: LibraryConversation) {
+        self.workspace = workspace; self.conversation = conversation
     }
-    func identity() throws -> ExecutionWorkspace { if offline { throw MobileConnectionError.offline }; return workspace }
+    func identity() -> ExecutionWorkspace { workspace }
     func providers() -> [HarnessCapabilities] { [] }
-    func pending() -> [PendingInteraction] { [] }
+    func pending() -> [PendingInteraction] { reads += 1; return [] }
     func receipt(_ id: String) -> LibraryCommandReceipt? { receipts[id] }
-    func conversations() -> [LibraryConversation] { [conversation] }
-    func capabilities(_ id: String) -> HarnessCapabilities { .init(id: "pi-durable", runtimeKind: "defaultAgent", displayName: "Pi Durable", available: true, canSteer: true, canStop: true) }
-    func transcript(_ id: String) -> LibraryTranscript {
-        entries.last(where: { $0.transcript != nil })?.transcript ?? .init(conversationID: id)
+    func conversations() -> [LibraryConversation] { reads += 1; return [conversation] }
+    func capabilities(_ id: String) -> HarnessCapabilities {
+        reads += 1
+        return .init(id: "pi-durable", runtimeKind: "defaultAgent", displayName: "Pi Durable", available: true, canSteer: true, canStop: true)
     }
-    func events(after: Int64) throws -> ExecutionJournalPage {
-        if offline { throw MobileConnectionError.offline }
-        eventRequests += 1; requestedCursors.append(after)
-        let available = entries.filter { $0.originSequence > after }
-        return .init(libraryID: workspace.libraryID, cursor: after + Int64(available.count) + (broken ? 1 : 0), entries: available)
+    func transcript(_ id: String) -> LibraryTranscript { reads += 1; return .init(conversationID: id) }
+    func readWorkspace(_ request: LibraryWorkspaceRead) throws -> LibraryWorkspaceResult {
+        reads += 1
+        throw LibraryAPIError(code: "unavailable", message: "Not in this fixture.")
     }
+    func events(after: Int64) -> ExecutionJournalPage { reads += 1; return .init(libraryID: workspace.libraryID, cursor: after) }
     func command(_ command: LibraryCommand) throws -> LibraryCommandReceipt {
         if let saved = receipts[command.commandID] { return saved }
         executions += 1
         let receipt = LibraryCommandReceipt(commandID: command.commandID, deviceID: command.deviceID,
-            status: .completed, conversationID: conversation.id, workspaceID: workspace.id)
+            status: .completed, conversationID: command.conversationID, workspaceID: workspace.id)
         receipts[command.commandID] = receipt
-        entries.append(.init(workspaceID: workspace.id, originSequence: Int64(entries.count + 1), conversationID: conversation.id,
-            kind: .transcript, transcript: .init(conversationID: conversation.id, messages: [
-                .init(id: UUID().uuidString.lowercased(), conversationID: conversation.id, role: "user", content: command.text ?? "")
-            ])))
         if lostACK { lostACK = false; throw URLError(.networkConnectionLost) }
         return receipt
     }
     func loseNextAcknowledgement() { lostACK = true }
-    func breakReplay() { broken = true }
 }

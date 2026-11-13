@@ -185,6 +185,40 @@ public actor DeviceAuthentication {
     try persist(next); state = next; lastSeenSaved.removeValue(forKey: deviceID)
   }
 
+  /// The same-user socket's check before a Dev stream key is admitted: the
+  /// credential must be the current one of a local development identity
+  /// named `deviceID` (never a normal paired device). Like any request with
+  /// that credential, it marks the identity present.
+  public func authenticateLocalDevelopment(deviceID: String, credential: String) throws -> PairedDevice {
+    let device = try authenticate(bearer: credential)
+    guard device.localDevelopment == true, device.id.lowercased() == deviceID.lowercased() else { throw Self.unauthorized }
+    return device
+  }
+
+  /// Whether `deviceID` is a current (unrevoked) local development identity.
+  public func isLocalDevelopment(_ deviceID: String) -> Bool {
+    state.devices.contains { $0.id.lowercased() == deviceID.lowercased() && $0.localDevelopment == true && Self.isActive($0, in: state) }
+  }
+
+  /// A Dev client whose stream socket is open is present, though it sends no
+  /// HTTP request while nothing changes: its live host marks it seen.
+  public func touchLocalDevelopment(deviceIDs: Set<String>) throws {
+    let ids = Set(deviceIDs.map { $0.lowercased() })
+    guard !ids.isEmpty else { return }
+    var next = state
+    let instant = now()
+    var persistNeeded = false
+    for index in next.devices.indices where ids.contains(next.devices[index].id.lowercased())
+      && next.devices[index].localDevelopment == true && Self.isActive(next.devices[index], in: next) {
+      next.devices[index].lastSeenAt = instant
+      if instant.timeIntervalSince(lastSeenSaved[next.devices[index].id] ?? .distantPast) >= 10 {
+        persistNeeded = true; lastSeenSaved[next.devices[index].id] = instant
+      }
+    }
+    if persistNeeded { try persist(next) }
+    state = next
+  }
+
   // MARK: Paired-Mac identity, membership and target-local peer grants
 
   /// This Mac's signing identity, set before peer use. Local unpairs are

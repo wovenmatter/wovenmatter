@@ -90,11 +90,23 @@ async function runOpenCode({run,config,cwd,instances,read,fetchRequest,nativeSes
     if(active[sessionID])throw before('The recurring OpenCode task is already running.')
     if(signal.aborted)throw before('Background execution was turned off.')
     accepted=true
-    const receipt=await call('POST',path+'/prompt',{id:messageID,text:prompt(run),files:[],...(mcpConnection?{metadata:{wovenMCP:{captureID:mcpConnection.captureID??''}}}:{})})
+    const receipt=await call('POST',path+'/prompt',{id:messageID,text:prompt(run),files:run.task.files??[],...(mcpConnection?{metadata:{wovenMCP:{captureID:mcpConnection.captureID??''}}}:{})})
     if(receipt.data?.id!==messageID)throw new Error('OpenCode did not acknowledge the task prompt. Check its session before retrying.')
     let observed=false
     const interactions = new Map()
-    interactive?.bind({async respond(id,response) {
+    interactive?.bind({
+    // More input while the turn runs. OpenCode decides between live injection
+    // and starting the next turn (`delivery: 'steer'`), as the Mac's OpenCode
+    // composer sends it. The message ID derives from the command, so a retry
+    // is the same message.
+    async steer(text,commandID,{files=[],mcpConnection:context}={}) {
+      if(signal.aborted)throw new Error('The run has stopped.')
+      const id='msg_'+String(commandID).replaceAll(/[^a-zA-Z0-9]/g,'')
+      const accepted=await call('POST',path+'/prompt',{id,text,files,delivery:'steer',...(context?{metadata:{wovenMCP:{captureID:context.captureID??''}}}:{})})
+      if(accepted.data?.id!==id)throw new Error('OpenCode did not acknowledge the input. Check its session before sending again.')
+      return {outcome:'injected'}
+    },
+    async respond(id,response) {
       if(signal.aborted)throw new Error('The run has stopped.')
       const item=interactions.get(id);if(!item)throw new Error('This interaction is no longer pending.')
       const current=(await call('GET',path+'/'+item.kind)).data??[]

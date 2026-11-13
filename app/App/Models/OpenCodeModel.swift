@@ -433,17 +433,14 @@ final class OpenCodeModel {
                       requestedConversationID: UUID? = nil, creationPreferences: PendingCreationPreferences? = nil, allowMissingCalendarFolder: Bool = false, executionRoot: SessionCreationRoot) async throws -> String {
         let sessionID = session["id"].text
         guard sessionID.hasPrefix("ses") else { throw OpenCodeError.message("OpenCode did not return a session ID.") }
-        let conversationID: String
+        // A Linux host's new OpenCode chats are created by its server
+        // (`createSession`), never opened from here.
         if let configuration = remoteConfiguration {
-            conversationID = try await store.database.createRemoteACPSession(runtimeKind: .opencode,
-                remoteWorkspaceID: configuration.id, remoteWorkspaceName: configuration.name,
-                title: session["title"].string ?? "New OpenCode chat", ownerDeviceID: ownerDeviceID,
-                openCodeAssociation: (connectionID, sessionID), requestedConversationID: requestedConversationID, allowMissingCalendarFolder: allowMissingCalendarFolder, executionRoot: executionRoot)
-        } else {
-            conversationID = try await store.database.createLocalACPSession(runtimeKind: .opencode,
-                title: session["title"].string ?? "New OpenCode chat", ownerDeviceID: ownerDeviceID,
-                openCodeAssociation: (connectionID, sessionID), importedOpenCodeSnapshot: importedSnapshot, requestedConversationID: requestedConversationID, allowMissingCalendarFolder: allowMissingCalendarFolder, executionRoot: executionRoot)
+            throw OpenCodeError.message("Start OpenCode chats on \(configuration.name) from New Chat; they run on its server.")
         }
+        let conversationID = try await store.database.createLocalACPSession(runtimeKind: .opencode,
+            title: session["title"].string ?? "New OpenCode chat", ownerDeviceID: ownerDeviceID,
+            openCodeAssociation: (connectionID, sessionID), importedOpenCodeSnapshot: importedSnapshot, requestedConversationID: requestedConversationID, allowMissingCalendarFolder: allowMissingCalendarFolder, executionRoot: executionRoot)
         let link = OpenCodeSessionLink(conversationID: conversationID, connectionID: connectionID, sessionID: sessionID)
         links[conversationID] = link
         let existing = importedSnapshot ?? snapshots[conversationID]
@@ -745,10 +742,9 @@ final class OpenCodeModel {
         // A failed selection remains a send barrier until the user selects again.
         if let selection = selectionTasks[id] { try await selection.value }
         try fence.check()
-        var input = input
-        if let configuration = remoteConfiguration, !input.files.isEmpty {
-            guard let remoteWorkspaces else { throw OpenCodeError.message("This remote workspace is unavailable.") }
-            input = try await remoteWorkspaces.stagingFiles(of: input, in: configuration.id)
+        // A Linux host's OpenCode chats run on its server; messages go there.
+        if let configuration = remoteConfiguration {
+            throw OpenCodeError.message("This chat runs on \(configuration.name). Send it from the chat, which goes through \(configuration.name)'s server.")
         }
         try fence.check()
         if let command = OpenCodeComposerMetadata.invocation(input.text, commands: commands[id] ?? []) {

@@ -54,6 +54,10 @@ public actor MobileSyncEngine {
       throw failure ?? MobileConnectionError.http(409, "The required synchronization stage has not completed on this Mac.")
     }
   }
+  /// Chats whose transcript an open stream keeps current (the open chat).
+  /// The offline cache does not read them again; they stream.
+  private var streamedTranscriptIDs: Set<String> = []
+  public func setStreamedTranscripts(_ ids: Set<String>) { streamedTranscriptIDs = ids }
   private var scheduledTask: Task<Void, Never>?
   private var schedulingGeneration: UInt64 = 0
   private var syncRequested = false
@@ -313,7 +317,7 @@ public actor MobileSyncEngine {
       try Task.checkCancellation()
       do {
         if pinned { try await keepTranscriptOffline(conversation.id) }
-        else { try await refreshTranscriptIfNeeded(conversation.id) }
+        else if !streamedTranscriptIDs.contains(conversation.id) { try await refreshTranscriptIfNeeded(conversation.id) }
       } catch { errors.append(error) }
     }
     if let error = errors.first { throw error }
@@ -397,8 +401,11 @@ public actor MobileSyncEngine {
     try await store.cacheTranscriptPage(page)
     return page
   }
-  public func transcriptActivityDetail(_ id: String, activityID: String) async throws -> LibraryActivity? {
-    try await transport.transcript(id).activities.first { $0.id == activityID }
+  /// The activity's complete projection, from the details route; a Mac too old
+  /// to have it answers with the activity as its transcript carries it.
+  public func transcriptActivityDetail(_ id: String, runID: String? = nil, activityID: String) async throws -> LibraryActivity? {
+    if let runID, let detail = try? await transport.activityDetails(id, runID: runID, activityID: activityID) { return detail }
+    return try await transport.transcript(id).activities.first { $0.id == activityID }
   }
   public func refreshTranscriptIfNeeded(_ id: String) async throws {
     let local = await store.snapshot()

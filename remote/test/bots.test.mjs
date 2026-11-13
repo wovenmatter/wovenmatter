@@ -3,7 +3,6 @@ import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
 import { mkdtempSync, rmSync, readFileSync, statSync, writeFileSync, mkdirSync, existsSync, watch } from 'node:fs'
 import { createServer, request as httpRequest } from 'node:http'
-import { connect } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
@@ -15,6 +14,9 @@ import { createBotsRuntime } from '../src/bots-runtime.mjs'
 import { botEngineLayout, createBotEngine, machineIdentity } from '../src/bots-engine.mjs'
 import { createBotsService } from '../src/bots-service.mjs'
 import { createMemberVerifier, privateKeyFromSeed, rawPublicKeyFor, signMemberRequest } from '../src/member-auth.mjs'
+import { authenticateMemberUpgrade, authorizeBotsUpgrade } from '../src/member-sockets.mjs'
+import { createInstallerBearer } from '../src/installer-bearer.mjs'
+import { WebSocket, WebSocketServer } from '../src/websocket.mjs'
 
 const temporary = t => { const directory = mkdtempSync(join(tmpdir(), 'woven-bots-')); t.after(() => rmSync(directory, { recursive: true, force: true })); return directory }
 // Waits for a condition instead of a fixed delay, so a loaded machine only slows a test.
@@ -430,66 +432,69 @@ test('the runtime starts once the engine finishes installing, and lowering the p
   assert.equal(response.value.resources.perBotBytes, 2 * 1024 ** 3)
 })
 
+// A bots runtime stand-in: a WebSocket server that records each handshake and echoes.
+async function echoRuntime(t, seen = []) {
+  const runtimeServer = createServer()
+  const sockets = new WebSocketServer({ server: runtimeServer, path: '/ws' })
+  sockets.on('headers', (_, request) => seen.push({ url: request.url, authorization: request.headers.authorization, cookie: request.headers.cookie, signature: request.headers['x-woven-member-signature'] }))
+  sockets.on('connection', socket => socket.on('message', (data, isBinary) => socket.send(data, { binary: isBinary })))
+  const runtimePort = await listen(runtimeServer)
+  t.after(() => { for (const client of sockets.clients) client.terminate(); sockets.close(); runtimeServer.close() })
+  return { seen, runtime: { start() {}, stop: async () => {}, restart: async () => {}, status: () => ({ running: true }), endpoint: () => ({ host: '127.0.0.1', port: runtimePort, token: 'runtime-token' }) } }
+}
+// Opens the bots socket and sends one message: the echo, or the HTTP refusal.
+function botsSocket(port, headers, path = '/v1/bots/ws') {
+  return new Promise(resolve => {
+    const socket = new WebSocket(`ws://127.0.0.1:${port}${path}`, { headers })
+    socket.on('unexpected-response', (_, response) => { resolve({ status: response.statusCode }); socket.terminate() })
+    socket.on('open', () => socket.send('echo'))
+    socket.on('message', data => { resolve({ status: 101, echo: String(data) }); socket.close() })
+    socket.on('error', () => resolve({ status: 0 }))
+  })
+}
+
 // The Mac signs its bots socket upgrade for this host (WOVEN_EVERYWHERE.md, "Membership and
 // device keys"): the server verifies it as server.mjs does, with the Serve prefix restored.
 test('a signed member upgrade opens the bots socket only at the member it names', async t => {
-  const runtimeServer = createServer()
-  runtimeServer.on('upgrade', (request, socket) => {
-    socket.write('HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n')
-    socket.on('data', data => socket.write(data)); socket.on('error', () => {})
-  })
-  const runtimePort = await listen(runtimeServer); t.after(() => runtimeServer.close())
-  const runtime = { start() {}, stop: async () => {}, restart: async () => {}, status: () => ({ running: true }), endpoint: () => ({ host: '127.0.0.1', port: runtimePort, token: 'runtime-token' }) }
+  const { runtime } = await echoRuntime(t)
   const mac = { deviceID: randomUUID(), key: privateKeyFromSeed(Buffer.alloc(32, 7)) }, here = randomUUID(), prefix = '/wovenmatter-execution/box'
   const verifier = createMemberVerifier({ audience: here, loadMembers: async () => ({ revision: '1', members: [
     { deviceID: mac.deviceID, kind: 'mac', name: 'Studio', publicKey: rawPublicKeyFor(mac.key).toString('base64'), endpoints: [], revoked: false }] }) })
   t.after(() => verifier.close())
-  const authorizeClient = request => verifier.verify({ method: request.method, target: request.url, alternateTargets: [prefix + request.url],
-    headers: request.headers, body: Buffer.alloc(0) }).then(() => true)
+  const authorizeClient = async request => (await authenticateMemberUpgrade(request, { members: verifier, servedTargets: async target => [prefix + target] })).member
   const f = await serviceFixture(t, { runtime, authorizeClient })
-  const handshake = headers => new Promise(resolve => {
-    const socket = connect(f.port, '127.0.0.1'); let text = ''
-    socket.on('data', data => { text += data; if (text.includes('\r\n\r\n')) { if (text.includes('101')) socket.write('echo'); if (!text.includes('101') || text.includes('echo')) { socket.destroy(); resolve(text) } } })
-    socket.on('close', () => resolve(text))
-    const lines = Object.entries(headers).map(([name, value]) => `${name}: ${value}\r\n`).join('')
-    socket.write(`GET /v1/bots/ws HTTP/1.1\r\nHost: x\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n${lines}\r\n`)
-  })
   // The Mac signs the full execution path it sends; Serve strips the prefix before this server.
   const signed = (audience, options = {}) => signMemberRequest({ deviceID: mac.deviceID, privateKey: mac.key, audience, method: 'GET', target: prefix + '/v1/bots/ws', ...options })
   const fresh = signed(here)
-  assert.match(await handshake(fresh), /101[\s\S]*echo/)
-  assert.match(await handshake(fresh), /401/, 'an upgrade cannot be replayed')
-  assert.match(await handshake(signed(randomUUID())), /401/, 'an upgrade signed for another member is refused')
-  assert.match(await handshake({ ...signed(here), 'x-woven-member-audience': randomUUID() }), /401/)
+  assert.deepEqual(await botsSocket(f.port, fresh), { status: 101, echo: 'echo' })
+  assert.equal((await botsSocket(f.port, fresh)).status, 401, 'an upgrade cannot be replayed')
+  assert.equal((await botsSocket(f.port, signed(randomUUID()))).status, 401, 'an upgrade signed for another member is refused')
+  assert.equal((await botsSocket(f.port, { ...signed(here), 'x-woven-member-audience': randomUUID() })).status, 401)
 })
 
-test('the bots socket requires client authorization and reaches the runtime with the runtime token only', async t => {
-  const seen = []
-  const runtimeServer = createServer()
-  runtimeServer.on('upgrade', (request, socket) => {
-    seen.push({ url: request.url, authorization: request.headers.authorization, cookie: request.headers.cookie })
-    socket.write('HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n')
-    socket.on('data', data => socket.write(data))
-    // The test client resets each connection once it has its echo.
-    socket.on('error', () => {})
-  })
-  const runtimePort = await listen(runtimeServer); t.after(() => runtimeServer.close())
-  const runtime = { start() {}, stop: async () => {}, restart: async () => {}, status: () => ({ running: true }), endpoint: () => ({ host: '127.0.0.1', port: runtimePort, token: 'runtime-token' }) }
-  const f = await serviceFixture(t, { runtime })
-  const handshake = (authorization, extra = '') => new Promise(resolve => {
-    const socket = connect(f.port, '127.0.0.1'); let text = ''
-    socket.on('data', data => { text += data; if (text.includes('\r\n\r\n')) { if (text.includes('101')) socket.write('echo'); if (!text.includes('101') || text.includes('echo')) { socket.destroy(); resolve(text) } } })
-    socket.on('close', () => resolve(text))
-    socket.write(`GET /v1/bots/ws?client=mac HTTP/1.1\r\nHost: x\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\nAuthorization: ${authorization}\r\nCookie: secret\r\n${extra}\r\n`)
-  })
-  assert.match(await handshake('Bearer nobody'), /401/)
-  assert.match(await handshake('Bearer device', 'Origin: https://evil.example\r\n'), /403/)
-  assert.match(await handshake('Bearer device'), /101[\s\S]*echo/)
+// WOVEN_EVERYWHERE.md, "Streaming": the Linux bots upgrade accepts signed members only.
+test('the bots socket accepts only signed members and reaches the runtime with the runtime token only', async t => {
+  const { runtime, seen } = await echoRuntime(t)
+  const mac = { deviceID: randomUUID(), key: privateKeyFromSeed(Buffer.alloc(32, 9)) }, here = randomUUID()
+  const verifier = createMemberVerifier({ audience: here, loadMembers: async () => ({ revision: '1', members: [
+    { deviceID: mac.deviceID, kind: 'mac', name: 'Studio', publicKey: rawPublicKeyFor(mac.key).toString('base64'), endpoints: [], revoked: false }] }) })
+  t.after(() => verifier.close())
+  // What server.mjs passes: signed members, or the installer bearer on the SSH tunnel.
+  const installer = 'i'.repeat(43)
+  const installerBearer = createInstallerBearer({ token: installer, rotate: async () => installer })
+  const authorizeClient = request => authorizeBotsUpgrade(request, { members: verifier, installerBearer })
+  const f = await serviceFixture(t, { runtime, authorizeClient })
+  const signed = () => signMemberRequest({ deviceID: mac.deviceID, privateKey: mac.key, audience: here, method: 'GET', target: '/v1/bots/ws?client=mac' })
+  assert.equal((await botsSocket(f.port, { authorization: 'Bearer device' }, '/v1/bots/ws?client=mac')).status, 401)
+  assert.equal((await botsSocket(f.port, { authorization: 'Bearer ' + installer, 'x-forwarded-host': 'host.example.ts.net' }, '/v1/bots/ws?client=mac')).status, 401, 'the installer bearer never opens the socket through Tailscale Serve')
+  assert.deepEqual(await botsSocket(f.port, { authorization: 'Bearer ' + installer }, '/v1/bots/ws?client=mac'), { status: 101, echo: 'echo' }, 'the installing Mac reaches a bots-only host over its SSH tunnel')
+  assert.equal((await botsSocket(f.port, { ...signed(), origin: 'https://evil.example' }, '/v1/bots/ws?client=mac')).status, 403)
+  assert.deepEqual(await botsSocket(f.port, { ...signed(), authorization: 'Bearer device', cookie: 'secret' }, '/v1/bots/ws?client=mac'), { status: 101, echo: 'echo' })
   // Exactly what the Mac's URLSessionWebSocketTask sends besides the fields above (captured
   // from CFNetwork; PiBotHandshakeTests checks the Mac side): no Origin, so it is accepted.
-  const cfNetwork = 'Accept-Encoding: gzip, deflate\r\nUser-Agent: Woven Matter CFNetwork/3896.200.61 Darwin/27.2.0\r\n'
-    + 'Sec-WebSocket-Extensions: permessage-deflate\r\nAccept: */*\r\nAccept-Language: en-US,en;q=0.9\r\n'
-  assert.match(await handshake('Bearer device', cfNetwork), /101[\s\S]*echo/)
-  assert.deepEqual(seen, [{ url: '/ws?client=mac', authorization: 'Bearer runtime-token', cookie: undefined },
-    { url: '/ws?client=mac', authorization: 'Bearer runtime-token', cookie: undefined }])
+  const cfNetwork = { 'accept-encoding': 'gzip, deflate', 'user-agent': 'Woven Matter CFNetwork/3896.200.61 Darwin/27.2.0', 'sec-websocket-extensions': 'permessage-deflate', accept: '*/*', 'accept-language': 'en-US,en;q=0.9' }
+  assert.deepEqual(await botsSocket(f.port, { ...signed(), ...cfNetwork }, '/v1/bots/ws?client=mac'), { status: 101, echo: 'echo' })
+  assert.deepEqual(seen, [{ url: '/ws?client=mac', authorization: 'Bearer runtime-token', cookie: undefined, signature: undefined },
+    { url: '/ws?client=mac', authorization: 'Bearer runtime-token', cookie: undefined, signature: undefined },
+    { url: '/ws?client=mac', authorization: 'Bearer runtime-token', cookie: undefined, signature: undefined }])
 })

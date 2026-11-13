@@ -41,10 +41,14 @@ public final class WorkspaceDatabase: Sendable {
 
   func write<T: Sendable>(_ operation: @escaping @Sendable (WorkspaceDatabaseConnection) throws -> T) async throws -> T {
     guard let writer else { throw WorkspaceDatabaseError.readOnlyProjection }
-    let changes = changes
+    let changes = changes, streamChanges = workers.streamChanges, libraryChanges = workers.libraryChanges
     return try await writer.worker.perform { _ in
       try writer.use { connection in
-        defer { if changes.isObserved { changes.check(connection) } }
+        defer {
+          if changes.isObserved { changes.check(connection) }
+          if streamChanges.isObserved { streamChanges.check(connection) }
+          if libraryChanges.isObserved { libraryChanges.check(connection) }
+        }
         return try operation(connection)
       }
     }
@@ -55,6 +59,20 @@ public final class WorkspaceDatabase: Sendable {
   @discardableResult
   public func observePeerChanges(_ handler: @escaping @Sendable (Int64) -> Void) -> UUID { changes.add(handler) }
   public func removePeerChangeObserver(_ id: UUID) { changes.remove(id) }
+
+  /// Calls `handler` (on the writer's queue; keep it short) after any write,
+  /// through any handle on this database file, that committed new
+  /// `execution_stream_changes` entries: the stream server's wake.
+  @discardableResult
+  public func observeExecutionStreamChanges(_ handler: @escaping @Sendable (Int64) -> Void) -> UUID { workers.streamChanges.add(handler) }
+  public func removeExecutionStreamObserver(_ id: UUID) { workers.streamChanges.remove(id) }
+
+  /// Calls `handler` (on the writer's queue; keep it short) after any write,
+  /// through any handle on this database file, that committed new
+  /// `device_sync_changes` entries: the wake of `library` stream items.
+  @discardableResult
+  public func observeLibraryChanges(_ handler: @escaping @Sendable (Int64) -> Void) -> UUID { workers.libraryChanges.add(handler) }
+  public func removeLibraryChangeObserver(_ id: UUID) { workers.libraryChanges.remove(id) }
 
   /// Cleanup of accepted work must survive cancellation of the task driving it.
   /// This still observes admission limits and queue deadlines.
@@ -84,9 +102,11 @@ public final class WorkspaceDatabase: Sendable {
 
 }
 
-/// Tracks the change log's high-water mark on the writer connection. One
+/// Tracks a change log's high-water mark on the writer connection. One
 /// indexed read of `sqlite_sequence` per write, only while observed.
 final class PeerChangeObservers: @unchecked Sendable {
+  private let table: String
+  init(table: String = "paired_library_changes") { self.table = table }
   private let lock = NSLock()
   private var handlers: [UUID: @Sendable (Int64) -> Void] = [:]
   private var last: Int64?
@@ -96,7 +116,7 @@ final class PeerChangeObservers: @unchecked Sendable {
   }
   func remove(_ id: UUID) { lock.withLock { _ = handlers.removeValue(forKey: id) } }
   func check(_ connection: WorkspaceDatabaseConnection) {
-    guard let value = try? connection.historyRowsUnlocked("SELECT seq FROM sqlite_sequence WHERE name='paired_library_changes'", values: [])
+    guard let value = try? connection.historyRowsUnlocked("SELECT seq FROM sqlite_sequence WHERE name=?", values: [table])
       .first?.objectValue?["seq"]?.doubleValue.map({ Int64($0) }) else { return }
     let notify: [@Sendable (Int64) -> Void] = lock.withLock {
       defer { last = value }

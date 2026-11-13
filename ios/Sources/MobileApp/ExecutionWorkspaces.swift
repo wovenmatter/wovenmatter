@@ -173,7 +173,11 @@ extension MobileModel {
       executionWorkspaces = journal.workspaces.values.filter { !$0.deleted && $0.id != deviceWorkspaceID }.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
       let availableIDs = Set(executionWorkspaces.map(\.id))
       for id in Array(workspaceClients.keys) where !availableIDs.contains(id) {
-        workspacePollTasks.removeValue(forKey: id)?.cancel()
+        if let stream = workspaceStreams.removeValue(forKey: id) {
+          streamEndpoints.removeValue(forKey: id); Task { await stream.close() }
+          if libraryStream?.workspaceID == id { setLibraryStream(nil) }
+        }
+        workspaceReadTasks.removeValue(forKey: id)?.cancel()
         workspaceClients.removeValue(forKey: id); workspaceProviders.removeValue(forKey: id)
         workspaceReachable.removeValue(forKey: id); remotePending.removeValue(forKey: id)
       }
@@ -184,17 +188,18 @@ extension MobileModel {
       guard generation == connectionGeneration, !pairingInProgress, credential != nil else { return }
       for workspace in executionWorkspaces {
         guard workspace.endpoint != nil else { continue }
-        if !force, let after = workspaceRefreshAfter[workspace.id], after > Date() { continue }
+        // A client made in this pass is read once; others only when forced.
+        var created = false
         // Member mode: signed requests straight to the workspace's own
         // endpoint, whichever Macs are offline. No grant is issued or stored.
         // Only a workspace whose serving member is known can be addressed; others keep their grant.
         if let memberIdentity, memberMode, let endpoint = workspace.endpoint, let audience = membership?.audience(for: workspace),
            !memberUnsupportedWorkspaceIDs.contains(workspace.id),
            workspaceClients[workspace.id] == nil || memberClientEndpoints[workspace.id] != endpoint {
-          workspacePollTasks.removeValue(forKey: workspace.id)?.cancel()
+          workspaceReadTasks.removeValue(forKey: workspace.id)?.cancel()
           workspaceClients[workspace.id] = WorkspaceClient(store: store, workspaceID: workspace.id,
             transport: try HTTPSExecutionWorkspaceTransport(workspace: workspace, identity: memberIdentity, audience: audience, performer: httpPerformer))
-          memberClientEndpoints[workspace.id] = endpoint
+          memberClientEndpoints[workspace.id] = endpoint; created = true
         }
         if workspaceClients[workspace.id] == nil {
           var saved = try workspaceCredentials.load(workspace.id)
@@ -222,22 +227,36 @@ extension MobileModel {
           guard try workspaceCredentials.load(workspace.id) == credential, workspaceClients[workspace.id] == nil else { continue }
           workspaceClients[workspace.id] = WorkspaceClient(store: store, workspaceID: workspace.id,
             transport: try HTTPSExecutionWorkspaceTransport(credential: credential))
+          created = true
         }
-        guard workspaceClients[workspace.id] != nil, workspacePollTasks[workspace.id] == nil else { continue }
+        guard workspaceClients[workspace.id] != nil, workspaceReadTasks[workspace.id] == nil else { continue }
+        // A connected stream pushes its history, questions and the open chat.
+        guard !streamConnected(workspace.id) else { continue }
+        // A workspace without a connected stream is read whole when its
+        // client is made and on the app's explicit refreshes (foreground,
+        // network return, New Chat, opening a chat). The 15 s tick reads only
+        // its open chat and questions (`refreshLiveViewsWithoutStream`). One
+        // whose stream is about to open is not read just because its client is new.
+        guard force || (created && !streams(workspace)) else { continue }
         let id = workspace.id
-        workspacePollTasks[id] = Task { [weak self] in
+        workspaceReadTasks[id] = Task { [weak self] in
           guard let self else { return }
           await self.refreshDirectWorkspace(id)
-          self.workspacePollTasks.removeValue(forKey: id)
+          self.workspaceReadTasks.removeValue(forKey: id)
         }
       }
+      await reconcileWorkspaceStreams()
       if providerID.isEmpty { providerID = availableExecutionProviders.first { $0.available && $0.canStart }?.id ?? "" }
       await reload()
     } catch { pairingError = error.localizedDescription }
   }
   func refreshDirectWorkspace(_ workspaceID: String,
                               clearCredential: ((String) throws -> Void)? = nil) async {
+    // Its stream follows the open chat; a connected one already holds everything else.
+    if workspaceStreams[workspaceID] != nil { await openStreamedConversation(workspaceID) }
+    if streamConnected(workspaceID) { return }
     guard let client = workspaceClients[workspaceID] else { return }
+    // A workspace with a stream is reported reachable or not by its stream's state.
     do {
       try await client.refresh()
       let discoveredProviders = try await client.providers()
@@ -252,21 +271,18 @@ extension MobileModel {
         }
       }
       guard !Task.isCancelled, workspaceClients[workspaceID] === client else { return }
-      workspaceReachable[workspaceID] = true
+      if workspaceStreams[workspaceID] == nil { workspaceReachable[workspaceID] = true }
       for id in state.pinnedTranscriptIDs ?? [] where executionOwner(of: id) == workspaceID && (state.transcripts[id] == nil || state.transcripts[id]?.olderCursor != nil) {
         do { try await downloadOfflineConversation(id) }
         catch { offlineProblems["chat:" + id] = error.localizedDescription }
       }
       rememberAgentCatalog()
-      workspaceReachable[workspaceID] = true; workspaceProblems.removeValue(forKey: workspaceID)
-      workspaceRetryCount[workspaceID] = 0
-      let active = selectedExecutionWorkspaceID == workspaceID && tab == .chat && (activeRunID != nil || awaitingRemoteTurn)
-      workspaceRefreshAfter[workspaceID] = Date().addingTimeInterval(active ? 2 : 30)
+      if workspaceStreams[workspaceID] == nil { workspaceReachable[workspaceID] = true; workspaceProblems.removeValue(forKey: workspaceID) }
       if providerID.isEmpty { providerID = availableExecutionProviders.first { $0.available && $0.canStart }?.id ?? "" }
       await reload()
     } catch {
       guard !Task.isCancelled, workspaceClients[workspaceID] === client else { return }
-      workspaceReachable[workspaceID] = false; workspaceProblems[workspaceID] = error.localizedDescription
+      if workspaceStreams[workspaceID] == nil { workspaceReachable[workspaceID] = false; workspaceProblems[workspaceID] = error.localizedDescription }
       if case MobileConnectionError.revoked = error {
         // Workspace access is independent of central pairing. A disabled or
         // revoked execution grant must not disconnect the library replica.
@@ -279,9 +295,6 @@ extension MobileModel {
         workspaceClients.removeValue(forKey: workspaceID); memberClientEndpoints.removeValue(forKey: workspaceID)
         memberUnsupportedWorkspaceIDs.insert(workspaceID)
       }
-      let failures = (workspaceRetryCount[workspaceID] ?? 0) + 1
-      workspaceRetryCount[workspaceID] = failures
-      workspaceRefreshAfter[workspaceID] = Date().addingTimeInterval(Self.connectionRetryDelay(failures))
     }
   }
   func sendToExecutionWorkspace() async {
@@ -332,8 +345,7 @@ extension MobileModel {
       if selectedConversationID == target { selectedConversationID = conversationID }
       if draftBuffer[sourceKey] == cleared { updateChatDraft(key: sourceKey, draft: cleared) }
       await reload()
-      // Show the message and its turn as soon as the workspace has them,
-      // instead of waiting for the next scheduled refresh.
+      // A streamed workspace pushes the message and its turn; any other is read once now.
       await refreshDirectWorkspace(workspaceID)
     } catch {
       withdrawPendingSend(sourceKey, restoring: draft, over: cleared)
@@ -368,6 +380,7 @@ extension MobileModel {
     centralProvidersRefreshDue = true
     if engine != nil { await refresh() }
     await refreshExecutionWorkspaces(force: true)
+    for id in workspaceStreams.keys where workspaceReachable[id] == true { await refreshStreamedWorkspace(id) }
   }
   func stopExecutionWorkspace() async {
     guard let id = selectedConversationID, let runID = activeRunID else { return }
@@ -383,7 +396,37 @@ extension MobileModel {
     do {
       let result = try await client.submit(command)
       if result.status == .rejected || result.status == .outcomeUnknown { errorMessage = result.message ?? "This workspace could not confirm the command." }
-      await refreshExecutionWorkspaces()
+      await refreshDirectWorkspace(owner)
     } catch { errorMessage = error.localizedDescription }
+  }
+  /// A message file of a session another machine runs, for Quick Look: read
+  /// from that workspace (`GET v1/execution/attachments/<sha256>`, the library
+  /// host for a central chat), checked against its digest and kept on this
+  /// iPhone under the name it was sent with. A file read once opens offline.
+  func attachmentURL(_ reference: LibraryAttachmentReference, conversationID: String) async throws -> URL {
+    guard reference.isReadable else { throw MobileConnectionError.http(404, "This file was not saved with its message.") }
+    let directory = attachmentDirectory.appendingPathComponent(reference.id, isDirectory: true)
+    let target = directory.appendingPathComponent(Self.attachmentFileName(reference.name))
+    if FileManager.default.fileExists(atPath: target.path) { return target }
+    let route = executionRoute(for: conversationID)
+    let workspaceID = route == "central" ? centralExecutionWorkspace?.id : route
+    guard let workspaceID, workspaceID != "local", let client = workspaceClients[workspaceID] else {
+      throw MobileConnectionError.http(503, "Connect to the workspace that holds this file to open it.")
+    }
+    let data = try await client.attachment(reference)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    try data.write(to: target, options: [.atomic, .completeFileProtection])
+    return target
+  }
+  /// Where opened message files are kept: caches, so the system may reclaim them.
+  var attachmentDirectory: URL {
+    FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].appendingPathComponent("MessageAttachments", isDirectory: true)
+  }
+  /// The sent name without path separators or control characters.
+  static func attachmentFileName(_ name: String) -> String {
+    let cleaned = String(String.UnicodeScalarView(name.unicodeScalars.filter {
+      !CharacterSet.controlCharacters.contains($0) && !"/\\:".unicodeScalars.contains($0)
+    })).trimmingCharacters(in: .whitespaces)
+    return cleaned.isEmpty || cleaned == "." || cleaned == ".." ? "Attachment" : String(cleaned.prefix(255))
   }
 }

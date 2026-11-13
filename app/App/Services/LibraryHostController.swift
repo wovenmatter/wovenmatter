@@ -74,6 +74,16 @@ final class LibraryHostController {
     private(set) var lastSeenAt: Date?
     private var authentication: DeviceAuthentication?
     private var executionAPI: MacExecutionAPI?
+    /// `GET /v1/stream`: live sessions for every other member device.
+    private(set) var executionStream: ExecutionStreamServer?
+    /// Open stream sockets and bots relays by member, closed when a member is removed.
+    private var memberSockets: MemberSocketRegistry?
+    /// The loopback-only `/v1/stream` listener for client-mode Dev builds on
+    /// this Mac and the in-memory roster of their stream keys. Never exposed
+    /// through Tailscale Serve; never reached by a library member's key.
+    private var developmentStream: (server: LibraryHTTPServer, roster: DevelopmentStreamRoster, port: UInt16)?
+    /// Whether this process serves Dev clients: production, or an explicit live Dev host.
+    private var servesDevelopmentClients: Bool { DevelopmentLaunch.mode == nil || DevelopmentLaunch.isLiveHost }
     private var inferenceHost: InferenceHost?
     /// Who may use this Mac's bots from another device (`/v1/bots/*`).
     private var authorizeBots: (@MainActor (LibraryHTTPRequest) async throws -> Void)?
@@ -257,6 +267,25 @@ final class LibraryHostController {
                         throw LibraryAPIError(code: "unauthorized", message: "This device is no longer paired.")
                     }
                 }, authorizeGrant: authorizeGrant, members: try? await peerSync.members())
+            // A stream that cannot start leaves the HTTP routes serving; its
+            // upgrade answers 503 until the next start.
+            if let directory = try? await peerSync.members(), let executionAPI {
+                let registry = MemberSocketRegistry(members: directory)
+                let stream = ExecutionStreamServer(database: database, source: executionAPI, members: directory, registry: registry)
+                if (try? await stream.start()) != nil {
+                    guard generation == expectedGeneration, !Task.isCancelled else { stream.stop(); throw CancellationError() }
+                    memberSockets = registry; executionStream = stream
+                    model.executionStreamChanged = { [weak stream, weak model] ids in
+                        stream?.liveStateChanged(conversationIDs: ids)
+                        // Waits on this Mac's sessions follow the same in-memory changes.
+                        Task { await model?.sessionWakeUpsLocalChanged(ids) }
+                    }
+                    if servesDevelopmentClients {
+                        developmentStream = try? await startDevelopmentStream(stream, audience: directory.identity.deviceID)
+                        guard generation == expectedGeneration, !Task.isCancelled else { throw CancellationError() }
+                    }
+                } else { stream.stop() }
+            }
             // Only a signed member request (a Mac or phone member). Other Macs
             // reach this Mac's bots with their member key; no grant is accepted.
             authorizeBots = { [weak self] request in
@@ -274,6 +303,9 @@ final class LibraryHostController {
             // Paired-Mac credential storage is independent of phone and library
             // availability. A failure is reported and retried, never fatal.
             await peerSync.restoreRecordingFailures()
+            // This Mac's streams to every other machine open now; afterwards
+            // only a registry or member change opens or closes one.
+            await connectExecutionStreams()
             // Availability alone must not hold the Mac awake. Active execution
             // continues to use the app's existing work/sleep policy.
             healthTask = Task { [weak self] in
@@ -287,13 +319,11 @@ final class LibraryHostController {
                     }
                     do { try await self.refreshExecutionRegistry() }
                     catch { self.errorMessage = error.localizedDescription }
+                    await self.refreshDevelopmentStreamPresence()
                     try? await LegacyMacLibraryUpgrade.reconnect(host: self, defaults: self.defaults)
                     await self.peerSync.synchronize()
                     await self.retryPendingRevocations()
                     await self.refreshStatus()
-                    if let model = self.model, let client = try? model.centralExecutionClient() {
-                        await client.refreshRegisteredWorkspaces()
-                    }
                     if let expiry = self.pairingExpiresAt, expiry <= Date() {
                         self.pairingPayload = nil; self.pairingExpiresAt = nil
                     }
@@ -334,17 +364,31 @@ final class LibraryHostController {
         return await libraryAPI.handle(request)
     }
 
-    /// Only `/v1/bots/ws` upgrades: a member's WebSocket to this Mac's bots runtime.
+    /// Two upgrades: a member's live stream (`/v1/stream`), and its WebSocket
+    /// to this Mac's bots runtime (`/v1/bots/ws`). Both are held in the member
+    /// socket registry, so removing the member closes them.
     private func upgrade(_ request: LibraryHTTPRequest, generation expected: UUID) async -> WebSocketUpgradeDecision {
         guard generation == expected else { return .reject(.error("unavailable", "This sharing session has stopped.", status: 503)) }
         let path = request.target.split(separator: "?", maxSplits: 1).first.map(String.init) ?? request.target
+        if path == "/" + StreamProtocol.path || path == "/wovenmatter/" + StreamProtocol.path {
+            guard let executionStream else { return .reject(.error("unavailable", "This Mac's stream is starting.", status: 503)) }
+            return await executionStream.upgrade(request)
+        }
         guard path == "/v1/bots/ws" || path == "/wovenmatter/v1/bots/ws" else {
             return .reject(.error("not_found", "Unknown upgrade route.", status: 404))
         }
-        guard let authorizeBots, let host = model?.botsHost else { return .reject(.error("unavailable", "Bots on this Mac are starting.", status: 503)) }
-        do { try await authorizeBots(request) }
-        catch { return .reject(.error("unauthorized", error.localizedDescription, status: 401)) }
-        return host.remoteUpgrade(request)
+        guard authorizeBots != nil, let host = model?.botsHost else { return .reject(.error("unavailable", "Bots on this Mac are starting.", status: 503)) }
+        let kinds: Set<MemberKind> = [.mac, .ios]
+        let member: LibraryMember
+        do {
+            guard MemberRequestVerifier.isSigned(request.headers) else { throw MemberRequestError.missing }
+            member = try await authenticateMember(request, allowing: kinds)
+        } catch { return .reject(.error("unauthorized", error.localizedDescription, status: 401)) }
+        let decision = host.remoteUpgrade(request)
+        guard case let .tunnel(port, head, options) = decision else { return decision }
+        var owned = options
+        if let memberSockets { owned.owner = .init(registry: memberSockets, deviceID: member.deviceID, kinds: kinds) }
+        return .tunnel(port: port, head: head, options: owned)
     }
 
     /// Quit and role changes cancel recovery as well as the owned listener.
@@ -360,6 +404,13 @@ final class LibraryHostController {
         let peerSync = peerSync
         Task { await peerSync.stopMembers() }
         server?.stop(); server = nil; executionAPI = nil; inferenceHost = nil; authorizeBots = nil
+        executionStream?.stop(); executionStream = nil; memberSockets = nil
+        if let development = developmentStream {
+            development.server.stop()
+            Task { await development.roster.clear() }
+            developmentStream = nil
+        }
+        model?.executionStreamChanged = nil
         for setup in linuxHostSetups.values { setup.task.cancel() }
         linuxHostSetups.removeAll()
         if let serve {
@@ -387,8 +438,11 @@ final class LibraryHostController {
     }
     func revoke(_ deviceID: String, expected: PairedDevice? = nil) async {
         if model?.isBackendFrontend == true { await forward(.revoke(deviceID)); return }
-        do { try await performRevocation(deviceID, expected: expected) }
-        catch { errorMessage = error.localizedDescription }
+        do {
+            try await performRevocation(deviceID, expected: expected)
+            // An unpaired Dev client's stream closes with 4401 at once.
+            await developmentStream?.roster.revoke(deviceID)
+        } catch { errorMessage = error.localizedDescription }
     }
 
     /// Completes only after local library, execution and inference access are
@@ -530,7 +584,7 @@ final class LibraryHostController {
     /// Test seam: carries signed requests to Linux hosts in process.
     @ObservationIgnored var remoteHostSend: MemberSignedHTTPClient.Send?
 
-    private func localExecutionWorkspaceID(libraryID: String) -> String {
+    func localExecutionWorkspaceID(libraryID: String) -> String {
         let key = Self.localExecutionIDKeyPrefix + libraryID
         if let value = defaults.string(forKey: key), UUID(uuidString: value) != nil { return value.lowercased() }
         let value = UUID().uuidString.lowercased(); defaults.set(value, forKey: key); return value
@@ -573,7 +627,7 @@ final class LibraryHostController {
         var desired: [ExecutionWorkspace] = [
             .init(id: localID, libraryID: identity.libraryID, ownerDeviceID: identity.hostDeviceID,
                   kind: .mac, name: DevelopmentLaunch.deviceName(), endpoint: endpoint,
-                  capabilities: ["execution.v1", "history.central.v1", "inference.v1"], executionDeviceID: identity.hostDeviceID, developmentInstance: DevelopmentLaunch.instance,
+                  capabilities: ["execution.v1", "history.central.v1", "inference.v1", StreamProtocol.capability], executionDeviceID: identity.hostDeviceID, developmentInstance: DevelopmentLaunch.instance,
                   // Paired devices show sessions here a clear message when a permission is missing.
                   macAccess: MacAccessSetupModel.current(keychainReady: model.keychainAccessReady),
                   folderOwnerID: folderOwnerID)
@@ -596,7 +650,9 @@ final class LibraryHostController {
                 .init(workspace: workspace, expectedRevision: prior?.revision), deviceID: identity.hostDeviceID)
         }
         guard generation == expectedGeneration, !Task.isCancelled else { return }
+        let previous = executionWorkspaces
         executionWorkspaces = try await database.libraryExecutionWorkspaces()
+        if executionWorkspaces != previous { await connectExecutionStreams() }
         for configuration in model.remoteWorkspaces.workspaces {
             // Adoption and enrollment do not wait for an earlier enrollment.
             setUpLinuxHost(configuration)
@@ -906,6 +962,8 @@ final class LibraryHostController {
     func disconnectLocalDevelopment(_ request: DevelopmentDisconnectRequest) async throws {
         guard let authentication, let database = model?.dashboardStore?.database else { throw LibraryAPIError(code: "unavailable", message: "This Mac’s library is unavailable.") }
         try await authentication.suspendLocalDevelopment(deviceID: request.deviceID, credential: request.credential)
+        // Quitting or disconnecting revokes the Dev stream key: its socket closes with 4401.
+        await developmentStream?.roster.revoke(request.deviceID)
         try await database.withdrawDevelopmentWorkspaces(ownedBy: request.deviceID)
         try await refreshStatusAndDevelopmentPresence(database: database)
     }
@@ -1147,15 +1205,81 @@ final class LibraryHostController {
         pairingPayload = nil; pairingExpiresAt = nil
     }
 
+    /// Opens a stream to every registered workspace that serves one and closes
+    /// those that left the registry: on start, and whenever the registry or the
+    /// member list changes (this Mac's registry refresh, a peer sync that
+    /// applied rows). Each stream reconnects by itself; nothing polls.
+    func connectExecutionStreams() async {
+        guard let model, !model.isBackendFrontend, let client = try? model.centralExecutionClient() else { return }
+        await client.connectRegisteredWorkspaces()
+    }
+
     func connectLocalDevelopment(_ request: DevelopmentClientRequest) async throws -> DevelopmentClientConnection {
-        guard DevelopmentLaunch.mode == nil || DevelopmentLaunch.isLiveHost,
+        guard servesDevelopmentClients,
               let database = model?.dashboardStore?.database, let endpoint, let authentication else {
             throw LibraryAPIError(code: "unavailable", message: "Run production with background execution enabled, or a live Dev host, and wait for its library to connect.")
         }
         let response = try await authentication.enrollLocalDevelopment(deviceID: request.deviceID,
             name: request.name, workspaceID: database.libraryID())
         await didPair()
-        return .init(endpoint: endpoint, pairing: response)
+        // The stream key, when sent, is admitted with the new credential. A
+        // key that cannot be admitted yet leaves the enrollment as it is; the
+        // client admits it again before every stream attempt.
+        var stream: DevelopmentStreamRoute?
+        if let key = request.memberKey {
+            stream = try? await admitDevelopmentStream(.init(deviceID: request.deviceID, credential: response.credential, memberKey: key))
+        }
+        return .init(endpoint: endpoint, pairing: response, stream: stream)
+    }
+
+    /// Admits a client-mode Dev build's stream key on the same-user socket
+    /// (`development.stream`, before each stream attempt): only with that Dev
+    /// identity's current credential, and never for a library member's device
+    /// ID. The key goes into the in-memory roster alone, never the member list.
+    func admitDevelopmentStream(_ request: DevelopmentStreamRequest) async throws -> DevelopmentStreamRoute {
+        guard servesDevelopmentClients, let authentication, let development = developmentStream, let executionAPI,
+              let directory = try? await peerSync.members() else {
+            throw LibraryAPIError(code: "unavailable", message: "This Mac's library is not streaming yet. Woven Matter retries automatically.")
+        }
+        let device = try await authentication.authenticateLocalDevelopment(deviceID: request.deviceID, credential: request.credential)
+        let members = try await directory.list().members
+        guard !members.contains(where: { $0.deviceID == request.deviceID.lowercased() }) else {
+            throw LibraryAPIError(code: "invalid_device", message: "A library member's identity cannot stream as a development client.")
+        }
+        try await development.roster.admit(deviceID: request.deviceID, name: device.name, publicKey: request.memberKey)
+        let descriptor = executionAPI.workspaceDescriptor
+        return .init(port: development.port, audience: directory.identity.deviceID,
+                     libraryID: descriptor.libraryID, workspaceID: descriptor.id)
+    }
+
+    /// The loopback listener in front of `stream` for Dev clients. It answers
+    /// only `GET /v1/stream` upgrades signed by roster keys.
+    private func startDevelopmentStream(_ stream: ExecutionStreamServer, audience: String) async throws
+        -> (server: LibraryHTTPServer, roster: DevelopmentStreamRoster, port: UInt16) {
+        let roster = DevelopmentStreamRoster(audience: audience)
+        await roster.observeRemovals { [weak stream] deviceID, removal in
+            stream?.closeDevelopment(deviceID: deviceID, code: removal == .revoked ? .memberRemoved : .goingAway)
+        }
+        let server = LibraryHTTPServer(upgradeHandler: { [weak stream] request in
+            let path = request.target.split(separator: "?", maxSplits: 1).first.map(String.init) ?? request.target
+            guard path == "/" + StreamProtocol.path else { return .reject(.error("not_found", "Unknown upgrade route.", status: 404)) }
+            guard let stream else { return .reject(.error("unavailable", "This Mac's stream is starting.", status: 503)) }
+            return await stream.developmentUpgrade(request, roster: roster)
+        }) { _ in .error("not_found", "This listener serves only the development stream.", status: 404) }
+        do { return (server, roster, try await server.start()) }
+        catch { server.stop(); throw error }
+    }
+
+    /// Keys of Dev identities that are no longer current leave the roster
+    /// (their sockets close with 4401), and a Dev client with an open stream
+    /// stays present though it sends no request while nothing changes.
+    private func refreshDevelopmentStreamPresence() async {
+        guard let development = developmentStream, let authentication, let executionStream else { return }
+        for id in await development.roster.deviceIDs {
+            if await !authentication.isLocalDevelopment(id) { await development.roster.revoke(id) }
+        }
+        let streaming = executionStream.developmentDeviceIDs().intersection(await development.roster.deviceIDs)
+        try? await authentication.touchLocalDevelopment(deviceIDs: streaming)
     }
 }
 

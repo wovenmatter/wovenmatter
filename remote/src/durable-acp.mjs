@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { harnessResource } from './harness-resources.mjs'
-import { mkdir, open, readFile, realpath } from 'node:fs/promises'
+import { mkdir, open, readFile, realpath, rm } from 'node:fs/promises'
 import { resolve, sep } from 'node:path'
 import { createInterface } from 'node:readline'
 import { randomUUID } from 'node:crypto'
@@ -14,6 +14,27 @@ export function redactMCPTransport(value) {
   if(typeof value.name==='string'&&/^(authorization|proxy-authorization)$/i.test(value.name))return {...value,value:'[redacted]'}
   return Object.fromEntries(Object.entries(value).filter(([key])=>!['bearerToken','wovenMCP','wovenMCPConnection'].includes(key)&&!/^(authorization|proxy-authorization)$/i.test(key)).map(([key,item])=>[key,redactMCPTransport(item)]))
 }
+
+// How a harness process starts: Codex, Claude Code and Grok run inside the
+// Woven MCP adapter; Grok's permission is a process flag.
+export function harnessLaunch(harness, selected, permission) {
+  let args = [...(harness.arguments ?? [])]
+  if (selected === 'grok_build' && permission) {
+    if (!['default', 'acceptEdits', 'auto', 'bypassPermissions', 'dontAsk'].includes(permission)) throw new Error('Invalid Grok permission')
+    const index = args.indexOf('--permission-mode')
+    if (index >= 0) args.splice(index, 2)
+    args = ['--permission-mode', permission, ...args]
+    const agent = args.indexOf('agent')
+    if (agent >= 0) args.splice(agent + 1, 0, '--no-leader')
+  }
+  const wrapped = ['codex', 'claude_code', 'grok_build'].includes(selected)
+  return wrapped ? { command: process.execPath, arguments: [fileURLToPath(harnessResource('mcp/adapter.mjs')), selected, harness.command, ...args] }
+    : { command: harness.command, arguments: args }
+}
+
+// A journal that does not end its last start with a stop belongs to an owner
+// that died without recording one.
+const journalState = history => history.filter(item => ['stopped', 'recovered'].includes(item.type)).at(-1)?.type === 'stopped' ? 'stopped' : 'interrupted'
 
 const identifier = value => {
   if (typeof value !== 'string' || !/^[a-zA-Z0-9_-]{1,128}$/.test(value)) throw new Error('Invalid channel identifier')
@@ -167,6 +188,7 @@ export function createDurableACP({ catalog, workspaceRoot, environment, isEnable
     channel.pendingJournal = []; channel.pendingBytes = 0
   }
   async function record(channel, entry) {
+    if (channel.discarded) return
     const line = JSON.stringify(entry) + '\n'
     const bytes = Buffer.byteLength(line)
     if ((channel.journalBytes ?? 0) + bytes > 64 * 1024 * 1024) throw new Error('Remote session journal is full; start a new session')
@@ -220,7 +242,7 @@ export function createDurableACP({ catalog, workspaceRoot, environment, isEnable
     if (permission && metadata && metadata.permission !== permission) throw new Error('Permission changed; start a new remote session')
     const channel = { id, harnessID: selected, permission: metadata?.permission ?? permission, path, events: history.filter(item => item.type === 'output'),
       journalBytes: Buffer.byteLength(history.map(JSON.stringify).join('\n')), snapshot: newSnapshot(history), accepted: new Set(history.filter(item => item.type === 'accepted').map(item => item.deliveryID)),
-      process: null, state: metadata ? (history.filter(item => ['stopped', 'recovered'].includes(item.type)).at(-1)?.type === 'stopped' ? 'stopped' : 'interrupted') : 'starting', failure: null }
+      process: null, state: metadata ? journalState(history) : 'starting', failure: null }
     // An existing journal means the former service owner stopped. Do not replay
     // accepted inputs or quietly start a fresh session under the same identity.
     if (metadata && !recovering) { channels.set(id, channel); return channel }
@@ -228,15 +250,7 @@ export function createDurableACP({ catalog, workspaceRoot, environment, isEnable
     const base = await realpath(workspaceRoot)
     const workingDirectory = await realpath(cwd ?? metadata?.cwd ?? workspaceRoot)
     if (runtimeKind !== 'host' && workingDirectory !== base && !workingDirectory.startsWith(base + sep)) throw new Error('Working directory is outside this workspace')
-    let args = [...(harness.arguments ?? [])]
-    if (selected === 'grok_build' && permission) {
-      if (!['default', 'acceptEdits', 'auto', 'bypassPermissions', 'dontAsk'].includes(permission)) throw new Error('Invalid Grok permission')
-      const index = args.indexOf('--permission-mode')
-      if (index >= 0) args.splice(index, 2)
-      args = ['--permission-mode', permission, ...args]
-      const agent = args.indexOf('agent')
-      if (agent >= 0) args.splice(agent + 1, 0, '--no-leader')
-    }
+    const launch = harnessLaunch(harness, selected, permission)
     if (!await isEnabled()) throw new Error('Background execution is disabled')
     if (!await isHarnessEnabled(selected)) throw new Error('This harness is not installed')
     const creation = metadata ? { type: 'recovered' } : { type: 'created', harnessID: selected, permission, cwd: workingDirectory }
@@ -247,9 +261,7 @@ export function createDurableACP({ catalog, workspaceRoot, environment, isEnable
       channel.state = 'stopped'
       throw new Error('Background execution is disabled or the harness is not installed')
     }
-    const wrapped = ['codex', 'claude_code', 'grok_build'].includes(selected);
-    const child = spawnProcess(wrapped ? process.execPath : harness.command, wrapped
-      ? [fileURLToPath(harnessResource('mcp/adapter.mjs')), selected, harness.command, ...args] : args, {
+    const child = spawnProcess(launch.command, launch.arguments, {
       cwd: workingDirectory, env: environment(harness), stdio: ['pipe', 'pipe', 'pipe'],
     })
     channel.process = child
@@ -287,6 +299,15 @@ export function createDurableACP({ catalog, workspaceRoot, environment, isEnable
     })
     return channel
   }
+  // A channel's journal, or null when it never existed.
+  async function journal(id) {
+    let history
+    try { history = (await readFile(resolve(directory, id + '.jsonl'), 'utf8')).split('\n').filter(Boolean).map(JSON.parse) }
+    catch (error) { if (error.code === 'ENOENT') return null; throw new Error('Channel journal is unreadable; refusing to replay work') }
+    return history.some(item => item.type === 'created') ? history : null
+  }
+  const peeked = (state, snapshot, live) => ({ state, live, sessionID: snapshot.session?.sessionId ?? null,
+    busy: snapshot.busy, pendingRequests: snapshot.pendingRequests.length })
   function wakePolls(channel) {
     for (const wake of channel.pollWaiters ?? []) wake()
   }
@@ -386,8 +407,58 @@ export function createDurableACP({ catalog, workspaceRoot, environment, isEnable
       nativeSessionID:channel.snapshot.session?.sessionId,
     })),
     hasActiveRuntime: id => [...channels.values()].some(channel => channel.process && (!id || channel.harnessID === id)),
-    stopAll: () => serialize(async () => {
-      await Promise.all([...channels.values()].map(channel => new Promise(resolve => {
+    // A channel's state without starting it: from memory, else from its
+    // journal; null when it never existed.
+    peek: id => serialize(async () => {
+      identifier(id)
+      const known = channels.get(id)
+      if (known) return peeked(known.state, known.snapshot, !!known.process)
+      const history = await journal(id)
+      if (!history) return null
+      return peeked(journalState(history), newSnapshot(history), false)
+    }),
+    // A channel left `interrupted` (its former owner died without recording
+    // a stop) that no process of this server holds is recorded stopped, so
+    // it can be reopened with `session/load`; its unfinished runs settle as
+    // stopped. A channel whose process still runs is refused. Null when it
+    // never existed.
+    release: id => serialize(async () => {
+      identifier(id)
+      let channel = channels.get(id)
+      if (!channel) {
+        if (!await journal(id)) return null
+        channel = await channelFor(id)
+      }
+      if (channel.process) throw new Error('This session is still running on this host')
+      if (channel.state === 'interrupted') {
+        const entry = { type: 'stopped' }
+        await record(channel, entry)
+        updateSnapshot(channel.snapshot, entry)
+        channel.state = 'stopped'
+        wakePolls(channel)
+      }
+      return peeked(channel.state, channel.snapshot, false)
+    }),
+    // Removes a channel this server opened for an operation that then failed
+    // (a native session that could not be reopened): no process or journal
+    // stays behind.
+    discard: id => serialize(async () => {
+      identifier(id)
+      const channel = channels.get(id)
+      channels.delete(id)
+      if (channel) channel.discarded = true
+      if (channel?.process) await new Promise(resolve => {
+        const child = channel.process
+        const timer = setTimeout(() => child.kill('SIGKILL'), 1500)
+        child.once('close', () => { clearTimeout(timer); resolve() })
+        child.kill('SIGTERM')
+      })
+      if (channel) { clearTimeout(channel.flushTimer); channel.pendingJournal = [] }
+      await rm(resolve(directory, id + '.jsonl'), { force: true })
+    }),
+    // `except(id)` keeps channels another owner still runs.
+    stopAll: ({ except = () => false } = {}) => serialize(async () => {
+      await Promise.all([...channels.values()].filter(channel => !except(channel.id)).map(channel => new Promise(resolve => {
         if (!channel.process) { resolve(); return }
         channel.state = 'stopped'
         const child = channel.process
@@ -396,7 +467,7 @@ export function createDurableACP({ catalog, workspaceRoot, environment, isEnable
         child.kill('SIGTERM')
       })))
       for (const channel of channels.values()) {
-        if (channel.state !== 'stopped') continue
+        if (channel.state !== 'stopped' || except(channel.id)) continue
         const entry = { type: 'stopped' }
         await record(channel, entry)
         updateSnapshot(channel.snapshot, entry)

@@ -49,19 +49,28 @@ export function createMemberTransport({ library, fetchImpl = globalThis.fetch, a
     return matches.length === 1 ? matches[0].deviceID : null
   }
 
-  /** `audience`: the destination member's device ID or its registry workspace (`audienceFor`). */
-  async function request(url, { method = 'GET', body, headers = {}, signal, timeout = timeoutMilliseconds, audience: destination } = {}) {
+  /**
+   * Member signature headers (lowercase names) for one request to `url`, an
+   * https tailnet URL; a WebSocket upgrade signs its `GET` with no body.
+   */
+  async function signedHeaders(url, { method = 'GET', payload = null, audience: destination } = {}) {
     const target = url instanceof URL ? url : new URL(url)
     if (!allowEndpoint(target.origin + target.pathname)) throw fail(400, 'Members are reached only over tailnet HTTPS.', 'member_endpoint_invalid')
     const audience = await audienceFor(destination)
     if (!audience) {
       throw fail(409, 'This device has not learned that member’s identity yet. Try again once the libraries have synchronized.', 'member_audience_unknown')
     }
-    const payload = body === undefined || body === null ? null : Buffer.isBuffer(body) ? body : Buffer.from(typeof body === 'string' ? body : JSON.stringify(body))
     const signed = (await library.sign({ method, target: target.pathname + target.search, audience,
       bodySHA256: createHash('sha256').update(payload ?? Buffer.alloc(0)).digest('hex') })).headers ?? {}
-    const outgoing = { accept: 'application/json', ...(payload ? { 'content-type': 'application/json' } : {}), ...headers }
-    for (const [name, value] of Object.entries(signed)) outgoing[name.toLowerCase()] = String(value)
+    return Object.fromEntries(Object.entries(signed).map(([name, value]) => [name.toLowerCase(), String(value)]))
+  }
+
+  /** `audience`: the destination member's device ID or its registry workspace (`audienceFor`). */
+  async function request(url, { method = 'GET', body, headers = {}, signal, timeout = timeoutMilliseconds, audience: destination } = {}) {
+    const target = url instanceof URL ? url : new URL(url)
+    const payload = body === undefined || body === null ? null : Buffer.isBuffer(body) ? body : Buffer.from(typeof body === 'string' ? body : JSON.stringify(body))
+    const signed = await signedHeaders(target, { method, payload, audience: destination })
+    const outgoing = { accept: 'application/json', ...(payload ? { 'content-type': 'application/json' } : {}), ...headers, ...signed }
     const deadline = AbortSignal.timeout(timeout), combined = signal ? AbortSignal.any([signal, deadline]) : deadline
     let response
     try { response = await fetchImpl(target, { method, headers: outgoing, body: payload ?? undefined, redirect: 'error', signal: combined }) }
@@ -110,7 +119,7 @@ export function createMemberTransport({ library, fetchImpl = globalThis.fetch, a
   /** The synced execution workspace registry (every Mac and Linux workspace). */
   async function workspaces() { return ((await library.workspaces()).workspaces ?? []).filter(item => item && !item.deleted) }
 
-  return { request, json, macs, workspaces, audienceFor }
+  return { request, json, macs, workspaces, audienceFor, signedHeaders }
 }
 
 /**

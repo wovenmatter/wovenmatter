@@ -38,12 +38,32 @@ public actor MemberDirectory {
 
   public func list() async throws -> LibraryMemberList {
     if let cached, Date().timeIntervalSince(cached.at) < cacheLifetime { return cached.list }
+    let started = changes
     let list = try await database.libraryMembers(own: identity.deviceID)
     try await pin(list)
+    // A change while this read was under way may not be in it: such a list is
+    // neither cached nor returned (a sweep acting on it would close a member's
+    // socket that was just added, or keep one that was just removed).
+    guard started == changes else { return try await self.list() }
     cached = (list, Date())
     return list
   }
-  public func invalidate() { cached = nil }
+  /// Counts invalidations, so a read knows whether one happened meanwhile.
+  private var changes = 0
+  /// Every change to the member list (a sync that received records, or a
+  /// local add or removal) invalidates the cache, and observers hear of it.
+  public func invalidate() {
+    changes += 1
+    cached = nil
+    for observer in observers.values { observer() }
+  }
+  private var observers: [UUID: @Sendable () -> Void] = [:]
+  /// `handler` runs (on this actor; keep it short) whenever the member list may have changed.
+  @discardableResult
+  public func observeChanges(_ handler: @escaping @Sendable () -> Void) -> UUID {
+    let id = UUID(); observers[id] = handler; return id
+  }
+  public func removeObserver(_ id: UUID) { observers.removeValue(forKey: id) }
 
   /// A Mac this device has trusted continuously for `pinAfter` becomes one
   /// of its anchors, so its trust no longer depends on the Mac that

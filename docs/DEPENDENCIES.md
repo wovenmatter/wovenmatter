@@ -315,6 +315,16 @@ Maintenance checks both for newer releases; recorded does not mean frozen.
   `npm test --prefix bots` (type check plus faux-provider suites) validates
   it; `npm run test:engine --prefix bots` with `WOVEN_BOTS_ENGINE_SOCKET` set
   exercises a real engine on request.
+- **Remote service** (`remote/`) declares no npm packages of its own. Its
+  live stream and bots relay (`remote/src/websocket.mjs`) load `ws` from the
+  Built-in agent's locked graph (`default-agent/package.json` `>=8.22.2`,
+  `default-agent/package-lock.json`), the same selection the bots runtime
+  uses. Every host release and workspace image already installs that graph
+  with `npm ci` beside `src/`, as it does for the agent modules `server.mjs`
+  loads, so there is one `ws` selection and no second lockfile to keep in
+  sync. Maintenance refreshes it with the Built-in agent; `remote/test`
+  checks that the loaded copy is the locked one, and the provider-free
+  stream and bots relay suites validate the selection.
 - **Pyodide and esbuild** produce the offline iOS resources and their
   provenance. They refresh together with the generated files.
 

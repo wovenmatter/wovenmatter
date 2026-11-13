@@ -74,7 +74,7 @@ struct DesktopJourneyTests {
         f.model.backendApplicationService = backend
         let preparation = FacadeGate(); preparation.hold()
         defer { f.model.backendApplicationService = nil; preparation.open() }
-        f.model.agentTools?.facadeFixtureMCPConnection = { _, local, _ in await preparation.pass(); return local }
+        f.model.agentTools?.facadeFixtureMCPConnection = { _, local in await preparation.pass(); return local }
         let client = UUID()
         let admission = AgentDispatchAdmission(instanceID: backend.instanceID, clientID: client, stopSequence: 0, observedStopRevision: 0)
         let request = try rpc(.sendMessageFenced(conversationID: id, input: .init(text: "Stopped"), noteID: nil, admission: admission))
@@ -290,7 +290,7 @@ struct DesktopJourneyTests {
         try await f.model.refreshClientExecutionState()
         let send = WovenMatterToolRequest(arguments: ["sessions", "send", child.id, "--text", "Revoked work"])
         let preparation = FacadeGate(); preparation.hold(); defer { preparation.open() }
-        tools.facadeFixtureMCPConnection = { _, local, _ in await preparation.pass(); return local }
+        tools.facadeFixtureMCPConnection = { _, local in await preparation.pass(); return local }
         let sending = Task { await tools.handle(send, callerID: source) }
         await preparation.waitForArrival()
         _ = try await f.database.setSessionToolEnabled(.sessions, enabled: false, sessionID: source)

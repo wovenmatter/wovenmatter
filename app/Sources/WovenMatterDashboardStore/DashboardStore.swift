@@ -416,24 +416,27 @@ public actor DashboardStore {
     )
   }
 
+  /// Records a chat the Linux host's server already created for this Mac.
   @discardableResult
-  public func createRemoteACPSession(
+  public func createRemoteMemberSession(
     runtimeKind: AgentRuntimeKind,
     remoteWorkspaceID: UUID,
     remoteWorkspaceName: String,
     title: String,
-    requestedConversationID: UUID? = nil,
+    providerID: String,
+    conversationID: UUID,
     allowMissingCalendarFolder: Bool = false,
     executionRoot: SessionCreationRoot
   ) async throws -> String {
     await runControls?.beforeSessionCreation()
-    return try await database.createRemoteACPSession(
+    return try await database.createRemoteMemberSession(
       runtimeKind: runtimeKind,
       remoteWorkspaceID: remoteWorkspaceID,
       remoteWorkspaceName: remoteWorkspaceName,
       title: title,
       ownerDeviceID: try await deviceIdentity.id(),
-      requestedConversationID: requestedConversationID,
+      providerID: providerID,
+      conversationID: conversationID,
       allowMissingCalendarFolder: allowMissingCalendarFolder,
       executionRoot: executionRoot
     )

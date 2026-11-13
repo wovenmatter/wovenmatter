@@ -101,9 +101,10 @@ in the conversation. See [Executor apps](executor.md).
 App-managed Pi Durable credentials on the Mac, including OAuth refresh tokens, are
 stored in macOS Keychain. Each remote workspace has one encrypted credential
 store using AES-256-GCM. Its separate random key is kept in the Mac's Keychain
-and delivered over the authenticated SSH connection. The remote helper keeps
-the key in memory; after a helper/container restart, reconnect Woven Matter to
-unlock it. Updates do not restart active sessions.
+and delivered to the host's server in a request signed with the Mac's device
+key (over the installer's SSH link only before the host is enrolled). The host
+keeps the key in memory; after it restarts, the next action from that Mac
+unlocks it again. Updates do not restart active sessions.
 
 If the Mac's workspace key is lost, use **Reset workspace credentials** on that
 workspace in Pi Durable settings. This removes independent ChatGPT/Grok sign-ins and

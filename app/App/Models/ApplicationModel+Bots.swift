@@ -118,7 +118,7 @@ extension ApplicationModel {
             syncErrors: { [weak self] in self.map { Array($0.libraryHost.peerSync.errors.values) + Self.libraryUpdateNotices($0.libraryHost.peerSync.syncStatus) } ?? [] },
             signSocket: { [weak self] url, audience in
                 guard let self else { throw CancellationError() }
-                return try await self.signBotSocket(url: url, audience: audience)
+                return try await self.signMemberSocket(url: url, audience: audience)
             })
     }
 
@@ -218,17 +218,37 @@ extension ApplicationModel {
                                           send: libraryHost.remoteHostSend)
     }
 
-    /// Headers for one signed bots socket upgrade. Only `/v1/bots/ws` on a member's
-    /// private tailnet address is signed, and only for a member in the registry.
-    func signBotSocket(url: URL, audience: String) async throws -> [String: String] {
+    /// Headers for one signed socket upgrade, for a process without the member
+    /// key (a window). Only a member's private tailnet address is signed, and
+    /// only two targets: `…/v1/bots/ws` of a bots machine in the registry, and
+    /// `…/v1/stream?protocol=1` of any Mac or Linux workspace in the registry.
+    func signMemberSocket(url: URL, audience: String) async throws -> [String: String] {
+        let audience = audience.lowercased()
         guard ["wss", "https"].contains(url.scheme?.lowercased() ?? ""), url.host?.lowercased().hasSuffix(".ts.net") == true,
-              url.user == nil, url.password == nil, url.path.hasSuffix("/v1/bots/ws"),
-              await memberBotTargets().contains(where: { $0.audience == audience.lowercased() }),
+              url.user == nil, url.password == nil, url.fragment == nil,
               let components = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
-            throw BotsError.unavailable("That bots connection is not a member's.")
+            throw BotsError.unavailable("That connection is not a member's.")
         }
+        let allowed: Bool
+        if url.path.hasSuffix("/v1/bots/ws"), components.percentEncodedQuery == nil {
+            allowed = await memberBotTargets().contains { $0.audience == audience }
+        } else if url.path.hasSuffix("/" + StreamProtocol.path), components.percentEncodedQuery == StreamProtocol.query {
+            allowed = await memberStreamAudiences().contains(audience)
+        } else { allowed = false }
+        guard allowed else { throw BotsError.unavailable("That connection is not a member's.") }
         let target = components.percentEncodedPath + (components.percentEncodedQuery.map { "?" + $0 } ?? "")
         return try await libraryHost.memberSigner().headers(method: "GET", target: target, audience: audience)
+    }
+
+    /// The members serving a Mac or Linux workspace in the registry.
+    private func memberStreamAudiences() async -> Set<String> {
+        guard let database = dashboardStore?.database, let directory = try? await libraryHost.peerSync.members(),
+              let workspaces = try? await database.libraryExecutionWorkspaces() else { return [] }
+        var audiences: Set<String> = []
+        for workspace in workspaces where (workspace.kind == .mac || workspace.kind == .linux) && !workspace.deleted && workspace.endpoint != nil {
+            if let audience = await directory.audience(for: workspace), audience != directory.identity.deviceID { audiences.insert(audience) }
+        }
+        return audiences
     }
 
     fileprivate func setRemoteBotResources(machineID: String, _ resources: BotResourceSettings, directory: BotsRemoteDirectory) async throws {

@@ -178,6 +178,14 @@ public struct WorkspaceMessageRecord: Codable, Equatable, Identifiable, Sendable
     case createdAt = "created_at"
     case updatedAt = "updated_at"
   }
+
+  /// This message with the text and status a live stream item carries.
+  public func updating(content: String, status: String?) -> WorkspaceMessageRecord {
+    WorkspaceMessageRecord(senderKind: senderKind, senderSessionID: senderSessionID, senderAgent: senderAgent,
+      senderSessionTitle: senderSessionTitle, id: id, conversationID: conversationID, clientMessageID: clientMessageID,
+      runID: runID, governingPlane: governingPlane, authorityDeviceID: authorityDeviceID, role: role, content: content,
+      status: status, createdAt: createdAt, updatedAt: updatedAt)
+  }
 }
 
 public struct WorkspaceNoteRecord: Codable, Equatable, Identifiable, Sendable {

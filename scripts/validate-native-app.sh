@@ -121,7 +121,6 @@ for integration in adapter.mjs hook.mjs binding.mjs proxy.mjs instructions.mjs o
 done
 test -f "${resources}/default-agent/src/woven-mcp.mjs"
 test -f "${resources}/default-agent/src/mcp-context.mjs"
-test -f "${resources}/mcp-relay.mjs"
 test ! -e "${resources}/wovenmatter"
 test ! -e "${resources}/wovenmatter-remote.py"
 test ! -e "${resources}/harnesses/cli"

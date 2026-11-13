@@ -26,6 +26,7 @@ public struct WorkspaceToolHandlers: Sendable {
   /// A session another member's workspace runs (one this caller created there,
   /// or one named with `workspace`): `status`, `list`, `send`, `stop` and
   /// `respond` go to that workspace. Nil means this workspace handles it.
+  /// It also answers `wait`, for this workspace's sessions too.
   public var memberSession: ReplicaRead?
   /// Runs after every admitted call, before its response is returned.
   public var afterExecution: @Sendable () async throws -> Void
@@ -91,7 +92,7 @@ public struct WorkspaceToolExecutor: Sendable {
         try await database.requireTool(group, sessionID: callerID)
       }
       let result: WovenMatterToolResponse
-      if group == .sessions, ["list", "status", "send", "stop", "respond"].contains(command.action),
+      if group == .sessions, ["list", "status", "wait", "send", "stop", "respond"].contains(command.action),
          let member = try await handlers.memberSession?(request, command, callerID) { result = member }
       else if let replica = try await handlers.replicaRead?(request, command, callerID) { result = replica }
       else { switch group {

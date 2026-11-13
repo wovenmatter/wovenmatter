@@ -25,6 +25,8 @@ enum BackendApplicationCommand: Codable, Sendable {
     case saveDictation(DictationRecord)
     case libraryHost(LibraryHostAction)
     case federatedExecution(FederatedExecutionAction)
+    /// One activity's complete projection in a chat another machine runs.
+    case federatedActivityDetails(conversationID: String, runID: String, activityID: String)
     case setIdleSleepPolicy(WorkPowerPolicy)
     case setClosedLidPolicy(WorkPowerPolicy)
     case stageAttachments(files: [BackendAttachmentSource])
@@ -60,6 +62,9 @@ enum BackendApplicationCommand: Codable, Sendable {
 struct BackendApplicationResult: Codable, Sendable {
     var libraryHost: LibraryHostSnapshot?
     var federatedExecution: FederatedExecutionSnapshot?
+    var activityDetails: AgentRunActivity?
+    /// Why a chat is read-only history (`LegacyRemoteChatError`), with session metadata.
+    var readOnlyReason: String?
     var exportURL: URL?
     var trashedConversations: [WorkspaceTrashedConversation]?
     var trashedNotes: [WorkspaceTrashedNote]?
@@ -92,6 +97,8 @@ struct BackendApplicationReadiness: Codable, Sendable {
     var startupError: String? = nil
     var executionDirectory: URL? = nil
     var startupMessage: String? = nil
+    /// The server serves its windows' persistent stream on its socket.
+    static let windowStreamCapability = "window.stream"
 }
 
 /// Dispatches frontend commands to the backend-owned application model.
@@ -111,7 +118,7 @@ final class BackendApplicationService {
     var dispatchStopRevisions: [String: UInt64] { dispatchAdmissions.stopRevisions }
 
     init(model: ApplicationModel) {
-        self.invalidations = BackendInvalidationJournal(instanceID: instanceID)
+        self.invalidations = BackendInvalidationJournal()
         self.dispatchAdmissions = AgentDispatchAdmissionLedger(instanceID: instanceID)
         self.model = model
     }
@@ -160,11 +167,9 @@ final class BackendApplicationService {
                     completeClientRouting: true,
                     capabilities: ["session.create", "session.send", "session.configure", "session.tools",
                                    "session.cancel", "session.permission", "session.interaction", "calendar.write",
-                                   "calendar.metadata", "session.dispatch-epochs"], startupError: startupError,
+                                   "calendar.metadata", "session.dispatch-epochs",
+                                   BackendApplicationReadiness.windowStreamCapability], startupError: startupError,
                     executionDirectory: model.clientExecutionDirectory, startupMessage: model.backendStartupMessage))
-            case "application.changes":
-                let cursor = try JSONDecoder().decode(BackendInvalidationCursor?.self, from: request.payload)
-                return try await response(request, invalidations.waitForChanges(after: cursor))
             case "remoteWorkspaces.command":
                 guard model.readyForBackendClients else { throw BackendRPCError.remote("The background service is still starting.") }
                 let command = try JSONDecoder().decode(BackendRemoteWorkspaceCommand.self, from: request.payload)
@@ -208,6 +213,9 @@ final class BackendApplicationService {
         switch command {
         case .federatedExecution(let action):
             return try await .init(federatedExecution: model.performFederatedExecution(action))
+        case let .federatedActivityDetails(conversationID, runID, activityID):
+            return try await .init(activityDetails: model.performFederatedActivityDetails(conversationID: conversationID,
+                runID: runID, activityID: activityID))
         case .libraryHost(let action):
             let host = model.libraryHost
             switch action {
@@ -261,7 +269,7 @@ final class BackendApplicationService {
             return try await .init(noteExport: store.exportNote(id: id, format: format, expectedRevision: revision))
         case let .sessionMetadata(id):
             await model.refreshLocalACPSession(conversation: try conversation(id))
-            return .init(metadata: model.localACPSessionMetadata[id])
+            return .init(readOnlyReason: model.legacyRemoteChatReasons[id], metadata: model.localACPSessionMetadata[id])
         case let .workspaceMutation(mutation):
             return try await executeWorkspaceMutation(mutation)
         case let .createPeerSession(agentID, conversationID, folderID):

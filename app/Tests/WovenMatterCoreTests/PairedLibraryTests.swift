@@ -301,26 +301,44 @@ extension PairedLibraryTests {
 
 
 extension PairedLibraryTests {
-  @Test func directOriginHistoryCanReachOtherPeersWhileItsManagingMacIsOffline() async throws {
-    let manager = try await Mac(), observer = try await Mac(), third = try await Mac()
-    defer { manager.remove(); observer.remove(); third.remove() }
-    let workspace = ExecutionWorkspace(id: UUID().uuidString.lowercased(), libraryID: try await manager.database.libraryID(),
+  /// History moves only by library sync: a Linux host writes its sessions
+  /// into its own library copy (`/v1/publisher/journal` on its library
+  /// socket), and that copy's peer sync carries them to every other Mac, with
+  /// the Mac that added the host offline. A phone's federation journal is read
+  /// from the same rows on whichever library host it reaches.
+  @Test func aLinuxHostsHistoryReachesEveryMacByLibrarySyncAlone() async throws {
+    let manager = try await Mac(), linux = try await Mac(), observer = try await Mac()
+    defer { manager.remove(); linux.remove(); observer.remove() }
+    let libraryID = try await manager.database.libraryID()
+    let workspace = ExecutionWorkspace(id: UUID().uuidString.lowercased(), libraryID: libraryID,
       ownerDeviceID: manager.id, kind: .linux, name: "Linux owner", endpoint: URL(string: "https://linux.fixture.ts.net/wovenmatter")!,
-      capabilities: ["execution.v1"], executionDeviceID: UUID().uuidString.lowercased())
+      capabilities: ["execution.v1", StreamProtocol.capability], executionDeviceID: linux.id)
     _ = try await manager.database.registerExecutionWorkspace(.init(workspace: workspace), deviceID: manager.id)
-    try await manager.send(to: observer)
+    try await manager.send(to: linux); try await manager.send(to: observer)
     let id = UUID().uuidString.lowercased()
     let creation = ExecutionJournalEntry(workspaceID: workspace.id, originSequence: 1, conversationID: id, kind: .conversation,
       conversation: .init(id: id, title: "Linux conversation", runtimeKind: "codex"))
     let output = ExecutionJournalEntry(workspaceID: workspace.id, originSequence: 2, conversationID: id, kind: .transcript,
       transcript: .init(conversationID: id, messages: [.init(id: UUID().uuidString.lowercased(), conversationID: id, role: "assistant", content: "Output while the managing Mac is offline")]))
-    let page = ExecutionJournalPage(libraryID: workspace.libraryID, cursor: 2, entries: [creation, output])
-    try await observer.database.retainDirectPairedHistory(page, workspace: workspace)
-    try await observer.database.retainDirectPairedHistory(page, workspace: workspace)
-    try await observer.send(to: third)
-    #expect(try await third.database.libraryFederatedTranscript(conversationID: id)?.messages.first?.content == "Output while the managing Mac is offline")
-    #expect(try await third.database.executionJournal(after: 0).entries.map(\.eventID) == [creation.eventID, output.eventID])
-    #expect(try await observer.database.read { try $0.historyRowsUnlocked("SELECT id FROM workspace_session_deliveries", values: []).isEmpty })
+    // The host's own Node server publishes into its library copy.
+    let path = "/v1/publisher/journal"
+    let published = try await DevicePublisherAPI.handleLocal(.init(method: "POST", target: path, headers: [:],
+      body: try JSONEncoder().encode(ExecutionJournalBatch(libraryID: libraryID, entries: [creation, output]))), path: path, database: linux.database)
+    #expect(published.status == 200)
+    // The managing Mac is offline; the host's library copy syncs with another Mac as the Linux member it is.
+    let sender = PairedLibrarySender(deviceID: linux.id, kind: .linux, members: [
+      .init(deviceID: manager.id, kind: .mac, endpoints: [], revoked: false),
+      .init(deviceID: linux.id, kind: .linux, endpoints: [], revoked: false)])
+    var cursor = try await observer.database.pairedLibraryCursors(linux.id).pulled
+    for _ in 0..<1000 {
+      let page = try await linux.database.pairedLibraryPage(after: cursor)
+      try await observer.database.receivePairedLibrary(page, from: linux.id, sender: sender)
+      cursor = page.cursor
+      if !page.hasMore { break }
+    }
+    #expect(try await observer.database.libraryFederatedTranscript(conversationID: id)?.messages.first?.content == "Output while the managing Mac is offline")
+    #expect(try await observer.database.libraryConversationExecutionWorkspace(conversationID: id)?.id == workspace.id)
+    #expect(try await observer.database.executionJournal(after: 0).entries.map(\.eventID) == [creation.eventID, output.eventID])
   }
 }
 
@@ -1156,6 +1174,28 @@ extension PairedLibraryTests {
       if !page.hasMore { return }
     }
     Issue.record("Peer replay did not finish")
+  }
+
+  /// Nothing runs a chat over SSH, so the durable-run table that path kept is
+  /// gone: a library that still has it, with rows, drops it when it opens,
+  /// and its chats' runs stay as they were.
+  @Test func aLibraryWithTheSSHDurableRunTableDropsItOnOpening() async throws {
+    let legacy = try await Mac(); defer { legacy.remove() }
+    let session = try await legacy.database.createFixtureLocalACPSession(runtimeKind: .codex, title: "Ran over SSH", ownerDeviceID: UUID())
+    try await legacy.database.write { connection in
+      try connection.executeUnlocked("""
+        CREATE TABLE desktop_local_acp_durable_runs (run_id TEXT PRIMARY KEY, remote_workspace_id TEXT NOT NULL, native_session_id TEXT NOT NULL);
+        CREATE TRIGGER desktop_local_acp_durable_runs_delete AFTER DELETE ON dashboard_runs BEGIN
+          DELETE FROM desktop_local_acp_durable_runs WHERE run_id=OLD.id;
+        END;
+        INSERT INTO desktop_local_acp_durable_runs VALUES ('run', 'workspace', 'native');
+        """)
+    }
+    let upgraded = try await WorkspaceDatabase(url: legacy.database.fileURL)
+    #expect(try await upgraded.read { try $0.historyRowsUnlocked(
+      "SELECT name FROM sqlite_master WHERE name LIKE 'desktop_local_acp_durable_runs%'", values: []) }.isEmpty)
+    #expect(try await upgraded.read { try $0.historyRowsUnlocked("SELECT title FROM dashboard_conversations WHERE id=?", values: [session])
+      .first?.objectValue?["title"]?.stringValue } == "Ran over SSH")
   }
 
   @Test func aMigratedLibraryAndAFreshOneShareOneSchemaAndExchangeRowsByName() async throws {

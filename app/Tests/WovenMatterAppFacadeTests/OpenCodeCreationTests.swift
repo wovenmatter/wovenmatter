@@ -8,7 +8,8 @@ import WovenMatterDashboardStore
 
 @MainActor @Suite(.serialized, .timeLimit(.minutes(2)))
 struct OpenCodeCreationTests {
-    @Test(arguments: [false, true], [false, true])
+    // A Linux host's OpenCode chats are created by its server (LinuxMemberPathTests).
+    @Test(arguments: [false], [false, true])
     func creationOwnsDefaultsAndRejectedDefaultsStillOpen(remote: Bool, rejected: Bool) async throws {
         let f = try await FacadeFixture(); defer { f.remove() }
         let transport = CreationTransport()

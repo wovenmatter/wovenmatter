@@ -213,7 +213,8 @@ test('Built-in credential routes require authentication, unlock explicitly, and 
   });
   assert.equal((await request('/v1/default-agent/status', undefined, 'wrong')).status, 401);
   assert.equal((await (await request('/v1/default-agent/status')).json()).locked, true);
-  assert.equal((await request('/v1/default-agent/rpc', { method: 'initialize' })).status, 423);
+  // The SSH relay's Pi route is gone; members reach Pi Durable through execution commands.
+  assert.equal((await request('/v1/default-agent/rpc', { method: 'initialize' })).status, 404);
   const unlockKey = randomBytes(32).toString('base64');
   const body = { workspace: 'fixture-workspace', unlockKey, revision: 'fixture-revision', config: {},
     credentials: { openrouter: { type: 'api_key', key: 'fixture-provider-secret' } } };
@@ -456,8 +457,10 @@ createInterface({ input: process.stdin }).on('line', line => {
   if (request.method === 'initialize') send({jsonrpc:'2.0',id:request.id,result:{protocolVersion:1}});
   else if (request.method === 'session/new' || request.method === 'session/load') send({jsonrpc:'2.0',id:request.id,result:{sessionId:'http_fixture'}});
   else if (request.method === 'session/prompt') {
-    appendFileSync(${JSON.stringify(marker)}, JSON.stringify(request.params.prompt) + '\\n');
-    send({jsonrpc:'2.0',method:'session/update',params:{sessionId:'http_fixture',update:{sessionUpdate:'agent_message_chunk',content:{type:'text',text:${JSON.stringify(output)}}}}});
+    // The host also titles the chat with this Codex.
+    const title = request.params.prompt[0].text.startsWith('Generate a short title');
+    if (!title) appendFileSync(${JSON.stringify(marker)}, JSON.stringify(request.params.prompt) + '\\n');
+    send({jsonrpc:'2.0',method:'session/update',params:{sessionId:'http_fixture',update:{sessionUpdate:'agent_message_chunk',content:{type:'text',text:title ? '{"title":"Fixture title"}' : ${JSON.stringify(output)}}}}});
     send({jsonrpc:'2.0',id:request.id,result:{stopReason:'end_turn'}});
   }
 });
@@ -495,12 +498,123 @@ createInterface({ input: process.stdin }).on('line', line => {
   const history = await historyResponse.json()
   assert.deepEqual(history.messages.map(message => [message.role, message.content]), [['user', input.text], ['assistant', output]])
   assert.equal((await readFile(marker, 'utf8')).trim().split('\n').length, 1)
+  // The first message's chat gets a title from this host's Codex.
+  await waitFor(service.url + '/v1/execution/conversations', headers, list => list.find(item => item.id === opened.conversationID)?.title === 'Fixture title')
   assert.equal((await request('/v1/execution/devices/' + device.deviceID, 'DELETE')).status, 200)
   assert.equal((await request('/v1/execution/commands', 'POST', { ...input, commandID: id() }, headers)).status, 401)
   const retained = await request(historyPath, 'GET')
   assert.equal(retained.status, 200)
   assert.deepEqual(await retained.json(), history)
   assert.equal((await readFile(marker, 'utf8')).trim().split('\n').length, 1)
+})
+
+test('members reach sessions with background execution off: attachments, options, Library files and Pi unlock routes', { timeout: 30000 }, async context => {
+  const root = await temporaryFixture(context, 'wovenmatter-member-routes-')
+  const bin = resolve(root, '.local/bin')
+  await mkdir(bin, { recursive: true })
+  const marker = resolve(root, 'prompts.jsonl')
+  const executable = resolve(bin, 'fixture-acp.mjs')
+  await writeFile(executable, `#!/usr/bin/env node
+import { appendFileSync } from 'node:fs';
+import { createInterface } from 'node:readline';
+if (process.argv.includes('--version')) { console.log('1.0.0'); process.exit(0); }
+const send = value => process.stdout.write(JSON.stringify(value) + '\\n');
+const options = [{id:'model',category:'model',currentValue:'small',options:[{value:'small',name:'Small'}]},{id:'mode',currentValue:'agent-full-access',options:[{value:'read-only',name:'Read'},{value:'agent-full-access',name:'Full'}]}];
+createInterface({ input: process.stdin }).on('line', line => {
+  const request = JSON.parse(line);
+  if (request.method === 'initialize') send({jsonrpc:'2.0',id:request.id,result:{protocolVersion:1}});
+  else if (request.method === 'session/new' || request.method === 'session/load') send({jsonrpc:'2.0',id:request.id,result:{sessionId:'member_fixture',configOptions:options}});
+  else if (request.method === 'session/set_config_option') send({jsonrpc:'2.0',id:request.id,result:{configOptions:options}});
+  else if (request.method === 'session/prompt') {
+    if (!request.params.prompt[0].text?.startsWith('Generate a short title')) appendFileSync(${JSON.stringify(marker)}, JSON.stringify(request.params.prompt) + '\\n');
+    send({jsonrpc:'2.0',method:'session/update',params:{sessionId:'member_fixture',update:{sessionUpdate:'agent_message_chunk',content:{type:'text',text:'seen'}}}});
+    send({jsonrpc:'2.0',id:request.id,result:{stopReason:'end_turn'}});
+  }
+});
+`)
+  await chmod(executable, 0o700)
+  const catalog = resolve(root, 'catalog.json')
+  await writeFile(catalog, JSON.stringify({ schemaVersion: 4, harnesses: [{
+    id: 'codex', displayName: 'Synthetic ACP', transport: 'acp', command: 'fixture-acp.mjs', arguments: [], cliCommand: 'fixture-acp.mjs',
+    install: { kind: 'npm-global', source: 'https://example.test', command: 'true' },
+    authentication: { statusCommands: ['true'], discoveries: [], methods: [] }, capabilities: ['conversations'],
+  }] }))
+  const token = 'member-routes-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+  const service = await startService({ workspace: root, home: root, catalog, token })
+  context.after(() => stopService(service.child))
+  const admin = { authorization: 'Bearer ' + token, 'content-type': 'application/json' }
+  const id = () => globalThis.crypto.randomUUID()
+  const request = (path, method, body, headers = admin) => fetch(service.url + path, { method, headers, ...(body ? { body: typeof body === 'string' || Buffer.isBuffer(body) ? body : JSON.stringify(body) } : {}) })
+  // Background execution off: sessions still run; the SSH relay route is gone.
+  assert.equal((await request('/v1/task-gateway', 'PATCH', { enabled: false })).status, 200)
+  assert.equal((await request('/v1/durable-acp/attach', 'POST', { channelID: 'relay', harnessID: 'codex' })).status, 404)
+  const device = { libraryID: id(), workspaceID: id(), ownerDeviceID: id(), deviceID: id(), scopes: ['execution'] }
+  const grant = await (await request('/v1/execution/devices', 'POST', device)).json()
+  const headers = { ...admin, authorization: 'Bearer ' + grant.token }
+  const providers = await (await request('/v1/execution/providers', 'GET', null, headers)).json()
+  assert.equal(providers.find(item => item.id === 'codex').available, true, JSON.stringify(providers))
+  // Options before a session exists.
+  const options = await request('/v1/execution/providers/codex/options', 'GET', null, headers)
+  assert.equal(options.status, 200)
+  const settings = await options.json()
+  assert.equal(settings.conversationID, '')
+  assert.deepEqual(settings.permissions.map(item => item.label), ['Full access', 'Read only'])
+  // An attachment, then a message that names it.
+  const image = Buffer.from('fixture image bytes'), digest = createHash('sha256').update(image).digest('hex')
+  const upload = await fetch(service.url + '/v1/execution/attachments/' + digest + '?name=photo.png&mimeType=image%2Fpng', { method: 'PUT', headers: { authorization: headers.authorization, 'content-type': 'image/png' }, body: image })
+  assert.equal(upload.status, 200)
+  assert.deepEqual(await upload.json(), { id: digest, name: 'photo.png', mimeType: 'image/png', byteCount: image.length })
+  const wrong = await fetch(service.url + '/v1/execution/attachments/' + 'a'.repeat(64) + '?name=x', { method: 'PUT', headers: { authorization: headers.authorization }, body: image })
+  assert.equal(wrong.status, 400)
+  // Its bytes come back from the attachment store, with their type.
+  const attachmentURL = (id, query = '') => service.url + '/v1/execution/attachments/' + id + query
+  const read = await fetch(attachmentURL(digest, '?name=photo.png'), { headers: { authorization: headers.authorization } })
+  assert.equal(read.status, 200)
+  assert.equal(read.headers.get('content-type'), 'image/png')
+  assert.deepEqual(Buffer.from(await read.arrayBuffer()), image)
+  const unnamed = await fetch(attachmentURL(digest), { headers: { authorization: headers.authorization } })
+  assert.deepEqual(Buffer.from(await unnamed.arrayBuffer()), image, 'the one file under its digest')
+  // Unauthorized, and never a path outside the store.
+  assert.equal((await fetch(attachmentURL(digest, '?name=photo.png'))).status, 401)
+  assert.equal((await fetch(attachmentURL(digest, '?name=photo.png'), { headers: { authorization: 'Bearer wrong' } })).status, 401)
+  await writeFile(resolve(root, 'secret.txt'), 'not an attachment')
+  const secretDigest = createHash('sha256').update('not an attachment').digest('hex')
+  for (const name of ['../../secret.txt', '../../../secret.txt', '/etc/passwd']) {
+    const escaped = await fetch(attachmentURL(digest, '?name=' + encodeURIComponent(name)), { headers: { authorization: headers.authorization } })
+    assert.equal(escaped.status, 404, name)
+  }
+  const traversal = await fetch(service.url + '/v1/execution/attachments/..%2F..%2Fsecret.txt', { headers: { authorization: headers.authorization } })
+  assert.notEqual(traversal.status, 200, 'only a digest names an attachment route')
+  assert.doesNotMatch(await traversal.text(), /not an attachment/)
+  // A staged copy replaced by a link out of the store is refused, as is one an agent edited.
+  const staged = resolve(root, '.wovenmatter/attachments', secretDigest)
+  await mkdir(staged, { recursive: true }); await symlink(resolve(root, 'secret.txt'), resolve(staged, 'secret.txt'))
+  assert.equal((await fetch(attachmentURL(secretDigest, '?name=secret.txt'), { headers: { authorization: headers.authorization } })).status, 403)
+  await rm(staged, { recursive: true }); await symlink(root, staged)
+  assert.equal((await fetch(attachmentURL(secretDigest, '?name=secret.txt'), { headers: { authorization: headers.authorization } })).status, 403)
+  await rm(staged)
+  const edited = resolve(root, '.wovenmatter/attachments', digest, 'photo.png')
+  await writeFile(edited, 'edited by an agent')
+  assert.equal((await fetch(attachmentURL(digest, '?name=photo.png'), { headers: { authorization: headers.authorization } })).status, 409)
+  await writeFile(edited, image)
+  const opened = await (await request('/v1/execution/commands', 'POST', { commandID: id(), deviceID: device.deviceID, kind: 'createSession', providerID: 'codex' }, headers)).json()
+  assert.equal(opened.status, 'completed', JSON.stringify(opened))
+  const input = { commandID: id(), deviceID: device.deviceID, kind: 'send', conversationID: opened.conversationID, text: 'What is this?', attachments: [{ id: digest, name: 'photo.png', mimeType: 'image/png' }] }
+  assert.equal((await (await request('/v1/execution/commands', 'POST', input, headers)).json()).status, 'accepted')
+  await waitFor(service.url + '/v1/execution/commands/' + input.commandID, headers, receipt => receipt.status === 'completed')
+  const prompt = JSON.parse((await readFile(marker, 'utf8')).trim())
+  assert.deepEqual(prompt.map(block => block.type), ['text', 'image'])
+  assert.equal(prompt[1].data, image.toString('base64'))
+  // Library retention reads a file an agent wrote, for administrators only.
+  await writeFile(resolve(root, 'result.txt'), 'agent output')
+  assert.equal((await request('/v1/execution/library-file', 'POST', { path: 'result.txt' }, headers)).status, 403)
+  const file = await (await request('/v1/execution/library-file', 'POST', { path: 'result.txt' })).json()
+  assert.equal(Buffer.from(file.data, 'base64').toString(), 'agent output')
+  // Pi Durable unlock takes only the workspace and its key.
+  assert.equal((await request('/v1/default-agent/unlock', 'POST', { workspace: 'w' })).status, 400)
+  assert.equal((await request('/v1/default-agent/unlock', 'POST', { workspace: 'w', unlockKey: 'k', credentials: {} })).status, 400)
+  assert.equal((await request('/v1/default-agent/unlock', 'POST', { workspace: 'w', unlockKey: 'k' }, headers)).status, 403)
+  assert.equal((await request('/v1/default-agent/control', 'POST', { action: 'shell' })).status, 400)
 })
 
 test('host health reports native paths and source inventory without exposing its token', async context => {

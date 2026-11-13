@@ -257,6 +257,13 @@ struct SessionSettingsSheet: View {
         .navigationTitle("Session settings")
         .navigationBarTitleDisplayMode(.inline).mobilePageSurface().toolbar(.visible, for: .navigationBar)
         .task { await load() }
+        .onChange(of: model.streamedSessionSettings[id]) { _, value in
+          guard let value, model.streamsSessionSettings(id) else { return }
+          // Choices not applied yet stay as the user left them.
+          let edited = settings.map { selectedModel != ($0.model ?? "") || thinking != ($0.thinking ?? "")
+            || permission != ($0.permission ?? "") || enabled != Set($0.enabledTools) } ?? false
+          if edited { settings = value } else { show(value) }
+        }
         .confirmationDialog("Removing timer access pauses this session’s timers.", isPresented: $confirmTimers, titleVisibility: .visible) {
           Button("Pause timers and save") { Task { await saveTools(confirmed: true) } }
         }
@@ -270,11 +277,19 @@ struct SessionSettingsSheet: View {
       }
     }
   }
+  /// A streamed workspace sends these settings as they change; any other is read.
   private func load() async {
+    if model.streamsSessionSettings(id) {
+      if let value = model.streamedSessionSettings[id] { show(value) }
+      return
+    }
     do {
       guard case .session(let value) = try await model.workspace(.session(id: id)) else { throw MobileConnectionError.invalidResponse }
-      settings = value; selectedModel = value.model ?? ""; thinking = value.thinking ?? ""; permission = value.permission ?? ""; enabled = Set(value.enabledTools)
+      show(value)
     } catch { failure = error.localizedDescription }
+  }
+  private func show(_ value: SessionSettings) {
+    settings = value; selectedModel = value.model ?? ""; thinking = value.thinking ?? ""; permission = value.permission ?? ""; enabled = Set(value.enabledTools)
   }
   private func apply() async {
     busy = true; defer { busy = false }
