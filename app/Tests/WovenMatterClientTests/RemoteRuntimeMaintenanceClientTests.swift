@@ -65,9 +65,7 @@ private final class RemoteMaintenanceFixtureProtocol: URLProtocol, @unchecked Se
         case "/v1/runtime-maintenance":
             #expect(first || request.url?.port == 41003)
             #expect(request.httpMethod == "GET")
-            // A service that predates an update can still list a retired harness.
-            let retired = row.replacingOccurrences(of: "\"id\":\"codex\"", with: "\"id\":\"hermes\"")
-            value = "{\"runtimes\":[\(retired),\(row)]}"
+            value = "{\"runtimes\":[\(row)]}"
         case "/v1/runtime-maintenance/check":
             #expect(!first)
             #expect(request.httpMethod == "POST")

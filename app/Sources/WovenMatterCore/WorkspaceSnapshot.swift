@@ -105,7 +105,7 @@ public struct WorkspaceConversationRecord: Codable, Equatable, Identifiable, Sen
       forKey: .governingPlane
     )
     authorityDeviceID = try values.decodeIfPresent(UUID.self, forKey: .authorityDeviceID)
-    // Sessions of retired harnesses stay listed as generic, read-only history.
+    // An unknown harness identity leaves the chat listed as plain read-only history.
     localRuntimeKind = try values.decodeIfPresent(String.self, forKey: .localRuntimeKind)
       .flatMap(AgentRuntimeKind.init(rawValue:))
     remoteWorkspaceID = try values.decodeIfPresent(

@@ -408,7 +408,6 @@ extension ApplicationModel {
         guard let runtime = command.options["harness"].flatMap(AgentRuntimeKind.init(rawValue:)) ?? source.localRuntimeKind ?? (WovenMCPCaller.isAppWide(source.id) ? .defaultAgent : nil) else {
             throw WorkspaceToolError.invalid("Choose a configured harness.")
         }
-        guard AgentRuntimeKind.allCases.contains(runtime) else { throw WorkspaceToolError.invalid("This harness has been retired.") }
         guard let store = dashboardStore else { throw ApplicationModelError.dashboardStoreUnavailable }
         let workspaceID: UUID?
         switch try await resolveAgentToolDestination(command.options["workspace"], callerWorkspace: source.remoteWorkspaceID) {

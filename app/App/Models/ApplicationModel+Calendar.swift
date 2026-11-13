@@ -72,7 +72,6 @@ extension ApplicationModel {
             guard let database = dashboardStore?.database else { throw ApplicationModelError.dashboardStoreUnavailable }
             var resolvedDraft = draft
             if var task = resolvedDraft.task {
-                guard AgentRuntimeKind.allCases.contains(task.configuration.runtimeKind) else { throw WorkspaceToolError.invalid("This harness has been retired.") }
                 task.configuration.nativeWorkingDirectory = try await folderWorkingDirectory(folderID: task.configuration.folderID,
                     workspaceID: task.configuration.workspaceID).path
                 resolvedDraft.task = task

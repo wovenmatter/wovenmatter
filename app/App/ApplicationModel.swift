@@ -3109,7 +3109,6 @@ final class ApplicationModel {
             } catch { localRunError = error.localizedDescription; return nil }
         }
 
-        if !AgentRuntimeKind.allCases.contains(runtimeKind) { localRunError = "This harness has been retired."; return nil }
         let resolvedRoot: URL
         do { resolvedRoot = try await folderWorkingDirectory(folderID: folderID, workspaceID: nil, explicit: nativeWorkingDirectory, calendarExecutionRoot: calendarExecutionRoot) }
         catch { localRunError = error.localizedDescription; return nil }

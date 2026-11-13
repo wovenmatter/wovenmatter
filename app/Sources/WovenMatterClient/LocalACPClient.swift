@@ -630,9 +630,6 @@ public actor LocalACPClient {
         workingDirectory: URL,
         accountCoordinator: ProviderAccountCoordinator? = nil
     ) throws -> LocalACPClient {
-        guard AgentRuntimeKind.allCases.contains(launch.runtimeKind) else {
-            throw LocalACPClientError.unsupportedConfiguration("retired agent")
-        }
         guard launch.runtimeKind != .opencode else {
             throw OpenCodeError.message("This OpenCode session cannot resume. Start a new OpenCode chat.")
         }
