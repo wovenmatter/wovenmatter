@@ -657,9 +657,11 @@ final class MobileUITests: XCTestCase {
   /// phone, Mac-only pages stay out of the way, and pairing is offered calmly.
   @MainActor func testFreshInstallWithoutPairingIsCompleteAndCalm() {
     let app = launch(tab: "Home", scenario: "standalone")
+    // The app names the device it runs on: "this iPad" in the iPad run.
+    let device = UIDevice.current.userInterfaceIdiom == .pad ? "iPad" : "iPhone"
     let connect = app.buttons["home-connect-mac"]
     XCTAssertTrue(connect.waitForExistence(timeout: 5))
-    XCTAssertTrue(app.staticTexts["home-connect-mac-caption"].label.contains("Everything on this iPhone is kept"))
+    XCTAssertTrue(app.staticTexts["home-connect-mac-caption"].label.contains("Everything on this \(device) is kept"))
     XCTAssertTrue(app.buttons["open-calendar"].exists)
     XCTAssertFalse(app.buttons["open-scheduled-tasks"].exists, "Scheduled tasks run on a Mac or Linux workspace")
     XCTAssertFalse(app.buttons["open-databases"].exists)
@@ -674,11 +676,11 @@ final class MobileUITests: XCTestCase {
     XCTAssertTrue(app.descendants(matching: .any)["chat-composer"].firstMatch.exists)
     saveScreenshot("standalone-quick-chat")
     setup.tap()
-    XCTAssertTrue(app.navigationBars["iPhone Connections"].waitForExistence(timeout: 5))
+    XCTAssertTrue(app.navigationBars[device + " Connections"].waitForExistence(timeout: 5))
     XCTAssertTrue(app.buttons["Web search"].exists)
     saveScreenshot("standalone-connections")
 
-    // A note is created, edited and saved on this iPhone, then deleted there.
+    // A note is created, edited and saved on this device, then deleted there.
     app.buttons["tab-home"].tap()
     app.buttons["action-new-note"].firstMatch.tap()
     let title = app.descendants(matching: .any)["note-title"].firstMatch
@@ -730,7 +732,7 @@ final class MobileUITests: XCTestCase {
     app.buttons["General"].tap()
     let analytics = app.staticTexts["analytics-explanation"]
     XCTAssertTrue(analytics.waitForExistence(timeout: 5))
-    XCTAssertTrue(analytics.label.hasPrefix("Nothing is sent while this iPhone isn’t paired"))
+    XCTAssertTrue(analytics.label.hasPrefix("Nothing is sent while this \(device) isn’t paired"))
     saveScreenshot("standalone-general")
   }
 
