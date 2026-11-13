@@ -149,13 +149,14 @@ const knownTypes = { '.txt': 'text/plain', '.md': 'text/markdown', '.csv': 'text
 // agent wrote, read by a Mac through `POST v1/execution/library-file`. The
 // file must be inside `root`, /tmp or /mnt/data, is opened without following
 // its final symlink, and must not change while it is read.
-export async function readWorkspaceFile({ path: requestedPath, root, maximumBytes = attachmentLimits.fileBytes }) {
+// `sharedRoots` are the scratch places an agent may also leave a file (`/tmp`, `/mnt/data`).
+export async function readWorkspaceFile({ path: requestedPath, root, maximumBytes = attachmentLimits.fileBytes, sharedRoots = ['/tmp', '/mnt/data'] }) {
   if (typeof requestedPath !== 'string' || !requestedPath || requestedPath.includes('\0') || Buffer.byteLength(requestedPath) > 8192) throw fail(400, 'The file path is invalid.')
   let path = requestedPath.startsWith('file://') ? decodeURIComponent(new URL(requestedPath).pathname) : requestedPath
   if (path.startsWith('~/')) path = join(homedir(), path.slice(2))
   if (!isAbsolute(path)) path = resolve(root, path)
   path = resolve(path)
-  const roots = [root, '/tmp', '/mnt/data'].filter(value => value && existsSync(value)).map(value => realpathSync(value))
+  const roots = [root, ...sharedRoots].filter(value => value && existsSync(value)).map(value => realpathSync(value))
   const inside = candidate => roots.some(value => candidate === value || candidate.startsWith(value.endsWith('/') ? value : value + '/'))
   let actual
   try { actual = await realpath(path) } catch { throw fail(404, 'The shared file is not on this workspace.') }

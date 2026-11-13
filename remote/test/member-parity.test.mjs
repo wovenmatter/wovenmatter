@@ -402,8 +402,11 @@ test('workspace files are read for Library retention only inside the session roo
   const file = await readWorkspaceFile({ path: 'report.md', root })
   assert.deepEqual([file.name, file.mimeType, file.data.toString()], ['report.md', 'text/markdown', '# Report'])
   assert.equal((await readWorkspaceFile({ path: 'file://' + join(root, 'nested', 'data.csv'), root })).mimeType, 'text/csv')
-  await assert.rejects(readWorkspaceFile({ path: join(outside, 'secret.txt'), root }), { statusCode: 403 })
-  await assert.rejects(readWorkspaceFile({ path: 'link.txt', root }), { statusCode: 403 })
+  // The system temporary folder is /tmp on Linux, which is itself a shared
+  // root, so the outside checks name the shared roots explicitly.
+  await assert.rejects(readWorkspaceFile({ path: join(outside, 'secret.txt'), root, sharedRoots: [] }), { statusCode: 403 })
+  await assert.rejects(readWorkspaceFile({ path: 'link.txt', root, sharedRoots: [] }), { statusCode: 403 })
+  assert.equal((await readWorkspaceFile({ path: join(outside, 'secret.txt'), root, sharedRoots: [outside] })).data.toString(), 'secret')
   await assert.rejects(readWorkspaceFile({ path: 'missing.txt', root }), { statusCode: 404 })
   await assert.rejects(readWorkspaceFile({ path: 'nested', root }), { statusCode: 400 })
   await assert.rejects(readWorkspaceFile({ path: 'report.md', root, maximumBytes: 3 }), { statusCode: 413 })
