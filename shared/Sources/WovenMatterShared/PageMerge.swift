@@ -7,6 +7,8 @@ public struct PageMerge: Equatable, Sendable {
   public var conflictedIDs: [String]
   /// New components holding the local version of each conflict, so neither version is lost.
   public var conflictCopyIDs: [String]
+  /// The component each copy was made from; an empty string for the Page's purpose.
+  var conflictCopySources: [String: String] = [:]
 
   public init(document: NoteDocument, conflictedIDs: [String] = [], conflictCopyIDs: [String] = []) {
     self.document = document; self.conflictedIDs = conflictedIDs; self.conflictCopyIDs = conflictCopyIDs
@@ -118,6 +120,7 @@ private struct PageMerger {
   var localItems: [String: BoardItem] = [:]
   var conflicted: [String] = []
   var copies: [String] = []
+  var copySources: [String: String] = [:]
   var extraBlocks: [String: NoteBlock] = [:]
   var extraItems: [String: BoardItem] = [:]
   var extraPlacements: [String: CanvasCardPlacement] = [:]
@@ -323,7 +326,7 @@ private struct PageMerger {
     let copyID = "conflict-" + Self.hash(id, content)
     // A retry of the same draft finds its copy already stored, and must not add another.
     guard !copies.contains(copyID), !remote.has(copyID) else { return }
-    copies.append(copyID)
+    copies.append(copyID); copySources[copyID] = id
     let isSection = sections.contains(id)
     extraBlocks[copyID] = Self.copyBlock(content.block, id: copyID)
     extraItems[copyID] = BoardItem(role: content.role, task: isSection ? nil : content.task, review: .needed, sessions: content.sessions,
@@ -352,7 +355,7 @@ private struct PageMerger {
     if let l, !l.isEmpty {
       let copyID = "conflict-purpose-" + Self.hash(l)
       if !remote.has(copyID), !copies.contains(copyID) {
-        copies.append(copyID)
+        copies.append(copyID); copySources[copyID] = ""
         extraBlocks[copyID] = .richText(NoteRichTextBlock(id: copyID, text: l))
         extraItems[copyID] = BoardItem(review: .needed, lastChange: "Kept this purpose because the Page's purpose also changed elsewhere.")
         children[nil, default: []].append(copyID)
@@ -431,7 +434,9 @@ private struct PageMerger {
     document.boardItems = items.isEmpty && document.boardItems == nil ? nil : items
     document.canvasConnections = document.canvasConnections?.filter { surviving.contains($0.from) && surviving.contains($0.to) }
     try document.validateEditableShape()
-    return PageMerge(document: document, conflictedIDs: conflicted, conflictCopyIDs: copies)
+    var result = PageMerge(document: document, conflictedIDs: conflicted, conflictCopyIDs: copies)
+    result.conflictCopySources = copySources
+    return result
   }
 
   static func copyBlock(_ block: NoteBlock, id: String) -> NoteBlock {

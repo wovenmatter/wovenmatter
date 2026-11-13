@@ -109,8 +109,10 @@ struct NoteSyncTests {
     #expect(texts(merged.content) == ["Mac wording", "Linux wording", "two"])
     let copy = try #require(document.blocks.first { $0.id.hasPrefix("conflict-") })
     #expect(document.boardItems?[copy.id]?.review == .needed)
-    // The copy is new to every replica; the next write there takes it over.
-    #expect(NoteSync.split(merged.content).clock?["c:" + copy.id] == nil)
+    // The copy counts as seen only where both conflicting changes were.
+    let dot = try #require(NoteSync.split(merged.content).clock?["c:" + copy.id])
+    #expect(dot.r == fromLinux.origin && dot.n == fromLinux.clock)
+    #expect(dot.a?.contains { $0.r == fromMac.origin && $0.n == fromMac.clock } == true)
   }
 
   @Test func aRemovalStandsUnlessTheOtherSideChangedIt() throws {

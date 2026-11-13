@@ -136,6 +136,27 @@ struct PagePeerSyncTests {
     #expect(try await air.document(id).blocks.count == 2)
   }
 
+  @Test func reviewingACopyWhileAnotherReplicaWritesStillRemovesIt() async throws {
+    let air = try await Replica(), linux = try await Replica(linux: true)
+    defer { air.remove(); linux.remove() }
+    let id = try await makePage(on: air, [("a", "one"), ("b", "two")])
+    try await everyone([air, linux])
+    try await air.editorUpdate(id, update("a", "Air wording"))
+    try await linux.agentUpdate(id, "a", "Linux wording")
+    try await everyone([air, linux])
+    let copy = try #require(try await air.document(id).blocks.first { $0.id.hasPrefix("conflict-") })
+    // At once: the Air reviews the copy away while an agent on Linux edits another component.
+    try await air.editorUpdate(id) { page in
+      try page.applyPageEdit(.init(action: .remove, id: copy.id, expectedRevision: page.boardItemRevision(for: copy.id)))
+    }
+    try await linux.agentUpdate(id, "b", "two, from Linux")
+    try await everyone([air, linux])
+    try await expectConverged([air, linux], on: id)
+    let texts = try await linux.texts(id)
+    #expect(texts.count == 2 && texts.contains("two, from Linux"))
+    #expect(!(try await air.document(id).blocks.contains { $0.id == copy.id }))
+  }
+
   @Test func artifactInputsTypedOnTwoReplicasAtOnceBothStay() async throws {
     let air = try await Replica(), linux = try await Replica(linux: true)
     defer { air.remove(); linux.remove() }

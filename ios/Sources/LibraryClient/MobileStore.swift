@@ -85,9 +85,10 @@ public actor MobileStore {
   public nonisolated let artifacts: SavedArtifactStore
   private let file: URL
   var state: MobileStoreState
-  /// The last text each Page editor saved, in memory only. An editor keeps sending
-  /// its own whole document; this is what that document derives from.
-  private var pageEditorContents: [String: String] = [:]
+  /// The last text each Page editor saved, in memory only, and the stored version the
+  /// editor was showing when it saved. An editor keeps sending its own whole document;
+  /// until it shows a newer stored version, that document derives from this text.
+  private var pageEditorContents: [String: (base: String?, saved: String)] = [:]
   public init(file: URL) throws {
     self.file = file
     dictations = try MobileDictationStore(file: file.appendingPathExtension("dictations.sqlite"))
@@ -327,12 +328,12 @@ public actor MobileStore {
   }
   public func editNote(id: String, title: String, content: String, folderID: String?, base: LibraryNote? = nil) throws {
     guard content.utf8.count <= LibraryProtocol.maximumNoteBytes else { throw Failure.noteTooLarge }
-    let edited = content
+    let edited = content, shown = base?.content
     var content = content, base = base
     // A Page changed underneath its open editor, by Quick Chat or a sync merge. The
     // editor's document lacks that change, so combine them instead of overwriting it.
     if let current = state.notes[id], state.conflicts[id] == nil, (current.kind ?? NoteDocument.decode(current.content).kind) == .canvas,
-       let ancestor = pageEditorContents[id] ?? base?.content, current.content != ancestor, content != current.content,
+       let ancestor = pageEditorAncestor(id, base: base), current.content != ancestor, content != current.content,
        let ancestorDocument = try? NoteDocument.editableDocument(from: ancestor),
        let localDocument = try? NoteDocument.editableDocument(from: content),
        let currentDocument = try? NoteDocument.editableDocument(from: current.content),
@@ -371,7 +372,15 @@ public actor MobileStore {
         next.outbox.append(.init(mutation: Self.mutation(for: note, kind: .updateNote, deviceID: next.deviceID)))
       }
     }
-    if let note = state.notes[id], (note.kind ?? NoteDocument.decode(note.content).kind) == .canvas { pageEditorContents[id] = edited }
+    if let note = state.notes[id], (note.kind ?? NoteDocument.decode(note.content).kind) == .canvas {
+      pageEditorContents[id] = (base: shown, saved: edited)
+    }
+  }
+  /// What an editor's document derives from: its own last save while it still shows the
+  /// version it saved over, otherwise the stored version it now shows.
+  private func pageEditorAncestor(_ id: String, base: LibraryNote?) -> String? {
+    if let last = pageEditorContents[id], last.base == base?.content { return last.saved }
+    return base?.content
   }
   /// Marking submitted is itself durable. A retry must resend exactly these bytes and ID.
   public func nextMutation(excludingOperationIDs: Set<String> = []) throws -> LibraryMutation? {

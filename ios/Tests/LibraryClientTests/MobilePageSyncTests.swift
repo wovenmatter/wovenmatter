@@ -125,6 +125,28 @@ struct MobilePageSyncTests {
     #expect(document.boardItems?["b"]?.updatedBy?.sessionID == "chat")
   }
 
+  /// Once the editor shows Quick Chat's change, editing that same component replaces it.
+  /// The editor's earlier save is no longer what it derives from, so nothing conflicts.
+  @Test func editingAComponentAfterTheEditorShowsTheChatsChangeReplacesIt() async throws {
+    let (store, root) = try store()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let opened = try await store.createNote(folderID: nil, title: "Plan", content: try page("one", "two"))
+    try await store.editNote(id: opened.id, title: "Plan", content: try page("one typed", "two"), folderID: nil, base: opened)
+    let chat = MobileToolContext(sessionID: "chat", workspaceID: "phone")
+    let read = await store.executeLocalTool(.init(arguments: ["pages", "read", "--note-id", opened.id], requestID: UUID().uuidString.lowercased()), context: chat)
+    let revision = try #require(read.result?.objectValue?["components"]?.arrayValue?[1].objectValue?["componentRevision"]?.stringValue)
+    let edit = await store.executeLocalTool(.init(arguments: ["pages", "update-component", "--note-id", opened.id, "--id", "b", "--component-revision", revision, "--text", "two from the chat"], requestID: UUID().uuidString.lowercased()), context: chat)
+    #expect(edit.success, "\(edit.error ?? "")")
+    // The editor adopts the stored Page, then the person rewrites the chat's component.
+    let shown = try #require(await store.snapshot().notes[opened.id])
+    var document = try NoteDocument.editableDocument(from: shown.content)
+    try document.applyPageEdit(.init(action: .update, id: "b", expectedRevision: document.boardItemRevision(for: "b"), patch: .init(text: "two, rewritten")))
+    try await store.editNote(id: opened.id, title: "Plan", content: try document.encoded(), folderID: nil, base: shown)
+    let saved = try NoteDocument.editableDocument(from: try #require(await store.snapshot().notes[opened.id]).content)
+    #expect(saved.blocks.map(\.plainText) == ["one typed", "two, rewritten"])
+    #expect(!saved.blocks.contains { $0.id.hasPrefix("conflict-") })
+  }
+
   @Test func anOrdinaryNoteStillAsksWhichVersionToKeep() async throws {
     let (store, root) = try store()
     defer { try? FileManager.default.removeItem(at: root) }

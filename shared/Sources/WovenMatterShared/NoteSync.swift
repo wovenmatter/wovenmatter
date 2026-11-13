@@ -6,7 +6,10 @@ import Foundation
 public struct NoteSyncDot: Codable, Equatable, Sendable {
   public var r: String?
   public var n: Int64
-  public init(r: String?, n: Int64) { self.r = r; self.n = n }
+  /// Further changes a replica must also have seen. A conflict copy exists only where both
+  /// conflicting changes met, so only a replica that saw both has seen the copy.
+  public var a: [NoteSyncDot]?
+  public init(r: String?, n: Int64, a: [NoteSyncDot]? = nil) { self.r = r; self.n = n; self.a = a }
   /// Written by the version that stores it: its origin and counter.
   static let current = NoteSyncDot(r: nil, n: 0)
   /// Made by a merge; the next local write takes it over.
@@ -148,9 +151,11 @@ public enum NoteSync {
     var folderID: String?
     var dots: [String: NoteSyncDot?]
     var vector: [String: Int64]
+    /// The synchronization record that carried this version; nil for a merge result.
+    var own: NoteSyncDot?
 
-    init(document: NoteDocument, title: String, folderID: String?, dots: [String: NoteSyncDot?], vector: [String: Int64]) {
-      self.document = document; self.title = title; self.folderID = folderID; self.dots = dots; self.vector = vector
+    init(document: NoteDocument, title: String, folderID: String?, dots: [String: NoteSyncDot?], vector: [String: Int64], own: NoteSyncDot? = nil) {
+      self.document = document; self.title = title; self.folderID = folderID; self.dots = dots; self.vector = vector; self.own = own
     }
 
     init?(_ version: Version) {
@@ -158,14 +163,14 @@ public enum NoteSync {
       guard let clock = parts.clock, let document = mergeableDocument(parts.body) else { return nil }
       let own = NoteSyncDot(r: version.origin, n: version.clock)
       self.init(document: document, title: version.title, folderID: version.folderID,
-                dots: clock.mapValues { Optional($0.n <= 0 ? own : $0) }, vector: version.vector)
+                dots: clock.mapValues { Optional($0.n <= 0 ? own : $0) }, vector: version.vector, own: own)
     }
 
     func dot(_ key: String) -> NoteSyncDot? { dots[key] ?? nil }
     /// Whether this version already includes that change.
     func saw(_ dot: NoteSyncDot?) -> Bool {
-      guard let dot, let replica = dot.r else { return false }
-      return (vector[replica] ?? 0) >= dot.n
+      guard let dot, let replica = dot.r, (vector[replica] ?? 0) >= dot.n else { return false }
+      return (dot.a ?? []).allSatisfy { saw($0) }
     }
     /// Whether `other`'s value for `key` is one this version has seen, and this version's is newer or the same.
     func supersedes(_ other: Replica, _ key: String) -> Bool { saw(other.dot(key)) }
@@ -265,7 +270,16 @@ public enum NoteSync {
     var dots = fields.dots
     for block in merged.document.blocks {
       let id = block.id
-      guard !copies.contains(id) else { continue }
+      // A copy is seen once both conflicting changes are: by every replica that made this
+      // merge, and by no replica that holds only one side. Reviewing it anywhere then removes
+      // it everywhere, even while another replica writes something else.
+      if copies.contains(id) {
+        guard let own = local.own, let source = merged.conflictCopySources[id] else { continue }
+        let met = (source.isEmpty ? [remote.dot("purpose")] : [remote.dot("c:" + source), remote.dot("m:" + source)]).compactMap { $0 }
+        let dot = NoteSyncDot(r: own.r, n: own.n, a: met.isEmpty ? nil : met)
+        for key in ["c:", "m:", "p:"] { dots[key + id] = dot }
+        continue
+      }
       let inRemote = r.has(id), inLocal = l.has(id)
       func pick(_ key: String, local useLocal: Bool) -> NoteSyncDot? {
         (inRemote && inLocal ? (useLocal ? local : remote) : (inRemote ? remote : local)).dot(key + id)
