@@ -7,7 +7,7 @@ import Crypto
 import Testing
 import WorkspaceFixtures
 import WovenMatterCore
-@testable import WovenMatterDashboardStore
+@testable import WovenMatterLibraryStore
 
 /// In-process network of members. Each endpoint host (`<name>.ts.net`)
 /// routes to one peer's handler; Linux hosts sit behind a Serve-style

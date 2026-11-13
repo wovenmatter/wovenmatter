@@ -2,7 +2,7 @@ import SwiftUI
 #if os(macOS)
 import AppKit
 import WovenMatterCore
-import WovenMatterDashboardStore
+import WovenMatterLibraryStore
 #else
 import WovenMatterShared
 #endif
@@ -78,7 +78,7 @@ struct ConversationWorkTranscript: View {
     #if os(macOS)
     init(
         run: WorkspaceRunRecord,
-        presentation: DashboardRunPresentation?,
+        presentation: RunPresentation?,
         records: [WorkspaceRunActivityRecord],
         commentaryIDs: Set<String> = [],
         hasFollowingResponse: Bool = false,
@@ -111,20 +111,20 @@ struct ConversationWorkTranscript: View {
                     .font(.system(size: 13))
                     .textSelection(.enabled)
             }
-            .foregroundStyle(DashboardPalette.mutedForeground)
+            .foregroundStyle(WovenPalette.mutedForeground)
             .fixedSize(horizontal: false, vertical: true)
         }
         if content.isVisible {
             VStack(alignment: .leading, spacing: 0) {
                 if content.failureMessage != nil {
                     HStack(spacing: 7) {
-                        DashboardLucideIcon(glyph: .alertCircle, size: 13)
+                        LucideIcon(glyph: .alertCircle, size: 13)
                         elapsedLabel
                     }
-                    .foregroundStyle(DashboardPalette.danger)
+                    .foregroundStyle(WovenPalette.danger)
                 } else {
                     elapsedLabel
-                        .foregroundStyle(DashboardPalette.mutedForeground)
+                        .foregroundStyle(WovenPalette.mutedForeground)
                 }
 
                 // Failure belongs to the run, not to its optional work history.
@@ -132,7 +132,7 @@ struct ConversationWorkTranscript: View {
                 if let failureMessage = content.failureMessage {
                     Text(RemoteNoteEditEnvelope.redactingEnvelopes(in: failureMessage))
                         .font(.system(size: 13))
-                        .foregroundStyle(DashboardPalette.danger)
+                        .foregroundStyle(WovenPalette.danger)
                         .textSelection(.enabled)
                         .fixedSize(horizontal: false, vertical: true)
                         .padding(.top, 8)
@@ -140,7 +140,7 @@ struct ConversationWorkTranscript: View {
 
                 if content.hasVisibleActivities {
                     Divider()
-                        .overlay(DashboardPalette.foreground.opacity(0.10))
+                        .overlay(WovenPalette.foreground.opacity(0.10))
                         .padding(.top, 12)
 
                     let entries = timeline.entries
@@ -195,7 +195,7 @@ struct ConversationWorkTranscript: View {
                         Image(systemName: "sparkles").frame(width: 17)
                         Text("Thinking").font(.system(size: 13.5))
                     }
-                    .foregroundStyle(DashboardPalette.mutedForeground)
+                    .foregroundStyle(WovenPalette.mutedForeground)
                     .padding(.top, 12)
                     .accessibilityLabel("Thinking")
                 }
@@ -227,7 +227,7 @@ struct ConversationWorkTranscript: View {
 
     /// Whole seconds for a once-per-second count; longer runs use the shared format.
     private static func elapsed(_ interval: TimeInterval) -> String {
-        interval < 60 ? "\(max(0, Int(interval)))s" : dashboardRunDuration(interval)
+        interval < 60 ? "\(max(0, Int(interval)))s" : formattedRunDuration(interval)
     }
 
     #if os(macOS)
@@ -242,7 +242,7 @@ struct ConversationWorkTranscript: View {
 }
 
 private struct ConversationElapsedButtonStyle: ButtonStyle {
-    @Environment(\.dashboardTheme) private var theme
+    @Environment(\.wovenTheme) private var theme
     @Environment(\.isEnabled) private var isEnabled
     @State private var hovered = false
 
@@ -296,7 +296,7 @@ private struct ConversationThinkingBlock: View {
         VStack(alignment: .leading, spacing: 6) {
             Label("Thinking", systemImage: "sparkles")
                 .font(.system(size: 11.5, weight: .medium))
-                .foregroundStyle(DashboardPalette.mutedForeground)
+                .foregroundStyle(WovenPalette.mutedForeground)
             ConversationBoundedWorkList(
                 group: ConversationWorkGroup(id: activity.id, activities: [activity], endsTimeline: isLive),
                 runID: runID, runStatus: isLive ? "running" : "completed", followsAppends: isLive,
@@ -357,11 +357,11 @@ private struct ConversationWorkGroupRow: View {
                         Image(systemName: "chevron.right")
                             .font(.system(size: 10, weight: .semibold))
                             .rotationEffect(.degrees(expanded.wrappedValue ? 90 : 0))
-                            .foregroundStyle(DashboardPalette.mutedForeground)
+                            .foregroundStyle(WovenPalette.mutedForeground)
                         Spacer(minLength: 0)
                     }
                     .foregroundStyle(group.hasFailure ? Color.red.opacity(0.8)
-                        : DashboardPalette.foreground.opacity(0.72))
+                        : WovenPalette.foreground.opacity(0.72))
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(ConversationElapsedButtonStyle())
@@ -574,7 +574,7 @@ private struct ConversationActivityRow: View {
             HStack(alignment: .firstTextBaseline, spacing: 7) {
                 Text(content)
                     .font(.system(size: 13))
-                    .foregroundStyle(isFailure ? .red.opacity(0.8) : DashboardPalette.foreground.opacity(0.72))
+                    .foregroundStyle(isFailure ? .red.opacity(0.8) : WovenPalette.foreground.opacity(0.72))
                     .textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)
                 if let expanded { chevron(expanded) }
@@ -589,7 +589,7 @@ private struct ConversationActivityRow: View {
                                 size: 13.5,
                                 weight: activity.kind == .thought ? .regular : .medium
                             ))
-                            .foregroundStyle(DashboardPalette.foreground.opacity(
+                            .foregroundStyle(WovenPalette.foreground.opacity(
                                 activity.kind == .thought ? 0.58 : 0.72
                             ))
                             .fixedSize(horizontal: false, vertical: true)
@@ -598,7 +598,7 @@ private struct ConversationActivityRow: View {
                     if let secondaryLabel {
                         Text(secondaryLabel)
                             .font(.system(size: 12.5))
-                            .foregroundStyle(DashboardPalette.mutedForeground)
+                            .foregroundStyle(WovenPalette.mutedForeground)
                             .lineLimit(activity.kind == .thought ? 2 : 1)
                             .truncationMode(.tail)
                     }
@@ -613,7 +613,7 @@ private struct ConversationActivityRow: View {
         Image(systemName: "chevron.right")
             .font(.system(size: 10, weight: .semibold))
             .rotationEffect(.degrees(expanded ? 90 : 0))
-            .foregroundStyle(DashboardPalette.mutedForeground)
+            .foregroundStyle(WovenPalette.mutedForeground)
     }
 
     @ViewBuilder
@@ -625,7 +625,7 @@ private struct ConversationActivityRow: View {
         } else {
             Image(systemName: systemImage)
                 .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(DashboardPalette.mutedForeground)
+                .foregroundStyle(WovenPalette.mutedForeground)
                 .frame(width: 17)
         }
     }
@@ -789,16 +789,16 @@ private struct ConversationActivityDetails: View {
             if loadToken != nil || waitingForDetails || (activity.detailsAvailable == true && complete == nil && error == nil) {
                 Text("Loading details…")
                     .font(.system(size: 12.5))
-                    .foregroundStyle(DashboardPalette.mutedForeground)
+                    .foregroundStyle(WovenPalette.mutedForeground)
             }
             if let error {
                 HStack(alignment: .firstTextBaseline, spacing: 8) {
                     Text(error)
-                        .foregroundStyle(DashboardPalette.danger)
+                        .foregroundStyle(WovenPalette.danger)
                         .textSelection(.enabled)
                         .fixedSize(horizontal: false, vertical: true)
                     Button("Retry") { attempt += 1 }
-                        .buttonStyle(DashboardQuietButtonStyle())
+                        .buttonStyle(WovenQuietButtonStyle())
                 }
                 .font(.system(size: 12.5))
             }
@@ -891,7 +891,7 @@ private struct ConversationActivityDetails: View {
                     .font(.system(size: 10.5, weight: .semibold))
                     .textCase(.uppercase)
                     .tracking(0.6)
-                    .foregroundStyle(DashboardPalette.mutedForeground)
+                    .foregroundStyle(WovenPalette.mutedForeground)
                 ConversationPagedText(text: value, style: .raw)
             }
         }
@@ -962,7 +962,7 @@ private struct ConversationReasoningText: View {
                         }
                     }
                 }
-                .buttonStyle(DashboardQuietButtonStyle())
+                .buttonStyle(WovenQuietButtonStyle())
                 .font(.system(size: 12))
             }
             if !shown.isEmpty {
@@ -1120,16 +1120,16 @@ private struct ConversationPagedText: View {
                         .padding(9)
                 }
                 .scrollIndicators(.never)
-                .background(DashboardPalette.muted.opacity(0.65))
+                .background(WovenPalette.muted.opacity(0.65))
                 .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
             } else {
                 textView(shown)
-                    .foregroundStyle(DashboardPalette.mutedForeground)
+                    .foregroundStyle(WovenPalette.mutedForeground)
                     .fixedSize(horizontal: false, vertical: true)
             }
             if remaining > 0 {
                 Button("Show more (\(remaining.formatted()) more characters)") { pages += 1 }
-                    .buttonStyle(DashboardQuietButtonStyle())
+                    .buttonStyle(WovenQuietButtonStyle())
                     .font(.system(size: 12))
             }
         }
@@ -1166,11 +1166,11 @@ private struct ConversationProposedPlan: View {
             HStack(spacing: 9) {
                 Image(systemName: "list.bullet.clipboard")
                     .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(DashboardPalette.mutedForeground)
+                    .foregroundStyle(WovenPalette.mutedForeground)
                     .frame(width: 17)
                 Text(activity.title?.nonempty ?? "Proposed plan")
                     .font(.system(size: 13.5, weight: .medium))
-                    .foregroundStyle(DashboardPalette.foreground.opacity(0.72))
+                    .foregroundStyle(WovenPalette.foreground.opacity(0.72))
             }
             if let content = activity.content?.nonempty {
                 #if os(macOS)
@@ -1182,7 +1182,7 @@ private struct ConversationProposedPlan: View {
                 ForEach(activity.planEntries.indices, id: \.self) { index in
                     Text("• \(activity.planEntries[index].content)")
                         .font(.system(size: 13))
-                        .foregroundStyle(DashboardPalette.mutedForeground)
+                        .foregroundStyle(WovenPalette.mutedForeground)
                         .fixedSize(horizontal: false, vertical: true)
                         .padding(.leading, 26)
                 }
@@ -1228,7 +1228,7 @@ struct ConversationChangedFilesCard: View {
                                 ? "chevron.up.chevron.down"
                                 : "chevron.down.chevron.up")
                         }
-                        .buttonStyle(DashboardQuietButtonStyle())
+                        .buttonStyle(WovenQuietButtonStyle())
                         .accessibilityLabel(allDirectoriesExpanded
                             ? "Collapse all folders"
                             : "Expand all folders")
@@ -1238,7 +1238,7 @@ struct ConversationChangedFilesCard: View {
                     } label: {
                         Label("Open diff", systemImage: "doc.badge.plus")
                     }
-                    .buttonStyle(DashboardQuietButtonStyle())
+                    .buttonStyle(WovenQuietButtonStyle())
                 }
                 .font(.system(size: 13))
                 .padding(.horizontal, 14)
@@ -1270,9 +1270,9 @@ struct ConversationChangedFilesCard: View {
                                                 ? 90 : 0
                                         ))
                                         .frame(width: 13)
-                                        .foregroundStyle(DashboardPalette.mutedForeground)
+                                        .foregroundStyle(WovenPalette.mutedForeground)
                                     Image(systemName: row.node.isDirectory ? "folder" : "doc.text")
-                                        .foregroundStyle(DashboardPalette.mutedForeground)
+                                        .foregroundStyle(WovenPalette.mutedForeground)
                                     Text(row.node.name)
                                         .lineLimit(1)
                                     Spacer()
@@ -1294,11 +1294,11 @@ struct ConversationChangedFilesCard: View {
                     }
                 }
             }
-            .background(DashboardPalette.primary.opacity(0.055))
+            .background(WovenPalette.primary.opacity(0.055))
             .clipShape(RoundedRectangle(cornerRadius: 17, style: .continuous))
             .overlay {
                 RoundedRectangle(cornerRadius: 17, style: .continuous)
-                    .stroke(DashboardPalette.foreground.opacity(0.10), lineWidth: 1)
+                    .stroke(WovenPalette.foreground.opacity(0.10), lineWidth: 1)
             }
             .sheet(item: $selectedChange) { change in
                 // Resolve the current owner/revision while the sheet is open.
@@ -1460,10 +1460,10 @@ private struct ConversationDiffSheet: View {
                 case .failed(let error):
                     VStack(spacing: 12) {
                         Text(error)
-                            .foregroundStyle(DashboardPalette.danger)
+                            .foregroundStyle(WovenPalette.danger)
                             .textSelection(.enabled)
                         Button("Retry") { attempt += 1 }
-                            .buttonStyle(DashboardQuietButtonStyle())
+                            .buttonStyle(WovenQuietButtonStyle())
                     }
                     .font(.system(size: 13))
                     .padding(16)
@@ -1577,7 +1577,7 @@ extension String {
     }
 }
 
-func dashboardRunDuration(_ interval: TimeInterval) -> String {
+func formattedRunDuration(_ interval: TimeInterval) -> String {
     let milliseconds = max(0, interval * 1_000)
     if milliseconds < 1_000 {
         return "\(max(1, Int(milliseconds.rounded())))ms"

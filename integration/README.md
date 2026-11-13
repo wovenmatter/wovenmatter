@@ -23,5 +23,5 @@ recovery without automatic unsent execution; and stopped-host rejection of
 new requests without canceling accepted Mac-owned work.
 
 Related coverage lives in shared package tests, `LibraryWorkspaceTests`, the
-iOS package tests, and the `DashboardNoteDraftTests` and `DashboardNoteEditorTests`
+iOS package tests, and the `NoteDraftTests` and `NoteEditorTests`
 suites in `app/Tests/WovenMatterAppFacadeTests`.

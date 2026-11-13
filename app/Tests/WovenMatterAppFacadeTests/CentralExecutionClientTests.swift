@@ -3,7 +3,7 @@ import Foundation
 import Testing
 import WovenMatterCore
 import WovenMatterClient
-@testable import WovenMatterDashboardStore
+@testable import WovenMatterLibraryStore
 @testable import WovenMatterAppFacade
 
 /// A machine this Mac holds no stream to is never read on a timer: its

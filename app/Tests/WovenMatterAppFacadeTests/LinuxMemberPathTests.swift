@@ -4,7 +4,7 @@ import LibraryClient
 import Testing
 import WovenMatterCore
 import WovenMatterClient
-@testable import WovenMatterDashboardStore
+@testable import WovenMatterLibraryStore
 @testable import WovenMatterAppFacade
 
 /// The Mac reaches a Linux host it added only through the host's server

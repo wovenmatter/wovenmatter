@@ -4,9 +4,19 @@ import WovenMatterShared
 
 @main struct MobileApp: App {
   @State private var model = MobileModel()
-  @AppStorage(DashboardTheme.storageKey) private var storedTheme = DashboardTheme.green.rawValue
-  private var theme: DashboardTheme { DashboardTheme(rawValue: storedTheme) ?? .green }
+  @AppStorage(WovenTheme.storageKey) private var storedTheme = WovenTheme.green.rawValue
+  private var theme: WovenTheme { WovenTheme(rawValue: storedTheme) ?? .green }
   @Environment(\.scenePhase) private var scenePhase
+
+  init() {
+    // v0.4.2 saved the theme as "wovenmatter.dashboard.theme". It moves once.
+    let defaults = UserDefaults.standard, legacy = "wovenmatter.dashboard.theme"
+    if let theme = defaults.object(forKey: legacy) {
+      if defaults.object(forKey: WovenTheme.storageKey) == nil { defaults.set(theme, forKey: WovenTheme.storageKey) }
+      defaults.removeObject(forKey: legacy)
+    }
+  }
+
   var body: some Scene {
     WindowGroup {
       ZStack {
@@ -14,7 +24,7 @@ import WovenMatterShared
         else { ProgressView("Opening your library…") }
       }
         .preferredColorScheme(theme.colorScheme)
-        .environment(\.dashboardTheme, theme)
+        .environment(\.wovenTheme, theme)
         .background(theme.palette.workspace)
         .task {
           #if DEBUG
@@ -46,7 +56,7 @@ import WovenMatterShared
 
 struct MobileShell: View {
   @Bindable var model: MobileModel
-  @Environment(\.dashboardTheme) private var theme
+  @Environment(\.wovenTheme) private var theme
   @State private var keyboardVisible = false
   @State private var hoveredTab: MobileModel.Tab?
   @State private var navigationReset = UUID()
@@ -64,7 +74,7 @@ struct MobileShell: View {
               ForEach(Array(MobileModel.Tab.allCases.dropFirst(5).filter { $0 != .trash }), id: \.self) { tab in sidebarRow(tab) }
             }.padding(.horizontal, 12)
           }
-        }.frame(width: DashboardMetrics.railWidth).background(theme == .dark ? theme.palette.railFill : theme.palette.themeWhisper)
+        }.frame(width: WovenMetrics.railWidth).background(theme == .dark ? theme.palette.railFill : theme.palette.themeWhisper)
         Divider()
       }
       VStack(spacing: 0) {
@@ -93,7 +103,7 @@ struct MobileShell: View {
             ForEach(Array(MobileModel.Tab.allCases.prefix(5)), id: \.self) { tab in
               Button { selectTab(tab) } label: {
                 VStack(spacing: 5) {
-                  DashboardLucideIcon(glyph: tab.icon, size: 22).frame(height: 26)
+                  LucideIcon(glyph: tab.icon, size: 22).frame(height: 26)
                   ZStack {
                     // Every highlight uses the widest tab label, including its
                     // selected weight, without hard-coding a Dynamic Type width.
@@ -103,11 +113,11 @@ struct MobileShell: View {
                     Text(tab.rawValue).font(.caption2.weight(isSelected(tab) ? .semibold : .regular))
                   }
                 }.padding(9)
-                  .foregroundStyle(isSelected(tab) ? DashboardPalette.foreground : DashboardPalette.mutedForeground)
+                  .foregroundStyle(isSelected(tab) ? WovenPalette.foreground : WovenPalette.mutedForeground)
                   .background(isSelected(tab) || hoveredTab == tab ? theme.palette.themeSoft : .clear,
-                    in: RoundedRectangle(cornerRadius: DashboardMetrics.controlRadius, style: .continuous))
-                  .contentShape(.interaction, RoundedRectangle(cornerRadius: DashboardMetrics.controlRadius, style: .continuous))
-                  .contentShape(.hoverEffect, RoundedRectangle(cornerRadius: DashboardMetrics.controlRadius, style: .continuous))
+                    in: RoundedRectangle(cornerRadius: WovenMetrics.controlRadius, style: .continuous))
+                  .contentShape(.interaction, RoundedRectangle(cornerRadius: WovenMetrics.controlRadius, style: .continuous))
+                  .contentShape(.hoverEffect, RoundedRectangle(cornerRadius: WovenMetrics.controlRadius, style: .continuous))
                   .hoverEffect(.highlight)
                   .frame(maxWidth: .infinity)
               }.buttonStyle(.plain).padding(.horizontal, 4).padding(.vertical, 6)
@@ -124,14 +134,14 @@ struct MobileShell: View {
     .onChange(of: model.tab) { _, tab in
       if tab != .chat && tab != .note { MobileDictation.shared.stop() }
     }
-    .sheet(isPresented: $model.chatChooserPresented, onDismiss: { model.newChatNoteID = nil }) { NewChatChooser(model: model).environment(\.dashboardTheme, theme) }
+    .sheet(isPresented: $model.chatChooserPresented, onDismiss: { model.newChatNoteID = nil }) { NewChatChooser(model: model).environment(\.wovenTheme, theme) }
     .scrollIndicators(.never)
-    .foregroundStyle(DashboardPalette.foreground).tint(theme.palette.themeAccent)
+    .foregroundStyle(WovenPalette.foreground).tint(theme.palette.themeAccent)
     .background(theme.palette.workspace)
     .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in keyboardVisible = true }
     .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in keyboardVisible = false }
-    .environment(\.dashboardTheme, theme)
-    .toggleStyle(SwitchToggleStyle(tint: DashboardPalette.primary))
+    .environment(\.wovenTheme, theme)
+    .toggleStyle(SwitchToggleStyle(tint: WovenPalette.primary))
   }
   private func selectTab(_ tab: MobileModel.Tab) {
     guard !model.startingChat else { return }
@@ -172,9 +182,9 @@ struct MobileInlineError: View {
   var body: some View {
     if let message = model.errorMessage {
       HStack(alignment: .top, spacing: 8) {
-        Text(message).font(.caption).foregroundStyle(DashboardPalette.danger).textSelection(.enabled)
+        Text(message).font(.caption).foregroundStyle(WovenPalette.danger).textSelection(.enabled)
           .frame(maxWidth: .infinity, alignment: .leading).accessibilityIdentifier("workspace-action-error")
-        Button { model.errorMessage = nil } label: { DashboardLucideIcon(glyph: .close, size: 14).frame(width: 44, height: 44) }
+        Button { model.errorMessage = nil } label: { LucideIcon(glyph: .close, size: 14).frame(width: 44, height: 44) }
           .buttonStyle(.plain).accessibilityLabel("Dismiss error")
       }.padding(.vertical, 8)
     }
@@ -184,11 +194,11 @@ struct MobileInlineError: View {
 struct PaneHeader<Trailing: View>: View {
   let title: String
   @ViewBuilder var trailing: Trailing
-  var body: some View { HStack(alignment: .center) { Text(title).font(.title.weight(.semibold)).accessibilityIdentifier("pane-heading-" + title.lowercased()); Spacer(); trailing.buttonStyle(DashboardIconButtonStyle()) }.padding(.horizontal, 20).padding(.top, 16).padding(.bottom, 14) }
+  var body: some View { HStack(alignment: .center) { Text(title).font(.title.weight(.semibold)).accessibilityIdentifier("pane-heading-" + title.lowercased()); Spacer(); trailing.buttonStyle(WovenIconButtonStyle()) }.padding(.horizontal, 20).padding(.top, 16).padding(.bottom, 14) }
 }
 struct WorkspaceRow<Icon: View>: View {
   @Environment(\.isEnabled) private var isEnabled
-  @Environment(\.dashboardTheme) private var theme
+  @Environment(\.wovenTheme) private var theme
   var icon: Icon
   var title: String
   var detail: String? = nil
@@ -199,26 +209,26 @@ struct WorkspaceRow<Icon: View>: View {
       HStack(spacing: 14) {
         icon.frame(width: 26)
         Text(title).font(.body.weight(selected ? .semibold : .regular)).lineLimit(2).frame(maxWidth: .infinity, alignment: .leading)
-        if let detail { Text(detail).font(.caption).foregroundStyle(DashboardPalette.foreground).lineLimit(2) }
+        if let detail { Text(detail).font(.caption).foregroundStyle(WovenPalette.foreground).lineLimit(2) }
       }.padding(.horizontal, 14).padding(.vertical, 13).frame(minHeight: 48)
-        .background(selected ? theme.palette.themeSoft : Color.clear, in: RoundedRectangle(cornerRadius: DashboardMetrics.controlRadius, style: .continuous))
+        .background(selected ? theme.palette.themeSoft : Color.clear, in: RoundedRectangle(cornerRadius: WovenMetrics.controlRadius, style: .continuous))
         .contentShape(Rectangle())
     }.buttonStyle(.plain).opacity(isEnabled ? 1 : 0.4).accessibilityAddTraits(selected ? .isSelected : [])
   }
 }
-extension WorkspaceRow where Icon == DashboardLucideIcon {
-  init(icon: DashboardLucideGlyph, title: String, detail: String? = nil, selected: Bool = false, action: @escaping () -> Void) {
-    self.init(icon: DashboardLucideIcon(glyph: icon, size: 22), title: title, detail: detail, selected: selected, action: action)
+extension WorkspaceRow where Icon == LucideIcon {
+  init(icon: LucideGlyph, title: String, detail: String? = nil, selected: Bool = false, action: @escaping () -> Void) {
+    self.init(icon: LucideIcon(glyph: icon, size: 22), title: title, detail: detail, selected: selected, action: action)
   }
 }
 
 struct GroupLabel: View {
   var text: String
-  var body: some View { Text(text).font(.subheadline.weight(.semibold)).foregroundStyle(DashboardPalette.foreground).frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 14).padding(.top, 22).padding(.bottom, 6) }
+  var body: some View { Text(text).font(.subheadline.weight(.semibold)).foregroundStyle(WovenPalette.foreground).frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 14).padding(.top, 22).padding(.bottom, 6) }
 }
 
 struct HomePane: View {
-  @Environment(\.dashboardTheme) private var theme
+  @Environment(\.wovenTheme) private var theme
   @Bindable var model: MobileModel
   var body: some View {
     VStack(spacing: 0) {
@@ -265,7 +275,7 @@ struct HomePane: View {
     }
   }
   private func homeCaption(_ text: String) -> some View {
-    Text(text).font(.caption).foregroundStyle(DashboardPalette.mutedForeground)
+    Text(text).font(.caption).foregroundStyle(WovenPalette.mutedForeground)
       .frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 14).padding(.bottom, 12)
   }
   @ViewBuilder private func workspaceAgents(_ group: AgentGroup) -> some View {
@@ -284,14 +294,14 @@ struct HomePane: View {
       Task { await model.newNote() }
     }.accessibilityIdentifier("action-new-note")
   }
-  private func quickAction(_ title: String, icon: DashboardLucideGlyph, detail: String, action: @escaping () -> Void) -> some View {
+  private func quickAction(_ title: String, icon: LucideGlyph, detail: String, action: @escaping () -> Void) -> some View {
     Button(action: action) {
       VStack(alignment: .leading, spacing: 8) {
-        DashboardLucideIcon(glyph: icon, size: 24).foregroundStyle(theme.palette.themeAccent)
+        LucideIcon(glyph: icon, size: 24).foregroundStyle(theme.palette.themeAccent)
         Text(title).font(.headline)
-        Text(detail).font(.caption).foregroundStyle(DashboardPalette.foreground)
+        Text(detail).font(.caption).foregroundStyle(WovenPalette.foreground)
       }.frame(maxWidth: .infinity, alignment: .leading).padding(16)
-        .background(theme.palette.themeWhisper, in: RoundedRectangle(cornerRadius: DashboardMetrics.cardRadius, style: .continuous))
+        .background(theme.palette.themeWhisper, in: RoundedRectangle(cornerRadius: WovenMetrics.cardRadius, style: .continuous))
     }.buttonStyle(.plain)
   }
   private func agentRow(_ agent: LaunchableAgent) -> some View {
@@ -353,7 +363,7 @@ struct FoldersPane: View {
                   if !groups.contains(where: { !$0.isLocal }) {
                     Text(model.isStandalone ? "Pair with your Mac in Settings → Device Connections to see its workspaces and folders here."
                       : "No paired Mac or Linux workspace is reachable right now. Its folders stay in All Workspaces.").font(.caption)
-                      .foregroundStyle(DashboardPalette.mutedForeground)
+                      .foregroundStyle(WovenPalette.mutedForeground)
                       .frame(maxWidth: .infinity, alignment: .leading).padding(14)
                       .accessibilityIdentifier("folders-remote-empty")
                   }
@@ -368,7 +378,7 @@ struct FoldersPane: View {
               sectionHeading("Recents", key: "recents", identifier: "folders-recents").padding(.top, 8)
               if isExpanded("recents") {
                 if model.folderRecentItems.isEmpty {
-                  Text("No recent items.").font(.caption).foregroundStyle(DashboardPalette.mutedForeground)
+                  Text("No recent items.").font(.caption).foregroundStyle(WovenPalette.mutedForeground)
                     .frame(maxWidth: .infinity, alignment: .leading).padding(14)
                 }
                 ForEach(model.folderRecentItems) { item in
@@ -424,7 +434,7 @@ struct FoldersPane: View {
         Text(title).font(.subheadline.weight(.semibold))
         Spacer()
         Image(systemName: isExpanded(key) ? "chevron.down" : "chevron.right").font(.caption.weight(.semibold)).accessibilityHidden(true)
-      }.foregroundStyle(DashboardPalette.foreground).padding(.horizontal, 14)
+      }.foregroundStyle(WovenPalette.foreground).padding(.horizontal, 14)
         .frame(minHeight: 44).contentShape(Rectangle())
     }.buttonStyle(.plain).accessibilityIdentifier(identifier).accessibilityLabel(title)
       .accessibilityValue(isExpanded(key) ? "Expanded" : "Collapsed")
@@ -455,7 +465,7 @@ struct FoldersPane: View {
         // Remote workspaces create folders where their files live, so explain the empty list.
         if folders.isEmpty && !workspace.canCreateFolder {
           Text("No folders yet. Create folders on " + workspace.name + ".").font(.caption)
-            .foregroundStyle(DashboardPalette.mutedForeground)
+            .foregroundStyle(WovenPalette.mutedForeground)
             .frame(maxWidth: .infinity, alignment: .leading).padding(14)
             .accessibilityIdentifier("workspace-folders-empty-" + workspace.id)
         }
@@ -496,16 +506,16 @@ struct FolderContentsPane: View {
         if model.canCreateInFolderScope { Menu {
           Button("New chat", glyph: .squarePen) { model.newChat() }
           Button("New note", glyph: .fileText) { Task { await model.newNote() } }
-        } label: { DashboardLucideIcon(glyph: .plus, size: 20).frame(width: 44, height: 44) }
+        } label: { LucideIcon(glyph: .plus, size: 20).frame(width: 44, height: 44) }
           .accessibilityLabel("Add to folder") }
       }
-      DashboardSearchField(text: $search, prompt: "Search notes and conversations")
+      WovenSearchField(text: $search, prompt: "Search notes and conversations")
         .textInputAutocapitalization(.never).padding(.horizontal, 20)
       ScrollView {
         VStack(spacing: 0) {
           if folders.isEmpty && notes.isEmpty && conversations.isEmpty {
             Text(search.isEmpty ? "This folder is empty. Add a note or start a chat." : "No matching notes or chats.")
-              .foregroundStyle(DashboardPalette.mutedForeground).frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 24).padding(.horizontal, 14)
+              .foregroundStyle(WovenPalette.mutedForeground).frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 24).padding(.horizontal, 14)
           }
           if !folders.isEmpty {
             GroupLabel(text: "Folders")
@@ -555,21 +565,21 @@ struct MobileSettingsPane: View {
 
 struct SettingsNavigationRow<Destination: View>: View {
   let title: String
-  let icon: DashboardLucideGlyph
+  let icon: LucideGlyph
   @ViewBuilder let destination: () -> Destination
   var body: some View {
     NavigationLink(destination: destination) {
       HStack(spacing: 14) {
-        DashboardLucideIcon(glyph: icon, size: 22).frame(width: 26)
+        LucideIcon(glyph: icon, size: 22).frame(width: 26)
         Text(title).frame(maxWidth: .infinity, alignment: .leading)
-        DashboardLucideIcon(glyph: .chevronDown, size: 16).rotationEffect(.degrees(-90)).foregroundStyle(DashboardPalette.mutedForeground)
+        LucideIcon(glyph: .chevronDown, size: 16).rotationEffect(.degrees(-90)).foregroundStyle(WovenPalette.mutedForeground)
       }.padding(.horizontal, 14).padding(.vertical, 13).frame(minHeight: 48).contentShape(Rectangle())
     }.buttonStyle(.plain)
   }
 }
 
 private struct MobilePageSurface: ViewModifier {
-  @Environment(\.dashboardTheme) private var theme
+  @Environment(\.wovenTheme) private var theme
   func body(content: Content) -> some View {
     content
       .scrollContentBackground(.hidden)
@@ -587,12 +597,12 @@ extension View {
 
 struct GeneralSettingsPane: View {
   @Bindable var model: MobileModel
-  @AppStorage(DashboardTheme.storageKey) private var storedTheme = DashboardTheme.green.rawValue
+  @AppStorage(WovenTheme.storageKey) private var storedTheme = WovenTheme.green.rawValue
   var body: some View {
     Form {
       Section("Appearance") {
-        DashboardSegmentedSelector(options: DashboardTheme.allCases.map(\.rawValue), selection: $storedTheme) {
-          DashboardTheme(rawValue: $0)?.title ?? $0
+        WovenSegmentedSelector(options: WovenTheme.allCases.map(\.rawValue), selection: $storedTheme) {
+          WovenTheme(rawValue: $0)?.title ?? $0
         }.accessibilityElement(children: .contain)
           .accessibilityLabel("Theme").listRowBackground(Color.clear)
       }
@@ -607,7 +617,7 @@ struct GeneralSettingsPane: View {
           : "App opens and active use are sampled at most once every six hours and sent through your Mac. No content or action details are sent. This choice applies to your whole central library; offline devices receive changes when they reconnect.")
           .font(.caption).foregroundStyle(.secondary).accessibilityIdentifier("analytics-explanation")
         if model.analytics.state.pendingEnabled != nil { Text("Preference waiting to sync.").font(.caption).foregroundStyle(.secondary) }
-        Link("Privacy policy",destination:ProductAnalyticsPolicy.url).foregroundStyle(DashboardPalette.success)
+        Link("Privacy policy",destination:ProductAnalyticsPolicy.url).foregroundStyle(WovenPalette.success)
         if let error=model.analytics.errorMessage { Text(error).foregroundStyle(.red) }
       }
     }.scrollIndicators(.never).mobileNavigationPage("General")
@@ -671,7 +681,7 @@ private struct WorkspaceSettingsPane: View {
         if let endpoint = workspace.endpoint { Text(endpoint.host ?? endpoint.absoluteString).textSelection(.enabled) }
         if !active {
           Text("Its agents and folders appear when this workspace is reachable again.").font(.caption)
-            .foregroundStyle(DashboardPalette.mutedForeground)
+            .foregroundStyle(WovenPalette.mutedForeground)
         }
       }
       if active {
@@ -685,7 +695,7 @@ private struct WorkspaceSettingsPane: View {
         }
       }
       Section {
-        if let problem = model.workspaceProblems[workspace.id] { Text(problem).font(.caption).foregroundStyle(DashboardPalette.mutedForeground) }
+        if let problem = model.workspaceProblems[workspace.id] { Text(problem).font(.caption).foregroundStyle(WovenPalette.mutedForeground) }
       }
     }.listStyle(.insetGrouped).mobileNavigationPage(workspace.name)
   }

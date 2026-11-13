@@ -14,7 +14,7 @@ import CSQLite
 import Testing
 @testable import WovenMatterShared
 import WovenMatterCore
-import WovenMatterDashboardStore
+import WovenMatterLibraryStore
 @testable import WovenMatterLibraryHost
 
 /// A one-request HTTP/1.1 client; the host closes every connection after its response.

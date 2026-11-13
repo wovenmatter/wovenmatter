@@ -4,7 +4,7 @@ import FacadeBrowserTestBridge
 import Foundation
 import WovenMatterClient
 import WovenMatterCore
-import WovenMatterDashboardStore
+import WovenMatterLibraryStore
 import WovenMatterAutomation
 
 /// The visible app owns CEF and TCC grants. Background/remote runtimes reach

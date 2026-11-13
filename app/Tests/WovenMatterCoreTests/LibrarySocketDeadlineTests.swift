@@ -6,7 +6,7 @@ import Glibc
 import Foundation
 import Testing
 import WovenMatterCore
-@testable import WovenMatterDashboardStore
+@testable import WovenMatterLibraryStore
 
 /// The head has a fixed deadline; a body only has to keep moving, so a large
 /// upload over a slow path completes and a stalled one is dropped.

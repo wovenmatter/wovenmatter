@@ -4,7 +4,7 @@ import UniformTypeIdentifiers
 import WovenMatterClient
 import WovenMatterCore
 
-final class DashboardScrollHoverCoordinator: @unchecked Sendable {
+final class ScrollHoverCoordinator: @unchecked Sendable {
     var isScrolling = false
     var hoveredToken: String?
     private var hoveredUpdate: ((Bool) -> Void)?
@@ -39,18 +39,18 @@ final class DashboardScrollHoverCoordinator: @unchecked Sendable {
     }
 }
 
-struct DashboardScrollHoverCoordinatorEnvironmentKey: EnvironmentKey {
-    static let defaultValue = DashboardScrollHoverCoordinator()
+struct ScrollHoverCoordinatorEnvironmentKey: EnvironmentKey {
+    static let defaultValue = ScrollHoverCoordinator()
 }
 
 extension EnvironmentValues {
-    var dashboardScrollHoverCoordinator: DashboardScrollHoverCoordinator {
-        get { self[DashboardScrollHoverCoordinatorEnvironmentKey.self] }
-        set { self[DashboardScrollHoverCoordinatorEnvironmentKey.self] = newValue }
+    var scrollHoverCoordinator: ScrollHoverCoordinator {
+        get { self[ScrollHoverCoordinatorEnvironmentKey.self] }
+        set { self[ScrollHoverCoordinatorEnvironmentKey.self] = newValue }
     }
 }
 
-struct DashboardRunDisplayPolicy {
+struct RunDisplayPolicy {
     static func presentsStatus(_ run: WorkspaceRunRecord) -> Bool {
         run.status != "queued" && run.status != "accepted"
     }
@@ -72,27 +72,27 @@ struct WorkspaceView: View {
     @State private var showsWorkspaceTrash = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    @AppStorage(DashboardTheme.storageKey) private var themeRawValue = DashboardTheme.green.rawValue
-    @AppStorage(DashboardSidebarStyle.storageKey) private var sidebarStyleRawValue = DashboardSidebarStyle.defaultStyle.rawValue
-    @AppStorage(DashboardSidebarSide.storageKey) private var singleSidebarSideRawValue = DashboardSidebarSide.defaultSide.rawValue
-    @AppStorage("wovenmatter.dashboard.left-rail") private var leftRailRequested = true
-    @AppStorage("wovenmatter.dashboard.right-rail") private var rightRailRequested = true
-    @AppStorage("wovenmatter.dashboard.single-rail") private var singleRailRequested = true
-    @AppStorage("wovenmatter.dashboard.chat-width-percent") private var chatWidthPercent = 58.0
-    @AppStorage("wovenmatter.dashboard.note-on-left") private var noteOnLeft = false
-    @AppStorage(DashboardPinnedAgentsStore.storageKey) private var pinnedAgentIDsRaw = "[]"
-    @AppStorage(DashboardAgentOrderStore.storageKey) private var agentOrderRaw = "{}"
-    @AppStorage(DashboardAgentDisclosureStore.storageKey) private var agentDisclosureRaw = "[]"
+    @AppStorage(WovenTheme.storageKey) private var themeRawValue = WovenTheme.green.rawValue
+    @AppStorage(SidebarStyle.storageKey) private var sidebarStyleRawValue = SidebarStyle.defaultStyle.rawValue
+    @AppStorage(SidebarSide.storageKey) private var singleSidebarSideRawValue = SidebarSide.defaultSide.rawValue
+    @AppStorage("wovenmatter.layout.left-rail") private var leftRailRequested = true
+    @AppStorage("wovenmatter.layout.right-rail") private var rightRailRequested = true
+    @AppStorage("wovenmatter.layout.single-rail") private var singleRailRequested = true
+    @AppStorage("wovenmatter.layout.chat-width-percent") private var chatWidthPercent = 58.0
+    @AppStorage("wovenmatter.layout.note-on-left") private var noteOnLeft = false
+    @AppStorage(PinnedAgentsStore.storageKey) private var pinnedAgentIDsRaw = "[]"
+    @AppStorage(AgentOrderStore.storageKey) private var agentOrderRaw = "{}"
+    @AppStorage(AgentDisclosureStore.storageKey) private var agentDisclosureRaw = "[]"
     @State private var selectedAgentID: UUID?
-    @State private var chatPanels = DashboardChatPanelState()
+    @State private var chatPanels = ChatPanelState()
     private var assets: WorkspaceAssetSession { model.workspaceAssets }
     private var selectedNoteID: String? { assets.tabs.selectedNoteID }
     @State private var selectedFolderID: String?
     @State private var localExecutionWorkspaceID: String?
-    @State private var sidebarNavigation = DashboardSidebarNavigationState()
-    @State private var destination = DashboardDestination.workspace
+    @State private var sidebarNavigation = SidebarNavigationState()
+    @State private var destination = WindowDestination.workspace
     /// The one rail revealed while the window is too narrow for the requested rails.
-    @State private var compactRail: DashboardSidebarSide?
+    @State private var compactRail: SidebarSide?
     @State private var compactWorkspacePane = CompactWorkspacePane.chat
     @State private var noteFocusMode = false
     @State private var draftsByConversationID: [String: String] = [:]
@@ -100,7 +100,7 @@ struct WorkspaceView: View {
     @State private var submittingConversationIDs: Set<String> = []
     @State private var showsAttachmentImporter = false
     @State private var archivedLibrarySource: WorkspaceLibraryItem?
-    @State private var attachmentPicker: DashboardAttachmentPickerKind?
+    @State private var attachmentPicker: AttachmentPickerKind?
     @State private var attachmentTargetConversationID: String?
     @State private var notice: String?
     @State private var noticeTask: Task<Void, Never>?
@@ -108,8 +108,8 @@ struct WorkspaceView: View {
     @State private var showsNewNoteChooser = false
     @State private var newlyCreatedNoteID: String?
 
-    private var theme: DashboardTheme {
-        DashboardTheme(rawValue: themeRawValue) ?? .green
+    private var theme: WovenTheme {
+        WovenTheme(rawValue: themeRawValue) ?? .green
     }
 
     private var allAgents: [WorkspaceAgent] {
@@ -139,12 +139,12 @@ struct WorkspaceView: View {
         ].joined(separator: "|")
     }
 
-    private var sidebarStyle: DashboardSidebarStyle {
-        DashboardSidebarStyle(rawValue: sidebarStyleRawValue) ?? .defaultStyle
+    private var sidebarStyle: SidebarStyle {
+        SidebarStyle(rawValue: sidebarStyleRawValue) ?? .defaultStyle
     }
 
-    private var singleSidebarSide: DashboardSidebarSide {
-        get { DashboardSidebarSide(rawValue: singleSidebarSideRawValue) ?? .defaultSide }
+    private var singleSidebarSide: SidebarSide {
+        get { SidebarSide(rawValue: singleSidebarSideRawValue) ?? .defaultSide }
         nonmutating set { singleSidebarSideRawValue = newValue.rawValue }
     }
 
@@ -193,7 +193,7 @@ struct WorkspaceView: View {
     // supported Xcode toolchains do not solve one enormous modifier chain.
     private var workspaceLayout: some View {
         GeometryReader { geometry in
-            let layout = DashboardLayoutState.resolve(
+            let layout = WorkspaceLayoutState.resolve(
                 width: geometry.size.width,
                 leftRailRequested: leftRailRequested,
                 rightRailRequested: rightRailRequested,
@@ -223,7 +223,7 @@ struct WorkspaceView: View {
                         .transition(.opacity)
                 }
                 if showsNewChatChooser {
-                    DashboardNewChatDrawer(
+                    NewChatDrawer(
                         model: model,
                         folderOwnerID: model.workspaceOverview?.folders.first(where: { $0.id == selectedFolderID })?.executionWorkspaceID,
                         localExecutionWorkspaceID: localExecutionWorkspaceID,
@@ -233,7 +233,7 @@ struct WorkspaceView: View {
                     .frame(width: min(440, max(360, geometry.size.width - 32)))
                     .transition(.move(edge: .trailing).combined(with: .opacity))
                 } else if showsNewNoteChooser {
-                    DashboardNewNoteDrawer(
+                    NewNoteDrawer(
                         onClose: closeNewNoteChooser,
                         onSelect: createNote
                     )
@@ -250,15 +250,15 @@ struct WorkspaceView: View {
                 value: showsNewNoteChooser
             )
         }
-        .environment(\.dashboardTheme, theme)
+        .environment(\.wovenTheme, theme)
         .environment(\.workspaceApplicationModel, model)
         .environment(\.openWorkspaceConversation, { id in
             destination = .workspace
             selectConversation(id)
         })
         .preferredColorScheme(theme.colorScheme)
-        .tint(DashboardPalette.primary)
-        .foregroundStyle(DashboardPalette.foreground)
+        .tint(WovenPalette.primary)
+        .foregroundStyle(WovenPalette.foreground)
     }
 
     private var workspaceConversationIDs: [String] {
@@ -323,8 +323,8 @@ struct WorkspaceView: View {
         }
         .onChange(of: singleSidebarSideRawValue) { oldValue, newValue in
             guard sidebarStyle != .split,
-                  let oldSide = DashboardSidebarSide(rawValue: oldValue),
-                  let newSide = DashboardSidebarSide(rawValue: newValue),
+                  let oldSide = SidebarSide(rawValue: oldValue),
+                  let newSide = SidebarSide(rawValue: newValue),
                   compactRail == oldSide else { return }
             compactRail = newSide
         }
@@ -333,20 +333,20 @@ struct WorkspaceView: View {
         }
         .onDisappear { noticeTask?.cancel() }
         .sheet(item: $conversationToRename) { conversation in
-            DashboardRenameSheet(heading: "Rename chat", placeholder: "Chat name", initialTitle: conversation.title) { title in
+            RenameSheet(heading: "Rename chat", placeholder: "Chat name", initialTitle: conversation.title) { title in
                 try await model.mutateConversation(id: conversation.id, mutation: .rename(title))
             }
         }
         .sheet(item: $noteToRename) { note in
-            DashboardRenameSheet(heading: "Rename note", placeholder: "Note name", initialTitle: model.noteDraft(for: note).title) { title in
+            RenameSheet(heading: "Rename note", placeholder: "Note name", initialTitle: model.noteDraft(for: note).title) { title in
                 try await model.mutateNote(id: note.id, mutation: .rename(title))
             }
         }
         .sheet(isPresented: $showsWorkspaceTrash) {
-            DashboardWorkspaceTrashSheet(model: model)
+            WorkspaceTrashSheet(model: model)
         }
         .sheet(item: $archivedLibrarySource) { item in
-            DashboardLibrarySourceSheet(item: item, model: model)
+            LibrarySourceSheet(item: item, model: model)
         }
     }
 
@@ -369,7 +369,7 @@ struct WorkspaceView: View {
             }
         }
         .sheet(item: $attachmentPicker) { kind in
-            DashboardAttachmentPicker(
+            AttachmentPicker(
                 kind: kind,
                 notes: model.workspaceOverview?.notes ?? [],
                 conversations: (model.workspaceOverview?.conversations ?? []).filter {
@@ -396,7 +396,7 @@ struct WorkspaceView: View {
         }
     }
 
-    private func desktopShell(layout: DashboardLayoutState) -> some View {
+    private func desktopShell(layout: WorkspaceLayoutState) -> some View {
         let showLeftRailButton = sidebarStyle != .split
             ? !layout.showsLeftRail && singleSidebarSide == .left
             : !layout.showsLeftRail
@@ -404,7 +404,7 @@ struct WorkspaceView: View {
             ? !layout.showsRightRail && singleSidebarSide == .right
             : !layout.showsRightRail
 
-        return HStack(spacing: DashboardMetrics.shellGap) {
+        return HStack(spacing: WovenMetrics.shellGap) {
             if layout.showsLeftRail {
                 railGroup(side: .left, collapsesAdaptivePages: layout.compact)
             }
@@ -415,20 +415,20 @@ struct WorkspaceView: View {
                 onLeftRail: { revealRail(side: .left, compact: layout.compact) },
                 onRightRail: { revealRail(side: .right, compact: layout.compact) }
             )
-            .frame(minWidth: DashboardMetrics.workspaceMinimumWidth)
+            .frame(minWidth: WovenMetrics.workspaceMinimumWidth)
 
             if layout.showsRightRail {
                 railGroup(side: .right, collapsesAdaptivePages: layout.compact)
             }
         }
-        .padding(.horizontal, DashboardMetrics.shellInset)
-        .padding(.bottom, DashboardMetrics.shellInset)
+        .padding(.horizontal, WovenMetrics.shellInset)
+        .padding(.bottom, WovenMetrics.shellInset)
         .animation(reduceMotion ? nil : .snappy(duration: 0.3), value: layout)
     }
 
     @ViewBuilder
     private func railGroup(
-        side: DashboardSidebarSide,
+        side: SidebarSide,
         collapsesAdaptivePages: Bool
     ) -> some View {
         let pages = sidebarNavigation.pages(
@@ -438,13 +438,13 @@ struct WorkspaceView: View {
         )
         let usesUnifiedSurface = sidebarStyle == .adaptive && pages.count == 2
 
-        let content = HStack(spacing: usesUnifiedSurface ? 0 : DashboardMetrics.shellGap) {
+        let content = HStack(spacing: usesUnifiedSurface ? 0 : WovenMetrics.shellGap) {
             ForEach(pages, id: \.self) { page in
                 rail(side: side, page: page, adaptiveExpanded: usesUnifiedSurface)
-                    .frame(width: DashboardMetrics.railWidth)
+                    .frame(width: WovenMetrics.railWidth)
                     .background {
                         if !usesUnifiedSurface {
-                            DashboardRailBackground()
+                            RailBackground()
                         }
                 }
             }
@@ -453,7 +453,7 @@ struct WorkspaceView: View {
         if usesUnifiedSurface {
             content
                 .background {
-                    DashboardRailBackground()
+                    RailBackground()
                 }
                 .overlay {
                     Rectangle()
@@ -462,18 +462,18 @@ struct WorkspaceView: View {
                         .allowsHitTesting(false)
                         .accessibilityHidden(true)
                 }
-                .clipShape(DashboardShapes.windowAlignedSurface)
+                .clipShape(DesktopShapes.windowAlignedSurface)
         } else {
             content
         }
     }
 
     private func rail(
-        side: DashboardSidebarSide,
-        page: DashboardSidebarPage,
+        side: SidebarSide,
+        page: SidebarPage,
         adaptiveExpanded: Bool
     ) -> some View {
-        DashboardSidebarRail(
+        SidebarRail(
             side: side,
             page: page,
             style: sidebarStyle,
@@ -500,7 +500,7 @@ struct WorkspaceView: View {
             pinnedAgentIDsRaw: $pinnedAgentIDsRaw,
             agentOrderRaw: $agentOrderRaw,
             agentDisclosureRaw: $agentDisclosureRaw,
-            actions: DashboardSidebarActions(
+            actions: SidebarActions(
                 onCollapse: collapseRail,
                 onMoveSingleRail: moveSingleSidebar,
                 onShowNavigation: showSidebarNavigation,
@@ -537,7 +537,7 @@ struct WorkspaceView: View {
         )
     }
 
-    private func collapseRail(side: DashboardSidebarSide) {
+    private func collapseRail(side: SidebarSide) {
         if compactRail == side {
             compactRail = nil
         } else if sidebarStyle != .split {
@@ -549,7 +549,7 @@ struct WorkspaceView: View {
         }
     }
 
-    private func revealRail(side: DashboardSidebarSide, compact: Bool) {
+    private func revealRail(side: SidebarSide, compact: Bool) {
         if compact {
             // A compact window has room for one rail beside the conversation.
             singleRailRequested = true
@@ -584,7 +584,7 @@ struct WorkspaceView: View {
             Group {
                 switch destination {
                 case .workspace:
-                    DashboardWorkspaceSurface(
+                    WorkspaceSurface(
                         model: model,
                         agents: allAgents,
                         conversations: model.workspaceOverview?.conversations ?? [],
@@ -620,12 +620,12 @@ struct WorkspaceView: View {
                         onOpenBotSettings: openBotSettings
                     )
                 case .calendar:
-                    DashboardCalendarSurface(model: model, onOpenSession: { id in
+                    CalendarSurface(model: model, onOpenSession: { id in
                         destination = .workspace
                         selectConversation(id)
                     })
                 case .cronJobs:
-                    DashboardCronSurface(
+                    CronSurface(
                         model: model,
                         onOpenConversation: { conversationID in
                             destination = .workspace
@@ -633,7 +633,7 @@ struct WorkspaceView: View {
                         }
                     )
                 case .library:
-                    DashboardLibrarySurface(library: model.library, configuredWorkspaces: model.remoteWorkspaces.workspaces.map {
+                    LibrarySurface(library: model.library, configuredWorkspaces: model.remoteWorkspaces.workspaces.map {
                         (id: $0.id.uuidString.lowercased(), name: $0.name)
                     }) { item in
                         if model.workspaceOverview?.conversations.contains(where: { $0.id == item.conversationID }) == true {
@@ -645,9 +645,9 @@ struct WorkspaceView: View {
                         }
                     }
                 case .databases:
-                    DashboardDatabasesView(model: model)
+                    DatabasesView(model: model)
                 case .usage:
-                    DashboardUsageView(
+                    UsageView(
                         model: model,
                         reservesRailControlSpace: showLeftRailButton || showRightRailButton
                     )
@@ -661,9 +661,9 @@ struct WorkspaceView: View {
 
             HStack {
                 if showLeftRailButton {
-                    DashboardRevealRailButton(side: .left,
-                        width: presentsAssets ? DashboardMetrics.assetToolbarControlWidth : 36,
-                        height: presentsAssets ? DashboardMetrics.assetToolbarControlHeight : 36,
+                    RevealRailButton(side: .left,
+                        width: presentsAssets ? WovenMetrics.assetToolbarControlWidth : 36,
+                        height: presentsAssets ? WovenMetrics.assetToolbarControlHeight : 36,
                         action: onLeftRail)
                 }
                 Spacer()
@@ -682,30 +682,30 @@ struct WorkspaceView: View {
                     } label: {
                         Image(systemName: "rectangle.on.rectangle").font(.system(size: 16)).frame(width: 32, height: 32)
                     }
-                    .buttonStyle(DashboardIconButtonStyle())
+                    .buttonStyle(WovenIconButtonStyle())
                     .help(assets.tabs.selected == nil ? "Open browser" : "Show assets")
                     .accessibilityLabel(assets.tabs.selected == nil ? "Open browser" : "Show assets")
                 }
                 if showRightRailButton {
-                    DashboardRevealRailButton(side: .right,
-                        width: presentsAssets ? DashboardMetrics.assetToolbarControlWidth : 36,
-                        height: presentsAssets ? DashboardMetrics.assetToolbarControlHeight : 36,
+                    RevealRailButton(side: .right,
+                        width: presentsAssets ? WovenMetrics.assetToolbarControlWidth : 36,
+                        height: presentsAssets ? WovenMetrics.assetToolbarControlHeight : 36,
                         action: onRightRail)
                 }
             }
             .padding(.horizontal, 12)
-            .padding(.vertical, presentsAssets ? DashboardMetrics.assetToolbarVerticalPadding : 12)
+            .padding(.vertical, presentsAssets ? WovenMetrics.assetToolbarVerticalPadding : 12)
 
             if let notice {
                 Text(notice)
                     .font(.system(size: 12.5, weight: .medium))
-                    .foregroundStyle(DashboardPalette.foreground)
+                    .foregroundStyle(WovenPalette.foreground)
                     .padding(.horizontal, 14)
                     .padding(.vertical, 9)
-                    .background(DashboardPalette.background.opacity(0.94))
+                    .background(WovenPalette.background.opacity(0.94))
                     .clipShape(Capsule())
                     .overlay { Capsule().stroke(theme.palette.border, lineWidth: 1) }
-                    .shadow(color: DashboardPalette.foreground.opacity(0.08), radius: 16, y: 8)
+                    .shadow(color: WovenPalette.foreground.opacity(0.08), radius: 16, y: 8)
                     .padding(.top, 14)
                     .transition(.move(edge: .top).combined(with: .opacity))
             }
@@ -820,7 +820,7 @@ struct WorkspaceView: View {
         compactWorkspacePane = .chat
     }
 
-    private func selectBot(_ target: DashboardBotTarget) {
+    private func selectBot(_ target: BotTarget) {
         _ = chatPanels.replaceActiveBot(with: target)
         selectedAgentID = nil
         destination = .workspace
@@ -833,7 +833,7 @@ struct WorkspaceView: View {
     }
 
     /// Links from a bot open beside it, the same way a chat's browser tabs do.
-    private func openBotLink(_ url: URL, from panelID: DashboardChatPanelID) {
+    private func openBotLink(_ url: URL, from panelID: ChatPanelID) {
         if let page = WovenAppLink(url) {
             switch page {
             case .accounts:
@@ -978,7 +978,7 @@ struct WorkspaceView: View {
         showsNewChatChooser = true
     }
 
-    private func handleConversationAction(_ conversation: WorkspaceConversationRecord, action: DashboardConversationMenuAction) {
+    private func handleConversationAction(_ conversation: WorkspaceConversationRecord, action: ConversationMenuAction) {
         if case .rename = action {
             conversationToRename = conversation
             return
@@ -998,7 +998,7 @@ struct WorkspaceView: View {
                     showNotice("Chat moved to Trash.")
                 case .export(let format):
                     let url = try await model.exportConversation(id: conversation.id, format: format)
-                    if try await DashboardConversationExport.save(url: url, title: conversation.title, format: format) {
+                    if try await ConversationExport.save(url: url, title: conversation.title, format: format) {
                         showNotice("Chat exported.")
                     }
                 }
@@ -1008,7 +1008,7 @@ struct WorkspaceView: View {
         }
     }
 
-    private func handleNoteAction(_ note: WorkspaceNoteRecord, action: DashboardNoteMenuAction) {
+    private func handleNoteAction(_ note: WorkspaceNoteRecord, action: NoteMenuAction) {
         if case .rename = action {
             noteToRename = note
             return
@@ -1027,7 +1027,7 @@ struct WorkspaceView: View {
                     showNotice("Note moved to Trash.")
                 case .export(let format):
                     let export = try await model.exportNote(id: note.id, format: format)
-                    if try await DashboardNoteExport.save(export) {
+                    if try await NoteExport.save(export) {
                         showNotice("Note exported.")
                     }
                 }
@@ -1051,7 +1051,7 @@ struct WorkspaceView: View {
         showsNewChatChooser = true
     }
 
-    private func startNewChat(_ target: DashboardNewChatTarget) {
+    private func startNewChat(_ target: NewChatTarget) {
         switch target {
         case .acpDirect(let runtimeKind):
             startDirectChat(runtimeKind)
@@ -1150,7 +1150,7 @@ struct WorkspaceView: View {
         showsNewNoteChooser = false
     }
 
-    private func openUtility(_ next: DashboardDestination) {
+    private func openUtility(_ next: WindowDestination) {
         destination = next
     }
 
@@ -1168,16 +1168,16 @@ struct WorkspaceView: View {
         }
     }
 
-    private func activatePanel(_ panelID: DashboardChatPanelID) {
+    private func activatePanel(_ panelID: ChatPanelID) {
         guard chatPanels.activePanelID != panelID else { return }
         guard chatPanels.activatePanel(panelID) else { return }
         synchronizeSelectionToActivePanel()
     }
 
-    private func addPanel(from panelID: DashboardChatPanelID) {
-        let newPanelID = DashboardChatPanelID(rawValue: UUID().uuidString.lowercased())
+    private func addPanel(from panelID: ChatPanelID) {
+        let newPanelID = ChatPanelID(rawValue: UUID().uuidString.lowercased())
         let openConversationIDs = Set(chatPanels.panels.compactMap(\.conversationID))
-        let conversationID = DashboardConversationSelection
+        let conversationID = ConversationSelection
             .mostRecentAvailableConversationID(
                 in: model.workspaceOverview?.conversations ?? [],
                 excluding: openConversationIDs
@@ -1195,12 +1195,12 @@ struct WorkspaceView: View {
         synchronizeSelectionToActivePanel()
     }
 
-    private func closePanel(_ panelID: DashboardChatPanelID) {
+    private func closePanel(_ panelID: ChatPanelID) {
         guard chatPanels.closePanel(panelID) else { return }
         synchronizeSelectionToActivePanel()
     }
 
-    private func navigatePanel(_ direction: DashboardChatPanelDirection) -> Bool {
+    private func navigatePanel(_ direction: ChatPanelDirection) -> Bool {
         guard chatPanels.navigate(direction) != nil else { return false }
         synchronizeSelectionToActivePanel()
         return true
@@ -1218,7 +1218,7 @@ struct WorkspaceView: View {
         model.markConversationRead(id: conversation.id)
     }
 
-    private func send(from panelID: DashboardChatPanelID) {
+    private func send(from panelID: ChatPanelID) {
         if let selectedConversation = conversation(in: panelID) {
             let conversationID = selectedConversation.id
             guard submittingConversationIDs.insert(conversationID).inserted else {
@@ -1268,8 +1268,8 @@ struct WorkspaceView: View {
     }
 
     private func handleAttachmentAction(
-        from panelID: DashboardChatPanelID,
-        _ action: DashboardComposerAttachmentAction
+        from panelID: ChatPanelID,
+        _ action: ComposerAttachmentAction
     ) {
         guard chatPanels.panel(id: panelID)?.conversationID != nil else {
             showNotice("Choose a conversation before attaching something.")
@@ -1287,7 +1287,7 @@ struct WorkspaceView: View {
     @discardableResult
     private func attachFiles(
         _ urls: [URL],
-        to panelID: DashboardChatPanelID
+        to panelID: ChatPanelID
     ) -> Bool {
         guard let conversationID = chatPanels.panel(id: panelID)?.conversationID else { return false }
         return attachFiles(urls, conversationID: conversationID)
@@ -1299,7 +1299,7 @@ struct WorkspaceView: View {
             let scoped = urls.filter { $0.startAccessingSecurityScopedResource() }
             defer {
                 scoped.forEach { $0.stopAccessingSecurityScopedResource() }
-                DashboardComposerNativeTextView.releaseTemporaryAttachments(urls)
+                ComposerNativeTextView.releaseTemporaryAttachments(urls)
             }
             do {
                 let files = urls.map { url in
@@ -1353,7 +1353,7 @@ struct WorkspaceView: View {
 
     private func removeAttachment(
         _ id: String,
-        from panelID: DashboardChatPanelID
+        from panelID: ChatPanelID
     ) {
         guard let conversationID = chatPanels.panel(id: panelID)?.conversationID else { return }
         attachmentDraftsByConversation[conversationID, default: []]
@@ -1361,7 +1361,7 @@ struct WorkspaceView: View {
     }
 
     private func conversation(
-        in panelID: DashboardChatPanelID
+        in panelID: ChatPanelID
     ) -> WorkspaceConversationRecord? {
         guard let conversationID = chatPanels.panel(id: panelID)?.conversationID else {
             return nil
@@ -1371,7 +1371,7 @@ struct WorkspaceView: View {
 
 }
 
-enum DashboardDestination: String, Equatable {
+enum WindowDestination: String, Equatable {
     case workspace
     case calendar
     case cronJobs
@@ -1381,11 +1381,11 @@ enum DashboardDestination: String, Equatable {
     case settings
 }
 
-struct DashboardWorkspaceSurface: View {
+struct WorkspaceSurface: View {
     @Bindable var model: ApplicationModel
     let agents: [WorkspaceAgent]
     let conversations: [WorkspaceConversationRecord]
-    let chatPanels: DashboardChatPanelState
+    let chatPanels: ChatPanelState
     @Bindable var assets: WorkspaceAssetSession
     @Binding var draftsByConversationID: [String: String]
     let attachmentDraftsByConversation: [String: [AgentMessageAttachmentDraft]]
@@ -1398,21 +1398,21 @@ struct DashboardWorkspaceSurface: View {
     let reservesTrailingRailControlSpace: Bool
     let newlyCreatedNoteID: String?
     let onNewNoteFocusHandled: (String) -> Void
-    let onActivatePanel: (DashboardChatPanelID) -> Void
-    let onAddPanel: (DashboardChatPanelID) -> Void
-    let onClosePanel: (DashboardChatPanelID) -> Void
-    let onNavigatePanel: (DashboardChatPanelDirection) -> Bool
-    let onSend: (DashboardChatPanelID) -> Void
-    let onAttachmentAction: (DashboardChatPanelID, DashboardComposerAttachmentAction) -> Void
-    let onRemoveAttachment: (String, DashboardChatPanelID) -> Void
-    let onDropFiles: ([URL], DashboardChatPanelID) -> Bool
-    let onBotRoute: (DashboardBotTarget, DashboardChatPanelID) -> Void
-    let onOpenBotLink: (URL, DashboardChatPanelID) -> Void
+    let onActivatePanel: (ChatPanelID) -> Void
+    let onAddPanel: (ChatPanelID) -> Void
+    let onClosePanel: (ChatPanelID) -> Void
+    let onNavigatePanel: (ChatPanelDirection) -> Bool
+    let onSend: (ChatPanelID) -> Void
+    let onAttachmentAction: (ChatPanelID, ComposerAttachmentAction) -> Void
+    let onRemoveAttachment: (String, ChatPanelID) -> Void
+    let onDropFiles: ([URL], ChatPanelID) -> Bool
+    let onBotRoute: (BotTarget, ChatPanelID) -> Void
+    let onOpenBotLink: (URL, ChatPanelID) -> Void
     let onOpenBotSettings: () -> Void
 
     var body: some View {
         GeometryReader { geometry in
-            let splitCompact = geometry.size.width < DashboardMetrics.splitBreakpoint
+            let splitCompact = geometry.size.width < WovenMetrics.splitBreakpoint
             if assets.tabs.isPresented {
                 if splitCompact {
                     if compactPane == .note {
@@ -1426,7 +1426,7 @@ struct DashboardWorkspaceSurface: View {
                     HStack(spacing: 0) {
                         if noteOnLeft {
                             assetPane()
-                                .frame(minWidth: DashboardMetrics.assetPaneMinimumWidth)
+                                .frame(minWidth: WovenMetrics.assetPaneMinimumWidth)
                             splitSeparator(totalWidth: geometry.size.width)
                             chatPanel(.primary, showNoteButton: false)
                                 .frame(width: chatWidth(for: geometry.size.width))
@@ -1435,13 +1435,13 @@ struct DashboardWorkspaceSurface: View {
                                 .frame(width: chatWidth(for: geometry.size.width))
                             splitSeparator(totalWidth: geometry.size.width)
                             assetPane()
-                                .frame(minWidth: DashboardMetrics.assetPaneMinimumWidth)
+                                .frame(minWidth: WovenMetrics.assetPaneMinimumWidth)
                         }
                     }
-                    .coordinateSpace(name: "dashboard-workspace-split")
+                    .coordinateSpace(name: "workspace-split")
                 }
             } else {
-                DashboardChatPanelGrid(state: chatPanels) { panelID in
+                ChatPanelGrid(state: chatPanels) { panelID in
                     chatPanel(panelID, showNoteButton: false)
                 }
             }
@@ -1462,13 +1462,13 @@ struct DashboardWorkspaceSurface: View {
 
     private func conversationState(
         for conversation: WorkspaceConversationRecord?
-    ) -> DashboardConversationState? {
+    ) -> ConversationState? {
         guard let conversation else { return nil }
         return model.conversationState(for: conversation.id)
     }
 
     private func assetPane(compact: Bool = false) -> some View {
-        DashboardAssetPane(
+        AssetPane(
             model: model, assets: assets, compact: compact, noteOnLeft: $noteOnLeft,
             focused: $noteFocusMode,
             reservesLeadingRailControlSpace: reservesLeadingRailControlSpace,
@@ -1479,7 +1479,7 @@ struct DashboardWorkspaceSurface: View {
     }
 
     private func splitSeparator(totalWidth: CGFloat) -> some View {
-        DashboardSplitSeparator(
+        SplitSeparator(
             totalWidth: totalWidth,
             noteOnLeft: noteOnLeft,
             chatWidthPercent: $chatWidthPercent
@@ -1499,7 +1499,7 @@ struct DashboardWorkspaceSurface: View {
 
     /// Open notes and pages at send time, from the same snapshot regular chats use.
     /// A note reference is offered only while bots hold the Notes tool group.
-    private func botContext(for panelID: DashboardChatPanelID) -> String? {
+    private func botContext(for panelID: ChatPanelID) -> String? {
         guard panelID == .primary else { return nil }
         _ = assets.pageRevision
         let notes = model.workspaceOverview?.notes ?? []
@@ -1509,7 +1509,7 @@ struct DashboardWorkspaceSurface: View {
     }
 
     @ViewBuilder private func chatPanel(
-        _ panelID: DashboardChatPanelID,
+        _ panelID: ChatPanelID,
         showNoteButton: Bool
     ) -> some View {
         if let target = chatPanels.panel(id: panelID)?.botTarget {
@@ -1520,7 +1520,7 @@ struct DashboardWorkspaceSurface: View {
     }
 
     /// The reveal-rail and assets buttons float over the panels at the window's top edges.
-    private func botHeaderInsets(for panelID: DashboardChatPanelID) -> BotHeaderInsets {
+    private func botHeaderInsets(for panelID: ChatPanelID) -> BotHeaderInsets {
         let reachesLeadingEdge = panelID == .primary && !(assets.tabs.isPresented && noteOnLeft)
         let reachesTrailingEdge = panelID == .primary ? !chatPanels.hasAuxiliaryPanels && !(assets.tabs.isPresented && !noteOnLeft) : true
         return BotHeaderInsets(
@@ -1530,8 +1530,8 @@ struct DashboardWorkspaceSurface: View {
     }
 
     private func botPanel(
-        _ panelID: DashboardChatPanelID,
-        target: DashboardBotTarget,
+        _ panelID: ChatPanelID,
+        target: BotTarget,
         showNoteButton: Bool
     ) -> some View {
         ZStack(alignment: .topTrailing) {
@@ -1571,13 +1571,13 @@ struct DashboardWorkspaceSurface: View {
                 .padding(.horizontal, 10)
                 .frame(height: 32)
         }
-        .buttonStyle(DashboardPillButtonStyle())
+        .buttonStyle(PillButtonStyle())
         .padding(.trailing, 52)
         .padding(.top, 12)
     }
 
     private func conversationPanel(
-        _ panelID: DashboardChatPanelID,
+        _ panelID: ChatPanelID,
         showNoteButton: Bool
     ) -> some View {
         let conversation = conversation(for: panelID)
@@ -1586,7 +1586,7 @@ struct DashboardWorkspaceSurface: View {
             attachmentDraftsByConversation[$0.id]
         } ?? []
         return ZStack(alignment: .topTrailing) {
-            DashboardCloudConversation(
+            CloudConversation(
                 model: model,
                 agent: agent(for: conversation),
                 conversation: conversation,
@@ -1633,7 +1633,7 @@ struct DashboardWorkspaceSurface: View {
     }
 
     private func conversation(
-        for panelID: DashboardChatPanelID
+        for panelID: ChatPanelID
     ) -> WorkspaceConversationRecord? {
         guard let conversationID = chatPanels.panel(id: panelID)?.conversationID else {
             return nil
@@ -1648,7 +1648,7 @@ struct DashboardWorkspaceSurface: View {
         return agents.first { $0.id.uuidString.lowercased() == agentID }
     }
 
-    private func draftBinding(for panelID: DashboardChatPanelID) -> Binding<String> {
+    private func draftBinding(for panelID: ChatPanelID) -> Binding<String> {
         let conversationID = chatPanels.panel(id: panelID)?.conversationID ?? ""
         return Binding(
             get: { draftsByConversationID[conversationID, default: ""] },
@@ -1658,7 +1658,7 @@ struct DashboardWorkspaceSurface: View {
 
     private func handleNavigationKey(
         _ press: KeyPress,
-        direction: DashboardChatPanelDirection
+        direction: ChatPanelDirection
     ) -> KeyPress.Result {
         guard press.modifiers == .command,
               chatPanels.hasAuxiliaryPanels,
@@ -1670,9 +1670,9 @@ struct DashboardWorkspaceSurface: View {
     }
 
     private func handleComposerNavigation(
-        _ direction: DashboardComposerNavigationDirection
+        _ direction: ComposerNavigationDirection
     ) -> Bool {
-        let panelDirection: DashboardChatPanelDirection = switch direction {
+        let panelDirection: ChatPanelDirection = switch direction {
         case .left: .left
         case .right: .right
         case .up: .up
@@ -1682,17 +1682,17 @@ struct DashboardWorkspaceSurface: View {
     }
 
     private func chatWidth(for totalWidth: CGFloat) -> CGFloat {
-        let contentWidth = max(1, totalWidth - DashboardMetrics.separatorWidth)
-        let bounds = dashboardChatWidthBounds(totalWidth: totalWidth)
+        let contentWidth = max(1, totalWidth - WovenMetrics.separatorWidth)
+        let bounds = chatWidthBounds(totalWidth: totalWidth)
         let normalized = min(max(chatWidthPercent, bounds.lowerBound), bounds.upperBound)
         return contentWidth * CGFloat(normalized / 100)
     }
 }
 
-struct DashboardChatPanelGrid<Content: View>: View {
-    @Environment(\.dashboardTheme) private var theme
-    let state: DashboardChatPanelState
-    @ViewBuilder let content: (DashboardChatPanelID) -> Content
+struct ChatPanelGrid<Content: View>: View {
+    @Environment(\.wovenTheme) private var theme
+    let state: ChatPanelState
+    @ViewBuilder let content: (ChatPanelID) -> Content
 
     var body: some View {
         if state.auxiliaryRows.isEmpty {
@@ -1717,7 +1717,7 @@ struct DashboardChatPanelGrid<Content: View>: View {
         }
     }
 
-    private func panelRow(_ row: [DashboardChatPanel]) -> some View {
+    private func panelRow(_ row: [ChatPanel]) -> some View {
         HStack(spacing: 0) {
             ForEach(Array(row.enumerated()), id: \.element.id) { index, panel in
                 content(panel.id)
@@ -1732,7 +1732,7 @@ struct DashboardChatPanelGrid<Content: View>: View {
     private var verticalDivider: some View {
         Rectangle()
             .fill(theme.palette.border)
-            .frame(width: DashboardChatPanelMetrics.dividerThickness)
+            .frame(width: ChatPanelMetrics.dividerThickness)
             .allowsHitTesting(false)
             .accessibilityHidden(true)
     }
@@ -1740,7 +1740,7 @@ struct DashboardChatPanelGrid<Content: View>: View {
     private var horizontalDivider: some View {
         Rectangle()
             .fill(theme.palette.border)
-            .frame(height: DashboardChatPanelMetrics.dividerThickness)
+            .frame(height: ChatPanelMetrics.dividerThickness)
             .allowsHitTesting(false)
             .accessibilityHidden(true)
     }

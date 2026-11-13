@@ -40,20 +40,20 @@ private struct LocalModelServerConnectionRow: View {
     @State private var verified = false
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            TextField("Server URL", text: $url).dashboardInput()
+            TextField("Server URL", text: $url).wovenInput()
                 .accessibilityLabel("Local model server URL")
                 .disabled(server != nil)
             if server != nil {
-                Text("Add a new connection to use a different server URL.").font(.settingsSecondary).foregroundStyle(DashboardPalette.mutedForeground)
+                Text("Add a new connection to use a different server URL.").font(.settingsSecondary).foregroundStyle(WovenPalette.mutedForeground)
             }
             SecureField(server == nil ? "API key" : "API key · leave empty to keep saved key", text: $key)
-                .dashboardInput().accessibilityLabel("Local model server API key")
+                .wovenInput().accessibilityLabel("Local model server API key")
             HStack {
                 Button(busy ? "Connecting…" : "Connect") { connect() }
                     .buttonStyle(SettingsQuietButtonStyle()).disabled(busy || url.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || (server == nil && key.isEmpty))
                 if let server {
                     Text(verified ? "Connected · \(server.models.count) models" : "Saved · \(server.models.count) models · checked \(server.verifiedAt.formatted(date: .abbreviated, time: .shortened))")
-                        .font(.settingsSecondary).foregroundStyle(DashboardPalette.mutedForeground)
+                        .font(.settingsSecondary).foregroundStyle(WovenPalette.mutedForeground)
                     Spacer()
                     Button("Remove") {
                         Task {

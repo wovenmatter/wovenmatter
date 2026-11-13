@@ -1,35 +1,9 @@
 import Foundation
 
-public enum DashboardSurface: String, Codable, CaseIterable, Sendable {
-  case web = "server_web"
-  case mac = "mac_native"
-
-  public init(from decoder: any Decoder) throws {
-    let container = try decoder.singleValueContainer()
-    guard let value = DashboardSurface(persistedValue: try container.decode(String.self)) else {
-      throw DecodingError.dataCorruptedError(
-        in: container,
-        debugDescription: "Unsupported dashboard surface"
-      )
-    }
-    self = value
-  }
-
-  public init?(persistedValue: String) {
-    switch persistedValue {
-    case "server_web", "web": self = .web
-    case "mac_native", "mac": self = .mac
-    default: return nil
-    }
-  }
-}
-
-/// A surface-scoped preference projection. Web and Mac rows intentionally use
-/// different IDs so synchronizing one surface never activates its layout or
-/// theme on the other.
+/// One Mac's window preferences. Each Mac's row has its own ID, so syncing
+/// the library never moves one Mac's layout or theme onto another.
 public struct SurfaceProfile: Codable, Equatable, Identifiable, Sendable {
   public let id: String
-  public let surface: DashboardSurface
   public let deviceID: UUID?
   public var theme: String
   public var sidebarStyle: String
@@ -47,7 +21,6 @@ public struct SurfaceProfile: Codable, Equatable, Identifiable, Sendable {
 
   public init(
     id: String,
-    surface: DashboardSurface,
     deviceID: UUID?,
     theme: String,
     sidebarStyle: String,
@@ -64,7 +37,6 @@ public struct SurfaceProfile: Codable, Equatable, Identifiable, Sendable {
     updatedAt: Date = Date()
   ) {
     self.id = id
-    self.surface = surface
     self.deviceID = deviceID
     self.theme = theme
     self.sidebarStyle = sidebarStyle

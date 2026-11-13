@@ -1,7 +1,7 @@
 import Foundation
 import Testing
 import WovenMatterCore
-@testable import WovenMatterDashboardStore
+@testable import WovenMatterLibraryStore
 
 struct MacDiscoveryTests {
     private var status: Data { Data(#"{"BackendState":"Running","Self":{"DNSName":"self.tail.ts.net."},"Peer":{"mac":{"Online":true,"OS":"macOS","DNSName":"mac.tail.ts.net."},"offline":{"Online":false,"OS":"macOS","DNSName":"offline.tail.ts.net."},"linux":{"Online":true,"OS":"linux","DNSName":"linux.tail.ts.net."},"phone":{"Online":true,"OS":"iOS","DNSName":"phone.tail.ts.net."},"outside":{"Online":true,"OS":"macOS","DNSName":"not-private.example"},"injection":{"Online":true,"OS":"macOS","DNSName":"host/other.tail.ts.net"}}}"#.utf8) }

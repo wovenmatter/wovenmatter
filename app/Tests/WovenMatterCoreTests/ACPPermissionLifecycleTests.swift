@@ -4,7 +4,7 @@ import Foundation
 import Testing
 import WovenMatterClient
 import WovenMatterCore
-@testable import WovenMatterDashboardStore
+@testable import WovenMatterLibraryStore
 
 struct ACPPermissionLifecycleTests {
 
@@ -297,7 +297,7 @@ private final class PermissionLifecycleFactory: @unchecked Sendable {
   var drivers: [PermissionLifecycleDriver] { lock.withLock { created } }
   var catalogs: [LocalACPSessionConfiguration] { lock.withLock { emittedCatalogs } }
 
-  func record(_ change: DashboardConversationChange) {
+  func record(_ change: ConversationChange) {
     if case .configuration(let configuration) = change.phase {
       lock.withLock { emittedCatalogs.append(configuration) }
     }

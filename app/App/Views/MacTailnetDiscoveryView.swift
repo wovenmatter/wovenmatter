@@ -1,6 +1,6 @@
 import SwiftUI
 import WovenMatterShared
-import WovenMatterDashboardStore
+import WovenMatterLibraryStore
 
 struct MacTailnetDiscoveryView: View {
     @Bindable var devices: MacDeviceSetupModel
@@ -19,12 +19,12 @@ struct MacTailnetDiscoveryView: View {
             }.buttonStyle(SettingsQuietButtonStyle()).disabled(busy)
                 .accessibilityIdentifier("devices.find-macs")
             if let error = devices.error {
-                Text(error).font(.system(size: 12)).foregroundStyle(DashboardPalette.danger)
+                Text(error).font(.system(size: 12)).foregroundStyle(WovenPalette.danger)
             } else if devices.searched && devices.rows.isEmpty {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("No Macs found").font(.system(size: 13, weight: .medium))
                     Text("No other macOS devices are visible on your Tailscale network. Connect another Mac to this tailnet, then try again.")
-                        .font(.system(size: 12)).foregroundStyle(DashboardPalette.mutedForeground)
+                        .font(.system(size: 12)).foregroundStyle(WovenPalette.mutedForeground)
                 }.accessibilityIdentifier("devices.no-macs")
             }
             ForEach(devices.rows) { row in
@@ -36,7 +36,7 @@ struct MacTailnetDiscoveryView: View {
                     onInspect: { Task { await devices.inspect(row) } })
             }
             if let error = devices.releaseError {
-                Text("Updates could not be checked. " + error).font(.system(size: 12)).foregroundStyle(DashboardPalette.mutedForeground)
+                Text("Updates could not be checked. " + error).font(.system(size: 12)).foregroundStyle(WovenPalette.mutedForeground)
                 Button("Check for updates") { Task { await devices.checkRelease() } }.buttonStyle(SettingsQuietButtonStyle())
             }
         }
@@ -107,27 +107,27 @@ private struct MacTailnetDeviceRow: View {
                 DeviceConnectionIcon(kind: .mac)
                 VStack(alignment: .leading, spacing: 4) {
                     Text(row.mac.name).font(.system(size: 13, weight: .medium))
-                    Text(summary).font(.system(size: 11)).foregroundStyle(DashboardPalette.mutedForeground)
-                    Text(row.mac.dnsName.isEmpty ? row.mac.address : row.mac.dnsName).font(.system(size: 11)).foregroundStyle(DashboardPalette.mutedForeground).textSelection(.enabled)
+                    Text(summary).font(.system(size: 11)).foregroundStyle(WovenPalette.mutedForeground)
+                    Text(row.mac.dnsName.isEmpty ? row.mac.address : row.mac.dnsName).font(.system(size: 11)).foregroundStyle(WovenPalette.mutedForeground).textSelection(.enabled)
                 }
                 Spacer(minLength: 8)
                 if row.busy || row.checking { ProgressView().controlSize(.small).accessibilityLabel(row.busy ? "Setting up Mac" : "Checking installation") }
             }
             if row.mac.online && !row.checking { actions.disabled(row.busy).padding(.leading, 36) }
-            if let message = row.message { Text(message).font(.system(size: 12)).foregroundStyle(DashboardPalette.mutedForeground) }
-            if let error = row.error { Text(error).font(.system(size: 12)).foregroundStyle(DashboardPalette.danger).textSelection(.enabled) }
+            if let message = row.message { Text(message).font(.system(size: 12)).foregroundStyle(WovenPalette.mutedForeground) }
+            if let error = row.error { Text(error).font(.system(size: 12)).foregroundStyle(WovenPalette.danger).textSelection(.enabled) }
             if row.installation?.installed == true, row.installation?.supportsSetup == false,
                !canUseService, release?.supportsRemoteSetup != true {
                 Text("Pair in Apple Devices on that Mac. Setup from here will be available when a release with remote pairing support is published.")
-                    .font(.system(size: 11)).foregroundStyle(DashboardPalette.mutedForeground)
+                    .font(.system(size: 11)).foregroundStyle(WovenPalette.mutedForeground)
             }
             if row.mac.online {
                 DisclosureGroup("Connection settings", isExpanded: $showConnection) {
                     VStack(alignment: .leading, spacing: 8) {
                         Text("Checking, downloading, and opening apps uses this Mac’s existing SSH access over Tailscale. Configure SSH on the other Mac first if access is unavailable.")
-                            .font(.system(size: 11)).foregroundStyle(DashboardPalette.mutedForeground)
-                        TextField("SSH host alias", text: $row.connection.alias).dashboardInput()
-                        TextField("SSH user (optional)", text: $row.connection.user).dashboardInput()
+                            .font(.system(size: 11)).foregroundStyle(WovenPalette.mutedForeground)
+                        TextField("SSH host alias", text: $row.connection.alias).wovenInput()
+                        TextField("SSH user (optional)", text: $row.connection.user).wovenInput()
                         Button("Check installation", action: onInspect).buttonStyle(SettingsQuietButtonStyle())
                     }.disabled(row.busy || row.checking)
                 }.font(.system(size: 12))

@@ -1,7 +1,7 @@
 import Foundation
 import WovenMatterCore
 import WovenMatterClient
-import WovenMatterDashboardStore
+import WovenMatterLibraryStore
 
 extension LibraryHostController {
     /// Adds a Linux host this Mac manages as a member: reads its identity
@@ -37,7 +37,7 @@ extension LibraryHostController {
     func ensureExecutionToolSettings(workspace: ExecutionWorkspace, configuration: RemoteWorkspaceConfiguration) async throws {
         guard workspace.kind == .linux, workspace.executionDeviceID != nil,
               workspace.id == configuration.id.uuidString.lowercased(),
-              let model, let database = model.dashboardStore?.database else { return }
+              let model, let database = model.libraryStore?.database else { return }
         let identity = try await database.libraryIdentity()
         guard !model.isBackendFrontend, workspace.libraryID == identity.libraryID else { return }
         let settings = try await database.toolSettings()

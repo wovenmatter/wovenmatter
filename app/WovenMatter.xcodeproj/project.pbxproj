@@ -14,8 +14,8 @@
         A03000000000000000000001 /* DesktopUpdater.swift in Sources */ = {isa = PBXBuildFile; fileRef = A03000000000000000000002; };
         A03000000000000000000003 /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = A03000000000000000000004; };
 		B40A00000000000000000001 /* WovenMatterAutomation in Frameworks */ = {isa = PBXBuildFile; productRef = B40A00000000000000000002 /* WovenMatterAutomation */; };
-		DA4C00000000000000000003 /* DashboardHTMLArtifactDocument.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA4C00000000000000000004 /* DashboardHTMLArtifactDocument.swift */; };
-		DA4C00000000000000000001 /* DashboardColors.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA4C00000000000000000002 /* DashboardColors.swift */; };
+		DA4C00000000000000000003 /* HTMLArtifactDocument.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA4C00000000000000000004 /* HTMLArtifactDocument.swift */; };
+		DA4C00000000000000000001 /* WovenColors.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA4C00000000000000000002 /* WovenColors.swift */; };
 		E07CAB6182634BC3A6D35468 /* ThirdPartyNotices.txt in Resources */ = {isa = PBXBuildFile; fileRef = FE09B6C372424DF69FC333FA /* ThirdPartyNotices.txt */; };
 		FCF465ABA5EF4C84A9433309 /* ConversationTranscriptState.swift in Sources */ = {isa = PBXBuildFile; fileRef = ACFB273F1EBA43F2A3304AE7 /* ConversationTranscriptState.swift */; };
 		8CF0AF093FDD4417AE3CE998 /* ConversationTasksBadge.swift in Sources */ = {isa = PBXBuildFile; fileRef = AC04DAE6C69A406FB73E74A1 /* ConversationTasksBadge.swift */; };
@@ -27,7 +27,7 @@
 		DA2090000000000000000002 /* DefaultAgentSDKSettingsModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA2090000000000000000001 /* DefaultAgentSDKSettingsModel.swift */; };
 		F2F8DB61A6E248D0FCD77382 /* BackendOpenCodeService.swift in Sources */ = {isa = PBXBuildFile; fileRef = F178B05B2AE0D773B0C59957 /* BackendOpenCodeService.swift */; };
 		A71B00000000000000000101 /* LibraryModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = A71B00000000000000000102 /* LibraryModel.swift */; };
-		A71B00000000000000000001 /* DashboardLibraryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A71B00000000000000000002 /* DashboardLibraryView.swift */; };
+		A71B00000000000000000001 /* LibrarySurface.swift in Sources */ = {isa = PBXBuildFile; fileRef = A71B00000000000000000002 /* LibrarySurface.swift */; };
 		0890236A7DEEC4A26AB512AB /* DictationModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7E4AE75EDB3C1EE9E7043F59 /* DictationModel.swift */; };
 		B93AB31EDDA3C1A9D35A791B /* DictationEditor.swift in Sources */ = {isa = PBXBuildFile; fileRef = FCBB65211C7015A6B8158E80 /* DictationEditor.swift */; };
 		C0DBB095B3E36A01B19862F1 /* LocalModelServerConnections.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA61B1265D88D38A1D708C78 /* LocalModelServerConnections.swift */; };
@@ -44,7 +44,7 @@
 		C06300000000000000000001 /* ApplicationUsageModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = C06300000000000000000002 /* ApplicationUsageModel.swift */; };
 		AA1900000000000000000001 /* WovenMatterLifecycleDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA1900000000000000000002 /* WovenMatterLifecycleDelegate.swift */; };
 		0C11E0000000000000000001 /* WovenMatterClient in Frameworks */ = {isa = PBXBuildFile; productRef = 0C11E0000000000000000004 /* WovenMatterClient */; };
-		D46000000000000000000002 /* WovenMatterDashboardStore in Frameworks */ = {isa = PBXBuildFile; productRef = D46000000000000000000001 /* WovenMatterDashboardStore */; };
+		D46000000000000000000002 /* WovenMatterLibraryStore in Frameworks */ = {isa = PBXBuildFile; productRef = D46000000000000000000001 /* WovenMatterLibraryStore */; };
 		A11C00000000000000000001 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A11C00000000000000000002 /* Assets.xcassets */; };
 		D57200000000000000000001 /* SharedAssets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = D57200000000000000000002 /* SharedAssets.xcassets */; };
 		073565BA0B01598641B11348 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C49C2130B0B0B01A795C7504 /* SettingsView.swift */; };
@@ -58,15 +58,15 @@
 		5AECF7B494583F056FBE596C /* WovenMatterApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 624CEC46A7441DADEBBCE79E /* WovenMatterApp.swift */; };
 		5E64711B441F5A188A2862AC /* RootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 489A29D04369BF898400D045 /* RootView.swift */; };
 		A11C00000000000000000003 /* WorkspaceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A11C00000000000000000004 /* WorkspaceView.swift */; };
-		DC0A00000000000000000001 /* DashboardComposerTextEditor.swift in Sources */ = {isa = PBXBuildFile; fileRef = DC0A00000000000000000002 /* DashboardComposerTextEditor.swift */; };
-		D45100000000000000000001 /* DashboardDesign.swift in Sources */ = {isa = PBXBuildFile; fileRef = D45100000000000000000002 /* DashboardDesign.swift */; };
-		D57100000000000000000001 /* DashboardStyle.swift in Sources */ = {isa = PBXBuildFile; fileRef = D57100000000000000000002 /* DashboardStyle.swift */; };
-		D45300000000000000000001 /* DashboardCalendarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D45300000000000000000002 /* DashboardCalendarView.swift */; };
-		D45400000000000000000001 /* DashboardUsageView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D45400000000000000000002 /* DashboardUsageView.swift */; };
-		D45400000000000000000003 /* DashboardUsageAnalytics.swift in Sources */ = {isa = PBXBuildFile; fileRef = D45400000000000000000004 /* DashboardUsageAnalytics.swift */; };
-		D45400000000000000000005 /* DashboardUsageChart.swift in Sources */ = {isa = PBXBuildFile; fileRef = D45400000000000000000006 /* DashboardUsageChart.swift */; };
-		D45400000000000000000007 /* DashboardUsageLimits.swift in Sources */ = {isa = PBXBuildFile; fileRef = D45400000000000000000008 /* DashboardUsageLimits.swift */; };
-		09C447491BD8CE01BF01568C /* DashboardUsageLoading.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5609000D516C815CA5DA026A /* DashboardUsageLoading.swift */; };
+		DC0A00000000000000000001 /* ComposerTextEditor.swift in Sources */ = {isa = PBXBuildFile; fileRef = DC0A00000000000000000002 /* ComposerTextEditor.swift */; };
+		D45100000000000000000001 /* DesktopDesign.swift in Sources */ = {isa = PBXBuildFile; fileRef = D45100000000000000000002 /* DesktopDesign.swift */; };
+		D57100000000000000000001 /* WovenStyle.swift in Sources */ = {isa = PBXBuildFile; fileRef = D57100000000000000000002 /* WovenStyle.swift */; };
+		D45300000000000000000001 /* CalendarSurface.swift in Sources */ = {isa = PBXBuildFile; fileRef = D45300000000000000000002 /* CalendarSurface.swift */; };
+		D45400000000000000000001 /* UsageView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D45400000000000000000002 /* UsageView.swift */; };
+		D45400000000000000000003 /* UsageAnalyticsPage.swift in Sources */ = {isa = PBXBuildFile; fileRef = D45400000000000000000004 /* UsageAnalyticsPage.swift */; };
+		D45400000000000000000005 /* UsageChart.swift in Sources */ = {isa = PBXBuildFile; fileRef = D45400000000000000000006 /* UsageChart.swift */; };
+		D45400000000000000000007 /* UsageLimitsPage.swift in Sources */ = {isa = PBXBuildFile; fileRef = D45400000000000000000008 /* UsageLimitsPage.swift */; };
+		09C447491BD8CE01BF01568C /* UsagePlaceholders.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5609000D516C815CA5DA026A /* UsagePlaceholders.swift */; };
 		D49000000000000000000001 /* ConversationMarkdown.swift in Sources */ = {isa = PBXBuildFile; fileRef = D49000000000000000000003 /* ConversationMarkdown.swift */; };
 		D49100000000000000000001 /* ConversationMarkdownDocument.swift in Sources */ = {isa = PBXBuildFile; fileRef = D49100000000000000000003 /* ConversationMarkdownDocument.swift */; };
 		D49300000000000000000001 /* ConversationMessageLayout.swift in Sources */ = {isa = PBXBuildFile; fileRef = D49300000000000000000003 /* ConversationMessageLayout.swift */; };
@@ -82,22 +82,22 @@
 		A13000000000000000000003 /* SettingsWorkspacesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A13000000000000000000004 /* SettingsWorkspacesView.swift */; };
 		A1300000000000000000F001 /* SettingsWovenMCPView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1300000000000000000F002 /* SettingsWovenMCPView.swift */; };
 		F10100000000000000000001 /* ArtifactEditor.swift in Sources */ = {isa = PBXBuildFile; fileRef = F10100000000000000000002 /* ArtifactEditor.swift */; };
-		F10200000000000000000001 /* DashboardDatabasesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F10200000000000000000002 /* DashboardDatabasesView.swift */; };
-		ADB35226B01C45F520411F2C /* DashboardConversationState.swift in Sources */ = {isa = PBXBuildFile; fileRef = FC6A850ACFC17DE4433439A7 /* DashboardConversationState.swift */; };
-		8443106E4E46FD4C315E128F /* DashboardNoteDrafts.swift in Sources */ = {isa = PBXBuildFile; fileRef = 879D531AEA3583A537B8BE1B /* DashboardNoteDrafts.swift */; };
-		97B76EB8D620C6E620196AC8 /* DashboardSidebar.swift in Sources */ = {isa = PBXBuildFile; fileRef = 890F3602A18AF2215FAC1D3E /* DashboardSidebar.swift */; };
-		E8E4FA74C6587F81C8999942 /* DashboardConversation.swift in Sources */ = {isa = PBXBuildFile; fileRef = B5CEADA1DA4AFBF4EFFC2CDC /* DashboardConversation.swift */; };
-		FE8DA980F8CFABCB8AAB3893 /* DashboardComposer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 45C178F10C928BB5DF700830 /* DashboardComposer.swift */; };
-		2350EC32F0F50FD3DB4069F3 /* DashboardNotePane.swift in Sources */ = {isa = PBXBuildFile; fileRef = 52C822631EDF91C6FE39C754 /* DashboardNotePane.swift */; };
-		923D138C1F54FC887AA90493 /* DashboardSharedViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 40D1B5DEF1B0023CB8C52B6D /* DashboardSharedViews.swift */; };
-		C04200000000000000000001 /* DashboardConversationPopover.swift in Sources */ = {isa = PBXBuildFile; fileRef = C04200000000000000000002 /* DashboardConversationPopover.swift */; };
+		F10200000000000000000001 /* DatabasesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F10200000000000000000002 /* DatabasesView.swift */; };
+		ADB35226B01C45F520411F2C /* ConversationState.swift in Sources */ = {isa = PBXBuildFile; fileRef = FC6A850ACFC17DE4433439A7 /* ConversationState.swift */; };
+		8443106E4E46FD4C315E128F /* NoteDrafts.swift in Sources */ = {isa = PBXBuildFile; fileRef = 879D531AEA3583A537B8BE1B /* NoteDrafts.swift */; };
+		97B76EB8D620C6E620196AC8 /* Sidebar.swift in Sources */ = {isa = PBXBuildFile; fileRef = 890F3602A18AF2215FAC1D3E /* Sidebar.swift */; };
+		E8E4FA74C6587F81C8999942 /* CloudConversation.swift in Sources */ = {isa = PBXBuildFile; fileRef = B5CEADA1DA4AFBF4EFFC2CDC /* CloudConversation.swift */; };
+		FE8DA980F8CFABCB8AAB3893 /* ConversationComposer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 45C178F10C928BB5DF700830 /* ConversationComposer.swift */; };
+		2350EC32F0F50FD3DB4069F3 /* DesktopNotePane.swift in Sources */ = {isa = PBXBuildFile; fileRef = 52C822631EDF91C6FE39C754 /* DesktopNotePane.swift */; };
+		923D138C1F54FC887AA90493 /* SharedViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 40D1B5DEF1B0023CB8C52B6D /* SharedViews.swift */; };
+		C04200000000000000000001 /* ConversationPopover.swift in Sources */ = {isa = PBXBuildFile; fileRef = C04200000000000000000002 /* ConversationPopover.swift */; };
 		4C606D43824083BD3A612FF1 /* OpenCodeModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3CE258FB55B3D55A39972D5B /* OpenCodeModel.swift */; };
 		E86083BC811D526E0900522B /* OpenCodeSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 97160C827D94B74AFAB2961A /* OpenCodeSettingsView.swift */; };
 		8B47C81B917AA853D87FB56A /* OpenCodeInteractionView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 17AF06D69A7DE73E3F94E40A /* OpenCodeInteractionView.swift */; };
 		46E81C4CE9571D1C715098CA /* OpenCodeSessionView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6F6AFCDD4A429E11B0945492 /* OpenCodeSessionView.swift */; };
 		5C84BF439B9047118002DD70 /* WorkspaceAgentToolsModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 20E807F893654CD4A1F24D40 /* WorkspaceAgentToolsModel.swift */; };
 		0D0C4EE8248E4F63A87CF7B4 /* MemberExecutionRoutes.swift in Sources */ = {isa = PBXBuildFile; fileRef = D8761929DCF444669E58A75E /* MemberExecutionRoutes.swift */; };
-		F19000000000000000000001 /* DashboardNoteDocumentCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = F19000000000000000000002 /* DashboardNoteDocumentCache.swift */; };
+		F19000000000000000000001 /* NoteDocumentCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = F19000000000000000000002 /* NoteDocumentCache.swift */; };
 		A14000000000000000000001 /* ApplicationModel+SessionSelections.swift in Sources */ = {isa = PBXBuildFile; fileRef = A14000000000000000000002 /* ApplicationModel+SessionSelections.swift */; };
 		E678564F286E71B5FA588A5A /* DeviceCommandService.swift in Sources */ = {isa = PBXBuildFile; fileRef = FF3D48D1E7B9587A3DF2F895 /* DeviceCommandService.swift */; };
 		B7937C7349692E25EE127696 /* LibraryHostController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0083907CDB98FA31255BD2C1 /* LibraryHostController.swift */; };
@@ -113,10 +113,10 @@
 		D8ADD27CBC40434BB0183702 /* NativeInteractionProjection.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2737F707B9A5E3A2A5A5AD8 /* NativeInteractionProjection.swift */; };
 		77A348D5C0634041BD69B746 /* LibraryWorkspaceFeatures.swift in Sources */ = {isa = PBXBuildFile; fileRef = 853617F2A39F477E947E59DA /* LibraryWorkspaceFeatures.swift */; };
 		A13EC094A3DEA4F302868640 /* ApplicationModel+Calendar.swift in Sources */ = {isa = PBXBuildFile; fileRef = B88F25850147F01B163EDF7E /* ApplicationModel+Calendar.swift */; };
-		F4743517D41721ACB550EE94 /* DashboardCalendarEventSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8AA41DB8B4A4AF41CCC355A1 /* DashboardCalendarEventSheet.swift */; };
-		22101ADAF84DA8CEE85A4AB8 /* DashboardCalendarTaskFields.swift in Sources */ = {isa = PBXBuildFile; fileRef = D6DCB1F7BFAF35416DF437EE /* DashboardCalendarTaskFields.swift */; };
-		C47EAA780000000000000001 /* DashboardCalendarFormControls.swift in Sources */ = {isa = PBXBuildFile; fileRef = C47EAA780000000000000002 /* DashboardCalendarFormControls.swift */; };
-		C47EAA780000000000000003 /* DashboardCalendarColors.swift in Sources */ = {isa = PBXBuildFile; fileRef = C47EAA780000000000000004 /* DashboardCalendarColors.swift */; };
+		F4743517D41721ACB550EE94 /* DesktopCalendarEventSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8AA41DB8B4A4AF41CCC355A1 /* DesktopCalendarEventSheet.swift */; };
+		22101ADAF84DA8CEE85A4AB8 /* CalendarTaskFields.swift in Sources */ = {isa = PBXBuildFile; fileRef = D6DCB1F7BFAF35416DF437EE /* CalendarTaskFields.swift */; };
+		C47EAA780000000000000001 /* CalendarFormControls.swift in Sources */ = {isa = PBXBuildFile; fileRef = C47EAA780000000000000002 /* CalendarFormControls.swift */; };
+		C47EAA780000000000000003 /* CalendarColors.swift in Sources */ = {isa = PBXBuildFile; fileRef = C47EAA780000000000000004 /* CalendarColors.swift */; };
 		95C7998809D0EDB0A8E1C327 /* ApplicationModel+WindowStream.swift in Sources */ = {isa = PBXBuildFile; fileRef = 58C9C50BA69858EC448D4F19 /* ApplicationModel+WindowStream.swift */; };
 		7E3A51C0D2B94F6E8A1C0B21 /* ApplicationModel+RemoteConversation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7E3A51C0D2B94F6E8A1C0B22 /* ApplicationModel+RemoteConversation.swift */; };
 		CE19449AB0FFF6A1E12E4D48 /* BackendApplicationService.swift in Sources */ = {isa = PBXBuildFile; fileRef = E1A63205C0811CE6DBAD590C /* BackendApplicationService.swift */; };
@@ -129,18 +129,18 @@
 		281F6DF22C3AE19CCE3FC99D /* BackendLibraryService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 753DF034EE6D727B6091929D /* BackendLibraryService.swift */; };
 		C131C0A00000000000000002 /* ApplicationModel+ConversationActions.swift in Sources */ = {isa = PBXBuildFile; fileRef = C131C0A00000000000000001 /* ApplicationModel+ConversationActions.swift */; };
 		C131C0B00000000000000002 /* ApplicationModel+NoteActions.swift in Sources */ = {isa = PBXBuildFile; fileRef = C131C0B00000000000000001 /* ApplicationModel+NoteActions.swift */; };
-		C131C0A00000000000000004 /* DashboardConversationActions.swift in Sources */ = {isa = PBXBuildFile; fileRef = C131C0A00000000000000003 /* DashboardConversationActions.swift */; };
-		C131C0B00000000000000004 /* DashboardNoteActions.swift in Sources */ = {isa = PBXBuildFile; fileRef = C131C0B00000000000000003 /* DashboardNoteActions.swift */; };
+		C131C0A00000000000000004 /* ConversationContextMenu.swift in Sources */ = {isa = PBXBuildFile; fileRef = C131C0A00000000000000003 /* ConversationContextMenu.swift */; };
+		C131C0B00000000000000004 /* NoteContextMenu.swift in Sources */ = {isa = PBXBuildFile; fileRef = C131C0B00000000000000003 /* NoteContextMenu.swift */; };
 		4D3A7F0D3149F78FD676C837 /* WorkspaceAssetSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4ADD1E1DF23A9E7BEF7AD7B6 /* WorkspaceAssetSession.swift */; };
-		46B913B8FF73487BF0D219C8 /* DashboardAssetPane.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1E7844C3713B055E9CEE07D7 /* DashboardAssetPane.swift */; };
-		00165EE7943E7F7E19A3D2AD /* DashboardBrowserPane.swift in Sources */ = {isa = PBXBuildFile; fileRef = D04B4DB93AFAF496F21185E6 /* DashboardBrowserPane.swift */; };
+		46B913B8FF73487BF0D219C8 /* AssetPane.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1E7844C3713B055E9CEE07D7 /* AssetPane.swift */; };
+		00165EE7943E7F7E19A3D2AD /* BrowserPane.swift in Sources */ = {isa = PBXBuildFile; fileRef = D04B4DB93AFAF496F21185E6 /* BrowserPane.swift */; };
 		A7EAFACF3F974117B37965CC /* ApplicationModel+Goals.swift in Sources */ = {isa = PBXBuildFile; fileRef = 848A38FA567146749E61538D /* ApplicationModel+Goals.swift */; };
 		A9AEC3CDE2454B04B05F6AA3 /* WorkspaceAgentToolsModel+Goals.swift in Sources */ = {isa = PBXBuildFile; fileRef = 26006898DCC6474CBE1A1585 /* WorkspaceAgentToolsModel+Goals.swift */; };
 		A9682778D5284ABE8DF0D342 /* ConversationGoalControls.swift in Sources */ = {isa = PBXBuildFile; fileRef = 988F5895CCE74B6E9C970200 /* ConversationGoalControls.swift */; };
 		1865697E240F2F2763E855ED /* LibraryClient in Frameworks */ = {isa = PBXBuildFile; productRef = C3AE1E4D864C6AAF1D9CDFAC /* LibraryClient */; };
 		97AD203F32768DAAE8E74B8A /* InferenceHost.swift in Sources */ = {isa = PBXBuildFile; fileRef = DDAE8827A1011FA6113C72B1 /* InferenceHost.swift */; };
 		6D31E453B9DB807ED72C7E93 /* SavedArtifactsModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8AB39465A1E975E9B17949AD /* SavedArtifactsModel.swift */; };
-		3920C098CAD3AD073343D629 /* DashboardSavedArtifactsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CF0706BAE96F6819E10625D5 /* DashboardSavedArtifactsView.swift */; };
+		3920C098CAD3AD073343D629 /* SavedArtifactsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CF0706BAE96F6819E10625D5 /* SavedArtifactsView.swift */; };
 		D9F61698E2250BF9BFAF5A2F /* CentralExecutionClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4C92277CA35CAFDF60ADE671 /* CentralExecutionClient.swift */; };
 		A7D1E2F3B4C5D6E7F8091A2B /* BackendWindowStreamSource.swift in Sources */ = {isa = PBXBuildFile; fileRef = B8E2F3A4C5D6E7F8091A2B3C /* BackendWindowStreamSource.swift */; };
 		FA2F7EB3AD102A068C2F070C /* FederatedExecutionBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = 306E57A53B3F8371623DCC8F /* FederatedExecutionBridge.swift */; };
@@ -154,7 +154,7 @@
 		63885F9DFDCFCD1D12455E37 /* RemoteBrowserViewerModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8FAAD9B2BEC652A9951E07F7 /* RemoteBrowserViewerModel.swift */; };
 		3E5461C189BF091338B7103C /* RemoteBrowserView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A524692B0EEFEF745237C8AF /* RemoteBrowserView.swift */; };
 		A6F6CE2A68949F541CAEF101 /* RemoteBrowserCanvas.swift in Sources */ = {isa = PBXBuildFile; fileRef = A6F6CE2A68949F541CAEF102 /* RemoteBrowserCanvas.swift */; };
-		D0C000000000000000000002 /* DashboardDocumentPane.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0C000000000000000000001; };
+		D0C000000000000000000002 /* DocumentPane.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0C000000000000000000001; };
 		D0C000000000000000000004 /* ConversationFilePreviews.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0C000000000000000000003; };
 		C28E61FFA047C5F1D80D55AB /* HarnessAccountPresentation.swift in Sources */ = {isa = PBXBuildFile; fileRef = EC0FDA57D036F2833D4D5F28 /* HarnessAccountPresentation.swift */; };
 		908E8E08608BCD94835B9307 /* SettingsHarnessAccounts.swift in Sources */ = {isa = PBXBuildFile; fileRef = D92320EB212D9B05AEBB711C /* SettingsHarnessAccounts.swift */; };
@@ -174,7 +174,7 @@
 		BA32B256A31201F0C7A60050 /* BotConversationController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1EDC53FEFEB9F50425DA9E5B /* BotConversationController.swift */; };
 		86CACBAFFC7E97DB84276B1B /* BotsHostController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 10711E2C4D6FF52822ADD5AD /* BotsHostController.swift */; };
 		35C8B5B3ED7B16682519C3F1 /* SettingsBotsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 86D0C046DD9FF43FF75D9571 /* SettingsBotsView.swift */; };
-		91FF8123A627781A3B7384B6 /* DashboardBotsSidebarSection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 886C0F4C61627DD7DD5BE07B /* DashboardBotsSidebarSection.swift */; };
+		91FF8123A627781A3B7384B6 /* BotsSidebarSection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 886C0F4C61627DD7DD5BE07B /* BotsSidebarSection.swift */; };
 		232888BC018146768F84ABE6 /* BotConversationSurface.swift in Sources */ = {isa = PBXBuildFile; fileRef = D9C23E0D94B91147BCA51776 /* BotConversationSurface.swift */; };
 		479780441D5DFD4C83B18DB9 /* SettingsBotsTeams.swift in Sources */ = {isa = PBXBuildFile; fileRef = 12E1B4139D26B5533AF18BA6 /* SettingsBotsTeams.swift */; };
 		63E3AC2E3964B416C868778C /* SettingsBotsProfiles.swift in Sources */ = {isa = PBXBuildFile; fileRef = D3317C510D37DBDE83A29ECB /* SettingsBotsProfiles.swift */; };
@@ -201,8 +201,8 @@
 		E02200000000000000000002 /* HarnessSetupModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "App/Models/HarnessSetupModel.swift"; sourceTree = SOURCE_ROOT; };
 		E02200000000000000000004 /* HarnessSetupView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "App/Views/HarnessSetupView.swift"; sourceTree = SOURCE_ROOT; };
         A03000000000000000000002 /* DesktopUpdater.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DesktopUpdater.swift; sourceTree = "<group>"; };
-		DA4C00000000000000000004 /* DashboardHTMLArtifactDocument.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardHTMLArtifactDocument.swift; sourceTree = "<group>"; };
-		DA4C00000000000000000002 /* DashboardColors.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardColors.swift; sourceTree = "<group>"; };
+		DA4C00000000000000000004 /* HTMLArtifactDocument.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HTMLArtifactDocument.swift; sourceTree = "<group>"; };
+		DA4C00000000000000000002 /* WovenColors.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WovenColors.swift; sourceTree = "<group>"; };
 		FE09B6C372424DF69FC333FA /* ThirdPartyNotices.txt */ = {isa = PBXFileReference; lastKnownFileType = text; path = App/ThirdPartyNotices.txt; sourceTree = SOURCE_ROOT; };
 		ACFB273F1EBA43F2A3304AE7 /* ConversationTranscriptState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationTranscriptState.swift; sourceTree = "<group>"; };
 		AC04DAE6C69A406FB73E74A1 /* ConversationTasksBadge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationTasksBadge.swift; sourceTree = "<group>"; };
@@ -214,7 +214,7 @@
 		DA2090000000000000000001 /* DefaultAgentSDKSettingsModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DefaultAgentSDKSettingsModel.swift; sourceTree = "<group>"; };
 		F178B05B2AE0D773B0C59957 /* BackendOpenCodeService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "BackendOpenCodeService.swift"; sourceTree = "<group>"; };
 		A71B00000000000000000102 /* LibraryModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryModel.swift; sourceTree = "<group>"; };
-		A71B00000000000000000002 /* DashboardLibraryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardLibraryView.swift; sourceTree = "<group>"; };
+		A71B00000000000000000002 /* LibrarySurface.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibrarySurface.swift; sourceTree = "<group>"; };
 		7E4AE75EDB3C1EE9E7043F59 /* DictationModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DictationModel.swift; sourceTree = "<group>"; };
 		FCBB65211C7015A6B8158E80 /* DictationEditor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DictationEditor.swift; sourceTree = "<group>"; };
 		BA61B1265D88D38A1D708C78 /* LocalModelServerConnections.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalModelServerConnections.swift; sourceTree = "<group>"; };
@@ -233,7 +233,7 @@
 		A11C00000000000000000002 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		D57200000000000000000002 /* SharedAssets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = SharedAssets.xcassets; sourceTree = "<group>"; };
 		A11C00000000000000000004 /* WorkspaceView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceView.swift; sourceTree = "<group>"; };
-		DC0A00000000000000000002 /* DashboardComposerTextEditor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardComposerTextEditor.swift; sourceTree = "<group>"; };
+		DC0A00000000000000000002 /* ComposerTextEditor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ComposerTextEditor.swift; sourceTree = "<group>"; };
 		37C9459F43D4462FD229B6B1 /* WovenMatter.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = WovenMatter.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		489A29D04369BF898400D045 /* RootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RootView.swift; sourceTree = "<group>"; };
 		5A0B27571F91CCF38534BB90 /* ApplicationModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ApplicationModel.swift; sourceTree = "<group>"; };
@@ -246,14 +246,14 @@
 		5E7A0000000000000000000E /* SettingsAccountsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsAccountsView.swift; sourceTree = "<group>"; };
 		B7E2C41A9D3F4E5A6B7C8D91 /* SettingsPermissionsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsPermissionsView.swift; sourceTree = "<group>"; };
 		DBB4B07F8994DA5A755EAF99 /* wovenmatter-macos */ = {isa = PBXFileReference; lastKnownFileType = folder; name = "wovenmatter-macos"; path = .; sourceTree = SOURCE_ROOT; };
-		D45100000000000000000002 /* DashboardDesign.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardDesign.swift; sourceTree = "<group>"; };
-		D57100000000000000000002 /* DashboardStyle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardStyle.swift; sourceTree = "<group>"; };
-		D45300000000000000000002 /* DashboardCalendarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardCalendarView.swift; sourceTree = "<group>"; };
-		D45400000000000000000002 /* DashboardUsageView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardUsageView.swift; sourceTree = "<group>"; };
-		D45400000000000000000004 /* DashboardUsageAnalytics.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardUsageAnalytics.swift; sourceTree = "<group>"; };
-		D45400000000000000000006 /* DashboardUsageChart.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardUsageChart.swift; sourceTree = "<group>"; };
-		D45400000000000000000008 /* DashboardUsageLimits.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardUsageLimits.swift; sourceTree = "<group>"; };
-		5609000D516C815CA5DA026A /* DashboardUsageLoading.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardUsageLoading.swift; sourceTree = "<group>"; };
+		D45100000000000000000002 /* DesktopDesign.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DesktopDesign.swift; sourceTree = "<group>"; };
+		D57100000000000000000002 /* WovenStyle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WovenStyle.swift; sourceTree = "<group>"; };
+		D45300000000000000000002 /* CalendarSurface.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalendarSurface.swift; sourceTree = "<group>"; };
+		D45400000000000000000002 /* UsageView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UsageView.swift; sourceTree = "<group>"; };
+		D45400000000000000000004 /* UsageAnalyticsPage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UsageAnalyticsPage.swift; sourceTree = "<group>"; };
+		D45400000000000000000006 /* UsageChart.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UsageChart.swift; sourceTree = "<group>"; };
+		D45400000000000000000008 /* UsageLimitsPage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UsageLimitsPage.swift; sourceTree = "<group>"; };
+		5609000D516C815CA5DA026A /* UsagePlaceholders.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UsagePlaceholders.swift; sourceTree = "<group>"; };
 		D49000000000000000000003 /* ConversationMarkdown.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationMarkdown.swift; sourceTree = "<group>"; };
 		D49100000000000000000003 /* ConversationMarkdownDocument.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationMarkdownDocument.swift; sourceTree = "<group>"; };
 		D49300000000000000000003 /* ConversationMessageLayout.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationMessageLayout.swift; sourceTree = "<group>"; };
@@ -270,22 +270,22 @@
 		A13000000000000000000004 /* SettingsWorkspacesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsWorkspacesView.swift; sourceTree = "<group>"; };
 		A1300000000000000000F002 /* SettingsWovenMCPView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsWovenMCPView.swift; sourceTree = "<group>"; };
 		F10100000000000000000002 /* ArtifactEditor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ArtifactEditor.swift; sourceTree = "<group>"; };
-		F10200000000000000000002 /* DashboardDatabasesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardDatabasesView.swift; sourceTree = "<group>"; };
-		FC6A850ACFC17DE4433439A7 /* DashboardConversationState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardConversationState.swift; sourceTree = "<group>"; };
-		879D531AEA3583A537B8BE1B /* DashboardNoteDrafts.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardNoteDrafts.swift; sourceTree = "<group>"; };
-		890F3602A18AF2215FAC1D3E /* DashboardSidebar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardSidebar.swift; sourceTree = "<group>"; };
-		B5CEADA1DA4AFBF4EFFC2CDC /* DashboardConversation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardConversation.swift; sourceTree = "<group>"; };
-		45C178F10C928BB5DF700830 /* DashboardComposer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardComposer.swift; sourceTree = "<group>"; };
-		52C822631EDF91C6FE39C754 /* DashboardNotePane.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardNotePane.swift; sourceTree = "<group>"; };
-		40D1B5DEF1B0023CB8C52B6D /* DashboardSharedViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardSharedViews.swift; sourceTree = "<group>"; };
-		C04200000000000000000002 /* DashboardConversationPopover.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardConversationPopover.swift; sourceTree = "<group>"; };
+		F10200000000000000000002 /* DatabasesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DatabasesView.swift; sourceTree = "<group>"; };
+		FC6A850ACFC17DE4433439A7 /* ConversationState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationState.swift; sourceTree = "<group>"; };
+		879D531AEA3583A537B8BE1B /* NoteDrafts.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NoteDrafts.swift; sourceTree = "<group>"; };
+		890F3602A18AF2215FAC1D3E /* Sidebar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sidebar.swift; sourceTree = "<group>"; };
+		B5CEADA1DA4AFBF4EFFC2CDC /* CloudConversation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudConversation.swift; sourceTree = "<group>"; };
+		45C178F10C928BB5DF700830 /* ConversationComposer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationComposer.swift; sourceTree = "<group>"; };
+		52C822631EDF91C6FE39C754 /* DesktopNotePane.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DesktopNotePane.swift; sourceTree = "<group>"; };
+		40D1B5DEF1B0023CB8C52B6D /* SharedViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SharedViews.swift; sourceTree = "<group>"; };
+		C04200000000000000000002 /* ConversationPopover.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationPopover.swift; sourceTree = "<group>"; };
 		3CE258FB55B3D55A39972D5B /* OpenCodeModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenCodeModel.swift; sourceTree = "<group>"; };
 		97160C827D94B74AFAB2961A /* OpenCodeSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenCodeSettingsView.swift; sourceTree = "<group>"; };
 		17AF06D69A7DE73E3F94E40A /* OpenCodeInteractionView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenCodeInteractionView.swift; sourceTree = "<group>"; };
 		6F6AFCDD4A429E11B0945492 /* OpenCodeSessionView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenCodeSessionView.swift; sourceTree = "<group>"; };
 		20E807F893654CD4A1F24D40 /* WorkspaceAgentToolsModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "WorkspaceAgentToolsModel.swift"; sourceTree = "<group>"; };
 		D8761929DCF444669E58A75E /* MemberExecutionRoutes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MemberExecutionRoutes.swift; sourceTree = "<group>"; };
-		F19000000000000000000002 /* DashboardNoteDocumentCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardNoteDocumentCache.swift; sourceTree = "<group>"; };
+		F19000000000000000000002 /* NoteDocumentCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NoteDocumentCache.swift; sourceTree = "<group>"; };
 		A14000000000000000000002 /* ApplicationModel+SessionSelections.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ApplicationModel+SessionSelections.swift"; sourceTree = "<group>"; };
 		FF3D48D1E7B9587A3DF2F895 /* DeviceCommandService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceCommandService.swift; sourceTree = "<group>"; };
 		0083907CDB98FA31255BD2C1 /* LibraryHostController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryHostController.swift; sourceTree = "<group>"; };
@@ -301,10 +301,10 @@
 		A2737F707B9A5E3A2A5A5AD8 /* NativeInteractionProjection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeInteractionProjection.swift; sourceTree = "<group>"; };
 		853617F2A39F477E947E59DA /* LibraryWorkspaceFeatures.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryWorkspaceFeatures.swift; sourceTree = "<group>"; };
 		B88F25850147F01B163EDF7E /* ApplicationModel+Calendar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ApplicationModel+Calendar.swift"; sourceTree = "<group>"; };
-		8AA41DB8B4A4AF41CCC355A1 /* DashboardCalendarEventSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "DashboardCalendarEventSheet.swift"; sourceTree = "<group>"; };
-		D6DCB1F7BFAF35416DF437EE /* DashboardCalendarTaskFields.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "DashboardCalendarTaskFields.swift"; sourceTree = "<group>"; };
-		C47EAA780000000000000002 /* DashboardCalendarFormControls.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "DashboardCalendarFormControls.swift"; sourceTree = "<group>"; };
-		C47EAA780000000000000004 /* DashboardCalendarColors.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "DashboardCalendarColors.swift"; sourceTree = "<group>"; };
+		8AA41DB8B4A4AF41CCC355A1 /* DesktopCalendarEventSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "DesktopCalendarEventSheet.swift"; sourceTree = "<group>"; };
+		D6DCB1F7BFAF35416DF437EE /* CalendarTaskFields.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "CalendarTaskFields.swift"; sourceTree = "<group>"; };
+		C47EAA780000000000000002 /* CalendarFormControls.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "CalendarFormControls.swift"; sourceTree = "<group>"; };
+		C47EAA780000000000000004 /* CalendarColors.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "CalendarColors.swift"; sourceTree = "<group>"; };
 		58C9C50BA69858EC448D4F19 /* ApplicationModel+WindowStream.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ApplicationModel+WindowStream.swift"; sourceTree = "<group>"; };
 		7E3A51C0D2B94F6E8A1C0B22 /* ApplicationModel+RemoteConversation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ApplicationModel+RemoteConversation.swift"; sourceTree = "<group>"; };
 		E1A63205C0811CE6DBAD590C /* BackendApplicationService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "BackendApplicationService.swift"; sourceTree = "<group>"; };
@@ -317,17 +317,17 @@
 		753DF034EE6D727B6091929D /* BackendLibraryService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "BackendLibraryService.swift"; sourceTree = "<group>"; };
 		C131C0A00000000000000001 /* ApplicationModel+ConversationActions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ApplicationModel+ConversationActions.swift"; sourceTree = "<group>"; };
 		C131C0B00000000000000001 /* ApplicationModel+NoteActions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ApplicationModel+NoteActions.swift"; sourceTree = "<group>"; };
-		C131C0A00000000000000003 /* DashboardConversationActions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "DashboardConversationActions.swift"; sourceTree = "<group>"; };
-		C131C0B00000000000000003 /* DashboardNoteActions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "DashboardNoteActions.swift"; sourceTree = "<group>"; };
+		C131C0A00000000000000003 /* ConversationContextMenu.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ConversationContextMenu.swift"; sourceTree = "<group>"; };
+		C131C0B00000000000000003 /* NoteContextMenu.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "NoteContextMenu.swift"; sourceTree = "<group>"; };
 		4ADD1E1DF23A9E7BEF7AD7B6 /* WorkspaceAssetSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "App/Models/WorkspaceAssetSession.swift"; sourceTree = SOURCE_ROOT; };
-		1E7844C3713B055E9CEE07D7 /* DashboardAssetPane.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "App/Views/DashboardAssetPane.swift"; sourceTree = SOURCE_ROOT; };
-		D04B4DB93AFAF496F21185E6 /* DashboardBrowserPane.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "App/Views/DashboardBrowserPane.swift"; sourceTree = SOURCE_ROOT; };
+		1E7844C3713B055E9CEE07D7 /* AssetPane.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "App/Views/AssetPane.swift"; sourceTree = SOURCE_ROOT; };
+		D04B4DB93AFAF496F21185E6 /* BrowserPane.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "App/Views/BrowserPane.swift"; sourceTree = SOURCE_ROOT; };
 		848A38FA567146749E61538D /* ApplicationModel+Goals.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ApplicationModel+Goals.swift"; sourceTree = "<group>"; };
 		26006898DCC6474CBE1A1585 /* WorkspaceAgentToolsModel+Goals.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "WorkspaceAgentToolsModel+Goals.swift"; sourceTree = "<group>"; };
 		988F5895CCE74B6E9C970200 /* ConversationGoalControls.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ConversationGoalControls.swift"; sourceTree = "<group>"; };
 		DDAE8827A1011FA6113C72B1 /* InferenceHost.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InferenceHost.swift; sourceTree = "<group>"; };
 		8AB39465A1E975E9B17949AD /* SavedArtifactsModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SavedArtifactsModel.swift; sourceTree = "<group>"; };
-		CF0706BAE96F6819E10625D5 /* DashboardSavedArtifactsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardSavedArtifactsView.swift; sourceTree = "<group>"; };
+		CF0706BAE96F6819E10625D5 /* SavedArtifactsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SavedArtifactsView.swift; sourceTree = "<group>"; };
 		4C92277CA35CAFDF60ADE671 /* CentralExecutionClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CentralExecutionClient.swift; sourceTree = "<group>"; };
 		B8E2F3A4C5D6E7F8091A2B3C /* BackendWindowStreamSource.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackendWindowStreamSource.swift; sourceTree = "<group>"; };
 		306E57A53B3F8371623DCC8F /* FederatedExecutionBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FederatedExecutionBridge.swift; sourceTree = "<group>"; };
@@ -341,7 +341,7 @@
 		8FAAD9B2BEC652A9951E07F7 /* RemoteBrowserViewerModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "App/Models/RemoteBrowserViewerModel.swift"; sourceTree = SOURCE_ROOT; };
 		A524692B0EEFEF745237C8AF /* RemoteBrowserView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "App/Views/RemoteBrowserView.swift"; sourceTree = SOURCE_ROOT; };
 		A6F6CE2A68949F541CAEF102 /* RemoteBrowserCanvas.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "App/Views/RemoteBrowserCanvas.swift"; sourceTree = SOURCE_ROOT; };
-		D0C000000000000000000001 /* DashboardDocumentPane.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "App/Views/DashboardDocumentPane.swift"; sourceTree = SOURCE_ROOT; };
+		D0C000000000000000000001 /* DocumentPane.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "App/Views/DocumentPane.swift"; sourceTree = SOURCE_ROOT; };
 		D0C000000000000000000003 /* ConversationFilePreviews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "App/Views/ConversationFilePreviews.swift"; sourceTree = SOURCE_ROOT; };
 		EC0FDA57D036F2833D4D5F28 /* HarnessAccountPresentation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HarnessAccountPresentation.swift; sourceTree = "<group>"; };
 		D92320EB212D9B05AEBB711C /* SettingsHarnessAccounts.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsHarnessAccounts.swift; sourceTree = "<group>"; };
@@ -361,7 +361,7 @@
 		1EDC53FEFEB9F50425DA9E5B /* BotConversationController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "BotConversationController.swift"; sourceTree = "<group>"; };
 		10711E2C4D6FF52822ADD5AD /* BotsHostController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "BotsHostController.swift"; sourceTree = "<group>"; };
 		86D0C046DD9FF43FF75D9571 /* SettingsBotsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "SettingsBotsView.swift"; sourceTree = "<group>"; };
-		886C0F4C61627DD7DD5BE07B /* DashboardBotsSidebarSection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "DashboardBotsSidebarSection.swift"; sourceTree = "<group>"; };
+		886C0F4C61627DD7DD5BE07B /* BotsSidebarSection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "BotsSidebarSection.swift"; sourceTree = "<group>"; };
 		D9C23E0D94B91147BCA51776 /* BotConversationSurface.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "BotConversationSurface.swift"; sourceTree = "<group>"; };
 		12E1B4139D26B5533AF18BA6 /* SettingsBotsTeams.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "SettingsBotsTeams.swift"; sourceTree = "<group>"; };
 		D3317C510D37DBDE83A29ECB /* SettingsBotsProfiles.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "SettingsBotsProfiles.swift"; sourceTree = "<group>"; };
@@ -391,7 +391,7 @@
 				1865697E240F2F2763E855ED /* LibraryClient in Frameworks */,
 				0C11E0000000000000000001 /* WovenMatterClient in Frameworks */,
 				B40A00000000000000000001 /* WovenMatterAutomation in Frameworks */,
-				D46000000000000000000002 /* WovenMatterDashboardStore in Frameworks */,
+				D46000000000000000000002 /* WovenMatterLibraryStore in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -415,9 +415,9 @@
 				A524692B0EEFEF745237C8AF /* RemoteBrowserView.swift */,
 				4ADD1E1DF23A9E7BEF7AD7B6 /* WorkspaceAssetSession.swift */,
 				D0C000000000000000000003 /* ConversationFilePreviews.swift */,
-				D0C000000000000000000001 /* DashboardDocumentPane.swift */,
-				1E7844C3713B055E9CEE07D7 /* DashboardAssetPane.swift */,
-				D04B4DB93AFAF496F21185E6 /* DashboardBrowserPane.swift */,
+				D0C000000000000000000001 /* DocumentPane.swift */,
+				1E7844C3713B055E9CEE07D7 /* AssetPane.swift */,
+				D04B4DB93AFAF496F21185E6 /* BrowserPane.swift */,
 				C67C8CBF1B7E40CA0F37A274 /* App */,
 				21F401DAE658C232D88E944F /* Packages */,
 				9959D7D4FDC4FD024F490589 /* Products */,
@@ -500,7 +500,7 @@
 				A71B00000000000000000102 /* LibraryModel.swift */,
 				C06300000000000000000002 /* ApplicationUsageModel.swift */,
 				ACFB273F1EBA43F2A3304AE7 /* ConversationTranscriptState.swift */,
-				FC6A850ACFC17DE4433439A7 /* DashboardConversationState.swift */,
+				FC6A850ACFC17DE4433439A7 /* ConversationState.swift */,
 				F10000000000000000000002 /* AgentDatabases.swift */,
 				A13000000000000000000002 /* RemoteWorkspacesModel.swift */,
 				EC0FDA57D036F2833D4D5F28 /* HarnessAccountPresentation.swift */,
@@ -514,7 +514,7 @@
 			isa = PBXGroup;
 			children = (
 				969050270F91397F88F6A49D /* RemoteInteractionCard.swift */,
-				CF0706BAE96F6819E10625D5 /* DashboardSavedArtifactsView.swift */,
+				CF0706BAE96F6819E10625D5 /* SavedArtifactsView.swift */,
 				BA61B1265D88D38A1D708C78 /* LocalModelServerConnections.swift */,
 				4D25E89AA1F9ECDB61C4EDEF /* SettingsConnectionsView.swift */,
 				E8A44EB04E09581B6A85026F /* DictationControls.swift */,
@@ -526,18 +526,18 @@
 				8F0B68181C793F898EC7A4DE /* SettingsAppleDevicesView.swift */,
 				ABFE2571A50B4A65EADC9715 /* DeviceConnectionsComponents.swift */,
 				A22000000000000000000005 /* MacTailnetDiscoveryView.swift */,
-				C131C0A00000000000000003 /* DashboardConversationActions.swift */,
-				C131C0B00000000000000003 /* DashboardNoteActions.swift */,
-				40D1B5DEF1B0023CB8C52B6D /* DashboardSharedViews.swift */,
-				C04200000000000000000002 /* DashboardConversationPopover.swift */,
-				52C822631EDF91C6FE39C754 /* DashboardNotePane.swift */,
-				45C178F10C928BB5DF700830 /* DashboardComposer.swift */,
-				B5CEADA1DA4AFBF4EFFC2CDC /* DashboardConversation.swift */,
+				C131C0A00000000000000003 /* ConversationContextMenu.swift */,
+				C131C0B00000000000000003 /* NoteContextMenu.swift */,
+				40D1B5DEF1B0023CB8C52B6D /* SharedViews.swift */,
+				C04200000000000000000002 /* ConversationPopover.swift */,
+				52C822631EDF91C6FE39C754 /* DesktopNotePane.swift */,
+				45C178F10C928BB5DF700830 /* ConversationComposer.swift */,
+				B5CEADA1DA4AFBF4EFFC2CDC /* CloudConversation.swift */,
 				988F5895CCE74B6E9C970200 /* ConversationGoalControls.swift */,
-				890F3602A18AF2215FAC1D3E /* DashboardSidebar.swift */,
-				DC0A00000000000000000002 /* DashboardComposerTextEditor.swift */,
+				890F3602A18AF2215FAC1D3E /* Sidebar.swift */,
+				DC0A00000000000000000002 /* ComposerTextEditor.swift */,
 				F10100000000000000000002 /* ArtifactEditor.swift */,
-				F10200000000000000000002 /* DashboardDatabasesView.swift */,
+				F10200000000000000000002 /* DatabasesView.swift */,
 				E10000000000000000000002 /* NoteEditor.swift */,
 				D49000000000000000000003 /* ConversationMarkdown.swift */,
 				D49400000000000000000003 /* ConversationResponse.swift */,
@@ -545,21 +545,21 @@
 				AC04DAE6C69A406FB73E74A1 /* ConversationTasksBadge.swift */,
 				D49200000000000000000003 /* ConversationWorkTranscript.swift */,
 				A10500000000000000000003 /* ConversationSubagentRow.swift */,
-				D45300000000000000000002 /* DashboardCalendarView.swift */,
-				D6DCB1F7BFAF35416DF437EE /* DashboardCalendarTaskFields.swift */,
-				C47EAA780000000000000002 /* DashboardCalendarFormControls.swift */,
-				C47EAA780000000000000004 /* DashboardCalendarColors.swift */,
-				8AA41DB8B4A4AF41CCC355A1 /* DashboardCalendarEventSheet.swift */,
-				A71B00000000000000000002 /* DashboardLibraryView.swift */,
-				D45400000000000000000002 /* DashboardUsageView.swift */,
-				D45400000000000000000004 /* DashboardUsageAnalytics.swift */,
-				D45400000000000000000006 /* DashboardUsageChart.swift */,
-				D45400000000000000000008 /* DashboardUsageLimits.swift */,
-				5609000D516C815CA5DA026A /* DashboardUsageLoading.swift */,
-				D45100000000000000000002 /* DashboardDesign.swift */,
-				D57100000000000000000002 /* DashboardStyle.swift */,
-				DA4C00000000000000000004 /* DashboardHTMLArtifactDocument.swift */,
-				DA4C00000000000000000002 /* DashboardColors.swift */,
+				D45300000000000000000002 /* CalendarSurface.swift */,
+				D6DCB1F7BFAF35416DF437EE /* CalendarTaskFields.swift */,
+				C47EAA780000000000000002 /* CalendarFormControls.swift */,
+				C47EAA780000000000000004 /* CalendarColors.swift */,
+				8AA41DB8B4A4AF41CCC355A1 /* DesktopCalendarEventSheet.swift */,
+				A71B00000000000000000002 /* LibrarySurface.swift */,
+				D45400000000000000000002 /* UsageView.swift */,
+				D45400000000000000000004 /* UsageAnalyticsPage.swift */,
+				D45400000000000000000006 /* UsageChart.swift */,
+				D45400000000000000000008 /* UsageLimitsPage.swift */,
+				5609000D516C815CA5DA026A /* UsagePlaceholders.swift */,
+				D45100000000000000000002 /* DesktopDesign.swift */,
+				D57100000000000000000002 /* WovenStyle.swift */,
+				DA4C00000000000000000004 /* HTMLArtifactDocument.swift */,
+				DA4C00000000000000000002 /* WovenColors.swift */,
 				A11C00000000000000000004 /* WorkspaceView.swift */,
 				489A29D04369BF898400D045 /* RootView.swift */,
 				C49C2130B0B0B01A795C7504 /* SettingsView.swift */,
@@ -572,7 +572,7 @@
 				D472AB9160464F1FAB826C21 /* WorkspaceToolControls.swift */,
 				74C188D9E69C4993381D98D1 /* SettingsMCPAccessSection.swift */,
 				86D0C046DD9FF43FF75D9571 /* SettingsBotsView.swift */,
-				886C0F4C61627DD7DD5BE07B /* DashboardBotsSidebarSection.swift */,
+				886C0F4C61627DD7DD5BE07B /* BotsSidebarSection.swift */,
 				D9C23E0D94B91147BCA51776 /* BotConversationSurface.swift */,
 				12E1B4139D26B5533AF18BA6 /* SettingsBotsTeams.swift */,
 				D3317C510D37DBDE83A29ECB /* SettingsBotsProfiles.swift */,
@@ -631,8 +631,8 @@
 				259A15701666BC22C0E6C0F1 /* WovenAutomationHost.swift */,
 				1A5EE1246A71A5EB98C6053B /* ConversationHTMLPreview.swift */,
 				FCBB65211C7015A6B8158E80 /* DictationEditor.swift */,
-				879D531AEA3583A537B8BE1B /* DashboardNoteDrafts.swift */,
-				F19000000000000000000002 /* DashboardNoteDocumentCache.swift */,
+				879D531AEA3583A537B8BE1B /* NoteDrafts.swift */,
+				F19000000000000000000002 /* NoteDocumentCache.swift */,
 				AA618CD1607B06D9E94B96F9 /* WovenMCPHost.swift */,
 				0F39CFC36A57A2E1D8179E26 /* BotEngineHost.swift */,
 				A56DDE951488ED17BBEBA764 /* BotsRuntimeSupervisor.swift */,
@@ -666,7 +666,7 @@
 				C3AE1E4D864C6AAF1D9CDFAC /* LibraryClient */,
 				0C11E0000000000000000004 /* WovenMatterClient */,
 				B40A00000000000000000002 /* WovenMatterAutomation */,
-				D46000000000000000000001 /* WovenMatterDashboardStore */,
+				D46000000000000000000001 /* WovenMatterLibraryStore */,
 			);
 			productName = WovenMatter;
 			productReference = 37C9459F43D4462FD229B6B1 /* WovenMatter.app */;
@@ -781,7 +781,7 @@
 				BA32B256A31201F0C7A60050 /* BotConversationController.swift in Sources */,
 				86CACBAFFC7E97DB84276B1B /* BotsHostController.swift in Sources */,
 				35C8B5B3ED7B16682519C3F1 /* SettingsBotsView.swift in Sources */,
-				91FF8123A627781A3B7384B6 /* DashboardBotsSidebarSection.swift in Sources */,
+				91FF8123A627781A3B7384B6 /* BotsSidebarSection.swift in Sources */,
 				232888BC018146768F84ABE6 /* BotConversationSurface.swift in Sources */,
 				479780441D5DFD4C83B18DB9 /* SettingsBotsTeams.swift in Sources */,
 				63E3AC2E3964B416C868778C /* SettingsBotsProfiles.swift in Sources */,
@@ -802,7 +802,7 @@
 				FA2F7EB3AD102A068C2F070C /* FederatedExecutionBridge.swift in Sources */,
 				D9F61698E2250BF9BFAF5A2F /* CentralExecutionClient.swift in Sources */,
 				A7D1E2F3B4C5D6E7F8091A2B /* BackendWindowStreamSource.swift in Sources */,
-				3920C098CAD3AD073343D629 /* DashboardSavedArtifactsView.swift in Sources */,
+				3920C098CAD3AD073343D629 /* SavedArtifactsView.swift in Sources */,
 				6D31E453B9DB807ED72C7E93 /* SavedArtifactsModel.swift in Sources */,
 				97AD203F32768DAAE8E74B8A /* InferenceHost.swift in Sources */,
 				E9602F4628690E58BDEA5ED6 /* WovenAutomationHost.swift in Sources */,
@@ -812,9 +812,9 @@
 				3E5461C189BF091338B7103C /* RemoteBrowserView.swift in Sources */,
 				4D3A7F0D3149F78FD676C837 /* WorkspaceAssetSession.swift in Sources */,
 				D0C000000000000000000004 /* ConversationFilePreviews.swift in Sources */,
-				D0C000000000000000000002 /* DashboardDocumentPane.swift in Sources */,
-				46B913B8FF73487BF0D219C8 /* DashboardAssetPane.swift in Sources */,
-				00165EE7943E7F7E19A3D2AD /* DashboardBrowserPane.swift in Sources */,
+				D0C000000000000000000002 /* DocumentPane.swift in Sources */,
+				46B913B8FF73487BF0D219C8 /* AssetPane.swift in Sources */,
+				00165EE7943E7F7E19A3D2AD /* BrowserPane.swift in Sources */,
 				0890236A7DEEC4A26AB512AB /* DictationModel.swift in Sources */,
 				B93AB31EDDA3C1A9D35A791B /* DictationEditor.swift in Sources */,
 				C0DBB095B3E36A01B19862F1 /* LocalModelServerConnections.swift in Sources */,
@@ -843,20 +843,20 @@
 				D8ADD27CBC40434BB0183702 /* NativeInteractionProjection.swift in Sources */,
 				77A348D5C0634041BD69B746 /* LibraryWorkspaceFeatures.swift in Sources */,
 				E678564F286E71B5FA588A5A /* DeviceCommandService.swift in Sources */,
-				C131C0A00000000000000004 /* DashboardConversationActions.swift in Sources */,
-				C131C0B00000000000000004 /* DashboardNoteActions.swift in Sources */,
-				923D138C1F54FC887AA90493 /* DashboardSharedViews.swift in Sources */,
-				C04200000000000000000001 /* DashboardConversationPopover.swift in Sources */,
-				2350EC32F0F50FD3DB4069F3 /* DashboardNotePane.swift in Sources */,
-				FE8DA980F8CFABCB8AAB3893 /* DashboardComposer.swift in Sources */,
-				E8E4FA74C6587F81C8999942 /* DashboardConversation.swift in Sources */,
+				C131C0A00000000000000004 /* ConversationContextMenu.swift in Sources */,
+				C131C0B00000000000000004 /* NoteContextMenu.swift in Sources */,
+				923D138C1F54FC887AA90493 /* SharedViews.swift in Sources */,
+				C04200000000000000000001 /* ConversationPopover.swift in Sources */,
+				2350EC32F0F50FD3DB4069F3 /* DesktopNotePane.swift in Sources */,
+				FE8DA980F8CFABCB8AAB3893 /* ConversationComposer.swift in Sources */,
+				E8E4FA74C6587F81C8999942 /* CloudConversation.swift in Sources */,
 				A9682778D5284ABE8DF0D342 /* ConversationGoalControls.swift in Sources */,
-				97B76EB8D620C6E620196AC8 /* DashboardSidebar.swift in Sources */,
-				8443106E4E46FD4C315E128F /* DashboardNoteDrafts.swift in Sources */,
-				F19000000000000000000001 /* DashboardNoteDocumentCache.swift in Sources */,
+				97B76EB8D620C6E620196AC8 /* Sidebar.swift in Sources */,
+				8443106E4E46FD4C315E128F /* NoteDrafts.swift in Sources */,
+				F19000000000000000000001 /* NoteDocumentCache.swift in Sources */,
 				C06300000000000000000001 /* ApplicationUsageModel.swift in Sources */,
-				ADB35226B01C45F520411F2C /* DashboardConversationState.swift in Sources */,
-				DC0A00000000000000000001 /* DashboardComposerTextEditor.swift in Sources */,
+				ADB35226B01C45F520411F2C /* ConversationState.swift in Sources */,
+				DC0A00000000000000000001 /* ComposerTextEditor.swift in Sources */,
 				F10000000000000000000001 /* AgentDatabases.swift in Sources */,
 				A13000000000000000000001 /* RemoteWorkspacesModel.swift in Sources */,
 				C28E61FFA047C5F1D80D55AB /* HarnessAccountPresentation.swift in Sources */,
@@ -866,7 +866,7 @@
 				B9FFAB8DAB6312F403B44CAC /* SettingsRemoteHarnessAccountView.swift in Sources */,
 				908E8E08608BCD94835B9307 /* SettingsHarnessAccounts.swift in Sources */,
 				F10100000000000000000001 /* ArtifactEditor.swift in Sources */,
-				F10200000000000000000001 /* DashboardDatabasesView.swift in Sources */,
+				F10200000000000000000001 /* DatabasesView.swift in Sources */,
 				D472AB9160464F1FAB826C12 /* ApplicationModel+AgentTools.swift in Sources */,
 				D45400000000000000000009 /* ApplicationModel+UsageDevices.swift in Sources */,
 				A7EAFACF3F974117B37965CC /* ApplicationModel+Goals.swift in Sources */,
@@ -905,21 +905,21 @@
 				FCF465ABA5EF4C84A9433309 /* ConversationTranscriptState.swift in Sources */,
 				D49200000000000000000001 /* ConversationWorkTranscript.swift in Sources */,
 				A10500000000000000000004 /* ConversationSubagentRow.swift in Sources */,
-				D45300000000000000000001 /* DashboardCalendarView.swift in Sources */,
-				22101ADAF84DA8CEE85A4AB8 /* DashboardCalendarTaskFields.swift in Sources */,
-				C47EAA780000000000000001 /* DashboardCalendarFormControls.swift in Sources */,
-				C47EAA780000000000000003 /* DashboardCalendarColors.swift in Sources */,
-				F4743517D41721ACB550EE94 /* DashboardCalendarEventSheet.swift in Sources */,
-				A71B00000000000000000001 /* DashboardLibraryView.swift in Sources */,
-				D45400000000000000000001 /* DashboardUsageView.swift in Sources */,
-				D45400000000000000000003 /* DashboardUsageAnalytics.swift in Sources */,
-				D45400000000000000000005 /* DashboardUsageChart.swift in Sources */,
-				D45400000000000000000007 /* DashboardUsageLimits.swift in Sources */,
-				09C447491BD8CE01BF01568C /* DashboardUsageLoading.swift in Sources */,
-				D45100000000000000000001 /* DashboardDesign.swift in Sources */,
-				D57100000000000000000001 /* DashboardStyle.swift in Sources */,
-				DA4C00000000000000000003 /* DashboardHTMLArtifactDocument.swift in Sources */,
-				DA4C00000000000000000001 /* DashboardColors.swift in Sources */,
+				D45300000000000000000001 /* CalendarSurface.swift in Sources */,
+				22101ADAF84DA8CEE85A4AB8 /* CalendarTaskFields.swift in Sources */,
+				C47EAA780000000000000001 /* CalendarFormControls.swift in Sources */,
+				C47EAA780000000000000003 /* CalendarColors.swift in Sources */,
+				F4743517D41721ACB550EE94 /* DesktopCalendarEventSheet.swift in Sources */,
+				A71B00000000000000000001 /* LibrarySurface.swift in Sources */,
+				D45400000000000000000001 /* UsageView.swift in Sources */,
+				D45400000000000000000003 /* UsageAnalyticsPage.swift in Sources */,
+				D45400000000000000000005 /* UsageChart.swift in Sources */,
+				D45400000000000000000007 /* UsageLimitsPage.swift in Sources */,
+				09C447491BD8CE01BF01568C /* UsagePlaceholders.swift in Sources */,
+				D45100000000000000000001 /* DesktopDesign.swift in Sources */,
+				D57100000000000000000001 /* WovenStyle.swift in Sources */,
+				DA4C00000000000000000003 /* HTMLArtifactDocument.swift in Sources */,
+				DA4C00000000000000000001 /* WovenColors.swift in Sources */,
 				A11C00000000000000000003 /* WorkspaceView.swift in Sources */,
 				5E64711B441F5A188A2862AC /* RootView.swift in Sources */,
 				E02200000000000000000001 /* HarnessSetupModel.swift in Sources */,
@@ -1182,9 +1182,9 @@
 			isa = XCSwiftPackageProductDependency;
 			productName = WovenMatterClient;
 		};
-		D46000000000000000000001 /* WovenMatterDashboardStore */ = {
+		D46000000000000000000001 /* WovenMatterLibraryStore */ = {
 			isa = XCSwiftPackageProductDependency;
-			productName = WovenMatterDashboardStore;
+			productName = WovenMatterLibraryStore;
 		};
 		C3AE1E4D864C6AAF1D9CDFAC /* LibraryClient */ = {isa = XCSwiftPackageProductDependency; package = C06BA836DE1CAE4D56F3020D; productName = LibraryClient; };
 /* End XCSwiftPackageProductDependency section */

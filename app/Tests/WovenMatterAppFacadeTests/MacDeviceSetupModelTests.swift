@@ -3,7 +3,7 @@ import AppKit
 import SwiftUI
 import Testing
 import WovenMatterShared
-import WovenMatterDashboardStore
+import WovenMatterLibraryStore
 @testable import WovenMatterAppFacade
 
 @MainActor
@@ -74,13 +74,13 @@ struct MacDeviceSetupModelTests {
         let defaults = try #require(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
         let application = ApplicationModel(applicationDefaults: defaults, startsAutomatically: false, ownsExecutionOverride: false)
-        for theme in DashboardTheme.allCases {
+        for theme in WovenTheme.allCases {
             for width: CGFloat in [440, 920] {
                 let view = SettingsPage(title: "Apple Devices") {
                     SettingsSection(title: "Find devices", detail: "Find other Macs on your Tailscale network, even when Woven Matter is closed.") {
                         MacTailnetDiscoveryView(devices: devices, host: application.libraryHost)
                     }
-                }.background(theme.palette.workspace).environment(\.dashboardTheme, theme).preferredColorScheme(theme.colorScheme)
+                }.background(theme.palette.workspace).environment(\.wovenTheme, theme).preferredColorScheme(theme.colorScheme)
                 let host = NSHostingView(rootView: view)
                 let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: width, height: 820), styleMask: [.borderless], backing: .buffered, defer: false)
                 window.isReleasedWhenClosed = false; window.contentView = host

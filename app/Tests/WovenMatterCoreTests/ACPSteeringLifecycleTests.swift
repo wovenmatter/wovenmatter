@@ -4,7 +4,7 @@ import Foundation
 import Testing
 import WovenMatterClient
 import WovenMatterCore
-@testable import WovenMatterDashboardStore
+@testable import WovenMatterLibraryStore
 
 @Suite(.timeLimit(.minutes(1)))
 struct ACPSteeringLifecycleTests {

@@ -4,7 +4,7 @@ import Observation
 import Security
 import WovenMatterClient
 import WovenMatterCore
-import WovenMatterDashboardStore
+import WovenMatterLibraryStore
 
 /// Debug test builds must opt into a separate workspace before any lease/database
 /// opens. The same value is used by the app lease, database, journal and note socket.
@@ -157,7 +157,7 @@ final class LibraryHostController {
 
     func start() async {
         if model?.isBackendFrontend == true { await forward(.start); return }
-        guard !isStarting, endpoint == nil, model?.dashboardStore != nil else { return }
+        guard !isStarting, endpoint == nil, model?.libraryStore != nil else { return }
         isStarting = true; errorMessage = nil; status = "Connecting…"
         generation = UUID()
         let expectedGeneration = generation
@@ -172,7 +172,7 @@ final class LibraryHostController {
             stoppingExposures.removeAll { previous in previousExposures.contains(where: { $0 === previous }) }
             try await loadAuthentication()
             guard generation == expectedGeneration, !Task.isCancelled else { throw CancellationError() }
-            guard let model, let database = model.dashboardStore?.database, let authentication else {
+            guard let model, let database = model.libraryStore?.database, let authentication else {
                 throw LibraryAPIError(code: "unavailable", message: "The Mac workspace is not ready.")
             }
             let centralIdentity = try await database.libraryIdentity()
@@ -282,7 +282,7 @@ final class LibraryHostController {
                 _ = try await self.authenticateMember(request, allowing: [.mac, .ios])
             }
             inferenceHost = InferenceHost(authentication: executionAuth, descriptor: local,
-                directory: try supportDirectory ?? ApplicationModel.dashboardSupportDirectory(),
+                directory: try supportDirectory ?? ApplicationModel.librarySupportDirectory(),
                 isActive: { [weak self] in self?.generation == expectedGeneration && self?.endpoint != nil }, authorize: authorizeGrant,
                 members: try? await peerSync.members())
             isStarting = false; status = "Available to your paired devices"
@@ -452,7 +452,7 @@ final class LibraryHostController {
             }
             // Persist the remote work list before revoking local access. An offline
             // workspace remains explicitly pending until its token is removed.
-            if let database = model?.dashboardStore?.database {
+            if let database = model?.libraryStore?.database {
                 let descriptors = try await database.libraryExecutionWorkspaces()
                 var pending = pendingRevocations
                 let identity = try await database.libraryIdentity()
@@ -477,7 +477,7 @@ final class LibraryHostController {
                 // the token this provenance obtained and retired its record, so
                 // its cleanup would only revoke the replacement.
                 let issued = remoteIssuances
-                let localID = try await model?.dashboardStore?.database.libraryIdentity().libraryID
+                let localID = try await model?.libraryStore?.database.libraryIdentity().libraryID
                 for delegation in await authentication.delegations(provisionedBy: deviceID)
                     where localID.map({ delegation.workspaceID != localExecutionWorkspaceID(libraryID: $0) }) ?? true {
                     let target = ExecutionTarget(deviceID: delegation.deviceID, workspaceID: delegation.workspaceID)
@@ -496,7 +496,7 @@ final class LibraryHostController {
                 try await authentication?.revokeLocally(deviceID: deviceID)
             }
             try await authentication?.removeDelegations(provisionedBy: deviceID)
-            try await model?.dashboardStore?.database.withdrawUnpairedMac(deviceID)
+            try await model?.libraryStore?.database.withdrawUnpairedMac(deviceID)
             try await loadExecutionAuthentication().revoke(deviceID: deviceID)
             try peerSync.revoke(deviceID)
             pairedDevices = await authentication?.devices() ?? []
@@ -508,7 +508,7 @@ final class LibraryHostController {
     /// Linux hosts the removed Mac added hold that Mac's installer bearer;
     /// each is asked to replace it, durably retried until it answers.
     private func queueInstallerRotations(installedBy deviceID: String) async throws {
-        guard let database = model?.dashboardStore?.database else { return }
+        guard let database = model?.libraryStore?.database else { return }
         let hosts = try await database.libraryExecutionWorkspaces()
             .filter { $0.kind == .linux && !$0.deleted && $0.ownerDeviceID == deviceID }.map(\.id)
         guard !hosts.isEmpty else { return }
@@ -516,7 +516,7 @@ final class LibraryHostController {
     }
 
     private func retryInstallerRotations() async {
-        guard let database = model?.dashboardStore?.database, !pendingInstallerRotations.isEmpty else { return }
+        guard let database = model?.libraryStore?.database, !pendingInstallerRotations.isEmpty else { return }
         let workspaces = (try? await database.libraryExecutionWorkspaces()) ?? []
         for id in pendingInstallerRotations {
             guard let workspace = workspaces.first(where: { $0.id == id }), !workspace.deleted else {
@@ -572,7 +572,7 @@ final class LibraryHostController {
 
     /// Registry changes do not open connections, start containers, or move workspace files.
     func refreshExecutionRegistry() async throws {
-        guard !registryRefreshInProgress, let model, let database = model.dashboardStore?.database else { return }
+        guard !registryRefreshInProgress, let model, let database = model.libraryStore?.database else { return }
         registryRefreshInProgress = true
         let expectedGeneration = generation
         defer { registryRefreshInProgress = false }
@@ -580,7 +580,7 @@ final class LibraryHostController {
         try await database.savePairedRemoteWorkspaces(model.remoteWorkspaces.workspaces)
         let existing = try await database.libraryExecutionWorkspaces()
         let localID = localExecutionWorkspaceID(libraryID: identity.libraryID)
-        // Local folders are bound to `device:<dashboard device id>`, which is
+        // Local folders are bound to `device:<device id>`, which is
         // neither `localID` nor the host device ID; naming it lets paired
         // devices group existing folders under this Mac without rewriting them.
         let folderOwnerID = (try? await model.executionWorkspaceIdentity(workspaceID: nil))
@@ -690,7 +690,7 @@ final class LibraryHostController {
         do { try await steps.adopt(configuration) } catch { failure = error }
         if configuration.workspaceID != RemoteHostInstallMode.botsOnlyWorkspaceID {
             let id = configuration.id.uuidString.lowercased()
-            let registered = try await model?.dashboardStore?.database.libraryExecutionWorkspaces().first { $0.id == id && !$0.deleted }
+            let registered = try await model?.libraryStore?.database.libraryExecutionWorkspaces().first { $0.id == id && !$0.deleted }
             if registered?.endpoint == nil || registered?.executionDeviceID == nil {
                 do { try await steps.enroll(id) } catch { failure = failure ?? error }
             }
@@ -744,7 +744,7 @@ final class LibraryHostController {
     private func provisionExecution(id: String, deviceID: String, name: String, provisionedBy: String?,
                                     current: @escaping @MainActor () async -> Bool,
                                     commit: @MainActor () async throws -> Void) async throws -> ExecutionCredential {
-        guard UUID(uuidString: id) != nil, let model, let database = model.dashboardStore?.database,
+        guard UUID(uuidString: id) != nil, let model, let database = model.libraryStore?.database,
               authentication != nil, try await deviceMayExecute(deviceID, workspaceID: id, current: current),
               !revokingDeviceIDs.contains(deviceID), !provisioningWorkspaceIDs.contains(id) else {
             throw LibraryAPIError(code: "unavailable", message: "This workspace is unavailable or another enrollment is in progress. Retry shortly.")
@@ -848,7 +848,7 @@ final class LibraryHostController {
     /// client HTTP route.
     func provisionCentralExecutionWorkspace(id: String) async throws -> ExecutionCredential {
         guard let model, !model.isBackendFrontend,
-              let database = model.dashboardStore?.database, UUID(uuidString: id) != nil,
+              let database = model.libraryStore?.database, UUID(uuidString: id) != nil,
               !provisioningWorkspaceIDs.contains(id) else {
             throw LibraryAPIError(code: "unavailable", message: "This Mac’s execution owner is unavailable.")
         }
@@ -888,14 +888,14 @@ final class LibraryHostController {
     }
 
     private func deviceMayExecute(_ deviceID: String, workspaceID: String, current: @MainActor () async -> Bool) async throws -> Bool {
-        guard authentication != nil, let database = model?.dashboardStore?.database,
+        guard authentication != nil, let database = model?.libraryStore?.database,
               !revokingDeviceIDs.contains(deviceID), await current() else { return false }
         guard try await database.libraryExecutionWorkspaces().contains(where: { $0.id == workspaceID && !$0.deleted }) else { return false }
         return await current()
     }
 
     func withdrawDevelopmentWorkspace() async throws {
-        guard DevelopmentLaunch.mode != nil, let database = model?.dashboardStore?.database else { return }
+        guard DevelopmentLaunch.mode != nil, let database = model?.libraryStore?.database else { return }
         stop() // Cancel recovery as well as periodic registrations before withdrawal.
         do {
             let identity = try await database.libraryIdentity()
@@ -927,7 +927,7 @@ final class LibraryHostController {
     }
 
     private func removeJournalGrants(deviceID: String) async throws {
-        guard let database = model?.dashboardStore?.database else { return }
+        guard let database = model?.libraryStore?.database else { return }
         let identity = try await database.libraryIdentity()
         for var workspace in try await database.libraryExecutionWorkspaces() where !workspace.deleted && workspace.libraryID == identity.libraryID && workspace.journalDeviceIDs.contains(deviceID) {
             let revision = workspace.revision
@@ -988,7 +988,7 @@ final class LibraryHostController {
             try await loadAuthentication()
             pendingPairingRequests = await authentication?.pendingPairingRequests() ?? []
             pendingDeviceRevocations = pendingRevocations
-            if let database = model?.dashboardStore?.database { try await refreshStatusAndDevelopmentPresence(database: database) }
+            if let database = model?.libraryStore?.database { try await refreshStatusAndDevelopmentPresence(database: database) }
         } catch { errorMessage = error.localizedDescription }
     }
     func refreshDiscovery() async {
@@ -1001,7 +1001,7 @@ final class LibraryHostController {
     }
     func approvePairing(id: String) async {
         if model?.isBackendFrontend == true { await forward(.approvePairing(id)); return }
-        guard endpoint != nil, let authentication, let database = model?.dashboardStore?.database else { return }
+        guard endpoint != nil, let authentication, let database = model?.libraryStore?.database else { return }
         do {
             try await authentication.approvePairing(id: id, workspaceID: database.libraryID())
             await refreshStatus(); errorMessage = nil
@@ -1034,7 +1034,7 @@ final class LibraryHostController {
         return authentication
     }
     func peerRoute() async throws -> PairedMacRoute {
-        guard let endpoint, let database = model?.dashboardStore?.database else { throw LibraryAPIError(code: "unavailable", message: "Wait for this Mac to connect to Tailscale before pairing.") }
+        guard let endpoint, let database = model?.libraryStore?.database else { throw LibraryAPIError(code: "unavailable", message: "Wait for this Mac to connect to Tailscale before pairing.") }
         let identity = try await database.libraryIdentity()
         return .init(deviceID: identity.hostDeviceID, libraryID: identity.libraryID, endpoint: endpoint, name: DevelopmentLaunch.deviceName())
     }
@@ -1092,7 +1092,7 @@ final class LibraryHostController {
 
     private func loadExecutionAuthentication() throws -> ExecutionAuthentication {
         if let executionAuthentication { return executionAuthentication }
-        let file = try (supportDirectory ?? ApplicationModel.dashboardSupportDirectory()).appending(path: "execution-devices.json")
+        let file = try (supportDirectory ?? ApplicationModel.librarySupportDirectory()).appending(path: "execution-devices.json")
         let value = try ExecutionAuthentication(fileURL: file)
         executionAuthentication = value
         return value
@@ -1100,7 +1100,7 @@ final class LibraryHostController {
 
     private func loadAuthentication() async throws {
         if authentication == nil {
-            let file = try (supportDirectory ?? ApplicationModel.dashboardSupportDirectory()).appendingPathComponent(DeviceAuthentication.fileName)
+            let file = try (supportDirectory ?? ApplicationModel.librarySupportDirectory()).appendingPathComponent(DeviceAuthentication.fileName)
             authentication = try DeviceAuthentication(fileURL: file)
         }
         pairedDevices = await authentication?.devices() ?? []

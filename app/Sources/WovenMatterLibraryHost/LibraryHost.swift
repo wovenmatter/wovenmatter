@@ -1,7 +1,7 @@
 import Foundation
 import WovenMatterClient
 import WovenMatterCore
-import WovenMatterDashboardStore
+import WovenMatterLibraryStore
 
 /// The headless library host (`wovenmatter-library`). It owns one library
 /// database and serves:
@@ -43,7 +43,7 @@ public final class LibraryHost: @unchecked Sendable {
   ]
 
   public let layout: LibraryHostLayout
-  public let store: DashboardStore
+  public let store: LibraryStore
   public let database: WorkspaceDatabase
   public let identity: MemberIdentity
   public let members: MemberDirectory
@@ -66,7 +66,7 @@ public final class LibraryHost: @unchecked Sendable {
     LinuxSecretStore.directory = layout.secrets
     self.layout = layout
     token = try LibraryHostToken.load(tokenFile ?? layout.defaultTokenFile)
-    store = try await DashboardStore(supportDirectory: layout.library)
+    store = try await LibraryStore(supportDirectory: layout.library)
     try await store.prepareLocalWorkspace()
     database = store.database
     executor = WorkspaceToolExecutor(database: database)

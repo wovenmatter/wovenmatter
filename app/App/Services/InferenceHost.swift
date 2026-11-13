@@ -2,7 +2,7 @@ import Darwin
 import Foundation
 import WovenMatterClient
 import WovenMatterCore
-import WovenMatterDashboardStore
+import WovenMatterLibraryStore
 
 /// Hosts model inference for authorized mobile clients. Pi's agent and all tools stay on the requesting device.
 /// A phone or Mac member signs its requests (docs/architecture/WOVEN_EVERYWHERE.md,

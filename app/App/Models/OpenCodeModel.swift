@@ -3,7 +3,7 @@ import Observation
 import OSLog
 import WovenMatterClient
 import WovenMatterCore
-import WovenMatterDashboardStore
+import WovenMatterLibraryStore
 
 @MainActor @Observable
 final class OpenCodeModel {
@@ -14,7 +14,7 @@ final class OpenCodeModel {
     private var projectedCanConnect = false
     private var applyingBackendSnapshot = false
     private let logger = Logger(subsystem: "wovenmatter.desktop", category: "OpenCode")
-    let store: DashboardStore
+    let store: LibraryStore
     let coordinator: OpenCodeSessionCoordinator
     private let connectionProvider: (@MainActor () async throws -> OpenCodeConnection)?
     let ownerDeviceID: UUID
@@ -107,7 +107,7 @@ final class OpenCodeModel {
         return executable != nil || hasServerRegistration
     }
 
-    init(store: DashboardStore, ownerDeviceID: UUID, defaults: UserDefaults,
+    init(store: LibraryStore, ownerDeviceID: UUID, defaults: UserDefaults,
          remoteConfiguration: RemoteWorkspaceConfiguration? = nil, remoteWorkspaces: RemoteWorkspacesModel? = nil,
          backendRequest: (@MainActor (String, Data) async throws -> Data)? = nil,
          coordinator: OpenCodeSessionCoordinator? = nil,

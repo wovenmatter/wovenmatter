@@ -1,7 +1,7 @@
 import Foundation
 import WovenMatterCore
 import WovenMatterClient
-import WovenMatterDashboardStore
+import WovenMatterLibraryStore
 
 /// Defaults for a tool-created destination. Outside callers have no source chat.
 struct WorkspaceToolCallerSource {
@@ -24,13 +24,13 @@ extension ApplicationModel {
             try await self?.sessionToolSelectionWorkspace(conversationID: id)
         }
         currentSessionToolIDs = { [weak self] id in
-            guard let database = self?.dashboardStore?.database,
+            guard let database = self?.libraryStore?.database,
                   let tools = try? await database.sessionTools(id) else { return nil }
             return tools.enabled.map(\.rawValue).sorted()
         }
         applyInitialSessionToolIDs = { [weak self] id, identifiers in
-            guard let self, let database = self.dashboardStore?.database else {
-                throw ApplicationModelError.dashboardStoreUnavailable
+            guard let self, let database = self.libraryStore?.database else {
+                throw ApplicationModelError.libraryStoreUnavailable
             }
             try await database.applyInitialSessionTools(WorkspaceSessionTools(identifiers: identifiers), sessionID: id)
             try await self.agentTools?.reload()
@@ -40,7 +40,7 @@ extension ApplicationModel {
     /// Resolves the actual native folder for local sessions, rather than assuming
     /// that an imported or tool-created chat uses the app's default working root.
     func sessionToolSelectionWorkspace(conversationID: String) async throws -> String {
-        guard let store = dashboardStore else { throw ApplicationModelError.dashboardStoreUnavailable }
+        guard let store = libraryStore else { throw ApplicationModelError.libraryStoreUnavailable }
         let database = store.database
         let session = try await database.localACPSession(conversationID: conversationID)
         let root = try await database.availableSessionExecutionRoot(id: conversationID)
@@ -89,7 +89,7 @@ extension ApplicationModel {
     }
 
     private func runAgentToolTick() async {
-        guard let database = dashboardStore?.database else { return }
+        guard let database = libraryStore?.database else { return }
         do {
             await runCalendarTasks()
             pendingSessionAccess = try await database.pendingCoordinationAccessRequests()
@@ -163,7 +163,7 @@ extension ApplicationModel {
             }
             return
         }
-        guard let database = dashboardStore?.database else { return }
+        guard let database = libraryStore?.database else { return }
         do {
             let outcome = try await database.resolveCoordinationAccess(requestID: id, allowed: allowed)
             pendingSessionAccess = try await database.pendingCoordinationAccessRequests()
@@ -173,7 +173,7 @@ extension ApplicationModel {
     }
 
     func handleAgentNote(callerID: String, request: NoteEditingRequest, requestID: String) async throws -> NoteEditingResponse {
-        guard let database = dashboardStore?.database else { throw CancellationError() }
+        guard let database = libraryStore?.database else { throw CancellationError() }
         guard await flushNoteDrafts(), !noteEditingSuspended, !backendStopping else {
             throw ApplicationModelError.noteDraftSaveFailed
         }
@@ -205,7 +205,7 @@ extension ApplicationModel {
     }
 
     private func toolConversation(_ id: String) async throws -> WorkspaceConversationRecord {
-        guard let database = dashboardStore?.database,
+        guard let database = libraryStore?.database,
               let conversation = try await database.workspaceOverview().conversations.first(where: { $0.id == id }) else {
             throw WorkspaceToolError.notFound("The requested session is unavailable.")
         }
@@ -213,7 +213,7 @@ extension ApplicationModel {
     }
 
     func handleSessionTool(callerID: String, command: WovenMatterToolCommand, request: WovenMatterToolRequest) async throws -> WovenMatterToolResponse {
-        guard let database = dashboardStore?.database else { throw CancellationError() }
+        guard let database = libraryStore?.database else { throw CancellationError() }
         if command.isDatabaseCommand { return try await handleDatabaseTool(callerID: callerID, command: command) }
         try await database.requireTool(.sessions, sessionID: callerID)
         let source = try await toolCallerSource(callerID)
@@ -268,7 +268,7 @@ extension ApplicationModel {
 
     private func createToolSession(source: WorkspaceToolCallerSource, command: WovenMatterToolCommand,
                                    request: WovenMatterToolRequest) async throws -> WovenMatterToolResponse {
-        guard let store = dashboardStore else { throw CancellationError() }
+        guard let store = libraryStore else { throw CancellationError() }
         // Coalesce concurrent retries while native creation is suspended.
         let creationKey = source.id + ":" + request.requestID + ":" + String(decoding: try JSONEncoder().encode(request.operationArguments), as: UTF8.self)
         if let pending = toolCreationTasks[creationKey] { return try await pending.value }
@@ -301,7 +301,7 @@ extension ApplicationModel {
             }
             let dispatchFence = self.beginAgentDispatch(conversationID: id)
             defer { self.finishAgentDispatch(conversationID: id, fence: dispatchFence) }
-            guard let agentTools = self.agentTools else { throw ApplicationModelError.dashboardStoreUnavailable }
+            guard let agentTools = self.agentTools else { throw ApplicationModelError.libraryStoreUnavailable }
             let botDispatch = try agentTools.trackBotDispatch(callerID: source.id, fence: dispatchFence)
             defer { agentTools.finishBotDispatch(botDispatch) }
             // Completed delivery receipts must replay before admission: unrelated
@@ -408,7 +408,7 @@ extension ApplicationModel {
         guard let runtime = command.options["harness"].flatMap(AgentRuntimeKind.init(rawValue:)) ?? source.localRuntimeKind ?? (WovenMCPCaller.isAppWide(source.id) ? .defaultAgent : nil) else {
             throw WorkspaceToolError.invalid("Choose a configured harness.")
         }
-        guard let store = dashboardStore else { throw ApplicationModelError.dashboardStoreUnavailable }
+        guard let store = libraryStore else { throw ApplicationModelError.libraryStoreUnavailable }
         let workspaceID: UUID?
         switch try await resolveAgentToolDestination(command.options["workspace"], callerWorkspace: source.remoteWorkspaceID) {
         case .thisMac: workspaceID = nil
@@ -449,9 +449,9 @@ extension ApplicationModel {
                               admissionDecision: WorkspaceSessionAdmission.Decision? = nil,
                               dispatchFence suppliedFence: AgentDispatchFence? = nil,
                               allowSteering: Bool = true) async throws -> WovenMatterToolResponse {
-        guard let database = dashboardStore?.database else { throw CancellationError() }
+        guard let database = libraryStore?.database else { throw CancellationError() }
         if WovenMCPCaller.parseBot(delivery.targetID) != nil {
-            guard let agentTools else { throw ApplicationModelError.dashboardStoreUnavailable }
+            guard let agentTools else { throw ApplicationModelError.libraryStoreUnavailable }
             _ = try await agentTools.deliverBotNotification(delivery)
             return try await toolDeliveryResponse(database.toolDelivery(id: delivery.id) ?? delivery)
         }
@@ -542,7 +542,7 @@ extension ApplicationModel {
 
 extension ApplicationModel {
     func handleDatabaseTool(callerID: String, command: WovenMatterToolCommand) async throws -> WovenMatterToolResponse {
-        guard let store = dashboardStore else { throw ApplicationModelError.dashboardStoreUnavailable }
+        guard let store = libraryStore else { throw ApplicationModelError.libraryStoreUnavailable }
         try await store.database.requireTool(.notes, sessionID: callerID)
         let source = try await toolCallerSource(callerID)
         let action = String(command.action.dropFirst("database-".count))

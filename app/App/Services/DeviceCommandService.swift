@@ -1,7 +1,7 @@
 import Foundation
 import WovenMatterClient
 import WovenMatterCore
-import WovenMatterDashboardStore
+import WovenMatterLibraryStore
 
 /// The same Mac-owned routing, concurrency and note-binding path used by desktop UI.
 /// Request tasks only await this service; they never own or cancel provider tasks.
@@ -31,7 +31,7 @@ final class DeviceCommandService: DeviceCommandServing {
     init(model: ApplicationModel) { self.model = model }
 
     func executeTool(_ request: LibraryToolRequest, deviceID: String) async throws -> WovenMatterToolResponse {
-        guard let database = model.dashboardStore?.database, let tools = model.agentTools else {
+        guard let database = model.libraryStore?.database, let tools = model.agentTools else {
             throw CommandError.unavailable
         }
         if toolDispatcher == nil { toolDispatcher = DeviceToolDispatcher(database: database) }
@@ -76,7 +76,7 @@ final class DeviceCommandService: DeviceCommandServing {
     /// Reads already negotiated state; never starts a provider just to display controls.
     func sessionCapabilities(conversationID: String) async throws -> HarnessCapabilities {
         let conversation = try await conversation(conversationID)
-        if try await model.dashboardStore?.database.libraryExecutionOwner(conversationID: conversationID) != nil {
+        if try await model.libraryStore?.database.libraryExecutionOwner(conversationID: conversationID) != nil {
             let snapshot = try await model.performFederatedExecution(.refresh(conversationID: conversationID))
             guard var capability = snapshot.capability else { throw CommandError.unavailable }
             capability.available = snapshot.online
@@ -94,7 +94,7 @@ final class DeviceCommandService: DeviceCommandServing {
         if runtime == .opencode {
             capability.activeInputMode = "unsupported"
             capability.canSteer = false
-        } else if let mode = await model.dashboardStore?.localACPActiveInputCapability(conversationID: conversationID) {
+        } else if let mode = await model.libraryStore?.localACPActiveInputCapability(conversationID: conversationID) {
             capability.activeInputMode = mode == .grokInterjection ? "grokInterjectionWithConcurrentFallback" : mode.rawValue
             capability.canSteer = active && mode != .unsupported
         }
@@ -158,7 +158,7 @@ final class DeviceCommandService: DeviceCommandServing {
         if command.kind == .respond {
             guard NativeInteractionProjection.responseIsSafeToJournal(command) else { throw CommandError.invalidCommand }
         }
-        guard let store = model.dashboardStore else { throw CommandError.unavailable }
+        guard let store = model.libraryStore else { throw CommandError.unavailable }
         return try await dispatcher(for: store).execute(command) { [self] original in
             var receipt = original
             try await dispatch(command, receipt: &receipt)
@@ -167,11 +167,11 @@ final class DeviceCommandService: DeviceCommandServing {
     }
 
     func receipt(commandID: String, deviceID: String) async throws -> LibraryCommandReceipt? {
-        guard let store = model.dashboardStore else { throw CommandError.unavailable }
+        guard let store = model.libraryStore else { throw CommandError.unavailable }
         return try await dispatcher(for: store).receipt(commandID: commandID, deviceID: deviceID)
     }
 
-    private func dispatcher(for store: DashboardStore) -> DeviceCommandDispatcher {
+    private func dispatcher(for store: LibraryStore) -> DeviceCommandDispatcher {
         if let commandDispatcher, commandDispatcher.database === store.database { return commandDispatcher }
         let dispatcher = DeviceCommandDispatcher(database: store.database)
         commandDispatcher = dispatcher
@@ -212,9 +212,9 @@ final class DeviceCommandService: DeviceCommandServing {
             let input: AgentMessageInput
             if let noteID = command.noteID {
                 guard let revision = command.noteRevision, await model.flushNoteDrafts(),
-                      let raw = try await model.dashboardStore?.database.libraryNote(id: noteID),
+                      let raw = try await model.libraryStore?.database.libraryNote(id: noteID),
                       raw.revision == revision,
-                      let canonical = try await model.dashboardStore?.database.workspaceOverview().notes.first(where: { $0.id == noteID })
+                      let canonical = try await model.libraryStore?.database.workspaceOverview().notes.first(where: { $0.id == noteID })
                 else { throw CommandError.noteRevisionChanged }
                 let reference = AgentMessageReferenceDraft(
                     kind: .note, resourceID: noteID, titleSnapshot: raw.title,
@@ -254,7 +254,7 @@ final class DeviceCommandService: DeviceCommandServing {
 
     private func respond(_ command: LibraryCommand) async throws {
         if let conversationID = command.conversationID,
-           try await model.dashboardStore?.database.libraryExecutionOwner(conversationID: conversationID) != nil {
+           try await model.libraryStore?.database.libraryExecutionOwner(conversationID: conversationID) != nil {
             let snapshot = try await model.performFederatedExecution(.refresh(conversationID: conversationID))
             guard let response = command.response,
                   let interaction = snapshot.interactions.first(where: { $0.id == command.interactionID && $0.runID == command.runID }) else { throw CommandError.interactionResolved }
@@ -321,7 +321,7 @@ final class DeviceCommandService: DeviceCommandServing {
     }
 
     func conversation(_ id: String) async throws -> WorkspaceConversationRecord {
-        guard let store = model.dashboardStore,
+        guard let store = model.libraryStore,
               let record = try await store.database.workspaceOverview().conversations.first(where: { $0.id == id })
         else { throw CommandError.unknownConversation }
         return record
@@ -329,7 +329,7 @@ final class DeviceCommandService: DeviceCommandServing {
 
     func transcript(conversationID: String, before: String? = nil) async throws -> LibraryTranscript {
         _ = try await conversation(conversationID)
-        guard let store = model.dashboardStore else { throw CommandError.unavailable }
+        guard let store = model.libraryStore else { throw CommandError.unavailable }
         let cursor: WorkspaceConversationHistoryCursor?
         if let before {
             guard before.utf8.count <= 2_048, let data = Data(base64Encoded: before),
@@ -353,7 +353,7 @@ final class DeviceCommandService: DeviceCommandServing {
 
 extension DeviceCommandService {
     func analyticsPreference() async throws -> ProductAnalyticsPreference {
-        guard let database = model.dashboardStore?.database else { throw ApplicationModelError.dashboardStoreUnavailable }
+        guard let database = model.libraryStore?.database else { throw ApplicationModelError.libraryStoreUnavailable }
         return try await database.productAnalyticsPreference()
     }
     func setAnalyticsPreference(_ change: ProductAnalyticsPreferenceChange) async throws -> ProductAnalyticsPreference { try await model.setProductAnalyticsPreference(change) }

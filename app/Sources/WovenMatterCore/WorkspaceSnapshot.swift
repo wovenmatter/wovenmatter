@@ -1,6 +1,6 @@
 import Foundation
 
-func dashboardDate(from value: String) -> Date? {
+func storedDate(from value: String) -> Date? {
   let fractional = ISO8601DateFormatter()
   fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
   return fractional.date(from: value) ?? ISO8601DateFormatter().date(from: value)
@@ -116,7 +116,7 @@ public struct WorkspaceConversationRecord: Codable, Equatable, Identifiable, Sen
   }
 }
 
-public enum DashboardConversationSelection {
+public enum ConversationSelection {
   public static func mostRecentAvailableConversationID(
     in conversations: [WorkspaceConversationRecord],
     excluding excludedConversationIDs: Set<String>
@@ -126,7 +126,7 @@ public enum DashboardConversationSelection {
     for conversation in conversations {
       guard !conversation.isArchived,
             !excludedConversationIDs.contains(conversation.id) else { continue }
-      let date = conversation.lastMessageAt.flatMap(dashboardDate(from:)) ?? .distantPast
+      let date = conversation.lastMessageAt.flatMap(storedDate(from:)) ?? .distantPast
       if selectedID == nil || date > selectedDate
           || (date == selectedDate && conversation.id > selectedID!) {
         selectedID = conversation.id
@@ -219,8 +219,8 @@ public struct WorkspaceCalendarItemRecord: Codable, Equatable, Identifiable, Sen
   public let updatedAt: String
   public let calendar: WorkspaceCalendarDetails
 
-  public var startDate: Date? { dashboardDate(from: startsAt) }
-  public var endDate: Date? { endsAt.flatMap(dashboardDate(from:)) }
+  public var startDate: Date? { storedDate(from: startsAt) }
+  public var endDate: Date? { endsAt.flatMap(storedDate(from:)) }
 
   enum CodingKeys: String, CodingKey {
     case id, kind, title, status, source

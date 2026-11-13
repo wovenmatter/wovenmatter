@@ -83,9 +83,9 @@ struct MobileDictationMicrophone: View {
     Button { MobileDictation.shared.toggle(editor) } label: {
       Image(systemName: session.isRecording ? "stop.circle.fill" : "mic")
         .font(.system(size: 20)).frame(width: 44, height: 44)
-        .foregroundStyle(session.isRecording ? DashboardPalette.danger : DashboardPalette.foreground)
+        .foregroundStyle(session.isRecording ? WovenPalette.danger : WovenPalette.foreground)
     }
-    .buttonStyle(DashboardIconButtonStyle())
+    .buttonStyle(WovenIconButtonStyle())
     .disabled(session.phase == .finishing)
     .accessibilityLabel(session.retainedTranscript != nil ? "Insert retained dictation here" : session.isRecording ? "Stop recording and insert here" : "Start dictation")
     .accessibilityIdentifier("dictation-microphone")
@@ -113,9 +113,9 @@ struct MobileDictationFeedback: View {
             .font(.subheadline).frame(minHeight: 44)
         }
         if !session.preview.isEmpty { Text(session.preview).font(.caption).lineLimit(3) }
-        if let error = session.error { Text(error).font(.caption).foregroundStyle(DashboardPalette.danger) }
+        if let error = session.error { Text(error).font(.caption).foregroundStyle(WovenPalette.danger) }
         if let retained = session.retainedTranscript { Text(retained).font(.caption).lineLimit(4).textSelection(.enabled) }
-      }.padding(12).background(DashboardPalette.background, in: RoundedRectangle(cornerRadius: DashboardMetrics.controlRadius))
+      }.padding(12).background(WovenPalette.background, in: RoundedRectangle(cornerRadius: WovenMetrics.controlRadius))
         .padding(12).accessibilityIdentifier("dictation-feedback")
     }
   }

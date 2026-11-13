@@ -3,14 +3,14 @@ import Foundation
 import WovenMatterClient
 import WovenMatterShared
 import WovenMatterCore
-import WovenMatterDashboardStore
+import WovenMatterLibraryStore
 
 extension ApplicationModel {
     /// Routes the window's commands to the process that owns execution.
     func controlBots(_ command: BotsCommand) async throws -> BotsCommandResult {
         if isBackendFrontend {
             guard let result = try await sendBackendCommand(.bots(command)).bots else {
-                throw ApplicationModelError.dashboardStoreUnavailable
+                throw ApplicationModelError.libraryStoreUnavailable
             }
             return result
         }
@@ -32,7 +32,7 @@ extension ApplicationModel {
     func configureBotsRuntime() {
         guard LocalExecutionRole.current.ownsExecution else { return }
         if let botsHost { attachBotDeliveries(botsHost); return }
-        guard let support = try? Self.dashboardSupportDirectory() else { return }
+        guard let support = try? Self.librarySupportDirectory() else { return }
         let directory = support.appending(path: "Bots")
         // The VM lives beside Bots in the support directory (`<support>/WovenVM`).
         let host = BotsHostController(directory: directory, engine: BotEngineHostFactory.make(support),
@@ -61,32 +61,32 @@ extension ApplicationModel {
         let directory = BotsRemoteDirectory()
         return BotsHostDependencies(
             identity: { [weak self] in
-                guard let database = self?.dashboardStore?.database else { throw ApplicationModelError.dashboardStoreUnavailable }
+                guard let database = self?.libraryStore?.database else { throw ApplicationModelError.libraryStoreUnavailable }
                 return (try await database.libraryIdentity().hostDeviceID, DevelopmentLaunch.deviceName())
             },
             appVersion: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String,
             issueKey: { [weak self] machineID, botID, name in
-                guard let tools = self?.agentTools else { throw ApplicationModelError.dashboardStoreUnavailable }
+                guard let tools = self?.agentTools else { throw ApplicationModelError.libraryStoreUnavailable }
                 return try await tools.issueBotKey(machineID: machineID, botID: botID, botName: name)
             },
             revokeKey: { [weak self] callerID, sticky in
-                guard let tools = self?.agentTools else { throw ApplicationModelError.dashboardStoreUnavailable }
+                guard let tools = self?.agentTools else { throw ApplicationModelError.libraryStoreUnavailable }
                 try tools.revokeBotKey(callerID: callerID, sticky: sticky)
             },
             reinstate: { [weak self] callerID in try await self?.agentTools?.reinstateBot(callerID: callerID) },
             setPaused: { [weak self] machineID, paused in
-                guard let tools = self?.agentTools else { throw ApplicationModelError.dashboardStoreUnavailable }
+                guard let tools = self?.agentTools else { throw ApplicationModelError.libraryStoreUnavailable }
                 try await tools.setBotsPaused(machineID: machineID, paused: paused)
             },
             callers: { [weak self] in try await self?.agentTools?.botCallers() ?? [] },
-            isPaused: { [weak self] machineID in (try? await self?.dashboardStore?.database.isBotMachinePaused(machineID)) ?? false },
+            isPaused: { [weak self] machineID in (try? await self?.libraryStore?.database.isBotMachinePaused(machineID)) ?? false },
             botMCP: { [weak self] in try? await self?.agentTools?.database.toolSettings().botMCP },
             recordConversation: { [weak self] machineID, batch in
-                guard let database = self?.dashboardStore?.database else { throw ApplicationModelError.dashboardStoreUnavailable }
+                guard let database = self?.libraryStore?.database else { throw ApplicationModelError.libraryStoreUnavailable }
                 try await database.recordBotConversation(machineID: machineID, batch)
             },
             deleteConversations: { [weak self] machineID, botID in
-                try await self?.dashboardStore?.database.deleteBotConversations(machineID: machineID, botID: botID)
+                try await self?.libraryStore?.database.deleteBotConversations(machineID: machineID, botID: botID)
             },
             inferenceCredential: { provider in try await BotsHostAPI.storedCredential(provider: provider) },
             remoteMachines: { [weak self] version in await self?.remoteBotMachines(thisMacVersion: version, directory: directory) ?? [] },
@@ -131,7 +131,7 @@ extension ApplicationModel {
     func remoteBotMachines(thisMacVersion: String?, directory: BotsRemoteDirectory) async -> [BotMachine] {
         let members = await memberBotWorkspaces()
         // A machine whose library schema differs cannot sync with this Mac: it needs Update everything.
-        let schema = try? await dashboardStore?.database.pairedLibrarySchema()
+        let schema = try? await libraryStore?.database.pairedLibrarySchema()
         let signedIDs = Set(members.map(\.id))
         let tunnelled = remoteWorkspaces.workspaces.filter { $0.kind == .host && !signedIDs.contains($0.id.uuidString.lowercased()) }
         let linux = tunnelled.map { configuration in
@@ -192,7 +192,7 @@ extension ApplicationModel {
     /// Every other Mac and Linux workspace in the registry that can be addressed:
     /// an endpoint and the member that serves it, one workspace per member.
     func memberBotTargets() async -> [(workspace: ExecutionWorkspace, audience: String)] {
-        guard let database = dashboardStore?.database, let directory = try? await libraryHost.peerSync.members(),
+        guard let database = libraryStore?.database, let directory = try? await libraryHost.peerSync.members(),
               let workspaces = try? await database.libraryExecutionWorkspaces() else { return [] }
         var seen: Set<String> = [directory.identity.deviceID], targets: [(workspace: ExecutionWorkspace, audience: String)] = []
         for workspace in workspaces where (workspace.kind == .mac || workspace.kind == .linux) && workspace.isVisibleInConnections && workspace.endpoint != nil {
@@ -242,7 +242,7 @@ extension ApplicationModel {
 
     /// The members serving a Mac or Linux workspace in the registry.
     private func memberStreamAudiences() async -> Set<String> {
-        guard let database = dashboardStore?.database, let directory = try? await libraryHost.peerSync.members(),
+        guard let database = libraryStore?.database, let directory = try? await libraryHost.peerSync.members(),
               let workspaces = try? await database.libraryExecutionWorkspaces() else { return [] }
         var audiences: Set<String> = []
         for workspace in workspaces where (workspace.kind == .mac || workspace.kind == .linux) && !workspace.deleted && workspace.endpoint != nil {

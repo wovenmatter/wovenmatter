@@ -3,7 +3,7 @@ import WovenMatterShared
 import Testing
 import LibraryClient
 import WovenMatterCore
-import WovenMatterDashboardStore
+import WovenMatterLibraryStore
 
 /// These tests cross the production mobile store/outbox, sync engine, JSON wire
 /// DTOs, real HTTP framing, authenticated workspace API and canonical SQLite.

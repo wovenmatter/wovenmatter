@@ -8,8 +8,8 @@ consent, recovery, and Dev signing are documented in
 ## Ownership and lifecycle
 
 `WorkspaceAssetSession` owns ephemeral tabs independently of chats.
-`DashboardAssetPane` owns pane navigation and shared toolbar controls;
-`DashboardNotePane` supplies the selected note-like asset's editor.
+`AssetPane` owns pane navigation and shared toolbar controls;
+`DesktopNotePane` supplies the selected note-like asset's editor.
 SwiftUI redraws, reparenting, and hidden panes retain each page's AppKit view.
 
 The runtime retains pages until CEF's `OnBeforeClose`; clients hold weak page

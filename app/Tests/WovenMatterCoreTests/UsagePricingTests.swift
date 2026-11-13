@@ -4,7 +4,7 @@ import FoundationNetworking
 #endif
 import Testing
 import WovenMatterCore
-@testable import WovenMatterDashboardStore
+@testable import WovenMatterLibraryStore
 
 @Suite("Usage API estimates")
 struct UsagePricingTests {

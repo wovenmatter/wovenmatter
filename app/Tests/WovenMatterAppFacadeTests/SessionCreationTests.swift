@@ -2,7 +2,7 @@ import Foundation
 import Testing
 import WorkspaceFixtures
 import WovenMatterCore
-import WovenMatterDashboardStore
+import WovenMatterLibraryStore
 @testable import WovenMatterAppFacade
 
 @MainActor @Suite(.serialized, .timeLimit(.minutes(2)))

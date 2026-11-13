@@ -7,7 +7,7 @@ import os
 import WovenMatterShared
 import LibraryClient
 import WovenMatterCore
-import WovenMatterDashboardStore
+import WovenMatterLibraryStore
 
 /// This Mac's reach into every other machine's sessions: one member-signed
 /// stream per workspace (docs/architecture/WOVEN_EVERYWHERE.md, "Streaming").

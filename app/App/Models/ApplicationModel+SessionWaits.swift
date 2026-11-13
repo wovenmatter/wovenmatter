@@ -1,7 +1,7 @@
 import Foundation
 import WovenMatterCore
 import WovenMatterClient
-import WovenMatterDashboardStore
+import WovenMatterLibraryStore
 
 /// `woven_sessions_wait` and wake-ups on this Mac (docs/architecture/WOVEN_EVERYWHERE.md,
 /// "Streaming", "Agent to agent"; `SessionWakeUp` in shared/), with the same
@@ -14,7 +14,7 @@ extension ApplicationModel {
 
     /// The coordinator, created (and its stored state loaded) on first use.
     func sessionWakeUps() async -> SessionWakeUps? {
-        guard !isBackendFrontend, let agentTools, let database = dashboardStore?.database else { return nil }
+        guard !isBackendFrontend, let agentTools, let database = libraryStore?.database else { return nil }
         if let existing = agentTools.sessionWakeUps { return existing }
         let coordinator = SessionWakeUps(database: database, hooks: .init(
             caller: { [weak self] id in await self?.sessionWakeUpCaller(id) ?? .gone },
@@ -51,7 +51,7 @@ extension ApplicationModel {
 
     /// One of this Mac's sessions, in `woven_sessions_status`'s terms.
     func localSessionSnapshot(_ id: String) async -> SessionWakeUps.Snapshot? {
-        guard let database = dashboardStore?.database else { return nil }
+        guard let database = libraryStore?.database else { return nil }
         let run = try? await database.activeRunID(conversationID: id)
         let pending = await libraryCommands.pendingInteractions().filter { $0.conversationID.lowercased() == id.lowercased() }
         // The stored run is what changes commit; it is the state, as on another workspace.
@@ -60,7 +60,7 @@ extension ApplicationModel {
 
     private func sessionWakeUpCaller(_ id: String) async -> SessionWakeUps.Caller {
         if WovenMCPCaller.parseBot(id) != nil { return .bot }
-        guard let database = dashboardStore?.database, (try? await database.sessionWakeUpCallerExists(id)) == true else { return .gone }
+        guard let database = libraryStore?.database, (try? await database.sessionWakeUpCallerExists(id)) == true else { return .gone }
         let activeRun = try? await database.activeRunID(conversationID: id)
         let idle = !runningToolSessionIDs.contains(id) && activeRun == nil
         guard idle else { return .conversation(idle: false, wokenRunsInARow: 0) }
@@ -70,7 +70,7 @@ extension ApplicationModel {
     /// Sends the wake-up into the idle caller like a coordination notification,
     /// never steering a running turn. False when it was not accepted.
     private func deliverSessionWakeUp(_ wakeUp: SessionWakeUps.Delivery) async -> Bool {
-        guard let database = dashboardStore?.database else { return false }
+        guard let database = libraryStore?.database else { return false }
         do {
             let delivery = try await database.reserveSessionWakeUpDelivery(id: wakeUp.id, callerID: wakeUp.callerID, sessionID: wakeUp.sessionID,
                 title: wakeUp.title, harness: wakeUp.harness, text: wakeUp.text, key: wakeUp.key)
@@ -93,7 +93,7 @@ extension ApplicationModel {
 
     /// A bot's wake-up reaches its runtime the way its notifications do.
     private func deliverBotWakeUp(_ wakeUp: SessionWakeUps.Delivery) async throws {
-        guard let database = dashboardStore?.database, let agentTools else { throw ApplicationModelError.dashboardStoreUnavailable }
+        guard let database = libraryStore?.database, let agentTools else { throw ApplicationModelError.libraryStoreUnavailable }
         let delivery = try await database.reserveSessionWakeUpDelivery(id: wakeUp.id, callerID: wakeUp.callerID, sessionID: wakeUp.sessionID,
             title: wakeUp.title, harness: wakeUp.harness, text: wakeUp.text, key: wakeUp.key)
         if delivery.status == "accepted" { return }
@@ -127,8 +127,8 @@ extension ApplicationModel {
     /// `woven_sessions_wait`: a session on another member's workspace resolves
     /// from that workspace's stream, one on this Mac from its own changes.
     func memberSessionWait(callerID: String, command: WovenMatterToolCommand, readsAll: Bool) async throws -> WovenMatterToolResponse {
-        guard let database = dashboardStore?.database, let coordinator = await sessionWakeUps() else {
-            throw ApplicationModelError.dashboardStoreUnavailable
+        guard let database = libraryStore?.database, let coordinator = await sessionWakeUps() else {
+            throw ApplicationModelError.libraryStoreUnavailable
         }
         let id = try command.required("id", allowPositional: true).lowercased()
         let until = try command.required("until")

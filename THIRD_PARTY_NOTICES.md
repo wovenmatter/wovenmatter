@@ -87,7 +87,7 @@ native runtime keeps Anthropic's original signature and is never modified.
 
 ## Lucide
 
-The dashboard icon assets are derived from `lucide-static`. The selected
+The apps' Lucide icon assets are derived from `lucide-static`. The selected
 release, published tarball integrity, and per-asset hashes are recorded in
 `docs/assets/lucide-provenance.json`.
 

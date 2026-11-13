@@ -2,7 +2,7 @@ import Foundation
 import Observation
 import Security
 import WovenMatterShared
-import WovenMatterDashboardStore
+import WovenMatterLibraryStore
 
 @Observable @MainActor
 final class MacPairingController {

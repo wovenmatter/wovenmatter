@@ -1,7 +1,7 @@
 import AppKit
 import Foundation
 import Observation
-import WovenMatterDashboardStore
+import WovenMatterLibraryStore
 
 @MainActor @Observable
 final class SavedArtifactsModel {

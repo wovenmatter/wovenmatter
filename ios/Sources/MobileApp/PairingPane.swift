@@ -4,7 +4,7 @@ import VisionKit
 import AVFoundation
 
 struct PairingPane: View {
-  @Environment(\.dashboardTheme) private var theme
+  @Environment(\.wovenTheme) private var theme
   @Bindable var model: MobileModel
   @State private var scanning = false
   @State private var scannerError: String?
@@ -28,7 +28,7 @@ struct PairingPane: View {
         pairingControls(header: "Device Connections", footer: "On any Mac with Woven Matter, open Settings → Apple Devices. Scan its code or paste its link. Both devices must use the same Tailscale network. After pairing once, \(model.deviceWorkspaceInSentence) reaches every Mac and Linux machine directly.")
       }
       if let problem = model.pairingError ?? scannerError {
-        Section { Text(problem).font(.callout).foregroundStyle(DashboardPalette.danger).textSelection(.enabled) }
+        Section { Text(problem).font(.callout).foregroundStyle(WovenPalette.danger).textSelection(.enabled) }
       }
     }.mobileNavigationPage("Device Connections")
       .sheet(isPresented: $scanning) {
@@ -50,7 +50,7 @@ struct PairingPane: View {
       Button { Task { await beginScanning() } } label: { Label("Scan pairing code", systemImage: "qrcode.viewfinder") }
         .disabled(model.pairingInProgress).accessibilityIdentifier("pairing-scan")
       TextField("Paste pairing link", text: $model.pairingText, axis: .vertical)
-        .dashboardInput().textInputAutocapitalization(.never).autocorrectionDisabled().privacySensitive().accessibilityIdentifier("pairing-link")
+        .wovenInput().textInputAutocapitalization(.never).autocorrectionDisabled().privacySensitive().accessibilityIdentifier("pairing-link")
       Button(model.pairingInProgress ? "Pairing…" : "Pair") {
         guard let url = URL(string: model.pairingText.trimmingCharacters(in: .whitespacesAndNewlines)) else {
           model.pairingError = "Paste the full pairing link from your Mac."; return

@@ -7,7 +7,7 @@ import CSQLite
 import Testing
 import WorkspaceFixtures
 import WovenMatterCore
-@testable import WovenMatterDashboardStore
+@testable import WovenMatterLibraryStore
 
 /// The migration of the maintainer's real libraries: every Mac and Linux host
 /// that updates opens a `workspace.sqlite` written by v0.4.2. The fixture is

@@ -8,7 +8,7 @@ import Foundation
 import Testing
 import WovenMatterCore
 import WovenMatterClient
-@testable import WovenMatterDashboardStore
+@testable import WovenMatterLibraryStore
 
 struct MacInstallerTests {
     @Test(arguments: ["checksum", "signature", "replacement", "success", "unsupported-pairing", "busy-lock", "interrupt"])

@@ -13,7 +13,7 @@ import WovenMatterClient
 import WorkspaceFixtures
 import Testing
 import WovenMatterCore
-@testable import WovenMatterDashboardStore
+@testable import WovenMatterLibraryStore
 
 @Suite("Equal paired Mac libraries", .serialized)
 struct PairedLibraryTests {

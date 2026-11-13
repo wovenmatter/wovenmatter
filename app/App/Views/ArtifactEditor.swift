@@ -2,7 +2,7 @@ import SwiftUI
 import WebKit
 import WovenMatterCore
 
-struct DashboardSpreadsheetEditor: View {
+struct SpreadsheetEditor: View {
     @Binding var document: NoteDocument
 
     private var tableIndex: Int? {
@@ -198,7 +198,7 @@ struct DashboardSpreadsheetEditor: View {
     }
 }
 
-struct DashboardHTMLArtifactView: NSViewRepresentable {
+struct HTMLArtifactView: NSViewRepresentable {
     @Environment(\.colorScheme) private var colorScheme
     let html: String
     let linkedDataJSON: String?
@@ -222,7 +222,7 @@ struct DashboardHTMLArtifactView: NSViewRepresentable {
         coordinator.emptyAppearance = emptyAppearance
         coordinator.html = html
         coordinator.linkedDataJSON = linkedDataJSON
-        let rendered = DashboardHTMLArtifactDocument.render(html: html, linkedDataJSON: linkedDataJSON, emptyAppearance: emptyAppearance)
+        let rendered = HTMLArtifactDocument.render(html: html, linkedDataJSON: linkedDataJSON, emptyAppearance: emptyAppearance)
         guard context.coordinator.renderedHTML != rendered else { return }
         context.coordinator.renderedHTML = rendered
         webView.loadHTMLString(rendered, baseURL: nil)
@@ -247,10 +247,10 @@ struct DashboardHTMLArtifactView: NSViewRepresentable {
     }
 }
 
-struct DashboardDatabaseLinkControl: View {
-    @Environment(\.dashboardTheme) private var theme
+struct DatabaseLinkControl: View {
+    @Environment(\.wovenTheme) private var theme
     @Binding var document: NoteDocument
-    let snapshot: DashboardDatabasesSnapshot
+    let snapshot: DatabasesSnapshot
     @State private var showsPopover = false
 
     private var links: [DatabaseArtifactLink] {
@@ -270,40 +270,40 @@ struct DashboardDatabaseLinkControl: View {
         Button {
             showsPopover.toggle()
         } label: {
-            DashboardLucideIcon(glyph: .database, size: 14)
+            LucideIcon(glyph: .database, size: 14)
                 .frame(width: 32, height: 32)
         }
-        .buttonStyle(DashboardIconButtonStyle())
+        .buttonStyle(WovenIconButtonStyle())
         .help(links.isEmpty ? "Link to database" : "Edit database link")
         .popover(isPresented: $showsPopover, arrowEdge: .top) {
-            DashboardDatabaseLinkPopover(
+            DatabaseLinkPopover(
                 document: $document,
                 snapshot: snapshot,
                 onClose: { showsPopover = false }
             )
-            .environment(\.dashboardTheme, theme)
+            .environment(\.wovenTheme, theme)
         }
     }
 }
 
-private struct DashboardDatabaseLinkPopover: View {
+private struct DatabaseLinkPopover: View {
     @Binding var document: NoteDocument
-    let snapshot: DashboardDatabasesSnapshot
+    let snapshot: DatabasesSnapshot
     let onClose: () -> Void
     @State private var sourceID = ""
     @State private var databaseID = ""
     @State private var targetTableID = ""
     @State private var sqliteQuery = ""
 
-    private var sources: [DashboardDatabaseSource] {
+    private var sources: [DatabaseSource] {
         snapshot.sources.filter { !$0.databases.isEmpty }
     }
 
-    private var databases: [DashboardAgentDatabase] {
+    private var databases: [AgentDatabase] {
         sources.first { $0.id == sourceID }?.databases ?? []
     }
 
-    private var selectedDatabase: DashboardAgentDatabase? {
+    private var selectedDatabase: AgentDatabase? {
         databases.first { $0.databaseID == databaseID }
     }
 
@@ -360,13 +360,13 @@ private struct DashboardDatabaseLinkPopover: View {
                 ForEach(databases) { Text($0.name).tag($0.databaseID) }
             }
             if let selectedDatabase {
-                Text(DashboardDatabaseFreshness.description(selectedDatabase))
+                Text(DatabaseFreshness.description(selectedDatabase))
                     .font(.system(size: 11))
                     .foregroundStyle(selectedDatabase.offline
-                        ? DashboardPalette.warning : DashboardPalette.mutedForeground)
+                        ? WovenPalette.warning : WovenPalette.mutedForeground)
             }
             TextField("SQL query, for example SELECT * FROM sales", text: $sqliteQuery, axis: .vertical)
-                .dashboardQuietTextInput(font: .system(size: 12, design: .monospaced))
+                .quietTextInput(font: .system(size: 12, design: .monospaced))
                 .lineLimit(2...5)
             Text(document.kind == .html
                 ? "Results are available as window.wovenMatterData. Your HTML refreshes when committed data changes."

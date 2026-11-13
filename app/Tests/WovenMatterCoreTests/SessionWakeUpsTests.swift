@@ -2,7 +2,7 @@ import Foundation
 import Testing
 import WorkspaceFixtures
 import WovenMatterCore
-@testable import WovenMatterDashboardStore
+@testable import WovenMatterLibraryStore
 
 /// Waits and wake-ups on a Mac (`SessionWakeUps`), case for case with the Linux
 /// server's remote/test/session-watch.test.mjs.

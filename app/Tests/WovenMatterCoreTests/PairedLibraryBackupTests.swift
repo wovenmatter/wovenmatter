@@ -3,7 +3,7 @@ import Testing
 import WovenMatterClient
 import WorkspaceFixtures
 import WovenMatterCore
-@testable import WovenMatterDashboardStore
+@testable import WovenMatterLibraryStore
 
 /// The recovery backup taken before a library's first peer import. A real
 /// library of several gigabytes takes minutes to copy and verify; it once ran

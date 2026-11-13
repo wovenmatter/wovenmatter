@@ -2,7 +2,7 @@ import Foundation
 import Observation
 import WovenMatterClient
 import WovenMatterCore
-import WovenMatterDashboardStore
+import WovenMatterLibraryStore
 
 /// The window's view of bots on every machine: one session per machine whose Woven
 /// server hosts bots, plus host state projected from the process that owns execution.
@@ -38,7 +38,7 @@ final class BotsModel {
         jobs.first { $0.kind == kind && $0.target.lowercased() == target.lowercased() }
     }
 
-    func name(for target: DashboardBotTarget) -> String? {
+    func name(for target: BotTarget) -> String? {
         sessions[target.machineID]?.bots.first { $0.id == target.botID }?.name
     }
 
@@ -121,7 +121,7 @@ final class BotsModel {
         return headers
     }
 
-    func conversation(_ target: DashboardBotTarget) -> BotConversationController? {
+    func conversation(_ target: BotTarget) -> BotConversationController? {
         sessions[target.machineID]?.conversation(botID: target.botID, conversationID: target.conversationID)
     }
 }

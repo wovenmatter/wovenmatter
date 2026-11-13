@@ -332,7 +332,7 @@ among Macs that still stand; they never decide who wins a dispute.
 ## Library on every surface
 
 - Macs and Linux machines hold a full library database and run the same Swift
-  library code: `WovenMatterDashboardStore` and its dependencies, built for
+  library code: `WovenMatterLibraryStore` and its dependencies, built for
   Linux. Linux has no rendering; agents read and edit notes, calendar, history
   and artifacts through the database with the exact same code as the Mac
   (`NoteDocument`, `applyNoteEdits`, receipts, versions).
@@ -446,7 +446,7 @@ among Macs that still stand; they never decide who wins a dispute.
   - `device_*` is what the library keeps for devices that reach it over the device API: the phone change feed (`device_sync_revisions`, `device_sync_changes`, written by the `<table>_device_sync_*` triggers), mutation, command, draft, tool and calendar receipts, scheduled MCP callers, saved files and message provenance.
   - `library_items`, `library_messages`, `library_settings` and `library_locations` index the Library pane (files and links found in chats); `library_members*` is the signed member list.
 
-  v0.4.2 still used the names of the OpenClaw dashboard the library came from (`dashboard_*`, `desktop_*`, OpenClaw gateway tables and columns, and per-row `user_id`, `governing_plane`, `authority_kind`, `authority_agent_id`, `origin_device_id` and `desktop_owned` columns every current writer sets to the same value). Opening such a library converts it in place (`LibrarySchemaUpgrade.swift`, whose tables are the complete old-to-new map): tables and columns are renamed, dead ones dropped, every trigger is recreated under its `<table>_<purpose>_<op>` name and every renamed index as `<table>_<purpose>`, and peer sync bookkeeping is rewritten to the new names, so paired Macs that update together keep their versions and cursors. Rows the old columns hid or kept read-only stay that way: a dashboard chat becomes retained read-only history, and a hidden one stays archived. The paired-devices file (`companion-devices.json`, now `library-devices.json`), the desktop's `companion.*` settings and its pairing credential and member key in the Keychain (`com.wovenmatter.companion.*`) moved once in November 2026.
+  v0.4.2 still used the names of the OpenClaw dashboard the library came from (`dashboard_*`, `desktop_*`, OpenClaw gateway tables and columns, and per-row `user_id`, `governing_plane`, `authority_kind`, `authority_agent_id`, `origin_device_id` and `desktop_owned` columns every current writer sets to the same value). Opening such a library converts it in place (`LibrarySchemaUpgrade.swift`, whose tables are the complete old-to-new map): tables and columns are renamed, dead ones dropped, every trigger is recreated under its `<table>_<purpose>_<op>` name and every renamed index as `<table>_<purpose>`, and peer sync bookkeeping is rewritten to the new names, so paired Macs that update together keep their versions and cursors. Rows the old columns hid or kept read-only stay that way: a dashboard chat becomes retained read-only history, and a hidden one stays archived. The paired-devices file (`companion-devices.json`, now `library-devices.json`), the desktop's `companion.*` settings and its pairing credential and member key in the Keychain (`com.wovenmatter.companion.*`) moved once in November 2026, as did each machine's device ID file (`dashboard-device-id`, now `device-id`; `DeviceIdentityFile.moveLegacyFile`) and the window, sidebar and theme settings saved under `wovenmatter.dashboard.*` (`WindowPreferenceUpgrade` on the Mac; the iPhone moves its theme).
 
 ### Library host (`wovenmatter-library`)
 
@@ -491,7 +491,7 @@ owned by the running user.
 
 | Path | Contents |
 | --- | --- |
-| `DIR/library/` | The `DashboardStore` support directory: `workspace.sqlite` (+ WAL), `dashboard-device-id` (this machine's device ID), library and attachment files |
+| `DIR/library/` | The `LibraryStore` support directory: `workspace.sqlite` (+ WAL), `device-id` (this machine's device ID), library and attachment files |
 | `DIR/secrets/` | 0600 files that replace Keychain items (`LinuxSecretStore`), one per generic-password item, and `member-signing.key` (this machine's member key) |
 | `DIR/run/library.sock` | Local API socket, 0600; peers must also be this user (checked with `SO_PEERCRED`) and, when the host was launched by `node`, that very parent process (see "Node signs through its library host") |
 | `DIR/run/library-api.token` | Local API bearer, 0600, 43–256 base64url characters. The Node server may create it before starting the host; otherwise the host creates it |
@@ -711,7 +711,7 @@ listed or fired, and a paused, revoked or disabled bot's are skipped.
   header, by the bot's name (`WorkspaceAgentToolsModel.timers(forBot:on:)`);
   session views never list them.
 
-Tool execution is `WorkspaceToolExecutor` in `WovenMatterDashboardStore`, the
+Tool execution is `WorkspaceToolExecutor` in `WovenMatterLibraryStore`, the
 same code the Mac app's `WorkspaceAgentToolsModel` now delegates to. Note edits
 go to `WorkspaceDatabase.readNoteForEditing` / `applyNoteEdits`, so a Linux
 edit stores the same `NoteDocument` bytes a Mac stores for the same edit.
@@ -822,7 +822,7 @@ hands them to the macOS job, which checks them with
   whose files it is bound to: `device:<id>` (an iPhone, or a Dev connected
   client's execution workspace, whose registry id is that `<id>`), `remote:<id>`
   (a Linux workspace, registry id `<id>`), or, for a Mac's own workspace,
-  `device:<dashboard device id>`, which is neither its registry id (a random
+  `device:<device id>`, which is neither its registry id (a random
   per-library value) nor its `hostDeviceID`. Each Mac's own registry row
   therefore names that value as `folderOwnerID` (optional, `device:<UUID>`,
   `.mac` rows only; the library rejects anything else). Devices group a

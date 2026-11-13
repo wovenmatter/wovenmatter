@@ -66,11 +66,11 @@ struct ConversationSubagentRow: View {
                 if let label = child.statusLabel?.nonempty {
                     Text(label)
                         .font(.system(size: 11.5))
-                        .foregroundStyle(DashboardPalette.mutedForeground)
+                        .foregroundStyle(WovenPalette.mutedForeground)
                 }
                 Spacer(minLength: 0)
             }
-            .foregroundStyle(DashboardPalette.foreground.opacity(0.72))
+            .foregroundStyle(WovenPalette.foreground.opacity(0.72))
         }
     }
 
@@ -79,7 +79,7 @@ struct ConversationSubagentRow: View {
         if let value = value?.nonempty {
             Text("\(label): \(value)")
                 .font(.system(size: 11.5))
-                .foregroundStyle(DashboardPalette.mutedForeground)
+                .foregroundStyle(WovenPalette.mutedForeground)
                 .textSelection(.enabled)
                 .fixedSize(horizontal: false, vertical: true)
         }
@@ -93,7 +93,7 @@ struct ConversationSubagentRow: View {
                 .textSelection(.enabled)
                 .fixedSize(horizontal: false, vertical: true)
         }
-        .foregroundStyle(DashboardPalette.mutedForeground)
+        .foregroundStyle(WovenPalette.mutedForeground)
     }
 
     private func entries(_ label: String, _ values: [AgentRunSubagentActivity]) -> some View {
@@ -116,7 +116,7 @@ struct ConversationSubagentRow: View {
             .padding(.top, 5)
         }
         .font(.system(size: 11.5))
-        .foregroundStyle(DashboardPalette.mutedForeground)
+        .foregroundStyle(WovenPalette.mutedForeground)
     }
 }
 
@@ -144,10 +144,10 @@ private struct ConversationSubagentHistory: View {
                                 ConversationSubagentArchiveEvent(request: request(eventID: eventID), fields: fields)
                             }
                         }
-                        if let error { Text(error).foregroundStyle(DashboardPalette.danger).textSelection(.enabled) }
+                        if let error { Text(error).foregroundStyle(WovenPalette.danger).textSelection(.enabled) }
                         if hasMore {
                             Button(rows.isEmpty ? "Load history" : "Load more history") { Task { await loadNextPage() } }
-                                .buttonStyle(DashboardQuietButtonStyle())
+                                .buttonStyle(WovenQuietButtonStyle())
                                 .disabled(busy)
                         }
                         if busy { Text("Loading history…") }
@@ -155,7 +155,7 @@ private struct ConversationSubagentHistory: View {
                 }
             }
             .font(.system(size: 11.5))
-            .foregroundStyle(DashboardPalette.mutedForeground)
+            .foregroundStyle(WovenPalette.mutedForeground)
         }
     }
 
@@ -197,10 +197,10 @@ private struct ConversationSubagentArchiveEvent: View {
                 ForEach(Array(chunks.enumerated()), id: \.offset) { _, chunk in
                     Text(chunk).font(.system(size: 11.5, design: .monospaced)).textSelection(.enabled)
                 }
-                if let error { Text(error).foregroundStyle(DashboardPalette.danger).textSelection(.enabled) }
+                if let error { Text(error).foregroundStyle(WovenPalette.danger).textSelection(.enabled) }
                 if hasMore {
                     Button(chunks.isEmpty ? "Read native record" : "Read more") { Task { await loadNextChunk() } }
-                        .buttonStyle(DashboardQuietButtonStyle()).disabled(busy)
+                        .buttonStyle(WovenQuietButtonStyle()).disabled(busy)
                 }
                 if busy { Text("Loading record…") }
             }

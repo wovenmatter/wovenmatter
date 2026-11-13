@@ -2,7 +2,7 @@ import CryptoKit
 import Foundation
 import Testing
 import WovenMatterCore
-@testable import WovenMatterDashboardStore
+@testable import WovenMatterLibraryStore
 
 @Suite("Central library federation", .serialized)
 struct FederationTests {

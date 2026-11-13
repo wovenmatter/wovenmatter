@@ -2,7 +2,7 @@ import Foundation
 import Observation
 import WovenMatterCore
 import WovenMatterClient
-import WovenMatterDashboardStore
+import WovenMatterLibraryStore
 
 enum ExecutorControl: Codable, Sendable {
     case setup(ExecutorConfiguration, prepareHost: Bool = false), refresh, dashboard

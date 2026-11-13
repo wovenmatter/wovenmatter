@@ -2,7 +2,7 @@ import Darwin
 import Foundation
 import WovenMatterClient
 import WovenMatterCore
-import WovenMatterDashboardStore
+import WovenMatterLibraryStore
 
 // A provider-free host for the production IPC, invalidation and database boundary.
 // This deliberately does not substitute for native ApplicationModel routing tests.
@@ -157,7 +157,7 @@ private final class WindowStream: @unchecked Sendable {
                 return
             }
             if CommandLine.arguments[1] == "frontend" {
-                let projection = try await DashboardStore(supportDirectory: root, readOnlyProjection: true)
+                let projection = try await LibraryStore(supportDirectory: root, readOnlyProjection: true)
                 var refused = false
                 do { _ = try await projection.database.createFolder(name: "Forbidden frontend write", location: .init(workspaceID: "device:test", rootPath: "/tmp", managed: false)) }
                 catch { refused = true }
@@ -181,7 +181,7 @@ private final class WindowStream: @unchecked Sendable {
         let frontend = try child("frontend", root: root)
         try await wait(frontend)
         try require(backend.isRunning, "Frontend exit stopped backend")
-        let projection = try await DashboardStore(supportDirectory: root, readOnlyProjection: true)
+        let projection = try await LibraryStore(supportDirectory: root, readOnlyProjection: true)
         // Invalidations reach the window as they are published, never by asking.
         let observedConversations: Set<String>
         do { observedConversations = try await stream.serverState("workspace") }

@@ -114,7 +114,7 @@ public struct WorkspaceLibraryItem: Codable, Equatable, Identifiable, Sendable {
   public let storage: LibraryStorage
   public let error: String?
   public var canOpen: Bool { (storage == .link && isWebLink) || contentHash != nil }
-  public var sentDate: Date? { dashboardDate(from: sentAt) }
+  public var sentDate: Date? { storedDate(from: sentAt) }
   public var isWebLink: Bool { ["http", "https"].contains(URL(string: source)?.scheme?.lowercased() ?? "") }
 }
 

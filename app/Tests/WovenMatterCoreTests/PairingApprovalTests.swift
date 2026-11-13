@@ -1,7 +1,7 @@
 import Foundation
 import Testing
 import WovenMatterCore
-@testable import WovenMatterDashboardStore
+@testable import WovenMatterLibraryStore
 
 @Suite struct PairingApprovalTests {
 

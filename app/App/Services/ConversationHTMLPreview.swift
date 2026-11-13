@@ -22,7 +22,7 @@ import WovenMatterCore
         }
         let view = coordinator.makeWebView()
         view.setValue(true, forKey: "drawsBackground")
-        view.underPageBackgroundColor = NSColor((appearance == "dark" ? DashboardTheme.dark : .green).palette.workspace)
+        view.underPageBackgroundColor = NSColor((appearance == "dark" ? WovenTheme.dark : .green).palette.workspace)
         view.frame = NSRect(x: 0, y: 0, width: width, height: 600)
         defer { coordinator.stop(view) }
         coordinator.onHeight = { [weak self] in self?.contentHeight = $0 }

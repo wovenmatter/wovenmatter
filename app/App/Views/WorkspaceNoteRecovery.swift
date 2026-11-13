@@ -26,7 +26,7 @@ struct WorkspaceNoteRecovery: View {
                 Button("Done") { dismiss() }.keyboardShortcut(.cancelAction)
             }
             Text("Up to 50 versions and 20 MB per document are retained, within a 256 MB workspace limit. Linked external data is not included.")
-                .font(.system(size: 11.5)).foregroundStyle(DashboardPalette.mutedForeground)
+                .font(.system(size: 11.5)).foregroundStyle(WovenPalette.mutedForeground)
                 .fixedSize(horizontal: false, vertical: true)
             HStack(alignment: .top, spacing: 16) {
                 ScrollView {
@@ -36,10 +36,10 @@ struct WorkspaceNoteRecovery: View {
                                 VStack(alignment: .leading, spacing: 4) {
                                     Text(version.title).font(.system(size: 12.5, weight: .medium)).lineLimit(1)
                                     Text(dateLabel(version.createdAt)).font(.system(size: 11))
-                                    Text(sourceLabel(version.source)).font(.system(size: 11)).foregroundStyle(DashboardPalette.mutedForeground)
+                                    Text(sourceLabel(version.source)).font(.system(size: 11)).foregroundStyle(WovenPalette.mutedForeground)
                                 }.padding(9).frame(maxWidth: .infinity, alignment: .leading)
-                                    .background(selection == version.id ? DashboardPalette.foreground.opacity(0.07) : .clear,
-                                        in: RoundedRectangle(cornerRadius: DashboardMetrics.controlRadius))
+                                    .background(selection == version.id ? WovenPalette.foreground.opacity(0.07) : .clear,
+                                        in: RoundedRectangle(cornerRadius: WovenMetrics.controlRadius))
                             }.buttonStyle(.plain).disabled(restores).accessibilityAddTraits(selection == version.id ? .isSelected : [])
                         }
                         if versions.isEmpty { Text("No retained versions.").font(.system(size: 12)) }
@@ -56,13 +56,13 @@ struct WorkspaceNoteRecovery: View {
                                 .frame(maxWidth: .infinity, alignment: .leading).textSelection(.enabled)
                             if document.plainText.count > 65_536 {
                                 Text("Preview shortened. Restoring includes the complete retained document.")
-                                    .font(.system(size: 11)).foregroundStyle(DashboardPalette.mutedForeground)
+                                    .font(.system(size: 11)).foregroundStyle(WovenPalette.mutedForeground)
                             }
                         }
                     }
                 }.scrollIndicators(.never).frame(maxWidth: .infinity, alignment: .leading)
             }.frame(height: 330)
-            if let error { Text(error).font(.system(size: 12)).foregroundStyle(DashboardPalette.danger) }
+            if let error { Text(error).font(.system(size: 12)).foregroundStyle(WovenPalette.danger) }
             HStack {
                 Button("Refresh") {
                     refreshTask?.cancel()
@@ -70,11 +70,11 @@ struct WorkspaceNoteRecovery: View {
                 }.buttonStyle(SettingsQuietButtonStyle()).disabled(loading || restores)
                 Spacer()
                 Button("Restore version") { confirmsRestore = true }
-                    .buttonStyle(DashboardPrimaryButtonStyle())
+                    .buttonStyle(WovenPrimaryButtonStyle())
                     .disabled(selected == nil || expectedRevision == nil || loading || restores)
             }
         }.padding(24).frame(width: 710)
-        .foregroundStyle(DashboardPalette.foreground)
+        .foregroundStyle(WovenPalette.foreground)
         .task(id: noteID) {
             refreshTask?.cancel()
             restoreTask?.cancel()
@@ -106,7 +106,7 @@ struct WorkspaceNoteRecovery: View {
         expectedRevision = nil
         defer { if loadGeneration == requestID { loading = false } }
         do {
-            guard await model.flushNoteDrafts(), let database = model.dashboardStore?.database else {
+            guard await model.flushNoteDrafts(), let database = model.libraryStore?.database else {
                 throw ApplicationModelError.noteDraftSaveFailed
             }
             try Task.checkCancellation()

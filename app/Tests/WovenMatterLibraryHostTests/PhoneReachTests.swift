@@ -4,7 +4,7 @@ import Testing
 import LibraryClient
 import WovenMatterShared
 import WovenMatterCore
-import WovenMatterDashboardStore
+import WovenMatterLibraryStore
 @testable import WovenMatterLibraryHost
 
 /// An in-process tailnet: each `host:port` routes to a Mac or Linux handler.
@@ -87,7 +87,7 @@ private final class ReachWorld: @unchecked Sendable {
     tailnet.route("box.tail1.ts.net", strip: true) { await linux.handleNetwork($0) }
 
     // The Mac: its library, member directory, peer sync and mobile API.
-    let macStore = try await DashboardStore(supportDirectory: root.appending(path: "mac"))
+    let macStore = try await LibraryStore(supportDirectory: root.appending(path: "mac"))
     try await macStore.prepareLocalWorkspace()
     let macDatabase = macStore.database
     self.macDatabase = macDatabase

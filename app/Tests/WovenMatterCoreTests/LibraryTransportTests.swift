@@ -1,6 +1,6 @@
 import Foundation
 import XCTest
-@testable import WovenMatterDashboardStore
+@testable import WovenMatterLibraryStore
 import WovenMatterCore
 
 final class LibraryTransportTests: XCTestCase {

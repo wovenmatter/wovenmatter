@@ -1,12 +1,12 @@
 import Foundation
 import WovenMatterCore
 import WovenMatterClient
-import WovenMatterDashboardStore
+import WovenMatterLibraryStore
 
 extension ApplicationModel {
     func resolveCalendarTask(callerID: String, command: WovenMatterToolCommand,
                              existing: WorkspaceCalendarTask?) async throws -> WorkspaceCalendarTask {
-        guard let database = dashboardStore?.database else { throw ApplicationModelError.dashboardStoreUnavailable }
+        guard let database = libraryStore?.database else { throw ApplicationModelError.libraryStoreUnavailable }
         let source = try await toolCallerSource(callerID)
         try await database.requireTool(.sessions, sessionID: callerID)
         let title = command.options["title"] ?? existing?.configuration.title ?? "Scheduled task"
@@ -69,7 +69,7 @@ extension ApplicationModel {
         isCreatingCalendarItem = true
         defer { isCreatingCalendarItem = false }
         do {
-            guard let database = dashboardStore?.database else { throw ApplicationModelError.dashboardStoreUnavailable }
+            guard let database = libraryStore?.database else { throw ApplicationModelError.libraryStoreUnavailable }
             var resolvedDraft = draft
             if var task = resolvedDraft.task {
                 task.configuration.nativeWorkingDirectory = try await folderWorkingDirectory(folderID: task.configuration.folderID,
@@ -97,7 +97,7 @@ extension ApplicationModel {
 
         calendarMutationError = nil
         do {
-            guard let database = dashboardStore?.database else { throw ApplicationModelError.dashboardStoreUnavailable }
+            guard let database = libraryStore?.database else { throw ApplicationModelError.libraryStoreUnavailable }
             try await database.deleteCalendarEvent(id: event.id, occurrence: occurrence, expectedRevision: event.calendar.revision)
             await refreshWorkspace()
             if LocalExecutionRole.current != .backend { await analytics.record(.active) }
@@ -124,7 +124,7 @@ extension ApplicationModel {
     func calendarTaskMetadata(_ task: WorkspaceCalendarTask) async throws -> LocalACPSessionMetadata {
         if isBackendFrontend {
             guard let metadata = try await sendBackendCommand(.calendarMetadata(task: task)).metadata else {
-                throw ApplicationModelError.dashboardStoreUnavailable
+                throw ApplicationModelError.libraryStoreUnavailable
             }
             return metadata
         }
@@ -153,7 +153,7 @@ extension ApplicationModel {
     /// that does not exist there yet (a scheduled task's scratch folder) reads
     /// the harness's choices without it.
     func linuxSessionOptions(workspaceID: UUID, runtime: AgentRuntimeKind, directory: String?, model: String?) async throws -> LocalACPSessionMetadata {
-        guard let database = dashboardStore?.database,
+        guard let database = libraryStore?.database,
               let workspace = try await database.libraryExecutionWorkspaces().first(where: { $0.id == workspaceID.uuidString.lowercased() && !$0.deleted }) else {
             throw ApplicationModelError.remoteHarnessUnavailable
         }
@@ -170,7 +170,7 @@ extension ApplicationModel {
     /// native configuration, permission requests, and durable delivery path.
     func runCalendarTasks() async {
         guard !backendStopping else { return }
-        guard let store = dashboardStore else { return }
+        guard let store = libraryStore else { return }
         await scheduleRemoteCalendarSynchronization()
         do {
             try await CalendarTaskRunner.tick(database: store.database,
@@ -184,14 +184,14 @@ extension ApplicationModel {
                 finishAttempt: { self.finishAgentDispatch(conversationID: $0.sessionID, fence: $1) },
                 prepare: { try await self.prepareCalendarSession($0, dispatchFence: $1) },
                 dispatch: { _ = try await self.dispatchToolDelivery($0, dispatchFence: $1) })
-            if try await store.database.dashboardRevision() != workspaceRevision { await refreshWorkspace() }
+            if try await store.database.workspaceRevision() != workspaceRevision { await refreshWorkspace() }
         } catch is CancellationError { }
         catch { calendarMutationError = error.localizedDescription }
     }
 
     private func prepareCalendarSession(_ run: WorkspaceCalendarRun, dispatchFence: AgentDispatchFence) async throws {
         try dispatchFence.check()
-        guard let store = dashboardStore, let id = UUID(uuidString: run.sessionID) else { throw ApplicationModelError.dashboardStoreUnavailable }
+        guard let store = libraryStore, let id = UUID(uuidString: run.sessionID) else { throw ApplicationModelError.libraryStoreUnavailable }
         let config = run.task.configuration
         if config.runtimeKind == .opencode, config.workspaceID == nil, openCode?.isEnabled != true {
             throw WorkspaceToolError.invalid("Install and connect OpenCode in Local workspace before running this task.")
@@ -296,7 +296,7 @@ extension ApplicationModel {
     /// Fence local scheduling before the first network suspension. An unknown
     /// publication outcome leaves execution remote-owned until reconciliation.
     func scheduleRemoteCalendarSynchronization() async {
-        guard let database = dashboardStore?.database else { return }
+        guard let database = libraryStore?.database else { return }
         for configuration in remoteWorkspaces.workspaces {
             let interval: TimeInterval = remoteCalendarGatewayErrors[configuration.id] == nil ? 5 : 30
             guard !remoteCalendarSyncInProgress.contains(configuration.id),
@@ -358,7 +358,7 @@ extension ApplicationModel {
 
     private func synchronizeRemoteCalendarGateway(_ configuration: RemoteWorkspaceConfiguration,
                                                    enabled: Bool) async throws -> RemoteTaskGatewayStatus {
-        guard let store = dashboardStore else { throw ApplicationModelError.dashboardStoreUnavailable }
+        guard let store = libraryStore else { throw ApplicationModelError.libraryStoreUnavailable }
         let database = store.database
         try requireCurrentRemoteCalendarConfiguration(configuration)
         let ownership = try await database.remoteCalendarExecutionOwnership(workspaceID: configuration.id)
@@ -420,8 +420,8 @@ extension ApplicationModel {
     }
 
     private func importRemoteCalendarResults(_ configuration: RemoteWorkspaceConfiguration) async throws {
-        guard let store = dashboardStore else { throw ApplicationModelError.dashboardStoreUnavailable }
-        let owner = try await store.dashboardDeviceID()
+        guard let store = libraryStore else { throw ApplicationModelError.libraryStoreUnavailable }
+        let owner = try await store.deviceID()
         try requireCurrentRemoteCalendarConfiguration(configuration)
         var imported = false
         // Drain bounded pages before handing execution back to this Mac.

@@ -114,10 +114,10 @@ struct DeviceAgentSettingsPane: View {
         VStack(alignment: .leading, spacing: 6) {
           Text("Tool Access")
           Text("Choose which Woven MCP tools are available to new chats by default.")
-            .font(.subheadline).fontWeight(.regular).foregroundStyle(DashboardPalette.mutedForeground)
+            .font(.subheadline).fontWeight(.regular).foregroundStyle(WovenPalette.mutedForeground)
         }.textCase(nil)
       }
-      if let failure { Section { Text(failure).foregroundStyle(DashboardPalette.danger); Button("Retry") { loadModels() } } }
+      if let failure { Section { Text(failure).foregroundStyle(WovenPalette.danger); Button("Retry") { loadModels() } } }
     }.disabled(saving).scrollIndicators(.never).mobileNavigationPage("Quick Chat")
       .toolbar { ToolbarItem(placement: .confirmationAction) { Button(saving ? "Saving…" : "Save") { save() }.disabled(saving || loading) } }
       .onAppear {
@@ -335,7 +335,7 @@ private struct InferenceConnectionEditor: View {
       else if state.loadingModels && !state.isOAuth { Section { ProgressView() } }
       if let problem = state.problem {
         Section {
-          Text(problem).foregroundStyle(DashboardPalette.danger)
+          Text(problem).foregroundStyle(WovenPalette.danger)
           if state.modelID.isEmpty || state.pendingSignInSave {
             Button("Retry") { if state.modelID.isEmpty { loadModels(force: true) } else { save() } }.disabled(state.saving)
           }
@@ -404,7 +404,7 @@ private struct InferenceConnectionEditor: View {
       if state.mode == .device && !state.isCustomServer {
         Button("Refresh models") { loadModels(force: true) }.disabled(state.loadingModels)
       }
-      if !state.modelID.isEmpty { Text(state.modelID).font(.caption).foregroundStyle(DashboardPalette.mutedForeground) }
+      if !state.modelID.isEmpty { Text(state.modelID).font(.caption).foregroundStyle(WovenPalette.mutedForeground) }
     }.disabled(!setupAllowed || state.saving)
   }
   private func initialize() async {

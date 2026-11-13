@@ -3,7 +3,7 @@ import Testing
 @testable import WovenMatterAppFacade
 import WovenMatterCore
 import WovenMatterClient
-import WovenMatterDashboardStore
+import WovenMatterLibraryStore
 
 /// `woven_sessions_wait` and wake-ups through the Mac's own tool path
 /// (`ApplicationModel+SessionWaits.swift`), against a Linux host that reports

@@ -5,7 +5,7 @@ import SQLite3
 import Testing
 import WovenMatterCore
 import WovenMatterClient
-@testable import WovenMatterDashboardStore
+@testable import WovenMatterLibraryStore
 @testable import WovenMatterAppFacade
 
 @MainActor @Suite(.serialized)
@@ -64,7 +64,7 @@ struct LibraryFacadeTests {
     let directory: URL
     let defaults: UserDefaults
     let suite: String
-    let store: DashboardStore
+    let store: LibraryStore
     var database: WorkspaceDatabase { store.database }
     let model: ApplicationModel
     let recorder = FacadeRecorder()
@@ -79,7 +79,7 @@ struct LibraryFacadeTests {
         suite = "library.facade.\(UUID())"
         defaults = UserDefaults(suiteName: suite)!
         let recorder = recorder
-        store = try await DashboardStore(supportDirectory: directory, runControls: .init(
+        store = try await LibraryStore(supportDirectory: directory, runControls: .init(
             accept: { route, id, input, delivery, context in try await recorder.accept(route, id, input, delivery, context) },
             steer: { route, id, input, delivery, runID in try await recorder.steer(route, id, input, delivery, runID) },
             cancel: { route, id, runID in try await recorder.cancel(route, id, runID) },
@@ -94,7 +94,7 @@ struct LibraryFacadeTests {
             fileManager: .default, credentialStore: FacadeNoCredentials(probe: probe),
             usageDatabaseURL: directory.appending(path: "usage.sqlite"), sharedConnectionRevision: { 0 },
             limitCollector: { request in probe.collectLimits(request); return [] })
-        model = ApplicationModel(applicationDefaults: defaults, dashboardStore: store, startsAutomatically: false,
+        model = ApplicationModel(applicationDefaults: defaults, libraryStore: store, startsAutomatically: false,
             localUsageService: usageService)
         let status: RemoteWorkspaceStatus = try decode(#"{"id":"fixture","name":"Fixture","state":"running","running":true,"startedAt":"","image":"fixture","memoryBytes":0,"swapBytes":0,"hostPort":7337,"persistentVolume":"fixture","capabilities":{"memory":false,"swap":false},"storageKind":"fixture","hostStorageLow":false,"legacyStorage":false}"#)
         let harnesses: [RemoteHarnessStatus] = try AgentRuntimeKind.allCases.map { runtime in
@@ -130,7 +130,7 @@ private enum FixtureError: Error { case configurationRejected }
 
 actor FacadeRecorder {
     struct Delivery: Sendable {
-        let route: DashboardRunControlAdapters.Route
+        let route: RunControlAdapters.Route
         let input: AgentMessageInput
         let delivery: String?
         let context: AgentNoteContext?
@@ -147,14 +147,14 @@ actor FacadeRecorder {
     nonisolated let creationGate = FacadeGate()
     nonisolated let configurationGate = FacadeGate()
     func configure(database: WorkspaceDatabase) { self.database = database }
-    func accept(_ route: DashboardRunControlAdapters.Route, _ id: String, _ input: AgentMessageInput,
+    func accept(_ route: RunControlAdapters.Route, _ id: String, _ input: AgentMessageInput,
                 _ delivery: String?, _ context: AgentNoteContext?) async throws -> LocalACPRunIdentifiers {
         deliveries.append(.init(route: route, input: input, delivery: delivery, context: context))
         let visible = AgentMessageInput(text: delivery ?? input.text, attachments: input.attachments,
             historyDeliveryID: input.historyDeliveryID, visibleWorkspace: input.visibleWorkspace, mcpContext: input.mcpContext)
         return try await database.beginLocalACPRun(conversationID: id, input: visible, noteContext: context)
     }
-    func steer(_ route: DashboardRunControlAdapters.Route, _ id: String, _ input: AgentMessageInput,
+    func steer(_ route: RunControlAdapters.Route, _ id: String, _ input: AgentMessageInput,
                _ delivery: String?, _ expectedRunID: String?) async throws -> LocalACPSteeringIdentifiers {
         guard let runID = try await database.activeRunID(conversationID: id), expectedRunID == nil || expectedRunID == runID else {
             throw LocalACPSessionDatabaseError.runNotFound
@@ -164,7 +164,7 @@ actor FacadeRecorder {
             historyDeliveryID: input.historyDeliveryID, visibleWorkspace: input.visibleWorkspace, mcpContext: input.mcpContext)
         return try await database.reserveLocalACPSteeringTurn(runID: runID, input: visible).identifiers
     }
-    func cancel(_ route: DashboardRunControlAdapters.Route, _ id: String, _ expectedRunID: String?) async throws {
+    func cancel(_ route: RunControlAdapters.Route, _ id: String, _ expectedRunID: String?) async throws {
         guard let runID = try await database.activeRunID(conversationID: id) else {
             if expectedRunID == nil { return }
             throw LocalACPSessionDatabaseError.runNotFound

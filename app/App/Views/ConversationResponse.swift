@@ -48,7 +48,7 @@ struct ConversationResponse: View {
                         .frame(width: copyTargetSize, height: copyTargetSize)
                         .contentShape(Rectangle())
                 }
-                .buttonStyle(DashboardIconButtonStyle())
+                .buttonStyle(WovenIconButtonStyle())
                 .help("Copy complete response")
                 .accessibilityLabel(copied ? "Response copied" : "Copy response")
             }
@@ -194,7 +194,7 @@ final class ConversationResponseNativeTextView: NSTextView, NSTextViewDelegate {
         isVerticallyResizable = false
         textContainer?.widthTracksTextView = false
         delegate = self
-        linkTextAttributes = [.foregroundColor: DashboardColors.success, .underlineStyle: 0]
+        linkTextAttributes = [.foregroundColor: WovenColors.success, .underlineStyle: 0]
         setAccessibilityLabel("Agent response")
     }
 
@@ -260,10 +260,10 @@ final class ConversationResponseNativeTextView: NSTextView, NSTextViewDelegate {
                 var rect = layoutManager.boundingRect(forGlyphRange: glyphs, in: textContainer)
                 if decoration.key == .responseCode {
                     rect = NSRect(x: 0, y: rect.minY - 6, width: bounds.width, height: rect.height + 12)
-                    DashboardColors.primary.withAlphaComponent(0.05).setFill()
+                    WovenColors.primary.withAlphaComponent(0.05).setFill()
                     NSBezierPath(roundedRect: rect, xRadius: 12, yRadius: 12).fill()
                 } else {
-                    DashboardColors.foreground.withAlphaComponent(0.16).setFill()
+                    WovenColors.foreground.withAlphaComponent(0.16).setFill()
                     if decoration.key == .responseQuote {
                         NSRect(x: max(0, rect.minX - 14), y: rect.minY, width: 2, height: rect.height).fill()
                     } else {
@@ -335,7 +335,7 @@ final class ConversationResponseNativeTextView: UITextView, UITextViewDelegate {
         showsHorizontalScrollIndicator = false
         contentInset = .zero
         delegate = self
-        linkTextAttributes = [.foregroundColor: DashboardColors.success, .underlineStyle: 0]
+        linkTextAttributes = [.foregroundColor: WovenColors.success, .underlineStyle: 0]
         accessibilityLabel = "Agent response"
         setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
     }
@@ -416,11 +416,11 @@ private final class ConversationResponseLayoutManager: NSLayoutManager {
                 let glyphs = self.glyphRange(forCharacterRange: full, actualCharacterRange: nil)
                 let rect = self.boundingRect(forGlyphRange: glyphs, in: container).offsetBy(dx: origin.x, dy: origin.y)
                 if key == .responseCode {
-                    DashboardColors.primary.withAlphaComponent(0.05).setFill()
+                    WovenColors.primary.withAlphaComponent(0.05).setFill()
                     UIBezierPath(roundedRect: CGRect(x: origin.x, y: rect.minY - 6,
                         width: container.size.width, height: rect.height + 12), cornerRadius: 12).fill()
                 } else {
-                    DashboardColors.foreground.withAlphaComponent(0.16).setFill()
+                    WovenColors.foreground.withAlphaComponent(0.16).setFill()
                     let mark = key == .responseQuote
                         ? CGRect(x: max(origin.x, rect.minX - 14), y: rect.minY, width: 2, height: rect.height)
                         : CGRect(x: origin.x, y: rect.midY, width: container.size.width, height: 1)
@@ -436,9 +436,9 @@ private final class ConversationResponseLayoutManager: NSLayoutManager {
             let rowGlyphs = self.glyphRange(forCharacterRange: full, actualCharacterRange: nil)
             let used = self.boundingRect(forGlyphRange: rowGlyphs, in: container).offsetBy(dx: origin.x, dy: origin.y)
             let rect = CGRect(x: origin.x, y: used.minY - 9, width: container.size.width, height: used.height + 18)
-            DashboardColors.primary.withAlphaComponent(0.032).setFill()
+            WovenColors.primary.withAlphaComponent(0.032).setFill()
             UIBezierPath(rect: rect).fill()
-            DashboardColors.foreground.withAlphaComponent(0.09).setStroke()
+            WovenColors.foreground.withAlphaComponent(0.09).setStroke()
             let border = UIBezierPath(rect: rect)
             for column in 1..<columns {
                 let x = rect.minX + rect.width * CGFloat(column) / CGFloat(columns)
@@ -548,7 +548,7 @@ private enum ConversationResponseAttributedText {
         let output = NSMutableAttributedString(string: "")
         // Streaming is conveyed by work activity; answer ink stays stable as
         // paragraphs arrive and the run settles.
-        let foreground = DashboardColors.foreground
+        let foreground = WovenColors.foreground
 
         func paragraphStyle(indent: CGFloat = 0) -> NSMutableParagraphStyle {
             let style = NSMutableParagraphStyle()
@@ -576,7 +576,7 @@ private enum ConversationResponseAttributedText {
                 }
                 #endif
                 var attributes: [NSAttributedString.Key: Any] = [.font: runFont, .foregroundColor: foreground]
-                if intent.contains(.code) { attributes[.backgroundColor] = DashboardColors.primary.withAlphaComponent(0.075) }
+                if intent.contains(.code) { attributes[.backgroundColor] = WovenColors.primary.withAlphaComponent(0.075) }
                 if intent.contains(.strikethrough) { attributes[.strikethroughStyle] = NSUnderlineStyle.single.rawValue }
                 if let link = run.link, ConversationMarkdownDocument.isLiveLink(link) { attributes[.link] = link }
                 result.append(NSAttributedString(string: String(text.rendered[run.range].characters), attributes: attributes))
@@ -664,7 +664,7 @@ private enum ConversationResponseAttributedText {
                             cell.setWidth(9, type: responseAbsolute, for: .padding)
                             cell.setWidth(0.5, type: responseAbsolute, for: .border)
                             cell.setBorderColor(foreground.withAlphaComponent(0.09))
-                            cell.backgroundColor = DashboardColors.primary.withAlphaComponent(0.032)
+                            cell.backgroundColor = WovenColors.primary.withAlphaComponent(0.032)
                             let cellStyle = paragraphStyle()
                             cellStyle.paragraphSpacing = 0
                             cellStyle.textBlocks = [cell]
@@ -715,7 +715,7 @@ struct ConversationUserBubble<Attachments: View>: View {
                     .font(.system(size: 15))
                     .lineSpacing(4)
                     .lineLimit(isLong && !expanded ? 6 : nil)
-                    .foregroundStyle(DashboardPalette.foreground)
+                    .foregroundStyle(WovenPalette.foreground)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .textSelection(.enabled)
             }
@@ -726,13 +726,13 @@ struct ConversationUserBubble<Attachments: View>: View {
                 }
                 .buttonStyle(.plain)
                 .font(.system(size: 12.5, weight: .medium))
-                .foregroundStyle(DashboardPalette.mutedForeground)
+                .foregroundStyle(WovenPalette.mutedForeground)
             }
         }
         .frame(maxWidth: preferredContentWidth, alignment: .trailing)
         .padding(.horizontal, 17)
         .padding(.vertical, 13)
-        .background(DashboardPalette.primary.opacity(0.13))
+        .background(WovenPalette.primary.opacity(0.13))
         .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
     }
     private var isLong: Bool { content.count > 420 || content.filter { $0 == "\n" }.count > 5 }

@@ -1,6 +1,6 @@
 import Foundation
 import Observation
-import WovenMatterDashboardStore
+import WovenMatterLibraryStore
 
 @MainActor @Observable
 final class MacDeviceRow: Identifiable {

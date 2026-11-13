@@ -45,7 +45,7 @@ struct StreamingPresentationTests {
         let root = ConversationWorkTranscript(run: .init(id: unique, conversationID: unique, status: "running"),
             presentation: .init(startedAt: nil, completedDuration: nil), records: records)
             .environment(\.conversationTranscriptState, state)
-            .environment(\.dashboardTheme, .green)
+            .environment(\.wovenTheme, .green)
             .environment(\.colorScheme, .light)
             .padding(24)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -586,7 +586,7 @@ struct StreamingPresentationTests {
         let output = ProcessInfo.processInfo.environment["WOVENMATTER_STREAMING_SCREENSHOTS"]
             .map { URL(fileURLWithPath: $0, isDirectory: true) }
         if let output { try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true) }
-        for theme in DashboardTheme.allCases {
+        for theme in WovenTheme.allCases {
             for width: CGFloat in [380, 760] {
                 for scene in Scene.allCases {
                     let state = ConversationTranscriptState()
@@ -607,7 +607,7 @@ struct StreamingPresentationTests {
                     .padding(24)
                     .frame(width: width, alignment: .leading)
                     .environment(\.conversationTranscriptState, state)
-                    .environment(\.dashboardTheme, theme)
+                    .environment(\.wovenTheme, theme)
                     .environment(\.colorScheme, theme.colorScheme)
                     .background(theme.palette.workspace)
                     let host = NSHostingView(rootView: root)
@@ -776,7 +776,7 @@ struct StreamingPresentationTests {
                 }
             }
                 .environment(\.conversationTranscriptState, state)
-                .environment(\.dashboardTheme, .green)
+                .environment(\.wovenTheme, .green)
                 .environment(\.colorScheme, .light)
                 .padding(24)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -810,7 +810,7 @@ struct StreamingPresentationTests {
                 run: .init(id: "scroll-run", conversationID: "scroll-fixture", status: "completed"),
                 presentation: .init(startedAt: nil, completedDuration: nil), records: fixture.records)
                 .environment(\.conversationTranscriptState, state)
-                .environment(\.dashboardTheme, DashboardTheme.dark)
+                .environment(\.wovenTheme, WovenTheme.dark)
                 .environment(\.colorScheme, .dark)
                 .padding(24)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -852,7 +852,7 @@ struct StreamingPresentationTests {
                         run: .init(id: "reasoning-run", conversationID: "reasoning-fixture", status: "running"),
                         presentation: .init(startedAt: nil, completedDuration: nil), records: fixture.records)
                         .environment(\.conversationTranscriptState, state)
-                        .environment(\.dashboardTheme, DashboardTheme.dark)
+                        .environment(\.wovenTheme, WovenTheme.dark)
                         .environment(\.colorScheme, .dark)
                         .padding(24)
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)

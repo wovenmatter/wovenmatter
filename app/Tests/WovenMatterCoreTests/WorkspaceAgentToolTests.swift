@@ -3,7 +3,7 @@ import Foundation
 import Testing
 import WovenMatterCore
 import WovenMatterClient
-@testable import WovenMatterDashboardStore
+@testable import WovenMatterLibraryStore
 
 @Suite("Agent tools access, coordination and timers")
 struct WorkspaceAgentToolTests {

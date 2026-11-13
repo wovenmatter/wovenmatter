@@ -163,7 +163,7 @@ struct SettingsWorkspacesView: View {
                 }.scrollIndicators(.never)
             }
             .padding(24).frame(width: 760, height: 520)
-            .foregroundStyle(DashboardPalette.foreground).background(DashboardPalette.background)
+            .foregroundStyle(WovenPalette.foreground).background(WovenPalette.background)
         }
         .sheet(item: $sharedLogsWorkspace) { workspace in
             VStack(alignment: .leading, spacing: 16) {
@@ -182,7 +182,7 @@ struct SettingsWorkspacesView: View {
                 }.scrollIndicators(.never)
             }
             .padding(24).frame(width: 760, height: 520)
-            .foregroundStyle(DashboardPalette.foreground).background(DashboardPalette.background)
+            .foregroundStyle(WovenPalette.foreground).background(WovenPalette.background)
         }
         .onChange(of: hostName + userName + accessMode.rawValue) { _, _ in
             acknowledgedHostAccess = false
@@ -380,7 +380,7 @@ struct SettingsWorkspacesView: View {
             detail: workspaceLocation(workspace),
             status: statusLabel(workspace),
             statusTone: model.statuses[workspace.id]?.running == true ? .good : .warning,
-            icon: { DashboardLucideIcon(glyph: .container, size: 15) },
+            icon: { LucideIcon(glyph: .container, size: 15) },
             action: { selectedWorkspaceID = workspace.id }
         )
     }
@@ -517,7 +517,7 @@ struct SettingsWorkspacesView: View {
                     if onlineMachines.isEmpty, !model.isDiscovering {
                         Text("No online machines discovered")
                             .font(.settingsSecondary)
-                            .foregroundStyle(DashboardPalette.mutedForeground)
+                            .foregroundStyle(WovenPalette.mutedForeground)
                     }
                     ForEach(onlineMachines) { machine in
                         Button {
@@ -543,12 +543,12 @@ struct SettingsWorkspacesView: View {
 
             SettingsField("Tailscale machine") {
                 TextField("machine.tailnet-name.ts.net", text: $hostName)
-                    .dashboardInput()
+                    .wovenInput()
                     .onSubmit { model.checkHost(hostName: hostName, userName: userName, kind: .host, accessMode: accessMode) }
             }
             SettingsField("Remote username (optional)") {
                 TextField("Resolved by SSH config", text: $userName)
-                    .dashboardInput()
+                    .wovenInput()
             }
             SettingsNote("Requires connected Tailscale on both machines. Uses your SSH agent; Woven Matter does not store SSH keys.")
             Button(model.isCheckingHost ? "Inspecting host…" : "Inspect host") {
@@ -564,7 +564,7 @@ struct SettingsWorkspacesView: View {
                     ? "Select a host to see whether it is ready."
                     : "Inspect this host to continue. Inspection makes no changes.")
                     .font(.settingsSecondary)
-                    .foregroundStyle(DashboardPalette.mutedForeground)
+                    .foregroundStyle(WovenPalette.mutedForeground)
             }
             if let preflight = currentPreflight {
                 SettingsInset {
@@ -589,7 +589,7 @@ struct SettingsWorkspacesView: View {
                         if !preflight.limitations.isEmpty {
                             Text(preflight.limitations.joined(separator: " "))
                                 .font(.settingsSecondary)
-                                .foregroundStyle(DashboardPalette.mutedForeground)
+                                .foregroundStyle(WovenPalette.mutedForeground)
                         }
                         if preflight.preparationRequired == true {
                             Text("Preparation required")
@@ -600,14 +600,14 @@ struct SettingsWorkspacesView: View {
                             ) { _, action in
                                 Text("• \(action)")
                                     .font(.settingsSecondary)
-                                    .foregroundStyle(DashboardPalette.mutedForeground)
+                                    .foregroundStyle(WovenPalette.mutedForeground)
                             }
                         }
                         if preflight.canPrepare == true {
                             Button(model.isCreating ? "Preparing host…" : "Prepare host") {
                                 model.prepareHost(hostName: hostName, userName: userName, kind: .host, accessMode: accessMode)
                             }
-                            .buttonStyle(DashboardPrimaryButtonStyle())
+                            .buttonStyle(WovenPrimaryButtonStyle())
                         }
                     }
                 }
@@ -620,11 +620,11 @@ struct SettingsWorkspacesView: View {
         SettingsSection(title: "Create workspace", detail: "On \(hostName.trimmingCharacters(in: .whitespacesAndNewlines))") {
             SettingsField("Name") {
                 TextField("Remote workspace name", text: $name)
-                    .dashboardInput()
+                    .wovenInput()
             }
             SettingsField("Workspace ID") {
                 TextField("remote-workspace-id", text: $workspaceID)
-                    .dashboardInput()
+                    .wovenInput()
             }
             SettingsNote("Files use available disk space on the remote machine.")
             SettingsNote(hostWarning(user: userName.isEmpty ? nil : userName, host: hostName))
@@ -640,7 +640,7 @@ struct SettingsWorkspacesView: View {
                     kind: .host, accessMode: accessMode
                 )
             }
-            .buttonStyle(DashboardPrimaryButtonStyle())
+            .buttonStyle(WovenPrimaryButtonStyle())
             .disabled(model.isCreating || currentPreflight?.ready != true
                 || !acknowledgedHostAccess
                 || name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -669,7 +669,7 @@ struct SettingsWorkspacesView: View {
                                 : HarnessAccountPresentation.remoteLabel(harness),
                             status: harness.state.replacingOccurrences(of: "_", with: " ").capitalized,
                             statusTone: harness.state == "ready" ? .good : .warning,
-                            icon: { DashboardHarnessLogoIcon(logo: DashboardHarnessLogo(runtimeKind: harness.id), size: 15) },
+                            icon: { HarnessLogoIcon(logo: HarnessLogo(runtimeKind: harness.id), size: 15) },
                             action: { onMoreRuntime(harness.id, workspace) }
                         )
                     }

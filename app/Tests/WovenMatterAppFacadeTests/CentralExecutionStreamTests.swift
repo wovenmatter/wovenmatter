@@ -3,7 +3,7 @@ import Foundation
 import Testing
 import WovenMatterCore
 import WovenMatterClient
-@testable import WovenMatterDashboardStore
+@testable import WovenMatterLibraryStore
 @testable import WovenMatterAppFacade
 
 /// A `stream.v1` workspace reaches this Mac on its stream: questions and

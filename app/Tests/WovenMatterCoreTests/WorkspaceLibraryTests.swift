@@ -4,7 +4,7 @@ import Testing
 import WovenMatterClient
 import WovenMatterCore
 
-@testable import WovenMatterDashboardStore
+@testable import WovenMatterLibraryStore
 
 @Suite("Library", .serialized)
 struct WorkspaceLibraryTests {

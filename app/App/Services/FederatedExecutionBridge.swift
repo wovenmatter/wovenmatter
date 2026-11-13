@@ -2,7 +2,7 @@ import CryptoKit
 import Foundation
 import WovenMatterCore
 import LibraryClient
-import WovenMatterDashboardStore
+import WovenMatterLibraryStore
 
 enum FederatedExecutionAction: Codable, Sendable {
     case refresh(conversationID: String)
@@ -79,12 +79,12 @@ extension ApplicationModel {
     /// Linux hosts it added): `CentralExecutionClient` refuses every copied
     /// owner (`retainedHistory`), whose chats stay read-only history.
     func centralExecutionClient() throws -> CentralExecutionClient {
-        guard !isBackendFrontend, let dashboardStore else { throw ApplicationModelError.dashboardStoreUnavailable }
+        guard !isBackendFrontend, let libraryStore else { throw ApplicationModelError.libraryStoreUnavailable }
         if let federatedExecutionClient { return federatedExecutionClient }
         // The command journal lives beside the library it addresses, never in a
         // global directory a fixture or another instance could share.
-        let directory = dashboardStore.database.supportDirectory
-        let client = try CentralExecutionClient(database: dashboardStore.database,
+        let directory = libraryStore.database.supportDirectory
+        let client = try CentralExecutionClient(database: libraryStore.database,
             commandJournalURL: directory.appending(path: "central-execution-commands.json"),
             makeSignedTransport: { [weak self] workspace in
                 // The iPhone is never an execution destination for signed calls.
@@ -118,7 +118,7 @@ extension ApplicationModel {
     /// The signed member routes of a Linux host this Mac added, by its
     /// configuration ID (which is its registry ID).
     func linuxMemberRoutes(_ id: UUID) async throws -> any MemberExecutionRoutes {
-        guard let database = dashboardStore?.database,
+        guard let database = libraryStore?.database,
               let workspace = try await database.libraryExecutionWorkspaces().first(where: { $0.id == id.uuidString.lowercased() && !$0.deleted }) else {
             throw LibraryAPIError(code: "unknown_workspace", message: "This Linux workspace is not in this library's workspaces yet. Reconnect it in Settings → Workspaces.")
         }
@@ -254,7 +254,7 @@ extension ApplicationModel {
 
     /// A snapshot's copied history has no connection or credential to its former owner.
     func savedDevelopmentExecution(_ action: FederatedExecutionAction) async throws -> FederatedExecutionSnapshot {
-        guard let database = dashboardStore?.database else { throw ApplicationModelError.dashboardStoreUnavailable }
+        guard let database = libraryStore?.database else { throw ApplicationModelError.libraryStoreUnavailable }
         let id: String
         let before: String?
         switch action {
@@ -280,7 +280,7 @@ extension ApplicationModel {
     /// `RemoteChatMoveDeferredError` and is tried again on the next open or send.
     func adoptRegisteredRemoteConversationIfNeeded(_ conversation: WorkspaceConversationRecord) async throws {
         guard !conversation.isArchived, !isBackendFrontend, !adoptedExecutionConversations.contains(conversation.id),
-              let workspaceID = conversation.remoteWorkspaceID, let store = dashboardStore else { return }
+              let workspaceID = conversation.remoteWorkspaceID, let store = libraryStore else { return }
         let id = workspaceID.uuidString.lowercased()
         let owner = try await store.database.libraryExecutionOwner(conversationID: conversation.id)
         // Created on the host's server: there is nothing to move.
@@ -342,7 +342,7 @@ extension ApplicationModel {
     /// execution ownership is looked up live as well as cached for presentation.
     func dispatchFederatedMessage(conversationID: String, input: AgentMessageInput, note: WorkspaceNoteRecord?,
                                   expectedRunID: String?, requiresIdle: Bool, dispatchFence: AgentDispatchFence) async throws -> Bool {
-        guard let database = dashboardStore?.database else { return false }
+        guard let database = libraryStore?.database else { return false }
         if let id = input.historyDeliveryID, try await database.toolDelivery(id: id)?.kind == .goal {
             // A primary-owner reservation can never become a foreign-owner send.
             // Adoption cancels this reservation; the new owner resumes its own goal.

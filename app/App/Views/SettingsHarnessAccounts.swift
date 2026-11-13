@@ -61,7 +61,7 @@ struct SettingsHarnessAccounts: View {
         if scope == "global" && !remotes.isEmpty {
             Text("Local workspace")
                 .font(.settingsBody)
-                .foregroundStyle(DashboardPalette.mutedForeground)
+                .foregroundStyle(WovenPalette.mutedForeground)
         }
     }
 
@@ -144,7 +144,7 @@ struct SettingsRemoteHarnessSoftware: View {
                     } else if runtime?.source != "system" {
                         SettingsRemoteRuntimeUpdateButton(model: model, harness: harness, configuration: workspace)
                     } else {
-                        Text("Managed on host").font(.settingsSecondary).foregroundStyle(DashboardPalette.mutedForeground)
+                        Text("Managed on host").font(.settingsSecondary).foregroundStyle(WovenPalette.mutedForeground)
                     }
                 }
                 .help(runtime?.components.compactMap(\.path).joined(separator: "\n") ?? "")

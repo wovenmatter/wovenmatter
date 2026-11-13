@@ -2,7 +2,7 @@ import AppKit
 import Darwin
 import Foundation
 import SwiftUI
-import WovenMatterDashboardStore
+import WovenMatterLibraryStore
 import WovenMatterClient
 import WovenMatterCore
 
@@ -383,6 +383,7 @@ enum WovenMatterEntryPoint {
         if let status = TailscaleServeSupervisor.dispatch(arguments: CommandLine.arguments) {
             Darwin.exit(status)
         }
+        WindowPreferenceUpgrade.moveRenamedKeys(in: .standard)
         // Dispatch before App.main and its delegate adaptor can initialize
         // NSApplication. A service is not a second instance of the GUI app:
         // LaunchServices and Sparkle must only see the frontend.
@@ -438,8 +439,8 @@ enum WovenMatterEntryPoint {
 
 struct WorkspaceMenuCommands: Commands {
     @FocusedValue(\.workspaceMenuActions) private var actions
-    @AppStorage(DashboardTheme.storageKey) private var themeRawValue = DashboardTheme.green.rawValue
-    @AppStorage(DashboardSidebarStyle.storageKey) private var sidebarStyleRawValue = DashboardSidebarStyle.defaultStyle.rawValue
+    @AppStorage(WovenTheme.storageKey) private var themeRawValue = WovenTheme.green.rawValue
+    @AppStorage(SidebarStyle.storageKey) private var sidebarStyleRawValue = SidebarStyle.defaultStyle.rawValue
 
     private var dictationTitle: String {
         if DictationModel.shared.isRecording { return "Stop Dictation" }
@@ -470,13 +471,13 @@ struct WorkspaceMenuCommands: Commands {
         }
         CommandMenu("Appearance") {
             Picker("Theme", selection: $themeRawValue) {
-                ForEach(DashboardTheme.allCases) { theme in
+                ForEach(WovenTheme.allCases) { theme in
                     Text(theme.title).tag(theme.rawValue)
                 }
             }
             Divider()
             Picker("Sidebar Layout", selection: $sidebarStyleRawValue) {
-                ForEach(DashboardSidebarStyle.allCases) { style in
+                ForEach(SidebarStyle.allCases) { style in
                     Text(style.title).tag(style.rawValue)
                 }
             }
@@ -523,7 +524,7 @@ struct WovenMatterApp: App {
                     DesktopUpdater.shared.start(model: applicationModel)
                     lifecycleDelegate.prepareBrowserTermination = { await WorkspaceAssetSession.shutdown() }
                 }
-                .frame(minWidth: DashboardMetrics.windowMinimumWidth, minHeight: 640)
+                .frame(minWidth: WovenMetrics.windowMinimumWidth, minHeight: 640)
                 .task {
                     while !Task.isCancelled {
                         await RemoteDeviceSetup.handle(model: applicationModel)

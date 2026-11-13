@@ -93,7 +93,7 @@ struct WorkspaceSessionToolsMenu: View {
                         }
                         if group == .calendar || group == .usage {
                             Text(group == .usage ? "Read only" : tools.settings.calendarAccess.title)
-                                .font(.system(size: 10.5)).foregroundStyle(DashboardPalette.mutedForeground)
+                                .font(.system(size: 10.5)).foregroundStyle(WovenPalette.mutedForeground)
                         }
                     }
                     if group == .computer {
@@ -102,14 +102,14 @@ struct WorkspaceSessionToolsMenu: View {
                 }
                 }
                 WorkspaceSessionManagementControls(tools: tools, sessionID: sessionID)
-                if let error = error ?? tools.error { Text(error).font(.system(size: 11.5)).foregroundStyle(DashboardPalette.mutedForeground) }
+                if let error = error ?? tools.error { Text(error).font(.system(size: 11.5)).foregroundStyle(WovenPalette.mutedForeground) }
             }.padding(16)
         }.scrollIndicators(.never)
         .frame(maxHeight: 520)
         .fixedSize(horizontal: false, vertical: true)
         .font(.system(size: 12.5))
-        .foregroundStyle(DashboardPalette.foreground)
-        .toggleStyle(DashboardSwitchToggleStyle())
+        .foregroundStyle(WovenPalette.foreground)
+        .toggleStyle(CompactSwitchToggleStyle())
         .frame(width: 330)
         .alert("Disable timers?", isPresented: $confirmsTimerPause) {
             Button("Cancel", role: .cancel) { }
@@ -127,6 +127,6 @@ private struct WorkspaceComputerUseExplanation: View {
         VStack(alignment: .leading, spacing: 6) {
             Text("Allows agents to see and control this Mac’s desktop and apps.")
             MacPermissionStatusLink(items: MacAccessStatus.computerUseRequirements, onOpen: onOpenPermissions)
-        }.font(.system(size: 11.5)).foregroundStyle(DashboardPalette.mutedForeground)
+        }.font(.system(size: 11.5)).foregroundStyle(WovenPalette.mutedForeground)
     }
 }

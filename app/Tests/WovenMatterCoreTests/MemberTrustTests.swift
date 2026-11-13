@@ -7,7 +7,7 @@ import Crypto
 import Testing
 import WorkspaceFixtures
 import WovenMatterCore
-@testable import WovenMatterDashboardStore
+@testable import WovenMatterLibraryStore
 
 /// The trust model (docs/architecture/WOVEN_EVERYWHERE.md, "Trust model"):
 /// signer times never decide which side of a dispute wins.

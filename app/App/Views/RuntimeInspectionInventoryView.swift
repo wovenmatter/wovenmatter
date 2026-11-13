@@ -3,7 +3,7 @@ import WovenMatterCore
 
 /// Show services people use first. Technical processes stay in flat disclosures.
 struct RuntimeInspectionInventoryView: View {
-    @Environment(\.dashboardTheme) private var theme
+    @Environment(\.wovenTheme) private var theme
     let items: [RuntimeInspection.Item]
     let connected: Bool
 
@@ -22,7 +22,7 @@ struct RuntimeInspectionInventoryView: View {
             section("Agent activity") {
                 if inventory.agents.isEmpty {
                     Text(connected ? "No active agent sessions. Chats and their agent processes appear here when they run." : "No agent sessions in the last observation.")
-                        .font(.settingsSecondary).foregroundStyle(DashboardPalette.mutedForeground)
+                        .font(.settingsSecondary).foregroundStyle(WovenPalette.mutedForeground)
                 } else {
                     ForEach(inventory.agents) { agent in
                         VStack(alignment: .leading, spacing: 10) {
@@ -50,13 +50,13 @@ struct RuntimeInspectionInventoryView: View {
 
     private func section<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text(title).font(.settingsBody.weight(.semibold)).foregroundStyle(DashboardPalette.mutedForeground)
+            Text(title).font(.settingsBody.weight(.semibold)).foregroundStyle(WovenPalette.mutedForeground)
             content()
         }
         .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(theme.palette.themeWhisper)
-        .clipShape(DashboardShapes.card)
+        .clipShape(DesktopShapes.card)
     }
 
     private func processDetails(_ entries: [RuntimeInspection.Item], title: String) -> some View {
@@ -66,27 +66,27 @@ struct RuntimeInspectionInventoryView: View {
                     VStack(alignment: .leading, spacing: 4) {
                         row(item)
                         if let parent = items.first(where: { $0.id == item.parentID }) {
-                            Text("Managed by \(parent.title)").font(.settingsSecondary).foregroundStyle(DashboardPalette.mutedForeground)
+                            Text("Managed by \(parent.title)").font(.settingsSecondary).foregroundStyle(WovenPalette.mutedForeground)
                         }
                     }
                 }
             }.padding(.top, 8)
         } label: {
-            Text(title).font(.settingsSecondary).foregroundStyle(DashboardPalette.mutedForeground)
+            Text(title).font(.settingsSecondary).foregroundStyle(WovenPalette.mutedForeground)
         }
     }
 
     private func row(_ item: RuntimeInspection.Item) -> some View {
         HStack(alignment: .top, spacing: 9) {
             Image(systemName: icon(item.kind)).font(.settingsText)
-                .foregroundStyle(DashboardPalette.mutedForeground).frame(width: 16, height: 18).accessibilityHidden(true)
+                .foregroundStyle(WovenPalette.mutedForeground).frame(width: 16, height: 18).accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 4) {
                 HStack(alignment: .firstTextBaseline, spacing: 12) {
                     Text(item.title).font(.settingsRow)
                         .lineLimit(2).fixedSize(horizontal: false, vertical: true)
                     Spacer(minLength: 8)
                     Text(connected ? item.state.capitalized : "Last: \(item.state)")
-                        .font(.settingsSecondary).foregroundStyle(DashboardPalette.mutedForeground)
+                        .font(.settingsSecondary).foregroundStyle(WovenPalette.mutedForeground)
                 }
                 if item.kind != "connection" {
                     ViewThatFits(in: .horizontal) {
@@ -95,10 +95,10 @@ struct RuntimeInspectionInventoryView: View {
                             resources(item)
                         }
                         VStack(alignment: .leading, spacing: 3) { identity(item); resources(item) }
-                    }.font(.settingsSecondary).foregroundStyle(DashboardPalette.mutedForeground).monospacedDigit()
+                    }.font(.settingsSecondary).foregroundStyle(WovenPalette.mutedForeground).monospacedDigit()
                 }
                 if let detail = item.detail, !detail.isEmpty {
-                    Text(detail).font(.settingsSecondary).foregroundStyle(DashboardPalette.mutedForeground).lineLimit(3).textSelection(.enabled)
+                    Text(detail).font(.settingsSecondary).foregroundStyle(WovenPalette.mutedForeground).lineLimit(3).textSelection(.enabled)
                 }
             }
         }

@@ -9,12 +9,12 @@ struct DeviceConnectionIcon: View {
     var body: some View {
         Group {
             switch kind {
-            case .mac: DashboardLucideIcon(glyph: .monitor, size: size)
-            case .iPhone: DashboardLucideIcon(glyph: .smartphone, size: size)
-            case .iPad: DashboardLucideIcon(glyph: .tablet, size: size)
-            case .unknown: DashboardLucideIcon(glyph: .panelsTopLeft, size: size)
+            case .mac: LucideIcon(glyph: .monitor, size: size)
+            case .iPhone: LucideIcon(glyph: .smartphone, size: size)
+            case .iPad: LucideIcon(glyph: .tablet, size: size)
+            case .unknown: LucideIcon(glyph: .panelsTopLeft, size: size)
             }
-        }.frame(width: size + 4, height: size + 4).foregroundStyle(DashboardPalette.foreground)
+        }.frame(width: size + 4, height: size + 4).foregroundStyle(WovenPalette.foreground)
     }
     static func label(_ kind: DeviceKind) -> String {
         switch kind { case .mac: "Mac"; case .iPhone: "iPhone"; case .iPad: "iPad"; case .unknown: "Device" }
@@ -49,7 +49,7 @@ struct DevicePairingCodeCard: View {
                     VStack(alignment: .leading, spacing: 12) {
                         if let expiry = host.pairingExpiresAt {
                             Text("Expires at \(expiry.formatted(date: .omitted, time: .shortened))")
-                                .font(.settingsBody).foregroundStyle(DashboardPalette.mutedForeground)
+                                .font(.settingsBody).foregroundStyle(WovenPalette.mutedForeground)
                         }
                         Button("Copy pairing link") {
                             NSPasteboard.general.clearContents()

@@ -4,7 +4,7 @@ import Testing
 import WorkspaceFixtures
 import WovenMatterClient
 import WovenMatterCore
-@testable import WovenMatterDashboardStore
+@testable import WovenMatterLibraryStore
 
 @Suite("ACP MCP connection ownership", .timeLimit(.minutes(1)))
 struct ACPMCPConnectionLifecycleTests {

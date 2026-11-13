@@ -3,7 +3,7 @@ import Foundation
 import Testing
 import WovenMatterCore
 import WovenMatterClient
-import WovenMatterDashboardStore
+import WovenMatterLibraryStore
 
 @Suite("Conversation HTML renders")
 struct ConversationHTMLRenderTests {

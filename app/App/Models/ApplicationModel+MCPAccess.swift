@@ -6,11 +6,11 @@ extension ApplicationModel {
     func controlMCPAccess(_ action: WovenMCPAccessAction) async throws -> WovenMCPAccessSnapshot {
         if isBackendFrontend {
             guard let snapshot = try await sendBackendCommand(.mcpAccess(action)).mcpAccess else {
-                throw ApplicationModelError.dashboardStoreUnavailable
+                throw ApplicationModelError.libraryStoreUnavailable
             }
             return snapshot
         }
-        guard let tools = agentTools else { throw ApplicationModelError.dashboardStoreUnavailable }
+        guard let tools = agentTools else { throw ApplicationModelError.libraryStoreUnavailable }
         return try await tools.mcpAccess(action)
     }
 }

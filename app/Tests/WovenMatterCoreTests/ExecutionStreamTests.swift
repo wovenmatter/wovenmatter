@@ -6,7 +6,7 @@ import Network
 import Testing
 import WorkspaceFixtures
 import WovenMatterCore
-@testable import WovenMatterDashboardStore
+@testable import WovenMatterLibraryStore
 
 /// The Mac's side of `GET /v1/stream` ("Streaming" in
 /// docs/architecture/WOVEN_EVERYWHERE.md): its change source, the signed

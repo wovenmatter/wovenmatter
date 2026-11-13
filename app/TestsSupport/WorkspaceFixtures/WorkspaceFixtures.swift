@@ -1,7 +1,7 @@
 import Foundation
 import WovenMatterCore
 import WovenMatterClient
-import WovenMatterDashboardStore
+import WovenMatterLibraryStore
 
 /// A unique temporary directory that owns one workspace database file.
 public struct PersistenceFixture: Sendable {

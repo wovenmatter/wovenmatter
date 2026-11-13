@@ -7,7 +7,7 @@ import MobileInference
 
 @MainActor @Observable final class MobileModel {
   enum Tab: String, CaseIterable { case home = "Home", folders = "Folders", chat = "Chats", note = "Notes", settings = "Settings", calendar = "Calendar", scheduledTasks = "Scheduled tasks", library = "Library", databases = "Databases", usage = "Usage", trash = "Trash"
-    var icon: DashboardLucideGlyph {
+    var icon: LucideGlyph {
       switch self {
       case .home: .house
       case .folders: .folder

@@ -2,7 +2,7 @@
 import Foundation
 import Testing
 import WovenMatterCore
-@testable import WovenMatterDashboardStore
+@testable import WovenMatterLibraryStore
 
 struct MacManagementTests {
     private static func fixtureIP(_ last: Int) -> String { [100, 64, 0, last].map(String.init).joined(separator: ".") }

@@ -2,7 +2,7 @@ import Foundation
 import WovenMatterShared
 import WovenMatterClient
 import WovenMatterCore
-import WovenMatterDashboardStore
+import WovenMatterLibraryStore
 
 /// Commands contain identities, never client-owned database or runtime objects.
 /// The service resolves each identity against its authoritative state at admission.
@@ -190,7 +190,7 @@ final class BackendApplicationService {
     }
 
     private func conversation(_ id: String) async throws -> WorkspaceConversationRecord {
-        guard let record = try await model.dashboardStore?.database.workspaceOverview().conversations.first(where: { $0.id == id }) else {
+        guard let record = try await model.libraryStore?.database.workspaceOverview().conversations.first(where: { $0.id == id }) else {
             throw BackendRPCError.remote("This session is no longer available.")
         }
         return record
@@ -259,10 +259,10 @@ final class BackendApplicationService {
         case .trashedConversations:
             return try await .init(trashedConversations: model.trashedConversations())
         case .trashedNotes:
-            guard let store = model.dashboardStore else { throw ApplicationModelError.dashboardStoreUnavailable }
+            guard let store = model.libraryStore else { throw ApplicationModelError.libraryStoreUnavailable }
             return try await .init(trashedNotes: store.trashedNotes())
         case let .exportNote(id, format, revision):
-            guard let store = model.dashboardStore else { throw ApplicationModelError.dashboardStoreUnavailable }
+            guard let store = model.libraryStore else { throw ApplicationModelError.libraryStoreUnavailable }
             return try await .init(noteExport: store.exportNote(id: id, format: format, expectedRevision: revision))
         case let .sessionMetadata(id):
             await model.refreshLocalACPSession(conversation: try conversation(id))
@@ -364,7 +364,7 @@ final class BackendApplicationService {
             }
             model.resolveLocalACPInteraction(id: id, response: value)
         case let .saveDictation(record):
-            guard let database = model.dashboardStore?.database else { throw ApplicationModelError.dashboardStoreUnavailable }
+            guard let database = model.libraryStore?.database else { throw ApplicationModelError.libraryStoreUnavailable }
             try await database.saveDictation(record)
         case let .saveCalendar(draft, eventID, revision, occurrence):
             let event: WorkspaceCalendarItemRecord?

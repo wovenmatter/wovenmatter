@@ -4,10 +4,10 @@ import WovenMatterClient
 
 struct BotSettingsActionLabel: View {
     let title: String
-    let glyph: DashboardLucideGlyph
+    let glyph: LucideGlyph
     var body: some View {
         HStack(spacing: 6) {
-            DashboardLucideIcon(glyph: glyph, size: 13)
+            LucideIcon(glyph: glyph, size: 13)
             Text(title)
         }
     }
@@ -20,7 +20,7 @@ struct BotSettingsLink: View {
     var body: some View {
         Button { if let target = URL(string: url) { onOpenLink(target) } } label: {
             BotSettingsActionLabel(title: title, glyph: .externalLink)
-                .foregroundStyle(DashboardPalette.success)
+                .foregroundStyle(WovenPalette.success)
         }
         .buttonStyle(SettingsQuietButtonStyle())
     }
@@ -39,7 +39,7 @@ struct BotSettingsCopy: View {
 }
 
 struct BotSettingsTextEditor: View {
-    @Environment(\.dashboardTheme) private var theme
+    @Environment(\.wovenTheme) private var theme
     @Binding var text: String
     let label: String
     var placeholder = ""
@@ -49,12 +49,12 @@ struct BotSettingsTextEditor: View {
     var body: some View {
         ZStack(alignment: .topLeading) {
             if text.isEmpty, !placeholder.isEmpty {
-                Text(placeholder).font(.settingsBody).foregroundStyle(DashboardPalette.mutedForeground)
+                Text(placeholder).font(.settingsBody).foregroundStyle(WovenPalette.mutedForeground)
                     .padding(.horizontal, 5).padding(.vertical, 8).allowsHitTesting(false)
             }
             TextEditor(text: $text)
                 .font(monospaced ? .system(size: 12, design: .monospaced) : .settingsText)
-                .foregroundStyle(DashboardPalette.foreground)
+                .foregroundStyle(WovenPalette.foreground)
                 .scrollContentBackground(.hidden)
                 .scrollIndicators(.never)
                 .accessibilityLabel(label)
@@ -62,7 +62,7 @@ struct BotSettingsTextEditor: View {
         .padding(6)
         .frame(height: height)
         .background(theme.palette.themeWhisper)
-        .clipShape(RoundedRectangle(cornerRadius: DashboardMetrics.controlRadius))
+        .clipShape(RoundedRectangle(cornerRadius: WovenMetrics.controlRadius))
     }
 }
 
@@ -90,15 +90,15 @@ struct BotSettingsModelPicker: View {
             HStack(spacing: 8) {
                 Text(selectedLabel)
                     .font(.settingsBody.weight(.medium))
-                    .foregroundStyle(DashboardPalette.foreground)
+                    .foregroundStyle(WovenPalette.foreground)
                     .lineLimit(1)
                     .truncationMode(.middle)
                 Image(systemName: "chevron.up.chevron.down")
                     .font(.system(size: 10, weight: .semibold))
-                    .foregroundStyle(DashboardPalette.mutedForeground)
+                    .foregroundStyle(WovenPalette.mutedForeground)
             }
             .frame(maxWidth: 280, alignment: .leading)
-            .contentShape(RoundedRectangle(cornerRadius: DashboardMetrics.controlRadius, style: .continuous))
+            .contentShape(RoundedRectangle(cornerRadius: WovenMetrics.controlRadius, style: .continuous))
         }
         .buttonStyle(SettingsQuietButtonStyle(isActive: presented))
         .fixedSize(horizontal: false, vertical: true)
@@ -112,7 +112,7 @@ struct BotSettingsModelPicker: View {
                     if !selection.isEmpty, !known { option("\(selection) (not signed in)", value: selection) }
                     ForEach(providers) { provider in
                         Text(provider.name).font(.settingsSecondary.weight(.semibold))
-                            .foregroundStyle(DashboardPalette.mutedForeground).padding(.top, 8).padding(.horizontal, 10)
+                            .foregroundStyle(WovenPalette.mutedForeground).padding(.top, 8).padding(.horizontal, 10)
                         ForEach(provider.models) { model in
                             option(model.name, value: "\(provider.id)/\(model.id)")
                         }
@@ -128,12 +128,12 @@ struct BotSettingsModelPicker: View {
     private func option(_ title: String, value: String) -> some View {
         Button { selection = value; presented = false } label: {
             HStack {
-                Text(title).font(.settingsText).foregroundStyle(DashboardPalette.foreground)
+                Text(title).font(.settingsText).foregroundStyle(WovenPalette.foreground)
                 Spacer()
                 if value == selection {
                     Image(systemName: "checkmark")
                         .font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(DashboardPalette.primary)
+                        .foregroundStyle(WovenPalette.primary)
                 }
             }.padding(.horizontal, 10).padding(.vertical, 6).contentShape(Rectangle())
         }.buttonStyle(SettingsMenuOptionButtonStyle())
@@ -162,7 +162,7 @@ struct BotSettingsModelFacts: View {
         } label: {
             HStack(spacing: 8) {
                 if let name { Text(name).fontWeight(.medium) }
-                Text("Model details").foregroundStyle(DashboardPalette.mutedForeground)
+                Text("Model details").foregroundStyle(WovenPalette.mutedForeground)
             }.font(.settingsBody)
         }
         .accessibilityLabel("Model details for \(name ?? model)")

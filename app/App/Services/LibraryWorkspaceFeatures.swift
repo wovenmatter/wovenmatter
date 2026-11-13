@@ -1,11 +1,11 @@
 import Foundation
 import WovenMatterClient
 import WovenMatterCore
-import WovenMatterDashboardStore
+import WovenMatterLibraryStore
 
 extension DeviceCommandService {
     func readWorkspace(_ request: LibraryWorkspaceRead) async throws -> LibraryWorkspaceResult {
-        guard let store = model.dashboardStore else { throw CommandError.unavailable }
+        guard let store = model.libraryStore else { throw CommandError.unavailable }
         switch request {
         case let .library(search, kind, offset):
             guard search.utf8.count <= 4_096, (0...100_000).contains(offset),
@@ -99,7 +99,7 @@ extension DeviceCommandService {
     }
 
     func performWorkspaceAction(_ action: LibraryWorkspaceAction) async throws {
-        guard let store = model.dashboardStore, !model.backendStopping else { throw CommandError.unavailable }
+        guard let store = model.libraryStore, !model.backendStopping else { throw CommandError.unavailable }
         switch action {
         case let .conversation(id, action, title, folderID):
             if action == "move" {
@@ -212,7 +212,7 @@ extension DeviceCommandService {
 
     private func sessionSettings(_ id: String) async throws -> SessionSettings {
         _ = try await conversation(id)
-        guard let store = model.dashboardStore else { throw CommandError.unavailable }
+        guard let store = model.libraryStore else { throw CommandError.unavailable }
         // Reading settings does not launch or authenticate a provider. Options
         // come from the Mac's already-negotiated session metadata.
         let saved = try? await store.database.localACPSession(conversationID: id)

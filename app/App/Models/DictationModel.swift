@@ -73,7 +73,7 @@ import WovenMatterShared
             if self.isBackendFrontend {
                 _ = try await self.sendBackendCommand(.saveDictation(record))
             } else {
-                guard let database = self.dashboardStore?.database else { throw ApplicationModelError.dashboardStoreUnavailable }
+                guard let database = self.libraryStore?.database else { throw ApplicationModelError.libraryStoreUnavailable }
                 try await database.saveDictation(record)
             }
         }

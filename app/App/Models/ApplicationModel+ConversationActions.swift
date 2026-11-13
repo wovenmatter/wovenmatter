@@ -11,11 +11,11 @@ extension ApplicationModel {
             let action: String = if case .moveToTrash = mutation { "trash" } else { "restore" }
             try await performOnOwner(conversationID: id, action: .conversation(id: id, action: action, title: nil, folderID: nil))
         } else {
-            guard let dashboardStore else { throw ApplicationModelError.dashboardStoreUnavailable }
+            guard let libraryStore else { throw ApplicationModelError.libraryStoreUnavailable }
             let trashing: Bool = if case .moveToTrash = mutation { true } else { false }
             if trashing { try beginConversationTrash(id: id) }
             defer { if trashing { finishConversationTrash(id: id) } }
-            try await dashboardStore.mutateConversation(id: id, mutation: mutation)
+            try await libraryStore.mutateConversation(id: id, mutation: mutation)
         }
         await refreshWorkspace()
         if LocalExecutionRole.current != .backend {
@@ -30,8 +30,8 @@ extension ApplicationModel {
             }
             return conversations
         }
-        guard let dashboardStore else { throw ApplicationModelError.dashboardStoreUnavailable }
-        return try await dashboardStore.trashedConversations()
+        guard let libraryStore else { throw ApplicationModelError.libraryStoreUnavailable }
+        return try await libraryStore.trashedConversations()
     }
 
     func exportConversation(id: String, format: WorkspaceConversationExportFormat) async throws -> URL {
@@ -41,14 +41,14 @@ extension ApplicationModel {
             }
             return url
         }
-        guard let dashboardStore else { throw ApplicationModelError.dashboardStoreUnavailable }
-        return try await dashboardStore.exportConversation(id: id, format: format)
+        guard let libraryStore else { throw ApplicationModelError.libraryStoreUnavailable }
+        return try await libraryStore.exportConversation(id: id, format: format)
     }
 
     /// The execution workspace of the paired Mac that runs this chat, when it
     /// is another Mac. Independent Linux and iOS workspaces are not included.
     func pairedOwnerWorkspace(conversationID id: String) async throws -> ExecutionWorkspace? {
-        guard let database = dashboardStore?.database,
+        guard let database = libraryStore?.database,
               let workspace = try await database.libraryConversationExecutionWorkspace(conversationID: id), workspace.kind == .mac,
               try await workspace.ownerDeviceID != database.libraryIdentity().hostDeviceID else { return nil }
         return workspace

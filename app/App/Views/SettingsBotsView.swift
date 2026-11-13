@@ -1,7 +1,7 @@
 import SwiftUI
 import WovenMatterClient
 import WovenMatterCore
-import WovenMatterDashboardStore
+import WovenMatterLibraryStore
 
 /// Settings → Bots: the one machine bots run on, installing on another device, and
 /// version notices. The chosen machine opens its own page; what bots may do through
@@ -94,7 +94,7 @@ struct SettingsBotsView: View {
                     detail: BotMachineText.summary(host, bots: bots),
                     status: BotMachineText.state(host),
                     statusTone: BotMachineText.tone(host),
-                    icon: { DashboardLucideIcon(glyph: host.kind == .linux ? .container : .monitor, size: 15) },
+                    icon: { LucideIcon(glyph: host.kind == .linux ? .container : .monitor, size: 15) },
                     action: { onOpenMachine(host.id) }
                 )
             } else if bots.machines.isEmpty, let error = bots.loadError {

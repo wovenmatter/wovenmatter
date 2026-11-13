@@ -1,7 +1,7 @@
 import SwiftUI
 import WovenMatterClient
 import WovenMatterCore
-import WovenMatterDashboardStore
+import WovenMatterLibraryStore
 
 /// Defaults are edited in Settings and captured once when a conversation is
 /// created. Options come from the selected harness and execution workspace.

@@ -5,7 +5,7 @@ import SQLite3
 import Testing
 import WovenMatterCore
 import WovenMatterClient
-@testable import WovenMatterDashboardStore
+@testable import WovenMatterLibraryStore
 @testable import WovenMatterAppFacade
 
 private func sessionIsLocked() -> Bool {
@@ -116,7 +116,7 @@ struct DesktopJourneyTests {
         f.model.updateNoteDraft(note: note, content: content)
         await #expect(throws: ApplicationModelError.noteDraftSaveFailed) { try await f.model.mutateNote(id: id, mutation: .rename("Renamed")) }
         await #expect(throws: ApplicationModelError.noteDraftSaveFailed) { _ = try await f.model.exportNote(id: id) }
-        let journal = DashboardNoteDraftJournal(fileURL: f.directory.appending(path: "fixture-drafts.ndjson"))
+        let journal = NoteDraftJournal(fileURL: f.directory.appending(path: "fixture-drafts.ndjson"))
         #expect(try journal.entries().map(\.content) == [content])
         try sql(f, "DROP TRIGGER reject_note")
         f.model.retryNoteDraft(note: note)
@@ -384,7 +384,7 @@ struct DesktopJourneyTests {
         }
         let other = try #require(await f.model.createLocalACPSession(runtimeKind: .codex))
         let tail = try await f.database.conversationHistoryPage(id: id, limit: 4)
-        let initial = DashboardConversationWindow(page: tail)
+        let initial = ConversationWindow(page: tail)
         let cursor = WorkspaceConversationHistoryCursor(createdAt: try #require(initial.messages.first).createdAt, messageID: try #require(initial.messages.first).id)
         let older = try await f.database.conversationHistoryPage(id: id, before: cursor, limit: 20)
         let expanded = initial.prepending(older, requestedFrom: initial)
@@ -392,11 +392,11 @@ struct DesktopJourneyTests {
         #expect(Set(refreshed.messages.map(\.id)).count == refreshed.messages.count)
         #expect(refreshed.messages.filter { $0.role == "user" }.map(\.content) == (0..<5).map { "Input \($0)" })
         #expect(refreshed.runs.allSatisfy { $0.conversationID == id })
-        let a = DashboardConversationState(conversationID: id), b = DashboardConversationState(conversationID: other)
+        let a = ConversationState(conversationID: id), b = ConversationState(conversationID: other)
         let stale = a.beginRefresh(); let current = a.beginRefresh(); let separate = b.beginRefresh()
         #expect(!a.isCurrentRefresh(stale) && a.isCurrentRefresh(current) && b.isCurrentRefresh(separate))
         let foreign = try await f.database.conversationHistoryPage(id: other, limit: 4)
-        #expect(DashboardConversationWindow(page: foreign).messages.isEmpty)
+        #expect(ConversationWindow(page: foreign).messages.isEmpty)
         #expect(expanded.messages.count > initial.messages.count)
         #expect(expanded.activities.count == 5)
         let oldest = try #require(expanded.messages.first)

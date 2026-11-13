@@ -6,7 +6,7 @@ import LibraryClient
 import WorkspaceFixtures
 import WovenMatterCore
 import WovenMatterShared
-@testable import WovenMatterDashboardStore
+@testable import WovenMatterLibraryStore
 @testable import WovenMatterAppFacade
 
 @MainActor @Suite(.serialized)
@@ -151,17 +151,17 @@ private enum HostFixtureError: Error { case timeout }
         directory = FileManager.default.temporaryDirectory.appending(path: "library-host-\(UUID())")
         suite = "library.host.\(UUID())"
         defaults = UserDefaults(suiteName: suite)!
-        let store = try await DashboardStore(supportDirectory: directory)
-        model = ApplicationModel(applicationDefaults: defaults, dashboardStore: store, startsAutomatically: false)
+        let store = try await LibraryStore(supportDirectory: directory)
+        model = ApplicationModel(applicationDefaults: defaults, libraryStore: store, startsAutomatically: false)
     }
-    /// Local folders are bound to `device:<dashboard device id>`, generated apart
+    /// Local folders are bound to `device:<device id>`, generated apart
     /// from the registry id and host device id. A record an earlier build
     /// published without the folder owner gains it on the next refresh, under
     /// the same workspace id, so existing folders are never rewritten.
     @Test func theCentralMacPublishesTheFolderOwnerItsFoldersUse() async throws {
         let fixture = try await HostFixture(); defer { fixture.remove() }
         await fixture.host.start()
-        let database = try #require(fixture.model.dashboardStore?.database)
+        let database = try #require(fixture.model.libraryStore?.database)
         let identity = try await database.libraryIdentity()
         let folderOwner = try await fixture.model.executionWorkspaceIdentity(workspaceID: nil)
         try await fixture.host.refreshExecutionRegistry()
@@ -202,7 +202,7 @@ private enum HostFixtureError: Error { case timeout }
         #expect((response as? HTTPURLResponse)?.statusCode == 200)
         let paired = try JSONDecoder().decode(PairResponse.self, from: bytes)
         let device = try #require(host.pairedDevices.first { $0.id == paired.deviceID })
-        let database = try #require(model.dashboardStore?.database)
+        let database = try #require(model.libraryStore?.database)
         let identity = try await database.libraryIdentity()
         let workspaces = try await database.libraryExecutionWorkspaces()
         let workspace = try #require(workspaces.first { $0.kind == .mac && $0.ownerDeviceID == identity.hostDeviceID })
@@ -382,7 +382,7 @@ extension LibraryHostLifecycleTests {
             await third.host.peerSync.synchronize(force: true)
             await mini.host.peerSync.synchronize(force: true)
         }
-        let airDB = try #require(air.model.dashboardStore?.database), thirdDB = try #require(third.model.dashboardStore?.database)
+        let airDB = try #require(air.model.libraryStore?.database), thirdDB = try #require(third.model.libraryStore?.database)
         let joiningRoute = try await mini.host.peerRoute()
         mesh.offline.insert(joiningRoute.endpoint.absoluteString)
         let first = UUID().uuidString.lowercased(), second = UUID().uuidString.lowercased()
@@ -444,7 +444,7 @@ extension LibraryHostLifecycleTests {
         #expect(try await air.executionStatus(ownExecution) == 200)
         let wire = String(decoding: try JSONEncoder().encode(await airAuth.peerMembership()), as: UTF8.self)
         #expect(!wire.contains(phone.credential) && !wire.contains(execution.token))
-        let withdrawn = try #require(try await mini.model.dashboardStore?.database.libraryExecutionWorkspaces().first { $0.id == workspace.id })
+        let withdrawn = try #require(try await mini.model.libraryStore?.database.libraryExecutionWorkspaces().first { $0.id == workspace.id })
         #expect(withdrawn.endpoint != nil)
     }
 }
@@ -452,7 +452,7 @@ extension LibraryHostLifecycleTests {
 
 extension LibraryHostLifecycleTests {
     private func writeNote(_ fixture: HostFixture, _ id: String, _ title: String) async throws {
-        let database = try #require(fixture.model.dashboardStore?.database)
+        let database = try #require(fixture.model.libraryStore?.database)
         let deviceID = try await fixture.host.peerRoute().deviceID
         _ = try await database.applyLibraryMutation(.init(deviceID: deviceID, kind: .createNote, resourceID: id, title: title,
             content: try NoteDocument(blocks: [.richText(.init(text: title))]).encoded()))
@@ -472,7 +472,7 @@ extension LibraryHostLifecycleTests {
     @Test func threeMacsConvergeOverHTTPThroughAnOfflineJoinerALostReplyAndARestart() async throws {
         let (mesh, air, mini, third) = try await httpMesh("http")
         defer { mesh.remove() }
-        let airDB = try #require(air.model.dashboardStore?.database), thirdDB = try #require(third.model.dashboardStore?.database)
+        let airDB = try #require(air.model.libraryStore?.database), thirdDB = try #require(third.model.libraryStore?.database)
         mesh.offline.insert(try await mini.host.peerRoute().endpoint.absoluteString)
         let first = UUID().uuidString.lowercased(), second = UUID().uuidString.lowercased()
         try await writeNote(air, first, "Air over HTTP"); try await writeNote(third, second, "Third over HTTP")
@@ -500,7 +500,7 @@ extension LibraryHostLifecycleTests {
         let air = try await mesh.add("files-air"), mini = try await mesh.add("files-mini")
         try await mesh.pair(air, with: mini)
         await air.host.peerSync.synchronize(force: true)
-        let airDB = try #require(air.model.dashboardStore?.database), miniDB = try #require(mini.model.dashboardStore?.database)
+        let airDB = try #require(air.model.libraryStore?.database), miniDB = try #require(mini.model.libraryStore?.database)
         let hash = try LibraryFileStore(supportDirectory: miniDB.supportDirectory).retain(Data(repeating: 91, count: 1_300_000))
         let miniRoute = try await mini.host.peerRoute()
         mesh.afterResponse = { endpoint, path in
@@ -520,7 +520,7 @@ extension LibraryHostLifecycleTests {
         let (mesh, air, mini, third) = try await httpMesh("reply")
         defer { mesh.remove() }
         let miniID = try await mini.host.peerRoute().deviceID
-        let airDB = try #require(air.model.dashboardStore?.database)
+        let airDB = try #require(air.model.libraryStore?.database)
         await third.host.revoke(miniID)
         mesh.offline.insert(try await third.host.peerRoute().endpoint.absoluteString)
         // The Mini learns its own unpair and returns it in its next reply.
@@ -547,7 +547,7 @@ extension LibraryHostLifecycleTests {
         air.host.stopSharing()
         await mini.host.peerSync.synchronize(force: true)
         third.host.stopSharing()
-        let thirdDB = try #require(third.model.dashboardStore?.database)
+        let thirdDB = try #require(third.model.libraryStore?.database)
         let learned = try #require(try await thirdDB.libraryExecutionWorkspaces().first { $0.id == airWorkspace.id })
         let thirdAuth = try await third.host.peerAuthentication()
         #expect(await thirdAuth.isActiveMac(airID))
@@ -599,7 +599,7 @@ extension LibraryHostLifecycleTests {
     @Test func peerHistoryIsLocalButNativeControlStaysWithItsMac() async throws {
         let mesh = PeerTestMesh(); defer { mesh.remove() }
         let air = try await mesh.add("history-air"), mini = try await mesh.add("history-mini")
-        let source = try #require(air.model.dashboardStore?.database), other = try #require(mini.model.dashboardStore?.database)
+        let source = try #require(air.model.libraryStore?.database), other = try #require(mini.model.libraryStore?.database)
         let id = try await source.createFixtureLocalACPSession(runtimeKind: .codex, title: "Owner's conversation", ownerDeviceID: UUID())
         let run = try await source.beginLocalACPRun(conversationID: id, input: .init(text: "Saved native input"))
         try await source.completeLocalACPRun(runID: run.runID, error: nil)
@@ -612,7 +612,7 @@ extension LibraryHostLifecycleTests {
         #expect(try await other.libraryFederatedTranscript(conversationID: id)?.messages.contains { $0.content == "Saved native input" } == true)
         #expect(try await other.read { try $0.historyRowsUnlocked("SELECT conversation_id FROM harness_sessions WHERE conversation_id=?", values: [id]).isEmpty })
         #expect(try await other.read { try $0.historyRowsUnlocked("SELECT id FROM workspace_history_events WHERE conversation_id=?", values: [id]).count } == originalCount)
-        let sourceAgent = try #require(try await source.dashboardAgents().first)
+        let sourceAgent = try #require(try await source.workspaceAgents().first)
         #expect(mini.model.peerAgentWorkspaces[sourceAgent.id] != nil)
         #expect(!mini.model.localCLIAgents.contains { $0.id == sourceAgent.id })
         #expect(mini.model.remoteWorkspaceAgents.contains { $0.id == sourceAgent.id })
@@ -671,7 +671,7 @@ extension LibraryHostLifecycleTests {
         try await mesh.pair(mini, with: air)
         // One turn walks at most eight manifest pages; later exchanges (forced
         // here, change-driven or presence in production) continue from the cursor.
-        let database = try #require(mini.model.dashboardStore?.database)
+        let database = try #require(mini.model.libraryStore?.database)
         let peer = try await air.host.peerRoute()
         for _ in 0..<4 {
             await mini.host.peerSync.synchronize(force: true)
@@ -722,7 +722,7 @@ extension LibraryHostLifecycleTests {
         let air = try await mesh.add("route-air"), mini = try await mesh.add("route-mini")
         try await mesh.pair(air, with: mini)
         await air.host.peerSync.synchronize(force: true)
-        let airDB = try #require(air.model.dashboardStore?.database), miniDB = try #require(mini.model.dashboardStore?.database)
+        let airDB = try #require(air.model.libraryStore?.database), miniDB = try #require(mini.model.libraryStore?.database)
         let id = try await airDB.createFixtureLocalACPSession(runtimeKind: .codex, title: "Air's chat", ownerDeviceID: UUID())
         await air.host.peerSync.synchronize(force: true)
         let airID = try await air.host.peerRoute().deviceID
@@ -815,7 +815,7 @@ extension LibraryHostLifecycleTests {
         try await mesh.pair(air, with: mini)
         await air.host.peerSync.synchronize(force: true)
         let airID = try await air.host.peerRoute().deviceID, miniID = try await mini.host.peerRoute().deviceID
-        let database = try #require(air.model.dashboardStore?.database)
+        let database = try #require(air.model.libraryStore?.database)
         let identity = try await database.libraryIdentity()
         let workspace = try await database.registerExecutionWorkspace(.init(workspace: .init(
             id: UUID().uuidString.lowercased(), libraryID: identity.libraryID, ownerDeviceID: airID, kind: .linux,

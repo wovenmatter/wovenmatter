@@ -19,7 +19,7 @@ public struct LibraryHostLayout: Sendable, Equatable {
   public let root: URL
   public init(root: URL) { self.root = root.standardizedFileURL }
 
-  /// DashboardStore support directory: workspace.sqlite, dashboard-device-id, library files.
+  /// LibraryStore support directory: workspace.sqlite, device-id, library files.
   public var library: URL { root.appending(path: "library", directoryHint: .isDirectory) }
   /// File-backed secrets that macOS keeps in the Keychain.
   public var secrets: URL { root.appending(path: "secrets", directoryHint: .isDirectory) }

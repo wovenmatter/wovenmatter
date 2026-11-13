@@ -75,22 +75,22 @@ struct OpenCodeFormView: View {
         case "external":
             if let url = URL(string: field["url"].text), ["https", "http"].contains(url.scheme) {
                 Link("Open " + (field["title"].string ?? "verification"), destination: url)
-                    .foregroundStyle(DashboardPalette.success)
+                    .foregroundStyle(WovenPalette.success)
             }
             Toggle("I’ve completed this step", isOn: Binding(
                 get: { answers[key]?.bool ?? false }, set: { answers[key] = .bool($0) }
             ))
-            .toggleStyle(DashboardSwitchToggleStyle())
+            .toggleStyle(CompactSwitchToggleStyle())
         case "boolean":
             Toggle("Yes", isOn: Binding(get: { answers[key]?.bool ?? false }, set: { answers[key] = .bool($0) }))
-                .toggleStyle(DashboardSwitchToggleStyle())
+                .toggleStyle(CompactSwitchToggleStyle())
         case "multiselect":
             ForEach(field["options"].array, id: \.self) { option in
                 Toggle(option["label"].text, isOn: Binding(get: { answers[key]?.array.contains(option["value"]) ?? false }, set: { selected in
                     var values = answers[key]?.array ?? []; values.removeAll { $0 == option["value"] }
                     if selected { values.append(option["value"]) }; answers[key] = .array(values)
                 }))
-                .toggleStyle(DashboardSwitchToggleStyle())
+                .toggleStyle(CompactSwitchToggleStyle())
             }
             if field["custom"].bool { customInput(field) }
         case "string" where !field["options"].array.isEmpty:

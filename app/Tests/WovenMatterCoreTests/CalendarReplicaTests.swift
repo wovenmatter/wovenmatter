@@ -2,7 +2,7 @@ import WorkspaceFixtures
 import Foundation
 import Testing
 import WovenMatterCore
-@testable import WovenMatterDashboardStore
+@testable import WovenMatterLibraryStore
 
 @Suite("Calendar replicas and execution ownership")
 struct CalendarReplicaTests {

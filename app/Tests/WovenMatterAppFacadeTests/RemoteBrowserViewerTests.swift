@@ -290,8 +290,8 @@ import WovenMatterClient
         let output = try #require(ProcessInfo.processInfo.environment["WOVENMATTER_REMOTE_BROWSER_PREVIEW"])
         let viewer = RemoteBrowserViewerModel(loadTabs: { .init(running: true, tabs: tabs) }, loadFrame: { id, _ in try frame(id) })
         await viewer.refresh()
-        for (theme, appearance, width) in [(DashboardTheme.green, NSAppearance.Name.aqua, 1000), (.cognac, .aqua, 700), (.dark, .darkAqua, 700)] {
-            let view = NSHostingView(rootView: RemoteBrowserContent(viewer: viewer, workspaceName: "Development workspace", onClose: {}).environment(\.dashboardTheme, theme))
+        for (theme, appearance, width) in [(WovenTheme.green, NSAppearance.Name.aqua, 1000), (.cognac, .aqua, 700), (.dark, .darkAqua, 700)] {
+            let view = NSHostingView(rootView: RemoteBrowserContent(viewer: viewer, workspaceName: "Development workspace", onClose: {}).environment(\.wovenTheme, theme))
             view.appearance = NSAppearance(named: appearance)
             view.frame = NSRect(x: 0, y: 0, width: width, height: 720)
             view.layoutSubtreeIfNeeded()

@@ -3,7 +3,7 @@ import Foundation
 import Network
 import Security
 import WovenMatterCore
-import WovenMatterDashboardStore
+import WovenMatterLibraryStore
 
 enum WovenMCPAccessAction: Codable, Sendable {
     case status

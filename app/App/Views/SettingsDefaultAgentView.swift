@@ -337,7 +337,7 @@ private struct SettingsAgentModelsView: View {
                         Text(defaultLabel).lineLimit(1)
                         Image(systemName: "chevron.up.chevron.down")
                             .font(.settingsSecondary.weight(.semibold))
-                            .foregroundStyle(DashboardPalette.mutedForeground)
+                            .foregroundStyle(WovenPalette.mutedForeground)
                     }
                 }
                 .buttonStyle(SettingsQuietButtonStyle())
@@ -393,7 +393,7 @@ private struct SettingsAgentModelsView: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text(item.name).font(.settingsRow)
                 Text(row.isDefault ? "\(item.providerName) · Default" : item.providerName)
-                    .font(.settingsSecondary).foregroundStyle(DashboardPalette.mutedForeground)
+                    .font(.settingsSecondary).foregroundStyle(WovenPalette.mutedForeground)
             }
             Spacer(minLength: 8)
             Button { agent.move(item.id, by: -1) } label: { Image(systemName: "chevron.up") }
@@ -453,7 +453,7 @@ private struct SettingsAgentModelsView: View {
                 Text("Add models").font(.settingsTitle)
                 Spacer()
                 Button("Done") { showsBrowser = false }
-                    .buttonStyle(DashboardPrimaryButtonStyle())
+                    .buttonStyle(WovenPrimaryButtonStyle())
                     .keyboardShortcut(.defaultAction)
             }
             if let provider = setupProvider {
@@ -463,7 +463,7 @@ private struct SettingsAgentModelsView: View {
                 requested: browsingAllModels, includesAllModels: agent.catalogIncludesAllModels,
                 loading: agent.busy, error: agent.error, setBrowsingAllModels: setBrowsingAllModels)
             if showingAllModels {
-                TextField("Find a model or provider", text: $filter.query).dashboardQuietTextInput()
+                TextField("Find a model or provider", text: $filter.query).quietTextInput()
                 HStack(spacing: 8) {
                     SettingsPicker("Connection", selection: $filter.connection, options: [""] + index.providers) {
                         $0.isEmpty ? "All connection types" : connectionName($0)
@@ -479,7 +479,7 @@ private struct SettingsAgentModelsView: View {
                 if matches.isEmpty {
                     if showingAllModels {
                         Text("No models match these filters.")
-                            .font(.settingsBody).foregroundStyle(DashboardPalette.mutedForeground)
+                            .font(.settingsBody).foregroundStyle(WovenPalette.mutedForeground)
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
                 } else {
@@ -495,8 +495,8 @@ private struct SettingsAgentModelsView: View {
         }
         .padding(24)
         .frame(width: 600, height: 620)
-        .foregroundStyle(DashboardPalette.foreground)
-        .background(DashboardPalette.background)
+        .foregroundStyle(WovenPalette.foreground)
+        .background(WovenPalette.background)
         .toggleStyle(SettingsSwitchToggleStyle())
         .environment(\.settingsFilledControls, true)
     }
@@ -507,7 +507,7 @@ private struct SettingsAgentModelsView: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text(item.name).font(.settingsRow)
                 Text(row.isDefault ? "\(item.providerName) · Default" : item.providerName)
-                    .font(.settingsSecondary).foregroundStyle(DashboardPalette.mutedForeground)
+                    .font(.settingsSecondary).foregroundStyle(WovenPalette.mutedForeground)
             }
         }
         .frame(minHeight: SettingsMetrics.rowHeight)
@@ -609,7 +609,7 @@ private struct SettingsAgentCatalogBrowseControls: View {
                     if !includesAllModels {
                         if loading {
                             ProgressView().controlSize(.small)
-                            Text("Loading models…").font(.settingsBody).foregroundStyle(DashboardPalette.mutedForeground)
+                            Text("Loading models…").font(.settingsBody).foregroundStyle(WovenPalette.mutedForeground)
                         } else {
                             Button("Retry") { setBrowsingAllModels(true) }
                         }
@@ -632,7 +632,7 @@ private struct SettingsAgentCatalogPageControls: View {
     var body: some View {
         HStack {
             Text("\(min(page * pageSize + 1, count))–\(min((page + 1) * pageSize, count)) of \(count) models")
-                .font(.settingsSecondary).foregroundStyle(DashboardPalette.mutedForeground).monospacedDigit()
+                .font(.settingsSecondary).foregroundStyle(WovenPalette.mutedForeground).monospacedDigit()
             Spacer()
             if count > pageSize {
                 Button("Previous") { page -= 1 }.disabled(page == 0)
@@ -670,18 +670,18 @@ private struct SettingsAgentDefaultModelChooser: View {
                 requested: browsingAllModels, includesAllModels: includesAllModels,
                 loading: loading, error: error, offersEnabledModels: true, setBrowsingAllModels: setBrowsingAllModels)
             if browsingAllModels && includesAllModels {
-                TextField("Find a model or provider", text: $query).dashboardQuietTextInput()
+                TextField("Find a model or provider", text: $query).quietTextInput()
             }
             if matches.isEmpty {
                 Text(browsingAllModels && includesAllModels ? "No models match this search." : "No enabled models to display.")
-                    .font(.settingsBody).foregroundStyle(DashboardPalette.mutedForeground)
+                    .font(.settingsBody).foregroundStyle(WovenPalette.mutedForeground)
                     .frame(maxWidth: .infinity, minHeight: 260)
             } else {
                 List(selection: $selectedID) {
                     ForEach(matches.dropFirst(page * pageSize).prefix(pageSize)) { entry in
                         VStack(alignment: .leading, spacing: 2) {
                             Text(entry.model.name).font(.settingsBody)
-                            Text(entry.model.providerName).font(.settingsSecondary).foregroundStyle(DashboardPalette.mutedForeground)
+                            Text(entry.model.providerName).font(.settingsSecondary).foregroundStyle(WovenPalette.mutedForeground)
                         }
                         .tag(entry.id)
                     }

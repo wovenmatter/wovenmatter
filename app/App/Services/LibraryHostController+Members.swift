@@ -1,7 +1,7 @@
 import Foundation
 import WovenMatterCore
 import WovenMatterClient
-import WovenMatterDashboardStore
+import WovenMatterLibraryStore
 
 extension LibraryHostController {
     /// This Mac's member signer: the same key as its paired-Mac identity.

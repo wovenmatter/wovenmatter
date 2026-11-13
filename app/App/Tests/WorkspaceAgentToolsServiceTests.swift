@@ -6,7 +6,7 @@ import Observation
 import Testing
 import WovenMatterCore
 import WovenMatterClient
-import WovenMatterDashboardStore
+import WovenMatterLibraryStore
 @testable import WovenMatterAppFacade
 
 // Process pipes must not occupy the cooperative workers serving MCP requests.

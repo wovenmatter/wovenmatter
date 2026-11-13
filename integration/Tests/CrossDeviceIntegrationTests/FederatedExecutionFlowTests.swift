@@ -3,7 +3,7 @@ import CryptoKit
 import Testing
 import LibraryClient
 import WovenMatterCore
-import WovenMatterDashboardStore
+import WovenMatterLibraryStore
 
 /// These flows cross the durable portable journal, real pairing/authentication,
 /// production API routes and central SQLite. Only transport reply loss and the

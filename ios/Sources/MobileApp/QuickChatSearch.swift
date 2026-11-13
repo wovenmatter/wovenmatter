@@ -51,7 +51,7 @@ struct QuickChatSearchSettingsPane: View {
             HStack {
               Text(provider.name)
               Spacer()
-              Text(connected.contains(provider) ? "Connected" : "Not connected").font(.callout).foregroundStyle(DashboardPalette.mutedForeground)
+              Text(connected.contains(provider) ? "Connected" : "Not connected").font(.callout).foregroundStyle(WovenPalette.mutedForeground)
             }
           }.accessibilityIdentifier("search-provider-" + provider.rawValue)
         }
@@ -65,7 +65,7 @@ struct QuickChatSearchSettingsPane: View {
           }
         }
       }
-      if let problem { Section { Text(problem).foregroundStyle(DashboardPalette.danger) } }
+      if let problem { Section { Text(problem).foregroundStyle(WovenPalette.danger) } }
     }.listStyle(.insetGrouped).scrollContentBackground(.hidden).scrollIndicators(.never).mobileNavigationPage("Web search")
       .task { connected = await load() }
   }
@@ -91,13 +91,13 @@ private struct QuickChatSearchKeyEditor: View {
       else {
         Section {
           SecureField(configured ? "Replace API key" : "API key", text: $key)
-            .dashboardInput().textInputAutocapitalization(.never).autocorrectionDisabled().disabled(saving)
+            .wovenInput().textInputAutocapitalization(.never).autocorrectionDisabled().disabled(saving)
         } footer: {
           Text(provider.canRead ? "The key stays on this device." : "The key stays on this device. Brave Search can search but not read webpages.")
         }
         if configured { Section { Button("Remove \(provider.name)", role: .destructive) { save(remove: true) }.disabled(saving) } }
       }
-      if let problem { Section { Text(problem).foregroundStyle(DashboardPalette.danger) } }
+      if let problem { Section { Text(problem).foregroundStyle(WovenPalette.danger) } }
     }.scrollIndicators(.never).mobileNavigationPage(provider.name)
       .toolbar {
         ToolbarItem(placement: .confirmationAction) {

@@ -55,7 +55,7 @@ struct WorkspaceSessionManagementControls: View {
                                 .disabled(timer.isPaused && !enabled)
                             Button { Task { await tools.removeTimer(timer) } } label: { Image(systemName: "trash") }
                                 .accessibilityLabel("Remove timer: \(timer.instruction)")
-                        }.font(.system(size: 11)).foregroundStyle(DashboardPalette.mutedForeground).buttonStyle(.plain)
+                        }.font(.system(size: 11)).foregroundStyle(WovenPalette.mutedForeground).buttonStyle(.plain)
                     }
                 }
             }
@@ -86,7 +86,7 @@ private struct WorkspaceTimerEditor: View {
         VStack(alignment: .leading, spacing: 16) {
             Text("Session timer").font(.system(size: 16, weight: .semibold))
             Text("Send this instruction while Woven Matter is open.")
-                .font(.system(size: 12)).foregroundStyle(DashboardPalette.mutedForeground)
+                .font(.system(size: 12)).foregroundStyle(WovenPalette.mutedForeground)
             TextEditor(text: $draft.instruction).font(.system(size: 13)).scrollIndicators(.never)
                 .frame(height: 100).accessibilityLabel("Timer instruction")
             DatePicker("Next run", selection: $draft.nextFireAt)
@@ -99,7 +99,7 @@ private struct WorkspaceTimerEditor: View {
                     Text("seconds")
                 }
             }
-            if let error { Text(error).font(.system(size: 12)).foregroundStyle(DashboardPalette.mutedForeground) }
+            if let error { Text(error).font(.system(size: 12)).foregroundStyle(WovenPalette.mutedForeground) }
             HStack {
                 Spacer()
                 Button("Cancel", role: .cancel) { dismiss() }
@@ -110,7 +110,7 @@ private struct WorkspaceTimerEditor: View {
                             dismiss()
                         } catch { self.error = error.localizedDescription }
                     }
-                }.buttonStyle(DashboardPrimaryButtonStyle())
+                }.buttonStyle(WovenPrimaryButtonStyle())
                     .disabled((try? draft.timer()) == nil)
             }
         }.padding(24).frame(width: 410)

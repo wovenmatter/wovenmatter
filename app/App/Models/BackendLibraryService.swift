@@ -1,7 +1,7 @@
 import Foundation
 import WovenMatterCore
 import WovenMatterClient
-import WovenMatterDashboardStore
+import WovenMatterLibraryStore
 
 /// Content identities and display metadata cross the boundary. The execution owner
 /// resolves retained files and creates opening copies; the UI reads the shared catalog.

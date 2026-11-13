@@ -1,7 +1,7 @@
 import Observation
 import SwiftUI
 import WovenMatterClient
-import WovenMatterDashboardStore
+import WovenMatterLibraryStore
 
 /// Install bots on another device: online Linux and macOS tailnet peers and what each
 /// needs before it can run bots. Closed on the Bots page until needed.
@@ -84,7 +84,7 @@ struct BotsDiscoverDevicesRow: View {
 
     @ViewBuilder private func installControls(_ device: BotDiscoveredDevice) -> some View {
         TextField("SSH user (optional)", text: Binding(get: { users[device.id] ?? "" }, set: { users[device.id] = $0 }))
-            .dashboardInput().frame(width: 170)
+            .wovenInput().frame(width: 170)
         Button("Install bots") { confirming = device }
             .buttonStyle(SettingsQuietButtonStyle())
             .disabled(installing)
@@ -138,13 +138,13 @@ struct BotsVersionNotice: View {
                     SettingsRow(title: part.kind == .bots ? "Bots on \(part.name)" : part.name) {
                         Text([part.current, part.expected].compactMap { $0 }.joined(separator: " → "))
                             .font(.settingsBody)
-                            .foregroundStyle(DashboardPalette.mutedForeground)
+                            .foregroundStyle(WovenPalette.mutedForeground)
                             .textSelection(.enabled)
                     }
                 }
                 HStack(spacing: 8) {
                     Button(updater.running ? "Updating…" : "Update everything") { Task { await updater.updateEverything(bots: bots) } }
-                        .buttonStyle(DashboardPrimaryButtonStyle())
+                        .buttonStyle(WovenPrimaryButtonStyle())
                         .disabled(updater.running)
                     if let step = updater.current { SettingsNote(step) }
                 }

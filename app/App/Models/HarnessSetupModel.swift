@@ -11,7 +11,7 @@ final class HarnessSetupPresentation {
 
     func prepareForLaunch() {
         let defaults = UserDefaults.standard
-        let database = try? ApplicationModel.dashboardSupportDirectory().appending(path: "workspace.sqlite")
+        let database = try? ApplicationModel.librarySupportDirectory().appending(path: "workspace.sqlite")
         HarnessOnboarding.prepareFirstLaunch(defaults: defaults,
             hasExistingWorkspace: database.map { FileManager.default.fileExists(atPath: $0.path) } ?? true,
             hasExistingPreferences: defaults.object(forKey: "wovenmatter.title-generation.enabled") != nil)
@@ -271,7 +271,7 @@ final class HarnessSignInModel {
                 let searchPath = await Task.detached { LocalACPRuntimeResolver.executableSearchPath }.value
                 guard let script = HarnessOnboarding.signInScript(kind, executable: executable, searchPath: searchPath)
                 else { throw RuntimeMaintenanceError.unavailable }
-                let directory = try ApplicationModel.dashboardSupportDirectory().appending(path: "Sign-in", directoryHint: .isDirectory)
+                let directory = try ApplicationModel.librarySupportDirectory().appending(path: "Sign-in", directoryHint: .isDirectory)
                 try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true,
                     attributes: [.posixPermissions: 0o700])
                 let file = directory.appending(path: kind.rawValue + ".command")

@@ -5,7 +5,7 @@ import Foundation
 import Observation
 import Security
 import WovenMatterCore
-import WovenMatterDashboardStore
+import WovenMatterLibraryStore
 
 struct PairedMacCredential: Codable, Sendable {
     var route: PairedMacRoute
@@ -102,7 +102,7 @@ final class PairedMacSyncController {
     /// device-only storage before it signs anything.
     private var signingKey: Curve25519.Signing.PrivateKey?
     func identity() async throws -> PeerSelf {
-        guard let host, let database = host.model?.dashboardStore?.database else { throw CancellationError() }
+        guard let host, let database = host.model?.libraryStore?.database else { throw CancellationError() }
         let library = try await database.libraryIdentity()
         if signingKey == nil {
             if let raw = try storage.loadSigningKey() { signingKey = try Curve25519.Signing.PrivateKey(rawRepresentation: raw) }
@@ -120,7 +120,7 @@ final class PairedMacSyncController {
     /// This Mac's member directory, keyed by the same identity as pairing.
     func members() async throws -> MemberDirectory {
         if let memberDirectory { return memberDirectory }
-        guard let database = host?.model?.dashboardStore?.database else { throw CancellationError() }
+        guard let database = host?.model?.libraryStore?.database else { throw CancellationError() }
         let directory = MemberDirectory(database: database, identity: MemberIdentity(try await identity(), kind: .mac))
         memberDirectory = directory
         return directory
@@ -213,7 +213,7 @@ final class PairedMacSyncController {
     }
 
     func refreshSyncStatus() async {
-        guard let librarySync, let database = host?.model?.dashboardStore?.database else { return }
+        guard let librarySync, let database = host?.model?.libraryStore?.database else { return }
         let status = await librarySync.status()
         syncStatus = status
         for peer in status.peers {
@@ -242,7 +242,7 @@ final class PairedMacSyncController {
     }
 
     func restore() async throws {
-        guard let host, let database = host.model?.dashboardStore?.database else { return }
+        guard let host, let database = host.model?.libraryStore?.database else { return }
         let own = try await host.peerRoute()
         try await database.savePairedMacRoute(own)
         routes = try await database.pairedMacRoutes()
@@ -301,7 +301,7 @@ final class PairedMacSyncController {
     }
 
     private func finishPairing(_ credential: PairedMacCredential) async throws {
-        guard let host, let database = host.model?.dashboardStore?.database, let reciprocal = credential.returnToken else { throw CancellationError() }
+        guard let host, let database = host.model?.libraryStore?.database, let reciprocal = credential.returnToken else { throw CancellationError() }
         let own = try await host.peerRoute(), route = credential.route
         guard credential.deviceID == own.deviceID else { throw CancellationError() }
         // Persisted before confirmation: losing either reply can resume the same
@@ -391,7 +391,7 @@ final class PairedMacSyncController {
             return await librarySync.handle(request) ?? .error("not_found", "Unknown peer endpoint.", status: 404)
         }
         do {
-            guard let host, let database = host.model?.dashboardStore?.database,
+            guard let host, let database = host.model?.libraryStore?.database,
                   request.headers["x-woven-protocol"] == String(LibraryProtocol.version) else {
                 return .error("unavailable", "This Mac is not ready to synchronize.", status: 503)
             }
@@ -486,7 +486,7 @@ final class PairedMacSyncController {
     /// itself is change-driven inside `LibraryPeerSync`; this only refreshes
     /// local state, and with `force` ("Sync now") catches up every peer once.
     func synchronize(force: Bool = false) async {
-        guard !syncing, let host, let database = host.model?.dashboardStore?.database else { return }
+        guard !syncing, let host, let database = host.model?.libraryStore?.database else { return }
         syncing = true; defer { syncing = false }
         await restoreRecordingFailures()
         if force { await librarySync?.synchronizeAll() }
@@ -501,7 +501,7 @@ final class PairedMacSyncController {
     /// Execution access comes directly from the Mac that manages the
     /// workspace, authenticated with this Mac's own target-local grant there.
     func provision(workspace: ExecutionWorkspace, deviceID: String) async throws -> ExecutionCredential {
-        guard let host, let database = host.model?.dashboardStore?.database,
+        guard let host, let database = host.model?.libraryStore?.database,
               let route = try await database.pairedMacRoutes().first(where: { $0.deviceID == workspace.ownerDeviceID }) else {
             throw LibraryAPIError(code: "peer_unavailable", message: "Reconnect the Mac that added this workspace to finish device enrollment.")
         }

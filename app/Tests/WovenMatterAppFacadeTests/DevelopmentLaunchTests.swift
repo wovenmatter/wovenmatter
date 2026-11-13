@@ -3,7 +3,7 @@ import LibraryClient
 import Foundation
 import Testing
 import WovenMatterCore
-@testable import WovenMatterDashboardStore
+@testable import WovenMatterLibraryStore
 @testable import WovenMatterAppFacade
 
 @MainActor @Suite(.serialized)

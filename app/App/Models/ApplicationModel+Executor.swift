@@ -4,11 +4,11 @@ import WovenMatterClient
 
 extension ApplicationModel {
     func executorClient(install: Bool = false, config proposed: ExecutorConfiguration? = nil, prepareHost: Bool = false) async throws -> ExecutorBrokerClient {
-        guard !isBackendFrontend, let database = dashboardStore?.database else { throw ApplicationModelError.dashboardStoreUnavailable }
+        guard !isBackendFrontend, let database = libraryStore?.database else { throw ApplicationModelError.libraryStoreUnavailable }
         let saved = try await database.toolSettings().executor
         guard let config = proposed ?? saved else { throw DefaultAgentError.message("Set up Executor in Settings → Woven MCP first.") }
         if executorRuntime.client == nil {
-            executorRuntime.client = ExecutorBrokerClient(directory: try Self.dashboardSupportDirectory().appending(path: "executor"))
+            executorRuntime.client = ExecutorBrokerClient(directory: try Self.librarySupportDirectory().appending(path: "executor"))
         }
         let client = executorRuntime.client!
         do {
@@ -32,7 +32,7 @@ extension ApplicationModel {
     }
 
     func recoverExecutorSetup() async throws {
-        guard let database = dashboardStore?.database, let setup = try await database.toolSettings().executorSetup, setup.running else { return }
+        guard let database = libraryStore?.database, let setup = try await database.toolSettings().executorSetup, setup.running else { return }
         try await database.updateExecutor(setup: .init(configuration: setup.configuration, running: false, error: "Executor setup was interrupted. Retry install or deploy; existing data and keys are retained."))
         try await agentTools?.reload()
     }
@@ -42,7 +42,7 @@ extension ApplicationModel {
     }
 
     func executeExecutorControl(_ control: ExecutorControl) async throws -> URL? {
-        guard let database = dashboardStore?.database else { throw ApplicationModelError.dashboardStoreUnavailable }
+        guard let database = libraryStore?.database else { throw ApplicationModelError.libraryStoreUnavailable }
         switch control {
         case let .setup(config, prepareHost):
             guard !executorRuntime.isSettingUp else { return nil }
@@ -110,7 +110,7 @@ extension ApplicationModel {
     }
 
     private func refreshExecutorInventory() async throws {
-        guard let database = dashboardStore?.database else { throw ApplicationModelError.dashboardStoreUnavailable }
+        guard let database = libraryStore?.database else { throw ApplicationModelError.libraryStoreUnavailable }
         let client = try await executorClient()
         let value = try await client.call(.object(["operation": .string("inventory")]))
         let apps = try JSONDecoder().decode([ExecutorAppTarget].self, from: JSONEncoder().encode(value))
@@ -118,7 +118,7 @@ extension ApplicationModel {
     }
 
     func synchronizeExecutorScope(_ session: String, policy: WorkspaceSessionTools) async throws {
-        guard let settings = try await dashboardStore?.database.toolSettings(), let config = settings.executor else {
+        guard let settings = try await libraryStore?.database.toolSettings(), let config = settings.executor else {
             if policy.enabled.contains(.executor) { throw DefaultAgentError.message("Set up Executor in Settings → Woven MCP first.") }; return
         }
         let profiles = config.apps.filter { policy.executorProfiles?.contains($0.id) == true }
@@ -128,11 +128,11 @@ extension ApplicationModel {
 
     func executorPolicy(_ session: String) async throws -> ExecutorApprovalPolicy {
         if WovenMCPCaller.isAppWide(session) {
-            guard let database = dashboardStore?.database else { throw ApplicationModelError.dashboardStoreUnavailable }
+            guard let database = libraryStore?.database else { throw ApplicationModelError.libraryStoreUnavailable }
             try await database.requireTool(.executor, sessionID: session)
             return .full
         }
-        guard let database = dashboardStore?.database else { throw ApplicationModelError.dashboardStoreUnavailable }
+        guard let database = libraryStore?.database else { throw ApplicationModelError.libraryStoreUnavailable }
         var runtime = workspaceOverview?.conversations.first { $0.id == session }?.localRuntimeKind
         if runtime == nil { runtime = try? await database.localACPSession(conversationID: session).runtimeKind }
         guard let runtime else { return .ask }
@@ -153,7 +153,7 @@ extension ApplicationModel {
 
     private func admitExecutorTool(_ session: String, command: WovenMatterToolCommand, request: WovenMatterToolRequest, fence: UUID) async throws -> WovenMatterToolResponse {
         guard !executorRuntime.isSettingUp else { throw DefaultAgentError.message("Executor setup is still running. Wait for Connections to show the runtime is ready.") }
-        guard let database = dashboardStore?.database else { throw ApplicationModelError.dashboardStoreUnavailable }
+        guard let database = libraryStore?.database else { throw ApplicationModelError.libraryStoreUnavailable }
         try await database.requireTool(.executor, sessionID: session)
         let policy = try await database.sessionTools(session)
         let client = try await executorClient()
@@ -205,7 +205,7 @@ extension ApplicationModel {
             while !Task.isCancelled {
                 let currentPolicy = try await executorPolicy(session)
                 if !readOnly && currentPolicy != initialPolicy { throw CancellationError() }
-                try await dashboardStore?.database.requireTool(.executor, sessionID: session)
+                try await libraryStore?.database.requireTool(.executor, sessionID: session)
                 let result = try await client.call(message("status"))
                 let status = result.objectValue?["status"]?.stringValue ?? "interrupted"
                 if ["completed", "cancelled", "interrupted"].contains(status) { return }
@@ -240,7 +240,7 @@ extension ApplicationModel {
                     try Task.checkCancellation()
                     let resume = executorRuntime.serialized(session) { [self] in
                         try Task.checkCancellation()
-                        try await dashboardStore?.database.requireTool(.executor, sessionID: session)
+                        try await libraryStore?.database.requireTool(.executor, sessionID: session)
                         let freshPolicy = try await executorPolicy(session)
                         if !readOnly && freshPolicy != initialPolicy { throw CancellationError() }
                         // Scope is rechecked by Executor again when resume admits the action.

@@ -1,7 +1,7 @@
 import Foundation
 import WovenMatterClient
 import WovenMatterCore
-import WovenMatterDashboardStore
+import WovenMatterLibraryStore
 
 /// What the background server's windows read on their live connection
 /// (`ExecutionWindowStreamServer`). A conversation this Mac runs is read from
@@ -28,7 +28,7 @@ final class BackendWindowStreamSource: ExecutionConversationSource {
 
     private var database: WorkspaceDatabase {
         get throws {
-            guard let database = model.dashboardStore?.database else { throw ApplicationModelError.dashboardStoreUnavailable }
+            guard let database = model.libraryStore?.database else { throw ApplicationModelError.libraryStoreUnavailable }
             return database
         }
     }
@@ -147,7 +147,7 @@ extension ApplicationModel {
     /// The background server's side of its windows' live connection, started
     /// with the first window that connects once the store is open.
     func acceptWindowStream(_ channel: BackendStreamChannel) {
-        guard !backendStopping, let database = dashboardStore?.database else { channel.close(); return }
+        guard !backendStopping, let database = libraryStore?.database else { channel.close(); return }
         if let server = backendWindowStream { server.accept(channel); return }
         let source = BackendWindowStreamSource(model: self)
         let server = ExecutionWindowStreamServer(database: database, source: source) { [weak self] in
@@ -178,7 +178,7 @@ extension ApplicationModel {
     }
 
     private func windowStreamHello() async -> StreamHello {
-        let identity = try? await dashboardStore?.database.libraryIdentity()
+        let identity = try? await libraryStore?.database.libraryIdentity()
         let libraryID = identity?.libraryID ?? ""
         return StreamHello(deviceID: identity?.hostDeviceID ?? "", libraryID: libraryID,
             workspaceID: libraryID.isEmpty ? "" : libraryHost.localExecutionWorkspaceID(libraryID: libraryID),

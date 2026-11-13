@@ -46,8 +46,8 @@ private struct ConversationMarkdownBlocks: View {
         }
         .font(.system(size: 15))
         .foregroundStyle(isStreaming
-            ? DashboardPalette.foreground.opacity(0.76)
-            : DashboardPalette.foreground)
+            ? WovenPalette.foreground.opacity(0.76)
+            : WovenPalette.foreground)
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
@@ -79,7 +79,7 @@ private struct ConversationMarkdownBlocks: View {
         case .quote(let blocks):
             HStack(alignment: .top, spacing: 12) {
                 RoundedRectangle(cornerRadius: 1)
-                    .fill(DashboardPalette.foreground.opacity(0.16))
+                    .fill(WovenPalette.foreground.opacity(0.16))
                     .frame(width: 2)
                 ConversationMarkdownBlocks(blocks: blocks, isStreaming: isStreaming)
             }
@@ -89,7 +89,7 @@ private struct ConversationMarkdownBlocks: View {
         case .table(let table):
             ConversationMarkdownTable(table: table)
         case .divider:
-            Divider().overlay(DashboardPalette.foreground.opacity(0.12))
+            Divider().overlay(WovenPalette.foreground.opacity(0.12))
         }
     }
 
@@ -98,11 +98,11 @@ private struct ConversationMarkdownBlocks: View {
         if let checked = item.checked {
             Image(systemName: checked ? "checkmark.square.fill" : "square")
                 .font(.system(size: 13))
-                .foregroundStyle(checked ? DashboardPalette.primary : DashboardPalette.mutedForeground)
+                .foregroundStyle(checked ? WovenPalette.primary : WovenPalette.mutedForeground)
         } else {
             Text(item.marker)
                 .font(.system(size: 14))
-                .foregroundStyle(DashboardPalette.mutedForeground)
+                .foregroundStyle(WovenPalette.mutedForeground)
         }
     }
 
@@ -121,7 +121,7 @@ private struct ConversationMarkdownInline: View {
 
     var body: some View {
         Text(styled)
-            .tint(DashboardPalette.success)
+            .tint(WovenPalette.success)
             .lineSpacing(5)
             .lineLimit(nil)
             .fixedSize(horizontal: false, vertical: true)
@@ -133,8 +133,8 @@ private struct ConversationMarkdownInline: View {
         for run in value.runs {
             guard run.inlinePresentationIntent?.contains(.code) == true else { continue }
             value[run.range].font = .system(size: 13.5, design: .monospaced)
-            value[run.range].foregroundColor = DashboardPalette.foreground.opacity(0.92)
-            value[run.range].backgroundColor = DashboardPalette.primary.opacity(0.075)
+            value[run.range].foregroundColor = WovenPalette.foreground.opacity(0.92)
+            value[run.range].backgroundColor = WovenPalette.primary.opacity(0.075)
         }
         return value
     }
@@ -160,7 +160,7 @@ private struct ConversationCodeBlock: View {
                 .buttonStyle(.plain)
             }
             .font(.system(size: 11.5, weight: .medium))
-            .foregroundStyle(DashboardPalette.mutedForeground)
+            .foregroundStyle(WovenPalette.mutedForeground)
             .padding(.horizontal, 13)
             .frame(height: 34)
 
@@ -173,13 +173,13 @@ private struct ConversationCodeBlock: View {
                     .padding(14)
             }
             .scrollIndicators(.never)
-            .background(DashboardPalette.background.opacity(0.64))
+            .background(WovenPalette.background.opacity(0.64))
         }
-        .background(DashboardPalette.primary.opacity(0.05))
+        .background(WovenPalette.primary.opacity(0.05))
         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         .overlay {
             RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .stroke(DashboardPalette.foreground.opacity(0.08), lineWidth: 1)
+                .stroke(WovenPalette.foreground.opacity(0.08), lineWidth: 1)
         }
         .onChange(of: content) { copied = false }
     }
@@ -208,16 +208,16 @@ private struct ConversationMarkdownTable: View {
             }
             .buttonStyle(.plain)
             .font(.system(size: 11.5, weight: .medium))
-            .foregroundStyle(DashboardPalette.mutedForeground)
+            .foregroundStyle(WovenPalette.mutedForeground)
             .padding(.horizontal, 12)
             .frame(height: 32)
             .overlay(alignment: .top) { Divider().opacity(0.5) }
         }
-        .background(DashboardPalette.primary.opacity(0.032))
+        .background(WovenPalette.primary.opacity(0.032))
         .clipShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
         .overlay {
             RoundedRectangle(cornerRadius: 11, style: .continuous)
-                .stroke(DashboardPalette.foreground.opacity(0.09), lineWidth: 1)
+                .stroke(WovenPalette.foreground.opacity(0.09), lineWidth: 1)
         }
         .sheet(isPresented: $expanded) {
             VStack(spacing: 0) {

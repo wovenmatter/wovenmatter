@@ -6,7 +6,7 @@ import Crypto
 import Foundation
 import Testing
 import WovenMatterCore
-@testable import WovenMatterDashboardStore
+@testable import WovenMatterLibraryStore
 
 /// A paired Mac for fixtures: canonical UUIDs, a signing key and a local store.
 struct PeerIdentityFixture {

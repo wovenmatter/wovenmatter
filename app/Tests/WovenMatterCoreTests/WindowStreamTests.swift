@@ -5,7 +5,7 @@ import Testing
 import WorkspaceFixtures
 import WovenMatterClient
 import WovenMatterCore
-@testable import WovenMatterDashboardStore
+@testable import WovenMatterLibraryStore
 
 extension BackendStreamChannel: StreamByteChannel {}
 

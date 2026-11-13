@@ -17,7 +17,7 @@ struct ScheduledTasksPane: View {
   var body: some View {
     List {
       Section {
-        DashboardSegmentedSelector(options: ["All", "Scheduled", "Calendar"], selection: $filter) { $0 }
+        WovenSegmentedSelector(options: ["All", "Scheduled", "Calendar"], selection: $filter) { $0 }
           .accessibilityLabel("Task type")
       }.listRowBackground(Color.clear)
       if let failure { HomeDataError(message: failure) }
@@ -29,21 +29,21 @@ struct ScheduledTasksPane: View {
           VStack(alignment: .leading, spacing: 8) {
             Label(item.event.draft.title, glyph: .calendarClock).font(.headline)
             Text([item.runtimeName, item.workspaceName].joined(separator: " · "))
-              .font(.subheadline).foregroundStyle(DashboardPalette.mutedForeground)
+              .font(.subheadline).foregroundStyle(WovenPalette.mutedForeground)
             Text(item.event.draft.startsAt, format: .dateTime.month().day().hour().minute())
               .font(.caption).monospacedDigit()
             if let unit = item.event.draft.recurrenceUnit {
               Text(recurrence(unit, interval: item.event.draft.recurrenceInterval))
-                .font(.caption).foregroundStyle(DashboardPalette.calendarRecurringTask)
+                .font(.caption).foregroundStyle(WovenPalette.calendarRecurringTask)
             }
             if let status = item.event.status {
-              Text(status).font(.caption).foregroundStyle(DashboardPalette.mutedForeground)
+              Text(status).font(.caption).foregroundStyle(WovenPalette.mutedForeground)
             }
           }.padding(.vertical, 5)
         }
       }
       if visible.isEmpty && !loading && failure == nil {
-        Text(loaded ? "No scheduled tasks." : "No tasks loaded.").foregroundStyle(DashboardPalette.mutedForeground)
+        Text(loaded ? "No scheduled tasks." : "No tasks loaded.").foregroundStyle(WovenPalette.mutedForeground)
       }
     }
     .listStyle(.plain).scrollContentBackground(.hidden).scrollIndicators(.never)
@@ -51,10 +51,10 @@ struct ScheduledTasksPane: View {
     .mobilePageSurface().toolbar(.visible, for: .navigationBar)
     .toolbar {
       ToolbarItemGroup(placement: .topBarTrailing) {
-        Button { Task { await load() } } label: { DashboardLucideIcon(glyph: .rotate, size: 20) }
+        Button { Task { await load() } } label: { LucideIcon(glyph: .rotate, size: 20) }
           .disabled(loading).accessibilityLabel("Refresh scheduled tasks")
         NavigationLink { CalendarEventSheet(model: model, event: nil, newTask: true) } label: {
-          DashboardLucideIcon(glyph: .plus, size: 20)
+          LucideIcon(glyph: .plus, size: 20)
         }.accessibilityLabel("New scheduled task")
       }
     }
@@ -98,22 +98,22 @@ struct DatabasesPane: View {
               DatabaseDetailPane(model: model, database: database, source: source)
             } label: {
               HStack(spacing: 12) {
-                DashboardLucideIcon(glyph: .database, size: 22)
+                LucideIcon(glyph: .database, size: 22)
                 VStack(alignment: .leading, spacing: 4) {
                   Text(database.name).font(.headline)
                   Text(database.format == "No preference" ? "Database" : database.format)
-                    .font(.caption).foregroundStyle(DashboardPalette.mutedForeground)
+                    .font(.caption).foregroundStyle(WovenPalette.mutedForeground)
                 }
               }.padding(.vertical, 5)
             }
           }
           if source.databases.isEmpty && source.error == nil {
-            Text("No databases.").foregroundStyle(DashboardPalette.mutedForeground)
+            Text("No databases.").foregroundStyle(WovenPalette.mutedForeground)
           }
         }
       }
       if sources.isEmpty && !loading && failure == nil {
-        Text(loaded ? "No databases." : "No databases loaded.").foregroundStyle(DashboardPalette.mutedForeground)
+        Text(loaded ? "No databases." : "No databases loaded.").foregroundStyle(WovenPalette.mutedForeground)
       }
     }
     .listStyle(.plain).scrollContentBackground(.hidden).scrollIndicators(.never)
@@ -121,7 +121,7 @@ struct DatabasesPane: View {
     .navigationTitle("Databases").navigationBarTitleDisplayMode(.inline).mobilePageSurface().toolbar(.visible, for: .navigationBar)
     .toolbar {
       ToolbarItem(placement: .topBarTrailing) {
-        Button { Task { await load() } } label: { DashboardLucideIcon(glyph: .rotate, size: 20) }
+        Button { Task { await load() } } label: { LucideIcon(glyph: .rotate, size: 20) }
           .disabled(!model.online || loading).accessibilityLabel("Refresh databases")
       }
     }
@@ -233,12 +233,12 @@ struct UsagePane: View {
           Text("This device").tag("device")
           if model.credential != nil { Text("Central library").tag("central") }
         }
-        DashboardSegmentedSelector(options: [1, 7, 30], selection: $days) { $0 == 1 ? "24 hours" : "\($0) days" }
+        WovenSegmentedSelector(options: [1, 7, 30], selection: $days) { $0 == 1 ? "24 hours" : "\($0) days" }
           .accessibilityLabel("Usage time range")
       }.listRowBackground(Color.clear)
       if let failure { HomeDataError(message: failure) }
       if loading && !loaded { ProgressView("Loading usage…") }
-      if !loaded && !loading && failure == nil { Text("No usage loaded.").foregroundStyle(DashboardPalette.mutedForeground) }
+      if !loaded && !loading && failure == nil { Text("No usage loaded.").foregroundStyle(WovenPalette.mutedForeground) }
       if loaded {
         Section(hasMore ? "Loaded records" : "Recorded usage") {
           LabeledContent("Tokens") { Text(totalTokens, format: .number).monospacedDigit() }
@@ -260,12 +260,12 @@ struct UsagePane: View {
                   Text(group.tokens, format: .number.notation(.compactName)).monospacedDigit()
                 }
                 GeometryReader { geometry in
-                  Capsule().fill(DashboardPalette.primary.opacity(0.12)).overlay(alignment: .leading) {
-                    Capsule().fill(DashboardPalette.primary)
+                  Capsule().fill(WovenPalette.primary.opacity(0.12)).overlay(alignment: .leading) {
+                    Capsule().fill(WovenPalette.primary)
                       .frame(width: geometry.size.width * min(1, Double(group.tokens) / Double(max(1, groups.first?.tokens ?? 1))))
                   }
                 }.frame(height: 5).accessibilityHidden(true)
-                Text("\(group.requests) requests").font(.caption).foregroundStyle(DashboardPalette.mutedForeground)
+                Text("\(group.requests) requests").font(.caption).foregroundStyle(WovenPalette.mutedForeground)
               }.padding(.vertical, 5)
             }
           }
@@ -279,12 +279,12 @@ struct UsagePane: View {
                 Text(sample.totalTokens, format: .number.notation(.compactName)).font(.subheadline).monospacedDigit()
               }
               Text([sample.provider, sample.workspace].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · "))
-                .font(.caption).foregroundStyle(DashboardPalette.mutedForeground)
+                .font(.caption).foregroundStyle(WovenPalette.mutedForeground)
               Text(sample.timestamp, format: .dateTime.month().day().hour().minute())
-                .font(.caption).foregroundStyle(DashboardPalette.mutedForeground)
+                .font(.caption).foregroundStyle(WovenPalette.mutedForeground)
             }.padding(.vertical, 3)
           }
-          if samples.isEmpty { Text("No recorded usage in this period.").foregroundStyle(DashboardPalette.mutedForeground) }
+          if samples.isEmpty { Text("No recorded usage in this period.").foregroundStyle(WovenPalette.mutedForeground) }
           if hasMore {
             Button(loading ? "Loading…" : "Load more") { Task { await load(more: true) } }.disabled(loading || !model.online)
           }
@@ -295,7 +295,7 @@ struct UsagePane: View {
     .navigationTitle("Usage").navigationBarTitleDisplayMode(.inline).mobilePageSurface().toolbar(.visible, for: .navigationBar)
     .toolbar {
       ToolbarItem(placement: .topBarTrailing) {
-        Button { Task { await load() } } label: { DashboardLucideIcon(glyph: .rotate, size: 20) }
+        Button { Task { await load() } } label: { LucideIcon(glyph: .rotate, size: 20) }
           .disabled(!available || loading).accessibilityLabel("Refresh usage")
       }
     }
@@ -338,5 +338,5 @@ struct UsagePane: View {
 
 private struct HomeDataError: View {
   let message: String
-  var body: some View { Text(message).font(.subheadline).foregroundStyle(DashboardPalette.danger).textSelection(.enabled) }
+  var body: some View { Text(message).font(.subheadline).foregroundStyle(WovenPalette.danger).textSelection(.enabled) }
 }

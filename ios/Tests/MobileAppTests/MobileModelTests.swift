@@ -150,7 +150,7 @@ final class MobileModelTests: XCTestCase {
   }
 
   /// The central Mac's registry id and host device id are generated apart from
-  /// the `device:<dashboard device id>` its existing folders are bound to.
+  /// the `device:<device id>` its existing folders are bound to.
   @MainActor func testCentralMacFoldersGroupUnderItsWorkspaceThroughPublishedFolderOwner() {
     let model = MobileModel()
     let registryID = UUID().uuidString.lowercased(), hostDeviceID = UUID().uuidString.lowercased()

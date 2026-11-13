@@ -2,7 +2,7 @@ import CryptoKit
 import Foundation
 import WovenMatterClient
 import WovenMatterCore
-import WovenMatterDashboardStore
+import WovenMatterLibraryStore
 
 enum BotsHostAPIError: LocalizedError {
     case invalid(String)

@@ -3,7 +3,7 @@ import Observation
 import Testing
 import WovenMatterClient
 import WovenMatterCore
-import WovenMatterDashboardStore
+import WovenMatterLibraryStore
 @testable import WovenMatterAppFacade
 
 // This probe exercises only preferences and the backend proxy. It never refreshes

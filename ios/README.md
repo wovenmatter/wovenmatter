@@ -63,7 +63,7 @@ covers it.
 - `EmbeddedExecution`: confined Python/WASM test package, not linked in the app; see [execution](../docs/IOS_EMBEDDED_EXECUTION.md).
 - `../shared`: portable note types and versioned wire contracts.
 
-Both apps compile the desktop's `DashboardStyle.swift` and bundle the same
+Both apps compile the desktop's `WovenStyle.swift` and bundle the same
 `SharedAssets.xcassets`. Follow [the style guide](../docs/STYLE_GUIDE.md).
 
 See [distributed architecture](../docs/DISTRIBUTED_CLIENT_ARCHITECTURE.md),

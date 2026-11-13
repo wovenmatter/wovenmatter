@@ -7,6 +7,7 @@ import sqlite3
 import subprocess
 import tempfile
 import unittest
+import uuid
 
 spec = importlib.util.spec_from_file_location("dev_build", Path(__file__).resolve().parents[1] / "dev-build.py")
 dev = importlib.util.module_from_spec(spec)
@@ -194,6 +195,26 @@ class DevelopmentBuildTests(unittest.TestCase):
                 self.assertEqual(db.execute("SELECT state FROM workspace_coordination_access_requests").fetchone(), ('cancelled',))
             with sqlite3.connect(source / "workspace.sqlite") as db:
                 self.assertEqual(db.execute("SELECT active FROM workspace_mcp_bot_machines").fetchone(), (1,))
+
+    def test_snapshot_reads_either_device_id_file_and_writes_its_own(self):
+        source_id = "c0ffee00-1234-4abc-8def-0123456789ab"
+        for name in ("device-id", "dashboard-device-id"):
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp); source = root / "source"; source.mkdir()
+                with sqlite3.connect(source / "workspace.sqlite") as db:
+                    db.executescript(f"""
+                      CREATE TABLE folder_execution_roots(folder_id TEXT, workspace_id TEXT, root_path TEXT, managed INTEGER, reference_paths TEXT);
+                      INSERT INTO folder_execution_roots VALUES('{uuid.uuid4()}','device:{source_id}','/source/project',0,'[]');
+                    """)
+                (source / name).write_text(source_id.upper() + "\n")
+                target = root / "snapshot"
+                dev.snapshot(source, target)
+                device_id = (target / "device-id").read_text()
+                self.assertNotEqual(device_id, source_id)
+                self.assertEqual((target / "device-id").stat().st_mode & 0o777, 0o600)
+                self.assertFalse((target / "dashboard-device-id").exists())
+                with sqlite3.connect(target / "workspace.sqlite") as db:
+                    self.assertEqual(db.execute("SELECT workspace_id FROM folder_execution_roots").fetchone(), ("device:" + device_id,))
 
     def test_snapshot_includes_wal_and_assets_without_changing_source(self):
         with tempfile.TemporaryDirectory() as tmp:

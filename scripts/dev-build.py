@@ -144,7 +144,7 @@ def copy_assets(source, target):
 
 
 # A v0.4.2 library used these names. The app renames them in place on open
-# (app/Sources/WovenMatterDashboardStore/LibrarySchemaUpgrade.swift) and
+# (app/Sources/WovenMatterLibraryStore/LibrarySchemaUpgrade.swift) and
 # converts the columns; a snapshot of such a library is renamed the same way
 # first, so its isolation below sees current table names.
 LEGACY_TABLES = {
@@ -310,14 +310,16 @@ def snapshot(source, destination):
             catalog.write_text(json.dumps(rows))
         device_id = str(uuid.uuid4())
         execution_root = temporary / "ExecutionHome" / ".woven-matter"
-        source_device_file = source / "dashboard-device-id"
-        source_device_id = source_device_file.read_text().strip().lower() if source_device_file.exists() else None
+        # A v0.4.2 library that the app has not opened since still holds its
+        # ID as `dashboard-device-id`; the app moves it to `device-id` on open.
+        source_device_file = next((path for path in (source / "device-id", source / "dashboard-device-id") if path.exists()), None)
+        source_device_id = source_device_file.read_text().strip().lower() if source_device_file else None
         disconnect_snapshot(temporary / "workspace.sqlite", device_id=device_id, source_device_id=source_device_id,
                             execution_root=execution_root,
                             published_root=destination / "ExecutionHome" / ".woven-matter")
         (temporary / "mcp-access.json").unlink(missing_ok=True)
-        (temporary / "dashboard-device-id").write_text(device_id)
-        (temporary / "dashboard-device-id").chmod(0o600)
+        (temporary / "device-id").write_text(device_id)
+        (temporary / "device-id").chmod(0o600)
         (temporary / "development-snapshot.json").write_text(json.dumps({"version": 1, "id": str(uuid.uuid4()), "source": str(source), "createdAt": time.time()}))
         os.rename(temporary, destination)
     finally:

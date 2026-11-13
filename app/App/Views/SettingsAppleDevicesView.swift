@@ -50,7 +50,7 @@ struct SettingsAppleDevicesView: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text(title).font(.settingsRow)
                 if let detail {
-                    Text(detail).font(.settingsSecondary).foregroundStyle(DashboardPalette.mutedForeground)
+                    Text(detail).font(.settingsSecondary).foregroundStyle(WovenPalette.mutedForeground)
                 }
             }
             Spacer(minLength: 0)
@@ -67,7 +67,7 @@ struct SettingsAppleDevicesView: View {
                 SettingsNote("Copy a pairing link from the other Mac’s Apple Devices settings.")
                 HStack {
                     SecureField("Pairing link", text: $pairingLink)
-                        .dashboardInput()
+                        .wovenInput()
                         .accessibilityIdentifier("devices.peer-link")
                     Button("Pair Mac") {
                         let link = pairingLink; pairingLink = ""; pairingLinkBusy = true
@@ -94,7 +94,7 @@ struct SettingsAppleDevicesView: View {
                     DeviceConnectionIcon(kind: request.identity.metadata.kind, size: 16)
                     VStack(alignment: .leading, spacing: 2) {
                         Text(request.identity.deviceName).font(.settingsRow)
-                        Text(DeviceConnectionIcon.label(request.identity.metadata.kind)).font(.settingsSecondary).foregroundStyle(DashboardPalette.mutedForeground)
+                        Text(DeviceConnectionIcon.label(request.identity.metadata.kind)).font(.settingsSecondary).foregroundStyle(WovenPalette.mutedForeground)
                     }
                     Spacer()
                     Button("Decline") { Task { await host.denyPairing(id: request.id) } }.buttonStyle(SettingsQuietButtonStyle())
@@ -119,7 +119,7 @@ struct SettingsAppleDevicesView: View {
                                 Text("\(DeviceConnectionIcon.label(device.kind)) · Paired \(device.pairedAt.formatted(date: .abbreviated, time: .shortened))")
                             }
                         }
-                        .font(.settingsSecondary).foregroundStyle(DashboardPalette.mutedForeground)
+                        .font(.settingsSecondary).foregroundStyle(WovenPalette.mutedForeground)
                     }
                     Spacer()
                     Button("Unpair device", role: .destructive) { Task { await host.revoke(device.id) } }
@@ -140,7 +140,7 @@ struct SettingsAppleDevicesView: View {
                         host.executionWorkspaces.first { $0.id == workspaceID }?.name ?? "Unavailable workspace"
                     }
                     Text("Waiting for " + names.joined(separator: ", "))
-                        .font(.settingsSecondary).foregroundStyle(DashboardPalette.mutedForeground)
+                        .font(.settingsSecondary).foregroundStyle(WovenPalette.mutedForeground)
                 }
             }
         }
