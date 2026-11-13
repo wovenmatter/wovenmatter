@@ -87,4 +87,3 @@ in your installed version.
 - [Distributed client acceptance](DISTRIBUTED_CLIENT_TESTING.md)
 - [UI style guide](STYLE_GUIDE.md) and [app icons](app-icons/README.md)
 - [Product analytics](analytics/README.md)
-- [Security policy](../SECURITY.md)

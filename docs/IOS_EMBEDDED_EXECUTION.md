@@ -3,7 +3,7 @@
 This package is retained for isolated runtime tests and is **not linked or bundled
 in the iPhone/iPad app**. Quick Chat has no command or Python execution.
 
-`EmbeddedExecution` embeds **real CPython 3.14.2 via Pyodide 314.0.7 / WebAssembly**
+`EmbeddedExecution` embeds **real CPython via Pyodide / WebAssembly**
 inside an independently terminable WebKit worker. It executes without a Mac,
 inference service, network connection, installation step, or runtime download.
 Pi Durable still owns the agent loop; this is a tool execution environment.
