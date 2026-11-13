@@ -57,7 +57,7 @@ covers it.
 
 - `MobileApp`: SwiftUI/UIKit navigation, Quick Chat, timers and lifecycle.
 - `LibraryClient`: durable local data, offline mutations, owner journal and
-  library membership; a Dev connected client of the desktop app uses it too.
+  library membership; the desktop app uses its stream and transport types too.
 - `MobileInference`: provider connections, credentials and streaming.
 - `PiDurableRuntime`: bundled SDK hosted by JavaScriptCore; see [runtime](Runtime/README.md).
 - `EmbeddedExecution`: confined Python/WASM test package, not linked in the app; see [execution](../docs/IOS_EMBEDDED_EXECUTION.md).

@@ -206,14 +206,6 @@ refresh. Every new or renewed workspace credential also replaces the token of
 each inference connection bound to that workspace's exact host scope and
 endpoint.
 
-A Dev connected client (`scripts/build_and_run.sh --mode client`) is a library
-client of the production Mac it connects to and follows the same rule: it
-clears a rejected direct workspace credential, requests a replacement through
-that Mac until it succeeds (including after a restart), and never presents the
-rejected token again. The execution host it runs for its own sessions
-authorizes requests by token, so revocation there takes effect when queued
-cleanup reaches it.
-
 ## Upgrade and recovery
 
 Before the first peer import, each Mac saves a consistent, integrity-checked
@@ -231,34 +223,9 @@ copy, is retried after one minute, doubling to fifteen; meanwhile the first
 synchronization reports its error.
 Retain the original database and device-only credential vaults when recovering.
 Ownership of rows that existed before pairing is claimed exactly once, before any
-peer data arrives; a schedule assigned to a client device keeps that executor.
+peer data arrives; a schedule assigned to a phone keeps that executor.
 
-Older node preferences no longer select a reduced desktop interface. Upgrade
-preserves the old replica and command journal, takes backups, and imports a
-WAL-aware copy of a former node's native database on the same physical Mac; the
-original execution directory is never modified. Notes, folders and schedules
-that the node held only as projections of the Mac it was connected to are not
-imported, so that Mac's current writing wins; writing that existed only in the
-node's workspace is preserved. The import commits with its completion marker, so
-a retry never duplicates rows. Cached notes, conflicts and unsent composer text
-get deterministic **Saved before pairing upgrade** notes. Pending note and folder
-operations are sent to the original approved Mac with their original operation
-IDs before pairing, so its receipts make retries exact; any operation it does not
-apply is kept as a visible note rather than abandoned. Imported runs that were
-active are recovered during the upgrade launch. Goal membership is kept by
-stable run IDs: an imported active goal first enrolls the node's runs it had not
-yet counted, then is paused; usage for enrolled runs keeps counting, and only
-runs after the upgrade enroll later. A goal this library already had is never
-changed by the import. Nothing is replayed
-against the new local library and pending agent commands are never replayed.
-If an upgrade step fails (for example the retired node's lease is still held),
-the full app still opens, the failure is reported, paired synchronization stays
-paused, and the upgrade is retried on the next launch.
-
-SQLite recovery backups and original replica/native files preserve ambiguous
-legacy collisions. Provider credentials remain in their original local storage.
-The retired node's execution lease must be free before import; upgrade never
-force-kills another owner. A fresh Dev snapshot drops copied peer routes,
+Provider credentials remain in their original local storage. A fresh Dev snapshot drops copied peer routes,
 membership state, counters and cursors, retaining source history without
 connecting to production. It keeps the copied ownership records, so a snapshot's
 new identity owns nothing it copied and never runs another Mac's schedules.
@@ -293,8 +260,6 @@ provider services or real pairing credentials are consumed.
   requests and any remaining library, execution and inference grants must be
   rejected. Retained local
   writing must remain available on the unpaired device.
-- For a former node, confirm recovered writing and its original native sessions
-  survive the upgrade. Do not delete the original replica or recovery backups.
 
 Real multi-Mac Tailscale connectivity, macOS Keychain access, sleep/wake, and
 real-account execution require Trey's hands-on acceptance before merging.

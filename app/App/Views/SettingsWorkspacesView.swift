@@ -125,7 +125,7 @@ struct SettingsWorkspacesView: View {
         .id(selectedWorkspaceID)
         .task(id: selectedWorkspaceID == nil && !addingWorkspace) {
             // Workspaces added on other paired devices arrive through host status.
-            guard selectedWorkspaceID == nil, !addingWorkspace, !DevelopmentLaunch.isClient else { return }
+            guard selectedWorkspaceID == nil, !addingWorkspace else { return }
             while !Task.isCancelled {
                 await application.libraryHost.refreshStatus()
                 do { try await Task.sleep(for: .seconds(2)) } catch { return }

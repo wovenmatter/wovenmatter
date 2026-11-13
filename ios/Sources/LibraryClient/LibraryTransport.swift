@@ -234,9 +234,6 @@ public final class HTTPSLibraryTransport: LibraryTransport, MobilePairingRequest
     catch MobileConnectionError.http(404, _) { return nil }
   }
   public func deviceConnections() async throws -> [DeviceConnection] { try await request("v1/devices") }
-  public func suspendDevelopmentConnection() async throws {
-    let _: [String: Bool] = try await request("v1/devices/development/disconnect", method: "POST", body: Data("{}".utf8), timeout: 3)
-  }
   public func capabilities(_ id: String) async throws -> HarnessCapabilities { try await request("v1/sessions/\(try Self.safeID(id))/capabilities") }
   public func asset(_ id: String) async throws -> LibraryNote { try await request("v1/assets/\(try Self.safeID(id))") }
 

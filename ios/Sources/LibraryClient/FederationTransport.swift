@@ -15,10 +15,6 @@ public protocol FederationTransport: Sendable {
 }
 
 extension HTTPSLibraryTransport: FederationTransport {
-  public func registerExecutionManagement(_ grant: ExecutionManagementGrant) async throws {
-    struct Acknowledgement: Decodable {}
-    let _: Acknowledgement = try await request("v1/federation/workspaces/" + TailnetJSONClient.safeID(grant.workspaceID) + "/management", method: "POST", body: JSONEncoder().encode(grant))
-  }
   public func executionCredential(workspaceID: String) async throws -> DirectWorkspaceCredential {
     let value: ExecutionCredential = try await request("v1/federation/workspaces/" + TailnetJSONClient.safeID(workspaceID) + "/credential", method: "POST", body: Data("{}".utf8))
     guard value.workspace.id == workspaceID, value.deviceID == credential.deviceID, let endpoint = value.workspace.endpoint else { throw MobileConnectionError.invalidResponse }

@@ -72,15 +72,6 @@ enum FederationAPI {
         return try .json(try await database.commitLibraryArtifact(commit, deviceID: device.id))
       default: break
       }
-      if parts.count == 5, parts[2] == "workspaces", parts[4] == "management" {
-        let grant = try JSONDecoder().decode(ExecutionManagementGrant.self, from: request.body)
-        guard grant.workspaceID == parts[3], let workspace = try await database.libraryExecutionWorkspaces().first(where: { $0.id == grant.workspaceID }),
-              !workspace.deleted, workspace.ownerDeviceID == device.id, workspace.endpoint == grant.endpoint,
-              PairingPayload.isValidEndpoint(grant.endpoint), (32...256).contains(grant.token.utf8.count) else {
-          return .error("wrong_owner", "Only the registered workspace owner can grant management at its verified endpoint.", status: 403)
-        }
-        return try .json(try await commands.registerExecutionManagement(grant, device: device))
-      }
       if parts.count == 5, parts[2] == "workspaces", parts[4] == "credential" {
         return try .json(try await commands.provisionExecutionWorkspace(id: parts[3], device: device))
       }

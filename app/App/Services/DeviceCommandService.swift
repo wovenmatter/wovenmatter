@@ -40,10 +40,6 @@ final class DeviceCommandService: DeviceCommandServing {
         }
     }
 
-    func registerExecutionManagement(_ grant: ExecutionManagementGrant, device: PairedDevice) async throws -> ExecutionWorkspace {
-        try await model.libraryHost.registerExecutionManagement(grant, device: device)
-    }
-
     func provisionExecutionWorkspace(id: String, device: PairedDevice) async throws -> ExecutionCredential {
         try await model.libraryHost.provisionExecutionWorkspace(id: id, device: device)
     }

@@ -224,17 +224,6 @@ public struct NativeRecordPart: Codable, Equatable, Sendable {
   }
 }
 
-/// A secondary execution host delegates device provisioning to its central
-/// library. The secret belongs in protected storage, never the sync journal.
-public struct ExecutionManagementGrant: Codable, Equatable, Sendable {
-  public var workspaceID: String
-  public var endpoint: URL
-  public var token: String
-  public init(workspaceID: String, endpoint: URL, token: String) {
-    self.workspaceID = workspaceID; self.endpoint = endpoint; self.token = token
-  }
-}
-
 /// An idle existing native session transferred by its trusted central manager.
 /// Sending this value must never replay its historical user messages.
 public struct ExecutionAdoption: Codable, Equatable, Sendable {

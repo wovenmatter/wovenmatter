@@ -71,7 +71,7 @@ struct SessionCreationTests {
         #expect(await f.recorder.configurations.count == 1)
         try await f.model.cancelCanonicalRun(conversationID: id, runID: try #require(try await f.database.activeRunID(conversationID: id)))
         try await f.model.waitForAgentStop(conversationID: id)
-        try await f.model.refreshClientExecutionState()
+        try await f.model.reconcileLocalRunState()
         await f.recorder.rejectConfiguration(false)
         await f.model.updateLocalACPSession(conversation: chat, model: "chosen-in-dropdown")
         _ = try await pollUntil(attempts: 1_000, interval: .milliseconds(10)) { f.model.localACPSessionMetadata[id]?.model == "chosen-in-dropdown" }

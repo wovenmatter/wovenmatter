@@ -294,32 +294,6 @@ public actor MobileStore {
       }
     }
   }
-  /// Import writes from an execution workspace through the same conflict/outbox
-  /// path as an editor. A deleted canonical ID is never silently recreated.
-  public func importWorkspaceNote(_ note: LibraryNote, base: LibraryNote? = nil) throws {
-    guard note.content.utf8.count <= LibraryProtocol.maximumNoteBytes else { throw Failure.noteTooLarge }
-    if state.deletedNotes.contains(note.id) || (state.notes[note.id] == nil && base != nil) {
-      try transaction { next in
-        next.notes[note.id] = note
-        next.conflicts[note.id] = .init(base: base, local: note, remote: nil,
-          reason: "This note was deleted from the central library. The execution workspace's writing is preserved.")
-        next.outbox.removeAll { $0.mutation.resourceID == note.id }
-      }
-    } else if let current = state.notes[note.id], let base,
-      (current.title != base.title || current.content != base.content || current.folderID != base.folderID),
-      (current.title != note.title || current.content != note.content || current.folderID != note.folderID) {
-      try transaction { next in
-        next.conflicts[note.id] = .init(base: base, local: note, remote: current,
-          reason: "The note was edited on this device while its workspace was running. Both versions have been preserved.")
-        next.notes[note.id] = note
-        next.outbox.removeAll { $0.mutation.resourceID == note.id }
-      }
-    } else if state.notes[note.id] != nil {
-      try editNote(id: note.id, title: note.title, content: note.content, folderID: note.folderID, base: base)
-    } else {
-      _ = try createNote(folderID: note.folderID, title: note.title, content: note.content, id: note.id)
-    }
-  }
   public func editNote(id: String, title: String, content: String, folderID: String?, base: LibraryNote? = nil) throws {
     guard content.utf8.count <= LibraryProtocol.maximumNoteBytes else { throw Failure.noteTooLarge }
     try transaction { next in

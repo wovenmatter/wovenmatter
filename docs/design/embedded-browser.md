@@ -38,9 +38,7 @@ The helper receives no MCP bearer or provider credentials. Shared tabs remain
 owned by ApplicationModel's WorkspaceAssetSession across pane visibility changes.
 
 Each Mac's agents drive that Mac's own embedded browser; there is no shared
-browser across Macs. A Dev connected client injects its window's asset session
-into its own execution workspace and dispatches automation in process, so its
-tabs remain accessible in its Browser pane. Quick Chat on iPhone offers neither
+browser across Macs. Quick Chat on iPhone offers neither
 capability and never controls iPhone UI. Execution access is checked before
 acceptance and between native input steps. Cancellation retains caller
 ownership and works after capability or execution-access revocation.

@@ -2,9 +2,8 @@ import AppKit
 import Foundation
 
 enum DevelopmentLaunch {
-    enum Mode { case client, snapshot, live }
+    enum Mode { case snapshot, live }
     static let mode: Mode? = nil
-    static let isClient = false
     static let isLiveHost = false
     static let isSnapshot = false
 }
@@ -432,7 +431,7 @@ private struct AppTerminationTests {
         try! verifyStaleSocketRecovery()
         // Policy and login-job checks never register a job.
         precondition(LocalBackgroundExecution(developmentMode: nil).isEnabled)
-        for mode in [DevelopmentLaunch.Mode.client, .snapshot, .live] {
+        for mode in [DevelopmentLaunch.Mode.snapshot, .live] {
             precondition(!LocalBackgroundExecution(developmentMode: mode).isEnabled)
         }
         precondition(LocalExecutionRole.resolve(arguments: []) == .frontend)

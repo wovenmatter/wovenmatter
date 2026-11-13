@@ -21,17 +21,16 @@ struct DeviceConnectionIcon: View {
     }
 }
 
+/// Discovery and pairing go through this Mac's library host (forwarded to the
+/// background server from a window), whose errors the pairing section shows.
 struct DevicePairingDiscoveryCard: View {
-    @Bindable var pairing: MacPairingController
     @Bindable var host: LibraryHostController
     @State private var devices = MacDeviceSetupModel()
     var body: some View {
         SettingsSummaryRow("Find on your network") {
             SettingsNote("Find other Macs on your Tailscale network, even when Woven Matter is closed.")
-            MacTailnetDiscoveryView(devices: devices, pairing: pairing, host: host)
+            MacTailnetDiscoveryView(devices: devices, host: host)
         }
-        // Stays visible when the row above is collapsed.
-        if let error = pairing.errorMessage { SettingsError(error) }
     }
 }
 

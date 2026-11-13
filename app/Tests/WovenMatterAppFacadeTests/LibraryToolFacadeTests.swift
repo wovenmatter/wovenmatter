@@ -182,7 +182,6 @@ struct LibraryToolFacadeTests {
 
     @Test func libraryToolRevocationFencesAutomationEvenAfterReenable() async throws {
         let fixture = try await FacadeFixture(); defer { fixture.remove() }
-        fixture.model.clientExecutionDirectory = fixture.directory
         let caller = try await fixture.database.createFixtureLocalACPSession(runtimeKind: .codex, title: "Mac caller", ownerDeviceID: UUID())
         try await fixture.database.setSessionTools(.init(enabled: [.browser, .computer]), sessionID: caller)
         let call = WovenMatterToolRequest(arguments: ["browser", "call", "--json", "{\"action\":\"tabs\"}"])

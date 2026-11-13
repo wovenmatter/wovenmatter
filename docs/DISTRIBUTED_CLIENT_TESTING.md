@@ -8,7 +8,7 @@ then iPad layout and real network transitions.
 
 ## Build and automation
 
-See [development builds](DEVELOPMENT_BUILDS.md) for the Mac and
+See [build and run](../README.md#build-and-run) for the Mac and
 [iOS setup](../ios/README.md) for the phone. User acceptance uses the normal Dev
 app and the user's existing data; disposable tests use a distinct `--instance`.
 Never pair or unpair a user's device as part of a build or install. Users

@@ -62,10 +62,6 @@ public actor MobileProductAnalytics {
     values["os_major"] = String(ProcessInfo.processInfo.operatingSystemVersion.majorVersion)
     send(ProductAnalyticsEvent(preferenceRevision: preference.revision, name: name, properties: values))
   }
-  public func sendUpdateReceipt(_ event: ProductAnalyticsEvent, analyticsID: String) {
-    guard state.preference?.analyticsID == analyticsID, event.name == .updateInstallCompleted else { return }
-    send(event)
-  }
   private func send(_ event: ProductAnalyticsEvent) {
     guard let transport, state.pendingEnabled == nil,
       let preference = state.preference, let event = event.validated(preference: preference),

@@ -92,7 +92,7 @@ struct SessionWaitTests {
         let delivery = try #require(try await s.mac.database.toolDelivery(id: deliveryID))
         #expect(delivery.kind == .notification && delivery.sourceID == id && delivery.targetID == caller && delivery.sourceTitle == "Build it")
         let run = try #require(try await s.mac.database.activeRunID(conversationID: caller))
-        try await s.mac.model.refreshClientExecutionState()
+        try await s.mac.model.reconcileLocalRunState()
 
         // A question while the woken turn runs: held until that turn ends.
         let sent = try await s.call(caller, "woven_sessions_send", ["id": .string(id), "text": .string("Ask first")])
@@ -104,7 +104,7 @@ struct SessionWaitTests {
         #expect(await s.mac.recorder.deliveries.count == 1, "a running caller is not woken")
         #expect(wakeUps.pending(callerID: caller).map(\.kind) == [.needsInput])
         try await s.mac.database.completeLocalACPRun(runID: run)
-        try await s.mac.model.refreshClientExecutionState()
+        try await s.mac.model.reconcileLocalRunState()
         await wakeUps.deliverPending()
         try await woken(s, "woken once its turn ended", count: 2)
         #expect(await s.mac.recorder.deliveries.last?.input.text.contains("is waiting for your answer: Which log? Read it with woven_sessions_status") == true)
@@ -125,7 +125,7 @@ struct SessionWaitTests {
         // The wait told the caller: no wake-up once its turn ends.
         let woken = try #require(try await s.mac.database.activeRunID(conversationID: caller))
         try await s.mac.database.completeLocalACPRun(runID: woken)
-        try await s.mac.model.refreshClientExecutionState()
+        try await s.mac.model.reconcileLocalRunState()
         await wakeUps.deliverPending()
         #expect(await s.mac.recorder.deliveries.count == 2)
 
@@ -173,7 +173,7 @@ struct SessionWaitTests {
         try await eventually("the wait began") { wakeUps.isTracking(workspaceID: ApplicationModel.sessionWaitThisMac) }
         let started = ContinuousClock.now
         try await s.mac.database.completeLocalACPRun(runID: run)
-        try await s.mac.model.refreshClientExecutionState()
+        try await s.mac.model.reconcileLocalRunState()
         let finished = try await waiting.value
         #expect(finished.result?.objectValue?["state"] == .string("idle") && finished.result?.objectValue?["timedOut"] == .bool(false))
         #expect(ContinuousClock.now - started < .seconds(10), "resolved by the change, not the timeout")

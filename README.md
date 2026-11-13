@@ -152,7 +152,6 @@ gets its own instance, bundle ID, caches, and data.
 ```sh
 scripts/build_and_run.sh                    # snapshot (the default)
 scripts/build_and_run.sh --mode snapshot
-scripts/build_and_run.sh --mode client
 scripts/build_and_run.sh --mode live
 scripts/build_and_run.sh --mode snapshot --instance NAME
 scripts/build_and_run.sh --plan             # print the resolved profile only
@@ -161,14 +160,17 @@ scripts/build_and_run.sh --plan             # print the resolved profile only
 - **snapshot** (default): the full desktop app with its own background server,
   backed by an isolated copy of the library. It never syncs back to
   production.
-- **client**: the full app as a connected client of the production library on
-  the same Mac. Use it only when testing a connected client.
 - **live**: the branch hosts the production library directly. Use it only when
   asked explicitly. Stop the production host first. An exclusive lease blocks
   a second owner.
 
-`debug`, `logs`, and `verify` replace the default `run` action. See
-[development builds](docs/DEVELOPMENT_BUILDS.md) for details. The iPhone app
+`debug`, `logs`, and `verify` replace the default `run` action. `--fresh`
+replaces a snapshot instance's data in place; its bundle ID, and so its macOS
+permissions, stay the same. Dev builds are signed with this Mac's Apple
+Development certificate, so permissions and Keychain access survive rebuilds
+(`WOVENMATTER_DEV_SIGNING_IDENTITY=-` builds unsigned). The launcher builds
+missing Linux library binaries with Docker;
+`WOVENMATTER_DEV_LINUX_LIBRARY=skip` builds without them. The iPhone app
 builds with `scripts/build-ios.sh`; see [ios/README.md](ios/README.md).
 
 ### Validate
@@ -190,7 +192,6 @@ on `PATH`. The bots runtime requires it.
 
 - [User guides and references](docs/README.md)
 - [Woven everywhere](docs/architecture/WOVEN_EVERYWHERE.md): devices, membership, library sync, sessions, and bots
-- [Development builds](docs/DEVELOPMENT_BUILDS.md)
 - [Dependency policy](docs/DEPENDENCIES.md)
 - [UI style guide](docs/STYLE_GUIDE.md)
 - [Agent guidance](AGENTS.md)

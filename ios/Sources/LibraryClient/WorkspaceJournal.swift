@@ -389,8 +389,7 @@ public actor WorkspaceJournal {
       for (index, entry) in page.entries.enumerated() {
         guard entry.workspaceID == workspaceID, entry.originSequence == cursor + Int64(index) + 1 else { throw Failure.replayGap }
         try Self.insert(entry, into: &next)
-        // A secondary Mac consumes its own native execution journal through this
-        // same local transport. Only that exact owner queues publication; a
+        // Only the workspace's exact execution owner queues publication; a
         // remote observer merely caches the immutable entries.
         if let localDeviceID, let workspace = next.workspaces[workspaceID],
            Self.isLocalExecutionOwner(workspace, deviceID: localDeviceID) {

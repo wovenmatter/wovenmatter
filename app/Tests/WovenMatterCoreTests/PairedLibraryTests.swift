@@ -210,20 +210,6 @@ extension PairedLibraryTests {
     #expect(result == content)
   }
 
-  @Test func legacyImportKeepsNativeRuntimeOnTheSameMacAndPreservesSource() async throws {
-    let old = try await Mac(), full = try await Mac(); defer { old.remove(); full.remove() }
-    let id = try await old.database.createFixtureLocalACPSession(runtimeKind: .codex, title: "Saved native session", ownerDeviceID: UUID())
-    let note = UUID().uuidString.lowercased()
-    try await old.note(note, title: "Legacy writing")
-    try await full.database.importLegacyLocalMacWorkspace(from: old.database.fileURL)
-    // Notes in a node's execution database are projections of the central
-    // library; the upgrade preserves unreconciled ones under recovery IDs.
-    #expect(try await full.database.libraryNote(id: note) == nil)
-    #expect(try await full.database.read { try $0.historyRowsUnlocked("SELECT conversation_id FROM desktop_local_acp_sessions WHERE conversation_id=?", values: [id]).count } == 1)
-    #expect(try await old.database.read { try $0.historyRowsUnlocked("SELECT conversation_id FROM desktop_local_acp_sessions WHERE conversation_id=?", values: [id]).count } == 1)
-    #expect(try await old.database.libraryNote(id: note)?.title == "Legacy writing")
-    #expect(try await full.database.libraryIdentity().hostDeviceID == full.id)
-  }
 }
 
 
@@ -496,26 +482,6 @@ extension PairedLibraryTests {
     #expect(try await a.database.toolSettings().externalMCP?.isEnabled == true)
   }
 
-  @Test func formerNodeProjectionsNeverOverwriteTheCentralLibraryAndImportIsIdempotent() async throws {
-    let central = try await Mac(), node = try await Mac(), full = try await Mac()
-    defer { central.remove(); node.remove(); full.remove() }
-    let id = UUID().uuidString.lowercased()
-    try await central.note(id, title: "Current central writing")
-    // The node's execution database held an older tool-facing copy of that note.
-    try await node.note(id, title: "Stale projection")
-    let session = try await node.database.createFixtureLocalACPSession(runtimeKind: .codex, title: "Node's native session", ownerDeviceID: UUID())
-    try await full.database.importLegacyLocalMacWorkspace(from: node.database.fileURL)
-    let count = { (database: WorkspaceDatabase) in try await database.read { try $0.historyRowsUnlocked("SELECT count(*) AS count FROM dashboard_messages", values: []).first?.objectValue?["count"]?.intValue ?? 0 } }
-    let imported = try await count(full.database)
-    try await full.database.importLegacyLocalMacWorkspace(from: node.database.fileURL)
-    #expect(try await count(full.database) == imported)
-    #expect(try await full.database.read { try $0.locallyOwnsConversationUnlocked(session) })
-    try await central.send(to: full); try await full.send(to: central)
-    #expect(try await full.database.libraryNote(id: id)?.title == "Current central writing")
-    #expect(try await central.database.libraryNote(id: id)?.title == "Current central writing")
-    #expect(try await !full.database.librarySnapshot().notes.contains { $0.title.contains("Recovered edit") })
-  }
-
   @Test func emptyTurnsDoNotRewriteForeignProjectionsButTouchedConversationsDo() async throws {
     let a = try await Mac(), b = try await Mac(); defer { a.remove(); b.remove() }
     let workspace = ExecutionWorkspace(id: UUID().uuidString.lowercased(), libraryID: try await a.database.libraryID(),
@@ -580,19 +546,19 @@ extension PairedLibraryTests {
     #expect(try await !b.database.librarySnapshot().notes.contains { $0.title.contains("Recovered edit") })
   }
 
-  @Test func schedulesOwnedByThisMacsExecutionContextStayLocalAfterUpgrade() async throws {
+  @Test func schedulesOwnedByThisMacStayLocalAfterUpgrade() async throws {
     let mac = try await Mac(); defer { mac.remove() }
     let start = Date().addingTimeInterval(-30)
     let task = WorkspaceCalendarTask(prompt: "Fixture", configuration: .init(runtimeKind: .codex, title: "Fixture", model: "fixture", permission: "read-only"))
-    let local = try await mac.database.saveCalendarEvent(draft: .init(title: "Context schedule", startsAt: start, timeZoneID: "UTC", task: task), creating: true, now: start)
+    let local = try await mac.database.saveCalendarEvent(draft: .init(title: "Mac schedule", startsAt: start, timeZoneID: "UTC", task: task), creating: true, now: start)
     let phone = try await mac.database.saveCalendarEvent(draft: .init(title: "Phone schedule", startsAt: start, timeZoneID: "UTC", task: task), creating: true, now: start)
-    let context = UUID().uuidString.lowercased(), phoneID = UUID().uuidString.lowercased()
+    let phoneID = UUID().uuidString.lowercased()
     // Recreate a database from before paired ownership existed.
     try await mac.database.write { connection in
       try connection.executeUnlocked("UPDATE paired_library_clock SET applying=1")
       try connection.executeUnlocked("DELETE FROM paired_calendar_owners; DELETE FROM paired_library_state WHERE name='owners.bootstrap'")
-      try connection.toolsExecuteUnlocked("INSERT INTO calendar_replica_context(singleton,library_id,workspace_id) VALUES(1,?,?)", [try connection.libraryIDUnlocked(), context])
-      try connection.toolsExecuteUnlocked("INSERT INTO calendar_task_executors(event_id,device_id) VALUES(?,?),(?,?)", [local, context, phone, phoneID])
+      try connection.toolsExecuteUnlocked("INSERT INTO calendar_task_executors(event_id,device_id) VALUES(?,?),(?,?)",
+        [local, try connection.libraryIdentityUnlocked().hostDeviceID, phone, phoneID])
       try connection.executeUnlocked("UPDATE paired_library_clock SET applying=0")
     }
     let upgraded = try await WorkspaceDatabase(url: mac.database.fileURL)
@@ -611,10 +577,6 @@ extension PairedLibraryTests {
   }
   private func projectedWorkspace(_ database: WorkspaceDatabase, _ id: String) async throws -> String? {
     try await database.read { try $0.historyRowsUnlocked("SELECT workspace_id FROM execution_conversations WHERE id=?", values: [id]).first?.objectValue?["workspace_id"]?.stringValue }
-  }
-  private func insertRun(_ database: WorkspaceDatabase, _ id: String, conversation: String) async throws {
-    try await database.write { try $0.toolsExecuteUnlocked("INSERT INTO dashboard_runs(id,conversation_id,status,created_at) VALUES(?,?,'completed',?)",
-      [id, conversation, WorkspaceDatabaseConnection.timestamp(Date())]) }
   }
 
   @Test func aSyntheticProjectionGuessedForTheWrongMacIsRepairedFromTheOwnerRecord() async throws {
@@ -674,57 +636,6 @@ extension PairedLibraryTests {
     #expect(converged["agent_id"] == native["agent_id"] && converged["governing_plane"] == native["governing_plane"])
     let status = try await central.database.read { try $0.historyRowsUnlocked("SELECT status FROM dashboard_runs WHERE id=?", values: [run.runID]).first?.objectValue?["status"]?.stringValue }
     #expect(status == "running")
-  }
-
-  @Test func importedGoalsKeepStableRunMembershipAndUsageAcrossRenumberedRuns() async throws {
-    let old = try await Mac(), full = try await Mac(); defer { old.remove(); full.remove() }
-    let session = try await old.database.createFixtureLocalACPSession(runtimeKind: .codex, title: "Goal chat", ownerDeviceID: UUID(),
-      fixtureLocation: .init(workspaceID: "local", rootPath: old.directory.path, managed: false))
-    // High, gapped source sequences.
-    for index in 0..<40 { try await insertRun(old.database, "gap-\(index)", conversation: UUID().uuidString.lowercased()) }
-    try await old.database.write { try $0.executeUnlocked("DELETE FROM dashboard_runs WHERE id LIKE 'gap-%'") }
-    try await insertRun(old.database, "before-goal", conversation: session)
-    let goal = try #require(try await old.database.mutateGoal(sessionID: session, mutation: .set(objective: "Finish", tokenBudget: 1000, turnBudget: nil)))
-    // An enrolled turn with usage, and a later turn the source never enrolled.
-    try await insertRun(old.database, "enrolled-turn", conversation: session)
-    try await old.database.recordGoalUsage(runID: "enrolled-turn", tokens: 5)
-    try await insertRun(old.database, "unenrolled-turn", conversation: session)
-    // The destination already has runs, one of them a duplicate ID in another chat.
-    let other = try await full.database.createFixtureLocalACPSession(runtimeKind: .codex, title: "Existing", ownerDeviceID: UUID())
-    for index in 0..<5 { try await insertRun(full.database, "existing-\(index)", conversation: other) }
-    try await insertRun(full.database, "before-goal", conversation: other)
-    try await full.database.importLegacyLocalMacWorkspace(from: old.database.fileURL)
-    let imported = try #require(try await full.database.sessionGoals().first { $0.id == goal.id })
-    #expect(imported.status == .paused)
-    let enrolled = { try await full.database.read { try $0.historyRowsUnlocked("SELECT run_id FROM workspace_goal_runs WHERE goal_id=?", values: [goal.id]).compactMap { $0.objectValue?["run_id"]?.stringValue } } }
-    // The unenrolled source turn is enrolled before pausing; the pre-goal turn never is.
-    #expect(Set(try await enrolled()) == ["enrolled-turn", "unenrolled-turn"])
-    #expect(imported.tokensUsed == 5)
-    // Late usage for an enrolled turn counts whatever its new row sequence.
-    try await full.database.recordGoalUsage(runID: "unenrolled-turn", tokens: 3)
-    #expect(try await full.database.sessionGoals().first { $0.id == goal.id }?.tokensUsed == 8)
-    // Resumed, a new run enrolls; the pre-goal turn still does not.
-    _ = try await full.database.mutateGoal(sessionID: session, mutation: .resume(id: goal.id))
-    try await insertRun(full.database, "after-upgrade", conversation: session)
-    try await full.database.recordGoalUsage(runID: "after-upgrade", tokens: 7)
-    #expect(Set(try await enrolled()) == ["enrolled-turn", "unenrolled-turn", "after-upgrade"])
-    #expect(try await full.database.sessionGoals().first { $0.id == goal.id }?.tokensUsed == 15)
-  }
-
-  @Test func anImportNeverRewritesAGoalThisLibraryAlreadyHad() async throws {
-    let old = try await Mac(), full = try await Mac(); defer { old.remove(); full.remove() }
-    let session = try await old.database.createFixtureLocalACPSession(runtimeKind: .codex, title: "Shared chat", ownerDeviceID: UUID(),
-      fixtureLocation: .init(workspaceID: "local", rootPath: old.directory.path, managed: false))
-    _ = try await old.database.mutateGoal(sessionID: session, mutation: .set(objective: "Source goal", tokenBudget: nil, turnBudget: nil))
-    // This library already has the chat and its own goal for it.
-    let existing = #"{"baselineRunSequence":999,"completedTurns":0,"createdAt":0,"enrolledRunSequence":999,"id":"existing-goal","objective":"Kept","observedRunSequence":999,"progressRevision":0,"sessionID":"\#(session)","status":"active","updatedAt":0}"#
-    try await full.database.write { connection in
-      try connection.toolsExecuteUnlocked("INSERT INTO dashboard_conversations(id,title) VALUES(?,'Shared chat')", [session])
-      try connection.toolsExecuteUnlocked("INSERT INTO workspace_session_goals(session_id,value) VALUES(?,?)", [session, existing])
-    }
-    try await full.database.importLegacyLocalMacWorkspace(from: old.database.fileURL)
-    let value = try await full.database.read { try $0.historyRowsUnlocked("SELECT value FROM workspace_session_goals WHERE session_id=?", values: [session]).first?.objectValue?["value"]?.stringValue }
-    #expect(value == existing)
   }
 
   @Test func bytesOfALosingLibraryVersionSurviveCleanup() async throws {
@@ -894,43 +805,6 @@ extension PairedLibraryTests {
     #expect(try await b.database.read { try $0.historyRowsUnlocked("SELECT deleted_at FROM dashboard_conversations WHERE id=?", values: [session]).first?.objectValue?["deleted_at"]?.stringValue } == nil)
   }
 
-  @Test func reimportingAGoalThisLibraryAlreadyHasNeverDuplicatesItsAccounting() async throws {
-    let old = try await Mac(), full = try await Mac(); defer { old.remove(); full.remove() }
-    let session = try await old.database.createFixtureLocalACPSession(runtimeKind: .codex, title: "Goal chat", ownerDeviceID: UUID(),
-      fixtureLocation: .init(workspaceID: "local", rootPath: old.directory.path, managed: false))
-    let goal = try #require(try await old.database.mutateGoal(sessionID: session, mutation: .set(objective: "Finish", tokenBudget: 1000, turnBudget: nil)))
-    try await insertRun(old.database, "shared-run", conversation: session)
-    try await old.database.recordGoalUsage(runID: "shared-run", tokens: 20)
-    let first = old.directory.appending(path: "first-copy.sqlite")
-    try WorkspaceDatabase.snapshotDatabase(from: old.database.fileURL, to: first)
-    try await full.database.importLegacyLocalMacWorkspace(from: first)
-    let total = { try await full.database.read { try $0.historyRowsUnlocked("SELECT json_extract(value,'$.tokensUsed') AS used FROM workspace_session_goals WHERE session_id=?", values: [session]).first?.objectValue?["used"]?.intValue } }
-    let usage = { (run: String) in try await full.database.read { try $0.historyRowsUnlocked("SELECT tokens FROM workspace_goal_usage WHERE goal_id=? AND run_id=?", values: [goal.id, run]).first?.objectValue?["tokens"]?.intValue } }
-    #expect(try await total() == 20)
-    // The node kept working: more usage on the same run, and a new run.
-    try await old.database.recordGoalUsage(runID: "shared-run", tokens: 80)
-    try await insertRun(old.database, "new-run", conversation: session)
-    try await old.database.recordGoalUsage(runID: "new-run", tokens: 5)
-    let second = old.directory.appending(path: "second-copy.sqlite")
-    try WorkspaceDatabase.snapshotDatabase(from: old.database.fileURL, to: second)
-    for _ in 0..<2 { try await full.database.importLegacyLocalMacWorkspace(from: second) }
-    // The same goal ID already exists here: its accounting is not overwritten
-    // or partially duplicated by the later import.
-    #expect(try await total() == 20)
-    #expect(try await usage("shared-run") == 20)
-    #expect(try await usage("new-run") == nil)
-    // Future cumulative usage stays consistent with the stored total.
-    _ = try await full.database.mutateGoal(sessionID: session, mutation: .resume(id: goal.id))
-    try await full.database.recordGoalUsage(runID: "shared-run", tokens: 30)
-    #expect(try await total() == 30)
-    // The node's later run happened while this library's goal was paused, so
-    // resuming does not enroll it; a run after resuming counts normally.
-    try await full.database.recordGoalUsage(runID: "new-run", tokens: 5)
-    #expect(try await total() == 30)
-    try await insertRun(full.database, "after-resume", conversation: session)
-    try await full.database.recordGoalUsage(runID: "after-resume", tokens: 4)
-    #expect(try await total() == 34)
-  }
 }
 
 

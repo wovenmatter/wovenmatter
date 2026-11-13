@@ -58,28 +58,9 @@ public actor MobileSyncEngine {
   /// The offline cache does not read them again; they stream.
   private var streamedTranscriptIDs: Set<String> = []
   public func setStreamedTranscripts(_ ids: Set<String>) { streamedTranscriptIDs = ids }
-  private var scheduledTask: Task<Void, Never>?
-  private var schedulingGeneration: UInt64 = 0
-  private var syncRequested = false
-  /// Writes request a short coalesced flush; connection lifecycle owns retry cadence.
-  public func scheduleSynchronization() {
-    syncRequested = true
-    guard scheduledTask == nil else { return }
-    schedulingGeneration &+= 1
-    let generation = schedulingGeneration
-    scheduledTask = Task {
-      defer { if generation == schedulingGeneration { scheduledTask = nil } }
-      do { try await Task.sleep(for: .milliseconds(150)) } catch { return }
-      while syncRequested, !Task.isCancelled, generation == schedulingGeneration {
-        syncRequested = false
-        do { try await synchronize() } catch { }
-      }
-    }
-  }
   public func cancelSynchronization() async {
-    schedulingGeneration &+= 1; syncGeneration &+= 1; syncRequested = false
+    syncGeneration &+= 1
     let running = syncTask
-    scheduledTask?.cancel(); scheduledTask = nil
     running?.cancel()
     await store.analytics.disconnect()
     let analytics = analyticsTask
@@ -93,9 +74,6 @@ public actor MobileSyncEngine {
   }
   public func synchronizationStatus() async -> MobileSynchronizationStatus {
     await Self.makeStatus(store: store, previous: status)
-  }
-  public static func localSynchronizationStatus(store: MobileStore) async -> MobileSynchronizationStatus {
-    await makeStatus(store: store, previous: .init())
   }
   private static func makeStatus(store: MobileStore, previous: MobileSynchronizationStatus) async -> MobileSynchronizationStatus {
     let local = await store.snapshot(), history = await store.journal.snapshot()

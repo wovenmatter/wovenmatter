@@ -303,8 +303,6 @@ change, change this document in the same commit.
   - The Linux host's single-Mac library MCP grant and publisher grant, issued
     by the Mac that added it: only a fallback for a host without a library
     host or with no Mac member answering.
-  - A Mac's saved execution grant for a workspace with no `executionDeviceID`
-    (a Dev connected client's execution workspace).
 
 ### Trust model
 
@@ -749,7 +747,7 @@ with `library_missing` before changing anything when the release has none for
 the machine's architecture, and a Mac refuses to send a host bundle without one
 (`RemoteHostLibrary`: the host's architecture from `inspect`, or any while it is
 unknown). Development builds get theirs from `scripts/build_and_run.sh`, which
-builds missing architectures with Docker (see docs/DEVELOPMENT_BUILDS.md). Starting and
+builds missing architectures with Docker (`WOVENMATTER_DEV_LINUX_LIBRARY=skip` builds without them). Starting and
 supervising it is the Node server's job. `scripts/test-linux-library.sh` builds
 and tests the portable targets on Linux; the manual validation workflow
 (`linux` scope) runs both and keeps the binaries as an artifact. The release
@@ -1042,8 +1040,6 @@ whose stream is connected; the iPhone's no-stream fallback is under "Clients".
   (`woven-member-v2`, headers only, empty body, the target including
   `?protocol=1`). It is the whole credential: no ticket, bearer or grant.
   Allowed member kinds are those of `/v1/execution/*`: `mac`, `ios`, `linux`.
-  A live host's loopback development listener accepts the same upgrade signed
-  by a Dev stream key instead (see "Client-mode Dev builds").
   A Mac window has no key; it asks its own server to sign each attempt
   (`BotsCommand.signSocket`, widened to `/v1/stream`). Every reconnect signs
   afresh.
@@ -1119,8 +1115,7 @@ normal, `1001` server stopping or sleeping, `1009` client frame over 1 MiB,
   - `pending` `{interactions:[PendingInteraction]}`: the whole list for the
     workspace whenever it changes, and on subscribe.
   - `journal` `{entry: ExecutionJournalEntry}`, `seq` = its `originSequence`:
-    only from a server with an execution journal (a Linux host, a secondary
-    Mac), only when the client passed `after`. The server replays every entry
+    only from a server with an execution journal (a Linux host), only when the client passed `after`. The server replays every entry
     after `after`, then sends new entries as they are written; a sequence jump
     means a gap and the client subscribes again with its last cursor. A Mac
     never asks for it: history reaches a Mac only by library sync (a Linux host
@@ -1237,28 +1232,6 @@ normal, `1001` server stopping or sleeping, `1009` client frame over 1 MiB,
   offline notice. Its live state, questions, approvals and settings come only
   from its stream; no device keeps a per-machine cache of another machine's
   history.
-- **Client-mode Dev builds** stream from their live library host with a Dev
-  stream key, never a member key. Each client instance keeps an Ed25519 key in
-  its own Keychain namespace and sends only the public half on the host's
-  same-user Unix socket, with `development.connect` and again with
-  `development.stream` before every attempt, both authenticated by its current
-  Dev device credential. The host keeps the key in an in-memory roster (never
-  SQLite, the signed member list or anything synchronized) and refuses a device
-  ID that is a library member. The key opens only the host's loopback
-  development listener (`ws://127.0.0.1:<port>/v1/stream?protocol=1`), a
-  separate port Tailscale Serve never exposes that serves `GET /v1/stream`
-  only and accepts only roster keys signed for the host's member ID; the
-  library's own listener refuses it. Its sockets are outside the member socket
-  registry and answer no call; commands go through the library API with the
-  Dev credential. Disconnecting (as quitting does), unpairing the Dev identity,
-  or that credential no longer being current revokes the key and closes its
-  sockets with `4401`; a host restart forgets the roster and the client admits
-  its key again. The client's background server subscribes to `workspace` and
-  to a `conversation` stream for each host chat its windows hold open and
-  relays them to the window; a `library` item ahead of its cursor starts one
-  library sync. Without a stream (an older host) library sync falls back to
-  15 s, 2 s during a run. Other machines' sessions show library history, read
-  on open, after an action and after each library sync.
 - **Mac window to its own server.** The window opens an ordinary RPC
   connection on its server's socket and sends `backend.stream` as its first
   request (readiness advertises `window.stream`). After the reply both ends

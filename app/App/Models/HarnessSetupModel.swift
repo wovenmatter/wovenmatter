@@ -14,8 +14,7 @@ final class HarnessSetupPresentation {
         let database = try? ApplicationModel.dashboardSupportDirectory().appending(path: "workspace.sqlite")
         HarnessOnboarding.prepareFirstLaunch(defaults: defaults,
             hasExistingWorkspace: database.map { FileManager.default.fileExists(atPath: $0.path) } ?? true,
-            hasExistingPreferences: defaults.object(forKey: "wovenmatter.title-generation.enabled") != nil
-                || defaults.bool(forKey: LocalExecutionRole.libraryClientPreferenceKey))
+            hasExistingPreferences: defaults.object(forKey: "wovenmatter.title-generation.enabled") != nil)
     }
 
     func takeAutomaticPresentation() -> Bool {

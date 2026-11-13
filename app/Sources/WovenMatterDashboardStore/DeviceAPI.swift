@@ -6,7 +6,6 @@ private struct MCPMalformedJSON: Error {}
 @MainActor
 public protocol DeviceCommandServing: AnyObject {
     func executeTool(_ request: LibraryToolRequest, deviceID: String) async throws -> WovenMatterToolResponse
-    func registerExecutionManagement(_ grant: ExecutionManagementGrant, device: PairedDevice) async throws -> ExecutionWorkspace
     func provisionExecutionWorkspace(id: String, device: PairedDevice) async throws -> ExecutionCredential
     func readWorkspace(_ request: LibraryWorkspaceRead) async throws -> LibraryWorkspaceResult
     func analyticsPreference() async throws -> ProductAnalyticsPreference
@@ -222,9 +221,6 @@ public extension DeviceCommandServing {
     func executeTool(_ request: LibraryToolRequest, deviceID: String) async throws -> WovenMatterToolResponse {
         throw LibraryAPIError(code: "unsupported", message: "Update the central Mac to use its tools from this device.")
     }
-    func registerExecutionManagement(_ grant: ExecutionManagementGrant, device: PairedDevice) async throws -> ExecutionWorkspace {
-        throw LibraryAPIError(code: "unsupported", message: "This host does not accept secondary execution management grants.")
-    }
     func provisionExecutionWorkspace(id: String, device: PairedDevice) async throws -> ExecutionCredential {
         throw LibraryAPIError(code: "unsupported", message: "This host does not provision independent execution workspaces.")
     }
@@ -436,13 +432,6 @@ public final class DeviceAPI {
                 return .error("workspace_mismatch", "This credential belongs to a different workspace. Your local writing is preserved.", status: 409)
             }
             onRequest()
-            if request.method == "POST", path == "/v1/devices/development/disconnect" {
-                guard device.isDevelopment, !device.isMember else { return .error("invalid_device", "Only a development connection has temporary presence.", status: 403) }
-                try await authentication.suspendLocalDevelopment(deviceID: device.id, credential: bearer)
-                try await database.withdrawDevelopmentWorkspaces(ownedBy: device.id)
-                onMutation()
-                return try .json(["disconnected": true])
-            }
             if path == "/mcp" {
                 return try await handleDeviceMCP(request, device: device)
             }

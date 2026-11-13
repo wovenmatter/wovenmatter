@@ -13,8 +13,6 @@ extension WorkspaceDatabase {
 extension WorkspaceDatabaseConnection {
   func migrateCalendarReplicas() throws {
     try executeUnlocked("""
-      CREATE TABLE IF NOT EXISTS calendar_execution_conflicts(event_id TEXT PRIMARY KEY);
-      CREATE TABLE IF NOT EXISTS calendar_replica_context(singleton INTEGER PRIMARY KEY CHECK(singleton=1), library_id TEXT NOT NULL, workspace_id TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS calendar_task_executors(event_id TEXT PRIMARY KEY, device_id TEXT NOT NULL, tools_json TEXT);
       CREATE TABLE IF NOT EXISTS calendar_run_publishers(event_id TEXT NOT NULL, device_id TEXT NOT NULL, PRIMARY KEY(event_id,device_id));
       CREATE TABLE IF NOT EXISTS calendar_published_runs(id TEXT PRIMARY KEY, event_id TEXT NOT NULL, device_id TEXT NOT NULL, payload_json TEXT NOT NULL);
@@ -53,6 +51,11 @@ extension WorkspaceDatabaseConnection {
       return .init(id: run.id, eventID: run.eventID, occurrenceIndex: run.occurrence, scheduledAt: run.scheduledAt,
         sessionID: run.sessionID, task: task, status: run.status, error: run.error, title: run.title)
     }
+  }
+  /// Schedules another device (a phone) runs; this Mac never runs them.
+  func calendarForeignExecutionEventIDs() throws -> Set<String> {
+    let localID = try libraryIdentityUnlocked().hostDeviceID
+    return Set(try calendarReplicaOwners().filter { $0.value != localID }.map(\.key))
   }
   func calendarReplicaOwners() throws -> [String: String] {
     Dictionary(uniqueKeysWithValues: try historyRowsUnlocked("SELECT event_id,device_id FROM calendar_task_executors", values: []).compactMap {

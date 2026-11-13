@@ -6,12 +6,8 @@ background server. Its visible app is a client; legacy off preferences no longer
 select a foreground execution owner.
 Development profiles use isolated background servers and never install login jobs.
 Remote workspaces retain their own independent execution preferences.
-
-A Dev connected client (`scripts/build_and_run.sh --mode client`) is the only
-library client left. Its own background server owns its replica of the production
-library, its synchronization journal and its native execution workspace (see
-[development builds](../DEVELOPMENT_BUILDS.md)). Snapshot profiles test the
-library host server that every production Mac runs.
+Snapshot and live Dev profiles run the same library host server that every
+production Mac runs.
 
 
 ## Local ownership

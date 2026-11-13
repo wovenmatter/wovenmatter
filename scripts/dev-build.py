@@ -19,8 +19,10 @@ def profile(root, instance, mode):
     instance = instance or (re.sub(r"[^a-z0-9-]", "-", root.parent.name.lower())[:40].strip("-") or "dev") + "-" + hashlib.sha256(os.fsencode(root)).hexdigest()[:10]
     if not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,63}", instance):
         raise ValueError("Use a lowercase instance name of up to 64 letters, digits, and hyphens.")
-    # Auto defaults to the complete, independent app; clients are explicit opt-in.
+    # Auto selects the complete, independent snapshot app; live is explicit opt-in.
     selected = "snapshot" if mode == "auto" else mode
+    if selected not in ("snapshot", "live"):
+        raise ValueError("Use --mode snapshot or --mode live.")
     support = Path.home() / "Library/Application Support"
     support = support / "Woven Matter" if selected == "live" else support / "Woven Matter Dev" / instance / selected
     return dict(instance=instance, mode=selected,
@@ -399,7 +401,7 @@ def main():
     plan = sub.add_parser("profile")
     plan.add_argument("--root", type=Path, required=True)
     plan.add_argument("--instance")
-    plan.add_argument("--mode", choices=("auto", "client", "snapshot", "live"), default="auto")
+    plan.add_argument("--mode", choices=("auto", "snapshot", "live"), default="auto")
     snap = sub.add_parser("snapshot")
     snap.add_argument("--source", type=Path, required=True)
     snap.add_argument("--destination", type=Path, required=True)

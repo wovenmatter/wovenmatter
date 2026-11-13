@@ -74,18 +74,6 @@ struct FederatedExecutionSnapshot: Codable, Sendable {
 }
 
 extension ApplicationModel {
-    func sharedLibraryFileURL(id: String) async throws -> URL {
-        if let client = liveLibraryClient { return try await client.exportFile(.libraryFile(id: id)) }
-        if DevelopmentLaunch.isClient, isBackendFrontend {
-            let bytes = try await callBackend(method: "library.command", payload: JSONEncoder().encode(BackendLibraryCommand.openShared(id: id)))
-            guard let url = try JSONDecoder().decode(BackendLibraryResult.self, from: bytes).url else {
-                throw WorkspaceToolError.invalid("The shared file is unavailable.")
-            }
-            return url
-        }
-        return try await library.fileURL(id: id)
-    }
-
     /// Signed execution between members. In a Dev snapshot it reaches only the
     /// workspaces the snapshot itself knows live (its own, paired members',
     /// Linux hosts it added): `CentralExecutionClient` refuses every copied
@@ -208,14 +196,6 @@ extension ApplicationModel {
         case .stop(let id, _), .configure(let id, _): targetID = id
         case .respond(let interaction, _): targetID = interaction.conversationID
         }
-        if let client = liveLibraryClient {
-            let snapshot = try await client.desktopExecution(action)
-            switch action {
-            case .refresh, .close, .earlier: break
-            case .stop, .configure, .respond: windowStreamRelayChanged([targetID])
-            }
-            return snapshot
-        }
         let client = try centralExecutionClient()
         if case .close(let id) = action {
             await client.unwatch(id)
@@ -261,7 +241,7 @@ extension ApplicationModel {
     /// What this process still holds for a chat whose live read failed: its
     /// workspace and saved transcript, shown offline.
     func federatedSnapshotAfterFailure(_ id: String) async -> FederatedExecutionSnapshot? {
-        guard liveLibraryClient == nil, let client = federatedExecutionClient,
+        guard let client = federatedExecutionClient,
               let workspace = try? await client.workspace(conversationID: id) else { return nil }
         return federatedSnapshot(id, workspace: workspace, client: client, transcript: client.transcripts[id], session: nil)
     }

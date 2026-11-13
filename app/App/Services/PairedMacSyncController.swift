@@ -20,15 +20,14 @@ struct PairedMacCredential: Codable, Sendable {
     var isCompleted: Bool { needsJoin != true && confirmationPending != true }
 }
 
-/// Device-only paired-Mac secrets: Mac grants, pending pairing claims and the
-/// retired node's original bearer. Production uses Keychain; fixtures inject
-/// memory storage so tests can never reach the user's Keychain.
+/// Device-only paired-Mac secrets: Mac grants and pending pairing claims.
+/// Production uses Keychain; fixtures inject memory storage so tests can never
+/// reach the user's Keychain.
 struct PairedMacDeviceStorage {
     var loadCredentials: @MainActor () throws -> [PairedMacCredential]
     var saveCredentials: @MainActor ([PairedMacCredential]) throws -> Void
     var loadClaim: (String) throws -> StoredPairingClaim?
     var saveClaim: (StoredPairingClaim?, String) throws -> Void
-    var loadLegacyCredential: @MainActor () throws -> MobileCredential?
     var loadExecutionCredential: @MainActor (String) throws -> DirectWorkspaceCredential?
     var saveExecutionCredential: @MainActor (DirectWorkspaceCredential) throws -> Void
     /// This Mac's device-only Curve25519 signing key (raw representation).
@@ -48,13 +47,12 @@ struct PairedMacDeviceStorage {
         .init(loadCredentials: PairedMacCredentialVault.load, saveCredentials: PairedMacCredentialVault.save,
               loadClaim: { try PendingPairingVault.load(deviceID: $0) },
               saveClaim: { try PendingPairingVault.save($0, deviceID: $1) },
-              loadLegacyCredential: { try MobileCredentialVault.load() },
               loadExecutionCredential: CentralExecutionCredentialVault.load,
               saveExecutionCredential: CentralExecutionCredentialVault.save,
               loadSigningKey: PairedMacCredentialVault.loadSigningKey, saveSigningKey: PairedMacCredentialVault.saveSigningKey)
     }
     /// Isolated storage for fixtures. Nothing is shared with other instances.
-    @MainActor static func memory(credentials: [PairedMacCredential] = [], legacy: MobileCredential? = nil) -> Self {
+    @MainActor static func memory(credentials: [PairedMacCredential] = []) -> Self {
         final class Box: @unchecked Sendable {
             var credentials: [PairedMacCredential] = []; var claims: [String: StoredPairingClaim] = [:]
             var execution: [String: DirectWorkspaceCredential] = [:]
@@ -63,7 +61,6 @@ struct PairedMacDeviceStorage {
         let box = Box(); box.credentials = credentials
         return .init(loadCredentials: { box.credentials }, saveCredentials: { box.credentials = $0 },
                      loadClaim: { box.claims[$0] }, saveClaim: { claim, id in box.claims[id] = claim },
-                     loadLegacyCredential: { legacy },
                      loadExecutionCredential: { box.execution[$0] },
                      saveExecutionCredential: { box.execution[CentralExecutionCredentialVault.account(libraryID: $0.libraryID, workspaceID: $0.workspaceID, deviceID: $0.deviceID)] = $0 },
                      loadSigningKey: { box.signingKey }, saveSigningKey: { box.signingKey = $0 },
@@ -106,7 +103,6 @@ final class PairedMacSyncController {
         guard let self else { throw CancellationError() }
         try await self.acceptPairing(endpoint: endpoint, response: response)
     }, loadClaim: storage.loadClaim, saveClaim: storage.saveClaim)
-    func loadLegacyCredential() throws -> MobileCredential? { try storage.loadLegacyCredential() }
     nonisolated static let capability = "library.peers.v2"
 
     /// This Mac's signing identity. The key is created once and persisted in
@@ -396,13 +392,13 @@ final class PairedMacSyncController {
         let path = request.target.replacingOccurrences(of: "/wovenmatter/", with: "/")
         guard path.hasPrefix("/v1/peers/") else { return nil }
         if MemberRequestVerifier.isSigned(request.headers) {
-            guard let host, !host.peerSyncPaused, let librarySync else {
+            guard host != nil, let librarySync else {
                 return .error("unavailable", "This Mac is not ready to synchronize.", status: 503)
             }
             return await librarySync.handle(request) ?? .error("not_found", "Unknown peer endpoint.", status: 404)
         }
         do {
-            guard let host, let database = host.model?.dashboardStore?.database, !host.peerSyncPaused,
+            guard let host, let database = host.model?.dashboardStore?.database,
                   request.headers["x-woven-protocol"] == String(LibraryProtocol.version) else {
                 return .error("unavailable", "This Mac is not ready to synchronize.", status: 503)
             }
@@ -497,7 +493,7 @@ final class PairedMacSyncController {
     /// itself is change-driven inside `LibraryPeerSync`; this only refreshes
     /// local state, and with `force` ("Sync now") catches up every peer once.
     func synchronize(force: Bool = false) async {
-        guard !syncing, let host, !host.peerSyncPaused, let database = host.model?.dashboardStore?.database else { return }
+        guard !syncing, let host, let database = host.model?.dashboardStore?.database else { return }
         syncing = true; defer { syncing = false }
         await restoreRecordingFailures()
         if force { await librarySync?.synchronizeAll() }

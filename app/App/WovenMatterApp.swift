@@ -355,8 +355,8 @@ final class WorkspaceProcessLease {
     }
 }
 
-/// Actions belong to the active workspace window, including a Dev client's
-/// local execution surface. Settings and setup windows publish no workspace actions.
+/// Actions belong to the active workspace window. Settings and setup windows
+/// publish no workspace actions.
 struct WorkspaceMenuActions {
     var newChat: @MainActor () -> Void
     var newNote: @MainActor () -> Void
