@@ -39,7 +39,7 @@ extension RemoteWorkspaceConfiguration {
 
 /// One validated host command over SSH (`wm-exec exec`), for validation and repair.
 /// Host paths are obtained from inspection/health, never from the Mac's home or
-/// from a container's fixed paths. The SSH transport is selected by its caller.
+/// from fixed paths. The SSH transport is selected by its caller.
 public struct RemoteWorkspaceExecTarget: Sendable {
     public let configuration: RemoteWorkspaceConfiguration
 
@@ -49,21 +49,18 @@ public struct RemoteWorkspaceExecTarget: Sendable {
 
     public var workspaceRoot: String {
         get throws {
-            if configuration.kind == .container { return configuration.workspaceRoot ?? "/home/.woven-matter" }
             return try absolute(configuration.workspaceRoot ?? dataRoot + "/workspace")
         }
     }
 
     public var databasesDirectory: String {
         get throws {
-            if configuration.kind == .container { return configuration.databasesDirectory ?? "/home/.local/share/wovenmatter/databases" }
             return try absolute(configuration.databasesDirectory ?? dataRoot + "/databases")
         }
     }
 
     public var attachmentsDirectory: String {
         get throws {
-            if configuration.kind == .container { return configuration.attachmentsDirectory ?? "/home/.woven-matter/.wovenmatter/attachments" }
             return try absolute(configuration.attachmentsDirectory ?? workspaceRoot + "/.wovenmatter/attachments")
         }
     }

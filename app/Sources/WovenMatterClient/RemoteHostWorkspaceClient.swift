@@ -69,7 +69,7 @@ private actor BundledHostFingerprint {
         if let task { return await task.value }
         let task = Task.detached(priority: .utility) { () -> String? in
             guard let root = try? RemoteWorkspaceSSHClient.loadDeploymentRoot() else { return nil }
-            return try? RemoteWorkspaceDeployment(root: root, kind: .host).fingerprint
+            return try? RemoteWorkspaceDeployment(root: root).fingerprint
         }
         self.task = task
         return await task.value
@@ -103,7 +103,7 @@ extension RemoteWorkspaceSSHClient {
         let destination = try Self.validatedDestination(hostName: configuration.hostName, userName: configuration.userName)
         let root = try deploymentRoot ?? Self.loadDeploymentRoot()
         try RemoteHostLibrary.require(root: root, architecture: architecture)
-        let deployment = try RemoteWorkspaceDeployment(root: root, kind: .host)
+        let deployment = try RemoteWorkspaceDeployment(root: root)
         progress("Preparing the host service bundle…")
         let bundle = try RemoteHostBundle.archive(root: root, deployment: deployment)
         let script = try String(data: hostScriptLoader(), encoding: .utf8).unwrapHostScript()
@@ -114,7 +114,7 @@ extension RemoteWorkspaceSSHClient {
             + arguments.map(RemoteWorkspaceExecTarget.quote).joined(separator: " ")
         var input = Data((secret + "\n").utf8)
         input.append(bundle)
-        let updates = RemoteWorkspaceBuildProgress(kind: .host, report: progress)
+        let updates = RemoteWorkspaceBuildProgress(report: progress)
         progress("Uploading the host service…")
         return try decode(RemoteWorkspaceStatus.self,
             from: streamingRunner(destination, command, input) { updates.receive($0) })

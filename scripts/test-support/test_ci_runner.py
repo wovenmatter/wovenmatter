@@ -80,7 +80,7 @@ if os.environ.get('CI_FIXTURE_FAIL') == '1' and sys.argv[1:] == ['test', '--pref
         self.assertEqual(calls, [])
 
     def test_image_recipe_runs_portable_tests_without_building_images(self):
-        result, calls = self.run_fixture(['remote/Dockerfile'])
+        result, calls = self.run_fixture(['remote/Executor.Dockerfile'])
         self.assertEqual(result.returncode, 0, result.stderr)
         npm = [call[1:] for call in calls if call[0] == 'npm']
         self.assertEqual([call for call in npm if call[0] == 'test'], [['test', '--prefix', 'remote']])

@@ -58,15 +58,6 @@ public struct PairedMacJoinReply: Codable, Sendable, Equatable {
     self.route = route; self.publicKey = publicKey; self.subjectSignature = subjectSignature
   }
 }
-public struct PairedMacExchange: Codable, Sendable {
-  public let deviceID: String
-  public let after: Int64
-  public let page: PairedLibraryPage
-  public let membership: PeerMembership
-  public init(deviceID: String, after: Int64, page: PairedLibraryPage, membership: PeerMembership) {
-    self.deviceID = deviceID; self.after = after; self.page = page; self.membership = membership
-  }
-}
 public struct PairedMacProofChallenge: Codable, Sendable {
   public let deviceID: String
   public let credentialID: String

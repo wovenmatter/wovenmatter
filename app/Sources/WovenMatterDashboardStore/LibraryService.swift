@@ -125,7 +125,7 @@ public actor LibraryService {
       throw WorkspaceToolError.invalid("Reconnect this remote workspace to save the file.")
     }
     let storedRoot = try await database.libraryRoot(conversationID: item.conversationID)
-    guard let root = storedRoot ?? workspace.workspaceRoot ?? (workspace.kind == .container ? "/home/.woven-matter" : nil) else {
+    guard let root = storedRoot ?? workspace.workspaceRoot else {
       throw WorkspaceToolError.invalid("Reconnect this host workspace to discover its files directory.")
     }
     guard let remoteFiles else { throw WorkspaceToolError.invalid("Reconnect this remote workspace to save the file.") }

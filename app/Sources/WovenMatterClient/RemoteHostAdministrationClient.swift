@@ -81,7 +81,7 @@ public struct RemoteHostAdministrationClient: Sendable {
     public static func hostBundle(root: URL? = nil) throws -> (bundle: Data, fingerprint: String) {
         let root = try root ?? RemoteWorkspaceSSHClient.loadDeploymentRoot()
         try RemoteHostLibrary.require(root: root, architecture: nil)
-        let deployment = try RemoteWorkspaceDeployment(root: root, kind: .host)
+        let deployment = try RemoteWorkspaceDeployment(root: root)
         return (try RemoteHostBundle.archive(root: root, deployment: deployment), deployment.fingerprint)
     }
 }

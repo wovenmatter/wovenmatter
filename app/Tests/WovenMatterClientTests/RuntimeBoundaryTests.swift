@@ -127,9 +127,9 @@ struct RuntimeBoundaryTests {
       scriptLoader: { Data("script".utf8) }
     )
     try await deleteClient.delete(configuration: configuration, removePersistentData: false)
-    #expect(deleteRecorder.command == "exec bash -s -- 'delete' 'work-1'")
+    #expect(deleteRecorder.command == "exec bash -s -- 'uninstall' 'work-1'")
     try await deleteClient.delete(configuration: configuration, removePersistentData: true)
-    #expect(deleteRecorder.command == "exec bash -s -- 'delete' 'work-1' '--data'")
+    #expect(deleteRecorder.command == "exec bash -s -- 'uninstall' 'work-1' '--data'")
 
     #expect(throws: RemoteWorkspaceClientError.self) {
       try RemoteWorkspaceSSHClient.validatedDestination(

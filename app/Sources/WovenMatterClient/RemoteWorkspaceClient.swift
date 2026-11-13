@@ -435,91 +435,6 @@ public enum RemoteMachineDiscovery {
     }
 }
 
-struct RemoteWorkspaceResourceCommandValues: Equatable, Sendable {
-    let memoryBytes: String
-    let memoryAndSwapBytes: String
-}
-
-enum RemoteWorkspaceResourceLimits {
-    static func commandValues(
-        for configuration: RemoteWorkspaceConfiguration
-    ) throws -> RemoteWorkspaceResourceCommandValues {
-        let memory = try configuration.memoryLimit.map {
-            try bytes(from: $0, label: "Memory limit", allowsZero: false)
-        }
-        if let memory, memory < 6 * 1_024 * 1_024 {
-            throw RemoteWorkspaceClientError.invalidResourceLimit(
-                "Memory limit must be at least 6 MB."
-            )
-        }
-
-        let additionalSwap = try configuration.swapLimit.map {
-            try bytes(from: $0, label: "Additional swap limit", allowsZero: true)
-        }
-        if additionalSwap != nil, memory == nil {
-            throw RemoteWorkspaceClientError.invalidResourceLimit(
-                "Set a memory limit before setting an additional swap limit."
-            )
-        }
-        let memoryAndSwap: Int64?
-        if let memory, let additionalSwap {
-            let (total, overflow) = memory.addingReportingOverflow(additionalSwap)
-            guard !overflow else {
-                throw RemoteWorkspaceClientError.invalidResourceLimit(
-                    "Memory plus swap exceeds the supported size."
-                )
-            }
-            memoryAndSwap = total
-        } else {
-            memoryAndSwap = nil
-        }
-
-        return RemoteWorkspaceResourceCommandValues(
-            memoryBytes: memory.map(String.init) ?? "",
-            memoryAndSwapBytes: memoryAndSwap.map(String.init) ?? ""
-        )
-    }
-
-    private static func bytes(
-        from input: String,
-        label: String,
-        allowsZero: Bool
-    ) throws -> Int64 {
-        let value = input.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        guard !value.isEmpty else {
-            throw RemoteWorkspaceClientError.invalidResourceLimit(
-                "\(label) is empty; leave the field blank for no explicit limit."
-            )
-        }
-        let suffix = value.last.map(String.init) ?? ""
-        let hasSuffix = ["b", "k", "m", "g", "t"].contains(suffix)
-        let digits = hasSuffix ? String(value.dropLast()) : value
-        guard !digits.isEmpty,
-              digits.allSatisfy(\.isNumber),
-              let amount = Int64(digits),
-              amount > 0 || allowsZero
-        else {
-            throw RemoteWorkspaceClientError.invalidResourceLimit(
-                "\(label) must be a whole number of gigabytes, such as 8."
-            )
-        }
-        let multiplier: Int64 = switch hasSuffix ? suffix : "g" {
-        case "k": 1_024
-        case "m": 1_024 * 1_024
-        case "g": 1_024 * 1_024 * 1_024
-        case "t": 1_024 * 1_024 * 1_024 * 1_024
-        default: 1
-        }
-        let (result, overflow) = amount.multipliedReportingOverflow(by: multiplier)
-        guard !overflow else {
-            throw RemoteWorkspaceClientError.invalidResourceLimit(
-                "\(label) exceeds the supported size."
-            )
-        }
-        return result
-    }
-}
-
 public actor RemoteWorkspaceSSHClient {
     public typealias Runner = @Sendable (
         _ destination: String,
@@ -644,13 +559,6 @@ public actor RemoteWorkspaceSSHClient {
         )
     }
 
-    public nonisolated static func validateResources(
-        configuration: RemoteWorkspaceConfiguration
-    ) throws {
-        if configuration.kind == .host { return }
-        _ = try RemoteWorkspaceResourceLimits.commandValues(for: configuration)
-    }
-
     public nonisolated static func validateConfiguration(
         _ configuration: RemoteWorkspaceConfiguration
     ) throws {
@@ -665,14 +573,13 @@ public actor RemoteWorkspaceSSHClient {
             hostName: configuration.hostName,
             userName: configuration.userName
         )
-        try validateResources(configuration: configuration)
     }
 
     public func delete(
         configuration: RemoteWorkspaceConfiguration,
         removePersistentData: Bool
     ) throws {
-        var arguments = [configuration.kind == .host ? "uninstall" : "delete", configuration.workspaceID]
+        var arguments = ["uninstall", configuration.workspaceID]
         if removePersistentData { arguments.append("--data") }
         _ = try runScript(
             hostName: configuration.hostName,

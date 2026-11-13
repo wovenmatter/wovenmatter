@@ -5,7 +5,7 @@ import Testing
 struct RemoteWorkspaceDeploymentTests {
     private func fixture() throws -> URL {
         let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
-        for file in ["remote/Dockerfile", "remote/build-image.sh", "remote/entrypoint.sh", "remote/package.json", "remote/src/service.mjs", "remote/security/backports.json", "remote/security/patches/repair.patch", "remote/npm-runtime/package.json", "remote/npm-runtime/package-lock.json", "remote/host/runtime-versions.json", "remote/host/build-bundle.sh", "scripts/remote-host.sh", "harnesses/catalog.json", "default-agent/package.json", "default-agent/package-lock.json", "default-agent/src/agent.mjs", "default-agent/.node-version"] {
+        for file in ["remote/package.json", "remote/src/service.mjs", "remote/security/backports.json", "remote/security/patches/repair.patch", "remote/npm-runtime/package.json", "remote/npm-runtime/package-lock.json", "remote/host/runtime-versions.json", "remote/host/build-bundle.sh", "scripts/remote-host.sh", "harnesses/catalog.json", "default-agent/package.json", "default-agent/package-lock.json", "default-agent/src/agent.mjs", "default-agent/.node-version"] {
             let url = root.appending(path: file)
             try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
             try Data(file.utf8).write(to: url)
@@ -53,12 +53,10 @@ struct RemoteWorkspaceDeploymentTests {
 
     @Test func hostFingerprintTracksNativeInstallerRuntimeAndService() throws {
         let root = try fixture(); defer { try? FileManager.default.removeItem(at: root) }
-        let originalContainer = try RemoteWorkspaceDeployment(root: root).fingerprint
         for path in ["remote/host/runtime-versions.json", "remote/host/build-bundle.sh", "scripts/remote-host.sh", "default-agent/.node-version"] {
-            let before = try RemoteWorkspaceDeployment(root: root, kind: .host).fingerprint
+            let before = try RemoteWorkspaceDeployment(root: root).fingerprint
             try Data("updated host input".utf8).write(to: root.appending(path: path))
-            #expect(try RemoteWorkspaceDeployment(root: root, kind: .host).fingerprint != before)
-            #expect(try RemoteWorkspaceDeployment(root: root).fingerprint == originalContainer)
+            #expect(try RemoteWorkspaceDeployment(root: root).fingerprint != before)
         }
     }
 
@@ -126,7 +124,7 @@ struct RemoteWorkspaceDeploymentTests {
 
     @Test func hostBundlesRecordTheReleaseVersionOutsideTheFingerprint() throws {
         let root = try hostFixture(); defer { try? FileManager.default.removeItem(at: root) }
-        let deployment = try RemoteWorkspaceDeployment(root: root, kind: .host)
+        let deployment = try RemoteWorkspaceDeployment(root: root)
         func manifest(_ version: String?) throws -> [String: Any] {
             let archive = try RemoteHostBundle.archive(root: root, deployment: deployment, releaseVersion: version)
             let extracted = try RemoteWorkspaceProcess.run(executable: "/usr/bin/tar", arguments: ["-xzOf", "-", "manifest.json"], input: archive)
@@ -141,7 +139,7 @@ struct RemoteWorkspaceDeploymentTests {
 
     @Test func nativeHostArchiveIsDeterministicAndRejectsSourceDrift() throws {
         let root = try hostFixture(); defer { try? FileManager.default.removeItem(at: root) }
-        let deployment = try RemoteWorkspaceDeployment(root: root, kind: .host)
+        let deployment = try RemoteWorkspaceDeployment(root: root)
         let first = try RemoteHostBundle.archive(root: root, deployment: deployment)
         try FileManager.default.setAttributes([.modificationDate: Date(timeIntervalSince1970: 100)],
             ofItemAtPath: root.appending(path: "remote/src/service.mjs").path)
@@ -154,11 +152,11 @@ struct RemoteWorkspaceDeploymentTests {
         let root = try hostFixture(); defer { try? FileManager.default.removeItem(at: root) }
         let link = root.appending(path: "remote/src/linked.mjs")
         try FileManager.default.createSymbolicLink(at: link, withDestinationURL: URL(fileURLWithPath: "/etc/passwd"))
-        let linked = try RemoteWorkspaceDeployment(root: root, kind: .host)
+        let linked = try RemoteWorkspaceDeployment(root: root)
         #expect(throws: RemoteWorkspaceClientError.self) { try RemoteHostBundle.archive(root: root, deployment: linked) }
         try FileManager.default.removeItem(at: link)
         try Data("26.12.2\n".utf8).write(to: root.appending(path: "default-agent/.node-version"))
-        let mismatched = try RemoteWorkspaceDeployment(root: root, kind: .host)
+        let mismatched = try RemoteWorkspaceDeployment(root: root)
         #expect(throws: RemoteWorkspaceClientError.self) { try RemoteHostBundle.archive(root: root, deployment: mismatched) }
     }
 
@@ -167,13 +165,13 @@ struct RemoteWorkspaceDeploymentTests {
     @Test func builtLinuxLibraryBinariesShipAsHostExecutables() throws {
         let root = try hostFixture(); defer { try? FileManager.default.removeItem(at: root) }
         try FileManager.default.removeItem(at: root.appending(path: "remote/host/library"))
-        let without = try RemoteWorkspaceDeployment(root: root, kind: .host)
+        let without = try RemoteWorkspaceDeployment(root: root)
         #expect(!without.sourceFiles.contains { $0.hasPrefix("remote/host/library/") })
         let binary = root.appending(path: "remote/host/library/linux-x86_64/wovenmatter-library")
         try FileManager.default.createDirectory(at: binary.deletingLastPathComponent(), withIntermediateDirectories: true)
         try Data("\u{7f}ELF fixture".utf8).write(to: binary)
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: binary.path)
-        let deployment = try RemoteWorkspaceDeployment(root: root, kind: .host)
+        let deployment = try RemoteWorkspaceDeployment(root: root)
         #expect(deployment.fingerprint != without.fingerprint)
         let archive = try RemoteHostBundle.archive(root: root, deployment: deployment)
         let listing = try RemoteWorkspaceProcess.run(executable: "/usr/bin/tar", arguments: ["-tvzf", "-"], input: archive)
@@ -184,7 +182,7 @@ struct RemoteWorkspaceDeploymentTests {
 
     @Test func hostNpmSecurityGraphIsBundledAndBoundToTheSourceIdentity() throws {
         let root = try hostFixture(); defer { try? FileManager.default.removeItem(at: root) }
-        let deployment = try RemoteWorkspaceDeployment(root: root, kind: .host)
+        let deployment = try RemoteWorkspaceDeployment(root: root)
         let archive = try RemoteHostBundle.archive(root: root, deployment: deployment)
         let extracted = try RemoteWorkspaceProcess.run(executable: "/usr/bin/tar",
             arguments: ["-xzOf", "-", "manifest.json"], input: archive)
@@ -201,16 +199,16 @@ struct RemoteWorkspaceDeploymentTests {
             #expect(contents.data == Data(canonical.utf8))
         }
         try Data("changed pinned npm security graph".utf8).write(to: root.appending(path: "remote/npm-runtime/package-lock.json"))
-        #expect(try RemoteWorkspaceDeployment(root: root, kind: .host).fingerprint != deployment.fingerprint)
+        #expect(try RemoteWorkspaceDeployment(root: root).fingerprint != deployment.fingerprint)
         #expect(throws: RemoteWorkspaceClientError.self) { try RemoteHostBundle.archive(root: root, deployment: deployment) }
     }
 
     @Test func progressStreamsBeforeExitAndFiltersRawOutput() throws {
         let state = ProgressState()
         let decoder = RemoteWorkspaceBuildProgress { state.append($0) }
-        decoder.receive(Data("WM_PROGRESS buil".utf8))
-        decoder.receive(Data("ding\nWM_PROGRESS building\nprivate installer output\n".utf8))
-        #expect(state.messages == ["Building the workspace image…"])
+        decoder.receive(Data("WM_PROGRESS uplo".utf8))
+        decoder.receive(Data("ading\nWM_PROGRESS uploading\nprivate installer output\n".utf8))
+        #expect(state.messages == ["Uploading the host service…"])
         let acknowledgement = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: acknowledgement) }
         let result = try RemoteWorkspaceProcess.run(executable: "/bin/sh",
@@ -222,7 +220,7 @@ struct RemoteWorkspaceDeploymentTests {
             })
         #expect(result.status == 0)
         #expect(result.output.trimmingCharacters(in: .whitespacesAndNewlines) == "done")
-        #expect(state.messages.last == "Workspace image ready.")
+        #expect(state.messages.last == "Host service ready.")
     }
 }
 

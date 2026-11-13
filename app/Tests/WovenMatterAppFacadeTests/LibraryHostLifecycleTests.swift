@@ -618,43 +618,6 @@ extension LibraryHostLifecycleTests {
         let withdrawn = try #require(try await mini.model.dashboardStore?.database.libraryExecutionWorkspaces().first { $0.id == workspace.id })
         #expect(withdrawn.endpoint != nil)
     }
-
-    @Test func incomingUnpairsApplyDespiteARejectedPageAndAreMarkedOnlyAfterSuccess() async throws {
-        let mesh = PeerTestMesh(); defer { mesh.remove() }
-        let air = try await mesh.add("order-air"), mini = try await mesh.add("order-mini")
-        try await mesh.pair(air, with: mini)
-        await air.host.peerSync.synchronize(force: true)
-        let airID = try await air.host.peerRoute().deviceID
-        let workspace = try #require(air.host.executionWorkspaces.first { $0.ownerDeviceID == airID && $0.kind == .mac })
-        let miniAuth = try await mini.host.peerAuthentication()
-        let phoneID = UUID().uuidString.lowercased()
-        let phone = try await miniAuth.pair(.init(token: try await miniAuth.createOffer(endpoint: mini.host.peerRoute().endpoint).payload.token,
-            deviceID: phoneID, deviceName: "Phone", metadata: .init(kind: .iPhone)), workspaceID: mini.host.peerRoute().libraryID)
-        let execution = try await mini.host.provisionExecutionWorkspace(id: workspace.id, device: miniAuth.authenticate(bearer: phone.credential))
-        #expect(try await air.executionStatus(execution) == 200)
-        await mini.host.revoke(phoneID)
-        // The Air fails to revoke locally once, and the library page is invalid.
-        var failures = 0
-        air.host.beforeLocalRevocation = { id in if id == phoneID { failures += 1; throw LibraryAPIError(code: "fixture", message: "Injected") } }
-        let token = try #require(mesh.credentials["order-mini"]?.first { $0.route.deviceID == airID }?.token)
-        let exchange = PairedMacExchange(deviceID: try await mini.host.peerRoute().deviceID, after: 0,
-            page: .init(schema: "incompatible", entries: [], cursor: 0, hasMore: false), membership: await miniAuth.peerMembership())
-        await #expect(throws: (any Error).self) {
-            try await mesh.request(air.host.peerRoute().endpoint, path: "v1/peers/exchange", token: token, libraryID: nil, body: JSONEncoder().encode(exchange))
-        }
-        // The unpair still took effect before the page was rejected...
-        #expect(try await air.executionStatus(execution) == 401)
-        // The exchange attempted local revocation. The Air's own change-driven
-        // sync may also learn the unpair from the Mini meanwhile and retry it
-        // (and fail the same way), so more than one attempt is legitimate.
-        #expect(failures >= 1)
-        // ...but is recorded as applied only once local revocation succeeds.
-        let applied = { air.defaults.stringArray(forKey: LibraryHostController.appliedPeerRevocationsKey) ?? [] }
-        #expect(!applied().contains { $0.hasPrefix(phoneID + ":") })
-        air.host.beforeLocalRevocation = nil
-        try await air.host.applyPeerRevocations()
-        #expect(applied().contains { $0.hasPrefix(phoneID + ":") })
-    }
 }
 
 
@@ -699,29 +662,6 @@ extension LibraryHostLifecycleTests {
         #expect(try await airDB.libraryNote(id: second)?.title == "Third over HTTP")
         #expect(try await thirdDB.libraryNote(id: first)?.title == "Air over HTTP")
         #expect(air.host.peerSync.errors.isEmpty && third.host.peerSync.errors.isEmpty)
-    }
-
-    /// A requester whose own unpair arrives in its exchange is refused before
-    /// its page is accepted or any library content is returned.
-    @Test func anExchangeCarryingItsRequestersUnpairIsRefusedBeforeAnyPage() async throws {
-        let (mesh, air, mini, third) = try await httpMesh("gate")
-        defer { mesh.remove() }
-        let airID = try await air.host.peerRoute().deviceID, miniID = try await mini.host.peerRoute().deviceID
-        let airDB = try #require(air.model.dashboardStore?.database), miniDB = try #require(mini.model.dashboardStore?.database)
-        #expect(try await air.host.peerAuthentication().isActiveMac(miniID))
-        await third.host.revoke(miniID)
-        let unpair = try await third.host.peerAuthentication().peerMembership()
-        let secret = UUID().uuidString.lowercased()
-        try await writeNote(mini, secret, "Sent with its own unpair")
-        let token = try #require(mesh.credentials["gate-mini"]?.first { $0.route.deviceID == airID && $0.isCompleted }?.token)
-        let page = try await miniDB.pairedLibraryPage(after: miniDB.pairedLibraryCursors(airID).pushed)
-        #expect(page.entries.contains { $0.table == "notes" && $0.key == "[\"\(secret)\"]" })
-        let exchange = PairedMacExchange(deviceID: miniID, after: 0, page: page, membership: unpair)
-        await #expect(throws: LibraryAPIError.self) {
-            try await mesh.request(air.host.peerRoute().endpoint, path: "v1/peers/exchange", token: token, libraryID: nil, body: JSONEncoder().encode(exchange))
-        }
-        #expect(try await airDB.libraryNote(id: secret) == nil)
-        #expect(try await !air.host.peerAuthentication().isActiveMac(miniID))
     }
 
     /// An unpair made on this Mac while a file transfer is in progress lets the

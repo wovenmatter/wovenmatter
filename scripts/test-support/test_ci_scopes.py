@@ -19,11 +19,9 @@ for path in ['README.md', 'docs/guide/notes-and-data.md', 'app/App/Views/Setting
     assert active(path) == set(), (path, active(path))
 for path in ['default-agent/src/runtime.mjs', 'default-agent/package-lock.json', 'harnesses/catalog.json']:
     assert active(path) == {'agent', 'service', 'pi'}, (path, active(path))
-for path in ['remote/src/server.mjs', 'remote/Dockerfile', 'remote/Executor.Dockerfile',
-             'remote/entrypoint.sh', 'remote/security/build-backports.py',
+for path in ['remote/src/server.mjs', 'remote/Executor.Dockerfile', 'remote/security/build-backports.py',
              'remote/npm-runtime/package-lock.json', 'remote/executor-runtime/package-lock.json']:
     assert active(path) == {'service', 'scripts'}, (path, active(path))
-assert active('.dockerignore') == {'service'}
 assert active('app/Updater/sparkle-version.json') == {'scripts'}
 assert active('scripts/test-support/test_ios_runner.py') == {'scripts'}
 assert active('ios/Config/PrivacyInfo.xcprivacy') == {'scripts'}

@@ -35,8 +35,7 @@
   PR CI and explicitly requested platform validation own source validation.
   Release preparation never runs local test suites or reruns CI; follow the
   release skill to start the workflow.
-  Tests must not consume provider services. Container lifecycle tests use
-  `scripts/test-container.sh` when in scope and Docker is available.
+  Tests must not consume provider services.
 - Keep one-off audit reports, generated coverage inventories, and review evidence
   out of Git. Record results in PR descriptions or external build artifacts.
 - Release, installation, publication, and delivery require an explicit request.

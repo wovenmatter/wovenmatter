@@ -16,8 +16,8 @@ def scopes(paths):
     agent = infrastructure or changed(r'^(default-agent/|harnesses/)')
     return dict(
         agent=agent or changed(r'^scripts/test-support/native-mcp\.test\.mjs$'),
-        service=agent or changed(r'^(remote/|\.dockerignore$|scripts/(remote-workspace|'
-                                r'test-remote-workspace|test-container)\.sh$)'),
+        service=agent or changed(r'^(remote/|scripts/(remote-workspace|'
+                                r'test-remote-workspace)\.sh$)'),
         pi=agent or changed(r'^(ios/Runtime/|ios/Sources/PiDurableRuntime/Resources/|'
                             r'ios/Sources/MobileInference/PiSDKVersion\.swift$|'
                             r'scripts/build-ios-pi-runtime\.mjs$|THIRD_PARTY_NOTICES\.md$)'),

@@ -137,7 +137,7 @@ struct RemoteHostLiveValidationTests {
         let before = try installationSnapshot(configuration: state.configuration)
         #expect(before.browserSelfTestDigest != nil)
         let sourceRoot = try RemoteWorkspaceSSHClient.loadDeploymentRoot()
-        let sourceDeployment = try RemoteWorkspaceDeployment(root: sourceRoot, kind: .host)
+        let sourceDeployment = try RemoteWorkspaceDeployment(root: sourceRoot)
         let candidateRoot = FileManager.default.temporaryDirectory.appending(path: ".wovenmatter-rollback-candidate-" + UUID().uuidString)
         try FileManager.default.createDirectory(at: candidateRoot, withIntermediateDirectories: false,
             attributes: [.posixPermissions: 0o700])
@@ -161,7 +161,7 @@ struct RemoteHostLiveValidationTests {
         }
         """#
         try Data(failedSelfTest.utf8).write(to: candidateRoot.appending(path: "remote/src/browser-selftest.mjs"))
-        let candidate = try RemoteWorkspaceDeployment(root: candidateRoot, kind: .host)
+        let candidate = try RemoteWorkspaceDeployment(root: candidateRoot)
         guard candidate.fingerprint != previousFingerprint else {
             throw RemoteWorkspaceClientError.invalidResponse("The rollback candidate must have a distinct source identity.")
         }

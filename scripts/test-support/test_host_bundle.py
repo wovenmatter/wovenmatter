@@ -80,7 +80,7 @@ class BundleTests(unittest.TestCase):
         self.assertEqual(versions['nodeVersion'],(ROOT/'default-agent/.node-version').read_text().strip())
         lock=json.loads((ROOT/'default-agent/package-lock.json').read_text())
         self.assertEqual(versions['playwrightVersion'],lock['packages']['node_modules/playwright-core']['version'])
-        self.assertIn('FROM node:'+versions['nodeVersion'].split('.')[0]+'-',(ROOT/'remote/Dockerfile').read_text())
+        self.assertIn('FROM node:'+versions['nodeVersion'].split('.')[0]+'-',(ROOT/'remote/Executor.Dockerfile').read_text())
         self.assertEqual(set(versions['nodeSHA256']),{'linux-x64','linux-arm64'})
         for value in versions['nodeSHA256'].values(): self.assertRegex(value,r'^[a-f0-9]{64}$')
         self.assertRegex(versions['dockerVersion'],r'^\d+\.\d+\.\d+$')
