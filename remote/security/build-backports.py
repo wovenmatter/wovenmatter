@@ -42,12 +42,7 @@ def run_build(*args, cwd=None, **kwargs):
         cwd=cwd, **kwargs)
 
 
-manifest = json.loads((ROOT / 'backports.json').read_text())
-requested = {name for name in os.environ.get('WM_SECURITY_PACKAGES', '').split(',') if name}
-available = {package['source'] for package in manifest}
-if requested - available:
-    raise RuntimeError('Unknown requested security source: ' + ', '.join(sorted(requested - available)))
-packages = [package for package in manifest if not requested or package['source'] in requested]
+packages = json.loads((ROOT / 'backports.json').read_text())
 
 for package in packages:
     name, version = package['source'], package['version']

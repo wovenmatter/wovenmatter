@@ -93,8 +93,8 @@ Maintenance checks both for newer releases; recorded does not mean frozen.
   install recipe.
   Maintenance reviews npm's vendored selections on every refresh and removes
   the replacement once npm ships a secure version. Image construction tests
-  actual npm registry installation and `npm ci`; container validation checks
-  that npm resolves the intended module. The 10.7.6 IP parser also escapes
+  actual npm registry installation and `npm ci`, and checks that npm resolves the
+  intended module. The 10.7.6 IP parser also escapes
   invalid IPv6 characters in HTML error diagnostics; provider-free fixtures retain address classification and verify
   that escaping. Audit both lockfiles separately.
   The Executor image consumes the same npm runtime lock, plus
