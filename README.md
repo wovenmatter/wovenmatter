@@ -143,7 +143,8 @@ address you'd like to use, and I'll happily add you as a tester.
 
 ## Security, license, and trademarks
 
-See the [security policy](SECURITY.md) for how to report a problem. Woven
-Matter is [MIT licensed](LICENSE). See [third-party notices](THIRD_PARTY_NOTICES.md)
+If you have a security issue, email
+[security@wovenmatter.com](mailto:security@wovenmatter.com). Woven Matter is
+[MIT licensed](LICENSE). See [third-party notices](THIRD_PARTY_NOTICES.md)
 and [trademarks](TRADEMARKS.md). To work on Woven Matter itself, see
 [Contributing](CONTRIBUTING.md).

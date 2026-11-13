@@ -32,4 +32,4 @@ extra logs or screenshots, then open a
 [GitHub issue](https://github.com/wovenmatter/wovenmatter/issues) or email
 support@wovenmatter.com.
 
-Report vulnerabilities through the [security policy](../../SECURITY.md).
+If you have a security issue, email [security@wovenmatter.com](mailto:security@wovenmatter.com).

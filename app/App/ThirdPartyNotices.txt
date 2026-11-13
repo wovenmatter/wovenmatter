@@ -1,6 +1,5 @@
-T3 Code paragraph streaming algorithm
+T3 Code
 https://github.com/pingdotgg/t3code
-Reference: 611132c171f3a821bd2e32f22261135cef6330ac
 
 MIT License
 

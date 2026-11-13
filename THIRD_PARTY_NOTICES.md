@@ -39,10 +39,27 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
-## Pi Durable runtime
+## Harnesses
 
-Pi Durable bundles `@earendil-works/pi-durable` from
-[Earendil Works Pi](https://github.com/earendil-works/pi/tree/main/packages/durable)
+Woven Matter works with these third-party coding agents. It does not bundle
+them: Settings installs each one from its official source, or Woven Matter uses
+the installation you already have. Each remains under its own license and terms.
+
+- [Codex](https://github.com/openai/codex), from OpenAI, through the
+  [Codex ACP adapter](https://github.com/agentclientprotocol/codex-acp)
+- [Claude Code](https://code.claude.com), from Anthropic, through the
+  [Claude Agent ACP adapter](https://github.com/agentclientprotocol/claude-agent-acp)
+- [Grok Build](https://docs.x.ai/build/cli/reference), from xAI
+- [OpenCode](https://opencode.ai)
+
+Their names and marks belong to their owners; see the harness identity marks
+below and [TRADEMARKS.md](TRADEMARKS.md).
+
+## Pi and Pi Durable
+
+Pi Durable, Woven Matter's built-in agent, is built on
+[Pi](https://github.com/earendil-works/pi) from Earendil Works. It bundles
+[`@earendil-works/pi-durable`](https://github.com/earendil-works/pi/tree/main/packages/durable)
 for native execution and persistence. The format-1 JSONL migration reader in
 `default-agent/src/legacy-jsonl-migration.mjs` adapts its recovery and reclamation
 rules under the same license. Its
@@ -61,13 +78,6 @@ It is MIT licensed, with
 `Copyright (c) 2018 Made With MOXY Lda <hello@moxy.studio>`.
 The MIT permission and disclaimer terms reproduced above apply to these packages.
 Bundled dependencies retain their own upstream licenses and notices.
-
-Pi Durable's Claude model-client transport follows the replay, inert tool
-inventory, and single-request admission design of
-[Hermes Claude Subscription DirectSDK](https://github.com/NousResearch/hermes-plugin-claude-subscription-directsdk)
-at reviewed revision `f1c1220778c7864fe4c1494baf9b1566e7c95bd2`. It is MIT
-licensed, with `Copyright (c) 2026 Nous Research and contributors`; the full
-notice is in `default-agent/src/claude-hermes-LICENSE.txt`.
 
 Pi Durable can use Claude models through the
 [Claude Agent SDK](https://github.com/anthropics/claude-agent-sdk-typescript),
@@ -100,21 +110,11 @@ WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION
 OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR IN
 CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 
-## Usage discovery and presentation
+## Inspiration
 
-The local usage transcript discovery, de-duplication, fork suppression, and
-analytics presentation are adapted from
-[T3 Code](https://github.com/pingdotgg/t3code/tree/afa83098064e7dca524a1e42dea3de03a883a0b6)
-at revision `afa83098064e7dca524a1e42dea3de03a883a0b6`.
-
-Provider-specific account limit retrieval and OpenCode Go local accounting are
-adapted from
-[Codex Bar](https://github.com/steipete/codexbar/tree/27c7f334e3c46c96ff8c063afbe0c7944ba5e0b7)
-at revision `27c7f334e3c46c96ff8c063afbe0c7944ba5e0b7`.
-
-The paragraph-level streaming of assistant text
-(`app/Sources/WovenMatterCore/AssistantStreamingText.swift`) adapts T3 Code's
-algorithm at revision `611132c171f3a821bd2e32f22261135cef6330ac`.
+Woven Matter takes inspiration from [T3 Code](https://github.com/pingdotgg/t3code)
+and [Codex Bar](https://github.com/steipete/codexbar), among other projects,
+for usage tracking, provider account limits, and how assistant text streams in.
 
 Both projects are licensed under the MIT License. T3 Code carries copyright
 `Copyright (c) 2026 T3 Tools Inc.` Codex Bar carries copyright
