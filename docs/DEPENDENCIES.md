@@ -211,7 +211,7 @@ Maintenance checks both for newer releases; recorded does not mean frozen.
   0.x minors, and refreshes every record and notice together. Upstream currently
   marks even its numbered driver releases as GitHub prereleases to keep the
   monorepo Latest pointer separate. Its release notes identify plain SemVer
-  driver releases as stable; the current selection is 0.47.24. The driver refuses input to macOS security
+  driver releases as stable; the current selection is 0.49.3. The driver refuses input to macOS security
   and consent prompts.
   The driver is spawned directly by the signed GUI, without a Node SDK or
   additional native libraries. Woven negotiates MCP 2025-06-18 and refuses an
@@ -359,13 +359,13 @@ an older configured channel. OpenCode and Executor retain the documented v2 API 
 maintenance must review a newer stable API major and implement its migration.
 
 `harnesses/catalog.json` records tested connector and engine minimums separately:
-Codex ACP 2.6.0 with Codex 0.167.2, and Claude ACP 0.106.0 with Claude SDK 0.3.323
+Codex ACP 2.6.0 with Codex 0.169.0, and Claude ACP 0.107.0 with Claude SDK 0.3.323
 (native Claude Code 2.1.323). The standalone Codex and Claude sign-in CLIs use their
 official current stable release channels. Codex ACP's `^0.166.0` engine range
 otherwise keeps its chat engine behind; its `~2.4.0` ACP TypeScript SDK range
-also excludes the current 2.6.0. Claude ACP 0.106.0 pins SDK 0.3.322;
-the consumer-scoped override selects SDK 0.3.323 independently so engine-only updates
-remain eligible when the connector's pin lags. Transcript-write loss
+also excludes the current 2.6.0. Claude ACP 0.107.0 pins the current SDK 0.3.323;
+the consumer-scoped override still selects the SDK independently so engine-only
+updates remain eligible when a future connector pin lags. Transcript-write loss
 invalidates the native resume marker and refuses tool dispatch/continuation commits;
 config-only write loss leaves a valid response intact. Provider-free persistence
 fixtures verify canonical replay after recovery. Claude's connector selects protocol SDK
