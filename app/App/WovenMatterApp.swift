@@ -549,7 +549,7 @@ struct WovenMatterApp: App {
                     DesktopUpdater.shared.start(model: applicationModel)
                     lifecycleDelegate.prepareBrowserTermination = { await WorkspaceAssetSession.shutdown() }
                 }
-                .frame(minWidth: 760, minHeight: 640)
+                .frame(minWidth: DashboardMetrics.windowMinimumWidth, minHeight: 640)
                 .task {
                     while !Task.isCancelled {
                         await RemoteDeviceSetup.handle(model: applicationModel)
