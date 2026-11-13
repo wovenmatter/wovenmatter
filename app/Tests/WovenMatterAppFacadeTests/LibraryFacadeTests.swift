@@ -104,7 +104,7 @@ struct LibraryFacadeTests {
         }
         let maintenance: [RemoteRuntimeMaintenance] = try AgentRuntimeKind.allCases.map { runtime in
             try decode("""
-                {"id":"\(runtime.rawValue)","displayName":"\(runtime.displayName)","enabled":true,"visible":true,"installed":true,"components":[],"failureCount":0,"updateAvailable":false}
+                {"id":"\(runtime.rawValue)","displayName":"\(runtime.displayName)","installed":true,"components":[],"failureCount":0,"updateAvailable":false}
                 """)
         }
         model.remoteWorkspaces.configureFacadeFixture(remote, status: status, harnesses: harnesses, maintenance: maintenance)
