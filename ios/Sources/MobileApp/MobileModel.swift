@@ -923,6 +923,7 @@ import MobileInference
         }
         await reload()
       }
+      if scenario.hasPrefix("page") { scenarioNoteID = try await seedPageFixture(store, incoming: scenario == "page-incoming") }
       if scenario == "offline-device" {
         let workspace = ExecutionWorkspace(id: "11111111-2222-4333-8444-555555555555", libraryID: "fixture", ownerDeviceID: "fixture-host", kind: .linux, name: "Offline Linux")
         executionWorkspaces = [workspace]
