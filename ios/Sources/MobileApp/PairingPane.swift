@@ -21,11 +21,11 @@ struct PairingPane: View {
           Button("Unpair", role: .destructive) { confirmDisconnect = true }.disabled(model.pairingInProgress)
         } header: { Text(model.memberMode ? "Your devices" : "Central database") } footer: {
           if let notice = model.membershipNotice { Text(notice).accessibilityIdentifier("pairing-membership-notice") }
-          else if model.memberMode { Text("This iPhone connects directly to each Mac and Linux machine. Any one that is online keeps it in sync.") }
+          else if model.memberMode { Text("\(model.deviceWorkspaceName) connects directly to each Mac and Linux machine. Any one that is online keeps it in sync.") }
         }
         if model.needsMemberPairing { pairingControls(header: "Pair again", footer: "Scan the code from Woven Matter → Settings → Apple Devices on any of your Macs. Pairing once is enough for every device.") }
       } else {
-        pairingControls(header: "Device Connections", footer: "On any Mac with Woven Matter, open Settings → Apple Devices. Scan its code or paste its link. Both devices must use the same Tailscale network. After pairing once, this iPhone reaches every Mac and Linux machine directly.")
+        pairingControls(header: "Device Connections", footer: "On any Mac with Woven Matter, open Settings → Apple Devices. Scan its code or paste its link. Both devices must use the same Tailscale network. After pairing once, \(model.deviceWorkspaceInSentence) reaches every Mac and Linux machine directly.")
       }
       if let problem = model.pairingError ?? scannerError {
         Section { Text(problem).font(.callout).foregroundStyle(DashboardPalette.danger).textSelection(.enabled) }

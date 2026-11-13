@@ -186,7 +186,7 @@ struct ItemManagementSheet: View {
           Button("Delete note", role: .destructive) {
             Task { busy = true; defer { busy = false }; if await model.deleteLocalNote(id) { dismiss() } }
           }
-        } message: { Text("It is removed from \(model.deviceWorkspaceNameInSentence).") }
+        } message: { Text("It is removed from \(model.deviceWorkspaceInSentence).") }
         .quickLookPreview($preview)
     }
   }

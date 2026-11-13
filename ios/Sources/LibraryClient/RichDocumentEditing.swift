@@ -8,7 +8,7 @@ public enum RichDocumentEditing {
     case unsupported, missingBlock, invalidRange, documentLimit
     public var errorDescription: String? {
       switch self {
-      case .unsupported: "This document uses a format this iPhone cannot edit. Its original data is preserved."
+      case .unsupported: "This document uses a format this device cannot edit. Its original data is preserved."
       case .missingBlock: "The selected paragraph no longer exists."
       case .invalidRange: "The selected text changed. Select it again."
       case .documentLimit: "This edit exceeds the document size or structure limit. The change was not inserted; your saved writing is unchanged."

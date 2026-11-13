@@ -335,7 +335,11 @@ when an intentional design change is accepted.
   sheets and popovers. Disable both scrollers on AppKit `NSScrollView` editors.
 - **Layout:** use the existing sidebar, chat-panel, and compact/expanded composer
   patterns. Check affected views at narrow and wide widths and respect Reduce
-  Motion and Reduce Transparency.
+  Motion and Reduce Transparency. Below the desktop breakpoint the rails hide on
+  their own; a revealed rail docks beside the conversation with the same width,
+  inset, and surface as at full width, and the conversation resizes rather than
+  sliding, dimming, or clipping. Only one rail is shown there: Split shows the
+  revealed side, and Adaptive shows one page with its back button.
 
 Compare rendered changes with the existing screen or supplied design reference.
 Code cleanup alone should not alter appearance or interaction.

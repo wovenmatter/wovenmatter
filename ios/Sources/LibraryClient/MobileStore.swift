@@ -70,7 +70,7 @@ public actor MobileStore {
     public var errorDescription: String? {
       switch self {
       case .incompatibleStore: "This local library needs a newer version of Woven Matter."
-      case .wrongWorkspace: "This iPhone belongs to a different workspace. Its local writing has been kept."
+      case .wrongWorkspace: "This device belongs to a different workspace. Its local writing has been kept."
       case .missingNote: "The note is no longer available."
       case .conflictingNote: "Resolve this note’s saved conflict before sending it to an agent."
       case .noteTooLarge: "This note exceeds the 4 MB document limit. Your previous saved version is safe."
@@ -693,7 +693,7 @@ public actor MobileStore {
   private static func remoteDeletion(_ id: String, state: inout MobileStoreState) {
     state.deletedNotes.insert(id)
     if state.isDirty(id), let local = state.notes[id] {
-      state.conflicts[id] = .init(base: state.bases[id], local: local, remote: nil, reason: "This note was deleted on the Mac. Your iPhone writing is preserved.")
+      state.conflicts[id] = .init(base: state.bases[id], local: local, remote: nil, reason: "This note was deleted on the Mac. Your writing on this device is preserved.")
       state.outbox.removeAll { $0.mutation.resourceID == id }
     } else { state.notes.removeValue(forKey: id) }
   }

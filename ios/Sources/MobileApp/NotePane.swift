@@ -577,10 +577,10 @@ private struct ConflictPane: View {
       ScrollView {
         VStack(alignment: .leading, spacing: 18) {
           Text(conflict.reason).font(.subheadline)
-          version("Your iPhone version", note: conflict.local)
+          version("Your \(model.deviceNoun) version", note: conflict.local)
           version("Mac version", note: conflict.remote)
           version("Common saved version", note: conflict.base)
-          Button("Keep iPhone version as a new note") { Task { await model.preserveConflict(id); dismiss() } }.buttonStyle(DashboardPrimaryButtonStyle())
+          Button("Keep \(model.deviceNoun) version as a new note") { Task { await model.preserveConflict(id); dismiss() } }.buttonStyle(DashboardPrimaryButtonStyle())
           Text("The Mac version keeps its original identity. Your writing becomes a new note, so a deleted note is never silently restored.").font(.caption).foregroundStyle(DashboardPalette.mutedForeground)
         }.padding(20)
       }.navigationTitle("Saved conflict").navigationBarTitleDisplayMode(.inline)

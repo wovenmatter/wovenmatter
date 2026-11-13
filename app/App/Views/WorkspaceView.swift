@@ -91,7 +91,8 @@ struct WorkspaceView: View {
     @State private var localExecutionWorkspaceID: String?
     @State private var sidebarNavigation = DashboardSidebarNavigationState()
     @State private var destination = DashboardDestination.workspace
-    @State private var compactDrawer = CompactDrawer.none
+    /// The one rail revealed while the window is too narrow for the requested rails.
+    @State private var compactRail: DashboardSidebarSide?
     @State private var compactWorkspacePane = CompactWorkspacePane.chat
     @State private var noteFocusMode = false
     @State private var draftsByConversationID: [String: String] = [:]
@@ -198,18 +199,16 @@ struct WorkspaceView: View {
                 rightRailRequested: rightRailRequested,
                 sidebarStyle: sidebarStyle,
                 singleSidebarSide: singleSidebarSide,
-                singleRailRequested: singleRailRequested
+                singleRailRequested: singleRailRequested,
+                compactRail: compactRail
             )
 
             ZStack(alignment: .trailing) {
-                Group {
-                    if layout.compact {
-                        compactShell(width: geometry.size.width)
-                    } else {
-                        desktopShell(layout: layout)
-                    }
-                }
+                desktopShell(layout: layout)
                 .background(theme.palette.workspace)
+                // Narrowing the window hides the rails again; widening restores
+                // the rails the person requested.
+                .onChange(of: layout.compact) { _, _ in compactRail = nil }
                 .alert("Pi Durable switched models", isPresented: Binding(get: { model.defaultAgentFallbackNotice != nil }, set: { if !$0 { model.defaultAgentFallbackNotice = nil } })) {
                     Button("OK") { model.defaultAgentFallbackNotice = nil }
                 } message: { Text(model.defaultAgentFallbackNotice ?? "") }
@@ -320,14 +319,14 @@ struct WorkspaceView: View {
             }
         }
         .onChange(of: sidebarStyleRawValue) { _, _ in
-            compactDrawer = .none
+            compactRail = nil
         }
         .onChange(of: singleSidebarSideRawValue) { oldValue, newValue in
             guard sidebarStyle != .split,
                   let oldSide = DashboardSidebarSide(rawValue: oldValue),
                   let newSide = DashboardSidebarSide(rawValue: newValue),
-                  compactDrawer == oldSide.compactDrawer else { return }
-            compactDrawer = newSide.compactDrawer
+                  compactRail == oldSide else { return }
+            compactRail = newSide
         }
         .onChange(of: surfacePreferenceSignature) { _, _ in
             model.persistMacSurfaceProfileFromUserDefaults()
@@ -422,19 +421,19 @@ struct WorkspaceView: View {
 
         return HStack(spacing: presentsCanvas ? 0 : DashboardMetrics.shellGap) {
             if layout.showsLeftRail {
-                railGroup(side: .left)
+                railGroup(side: .left, collapsesAdaptivePages: layout.compact)
             }
 
             centerSurface(
                 showLeftRailButton: showLeftRailButton,
                 showRightRailButton: showRightRailButton,
-                onLeftRail: { revealRail(side: .left) },
-                onRightRail: { revealRail(side: .right) }
+                onLeftRail: { revealRail(side: .left, compact: layout.compact) },
+                onRightRail: { revealRail(side: .right, compact: layout.compact) }
             )
             .frame(minWidth: DashboardMetrics.workspaceMinimumWidth)
 
             if layout.showsRightRail {
-                railGroup(side: .right)
+                railGroup(side: .right, collapsesAdaptivePages: layout.compact)
             }
         }
         // Only fill the tiny cutouts beneath rounded sidebar bottoms. Keep the
@@ -451,96 +450,25 @@ struct WorkspaceView: View {
         .animation(reduceMotion ? nil : .snappy(duration: 0.3), value: layout)
     }
 
-    private func compactShell(width: CGFloat) -> some View {
-        let drawerWidth = min(width * 0.82, 320)
-        let showLeftRailButton = sidebarStyle == .split || singleSidebarSide == .left
-        let showRightRailButton = sidebarStyle == .split || singleSidebarSide == .right
-        let drawerPageCount = sidebarNavigation.pages(
-            for: singleSidebarSide,
-            style: sidebarStyle
-        ).count
-        let drawerTotalWidth = drawerWidth * CGFloat(drawerPageCount)
-        let workspaceOffset: CGFloat = switch compactDrawer {
-        case .none: 0
-        case .left: drawerTotalWidth
-        case .right: -drawerTotalWidth
-        }
-
-        return ZStack(alignment: compactDrawer == .right ? .trailing : .leading) {
-            centerSurface(
-                showLeftRailButton: showLeftRailButton,
-                showRightRailButton: showRightRailButton,
-                onLeftRail: { toggleCompactRail(side: .left) },
-                onRightRail: { toggleCompactRail(side: .right) }
-            )
-            .offset(x: workspaceOffset)
-            .opacity(compactDrawer == .none ? 1 : 0.58)
-            .clipShape(compactWorkspaceShape)
-            .shadow(
-                color: compactDrawer == .none ? .clear : DashboardPalette.foreground.opacity(0.12),
-                radius: 22,
-                x: compactDrawer == .left ? -18 : 18
-            )
-            .onTapGesture {
-                if compactDrawer != .none { compactDrawer = .none }
-            }
-
-            if compactDrawer == .left {
-                railGroup(side: .left, railWidth: drawerWidth, compact: true)
-                    .transition(.move(edge: .leading).combined(with: .opacity))
-            } else if compactDrawer == .right {
-                railGroup(side: .right, railWidth: drawerWidth, compact: true)
-                    .transition(.move(edge: .trailing).combined(with: .opacity))
-            }
-        }
-        .animation(reduceMotion ? nil : .snappy(duration: 0.3), value: compactDrawer)
-    }
-
-    private var compactWorkspaceShape: UnevenRoundedRectangle {
-        switch compactDrawer {
-        case .left:
-            UnevenRoundedRectangle(
-                topLeadingRadius: 28,
-                bottomLeadingRadius: 28,
-                bottomTrailingRadius: 0,
-                topTrailingRadius: 0,
-                style: .continuous
-            )
-        case .right:
-            UnevenRoundedRectangle(
-                topLeadingRadius: 0,
-                bottomLeadingRadius: 0,
-                bottomTrailingRadius: 28,
-                topTrailingRadius: 28,
-                style: .continuous
-            )
-        case .none:
-            UnevenRoundedRectangle(
-                topLeadingRadius: 0,
-                bottomLeadingRadius: 0,
-                bottomTrailingRadius: 0,
-                topTrailingRadius: 0,
-                style: .continuous
-            )
-        }
-    }
-
     @ViewBuilder
     private func railGroup(
         side: DashboardSidebarSide,
-        railWidth: CGFloat = DashboardMetrics.railWidth,
-        compact: Bool = false
+        collapsesAdaptivePages: Bool
     ) -> some View {
-        let pages = sidebarNavigation.pages(for: side, style: sidebarStyle)
+        let pages = sidebarNavigation.pages(
+            for: side,
+            style: sidebarStyle,
+            collapsesAdaptivePages: collapsesAdaptivePages
+        )
         let usesUnifiedSurface = sidebarStyle == .adaptive && pages.count == 2
 
         let content = HStack(spacing: usesUnifiedSurface ? 0 : DashboardMetrics.shellGap) {
             ForEach(pages, id: \.self) { page in
                 rail(side: side, page: page, adaptiveExpanded: usesUnifiedSurface)
-                    .frame(width: railWidth)
+                    .frame(width: DashboardMetrics.railWidth)
                     .background {
                         if !usesUnifiedSurface {
-                            railBackground(compact: compact)
+                            DashboardRailBackground()
                         }
                 }
             }
@@ -549,7 +477,7 @@ struct WorkspaceView: View {
         if usesUnifiedSurface {
             content
                 .background {
-                    railBackground(compact: compact)
+                    DashboardRailBackground()
                 }
                 .overlay {
                     Rectangle()
@@ -561,16 +489,6 @@ struct WorkspaceView: View {
                 .clipShape(DashboardShapes.windowAlignedSurface)
         } else {
             content
-        }
-    }
-
-    @ViewBuilder
-    private func railBackground(compact: Bool) -> some View {
-        if compact {
-            DashboardShapes.windowAlignedSurface
-                .fill(theme.palette.railFill)
-        } else {
-            DashboardRailBackground()
         }
     }
 
@@ -644,8 +562,8 @@ struct WorkspaceView: View {
     }
 
     private func collapseRail(side: DashboardSidebarSide) {
-        if compactDrawer == side.compactDrawer {
-            compactDrawer = .none
+        if compactRail == side {
+            compactRail = nil
         } else if sidebarStyle != .split {
             singleRailRequested = false
         } else if side == .left {
@@ -655,19 +573,18 @@ struct WorkspaceView: View {
         }
     }
 
-    private func revealRail(side: DashboardSidebarSide) {
-        if sidebarStyle != .split {
+    private func revealRail(side: DashboardSidebarSide, compact: Bool) {
+        if compact {
+            // A compact window has room for one rail beside the conversation.
+            singleRailRequested = true
+            compactRail = side
+        } else if sidebarStyle != .split {
             singleRailRequested = true
         } else if side == .left {
             leftRailRequested = true
         } else {
             rightRailRequested = true
         }
-    }
-
-    private func toggleCompactRail(side: DashboardSidebarSide) {
-        singleRailRequested = true
-        compactDrawer = compactDrawer == side.compactDrawer ? .none : side.compactDrawer
     }
 
     private func moveSingleSidebar() {
@@ -790,7 +707,6 @@ struct WorkspaceView: View {
                         }
                         if opened {
                             compactWorkspacePane = .note
-                            compactDrawer = .none
                         }
                     } label: {
                         Image(systemName: "rectangle.on.rectangle").font(.system(size: 16)).frame(width: 32, height: 32)
@@ -891,7 +807,6 @@ struct WorkspaceView: View {
         _ = chatPanels.replaceActiveConversation(with: latest?.id)
         destination = .workspace
         compactWorkspacePane = .chat
-        compactDrawer = .none
     }
 
     private func selectRemoteAgent(_ target: RemoteHarnessChatTarget) {
@@ -904,7 +819,6 @@ struct WorkspaceView: View {
             selectedAgentID = nil
             destination = .workspace
             compactWorkspacePane = .chat
-            compactDrawer = .none
         }
     }
 
@@ -933,7 +847,6 @@ struct WorkspaceView: View {
         }
         destination = .workspace
         compactWorkspacePane = .chat
-        compactDrawer = .none
     }
 
     private func selectBot(_ target: DashboardBotTarget) {
@@ -941,13 +854,11 @@ struct WorkspaceView: View {
         selectedAgentID = nil
         destination = .workspace
         compactWorkspacePane = .chat
-        compactDrawer = .none
     }
 
     private func openBotSettings() {
         model.pendingBotsSettings = true
         openUtility(.settings)
-        compactDrawer = .none
     }
 
     /// Links from a bot open beside it, the same way a chat's browser tabs do.
@@ -956,7 +867,6 @@ struct WorkspaceView: View {
             switch page {
             case .accounts:
                 model.pendingConnectionsScope = "global"
-                compactDrawer = .none
             case .botProfiles:
                 model.pendingBotProfilesMachine = chatPanels.panel(id: panelID)?.botTarget?.machineID
                 openBotSettings()
@@ -974,15 +884,15 @@ struct WorkspaceView: View {
         chatPanels.presentAsset()
         destination = .workspace
         compactWorkspacePane = .note
-        compactDrawer = .none
     }
 
     private func selectFolder(_ id: String?) {
         selectedFolderID = id
         sidebarNavigation.selectFolder()
         destination = .workspace
-        if sidebarStyle == .split {
-            compactDrawer = .none
+        // Only one rail fits a compact window; show the folder's contents.
+        if sidebarStyle == .split, compactRail == .left {
+            compactRail = .right
         }
     }
 
@@ -998,7 +908,6 @@ struct WorkspaceView: View {
         }
         destination = .workspace
         compactWorkspacePane = .chat
-        compactDrawer = .none
     }
 
     private func selectNote(_ id: String) {
@@ -1007,7 +916,6 @@ struct WorkspaceView: View {
         chatPanels.presentAsset()
         destination = .workspace
         compactWorkspacePane = .note
-        compactDrawer = .none
     }
 
     private func createNote(kind: NoteArtifactKind = .note) {
@@ -1097,7 +1005,6 @@ struct WorkspaceView: View {
         selectFolder(id)
         showsNewNoteChooser = false
         showsNewChatChooser = true
-        compactDrawer = .none
     }
 
     private func handleConversationAction(_ conversation: WorkspaceConversationRecord, action: DashboardConversationMenuAction) {
@@ -1165,13 +1072,11 @@ struct WorkspaceView: View {
         closeNewNoteChooser()
         destination = .workspace
         compactWorkspacePane = .note
-        compactDrawer = .none
         chatPanels.presentAsset()
     }
 
     private func createConversation() {
         showsNewNoteChooser = false
-        compactDrawer = .none
         showsNewChatChooser = true
     }
 
@@ -1192,7 +1097,6 @@ struct WorkspaceView: View {
         selectDefaults()
         destination = .workspace
         compactWorkspacePane = .chat
-        compactDrawer = .none
     }
 
     private struct ChatCreationSelection {
@@ -1269,7 +1173,6 @@ struct WorkspaceView: View {
     private func openNewNoteChooser() {
         showsNewChatChooser = false
         showsNewNoteChooser = true
-        compactDrawer = .none
     }
 
     private func closeNewNoteChooser() {
@@ -1278,7 +1181,6 @@ struct WorkspaceView: View {
 
     private func openUtility(_ next: DashboardDestination) {
         destination = next
-        compactDrawer = .none
     }
 
     private func showUnavailableMutation(_ label: String) {
@@ -1288,7 +1190,6 @@ struct WorkspaceView: View {
     private func showNotice(_ message: String) {
         noticeTask?.cancel()
         notice = message
-        withAnimation(.easeOut(duration: 0.2)) { compactDrawer = .none }
         noticeTask = Task {
             try? await Task.sleep(for: .seconds(3))
             guard !Task.isCancelled else { return }
