@@ -127,6 +127,8 @@ export function createStreamServer({ members, servedTargets = async () => [], ex
     largeMessageMilliseconds: streamTimings.largeMessageMilliseconds, libraryMilliseconds: streamTimings.libraryMilliseconds, closeMilliseconds: 5_000, ...timings }
   const webSockets = new WebSocketServer({ noServer: true, maxPayload: limit.clientFrameBytes, perMessageDeflate: false, clientTracking: false })
   const connections = new Set()
+  // A Map, so a client's `stream` never names an Object prototype key.
+  const streams = new Map([['workspace', workspaceStream], ['conversation', conversationStream]])
   let closed = false
   const unwatch = execution.watch(change => { for (const connection of connections) connection.changed(change) })
   const unwatchLibrary = library?.watch(cursor => { for (const connection of connections) connection.changed({ kind: 'library', cursor }) }) ?? (() => {})
@@ -169,11 +171,13 @@ export function createStreamServer({ members, servedTargets = async () => [], ex
     const device = { id: member.deviceID, name: member.name, scopes: ['execution', 'inference'], memberKind: member.kind }
     let ended = false, closeTimer = null
 
-    // Liveness: ping every 25 s; a socket with no pong for 60 s is gone.
+    // Liveness: ping every 25 s; a socket from which nothing arrived for 60 s
+    // (no pong, ping or frame) is gone.
     const pinger = setInterval(() => { if (ws.readyState === OPEN) ws.ping() }, time.pingMilliseconds)
     const deadline = setTimeout(() => ws.terminate(), time.pongTimeoutMilliseconds)
     pinger.unref?.(); deadline.unref?.()
-    ws.on('pong', () => deadline.refresh())
+    const heard = () => deadline.refresh()
+    ws.on('pong', heard); ws.on('ping', heard)
     const unregister = registry ? registry.add(member, { kinds, close: (code, reason) => close(code, reason) }) : () => {}
 
     function close(code, reason) {
@@ -203,8 +207,8 @@ export function createStreamServer({ members, servedTargets = async () => [], ex
       const existing = subscriptions.get(frame.id)
       if (existing) { endSubscription(existing, streamFailure('invalid', 'This subscription ID is already in use.')); return }
       if (subscriptions.size >= limit.subscriptions) { enqueue({ t: 'end', id: frame.id, error: streamFailure('unavailable', 'Too many subscriptions on this connection.', true) }); return }
-      const make = { workspace: workspaceStream, conversation: conversationStream }[frame.stream]
-      if (!make) { enqueue({ t: 'end', id: frame.id, error: streamFailure('invalid', `This server has no ${frame.stream} stream.`) }); return }
+      const make = typeof frame.stream === 'string' ? streams.get(frame.stream) : undefined
+      if (!make) { enqueue({ t: 'end', id: frame.id, error: streamFailure('invalid', `This server has no ${String(frame.stream).slice(0, 64)} stream.`) }); return }
       const subscription = { id: frame.id, ended: false, stop() {}, changed() {} }
       subscriptions.set(frame.id, subscription)
       const context = { subscription, enqueue, waitForRoom, room, end: error => endSubscription(subscription, error) }
@@ -248,6 +252,7 @@ export function createStreamServer({ members, servedTargets = async () => [], ex
 
     ws.on('message', (data, isBinary) => {
       if (ended) return
+      heard()
       if (isBinary) return violation('The stream carries JSON text frames.')
       let frame
       try { frame = decodeFrame(data, { maximumBytes: limit.clientFrameBytes }) } catch (error) { return violation(error.message) }
@@ -439,17 +444,21 @@ export function createStreamServer({ members, servedTargets = async () => [], ex
       return sessionRead
     }
 
-    // Upserts in as few items as fit in a frame.
+    // Upserts in as few items as fit in a frame. An entity too large for one
+    // frame ends the subscription with a non-retryable `unavailable`, so the
+    // client does not loop; false when the subscription ended.
+    const tooLarge = () => end(streamFailure('unavailable', 'This conversation has an entry too large to stream. Open it again later.'))
     function sendUpserts(messages, activities, fields) {
       const entities = [...messages.map(value => ['messages', value]), ...activities.map(value => ['activities', value])]
       let batch = { messages: [], activities: [] }, bytes = 0
       const emit = () => item('transcript', { transcript: { conversationID: id, ...batch, ...fields }, snapshot: false }, { key: 'transcript', merge: mergeTranscripts })
+        || subscription.ended || (tooLarge(), false)
       for (const [field, value] of entities) {
-        const size = value.json.length + 64
-        if (bytes && bytes + size > limit.frameBytes / 2) { emit(); batch = { messages: [], activities: [] }; bytes = 0 }
+        const size = Buffer.byteLength(value.json) + 64
+        if (bytes && bytes + size > limit.frameBytes / 2) { if (!emit()) return false; batch = { messages: [], activities: [] }; bytes = 0 }
         batch[field].push(value.entity); bytes += size
       }
-      emit()
+      return emit() && !subscription.ended
     }
 
     function flush() {
@@ -468,10 +477,11 @@ export function createStreamServer({ members, servedTargets = async () => [], ex
       hints.all = false; hints.messages.clear(); hints.activities.clear()
       const fields = transcriptShape(record.transcript), fieldsHash = hash(JSON.stringify(fields))
       if (messages.length || activities.length || fieldsHash !== shape) {
+        // Recorded as sent only once queued, so nothing is skipped later.
+        if (!sendUpserts(messages, activities, fields)) return
         for (const value of messages) sent.set('m:' + value.entity.id, hash(value.json))
         for (const value of activities) sent.set('a:' + value.entity.id, hash(value.json))
         shape = fieldsHash
-        sendUpserts(messages, activities, fields)
         lastSentAt = clock.now()
       }
       const input = hash(JSON.stringify([record.conversation.runtimeKind, record.native ?? null, record.conversation.activeRunID ?? null]))
@@ -503,11 +513,14 @@ export function createStreamServer({ members, servedTargets = async () => [], ex
     for (const activity of record.transcript.activities) sent.set('a:' + activity.id, hash(JSON.stringify(activity)))
     shape = hash(JSON.stringify(transcriptShape(record.transcript)))
     // The latest window, as `GET …/transcript` returns it, made smaller only
-    // if it does not fit in one frame.
+    // if it does not fit in one frame. One that never fits ends the
+    // subscription with a non-retryable `unavailable`.
     for (let window = limit.snapshotWindow; ; window = Math.floor(window / 2)) {
       const transcript = execution.transcript(id, null, { limit: Math.max(window, 1) })
-      if (item('transcript', { transcript, snapshot: true }) || window <= 1 || subscription.ended) break
+      if (item('transcript', { transcript, snapshot: true }) || subscription.ended) break
+      if (window <= 1) { tooLarge(); return }
     }
+    if (subscription.ended) return
     lastSentAt = clock.now()
     await refreshCapabilities(record)
     if (subscription.ended) return

@@ -162,14 +162,14 @@ test('a wait on this workspace resolves on idle, needsInput and either, and time
 
   // The turn ends while the call waits.
   const waiting = caller.call('woven_sessions_wait', { id: child.id, until: 'idle', timeoutSeconds: 10 })
-  await sleep(50)
+  await until(() => f.service.sessionWaits() === 1, 'the wait follows the session')
   f.finish(f.runs.at(-1).runID)
   const finished = resultOf(await waiting)
   assert.equal(finished.state, 'idle'); assert.equal(finished.timedOut, false)
 
   // A question: needsInput, and either.
   const asking = caller.call('woven_sessions_wait', { id: child.id, until: 'needsInput', timeoutSeconds: 10 })
-  await sleep(50)
+  await until(() => f.service.sessionWaits() === 1, 'the wait follows the session')
   await sendTo(f, child.id, 'Ask first, then work')
   const asked = resultOf(await asking)
   assert.equal(asked.state, 'needsInput'); assert.equal(asked.timedOut, false)
@@ -179,7 +179,7 @@ test('a wait on this workspace resolves on idle, needsInput and either, and time
   await until(() => !f.service.summary(child.id).conversation.activeRunID, 'the question run ended')
   await sendTo(f, child.id, 'One more turn')
   const any = caller.call('woven_sessions_wait', { id: child.id, until: 'either', timeoutSeconds: 10 })
-  await sleep(50)
+  await until(() => f.service.sessionWaits() === 1, 'the wait follows the session')
   f.finish(f.runs.at(-1).runID)
   assert.equal(resultOf(await any).state, 'idle')
 
@@ -222,7 +222,7 @@ test('a scheduled task waits on this server, never on a Mac', async t => {
   assert.ok(tools.includes('woven_sessions_wait'))
   await sendTo(f, child.id, 'Work for a while')
   const waiting = f.service.mcp.handle(scope, { jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'woven_sessions_wait', arguments: { id: child.id, until: 'idle', timeoutSeconds: 10 } } })
-  await sleep(50)
+  await until(() => f.service.sessionWaits() === 1, 'the wait follows the session')
   f.finish(f.runs.at(-1).runID)
   const waited = resultOf(await waiting)
   assert.equal(waited.state, 'idle'); assert.equal(waited.timedOut, false)
@@ -239,7 +239,8 @@ test('a finished session wakes its idle caller, and waits while the caller runs'
   await until(() => l.runs.length === 1, 'the caller runs')
   m.finish(m.runs[0].runID)
   await until(() => l.service.summary(caller.id) && !m.service.summary(child.id).conversation.activeRunID, 'the session finished')
-  await sleep(300)
+  await until(() => l.service.sessionWakeUps(caller.id).length === 1, 'the wake-up is held')
+  for (let index = 0; index < 5; index++) await settle()
   assert.equal(l.runs.length, 1, 'a running caller is not woken')
 
   // Its turn ends: the wake-up starts the next one.
@@ -265,10 +266,12 @@ test('a finished session wakes its idle caller, and waits while the caller runs'
   await until(() => l.runs.length === 4, 'the caller runs')
   m.finish(m.runs.at(-1).runID)
   await until(() => !m.service.summary(child.id).conversation.activeRunID, 'the session finished again')
-  await sleep(200)
+  await until(() => l.service.sessionWakeUps(caller.id).length === 1, 'the wake-up is held while the caller runs')
   assert.equal(resultOf(await caller.call('woven_sessions_status', { id: child.id })).session.state, 'idle')
+  assert.deepEqual(l.service.sessionWakeUps(caller.id), [], 'reading the state replaced it')
   l.finish(l.runs[3].runID)
-  await sleep(400)
+  await until(() => !l.service.summary(caller.id).conversation.activeRunID, 'the caller is idle')
+  for (let index = 0; index < 5; index++) await settle()
   assert.equal(l.runs.length, 4, 'the caller saw it finish, so it is not woken')
 })
 
@@ -289,7 +292,8 @@ test('a bot is woken through the bots runtime', async t => {
   await until(() => listReads() > before, 'the wait began')
   m.finish(m.runs[0].runID)
   assert.equal(resultOf(await waited).state, 'idle')
-  await sleep(300)
+  await until(() => l.service.sessionWakeUps().length === 0 && l.service.sessionWatched().length === 0, 'nothing is left to wake the bot with')
+  for (let index = 0; index < 5; index++) await settle()
   assert.equal(botDeliveries.length, 0, 'the wait already told the bot')
 
   resultOf(await call('woven_sessions_send', { id: child.id, text: 'Again', requestID: randomUUID() }))
@@ -301,11 +305,12 @@ test('a bot is woken through the bots runtime', async t => {
 })
 
 // The coordinator alone, with a source the test drives.
-function coordinator(t, { db = new DatabaseSync(':memory:'), runs } = {}) {
-  const sources = [], delivered = [], bots = []
+function coordinator(t, { db = new DatabaseSync(':memory:'), runs, sourceFor = null, refuse = null, options = {} } = {}) {
+  const sources = [], delivered = [], bots = [], logs = []
   const callers = runs ?? new Map()
-  const watch = createSessionWatch({ db, retryMilliseconds: 50, lingerMilliseconds: 10_000,
-    sourceFor: async () => {
+  const watch = createSessionWatch({ db, retryMilliseconds: 50, lingerMilliseconds: 10_000, log: message => logs.push(message), ...options,
+    sourceFor: async (...input) => {
+      if (sourceFor) { const value = await sourceFor(...input); if (value !== undefined) return value }
       const listeners = new Set()
       const source = { listen: fn => { listeners.add(fn); return () => listeners.delete(fn) }, track: () => () => {}, sync() {}, retry() {}, ready: () => true, close() {},
         emit: (id, state, extra = {}) => { for (const fn of listeners) fn(id, { state, conversation: { id, ...(extra.title ? { title: extra.title } : {}), ...(state === 'running' ? { activeRunID: extra.runID ?? 'remote-run' } : {}) }, pending: extra.pending ?? [] }) } }
@@ -314,6 +319,7 @@ function coordinator(t, { db = new DatabaseSync(':memory:'), runs } = {}) {
     },
     caller: id => id.startsWith('woven:bot:') ? { kind: 'bot', botID: id.split(':').at(-1) } : callers.get(id) ?? null,
     deliverToConversation: async input => {
+      if (refuse) return refuse(input)
       const state = callers.get(input.callerID)
       if (!state.idle) return { status: 'rejected', message: 'This conversation is already running.' }
       const runID = 'wake-' + (delivered.length + 1)
@@ -323,7 +329,7 @@ function coordinator(t, { db = new DatabaseSync(':memory:'), runs } = {}) {
     deliverToBot: async input => { bots.push(input) } })
   t.after(() => watch.close())
   const remember = (id, callerID) => db.prepare('INSERT INTO member_sessions VALUES (?,?,?,?)').run(id, callerID, 'w1', new Date().toISOString())
-  return { db, watch, sources, delivered, bots, callers, remember }
+  return { db, watch, sources, delivered, bots, callers, remember, logs }
 }
 const workspaceW1 = { id: 'w1', name: 'Workstation W' }
 
@@ -414,4 +420,52 @@ test('a bot\'s wake-ups count again when it creates a session', async t => {
   watch.observe({ callerID, workspace: workspaceW1, id: sessionID, state: 'running', runID: 'new', created: true })
   sources[0].emit(sessionID, 'idle')
   await until(() => bots.length === maximumWakeUpsPerRun + 1, 'a created session starts a new count')
+})
+
+test('a wake-up refused every time is retried with a backoff, then dropped; a permanent refusal at once', async t => {
+  const attempts = []
+  const { watch, sources, callers, remember, logs } = coordinator(t, { options: { maximumDeliveryAttempts: 3 },
+    refuse: input => { attempts.push({ at: Date.now(), input }); if (input.sessionID === permanent) throw Object.assign(new Error('Conversation not found.'), { statusCode: 404 })
+      return { status: 'rejected', message: 'The workspace is at its session limit.' } } })
+  const callerID = randomUUID(), sessionID = randomUUID(), permanent = randomUUID()
+  callers.set(callerID, { kind: 'conversation', idle: true, latestRunID: 'user-run' })
+  remember(sessionID, callerID)
+  watch.observe({ callerID, workspace: workspaceW1, id: sessionID, state: 'running', runID: 'r1' })
+  await until(() => sources.length === 1, 'a source for w1')
+  sources[0].emit(sessionID, 'idle')
+  await until(() => watch.pending(callerID).length === 0, 'dropped after its attempts')
+  assert.equal(attempts.length, 3)
+  // 50 ms, then 100 ms: each wait longer than the one before.
+  assert.ok(attempts[2].at - attempts[1].at >= 90 && attempts[1].at - attempts[0].at >= 40, JSON.stringify(attempts.map(item => item.at - attempts[0].at)))
+  assert.ok(logs.some(message => /dropped after 3 refusals/.test(message)))
+  // A refusal the caller's workspace can never accept is not retried.
+  remember(permanent, callerID)
+  watch.observe({ callerID, workspace: workspaceW1, id: permanent, state: 'running', runID: 'r2' })
+  sources[0].emit(permanent, 'idle')
+  await until(() => watch.pending(callerID).length === 0 && attempts.length === 4, 'dropped at once')
+  await sleep(150)
+  assert.equal(attempts.length, 4)
+})
+
+test('sessions on a removed workspace stop being watched; one not reachable yet is retried with a backoff', async t => {
+  const tries = { removed: 0, flaky: 0 }
+  const { db, watch, sources, callers, remember, logs } = coordinator(t, { sourceFor: async workspaceID => {
+    if (workspaceID === 'removed') { tries.removed++; return null }
+    if (workspaceID === 'flaky' && ++tries.flaky < 4) throw new Error('The library host is not ready.')
+    return undefined
+  } })
+  const callerID = randomUUID(), gone = randomUUID(), later = randomUUID()
+  callers.set(callerID, { kind: 'conversation', idle: true, latestRunID: 'user-run' })
+  remember(gone, callerID); remember(later, callerID)
+  watch.observe({ callerID, workspace: { id: 'removed', name: 'Old box' }, id: gone, state: 'running', runID: 'r1' })
+  await until(() => !watch.watched().some(row => row.id === gone), 'the removed workspace\'s session is no longer watched')
+  await sleep(200)
+  assert.equal(tries.removed, 1, 'a removed workspace is not tried again')
+  assert.equal(logs.filter(message => message.includes('removed')).length, 1)
+  watch.observe({ callerID, workspace: { id: 'flaky', name: 'New box' }, id: later, state: 'running', runID: 'r2' })
+  await until(() => sources.length === 1, 'reached once it is ready', 5_000)
+  assert.equal(tries.flaky, 4)
+  assert.equal(logs.filter(message => message.includes('flaky')).length, 1, 'said once, not on every attempt')
+  assert.ok(watch.watched().some(row => row.id === later))
+  assert.equal(db.prepare('SELECT COUNT(*) AS n FROM member_session_watch WHERE workspace=?').get('removed').n, 0)
 })

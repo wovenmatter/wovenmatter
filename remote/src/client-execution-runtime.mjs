@@ -213,13 +213,20 @@ export function createClientExecutionRuntime({ defaultAgent, durableACP, catalog
       return adopted
     }
     if(typeof native.channelID!=='string')throw fail('The native durable channel identity is required.')
-    const known=durableACP.peek?await durableACP.peek(native.channelID):undefined
+    let known=durableACP.peek?await durableACP.peek(native.channelID):undefined
+    if(known?.state==='interrupted') {
+      // Its former owner died without recording a stop (an ungraceful host
+      // exit), and the SSH relay it last ran under is gone. Once no process
+      // of this server holds it, it is recorded stopped and reopened below.
+      if(known.live)throw fail('This native session is still running on this host. Wait for it to finish before moving it.')
+      if(known.sessionID&&known.sessionID!==native.sessionID)throw fail('The durable channel belongs to a different native session.')
+      known=await durableACP.release(native.channelID).catch(error=>{throw fail(error.message)})
+    }
     if(known!==undefined&&known?.state!=='running') {
       // The durable process is gone (a host restart stopped it) or never
       // existed (an SSH session with background execution off). Reopen the
       // native session from the harness's own store on a channel this server
       // owns; a session that cannot be reopened leaves no process behind.
-      if(known?.state==='interrupted')throw fail('This native session was interrupted. It cannot move until it is reopened where it last ran.')
       if(known?.sessionID&&known.sessionID!==native.sessionID)throw fail('The durable channel belongs to a different native session.')
       const reopened={nativeWorkingDirectory:native.nativeWorkingDirectory,sessionID:native.sessionID,channelID:native.channelID,...(runtimeKind==='grok_build'?{permission:native.permission??'default'}:{})}
       try {

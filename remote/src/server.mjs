@@ -231,7 +231,7 @@ function hostRelease() {
 
 const bots = runningAsService && configuration.runtimeKind === 'host' && process.platform === 'linux' ? createBotsService({
   configuration, mcp: clientExecution.mcp, release: hostRelease, defaultAgent, serverPort: () => server.address()?.port ?? listenPort,
-  libraryHost: library, memberIdentity, registry: memberSockets,
+  libraryHost: library, memberIdentity, registry: memberSockets, installerBearer,
   // Signed members, or the installer bearer on the SSH tunnel only; device grants open nothing.
   authorizeClient: request => authorizeBotsUpgrade(request, { members, servedTargets, installerBearer }),
 }) : null

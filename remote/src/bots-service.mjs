@@ -7,7 +7,7 @@ import { createBotEngine, machineIdentity } from './bots-engine.mjs'
 import { createBotConversationLibrary, createJournalBotLibraryAdapter, createLocalLibraryBotAdapter } from './bots-library.mjs'
 import { createBotPreviews } from './bots-previews.mjs'
 import { botsPackageRoot, createBotsRuntime } from './bots-runtime.mjs'
-import { executionMemberKinds } from './member-sockets.mjs'
+import { executionMemberKinds, memberRemovedCloseCode } from './member-sockets.mjs'
 import { WebSocket as RelayWebSocket, WebSocketServer } from './websocket.mjs'
 
 const GB = 1024 ** 3
@@ -48,7 +48,7 @@ async function writePrivateJSON(path, value) {
  * reports resources, and proxies /v1/bots/ws for Woven apps.
  */
 export function createBotsService({ configuration, mcp, defaultAgent, serverPort, library, libraryHost, engine, runtime, previews,
-  authorizeClient, registry = null, machine, memberIdentity, release, engineWatchMilliseconds = 5000, webSocket = globalThis.WebSocket, log = message => process.stderr.write(message + '\n') }) {
+  authorizeClient, registry = null, installerBearer = null, machine, memberIdentity, release, engineWatchMilliseconds = 5000, webSocket = globalThis.WebSocket, log = message => process.stderr.write(message + '\n') }) {
   const stateDirectory = join(configuration.stateDirectory, 'bots')
   const settingsPath = join(stateDirectory, 'settings.json')
   const dataDirectory = configuration.botsData ?? join(configuration.dataRoot, 'bots')
@@ -112,6 +112,7 @@ export function createBotsService({ configuration, mcp, defaultAgent, serverPort
   }
   async function close() {
     clearInterval(engineWatch)
+    stopInstallerWatch()
     await runtime?.stop()
     await previews.close().catch(() => {})
   }
@@ -282,6 +283,9 @@ export function createBotsService({ configuration, mcp, defaultAgent, serverPort
     const target = active() ? runtime?.endpoint() : null
     if (!target) { refuse(503, 'Service Unavailable'); return }
     if ((request.headers.upgrade ?? '').toLowerCase() !== 'websocket') { refuse(400, 'Bad Request'); return }
+    // The client's handshake must be one the relay can complete before an upstream is dialled.
+    const key = request.headers['sec-websocket-key'], version = request.headers['sec-websocket-version']
+    if (request.method !== 'GET' || typeof key !== 'string' || !/^[+/0-9A-Za-z]{22}==$/.test(key.trim()) || !['8', '13'].includes(version)) { refuse(400, 'Bad Request'); return }
     const protocols = String(request.headers['sec-websocket-protocol'] ?? '').split(',').map(value => value.trim()).filter(Boolean)
     const headers = { authorization: 'Bearer ' + target.token, ...(typeof request.headers['user-agent'] === 'string' ? { 'user-agent': request.headers['user-agent'] } : {}) }
     let upstream
@@ -290,17 +294,31 @@ export function createBotsService({ configuration, mcp, defaultAgent, serverPort
     let opened = false
     upstream.on('unexpected-response', (_, response) => { response.resume(); refuse(502, 'Bad Gateway'); upstream.terminate() })
     upstream.on('error', () => { if (!opened) refuse(502, 'Bad Gateway') })
-    socket.once('close', () => { if (!opened) upstream.terminate() })
+    // Until both ends are bridged, a client socket that goes away (its
+    // handshake was refused, or it hung up) takes the upstream with it.
+    let bridged = false
+    socket.once('close', () => { if (!bridged) upstream.terminate() })
     upstream.once('open', () => {
       opened = true
       if (socket.destroyed) { upstream.terminate(); return }
       request.wovenUpstreamProtocol = upstream.protocol
-      relays.handleUpgrade(request, socket, head, client => bridge(client, upstream, member))
+      relays.handleUpgrade(request, socket, head, client => { bridged = true; bridge(client, upstream, member, request) })
     })
   }
-  function bridge(client, upstream, member) {
-    const unregister = registry && member?.deviceID
-      ? registry.add(member, { kinds: executionMemberKinds, close: (code, reason) => { client.close(code, reason); upstream.close(1000) } }) : () => {}
+  // Relays the installer bearer opened: a rotation of that bearer closes them.
+  const installerRelays = new Set()
+  const stopInstallerWatch = installerBearer?.onRotate(() => {
+    for (const close of [...installerRelays]) close(memberRemovedCloseCode, 'The installer bearer was replaced.')
+  }) ?? (() => {})
+  function bridge(client, upstream, member, request) {
+    const closeBoth = (code, reason) => { client.close(code, reason); upstream.close(1000) }
+    let unregister = registry && member?.deviceID ? registry.add(member, { kinds: executionMemberKinds, close: closeBoth }) : () => {}
+    if (member?.installer) {
+      installerRelays.add(closeBoth)
+      unregister = () => installerRelays.delete(closeBoth)
+      // Rotated while this relay was being opened.
+      if (installerBearer && !installerBearer.matches(request)) queueMicrotask(() => closeBoth(memberRemovedCloseCode, 'The installer bearer was replaced.'))
+    }
     // Messages pass through unchanged; a side that cannot keep up pauses the other.
     const forward = (from, to) => {
       let pending = 0

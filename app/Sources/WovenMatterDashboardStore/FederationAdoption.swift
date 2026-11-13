@@ -83,16 +83,24 @@ extension WorkspaceDatabaseConnection {
   }
 
   /// The legacy history sent with an adoption: the newest messages and
-  /// activities that fit the host's request limit (8 MiB), roles the host
-  /// accepts. The full history stays in this library either way.
+  /// activities that fit the host's request limit (8 MiB) and its counts
+  /// (`adoptionEntityLimit` of each), roles the host accepts. The full
+  /// history stays in this library either way.
   func adoptionTranscriptUnlocked(_ conversationID: String, limit: Int = 6 * 1_024 * 1_024) throws -> LibraryTranscript {
     var transcript = try federationLegacyTranscriptUnlocked(conversationID)
     transcript.messages.removeAll { !["user", "assistant", "system"].contains($0.role) }
     return Self.fitted(transcript, limit: limit)
   }
 
-  static func fitted(_ transcript: LibraryTranscript, limit: Int) -> LibraryTranscript {
+  /// The most messages, and the most activities, a Linux host accepts in an
+  /// adopted transcript (`remote/src/client-execution.mjs`).
+  static let adoptionEntityLimit = 10_000
+
+  static func fitted(_ transcript: LibraryTranscript, limit: Int, count: Int = adoptionEntityLimit) -> LibraryTranscript {
     var value = transcript
+    // Keep the latest turns, as the byte trim below does.
+    if value.messages.count > count { value.messages.removeFirst(value.messages.count - count) }
+    if value.activities.count > count { value.activities.removeFirst(value.activities.count - count) }
     let encoder = JSONEncoder()
     func size() -> Int { (try? encoder.encode(value).count) ?? Int.max }
     while size() > limit, !value.messages.isEmpty || !value.activities.isEmpty {

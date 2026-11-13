@@ -273,7 +273,7 @@ export function createClientExecution({ directory, runtime, kind = 'linux', name
     if (value == null) return { messages: [], activities: [] }
     const messages = value.messages ?? [], activities = value.activities ?? []
     if (typeof value !== 'object' || !Array.isArray(messages) || !Array.isArray(activities) || messages.length > 10000 || activities.length > 10000) throw fail(400, 'Invalid adopted history.')
-    const settled = status => ['running', 'pending', 'queued'].includes(status) ? 'interrupted' : status
+    const settled = status => ['running', 'pending', 'queued', 'cancelling', 'uncertain', 'streaming'].includes(status) ? 'interrupted' : status
     const ids = new Set()
     const entity = (item, valid) => {
       if (!item || typeof item !== 'object' || typeof item.id !== 'string' || !item.id || item.id.length > 256 || ids.has(item.id) || !valid(item)) throw fail(400, 'Invalid adopted history.')
@@ -886,9 +886,11 @@ export function createClientExecution({ directory, runtime, kind = 'linux', name
     async sourceFor(workspaceID,{interesting}) {
       if(workspaceID===enrolledID())return createLocalSessionSource({summary:id=>service.summary(id),watch:listener=>{watchers.add(listener);return()=>watchers.delete(listener)},interesting})
       if(!members)return null
+      // A list that cannot be read is retried; one without the workspace means it was removed.
       const workspace=(await members.transport.workspaces()).find(item=>item.id===workspaceID)
-      if(!workspace?.endpoint||workspace.kind==='ios')return null
+      if(!workspace?.endpoint||workspace.kind==='ios'||workspace.deleted)return null
       return createRemoteSessionSource({endpoint:workspace.endpoint,sign:url=>members.transport.signedHeaders(url,{audience:workspace}),interesting,
+        expected:{workspaceID:workspace.id,libraryID:workspace.libraryID??null},
         log:message=>process.stderr.write(message+'\n'),...(sessionWatchOptions.stream??{})})
     },
     caller(callerID) {
@@ -1139,6 +1141,9 @@ export function createClientExecution({ directory, runtime, kind = 'linux', name
     },
     // The member list changed: a stream refused with 4401 may try again.
     retryStreams:()=>sessionWatch.retry(),
+    // What the session watch holds: pending wake-ups (all, or one caller's),
+    // watched sessions, and how many waits follow live changes.
+    sessionWakeUps:callerID=>sessionWatch.pending(callerID),sessionWatched:()=>sessionWatch.watched(),sessionWaits:()=>sessionWatch.waiting(),
     async close() { closed=true;sessionWatch.close();clearInterval(goalTimer);mcp.close();await publisher.close(); clearTimeout(flushTimer); for (const id of dirty.keys()) flush(id,true); unlockMaterial = undefined; await runtime.close?.(); await Promise.allSettled([...jobs.values()].map(job => job.completion)); await Promise.allSettled([...queues.values()]); db.close() },
   }
   // What was watched or pending before a restart (its interrupted runs are idle now).

@@ -283,7 +283,8 @@ same commit.
     /v1/host/installer-bearer` (a signed Mac member, or the installer itself)
     rotates it: `remote-host.sh rotate-token ID` writes a new
     `WOVENMATTER_API_TOKEN` to `service.env` and the running server switches
-    to it at once; the reply is `{rotated: true}`, plus `bearer` only for the
+    to it at once, closing (`4401`) every bots relay the old bearer opened;
+    the reply is `{rotated: true}`, plus `bearer` only for the
     installer on its own tunnel. A Mac that removes another Mac queues a
     rotation (durably, retried with pending revocations,
     user-defaults key `library.execution.pending-installer-rotations`) on every Linux host in
@@ -1315,7 +1316,10 @@ member removed.
   last. Bots get theirs through the bots runtime, and a bot's count restarts
   when it creates a session. IDs derive from caller, session and state, so each
   is delivered once; watched sessions and pending wake-ups survive a restart
-  (Linux: `remote/src/session-watch.mjs`).
+  (Linux: `remote/src/session-watch.mjs`). On Linux a wake-up refused every
+  time backs off and is dropped after 20 attempts (one refused as invalid or
+  not found at once), and sessions on a workspace gone from the registry stop
+  being watched; one not reachable yet is retried with a backoff.
 - Behind both, the caller's server holds one stream to each destination server
   while it watches or waits on a session there, subscribed to its `workspace`
   stream and filtered on the caller's side to those sessions; its own
@@ -1346,7 +1350,10 @@ no stdio relay.
 - **Messages.** Files are uploaded first (`PUT
   v1/execution/attachments/<sha256>?name=&mimeType=`, 25 MiB each, stored under
   `.wovenmatter/attachments/<sha256>/<name>`), then named in `send` or `steer`
-  `attachments` (8 files, 50 MiB) and checked again before delivery. Images and
+  `attachments` (8 files, 50 MiB) and checked again before delivery. The
+  store holds at most 2,000 files and 4 GiB; an upload past that is refused
+  with `507` until files are removed from it, and a digest folder that is not
+  a real directory inside the store is refused with `403`. Images and
   UTF-8 text are inlined up to 5 MiB per message; other files, and anything
   past that, are linked and listed by path. `promptContext` (visible notes and
   pages, references) follows the message to the harness and is not in the
@@ -1379,11 +1386,18 @@ no stdio relay.
   `/tmp` or `/mnt/data`, no final symlink, 25 MiB.
 - **Adoption.** A chat that ran over SSH before moves to its host's server
   when this Mac first opens, refreshes or sends to it. Runs it left unsettled
-  are interrupted, the adoption is fenced in the library
-  (`execution_adoptions`), and `POST v1/execution/adopt` carries `transcript`:
-  the newest messages and activities that fit in 6 MiB. The host reopens a
-  stopped or missing durable channel with `session/load` and leaves no process
-  behind when that fails. A retry resends the same adoption. A chat that
+  are interrupted, each with its assistant message, saying the run was on
+  that host and the update interrupted it (a run still running or uncertain
+  when the Mac starts is settled the same way); the adoption is fenced in the
+  library (`execution_adoptions`), and `POST v1/execution/adopt` carries
+  `transcript`: the newest messages and activities that fit in 6 MiB, at
+  most 10,000 of each (the host's limits); an entry left running, queued,
+  uncertain or streaming arrives interrupted. The host reopens a stopped or
+  missing durable channel with `session/load` and leaves no process behind
+  when that fails. A channel left interrupted by an ungraceful exit, which no
+  process of the host's server holds, is recorded stopped and reopened the
+  same way; one whose process still runs is refused. A retry resends the
+  same adoption. A chat that
   cannot move (its host is no longer set up or not yet enrolled, it never
   started a native session, or the host refuses) stays in the library as
   read-only history, and sending to it says why.

@@ -9,7 +9,8 @@ import { createBotConversationLibrary, createMemoryBotLibraryAdapter } from '../
 import { createBotsService } from '../src/bots-service.mjs'
 import { createClientExecution } from '../src/client-execution.mjs'
 import { createMemberVerifier, privateKeyFromSeed, rawPublicKeyFor, signMemberRequest } from '../src/member-auth.mjs'
-import { authenticateMemberUpgrade, createMemberSocketRegistry } from '../src/member-sockets.mjs'
+import { authenticateMemberUpgrade, authorizeBotsUpgrade, createMemberSocketRegistry } from '../src/member-sockets.mjs'
+import { createInstallerBearer } from '../src/installer-bearer.mjs'
 import { createStreamClient } from '../src/stream-client.mjs'
 import { decodeFrame, encodeFrame, StreamFrameError, streamCapability } from '../src/stream-protocol.mjs'
 import { createOutboundQueue, createStreamServer } from '../src/stream-server.mjs'
@@ -574,6 +575,57 @@ test('a socket that answers no pings is closed', async t => {
   assert.equal(String(await pong), 'x')
 })
 
+test('any frame from the client keeps its socket alive, not only a pong', async t => {
+  const f = await fixture(t, { timings: { pingMilliseconds: 40, pongTimeoutMilliseconds: 600 } })
+  const talking = f.connect(f.signed(), { autoPong: false })
+  await talking.next(frame => frame.t === 'hello')
+  for (const deadline = Date.now() + 1_500; Date.now() < deadline;) {
+    await talking.request('execution.receipt', { commandID: randomUUID() })
+    await new Promise(resolve => setTimeout(resolve, 100))
+  }
+  assert.equal(talking.socket.readyState, WebSocket.OPEN)
+  // Its own pings count too.
+  for (const deadline = Date.now() + 1_000; Date.now() < deadline;) { talking.socket.ping(); await new Promise(resolve => setTimeout(resolve, 100)) }
+  assert.equal(talking.socket.readyState, WebSocket.OPEN)
+  // Silence still closes it.
+  await talking.closed
+})
+
+test('a stream name that is an Object prototype key is not a stream', async t => {
+  const f = await fixture(t)
+  const client = f.connect()
+  await client.next(frame => frame.t === 'hello')
+  for (const stream of ['constructor', '__proto__', 'toString', 'hasOwnProperty']) {
+    client.send({ t: 'sub', id: stream, stream, params: {} })
+    const end = await client.next(frame => frame.t === 'end' && frame.id === stream)
+    assert.equal(end.error.code, 'invalid', stream)
+  }
+  // The connection still serves real streams.
+  client.send({ t: 'sub', id: 'w', stream: 'workspace', params: {} })
+  await client.next(isItem('synchronized', 'w'))
+})
+
+test('a transcript snapshot or entity too large for one frame ends the subscription with unavailable', async t => {
+  const f = await fixture(t, { limits: { frameBytes: 4 * 1024 } })
+  const id = await f.session()
+  await f.execution.command(f.command('send', { conversationID: id, text: 'go' }), f.device)
+  await eventually(() => f.runs.length === 1, 'the run started')
+  const client = f.connect()
+  await client.next(frame => frame.t === 'hello')
+  client.send({ t: 'sub', id: 'live', stream: 'conversation', params: { conversationID: id } })
+  await client.next(isItem('synchronized', 'live'))
+  // An entity over the frame limit: the subscription ends; it is not dropped quietly.
+  f.runs[0].publish({ sessionUpdate: 'agent_message_chunk', content: { text: 'x'.repeat(40 * 1024) } })
+  const ended = await client.next(frame => frame.t === 'end' && frame.id === 'live')
+  assert.equal(ended.error.code, 'unavailable'); assert.equal(ended.error.retryable, false)
+  // A snapshot that does not fit even one message ends before `synchronized`.
+  client.send({ t: 'sub', id: 'snapshot', stream: 'conversation', params: { conversationID: id } })
+  const refused = await client.next(frame => frame.t === 'end' && frame.id === 'snapshot')
+  assert.equal(refused.error.code, 'unavailable'); assert.equal(refused.error.retryable, false)
+  assert.equal(client.unread(frame => frame.id === 'snapshot').length, 0)
+  assert.ok(!client.frames.some(frame => frame.id === 'snapshot' && frame.t === 'item'))
+})
+
 test('inbound frames are limited to 1 MiB and must be JSON text', async t => {
   const f = await fixture(t)
   const large = f.connect()
@@ -675,4 +727,73 @@ test('a socket added after the sweep that removed its member is closed with 4401
   assert.deepEqual(closes.late, [4401])
   assert.deepEqual(closes.kept, [])
   assert.equal(registry.count(), 1)
+})
+
+test('the stream client uses a server only when its hello names the expected workspace and library', async t => {
+  const f = await fixture(t)
+  const connect = expected => {
+    const events = [], items = [], signatures = []
+    const client = createStreamClient({ endpoint: `http://127.0.0.1:${f.port}`, expected,
+      sign: async url => { signatures.push(url); return f.signed(url.pathname + url.search) }, timings: { initial: 20, maximum: 100 }, onEvent: event => events.push(event) })
+    t.after(() => client.close())
+    client.subscribe('workspace', {}, { onItem: frame => items.push(frame) })
+    client.connect()
+    return { client, events, items, signatures }
+  }
+  const right = connect({ workspaceID: f.enrollment.workspaceID.toUpperCase(), libraryID: f.enrollment.libraryID })
+  await eventually(() => right.items.some(frame => frame.kind === 'synchronized'), 'the expected workspace streams')
+  for (const expected of [{ workspaceID: randomUUID(), libraryID: f.enrollment.libraryID }, { workspaceID: f.enrollment.workspaceID, libraryID: randomUUID() }]) {
+    const wrong = connect(expected)
+    await eventually(() => wrong.client.state() === 'mismatched', 'another workspace is not used')
+    assert.deepEqual(wrong.events.find(event => event.type === 'mismatch').hello, { workspaceID: f.enrollment.workspaceID, libraryID: f.enrollment.libraryID })
+    assert.equal(wrong.items.length, 0, 'nothing it sent was used')
+    // No reconnecting to it until told.
+    const attempts = wrong.signatures.length
+    await new Promise(resolve => setTimeout(resolve, 200))
+    assert.equal(wrong.signatures.length, attempts)
+    wrong.client.retry()
+    await eventually(() => wrong.signatures.length === attempts + 1 && wrong.client.state() === 'mismatched', 'retry checks again')
+  }
+})
+
+test('the bots relay dials no runtime for a bad handshake, and a bearer rotation closes installer relays', async t => {
+  const f = await fixture(t)
+  const runtimeServer = createServer(), runtimeSockets = new WebSocketServer({ server: runtimeServer, path: '/ws' })
+  let dialled = 0
+  runtimeSockets.on('connection', socket => { dialled++; socket.on('message', data => socket.send(data)) })
+  const runtimePort = await listen(runtimeServer)
+  t.after(() => { for (const socket of runtimeSockets.clients) socket.terminate(); runtimeSockets.close(); runtimeServer.close() })
+  const directory = mkdtempSync(join(tmpdir(), 'wm-stream-installer-'))
+  t.after(() => rmSync(directory, { recursive: true, force: true }))
+  const token = 'installer-' + 'a'.repeat(40), next = 'installer-' + 'b'.repeat(40)
+  const installerBearer = createInstallerBearer({ token, rotate: async () => next })
+  const bots = createBotsService({ configuration: { stateDirectory: directory, dataRoot: directory, botsData: join(directory, 'bots'), serviceRoot: directory, botsEnabled: true, workspaceEnabled: true },
+    engine: { status: async () => ({ installed: false }), layout: { socket: join(directory, 'engine.sock') } }, previews: { recover: async () => {}, close: async () => {} },
+    runtime: { start() {}, stop: async () => {}, restart: async () => {}, status: () => ({ running: true }), endpoint: () => ({ host: '127.0.0.1', port: runtimePort, token: 'runtime-token' }) },
+    library: createBotConversationLibrary(createMemoryBotLibraryAdapter()), machine: { deviceID: f.host, name: 'box' }, serverPort: () => f.port, registry: f.registry, log: () => {},
+    installerBearer, authorizeClient: request => authorizeBotsUpgrade(request, { members: f.verifier, servedTargets: f.servedTargets, installerBearer }) })
+  t.after(() => bots.close())
+  f.upgrades.push(bots.upgrade)
+
+  // A signed request whose WebSocket handshake cannot be completed: refused before any upstream exists.
+  for (const headers of [{ 'sec-websocket-key': 'short' }, { 'sec-websocket-version': '12' }]) {
+    const refused = await handshake(f.port, { path: '/v1/bots/ws', headers: { ...f.signed(prefix + '/v1/bots/ws'), ...headers } })
+    assert.equal(refused.status, 400)
+  }
+  assert.equal(dialled, 0)
+
+  const open = headers => { const socket = new WebSocket(`ws://127.0.0.1:${f.port}/v1/bots/ws`, { headers }); f.sockets.push(socket); return frameReader(socket) }
+  const installer = open({ authorization: 'Bearer ' + token }), member = open(f.signed(prefix + '/v1/bots/ws'))
+  await installer.opened; await member.opened
+  installer.send({ t: 'echo' })
+  assert.deepEqual(await installer.next(), { t: 'echo' })
+  await eventually(() => dialled === 2, 'both relays reach the runtime')
+  assert.equal(await installerBearer.rotate(), next)
+  assert.equal((await installer.closed).code, 4401)
+  assert.equal(member.socket.readyState, WebSocket.OPEN, 'a member relay is not the installer\'s')
+  // The old bearer opens nothing; the new one does.
+  assert.equal((await handshake(f.port, { path: '/v1/bots/ws', headers: { authorization: 'Bearer ' + token } })).status, 401)
+  const renewed = open({ authorization: 'Bearer ' + next })
+  await renewed.opened
+  await eventually(() => runtimeSockets.clients.size === 2, 'the closed relay left no runtime socket behind')
 })
