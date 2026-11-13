@@ -1362,6 +1362,19 @@ extension WorkspaceDatabaseConnection {
   ) throws {
     try transaction {
       let timestamp = Self.timestamp(recoveredAt)
+      // A run of a chat that ran over SSH ran on its Linux host, not here.
+      // Nothing launches or reattaches one any more, so a run left running
+      // or uncertain before the update is settled as interrupted by it.
+      for conversationID in try libraryIDsUnlocked("""
+        SELECT DISTINCT r.conversation_id FROM dashboard_runs r
+        JOIN desktop_local_acp_sessions s ON s.conversation_id=r.conversation_id AND s.remote_workspace_id IS NOT NULL
+        WHERE r.desktop_owned=1 AND r.status IN ('running','uncertain')
+          AND r.conversation_id NOT IN (SELECT conversation_id FROM desktop_openclaw_gateway_sessions)
+          AND r.conversation_id NOT IN (SELECT conversation_id FROM desktop_opencode_sessions)
+          AND \(PairedLibraryOwnership.localConversation("r.conversation_id"))
+        """, bindings: []) {
+        try interruptLegacyRemoteRunsUnlocked(conversationID: conversationID)
+      }
       // Losing this process ends every local CLI it ran.
       let message = try prepareUnlocked("""
         UPDATE dashboard_messages

@@ -67,12 +67,36 @@ extension WorkspaceDatabaseConnection {
         SELECT COUNT(*) FROM desktop_local_acp_sessions s WHERE s.conversation_id=? AND s.remote_workspace_id IS NOT NULL
           AND NOT EXISTS (SELECT 1 FROM execution_conversations x WHERE x.id=s.conversation_id)
         """, bindings: [conversationID]) != 0 else { return }
-      let now = Self.timestamp(Date())
-      try toolsExecuteUnlocked("""
-        UPDATE dashboard_runs SET status='interrupted',updated_at=?,completed_at=COALESCE(completed_at,?)
-        WHERE conversation_id=? AND status IN ('running','queued','pending','cancelling','uncertain')
-        """, [now, now, conversationID])
+      try interruptLegacyRemoteRunsUnlocked(conversationID: conversationID)
     }
+  }
+
+  /// Settles a chat's unsettled SSH runs as interrupted, each together with
+  /// its assistant message, so the history it shows and sends on keeps no
+  /// running or uncertain reply. The run happened on the Linux host, not on
+  /// this Mac; the update that removed the SSH path is what interrupted it.
+  func interruptLegacyRemoteRunsUnlocked(conversationID: String) throws {
+    let workspaceID = try libraryIDsUnlocked("""
+      SELECT remote_workspace_id FROM desktop_local_acp_sessions WHERE conversation_id=? AND remote_workspace_id IS NOT NULL
+      """, bindings: [conversationID]).first
+    let name = try workspaceID.flatMap { try federationWorkspaceUnlocked($0)?.name }
+      .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.flatMap { $0.isEmpty ? nil : $0 }
+    let detail = Self.legacyRemoteInterruption(host: name)
+    let now = Self.timestamp(Date())
+    let unsettled = "('running','queued','pending','cancelling','uncertain')"
+    try toolsExecuteUnlocked("""
+      UPDATE dashboard_messages SET content=CASE WHEN content='' THEN ? ELSE content END,status='interrupted',updated_at=?
+      WHERE role='assistant' AND id IN (SELECT assistant_message_id FROM dashboard_runs
+        WHERE conversation_id=? AND status IN \(unsettled))
+      """, [detail, now, conversationID])
+    try toolsExecuteUnlocked("""
+      UPDATE dashboard_runs SET status='interrupted',error=?,updated_at=?,completed_at=COALESCE(completed_at,?)
+      WHERE conversation_id=? AND status IN \(unsettled)
+      """, [detail, now, now, conversationID])
+  }
+
+  static func legacyRemoteInterruption(host: String?) -> String {
+    "This run on \(host ?? "the Linux host") was interrupted when Woven Matter updated."
   }
 }
 
