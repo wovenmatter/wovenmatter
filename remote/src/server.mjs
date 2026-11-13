@@ -594,8 +594,6 @@ const server = createServer({ maxHeaderSize: 16_384, headersTimeout: 10_000,
     if (maintenanceMatch) {
       const harness = requireHarness(maintenanceMatch[1])
       if (request.method === 'POST' && maintenanceMatch[2] === 'check') return json(response, 200, await maintenance.inventory(harness, true))
-      // Older apps may send retired visibility/enable preferences. Ignore them.
-      if (request.method === 'PATCH' && !maintenanceMatch[2]) { await readJSON(request); return json(response, 200, await maintenance.inventory(harness)) }
       if (request.method === 'POST' && maintenanceMatch[2]) return json(response, 202, await maintenance.start(harness, maintenanceMatch[2], await readJSON(request)))
     }
 

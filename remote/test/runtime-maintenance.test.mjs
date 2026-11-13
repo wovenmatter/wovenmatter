@@ -37,8 +37,6 @@ test('installation alone controls availability and update checks never install s
   await f.service.start(opencode, 'install', { confirmed: true })
   const installed = await finished(f.service)
   assert.equal(installed.installed, true)
-  assert.equal(installed.enabled, true) // Compatibility fields for older apps.
-  assert.equal(installed.visible, true)
   assert.equal(await f.service.isInstalled('opencode'), true)
   const calls = f.calls.length
   await f.service.isInstalled('opencode')
@@ -107,7 +105,7 @@ test('retired hidden and disabled preferences cannot suppress installed harnesse
   const service = createRuntimeMaintenance(f.options)
   assert.equal(await service.isInstalled('opencode'), true)
   const row = (await service.list()).runtimes[0]
-  assert.equal(row.enabled, true); assert.equal(row.visible, true); assert.equal(row.failureCount, 2)
+  assert.equal(row.installed, true); assert.equal(row.failureCount, 2)
   await service.recordFailure(opencode, 'install', new Error('fixture'))
   const saved = JSON.parse(await (await import('node:fs/promises')).readFile(resolve(f.root, '.wovenmatter/runtime-preferences.json'), 'utf8'))
   assert.deepEqual(saved.opencode, { failureCount: 3 })

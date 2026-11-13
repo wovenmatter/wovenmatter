@@ -311,9 +311,6 @@ public struct RemoteRuntimeComponent: Codable, Equatable, Identifiable, Sendable
 public struct RemoteRuntimeMaintenance: Codable, Equatable, Identifiable, Sendable {
     public let id: AgentRuntimeKind
     public let displayName: String
-    // Decoded only for compatibility with workspaces created by older apps.
-    public let enabled: Bool
-    public let visible: Bool
     public let installed: Bool
     public let components: [RemoteRuntimeComponent]
     public let operation: RemoteHarnessOperation?
@@ -1227,19 +1224,7 @@ public struct RemoteWorkspaceServiceClient: Sendable {
             path: checkLatest ? "v1/runtime-maintenance/check" : "v1/runtime-maintenance",
             method: checkLatest ? "POST" : "GET", body: nil
         )
-        var runtimes = document.runtimes
-        for index in runtimes.indices {
-            let runtime = runtimes[index]
-            // Existing containers may still persist the removed opt-in flags.
-            // Retire those flags on verified installations without rebuilding the workspace.
-            if runtime.installed && (!runtime.enabled || !runtime.visible) {
-                runtimes[index] = try await request(
-                    path: "v1/runtime-maintenance/\(runtime.id.rawValue)", method: "PATCH",
-                    body: JSONEncoder().encode(["enabled": true, "visible": true])
-                )
-            }
-        }
-        return runtimes
+        return document.runtimes
     }
 
     public func checkRuntimeUpdates(_ id: AgentRuntimeKind) async throws -> RemoteRuntimeMaintenance {
