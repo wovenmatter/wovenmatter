@@ -133,26 +133,28 @@ extension WorkspaceDatabase {
   public func prepareForPeerSync() {
     guard !isReadOnlyProjection else { return }
     let source = fileURL, file = peerBackupFile
-    workers.peerBackup.start(file) { try WorkspaceDatabase.writePeerBackup(from: source, to: file) }
+    peerBackup.start { try WorkspaceDatabase.writePeerBackup(from: source, to: file) }
   }
+
+  var peerBackup: PeerBackupFence { PeerBackupFence.shared(for: peerBackupFile) }
 
   /// Starts the recovery backup if needed and waits for it to finish.
   public func backUpBeforePeerSync() async throws {
     guard !isReadOnlyProjection else { throw WorkspaceDatabaseError.readOnlyProjection }
     let source = fileURL, file = peerBackupFile
-    _ = try await workers.peerBackup.wait(file, timeout: nil) { try WorkspaceDatabase.writePeerBackup(from: source, to: file) }
+    _ = try await peerBackup.wait(timeout: nil) { try WorkspaceDatabase.writePeerBackup(from: source, to: file) }
   }
 
   /// True once a peer page may be imported: the recovery backup exists, or
   /// this library never asked for one (a Linux host). Waits at most `timeout`
   /// for a backup in progress (nil waits until it ends) and throws if it fails.
   public func peerImportsReady(timeout: TimeInterval? = nil) async throws -> Bool {
-    let source = fileURL, file = peerBackupFile, fence = workers.peerBackup
-    guard !fence.isOpen(file) else { return true }
-    return try await fence.wait(file, timeout: timeout) { try WorkspaceDatabase.writePeerBackup(from: source, to: file) }
+    let source = fileURL, file = peerBackupFile, fence = peerBackup
+    guard !fence.isOpen else { return true }
+    return try await fence.wait(timeout: timeout) { try WorkspaceDatabase.writePeerBackup(from: source, to: file) }
   }
 
-  var acceptsPeerImports: Bool { workers.peerBackup.isOpen(peerBackupFile) }
+  var acceptsPeerImports: Bool { peerBackup.isOpen }
 
   /// A refused peer page while the backup runs. `peer_unavailable` makes the
   /// sending device retry later and show this Mac as offline, not failing.
@@ -167,10 +169,15 @@ extension WorkspaceDatabase {
     guard !FileManager.default.fileExists(atPath: file.path) else { return }
     let directory = file.deletingLastPathComponent()
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
-    let partial = directory.appending(path: UUID().uuidString + ".partial")
-    // The copy takes the library's WAL mode until it is switched back, which
-    // leaves sidecar files of its own.
-    defer { for suffix in ["", "-wal", "-shm", "-journal"] { try? FileManager.default.removeItem(atPath: partial.path + suffix) } }
+    // One copy per file runs at a time (`PeerBackupFence`), so the partial
+    // has a fixed name, and one left by a quit or crash mid-copy, as large as
+    // the library, is cleared by the next attempt. The copy takes the
+    // library's WAL mode until it is switched back, which leaves sidecar files
+    // of its own.
+    let partial = directory.appending(path: file.lastPathComponent + ".partial")
+    let partialFiles = ["", "-wal", "-shm", "-journal"].map { partial.path + $0 }
+    for path in partialFiles { try? FileManager.default.removeItem(atPath: path) }
+    defer { for path in partialFiles { try? FileManager.default.removeItem(atPath: path) } }
     var library: OpaquePointer?
     guard sqlite3_open_v2(source.path, &library, SQLITE_OPEN_READONLY, nil) == SQLITE_OK, let library else {
       sqlite3_close(library); throw WorkspaceDatabaseError.open("Could not read the local library for its recovery backup.")
@@ -180,6 +187,7 @@ extension WorkspaceDatabase {
     try WorkspaceDatabaseConnection.copyMainDatabase(from: library, to: partial, openFailure: "Could not create the local recovery backup.",
       copyFailure: "Could not snapshot the local library.", incompleteFailure: "The local recovery backup did not complete.")
     try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: partial.path)
-    try FileManager.default.moveItem(at: partial, to: file)
+    do { try FileManager.default.moveItem(at: partial, to: file) }
+    catch { if !FileManager.default.fileExists(atPath: file.path) { throw error } }
   }
 }
