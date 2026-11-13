@@ -120,8 +120,10 @@ final class InferenceTests: XCTestCase {
     XCTAssertEqual(inferenceObjects(messages[5]["content"]).first?["text"] as? String, "Compare these.")
   }
   func testAdapterPreservesExactAccountScopeAndDoesNotForwardProviderKeys() async throws {
-    let connection = InferenceConnection(id: "adapter", name: "Host", provider: "openai-codex", accountID: "account-b", route: .adapter, baseURL: "https://host.example.ts.net", modelID: "m", hostScope: .init(libraryID: "library", workspaceID: "workspace", deviceID: "phone", protocolVersion: 3))
+    let connection = InferenceConnection(id: "adapter", name: "Host", provider: "openai-codex", accountID: "account-b", route: .adapter, baseURL: "https://host.example.ts.net", modelID: "m", hostScope: .init(libraryID: "library", workspaceID: "workspace", deviceID: "phone", protocolVersion: 3, hostDeviceID: "a0000000-0000-4000-8000-00000000000a"))
     let transport = FixtureTransport([.response(200), .line("{\"type\":\"done\",\"reason\":\"stop\",\"message\":{\"content\":[]}}")])
+    InferenceMemberSigning.install { request, _ in request.setValue("signed", forHTTPHeaderField: "X-Woven-Member-Signature") }
+    defer { InferenceMemberSigning.install(nil) }
     let service = MobileInferenceService(connection: connection, credentials: TestCredentials(), transport: transport, model: model)
     try await service.stream(requestJSON: "{\"model\":{\"id\":\"m\",\"provider\":\"openai-codex\"},\"context\":{\"messages\":[]},\"scope\":{\"conversationID\":\"c\",\"requestID\":\"c:task\"}}", emit: { _ in })
     let requests = await transport.requests, request = try XCTUnwrap(requests.first)
@@ -162,8 +164,12 @@ final class InferenceTests: XCTestCase {
     let call = try XCTUnwrap(signed.lock.withLock { signed.calls.first })
     XCTAssertEqual(call.0, host); XCTAssertEqual(call.1, "/wovenmatter/v1/inference/stream")
     XCTAssertEqual(call.2, request.httpBody?.count, "signed after the body was set")
-    // Without the host's identity the saved grant is still presented.
+    // Without the host's identity nothing is sent: there is no grant to present.
     var unsigned = connection; unsigned.hostScope?.hostDeviceID = nil
     XCTAssertFalse(InferenceMemberSigning.signs(unsigned.hostScope))
+    // A connection saved without it signs for its workspace's serving member.
+    InferenceMemberSigning.updateHosts(["workspace": host])
+    defer { InferenceMemberSigning.updateHosts([:]) }
+    XCTAssertTrue(InferenceMemberSigning.signs(unsigned.hostScope))
   }
 }

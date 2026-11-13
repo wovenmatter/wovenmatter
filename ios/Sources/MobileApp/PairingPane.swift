@@ -19,9 +19,9 @@ struct PairingPane: View {
             LabeledContent(member.name, value: peerState(member)).accessibilityIdentifier("pairing-member-" + member.kind)
           }
           Button("Unpair", role: .destructive) { confirmDisconnect = true }.disabled(model.pairingInProgress)
-        } header: { Text(model.memberMode ? "Your devices" : "Central database") } footer: {
+        } header: { Text("Your devices") } footer: {
           if let notice = model.membershipNotice { Text(notice).accessibilityIdentifier("pairing-membership-notice") }
-          else if model.memberMode { Text("\(model.deviceWorkspaceName) connects directly to each Mac and Linux machine. Any one that is online keeps it in sync.") }
+          else { Text("\(model.deviceWorkspaceName) connects directly to each Mac and Linux machine. Any one that is online keeps it in sync.") }
         }
         if model.needsMemberPairing { pairingControls(header: "Pair again", footer: "Scan the code from Woven Matter → Settings → Apple Devices on any of your Macs. Pairing once is enough for every device.") }
       } else {
@@ -62,8 +62,7 @@ struct PairingPane: View {
   }
   /// Every Mac and Linux member, from whichever one this phone synced with.
   private var memberDevices: [MobileLibraryMember] {
-    guard model.memberMode else { return [] }
-    return (model.membership?.members ?? []).filter { !$0.revoked && ($0.kind == "mac" || $0.kind == "linux") }
+    (model.membership?.members ?? []).filter { !$0.revoked && ($0.kind == "mac" || $0.kind == "linux") }
       .sorted { $0.kind == $1.kind ? $0.name.localizedStandardCompare($1.name) == .orderedAscending : $0.kind == "mac" }
   }
   private func peerState(_ member: MobileLibraryMember) -> String {

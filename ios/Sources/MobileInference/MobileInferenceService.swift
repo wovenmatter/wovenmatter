@@ -142,14 +142,10 @@ public actor MobileInferenceService {
     request.setValue(scope.workspaceID, forHTTPHeaderField: "X-Woven-Workspace")
     request.setValue(scope.deviceID, forHTTPHeaderField: "X-Woven-Device")
   }
-  /// A member signature when this device signs as a member and the host
-  /// scope names the host; otherwise the saved grant as the bearer.
+  /// Hosted inference is reached only with this device's member signature.
   private func authorize(_ request: inout URLRequest) async throws {
-    if let (sign, audience) = InferenceMemberSigning.signer(for: connection.hostScope) {
-      try sign(&request, audience)
-      return
-    }
-    request.setValue("Bearer \(try await secret())", forHTTPHeaderField: "Authorization")
+    guard let (sign, audience) = InferenceMemberSigning.signer(for: connection.hostScope) else { throw InferenceError.hostNotReachable }
+    try sign(&request, audience)
   }
   private func secret() async throws -> String {
     guard let value = try await credentials.read(connectionID: connection.id), !value.isEmpty else { throw InferenceError.missingCredential }

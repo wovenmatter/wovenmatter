@@ -939,11 +939,12 @@ hands them to the macOS job, which checks them with
   `mac` members: the principal is the member's device ID, a named
   `X-Woven-Workspace` / `X-Woven-Library` / `X-Woven-Device` must match it and
   this Mac, and removal is checked before credentials are prepared and again
-  before a stream starts. In member mode the phone saves hosted connections
+  before a stream starts. The phone saves hosted connections
   with `InferenceHostScope.hostDeviceID` (the workspace's `executionDeviceID`)
   and no credential, and `MobileInferenceService` signs them through
   `InferenceMemberSigning` (installed with the phone's member key); a
-  connection without `hostDeviceID` keeps presenting its grant.
+  connection saved without `hostDeviceID` signs for its workspace's serving
+  member. No inference grant is presented, and the Mac accepts none.
 - **Analytics.** Only Macs record product analytics (a Linux host answers
   `unsupported`). Each synchronization picks the analytics connection again
   (`MobileLibraryHosts.analyticsTransport`): the current host when it is a

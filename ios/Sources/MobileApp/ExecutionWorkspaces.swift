@@ -70,7 +70,7 @@ extension MobileModel {
         // Signed requests straight to the workspace's own endpoint, whichever
         // Macs are offline. Only a workspace whose serving member is known can
         // be addressed; others wait for the member list.
-        if let memberIdentity, memberMode, let endpoint = workspace.endpoint, let audience = membership?.audience(for: workspace),
+        if let memberIdentity, let endpoint = workspace.endpoint, let audience = membership?.audience(for: workspace),
            workspaceClients[workspace.id] == nil || memberClientEndpoints[workspace.id] != endpoint {
           workspaceReadTasks.removeValue(forKey: workspace.id)?.cancel()
           workspaceClients[workspace.id] = WorkspaceClient(store: store, workspaceID: workspace.id,
@@ -93,6 +93,9 @@ extension MobileModel {
           self.workspaceReadTasks.removeValue(forKey: id)
         }
       }
+      // Hosted inference connections sign for the member that serves their workspace.
+      InferenceMemberSigning.updateHosts(Dictionary(executionWorkspaces.compactMap { workspace in
+        membership?.audience(for: workspace).map { (workspace.id, $0) } }, uniquingKeysWith: { first, _ in first }))
       await reconcileWorkspaceStreams()
       if providerID.isEmpty { providerID = availableExecutionProviders.first { $0.available && $0.canStart }?.id ?? "" }
       await reload()

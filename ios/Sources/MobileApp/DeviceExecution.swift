@@ -93,8 +93,8 @@ struct InferenceSetupCredential: InferenceCredentialReading {
     try saved.validate()
     try InferenceConnectionPolicy.validateSave(saved, existing: existing)
     try Task.checkCancellation()
-    // A member-signed host connection has no credential to store.
-    if InferenceMemberSigning.signs(saved.hostScope), saved.route == .adapter {
+    // A hosted connection is member-signed: it has no credential to store.
+    if saved.route == .adapter {
       saved.selectedModel = try await resolveModel(saved, "")
       try Task.checkCancellation()
       try persist(saved)

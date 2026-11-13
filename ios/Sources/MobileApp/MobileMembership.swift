@@ -4,16 +4,15 @@ import LibraryClient
 import MobileInference
 import WovenMatterShared
 
-/// Member mode (docs/architecture/WOVEN_EVERYWHERE.md): the phone pairs once
+/// Membership (docs/architecture/WOVEN_EVERYWHERE.md): the phone pairs once
 /// with any Mac, which adds it as an `ios` member. From then on it signs every
 /// request with its own key, learns every Mac and Linux member from whichever
 /// one it syncs with, syncs with any online library host and manages sessions
 /// on every workspace directly. It has no home Mac.
 extension MobileModel {
-  var memberMode: Bool { libraryHosts != nil && memberIdentity != nil }
   /// Paired, but not a member any Mac or Linux host accepts (the Mac refused
   /// its key, as after a backup is restored): it syncs nothing until it pairs again.
-  var needsMemberPairing: Bool { credential != nil && !memberMode }
+  var needsMemberPairing: Bool { credential != nil && libraryHosts == nil }
   /// Never paired (or unpaired): everything runs on this device. Pairing a Mac
   /// adds workspaces, agents on your computers and sync; it keeps local data.
   var isStandalone: Bool { credential == nil && state.workspaceID == nil }
@@ -22,7 +21,7 @@ extension MobileModel {
   var libraryHostDeviceID: String? { membership?.currentHost?.deviceID ?? membership?.pairedHostDeviceID }
   var libraryHostName: String? {
     // The saved membership carries the host's real device ID and name once learned.
-    guard memberMode, let host = membership?.currentHost ?? synchronizationStatus.libraryHost else { return nil }
+    guard let host = membership?.currentHost ?? synchronizationStatus.libraryHost else { return nil }
     if let member = membership?.members.first(where: { $0.deviceID == host.deviceID }) { return member.name }
     return host.name
   }
@@ -69,14 +68,14 @@ extension MobileModel {
   }
 
   /// The host Mac's member device ID for an inference connection to
-  /// `workspaceID`, in member mode; nil while it cannot be signed for.
+  /// `workspaceID`; nil while it cannot be signed for.
   func inferenceHostDeviceID(_ workspaceID: String) -> String? {
-    guard memberMode, let workspace = executionWorkspaces.first(where: { $0.id == workspaceID }) else { return nil }
+    guard let workspace = executionWorkspaces.first(where: { $0.id == workspaceID }) else { return nil }
     return membership?.audience(for: workspace)
   }
 
-  /// Member mode when this phone paired with its key and the Mac accepted it.
-  /// Returns false when it is not a member yet.
+  /// Connects as a member when this phone paired with its key and the Mac
+  /// accepted it. Returns false when it is not a member yet.
   func configureMemberTransport() throws -> Bool {
     // First, so a membership whose key was lost reads as refused below.
     _ = try? loadMemberIdentity()
