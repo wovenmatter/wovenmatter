@@ -186,8 +186,9 @@ final class CentralStreamTests: XCTestCase {
     defer { try? FileManager.default.removeItem(at: fixture.root) }
     await model.refreshExecutionWorkspaces(force: true)
     XCTAssertEqual(model.centralExecutionWorkspace?.id, fixture.studio.id)
-    XCTAssertTrue(model.streamsCentral)
+    XCTAssertFalse(model.streamsCentral, "Advertised is not connected: until it connects, the central route is read")
     let socket = await openHost(fixture)
+    await waitUntil("streamed") { model.streamsCentral }
     await model.selectConversation("central-chat")
     XCTAssertEqual(model.selectedExecutionWorkspaceID, "central", "The chat keeps its central route")
     await waitUntil("subscriptions") { await socket.subscriptions.count == 2 }
@@ -277,11 +278,16 @@ final class CentralStreamTests: XCTestCase {
     XCTAssertGreaterThan(reads, settled)
     XCTAssertEqual(model.librarySyncPause, .stream, "Still no timer")
 
-    // A cursor this phone already passed does not sync again.
-    await socket.push(.item(.init(id: workspaceSub, payload: .library(.init(cursor: 4)))))
+    // The cursor this phone holds does not sync again.
+    await socket.push(.item(.init(id: workspaceSub, payload: .library(.init(cursor: 5)))))
     try await Task.sleep(for: .milliseconds(100))
     let unchanged = await fixture.library.changeReads
-    XCTAssertEqual(unchanged, reads, "An older cursor does not sync")
+    XCTAssertEqual(unchanged, reads, "The same cursor does not sync")
+
+    // A cursor behind this phone's (the host's library was restored or
+    // reset) synchronizes, so the phone learns it.
+    await socket.push(.item(.init(id: workspaceSub, payload: .library(.init(cursor: 4)))))
+    await waitUntil("synchronized after a lower cursor") { await fixture.library.changeReads > unchanged }
 
     // The stream closes: the timer returns until it announces again.
     await socket.serverClose(code: 1006)
@@ -315,8 +321,68 @@ final class CentralStreamTests: XCTestCase {
     XCTAssertFalse(FileManager.default.fileExists(atPath: model.attachmentDirectory.appendingPathComponent(other.id).path))
   }
 
+  /// The open chat of a workspace without a connected stream (here Mini,
+  /// which serves none) is read on the 15 s foreground tick with its
+  /// questions; nothing is read while every open view streams.
+  @MainActor func testAnOpenChatWithoutAConnectedStreamIsReadOnTheTick() async throws {
+    let fixture = try await makeFixture(); let model = fixture.model
+    defer { try? FileManager.default.removeItem(at: fixture.root) }
+    await model.refresh()
+    await model.refreshExecutionWorkspaces(force: true)
+    await model.workspaceReadTasks[fixture.mini.id]?.value
+    let socket = await openHost(fixture)
+    await waitUntil("workspace subscription") { await socket.subscriptions.count == 1 }
+    await waitUntil("streamed") { model.streamsCentral }
+    XCTAssertFalse(model.liveViewFallbackNeeded, "Every open view streams: no tick")
+
+    await model.selectConversation("mini-chat", workspaceID: fixture.mini.id)
+    await model.workspaceReadTasks[fixture.mini.id]?.value
+    XCTAssertTrue(model.liveViewFallbackNeeded)
+    let before = fixture.http.paths(host: "mini.tail1.ts.net").count
+    let studioBefore = fixture.http.paths(host: "studio.tail1.ts.net").count
+    await model.refreshLiveViewsWithoutStream()
+    let tick = Array(fixture.http.paths(host: "mini.tail1.ts.net").dropFirst(before))
+    XCTAssertTrue(tick.contains { $0.hasSuffix("/v1/execution/interactions") }, "\(tick)")
+    XCTAssertTrue(tick.contains { $0.contains("/conversations/mini-chat/transcript") }, "\(tick)")
+    XCTAssertFalse(tick.contains { $0.hasSuffix("/providers") }, "The agent list is not read on the tick")
+    XCTAssertEqual(fixture.http.paths(host: "studio.tail1.ts.net").count, studioBefore, "A connected stream is never read")
+  }
+
+  /// While the library host's stream does not serve `workspace` (it ended
+  /// it, or it is down), the central route's questions are read over HTTP on
+  /// the tick, the stream's copy goes, and the library timer returns.
+  @MainActor func testTheCentralRouteIsReadOnTheTickWhileTheHostsStreamDoesNotServeIt() async throws {
+    let fixture = try await makeFixture(); let model = fixture.model
+    defer { try? FileManager.default.removeItem(at: fixture.root) }
+    await model.refresh()
+    await model.refreshExecutionWorkspaces(force: true)
+    let socket = await openHost(fixture)
+    await waitUntil("workspace subscription") { await socket.subscriptions.count == 1 }
+    let workspaceSub = await socket.subscriptions[0].id
+    await socket.push(.item(.init(id: workspaceSub, payload: .library(.init(cursor: 1)))))
+    await waitUntil("announcing stream") { !model.librarySyncTimerNeeded }
+    let question = PendingInteraction(id: "q1", conversationID: "central-chat", runID: "run", kind: .approval, title: "Run the tests?")
+    await socket.push(.item(.init(id: workspaceSub, payload: .pending(.init(interactions: [question])))))
+    await waitUntil("question") { model.allPending.map(\.id) == ["q1"] }
+    let reads = await fixture.library.pendingReads
+    await model.refreshLiveViewsWithoutStream()
+    let quiet = await fixture.library.pendingReads
+    XCTAssertEqual(quiet, reads, "Nothing is read while the stream serves the central route")
+
+    // The host ends `workspace` for good on this connection.
+    await socket.push(.end(.init(id: workspaceSub, error: .init(.invalid, "No workspace here."))))
+    await waitUntil("not streamed") { !model.streamsCentral }
+    XCTAssertTrue(model.librarySyncTimerNeeded, "The library timer returns")
+    XCTAssertTrue(model.liveViewFallbackNeeded)
+    XCTAssertTrue(model.allPending.isEmpty, "The stream's copy goes; the read one replaces it")
+    await model.refreshLiveViewsWithoutStream()
+    let read = await fixture.library.pendingReads
+    XCTAssertEqual(read, reads + 1, "The central questions are read on the tick")
+  }
+
   /// A workspace without a stream is read once when its client is made and
-  /// on explicit refreshes, never on the 15 s tick.
+  /// on explicit refreshes; a refresh of the registry (as the 15 s tick runs
+  /// it) does not read it whole.
   @MainActor func testAWorkspaceWithoutAStreamIsNotPolled() async throws {
     let fixture = try await makeFixture(); let model = fixture.model
     defer { try? FileManager.default.removeItem(at: fixture.root) }

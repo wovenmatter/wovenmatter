@@ -230,11 +230,12 @@ extension MobileModel {
           created = true
         }
         guard workspaceClients[workspace.id] != nil, workspaceReadTasks[workspace.id] == nil else { continue }
-        // A streamed workspace pushes its history, questions and the open chat.
-        guard !streams(workspace) else { continue }
-        // Nothing polls a workspace. One without a stream is read when its
+        // A connected stream pushes its history, questions and the open chat.
+        guard !streamConnected(workspace.id) else { continue }
+        // A workspace without a connected stream is read whole when its
         // client is made and on the app's explicit refreshes (foreground,
-        // network return, New Chat, opening a chat), never on the 15 s tick.
+        // network return, New Chat, opening a chat). The 15 s tick reads only
+        // its open chat and questions (`refreshLiveViewsWithoutStream`).
         guard force || created else { continue }
         let id = workspace.id
         workspaceReadTasks[id] = Task { [weak self] in
@@ -250,8 +251,9 @@ extension MobileModel {
   }
   func refreshDirectWorkspace(_ workspaceID: String,
                               clearCredential: ((String) throws -> Void)? = nil) async {
-    // Its stream already holds everything; only the open chat may have changed.
-    if workspaceStreams[workspaceID] != nil { await openStreamedConversation(workspaceID); return }
+    // Its stream follows the open chat; a connected one already holds everything else.
+    if workspaceStreams[workspaceID] != nil { await openStreamedConversation(workspaceID) }
+    if streamConnected(workspaceID) { return }
     guard let client = workspaceClients[workspaceID] else { return }
     do {
       try await client.refresh()

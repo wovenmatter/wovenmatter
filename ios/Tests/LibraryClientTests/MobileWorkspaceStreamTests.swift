@@ -298,6 +298,106 @@ final class MobileWorkspaceStreamTests: XCTestCase {
     await eventually("asked again on the new connection") { await next.subscriptions.count == 2 }
   }
 
+  /// A replay of many journal entries is one journal write and one
+  /// projection restore, not one per entry.
+  func testAJournalBurstIsWrittenOnce() async throws {
+    let (store, server, stream, updates) = try await make()
+    await stream.start()
+    let socket = await open(server, stream)
+    await eventually("workspace subscription") { await socket.subscriptions.count == 1 }
+    let id = await socket.subscriptions[0].id
+    for sequence in 1...40 { await socket.push(journalItem(id, Int64(sequence), conversation: "chat-\(sequence)")) }
+    await socket.push(.item(.init(id: id, payload: .synchronized)))
+    await eventually("written") { updates.all.contains(.history) }
+    let cursor = await store.journal.snapshot().directCursors["linux"]
+    XCTAssertEqual(cursor, 40)
+    try await Task.sleep(for: .milliseconds(100))
+    let writes = await stream.journalWrites
+    XCTAssertEqual(writes, 1, "One write and one restore for the whole replay")
+    XCTAssertEqual(updates.all.filter { $0 == .history }.count, 1)
+    let conversations = await store.snapshot().conversations
+    XCTAssertEqual(conversations["chat-40"]?.title, "Version 40")
+
+    // Live entries after it are written shortly after they arrive, also together.
+    await socket.push(journalItem(id, 41, conversation: "chat-41"))
+    await socket.push(journalItem(id, 42, conversation: "chat-42"))
+    await eventually("live entries") { await store.journal.snapshot().directCursors["linux"] == 42 }
+    let after = await stream.journalWrites
+    XCTAssertLessThanOrEqual(after, 3)
+  }
+
+  /// A write that fails (here an entry the journal refuses) is not taken:
+  /// the subscription asks again from the saved cursor, and keeps it on
+  /// later reconnects, so journal delivery never turns off.
+  func testAFailedWriteResubscribesFromTheSavedCursor() async throws {
+    let (store, server, stream, _) = try await make()
+    await stream.start()
+    let socket = await open(server, stream)
+    await eventually("workspace subscription") { await socket.subscriptions.count == 1 }
+    let id = await socket.subscriptions[0].id
+    await socket.push(journalItem(id, 1))
+    await socket.push(journalItem(id, 2))
+    await socket.push(.item(.init(id: id, payload: .synchronized)))
+    await eventually("written") { await store.journal.snapshot().directCursors["linux"] == 2 }
+    let huge = ExecutionJournalEntry(eventID: "event-3", workspaceID: "linux", originSequence: 3, conversationID: "chat", kind: .conversation,
+      conversation: .init(id: "chat", title: String(repeating: "x", count: FederationProtocol.maximumEntryBytes + 1)))
+    await socket.push(.item(.init(id: id, seq: 3, payload: .journal(.init(entry: huge)))))
+    await socket.push(.item(.init(id: id, payload: .synchronized)))
+    await eventually("subscribed again") { await socket.subscriptions.count == 2 }
+    let again = await socket.subscriptions[1]
+    XCTAssertEqual(again.params.after, 2, "From the saved cursor, never without one")
+    await socket.serverClose(code: 1006)
+    let next = await open(server, stream, socket: 1)
+    await eventually("reconnected") { await next.subscriptions.count == 1 }
+    let resumed = await next.subscriptions[0].params.after
+    XCTAssertEqual(resumed, 2)
+  }
+
+  /// A retryable end is restored by the connection without a report; a
+  /// terminal end is reported, not asked for again on that connection, and
+  /// the next connection subscribes again.
+  func testATerminalWorkspaceEndIsReportedAndTheNextConnectionSubscribesAgain() async throws {
+    let (_, server, stream, updates) = try await make()
+    await stream.start()
+    let socket = await open(server, stream)
+    await eventually("workspace subscription") { await socket.subscriptions.count == 1 }
+    let first = await socket.subscriptions[0].id
+    await socket.push(.end(.init(id: first, error: .init(.unavailable, "Busy.", retryable: true))))
+    await eventually("restored") { await socket.subscriptions.count == 2 }
+    XCTAssertFalse(updates.all.contains { if case .workspaceEnded = $0 { true } else { false } })
+
+    let second = await socket.subscriptions[1].id
+    await socket.push(.end(.init(id: second, error: .init(.invalid, "No workspace here."))))
+    await eventually("reported") { updates.all.contains(.workspaceEnded(.init(.invalid, "No workspace here."))) }
+    await stream.start()
+    try await Task.sleep(for: .milliseconds(30))
+    let count = await socket.subscriptions.count
+    XCTAssertEqual(count, 2, "Not asked for again on the same connection")
+
+    await socket.serverClose(code: 1001)
+    let next = await open(server, stream, socket: 1)
+    await eventually("subscribed on the next connection") { await next.subscriptions.count == 1 }
+    let stream2 = await next.subscriptions[0].stream
+    XCTAssertEqual(stream2, "workspace")
+  }
+
+  /// A server that answers a chat's subscription before `subscribe` returns:
+  /// its first snapshot is kept.
+  func testAFirstSnapshotThatArrivesWhileSubscribingIsKept() async throws {
+    let (store, server, stream, _) = try await make()
+    await stream.start()
+    let socket = await open(server, stream)
+    await eventually("workspace subscription") { await socket.subscriptions.count == 1 }
+    await socket.setReplies { subscription in
+      guard subscription.stream == "conversation" else { return [] }
+      return [.item(.init(id: subscription.id, payload: .transcript(.init(transcript: .init(conversationID: "chat", messages: [
+        .init(id: "m1", conversationID: "chat", role: "user", content: "Hello"),
+      ]), snapshot: true))))]
+    }
+    await stream.open(conversationID: "chat")
+    await eventually("snapshot kept") { await store.snapshot().transcripts["chat"]?.messages.map(\.id) == ["m1"] }
+  }
+
   /// Lifecycle of one workspace's stream: a stale clock is reported as such;
   /// a 4401 close (member removed) stops every retry, on wake and on
   /// foreground too, until the member list changes; the background closes

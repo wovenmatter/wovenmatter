@@ -1014,7 +1014,8 @@ hands them to the macOS job, which checks them with
 
 ## Streaming
 
-Every live view of a session streams. Nothing polls an execution workspace.
+Every live view of a session streams. Nothing polls an execution workspace
+whose stream is connected; the iPhone's no-stream fallback is under "Clients".
 
 - **Who is the server.** Each machine's one Woven server (the Mac background
   server, the Linux Node server) owns its sessions and serves the stream. Every
@@ -1120,7 +1121,10 @@ member removed.
     means a gap and the client subscribes again with its last cursor. A Mac
     never asks for it: history reaches a Mac only by library sync (a Linux host
     writes its sessions into its own library copy through `/v1/publisher/*`).
-    The iPhone feeds it to its `WorkspaceJournal`.
+    The iPhone feeds it to its `WorkspaceJournal`, a run of consecutive
+    entries as one write and one projection restore (up to 256 entries, at
+    most 50 ms after the first, or when any other item arrives). A write that
+    fails subscribes again from the cursor it holds.
   - `library` `{cursor}`: the server's mobile library change cursor
     (`device_sync_changes`, what `GET v1/changes` pages), on subscribe and then
     whenever a change a phone syncs commits, at most every 300 ms
@@ -1206,9 +1210,18 @@ member removed.
 ### Clients
 
 - One `StreamConnection` per (client, server) owns reconnection: backoff from
-  1 s to 30 s with jitter, an immediate attempt on wake, network path change
-  and app foreground, and no attempts while Tailscale is down. Subscriptions
-  resume after a reconnect; commands do not.
+  1 s to 30 s with jitter, starting again from 1 s only once a connection has
+  stayed open 30 s (a server that greets and closes keeps backing off), an
+  immediate attempt on wake, network path change and app foreground, and no
+  attempts while Tailscale is down. An attempt whose `hello` has not arrived
+  30 s after it started fails; a ping whose pong has not arrived in 20 s
+  drops the socket, even when the transport never reports the ping, and one
+  probe runs per socket at a time. Subscriptions resume after a reconnect;
+  commands do not. A `resync` end subscribes again at once, a repeated one
+  (within 30 s of the last) after the backoff; an end whose error is
+  `retryable` subscribes again after the backoff and is not reported. Only an
+  end without an error or with a non-retryable one reaches the subscriber,
+  and that subscription is gone.
 - A Mac's background server opens a stream to every registered workspace that
   serves one when it starts, and opens or closes streams when the registry or
   member list changes (a registry refresh, a peer sync that applied rows).
@@ -1280,15 +1293,29 @@ member removed.
   an open central chat. The phone reads no central transcript, questions,
   capabilities or session settings over HTTP; central commands stay on the
   mobile API's `POST v1/commands`. A chat whose subscription the server ends
-  is read once and not resubscribed on that connection. Lost central replies
+  is read once and not resubscribed on that connection. A `workspace`
+  subscription the server ends for good is not asked for again on that
+  connection either; the next connection subscribes again, and meanwhile the
+  workspace counts as not streamed. Lost central replies
   are resolved by receipt once per connection to the host. An expanded
   activity is read once from its owner's details route; a journaled summary
   is used only when it is complete. While the stream of the library host it
   syncs with carries `library` items, the phone has no library timer: an item
-  ahead of its cursor synchronizes at once, and a refresh asked for during one
+  whose cursor differs from the one it holds synchronizes at once (ahead: a
+  change; behind: the host's library was restored or reset), and a refresh asked for during one
   runs once more afterwards. Without that stream (an older host, the stream
   down, another host) the 15 s foreground timer runs. It also syncs once on
   foreground, network return and connection.
+  A route counts as streamed only while its stream is connected and serves
+  `workspace`, not because the workspace advertises `stream.v1`. For a route
+  without one (no `stream.v1`, the stream down or ended), the same 15 s
+  foreground tick reads the live view the phone shows: the central questions
+  and the open central chat over the mobile API while the library host's
+  stream is not connected, and the open chat of another workspace with its
+  questions over that workspace's signed HTTP routes. It reads nothing for a
+  route whose stream is connected, and runs no timer when every shown view
+  streams. When the host's stream stops, its copy of the central questions
+  is dropped for the one read.
 
 ### Agent to agent
 

@@ -99,7 +99,9 @@ extension MobileModel {
 
   /// A `library` item from a workspace's stream: the server's library change
   /// cursor. From the library host this phone syncs with, it replaces the
-  /// timer, and a cursor ahead of what this phone holds synchronizes now.
+  /// timer, and a cursor other than the one this phone holds synchronizes
+  /// now: ahead (a change), or behind (the host's library was restored or
+  /// reset, which only a sync can tell this phone).
   /// Cursors of other servers are not comparable with this phone's and are
   /// ignored (their changes reach the host by peer sync, which announces them).
   func libraryChanged(cursor: Int64, serverDeviceID: String, workspaceID: String) async {
@@ -108,7 +110,7 @@ extension MobileModel {
       return
     }
     setLibraryStream((workspaceID, host))
-    guard let store, cursor > (await store.snapshot().cursor) else { return }
+    guard let store, cursor != (await store.snapshot().cursor) else { return }
     synchronizeLibraryNow()
   }
 
@@ -134,8 +136,9 @@ extension MobileModel {
   /// Wakes the loop when its pause no longer fits: a timer that is no longer
   /// needed, or a wait for a stream that no longer announces changes.
   func libraryStreamChanged() {
+    let tick = librarySyncTimerNeeded || liveViewFallbackNeeded
     switch librarySyncPause {
-    case .timer where !librarySyncTimerNeeded, .stream where librarySyncTimerNeeded: wakeLibrarySyncLoop()
+    case .timer where !tick, .stream where tick: wakeLibrarySyncLoop()
     default: break
     }
   }
@@ -207,13 +210,15 @@ extension MobileModel {
         await refreshExecutionWorkspaces()
         if let engine { synchronizationStatus = await engine.synchronizationStatus() }
       }
+      // A live view no connected stream carries: the open chat and its questions.
+      if connectionForeground, !first { await refreshLiveViewsWithoutStream() }
       first = false
       // Library sync (notes, calendar, dictation, artifacts and the
       // registry) every 15 s, unless the library host's stream announces its
-      // changes: then nothing waits on a timer, and each `library` item
-      // ahead of this phone synchronizes at once. Live views of sessions
-      // stream; nothing here reads an execution workspace.
-      if librarySyncTimerNeeded { await pauseLibrarySync(.timer, timeout: Self.librarySyncInterval) }
+      // changes: then each `library` item whose cursor differs from this
+      // phone's synchronizes at once. Live views of sessions stream; the
+      // same tick reads one only while no connected stream carries it.
+      if librarySyncTimerNeeded || liveViewFallbackNeeded { await pauseLibrarySync(.timer, timeout: Self.librarySyncInterval) }
       else { await pauseLibrarySync(.stream, timeout: nil) }
     }
   }

@@ -5,8 +5,10 @@ import WovenMatterShared
 /// Live streams to every listed Mac and Linux workspace that serves `stream.v1`
 /// while the app is in the foreground: `workspace` on each, `conversation`
 /// only for the open chat. The library host's stream also carries the central
-/// route (its own sessions). Nothing polls an execution workspace: one without
-/// a stream is read once when it connects, when a chat opens and after a command.
+/// route (its own sessions). A route without a connected stream (no
+/// `stream.v1`, or its stream down or ended) is read when its client is made,
+/// when a chat opens, after a command, and for the open chat and its
+/// questions on the 15 s foreground tick (`refreshLiveViewsWithoutStream`).
 extension MobileModel {
   /// Whether this workspace is (or will be) reached by its stream: member
   /// mode, a known serving member, and a workspace that offers one.
@@ -24,9 +26,19 @@ extension MobileModel {
     return workspace.flatMap { streams($0) ? $0 : nil }
   }
 
+  /// Whether this workspace's stream is connected and its `workspace`
+  /// subscription served: only then does nothing read its live view over HTTP.
+  func streamConnected(_ workspaceID: String) -> Bool {
+    workspaceStreams[workspaceID] != nil && liveStreamIDs.contains(workspaceID)
+  }
+
   /// Whether the central route's live view (transcript, run state, questions
-  /// and approvals, capabilities, settings) arrives on the library host's stream.
-  var streamsCentral: Bool { !fixture && streamedWorkspace(forRoute: "central") != nil }
+  /// and approvals, capabilities) arrives now on the library host's connected
+  /// stream. While it does not, they are read over HTTP.
+  var streamsCentral: Bool {
+    guard !fixture, let host = streamedWorkspace(forRoute: "central") else { return false }
+    return streamConnected(host.id)
+  }
 
   /// Whether this chat's settings (model, thinking, permission, tools, goal)
   /// arrive as `session` items on its workspace's stream. Then nothing reads
@@ -56,7 +68,7 @@ extension MobileModel {
     guard !fixture, let store, let memberIdentity, connectionForeground else { return }
     let wanted = Dictionary(executionWorkspaces.filter(streams).map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
     for (id, stream) in workspaceStreams where wanted[id] == nil || wanted[id]?.endpoint != streamEndpoints[id] {
-      workspaceStreams.removeValue(forKey: id); streamEndpoints.removeValue(forKey: id)
+      workspaceStreams.removeValue(forKey: id); streamEndpoints.removeValue(forKey: id); liveStreamIDs.remove(id)
       if libraryStream?.workspaceID == id { setLibraryStream(nil) }
       await workspaceClients[id]?.setStream(nil)
       await stream.close()
@@ -93,6 +105,7 @@ extension MobileModel {
 
   /// The app went to the background: every stream closes cleanly (1000).
   func stopWorkspaceStreams() {
+    liveStreamIDs = []
     setLibraryStream(nil)
     let streams = Array(workspaceStreams.values)
     streamLifecycle = Task { [previous = streamLifecycle] in
@@ -119,6 +132,7 @@ extension MobileModel {
 
   /// Pairing changed: no stream outlives its connection generation.
   func closeWorkspaceStreams() {
+    liveStreamIDs = []
     setLibraryStream(nil)
     let streams = workspaceStreams
     workspaceStreams = [:]; streamEndpoints = [:]; streamMembersRevision = nil
@@ -139,6 +153,7 @@ extension MobileModel {
     guard workspaceStreams[id] != nil else { return }
     switch update {
     case .state(let state):
+      if case .open = state { streamLive(id, true) } else { streamLive(id, false) }
       switch state {
       case .open:
         workspaceReachable[id] = true; workspaceProblems.removeValue(forKey: id)
@@ -150,9 +165,10 @@ extension MobileModel {
         workspaceReachable[id] = false; workspaceProblems[id] = streamProblem(.memberRemoved, workspaceID: id)
       case .idle, .connecting: break
       }
-      // A closed stream announces nothing: the library timer returns until
-      // the next `library` item on a reconnected stream.
-      if case .open = state {} else if libraryStream?.workspaceID == id { setLibraryStream(nil) }
+    case .workspaceEnded:
+      // Served no longer on this connection: its live view is read over
+      // HTTP on the foreground tick until the next connection subscribes again.
+      streamLive(id, false)
     case .library(let cursor, let server):
       await libraryChanged(cursor: cursor, serverDeviceID: server, workspaceID: id)
     case .pending(let interactions):
@@ -168,6 +184,71 @@ extension MobileModel {
       // Not from the subscription's handler: the socket's next frame waits on it.
       guard conversationID == selectedConversationID else { return }
       Task { await self.readConversationOnce(conversationID) }
+    }
+  }
+
+  /// A stream started or stopped carrying its workspace's live view. The
+  /// host's questions came from its stream (`remotePending`); without it they
+  /// are read into `pending`, so one copy shows. A closed stream announces
+  /// nothing, so the library timer returns until the next `library` item.
+  /// The foreground loop then starts or stops its tick.
+  private func streamLive(_ id: String, _ live: Bool) {
+    let host = id == centralExecutionWorkspace?.id
+    if live {
+      guard liveStreamIDs.insert(id).inserted else { return }
+      if host, !pending.isEmpty { pending = [] }
+    } else {
+      if libraryStream?.workspaceID == id { setLibraryStream(nil) }
+      guard liveStreamIDs.remove(id) != nil else { return }
+      if host { remotePending.removeValue(forKey: id) }
+    }
+    libraryStreamChanged()
+  }
+
+  /// The 15 s foreground tick for a live view no connected stream carries:
+  /// the central questions (and the open central chat) while the library
+  /// host's stream is not connected, and the open chat of a workspace whose
+  /// stream is not (no `stream.v1`, down, or ended), with its questions.
+  /// Nothing is read for a route whose stream is connected.
+  var liveViewFallbackNeeded: Bool {
+    guard !fixture, connectionForeground else { return false }
+    if engine != nil, online, !streamsCentral { return true }
+    return unstreamedOpenWorkspace != nil
+  }
+
+  /// The open chat's workspace when no connected stream carries it.
+  private var unstreamedOpenWorkspace: String? {
+    guard selectedConversationID != nil else { return nil }
+    let route = selectedExecutionWorkspaceID
+    guard route != "central", route != "local", workspaceClients[route] != nil, !streamConnected(route) else { return nil }
+    return route
+  }
+
+  /// One fallback pass (see `liveViewFallbackNeeded`). Never reads a route
+  /// whose stream is connected, and reads no agent list or offline copies.
+  func refreshLiveViewsWithoutStream() async {
+    guard liveViewFallbackNeeded else { return }
+    if engine != nil, online, !streamsCentral {
+      await refreshCentralConversation(selectedExecutionWorkspaceID == "central" ? selectedConversationID : nil)
+    }
+    guard let route = unstreamedOpenWorkspace, let client = workspaceClients[route], workspaceReadTasks[route] == nil else { return }
+    do {
+      try await client.refresh()
+      let target = selectedConversationID
+      let interactions = try await client.pending()
+      guard workspaceClients[route] === client, !streamConnected(route) else { return }
+      remotePending[route] = interactions
+      if let id = target, executionRoute(for: id) == route {
+        _ = try await client.refreshTranscript(id)
+        sessionCapabilities[id] = try await client.capabilities(id)
+      }
+      guard workspaceClients[route] === client else { return }
+      // A workspace with a stream is reported by its stream's state.
+      if workspaceStreams[route] == nil { workspaceReachable[route] = true; workspaceProblems.removeValue(forKey: route) }
+      await reload()
+    } catch {
+      guard workspaceClients[route] === client, workspaceStreams[route] == nil else { return }
+      workspaceReachable[route] = false; workspaceProblems[route] = error.localizedDescription
     }
   }
 
