@@ -376,8 +376,14 @@ public actor WorkspaceJournal {
   public func receiveLibrary(_ page: ExecutionJournalPage) throws {
     try transaction { next in
       guard next.libraryID == page.libraryID else { throw Failure.wrongLibrary }
-      guard page.cursor == next.libraryCursor + Int64(page.entries.count), !page.hasMore || !page.entries.isEmpty else { throw Failure.replayGap }
-      for entry in page.entries { try Self.insert(entry, into: &next) }
+      let covered = page.entries.count + (page.skipped?.count ?? 0)
+      guard page.cursor == next.libraryCursor + Int64(covered), !page.hasMore || covered > 0 else { throw Failure.replayGap }
+      var skips = Skips(page.skipped)
+      for entry in page.entries {
+        skips.pass(before: entry, in: &next)
+        try Self.insert(entry, into: &next)
+      }
+      try skips.finish(in: &next)
       next.libraryCursor = page.cursor
     }
   }
@@ -385,18 +391,64 @@ public actor WorkspaceJournal {
     try transaction { next in
       guard (next.workspaces[workspaceID]?.libraryID ?? next.libraryID) == page.libraryID else { throw Failure.wrongLibrary }
       let cursor = next.directCursors[workspaceID] ?? 0
-      guard page.cursor == cursor + Int64(page.entries.count), !page.hasMore || !page.entries.isEmpty else { throw Failure.replayGap }
-      for (index, entry) in page.entries.enumerated() {
-        guard entry.workspaceID == workspaceID, entry.originSequence == cursor + Int64(index) + 1 else { throw Failure.replayGap }
+      let owner = localDeviceID.flatMap { id in next.workspaces[workspaceID].map { Self.isLocalExecutionOwner($0, deviceID: id) } } ?? false
+      let skipped = page.skipped ?? []
+      // This device publishes what its own workspace records, and a host
+      // refuses history with a missing sequence: nothing of its own is skipped.
+      guard skipped.allSatisfy({ $0.workspaceID == workspaceID }), !owner || skipped.isEmpty else { throw Failure.replayGap }
+      let covered = page.entries.count + skipped.count
+      guard page.cursor == cursor + Int64(covered), !page.hasMore || covered > 0 else { throw Failure.replayGap }
+      var skips = Skips(skipped)
+      let named = Set(skipped.map(\.originSequence))
+      var entries = page.entries[...]
+      // Entries, in order, and skips are together exactly the sequences after the cursor.
+      for sequence in stride(from: cursor + 1, through: page.cursor, by: 1) {
+        guard let entry = entries.first, entry.originSequence == sequence else {
+          guard named.contains(sequence) else { throw Failure.replayGap }
+          continue
+        }
+        entries.removeFirst()
+        guard entry.workspaceID == workspaceID else { throw Failure.replayGap }
+        skips.pass(before: entry, in: &next)
         try Self.insert(entry, into: &next)
         // Only the workspace's exact execution owner queues publication; a
         // remote observer merely caches the immutable entries.
-        if let localDeviceID, let workspace = next.workspaces[workspaceID],
-           Self.isLocalExecutionOwner(workspace, deviceID: localDeviceID) {
-          next.pendingEventIDs.insert(entry.eventID)
-        }
+        if owner { next.pendingEventIDs.insert(entry.eventID) }
       }
+      guard entries.isEmpty else { throw Failure.replayGap }
+      try skips.finish(in: &next)
       next.directCursors[workspaceID] = page.cursor
+    }
+  }
+  /// Records a page names without their contents (`ExecutionJournalPage.skipped`):
+  /// a newer build wrote them and the host, or this build, cannot read them.
+  /// Each moves its workspace's sequence one step, in order with the entries
+  /// around it, so the records after it are still accepted and nothing but a
+  /// named position is ever passed over. A sequence already held is ignored.
+  private struct Skips {
+    private var sequences: [String: [Int64]] = [:]
+    init(_ skipped: [ExecutionJournalSkip]?) {
+      for skip in skipped ?? [] { sequences[skip.workspaceID, default: []].append(skip.originSequence) }
+      for id in sequences.keys { sequences[id]?.sort() }
+    }
+    /// Takes the skips that directly follow what is held, up to `limit`.
+    private mutating func pass(_ workspaceID: String, below limit: Int64?, in next: inout WorkspaceJournalState) {
+      while let first = sequences[workspaceID]?.first, limit.map({ first < $0 }) ?? true {
+        let held = next.originSequences[workspaceID] ?? 0
+        guard first <= held + 1 else { return }
+        next.originSequences[workspaceID] = max(held, first)
+        sequences[workspaceID]?.removeFirst()
+      }
+    }
+    mutating func pass(before entry: ExecutionJournalEntry, in next: inout WorkspaceJournalState) {
+      pass(entry.workspaceID, below: entry.originSequence, in: &next)
+    }
+    /// Every skip must have had its turn: one that leaves a gap is a gap.
+    mutating func finish(in next: inout WorkspaceJournalState) throws {
+      for id in sequences.keys.sorted() {
+        pass(id, below: nil, in: &next)
+        guard sequences[id]?.isEmpty != false else { throw Failure.replayGap }
+      }
     }
   }
   public func rememberCommand(_ command: LibraryCommand, workspaceID: String) throws -> LibraryCommand {
@@ -612,7 +664,11 @@ public actor WorkspaceClient {
       if !page.hasMore { break }
     }
     for record in await store.journal.commandRecords(workspaceID: workspaceID) where record.receipt?.status != .completed && record.receipt?.status != .rejected {
-      if let receipt = try await transport.receipt(record.id) {
+      // A receipt in a state a newer workspace added cannot be read here. That
+      // command stays unresolved; the others are still asked about.
+      let answer: LibraryCommandReceipt?
+      do { answer = try await transport.receipt(record.id) } catch is DecodingError { continue }
+      if let receipt = answer {
         try await store.journal.rememberReceipt(receipt, workspaceID: workspaceID)
         for launch in await store.snapshot().launches where launch.create.workspaceID == workspaceID && (launch.create.commandID == receipt.commandID || launch.initialSend.commandID == receipt.commandID) {
           try await store.rememberLaunchReceipt(receipt, launchID: launch.id)

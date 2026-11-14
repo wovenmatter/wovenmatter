@@ -461,6 +461,32 @@ among Macs that still stand; they never decide who wins a dispute.
   signed `GET /v1/sync/status` on every Mac and Linux host. On a Mac, a peer
   in `updateRequired` raises the same "Versions don't match" / "Update
   everything" notice as a bots version mismatch (`ApplicationModel+Bots.swift`).
+- **Values a newer build wrote.** With matching schemas, devices still run
+  different builds for days, and a row or reply may hold a value an older
+  build does not know (a new workspace kind, journal entry kind, note kind,
+  goal state). The rule has two halves:
+  - **Reading skips.** A list read from another device, or from a replicated
+    table, keeps the elements this build can decode and drops the rest
+    (`LossyArray`): the library snapshot and change pages, the workspace
+    registry, pending questions, conversation and provider lists, saved
+    artifact manifests. A change page's `cursor` covers a dropped change. A
+    snapshot list that lost an element is marked incomplete, and the phone
+    then takes nothing absent from it as deleted (and does not move to that
+    host). A detail inside a value that must survive reads as absent
+    (`LossyOptional`): a note's `kind` (its `content` is untouched, and a
+    document this build cannot decode is read-only), a session's `goal`. A
+    journal has no gaps, so an entry that cannot be read is not dropped
+    silently: `ExecutionJournalPage.skipped` names its workspace and sequence
+    (written by a serving member that cannot read its own replicated row,
+    added by a reader that cannot decode an entry), and the reader moves that
+    one position forward. A gap nothing names still stops the reader.
+  - **Writing refuses.** A request a device must not lose is decoded whole or
+    refused: a journal batch (`POST v1/federation/journal`,
+    `/v1/publisher/journal`) with an entry the host cannot read answers 400
+    `invalid_request` and takes nothing, so the sender keeps it and retries
+    after the host updates. Registrations, mutations and commands are the
+    same, and a lookup that decides a write never takes an unreadable row for
+    a missing one.
 
 - **Storage names.** Table names say what a table holds:
   - The core library: `conversations`, their `messages`, `message_attachments` and `message_references`, the `runs` that answered them with each run's `run_activities` (tool calls, thoughts and other activity rows), `run_visible_notes` (the note a run could see) and `run_program_statuses`, plus `agents`, `folders`, `notes`, `calendar_items`, `conversation_titles` (a title set by the user, which wins over the harness's) and `session_imports`. `harness_sessions` is the native session of every harness, local or on a remote workspace (`native_session_id`); `opencode_sessions`, `opencode_submissions` and `opencode_hidden_messages` are OpenCode's. `workspace_revision`, `activity_revision`, `activity_summaries` and `message_revisions` are the change counters and caches the window reads. An agent's `owner_device_id` is the Mac that added it, or the workspace owner of a remote harness. Who runs a conversation is its `conversation_owners` row, or its `execution_conversations` projection for a session another member executes.
@@ -557,7 +583,9 @@ one per connection, with `Host`; POST bodies are `application/json`.
   `/mcp/workspace`. Headers: `X-Woven-Conversation-ID` (the caller, a
   UUID; registered on first use), `X-Woven-Enabled-Groups` (comma-separated,
   the caller's current selection; the Node server is the authority for its own
-  sessions' tool policy), optional `X-Woven-Context-ID` and
+  sessions' tool policy; a group name the host does not know is ignored, here
+  and on a Mac's `/mcp` and `/mcp/workspace`, so a newer caller keeps the
+  tools both builds know), optional `X-Woven-Context-ID` and
   `MCP-Protocol-Version`. Served groups: `notes` (including spreadsheet and
   HTML note artifacts), `history`, `calendar`, `library` and `timers` (see
   "Timers on a library host"), plus
@@ -1109,7 +1137,10 @@ decode and re-encode every fixture.
 | server | `{t:"end", id, error?}` | The server closed a subscription. |
 | client | `{t:"cancel", id}` | Close a subscription or abandon a call. |
 
-Unknown frame types and unknown item kinds are ignored. A subscription the
+Unknown frame types and unknown item kinds are ignored. So is an item of a
+known kind whose `data` a client cannot decode (a newer server's value): it
+is valid JSON, so it does not close the socket, and its `seq` still advances.
+A subscription the
 client cancels gets no `end`. A socket holds at most 64 subscriptions and 64
 calls in progress (a cancelled call no longer counts); another is refused with
 a retryable `unavailable` `end` or `res`. Error codes:
@@ -1132,7 +1163,9 @@ normal, `1001` server stopping or sleeping, `1009` client frame over 1 MiB,
   - `journal` `{entry: ExecutionJournalEntry}`, `seq` = its `originSequence`:
     only from a server with an execution journal (a Linux host), only when the client passed `after`. The server replays every entry
     after `after`, then sends new entries as they are written; a sequence jump
-    means a gap and the client subscribes again with its last cursor. A Mac
+    means a gap and the client subscribes again with its last cursor. An entry
+    the client cannot decode keeps its place: the client moves its cursor past
+    that `seq` without the record. A Mac
     never asks for it: history reaches a Mac only by library sync (a Linux host
     writes its sessions into its own library copy through `/v1/publisher/*`).
     The iPhone feeds it to its `WorkspaceJournal`, a run of consecutive

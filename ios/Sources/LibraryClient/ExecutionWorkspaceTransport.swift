@@ -83,10 +83,10 @@ public final class HTTPSExecutionWorkspaceTransport: ExecutionWorkspaceTransport
     return value
   }
   public func providers() async throws -> [HarnessCapabilities] {
-    try await client.request("v1/execution/providers")
+    try await client.list("v1/execution/providers")
   }
   public func pending() async throws -> [PendingInteraction] {
-    try await client.request("v1/execution/interactions")
+    try await client.list("v1/execution/interactions")
   }
   public func command(_ command: LibraryCommand) async throws -> LibraryCommandReceipt {
     guard command.deviceID == credential.deviceID else { throw MobileConnectionError.revoked }
@@ -103,7 +103,7 @@ public final class HTTPSExecutionWorkspaceTransport: ExecutionWorkspaceTransport
     try await client.request("v1/execution/events", query: [.init(name: "after", value: String(after))])
   }
   public func conversations() async throws -> [LibraryConversation] {
-    try await client.request("v1/execution/conversations")
+    try await client.list("v1/execution/conversations")
   }
   public func transcript(_ id: String) async throws -> LibraryTranscript {
     try await client.request("v1/execution/conversations/" + TailnetJSONClient.safeID(id) + "/transcript")
@@ -150,6 +150,11 @@ final class TailnetJSONClient: @unchecked Sendable {
   }
   func request<Value: Decodable>(_ path: String, method: String = "GET", query: [URLQueryItem] = [], body: Data? = nil) async throws -> Value {
     try JSONDecoder().decode(Value.self, from: await data(path, method: method, query: query, body: body))
+  }
+  /// A list the workspace answers with. An element a newer workspace wrote and
+  /// this build cannot read is dropped; the rest of the list still arrives.
+  func list<Element: Decodable>(_ path: String) async throws -> [Element] {
+    (try await request(path) as LossyArray<Element>).wrappedValue
   }
   /// A 2xx reply's bytes, at most `maximumBytes`.
   func data(_ path: String, method: String = "GET", query: [URLQueryItem] = [], body: Data? = nil,

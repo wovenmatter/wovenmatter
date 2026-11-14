@@ -68,6 +68,10 @@ public actor MobileWorkspaceStream {
   private var stateTask: Task<Void, Never>?
   /// Journal entries taken and not yet written, in order.
   private var journalBuffer: [ExecutionJournalEntry] = []
+  /// Sequences taken without their record (this build cannot read it), not yet written.
+  private var journalSkips: [ExecutionJournalSkip] = []
+  /// The last sequence taken into the batch, record or skip.
+  private var journalTaken: Int64?
   /// The last sequence of the batch being written.
   private var journalInFlight: Int64?
   private var journalWrite: Task<Void, Never>?
@@ -199,7 +203,14 @@ public actor MobileWorkspaceStream {
       return .accepted
     case .item(let value): item = value
     }
-    if case .journal(let value) = item.payload { return await takeJournal(value.entry) }
+    if case .journal(let value) = item.payload { return await takeJournal(value.entry.originSequence, entry: value.entry) }
+    // A journal record a newer server wrote and this build cannot read still
+    // holds its place: `seq` is its origin sequence, and passing over it by
+    // number keeps the records after it from looking like a gap, which would
+    // subscribe again from the same record forever.
+    if case .unknown(let kind, _) = item.payload, kind == StreamItem.Kind.journal.rawValue, let sequence = item.seq {
+      return await takeJournal(sequence, entry: nil)
+    }
     // Anything else follows the journal entries before it.
     await flushJournal()
     switch item.payload {
@@ -225,17 +236,19 @@ public actor MobileWorkspaceStream {
   /// One journal item: kept for the next batch when it continues the last
   /// one taken; one already held is skipped; a gap writes what came in order
   /// and subscribes again from the stored cursor.
-  private func takeJournal(_ entry: ExecutionJournalEntry) async -> StreamItemDisposition {
+  private func takeJournal(_ sequence: Int64, entry: ExecutionJournalEntry?) async -> StreamItemDisposition {
     let last: Int64
-    if let buffered = journalBuffer.last?.originSequence ?? journalInFlight { last = buffered }
+    if let buffered = journalTaken ?? journalInFlight { last = buffered }
     else { last = await storedCursor() }
-    guard entry.originSequence > last else { return .accepted }
-    guard entry.originSequence == last + 1 else {
+    guard sequence > last else { return .accepted }
+    guard sequence == last + 1 else {
       await flushJournal()
       return .resubscribe(.init(after: await storedCursor()))
     }
-    journalBuffer.append(entry)
-    if journalBuffer.count >= Self.journalBatchLimit { await flushJournal() }
+    if let entry { journalBuffer.append(entry) }
+    else { journalSkips.append(.init(workspaceID: workspaceID, originSequence: sequence)) }
+    journalTaken = sequence
+    if journalBuffer.count + journalSkips.count >= Self.journalBatchLimit { await flushJournal() }
     else if journalTimer == nil {
       journalTimer = Task { [weak self] in
         do { try await Task.sleep(for: Self.journalDelay) } catch { return }
@@ -258,12 +271,12 @@ public actor MobileWorkspaceStream {
   }
 
   private func writeJournal() async {
-    guard !journalBuffer.isEmpty else { return }
-    let entries = journalBuffer
-    journalBuffer = []
-    journalInFlight = entries.last?.originSequence
+    guard let last = journalTaken else { return }
+    let entries = journalBuffer, skipped = journalSkips
+    journalBuffer = []; journalSkips = []; journalTaken = nil
+    journalInFlight = last
     defer { journalInFlight = nil }
-    let page = ExecutionJournalPage(libraryID: libraryID, cursor: entries.last?.originSequence ?? 0, entries: entries)
+    let page = ExecutionJournalPage(libraryID: libraryID, cursor: last, entries: entries, skipped: skipped.isEmpty ? nil : skipped)
     do {
       try await store.journal.receiveWorkspace(page, workspaceID: workspaceID, localDeviceID: store.snapshot().deviceID)
       try await store.restoreExecutionProjection()
@@ -273,7 +286,7 @@ public actor MobileWorkspaceStream {
       // Not taken (a gap, or a store that failed to write): what came after
       // is dropped, and the subscription replays from the saved cursor. It
       // keeps its questions and approvals meanwhile.
-      journalBuffer = []
+      journalBuffer = []; journalSkips = []; journalTaken = nil
       let cursor = await storedCursor()
       if let subscription = workspaceSubscription { await connection.resubscribe(subscription, params: .init(after: cursor)) }
       else { workspaceRestart = cursor }

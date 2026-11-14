@@ -15,6 +15,11 @@ extension MobileStore {
   /// `bodies` are the host's full versions of notes whose snapshot entry
   /// left the content out. Nothing local is dropped.
   public func rebindLibrary(to snapshot: LibrarySnapshot, bodies: [String: LibraryNote]) throws {
+    // A note or folder missing from the snapshot is re-created on the host
+    // from this device's copy. One the snapshot lacks only because this build
+    // could not read it must not be: the move waits, as it did when such a
+    // snapshot could not be read at all.
+    guard snapshot.hasEveryNote, snapshot.hasEveryFolder, snapshot.hasEveryConversation else { throw MobileConnectionError.invalidResponse }
     try transaction { next in
       guard next.pairingTransitionWorkspaceID == nil else { throw Failure.wrongWorkspace }
       var remote = Dictionary(snapshot.notes.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })

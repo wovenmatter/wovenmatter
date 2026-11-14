@@ -16,7 +16,7 @@ public protocol FederationTransport: Sendable {
 
 extension HTTPSLibraryTransport: FederationTransport {
   public func libraryIdentity() async throws -> LibraryIdentity { try await request("v1/federation/identity") }
-  public func executionWorkspaces() async throws -> [ExecutionWorkspace] { try await request("v1/federation/workspaces") }
+  public func executionWorkspaces() async throws -> [ExecutionWorkspace] { try await list("v1/federation/workspaces") }
   public func registerWorkspace(_ registration: LibraryWorkspaceRegistration) async throws -> ExecutionWorkspace {
     try await request("v1/federation/workspaces", method: "POST", body: JSONEncoder().encode(registration))
   }
@@ -24,7 +24,7 @@ extension HTTPSLibraryTransport: FederationTransport {
   public func importJournal(_ batch: ExecutionJournalBatch) async throws -> ExecutionJournalBatchResult {
     try await request("v1/federation/journal", method: "POST", body: JSONEncoder().encode(batch))
   }
-  public func artifactManifests() async throws -> [LibraryArtifactManifest] { try await request("v1/federation/artifacts") }
+  public func artifactManifests() async throws -> [LibraryArtifactManifest] { try await list("v1/federation/artifacts") }
   public func registerArtifact(_ registration: LibraryArtifactRegistration) async throws -> LibraryArtifactTransfer {
     try await request("v1/federation/artifacts/register", method: "POST", body: JSONEncoder().encode(registration))
   }

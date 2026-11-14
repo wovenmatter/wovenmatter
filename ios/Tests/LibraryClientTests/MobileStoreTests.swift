@@ -71,6 +71,71 @@ final class MobileStoreTests: XCTestCase {
 
 }
 
+/// What the phone does with a page a newer host wrote.
+final class MobileStoreNewerHostTests: XCTestCase {
+  private func store() throws -> MobileStore {
+    try MobileStore(file: FileManager.default.temporaryDirectory.appending(path: UUID().uuidString).appending(path: "store.json"))
+  }
+  private func note(_ id: String, revision: Int = 1, kind: String = "note") -> String {
+    #"{"id":"\#(id)","title":"Note \#(id)","content":"text","contentIncluded":true,"contentByteCount":4,"revision":\#(revision),"updatedAt":"","kind":"\#(kind)"}"#
+  }
+  private let folder = #"{"id":"f1","name":"Work","revision":1,"updatedAt":""}"#
+  private let chat = #"{"id":"c1","title":"Chat","preview":"","updatedAt":""}"#
+
+  /// "Absent from the snapshot" means "deleted on the host" only for a list
+  /// this build read in full.
+  func testASnapshotThisBuildCannotReadInFullDeletesNothing() async throws {
+    let store = try store()
+    func snapshot(cursor: Int, notes: [String], folders: [String], conversations: [String]) throws -> LibrarySnapshot {
+      try JSONDecoder().decode(LibrarySnapshot.self, from: Data(
+        #"{"workspaceID":"library","cursor":\#(cursor),"notes":[\#(notes.joined(separator: ","))],"folders":[\#(folders.joined(separator: ","))],"conversations":[\#(conversations.joined(separator: ","))]}"#.utf8))
+    }
+    try await store.apply(try snapshot(cursor: 1, notes: [note("n1"), note("n2")], folders: [folder], conversations: [chat]))
+    // The host now holds n2, the folder and the chat in a shape this build
+    // cannot read, and a note of a kind it does not know.
+    let partial = try snapshot(cursor: 9, notes: [note("n1", revision: 2), #"{"id":"n2","title":7}"#, note("n3", kind: "slides")],
+                               folders: [#"{"id":"f1","name":7}"#], conversations: [#"{"id":"c1","title":7}"#])
+    XCTAssertFalse(partial.hasEveryNote || partial.hasEveryFolder || partial.hasEveryConversation)
+    try await store.apply(partial)
+    var state = await store.snapshot()
+    XCTAssertEqual(state.cursor, 9)
+    XCTAssertEqual(state.notes.keys.sorted(), ["n1", "n2", "n3"])
+    XCTAssertEqual(state.notes["n1"]?.revision, 2)
+    XCTAssertNil(state.notes["n3"]?.kind)
+    XCTAssertEqual(state.notes["n3"]?.content, "text", "A note of a newer kind keeps its document as the host sent it")
+    XCTAssertFalse(state.deletedNotes.contains("n2"))
+    XCTAssertEqual(state.folders.keys.sorted(), ["f1"])
+    XCTAssertEqual(state.conversations.keys.sorted(), ["c1"])
+    XCTAssertNotEqual(state.libraryDeletedConversationIDs?.contains("c1"), true)
+    // A snapshot read in full still removes what the host no longer holds.
+    try await store.apply(try snapshot(cursor: 10, notes: [note("n1", revision: 2)], folders: [], conversations: []))
+    state = await store.snapshot()
+    XCTAssertEqual(state.notes.keys.sorted(), ["n1"])
+    XCTAssertTrue(state.folders.isEmpty && state.conversations.isEmpty)
+    // A move to another host compares both libraries in full, so it waits.
+    do { try await store.rebindLibrary(to: partial, bodies: [:]); XCTFail("Moved with a partial snapshot") }
+    catch MobileConnectionError.invalidResponse { }
+  }
+
+  /// The change feed is re-requested from the stored cursor, so a change this
+  /// build cannot read must not hold the cursor back.
+  func testAChangeThisBuildCannotReadIsPassedOverAndTheCursorAdvances() async throws {
+    let store = try store()
+    try await store.apply(LibrarySnapshot(workspaceID: "library", cursor: 5))
+    let page = try JSONDecoder().decode(LibraryChangePage.self, from: Data(#"""
+      {"workspaceID":"library","cursor":8,"hasMore":true,"resetRequired":false,"changes":[
+        {"cursor":6,"resourceKind":"calendar","resourceID":"e1","operation":"upsert","revision":1},
+        {"cursor":7,"resourceKind":"note","resourceID":"n1","operation":"archive","revision":1},
+        {"cursor":8,"resourceKind":"note","resourceID":"n2","operation":"upsert","revision":1,"note":\#(note("n2"))}]}
+      """#.utf8))
+    XCTAssertEqual(page.changes.map(\.cursor), [8])
+    try await store.apply(page)
+    let state = await store.snapshot()
+    XCTAssertEqual(state.cursor, 8)
+    XCTAssertEqual(state.notes.keys.sorted(), ["n2"])
+  }
+}
+
 final class MobileLaunchSelectionTests: XCTestCase {
   func testOnlyTheSameRequestRetriesAnUnconfirmedLaunchAndOthersStartSeparately() {
     func launch(_ text: String, workspace: String? = nil, provider: String = "codex", note: String? = nil) -> MobileLaunchRecord {

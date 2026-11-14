@@ -396,19 +396,31 @@ public actor MobileStore {
   public func apply(_ snapshot: LibrarySnapshot) throws {
     try transaction { next in
       try Self.checkWorkspace(snapshot.workspaceID, state: &next)
+      // A newer host may hold an item this build cannot read, which the
+      // snapshot then lacks. Absence means "deleted on the host" only for a
+      // list read in full; otherwise what this device holds is kept.
       let remoteNotes = Dictionary(uniqueKeysWithValues: snapshot.notes.map { ($0.id, $0) })
-      for id in Array(next.notes.keys) where remoteNotes[id] == nil && next.bases[id] != nil { Self.remoteDeletion(id, state: &next) }
+      if snapshot.hasEveryNote {
+        for id in Array(next.notes.keys) where remoteNotes[id] == nil && next.bases[id] != nil { Self.remoteDeletion(id, state: &next) }
+      }
       for note in snapshot.notes { Self.remoteNote(note, state: &next) }
-      let pendingFolders = next.folders.filter { id, _ in next.outbox.contains { $0.mutation.resourceID == id } }
-      next.folders = Dictionary(uniqueKeysWithValues: snapshot.folders.filter { next.pendingFolderDeletions?[$0.id] == nil }.map { ($0.id, $0) }).merging(pendingFolders) { _, local in local }
+      let keptFolders = snapshot.hasEveryFolder ? next.folders.filter { id, _ in next.outbox.contains { $0.mutation.resourceID == id } } : next.folders
+      next.folders = Dictionary(uniqueKeysWithValues: snapshot.folders.filter { next.pendingFolderDeletions?[$0.id] == nil }.map { ($0.id, $0) }).merging(keptFolders) { remote, local in
+        next.outbox.contains { $0.mutation.resourceID == local.id } ? local : remote
+      }
       let changedIDs = snapshot.conversations.filter { next.conversations[$0.id] != $0 }.map(\.id)
       next.dirtyTranscriptIDs = (next.dirtyTranscriptIDs ?? []).union(changedIDs)
       let incomingIDs = Set(snapshot.conversations.map(\.id))
-      let missingIDs = (next.libraryConversationIDs ?? []).subtracting(incomingIDs)
+      let missingIDs = snapshot.hasEveryConversation ? (next.libraryConversationIDs ?? []).subtracting(incomingIDs) : []
       next.libraryDeletedConversationIDs = (next.libraryDeletedConversationIDs ?? []).union(missingIDs).subtracting(incomingIDs)
-      next.libraryConversationIDs = incomingIDs
-      let execution = next.conversations.filter { next.executionConversationIDs?.contains($0.key) == true && next.libraryDeletedConversationIDs?.contains($0.key) != true }
-      next.conversations = Dictionary(uniqueKeysWithValues: snapshot.conversations.map { ($0.id, $0) }).merging(execution) { _, local in local }
+      next.libraryConversationIDs = snapshot.hasEveryConversation ? incomingIDs : (next.libraryConversationIDs ?? []).union(incomingIDs)
+      let kept = next.conversations.filter { id, _ in
+        next.libraryDeletedConversationIDs?.contains(id) != true
+          && (next.executionConversationIDs?.contains(id) == true || !snapshot.hasEveryConversation)
+      }
+      next.conversations = Dictionary(uniqueKeysWithValues: snapshot.conversations.map { ($0.id, $0) }).merging(kept) { remote, local in
+        next.executionConversationIDs?.contains(local.id) == true ? local : remote
+      }
       next.cursor = snapshot.cursor
       next.hasLibrarySnapshot = true
     }

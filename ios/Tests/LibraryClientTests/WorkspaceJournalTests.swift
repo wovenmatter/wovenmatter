@@ -48,6 +48,96 @@ final class WorkspaceJournalTests: XCTestCase {
       XCTFail("Direct replay must match the actual execution namespace")
     } catch WorkspaceJournal.Failure.wrongLibrary { }
   }
+  /// A record a newer workspace wrote holds a place in its sequence. A page
+  /// that names the place moves the cursor past it and the records after it
+  /// are accepted; a gap nothing names still stops without advancing.
+  func testANamedSkipAdvancesTheSequenceAndAnUnnamedGapStillStops() async throws {
+    let journal = try WorkspaceJournal(file: path())
+    try await journal.bind(libraryID: "library")
+    try await journal.mergeRegistry([.init(id: "linux", libraryID: "library", ownerDeviceID: "mac", kind: .linux, name: "Server")])
+    // As the workspace sends it: record 2 is of a kind this build does not know.
+    var rows = try [1, 2, 3].map { try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(entry($0, workspace: "linux"))) as? [String: Any]) }
+    rows[1]["kind"] = "forkedConversation"
+    let body: [String: Any] = ["libraryID": "library", "cursor": 3, "hasMore": true, "entries": rows]
+    let page = try JSONDecoder().decode(ExecutionJournalPage.self, from: JSONSerialization.data(withJSONObject: body))
+    XCTAssertEqual(page.entries.map(\.originSequence), [1, 3])
+    XCTAssertEqual(page.skipped, [.init(workspaceID: "linux", originSequence: 2)])
+    try await journal.receiveWorkspace(page, workspaceID: "linux", localDeviceID: "phone")
+    var state = await journal.snapshot()
+    XCTAssertEqual(state.directCursors["linux"], 3)
+    XCTAssertEqual(state.originSequences["linux"], 3)
+    XCTAssertEqual(state.entries.values.map(\.originSequence).sorted(), [1, 3])
+    XCTAssertEqual(state.conversations["chat"]?.title, "Version 3")
+    XCTAssertTrue(state.pendingEventIDs.isEmpty, "An observer never publishes what it read")
+
+    // The sequence continues, and a page that holds only a skip still advances.
+    try await journal.receiveWorkspace(.init(libraryID: "library", cursor: 4, entries: [entry(4, workspace: "linux")]), workspaceID: "linux")
+    try await journal.receiveWorkspace(.init(libraryID: "library", cursor: 5, hasMore: true, skipped: [.init(workspaceID: "linux", originSequence: 5)]), workspaceID: "linux")
+    state = await journal.snapshot()
+    XCTAssertEqual(state.directCursors["linux"], 5)
+    XCTAssertEqual(state.originSequences["linux"], 5)
+
+    // Only a named position is passed over.
+    let refused: [ExecutionJournalPage] = [
+      .init(libraryID: "library", cursor: 7, entries: [entry(7, workspace: "linux")]),
+      .init(libraryID: "library", cursor: 7, entries: [entry(7, workspace: "linux")], skipped: [.init(workspaceID: "linux", originSequence: 9)]),
+      .init(libraryID: "library", cursor: 7, entries: [entry(7, workspace: "linux")], skipped: [.init(workspaceID: "other", originSequence: 6)]),
+      .init(libraryID: "library", cursor: 6, hasMore: true),
+    ]
+    for page in refused {
+      do { try await journal.receiveWorkspace(page, workspaceID: "linux"); XCTFail("An unexplained gap was accepted") }
+      catch WorkspaceJournal.Failure.replayGap { }
+    }
+    let cursor = await journal.snapshot().directCursors["linux"]
+    XCTAssertEqual(cursor, 5)
+    try await journal.receiveWorkspace(.init(libraryID: "library", cursor: 7, entries: [entry(7, workspace: "linux")],
+      skipped: [.init(workspaceID: "linux", originSequence: 6)]), workspaceID: "linux")
+    let final = await journal.snapshot().directCursors["linux"]
+    XCTAssertEqual(final, 7)
+  }
+
+  /// The library's journal interleaves workspaces: a skip moves only its own
+  /// workspace's sequence, in order with that workspace's entries.
+  func testALibraryPageWithASkipKeepsEveryWorkspacesSequence() async throws {
+    let journal = try WorkspaceJournal(file: path())
+    try await journal.bind(libraryID: "library")
+    let page = ExecutionJournalPage(libraryID: "library", cursor: 4, entries: [
+      entry(1, workspace: "linux", id: "a"), entry(1, workspace: "other", id: "b"), entry(3, workspace: "linux", id: "a"),
+    ], hasMore: true, skipped: [.init(workspaceID: "linux", originSequence: 2)])
+    try await journal.receiveLibrary(page)
+    var state = await journal.snapshot()
+    XCTAssertEqual(state.libraryCursor, 4)
+    XCTAssertEqual(state.originSequences, ["linux": 3, "other": 1])
+    XCTAssertEqual(state.conversations["a"]?.title, "Version 3")
+    // A position this device already holds is not passed over twice.
+    try await journal.receiveLibrary(.init(libraryID: "library", cursor: 5, skipped: [.init(workspaceID: "linux", originSequence: 2)]))
+    state = await journal.snapshot()
+    XCTAssertEqual(state.libraryCursor, 5)
+    XCTAssertEqual(state.originSequences["linux"], 3)
+    for page in [ExecutionJournalPage(libraryID: "library", cursor: 6, entries: [entry(5, workspace: "linux", id: "a")]),
+                 .init(libraryID: "library", cursor: 6, skipped: [.init(workspaceID: "other", originSequence: 3)])] {
+      do { try await journal.receiveLibrary(page); XCTFail("An unexplained gap was accepted") }
+      catch WorkspaceJournal.Failure.replayGap { }
+    }
+    let cursor = await journal.snapshot().libraryCursor
+    XCTAssertEqual(cursor, 5)
+  }
+
+  /// This device publishes its own workspace's records in sequence, and a
+  /// host refuses a missing one, so nothing of its own is ever skipped.
+  func testTheExecutionOwnerNeverSkipsItsOwnRecords() async throws {
+    let journal = try WorkspaceJournal(file: path())
+    try await journal.upsertWorkspace(.init(id: "phone", libraryID: "library", ownerDeviceID: "phone", kind: .ios, name: "iPhone"))
+    do {
+      try await journal.receiveWorkspace(.init(libraryID: "library", cursor: 1, skipped: [.init(workspaceID: "phone", originSequence: 1)]),
+                                         workspaceID: "phone", localDeviceID: "phone")
+      XCTFail("The owner skipped its own record")
+    } catch WorkspaceJournal.Failure.replayGap { }
+    try await journal.receiveWorkspace(.init(libraryID: "library", cursor: 1, entries: [entry(1)]), workspaceID: "phone", localDeviceID: "phone")
+    let pending = await journal.pendingOwnerEntries(deviceID: "phone").map(\.originSequence)
+    XCTAssertEqual(pending, [1])
+  }
+
   func testDirectControlCommandsPersistOwnerBeforeDispatchAndRejectMismatches() async throws {
     let store = try MobileStore(file: path()), transport = OfflineWorkspace()
     let client = WorkspaceClient(store: store, workspaceID: "linux", transport: transport)

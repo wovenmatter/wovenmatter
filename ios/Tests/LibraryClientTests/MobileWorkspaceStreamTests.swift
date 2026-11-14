@@ -331,6 +331,47 @@ final class MobileWorkspaceStreamTests: XCTestCase {
     XCTAssertLessThanOrEqual(after, 3)
   }
 
+  /// A journal record of a kind a newer server added is an item this build
+  /// cannot read. Its sequence is passed over, so the records after it are
+  /// written and the subscription is not asked for again from the same record.
+  func testAJournalRecordThisBuildCannotReadIsPassedOver() async throws {
+    let (store, server, stream, _) = try await make()
+    await stream.start()
+    let socket = await open(server, stream)
+    await eventually("workspace subscription") { await socket.subscriptions.count == 1 }
+    let id = await socket.subscriptions[0].id
+    await socket.push(journalItem(id, 1))
+    let unread = try WebSocketStreamTransport.decode(.string(#"""
+      {"t":"item","id":"\#(id)","seq":2,"kind":"journal","data":{"entry":{"eventID":"event-2","workspaceID":"linux",
+       "originSequence":2,"conversationID":"chat","kind":"forkedConversation"}}}
+      """#))
+    guard case .item(let item) = unread, case .unknown = item.payload else { return XCTFail("Expected an ignored item, not \(unread)") }
+    await socket.push(unread)
+    await socket.push(journalItem(id, 3, conversation: "later"))
+    await socket.push(.item(.init(id: id, payload: .synchronized)))
+    await eventually("written past the unread record") { await store.journal.snapshot().directCursors["linux"] == 3 }
+    let state = await store.journal.snapshot()
+    XCTAssertEqual(state.entries.values.map(\.originSequence).sorted(), [1, 3])
+    let title = await store.snapshot().conversations["later"]?.title
+    XCTAssertEqual(title, "Version 3")
+    // An unread record that arrives alone is passed over too.
+    let alone = try WebSocketStreamTransport.decode(.string(#"""
+      {"t":"item","id":"\#(id)","seq":4,"kind":"journal","data":{"entry":{"eventID":"event-4","workspaceID":"linux",
+       "originSequence":4,"conversationID":"chat","kind":"forkedConversation"}}}
+      """#))
+    await socket.push(alone)
+    await eventually("the cursor moves past it") { await store.journal.snapshot().directCursors["linux"] == 4 }
+    try await Task.sleep(for: .milliseconds(100))
+    let subscriptions = await socket.subscriptions.count
+    XCTAssertEqual(subscriptions, 1, "Never subscribed again for the record it cannot read")
+    // The next connection resumes after it.
+    await socket.serverClose(code: 1006)
+    let next = await open(server, stream, socket: 1)
+    await eventually("reconnected") { await next.subscriptions.count == 1 }
+    let resumed = await next.subscriptions[0].params.after
+    XCTAssertEqual(resumed, 4)
+  }
+
   /// A write that fails (here an entry the journal refuses) is not taken:
   /// the subscription asks again from the saved cursor, and keeps it on
   /// later reconnects, so journal delivery never turns off.

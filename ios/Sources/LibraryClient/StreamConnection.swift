@@ -766,7 +766,11 @@ public enum StreamCommands {
     var learned: [LibraryCommandReceipt] = []
     for record in await journal.commandRecords(workspaceID: workspaceID)
     where record.receipt == nil || record.receipt?.status == .outcomeUnknown {
-      guard let receipt = try await connection.receipt(record.command.commandID),
+      // A receipt in a state a newer server added cannot be read here. That
+      // command stays unresolved; the others are still asked about.
+      let answer: LibraryCommandReceipt?
+      do { answer = try await connection.receipt(record.command.commandID) } catch is DecodingError { continue }
+      guard let receipt = answer,
             receipt.commandID == record.command.commandID, receipt.deviceID == record.command.deviceID,
             receipt.status != .outcomeUnknown else { continue }
       try await journal.rememberReceipt(receipt, workspaceID: workspaceID)

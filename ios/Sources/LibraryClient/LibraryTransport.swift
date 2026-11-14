@@ -220,8 +220,8 @@ public final class HTTPSLibraryTransport: LibraryTransport, MobilePairingRequest
   public func mutate(_ mutation: LibraryMutation) async throws -> LibraryMutationResult { try await request("v1/mutations", method: "POST", body: JSONEncoder().encode(mutation)) }
   public func note(_ id: String) async throws -> LibraryNote { try await request("v1/notes/\(try Self.safeID(id))") }
   public func linkedData(_ id: String, tableID: String?) async throws -> LinkedDataPreview { try await request("v1/assets/\(try Self.safeID(id))/linked-data", query: tableID.map { [.init(name: "tableID", value: $0)] } ?? []) }
-  public func providers() async throws -> [HarnessCapabilities] { try await request("v1/providers") }
-  public func pending() async throws -> [PendingInteraction] { try await request("v1/pending") }
+  public func providers() async throws -> [HarnessCapabilities] { try await list("v1/providers") }
+  public func pending() async throws -> [PendingInteraction] { try await list("v1/pending") }
   public func transcript(_ id: String) async throws -> LibraryTranscript { try await request("v1/sessions/\(try Self.safeID(id))/transcript") }
   public func transcript(_ id: String, before: String) async throws -> LibraryTranscript { try await request("v1/sessions/\(try Self.safeID(id))/transcript", query: [.init(name: "before", value: before)]) }
   public func activityDetails(_ id: String, runID: String, activityID: String) async throws -> LibraryActivity {
@@ -232,10 +232,15 @@ public final class HTTPSLibraryTransport: LibraryTransport, MobilePairingRequest
     do { return try await request("v1/command-receipts/\(try Self.safeID(id))") }
     catch MobileConnectionError.http(404, _) { return nil }
   }
-  public func deviceConnections() async throws -> [DeviceConnection] { try await request("v1/devices") }
+  public func deviceConnections() async throws -> [DeviceConnection] { try await list("v1/devices") }
   public func capabilities(_ id: String) async throws -> HarnessCapabilities { try await request("v1/sessions/\(try Self.safeID(id))/capabilities") }
   public func asset(_ id: String) async throws -> LibraryNote { try await request("v1/assets/\(try Self.safeID(id))") }
 
+  /// A list the host answers with. An element a newer host wrote and this
+  /// build cannot read is dropped; the rest of the list still arrives.
+  func list<Element: Decodable>(_ path: String) async throws -> [Element] {
+    (try await request(path) as LossyArray<Element>).wrappedValue
+  }
   func request<Result: Decodable>(_ path: String, method: String = "GET", query: [URLQueryItem] = [], body: Data? = nil, timeout: TimeInterval? = nil) async throws -> Result {
     let (data, _) = try await data(path, method: method, query: query, body: body, maximumBytes: 80 * 1_024 * 1_024, timeout: timeout)
     return try JSONDecoder().decode(Result.self, from: data)

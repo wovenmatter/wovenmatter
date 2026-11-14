@@ -206,6 +206,9 @@ public actor MobileSyncEngine {
     let deviceID = await store.snapshot().deviceID
     let snapshot = try await connection.snapshot()
     guard snapshot.workspaceID == libraryID else { throw MobileStore.Failure.wrongWorkspace }
+    // A move compares everything this device holds with everything the host
+    // holds, so it needs the host's whole list; see `MobileStore.rebindLibrary`.
+    guard snapshot.hasEveryNote, snapshot.hasEveryFolder, snapshot.hasEveryConversation else { throw MobileConnectionError.invalidResponse }
     var bodies: [String: LibraryNote] = [:]
     for id in await store.notesNeedingBodies(for: snapshot) {
       try Task.checkCancellation()
@@ -356,7 +359,11 @@ public actor MobileSyncEngine {
     }
     let records = await store.snapshot().commands
     for record in records where record.receipt == nil || record.receipt?.status == .accepted || record.receipt?.status == .outcomeUnknown {
-      if let receipt = try await transport.receipt(record.id) { try await store.rememberReceipt(receipt) }
+      // A receipt in a state a newer host added cannot be read here. That
+      // command stays unresolved; the others are still asked about.
+      let answer: LibraryCommandReceipt?
+      do { answer = try await transport.receipt(record.id) } catch is DecodingError { continue }
+      if let receipt = answer { try await store.rememberReceipt(receipt) }
     }
   }
   public func linkedData(note: LibraryNote, tableID: String? = nil) async throws -> LinkedDataPreview {
