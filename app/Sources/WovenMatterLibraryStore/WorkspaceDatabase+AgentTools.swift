@@ -97,6 +97,7 @@ extension WorkspaceDatabaseConnection {
           instruction TEXT NOT NULL, next_fire_at REAL NOT NULL, interval_seconds REAL,
           is_paused INTEGER NOT NULL DEFAULT 0, pending_delivery_id TEXT, outside_mcp INTEGER NOT NULL DEFAULT 0);
         CREATE INDEX IF NOT EXISTS session_timers_due ON session_timers(is_paused,next_fire_at);
+        CREATE INDEX IF NOT EXISTS session_timers_session ON session_timers(session_id);
         CREATE TABLE IF NOT EXISTS coordination_access_requests(
           id TEXT PRIMARY KEY, source_id TEXT NOT NULL REFERENCES mcp_callers(id),
           target_id TEXT NOT NULL REFERENCES conversations(id), purpose TEXT NOT NULL,

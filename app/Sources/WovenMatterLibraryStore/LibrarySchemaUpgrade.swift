@@ -5,7 +5,8 @@ import Crypto
 #endif
 import Foundation
 
-/// Converts a library written by v0.4.2 to the current schema in place.
+/// Converts a library written by v0.4.2, or by a build before the versioned
+/// schema, to the current schema in place.
 ///
 /// v0.4.2 still used the names of the codebase the library came from: core
 /// tables named `dashboard_*` and `desktop_*`, OpenClaw gateway tables and
@@ -19,13 +20,24 @@ import Foundation
 /// bookkeeping to match, so paired Macs that update together keep their
 /// versions and cursors.
 ///
-/// It runs on open before anything else creates schema. Every trigger is
-/// dropped first, and every index of a renamed table and every index in
-/// `droppedLibraryIndexes` is dropped: the regular schema creation that
-/// follows recreates both under their current names. Each step checks what
-/// is present, so a partly converted or partly created library converges on
-/// the same result.
+/// It runs on open, before anything else creates schema, for a library whose
+/// `user_version` is 0, and stamps `librarySchemaVersion` in the same
+/// transaction. Every trigger is dropped first, and every index of a renamed
+/// table and every index in `droppedLibraryIndexes` is dropped: the regular
+/// schema creation that follows recreates both under their current names.
+/// Each step checks what is present, so a partly converted or partly
+/// created library converges on the same result.
 extension WorkspaceDatabaseConnection {
+  /// `PRAGMA user_version` of the current schema. A library created or
+  /// converted by this build carries it, so it skips the conversion below
+  /// and the next schema change is gated on the version instead of on what
+  /// the file happens to contain. 0 is every library before it.
+  static let librarySchemaVersion = 1
+
+  func libraryVersionUnlocked() throws -> Int {
+    try historyRowsUnlocked("PRAGMA user_version", values: []).first?.objectValue?["user_version"]?.intValue ?? 0
+  }
+
   static let renamedLibraryTables: [(old: String, new: String)] = [
     ("dashboard_agents", "agents"),
     ("dashboard_conversations", "conversations"),
@@ -201,19 +213,9 @@ extension WorkspaceDatabaseConnection {
       Set(try historyRowsUnlocked("SELECT name FROM pragma_table_info(?)", values: [table])
         .compactMap { $0.objectValue?["name"]?.stringValue })
     }
-    var legacyColumns = false
-    for (table, dropped) in Self.droppedLibraryColumns {
-      let present = try columns(tables.contains(table) ? table : Self.renamedLibraryTables.first { $0.new == table }?.old ?? table)
-      if !present.isDisjoint(with: dropped) { legacyColumns = true; break }
-    }
-    var jsonBlobs = false
-    for (table, json) in Self.jsonTextColumns where !jsonBlobs {
-      let name = tables.contains(table) ? table : Self.renamedLibraryTables.first { $0.new == table }?.old ?? table
-      jsonBlobs = try !historyRowsUnlocked("SELECT 1 AS blob FROM pragma_table_info(?) WHERE upper(type)='BLOB' AND name IN (SELECT value FROM json_each(?))",
-                                            values: [name, String(decoding: try JSONEncoder().encode(json), as: UTF8.self)]).isEmpty
-    }
-    guard legacyColumns || jsonBlobs || Self.renamedLibraryTables.contains(where: { tables.contains($0.old) })
-            || Self.droppedLibraryTables.contains(where: tables.contains) else { return }
+    // A file without a library (new, or holding only the usage index) is
+    // created and stamped by the regular schema creation instead.
+    guard tables.contains("conversations") || tables.contains("dashboard_conversations") else { return }
 
     // Foreign keys stay off while tables are renamed and dropped (a dropped
     // parent must not cascade into its children); renaming still rewrites
@@ -336,6 +338,7 @@ extension WorkspaceDatabaseConnection {
         "SELECT 1 AS present FROM sqlite_master WHERE name='agents' AND instr(sql,'''openclaw''')>0", values: []).isEmpty == false {
         try rebuildCoreTableUnlocked("agents")
       }
+      try executeUnlocked("PRAGMA user_version=\(Self.librarySchemaVersion)")
     }
     try executeUnlocked("PRAGMA foreign_keys=ON")
   }

@@ -168,6 +168,8 @@ extension WorkspaceDatabaseConnection {
       INSERT OR IGNORE INTO workspace_revision (singleton, revision) VALUES (1, 0);
       CREATE INDEX IF NOT EXISTS conversations_recent
         ON conversations(is_archived, deleted_at, last_message_at DESC);
+      CREATE INDEX IF NOT EXISTS conversations_folder
+        ON conversations(folder_id) WHERE folder_id IS NOT NULL;
       CREATE INDEX IF NOT EXISTS messages_conversation_created
         ON messages(conversation_id, created_at, id);
       CREATE INDEX IF NOT EXISTS message_attachments_message_created
@@ -176,6 +178,8 @@ extension WorkspaceDatabaseConnection {
         ON message_references(message_id, created_at, id);
       CREATE INDEX IF NOT EXISTS run_activities_run_created
         ON run_activities(run_id, created_at, id);
+      CREATE INDEX IF NOT EXISTS run_activities_conversation_created
+        ON run_activities(conversation_id, created_at, id);
       CREATE INDEX IF NOT EXISTS runs_conversation_user_message
         ON runs(conversation_id, user_message_id);
       CREATE INDEX IF NOT EXISTS runs_conversation_assistant_message
@@ -184,6 +188,10 @@ extension WorkspaceDatabaseConnection {
         ON runs(conversation_id, status, created_at DESC, id DESC);
       CREATE INDEX IF NOT EXISTS notes_recent
         ON notes(deleted_at, updated_at DESC);
+      CREATE INDEX IF NOT EXISTS notes_folder
+        ON notes(folder_id) WHERE folder_id IS NOT NULL;
+      CREATE INDEX IF NOT EXISTS opencode_submissions_conversation
+        ON opencode_submissions(conversation_id, status);
       """)
   }
 

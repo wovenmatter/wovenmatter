@@ -47,7 +47,10 @@ final class WorkspaceDatabaseConnection {
       }
       try execute("PRAGMA busy_timeout = 5000")
       try execute("PRAGMA journal_mode = WAL")
-      try upgradeLibrarySchemaUnlocked()
+      // A library from before the versioned schema converts first; a
+      // current one skips straight to the idempotent creation below.
+      let version = try withLock { try libraryVersionUnlocked() }
+      if version == 0 { try upgradeLibrarySchemaUnlocked() }
       try execute("PRAGMA foreign_keys = ON")
       try migrate()
       try migrateWorkspaceHistory()
@@ -63,6 +66,8 @@ final class WorkspaceDatabaseConnection {
       try migratePairedLibrary()
       try migrateExecutionStreamChanges()
       try migrateDeviceSyncWakes()
+      // A fresh library is stamped once everything above exists.
+      if version < Self.librarySchemaVersion { try execute("PRAGMA user_version = \(Self.librarySchemaVersion)") }
     } catch {
       sqlite3_close(database)
       connection = nil

@@ -40,6 +40,10 @@ import WovenMatterCore
       Issue.record("\(key) differs:\nupgraded: \(actual[key] ?? "missing")\nfresh: \(expected[key]!)")
     }
     #expect(try await library.pairedLibrarySchema() == current.pairedLibrarySchema())
+    // Both carry the schema version, so later opens skip the conversion.
+    for database in [library, current] {
+      #expect(try await row(database, "PRAGMA user_version")["user_version"]?.intValue == WorkspaceDatabaseConnection.librarySchemaVersion)
+    }
     // Opening it again changes nothing.
     let reopened = try await schema(WorkspaceDatabase(url: upgraded.databaseURL))
     for key in Set(reopened.keys).union(actual.keys).sorted() where reopened[key] != actual[key] {

@@ -22,6 +22,7 @@ extension WorkspaceDatabaseConnection {
           native_command TEXT, failure_code TEXT, failure_reason TEXT
         );
         CREATE INDEX IF NOT EXISTS session_deliveries_source ON session_deliveries(source_id,created_at);
+        CREATE INDEX IF NOT EXISTS session_deliveries_target ON session_deliveries(target_id,status);
         CREATE TABLE IF NOT EXISTS history_events(
           sequence INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT NOT NULL UNIQUE,
           conversation_id TEXT, run_id TEXT, agent_id TEXT, harness TEXT NOT NULL,
