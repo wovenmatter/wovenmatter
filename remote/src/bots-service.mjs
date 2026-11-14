@@ -7,6 +7,7 @@ import { createBotEngine, machineIdentity } from './bots-engine.mjs'
 import { createBotConversationLibrary, createJournalBotLibraryAdapter, createLocalLibraryBotAdapter } from './bots-library.mjs'
 import { createBotPreviews } from './bots-previews.mjs'
 import { botsPackageRoot, createBotsRuntime } from './bots-runtime.mjs'
+import { githubDirectory, readGitHubConfiguration } from './github-identity.mjs'
 import { executionMemberKinds, memberRemovedCloseCode } from './member-sockets.mjs'
 import { WebSocket as RelayWebSocket, WebSocketServer } from './websocket.mjs'
 
@@ -156,6 +157,10 @@ export function createBotsService({ configuration, mcp, defaultAgent, serverPort
     if (path === '/v1/bots-host/inference-credentials' && method === 'POST') {
       const body = await readJSON(request, 16384)
       json(response, 200, await defaultAgent.botCredentials({ provider: body.provider })); return true
+    }
+    // Settings → GitHub, as a Mac last sent it to this host (github-identity.mjs).
+    if (path === '/v1/bots-host/git' && method === 'POST') {
+      json(response, 200, await readGitHubConfiguration(githubDirectory(configuration))); return true
     }
     const entries = path.match(/^\/v1\/bots-host\/conversations\/([0-9a-fA-F-]{36})\/entries$/)
     if (entries && method === 'POST') {

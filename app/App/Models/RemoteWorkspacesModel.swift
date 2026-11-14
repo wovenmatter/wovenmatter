@@ -103,6 +103,8 @@ final class RemoteWorkspacesModel {
     private struct DefaultAgentAcknowledgment {
         let revision: String
         let identity: RemoteWorkspaceRequestIdentity
+        /// Settings → GitHub's revision sent with it.
+        var github: Int64? = nil
     }
     private var defaultAgentAcknowledgments: [UUID: DefaultAgentAcknowledgment] = [:]
     private var defaultAgentSyncTasks: [UUID: (id: UUID, task: Task<Void, any Error>)] = [:]
@@ -1196,9 +1198,11 @@ final class RemoteWorkspacesModel {
         if facadeFixtureWorkspaceIDs.contains(configuration.id) { return }
         #endif
         let identity = try requestIdentity(configuration)
-        let payload = try await ProviderAccountCoordinator.shared.prepare(configuration.id.uuidString.lowercased())
+        // Settings → GitHub rides along; its own revision decides whether to send again.
+        let payload = try await ProviderAccountCoordinator.shared.prepare(configuration.id.uuidString.lowercased()).withGitHub()
         try requireCurrent(identity)
-        if let ack = defaultAgentAcknowledgments[configuration.id], ack.revision == payload.revision, ack.identity == identity { return }
+        if let ack = defaultAgentAcknowledgments[configuration.id], ack.revision == payload.revision, ack.identity == identity,
+           ack.github == payload.github?.revision { return }
         if defaultAgentSyncTasks[configuration.id] != nil {
             try await waitForDefaultAgentSync(configuration.id)
             return try await ensureDefaultAgent(configuration)
@@ -1219,7 +1223,7 @@ final class RemoteWorkspacesModel {
             guard receipt.saved, receipt.revision == payload.revision else {
                 throw DefaultAgentError.message("The workspace did not acknowledge the current Pi Durable credentials.")
             }
-            defaultAgentAcknowledgments[configuration.id] = .init(revision: receipt.revision, identity: identity)
+            defaultAgentAcknowledgments[configuration.id] = .init(revision: receipt.revision, identity: identity, github: payload.github?.revision)
         }
         let operationID = UUID()
         defaultAgentSyncTasks[configuration.id] = (operationID, task)

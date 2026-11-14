@@ -205,6 +205,29 @@ struct MemberSyncTests {
     #expect(notices > 0)
   }
 
+  /// Settings → GitHub rides the library: Mac 3 receives Mac 1's key sealed to it, through
+  /// peer sync alone, and the Linux hosts' copies carry only ciphertext.
+  @Test func gitHubKeyReachesEveryMacThroughPeerSync() async throws {
+    let (_, members, _) = try await Self.mesh()
+    defer { Task { for member in members { await member.remove() } } }
+    for member in members { await member.sync.start() }
+    #expect(try await Self.settle(members) { (try? await $0.directory.list().members.filter { !$0.revoked }.count) == 6 })
+    let macs = Array(members[0..<3]), stores = macs.map { _ in MemoryGitHubStore() }
+    let syncs = zip(macs, stores).map { GitHubIdentitySync(database: $0.database, directory: $0.directory, storage: $1.storage) }
+    for sync in syncs { try await sync.reconcile() }
+    #expect(try await Self.settle([macs[0]]) { (try? await $0.database.gitHubIdentityRecipients().count) == 3 })
+    let saved = try await syncs[0].change { $0.key = gitHubFixtureKey; $0.identity = .init(name: "Ada") }
+    #expect(try await pollUntil(attempts: 300, interval: .milliseconds(50)) {
+      for (sync, store) in zip(syncs, stores) { _ = try? await sync.reconcile(); if store.value != saved { return false } }
+      return true
+    })
+    for linux in members[3...] {
+      #expect(try await Self.settle([linux]) { (try? await $0.database.gitHubSharedIdentity()?.revision) == saved.revision })
+      let shared = String(decoding: try JSONEncoder().encode(try #require(try await linux.database.gitHubSharedIdentity())), as: UTF8.self)
+      #expect(!shared.contains("fixture-private-material"))
+    }
+  }
+
   @Test func linuxHostsSynchronizeWithEveryMacOffline() async throws {
     let (network, members, _) = try await Self.mesh()
     defer { Task { for member in members { await member.remove() } } }
@@ -314,7 +337,9 @@ struct MemberSyncTests {
     await network.setOffline([])
     await a.sync.resume(reason: "wake")
     #expect(try await Self.settle([a]) { await $0.has(note) })
-    #expect(await a.sync.exchanges["wake", default: 0] >= 1)
+    // A wake during an exchange already under way runs right after it, and
+    // that earlier exchange may be the one that brings the note.
+    #expect(try await Self.settle([a]) { await $0.sync.exchanges["wake", default: 0] >= 1 })
   }
 
   /// A Linux host relays every row, but may write registry and ownership rows

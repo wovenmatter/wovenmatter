@@ -60,6 +60,8 @@ struct BotsHostAPI: Sendable {
     var removePreview: @MainActor @Sendable (_ botID: String, _ port: Int) async -> Void
     var inferenceCredential: @MainActor @Sendable (_ provider: String) async throws -> CredentialReply
     var recordConversation: @MainActor @Sendable (_ botID: String, _ batch: BotConversationMirror) async throws -> Void
+    /// Settings → GitHub for the bots' containers: the key and identity this Mac holds.
+    var gitConfiguration: @MainActor @Sendable () async throws -> GitHubHostConfiguration = { GitHubHostConfiguration(nil) }
 
     private struct KeyRequest: Decodable { let botID: String; let botName: String? }
     private struct KeyResponse: Encodable { let endpoint: String; let token: String }
@@ -105,6 +107,8 @@ struct BotsHostAPI: Sendable {
                 let body = try decode(CredentialRequest.self, request)
                 guard Self.providers.contains(body.provider) else { throw BotsHostAPIError.invalid("Unknown provider.") }
                 return try .json(try await inferenceCredential(body.provider))
+            case ("POST", ["git"]):
+                return try .json(try await gitConfiguration())
             case let ("POST", route) where route.count == 3 && route[0] == "conversations" && route[2] == "entries":
                 try Self.requireIdentifier(route[1])
                 let batch = try decode(BotConversationMirror.self, request)

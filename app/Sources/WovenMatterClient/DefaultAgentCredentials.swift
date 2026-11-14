@@ -51,6 +51,18 @@ public struct DefaultAgentPayload: Codable, Sendable {
     public var workspace: String
     public var unlockKey: String?
     public var revision: String?
+    /// Settings → GitHub, only in the configuration sent to a Linux host
+    /// (`withGitHub()`); never in what local Pi Durable or helpers receive.
+    public var github: GitHubHostConfiguration?
+
+    /// This payload with Settings → GitHub, for a Linux host. Without a setting on this
+    /// Mac (or with one Keychain cannot read) the host keeps what it has.
+    public func withGitHub(keychain: KeychainAccess = .init()) -> Self {
+        var value = self
+        value.github = (try? GitHubConfigurationStore.load(keychain: keychain)).flatMap { $0 }
+            .flatMap { $0.revision > 0 ? GitHubHostConfiguration($0) : nil }
+        return value
+    }
     public init(config: DefaultAgentSettings, credentials: [String: DefaultAgentCredential], workspace: String) {
         self.config = config
         self.credentials = credentials

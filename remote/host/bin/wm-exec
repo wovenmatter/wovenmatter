@@ -61,6 +61,13 @@ env['PATH']=':'.join(dict.fromkeys(p for p in paths if p))
 askpass=tools+'/askpass'
 env.update({'GIT_TERMINAL_PROMPT':'0','GCM_INTERACTIVE':'never','GIT_ASKPASS':askpass,'SSH_ASKPASS':askpass,
     'SSH_ASKPASS_REQUIRE':'force','SUDO_ASKPASS':askpass,'DEBIAN_FRONTEND':'noninteractive'})
+# Settings → GitHub (remote/src/github-identity.mjs): ssh_config and the gitconfig include.
+github=Path(settings['WOVENMATTER_STATE_DIRECTORY'])/'github'
+if (github/'ssh_config').is_file():
+    if not env.get('GIT_SSH_COMMAND') and not env.get('GIT_SSH') and (github/'github.conf').is_file(): env['GIT_SSH_COMMAND']="ssh -F '"+str(github/'ssh_config').replace("'","'\\''")+"'"
+    include=str(github/'gitconfig'); count=int(env.get('GIT_CONFIG_COUNT') or 0) if (env.get('GIT_CONFIG_COUNT') or '0').isdigit() else 0
+    if not any(env.get(f'GIT_CONFIG_KEY_{i}')=='include.path' and env.get(f'GIT_CONFIG_VALUE_{i}')==include for i in range(count)):
+        env.update({f'GIT_CONFIG_KEY_{count}':'include.path',f'GIT_CONFIG_VALUE_{count}':include,'GIT_CONFIG_COUNT':str(count+1)})
 env['WOVEN_DEFAULT_AGENT_DIRECTORY']=str(Path(settings['WOVENMATTER_WORKSPACE'])/'.wovenmatter/default-agent')
 resource.setrlimit(resource.RLIMIT_CORE,(0,0))
 os.umask(0o077)

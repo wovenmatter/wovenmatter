@@ -35,6 +35,7 @@
 		8BD4FF831500CD09DE10FC28 /* DictationControls.swift in Sources */ = {isa = PBXBuildFile; fileRef = E8A44EB04E09581B6A85026F /* DictationControls.swift */; };
 		DA2000000000000000000004 /* SettingsDefaultAgentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA2000000000000000000003 /* SettingsDefaultAgentView.swift */; };
 		DA2000000000000000000002 /* DefaultAgentSettingsModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA2000000000000000000001 /* DefaultAgentSettingsModel.swift */; };
+		B8607A0B3831298FB2D72777 /* GitHubSettingsModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 06B8B610524048CCBE1F85C7 /* GitHubSettingsModel.swift */; };
 		D472AB9160464F1FAB826C52 /* WorkspaceNoteRecovery.swift in Sources */ = {isa = PBXBuildFile; fileRef = D472AB9160464F1FAB826C51 /* WorkspaceNoteRecovery.swift */; };
 		D472AB9160464F1FAB826C42 /* WorkspaceSessionManagement.swift in Sources */ = {isa = PBXBuildFile; fileRef = D472AB9160464F1FAB826C41 /* WorkspaceSessionManagement.swift */; };
 		D472AB9160464F1FAB826C32 /* WorkspaceSessionActivity.swift in Sources */ = {isa = PBXBuildFile; fileRef = D472AB9160464F1FAB826C31 /* WorkspaceSessionActivity.swift */; };
@@ -181,6 +182,7 @@
 		A26173786E8E05A043C275EF /* SettingsBotsProfileEditor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4B3E1BC3E5E5E5D5DC0744B7 /* SettingsBotsProfileEditor.swift */; };
 		718D450CF03768E9786FFF3A /* SettingsBotsOnboarding.swift in Sources */ = {isa = PBXBuildFile; fileRef = 901C811656F9BA5B0CF39EC5 /* SettingsBotsOnboarding.swift */; };
 		1BD7EC982F8A86A85EAA9F81 /* SettingsBotsMemory.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0FD6A40AC6FFC443F6AAB163 /* SettingsBotsMemory.swift */; };
+		34F69AAF1D635A8BF1F9795F /* SettingsGitHubView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0461C7B08F590CC18851D00 /* SettingsGitHubView.swift */; };
 		D103F308B19022C857BBF538 /* SettingsBotsControls.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9B4CDD9A106DF8DE360AF046 /* SettingsBotsControls.swift */; };
 		AA64B70FC82FA55F0937546A /* SettingsBotsSections.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7104E5C0F90784AC02787F69 /* SettingsBotsSections.swift */; };
 		0409795CE22F15373CB4D0EF /* SettingsBotsResources.swift in Sources */ = {isa = PBXBuildFile; fileRef = D5BF1B4450520A0C60B653F1 /* SettingsBotsResources.swift */; };
@@ -222,6 +224,7 @@
 		E8A44EB04E09581B6A85026F /* DictationControls.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DictationControls.swift; sourceTree = "<group>"; };
 		DA2000000000000000000003 /* SettingsDefaultAgentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsDefaultAgentView.swift; sourceTree = "<group>"; };
 		DA2000000000000000000001 /* DefaultAgentSettingsModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DefaultAgentSettingsModel.swift; sourceTree = "<group>"; };
+		06B8B610524048CCBE1F85C7 /* GitHubSettingsModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "GitHubSettingsModel.swift"; sourceTree = "<group>"; };
 		D472AB9160464F1FAB826C51 /* WorkspaceNoteRecovery.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "WorkspaceNoteRecovery.swift"; sourceTree = "<group>"; };
 		D472AB9160464F1FAB826C41 /* WorkspaceSessionManagement.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "WorkspaceSessionManagement.swift"; sourceTree = "<group>"; };
 		D472AB9160464F1FAB826C31 /* WorkspaceSessionActivity.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "WorkspaceSessionActivity.swift"; sourceTree = "<group>"; };
@@ -368,6 +371,7 @@
 		4B3E1BC3E5E5E5D5DC0744B7 /* SettingsBotsProfileEditor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "SettingsBotsProfileEditor.swift"; sourceTree = "<group>"; };
 		901C811656F9BA5B0CF39EC5 /* SettingsBotsOnboarding.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "SettingsBotsOnboarding.swift"; sourceTree = "<group>"; };
 		0FD6A40AC6FFC443F6AAB163 /* SettingsBotsMemory.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "SettingsBotsMemory.swift"; sourceTree = "<group>"; };
+		C0461C7B08F590CC18851D00 /* SettingsGitHubView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "SettingsGitHubView.swift"; sourceTree = "<group>"; };
 		9B4CDD9A106DF8DE360AF046 /* SettingsBotsControls.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "SettingsBotsControls.swift"; sourceTree = "<group>"; };
 		7104E5C0F90784AC02787F69 /* SettingsBotsSections.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "SettingsBotsSections.swift"; sourceTree = "<group>"; };
 		D5BF1B4450520A0C60B653F1 /* SettingsBotsResources.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "SettingsBotsResources.swift"; sourceTree = "<group>"; };
@@ -462,6 +466,7 @@
 				CFFD1CC4C80237464F98A612 /* ApplicationModel+Automation.swift */,
 				7E4AE75EDB3C1EE9E7043F59 /* DictationModel.swift */,
 				DA2000000000000000000001 /* DefaultAgentSettingsModel.swift */,
+				06B8B610524048CCBE1F85C7 /* GitHubSettingsModel.swift */,
 				DA2090000000000000000001 /* DefaultAgentSDKSettingsModel.swift */,
 				A14000000000000000000002 /* ApplicationModel+SessionSelections.swift */,
 				3CE258FB55B3D55A39972D5B /* OpenCodeModel.swift */,
@@ -579,6 +584,7 @@
 				4B3E1BC3E5E5E5D5DC0744B7 /* SettingsBotsProfileEditor.swift */,
 				901C811656F9BA5B0CF39EC5 /* SettingsBotsOnboarding.swift */,
 				0FD6A40AC6FFC443F6AAB163 /* SettingsBotsMemory.swift */,
+				C0461C7B08F590CC18851D00 /* SettingsGitHubView.swift */,
 				9B4CDD9A106DF8DE360AF046 /* SettingsBotsControls.swift */,
 				7104E5C0F90784AC02787F69 /* SettingsBotsSections.swift */,
 				D5BF1B4450520A0C60B653F1 /* SettingsBotsResources.swift */,
@@ -788,6 +794,7 @@
 				A26173786E8E05A043C275EF /* SettingsBotsProfileEditor.swift in Sources */,
 				718D450CF03768E9786FFF3A /* SettingsBotsOnboarding.swift in Sources */,
 				1BD7EC982F8A86A85EAA9F81 /* SettingsBotsMemory.swift in Sources */,
+				34F69AAF1D635A8BF1F9795F /* SettingsGitHubView.swift in Sources */,
 				D103F308B19022C857BBF538 /* SettingsBotsControls.swift in Sources */,
 				AA64B70FC82FA55F0937546A /* SettingsBotsSections.swift in Sources */,
 				0409795CE22F15373CB4D0EF /* SettingsBotsResources.swift in Sources */,
@@ -824,6 +831,7 @@
 				DA2090000000000000000012 /* SettingsDefaultAgentSDKView.swift in Sources */,
 				DA2090000000000000000002 /* DefaultAgentSDKSettingsModel.swift in Sources */,
 				DA2000000000000000000002 /* DefaultAgentSettingsModel.swift in Sources */,
+				B8607A0B3831298FB2D72777 /* GitHubSettingsModel.swift in Sources */,
 				46E81C4CE9571D1C715098CA /* OpenCodeSessionView.swift in Sources */,
 				8B47C81B917AA853D87FB56A /* OpenCodeInteractionView.swift in Sources */,
 				E86083BC811D526E0900522B /* OpenCodeSettingsView.swift in Sources */,

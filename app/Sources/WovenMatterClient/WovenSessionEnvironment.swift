@@ -94,6 +94,7 @@ public enum WovenSessionEnvironment {
     /// Applies the no-prompt overlay to a session process environment.
     public static func apply(to environment: inout [String: String],
                              toolsDirectory: URL? = installedDirectory,
+                             gitDirectory: URL? = GitHubGitFiles.installedDirectory,
                              deviceName: String = deviceName) {
         if let toolsDirectory {
             let tools = toolsDirectory.path
@@ -106,6 +107,8 @@ public enum WovenSessionEnvironment {
             environment["SSH_ASKPASS_REQUIRE"] = "force"
             environment["SUDO_ASKPASS"] = askpass
         }
+        // Settings → GitHub: the user's key for github.com and their commit identity.
+        if let gitDirectory { GitHubGitFiles.apply(to: &environment, directory: gitDirectory.path) }
         environment["GIT_TERMINAL_PROMPT"] = "0"
         environment["GCM_INTERACTIVE"] = "never"
         environment["DEBIAN_FRONTEND"] = "noninteractive"

@@ -63,6 +63,9 @@ hardware key service is required. Losing the Mac key requires an explicit reset
 and re-sign-in for independent remote accounts. This feature is not a SOC 2 or
 FIPS certification claim.
 
+Settings → GitHub's SSH key rides the same configuration to Linux hosts but is
+kept as a private file there, because ssh reads it; see `GITHUB_IDENTITY.md`.
+
 Dictation uses Apple's on-device SpeechAnalyzer API and does not consume provider
 credentials. Grok subscription and API connections remain available to agents and
 Usage. Local model server keys use the same Keychain and encrypted remote vault,

@@ -89,6 +89,7 @@ extension ApplicationModel {
                 try await self?.libraryStore?.database.deleteBotConversations(machineID: machineID, botID: botID)
             },
             inferenceCredential: { provider in try await BotsHostAPI.storedCredential(provider: provider) },
+            gitConfiguration: { GitHubHostConfiguration(try GitHubConfigurationStore.load()) },
             remoteMachines: { [weak self] version in await self?.remoteBotMachines(thisMacVersion: version, directory: directory) ?? [] },
             setRemoteResources: { [weak self] machineID, resources in
                 guard let self else { throw CancellationError() }

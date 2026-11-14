@@ -45,6 +45,7 @@ in your installed version.
 - [Active-run steering](architecture/active-run-steering.md): sending to a session while it is working.
 - [Pi Durable execution storage](architecture/PI_DURABLE_STORAGE.md)
 - [Default agent credentials](architecture/DEFAULT_AGENT_CREDENTIALS.md)
+- [GitHub key and git identity](architecture/GITHUB_IDENTITY.md): Settings → GitHub on every machine, session and bot.
 - [Internal database concurrency](architecture/ASYNC_DATABASE.md)
 - [Chat HTML rendering](architecture/CHAT_HTML_RENDERING.md)
 - [Shared workspace browser](design/embedded-browser.md)

@@ -41,7 +41,7 @@ export class FakeEngine {
   readonly volumes = new Map<string, Record<string, string>>();
   readonly containers = new Map<string, Container>();
   readonly requests: string[] = [];
-  readonly execs = new Map<string, { container: string; cmd: string[]; user?: string; exitCode: number | null; running: boolean }>();
+  readonly execs = new Map<string, { container: string; cmd: string[]; user?: string; env?: string[]; exitCode: number | null; running: boolean }>();
   /** Output for `ps -eo pid=,ppid=,args=`; undefined makes the check fail. */
   ps: string | undefined = "    1     0 /usr/bin/tini -- node /opt/woven-bot/supervisor.mjs\n";
   /** Exit code of the update's upgrade command. */
@@ -323,7 +323,7 @@ export class FakeEngine {
       if (action === "/exec") {
         const spec = json();
         const id = `exec${this.#next++}`;
-        this.execs.set(id, { container: name, cmd: spec.Cmd, user: spec.User, exitCode: null, running: false });
+        this.execs.set(id, { container: name, cmd: spec.Cmd, user: spec.User, env: spec.Env, exitCode: null, running: false });
         return this.#json(response, 201, { Id: id });
       }
     }
@@ -350,6 +350,8 @@ export class FakeEngine {
     if (first === "node" && second === "/opt/woven-bot/agent.mjs") return helper("agent.mjs");
     if (first === "node" && second === "/opt/woven-bot/forward.mjs") return helper("forward.mjs", cmd.slice(2));
     if (first === "node" && second === "/opt/woven-bot/ctl.mjs") return helper("ctl.mjs", cmd.slice(2));
+    // An inline script (Settings → GitHub's file writer) runs as itself, on the host's paths.
+    if (first === "node" && second === "-e") return this.#capture(spawn(process.execPath, cmd.slice(1), { env, stdio: ["pipe", "pipe", "pipe"] }), "node -e");
     if (first === "ps") {
       if (this.ps === undefined) return 1;
       return spawn("printf", ["%s", this.ps], { stdio: ["pipe", "pipe", "pipe"] });

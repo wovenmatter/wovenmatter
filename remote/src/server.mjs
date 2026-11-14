@@ -33,6 +33,7 @@ import { createInstallerBearer } from './installer-bearer.mjs'
 import { createExecutionAttachments } from './execution-attachments.mjs'
 import { createTitleGenerator } from './title-generation.mjs'
 import { createDefaultAgentControl } from './default-agent-control.mjs'
+import { applyGitHubConfiguration, ensureGitHubStaticFiles, githubDirectory, validGitHubConfiguration } from './github-identity.mjs'
 import { createServer } from 'node:http'
 import { randomUUID, createHash } from 'node:crypto'
 import { readFile, writeFile, mkdir, realpath, rename, rm } from 'node:fs/promises'
@@ -47,6 +48,8 @@ const modulePath = fileURLToPath(import.meta.url)
 const entrypointPath = process.argv[1] ? await realpath(resolve(process.argv[1])).catch(() => null) : null
 const runningAsService = entrypointPath === await realpath(modulePath)
 const { catalogPath, workspaceRoot, managedDataRoot, listenHost, listenPort } = configuration
+// Settings → GitHub: every session environment points at these files, key or not.
+if (runningAsService) ensureGitHubStaticFiles(githubDirectory(configuration))
 const apiToken = runningAsService
   ? validatedAPIToken(configuration.apiToken)
   : configuration.apiToken
@@ -507,7 +510,9 @@ const server = createServer({ maxHeaderSize: 16_384, headersTimeout: 10_000,
       return json(response, 200, await defaultAgentSDKRequest(request, response, defaultAgent))
     }
     if (url.pathname === '/v1/default-agent/configuration'  && request.method === 'POST') {
-      const payload = await readJSON(request)
+      const { github, ...payload } = await readJSON(request)
+      // Settings → GitHub rides along; a Mac without the setting sends none and changes nothing.
+      if (github !== undefined) await applyGitHubConfiguration(validGitHubConfiguration(github), githubDirectory(configuration))
       const result = await defaultAgent.configure(payload)
       clientExecution.rememberUnlockMaterial(payload)
       return json(response, 200, result)

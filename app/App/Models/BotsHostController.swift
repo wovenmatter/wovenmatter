@@ -83,6 +83,8 @@ struct BotsHostDependencies {
     var recordConversation: @MainActor (_ machineID: String, _ batch: BotConversationMirror) async throws -> Void
     var deleteConversations: @MainActor (_ machineID: String, _ botID: String) async throws -> Void
     var inferenceCredential: @MainActor (_ provider: String) async throws -> BotsHostAPI.CredentialReply
+    /// Settings → GitHub for the bots' containers.
+    var gitConfiguration: @MainActor () async throws -> GitHubHostConfiguration = { GitHubHostConfiguration(nil) }
     var remoteMachines: @MainActor (_ thisMacVersion: String?) async -> [BotMachine] = { _ in [] }
     var setRemoteResources: @MainActor (_ machineID: String, _ resources: BotResourceSettings) async throws -> Void = { _, _ in
         throw BotsError.unavailable("That machine is unavailable.")
@@ -468,7 +470,8 @@ final class BotsHostController {
             publishPreview: { botID, port, containerPort in try await previews.publish(botID: botID, port: port, containerPort: containerPort) },
             removePreview: { botID, port in await previews.remove(botID: botID, port: port) },
             inferenceCredential: { provider in try await dependencies.inferenceCredential(provider) },
-            recordConversation: { _, batch in try await dependencies.recordConversation(machineID, batch) })
+            recordConversation: { _, batch in try await dependencies.recordConversation(machineID, batch) },
+            gitConfiguration: { try await dependencies.gitConfiguration() })
     }
 
     // MARK: Delivery to bots

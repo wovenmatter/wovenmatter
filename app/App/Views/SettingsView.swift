@@ -26,6 +26,7 @@ private enum SettingsRoute: Equatable {
     case general
     case permissions
     case accounts(String)
+    case github
     case agents
     case piDurable(String, HarnessSettingsOrigin)
     case harness(AgentRuntimeKind, UUID?, HarnessSettingsOrigin)
@@ -83,6 +84,9 @@ struct SettingsView: View {
                     backTitle: backTitle(.accounts),
                     onBack: { back(from: .accounts) }
                 )
+            case .github:
+                SettingsGitHubView(model: model.github, reservesRailControlSpace: reservesRailControlSpace,
+                                   onBack: { route = .landing })
             case .agents:
                 SettingsAgentsView(
                     model: model,
@@ -255,6 +259,7 @@ struct SettingsView: View {
         case .general: "General"
         case .permissions: "Permissions & Access"
         case .accounts: "Subscriptions & API Keys"
+        case .github: "GitHub"
         case .agents: "Agents"
         case .piDurable: "Pi Durable"
         case .harness(let kind, _, _): kind.displayName
@@ -318,6 +323,14 @@ struct SettingsView: View {
                     action: { open(.accounts, .accounts("global"), from: .landing) }
                 )
                 SettingsDestinationRow(
+                    title: "GitHub",
+                    detail: "Your SSH key and commit identity for agents and bots everywhere.",
+                    status: model.github.snapshot.map { $0.key == nil ? "No key" : "Key added" },
+                    statusTone: model.github.snapshot?.key == nil ? .neutral : .good,
+                    icon: { LucideIcon(glyph: .gitBranch, size: 15) },
+                    action: { route = .github }
+                )
+                SettingsDestinationRow(
                     title: "Agents",
                     detail: "Pi Durable, Codex, Claude Code, Grok Build, and OpenCode.",
                     icon: { LucideIcon(glyph: .bot, size: 15) },
@@ -361,7 +374,10 @@ struct SettingsView: View {
                 )
             }
         }
-        .task { macAccess.refresh(keychainReady: model.keychainAccessReady) }
+        .task {
+            macAccess.refresh(keychainReady: model.keychainAccessReady)
+            await model.github.load()
+        }
     }
 }
 
