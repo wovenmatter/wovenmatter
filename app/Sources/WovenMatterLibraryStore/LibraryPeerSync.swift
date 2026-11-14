@@ -432,7 +432,7 @@ public actor LibraryPeerSync {
         update(member) { $0.version = reply.version }
         if !page.hasMore && !reply.page.hasMore { break }
       }
-      try? await database.materializePendingPeerRecords(senders: senders())
+      try? await materializePending()
       if forceFiles || received || (nextFiles[member.deviceID] ?? .distantPast) <= Date() {
         do {
           // A manifest longer than one bounded turn continues on the next exchange.
@@ -469,9 +469,9 @@ public actor LibraryPeerSync {
       }
       cursor = page.hasMore ? page.cursor : ""
       try await database.savePeerSyncFileCursor(cursor, peer: member.deviceID)
-      if !page.hasMore { try await database.materializePendingPeerRecords(senders: senders()); return true }
+      if !page.hasMore { try await materializePending(); return true }
     }
-    try await database.materializePendingPeerRecords(senders: senders())
+    try await materializePending()
     return false
   }
 
@@ -510,13 +510,17 @@ public actor LibraryPeerSync {
   /// Applies waiting records whose bytes have arrived, or that an update
   /// made readable, each checked against the member it came from.
   public func materializePending() async throws {
-    try await database.materializePendingPeerRecords(senders: senders())
+    // Without the member list nothing can be checked; waiting records wait.
+    guard let senders = await senders() else { return }
+    try await database.materializePendingPeerRecords(senders: senders)
   }
 
-  /// Every current Mac and Linux member as a sender, by device ID.
-  private func senders() async -> [String: PairedLibrarySender] {
+  /// Every current Mac and Linux member as a sender, by device ID; nil when
+  /// the member list could not be read.
+  private func senders() async -> [String: PairedLibrarySender]? {
+    guard let members = try? await peers() else { return nil }
     var result: [String: PairedLibrarySender] = [:]
-    for member in (try? await peers()) ?? [] {
+    for member in members {
       if let sender = try? await sender(member) { result[sender.deviceID] = sender }
     }
     return result

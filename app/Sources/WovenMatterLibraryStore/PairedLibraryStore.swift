@@ -419,10 +419,11 @@ extension WorkspaceDatabaseConnection {
   /// is retried from `peer_sync_versions` (`materializePendingPeerRecords`).
   /// `senders` names the current Mac and Linux members by device ID; each
   /// record is checked against the one it came from (`peerRecordAllowed`),
-  /// when it arrives and again when a waiting one is retried. A peer that
-  /// is no longer among them (removed since) is treated as an unknown
-  /// Linux host, which may write nothing it does not serve. Only fixtures
-  /// that stand in for a Mac pass nil.
+  /// when it arrives and again when a waiting one is retried. Retries skip
+  /// a peer that is not among them (`materializePendingPeerRecords`); were
+  /// one to reach here, it is treated as an unknown Linux host, which may
+  /// write nothing it does not serve. Only fixtures that stand in for a
+  /// Mac pass nil.
   private func applyPeerRecords(_ entries: [(record: PairedLibraryRecord, pending: Int64?)], from peer: String,
                                 cursor: Int64?, senders: [String: PairedLibrarySender]?) throws {
     let tables = Dictionary(uniqueKeysWithValues: try peerTables().map { ($0.name, $0) })
@@ -744,7 +745,13 @@ extension WorkspaceDatabaseConnection {
         }
         if pendingReferencesAvailable(record) { ready[peer, default: []].append((record, Int64(cursor))) }
       }
-      for (peer, entries) in ready.sorted(by: { $0.key < $1.key }) { try applyPeerRecords(entries, from: peer, cursor: nil, senders: senders) }
+      // A record is applied only while the member it came from can be
+      // checked. One from a peer the caller could not vouch for (no longer a
+      // member, or the member list was unavailable just now) keeps waiting:
+      // dropping it would lose it for good, since its relay has moved on.
+      for (peer, entries) in ready.sorted(by: { $0.key < $1.key }) where senders == nil || senders?[peer.lowercased()] != nil {
+        try applyPeerRecords(entries, from: peer, cursor: nil, senders: senders)
+      }
     }
     try setPeerSyncStateUnlocked("pending.after", after == 0 ? nil : String(after))
   }
@@ -1025,8 +1032,8 @@ extension WorkspaceDatabase {
   }
   /// `senders`: the current Mac and Linux members by device ID, so a waiting
   /// record is checked against the member it came from
-  /// (`peerRecordAllowed`); one from a peer no longer among them is checked
-  /// as an unknown Linux host. Only fixtures that stand in for Macs pass nil.
+  /// (`peerRecordAllowed`); one from a peer not among them keeps waiting.
+  /// Only fixtures that stand in for Macs pass nil.
   public func materializePendingPeerRecords(senders: [String: PairedLibrarySender]? = nil) async throws {
     try await write { try $0.materializePendingPeerRecords(senders: senders) }
   }

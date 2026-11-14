@@ -463,9 +463,8 @@ final class PairedMacSyncController {
         if force { await librarySync?.synchronizeAll() }
         do { try await host.applyPeerRevocations() } catch { errors["revocations"] = error.localizedDescription }
         do {
-            // With no sync running, nothing is trusted to have sent a waiting record.
-            if let librarySync { try await librarySync.materializePending() }
-            else { try await database.materializePendingPeerRecords(senders: [:]) }
+            // With no sync running there is no member to check a waiting record against; it waits.
+            try await librarySync?.materializePending()
             errors.removeValue(forKey: "pending")
         } catch { errors["pending"] = error.localizedDescription }
         await refreshSyncStatus()

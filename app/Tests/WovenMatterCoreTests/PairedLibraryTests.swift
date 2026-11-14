@@ -1142,15 +1142,22 @@ extension PairedLibraryTests {
       try await mac.database.read { try $0.historyRowsUnlocked("SELECT 1 AS present FROM conversation_owners WHERE id=?", values: [conversation]).count }
     }
     let member = PairedLibrarySender(deviceID: linux, kind: .linux, members: [.init(deviceID: linux, kind: .linux, endpoints: [], revoked: false)])
-    for senders in [[linux: member], [:]] {
-      let mac = try await Mac(); defer { mac.remove() }
-      let conversation = UUID().uuidString.lowercased()
-      try await held(mac, conversation: conversation)
-      try await mac.database.materializePendingPeerRecords(senders: senders)
-      #expect(try await owners(mac, conversation) == 0)
-      #expect(try await mac.database.peerSyncWaitingForUpdate() == 0)
-      #expect(try await mac.database.read { try $0.historyRowsUnlocked("SELECT cursor FROM peer_sync_versions WHERE pending_peer IS NOT NULL", values: []).isEmpty })
+    let mac = try await Mac(); defer { mac.remove() }
+    let conversation = UUID().uuidString.lowercased()
+    try await held(mac, conversation: conversation)
+    func waiting() async throws -> Int {
+      try await mac.database.read { try $0.historyRowsUnlocked("SELECT cursor FROM peer_sync_versions WHERE pending_peer IS NOT NULL", values: []).count }
     }
+    // While its sender cannot be checked (the member list was unavailable, or
+    // lacks that peer), the record neither applies nor is dropped.
+    try await mac.database.materializePendingPeerRecords(senders: [:])
+    #expect(try await owners(mac, conversation) == 0)
+    #expect(try await waiting() == 1)
+    // Checked against the Linux host that sent it, it is refused: the row names another device.
+    try await mac.database.materializePendingPeerRecords(senders: [linux: member])
+    #expect(try await owners(mac, conversation) == 0)
+    #expect(try await waiting() == 0)
+    #expect(try await mac.database.peerSyncWaitingForUpdate() == 0)
   }
 
   /// A record for a table this build does not have, or whose content needs a
