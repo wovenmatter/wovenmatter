@@ -322,7 +322,7 @@ struct SettingsWorkspacesView: View {
     private var currentPreflight: RemoteWorkspacePreflight? {
         model.preflight(
             hostName: hostName,
-            userName: userName, kind: .host, accessMode: accessMode
+            userName: userName, accessMode: accessMode
         )
     }
 
@@ -407,11 +407,9 @@ struct SettingsWorkspacesView: View {
                             .disabled(!status.running)
                         Divider()
                     }
-                    Button("Update server") { model.updateContainer(workspace) }
+                    Button("Update server") { model.updateHost(workspace) }
                     Button("View browser") { browserWorkspace = workspace }
-                    if workspace.kind == .host {
-                        Button("Logs") { model.loadLogs(workspace); logsWorkspace = workspace }
-                    }
+                    Button("Logs") { model.loadLogs(workspace); logsWorkspace = workspace }
                     Divider()
                     Button("Uninstall…", role: .destructive) { pendingDeletion = workspace }
                 }
@@ -453,10 +451,8 @@ struct SettingsWorkspacesView: View {
                 }
                 if let error = model.taskGatewayErrors[workspace.id] { SettingsError(error) }
             }
-            if workspace.kind == .host {
-                SettingsSummaryRow("Access", value: workspace.accessMode == .fullRoot ? "Full root access" : "Normal user permissions") {
-                    SettingsNote(hostWarning(user: workspace.userName, host: workspace.hostName))
-                }
+            SettingsSummaryRow("Access", value: workspace.accessMode == .fullRoot ? "Full root access" : "Normal user permissions") {
+                SettingsNote(hostWarning(user: workspace.userName, host: workspace.hostName))
             }
             if let status {
                 SettingsSummaryRow("Storage", value: hostStorageLabel(status)) {
@@ -465,9 +461,7 @@ struct SettingsWorkspacesView: View {
                     SettingsValueRow(label: "Host storage", value: hostStorageLabel(status))
                 }
             }
-            if workspace.kind == .host {
-                browserSandboxRow(workspace, status: status, busy: busy)
-            }
+            browserSandboxRow(workspace, status: status, busy: busy)
             SettingsHelp {
                 SettingsNote("Background work is on by default. Pi Durable needs this Mac to unlock credentials after a remote restart.")
             }
@@ -522,7 +516,7 @@ struct SettingsWorkspacesView: View {
                     ForEach(onlineMachines) { machine in
                         Button {
                             hostName = machine.hostName
-                            model.checkHost(hostName: hostName, userName: userName, kind: .host, accessMode: accessMode)
+                            model.checkHost(hostName: hostName, userName: userName, accessMode: accessMode)
                         } label: {
                             HStack(spacing: 8) {
                                 Text(machine.displayName)
@@ -544,7 +538,7 @@ struct SettingsWorkspacesView: View {
             SettingsField("Tailscale machine") {
                 TextField("machine.tailnet-name.ts.net", text: $hostName)
                     .wovenInput()
-                    .onSubmit { model.checkHost(hostName: hostName, userName: userName, kind: .host, accessMode: accessMode) }
+                    .onSubmit { model.checkHost(hostName: hostName, userName: userName, accessMode: accessMode) }
             }
             SettingsField("Remote username (optional)") {
                 TextField("Resolved by SSH config", text: $userName)
@@ -554,7 +548,7 @@ struct SettingsWorkspacesView: View {
             Button(model.isCheckingHost ? "Inspecting host…" : "Inspect host") {
                 model.checkHost(
                     hostName: hostName,
-                    userName: userName, kind: .host, accessMode: accessMode
+                    userName: userName, accessMode: accessMode
                 )
             }
             .buttonStyle(SettingsQuietButtonStyle())
@@ -605,7 +599,7 @@ struct SettingsWorkspacesView: View {
                         }
                         if preflight.canPrepare == true {
                             Button(model.isCreating ? "Preparing host…" : "Prepare host") {
-                                model.prepareHost(hostName: hostName, userName: userName, kind: .host, accessMode: accessMode)
+                                model.prepareHost(hostName: hostName, userName: userName, accessMode: accessMode)
                             }
                             .buttonStyle(WovenPrimaryButtonStyle())
                         }
@@ -637,7 +631,7 @@ struct SettingsWorkspacesView: View {
                     hostName: hostName,
                     userName: userName,
                     port: 7337,
-                    kind: .host, accessMode: accessMode
+                    accessMode: accessMode
                 )
             }
             .buttonStyle(WovenPrimaryButtonStyle())

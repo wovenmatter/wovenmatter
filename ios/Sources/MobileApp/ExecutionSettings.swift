@@ -59,12 +59,6 @@ struct DeviceAgentSettingsPane: View {
   @State private var catalogTask: Task<Void, Never>?
   @State private var saveTask: Task<Void, Never>?
   @State private var generation = UUID()
-  private var policy: PiExecutionPolicy { defaults.executionPolicy ?? .init() }
-  private func policyBinding<Value>(_ path: WritableKeyPath<PiExecutionPolicy, Value>) -> Binding<Value> {
-    Binding(get: { policy[keyPath: path] }, set: { value in
-      var updated = policy; updated[keyPath: path] = value; defaults.executionPolicy = updated
-    })
-  }
   private var selectedConnection: InferenceConnection? { model.inferenceConnections.first { $0.id == connectionID } }
   private var toolDefinitions: [SessionSettingOption] { MobileModel.deviceToolAccessOptions }
   private var selectedModel: InferenceModel? { models.first { $0.id == selectedModelID } }

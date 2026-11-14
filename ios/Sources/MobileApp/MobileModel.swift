@@ -312,7 +312,7 @@ import MobileInference
             await completeMemberPairing(endpoint: pending.endpoint, hostDeviceID: pending.hostDeviceID)
           } else { try configureTransport() }
         } catch { pairingError = error.localizedDescription; credential = nil }
-        do { try await store?.interruptExecutorJobs(); try await loadExecutionConfiguration() }
+        do { try await loadExecutionConfiguration() }
         catch { errorMessage = error.localizedDescription }
         #if DEBUG
         await DevelopmentTailnet.applyLaunchOptions(to: self)

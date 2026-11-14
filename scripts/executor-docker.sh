@@ -12,7 +12,7 @@ host_storage_low=false
 host_storage_warning=''
 
 usage() {
-  printf '%s\n' 'usage: remote-workspace.sh inspect | prepare AUTHORIZED' >&2
+  printf '%s\n' 'usage: executor-docker.sh inspect | prepare AUTHORIZED' >&2
   exit 64
 }
 
@@ -251,7 +251,7 @@ inspect_host() {
     amd64|x86_64|arm64|aarch64) supported_arch=true ;;
     *) blockers+=("The pinned workspace image supports amd64 and arm64 Linux hosts; this host reports ${architecture}.") ;;
   esac
-  [ "$(uname -s 2>/dev/null || true)" = Linux ] || blockers+=("Remote workspaces require Linux.")
+  [ "$(uname -s 2>/dev/null || true)" = Linux ] || blockers+=("Executor requires a Linux host.")
   can_elevate && privilege=true
 
   if select_docker; then

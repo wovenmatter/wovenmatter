@@ -2,19 +2,9 @@ import Foundation
 import WovenMatterCore
 
 public enum RemoteWorkspaceKind: String, Codable, CaseIterable, Sendable {
-    // Retained only to decode deprecated saved workspace records.
-    case container
     case host
 
-    public var isSupported: Bool { self == .host }
-
-    public func requireSupported() throws {
-        guard isSupported else {
-            throw RemoteWorkspaceClientError.invalidResponse("Remote container workspaces are deprecated. Create a native Linux host workspace in Settings.")
-        }
-    }
-
-    public var displayName: String { self == .host ? "Linux host" : "Docker container" }
+    public var displayName: String { "Linux host" }
 }
 
 public enum RemoteWorkspaceAccessMode: String, Codable, CaseIterable, Sendable {
@@ -26,7 +16,7 @@ public enum RemoteWorkspaceAccessMode: String, Codable, CaseIterable, Sendable {
 
 extension RemoteWorkspaceConfiguration {
     public func fullRootPermission(for runtimeKind: AgentRuntimeKind) -> String? {
-        guard kind == .host, accessMode == .fullRoot else { return nil }
+        guard accessMode == .fullRoot else { return nil }
         switch runtimeKind {
         case .codex: return "agent-full-access"
         case .claudeCode, .grokBuild: return "bypassPermissions"
@@ -78,7 +68,6 @@ public struct RemoteWorkspaceExecTarget: Sendable {
     /// validation and repair. Agents never launch through it.
     public func prefix(workingDirectory: String? = nil, interactive: Bool = false,
                        environment: [String: String] = [:]) throws -> [String] {
-        try configuration.kind.requireSupported()
         guard configuration.workspaceID.wholeMatch(of: /^[a-z0-9][a-z0-9-]{0,47}$/) != nil else {
             throw RemoteWorkspaceClientError.invalidWorkspaceID
         }

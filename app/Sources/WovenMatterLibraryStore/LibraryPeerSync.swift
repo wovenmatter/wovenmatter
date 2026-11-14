@@ -531,7 +531,7 @@ public actor LibraryPeerSync {
 
   /// Serves `/v1/peers/sync`, `/v1/peers/notify`, `/v1/peers/files` and
   /// `/v1/peers/file` to signed Mac and Linux members. Returns nil for any
-  /// other path or an unsigned request, so older handlers can still answer.
+  /// other path or an unsigned request, so later handlers in the chain can answer it.
   public func handle(_ request: LibraryHTTPRequest) async -> LibraryHTTPResponse? {
     let target = MemberRequestSignature.canonicalTarget(request.target)
     let path = target.split(separator: "?", maxSplits: 1).first.map(String.init) ?? target

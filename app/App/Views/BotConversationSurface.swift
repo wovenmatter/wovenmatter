@@ -118,7 +118,7 @@ struct BotConversationSurface: View {
     private var unavailable: some View {
         ZStack {
             BotsUnavailableView(machine: session?.machine ?? bots.machines.first { $0.id == target.machineID },
-                                compatible: session?.isCompatible ?? true, onOpenSettings: onOpenSettings)
+                                onOpenSettings: onOpenSettings)
             controls
         }
     }
@@ -1031,12 +1031,11 @@ struct BotDismissibleError: View {
 
 struct BotsUnavailableView: View {
     let machine: BotMachine?
-    var compatible = true
     let onOpenSettings: () -> Void
 
     var body: some View {
         VStack(spacing: 10) {
-            if machine?.state == .starting || (machine?.state == .ready && compatible) {
+            if machine?.state == .starting || machine?.state == .ready {
                 ProgressView().controlSize(.small)
             } else {
                 LucideIcon(glyph: .bot, size: 20)
@@ -1059,7 +1058,7 @@ struct BotsUnavailableView: View {
         switch machine.state {
         case .off: return machine.kind == .thisMac ? "Bots are off on this Mac" : "Bots are off on \(name)"
         case .starting: return "Starting bots on \(name)"
-        case .ready: return compatible ? "Connecting…" : "Update bots on \(name)"
+        case .ready: return "Connecting…"
         case .unreachable: return "\(name) is unavailable"
         case .needsUpdate: return "Update everything to use these bots"
         case .failed: return "Bots on \(name) could not start"
@@ -1068,7 +1067,6 @@ struct BotsUnavailableView: View {
 
     private var detail: String? {
         guard let machine else { return "Connect it in Settings → Apple Devices or Settings → Workspaces, then try again." }
-        if machine.state == .ready, !compatible { return "Its bots runtime is older than this app can use." }
         if machine.state == .off, machine.kind == .thisMac { return "Turn them on in Settings → Bots." }
         return machine.message
     }

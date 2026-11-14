@@ -190,9 +190,11 @@ describe("in-container supervisor", () => {
         return next !== undefined && next !== first;
       }, { timeout: 10_000, interval: 200 })
       .toBe(true);
-    const logs = (await control("services.logs", { name: "ticker" })) as { text: string };
-    expect(logs.text).toContain("started ticker");
-    expect(logs.text).toMatch(/exited/);
+    // The kill can land before the first start writes its line, so wait for
+    // the restarted process's output.
+    const logs = async () => ((await control("services.logs", { name: "ticker" })) as { text: string }).text;
+    await expect.poll(logs, { timeout: 10_000, interval: 200 }).toContain("started ticker");
+    expect(await logs()).toMatch(/exited/);
     expect(JSON.parse(await readFile(join(state, "services.json"), "utf8"))).toEqual([
       { name: "ticker", command: "echo started $WOVEN_SERVICE; exec sleep 30", cwd: dir.path },
     ]);

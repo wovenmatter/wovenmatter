@@ -107,13 +107,6 @@ extension WorkspaceDatabase {
 
   var peerBackup: PeerBackupFence { PeerBackupFence.shared(for: peerBackupFile) }
 
-  /// Starts the recovery backup if needed and waits for it to finish.
-  public func backUpBeforePeerSync() async throws {
-    guard !isReadOnlyProjection else { throw WorkspaceDatabaseError.readOnlyProjection }
-    let source = fileURL, file = peerBackupFile
-    _ = try await peerBackup.wait(timeout: nil) { try WorkspaceDatabase.writePeerBackup(from: source, to: file) }
-  }
-
   /// True once a peer page may be imported: the recovery backup exists, or
   /// this library never asked for one (a Linux host). Waits at most `timeout`
   /// for a backup in progress (nil waits until it ends) and throws if it fails.

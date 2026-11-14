@@ -133,7 +133,7 @@ extension ApplicationModel {
         // A machine whose library schema differs cannot sync with this Mac: it needs Update everything.
         let schema = try? await libraryStore?.database.pairedLibrarySchema()
         let signedIDs = Set(members.map(\.id))
-        let tunnelled = remoteWorkspaces.workspaces.filter { $0.kind == .host && !signedIDs.contains($0.id.uuidString.lowercased()) }
+        let tunnelled = remoteWorkspaces.workspaces.filter { !signedIDs.contains($0.id.uuidString.lowercased()) }
         let linux = tunnelled.map { configuration in
             Task { await self.linuxBotMachine(configuration, thisMacVersion: thisMacVersion, schema: schema, directory: directory) }
         }
@@ -309,7 +309,7 @@ extension ApplicationModel {
     func discoverBotDevices() async throws -> [BotDiscoveredDevice] {
         let peers = try await Task.detached { try RemoteMachineDiscovery.tailnetMachines(includeMacs: true) }.value
         let members = await memberBotWorkspaces()
-        let configured = remoteWorkspaces.workspaces.filter { $0.kind == .host }
+        let configured = remoteWorkspaces.workspaces
         let linuxMembers = members.filter { $0.kind == .linux }
         let macs = members.filter { $0.kind == .mac }
         let macHosts = Set(macs.compactMap { $0.endpoint?.host?.lowercased() })

@@ -109,15 +109,8 @@ struct RuntimeBoundaryTests {
       workspaceID: "work-1",
       hostName: "linux-box",
       userName: "woven",
-      remotePort: 7440,
-      memoryLimit: "8",
-      swapLimit: "4"
+      remotePort: 7440
     )
-
-    // The retained lifecycle helper runs no host command.
-    #expect(throws: RemoteWorkspaceClientError.self) {
-      try RemoteWorkspaceExecTarget(configuration: configuration).command(["true"])
-    }
 
     let deleteRecorder = SSHRecorder(response: #"{"deleted":true}"#)
     let deleteClient = RemoteWorkspaceSSHClient(

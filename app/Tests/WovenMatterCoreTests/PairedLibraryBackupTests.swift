@@ -35,7 +35,8 @@ struct PairedLibraryBackupTests {
   @Test func otherDatabaseWorkNeverWaitsForTheBackup() async throws {
     let (fixture, database) = try await Self.largeLibrary(); defer { fixture.remove() }
     let file = fixture.directory.appending(path: "Paired Mac Backups/before-peer-sync.sqlite")
-    let backup = Task { try await database.backUpBeforePeerSync() }
+    database.prepareForPeerSync()
+    let backup = Task { _ = try await database.peerImportsReady() }
     #expect(try await Self.backupStarted(fixture.directory))
     let route = PairedMacRoute(deviceID: UUID().uuidString, libraryID: UUID().uuidString,
       endpoint: URL(string: "https://mini.example.ts.net:8443/wovenmatter")!, name: "Mini")
@@ -156,7 +157,8 @@ struct PairedLibraryBackupTests {
     for suffix in ["", "-journal"] {
       FileManager.default.createFile(atPath: file.path + ".partial" + suffix, contents: Data(repeating: 7, count: 4096))
     }
-    try await database.backUpBeforePeerSync()
+    database.prepareForPeerSync()
+    _ = try await database.peerImportsReady()
     #expect(FileManager.default.fileExists(atPath: file.path))
     let leftovers = try FileManager.default.contentsOfDirectory(atPath: file.deletingLastPathComponent().path)
       .filter { $0.contains(".partial") }

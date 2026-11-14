@@ -29,7 +29,3 @@ export const SEARCH_PROVIDERS: readonly (AccountSpec & { id: SearchProviderId })
   { id: "brave", provider: "brave", group: "Search", label: "Brave Search", method: "api_key" },
   { id: "firecrawl", provider: "firecrawl", group: "Search", label: "Firecrawl", method: "api_key" },
 ];
-
-export function findAccount(id: string): AccountSpec | undefined {
-  return ACCOUNTS.find((entry) => entry.id === id) ?? SEARCH_PROVIDERS.find((entry) => entry.id === id);
-}

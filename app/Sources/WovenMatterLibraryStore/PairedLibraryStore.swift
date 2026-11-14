@@ -480,22 +480,6 @@ extension WorkspaceDatabaseConnection {
     }
   }
 
-  /// Older builds kept one arrival-order winner. Recompute the canonical winner
-  /// of every retained frontier so those databases converge without a replay.
-  private func recomputeFrontiersUnlocked() throws {
-    let tables = Dictionary(uniqueKeysWithValues: try peerTables().map { ($0.name, $0) })
-    var scope = ProjectionScope()
-    try executeUnlocked("UPDATE paired_library_clock SET applying=1 WHERE singleton=1")
-    for row in try historyRowsUnlocked("SELECT DISTINCT table_name,record_key FROM paired_library_frontier ORDER BY table_name,record_key", values: []) {
-      guard let name = row.objectValue?["table_name"]?.stringValue, let key = row.objectValue?["record_key"]?.stringValue,
-            let table = tables[name] else { continue }
-      try settleFrontierUnlocked(try frontierMembersUnlocked(table: name, key: key), table: table, scope: &scope)
-    }
-    try projectConversationOwners(scope)
-    try executeUnlocked("UPDATE paired_library_clock SET applying=0 WHERE singleton=1")
-    try reassertLocalRowsUnlocked(tables)
-  }
-
   private func externalizePeerValues(_ record: PairedLibraryRecord) throws -> PairedLibraryRecord {
     var row = record.row
     for (name, value) in row where ["text", "blob"].contains(value.type) && (value.value?.utf8.count ?? 0) > 262_144 {

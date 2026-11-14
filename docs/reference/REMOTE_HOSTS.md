@@ -10,8 +10,7 @@ Tailscale HTTPS, signed with the Mac's device key: sessions and their live
 stream (`GET /v1/stream?protocol=1`), files, Pi Durable settings, logs,
 restarts and updates. Each host is a library member with its own full library
 copy; session history reaches other devices by library sync.
-Docker is not required. Native hosts supersede deprecated remote container workspaces,
-which are no longer offered or reconnected. The separate Docker Executor is unchanged.
+Docker is not required.
 
 ## Execution and permissions
 
