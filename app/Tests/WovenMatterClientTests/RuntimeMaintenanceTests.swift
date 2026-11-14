@@ -6,6 +6,24 @@ import WovenMatterCore
 
 struct RuntimeMaintenanceTests {
 
+    /// Another Mac reads this Mac's harnesses in the shape a Linux host serves.
+    @Test func aMacsInventoryReadsLikeALinuxHosts() {
+        let inventory = RuntimeInventory(kind: .claudeCode, components: [
+            RuntimeComponent(name: "claude-agent-acp", executable: URL(fileURLWithPath: "/private/bin/claude-agent-acp"),
+                             installed: "0.9.0", latest: "0.10.0", package: "@agentclientprotocol/claude-agent-acp", required: true, present: true),
+            RuntimeComponent(name: "claude (sign-in CLI)", executable: nil, installed: "2.1.0", latest: "2.1.0", package: nil,
+                             required: false, present: true),
+        ], limitation: nil)
+        let row = inventory.maintenance()
+        #expect(row.id == .claudeCode && row.displayName == "Claude Code" && row.installed && row.updateAvailable)
+        #expect(row.components.map(\.id) == ["runtime", "claude (sign-in CLI)"])
+        #expect(row.components[0].availableUpdateVersion == "0.10.0" && row.components[1].availableUpdateVersion == nil)
+        // Paths stay on the Mac that has them.
+        #expect(row.components.allSatisfy { $0.path == nil })
+        let decoded = try? JSONDecoder().decode(RemoteRuntimeMaintenance.self, from: JSONEncoder().encode(row))
+        #expect(decoded == row)
+    }
+
     @Test(arguments: [false, true])
     func codexInventoryFindsTheEngineBesideTheLaunchedAdapter(legacyAdapter: Bool) async throws {
         let minimum = try #require(LocalACPRuntimeCatalog.definition(for: .codex)?.minimumAdapterVersion)

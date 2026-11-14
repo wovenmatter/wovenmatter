@@ -43,6 +43,13 @@ final class BotsModel {
     }
 
     @discardableResult
+    /// A read that changes nothing here, such as another machine's harnesses: its reply
+    /// carries no machines, so it is not applied.
+    func query(_ command: BotsCommand) async throws -> BotsCommandResult {
+        guard let perform else { throw BotsError.unavailable("Bots are still starting.") }
+        return try await perform(command)
+    }
+
     func send(_ command: BotsCommand) async throws -> BotsCommandResult {
         guard let perform else { throw BotsError.unavailable("Bots are still starting.") }
         busy = true

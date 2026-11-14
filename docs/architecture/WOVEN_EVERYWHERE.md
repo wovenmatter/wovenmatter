@@ -2102,9 +2102,19 @@ answers); `PUT /v1/resources`; (optional forwards) `GET /v1/forwards`;
 
 ### Updates
 
-- The UI offers "Update everything" across all devices. Each part can also be
-  updated on its own: this Mac's app, a Linux host, or bots from the Bots
-  page.
+- Settings → Updates offers "Update everything", "Update Woven Matter" and
+  "Update harnesses" across all devices. Each part can also be updated on its
+  own there: this Mac's app, another device, its bots, or one harness.
+- Harnesses on other machines are read and updated with the member signature.
+  Every Mac serves `GET /v1/runtime-maintenance`, `POST
+  /v1/runtime-maintenance/check`, `POST /v1/runtime-maintenance/:id/check|update`
+  and `GET|POST /v1/default-agent/sdks` to signed Mac members, in the shapes a
+  Linux host serves. A Mac's update runs to the end and answers one finished
+  operation; `force: true` stops the chats using its harnesses first, and
+  without it a busy harness answers `runtime_active_stop_conversations_or_server_first`.
+  The window asks through bots commands (`memberInventory`,
+  `memberInstallerPreview`, `updateMemberHarness`, `updateMemberSDKs`); updates
+  run as `updateHarness` jobs in the process that owns execution.
 - Clicking Update stops running work immediately. Woven snapshots each bot
   (container filesystem and storage), updates it in place, runs a health
   check, and rolls back to the snapshot on failure. Only the snapshot from the

@@ -23,6 +23,9 @@ struct FleetHarness: Identifiable, Equatable {
         case thisMac
         /// A Linux workspace this Mac added.
         case workspace(UUID)
+        /// Another Mac, or a Linux host another Mac added, reached with this Mac's member
+        /// signature (its device ID).
+        case member(String)
     }
     enum Kind: Hashable {
         case runtime(AgentRuntimeKind)
@@ -38,7 +41,11 @@ struct FleetHarness: Identifiable, Equatable {
     let error: String?
 
     var id: String {
-        let place = switch location { case .thisMac: "this-mac"; case .workspace(let id): id.uuidString.lowercased() }
+        let place = switch location {
+        case .thisMac: "this-mac"
+        case .workspace(let id): id.uuidString.lowercased()
+        case .member(let id): "member-" + id.lowercased()
+        }
         let item = switch kind { case .runtime(let kind): kind.rawValue; case .piDurableSDK: "pi-durable-sdk" }
         return place + "/" + item
     }
@@ -58,7 +65,11 @@ final class FleetUpdatesModel {
         case thisMacApp
         /// Woven Matter on another device, with its bots.
         case device(machineID: String)
+        /// One machine's bots: a Mac's VM, then the bots and everything in their containers.
+        case bots(machineID: String)
         case harness(id: String)
+        /// Harnesses that were busy on another machine, tried again after "Update now".
+        case harnesses(ids: [String])
     }
 
     /// Work that an update would stop, shown before anything starts.
@@ -86,6 +97,8 @@ final class FleetUpdatesModel {
         let request: Request
         let force: Bool
         let items: [Item]
+        /// Linux harnesses whose download couldn't be checked, already reported.
+        let skipped: Set<String>
     }
 
     private(set) var release: MacRelease?
@@ -102,6 +115,10 @@ final class FleetUpdatesModel {
     private(set) var notice: String?
     var busyConfirmation: BusyConfirmation?
     var review: DownloadReview?
+    /// Harnesses on other machines, by device ID.
+    private(set) var memberInventories: [String: FleetMemberInventory] = [:]
+    private(set) var memberErrors: [String: String] = [:]
+    private(set) var loadingMembers: Set<String> = []
 
     @ObservationIgnored private weak var model: ApplicationModel?
     /// This run continues one that updated this Mac first.
@@ -181,6 +198,12 @@ final class FleetUpdatesModel {
         return model.bots.versionReport.outdated.contains { $0.id == "bots:" + machine.id }
     }
 
+    /// Another machine whose harnesses this Mac reaches by signed request: every reachable
+    /// Mac, and Linux hosts this Mac didn't add.
+    func isMember(_ machine: BotMachine) -> Bool {
+        machine.state != .unreachable && workspace(for: machine) == nil
+    }
+
     /// The configured Linux workspace a machine serves, whose harnesses this Mac manages.
     func workspace(for machine: BotMachine) -> RemoteWorkspaceConfiguration? {
         guard let id = machine.workspaceID, let model else { return nil }
@@ -218,13 +241,39 @@ final class FleetUpdatesModel {
                 }
             if let sdk = sdkRow(location: location, key: id.uuidString.lowercased()) { rows.insert(sdk, at: 0) }
             return rows
+        case .member(let machineID):
+            guard let inventory = memberInventories[machineID.lowercased()] else { return [] }
+            let bots = model.bots
+            func job(_ item: String) -> BotsJob? { bots.job(.updateHarness, target: machineID.lowercased() + "/" + item) }
+            var rows: [FleetHarness] = inventory.runtimes
+                .sorted { $0.id.presentationRank < $1.id.presentationRank }
+                .map { runtime in
+                    let job = job(runtime.id.rawValue)
+                    let failed = runtime.operation?.status == "failed" ? runtime.operation?.error : nil
+                    return FleetHarness(location: location, kind: .runtime(runtime.id), name: runtime.displayName,
+                                        versions: runtime.components.map(Self.componentVersion).joined(separator: " · "),
+                                        updateAvailable: runtime.updateAvailable, checking: loadingMembers.contains(machineID.lowercased()),
+                                        updating: job?.running == true || runtime.operation?.status == "running",
+                                        error: job?.running == false ? job?.error : failed)
+                }
+            if let status = inventory.sdks, !status.sdks.isEmpty {
+                let job = job("pi-durable-sdk")
+                rows.insert(FleetHarness(location: location, kind: .piDurableSDK, name: "Pi Durable SDK",
+                                         versions: Self.sdkVersions(status),
+                                         updateAvailable: status.sdks.contains { $0.updateAvailable || $0.consistent == false },
+                                         checking: loadingMembers.contains(machineID.lowercased()), updating: job?.running == true,
+                                         error: job?.running == false ? job?.error : nil), at: 0)
+            }
+            return rows
         }
     }
 
-    /// Every harness this Mac can update: its own, then each Linux workspace it added.
+    /// Every harness this Mac can update: its own, each Linux workspace it added, then
+    /// every other machine's.
     var allHarnesses: [FleetHarness] {
         guard let model else { return [] }
         return harnesses(on: .thisMac) + model.remoteWorkspaces.workspaces.flatMap { harnesses(on: .workspace($0.id)) }
+            + devices.filter(isMember).flatMap { harnesses(on: .member($0.id)) }
     }
 
     /// How many things have an update, for the summary rows.
@@ -256,20 +305,24 @@ final class FleetUpdatesModel {
         guard let model else { return nil }
         let state = model.connections.sdks.state(for: key)
         guard let status = state.status, !status.sdks.isEmpty else { return nil }
-        let versions = status.sdks.map { sdk in
-            "\(sdk.displayName) \(sdk.installedVersion ?? "not installed")"
-                + (sdk.updateAvailable ? sdk.latestVersion.map { " → \($0)" } ?? "" : "")
-        }.joined(separator: " · ")
-        return FleetHarness(location: location, kind: .piDurableSDK, name: "Pi Durable SDK", versions: versions,
+        return FleetHarness(location: location, kind: .piDurableSDK, name: "Pi Durable SDK", versions: Self.sdkVersions(status),
                             updateAvailable: status.sdks.contains { $0.updateAvailable || $0.consistent == false },
                             checking: state.busy && state.operation?.action != .update,
                             updating: state.operation?.action == .update, error: state.error)
+    }
+
+    private static func sdkVersions(_ status: DefaultAgentSDKStatus) -> String {
+        status.sdks.map { sdk in
+            "\(sdk.displayName) \(sdk.installedVersion ?? "not installed")"
+                + (sdk.updateAvailable ? sdk.latestVersion.map { " → \($0)" } ?? "" : "")
+        }.joined(separator: " · ")
     }
 
     func workspaceName(_ location: FleetHarness.Location) -> String {
         switch location {
         case .thisMac: return "this Mac"
         case .workspace(let id): return model?.remoteWorkspaces.configuration(id: id)?.name ?? "a workspace"
+        case .member(let id): return devices.first { $0.id.lowercased() == id.lowercased() }?.name ?? "another device"
         }
     }
 
@@ -281,6 +334,35 @@ final class FleetUpdatesModel {
         if model.runtimeInventories.isEmpty { model.refreshRuntimeInventory() }
         requestSDKs(.status, onlyMissing: true)
         if release == nil, releaseError == nil, !checking { Task { await checkRelease() } }
+        Task {
+            await model.bots.refresh()
+            await refreshMembers(checkLatest: false, onlyMissing: true)
+        }
+    }
+
+    /// Asks every other machine for its harnesses, all at once.
+    func refreshMembers(checkLatest: Bool, onlyMissing: Bool = false) async {
+        guard let model else { return }
+        let machines = devices.filter(isMember).map { $0.id.lowercased() }
+            .filter { !onlyMissing || memberInventories[$0] == nil }
+            .filter { !loadingMembers.contains($0) }
+        loadingMembers.formUnion(machines)
+        // Each machine is asked at once; their answers land as they come.
+        let asks = machines.map { machineID in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                defer { self.loadingMembers.remove(machineID) }
+                do {
+                    let reply = try await model.bots.query(.memberInventory(machineID: machineID, checkLatest: checkLatest))
+                    guard let inventory = reply.memberInventory else { throw FleetUpdateError("It didn't report its harnesses.") }
+                    self.memberInventories[machineID] = inventory
+                    self.memberErrors[machineID] = nil
+                } catch {
+                    self.memberErrors[machineID] = error.localizedDescription
+                }
+            }
+        }
+        for ask in asks { await ask.value }
     }
 
     /// Check now: the newest release, every device and every harness's newest version.
@@ -297,6 +379,7 @@ final class FleetUpdatesModel {
             }
         }
         await model.bots.refresh()
+        await refreshMembers(checkLatest: true)
         await releaseCheck
         // Harness checks report through their own models; give them a moment to land.
         _ = await wait(timeout: .seconds(30)) { [weak self] in self?.anyHarnessChecking == false }
@@ -354,7 +437,7 @@ final class FleetUpdatesModel {
         guard let review else { return }
         self.review = nil
         let previews = Dictionary(uniqueKeysWithValues: review.items.map { ($0.id, $0.preview) })
-        Task { await run(review.request, force: review.force, previews: previews) }
+        Task { await run(review.request, force: review.force, previews: previews, skipped: review.skipped) }
     }
 
     func cancelReview() { review = nil }
@@ -376,25 +459,40 @@ final class FleetUpdatesModel {
             return
         }
         current = "Checking downloads…"
-        let targets = remoteHarnessTargets(for: request)
         var items: [DownloadReview.Item] = []
-        for target in targets {
+        var skipped: Set<String> = []
+        for target in remoteHarnessTargets(for: request) {
             currentItem = target.harness.id
             switch await preview(target) {
             case .success(let preview):
                 items.append(.init(id: target.harness.id, title: "\(target.harness.name) on \(target.configuration.name)", preview: preview))
             case .failure(let error):
+                skipped.insert(target.harness.id)
                 failures.append("\(target.harness.name) on \(target.configuration.name): \(error.localizedDescription)")
+            }
+        }
+        // Other machines: a Linux host names its download; a Mac updates from its registries.
+        for harness in harnessTargets(for: request) {
+            guard case .member(let machineID) = harness.location, case .runtime(let kind) = harness.kind else { continue }
+            currentItem = harness.id
+            do {
+                let reply = try await model!.bots.query(.memberInstallerPreview(machineID: machineID, kind: kind))
+                if let preview = reply.installerPreview {
+                    items.append(.init(id: harness.id, title: "\(harness.name) on \(workspaceName(harness.location))", preview: preview))
+                }
+            } catch {
+                skipped.insert(harness.id)
+                failures.append("\(harness.name) on \(workspaceName(harness.location)): \(error.localizedDescription)")
             }
         }
         currentItem = nil
         current = nil
         running = false
-        if items.isEmpty { await run(request, force: force, previews: [:]) }
-        else { review = .init(request: request, force: force, items: items) }
+        if items.isEmpty { await run(request, force: force, previews: [:], skipped: skipped) }
+        else { review = .init(request: request, force: force, items: items, skipped: skipped) }
     }
 
-    private func run(_ request: Request, force: Bool, previews: [String: RemoteInstallerPreview]) async {
+    private func run(_ request: Request, force: Bool, previews: [String: RemoteInstallerPreview], skipped: Set<String>) async {
         guard let model, !running else { return }
         running = true
         defer { running = false; current = nil; currentItem = nil }
@@ -404,15 +502,25 @@ final class FleetUpdatesModel {
             if step == .thisMacApp { restartsThisMac = true; continue }
             await perform(step)
         }
+        var busyElsewhere: [FleetHarness] = []
         for harness in harnessTargets(for: request) {
-            // A Linux download that couldn't be checked was reported before the review.
-            if case .workspace = harness.location, case .runtime = harness.kind, previews[harness.id] == nil { continue }
+            // A download that couldn't be checked was reported before the review.
+            if skipped.contains(harness.id) { continue }
             currentItem = harness.id
             current = "Updating \(harness.name) on \(workspaceName(harness.location))…"
-            if let failure = await update(harness, preview: previews[harness.id]) {
-                failures.append("\(harness.name) on \(workspaceName(harness.location)): \(failure)")
+            switch await update(harness, preview: previews[harness.id], force: force) {
+            case nil: break
+            case FleetBusyError.message? where !force: busyElsewhere.append(harness)
+            case let failure?: failures.append("\(harness.name) on \(workspaceName(harness.location)): \(failure)")
             }
         }
+        // Chats on another machine can't be seen from here before it answers; offer to stop them now.
+        if !busyElsewhere.isEmpty {
+            busyConfirmation = .init(request: .harnesses(ids: busyElsewhere.map(\.id)), items: busyElsewhere.map {
+                BusyItem(id: $0.id, text: "\($0.name) on \(workspaceName($0.location)) is in use by chats running there.")
+            })
+        }
+        await refreshMembers(checkLatest: false)
         currentItem = nil
         resumedAfterUpdate = false
         await model.bots.refresh()
@@ -463,7 +571,11 @@ final class FleetUpdatesModel {
                 steps.insert(.mac(id: machine.id, name: machine.name), at: 0)
             }
             return steps
-        case .harness: return []
+        case .bots(let machineID):
+            guard let machine = model.bots.machines.first(where: { $0.id == machineID }) else { return [] }
+            return (machine.kind == .linux ? [] : [.engine(machineID: machine.id, name: machine.displayName)])
+                + [.bots(machineID: machine.id, name: machine.displayName)]
+        case .harness, .harnesses: return []
         }
     }
 
@@ -471,7 +583,8 @@ final class FleetUpdatesModel {
         switch request {
         case .scope(let scope): scope.includesHarnesses ? allHarnesses.filter(\.updateAvailable) : []
         case .harness(let id): allHarnesses.filter { $0.id == id }
-        case .thisMacApp, .device: []
+        case .harnesses(let ids): allHarnesses.filter { ids.contains($0.id) }
+        case .thisMacApp, .device, .bots: []
         }
     }
 
@@ -532,6 +645,9 @@ final class FleetUpdatesModel {
                     items.append(.init(id: "opencode:" + id.uuidString, text: "The OpenCode server on \(workspaceName(harness.location)) is running.",
                                        openCodeServer: id))
                 }
+            case .member:
+                // That machine knows its own chats; it answers busy, and is asked again then.
+                break
             }
         }
         return items
@@ -627,7 +743,7 @@ final class FleetUpdatesModel {
     // MARK: Harnesses
 
     /// Updates one harness and waits for it; nil on success.
-    private func update(_ harness: FleetHarness, preview: RemoteInstallerPreview?) async -> String? {
+    private func update(_ harness: FleetHarness, preview: RemoteInstallerPreview?, force: Bool) async -> String? {
         guard let model else { return "Woven Matter isn't ready." }
         switch (harness.location, harness.kind) {
         case (.thisMac, .runtime(let kind)):
@@ -639,6 +755,12 @@ final class FleetUpdatesModel {
             if model.failedRuntimeUpdateKinds.contains(kind) { return model.runtimeFailureDetails[kind] ?? "The update failed." }
             if model.localRuntimeMaintenanceHasActiveConversation { return "A chat is still using it. Try again when it finishes." }
             return model.runtimeInventories[kind]?.updateAvailable == true ? "It is still out of date." : nil
+        case (.member(let machineID), .runtime(let kind)):
+            return await followMemberJob(machineID: machineID, item: kind.rawValue,
+                                         .updateMemberHarness(machineID: machineID, kind: kind, sourceSHA256: preview?.sha256,
+                                                              packageSpec: preview?.packageSpec, force: force))
+        case (.member(let machineID), .piDurableSDK):
+            return await followMemberJob(machineID: machineID, item: "pi-durable-sdk", .updateMemberSDKs(machineID: machineID))
         case (_, .piDurableSDK):
             let workspaceID: UUID? = if case .workspace(let id) = harness.location { id } else { nil }
             let command = DefaultAgentSDKCommand(workspaceID: workspaceID, request: .init(action: .update))
@@ -651,6 +773,24 @@ final class FleetUpdatesModel {
             guard let reviewed = preview else { return "Its download wasn't reviewed." }
             return await updateRemote(RemoteTarget(harness: harness, kind: kind, configuration: configuration), reviewed: reviewed)
         }
+    }
+
+    /// Starts a harness update on another machine in the background server and follows
+    /// its job; nil on success, `FleetBusyError.message` when chats there are using it.
+    private func followMemberJob(machineID: String, item: String, _ command: BotsCommand) async -> String? {
+        guard let bots = model?.bots else { return "Woven Matter isn't ready." }
+        let target = machineID.lowercased() + "/" + item
+        do { _ = try await bots.send(command) }
+        catch { return error.localizedDescription }
+        let deadline = ContinuousClock.now + .seconds(1_000)
+        while ContinuousClock.now < deadline {
+            guard let job = bots.job(.updateHarness, target: target) else { return "It stopped answering." }
+            guard job.running else { return job.error }
+            if let progress = job.progress { current = progress + " (\(workspaceName(.member(machineID))))" }
+            try? await Task.sleep(for: .seconds(2))
+            await bots.refresh()
+        }
+        return "It did not finish in time."
     }
 
     /// The download a Linux workspace would run for this update, without starting it.

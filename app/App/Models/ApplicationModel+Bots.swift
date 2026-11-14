@@ -119,6 +119,23 @@ extension ApplicationModel {
             signSocket: { [weak self] url, audience in
                 guard let self else { throw CancellationError() }
                 return try await self.signMemberSocket(url: url, audience: audience)
+            },
+            memberInventory: { [weak self] machineID, checkLatest in
+                guard let self else { throw CancellationError() }
+                return try await self.memberInventory(machineID: machineID, checkLatest: checkLatest)
+            },
+            memberInstallerPreview: { [weak self] machineID, kind in
+                guard let self else { throw CancellationError() }
+                return try await self.memberInstallerPreview(machineID: machineID, kind: kind)
+            },
+            updateMemberHarness: { [weak self] machineID, kind, sourceSHA256, packageSpec, force, progress in
+                guard let self else { throw CancellationError() }
+                try await self.updateMemberHarness(machineID: machineID, kind: kind, sourceSHA256: sourceSHA256,
+                                                   packageSpec: packageSpec, force: force, progress: progress)
+            },
+            updateMemberSDKs: { [weak self] machineID in
+                guard let self else { throw CancellationError() }
+                try await self.updateMemberSDKs(machineID: machineID)
             })
     }
 

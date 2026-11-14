@@ -11,9 +11,9 @@ updates**, and an **Updates** row that opens the page.
   opens to list Pi Durable SDK, Codex, Claude Code, Grok Build, and OpenCode with
   their versions.
 - **Each other Mac and Linux machine:** its Woven Matter or Woven server version,
-  its bots, and the harnesses on Linux workspaces this Mac added. A Mac's own
-  harnesses update on that Mac, in its Settings → Updates. A device that is
-  offline shows the last version it reported.
+  its bots, and a **Harnesses** row with every harness installed there. A device
+  that is offline shows the last version it reported. A device running an older
+  Woven Matter shows its harnesses once it's updated.
 - **Check now** looks up the newest release and every harness's newest version.
 
 Anything with a newer version shows **Update available** and its own
@@ -42,6 +42,8 @@ Each host downloads its source again and refuses to run it if it changed.
 Updating a harness can't replace it while a chat is using it, and this Mac
 restarts to update. If an update would interrupt chats, or a running OpenCode
 server, Woven Matter names them first. **Update now** stops them and updates;
-**Cancel** leaves everything as it is.
+**Cancel** leaves everything as it is. Another Mac reports its running chats
+when its harness update starts; Woven Matter then names them and asks the same
+way.
 
 Next: [Apple devices](apple-devices.md) or [Troubleshooting](troubleshooting.md).

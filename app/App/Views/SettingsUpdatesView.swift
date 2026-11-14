@@ -161,9 +161,7 @@ struct SettingsUpdatesView: View {
                 if let workspace = updates.workspace(for: machine) {
                     harnesses(on: .workspace(workspace.id))
                 } else {
-                    SettingsNote(machine.kind == .mac
-                        ? "Its harnesses are updated on that Mac, in Settings → Updates."
-                        : "Its harnesses are updated from the Mac that added it.")
+                    memberHarnesses(machine)
                 }
             }
         }
@@ -179,12 +177,35 @@ struct SettingsUpdatesView: View {
 
     private func bots(_ machine: BotMachine) -> some View {
         let outdated = updates.botsAreOutdated(machine)
+        let busy = updates.running && updates.currentItem == machine.id
         return SettingsRow(title: "Bots", detail: machine.versions.runtime.map { "Runtime \($0)" }) {
+            if busy || machine.updating { ProgressView().controlSize(.small) }
             SettingsStatus(outdated ? "Update available" : "Up to date", tone: outdated ? .warning : .good)
+            Button("Update") { updates.start(.bots(machineID: machine.id)) }
+                .buttonStyle(SettingsQuietButtonStyle())
+                .disabled(updates.running || machine.updating || machine.state != .ready)
+                .help("Updates the bots VM, then each bot and the tools in its container.")
         }
     }
 
     // MARK: Harnesses
+
+    /// Another machine's harnesses, as it reports them.
+    @ViewBuilder private func memberHarnesses(_ machine: BotMachine) -> some View {
+        let id = machine.id.lowercased()
+        if let inventory = updates.memberInventories[id], inventory.unsupported {
+            SettingsNote("Update its Woven Matter to see and update its harnesses here.")
+        } else if updates.memberInventories[id] == nil, let error = updates.memberErrors[id] {
+            SettingsRow(title: "Harnesses", detail: error) { SettingsStatus("Unavailable", tone: .warning) }
+        } else if updates.memberInventories[id] == nil {
+            SettingsRow(title: "Harnesses") {
+                ProgressView().controlSize(.small)
+                SettingsStatus("Checking", tone: .neutral)
+            }
+        } else {
+            harnesses(on: .member(machine.id))
+        }
+    }
 
     private func harnesses(on location: FleetHarness.Location) -> some View {
         let rows = updates.harnesses(on: location)
