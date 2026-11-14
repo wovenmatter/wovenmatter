@@ -245,6 +245,8 @@ extension WorkspaceDatabaseConnection {
     "desktop_openclaw_import_activity", "desktop_openclaw_run_inputs",
     // Results of the OpenClaw dashboard's scheduled jobs, and its user profiles.
     "desktop_scheduled_result_routes", "desktop_scheduled_result_receipts", "profiles",
+    // Buzz workspaces, which the v0.1 releases had.
+    "desktop_buzz_agent_enrollments", "desktop_buzz_workspace_links",
     // A copy of the device ID the `dashboard-device-id` file holds.
     "desktop_local_identity",
     // Runs a Linux host kept for chats that ran over SSH.
@@ -337,7 +339,9 @@ extension WorkspaceDatabaseConnection {
                         "desktop_owned", "origin_device_id"]),
     // `title` was a copy of the conversation's title that a rename made on
     // another device never reached.
-    ("harness_sessions", ["governing_plane", "authority_kind", "authority_device_id", "authority_agent_id", "title"]),
+    // The Buzz links are from the v0.1 releases.
+    ("harness_sessions", ["governing_plane", "authority_kind", "authority_device_id", "authority_agent_id", "title",
+                          "buzz_workspace_link_id", "buzz_agent_id"]),
     // One row per run activity now that OpenClaw traces are gone.
     ("activity_summaries", ["source_kind", "source_id", "activity_id"]),
     // An accepted analytics event is kept only to deduplicate its ID.
@@ -543,6 +547,13 @@ extension WorkspaceDatabaseConnection {
       if tables.contains("agents"), try historyRowsUnlocked(
         "SELECT 1 AS present FROM sqlite_master WHERE name='agents' AND instr(sql,'''openclaw''')>0", values: []).isEmpty == false {
         try rebuildCoreTableUnlocked("agents")
+      }
+      // A library from before `defaults_applied` existed added it with
+      // DEFAULT 1, since its sessions already had their tools; a new library
+      // declares 0. A column default only changes by rebuilding the table.
+      if tables.contains("session_tools"), try historyRowsUnlocked(
+        "SELECT 1 AS present FROM pragma_table_info('session_tools') WHERE name='defaults_applied' AND dflt_value<>'0'", values: []).isEmpty == false {
+        try rebuildCoreTableUnlocked("session_tools", from: Self.sessionToolsSQL)
       }
       // Runs take a local order that is never renumbered (`runs.ordinal`);
       // each keeps its rowid as it, so the fences goals hold stay right.

@@ -46,6 +46,14 @@ extension WorkspaceDatabaseConnection {
     return matches.first?.objectValue?["id"]?.stringValue ?? canonical
   }
 
+  /// A session's tool choices. `defaults_applied` is 0 until the session's
+  /// default tools have been chosen for it.
+  static let sessionToolsSQL = """
+    CREATE TABLE IF NOT EXISTS session_tools (
+      session_id TEXT PRIMARY KEY REFERENCES conversations(id), enabled_json TEXT NOT NULL,
+      defaults_applied INTEGER NOT NULL DEFAULT 0);
+    """
+
   func migrateAgentTools() throws {
     try transaction {
       // A source (`source_id`, `created_by`, `coordinator_id`) is any MCP
@@ -71,9 +79,7 @@ extension WorkspaceDatabaseConnection {
         CREATE TABLE IF NOT EXISTS automation_cancellations(
           source_id TEXT NOT NULL REFERENCES mcp_callers(id), request_id TEXT NOT NULL,
           PRIMARY KEY(source_id,request_id));
-        CREATE TABLE IF NOT EXISTS session_tools(
-          session_id TEXT PRIMARY KEY REFERENCES conversations(id), enabled_json TEXT NOT NULL,
-          defaults_applied INTEGER NOT NULL DEFAULT 0);
+        \(Self.sessionToolsSQL)
         CREATE TABLE IF NOT EXISTS session_executor_profiles(
           session_id TEXT PRIMARY KEY REFERENCES conversations(id), profiles_json TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS session_grants(

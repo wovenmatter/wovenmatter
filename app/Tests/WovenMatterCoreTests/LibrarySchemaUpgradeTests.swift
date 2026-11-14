@@ -358,6 +358,17 @@ import WovenMatterCore
       INSERT INTO old_identity SELECT * FROM library_identity;
       DROP TABLE library_identity;
       ALTER TABLE old_identity RENAME TO library_identity;
+      -- What a library first created by a v0.1 release still carries.
+      CREATE TABLE desktop_buzz_workspace_links(id TEXT PRIMARY KEY, display_name TEXT NOT NULL);
+      CREATE INDEX desktop_buzz_workspace_links_name ON desktop_buzz_workspace_links(display_name);
+      CREATE TABLE desktop_buzz_agent_enrollments(id TEXT PRIMARY KEY, workspace_link_id TEXT NOT NULL);
+      ALTER TABLE desktop_local_acp_sessions ADD COLUMN buzz_workspace_link_id TEXT;
+      ALTER TABLE desktop_local_acp_sessions ADD COLUMN buzz_agent_id TEXT;
+      CREATE TABLE old_tools(session_id TEXT PRIMARY KEY REFERENCES dashboard_conversations(id), enabled_json TEXT NOT NULL,
+        defaults_applied INTEGER NOT NULL DEFAULT 1);
+      INSERT INTO old_tools SELECT * FROM workspace_session_tools;
+      DROP TABLE workspace_session_tools;
+      ALTER TABLE old_tools RENAME TO workspace_session_tools;
       UPDATE note_asset_versions SET source='companion' WHERE id='\(note)';
       UPDATE paired_library_rows SET payload=json_set(payload,'$.row.source',json_object('type','text','value','companion'))
         WHERE table_name='note_asset_versions';
