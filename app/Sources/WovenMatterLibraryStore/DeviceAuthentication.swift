@@ -132,6 +132,9 @@ public actor DeviceAuthentication {
     // through explicit approval; such Mac grants may complete one signed join.
     // An unreleased v2 store mixed replicated bearers into this ledger, so its
     // grants are revoked and those devices pair again.
+    // A store a newer Woven Matter wrote is refused like a newer `version`:
+    // this upgrade would otherwise demote every paired Mac in it.
+    guard (state.admissionVersion ?? 0) <= 3 else { throw Self.error("credential_store", "This paired-device store requires a newer Woven Matter.") }
     if state.admissionVersion != 3 {
       var upgraded = state
       let previous = upgraded.admissionVersion

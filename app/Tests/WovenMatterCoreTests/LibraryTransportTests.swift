@@ -29,6 +29,16 @@ final class LibraryTransportTests: XCTestCase {
     let revoked = try DeviceAuthentication(fileURL: file)
     do { _ = try await revoked.authenticate(bearer: response.credential); XCTFail("Revoked credential was accepted") }
     catch { XCTAssertEqual((error as? LibraryAPIError)?.code, "unauthorized") }
+
+    // A store a newer Woven Matter wrote is refused and left as it is.
+    let saved = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any])
+    for (field, value) in [("admissionVersion", 4), ("version", 2)] {
+      var newer = saved; newer[field] = value
+      let data = try JSONSerialization.data(withJSONObject: newer, options: [.sortedKeys])
+      try data.write(to: file)
+      XCTAssertThrowsError(try DeviceAuthentication(fileURL: file)) { XCTAssertEqual(($0 as? LibraryAPIError)?.code, "credential_store") }
+      XCTAssertEqual(try Data(contentsOf: file), data)
+    }
   }
 
   func testHTTPReaderHandlesSplitUTF8AndRejectsSmugglingAndBrowserOrigins() async throws {
