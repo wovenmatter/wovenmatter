@@ -105,8 +105,6 @@ public struct PiBotHealth: Codable, Equatable, Sendable {
         self.ok = ok; self.version = version; self.protocol = `protocol`
         self.installationId = installationId; self.capabilities = capabilities; self.environment = environment
     }
-
-    public func supports(_ capability: String) -> Bool { capabilities?.contains(capability) == true }
 }
 
 /// Sidebar placement, without any network or view dependency: Admin Bot, then the
