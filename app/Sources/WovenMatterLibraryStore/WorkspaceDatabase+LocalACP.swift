@@ -1086,13 +1086,15 @@ extension WorkspaceDatabaseConnection {
   /// Recover only input identities recorded in this exact native session's archive.
   public func builtInRunRecoveryRequests(conversationID: String, sessionID: String) throws -> [DefaultAgentRunRecoveryRequest] {
     try withLock {
+      // `+h.harness` keeps SQLite on the conversation's events rather than
+      // every default-agent event in `history_events_harness`.
       let rows = try historyRowsUnlocked("""
         SELECT r.id AS run_id,json_extract(h.payload,'$.value.requestId') AS request_id
         FROM runs r JOIN harness_sessions s ON s.conversation_id=r.conversation_id
         JOIN history_events h ON h.run_id=r.id AND h.conversation_id=r.conversation_id
         WHERE r.conversation_id=? AND r.status='uncertain'
           AND s.runtime_kind='default_agent' AND s.native_session_id=?
-          AND h.harness='default_agent' AND h.native_session_id=? AND json_valid(h.payload)
+          AND +h.harness='default_agent' AND h.native_session_id=? AND json_valid(h.payload)
           AND json_extract(h.payload,'$.type')='submission'
           AND json_extract(h.payload,'$.value.type')='input'
           AND json_valid(h.projection_json) AND json_extract(h.projection_json,'$.childID') IS NULL

@@ -23,6 +23,8 @@ extension WorkspaceDatabaseConnection {
         );
         CREATE INDEX IF NOT EXISTS session_deliveries_source ON session_deliveries(source_id,created_at);
         CREATE INDEX IF NOT EXISTS session_deliveries_target ON session_deliveries(target_id,status);
+        -- The dispatcher's queue (`sessionDeliveries(queuedOnly:)`), in rowid order.
+        CREATE INDEX IF NOT EXISTS session_deliveries_queued ON session_deliveries(status) WHERE status='queued';
         CREATE TABLE IF NOT EXISTS history_events(
           sequence INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT NOT NULL UNIQUE,
           conversation_id TEXT, run_id TEXT, agent_id TEXT, harness TEXT NOT NULL,
@@ -37,6 +39,9 @@ extension WorkspaceDatabaseConnection {
         CREATE INDEX IF NOT EXISTS history_events_native_session ON history_events(harness,source_connection_id,agent_id,native_session_id)
           WHERE conversation_id IS NULL;
         CREATE INDEX IF NOT EXISTS history_events_native_record ON history_events(harness,source_id,native_session_id,native_record_id,sequence);
+        -- CLI journal events, which `recordHistoryUnlocked` keeps to the newest 10,000.
+        -- Its prune repeats this exact WHERE term so SQLite can use the index.
+        CREATE INDEX IF NOT EXISTS history_events_cli ON history_events(sequence) WHERE kind LIKE 'cli.%';
         -- Search covers everything but CLI journals, which may carry tool request bodies.
         CREATE VIRTUAL TABLE IF NOT EXISTS history_search USING fts5(payload,content='');
         CREATE TRIGGER IF NOT EXISTS history_events_search_insert AFTER INSERT ON history_events
@@ -146,10 +151,13 @@ extension WorkspaceDatabaseConnection {
     }
     try stepDone(statement)
     if event.kind.hasPrefix("cli.") {
+      // Everything at or before the 10,001st newest CLI event: one short walk
+      // of `history_events_cli` finds it, and the delete is a range of that
+      // index. Nothing is deleted while there are 10,000 or fewer.
       try executeUnlocked("""
-        DELETE FROM history_events WHERE kind LIKE 'cli.%' AND sequence NOT IN (
+        DELETE FROM history_events WHERE kind LIKE 'cli.%' AND sequence <= (
           SELECT sequence FROM history_events WHERE kind LIKE 'cli.%'
-            ORDER BY sequence DESC LIMIT 10000
+            ORDER BY sequence DESC LIMIT 1 OFFSET 10000
         )
         """)
     }
@@ -262,7 +270,11 @@ extension WorkspaceDatabaseConnection {
         ("source_id", query.sourceID), ("native_session_id", query.nativeSessionID), ("native_record_id", query.nativeRecordID),
       ] {
         if let value {
-          filters.append("e.\(column) = ?")
+          // A harness has few distinct values; with a conversation or run
+          // also named, `+` keeps SQLite on that narrower index instead of
+          // walking every event of the harness through `history_events_harness`.
+          let narrower = query.conversationID != nil || query.runID != nil || query.command == "trace"
+          filters.append(column == "harness" && narrower ? "+e.harness = ?" : "e.\(column) = ?")
           values.append(value)
         }
       }

@@ -198,6 +198,8 @@ extension WorkspaceDatabaseConnection {
         ON messages(conversation_id, position) WHERE position IS NOT NULL;
       CREATE INDEX IF NOT EXISTS message_attachments_message_created
         ON message_attachments(message_id, created_at, id);
+      CREATE INDEX IF NOT EXISTS message_attachments_content_hash
+        ON message_attachments(content_hash, created_at, id) WHERE content_hash IS NOT NULL;
       CREATE INDEX IF NOT EXISTS message_references_message_created
         ON message_references(message_id, created_at, id);
       CREATE INDEX IF NOT EXISTS run_activities_run_created
