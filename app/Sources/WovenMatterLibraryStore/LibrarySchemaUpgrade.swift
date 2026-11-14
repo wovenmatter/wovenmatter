@@ -425,13 +425,16 @@ extension WorkspaceDatabaseConnection {
     }
     var changed: [String: Set<String>] = [:], deleted: [String] = []
     let now = Self.timestamp(Date())
+    // Every Mac that converts the same document writes the same text.
+    let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
+    func sortedJSON<T: Encodable>(_ value: T) throws -> String { String(decoding: try encoder.encode(value), as: UTF8.self) }
     func owner(_ table: String, _ id: String) throws -> String? {
       try libraryIDsUnlocked("SELECT conversation_id FROM \(table) WHERE id=?", bindings: [id]).first
     }
     for (conversationID, transcript) in documents {
       try toolsExecuteUnlocked("UPDATE execution_conversations SET active_run_id=? WHERE id=?", [transcript.activeRunID, conversationID])
       for (index, message) in transcript.messages.enumerated() {
-        let values: [String?] = [message.sequence.map(String.init), String(index + 1), try message.attachments.map { try toolsJSON($0) },
+        let values: [String?] = [message.sequence.map(String.init), String(index + 1), try message.attachments.map { try sortedJSON($0) },
                                  message.status ?? "", message.createdAt, message.id]
         switch try owner("messages", message.id) {
         case conversationID?:
@@ -465,7 +468,7 @@ extension WorkspaceDatabaseConnection {
         }
         let content = try activity.projectionJSON.flatMap { json in
           (try? JSONDecoder().decode(AgentRunActivity.self, from: Data(json.utf8))).map { _ in json }
-        } ?? toolsJSON(AgentRunActivity(id: activity.id, kind: .activity, title: activity.title, detail: activity.detail, status: activity.status))
+        } ?? sortedJSON(AgentRunActivity(id: activity.id, kind: .activity, title: activity.title, detail: activity.detail, status: activity.status))
         let values: [String?] = [String(index + 1), activity.title, activity.detail, activity.status, activity.detailsRecordID,
                                  activity.isTransient.map { $0 ? "1" : "0" }, activity.sequence.map(String.init), activity.completedAt,
                                  activity.createdAt ?? "", content, activity.id]
@@ -779,7 +782,9 @@ extension WorkspaceDatabaseConnection {
       let predicate = "deleted_at IS NULL AND (" + hidden.joined(separator: " OR ") + ")"
       let retired = try historyRowsUnlocked("SELECT id FROM agents WHERE \(predicate)", values: [])
         .compactMap { $0.objectValue?["id"]?.stringValue }
-      try executeUnlocked("UPDATE agents SET deleted_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE \(predicate)")
+      // Its last update is the retirement time: every Mac that converts the
+      // same row records the same version.
+      try executeUnlocked("UPDATE agents SET deleted_at=updated_at WHERE \(predicate)")
       try refreshPeerFieldUnlocked("agents", "deleted_at", ids: retired, bookkeeping: bookkeeping)
       let location = "CASE governing_plane WHEN 'remote_workspace' THEN 'remote' ELSE 'local' END"
       let moved = try historyRowsUnlocked("SELECT id FROM agents WHERE execution_location IS NOT \(location)", values: [])
