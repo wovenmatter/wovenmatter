@@ -72,7 +72,7 @@
 		D49300000000000000000001 /* ConversationMessageLayout.swift in Sources */ = {isa = PBXBuildFile; fileRef = D49300000000000000000003 /* ConversationMessageLayout.swift */; };
 		D49200000000000000000001 /* ConversationWorkTranscript.swift in Sources */ = {isa = PBXBuildFile; fileRef = D49200000000000000000003 /* ConversationWorkTranscript.swift */; };
 		A10500000000000000000004 /* ConversationSubagentRow.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10500000000000000000003 /* ConversationSubagentRow.swift */; };
-		A12000000000000000000005 /* remote-workspace.sh in Resources */ = {isa = PBXBuildFile; fileRef = A12000000000000000000006 /* remote-workspace.sh */; };
+		A12000000000000000000005 /* executor-docker.sh in Resources */ = {isa = PBXBuildFile; fileRef = A12000000000000000000006 /* executor-docker.sh */; };
 		A16800000000000000000001 /* remote-host.sh in Resources */ = {isa = PBXBuildFile; fileRef = A16800000000000000000002 /* remote-host.sh */; };
 		A12000000000000000000007 /* remote in Resources */ = {isa = PBXBuildFile; fileRef = A12000000000000000000008 /* remote */; };
 		A12000000000000000000009 /* harnesses in Resources */ = {isa = PBXBuildFile; fileRef = A1200000000000000000000A /* harnesses */; };
@@ -259,7 +259,7 @@
 		D49300000000000000000003 /* ConversationMessageLayout.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationMessageLayout.swift; sourceTree = "<group>"; };
 		D49200000000000000000003 /* ConversationWorkTranscript.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationWorkTranscript.swift; sourceTree = "<group>"; };
 		A10500000000000000000003 /* ConversationSubagentRow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationSubagentRow.swift; sourceTree = "<group>"; };
-		A12000000000000000000006 /* remote-workspace.sh */ = {isa = PBXFileReference; lastKnownFileType = text.script.sh; path = "../../../scripts/remote-workspace.sh"; sourceTree = "<group>"; };
+		A12000000000000000000006 /* executor-docker.sh */ = {isa = PBXFileReference; lastKnownFileType = text.script.sh; path = "../../../scripts/executor-docker.sh"; sourceTree = "<group>"; };
 		A16800000000000000000002 /* remote-host.sh */ = {isa = PBXFileReference; lastKnownFileType = text.script.sh; path = "../../../scripts/remote-host.sh"; sourceTree = "<group>"; };
 		A12000000000000000000008 /* remote */ = {isa = PBXFileReference; lastKnownFileType = folder; path = "../../../remote"; sourceTree = "<group>"; };
 		A1200000000000000000000A /* harnesses */ = {isa = PBXFileReference; lastKnownFileType = folder; path = "../../../harnesses"; sourceTree = "<group>"; };
@@ -601,7 +601,7 @@
 		D50000000000000000000007 /* Resources */ = {
 			isa = PBXGroup;
 			children = (
-				A12000000000000000000006 /* remote-workspace.sh */,
+				A12000000000000000000006 /* executor-docker.sh */,
 				A16800000000000000000002 /* remote-host.sh */,
 				A12000000000000000000008 /* remote */,
 				A1200000000000000000000A /* harnesses */,
@@ -717,7 +717,7 @@
 			files = (
 				58D2DD715AC36ACD6DF22BB2 /* LUCIDE_LICENSE.txt in Resources */,
 				E07CAB6182634BC3A6D35468 /* ThirdPartyNotices.txt in Resources */,
-				A12000000000000000000005 /* remote-workspace.sh in Resources */,
+				A12000000000000000000005 /* executor-docker.sh in Resources */,
 				A16800000000000000000001 /* remote-host.sh in Resources */,
 				A12000000000000000000007 /* remote in Resources */,
 				A12000000000000000000009 /* harnesses in Resources */,

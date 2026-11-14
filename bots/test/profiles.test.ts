@@ -269,38 +269,4 @@ describe("bot profiles", () => {
       await t.close();
     }
   });
-
-  it("migrates a legacy per-bot model to a profile", async () => {
-    const path = join(dir.path, "db.sqlite");
-    const profiles = new ProfileStore(parseTestSettings(legacy).modelProfiles);
-    const first = await open(path, profiles);
-    const same = await first.manager.create("Same");
-    const own = await first.manager.create("Admin Bot");
-    await first.close();
-    const db = await openSharedDatabase(path);
-    await db.run("UPDATE pibot_bots SET model = 'faux/faux-1' WHERE id = ?", same.id);
-    await db.run("UPDATE pibot_bots SET model = 'faux/faux-2' WHERE id = ?", own.id);
-    await db.close();
-
-    const second = await open(path, profiles);
-    try {
-      expect(profiles.list().map((profile) => profile.id)).toEqual(["default", "admin-bot"]);
-      expect(profiles.get("default")?.memoryModel).toBe("faux/faux-2");
-      expect(profiles.get("admin-bot")).toMatchObject({
-        name: "Admin Bot",
-        main: "faux/faux-2",
-        memoryModel: "faux/faux-2",
-        pool: profiles.get("default")?.pool,
-      });
-      expect(second.manager.assignedProfile(same.id)).toBeUndefined();
-      expect(second.manager.assignedProfile(own.id)).toBe("admin-bot");
-      expect((await second.manager.registry.get(own.id))?.legacyModel).toBeUndefined();
-      expect(await mainModel(second.manager, own.id)).toEqual({
-        provider: "faux",
-        modelId: "faux-2",
-      });
-    } finally {
-      await second.close();
-    }
-  });
 });

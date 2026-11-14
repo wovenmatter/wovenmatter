@@ -684,12 +684,3 @@ public struct PiBotPreview: Codable, Equatable, Sendable, Identifiable {
     public var id: String { botId + ":" + String(port) }
     public init(botId: String, port: Int, url: String) { self.botId = botId; self.port = port; self.url = url }
 }
-
-/// `woven.status`, aggregated over the bots' own keys.
-public struct PiBotWovenStatus: Codable, Equatable, Sendable {
-    public struct Bot: Codable, Equatable, Sendable { public let state: String; public let toolCount: Int? }
-    public let state: String
-    public let toolCount: Int?
-    public let error: String?
-    public let bots: [String: Bot]?
-}

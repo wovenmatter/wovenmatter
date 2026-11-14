@@ -8,7 +8,6 @@ import { OPENAI_CODEX_MODELS } from "@earendil-works/pi-ai/providers/openai-code
 import { OPENCODE_GO_MODELS } from "@earendil-works/pi-ai/providers/opencode-go.models";
 import { OPENROUTER_MODELS } from "@earendil-works/pi-ai/providers/openrouter.models";
 import { XAI_MODELS } from "@earendil-works/pi-ai/providers/xai.models";
-import { parseModelRef } from "./config.ts";
 import { LIMIT_LABELS, type LimitEntry } from "./limits.ts";
 
 /**
@@ -287,13 +286,4 @@ export function formatLimit(limit: LimitEntry): string {
     ? `resets ${new Date(limit.resetsAt).toISOString().replace(/\.\d{3}Z$/, "Z")}`
     : "reset time unknown";
   return `${LIMIT_LABELS[limit.kind]} (${limit.account}), ${reset}`;
-}
-
-/** The provider part of a ref, or undefined for an invalid one. */
-export function providerOf(ref: string): string | undefined {
-  try {
-    return parseModelRef(ref).provider;
-  } catch {
-    return undefined;
-  }
 }

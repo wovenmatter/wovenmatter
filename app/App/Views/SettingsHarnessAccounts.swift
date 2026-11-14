@@ -150,7 +150,7 @@ struct SettingsRemoteHarnessSoftware: View {
                 .help(runtime?.components.compactMap(\.path).joined(separator: "\n") ?? "")
                 if let runtime {
                     ForEach(runtime.components) { component in
-                        if workspace.kind == .host, component.source == "system", let path = component.path {
+                        if component.source == "system", let path = component.path {
                             SettingsNote("Using \(path) (installed on host)")
                         }
                     }

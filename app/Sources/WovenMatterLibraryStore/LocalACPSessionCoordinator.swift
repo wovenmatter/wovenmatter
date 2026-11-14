@@ -1008,17 +1008,6 @@ public actor LocalACPSessionCoordinator {
         }
     }
 
-    // Called only after typed, fenced recovery confirms this exact native
-    // session is idle and its durable runs have been reconciled.
-    private func confirmRecoveredStop(
-        conversationID: String, nativeSessionID: String, remoteWorkspaceID: UUID?
-    ) {
-        guard let failed = failedStopSessionIDs[conversationID],
-              failed.nativeSessionID == nativeSessionID,
-              failed.remoteWorkspaceID == remoteWorkspaceID else { return }
-        failedStopSessionIDs.removeValue(forKey: conversationID)
-    }
-
     @discardableResult
     public func sendActiveInput(
         conversationID: String,
@@ -1659,19 +1648,7 @@ public actor LocalACPSessionCoordinator {
             guard !isShutDown else {
                 throw LifecycleError.shutDown
             }
-            var replacedUnpromptedDraft = false
-            if descriptor.runtimeKind == .claudeCode, descriptor.remoteWorkspaceID == nil,
-               let previousID = descriptor.nativeSessionID, !initialized.loadedExistingSession,
-               initialized.sessionID != previousID {
-                // Older builds persisted Claude's configuration-only ID. The
-                // adapter could not reload it; atomically prove this local chat
-                // has never had a run/message before relaxing the identity fence.
-                replacedUnpromptedDraft = try await database.write {
-                    try $0.discardUnpromptedClaudeDraftSessionID(conversationID: descriptor.conversationID,
-                        expectedSessionID: previousID)
-                }
-            }
-            if let requiredSessionID, !replacedUnpromptedDraft,
+            if let requiredSessionID,
                initialized.sessionID != requiredSessionID || !initialized.loadedExistingSession {
                 throw LifecycleError.sessionIdentityChanged
             }

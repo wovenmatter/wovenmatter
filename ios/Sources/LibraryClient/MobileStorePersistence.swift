@@ -20,12 +20,7 @@ enum MobileStorePersistence {
   enum BodyRole: Hashable { case local, cachedNote(String), cachedBase(String), cachedTranscript(String) }
   static func load(from file: URL) throws -> MobileStoreState {
     let data = PersistedFieldRenames.upgrade(try Data(contentsOf: file), renaming: PersistedFieldRenames.store)
-    guard let envelope = try? JSONDecoder().decode(Envelope.self, from: data) else {
-      // The earliest stores kept all writing inline in this one excluded file.
-      let legacy = try JSONDecoder().decode(MobileStoreState.self, from: data)
-      try? applyBackupIfChanged(.include, at: file)
-      return legacy
-    }
+    let envelope = try JSONDecoder().decode(Envelope.self, from: data)
     guard envelope.version == 2 else { throw MobileStore.Failure.incompatibleStore }
     var state = envelope.state
     var missing = Set<BodyRole>(), roles: [String: MobileBackup] = [:]

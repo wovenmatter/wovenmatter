@@ -497,8 +497,9 @@ final class ReachLinuxHost: @unchecked Sendable {
         self.prefix = prefix
         let host = UUID().uuidString.lowercased()
         memberID = host
-        // As in an older host's record, the Node server's execution device ID is its own, not the
-        // member ID, so these tests also cover the audience fallback kept for such records.
+        // As in a workspace a host registered with a random ID before v0.4.0, the Node server's
+        // execution device ID is its own, not the member ID, so these tests also cover the
+        // audience fallback kept for such workspaces.
         descriptor = .init(id: workspaceID, libraryID: libraryID, ownerDeviceID: UUID().uuidString.lowercased(), kind: .linux, name: "Linux L",
             endpoint: URL(string: "https://linux-l.fixture.ts.net" + prefix)!, capabilities: ["execution", "historyReplay"],
             executionDeviceID: UUID().uuidString.lowercased())

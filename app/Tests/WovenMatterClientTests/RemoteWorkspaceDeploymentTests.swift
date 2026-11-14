@@ -28,11 +28,11 @@ struct RemoteWorkspaceDeploymentTests {
 
     @Test func aHostBundleWithoutTheHostsLibraryIsNeverSent() async throws {
         let root = try hostFixture(); defer { try? FileManager.default.removeItem(at: root) }
-        let client = RemoteWorkspaceSSHClient(runner: { _, _, _ in Data() }, scriptLoader: { Data("container-lifecycle".utf8) },
+        let client = RemoteWorkspaceSSHClient(runner: { _, _, _ in Data() }, scriptLoader: { Data("host-lifecycle".utf8) },
             deploymentRoot: root, streamingRunner: { _, _, _, _ in
                 Issue.record("A bundle without the host's library host was sent")
                 return Data()
-            }, hostScriptLoader: { Data("host-lifecycle".utf8) })
+            }, executorDockerScriptLoader: { Data("executor-docker".utf8) })
         let configuration = RemoteWorkspaceConfiguration(name: "box", workspaceID: "bots", hostName: "host.invalid", userName: "alice", kind: .host)
         #expect(RemoteHostLibrary.bundled(root: root) == ["x86_64"])
         await #expect(throws: RemoteWorkspaceClientError.self) {
@@ -66,11 +66,11 @@ struct RemoteWorkspaceDeploymentTests {
         let client = RemoteWorkspaceSSHClient(runner: { _, _, _ in
             Issue.record("Host deployment should stream its bundle using the streaming runner")
             return Data()
-        }, scriptLoader: { Data("container-lifecycle".utf8) }, deploymentRoot: root,
+        }, scriptLoader: { Data("host-lifecycle".utf8) }, deploymentRoot: root,
         streamingRunner: { destination, command, input, progress in
             #expect(destination == "alice@host.invalid")
             #expect(command.contains("host-lifecycle"))
-            #expect(!command.contains("container-lifecycle") && !command.contains(token))
+            #expect(!command.contains("executor-docker") && !command.contains(token))
             #expect(command.contains("'install' 'native-fixture' '7337' 'fullRoot'"))
             let input = try #require(input)
             #expect(input.starts(with: Data((token + "\n").utf8)))
@@ -84,7 +84,7 @@ struct RemoteWorkspaceDeploymentTests {
             #expect((manifest["files"] as? [String: Any])?["host/remote-host.sh"] != nil)
             progress(Data("WM_PROGRESS selftest\n".utf8))
             return Data(#"{"id":"native-fixture","name":"Native","state":"running","running":true,"startedAt":"","image":"native","memoryBytes":0,"swapBytes":0,"hostPort":7337,"persistentVolume":"/home/alice/.local/share/wovenmatter","capabilities":{"memory":false,"swap":false},"storageKind":"host","hostStorageLow":false,"legacyStorage":false,"kind":"host"}"#.utf8)
-        }, hostScriptLoader: { Data("host-lifecycle".utf8) })
+        }, executorDockerScriptLoader: { Data("executor-docker".utf8) })
         let status = try await client.deployHost(configuration: .init(name: "Native", workspaceID: "native-fixture",
             hostName: "host.invalid", userName: "alice", kind: .host, accessMode: .fullRoot), token: token)
         #expect(status.running && status.kind == .host)
@@ -98,12 +98,12 @@ struct RemoteWorkspaceDeploymentTests {
         let client = RemoteWorkspaceSSHClient(runner: { _, command, _ in
             commands.append(command)
             return Data(#"{"ready":true,"runtime":"host","version":"","architecture":"x86_64","capabilities":{"memory":false,"swap":false},"limitations":[],"hostStorageLow":false,"blockingIssues":[]}"#.utf8)
-        }, scriptLoader: { Data("container-lifecycle".utf8) }, deploymentRoot: root,
+        }, scriptLoader: { Data("host-lifecycle".utf8) }, deploymentRoot: root,
         streamingRunner: { _, command, _, _ in commands.append(command); return Data(status.utf8) },
-        hostScriptLoader: { Data("host-lifecycle".utf8) })
+        executorDockerScriptLoader: { Data("executor-docker".utf8) })
         let configuration = RemoteWorkspaceConfiguration(name: "box", workspaceID: "bots", hostName: "host.invalid",
             userName: "alice", kind: .host, accessMode: .user)
-        _ = try await client.prepareHost(hostName: "host.invalid", userName: "alice", kind: .host, accessMode: .user,
+        _ = try await client.prepareHost(hostName: "host.invalid", userName: "alice", accessMode: .user,
             roles: RemoteHostInstallMode.botsOnly.roles)
         _ = try await client.deployHost(configuration: configuration, token: "fixture-secret", mode: .botsOnly)
         _ = try await client.deployHost(configuration: configuration, token: "fixture-secret")

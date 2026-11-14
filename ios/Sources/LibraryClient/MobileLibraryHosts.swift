@@ -230,16 +230,8 @@ public actor MobileLibraryHosts {
     }
     await refreshSyncStatus(from: transport)
   }
-  /// The host the phone currently syncs with, by member device ID.
-  public func currentHostDeviceID() -> String? { state.currentHost?.deviceID }
   public func refreshSyncStatus(from transport: HTTPSLibraryTransport) async {
     if let status = try? await transport.syncStatus() { update { $0.syncStatus = status } }
-  }
-  public func setPairedHost(deviceID: String?, name: String?) {
-    update { next in
-      if let deviceID { next.pairedHostDeviceID = deviceID.lowercased() }
-      if let name { next.pairedName = name }
-    }
   }
 
   static func sameBase(_ lhs: URL, _ rhs: URL) -> Bool {

@@ -280,7 +280,6 @@ public enum MobileCredentialVault {
   private static var service: String { ClientCredentialNamespace.service("com.wovenmatter.wovenmatter.pairing") }
   public static func load() throws -> MobileCredential? {
     #if canImport(Security)
-    LegacyKeychainItem.move(from: ClientCredentialNamespace.service("com.wovenmatter.companion.dev.pairing"), to: service, account: "paired-mac")
     var result: CFTypeRef?
     let status = SecItemCopyMatching([kSecClass: kSecClassGenericPassword, kSecAttrService: service,
       kSecAttrAccount: "paired-mac", kSecReturnData: true, kSecMatchLimit: kSecMatchLimitOne] as CFDictionary, &result)
@@ -316,24 +315,6 @@ public enum MobileCredentialVault {
     #endif
   }
 }
-
-#if canImport(Security)
-/// Desktop apps from before November 2026 saved these items under
-/// `com.wovenmatter.companion.*` services. An item moves once, the first time it
-/// is read, so a Mac that is a library client stays paired.
-enum LegacyKeychainItem {
-  static func move(from legacy: String, to service: String, account: String) {
-    let current: [CFString: Any] = [kSecClass: kSecClassGenericPassword, kSecAttrService: service, kSecAttrAccount: account]
-    guard SecItemCopyMatching(current as CFDictionary, nil) == errSecItemNotFound else { return }
-    let old: [CFString: Any] = [kSecClass: kSecClassGenericPassword, kSecAttrService: legacy, kSecAttrAccount: account]
-    var result: CFTypeRef?
-    guard SecItemCopyMatching(old.merging([kSecReturnData: true, kSecMatchLimit: kSecMatchLimitOne]) { _, new in new } as CFDictionary,
-                              &result) == errSecSuccess, let data = result as? Data else { return }
-    let added = SecItemAdd(current.merging([kSecValueData: data, kSecAttrAccessible: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly]) { _, new in new } as CFDictionary, nil)
-    if added == errSecSuccess { SecItemDelete(old as CFDictionary) }
-  }
-}
-#endif
 
 /// Multiple desktop instances share a Keychain but must never share a device's
 /// library bearer. Preserve the established service for ordinary installations.

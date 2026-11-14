@@ -8,11 +8,7 @@ enum WorkspaceJournalPersistence {
   private struct Envelope: Codable { var version: Int; var state: WorkspaceJournalState }
   static func load(at file: URL) throws -> WorkspaceJournalState {
     let data = PersistedFieldRenames.upgrade(try Data(contentsOf: file), renaming: PersistedFieldRenames.journal)
-    guard let envelope = try? JSONDecoder().decode(Envelope.self, from: data) else {
-      let legacy = try JSONDecoder().decode(WorkspaceJournalState.self, from: data)
-      try? MobileStorePersistence.applyBackupIfChanged(.include, at: file)
-      return legacy
-    }
+    let envelope = try JSONDecoder().decode(Envelope.self, from: data)
     guard envelope.version == 2 else { throw WorkspaceJournal.Failure.incompatibleStore }
     var state = envelope.state
     var loaded: [String: Data] = [:]

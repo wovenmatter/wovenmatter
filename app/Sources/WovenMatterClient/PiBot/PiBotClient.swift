@@ -42,7 +42,6 @@ public actor PiBotClient {
     private var attempt = 0
     private var reconnect: Task<Void, Never>?
     private var generation = 0
-    private var expectingRestart = false
     public private(set) var state = ConnectionState.closed
 
     /// `socketURL` is the full WebSocket address: `ws://127.0.0.1:<port>/ws` for this Mac's
@@ -139,8 +138,7 @@ public actor PiBotClient {
         failPending("Connection lost.")
         update(.closed)
         guard !stopped else { return }
-        // A deliberate restart comes back quickly, so don't back off from it.
-        let delay = expectingRestart ? 0.5 : min(0.5 * pow(2, Double(attempt)), 10)
+        let delay = min(0.5 * pow(2, Double(attempt)), 10)
         attempt += 1
         reconnect?.cancel()
         reconnect = Task { [weak self] in
@@ -149,9 +147,6 @@ public actor PiBotClient {
             await self?.reopen()
         }
     }
-
-    /// The server was told to restart: keep retrying promptly until it is back.
-    public func expectRestart() { expectingRestart = true }
 
     private func reopen() {
         guard !stopped, task == nil, authorizing == nil else { return }
@@ -176,7 +171,6 @@ public actor PiBotClient {
         switch type {
         case "hello":
             attempt = 0
-            expectingRestart = false
             update(.open)
             if let data = try? JSONEncoder().encode(value),
                let hello = try? JSONDecoder().decode(PiBotHello.self, from: data) {
@@ -408,7 +402,6 @@ public actor PiBotClient {
     @discardableResult public func stopPreview(botID: String, port: Int) async throws -> Bool {
         try decode(try await call("previews.stop", ["botId": .string(botID), "port": .number(Double(port))]), as: StoppedResult.self).stopped
     }
-    public func wovenStatus() async throws -> PiBotWovenStatus { try decode(try await call("woven.status")) }
 }
 
 private struct PiBotHello: Decodable {

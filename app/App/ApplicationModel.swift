@@ -1580,7 +1580,7 @@ final class ApplicationModel {
                     throw WorkspaceToolError.invalid("Remote folders must be created in their owning workspace.")
                 }
                 if let externalRoot {
-                    guard configuration.kind == .host, externalRoot.isFileURL else {
+                    guard externalRoot.isFileURL else {
                         throw WorkspaceToolError.invalid("Link existing directories in a native host workspace.")
                     }
                     path = try await remoteWorkspaces.linkHostProject(path: externalRoot.path, in: configuration).path

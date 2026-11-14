@@ -13,31 +13,6 @@ struct BotSettingsActionLabel: View {
     }
 }
 
-struct BotSettingsLink: View {
-    let title: String
-    let url: String
-    let onOpenLink: (URL) -> Void
-    var body: some View {
-        Button { if let target = URL(string: url) { onOpenLink(target) } } label: {
-            BotSettingsActionLabel(title: title, glyph: .externalLink)
-                .foregroundStyle(WovenPalette.success)
-        }
-        .buttonStyle(SettingsQuietButtonStyle())
-    }
-}
-
-struct BotSettingsCopy: View {
-    let title: String
-    let text: String
-    var body: some View {
-        Button {
-            NSPasteboard.general.clearContents()
-            NSPasteboard.general.setString(text, forType: .string)
-        } label: { BotSettingsActionLabel(title: title, glyph: .copy) }
-        .buttonStyle(SettingsQuietButtonStyle())
-    }
-}
-
 struct BotSettingsTextEditor: View {
     @Environment(\.wovenTheme) private var theme
     @Binding var text: String

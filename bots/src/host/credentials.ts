@@ -17,7 +17,6 @@ export const MODEL_PROVIDERS = [
   "claude-subscription",
   "anthropic",
 ] as const;
-export const SEARCH_PROVIDER_IDS = ["exa", "brave", "firecrawl"] as const;
 
 /** Marks a Claude native profile inside an api-key credential (see claude/provider.ts). */
 export const NATIVE_PREFIX = "woven-native:";

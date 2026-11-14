@@ -52,7 +52,6 @@ public struct MobileStoreState: Codable, Equatable, Sendable {
   public var toolInvocations: [String: [String]]?
   public var localToolCoordinations: [String: MobileLocalSessionCoordination]?
   public var toolSubmissions: [String: MobileToolSubmission]?
-  public var toolExecutorJobs: [String: MobileExecutorJob]?
   public var toolReceipts: [String: MobileToolReceipt]?
   public var toolNoteVersions: [MobileToolNoteVersion]?
   public var toolTimers: [String: MobileToolTimer]?

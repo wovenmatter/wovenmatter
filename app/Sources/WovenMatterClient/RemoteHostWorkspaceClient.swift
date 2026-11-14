@@ -92,9 +92,6 @@ extension RemoteWorkspaceSSHClient {
     public func deployHost(configuration: RemoteWorkspaceConfiguration, token: String? = nil,
                            update: Bool = false, mode: RemoteHostInstallMode = .workspace, architecture: String? = nil,
                            progress: @escaping @Sendable (String) -> Void = { _ in }) throws -> RemoteWorkspaceStatus {
-        guard configuration.kind == .host else {
-            throw RemoteWorkspaceClientError.invalidResponse("Select a Linux host workspace for native deployment.")
-        }
         try Self.validateConfiguration(configuration)
         let secret = token ?? ""
         guard !secret.contains("\n"), !secret.contains("\r"), !secret.contains("\0"), update || !secret.isEmpty else {
@@ -126,16 +123,11 @@ extension RemoteWorkspaceSSHClient {
         }
         try Self.validateConfiguration(configuration)
         let destination = try Self.validatedDestination(hostName: configuration.hostName, userName: configuration.userName)
-        if configuration.kind == .host {
-            let script = try String(data: hostScriptLoader(), encoding: .utf8).unwrapHostScript()
-            let command = "exec bash -c " + RemoteWorkspaceExecTarget.quote(script) + " -- "
-                + ["logs", configuration.workspaceID, String(count)].map(RemoteWorkspaceExecTarget.quote).joined(separator: " ")
-            struct Response: Decodable { let logs: String }
-            return try decode(Response.self, from: runner(destination, command, nil)).logs
-        }
-        let command = ["docker", "logs", "--tail", String(count), "wovenmatter-" + configuration.workspaceID]
-            .map(RemoteWorkspaceExecTarget.quote).joined(separator: " ")
-        return String(decoding: try runner(destination, command, nil), as: UTF8.self)
+        let script = try String(data: hostScriptLoader(), encoding: .utf8).unwrapHostScript()
+        let command = "exec bash -c " + RemoteWorkspaceExecTarget.quote(script) + " -- "
+            + ["logs", configuration.workspaceID, String(count)].map(RemoteWorkspaceExecTarget.quote).joined(separator: " ")
+        struct Response: Decodable { let logs: String }
+        return try decode(Response.self, from: runner(destination, command, nil)).logs
     }
 
 }

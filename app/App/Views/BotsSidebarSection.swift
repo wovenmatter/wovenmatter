@@ -92,13 +92,11 @@ struct BotsSidebarSection: View {
                 AgentDisclosureStore.toggle(sectionKey, in: &disclosureRaw)
             }
             .contextMenu {
-                if bots.supportsGroups {
-                    Button("New group…") {
-                        newGroupName = ""
-                        creatingGroup = true
-                    }
-                    .disabled(!bots.isConnected)
+                Button("New group…") {
+                    newGroupName = ""
+                    creatingGroup = true
                 }
+                .disabled(!bots.isConnected)
                 Button("Bot settings…", action: onOpenSettings)
             }
             .popover(isPresented: $creatingGroup, arrowEdge: .trailing) {
@@ -151,7 +149,7 @@ struct BotsSidebarSection: View {
 
     private var statusText: String? {
         switch bots.machine.state {
-        case .ready: bots.isConnected ? (bots.isCompatible ? nil : "Update bots on \(bots.displayName)") : "Connecting to your bots…"
+        case .ready: bots.isConnected ? nil : "Connecting to your bots…"
         case .starting: "Starting bots…"
         case .off: "Bots are off"
         case .unreachable: "\(bots.displayName) is unavailable"
@@ -325,21 +323,19 @@ struct BotsSidebarSection: View {
                 renamedBotName = bot.name
                 renamingBotID = bot.id
             }
-            if bots.supportsGroups {
-                Menu("Move to group") {
-                    ForEach(bots.groups.sorted { ($0.position, $0.id) < ($1.position, $1.id) }) { group in
-                        Button(group.name) { Task { await bots.setGroup(botID: bot.id, groupID: group.id) } }
-                            .disabled(bot.groupId == group.id)
-                    }
-                    if !bots.groups.isEmpty { Divider() }
-                    Button("New group…") {
-                        newGroupName = ""
-                        creatingGroupForBotID = bot.id
-                    }
-                    if bot.groupId != nil {
-                        Divider()
-                        Button("Remove from group") { Task { await bots.setGroup(botID: bot.id, groupID: nil) } }
-                    }
+            Menu("Move to group") {
+                ForEach(bots.groups.sorted { ($0.position, $0.id) < ($1.position, $1.id) }) { group in
+                    Button(group.name) { Task { await bots.setGroup(botID: bot.id, groupID: group.id) } }
+                        .disabled(bot.groupId == group.id)
+                }
+                if !bots.groups.isEmpty { Divider() }
+                Button("New group…") {
+                    newGroupName = ""
+                    creatingGroupForBotID = bot.id
+                }
+                if bot.groupId != nil {
+                    Divider()
+                    Button("Remove from group") { Task { await bots.setGroup(botID: bot.id, groupID: nil) } }
                 }
             }
             Divider()

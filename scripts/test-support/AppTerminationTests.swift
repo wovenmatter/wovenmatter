@@ -329,31 +329,12 @@ private struct AppTerminationTests {
     }
 
     @MainActor static func verifyTransitionRecovery() async throws {
-        enum Failure: Error { case expected }
         let preparedModel = ApplicationModel()
         preparedModel.isPreparedForExecutionRestart = true
         let preparedDelegate = WovenMatterLifecycleDelegate()
         preparedDelegate.model = preparedModel
         precondition(preparedDelegate.applicationShouldTerminate(NSApplication.shared) == .terminateNow)
         precondition(preparedModel.events.isEmpty)
-        for failingStep in ["prepare", "commit", "relaunch"] {
-            var events: [String] = []
-            do {
-                try await LocalExecutionTransition.perform(prepare: {
-                    events.append("prepare")
-                    if failingStep == "prepare" { throw Failure.expected }
-                }, commit: {
-                    events.append("commit")
-                    if failingStep == "commit" { throw Failure.expected }
-                }, relaunch: {
-                    events.append("relaunch")
-                    if failingStep == "relaunch" { throw Failure.expected }
-                }, rollback: { events.append("rollback") }, recover: { events.append("recover") })
-                preconditionFailure("Expected transition failure")
-            } catch Failure.expected {}
-            precondition(events.last == "recover")
-            precondition(events.contains("rollback") == (failingStep == "relaunch"))
-        }
         let started = Date()
         do {
             _ = try LocalBackendSupervisor.runCommand(executable: URL(fileURLWithPath: "/bin/sleep"),
@@ -386,12 +367,6 @@ private struct AppTerminationTests {
         let failing = LocalBackendSupervisor(domain: "gui/999999", label: "wovenmatter.tests.fake",
             plistURL: URL(fileURLWithPath: "/private/tmp/not-installed.plist")) { _ in 113 }
         do { try failing.start(); preconditionFailure("Expected bootstrap failure") } catch { }
-
-        var events: [String] = []
-        try await LocalExecutionTransition.perform(prepare: { events.append("prepare") },
-            commit: { events.append("commit") }, relaunch: { events.append("relaunch") },
-            rollback: { events.append("rollback") }, recover: { events.append("recover") })
-        precondition(events == ["prepare", "commit", "relaunch"])
     }
 
     @MainActor static func main() {

@@ -64,7 +64,7 @@ if enabled scripts; then
     python3 "scripts/test-support/test_${suite}.py"
   done
   scripts/test-dev-signing.sh
-  scripts/test-remote-workspace.sh
+  scripts/test-executor-docker.sh
   scripts/test-remote-host.sh
   while IFS= read -r -d '' file; do
     [ ! -f "$file" ] || node --check "$file"

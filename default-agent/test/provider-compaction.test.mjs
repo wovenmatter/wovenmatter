@@ -269,10 +269,10 @@ test('base64 native transport copies sanitize known Woven capabilities before en
   assert.equal(result.rawSSEBytes.sourceSHA256, createHash('sha256').update(stream).digest('hex'));
   assert.equal(result.rawSSEBytes.sha256, createHash('sha256').update(encodedCopy).digest('hex'));
   assert.equal(result.rawSSEBytes.totalBytes, encodedCopy.length); assert.equal(result.rawSSEBytes.sourceBytes, Buffer.byteLength(stream));
-  // The central copy also sanitizes the ordinary plaintext/native JSON fields.
+  // The library archive copy also sanitizes the ordinary plaintext/native JSON fields.
   // Its already encoded duplicate must not bypass that same privacy boundary.
-  const central = await sanitizeNativeTransportBytes(Buffer.from(JSON.stringify(result))), stored = JSON.parse(central.bytes);
-  assert.ok(!central.bytes.toString().includes('wmtools-')); assert.ok(!Buffer.from(stored.rawSSEBase64, 'base64').toString().includes('wmtools-'));
+  const archived = await sanitizeNativeTransportBytes(Buffer.from(JSON.stringify(result))), stored = JSON.parse(archived.bytes);
+  assert.ok(!archived.bytes.toString().includes('wmtools-')); assert.ok(!Buffer.from(stored.rawSSEBase64, 'base64').toString().includes('wmtools-'));
   assert.equal(stored.continuation.output[1].future_metadata.arbitraryUserBase64, arbitraryUserBase64);
   assert.ok(result.responseJSON.includes(capability)); // Execution-host native content remains authoritative.
 });

@@ -9,8 +9,7 @@ Claude accounts use the official Claude Agent SDK. Standalone Pi is independent.
 
 Each conversation owns `durable/<woven-session-uuid>/` under its execution host's
 Pi Durable workspace root. Durable persists its tasks, requests, checkpoints and
-context in the workspace SQLite database; an older JSONL store under `native/` is
-imported once and kept as a read-only backup. A small manifest identifies the store
+context in the workspace SQLite database. A small manifest identifies the store
 and working directory; a library heartbeat lock enforces one execution owner.
 
 Input fingerprints reject reuse with different content. Native request IDs and

@@ -48,11 +48,6 @@ export type BotRecord = {
   readonly groupId?: string;
   /** The model profile the bot runs (`[profiles.<id>]`); unset: the default profile. */
   readonly profile?: string;
-  /**
-   * Legacy per-bot model override (before profiles), read only by the startup migration that
-   * turns it into a profile assignment.
-   */
-  readonly legacyModel?: string;
 };
 
 export type BotKind = "admin" | "bot";
@@ -84,12 +79,11 @@ type BotRow = {
   is_manager: number;
   manager_id: string | null;
   is_orchestrator: number;
-  model: string | null;
   profile: string | null;
   group_id: string | null;
 };
 const BOT_COLUMNS =
-  "id, name, schema_prefix, created_at, kind, is_manager, manager_id, is_orchestrator, model, profile, group_id";
+  "id, name, schema_prefix, created_at, kind, is_manager, manager_id, is_orchestrator, profile, group_id";
 type ThreadRow = {
   bot_id: string;
   conversation_id: number;
@@ -122,7 +116,6 @@ function toBot(row: BotRow): BotRecord {
     orchestrator: row.is_orchestrator === 1,
     ...(row.group_id ? { groupId: row.group_id } : {}),
     ...(row.profile ? { profile: row.profile } : {}),
-    ...(row.model ? { legacyModel: row.model } : {}),
   };
 }
 
@@ -230,13 +223,6 @@ export class BotRegistry {
         (column) => column.name,
       ),
     );
-    // The orchestrator was first stored as `is_top`: rename it in place (values kept) and drop the
-    // old index, which is recreated below under its new name.
-    if (columns.has("is_top") && !columns.has("is_orchestrator")) {
-      await this.#db.exec("DROP INDEX IF EXISTS pibot_bots_one_top");
-      await this.#db.exec(`ALTER TABLE ${BOTS_TABLE} RENAME COLUMN is_top TO is_orchestrator`);
-      columns.add("is_orchestrator");
-    }
     const deliveryColumns = await this.#db.all<{ name: string }>(
       `PRAGMA table_info(${DELIVERIES_TABLE})`,
     );
@@ -250,7 +236,6 @@ export class BotRegistry {
       ["kind", "TEXT NOT NULL DEFAULT 'bot'"],
       ["is_manager", "INTEGER NOT NULL DEFAULT 0"],
       ["manager_id", "TEXT"],
-      ["model", "TEXT"],
       ["profile", "TEXT"],
       ["group_id", `TEXT REFERENCES ${GROUPS_TABLE}(id) ON DELETE SET NULL`],
       ["is_orchestrator", "INTEGER NOT NULL DEFAULT 0"],
@@ -431,11 +416,6 @@ export class BotRegistry {
   /** Assign a profile (undefined: the default). */
   async setProfile(id: string, profile: string | undefined): Promise<void> {
     await this.#db.run(`UPDATE ${BOTS_TABLE} SET profile = ? WHERE id = ?`, profile ?? null, id);
-  }
-
-  /** Startup migration: the legacy model override was turned into a profile assignment. */
-  async clearLegacyModel(id: string): Promise<void> {
-    await this.#db.run(`UPDATE ${BOTS_TABLE} SET model = NULL WHERE id = ?`, id);
   }
 
   /** Every bot (live or deleted) on `profile` goes back to the default profile. */

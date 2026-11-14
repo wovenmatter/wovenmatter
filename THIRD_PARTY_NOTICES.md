@@ -60,9 +60,7 @@ below and [TRADEMARKS.md](TRADEMARKS.md).
 Pi Durable, Woven Matter's built-in agent, is built on
 [Pi](https://github.com/earendil-works/pi) from Earendil Works. It bundles
 [`@earendil-works/pi-durable`](https://github.com/earendil-works/pi/tree/main/packages/durable)
-for native execution and persistence. The format-1 JSONL migration reader in
-`default-agent/src/legacy-jsonl-migration.mjs` adapts its recovery and reclamation
-rules under the same license. Its
+for native execution and persistence. Its
 [upstream license](https://github.com/earendil-works/pi/blob/main/LICENSE)
 is MIT, with `Copyright (c) 2025 Mario Zechner`.
 

@@ -110,7 +110,8 @@ public struct LibraryCalendarDraft: Codable, Equatable, Sendable {
   public var recurrenceUnit: String?
   public var recurrenceInterval: Int
   public var task: ScheduledTask?
-  /// Nil preserves the host’s existing visibility for older clients.
+  /// Nil reads as shown on the calendar, except that an edit to an existing task keeps the
+  /// task’s current visibility.
   public var showsOnCalendar: Bool?
   public init(title: String = "", details: String = "", startsAt: Date = Date(), endsAt: Date? = nil,
               allDay: Bool = false, timeZoneID: String = TimeZone.current.identifier,
