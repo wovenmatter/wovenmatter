@@ -67,7 +67,6 @@ import MobileInference
   var online = false
   var connecting = false
   var sending = false
-  var connectionLabel = "Local library"
   var errorMessage: String?
   var pairingPresented = false
   var pairingText = ""
@@ -77,8 +76,8 @@ import MobileInference
   var connectionGeneration = UUID()
   var connectionForeground = true
   var automaticSynchronization = true
-  var centralRetryCount = 0
-  var centralRefreshAfter = Date.distantPast
+  var libraryRetryCount = 0
+  var libraryRefreshAfter = Date.distantPast
   var connectionRefreshTask: Task<Void, Never>?
   @ObservationIgnored var networkMonitor: MobileNetworkMonitor?
   /// The open stream that announces the library host's changes (`library`
@@ -110,7 +109,7 @@ import MobileInference
   /// The endpoint each signed workspace client was made for.
   var memberClientEndpoints: [String: URL] = [:]
   /// Pairing confirmation and unpairing for a paired transport. Tests record
-  /// these requests instead of contacting central.
+  /// these requests instead of contacting a library host.
   @ObservationIgnored var pairingRequests: (HTTPSLibraryTransport) -> any MobilePairingRequests = { $0 }
   var saveTask: Task<Void, Never>?
   private var saveGenerations: [String: Int] = [:]
@@ -182,8 +181,8 @@ import MobileInference
   var pendingSends: [String: PendingSend] = [:]
   /// The library host that reported `providers`, and whether the next
   /// refresh must ask it again (launch, reconnect, New Chat, a new host).
-  var centralProvidersHostID: String?
-  var centralProvidersRefreshDue = true
+  var hostProvidersDeviceID: String?
+  var hostProvidersRefreshDue = true
   var backgroundTaskID: UIBackgroundTaskIdentifier = .invalid
   var backgroundFallbackToken: UUID?
   var calendarRevision = 0
@@ -254,7 +253,7 @@ import MobileInference
   init(store: MobileStore, transport: any LibraryTransport) {
     fixture = false; isolatedTestHost = false; automaticSynchronization = false; self.store = store
     quickChatNotifications = QuickChatNotifications(center: RecordingQuickChatNotificationCenter())
-    executionWorkspaceID = "central"
+    executionWorkspaceID = "host"
     engine = MobileSyncEngine(store: store, transport: transport)
     online = true
   }
@@ -284,7 +283,7 @@ import MobileInference
     if let id = selectedConversationID, let record = executionRecords[id] { return (record.status == "running" || record.status == "stopping") ? record.runID : nil }
     return selectedConversationID.flatMap { state.transcripts[$0]?.activeRunID } ?? selectedConversation?.activeRunID
   }
-  var centralProvider: HarnessCapabilities? { selectedConversationID.flatMap { sessionCapabilities[$0] } ?? providers.first { $0.id == (selectedConversation?.providerID ?? providerID) } }
+  var hostProvider: HarnessCapabilities? { selectedConversationID.flatMap { sessionCapabilities[$0] } ?? providers.first { $0.id == (selectedConversation?.providerID ?? providerID) } }
   var allPending: [PendingInteraction] { pending + localPending + remotePending.values.flatMap { $0 } }
   var currentPending: [PendingInteraction] { allPending.filter { $0.conversationID == selectedConversationID } }
 
@@ -338,13 +337,13 @@ import MobileInference
     await refreshSynchronizationStatus()
   }
   func configureTransport() throws {
-    guard let credential, let store else { connectionLabel = "Saved on this device"; return }
+    guard let credential, let store else { return }
     guard credential.deviceID == state.deviceID else { throw LibraryAPIError(code: "device_identity_changed", message: "Pair this local library with your Mac again. The saved credential belongs to a previous app installation; your local notes are safe.") }
     // Every connection is signed. Until this phone is a member (the Mac
     // refused its key, or the pairing never learned the Mac's member ID) it
     // does not sync, and Settings asks to pair again.
     if try configureMemberTransport() { return }
-    transport = nil; engine = nil; connectionLabel = "Pair again"
+    transport = nil; engine = nil
   }
   func pair(url: URL) async {
     guard !isolatedTestHost, !fixture, let store, !pairingInProgress else { return }
@@ -359,7 +358,7 @@ import MobileInference
         pending.endpoint == payload.endpoint {
         if (current.workspaceID ?? current.detachedWorkspaceID) != pending.workspaceID,
           !localRunTasks.isEmpty || processingDeviceSchedule {
-          throw DeviceExecutionError.unavailable("Finish the running device agents before changing the central database.")
+          throw DeviceExecutionError.unavailable("Finish the running Quick Chat agents before pairing with another library.")
         }
         await flushLocalWrites()
         stopDeviceScheduler()
@@ -380,7 +379,7 @@ import MobileInference
         deviceName: UIDevice.current.name, metadata: deviceMetadata, performer: httpPerformer)
       if (current.workspaceID ?? current.detachedWorkspaceID) != target,
         !localRunTasks.isEmpty || processingDeviceSchedule {
-        throw DeviceExecutionError.unavailable("Finish the running device agents before changing the central database.")
+        throw DeviceExecutionError.unavailable("Finish the running Quick Chat agents before pairing with another library.")
       }
       await flushLocalWrites()
       stopDeviceScheduler()
@@ -389,7 +388,7 @@ import MobileInference
       // request to any Mac or Linux member is signed with it.
       let identity = try loadMemberIdentity()
       let paired = try await HTTPSLibraryTransport.pair(payload, deviceID: current.deviceID,
-        deviceName: UIDevice.current.name, metadata: deviceMetadata, expectedWorkspaceID: target, requiresConfirmation: true,
+        deviceName: UIDevice.current.name, metadata: deviceMetadata, expectedWorkspaceID: target,
         memberPublicKey: identity.publicKey, performer: httpPerformer)
       // Pairing again with another Mac of the same library moves nothing:
       // the next sync rebinds to it like to any other member host. The Mac
@@ -434,25 +433,25 @@ import MobileInference
       try await engine.synchronize()
       guard generation == connectionGeneration, !Task.isCancelled else { return }
       await adoptCurrentLibraryHost(engine)
-      // The central list is the current host's: asked again after launch, a
+      // The host list is the current host's: asked again after launch, a
       // reconnect, the app becoming active, a new host or when New Chat opens.
       let host = libraryHostDeviceID
-      let connectionChanged = centralProvidersRefreshDue || providers.isEmpty || host != centralProvidersHostID
+      let connectionChanged = hostProvidersRefreshDue || providers.isEmpty || host != hostProvidersDeviceID
       let refreshedProviders = connectionChanged ? try await engine.providers() : providers
-      // The host's stream pushes the central route's questions and approvals
+      // The host's stream pushes the host route's questions and approvals
       // and resolves lost replies when it connects. Without one they are read
       // once per connection here, and when a chat opens or after a command.
-      let refreshedPending: [PendingInteraction]? = streamsCentral ? [] : connectionChanged ? try await engine.pending() : nil
-      if connectionChanged, !streamsCentral { try await engine.recoverCommandReceipts() }
+      let refreshedPending: [PendingInteraction]? = streamsHostRoute ? [] : connectionChanged ? try await engine.pending() : nil
+      if connectionChanged, !streamsHostRoute { try await engine.recoverCommandReceipts() }
       let status = await engine.synchronizationStatus()
       guard generation == connectionGeneration, !Task.isCancelled else { return }
       providers = refreshedProviders
       if let refreshedPending, refreshedPending != pending { pending = refreshedPending }
-      if connectionChanged { centralProvidersHostID = host; centralProvidersRefreshDue = false }
+      if connectionChanged { hostProvidersDeviceID = host; hostProvidersRefreshDue = false }
       synchronizationStatus = status
-      online = true; connectionLabel = "Connected"
-      centralRetryCount = 0
-      centralRefreshAfter = Date().addingTimeInterval(15)
+      online = true
+      libraryRetryCount = 0
+      libraryRefreshAfter = Date().addingTimeInterval(15)
       if providerID.isEmpty { providerID = providers.first(where: { $0.available })?.id ?? "" }
       await reload(); rememberAgentCatalog()
     } catch {
@@ -461,11 +460,10 @@ import MobileInference
       guard generation == connectionGeneration else { return }
       synchronizationStatus = status
       await adoptCurrentLibraryHost(engine)
-      online = status.centralReachable == true
-      centralProvidersRefreshDue = true
-      connectionLabel = online ? "Connected" : "Disconnected"
-      centralRetryCount += 1
-      centralRefreshAfter = Date().addingTimeInterval(Self.connectionRetryDelay(centralRetryCount))
+      online = status.hostReachable == true
+      hostProvidersRefreshDue = true
+      libraryRetryCount += 1
+      libraryRefreshAfter = Date().addingTimeInterval(Self.connectionRetryDelay(libraryRetryCount))
       await reload()
     }
   }
@@ -501,10 +499,10 @@ import MobileInference
     selectedConversationID = id; tab = .chat
     if isViewingRemoteQuickChat { await refreshRemoteQuickChatHistory() }
     else if selectedExecutionWorkspaceID == "local" { await openDeviceConversation(id) }
-    else if selectedExecutionWorkspaceID == "central" {
+    else if selectedExecutionWorkspaceID == "host" {
       // The library host's stream follows it; without a stream it is read once.
       await followSelectedConversation()
-      if !streamsCentral { await refreshCentralConversation(id) }
+      if !streamsHostRoute { await refreshHostConversation(id) }
     }
     else { await refreshExecutionWorkspaces(force: true) }
   }
@@ -514,38 +512,38 @@ import MobileInference
     let owner = selectedExecutionWorkspaceID
     if isViewingRemoteQuickChat { await refreshRemoteQuickChatHistory() }
     else if owner == "local", let id = selectedConversationID { await openDeviceConversation(id) }
-    else if owner == "central" {
+    else if owner == "host" {
       await followSelectedConversation()
-      if let id = selectedConversationID, !streamsCentral || state.transcripts[id] == nil { await refreshCentralConversation(id) }
+      if let id = selectedConversationID, !streamsHostRoute || state.transcripts[id] == nil { await refreshHostConversation(id) }
     }
     else { await refreshDirectWorkspace(owner) }
   }
-  /// One read of a central chat's live view, for a host that does not stream
-  /// it: its transcript and capabilities, and the central questions and
+  /// One read of a host chat's live view, for a host that does not stream
+  /// it: its transcript and capabilities, and the host route's questions and
   /// approvals. Only when the chat opens, on "Load conversation" and after a command.
-  func refreshCentralConversation(_ conversationID: String?) async {
+  func refreshHostConversation(_ conversationID: String?) async {
     guard online, let engine else { return }
     do {
       if let conversationID {
         try await engine.refreshTranscript(conversationID)
         if let capability = try? await transport?.capabilities(conversationID) { sessionCapabilities[conversationID] = capability }
       }
-      if !streamsCentral { pending = try await engine.pending() }
+      if !streamsHostRoute { pending = try await engine.pending() }
       await reload()
     } catch { /* Saved history stays visible; the next explicit read retries. */ }
   }
-  /// After a central command: the stream shows its effect. Without a stream
+  /// After a host route command: the stream shows its effect. Without a stream
   /// the chat is read once. Library sync follows shortly, as after any change.
-  func afterCentralCommand(_ conversationID: String?) async {
+  func afterHostCommand(_ conversationID: String?) async {
     await followSelectedConversation()
-    if !streamsCentral { await refreshCentralConversation(conversationID ?? selectedConversationID) }
+    if !streamsHostRoute { await refreshHostConversation(conversationID ?? selectedConversationID) }
     requestSynchronization()
   }
   /// A chat its workspace's stream does not serve (the server ended its
   /// subscription): read once, never polled.
   func readConversationOnce(_ conversationID: String) async {
     let route = executionRoute(for: conversationID)
-    if route == "central" { await refreshCentralConversation(conversationID); return }
+    if route == "host" { await refreshHostConversation(conversationID); return }
     guard route != "local", let client = workspaceClients[route] else { return }
     do {
       _ = try await client.refreshTranscript(conversationID)
@@ -554,7 +552,7 @@ import MobileInference
     } catch { workspaceProblems[route] = error.localizedDescription }
   }
   func loadEarlierMessages() async {
-    if selectedExecutionWorkspaceID != "central", let client = workspaceClients[selectedExecutionWorkspaceID], let target = selectedConversationID,
+    if selectedExecutionWorkspaceID != "host", let client = workspaceClients[selectedExecutionWorkspaceID], let target = selectedConversationID,
        let before = transcript?.olderCursor, !loadingHistory {
       loadingHistory = true; defer { loadingHistory = false }
       do { historyPages[target] = try await client.earlierTranscript(target, before: before) }
@@ -632,7 +630,7 @@ import MobileInference
   func send() async {
     guard !chatSettingsBusy, !startingChat else { return }
     if selectedExecutionWorkspaceID == "local" { await sendOnDevice(); return }
-    if selectedExecutionWorkspaceID != "central" { await sendToExecutionWorkspace(); return }
+    if selectedExecutionWorkspaceID != "host" { await sendToExecutionWorkspace(); return }
     guard online, let engine, !sending, !composer.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
     // Capture target, route, text and reference before yielding. Switching tabs or
     // sessions during save/network work can never redirect this command.
@@ -659,7 +657,7 @@ import MobileInference
     do {
       let receipt: LibraryCommandReceipt
       if target == nil {
-        try await requireWorkspaceConnection("central")
+        try await requireWorkspaceConnection("host")
         let conversationID = pendingLaunch?.create.conversationID ?? UUID().uuidString.lowercased()
         let launch: MobileLaunchRecord
         if let pendingLaunch { launch = pendingLaunch } else {
@@ -695,7 +693,7 @@ import MobileInference
       let conversationID = receipt.conversationID ?? target ?? selectedConversationID ?? sourceKey
       acceptPendingSend(from: sourceKey, to: conversationID); accepted = true
       if draftBuffer[sourceKey] == cleared && providerID == route { updateChatDraft(key: sourceKey, draft: cleared) }
-      await afterCentralCommand(conversationID)
+      await afterHostCommand(conversationID)
     } catch { errorMessage = workspaceActionMessage(error); await reload() }
   }
   /// Resends the saved unconfirmed message with its original command ID. The
@@ -707,7 +705,7 @@ import MobileInference
     do {
       var receipt: LibraryCommandReceipt?
       let unresolved: (MobileCommandRecord) -> Bool = { $0.command.conversationID == id && ($0.receipt == nil || $0.receipt?.status == .outcomeUnknown) && ($0.command.kind == .send || $0.command.kind == .steer) }
-      if route == "central" {
+      if route == "host" {
         guard let engine else { throw MobileConnectionError.offline }
         if let pending = state.commands.first(where: unresolved) { receipt = try await engine.submit(pending.command) }
       } else {
@@ -719,7 +717,7 @@ import MobileInference
       } else {
         unconfirmedSendConversationID = nil; errorMessage = receipt?.status == .rejected ? receipt?.message ?? "The previous message was not accepted." : nil
       }
-      if route == "central" { await afterCentralCommand(id) } else { await refreshDirectWorkspace(route) }
+      if route == "host" { await afterHostCommand(id) } else { await refreshDirectWorkspace(route) }
     } catch { errorMessage = workspaceActionMessage(error) }
   }
   /// New chats whose first message has no confirmed outcome. Each keeps its
@@ -743,7 +741,7 @@ import MobileInference
       if result.accepted { errorMessage = nil; selectedConversationID = result.create.conversationID }
       else { errorMessage = result.sendReceipt?.message ?? result.createReceipt?.message ?? "This new chat still hasn’t been confirmed. It stays saved; try again when connected." }
       if let workspaceID = launch.create.workspaceID { await refreshDirectWorkspace(workspaceID) }
-      else { await afterCentralCommand(result.create.conversationID) }
+      else { await afterHostCommand(result.create.conversationID) }
     } catch { errorMessage = workspaceActionMessage(error); await reload() }
   }
   /// Shows a saved launch's first message in the new-chat composer. The launch
@@ -755,7 +753,7 @@ import MobileInference
   }
   func stop() async {
     if selectedExecutionWorkspaceID == "local" { await stopOnDevice(); return }
-    if selectedExecutionWorkspaceID != "central" { await stopExecutionWorkspace(); return }
+    if selectedExecutionWorkspaceID != "host" { await stopExecutionWorkspace(); return }
     guard let conversationID = selectedConversationID, let runID = activeRunID, online, activeProvider?.canStop == true else { return }
     await submit(.init(deviceID: state.deviceID, kind: .stop, conversationID: conversationID, runID: runID))
   }
@@ -769,7 +767,7 @@ import MobileInference
         : response.optionID == "allow" || !response.answers.isEmpty ? .allowed : .declined)
       return
     }
-    if executionRoute(for: interaction.conversationID) != "central" { await respondInExecutionWorkspace(interaction, response: response); return }
+    if executionRoute(for: interaction.conversationID) != "host" { await respondInExecutionWorkspace(interaction, response: response); return }
     await submit(.init(deviceID: state.deviceID, kind: .respond, conversationID: interaction.conversationID,
       runID: interaction.runID, interactionID: interaction.id, response: response))
   }
@@ -780,7 +778,7 @@ import MobileInference
     if let id = conversationID {
       let owner = executionRoute(for: id)
       if owner == "local" { return try await readDeviceWorkspace(request) }
-      if owner != "central" {
+      if owner != "host" {
         guard let client = workspaceClients[owner] else { throw DeviceExecutionError.unavailable("This execution workspace is unavailable.") }
         return try await client.readWorkspace(request)
       }
@@ -806,7 +804,7 @@ import MobileInference
         if accepted, action.qualifiesForAnalytics { await analytics.record(.active) }
         return accepted
       }
-      if owner != "central" {
+      if owner != "host" {
         guard let client = workspaceClients[owner] else { errorMessage = "This execution workspace is unavailable."; return false }
         do {
           let command = LibraryCommand(deviceID: state.deviceID, kind: .workspace, conversationID: id, workspaceAction: action)
@@ -839,7 +837,7 @@ import MobileInference
         return false
       }
       if pending == nil, action.qualifiesForAnalytics { await analytics.record(.active) }
-      await afterCentralCommand(conversationID)
+      await afterHostCommand(conversationID)
       return true
     } catch { errorMessage = error.localizedDescription; await reload(); return false }
   }
@@ -847,7 +845,7 @@ import MobileInference
     store != nil && state.notes[id]?.contentIncluded == true && !state.uncachedNoteIDs.contains(id) && state.conflicts[id] == nil
   }
   /// Rename and move use the same durable local edits as the note editor. They
-  /// must work before a new phone note has ever reached the central library.
+  /// must work before a new phone note has ever reached the library.
   func editNoteDetails(_ id: String, action: String, title: String, folderID: String?) async -> Bool {
     guard ["rename", "move"].contains(action), let store else { return false }
     await flushLocalWrites()
@@ -911,7 +909,7 @@ import MobileInference
     do {
       let result = try await engine.submit(command)
       if result.status == .rejected || result.status == .outcomeUnknown { errorMessage = result.message ?? "This request was not accepted." }
-      await reload(); await afterCentralCommand(command.conversationID)
+      await reload(); await afterHostCommand(command.conversationID)
     } catch { errorMessage = error.localizedDescription; await reload() }
   }
 
@@ -1015,7 +1013,7 @@ import MobileInference
       if scenario == "workspace-organization" || scenario == "remote-folders-empty" {
         let mac = "aaaaaaaa-1111-4111-8111-111111111111", linux = "bbbbbbbb-2222-4222-8222-222222222222", ipad = "cccccccc-3333-4333-8333-333333333333"
         executionWorkspaces = [
-          .init(id: mac, libraryID: "fixture", ownerDeviceID: mac, kind: .mac, name: "Studio Mac", capabilities: ["history.central.v1"]),
+          .init(id: mac, libraryID: "fixture", ownerDeviceID: mac, kind: .mac, name: "Studio Mac", capabilities: ["history.library.v1"]),
           .init(id: linux, libraryID: "fixture", ownerDeviceID: mac, kind: .linux, name: "Linux workspace"),
           .init(id: ipad, libraryID: "fixture", ownerDeviceID: ipad, kind: .ios, name: "Travel iPad", capabilities: ["quick-chat", "notes"])
         ]
@@ -1048,11 +1046,11 @@ import MobileInference
         let mac = "aaaaaaaa-7777-4777-8777-777777777777", stale = "bbbbbbbb-8888-4888-8888-888888888888", linux = "cccccccc-9999-4999-8999-999999999999"
         let copied = "dddddddd-0000-4000-8000-000000000000"
         executionWorkspaces = [
-          .init(id: mac, libraryID: "fixture", ownerDeviceID: mac, kind: .mac, name: "Office Mac", capabilities: ["history.central.v1"]),
+          .init(id: mac, libraryID: "fixture", ownerDeviceID: mac, kind: .mac, name: "Office Mac", capabilities: ["history.library.v1"]),
           .init(id: stale, libraryID: "fixture", ownerDeviceID: mac, kind: .linux, name: "Old Linux box"),
           .init(id: linux, libraryID: "fixture", ownerDeviceID: linux, kind: .linux, name: "Build server"),
           // A library copied from another Mac keeps that Mac's row as history only.
-          .init(id: copied, libraryID: "fixture", ownerDeviceID: copied, kind: .mac, name: "Copied MacBook Air", capabilities: ["history.central.v1"], retainedHistory: true)
+          .init(id: copied, libraryID: "fixture", ownerDeviceID: copied, kind: .mac, name: "Copied MacBook Air", capabilities: ["history.library.v1"], retainedHistory: true)
         ]
         func agent(_ id: String, _ name: String, ready: Bool) -> HarnessCapabilities { .init(id: id, runtimeKind: id, displayName: name, available: ready, canStart: ready) }
         let cached = [agent("default_agent", "Pi Durable", ready: true), agent("codex", "Codex", ready: false), agent("claude_code", "Claude Code", ready: false),

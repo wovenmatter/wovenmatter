@@ -358,7 +358,7 @@ extension FacadeFixture {
             kind: .linux, name: remote.name, endpoint: URL(string: "https://fixture.ts.net/wovenmatter"),
             executionDeviceID: UUID().uuidString.lowercased())), deviceID: identity.hostDeviceID)
         let fake = LinuxMemberFake(workspace: workspace)
-        let client = try CentralExecutionClient(database: database,
+        let client = try MemberExecutionClient(database: database,
             commandJournalURL: directory.appending(path: "member-commands-\(UUID()).json"),
             makeSignedTransport: { _ in fake })
         client.unlockDefaultAgentHandler = { workspace, routes in

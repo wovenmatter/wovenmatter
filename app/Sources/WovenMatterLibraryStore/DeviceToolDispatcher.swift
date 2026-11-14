@@ -20,7 +20,7 @@ public final class DeviceToolDispatcher {
     if let task = pending[key] { return try await task.value }
     guard reservation.isNew else {
       return .init(success: false,
-        error: "The central Mac accepted this tool call but its result was not recorded. Inspect the affected item before issuing another request; this request will not execute again.",
+        error: "This Mac accepted this tool call but its result was not recorded. Inspect the affected item before issuing another request; this request will not execute again.",
         code: "outcome_unknown", requestID: id)
     }
     var request = value.request

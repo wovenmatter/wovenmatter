@@ -16,8 +16,10 @@ extension MobileModel {
   /// Never paired (or unpaired): everything runs on this device. Pairing a Mac
   /// adds workspaces, agents on your computers and sync; it keeps local data.
   var isStandalone: Bool { credential == nil && state.workspaceID == nil }
-  /// The Mac or Linux host this phone synced with last. Its own sessions are
-  /// the "central" route; every other device's sessions go to that device.
+  /// The Mac or Linux host this phone syncs its library with now (the last
+  /// one that answered). Its own sessions are the "host" route, commanded
+  /// through its library API; every other device's sessions go to that
+  /// device directly. The host changes when the phone fails over.
   var libraryHostDeviceID: String? { membership?.currentHost?.deviceID ?? membership?.pairedHostDeviceID }
   var libraryHostName: String? {
     // The saved membership carries the host's real device ID and name once learned.
@@ -25,17 +27,14 @@ extension MobileModel {
     if let member = membership?.members.first(where: { $0.deviceID == host.deviceID }) { return member.name }
     return host.name
   }
-  /// The registered workspace of the library host itself, when it is a Mac.
-  /// Every Mac that hosts a library advertises central history, so the host
-  /// is matched by device; only a pairing that never learned its host's
-  /// device ID falls back to the first such Mac.
-  var centralExecutionWorkspace: ExecutionWorkspace? {
+  /// The registered workspace of the library host itself, when it is a Mac,
+  /// matched by device. Nil while the host is a Linux machine or unknown.
+  var hostExecutionWorkspace: ExecutionWorkspace? {
+    guard let host = libraryHostDeviceID?.lowercased() else { return nil }
     // A copied snapshot owner keeps the capability for its history only.
-    let central = executionWorkspaces.filter(\.isLiveCentralMac)
-    if let host = libraryHostDeviceID?.lowercased() {
-      return central.first { $0.ownerDeviceID.lowercased() == host || $0.executionDeviceID?.lowercased() == host }
+    return executionWorkspaces.first {
+      $0.isLiveLibraryMac && ($0.ownerDeviceID.lowercased() == host || $0.executionDeviceID?.lowercased() == host)
     }
-    return central.first
   }
   /// "Update everything" and re-pairing notices for Settings and the sync status.
   var membershipNotice: String? {
@@ -133,7 +132,7 @@ extension MobileModel {
   /// Probes the Mac once the pairing is confirmed (it signs this phone's
   /// member entry then) and records the result.
   func completeMemberPairing(endpoint: URL, hostDeviceID: String?) async {
-    guard let identity = try? loadMemberIdentity() else { transport = nil; connectionLabel = "Pair again"; return }
+    guard let identity = try? loadMemberIdentity() else { transport = nil; return }
     let probe = await probeMemberPairing(endpoint: endpoint, hostDeviceID: hostDeviceID, identity: identity)
     await finishMemberPairing(endpoint: endpoint, hostDeviceID: hostDeviceID, rejected: probe == .rejected)
   }
@@ -158,7 +157,7 @@ extension MobileModel {
       let previousEngine = engine
       let member = rejected ? false : try configureMemberTransport()
       if !member {
-        libraryHosts = nil; transport = nil; engine = nil; connectionLabel = "Pair again"
+        libraryHosts = nil; transport = nil; engine = nil
       }
       await previousEngine?.cancelSynchronization()
     } catch { pairingError = error.localizedDescription }

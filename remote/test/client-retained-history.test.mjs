@@ -76,7 +76,7 @@ test('active task and direct execution spools are never re-imported as legacy RP
   const f=fixture(t),taskID=randomUUID(),directID=randomUUID();let imports=0
   for(const id of [taskID,directID])writeFileSync(join(f.defaultDirectory,`run-${randomUUID()}-${id}.jsonl`),'{"sessionUpdate":"agent_message_chunk","content":{"text":"owned"}}\n')
   const bridge=capture(f,{execution:{descriptor:()=>f.execution.descriptor(),hasRun:id=>id===directID,importRetainedEvents:()=>{imports++}},
-    taskGateway:{results:()=>({entries:[],cursor:'0'}),retainedRunIDs:()=>[taskID]},resolveAssociation:()=>assert.fail('Already owned run queried central')})
+    taskGateway:{results:()=>({entries:[],cursor:'0'}),retainedRunIDs:()=>[taskID]},resolveAssociation:()=>assert.fail('Already owned run resolved its association again')})
   await bridge.pump();assert.equal(imports,0);assert.equal(bridge.status().pendingAssociationCount,0);await bridge.close()
 })
 

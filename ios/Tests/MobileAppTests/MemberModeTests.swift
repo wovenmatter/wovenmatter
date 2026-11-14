@@ -61,8 +61,8 @@ final class MemberModeTests: XCTestCase {
   }
 
   /// In member mode the phone reaches another Mac's workspace with signed
-  /// requests and no execution grant, and "central" is the host it syncs with.
-  @MainActor func testMemberModeReachesWorkspacesWithSignaturesAndCentralFollowsTheHost() async throws {
+  /// requests and no execution grant, and "host" is the host it syncs with.
+  @MainActor func testMemberModeReachesWorkspacesWithSignaturesAndTheHostRouteFollowsTheHost() async throws {
     let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     defer { try? FileManager.default.removeItem(at: root) }
     let store = try MobileStore(file: root.appendingPathComponent("library.json"))
@@ -76,10 +76,10 @@ final class MemberModeTests: XCTestCase {
     XCTAssertNotNil(model.membershipNotice, "A paired phone that is not a member is asked to pair again")
 
     let mini = ExecutionWorkspace(id: UUID().uuidString.lowercased(), libraryID: "library-b", ownerDeviceID: "b0000000-0000-0000-0000-00000000000b",
-      kind: .mac, name: "Mini", endpoint: URL(string: "https://mini.tail1.ts.net/wovenmatter")!, capabilities: ["execution.v1", "history.central.v1"],
+      kind: .mac, name: "Mini", endpoint: URL(string: "https://mini.tail1.ts.net/wovenmatter")!, capabilities: ["execution.v1", "history.library.v1"],
       executionDeviceID: "b0000000-0000-0000-0000-00000000000b")
     let studio = ExecutionWorkspace(id: UUID().uuidString.lowercased(), libraryID: "library-a", ownerDeviceID: "a0000000-0000-0000-0000-00000000000a",
-      kind: .mac, name: "Studio", endpoint: nil, capabilities: ["execution.v1", "history.central.v1"], executionDeviceID: "a0000000-0000-0000-0000-00000000000a")
+      kind: .mac, name: "Studio", endpoint: nil, capabilities: ["execution.v1", "history.library.v1"], executionDeviceID: "a0000000-0000-0000-0000-00000000000a")
     // As a synchronization does, bind the journal to the host's library first.
     try await store.journal.bind(libraryID: "library-a")
     try await store.journal.upsertWorkspace(mini, pending: false, trustedRegistry: true)
@@ -106,10 +106,10 @@ final class MemberModeTests: XCTestCase {
       XCTAssertEqual(request.value(forHTTPHeaderField: "X-Woven-Member-Device"), identity.deviceID)
       XCTAssertNotNil(request.value(forHTTPHeaderField: "X-Woven-Member-Signature"))
     }
-    // "Central" is the Mac this phone syncs with, not the first Mac listed.
-    XCTAssertEqual(model.centralExecutionWorkspace?.id, studio.id)
+    // The host route is the Mac this phone syncs with, not the first Mac listed.
+    XCTAssertEqual(model.hostExecutionWorkspace?.id, studio.id)
     membership.currentHost = .init(deviceID: "b0000000-0000-0000-0000-00000000000b", kind: "mac", name: "Mini", endpoint: URL(string: "https://mini.tail1.ts.net/wovenmatter")!)
     model.membership = membership
-    XCTAssertEqual(model.centralExecutionWorkspace?.id, mini.id)
+    XCTAssertEqual(model.hostExecutionWorkspace?.id, mini.id)
   }
 }

@@ -102,7 +102,7 @@ public enum LibraryCalendarError: Error, LocalizedError {
     case .conflict: "This calendar event changed. Reopen it or resolve its saved conflict before editing."
     case .missing: "The calendar event is no longer available."
     case .requestMismatch: "This calendar request ID was already used for a different operation."
-    case .wrongWorkspace: "This calendar belongs to another central library. Local changes have been kept."
+    case .wrongWorkspace: "This calendar belongs to another library. Local changes have been kept."
     case .invalidReceipt: "The server returned an invalid calendar acknowledgement. Local changes have been kept."
     }
   }

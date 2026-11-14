@@ -46,8 +46,8 @@ public struct MobileStoreState: Codable, Equatable, Sendable {
   public var uncachedNoteIDs: Set<String> = []
   /// Optional for backward decoding of existing format-1 libraries.
   public var executionConversationIDs: Set<String>?
-  public var centralDeletedConversationIDs: Set<String>?
-  public var centralConversationIDs: Set<String>?
+  public var libraryDeletedConversationIDs: Set<String>?
+  public var libraryConversationIDs: Set<String>?
   public var pendingNoteDeletions: [String: LibraryNote]?
   public var toolInvocations: [String: [String]]?
   public var localToolCoordinations: [String: MobileLocalSessionCoordination]?
@@ -184,7 +184,7 @@ public actor MobileStore {
       next.conversations = history.conversations; next.transcripts = history.transcripts
       next.executionConversationIDs = Set(history.conversations.keys)
       next.ownedConversationIDs = Set(history.conversations.keys)
-      next.centralConversationIDs = []; next.centralDeletedConversationIDs = []
+      next.libraryConversationIDs = []; next.libraryDeletedConversationIDs = []
       next.transcriptRecency = next.transcriptRecency.filter { history.conversations[$0] != nil }
       next.chatDrafts = next.chatDrafts.filter { $0.key == "new-chat" || history.conversations[$0.key] != nil }
       next.pinnedTranscriptIDs = next.pinnedTranscriptIDs?.intersection(history.conversations.keys)
@@ -405,10 +405,10 @@ public actor MobileStore {
       let changedIDs = snapshot.conversations.filter { next.conversations[$0.id] != $0 }.map(\.id)
       next.dirtyTranscriptIDs = (next.dirtyTranscriptIDs ?? []).union(changedIDs)
       let incomingIDs = Set(snapshot.conversations.map(\.id))
-      let missingIDs = (next.centralConversationIDs ?? []).subtracting(incomingIDs)
-      next.centralDeletedConversationIDs = (next.centralDeletedConversationIDs ?? []).union(missingIDs).subtracting(incomingIDs)
-      next.centralConversationIDs = incomingIDs
-      let execution = next.conversations.filter { next.executionConversationIDs?.contains($0.key) == true && next.centralDeletedConversationIDs?.contains($0.key) != true }
+      let missingIDs = (next.libraryConversationIDs ?? []).subtracting(incomingIDs)
+      next.libraryDeletedConversationIDs = (next.libraryDeletedConversationIDs ?? []).union(missingIDs).subtracting(incomingIDs)
+      next.libraryConversationIDs = incomingIDs
+      let execution = next.conversations.filter { next.executionConversationIDs?.contains($0.key) == true && next.libraryDeletedConversationIDs?.contains($0.key) != true }
       next.conversations = Dictionary(uniqueKeysWithValues: snapshot.conversations.map { ($0.id, $0) }).merging(execution) { _, local in local }
       next.cursor = snapshot.cursor
       next.hasLibrarySnapshot = true
@@ -430,12 +430,12 @@ public actor MobileStore {
         case .conversation:
           if change.operation == .delete {
             next.conversations.removeValue(forKey: change.resourceID); next.transcripts.removeValue(forKey: change.resourceID)
-            next.centralDeletedConversationIDs = (next.centralDeletedConversationIDs ?? []).union([change.resourceID])
+            next.libraryDeletedConversationIDs = (next.libraryDeletedConversationIDs ?? []).union([change.resourceID])
           } else if let conversation = change.conversation {
             next.dirtyTranscriptIDs = (next.dirtyTranscriptIDs ?? []).union([conversation.id])
             next.conversations[conversation.id] = conversation
-            next.centralConversationIDs = (next.centralConversationIDs ?? []).union([conversation.id])
-            next.centralDeletedConversationIDs?.remove(conversation.id)
+            next.libraryConversationIDs = (next.libraryConversationIDs ?? []).union([conversation.id])
+            next.libraryDeletedConversationIDs?.remove(conversation.id)
           }
         case .transcript: next.dirtyTranscriptIDs = (next.dirtyTranscriptIDs ?? []).union([change.resourceID])
         case .providers: break
@@ -457,32 +457,32 @@ public actor MobileStore {
         next.conversations.removeValue(forKey: id); next.transcripts.removeValue(forKey: id)
         next.executionConversationIDs?.remove(id)
       }
-      for entry in history.pendingEntries where entry.kind == .restoredConversation { next.centralDeletedConversationIDs?.remove(entry.conversationID) }
-      for conversation in history.conversations.values where next.centralDeletedConversationIDs?.contains(conversation.id) != true {
+      for entry in history.pendingEntries where entry.kind == .restoredConversation { next.libraryDeletedConversationIDs?.remove(entry.conversationID) }
+      for conversation in history.conversations.values where next.libraryDeletedConversationIDs?.contains(conversation.id) != true {
         next.conversations[conversation.id] = conversation
         next.executionConversationIDs = (next.executionConversationIDs ?? []).union([conversation.id])
       }
     }
     let recent = history.conversations.values.sorted { $0.updatedAt == $1.updatedAt ? $0.id < $1.id : $0.updatedAt > $1.updatedAt }
-    for conversation in recent.reversed() where state.centralDeletedConversationIDs?.contains(conversation.id) != true {
+    for conversation in recent.reversed() where state.libraryDeletedConversationIDs?.contains(conversation.id) != true {
       if let transcript = history.transcripts[conversation.id] { try cache(transcript) }
     }
   }
-  /// Read-through projection for the central host's own execution API. The
+  /// Read-through projection of the library host's own sessions. The
   /// authoritative snapshot/change feed continues to own these conversations.
-  public func cacheCentralConversations(_ conversations: [LibraryConversation]) throws {
+  public func cacheHostConversations(_ conversations: [LibraryConversation]) throws {
     try transaction { next in
       for conversation in conversations { next.conversations[conversation.id] = conversation }
     }
   }
   /// The library host's own sessions as its stream names them. Its execution
   /// API names them as its registered workspace's, but the library it serves
-  /// holds them unassigned (the "central" route), so they keep the library's
+  /// holds them unassigned (the "host" route), so they keep the library's
   /// identity here: a summary pushed live never moves a chat to another route.
   /// A conversation the library deleted stays deleted.
   public func cacheLibraryHostConversations(_ conversations: [LibraryConversation]) throws {
     try transaction { next in
-      for var conversation in conversations where next.centralDeletedConversationIDs?.contains(conversation.id) != true {
+      for var conversation in conversations where next.libraryDeletedConversationIDs?.contains(conversation.id) != true {
         let stored = next.conversations[conversation.id]
         conversation.workspaceID = stored?.workspaceID; conversation.libraryID = stored?.libraryID
         next.conversations[conversation.id] = conversation
@@ -492,7 +492,7 @@ public actor MobileStore {
   /// Projection only: execution history remains durable in the separate journal.
   public func adoptExecution(conversation: LibraryConversation? = nil, transcript: LibraryTranscript? = nil) throws {
     try transaction { next in
-      if let conversation, next.centralDeletedConversationIDs?.contains(conversation.id) != true {
+      if let conversation, next.libraryDeletedConversationIDs?.contains(conversation.id) != true {
         next.conversations[conversation.id] = conversation
         next.executionConversationIDs = (next.executionConversationIDs ?? []).union([conversation.id])
       }

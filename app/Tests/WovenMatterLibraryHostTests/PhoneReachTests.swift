@@ -130,7 +130,6 @@ private final class ReachWorld: @unchecked Sendable {
     self.sessions = sessions
     let execution = await MainActor.run {
       MacExecutionAPI(database: linux.database, commands: sessions,
-        authentication: try! ExecutionAuthentication(fileURL: root.appending(path: "box-execution.json")),
         descriptor: workspace, isActive: { true }, members: linux.members)
     }
     tailnet.route("box.tail1.ts.net:9443", strip: false) { await execution.handle($0) }
@@ -167,6 +166,7 @@ struct PhoneReachTests {
     let offer = try await pairing.createOffer(endpoint: macURL)
     let paired = try await HTTPSLibraryTransport.pair(offer.payload, deviceID: phoneID, deviceName: "iPhone",
       metadata: .init(kind: .iPhone), memberPublicKey: identity.publicKey, performer: tailnet)
+    try await HTTPSLibraryTransport(credential: paired, performer: tailnet).confirmPairing()
     #expect(await macMembers.member(phoneID)?.kind == .ios)
     // The pairing reply names the Mac's member device ID, which the phone's requests to it are addressed to.
     let macDevice = try #require(paired.hostDeviceID)

@@ -16,7 +16,7 @@ import WovenMatterLibraryStore
 /// arrives only by library sync. Nothing here reads a workspace on a timer: a
 /// machine that is not connected shows what the library holds, marked offline.
 @MainActor @Observable
-final class CentralExecutionClient {
+final class MemberExecutionClient {
     /// A transport signed with this Mac's member key, or nil when this Mac has
     /// no member identity yet or the workspace's serving member is unknown.
     typealias MakeSignedTransport = @MainActor (ExecutionWorkspace) async throws -> (any ExecutionWorkspaceTransport)?
@@ -54,6 +54,20 @@ final class CentralExecutionClient {
     private(set) var pending: [String: [PendingInteraction]] = [:]
     private(set) var onlineWorkspaces: Set<String> = []
     private(set) var errors: [String: String] = [:]
+
+    /// The command journal's file name in the library's support directory.
+    nonisolated static let commandJournalName = "member-execution-commands.json"
+
+    /// v0.4.2 saved the journal as `central-execution-commands.json`. It moves
+    /// once before the client opens it, so commands awaiting a receipt keep it.
+    nonisolated static func moveLegacyCommandJournal(in directory: URL) throws {
+        let legacy = directory.appending(path: "central-execution-commands.json")
+        let current = directory.appending(path: commandJournalName)
+        let manager = FileManager.default
+        guard manager.fileExists(atPath: legacy.path) else { return }
+        if manager.fileExists(atPath: current.path) { try manager.removeItem(at: legacy) }
+        else { try manager.moveItem(at: legacy, to: current) }
+    }
 
     init(database: WorkspaceDatabase, commandJournalURL: URL,
          makeSignedTransport: @escaping MakeSignedTransport,
@@ -493,7 +507,7 @@ final class LiveWorkspace {
     func releaseAll() { for id in Array(waiters.keys) { release(id) } }
 }
 
-extension CentralExecutionClient {
+extension MemberExecutionClient {
     /// Whether this Mac holds a stream to the workspace.
     func isStreamed(_ workspaceID: String) -> Bool { live[workspaceID] != nil }
 

@@ -63,9 +63,44 @@ struct LibraryHostLifecycleTests {
     }
 
 
+    /// A phone unpairs itself with its signed member request: this Mac
+    /// removes it from the library as Apple Devices does (a signed unpair and
+    /// a member removal both reach the other members). A Mac cannot.
+    @Test func aPhoneMembersSignedUnpairRemovesItFromTheLibrary() async throws {
+        let fixture = try await HostFixture(); defer { fixture.remove() }
+        await fixture.host.startServingLibrary()
+        try await waitUntil { fixture.host.endpoint != nil && !fixture.host.isStarting && fixture.host.status == "Available to your paired devices" }
+        let members = try await fixture.host.peerSync.members()
+        try await members.ensureSelf(name: "Mac", endpoints: [])
+        let phone = MemberIdentity(deviceID: UUID().uuidString.lowercased(), kind: .ios, key: .init())
+        let mac = MemberIdentity(deviceID: UUID().uuidString.lowercased(), kind: .mac, key: .init())
+        _ = try await members.add(deviceID: phone.deviceID, kind: .ios, name: "Phone", publicKey: phone.publicKey, endpoints: [])
+        _ = try await members.add(deviceID: mac.deviceID, kind: .mac, name: "Other Mac", publicKey: mac.publicKey, endpoints: [])
+        let url = try fixture.loopbackURL(path: "v1/pair/unpair")
+        func unpair(_ member: MemberIdentity) async throws -> Int {
+            var request = URLRequest(url: url)
+            request.httpMethod = "POST"; request.httpBody = Data("{}".utf8)
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            request.setValue(String(LibraryProtocol.version), forHTTPHeaderField: "X-Woven-Protocol")
+            for (name, value) in try member.signer.headers(method: "POST", target: url.path, body: Data("{}".utf8), audience: members.identity.deviceID) {
+                request.setValue(value, forHTTPHeaderField: name)
+            }
+            let (_, response) = try await URLSession.shared.data(for: request)
+            return try #require((response as? HTTPURLResponse)?.statusCode)
+        }
+        #expect(try await unpair(mac) == 400)
+        #expect(await members.member(mac.deviceID) != nil)
+        #expect(try await unpair(phone) == 200)
+        #expect(await members.member(phone.deviceID) == nil)
+        #expect(try await members.list().members.contains { $0.deviceID == phone.deviceID && $0.revoked })
+        #expect(try await !fixture.host.peerAuthentication().revocationContext(for: phone.deviceID).isEmpty)
+        // Removed, its signature no longer reaches anything here.
+        #expect(try await unpair(phone) == 401)
+    }
+
     @Test func clickPairingHTTPRequiresLocalApprovalAndReturnsAccurateMetadata() async throws {
         let fixture = try await HostFixture(); defer { fixture.remove() }
-        await fixture.host.startForCentralDatabase()
+        await fixture.host.startServingLibrary()
         // The address is published before the workspace API is ready; wait for both.
         try await waitUntil { fixture.host.endpoint != nil && !fixture.host.isStarting && fixture.host.status == "Available to your paired devices" }
         let target = try #require(fixture.children.last?.target)
@@ -79,7 +114,7 @@ struct LibraryHostLifecycleTests {
         }
         let (advertised, _) = try await URLSession.shared.data(from: base.appending(path: "v1/discovery"))
         let advertisement = try JSONDecoder().decode(DiscoveryAdvertisement.self, from: advertised)
-        #expect(advertisement.role == .central && advertisement.identity.metadata.kind == .mac)
+        #expect(advertisement.identity.metadata.kind == .mac)
         #expect(!String(decoding: advertised, as: UTF8.self).contains("credential"))
         let request = PairingApprovalRequest(requestID: UUID().uuidString.lowercased(), requestSecret: UUID().uuidString + UUID().uuidString,
             identity: .init(deviceID: UUID().uuidString.lowercased(), deviceName: "Peer Mac", metadata: .init(kind: .mac, osVersion: "fixtureOS", appVersion: "fixtureApp")))
@@ -97,28 +132,9 @@ struct LibraryHostLifecycleTests {
         #expect(status == 200 && approved.pairing?.deviceID == request.identity.deviceID)
         #expect(fixture.host.pairedDevices.first?.metadata == request.identity.metadata)
         #expect(fixture.host.pairedDevices.first?.lastSeenAt == nil)
-        let principal = try #require(fixture.host.pairedDevices.first)
-        let workspace = try #require(fixture.host.executionWorkspaces.first { $0.kind == .mac })
-        let direct = try await fixture.host.provisionExecutionWorkspace(id: workspace.id, device: principal)
-        #expect(try await fixture.executionStatus(direct) == 200)
         let (_, cancelled) = try await post("v1/pairing/cancel", JSONEncoder().encode(PairingPoll(requestID: request.requestID, requestSecret: request.requestSecret)))
         #expect(cancelled == 200)
-        #expect(try await fixture.executionStatus(direct) == 401)
         #expect(fixture.host.pairedDevices.isEmpty)
-    }
-
-    @Test func pairingGrantsExecutionWithoutWorkspacePermissionsAndUnpairRevokesIt() async throws {
-        let fixture = try await HostFixture(); defer { fixture.remove() }
-        await fixture.host.start()
-        let credential = try await fixture.pairAndProvision(name: "Fixture Mac")
-        let device = try #require(fixture.host.pairedDevices.first { $0.id == credential.deviceID })
-        let fresh = try await fixture.host.provisionExecutionWorkspace(id: credential.workspace.id, device: device)
-        #expect(try await fixture.executionStatus(fresh) == 200)
-        await fixture.host.revoke(device.id)
-        #expect(try await fixture.executionStatus(fresh) == 401)
-        await #expect(throws: LibraryAPIError.self) {
-            try await fixture.host.provisionExecutionWorkspace(id: credential.workspace.id, device: device)
-        }
     }
 
     private func waitUntil(attempts: Int = 300, _ condition: () -> Bool) async throws {
@@ -158,7 +174,7 @@ private enum HostFixtureError: Error { case timeout }
     /// from the registry id and host device id. A record an earlier build
     /// published without the folder owner gains it on the next refresh, under
     /// the same workspace id, so existing folders are never rewritten.
-    @Test func theCentralMacPublishesTheFolderOwnerItsFoldersUse() async throws {
+    @Test func aMacPublishesTheFolderOwnerItsFoldersUse() async throws {
         let fixture = try await HostFixture(); defer { fixture.remove() }
         await fixture.host.start()
         let database = try #require(fixture.model.libraryStore?.database)
@@ -189,34 +205,6 @@ private enum HostFixtureError: Error { case timeout }
         // claims, legacy and direct execution credentials stay in memory.
         LibraryHostController(model: model, defaults: defaults, supportDirectory: directory, retryInterval: .milliseconds(25),
             peerStorage: storage, makeExposure: { [unowned self] in makeExposure() })
-    }
-    func pairAndProvision(name: String, deviceID: String = UUID().uuidString.lowercased()) async throws -> ExecutionCredential {
-        await host.createPairingCode()
-        let offer = try #require(host.pairingPayload)
-        var request = URLRequest(url: try loopbackURL(path: "v1/pair"))
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = try JSONEncoder().encode(PairRequest(token: offer.token,
-            deviceID: deviceID, deviceName: name))
-        let (bytes, response) = try await URLSession.shared.data(for: request)
-        #expect((response as? HTTPURLResponse)?.statusCode == 200)
-        let paired = try JSONDecoder().decode(PairResponse.self, from: bytes)
-        let device = try #require(host.pairedDevices.first { $0.id == paired.deviceID })
-        let database = try #require(model.libraryStore?.database)
-        let identity = try await database.libraryIdentity()
-        let workspaces = try await database.libraryExecutionWorkspaces()
-        let workspace = try #require(workspaces.first { $0.kind == .mac && $0.ownerDeviceID == identity.hostDeviceID })
-        return try await host.provisionExecutionWorkspace(id: workspace.id, device: device)
-    }
-    func executionStatus(_ credential: ExecutionCredential) async throws -> Int {
-        var request = URLRequest(url: try loopbackURL(path: "v1/execution"))
-        request.setValue("Bearer " + credential.token, forHTTPHeaderField: "Authorization")
-        request.setValue(String(LibraryProtocol.version), forHTTPHeaderField: "X-Woven-Protocol")
-        request.setValue(credential.workspace.libraryID, forHTTPHeaderField: "X-Woven-Library")
-        request.setValue(credential.workspace.id, forHTTPHeaderField: "X-Woven-Workspace")
-        request.setValue(credential.deviceID, forHTTPHeaderField: "X-Woven-Device")
-        let (_, response) = try await URLSession.shared.data(for: request)
-        return try #require((response as? HTTPURLResponse)?.statusCode)
     }
     func libraryStatus(bearer: String) async throws -> Int {
         var request = URLRequest(url: try loopbackURL(path: "v1/snapshot"))
@@ -336,7 +324,7 @@ private enum HostFixtureError: Error { case timeout }
         requested.append(endpoint.absoluteString + " " + path)
         if path == "v1/discovery" && !overHTTP {
             let identity = try #require(fixture.host.peerIdentity)
-            return try JSONEncoder().encode(DiscoveryAdvertisement(role: .central, identity: identity, capabilities: [PairedMacSyncController.capability]))
+            return try JSONEncoder().encode(DiscoveryAdvertisement(identity: identity, capabilities: [PairedMacSyncController.capability]))
         }
         if overHTTP || ["v1/pair/preview", "v1/pair", "v1/pair/confirm"].contains(path) {
             var request = URLRequest(url: try fixture.loopbackURL(path: path))
@@ -365,7 +353,7 @@ private enum HostFixtureError: Error { case timeout }
         let own = try await first.host.peerRoute()
         let authentication = try await second.host.peerAuthentication()
         let offer = try await authentication.createOffer(endpoint: route.endpoint)
-        let response = try await authentication.pair(.init(token: offer.payload.token, deviceID: own.deviceID, deviceName: own.name, metadata: .init(kind: .mac),
+        let response = try await authentication.pairConfirmed(.init(token: offer.payload.token, deviceID: own.deviceID, deviceName: own.name, metadata: .init(kind: .mac),
             purpose: PairingPurpose.peerMac), workspaceID: route.libraryID)
         try await first.host.peerSync.acceptPairing(endpoint: route.endpoint, response: response)
     }
@@ -394,38 +382,28 @@ extension LibraryHostLifecycleTests {
         let phoneID = UUID().uuidString.lowercased()
         let authentication = try await third.host.peerAuthentication()
         let offer = try await authentication.createOffer(endpoint: third.host.peerRoute().endpoint)
-        let phone = try await authentication.pair(.init(token: offer.payload.token, deviceID: phoneID, deviceName: "New iPhone", metadata: .init(kind: .iPhone)), workspaceID: thirdDB.libraryID())
+        let phone = try await authentication.pairConfirmed(.init(token: offer.payload.token, deviceID: phoneID, deviceName: "New iPhone", metadata: .init(kind: .iPhone)), workspaceID: thirdDB.libraryID())
         await air.host.peerSync.synchronize(force: true)
         await third.host.peerSync.synchronize(force: true)
         #expect(try await airDB.libraryNote(id: second)?.title == "Third offline")
         #expect(try await thirdDB.libraryNote(id: first)?.title == "Air offline")
         #expect(try await airDB.read { try !$0.historyRowsUnlocked("SELECT 1 FROM paired_remote_workspaces WHERE id=?", values: [remote.id.uuidString.lowercased()]).isEmpty })
-        // The new phone is listed for display and delegation, but its bearer
-        // authenticates only at the Mac it paired with.
-        #expect(try await air.host.peerAuthentication().rosterName(for: phoneID) == "New iPhone")
+        // The new phone is listed for display, but its bearer authenticates
+        // only at the Mac it paired with.
+        #expect(try await air.host.peerAuthentication().peerMembership().entries.contains { $0.deviceID == phoneID && $0.name == "New iPhone" })
         await #expect(throws: LibraryAPIError.self) { try await air.host.peerAuthentication().authenticate(bearer: phone.credential) }
         #expect(air.host.peerSync.errors.isEmpty && third.host.peerSync.errors.isEmpty)
     }
 
-    @Test func unpairingAMacEndsItsDerivedExecutionAndItsMintedBearersNeverWorkElsewhere() async throws {
+    @Test func bearersAnotherMacHoldsOrMintedNeverWorkHere() async throws {
         let mesh = PeerTestMesh(); defer { mesh.remove() }
         let air = try await mesh.add("revoke-air"), mini = try await mesh.add("revoke-mini"), third = try await mesh.add("revoke-third")
         try await mesh.pair(air, with: mini); try await mesh.pair(third, with: mini)
         for _ in 0..<2 { for fixture in [air, third, mini] { await fixture.host.peerSync.synchronize(force: true) } }
-        let airID = try await air.host.peerRoute().deviceID, miniID = try await mini.host.peerRoute().deviceID
-        let workspace = try #require(air.host.executionWorkspaces.first { $0.ownerDeviceID == airID && $0.kind == .mac })
-        // The Mini obtains the Air's execution access for its own phone directly
-        // from the Air; the Air records the Mini as that grant's provenance.
-        let miniAuth = try await mini.host.peerAuthentication()
-        let phone = try await miniAuth.pair(.init(token: try await miniAuth.createOffer(endpoint: mini.host.peerRoute().endpoint).payload.token,
+        let miniID = try await mini.host.peerRoute().deviceID
+        let miniAuth = try await mini.host.peerAuthentication(), airAuth = try await air.host.peerAuthentication()
+        let phone = try await miniAuth.pairConfirmed(.init(token: try await miniAuth.createOffer(endpoint: mini.host.peerRoute().endpoint).payload.token,
             deviceID: UUID().uuidString.lowercased(), deviceName: "Phone", metadata: .init(kind: .iPhone)), workspaceID: mini.host.peerRoute().libraryID)
-        let execution = try await mini.host.provisionExecutionWorkspace(id: workspace.id, device: miniAuth.authenticate(bearer: phone.credential))
-        #expect(try await air.executionStatus(execution) == 200)
-        // A phone the Air paired itself is unrelated to the Mini.
-        let airAuth = try await air.host.peerAuthentication()
-        let ownPhone = try await airAuth.pair(.init(token: try await airAuth.createOffer(endpoint: air.host.peerRoute().endpoint).payload.token,
-            deviceID: UUID().uuidString.lowercased(), deviceName: "Air phone", metadata: .init(kind: .iPhone)), workspaceID: air.host.peerRoute().libraryID)
-        let ownExecution = try await air.host.provisionExecutionWorkspace(id: workspace.id, device: airAuth.authenticate(bearer: ownPhone.credential))
         // Bearers the Mini holds or minted (its grant at the third Mac, the
         // reciprocal the third Mac minted for it, its phone) never authenticate at the Air.
         let thirdID = try await third.host.peerRoute().deviceID
@@ -438,14 +416,10 @@ extension LibraryHostLifecycleTests {
                 try await mesh.request(air.host.peerRoute().endpoint, path: "v1/peers/files", token: bearer, libraryID: nil, body: JSONEncoder().encode(""))
             }
         }
-        // Unpairing the Mini on the Air revokes everything derived through it.
+        // Membership never carries a bearer.
         await air.host.revoke(miniID)
-        #expect(try await air.executionStatus(execution) == 401)
-        #expect(try await air.executionStatus(ownExecution) == 200)
         let wire = String(decoding: try JSONEncoder().encode(await airAuth.peerMembership()), as: UTF8.self)
-        #expect(!wire.contains(phone.credential) && !wire.contains(execution.token))
-        let withdrawn = try #require(try await mini.model.libraryStore?.database.libraryExecutionWorkspaces().first { $0.id == workspace.id })
-        #expect(withdrawn.endpoint != nil)
+        #expect(!wire.contains(phone.credential) && !wire.contains(minted) && !wire.contains(held))
     }
 }
 
@@ -568,7 +542,7 @@ extension LibraryHostLifecycleTests {
         let airID = try await air.host.peerRoute().deviceID
         let airAuth = try await air.host.peerAuthentication()
         let phoneID = UUID().uuidString.lowercased()
-        let phone = try await airAuth.pair(.init(token: try await airAuth.createOffer(endpoint: air.host.peerRoute().endpoint).payload.token,
+        let phone = try await airAuth.pairConfirmed(.init(token: try await airAuth.createOffer(endpoint: air.host.peerRoute().endpoint).payload.token,
             deviceID: phoneID, deviceName: "Phone", metadata: .init(kind: .iPhone)), workspaceID: air.host.peerRoute().libraryID)
         // The Air restarts and its Keychain refuses the signing key.
         var keychainAvailable = false
@@ -728,7 +702,7 @@ extension LibraryHostLifecycleTests {
         let airID = try await air.host.peerRoute().deviceID
         #expect(try await mini.model.pairedOwnerWorkspace(conversationID: id)?.ownerDeviceID == airID)
         // The owner is unreachable: no transport, so routing fails closed.
-        mini.model.federatedExecutionClient = try CentralExecutionClient(database: miniDB,
+        mini.model.federatedExecutionClient = try MemberExecutionClient(database: miniDB,
             commandJournalURL: mini.directory.appending(path: "route-commands.json"),
             makeSignedTransport: { _ in throw URLError(.notConnectedToInternet) })
         await #expect(throws: (any Error).self) { try await mini.model.mutateConversation(id: id, mutation: .moveToTrash) }
@@ -745,164 +719,3 @@ extension LibraryHostLifecycleTests {
     }
 }
 
-extension LibraryHostLifecycleTests {
-    @Test func aDirectReplacementRetiresDelegatedProvenanceButAFailedOneKeepsIt() async throws {
-        let mesh = PeerTestMesh(); defer { mesh.remove() }
-        let air = try await mesh.add("replace-air"), mini = try await mesh.add("replace-mini")
-        try await mesh.pair(air, with: mini)
-        await air.host.peerSync.synchronize(force: true)
-        let airID = try await air.host.peerRoute().deviceID, miniID = try await mini.host.peerRoute().deviceID
-        let workspace = try #require(air.host.executionWorkspaces.first { $0.ownerDeviceID == airID && $0.kind == .mac })
-        let miniAuth = try await mini.host.peerAuthentication(), airAuth = try await air.host.peerAuthentication()
-        let phoneID = UUID().uuidString.lowercased()
-        let phone = try await miniAuth.pair(.init(token: try await miniAuth.createOffer(endpoint: mini.host.peerRoute().endpoint).payload.token,
-            deviceID: phoneID, deviceName: "Phone", metadata: .init(kind: .iPhone)), workspaceID: mini.host.peerRoute().libraryID)
-        let delegated = try await mini.host.provisionExecutionWorkspace(id: workspace.id, device: miniAuth.authenticate(bearer: phone.credential))
-        #expect(try await air.executionStatus(delegated) == 200)
-        // The phone now pairs with the Air directly.
-        let direct = try await airAuth.pair(.init(token: try await airAuth.createOffer(endpoint: air.host.peerRoute().endpoint).payload.token,
-            deviceID: phoneID, deviceName: "Phone", metadata: .init(kind: .iPhone)), workspaceID: air.host.peerRoute().libraryID)
-        let principal = try await airAuth.authenticate(bearer: direct.credential)
-        // A failed direct replacement (for a workspace that does not exist) keeps the delegated origin.
-        await #expect(throws: (any Error).self) { try await air.host.provisionExecutionWorkspace(id: UUID().uuidString.lowercased(), device: principal) }
-        #expect(await airAuth.delegations(provisionedBy: miniID).map(\.workspaceID) == [workspace.id])
-        // A successful direct replacement rotates the token and retires that origin.
-        let replacement = try await air.host.provisionExecutionWorkspace(id: workspace.id, device: principal)
-        #expect(await airAuth.delegations(provisionedBy: miniID).isEmpty)
-        #expect(try await air.executionStatus(delegated) == 401)
-        // Unpairing the Mini later never touches the Air's own direct grant.
-        await air.host.revoke(miniID)
-        #expect(try await air.executionStatus(replacement) == 200)
-    }
-}
-
-/// A remote workspace that keeps one token per device, as the Linux service
-/// and Mac execution management do; issuance can be suspended or failed.
-@MainActor final class FakeRemoteExecutionWorkspace {
-    var tokens: [String: String] = [:]
-    var removals: [String] = []
-    var suspendNextIssue = false, failNextIssue = false
-    private(set) var suspended = false
-    private var gate: CheckedContinuation<Void, Never>?
-
-    func requests(_ workspace: ExecutionWorkspace) -> LibraryHostController.RemoteExecutionRequests {
-        .init(issue: { [self] _, deviceID in
-            if suspendNextIssue {
-                suspendNextIssue = false
-                await withCheckedContinuation { gate = $0; suspended = true }
-            }
-            if failNextIssue { failNextIssue = false; throw URLError(.notConnectedToInternet) }
-            let token = UUID().uuidString + UUID().uuidString
-            tokens[deviceID] = token
-            return ExecutionCredential(workspace: workspace, deviceID: deviceID, token: token)
-        }, revoke: { [self] _, deviceID in
-            tokens.removeValue(forKey: deviceID); removals.append(deviceID)
-        })
-    }
-    func untilSuspended() async throws {
-        _ = try await pollUntil(attempts: 2_000, interval: .milliseconds(5)) { suspended }
-        try #require(suspended)
-    }
-    func resume() { suspended = false; gate?.resume(); gate = nil }
-}
-
-extension LibraryHostLifecycleTests {
-    /// The Air manages a remote workspace; the Mini's phone holds a grant there
-    /// delegated through the Air, and the phone has also paired with the Air.
-    private func remoteReplacementFixture(_ mesh: PeerTestMesh, _ prefix: String) async throws
-        -> (air: HostFixture, miniID: String, workspaceID: String, phoneID: String, direct: PairedDevice, remote: FakeRemoteExecutionWorkspace) {
-        let air = try await mesh.add(prefix + "-air"), mini = try await mesh.add(prefix + "-mini")
-        try await mesh.pair(air, with: mini)
-        await air.host.peerSync.synchronize(force: true)
-        let airID = try await air.host.peerRoute().deviceID, miniID = try await mini.host.peerRoute().deviceID
-        let database = try #require(air.model.libraryStore?.database)
-        let identity = try await database.libraryIdentity()
-        let workspace = try await database.registerExecutionWorkspace(.init(workspace: .init(
-            id: UUID().uuidString.lowercased(), libraryID: identity.libraryID, ownerDeviceID: airID, kind: .linux,
-            name: "Linux", endpoint: URL(string: "https://linux.fixture.ts.net/wovenmatter"), capabilities: ["execution.v1"])), deviceID: identity.hostDeviceID)
-        let remote = FakeRemoteExecutionWorkspace()
-        air.host.remoteExecutionRequests = remote.requests(workspace)
-        let phoneID = UUID().uuidString.lowercased()
-        let delegated = try await air.host.provisionDelegatedExecution(id: workspace.id, deviceID: phoneID, name: "Phone", provisionedBy: miniID)
-        #expect(remote.tokens[phoneID] == delegated.token)
-        let airAuth = try await air.host.peerAuthentication()
-        #expect(await airAuth.delegations(provisionedBy: miniID).map(\.workspaceID) == [workspace.id])
-        let pairing = try await airAuth.pair(.init(token: try await airAuth.createOffer(endpoint: air.host.peerRoute().endpoint).payload.token,
-            deviceID: phoneID, deviceName: "Phone", metadata: .init(kind: .iPhone)), workspaceID: air.host.peerRoute().libraryID)
-        return (air, miniID, workspace.id, phoneID, try await airAuth.authenticate(bearer: pairing.credential), remote)
-    }
-
-    @Test func aRemoteDirectReplacementSurvivesUnpairingTheDelegatingMacMidFlight() async throws {
-        let mesh = PeerTestMesh(); defer { mesh.remove() }
-        let (air, miniID, workspaceID, phoneID, direct, remote) = try await remoteReplacementFixture(mesh, "race")
-        // The direct replacement drains nothing and suspends at the remote workspace.
-        remote.suspendNextIssue = true
-        let replacement = Task { try await air.host.provisionExecutionWorkspace(id: workspaceID, device: direct) }
-        try await remote.untilSuspended()
-        // The Mini is unpaired meanwhile: its delegated grant's cleanup is queued
-        // and cannot run while the workspace is guarded.
-        await air.host.revoke(miniID)
-        #expect(air.host.snapshot.pendingDeviceRevocations[phoneID] == [workspaceID])
-        #expect(remote.removals.isEmpty)
-        remote.resume()
-        let fresh = try await replacement.value
-        #expect(remote.tokens[phoneID] == fresh.token)
-        // The replacement superseded that cleanup; a later retry never removes it.
-        #expect(air.host.snapshot.pendingDeviceRevocations[phoneID] == nil)
-        await air.host.retryPendingRevocations()
-        #expect(remote.removals.isEmpty && remote.tokens[phoneID] == fresh.token)
-        #expect(try await air.host.peerAuthentication().delegations(provisionedBy: miniID).isEmpty)
-        // Unpairing the Mini again has nothing left to clean up for this phone.
-        await air.host.revoke(miniID)
-        await air.host.retryPendingRevocations()
-        #expect(remote.tokens[phoneID] == fresh.token)
-    }
-
-    @Test func aFailedOrSameOriginRemoteReplacementKeepsTheQueuedCleanup() async throws {
-        let mesh = PeerTestMesh(); defer { mesh.remove() }
-        // A direct replacement that fails leaves the delegated token to be removed.
-        do {
-            let (air, miniID, workspaceID, phoneID, direct, remote) = try await remoteReplacementFixture(mesh, "failed")
-            remote.suspendNextIssue = true; remote.failNextIssue = true
-            let replacement = Task { try await air.host.provisionExecutionWorkspace(id: workspaceID, device: direct) }
-            try await remote.untilSuspended()
-            await air.host.revoke(miniID)
-            remote.resume()
-            await #expect(throws: (any Error).self) { try await replacement.value }
-            #expect(air.host.snapshot.pendingDeviceRevocations[phoneID] == [workspaceID])
-            await air.host.retryPendingRevocations()
-            #expect(remote.removals == [phoneID] && remote.tokens[phoneID] == nil)
-            #expect(air.host.snapshot.pendingDeviceRevocations[phoneID] == nil)
-        }
-        // A replacement from the Mac being unpaired never supersedes its own cleanup.
-        do {
-            let (air, miniID, workspaceID, phoneID, _, remote) = try await remoteReplacementFixture(mesh, "same")
-            remote.suspendNextIssue = true
-            let replacement = Task { try await air.host.provisionDelegatedExecution(id: workspaceID, deviceID: phoneID, name: "Phone", provisionedBy: miniID) }
-            try await remote.untilSuspended()
-            await air.host.revoke(miniID)
-            remote.resume()
-            await #expect(throws: (any Error).self) { try await replacement.value }
-            #expect(remote.tokens[phoneID] != nil)
-            await air.host.retryPendingRevocations()
-            #expect(remote.tokens[phoneID] == nil && remote.removals == [phoneID])
-            #expect(air.host.snapshot.pendingDeviceRevocations[phoneID] == nil)
-        }
-    }
-
-    /// A phone that had the Air's own grant re-pairs with the Mini without the
-    /// Air unpairing it. The Mini still obtains the Air's workspace for it; that
-    /// grant now derives from the Mini and ends with the Mini's unpair.
-    @Test func aPhoneThatMovedToAnotherMacStillReachesTheFormerMacsWorkspace() async throws {
-        let mesh = PeerTestMesh(); defer { mesh.remove() }
-        let (air, miniID, workspaceID, phoneID, direct, remote) = try await remoteReplacementFixture(mesh, "moved")
-        _ = try await air.host.provisionExecutionWorkspace(id: workspaceID, device: direct)
-        #expect(try await air.host.peerAuthentication().delegations(provisionedBy: miniID).isEmpty)
-        let moved = try await air.host.provisionDelegatedExecution(id: workspaceID, deviceID: phoneID, name: "Phone", provisionedBy: miniID)
-        #expect(remote.tokens[phoneID] == moved.token)
-        #expect(try await air.host.peerAuthentication().delegations(provisionedBy: miniID).map(\.workspaceID) == [workspaceID])
-        await air.host.revoke(miniID)
-        await air.host.retryPendingRevocations()
-        #expect(remote.tokens[phoneID] == nil && remote.removals == [phoneID])
-    }
-}

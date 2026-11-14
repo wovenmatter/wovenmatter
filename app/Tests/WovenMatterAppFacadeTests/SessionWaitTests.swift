@@ -8,7 +8,7 @@ import WovenMatterLibraryStore
 /// `woven_sessions_wait` and wake-ups through the Mac's own tool path
 /// (`ApplicationModel+SessionWaits.swift`), against a Linux host that reports
 /// its sessions' state. The destination's `workspace` stream items are handed
-/// to `SessionWakeUps` as `CentralExecutionClient.onWorkspaceItem` hands them.
+/// to `SessionWakeUps` as `MemberExecutionClient.onWorkspaceItem` hands them.
 @Suite("Mac session waits", .serialized) @MainActor
 struct SessionWaitTests {
     @MainActor final class Setup {
@@ -24,7 +24,7 @@ struct SessionWaitTests {
                                    libraryID: identity.libraryID, members: [signer.deviceID: signer.publicKey])
             workspace = try await mac.database.receiveSyncedWorkspace(linux.descriptor)
             let linux = linux
-            mac.model.federatedExecutionClient = try CentralExecutionClient(database: mac.database,
+            mac.model.federatedExecutionClient = try MemberExecutionClient(database: mac.database,
                 commandJournalURL: mac.directory.appending(path: "commands.json"),
                 makeSignedTransport: { workspace in try SignedExecutionWorkspaceTransport(workspace: workspace, signer: signer.signer, audience: linux.memberID, send: linux.send) })
             tools = try #require(mac.model.agentTools)

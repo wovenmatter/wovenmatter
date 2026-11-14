@@ -4,7 +4,7 @@ import WovenMatterCore
 @MainActor
 enum FederationAPI {
   static func handle(_ request: LibraryHTTPRequest, path: String, query: [URLQueryItem], device: PairedDevice,
-                     database: WorkspaceDatabase, commands: any DeviceCommandServing) async throws -> LibraryHTTPResponse {
+                     database: WorkspaceDatabase) async throws -> LibraryHTTPResponse {
     func value(_ key: String) -> String? { query.first(where: { $0.name == key })?.value }
     let parts = path.split(separator: "/").map(String.init)
     func ownsClientWorkspace(_ id: String) async throws -> Bool {
@@ -71,9 +71,6 @@ enum FederationAPI {
               try await ownsClientWorkspace(workspaceID) else { return rejectedRelay() }
         return try .json(try await database.commitLibraryArtifact(commit, deviceID: device.id))
       default: break
-      }
-      if parts.count == 5, parts[2] == "workspaces", parts[4] == "credential" {
-        return try .json(try await commands.provisionExecutionWorkspace(id: parts[3], device: device))
       }
     }
     return .error("not_found", "Unknown library federation endpoint.", status: 404)

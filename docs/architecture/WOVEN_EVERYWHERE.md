@@ -95,9 +95,9 @@ change, change this document in the same commit.
     installs the host, installs it bots-only, or adds the workspace to a
     bots-only host, and again on each launch (`LibraryHostController.setUpLinuxHost`).
     Setup is the adoption above, then, for a host with a workspace, exposing
-    and enrolling it (`provisionCentralExecutionWorkspace`: Tailscale Serve
-    for its execution API, then the grant that registers the row's
-    `endpoint` and `executionDeviceID`). Neither step waits for the other or
+    and enrolling it (Tailscale Serve for its execution API, then
+    `POST /v1/execution/devices`, which registers the row's `endpoint` and
+    `executionDeviceID`). Neither step waits for the other or
     for an earlier enrollment. A step that fails (the host's library still
     starting, the host offline) is retried after 5 seconds, doubling to at
     most 10 minutes, until both succeed; a bots-only host is only adopted.
@@ -208,8 +208,8 @@ change, change this document in the same commit.
   Mac endpoint (`https://<mac>.<tailnet>.ts.net:<port>/wovenmatter`, no
   trailing slash) signs `/wovenmatter/…` and a Linux execution endpoint
   (`…/wovenmatter-execution/<id>/`) signs its full path. The Mac app's
-  `SignedExecutionWorkspaceTransport` replaces execution grants for every
-  other Mac and Linux workspace with a known `executionDeviceID`; a signed
+  `SignedExecutionWorkspaceTransport` signs every request to another Mac or
+  Linux workspace with a known `executionDeviceID`; a signed
   refusal is final ("does not recognize this Mac yet" until the member lists
   synchronize). Nothing is provisioned or saved: a workspace this Mac cannot
   sign for (its serving member is unknown) is not reachable yet.
@@ -290,7 +290,8 @@ change, change this document in the same commit.
     bearer: none of these is a call between members.
   - The phone's pairing credential, which confirms (`POST /v1/pair/confirm`)
     and ends (`/v1/pair/unpair`) a pairing. Every other request the phone
-    makes is signed.
+    makes is signed. Unpairing on the phone sends a signed `/v1/pair/unpair`
+    to a Mac, which removes the phone as Apple Devices' Unpair device does.
 
 ### Trust model
 
@@ -781,7 +782,7 @@ hands them to the macOS job, which checks them with
   `WovenMCPTests` checks that they agree). On a Mac,
   `WorkspaceToolHandlers.memberSession` sends a call for a remembered or named
   member session to `ApplicationModel+MemberSessions.swift`, which signs it
-  through `CentralExecutionClient` (`SignedExecutionWorkspaceTransport`); a
+  through this Mac's member execution client (`SignedExecutionWorkspaceTransport`); a
   session on that Mac stays local; a Linux host's sessions, the adding Mac's
   included, are reached with signed calls to that host. Each is one or more signed calls to the destination's
   execution API (`GET v1/execution/conversations`, `…/conversations/<id>/transcript`,
@@ -849,14 +850,14 @@ hands them to the macOS job, which checks them with
   connections; their synced Quick Chat history and folders stay listed.
 - **Order and names.** Quick Chat comes first, then the library host, the
   other Macs and the Linux workspaces, each listed once under its registry
-  name with its own agents (`AgentGroup.list`). Every Mac that hosts
-  a library advertises `history.central.v1`, so the central agent list
-  ("This Mac", from `GET /v1/providers`) belongs only to the registry row of the
-  library host the phone syncs with, matched by its device ID
-  (`MobileModel.centralExecutionWorkspace`); any other Mac lists its own
-  agents from its own endpoint. A library host's agent that its central list
-  reports as not ready is offered through its own endpoint when that reports
-  it ready.
+  name with its own agents (`AgentGroup.list`). Every Mac member advertises
+  `history.library.v1` (it serves its own sessions' history from the library
+  change feed), so the host route's agent list ("This Mac", from
+  `GET /v1/providers` on the mobile API) belongs only to the registry row of
+  the library host the phone currently syncs with, matched by its device ID;
+  any other Mac lists its own agents from its own endpoint. A library host's
+  agent that the host route reports as not ready is offered through its own
+  endpoint when that reports it ready.
 - **Agent freshness.** The phone asks the library host for its agent list on
   the first refresh after launch, after a failed refresh (reconnect), when it
   becomes active or the network returns, when the library host changes, when
@@ -865,7 +866,7 @@ hands them to the macOS job, which checks them with
   Chat refreshes every workspace at once. The saved agent catalog only fills
   the lists until those answers arrive; a deleted workspace's saved list is
   dropped.
-- **Sending.** A message to a Mac or Linux session (direct or central) shows in
+- **Sending.** A message to a Mac or Linux session (direct or through the host route) shows in
   the chat immediately (`PendingSend`), the composer clears, and a
   quiet caption says "Sending to <workspace>…" until the workspace accepts it,
   then "Starting on <workspace>…" until its transcript shows the message and
@@ -927,8 +928,9 @@ hands them to the macOS job, which checks them with
   offers this phone's own records again (the host keeps those it has);
   dictation and artifact cursors restart. The phone's device workspace is
   re-registered in the new host's library at that host's revision.
-- **Sessions.** "Central" means the library host the phone is syncing with;
-  its own sessions use the mobile API, and every other workspace with an
+- **Sessions.** The host route is the library host the phone is syncing with
+  now (it changes when the phone fails over): that host's own sessions use the
+  mobile API, and every other workspace with an
   endpoint (each Mac's own and each Linux workspace) gets a signed direct
   client. No execution grant is issued, stored or presented.
 - **Inference.** A Mac's inference host (`/v1/inference/catalog`,
@@ -1254,16 +1256,16 @@ normal, `1001` server stopping or sleeping, `1009` client frame over 1 MiB,
   foreground: `workspace` on each, `conversation` only for the open chat. It
   closes cleanly when the app goes to the background and resumes on return.
   Nothing is live while the app is in the background. The library host's
-  stream also carries the central route (its own sessions, unassigned in its
+  stream also carries the host route (its own sessions, unassigned in its
   library): its `conversations` summaries keep the library's identity,
-  `pending` is the central questions and approvals, and `conversation` follows
-  an open central chat. The phone reads no central transcript, questions,
-  capabilities or session settings over HTTP; central commands stay on the
-  mobile API's `POST v1/commands`. A chat whose subscription the server ends
+  `pending` is the host route's questions and approvals, and `conversation`
+  follows an open chat on that route. The phone reads no transcript,
+  questions, capabilities or session settings of the host route over HTTP;
+  its commands stay on the mobile API's `POST v1/commands`. A chat whose subscription the server ends
   is read once and not resubscribed on that connection. A `workspace`
   subscription the server ends for good is not asked for again on that
   connection either; the next connection subscribes again, and meanwhile the
-  workspace counts as not streamed. Lost central replies
+  workspace counts as not streamed. Lost host-route replies
   are resolved by receipt once per connection to the host. An expanded
   activity is read once from its owner's details route; a journaled summary
   is used only when it is complete. While the stream of the library host it
@@ -1276,13 +1278,13 @@ normal, `1001` server stopping or sleeping, `1009` client frame over 1 MiB,
   A route counts as streamed only while its stream is connected and serves
   `workspace`, not because the workspace advertises `stream.v1`. For a route
   without one (no `stream.v1`, the stream down or ended), the same 15 s
-  foreground tick reads the live view the phone shows: the central questions
-  and the open central chat over the mobile API while the library host's
+  foreground tick reads the live view the phone shows: the host route's
+  questions and its open chat over the mobile API while the library host's
   stream is not connected, and the open chat of another workspace with its
   questions over that workspace's signed HTTP routes. It reads nothing for a
   route whose stream is connected, and runs no timer when every shown view
-  streams. When the host's stream stops, its copy of the central questions
-  is dropped for the one read.
+  streams. When the host's stream stops, its copy of the host route's
+  questions is dropped for the one read.
 
 ### Agent to agent
 
@@ -1326,7 +1328,7 @@ normal, `1001` server stopping or sleeping, `1009` client frame over 1 MiB,
   stream and filtered on the caller's side to those sessions; its own
   workspace's sessions come from in-process changes. A Linux host answers its
   scheduled tasks' waits itself; a Mac watches through its
-  `CentralExecutionClient` streams and stores watches and pending wake-ups
+  member execution client's streams and stores watches and pending wake-ups
   unsynchronized in its library (`member_session_watch`,
   `member_session_wakeups`, `member_session_wakeup_counts`).
 

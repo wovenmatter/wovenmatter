@@ -40,10 +40,6 @@ final class DeviceCommandService: DeviceCommandServing {
         }
     }
 
-    func provisionExecutionWorkspace(id: String, device: PairedDevice) async throws -> ExecutionCredential {
-        try await model.libraryHost.provisionExecutionWorkspace(id: id, device: device)
-    }
-
     func providers() -> [HarnessCapabilities] {
         let catalog = (try? HarnessCatalog.loadBundled().harnesses) ?? []
         func provider(_ runtime: AgentRuntimeKind, id: String, name: String, route: String, available: Bool) -> HarnessCapabilities {

@@ -23,16 +23,16 @@ struct CalendarReplicaTests {
     let identity = try await database.libraryIdentity()
     let workspace = try await database.registerExecutionWorkspace(.init(workspace: .init(
       id: UUID().uuidString.lowercased(), libraryID: identity.libraryID, ownerDeviceID: identity.hostDeviceID,
-      kind: .mac, name: "Central Mac", executionDeviceID: identity.hostDeviceID)), deviceID: identity.hostDeviceID)
+      kind: .mac, name: "Studio Mac", executionDeviceID: identity.hostDeviceID)), deviceID: identity.hostDeviceID)
     var request = mutation()
-    request.record.event.draft.task = .init(prompt: "Shared central task")
+    request.record.event.draft.task = .init(prompt: "Shared library task")
     #expect(try await database.libraryCalendarMutate(request, deviceID: device).status == .accepted)
     #expect(try await database.libraryIdentity() == identity)
     #expect(try await database.libraryExecutionWorkspaces() == [workspace])
     #expect(try await database.libraryCalendarSnapshot().records.count == 1)
   }
 
-  @Test func centralRunnerCannotClaimClientOwnedTasksAndRunReceiptsRemainOwned() async throws {
+  @Test func aMacCannotClaimAnotherDevicesTasksAndRunReceiptsRemainOwned() async throws {
     let (database, persistence) = try await fixture(); defer { persistence.remove() }
     var request = mutation(owner: true); request.record.event.draft.task?.enabledTools = ["wovenmatter_calendar"]
     let receipt = try await database.libraryCalendarMutate(request, deviceID: device)

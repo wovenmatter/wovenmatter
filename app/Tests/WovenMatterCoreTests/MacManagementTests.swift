@@ -62,7 +62,7 @@ struct MacManagementTests {
             return Data(#"{"BackendState":"Running","Peer":{}}"#.utf8)
         })
         await #expect(throws: (any Error).self) {
-            try await manager.requestPairing(mini, connection: .init(alias: "mini"), central: URL(string: "https://air.tail.ts.net:8443/wovenmatter")!)
+            try await manager.requestPairing(mini, connection: .init(alias: "mini"), endpoint: URL(string: "https://air.tail.ts.net:8443/wovenmatter")!)
         }
         #expect(await calls.items == ["tailscale"])
     }

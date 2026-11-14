@@ -110,7 +110,7 @@ struct NotePane: View {
         Button { conflictsPresented = true } label: { Label("Review saved conflict", systemImage: "doc.on.doc").font(.caption).frame(maxWidth: .infinity, alignment: .leading).padding(12).background(theme.palette.themeWhisper) }.padding(.horizontal, 20)
       }
       if model.state.uncachedNoteIDs.contains(note.id) {
-        ContentUnavailableView("Not saved on this device", systemImage: "icloud.and.arrow.down", description: Text("Download this document from the central library."))
+        ContentUnavailableView("Not saved on this device", systemImage: "icloud.and.arrow.down", description: Text("Download this document from your library."))
         if model.online { Button("Download document") { Task { await model.openNote(note.id) } }.buttonStyle(WovenPrimaryButtonStyle()).padding() }
       } else if let document {
         if document.kind == .html {

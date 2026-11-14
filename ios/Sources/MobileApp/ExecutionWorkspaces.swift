@@ -220,7 +220,7 @@ extension MobileModel {
   /// the library host and every reachable workspace for their agents again.
   func refreshAgentAvailability() async {
     guard !fixture else { return }
-    centralProvidersRefreshDue = true
+    hostProvidersRefreshDue = true
     if engine != nil { await refresh() }
     await refreshExecutionWorkspaces(force: true)
     for id in workspaceStreams.keys where workspaceReachable[id] == true { await refreshStreamedWorkspace(id) }
@@ -244,7 +244,7 @@ extension MobileModel {
   }
   /// A message file of a session another machine runs, for Quick Look: read
   /// from that workspace (`GET v1/execution/attachments/<sha256>`, the library
-  /// host for a central chat), checked against its digest and kept on this
+  /// host for a host chat), checked against its digest and kept on this
   /// iPhone under the name it was sent with. A file read once opens offline.
   func attachmentURL(_ reference: LibraryAttachmentReference, conversationID: String) async throws -> URL {
     guard reference.isReadable else { throw MobileConnectionError.http(404, "This file was not saved with its message.") }
@@ -252,7 +252,7 @@ extension MobileModel {
     let target = directory.appendingPathComponent(Self.attachmentFileName(reference.name))
     if FileManager.default.fileExists(atPath: target.path) { return target }
     let route = executionRoute(for: conversationID)
-    let workspaceID = route == "central" ? centralExecutionWorkspace?.id : route
+    let workspaceID = route == "host" ? hostExecutionWorkspace?.id : route
     guard let workspaceID, workspaceID != "local", let client = workspaceClients[workspaceID] else {
       throw MobileConnectionError.http(503, "Connect to the workspace that holds this file to open it.")
     }

@@ -143,9 +143,8 @@ final class PairedMacSyncController {
         }
         if librarySync == nil {
             let version = (Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String) ?? "development"
-            // The bearer-era roster (phone names for delegation, Mac
-            // introductions and signed unpairs) still rides along each
-            // exchange until phones pair as members.
+            // The paired-Mac roster (Mac introductions, signed unpairs and
+            // phone names for display) rides along each exchange.
             let attachments = LibraryPeerSync.Attachments(outgoing: { _ in
                 try? JSONEncoder().encode(await authentication.peerMembership())
             }, incoming: { [weak self] data, peer in
@@ -396,22 +395,6 @@ final class PairedMacSyncController {
                 return .error("unavailable", "This Mac is not ready to synchronize.", status: 503)
             }
             let authentication = try await host.peerAuthentication()
-            if path == "/v1/peers/proof", request.method == "POST", request.body.count <= 4096 {
-                let challenge = try JSONDecoder().decode(PairedMacProofChallenge.self, from: request.body)
-                return try .json(try await authentication.peerProof(challenge, route: host.peerRoute(), own: identity()))
-            }
-            // Learned-peer handshake: unauthenticated by bearer, authenticated by
-            // a one-use challenge and the requester's pinned key.
-            if path == "/v1/peers/challenge", request.method == "POST", request.body.count <= 4096 {
-                let challengeRequest = try JSONDecoder().decode(PairedMacChallengeRequest.self, from: request.body)
-                return try .json(try await authentication.issueChallenge(challengeRequest, route: host.peerRoute(), own: identity()))
-            }
-            if path == "/v1/peers/handshake", request.method == "POST", request.body.count <= 4096 {
-                let handshake = try JSONDecoder().decode(PairedMacHandshake.self, from: request.body)
-                let grant = try await authentication.completeHandshake(handshake, own: identity())
-                nextAttempt[handshake.request.requesterDeviceID] = .distantPast
-                return try .json(grant)
-            }
             guard let bearer = request.bearer else { return .error("unauthorized", "Pair this Mac before synchronizing.", status: 401) }
             let principal = try await authentication.authenticate(bearer: bearer)
             guard !principal.isDevelopment else { return .error("wrong_device", "Only paired Macs may exchange full libraries.", status: 403) }
@@ -454,22 +437,6 @@ final class PairedMacSyncController {
             guard await authentication.isAuthorizedPeer(principal) else {
                 return .error("wrong_device", "Only admitted paired Macs may exchange full libraries. Pair this Mac again.", status: 403)
             }
-            if path == "/v1/peers/credential", request.method == "POST", request.body.count <= 4096 {
-                let enrollment = try JSONDecoder().decode(PairedWorkspaceEnrollment.self, from: request.body)
-                // Any Mac enrolls a device for any workspace it knows: Linux hosts
-                // issue grants to every Mac member, and a Mac issues its own.
-                guard try await database.libraryExecutionWorkspaces().contains(where: { $0.id == enrollment.workspaceID && !$0.deleted && $0.kind != .ios }) else {
-                    return .error("unknown_workspace", "This Mac does not know that workspace yet.", status: 404)
-                }
-                // A Mac enrolls itself directly. It may also enroll one of its own
-                // mobile devices; that grant records the Mac as its provenance.
-                if enrollment.deviceID == principal.id {
-                    return try .json(try await host.provisionExecutionWorkspace(id: enrollment.workspaceID, device: principal))
-                }
-                let name = await authentication.rosterName(for: enrollment.deviceID) ?? "Device"
-                return try .json(try await host.provisionDelegatedExecution(id: enrollment.workspaceID, deviceID: enrollment.deviceID,
-                    name: name, provisionedBy: principal.id))
-            }
             if path == "/v1/peers/usage", request.method == "POST", request.body.count <= 4096 {
                 guard let model = host.model else {
                     return .error("unavailable", "This Mac is not ready to synchronize.", status: 503)
@@ -496,37 +463,6 @@ final class PairedMacSyncController {
             errors.removeValue(forKey: "pending")
         } catch { errors["pending"] = error.localizedDescription }
         await refreshSyncStatus()
-    }
-
-    /// Execution access comes directly from the Mac that manages the
-    /// workspace, authenticated with this Mac's own target-local grant there.
-    func provision(workspace: ExecutionWorkspace, deviceID: String) async throws -> ExecutionCredential {
-        guard let host, let database = host.model?.libraryStore?.database,
-              let route = try await database.pairedMacRoutes().first(where: { $0.deviceID == workspace.ownerDeviceID }) else {
-            throw LibraryAPIError(code: "peer_unavailable", message: "Reconnect the Mac that added this workspace to finish device enrollment.")
-        }
-        let authentication = try await host.peerAuthentication(), identity = try await identity()
-        guard await authentication.isActiveMac(route.deviceID), let pin = await authentication.pin(for: route.deviceID), pin.libraryID == route.libraryID else {
-            throw LibraryAPIError(code: "peer_unavailable", message: "Pair with the Mac that added this workspace again to finish device enrollment.")
-        }
-        var credential = try loadCredentials().first(where: { $0.route.deviceID == route.deviceID && $0.deviceID == identity.deviceID && $0.isCompleted })
-        if credential == nil {
-            let grant = try await network.handshake(route, own: identity, pin: pin, operationID: UUID().uuidString.lowercased())
-            let issued = PairedMacCredential(route: grant.route, deviceID: identity.deviceID, token: grant.token)
-            var credentials = try loadCredentials()
-            credentials.removeAll { $0.route.deviceID == route.deviceID && $0.isCompleted }
-            credentials.append(issued); try saveCredentials(credentials)
-            credential = issued
-        }
-        guard let credential else { throw CancellationError() }
-        try await network.verify(route, deviceID: identity.deviceID, token: credential.token, pin: pin)
-        let result: ExecutionCredential = try await network.request(route.endpoint, path: "v1/peers/credential", token: credential.token,
-            body: JSONEncoder().encode(PairedWorkspaceEnrollment(workspaceID: workspace.id, deviceID: deviceID)))
-        guard result.workspace.id == workspace.id, result.workspace.ownerDeviceID == workspace.ownerDeviceID,
-              result.workspace.libraryID == workspace.libraryID, result.deviceID == deviceID else {
-            throw LibraryAPIError(code: "wrong_workspace", message: "The workspace returned a different execution identity.")
-        }
-        return result
     }
 
     func revoke(_ deviceID: String) throws {

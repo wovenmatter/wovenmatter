@@ -3,7 +3,7 @@ import LibraryClient
 import WovenMatterShared
 @testable import WovenMatterMobileApp
 
-/// The library host's mobile API (`POST v1/commands`), recording every central command.
+/// The library host's mobile API (`POST v1/commands`), recording every host route command.
 private actor HostLibrary: OfflineLibraryTransport {
   private(set) var commands: [LibraryCommand] = []
   func workspaceIdentity() async throws -> String { "library-a" }
@@ -131,7 +131,7 @@ final class LibraryHostCommandTests: XCTestCase {
   private let productionDevice = "c0000000-0000-4000-8000-00000000000c"
   private let olderDevice = "d0000000-0000-4000-8000-00000000000d"
   private let miniDevice = "b0000000-0000-4000-8000-00000000000b"
-  private let streamed = ["execution.v1", "history.central.v1", "inference.v1", StreamProtocol.capability]
+  private let streamed = ["execution.v1", "history.library.v1", "inference.v1", StreamProtocol.capability]
 
   private struct Fixture {
     let model: MobileModel
@@ -159,7 +159,7 @@ final class LibraryHostCommandTests: XCTestCase {
     let copied = ExecutionWorkspace(id: "33333333-3333-4333-8333-333333333333", libraryID: "library-a", ownerDeviceID: productionDevice, kind: .mac,
       name: "Studio", capabilities: streamed, executionDeviceID: productionDevice, retainedHistory: true)
     let older = ExecutionWorkspace(id: "44444444-4444-4444-8444-444444444444", libraryID: "library-a", ownerDeviceID: olderDevice, kind: .mac,
-      name: "Studio", capabilities: ["execution.v1", "history.central.v1"], executionDeviceID: olderDevice, retainedHistory: true)
+      name: "Studio", capabilities: ["execution.v1", "history.library.v1"], executionDeviceID: olderDevice, retainedHistory: true)
     let dev = ExecutionWorkspace(id: "11111111-1111-4111-8111-111111111111", libraryID: "library-a", ownerDeviceID: hostDevice, kind: .mac,
       name: "Studio (Dev)", endpoint: devEndpoint, capabilities: streamed, executionDeviceID: hostDevice, developmentInstance: "snapshot")
     // Another Mac keeps its own library namespace.
@@ -198,24 +198,24 @@ final class LibraryHostCommandTests: XCTestCase {
     }
   }
 
-  /// Codex under the library host's own workspace is the central route: the
+  /// Codex under the library host's own workspace is the host route: the
   /// live row, never a copy. The chat is created and used through the mobile
   /// API (`POST v1/commands`), and nothing reaches the host's stream.
   @MainActor func testChatOnTheLibraryHostUsesTheMobileAPI() async throws {
     let fixture = try await makeFixture(); let model = fixture.model
     defer { try? FileManager.default.removeItem(at: fixture.root); model.closeWorkspaceStreams() }
     await connect(fixture)
-    XCTAssertEqual(model.centralExecutionWorkspace?.id, fixture.dev.id, "The live row, not a copied one, is the library host")
-    XCTAssertTrue(model.streamsCentral)
-    XCTAssertEqual(model.launcherGroups.map(\.id), ["local", "central", fixture.mini.id], "Copied rows are never listed")
-    let central = try XCTUnwrap(model.launcherGroups.first { $0.id == "central" })
-    XCTAssertEqual(central.workspace?.id, fixture.dev.id)
-    let codex = try XCTUnwrap(central.agents.first { $0.providerID == "local:codex" })
+    XCTAssertEqual(model.hostExecutionWorkspace?.id, fixture.dev.id, "The live row, not a copied one, is the library host")
+    XCTAssertTrue(model.streamsHostRoute)
+    XCTAssertEqual(model.launcherGroups.map(\.id), ["local", "host", fixture.mini.id], "Copied rows are never listed")
+    let hostGroup = try XCTUnwrap(model.launcherGroups.first { $0.id == "host" })
+    XCTAssertEqual(hostGroup.workspace?.id, fixture.dev.id)
+    let codex = try XCTUnwrap(hostGroup.agents.first { $0.providerID == "local:codex" })
 
     await model.launchAgent(codex)
     XCTAssertNil(model.chatSetupProblem); XCTAssertNil(model.errorMessage)
     let id = try XCTUnwrap(model.selectedConversationID)
-    XCTAssertEqual(model.selectedExecutionWorkspaceID, "central")
+    XCTAssertEqual(model.selectedExecutionWorkspaceID, "host")
     model.composer = "Plan the release"
     await model.send()
     XCTAssertNil(model.errorMessage)
@@ -224,10 +224,10 @@ final class LibraryHostCommandTests: XCTestCase {
     XCTAssertEqual(sent.map(\.kind), [.createSession, .send])
     XCTAssertTrue(sent.allSatisfy { $0.conversationID == id && $0.deviceID == model.state.deviceID && $0.workspaceID == nil })
     let streamed = await fixture.devServer.commands()
-    XCTAssertTrue(streamed.isEmpty, "Central commands stay on the mobile API: \(streamed.map(\.kind))")
+    XCTAssertTrue(streamed.isEmpty, "Host route commands stay on the mobile API: \(streamed.map(\.kind))")
     XCTAssertFalse(fixture.http.paths.contains { $0.contains("/v1/execution/commands") })
 
-    // The next message, stopping and the composer's route stay central too.
+    // The next message, stopping and the composer's route stay on the host route too.
     model.composer = "And the changelog"
     await model.send()
     XCTAssertNil(model.errorMessage)
@@ -263,15 +263,15 @@ final class LibraryHostCommandTests: XCTestCase {
       XCTAssertEqual(command.libraryID, fixture.mini.libraryID, "The Mac's own library, not the phone's")
       XCTAssertEqual(command.workspaceID, fixture.mini.id)
     }
-    let central = await fixture.library.commands
-    XCTAssertTrue(central.isEmpty)
+    let hostCommands = await fixture.library.commands
+    XCTAssertTrue(hostCommands.isEmpty)
     let host = await fixture.devServer.commands()
     XCTAssertTrue(host.isEmpty)
   }
 
-  /// While the library is unreachable, a central chat may fall back to the
+  /// While the library is unreachable, a host chat may fall back to the
   /// host's own workspace route; that also takes the host's identity.
-  @MainActor func testCentralChatFallbackToTheHostWorkspaceCarriesItsIdentity() async throws {
+  @MainActor func testHostChatFallbackToTheHostWorkspaceCarriesItsIdentity() async throws {
     let fixture = try await makeFixture(); let model = fixture.model
     defer { try? FileManager.default.removeItem(at: fixture.root); model.closeWorkspaceStreams() }
     await connect(fixture)
@@ -279,7 +279,7 @@ final class LibraryHostCommandTests: XCTestCase {
     model.state.conversations[id] = .init(id: id, title: "Release plan", providerID: "local:codex", runtimeKind: "codex")
     model.online = false
     await model.selectConversation(id)
-    XCTAssertEqual(model.executionOwner(of: id), "central")
+    XCTAssertEqual(model.executionOwner(of: id), "host")
     XCTAssertEqual(model.selectedExecutionWorkspaceID, fixture.dev.id, "The host's own workspace, never a copied row")
     model.composer = "Still there?"
     await model.send()

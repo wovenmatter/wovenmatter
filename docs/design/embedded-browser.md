@@ -120,7 +120,7 @@ all proprietary Chrome services, codecs, or DRM. Sources:
 
 - Core tests cover tab limits/selection, hidden-pane retention, address handling,
   and snapshot transport. Credential tests cover persistence, origin isolation,
-  failed writes, and centralized prompt policy using fake Keychain operations.
+  failed writes, and the app-wide prompt policy using fake Keychain operations.
 - Native lifecycle fixtures cover retained owners, unload cancellation, restart
   recovery, and deferred shutdown without loading CEF or accessing Keychain.
   The normal build validates the actual framework/helper bundles and signatures.

@@ -798,12 +798,11 @@ private final class StreamMac: @unchecked Sendable {
     registry = MemberSocketRegistry(members: directory)
     descriptor = ExecutionWorkspace(id: UUID().uuidString.lowercased(), libraryID: identity.libraryID, ownerDeviceID: hostID, kind: .mac,
       name: "This Mac", endpoint: URL(string: "https://mac.fixture.ts.net:8443/wovenmatter")!,
-      capabilities: ["execution.v1", "history.central.v1", StreamProtocol.capability], executionDeviceID: hostID)
+      capabilities: ["execution.v1", "history.library.v1", StreamProtocol.capability], executionDeviceID: hostID)
     let database = database, descriptor = descriptor, directory = directory
-    let authentication = try ExecutionAuthentication(fileURL: fixture.directory.appending(path: "execution-grants.json"))
     let pair = await MainActor.run {
       let commands = StreamCommands(database: database)
-      return (commands, MacExecutionAPI(database: database, commands: commands, authentication: authentication,
+      return (commands, MacExecutionAPI(database: database, commands: commands,
                                         descriptor: descriptor, isActive: { true }, members: directory))
     }
     commands = pair.0; api = pair.1

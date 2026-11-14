@@ -63,19 +63,6 @@ public struct RemoteHostAdministrationClient: Sendable {
         try await client.request("v1/host/members/adopt", method: "POST", body: adoption)
     }
 
-    /// A device grant issued by the host itself (Mac members administer every
-    /// Linux host), for a phone that has no member key yet.
-    public func provisionExecutionDevice(workspace: ExecutionWorkspace, deviceID: String, name: String,
-                                         scopes: [String] = ["execution", "inference"]) async throws -> ExecutionCredential {
-        struct Payload: Encodable {
-            let libraryID: String; let workspaceID: String; let ownerDeviceID: String
-            let deviceID: String; let name: String; let workspaceName: String; let endpoint: URL?; let scopes: [String]
-        }
-        return try await client.request("v1/execution/devices", method: "POST", body: JSONEncoder().encode(Payload(
-            libraryID: workspace.libraryID, workspaceID: workspace.id, ownerDeviceID: workspace.ownerDeviceID, deviceID: deviceID,
-            name: name, workspaceName: workspace.name, endpoint: workspace.endpoint, scopes: scopes)))
-    }
-
     /// The bundle a signed update uploads, built from this Mac's own app as an
     /// SSH install would, and its deployment fingerprint.
     public static func hostBundle(root: URL? = nil) throws -> (bundle: Data, fingerprint: String) {

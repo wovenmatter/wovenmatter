@@ -60,7 +60,7 @@ final class MemberReachTests: XCTestCase {
   }
 
   /// An expanded row reads its activity once from the owner's details route,
-  /// with free-form activity and run IDs in the query; a central chat's from
+  /// with free-form activity and run IDs in the query; a host chat's from
   /// the library host's. An owner without the route falls back to its transcript.
   func testExpandedActivitiesReadTheDetailsRouteOnce() async throws {
     let identity = try MobileMemberKeyVault.loadOrCreate(deviceID: phoneID, storage: .memory())
@@ -83,8 +83,8 @@ final class MemberReachTests: XCTestCase {
 
     let library = try HTTPSLibraryTransport(host: URL(string: "https://studio.tail1.ts.net/wovenmatter")!, hostDeviceID: mac, identity: identity, performer: http)
     let store = try MobileStore(file: FileManager.default.temporaryDirectory.appending(path: UUID().uuidString).appending(path: "store.json"))
-    let central = try await MobileSyncEngine(store: store, transport: library).transcriptActivityDetail(conversation, runID: "run 1", activityID: "tool/1 #a")
-    XCTAssertEqual(central, full)
+    let viaHost = try await MobileSyncEngine(store: store, transport: library).transcriptActivityDetail(conversation, runID: "run 1", activityID: "tool/1 #a")
+    XCTAssertEqual(viaHost, full)
     XCTAssertEqual(http.requests.last?.url?.path, "/wovenmatter/v1/sessions/\(conversation)/activity")
     XCTAssertEqual(http.requests.count, 2, "One read per expansion; no transcript read when the route answers")
   }

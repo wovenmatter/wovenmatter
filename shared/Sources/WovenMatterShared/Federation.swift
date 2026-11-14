@@ -41,7 +41,7 @@ public struct ExecutionWorkspace: Codable, Equatable, Identifiable, Sendable {
   /// A Mac's one-time access setup status (Keychain and macOS privacy permissions).
   public var macAccess: MacAccessStatus?
   /// The owner a Mac writes into its folders' execution bindings
-  /// (`device:<id>`). The central Mac's registry id is a separate random value,
+  /// (`device:<id>`). A Mac's registry id is a separate random value,
   /// so devices group its folders through this. Display grouping only.
   public var folderOwnerID: String?
   public var isVisibleInConnections: Bool {
@@ -141,7 +141,7 @@ public struct ExecutionJournalBatchResult: Codable, Equatable, Sendable {
 }
 public struct ExecutionJournalPage: Codable, Equatable, Sendable {
   public var libraryID: String
-  /// Central-library cursor; unrelated to any workspace's originSequence.
+  /// The serving member's library cursor; unrelated to any workspace's originSequence.
   public var cursor: Int64
   public var entries: [ExecutionJournalEntry]
   public var hasMore: Bool
@@ -195,7 +195,8 @@ public struct LibraryArtifactCommit: Codable, Equatable, Sendable {
   public init(id: String, revision: Int64) { self.id = id; self.revision = revision }
 }
 
-/// A device-scoped bearer returned only by authenticated central provisioning.
+/// A Linux host's enrolment reply to the Mac that added it: the registered
+/// workspace (endpoint and execution device ID) and a device-scoped bearer.
 public struct ExecutionCredential: Codable, Equatable, Sendable {
   public var workspace: ExecutionWorkspace
   public var deviceID: String
@@ -224,7 +225,7 @@ public struct NativeRecordPart: Codable, Equatable, Sendable {
   }
 }
 
-/// An idle existing native session transferred by its trusted central manager.
+/// An idle existing native session moved by the Mac that ran it to a Linux host it added.
 /// Sending this value must never replay its historical user messages.
 public struct ExecutionAdoption: Codable, Equatable, Sendable {
   public var workspaceID: String

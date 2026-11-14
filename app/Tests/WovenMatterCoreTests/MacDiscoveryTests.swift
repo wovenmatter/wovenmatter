@@ -10,10 +10,10 @@ struct MacDiscoveryTests {
         let discovery = MacDiscovery(status: { input }, probe: { endpoint in
             await recorder.record(endpoint)
             switch endpoint.port {
-            case 8443: return .init(role: .central, identity: .init(deviceID: "bad-id", deviceName: "Bad", metadata: .init(kind: .mac)))
-            case 10_000: return .init(role: .client, identity: .init(deviceID: UUID().uuidString, deviceName: "Bad\nName", metadata: .init(kind: .mac)))
-            case 8444: return .init(role: .client, identity: .init(deviceID: UUID().uuidString, deviceName: "Phone", metadata: .init(kind: .iPhone)))
-            default: return .init(role: .central, identity: .init(deviceID: UUID().uuidString, deviceName: "Mac", metadata: .init(kind: .mac)))
+            case 8443: return .init(identity: .init(deviceID: "bad-id", deviceName: "Bad", metadata: .init(kind: .mac)))
+            case 10_000: return .init(identity: .init(deviceID: UUID().uuidString, deviceName: "Bad\nName", metadata: .init(kind: .mac)))
+            case 8444: return .init(identity: .init(deviceID: UUID().uuidString, deviceName: "Phone", metadata: .init(kind: .iPhone)))
+            default: return .init(identity: .init(deviceID: UUID().uuidString, deviceName: "Mac", metadata: .init(kind: .mac)))
             }
         })
         let peers = try await discovery.discover()

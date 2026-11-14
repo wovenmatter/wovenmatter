@@ -54,7 +54,7 @@ public struct ProductAnalyticsEvent: Codable, Equatable, Identifiable, Sendable 
   public var qualifying: Bool {
     name == .active
   }
-  /// Re-applied at the central ingestion boundary, including decoded remote input.
+  /// Re-applied where a Mac ingests analytics, including decoded remote input.
   public static func sanitize(_ values: [String: String]) -> [String: String] {
     let enums: [String: Set<String>] = [
       "platform": ["macos", "ios", "ipados"],

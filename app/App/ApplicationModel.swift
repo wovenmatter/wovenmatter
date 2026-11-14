@@ -342,7 +342,7 @@ final class ApplicationModel {
     let analytics = ProductAnalyticsModel()
     private(set) var libraryStore: LibraryStore?
     @ObservationIgnored
-    var federatedExecutionClient: CentralExecutionClient?
+    var federatedExecutionClient: MemberExecutionClient?
     /// A Dev snapshot's copied conversations are read-only history; its own
     /// sessions run. Test seam: fixtures exercise the snapshot rule.
     @ObservationIgnored var readsCopiedHistoryOnly = DevelopmentLaunch.isSnapshot
@@ -722,7 +722,7 @@ final class ApplicationModel {
             startBotsClient()
             startAgentToolRuntime()
             startLibraryStoreIfReady()
-            await libraryHost.startForCentralDatabase()
+            await libraryHost.startServingLibrary()
             Task { [weak self] in
                 await self?.refreshDatabases()
             }
@@ -2114,7 +2114,7 @@ final class ApplicationModel {
         }
         do {
             try await KeychainAccess.$isCredentialAuthorizationActive.withValue(true) {
-                guard KeychainAccess.enforceCentralAuthorization() == 0 else {
+                guard KeychainAccess.disableUnrequestedPrompts() == 0 else {
                     throw BrowserCredentialStore.AccessError.unavailable(-25308)
                 }
                 try await Task.detached(priority: .userInitiated) {
@@ -2352,7 +2352,7 @@ final class ApplicationModel {
         await cancelAutomation(callerID: conversationID)
         guard !isBackendFrontend else { throw ApplicationModelError.libraryStoreUnavailable }
         if (try await libraryStore?.database.libraryExecutionOwner(conversationID: conversationID)) != nil {
-            let client = try centralExecutionClient()
+            let client = try memberExecutionClient()
             try await client.refresh(conversationID: conversationID)
             guard let runID = client.transcripts[conversationID]?.activeRunID else { return }
             _ = try await client.stop(conversationID: conversationID, runID: runID)
@@ -2989,7 +2989,7 @@ final class ApplicationModel {
               let agent = try await database.workspaceAgents().first(where: { $0.id == agentID }) else {
             throw LibraryAPIError(code: "unknown_workspace", message: "This paired workspace is unavailable. Reconnect its Mac to continue.")
         }
-        let client = try centralExecutionClient()
+        let client = try memberExecutionClient()
         _ = try await client.createSession(workspace: workspace, runtimeKind: agent.runtimeKind,
             conversationID: conversationID.uuidString.lowercased(), folderID: folderID)
         try await database.installPairedConversationPlaceholder(id: conversationID.uuidString.lowercased(), agentID: agentID,
@@ -3155,7 +3155,7 @@ final class ApplicationModel {
             thinking: selections.thinking, permission: permission, enabledTools: tools)
         let id = conversationID.uuidString.lowercased()
         let executionRoot = try await sessionCreationRoot(folderID: folderID, workspaceID: target.configuration.id, root: root)
-        let client = try centralExecutionClient()
+        let client = try memberExecutionClient()
         let receipt = try await client.createSession(workspace: workspace, runtimeKind: runtime, conversationID: id,
             folderID: folderID, title: title, sessionOptions: options)
         let providerID = try await client.providers(workspace: workspace).first { $0.runtimeKind == runtime.rawValue }?.id ?? runtime.rawValue
@@ -3605,7 +3605,7 @@ final class ApplicationModel {
         guard let database = libraryStore?.database else { return nil }
         do {
             if try await database.libraryExecutionOwner(conversationID: conversationID) != nil {
-                let client = try centralExecutionClient()
+                let client = try memberExecutionClient()
                 try await client.refresh(conversationID: conversationID)
                 return client.transcripts[conversationID]?.activeRunID
             }
@@ -3618,7 +3618,7 @@ final class ApplicationModel {
         if try await libraryStore.database.libraryExecutionOwner(conversationID: conversationID) != nil {
             backendApplicationService?.recordLibraryStop(conversationID: conversationID)
             cancelPendingAgentDispatch(conversationID: conversationID)
-            let client = try centralExecutionClient()
+            let client = try memberExecutionClient()
             let barrier = agentStops.begin(conversationID: conversationID) {
                 _ = try await client.stop(conversationID: conversationID, runID: runID)
             }
@@ -4286,7 +4286,7 @@ extension ApplicationModel {
                 // A file of a session another machine runs is read from there once.
                 let result = try await BackendLibraryService(service: libraryStore.library, remoteAttachment: { [weak self] conversationID, reference in
                     guard let self else { throw ApplicationModelError.libraryStoreUnavailable }
-                    return try await self.centralExecutionClient().attachment(conversationID: conversationID, reference: reference)
+                    return try await self.memberExecutionClient().attachment(conversationID: conversationID, reference: reference)
                 }).execute(command)
                 return .init(id: request.id, result: try JSONEncoder().encode(result))
             }

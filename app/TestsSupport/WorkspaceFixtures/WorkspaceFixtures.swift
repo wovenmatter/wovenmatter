@@ -132,3 +132,17 @@ extension WorkspaceDatabase {
     return .init(folderID: configuration?.folderID, location: location, defaultPath: path)
   }
 }
+
+extension DeviceAuthentication {
+  /// Pairs and confirms, as a device does with its two requests: `request`
+  /// with confirmation required, then `confirmPairing` with the returned bearer.
+  public func pairConfirmed(_ request: PairRequest, workspaceID: String) async throws -> PairResponse {
+    var confirmed = PairRequest(token: request.token, deviceID: request.deviceID, deviceName: request.deviceName,
+      protocolVersion: request.protocolVersion, metadata: request.metadata, expectedWorkspaceID: request.expectedWorkspaceID,
+      requiresConfirmation: true, purpose: request.purpose)
+    confirmed.memberPublicKey = request.memberPublicKey
+    let response = try await pair(confirmed, workspaceID: workspaceID)
+    try await confirmPairing(bearer: response.credential, workspaceID: workspaceID)
+    return response
+  }
+}

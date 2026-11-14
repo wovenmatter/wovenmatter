@@ -62,7 +62,7 @@ struct MacTailnetDiscoveryView: View {
             rowError(item.row); return
         }
         guard [.update, .download, .open].contains(item.action) || host.endpoint != nil else { item.row.error = "Wait for this Mac’s library to become available before pairing."; return }
-        await devices.perform(item.action, row: item.row, central: host.endpoint)
+        await devices.perform(item.action, row: item.row, endpoint: host.endpoint)
     }
 }
 

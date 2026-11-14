@@ -139,67 +139,6 @@ public struct PeerMembership: Codable, Equatable, Sendable {
   public init(entries: [PeerRosterEntry], revocations: [PeerRevocation]) { self.entries = entries; self.revocations = revocations }
 }
 
-extension PairedMacProof {
-  /// Signed by the target Mac. Binds a fresh requester nonce, the requester and
-  /// its target-local credential identity, and the exact returned route.
-  public static func statement(_ challenge: PairedMacProofChallenge, route: PairedMacRoute) -> Data {
-    canonical([("requester", challenge.deviceID.lowercased()), ("credential", challenge.credentialID),
-               ("nonce", challenge.nonce.base64EncodedString()), ("target", challenge.targetDeviceID.lowercased()),
-               ("target_library", challenge.targetLibraryID.lowercased()), ("route_device", route.deviceID.lowercased()),
-               ("route_library", route.libraryID.lowercased()), ("route_endpoint", route.endpoint.absoluteString),
-               ("route_name", route.name)], domain: "woven.peer.proof.v2")
-  }
-}
-
-/// A one-use server challenge for the learned-peer handshake. The target signs
-/// it so the requester knows it reached the pinned Mac before signing anything.
-public struct PairedMacChallengeRequest: Codable, Equatable, Sendable {
-  public let requesterDeviceID: String
-  public let requesterLibraryID: String
-  public let targetDeviceID: String
-  public let targetLibraryID: String
-  public init(requesterDeviceID: String, requesterLibraryID: String, targetDeviceID: String, targetLibraryID: String) {
-    self.requesterDeviceID = requesterDeviceID; self.requesterLibraryID = requesterLibraryID
-    self.targetDeviceID = targetDeviceID; self.targetLibraryID = targetLibraryID
-  }
-}
-public struct PairedMacChallenge: Codable, Sendable {
-  public let challengeID: String
-  public let nonce: Data
-  public let serviceID: String
-  public let route: PairedMacRoute
-  public let signature: Data
-  static func statement(challengeID: String, nonce: Data, serviceID: String, request: PairedMacChallengeRequest, route: PairedMacRoute) -> Data {
-    canonical([("challenge", challengeID), ("nonce", nonce.base64EncodedString()), ("service", serviceID),
-               ("requester", request.requesterDeviceID), ("requester_library", request.requesterLibraryID),
-               ("target", request.targetDeviceID), ("target_library", request.targetLibraryID),
-               ("route_device", route.deviceID), ("route_library", route.libraryID),
-               ("route_endpoint", route.endpoint.absoluteString), ("route_name", route.name)], domain: "woven.peer.challenge.v2")
-  }
-}
-/// The requester's signature over the consumed challenge. The target issues a
-/// fresh grant that authenticates only at the target itself.
-public struct PairedMacHandshake: Codable, Sendable {
-  public let challengeID: String
-  public let request: PairedMacChallengeRequest
-  public let operationID: String
-  public let signature: Data
-  public init(challengeID: String, request: PairedMacChallengeRequest, operationID: String, signature: Data) {
-    self.challengeID = challengeID; self.request = request; self.operationID = operationID; self.signature = signature
-  }
-  public static func statement(challenge: PairedMacChallenge, request: PairedMacChallengeRequest, operationID: String) -> Data {
-    canonical([("purpose", "peer.grant"), ("role", PeerAdmission.role), ("protocol", PeerAdmission.protocolName),
-               ("challenge", challenge.challengeID), ("nonce", challenge.nonce.base64EncodedString()), ("service", challenge.serviceID),
-               ("requester", request.requesterDeviceID), ("requester_library", request.requesterLibraryID),
-               ("target", request.targetDeviceID), ("target_library", request.targetLibraryID),
-               ("endpoint", challenge.route.endpoint.absoluteString), ("operation", operationID)], domain: "woven.peer.handshake.v2")
-  }
-}
-public struct PairedMacGrant: Codable, Sendable {
-  public let token: String
-  public init(token: String) { self.token = token }
-}
-
 /// Length-prefixed, domain-separated encoding: unambiguous for any field value.
 func canonical(_ fields: [(String, String)], domain: String = PeerAdmission.protocolName) -> Data {
   var data = Data()

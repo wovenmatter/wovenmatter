@@ -86,8 +86,8 @@ public struct KeychainAccess: Sendable {
   /// Suppress unwrapped library calls too (notably Chromium's asynchronous
   /// OSCrypt worker). No Keychain items are read or modified by this operation.
   @discardableResult
-  public static func enforceCentralAuthorization() -> OSStatus {
-    systemPolicy.enforceCentralAuthorization()
+  public static func disableUnrequestedPrompts() -> OSStatus {
+    systemPolicy.disableUnrequestedPrompts()
   }
 
   public func copyMatching(
@@ -201,20 +201,20 @@ public struct KeychainAccess: Sendable {
 final class KeychainInteractionPolicy: @unchecked Sendable {
   let operations: KeychainOperations
   private let lock = NSRecursiveLock()
-  private var centralized = false
+  private var promptPolicyInstalled = false
   private var originalInteractionAllowed = false
   private var enforcementFailure: OSStatus?
 
   init(operations: KeychainOperations) { self.operations = operations }
 
   func allowsInteraction(_ requested: Bool) -> Bool {
-    lock.withLock { requested && (!centralized || KeychainAccess.isCredentialAuthorizationActive) }
+    lock.withLock { requested && (!promptPolicyInstalled || KeychainAccess.isCredentialAuthorizationActive) }
   }
 
-  func enforceCentralAuthorization() -> OSStatus {
+  func disableUnrequestedPrompts() -> OSStatus {
     lock.withLock {
-      if centralized && enforcementFailure == nil { return errSecSuccess }
-      centralized = true
+      if promptPolicyInstalled && enforcementFailure == nil { return errSecSuccess }
+      promptPolicyInstalled = true
       let (status, allowed) = operations.getInteractionAllowed()
       guard status == errSecSuccess else { enforcementFailure = status; return status }
       originalInteractionAllowed = allowed
@@ -231,7 +231,7 @@ final class KeychainInteractionPolicy: @unchecked Sendable {
       let interactive = allowsInteraction(allowInteraction)
       // Preserve the original behavior for clients that do not install the app
       // policy, including tests and command-line entry points.
-      if interactive && !centralized { return operation() }
+      if interactive && !promptPolicyInstalled { return operation() }
       let (status, prior) = operations.getInteractionAllowed()
       guard status == errSecSuccess else { return failure(status) }
       // Never override a policy that was disabled before Woven installed its own.

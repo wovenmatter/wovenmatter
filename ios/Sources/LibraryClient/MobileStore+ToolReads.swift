@@ -176,7 +176,7 @@ extension MobileStore {
       let itemKind = mediaType.hasPrefix("image/") ? "photo" : mediaType == "text/uri-list" ? "link" : "file"
       return (query.isEmpty || item.title.localizedCaseInsensitiveContains(query)) && (workspaces == nil || workspaces!.contains(item.workspaceID)) && (kind == nil || itemKind == kind)
     }.sorted { $0.id < $1.id }
-    if c.options["harness"] != nil || c.options["sender"] != nil || c.options["since"] != nil || c.options["until"] != nil { throw WorkspaceToolError.invalid("These filters require the central library's retained-item attribution. Use target central when connected.") }
+    if c.options["harness"] != nil || c.options["sender"] != nil || c.options["since"] != nil || c.options["until"] != nil { throw WorkspaceToolError.invalid("These filters need retained-item attribution, which a Mac or Linux workspace agent can read.") }
     return try MobileToolSupport.page(rows.map(MobileToolSupport.value), command: c, offsetKey: "offset")
   }
 }

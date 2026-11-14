@@ -40,9 +40,9 @@ struct PairingPane: View {
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { scanning = false } } }
         }
       }
-      .confirmationDialog("Unpair from the central database?", isPresented: $confirmDisconnect, titleVisibility: .visible) {
+      .confirmationDialog("Unpair \(model.deviceWorkspaceInSentence)?", isPresented: $confirmDisconnect, titleVisibility: .visible) {
         Button("Unpair", role: .destructive) { Task { await model.disconnectMac() } }
-      } message: { Text("Your notes, chats, provider sign-ins, and pending changes stay on this device. Access to its connected workspaces ends until you pair again.") }
+      } message: { Text("Your notes, chats, provider sign-ins, and pending changes stay on \(model.deviceWorkspaceInSentence). It stops syncing with your Macs and Linux machines until you pair again.") }
       .tint(theme.palette.themeAccent)
   }
   @ViewBuilder private func pairingControls(header: String, footer: String) -> some View {
@@ -72,7 +72,13 @@ struct PairingPane: View {
     case "updateRequired": return "Update needed"
     case "failing": return "Not syncing"
     case "offline": return "Offline"
-    default: return member.kind == "mac" ? "Mac" : "Linux"
+    default:
+      // No sync report yet: say whether this iPhone reaches it directly.
+      let reached = model.executionWorkspaces.contains { workspace in
+        (workspace.ownerDeviceID.lowercased() == member.deviceID || workspace.executionDeviceID?.lowercased() == member.deviceID)
+          && model.workspaceReachable[workspace.id] == true
+      }
+      return reached ? "Connected" : member.kind == "mac" ? "Mac" : "Linux"
     }
   }
   private func beginScanning() async {

@@ -158,7 +158,7 @@ struct CalendarEventSheet: View {
         Text("No folder").tag("")
         ForEach(model.folders.filter { folder in
           guard let owner = model.folderOwner(folder) else { return true }
-          let selected = draft.task?.workspaceID ?? (model.centralExecutionWorkspace ?? model.folderWorkspaces.first(where: { $0.capabilities.contains("history.central.v1") }))?.id
+          let selected = draft.task?.workspaceID ?? (model.hostExecutionWorkspace ?? model.folderWorkspaces.first(where: { $0.capabilities.contains("history.library.v1") }))?.id
           return selected.map(model.canonicalWorkspaceID) == owner
         }) { Text($0.name).tag($0.id) }
       }
@@ -172,13 +172,13 @@ struct CalendarEventSheet: View {
   }
   private static func defaultTask(_ model: MobileModel) -> ScheduledTask {
     let agent = model.listedLauncherAgents.first { $0.workspaceID != "local" && $0.isAvailable }
-    return .init(runtime: agent?.runtimeKind ?? "", workspaceID: agent.flatMap { $0.workspaceID == "central" ? nil : $0.workspaceID })
+    return .init(runtime: agent?.runtimeKind ?? "", workspaceID: agent.flatMap { $0.workspaceID == "host" ? nil : $0.workspaceID })
   }
   private var routeChoices: [SessionSettingOption] {
     var values = [SessionSettingOption(id: "", label: "Choose a Mac or Linux agent")]
     // Only reachable workspaces are offered; a saved route stays selected below.
     for agent in model.listedLauncherAgents where agent.workspaceID != "local" {
-      let owner = agent.workspaceID == "central" ? "local:" + agent.runtimeKind : "remote:" + agent.workspaceID + ":" + agent.runtimeKind
+      let owner = agent.workspaceID == "host" ? "local:" + agent.runtimeKind : "remote:" + agent.workspaceID + ":" + agent.runtimeKind
       if !values.contains(where: { $0.id == owner }) { values.append(.init(id: owner, label: agent.name + " · " + agent.workspaceName)) }
     }
     if selectedRoute == "device" { values.append(.init(id: "device", label: "Previously assigned to this phone · choose a workspace")) }
@@ -217,13 +217,13 @@ private struct CalendarConflictPane: View {
   var body: some View {
     List {
       Section("This device") { details(conflict.local) }
-      Section("Central Mac") {
+      Section("Your library") {
         if let remote = conflict.remote, !remote.deleted { details(remote) }
         else { Text("Deleted") }
       }
       Section {
         Button(conflict.remote?.deleted == true ? "Save this device’s version as a new event" : "Keep this device’s version") { resolve(true) }
-        Button("Use the central Mac’s version") { resolve(false) }
+        Button("Use the library’s version") { resolve(false) }
       }
       if let error = model.errorMessage { Text(error).foregroundStyle(WovenPalette.danger) }
     }.disabled(busy).listStyle(.insetGrouped).scrollContentBackground(.hidden).scrollIndicators(.never)

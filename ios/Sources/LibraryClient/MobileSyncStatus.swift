@@ -13,7 +13,7 @@ public struct MobileSyncLaneStatus: Codable, Equatable, Sendable {
 }
 public struct MobileSynchronizationStatus: Codable, Equatable, Sendable {
   /// Connectivity is independent of conflicts or a failed individual transfer.
-  public var centralReachable: Bool?
+  public var hostReachable: Bool?
   public var lastContactAt: Date?
   public var lanes: [MobileSyncLane: MobileSyncLaneStatus] = [:]
   /// The Mac or Linux host the phone synced with last (it has no home Mac).

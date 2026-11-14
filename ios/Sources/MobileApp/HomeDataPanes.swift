@@ -173,7 +173,7 @@ private struct DatabaseDetailPane: View {
   }
 }
 
-private enum UsagePreferences {
+enum UsagePreferences {
   static let sourceKey = "mobile.usage.defaultSource"
   static let daysKey = "mobile.usage.defaultDays"
 }
@@ -187,7 +187,7 @@ struct UsageSettingsPane: View {
       Section("Default view") {
         Picker("Source", selection: $source) {
           Text(model.deviceWorkspaceName).tag("device")
-          if model.credential != nil || source == "central" { Text("Central library").tag("central") }
+          if model.credential != nil || source == "library" { Text("All devices").tag("library") }
         }
         Picker("Time range", selection: $days) {
           Text("24 hours").tag(1)
@@ -218,7 +218,7 @@ struct UsagePane: View {
     let defaults = UserDefaults.standard
     let days = defaults.object(forKey: UsagePreferences.daysKey) as? Int ?? 7
     _days = State(initialValue: [1, 7, 30].contains(days) ? days : 7)
-    _source = State(initialValue: defaults.string(forKey: UsagePreferences.sourceKey) == "central" && model.credential != nil ? "central" : "device")
+    _source = State(initialValue: defaults.string(forKey: UsagePreferences.sourceKey) == "library" && model.credential != nil ? "library" : "device")
   }
   private var totalTokens: Int64 { samples.reduce(0) { $0 + $1.totalTokens } }
   private var groups: [(name: String, tokens: Int64, requests: Int)] {
@@ -231,7 +231,7 @@ struct UsagePane: View {
       Section {
         Picker("Source", selection: $source) {
           Text("This device").tag("device")
-          if model.credential != nil { Text("Central library").tag("central") }
+          if model.credential != nil { Text("All devices").tag("library") }
         }
         WovenSegmentedSelector(options: [1, 7, 30], selection: $days) { $0 == 1 ? "24 hours" : "\($0) days" }
           .accessibilityLabel("Usage time range")
@@ -302,7 +302,7 @@ struct UsagePane: View {
     .refreshable { await load() }
     .task(id: scope) {
       generation += 1; loading = false; samples = []; loaded = false; hasMore = false; failure = nil
-      if source == "central", model.credential == nil { source = "device"; return }
+      if source == "library", model.credential == nil { source = "device"; return }
       await load()
     }
   }

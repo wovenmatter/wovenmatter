@@ -4,8 +4,8 @@ import LibraryClient
 import WovenMatterShared
 
 /// UI fixture of a phone paired as a member with two Dev Macs, from a real
-/// phone's saved data: both Macs advertise central history, the library host
-/// ("This Mac") reports a stale central agent list, two copied snapshot rows
+/// phone's saved data: both Macs serve library history, the library host
+/// ("This Mac") reports a stale host agent list, two copied snapshot rows
 /// remain as history, and a Linux workspace is registered but not reachable.
 /// `member-macs-send` also opens a Pi Durable chat on the library host whose
 /// workspace takes a moment to accept each message; `member-macs-chooser`
@@ -20,7 +20,7 @@ extension MobileModel {
     let airHost = "e775f2b2-1e79-4bc2-b723-39b3fab2d9c5", miniHost = "7c072eba-eb7c-490b-9434-fb710c7f828f"
     let oldAir = "9e51815e-6d2d-4d20-9885-ddab9621b460"
     let airEndpoint = URL(string: "https://jamess-macbook-air.example.ts.net:10000/wovenmatter")!
-    let capabilities = ["execution.v1", "history.central.v1", "inference.v1"]
+    let capabilities = ["execution.v1", "history.library.v1", "inference.v1"]
     let air = ExecutionWorkspace(id: Self.memberMacsAir, libraryID: "fixture", ownerDeviceID: airHost, kind: .mac,
       name: "James’s MacBook Air (Dev) · worktrees-b8e80bfb02", endpoint: airEndpoint, capabilities: capabilities,
       executionDeviceID: airHost, developmentInstance: "worktrees-b8e80bfb02")
@@ -44,13 +44,13 @@ extension MobileModel {
     }
     let ready = [agent("default_agent", "Pi Durable", ready: true, resume: false), agent("codex", "Codex", ready: true),
                  agent("claude_code", "Claude Code", ready: true), agent("grok_build", "Grok Build", ready: true), agent("opencode", "OpenCode", ready: true)]
-    // The library host's central list, saved when Codex, Claude Code and OpenCode were not set up there yet.
+    // The library host's own agent list, saved when Codex, Claude Code and OpenCode were not set up there yet.
     let stale = [agent("default_agent", "Pi Durable", ready: true, resume: false), agent("codex", "Codex", ready: false),
                  agent("claude_code", "Claude Code", ready: false), agent("grok_build", "Grok Build", ready: true), agent("opencode", "OpenCode", ready: false)]
     providers = stale
     workspaceProviders = [Self.memberMacsAir: ready, Self.memberMacsMini: ready, copied: stale, copiedDeleted: ready]
     knownAgentIDs = Set(([Self.memberMacsAir, Self.memberMacsMini, copied, copiedDeleted].flatMap { id in ready.map { id + ":" + $0.id } })
-      + ready.map { "central:" + $0.id })
+      + ready.map { "host:" + $0.id })
     workspaceReachable = [Self.memberMacsAir: true, Self.memberMacsMini: true]
     var saved = MobileMembershipState(deviceID: state.deviceID, pairedEndpoint: airEndpoint, pairedHostDeviceID: airHost,
       pairedName: air.name)
@@ -60,7 +60,11 @@ extension MobileModel {
       .init(deviceID: airHost, kind: "mac", name: air.name, endpoints: [airEndpoint]),
     ]
     membership = saved
-    online = true // Fixture presentation only; no central transport is configured.
+    libraryHosts = try MobileLibraryHosts(state: saved,
+      identity: MobileMemberKeyVault.loadOrCreate(deviceID: state.deviceID, storage: .memory()), file: nil)
+    // Paired through the Air; no request ever uses this fixture credential.
+    credential = MobileCredential(endpoint: airEndpoint, workspaceID: "fixture", deviceID: state.deviceID, token: "", hostDeviceID: airHost)
+    online = true // Fixture presentation only; no library transport is configured.
     guard send else { await reload(); return }
 
     let id = Self.memberMacsFixtureChat
@@ -89,8 +93,8 @@ private actor MemberMacsFixtureWorkspace: ExecutionWorkspaceTransport {
   let agents: [HarnessCapabilities]
   var receipts: [String: LibraryCommandReceipt] = [:]
   init(workspace: ExecutionWorkspace, transcript: LibraryTranscript, providers: [HarnessCapabilities]) {
-    // Without central history the fixture keeps its seeded conversation rows.
-    var identity = workspace; identity.capabilities.removeAll { $0 == "history.central.v1" }
+    // Without library history the fixture keeps its seeded conversation rows.
+    var identity = workspace; identity.capabilities.removeAll { $0 == "history.library.v1" }
     self.workspace = identity; transcriptValue = transcript; agents = providers
   }
   func identity() async throws -> ExecutionWorkspace { workspace }

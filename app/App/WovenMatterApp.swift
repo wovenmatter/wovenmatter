@@ -401,7 +401,7 @@ enum WovenMatterEntryPoint {
     @MainActor private static func runBackend() -> Never {
         do {
             try DevelopmentLaunch.validate()
-            KeychainAccess.enforceCentralAuthorization()
+            KeychainAccess.disableUnrequestedPrompts()
             let lease = WorkspaceProcessLease.acquireOrExit()
             try WovenMatterBackendProcess.removeStaleSocketAfterAcquiringLease(
                 LocalExecutionRole.backendSocketURL(workspaceDirectory:
@@ -502,7 +502,7 @@ struct WovenMatterApp: App {
         if !isRunningUnitTests, LocalExecutionRole.current != .backend {
             HarnessSetupPresentation.shared.prepareForLaunch()
         }
-        if !isRunningUnitTests { KeychainAccess.enforceCentralAuthorization() }
+        if !isRunningUnitTests { KeychainAccess.disableUnrequestedPrompts() }
         workspaceProcessLease = isRunningUnitTests
             ? nil
             : WorkspaceProcessLease.acquireOrExit()

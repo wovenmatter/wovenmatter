@@ -1,5 +1,6 @@
 import Foundation
 import XCTest
+import WorkspaceFixtures
 @testable import WovenMatterLibraryStore
 import WovenMatterCore
 
@@ -13,10 +14,10 @@ final class LibraryTransportTests: XCTestCase {
     let offer = try await auth.createOffer(endpoint: endpoint)
     let deviceID = UUID().uuidString.lowercased()
     let request = PairRequest(token: offer.payload.token, deviceID: deviceID, deviceName: "Fixture iPhone")
-    let response = try await auth.pair(request, workspaceID: "fixture-workspace")
+    let response = try await auth.pairConfirmed(request, workspaceID: "fixture-workspace")
     let device = try await auth.authenticate(bearer: response.credential)
     XCTAssertEqual(device.id, deviceID)
-    do { _ = try await auth.pair(request, workspaceID: "fixture-workspace"); XCTFail("Pairing code was reused") }
+    do { _ = try await auth.pairConfirmed(request, workspaceID: "fixture-workspace"); XCTFail("Pairing code was reused") }
     catch { XCTAssertEqual((error as? LibraryAPIError)?.code, "invalid_pairing") }
     let disk = try String(contentsOf: file, encoding: .utf8)
     XCTAssertFalse(disk.contains(response.credential))

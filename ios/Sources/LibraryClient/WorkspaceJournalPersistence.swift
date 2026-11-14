@@ -7,7 +7,7 @@ import WovenMatterShared
 enum WorkspaceJournalPersistence {
   private struct Envelope: Codable { var version: Int; var state: WorkspaceJournalState }
   static func load(at file: URL) throws -> WorkspaceJournalState {
-    let data = try Data(contentsOf: file)
+    let data = PersistedFieldRenames.upgrade(try Data(contentsOf: file), renaming: PersistedFieldRenames.journal)
     guard let envelope = try? JSONDecoder().decode(Envelope.self, from: data) else {
       let legacy = try JSONDecoder().decode(WorkspaceJournalState.self, from: data)
       try? MobileStorePersistence.applyBackupIfChanged(.include, at: file)
@@ -25,7 +25,7 @@ enum WorkspaceJournalPersistence {
       loaded[reference] = data; return data
     }
     // Earlier builds excluded the journal. History may have no other copy until
-    // central accepts it, so include every body and the index on open, before any edit.
+    // the library accepts it, so include every body and the index on open, before any edit.
     for reference in loaded.keys { try? MobileStorePersistence.applyBackupIfChanged(.include, at: directory(file).appendingPathComponent(reference)) }
     try? MobileStorePersistence.applyBackupIfChanged(.include, at: file)
     return state
@@ -46,7 +46,7 @@ enum WorkspaceJournalPersistence {
       let blob = directory(file).appendingPathComponent(reference)
       if !FileManager.default.fileExists(atPath: blob.path) { try MobileStorePersistence.writeDurably(data, at: blob, backup: .include) }
     }
-    // Phone-origin history has no other copy until central accepts it; keep it in backups.
+    // Phone-origin history has no other copy until the library accepts it; keep it in backups.
     for reference in pending.keys { try MobileStorePersistence.applyBackupIfChanged(.include, at: directory(file).appendingPathComponent(reference)) }
     try MobileStorePersistence.writeDurably(index, at: file, backup: .include)
     // Crashes can leave unreferenced bodies; they never remove a live record.

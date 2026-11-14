@@ -15,6 +15,8 @@ import WovenMatterShared
       if defaults.object(forKey: WovenTheme.storageKey) == nil { defaults.set(theme, forKey: WovenTheme.storageKey) }
       defaults.removeObject(forKey: legacy)
     }
+    // v0.4.2 saved the all-devices usage view as "host". It reads "library" once.
+    if defaults.string(forKey: UsagePreferences.sourceKey) == "central" { defaults.set("library", forKey: UsagePreferences.sourceKey) }
   }
 
   var body: some Scene {
@@ -614,7 +616,7 @@ struct GeneralSettingsPane: View {
         Toggle("Share product analytics",isOn:Binding(get:{model.analytics.enabled},set:{value in Task { await model.analytics.setEnabled(value) } }))
         Text(model.credential == nil
           ? "Nothing is sent while \(model.deviceWorkspaceInSentence) isn’t paired. Once paired, app opens and active use are sampled at most once every six hours and sent through your Mac. No content or action details are sent."
-          : "App opens and active use are sampled at most once every six hours and sent through your Mac. No content or action details are sent. This choice applies to your whole central library; offline devices receive changes when they reconnect.")
+          : "App opens and active use are sampled at most once every six hours and sent through your Mac. No content or action details are sent. This choice applies to all your devices; offline devices receive it when they reconnect.")
           .font(.caption).foregroundStyle(.secondary).accessibilityIdentifier("analytics-explanation")
         if model.analytics.state.pendingEnabled != nil { Text("Preference waiting to sync.").font(.caption).foregroundStyle(.secondary) }
         Link("Privacy policy",destination:ProductAnalyticsPolicy.url).foregroundStyle(WovenPalette.success)
@@ -632,13 +634,9 @@ struct WorkspacesSettingsPane: View {
         NavigationLink { DeviceAgentSettingsPane(model: model) } label: {
           Label("Quick Chat", glyph: .messageSquare)
         }
-        if model.credential != nil || model.state.workspaceID != nil {
-          NavigationLink { CentralWorkspaceSettingsPane(model: model) } label: {
-            Label("Central database", glyph: .monitor).opacity(model.online ? 1 : 0.5)
-          }
-        }
         // Every saved workspace stays here with its connection state, so a
-        // disconnected one can be checked or refreshed.
+        // disconnected one can be checked or refreshed. The Mac this device
+        // syncs its library with is listed like every other one.
         ForEach(model.executionWorkspaces) { workspace in
           NavigationLink { WorkspaceSettingsPane(model: model, workspace: workspace) } label: {
             Label(workspace.name, glyph: workspace.kind == .mac ? .monitor : .container)
@@ -651,33 +649,20 @@ struct WorkspacesSettingsPane: View {
   }
 }
 
-private struct CentralWorkspaceSettingsPane: View {
-  @Bindable var model: MobileModel
-  var body: some View {
-    List {
-      Section {
-        LabeledContent("Connection", value: model.online ? "Connected" : "Disconnected")
-        if let endpoint = model.credential?.endpoint { Text(endpoint.host ?? endpoint.absoluteString).textSelection(.enabled) }
-      }
-      Section("Agents") {
-        ForEach(model.launcherAgents.filter { $0.workspaceID == "central" }) { agent in
-          Button { Task { await model.launchAgent(agent) } } label: {
-            Label { Text(agent.name) } icon: { MobileAgentIcon(runtimeKind: agent.runtimeKind, size: 22) }
-          }.disabled(!agent.isAvailable)
-        }
-      }
-    }.listStyle(.insetGrouped).mobileNavigationPage("Central database")
-  }
-}
-
 private struct WorkspaceSettingsPane: View {
   @Bindable var model: MobileModel
   let workspace: ExecutionWorkspace
   private var active: Bool { model.workspaceIsActive(workspace) }
+  /// The library host's own agents are listed in its group under the host route.
+  private var agents: [LaunchableAgent] { model.launcherGroups.first { $0.workspace?.id == workspace.id }?.agents ?? [] }
   var body: some View {
     List {
       Section {
         LabeledContent("Connection", value: active ? "Connected" : "Disconnected")
+        if model.online, model.hostExecutionWorkspace?.id == workspace.id {
+          Text("\(model.deviceWorkspaceName) syncs its library with this Mac now. Any other Mac or Linux machine that is online takes over when it isn’t.")
+            .font(.caption).foregroundStyle(WovenPalette.mutedForeground).accessibilityIdentifier("workspace-library-host")
+        }
         if let endpoint = workspace.endpoint { Text(endpoint.host ?? endpoint.absoluteString).textSelection(.enabled) }
         if !active {
           Text("Its agents and folders appear when this workspace is reachable again.").font(.caption)
@@ -687,7 +672,7 @@ private struct WorkspaceSettingsPane: View {
       if active {
         Section { NavigationLink("Folders") { FoldersPane(model: model, workspaceID: workspace.id) } }
         Section("Agents") {
-          ForEach(model.listedLauncherAgents.filter { $0.workspaceID == workspace.id }) { agent in
+          ForEach(agents) { agent in
             Button { Task { await model.launchAgent(agent) } } label: {
               Label { Text(agent.name) } icon: { MobileAgentIcon(runtimeKind: agent.runtimeKind, size: 22) }
             }.disabled(!agent.isAvailable)

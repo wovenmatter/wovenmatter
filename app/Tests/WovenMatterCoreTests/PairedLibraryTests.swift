@@ -530,23 +530,23 @@ extension PairedLibraryTests {
   }
 
   @Test func theExecutionOwnersNativeRowsSurviveAStaleFederatedProjection() async throws {
-    let node = try await Mac(), central = try await Mac(); defer { node.remove(); central.remove() }
+    let node = try await Mac(), peer = try await Mac(); defer { node.remove(); peer.remove() }
     let session = try await node.database.createFixtureLocalACPSession(runtimeKind: .codex, title: "Native session", ownerDeviceID: UUID())
     let run = try await node.database.beginLocalACPRun(conversationID: session, input: .init(text: "Native input"))
     let native = try await node.database.read { connection in
       try #require(try connection.historyRowsUnlocked("SELECT agent_id,owner_device_id FROM conversations WHERE id=?", values: [session]).first?.objectValue)
     }
-    // The central library held a federated projection of the same chat and run.
-    try await central.database.write { connection in
+    // Another member held a federated projection of the same chat and run.
+    try await peer.database.write { connection in
       try connection.toolsExecuteUnlocked("INSERT INTO conversations(id,title,owner_device_id,created_at,updated_at) VALUES(?,?,?,?,?)",
         [session, "Projected title", UUID().uuidString.lowercased(), "2020-01-01T00:00:00Z", "2020-01-01T00:00:00Z"])
       try connection.toolsExecuteUnlocked("INSERT INTO runs(id,conversation_id,status,created_at) VALUES(?,?,'completed','2020-01-01T00:00:00Z')", [run.runID, session])
     }
-    // Make the central copies win the deterministic order, as a busy central would.
-    try await central.database.write { try $0.executeUnlocked("UPDATE paired_library_clock SET tick=tick+1000000") }
-    try await central.database.write { try $0.toolsExecuteUnlocked("UPDATE conversations SET title='Projected title ' WHERE id=?", [session]) }
-    try await central.database.write { try $0.toolsExecuteUnlocked("UPDATE runs SET status='completed',error='projection' WHERE id=?", [run.runID]) }
-    try await central.send(to: node)
+    // Make the peer's copies win the deterministic order, as a busy peer would.
+    try await peer.database.write { try $0.executeUnlocked("UPDATE paired_library_clock SET tick=tick+1000000") }
+    try await peer.database.write { try $0.toolsExecuteUnlocked("UPDATE conversations SET title='Projected title ' WHERE id=?", [session]) }
+    try await peer.database.write { try $0.toolsExecuteUnlocked("UPDATE runs SET status='completed',error='projection' WHERE id=?", [run.runID]) }
+    try await peer.send(to: node)
     let after = try await node.database.read { connection in
       try #require(try connection.historyRowsUnlocked("SELECT agent_id,owner_device_id,title FROM conversations WHERE id=?", values: [session]).first?.objectValue)
     }
@@ -554,13 +554,13 @@ extension PairedLibraryTests {
     for key in ["agent_id", "owner_device_id"] { #expect(after[key] == native[key]) }
     #expect(after["title"]?.stringValue == "Projected title ")
     #expect(try await node.database.activeRunID(conversationID: session) == run.runID)
-    // The owner republishes its native rows, so the central library converges.
-    try await node.send(to: central)
-    let converged = try await central.database.read { connection in
+    // The owner republishes its native rows, so the peer converges.
+    try await node.send(to: peer)
+    let converged = try await peer.database.read { connection in
       try #require(try connection.historyRowsUnlocked("SELECT agent_id,owner_device_id FROM conversations WHERE id=?", values: [session]).first?.objectValue)
     }
     #expect(converged["agent_id"] == native["agent_id"] && converged["owner_device_id"] == native["owner_device_id"])
-    let status = try await central.database.read { try $0.historyRowsUnlocked("SELECT status FROM runs WHERE id=?", values: [run.runID]).first?.objectValue?["status"]?.stringValue }
+    let status = try await peer.database.read { try $0.historyRowsUnlocked("SELECT status FROM runs WHERE id=?", values: [run.runID]).first?.objectValue?["status"]?.stringValue }
     #expect(status == "running")
   }
 
@@ -585,24 +585,6 @@ extension PairedLibraryTests {
 
 
 extension PairedLibraryTests {
-  @Test func legacyExecutionGrantsWithoutProvenanceAreRetiredOneByOne() async throws {
-    let mac = try await Mac(); defer { mac.remove() }
-    let file = mac.directory.appending(path: "execution-devices.json")
-    let own = mac.id, phone = UUID().uuidString.lowercased(), library = UUID().uuidString.lowercased(), workspace = UUID().uuidString.lowercased()
-    func grant(_ device: String) -> [String: Any] {
-      ["scope": ["deviceID": device, "libraryID": library, "workspaceID": workspace], "digest": Data(SHA256.hash(data: Data(device.utf8))).base64EncodedString()]
-    }
-    try JSONSerialization.data(withJSONObject: ["version": 1, "grants": [grant(own), grant(phone)]]).write(to: file)
-    let auth = try ExecutionAuthentication(fileURL: file)
-    // A new grant issued before the sweep never exempts the older ones.
-    let fresh = UUID().uuidString.lowercased()
-    let token = try await auth.provision(deviceID: fresh, libraryID: library, workspaceID: workspace)
-    try await auth.retireUnknownProvenance(keeping: own)
-    await #expect(throws: LibraryAPIError.self) { try await auth.authenticate(bearer: phone) }
-    #expect(try await auth.authenticate(bearer: own).deviceID == own)
-    #expect(try await auth.authenticate(bearer: token).deviceID == fresh)
-  }
-
   @Test func theOwnerValidatesAnotherMacsTrashAndAppliesItsOwnEffects() async throws {
     let a = try await Mac(), b = try await Mac(); defer { a.remove(); b.remove() }
     let busy = try await a.database.createFixtureLocalACPSession(runtimeKind: .codex, title: "Busy", ownerDeviceID: UUID())

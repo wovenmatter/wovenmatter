@@ -17,7 +17,7 @@ private actor BackupArtifactLibrary: FederationTransport {
   func registerWorkspace(_ registration: LibraryWorkspaceRegistration) throws -> ExecutionWorkspace { throw MobileConnectionError.offline }
   func journal(after: Int64) throws -> ExecutionJournalPage { throw MobileConnectionError.offline }
   func importJournal(_ batch: ExecutionJournalBatch) throws -> ExecutionJournalBatchResult { throw MobileConnectionError.offline }
-  /// Central now holds other content, at a later revision, under an existing ID.
+  /// The library now holds other content, at a later revision, under an existing ID.
   func replace(_ id: String, revision: Int64, with data: Data) {
     remote = .init(id: id, workspaceID: "phone", title: "Replaced", mediaType: "text/plain", byteCount: Int64(data.count),
       sha256: SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined(), revision: revision)
@@ -39,7 +39,7 @@ private actor BackupArtifactLibrary: FederationTransport {
 }
 
 /// Backups must keep writing that exists only on this device and may skip
-/// caches that central can provide again. A restore omits those caches.
+/// caches that the library can provide again. A restore omits those caches.
 final class MobileStoreBackupTests: XCTestCase {
   private var roots: [URL] = []
   override func tearDown() {
@@ -100,18 +100,18 @@ final class MobileStoreBackupTests: XCTestCase {
     XCTAssertEqual(restored.chatDrafts["new-chat"]?.text, "An unsent message")
   }
 
-  func testCentralCacheIsExcludedAndRestoreFetchesItAgainWithoutLosingEdits() async throws {
+  func testLibraryCacheIsExcludedAndRestoreFetchesItAgainWithoutLosingEdits() async throws {
     let file = file(), store = try MobileStore(file: file)
-    let cached = LibraryNote(id: "cached", title: "From the Mac", content: try document("Central copy"), revision: 3)
+    let cached = LibraryNote(id: "cached", title: "From the Mac", content: try document("Library copy"), revision: 3)
     let edited = LibraryNote(id: "edited", title: "Being edited", content: try document("Server version"), revision: 2)
-    try await store.apply(LibrarySnapshot(workspaceID: "central", cursor: 1, notes: [cached, edited]))
+    try await store.apply(LibrarySnapshot(workspaceID: "host", cursor: 1, notes: [cached, edited]))
     XCTAssertTrue(try excluded(body(edited.content, in: file)), "Before the edit the server version is a rebuildable cache")
     let edit = try document("Offline edit waiting to sync")
     try await store.editNote(id: edited.id, title: edited.title, content: edit, folderID: nil, base: edited)
-    try await store.cache(.init(conversationID: "central-chat", messages: [.init(id: "m", conversationID: "central-chat", role: "assistant", content: "Mac reply")]))
+    try await store.cache(.init(conversationID: "host-chat", messages: [.init(id: "m", conversationID: "host-chat", role: "assistant", content: "Mac reply")]))
 
-    XCTAssertTrue(try excluded(body(cached.content, in: file)), "Unchanged central notes are a rebuildable cache")
-    XCTAssertTrue(try excluded(body("Mac reply", in: file)), "Central transcripts are a rebuildable cache")
+    XCTAssertTrue(try excluded(body(cached.content, in: file)), "Unchanged library notes are a rebuildable cache")
+    XCTAssertTrue(try excluded(body("Mac reply", in: file)), "Library transcripts are a rebuildable cache")
     XCTAssertFalse(try excluded(body(edit, in: file)), "Unsynced edits must survive a restore")
     XCTAssertFalse(try excluded(body(edited.content, in: file)), "The edit's base is needed to detect a conflict")
     XCTAssertFalse(try excluded(file))
@@ -124,7 +124,7 @@ final class MobileStoreBackupTests: XCTestCase {
     XCTAssertTrue(state.uncachedNoteIDs.contains("cached"))
     let refetch = await reopened.notesToCache()
     XCTAssertTrue(refetch.contains("cached"))
-    XCTAssertNil(state.transcripts["central-chat"], "The transcript is fetched again")
+    XCTAssertNil(state.transcripts["host-chat"], "The transcript is fetched again")
     XCTAssertEqual(state.notes["edited"]?.content, edit)
     XCTAssertTrue(state.isDirty("edited"))
     XCTAssertEqual(state.bases["edited"]?.content, edited.content)
@@ -198,7 +198,7 @@ final class MobileStoreBackupTests: XCTestCase {
     let device = await store.snapshot().deviceID
     let transcript = LibraryTranscript(conversationID: "quick-chat", messages: [.init(id: "m", conversationID: "quick-chat", role: "user", content: "Asked on this phone")])
     try await store.adoptExecution(conversation: .init(id: "quick-chat", title: "Quick Chat"), transcript: transcript)
-    XCTAssertFalse(try excluded(body("Asked on this phone", in: file)), "Phone Quick Chat history has no central copy yet")
+    XCTAssertFalse(try excluded(body("Asked on this phone", in: file)), "Phone Quick Chat history has no library copy yet")
     try await store.journal.appendNativeRecord(workspaceID: device, conversationID: "quick-chat", recordID: "r", format: "pi-durable.entry.v1", data: Data("native".utf8))
     XCTAssertFalse(try excluded(file.appendingPathExtension("execution")))
     _ = try await store.calendar.save(expectedRevision: nil, draft: .init(title: "Offline event", startsAt: Date()))
@@ -270,7 +270,7 @@ final class MobileStoreBackupTests: XCTestCase {
     XCTAssertEqual(uploads, 1)
   }
 
-  /// Identical bytes share one blob. Downloading a central copy of the same bytes
+  /// Identical bytes share one blob. Downloading a library copy of the same bytes
   /// must not exclude the source of a file saved here that has not uploaded yet.
   func testDownloadedCopyOfIdenticalBytesKeepsAPendingLocalSourceInBackups() async throws {
     let root = file().deletingLastPathComponent().appendingPathComponent("artifacts")
@@ -327,7 +327,7 @@ final class MobileStoreBackupTests: XCTestCase {
     let file = file()
     let content = try document("Local writing that later syncs")
     let note = LibraryNote(id: "note", title: "Note", content: content, revision: 2)
-    var state = MobileStoreState(); state.workspaceID = "central"; state.notes[note.id] = note
+    var state = MobileStoreState(); state.workspaceID = "host"; state.notes[note.id] = note
     _ = try MobileStorePersistence.persist(state, at: file)
     XCTAssertFalse(try excluded(body(content, in: file)), "Unsynced writing is in backups")
     let committed = try Data(contentsOf: file)
@@ -340,7 +340,7 @@ final class MobileStoreBackupTests: XCTestCase {
     _ = try MobileStorePersistence.persist(synced, at: file)
     XCTAssertFalse(try excluded(body(content, in: file)), "Writing once needed here is never excluded again in place")
     // A body that was only ever a cache is still written excluded.
-    let cachedOnly = LibraryNote(id: "cached", title: "Cached", content: try document("Central copy only"), revision: 1)
+    let cachedOnly = LibraryNote(id: "cached", title: "Cached", content: try document("Library copy only"), revision: 1)
     var withCache = synced; withCache.notes[cachedOnly.id] = cachedOnly; withCache.bases[cachedOnly.id] = cachedOnly
     _ = try MobileStorePersistence.persist(withCache, at: file)
     XCTAssertTrue(try excluded(body(cachedOnly.content, in: file)))
@@ -362,7 +362,7 @@ final class MobileStoreBackupTests: XCTestCase {
     throw UnsettledBackupFlag()
   }
 
-  /// Uploaded bytes whose ID central later gives other content, then saved again here
+  /// Uploaded bytes whose ID the library later gives other content, then saved again here
   /// under a new ID: the reused blob path must end up in backups, as the only copy.
   func testBytesSavedAgainAfterTheirFirstUseLeftStayInBackups() async throws {
     for iteration in 0..<20 {

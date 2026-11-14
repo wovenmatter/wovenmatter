@@ -58,28 +58,6 @@ public struct PairedMacJoinReply: Codable, Sendable, Equatable {
     self.route = route; self.publicKey = publicKey; self.subjectSignature = subjectSignature
   }
 }
-public struct PairedMacProofChallenge: Codable, Sendable {
-  public let deviceID: String
-  public let credentialID: String
-  public let nonce: Data
-  public let targetDeviceID: String
-  public let targetLibraryID: String
-  public init(deviceID: String, credentialID: String, nonce: Data, targetDeviceID: String, targetLibraryID: String) {
-    self.deviceID = deviceID; self.credentialID = credentialID; self.nonce = nonce
-    self.targetDeviceID = targetDeviceID; self.targetLibraryID = targetLibraryID
-  }
-}
-public struct PairedMacProof: Codable, Sendable {
-  public let route: PairedMacRoute
-  public let signature: Data
-  public init(route: PairedMacRoute, signature: Data) { self.route = route; self.signature = signature }
-}
-public struct PairedWorkspaceEnrollment: Codable, Sendable {
-  public let workspaceID: String
-  public let deviceID: String
-  public init(workspaceID: String, deviceID: String) { self.workspaceID = workspaceID; self.deviceID = deviceID }
-}
-
 extension WorkspaceDatabase {
   public func savePairedMacRoute(_ route: PairedMacRoute) async throws {
     try route.validate()

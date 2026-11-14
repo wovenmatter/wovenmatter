@@ -8,8 +8,8 @@ Each paired Mac owns a complete local SQLite library, runs the normal desktop
 app, and accepts local edits while disconnected. Each Linux host keeps the same
 complete library through the `wovenmatter-library` executable. Macs and Linux
 hosts exchange changes peer-to-peer in both directions over tailnet HTTPS.
-There is no designated central database, promotion, handoff, or replacement
-authority. The Mac used to pair two other devices does not need to remain
+No member's database is authoritative, and there is no promotion, handoff, or
+replacement authority. The Mac used to pair two other devices does not need to remain
 online for them to synchronize with each other.
 
 A Mac can add Linux hosts and pair other Macs and iPhones. Every device has a
@@ -19,9 +19,9 @@ to every device (see [Woven everywhere](architecture/WOVEN_EVERYWHERE.md),
 approval on a Mac; discovery does not grant access. Library sync and execution
 requests between members are signed with the caller's device key, and no
 bearer is issued for them. Bearers remain only for the pairing handshake
-(`join/prepare`, `join`), `/v1/peers/usage`, `/v1/peers/credential`, phones
-paired before member keys existed, and the installing Mac's administrative
-link to a Linux host. Removing a device is a signed revocation that each device
+(`join/prepare`, `join`), `/v1/peers/usage`, a phone's pairing connection
+(pair, confirm, unpair), and the installing Mac's administrative link to a
+Linux host. Removing a device is a signed revocation that each device
 applies as soon as it syncs; it stays effective across stale membership replay,
 concurrent removals and re-pairing.
 
@@ -86,7 +86,7 @@ regardless of arrival order. Receive cursors commit with durable acceptance,
 including a durable pending record for a value whose bytes are still downloading. Push acknowledgement covers
 only the exact submitted page. Retries cannot duplicate commands or recovered
 notes. Changes are relayed with their original identity and causal context, so
-connected peers converge without choosing a central Mac. Background retries are
+connected peers converge without any Mac coordinating them. Background retries are
 bounded and ordinary disconnection is quiet.
 
 Settings → Apple Devices presents this Mac, pairing and the devices paired with

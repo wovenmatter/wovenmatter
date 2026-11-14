@@ -157,7 +157,7 @@ extension ApplicationModel {
               let workspace = try await database.libraryExecutionWorkspaces().first(where: { $0.id == workspaceID.uuidString.lowercased() && !$0.deleted }) else {
             throw ApplicationModelError.remoteHarnessUnavailable
         }
-        let client = try centralExecutionClient()
+        let client = try memberExecutionClient()
         let settings: SessionSettings
         do { settings = try await client.sessionOptions(workspace: workspace, runtimeKind: runtime, workingDirectory: directory, model: model) }
         catch let error as LibraryAPIError where directory != nil && error.code == "http_409" {

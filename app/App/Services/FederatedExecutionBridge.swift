@@ -76,16 +76,17 @@ struct FederatedExecutionSnapshot: Codable, Sendable {
 extension ApplicationModel {
     /// Signed execution between members. In a Dev snapshot it reaches only the
     /// workspaces the snapshot itself knows live (its own, paired members',
-    /// Linux hosts it added): `CentralExecutionClient` refuses every copied
+    /// Linux hosts it added): `MemberExecutionClient` refuses every copied
     /// owner (`retainedHistory`), whose chats stay read-only history.
-    func centralExecutionClient() throws -> CentralExecutionClient {
+    func memberExecutionClient() throws -> MemberExecutionClient {
         guard !isBackendFrontend, let libraryStore else { throw ApplicationModelError.libraryStoreUnavailable }
         if let federatedExecutionClient { return federatedExecutionClient }
         // The command journal lives beside the library it addresses, never in a
         // global directory a fixture or another instance could share.
         let directory = libraryStore.database.supportDirectory
-        let client = try CentralExecutionClient(database: libraryStore.database,
-            commandJournalURL: directory.appending(path: "central-execution-commands.json"),
+        try MemberExecutionClient.moveLegacyCommandJournal(in: directory)
+        let client = try MemberExecutionClient(database: libraryStore.database,
+            commandJournalURL: directory.appending(path: MemberExecutionClient.commandJournalName),
             makeSignedTransport: { [weak self] workspace in
                 // The iPhone is never an execution destination for signed calls.
                 // A workspace whose serving member is unknown cannot be addressed.
@@ -122,7 +123,7 @@ extension ApplicationModel {
               let workspace = try await database.libraryExecutionWorkspaces().first(where: { $0.id == id.uuidString.lowercased() && !$0.deleted }) else {
             throw LibraryAPIError(code: "unknown_workspace", message: "This Linux workspace is not in this library's workspaces yet. Reconnect it in Settings → Workspaces.")
         }
-        return try await centralExecutionClient().memberRoutes(for: workspace)
+        return try await memberExecutionClient().memberRoutes(for: workspace)
     }
 
     /// An agent's file on a Linux host, for Library retention: `path` as the
@@ -191,7 +192,7 @@ extension ApplicationModel {
         case .stop(let id, _), .configure(let id, _): targetID = id
         case .respond(let interaction, _): targetID = interaction.conversationID
         }
-        let client = try centralExecutionClient()
+        let client = try memberExecutionClient()
         if case .close(let id) = action {
             await client.unwatch(id)
             guard let workspace = try await client.workspace(conversationID: id) else {
@@ -241,7 +242,7 @@ extension ApplicationModel {
         return federatedSnapshot(id, workspace: workspace, client: client, transcript: client.transcripts[id], session: nil)
     }
 
-    private func federatedSnapshot(_ id: String, workspace: ExecutionWorkspace, client: CentralExecutionClient,
+    private func federatedSnapshot(_ id: String, workspace: ExecutionWorkspace, client: MemberExecutionClient,
                                    transcript: LibraryTranscript?, session: SessionSettings?) -> FederatedExecutionSnapshot {
         // A chat still moving to its host, or whose live view its owner ended,
         // shows its saved history with why, as a machine that is not connected does.
@@ -313,7 +314,7 @@ extension ApplicationModel {
                 }
                 self.federatedExecutionOwners[conversation.id] = id
                 do {
-                    let routes = try await self.centralExecutionClient().memberRoutes(for: workspace)
+                    let routes = try await self.memberExecutionClient().memberRoutes(for: workspace)
                     try await routes.adopt(JSONEncoder().encode(adoption))
                 } catch {
                     throw RemoteChatMoveDeferredError.classify(error, workspace: workspace.name)
@@ -367,10 +368,10 @@ extension ApplicationModel {
         }
         try await waitForAgentStop(conversationID: conversationID)
         try dispatchFence.check()
-        let client = try centralExecutionClient()
+        let client = try memberExecutionClient()
         try await client.refresh(conversationID: conversationID)
         try dispatchFence.check()
-        // The owner's live state can be newer than its central publication.
+        // The owner's live state can be newer than the history library sync brought.
         let active = client.transcripts[conversationID]?.activeRunID
         if requiresIdle && active != nil { throw LocalACPSessionDatabaseError.runAlreadyActive }
         if let expectedRunID, expectedRunID != active { throw LocalACPSessionDatabaseError.runNotFound }

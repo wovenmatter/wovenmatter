@@ -54,7 +54,7 @@ extension ApplicationModel {
     /// derive from the caller and request, so a retry replays receipts.
     func createMemberToolSession(sourceID: String, requestID: String, workspace: ExecutionWorkspace,
                                  runtime: AgentRuntimeKind, title: String, text: String) async throws -> WovenMatterToolResponse {
-        let client = try centralExecutionClient()
+        let client = try memberExecutionClient()
         guard let database = libraryStore?.database else { throw ApplicationModelError.libraryStoreUnavailable }
         let device = try await database.libraryIdentity().hostDeviceID
         let providers = try await client.providers(workspace: workspace)
@@ -113,7 +113,7 @@ extension ApplicationModel {
             let base: [String: JSONValue] = ["workspace": .string(workspace.id), "workspaceName": .string(workspace.name),
                                                     "workspaceKind": .string(workspace.kind.rawValue)]
             do {
-                let providers = try await centralExecutionClient().providers(workspace: workspace)
+                let providers = try await memberExecutionClient().providers(workspace: workspace)
                 let kinds = Set(AgentRuntimeKind.allCases.map(\.rawValue))
                 for provider in providers where kinds.contains(provider.runtimeKind) {
                     rows.append(.object(base.merging(["harness": .string(provider.runtimeKind),
@@ -170,7 +170,7 @@ extension ApplicationModel {
         }
         let id = try command.required("id", allowPositional: true)
         guard let workspace = try await memberSessionWorkspace(id: id, named: command.options["workspace"]) else { return nil }
-        let client = try centralExecutionClient()
+        let client = try memberExecutionClient()
         switch command.action {
         case "status":
             let creator = try await database.memberToolSession(id: id)?.callerID
@@ -221,7 +221,7 @@ extension ApplicationModel {
         return workspace
     }
 
-    private func memberConversation(_ client: CentralExecutionClient, _ workspace: ExecutionWorkspace,
+    private func memberConversation(_ client: MemberExecutionClient, _ workspace: ExecutionWorkspace,
                                     _ id: String) async throws -> LibraryConversation {
         guard UUID(uuidString: id) != nil else { throw WorkspaceToolError.invalid("Name the session by its ID.") }
         guard let found = try await client.conversations(workspace: workspace).first(where: { $0.id.lowercased() == id.lowercased() }) else {
@@ -247,7 +247,7 @@ extension ApplicationModel {
 
     /// State, pending questions and approvals, and the latest 20 messages
     /// (4000 characters each); `before` pages older ones.
-    func memberSessionStatus(client: CentralExecutionClient, workspace: ExecutionWorkspace,
+    func memberSessionStatus(client: MemberExecutionClient, workspace: ExecutionWorkspace,
                                      id: String, before: String?) async throws -> WovenMatterToolResponse {
         let found = try await memberConversation(client, workspace, id)
         let transcript = try await client.transcript(workspace: workspace, conversationID: found.id, before: before)
@@ -278,7 +278,7 @@ extension ApplicationModel {
         return .init(result: .object(result))
     }
 
-    private func memberCommand(_ client: CentralExecutionClient, _ workspace: ExecutionWorkspace, callerID: String,
+    private func memberCommand(_ client: MemberExecutionClient, _ workspace: ExecutionWorkspace, callerID: String,
                                requestID: String, conversation: String, step: String, kind: LibraryCommand.Kind,
                                runID: String? = nil, text: String? = nil, interactionID: String? = nil,
                                response: InteractionResponse? = nil) async throws -> LibraryCommandReceipt {
@@ -297,7 +297,7 @@ extension ApplicationModel {
     }
 
     /// Sends to an idle session, or steers a running one when its harness can.
-    private func memberSessionSend(client: CentralExecutionClient, workspace: ExecutionWorkspace, callerID: String,
+    private func memberSessionSend(client: MemberExecutionClient, workspace: ExecutionWorkspace, callerID: String,
                                    requestID: String, id: String, text: String) async throws -> WovenMatterToolResponse {
         let found = try await memberConversation(client, workspace, id)
         let receipt: LibraryCommandReceipt
@@ -315,7 +315,7 @@ extension ApplicationModel {
         return .init(result: .object(["session": .object(Self.describeMemberSession(found, on: workspace)), "receipt": Self.receiptValue(receipt)]))
     }
 
-    private func memberSessionStop(client: CentralExecutionClient, workspace: ExecutionWorkspace, callerID: String,
+    private func memberSessionStop(client: MemberExecutionClient, workspace: ExecutionWorkspace, callerID: String,
                                    requestID: String, id: String) async throws -> WovenMatterToolResponse {
         let found = try await memberConversation(client, workspace, id)
         let session = JSONValue.object(Self.describeMemberSession(found, on: workspace))
@@ -329,7 +329,7 @@ extension ApplicationModel {
     }
 
     /// Answers one pending question (or approval) of the session's current run.
-    private func memberSessionRespond(client: CentralExecutionClient, workspace: ExecutionWorkspace, callerID: String,
+    private func memberSessionRespond(client: MemberExecutionClient, workspace: ExecutionWorkspace, callerID: String,
                                       requestID: String, id: String, interactionID: String,
                                       response: InteractionResponse) async throws -> WovenMatterToolResponse {
         let found = try await memberConversation(client, workspace, id)
@@ -365,7 +365,7 @@ extension ApplicationModel {
                                    limit: Int) async throws -> WovenMatterToolResponse {
         guard let database = libraryStore?.database else { throw ApplicationModelError.libraryStoreUnavailable }
         let created = Set(try await database.memberToolSessions(callerID: callerID).map(\.id))
-        let rows = try await centralExecutionClient().conversations(workspace: workspace).filter { readsAll || created.contains($0.id.lowercased()) }
+        let rows = try await memberExecutionClient().conversations(workspace: workspace).filter { readsAll || created.contains($0.id.lowercased()) }
         return .init(result: .object(["rows": .array(rows.prefix(limit).map { .object(Self.describeMemberSession($0, on: workspace)) }),
                                       "hasMore": .bool(rows.count > limit)]))
     }
@@ -389,7 +389,7 @@ extension ApplicationModel {
                 continue
             }
             do {
-                let live = try await centralExecutionClient().conversations(workspace: workspace)
+                let live = try await memberExecutionClient().conversations(workspace: workspace)
                 for id in ids {
                     if let conversation = live.first(where: { $0.id.lowercased() == id }) {
                         rows.append(.object(Self.describeMemberSession(conversation, on: workspace)))

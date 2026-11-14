@@ -56,7 +56,7 @@ extension ApplicationModel {
 
     /// Sends a chat action to the Mac that runs it and surfaces its refusal.
     func performOnOwner(conversationID id: String, action: LibraryWorkspaceAction) async throws {
-        let receipt = try await centralExecutionClient().perform(conversationID: id, action: action)
+        let receipt = try await memberExecutionClient().perform(conversationID: id, action: action)
         if receipt.status == .rejected {
             throw LibraryAPIError(code: "rejected", message: receipt.message ?? WorkspaceConversationActionError.ownedByAnotherMac.localizedDescription)
         }

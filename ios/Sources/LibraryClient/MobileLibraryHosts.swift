@@ -155,6 +155,13 @@ public actor MobileLibraryHosts {
   /// current Mac host, else a signed connection to the preferred Mac.
   public func analyticsTransport(current: MobileLibraryHost?, connection: HTTPSLibraryTransport?,
                                  registry: [ExecutionWorkspace] = []) -> HTTPSLibraryTransport? {
+    macTransport(current: current, connection: connection, registry: registry)
+  }
+  /// A connection to a Mac: `connection` when it reaches the current host and
+  /// that host is a Mac, else a signed connection to the preferred Mac. Only a
+  /// Mac records analytics and removes this device when it unpairs.
+  public func macTransport(current: MobileLibraryHost?, connection: HTTPSLibraryTransport?,
+                           registry: [ExecutionWorkspace] = []) -> HTTPSLibraryTransport? {
     guard let host = state.analyticsHost(current: current, registry: registry) else { return nil }
     if let connection, host == current { return connection }
     return try? transport(for: host)

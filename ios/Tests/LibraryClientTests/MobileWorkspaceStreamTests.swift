@@ -135,17 +135,17 @@ final class MobileWorkspaceStreamTests: XCTestCase {
     XCTAssertEqual(methods, ["execution.receipt", "execution.receipt"])
   }
 
-  /// The library host's stream carries the central route: its own sessions,
+  /// The library host's stream carries the host route: its own sessions,
   /// which its library holds unassigned. A pushed summary keeps that identity
   /// (so the chat never moves to another route), a deleted chat stays deleted,
-  /// and an open central chat is followed live like any other.
-  func testTheLibraryHostsStreamCarriesCentralChatsWithTheLibrarysIdentity() async throws {
+  /// and an open host chat is followed live like any other.
+  func testTheLibraryHostsStreamCarriesHostChatsWithTheLibrarysIdentity() async throws {
     let store = try MobileStore(file: FileManager.default.temporaryDirectory.appending(path: UUID().uuidString).appending(path: "store.json"))
     let host = ExecutionWorkspace(id: "studio", libraryID: "library", ownerDeviceID: "mac", kind: .mac, name: "Studio",
-                                  capabilities: ["history.central.v1", StreamProtocol.capability])
+                                  capabilities: ["history.library.v1", StreamProtocol.capability])
     try await store.journal.upsertWorkspace(host, pending: false)
     try await store.apply(LibrarySnapshot(workspaceID: "library", cursor: 1, folders: [], notes: [], conversations: [
-      .init(id: "central-chat", title: "Plan", providerID: "local:codex", runtimeKind: "codex"),
+      .init(id: "host-chat", title: "Plan", providerID: "local:codex", runtimeKind: "codex"),
       .init(id: "trashed", title: "Trashed later", providerID: "local:codex", runtimeKind: "codex"),
     ]))
     try await store.apply(LibraryChangePage(workspaceID: "library", cursor: 2, changes: [
@@ -164,47 +164,47 @@ final class MobileWorkspaceStreamTests: XCTestCase {
     XCTAssertEqual(workspaceSub.stream, "workspace")
 
     // The host's execution API names its sessions as its workspace's.
-    let pushed = LibraryConversation(id: "central-chat", title: "Plan, running", providerID: "local:codex", runtimeKind: "codex",
+    let pushed = LibraryConversation(id: "host-chat", title: "Plan, running", providerID: "local:codex", runtimeKind: "codex",
                                      activeRunID: "run", libraryID: "library", workspaceID: "studio")
-    let brandNew = LibraryConversation(id: "new-central-chat", title: "Started on the Mac", providerID: "local:codex", runtimeKind: "codex",
+    let brandNew = LibraryConversation(id: "new-host-chat", title: "Started on the Mac", providerID: "local:codex", runtimeKind: "codex",
                                        libraryID: "library", workspaceID: "studio")
     let trashed = LibraryConversation(id: "trashed", title: "Deleted in the library", providerID: "local:codex", workspaceID: "studio")
     await socket.push(.item(.init(id: workspaceSub.id, payload: .conversations(.init(conversations: [pushed, brandNew, trashed], snapshot: true)))))
-    await eventually("summary") { await store.snapshot().conversations["central-chat"]?.title == "Plan, running" }
+    await eventually("summary") { await store.snapshot().conversations["host-chat"]?.title == "Plan, running" }
     let conversations = await store.snapshot().conversations
-    XCTAssertNil(conversations["central-chat"]?.workspaceID, "Still the central route")
-    XCTAssertNil(conversations["central-chat"]?.libraryID)
-    XCTAssertEqual(conversations["central-chat"]?.activeRunID, "run")
-    XCTAssertNil(conversations["new-central-chat"]?.workspaceID)
+    XCTAssertNil(conversations["host-chat"]?.workspaceID, "Still the host route")
+    XCTAssertNil(conversations["host-chat"]?.libraryID)
+    XCTAssertEqual(conversations["host-chat"]?.activeRunID, "run")
+    XCTAssertNil(conversations["new-host-chat"]?.workspaceID)
     XCTAssertNil(conversations["trashed"], "A chat the library deleted is not brought back")
 
-    // The open central chat streams: its transcript (with activity projections and run state) and capabilities.
-    await stream.open(conversationID: "central-chat")
+    // The open host chat streams: its transcript (with activity projections and run state) and capabilities.
+    await stream.open(conversationID: "host-chat")
     await eventually("conversation subscription") { await socket.subscriptions.count == 2 }
     let chat = await socket.subscriptions[1]
     XCTAssertEqual(chat.stream, "conversation")
-    XCTAssertEqual(chat.params.conversationID, "central-chat")
-    await socket.push(.item(.init(id: chat.id, payload: .transcript(.init(transcript: .init(conversationID: "central-chat", messages: [
-      .init(id: "m1", conversationID: "central-chat", runID: "run", role: "user", content: "Plan the release",
+    XCTAssertEqual(chat.params.conversationID, "host-chat")
+    await socket.push(.item(.init(id: chat.id, payload: .transcript(.init(transcript: .init(conversationID: "host-chat", messages: [
+      .init(id: "m1", conversationID: "host-chat", runID: "run", role: "user", content: "Plan the release",
             attachments: [.init(id: "sha", name: "plan.md", mimeType: "text/markdown", byteCount: 12)]),
     ], activities: [.init(id: "a1", runID: "run", title: "Read file", status: "running", projectionJSON: #"{"id":"a1","kind":"tool"}"#)],
       activeRunID: "run", runs: [.init(id: "run", status: "running")]), snapshot: true)))))
     let capabilities = HarnessCapabilities(id: "local:codex", runtimeKind: "codex", displayName: "Codex", available: true, canSteer: true)
     await socket.push(.item(.init(id: chat.id, payload: .capabilities(.init(capabilities: capabilities)))))
-    await eventually("capabilities") { updates.all.contains(.capabilities(conversationID: "central-chat", capabilities)) }
-    let transcript = await store.snapshot().transcripts["central-chat"]
+    await eventually("capabilities") { updates.all.contains(.capabilities(conversationID: "host-chat", capabilities)) }
+    let transcript = await store.snapshot().transcripts["host-chat"]
     XCTAssertEqual(transcript?.activeRunID, "run")
     XCTAssertEqual(transcript?.runs?.first?.status, "running")
     XCTAssertEqual(transcript?.activities.first?.projectionJSON, #"{"id":"a1","kind":"tool"}"#, "Activity projections arrive whole")
     XCTAssertEqual(transcript?.messages.first?.attachments?.first?.name, "plan.md")
-    XCTAssertTrue(updates.all.contains(.transcript(conversationID: "central-chat")))
+    XCTAssertTrue(updates.all.contains(.transcript(conversationID: "host-chat")))
 
     // Another Mac's stream (not the host) names its sessions as its own.
     await stream.setLibraryHost(false)
     var other = brandNew; other.title = "Renamed"
     await socket.push(.item(.init(id: workspaceSub.id, payload: .conversations(.init(conversations: [other], snapshot: false)))))
-    await eventually("renamed") { await store.snapshot().conversations["new-central-chat"]?.title == "Renamed" }
-    let moved = await store.snapshot().conversations["new-central-chat"]?.workspaceID
+    await eventually("renamed") { await store.snapshot().conversations["new-host-chat"]?.title == "Renamed" }
+    let moved = await store.snapshot().conversations["new-host-chat"]?.workspaceID
     XCTAssertEqual(moved, "studio")
   }
 
@@ -230,15 +230,16 @@ final class MobileWorkspaceStreamTests: XCTestCase {
     let bytes = Data("fixture image bytes".utf8)
     let digest = SHA256.hash(data: bytes).hexString
     let http = AttachmentHTTP(bytes: bytes)
-    let credential = DirectWorkspaceCredential(endpoint: URL(string: "https://linux.tail1.ts.net/wovenmatter-execution/linux")!,
-                                               libraryID: "library", workspaceID: "linux", deviceID: "phone", token: "test-token")
-    let transport = try HTTPSExecutionWorkspaceTransport(credential: credential, performer: http)
+    let identity = try MobileMemberKeyVault.loadOrCreate(deviceID: UUID().uuidString.lowercased(), storage: .memory())
+    let workspace = ExecutionWorkspace(id: "linux", libraryID: "library", ownerDeviceID: "linux", kind: .linux, name: "Linux",
+      endpoint: URL(string: "https://linux.tail1.ts.net/wovenmatter-execution/linux")!, executionDeviceID: UUID().uuidString.lowercased())
+    let transport = try HTTPSExecutionWorkspaceTransport(workspace: workspace, identity: identity, performer: http)
     let reference = LibraryAttachmentReference(id: digest, name: "photo.png", mimeType: "image/png")
     let read = try await transport.attachment(reference)
     XCTAssertEqual(read, bytes)
     XCTAssertEqual(http.requests.first?.url?.path, "/wovenmatter-execution/linux/v1/execution/attachments/" + digest)
     XCTAssertEqual(http.requests.first?.url?.query, "name=photo.png")
-    XCTAssertEqual(http.requests.first?.value(forHTTPHeaderField: "Authorization"), "Bearer test-token")
+    XCTAssertNil(http.requests.first?.value(forHTTPHeaderField: "Authorization"), "Signed, never a bearer")
     // Bytes that do not match the digest are refused; a name that is not a digest is never requested.
     http.bytes = Data("damaged".utf8)
     do { _ = try await transport.attachment(reference); XCTFail("Accepted damaged bytes") } catch {}

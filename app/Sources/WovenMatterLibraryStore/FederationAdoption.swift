@@ -7,7 +7,8 @@ import CSQLite
 import WovenMatterCore
 
 extension WorkspaceDatabaseConnection {
-  /// Trusted central-host migration, never an HTTP peer claim. Ownership is
+  /// This Mac moving one of its sessions to a Linux host it added; never an
+  /// HTTP peer claim. Ownership is
   /// fenced durably before remote enrollment; failure must retry this same
   /// adoption rather than falling back to the legacy native attachment.
   public func prepareExecutionAdoption(conversationID: String, workspaceID: String, deviceID: String) throws -> ExecutionAdoption {
@@ -16,7 +17,7 @@ extension WorkspaceDatabaseConnection {
       guard deviceID == identity.hostDeviceID,
             let workspace = try federationWorkspaceUnlocked(workspaceID), !workspace.deleted,
             workspace.kind == .linux, workspace.ownerDeviceID == identity.hostDeviceID else {
-        throw federationError("wrong_owner", "Only the central host may transfer one of its configured remote sessions.")
+        throw federationError("wrong_owner", "Only the Mac that added this Linux workspace can move its sessions there.")
       }
       if let saved = try federationValuesUnlocked("SELECT payload FROM execution_adoptions WHERE conversation_id=?", bindings: [conversationID], as: ExecutionAdoption.self).first {
         guard saved.workspaceID == workspaceID,

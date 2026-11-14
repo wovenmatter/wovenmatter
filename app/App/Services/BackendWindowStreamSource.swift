@@ -7,7 +7,7 @@ import WovenMatterLibraryStore
 /// (`ExecutionWindowStreamServer`). A conversation this Mac runs is read from
 /// its own tables, exactly as for a member's WebSocket. A conversation another
 /// machine runs is relayed from what this server already holds for it: the
-/// one WebSocket it keeps to that machine (`CentralExecutionClient`), read
+/// one WebSocket it keeps to that machine (`MemberExecutionClient`), read
 /// again only when that stream pushes or an action finishes. A machine this
 /// server cannot reach shows the history library sync brought, marked offline;
 /// nothing polls it.
@@ -42,7 +42,7 @@ final class BackendWindowStreamSource: ExecutionConversationSource {
         openCounts[conversationID, default: 0] += 1
         guard kind == .remote, openCounts[conversationID] == 1 else { return }
         // Every chat open in a window stays live, however many are open.
-        (try? model.centralExecutionClient())?.hold(conversationID)
+        (try? model.memberExecutionClient())?.hold(conversationID)
         await read(conversationID)
     }
 

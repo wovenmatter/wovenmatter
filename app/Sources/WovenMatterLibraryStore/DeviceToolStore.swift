@@ -60,7 +60,7 @@ extension WorkspaceDatabaseConnection {
             ? workspace.executionDeviceID == deviceID
             : (workspace.kind == .ios || workspace.kind == .mac) && workspace.ownerDeviceID == deviceID
               && (workspace.executionDeviceID ?? workspace.ownerDeviceID) == deviceID else {
-      throw LibraryAPIError(code: "wrong_owner", message: "Sync this device's conversation before using the central library tools.")
+      throw LibraryAPIError(code: "wrong_owner", message: "Sync this device's conversation before using library tools on this Mac.")
     }
     if let supplied = command.options["request-id"] {
       guard UUID(uuidString: supplied) == UUID(uuidString: value.request.requestID) else {
@@ -72,7 +72,7 @@ extension WorkspaceDatabaseConnection {
       if group.isAutomation, command.action == "cancel" { return }
       guard group == .html || value.enabledGroups.contains(group) else { throw WorkspaceToolError.disabled(group) }
       // History retains the desktop's independent attachment/management checks.
-      // All other groups require the persisted central session policy as well.
+      // All other groups require the session's persisted tool policy here as well.
       if group != .history { try requireToolUnlocked(group, sessionID: value.conversationID) }
     }
   }

@@ -6,7 +6,6 @@ private struct MCPMalformedJSON: Error {}
 @MainActor
 public protocol DeviceCommandServing: AnyObject {
     func executeTool(_ request: LibraryToolRequest, deviceID: String) async throws -> WovenMatterToolResponse
-    func provisionExecutionWorkspace(id: String, device: PairedDevice) async throws -> ExecutionCredential
     func readWorkspace(_ request: LibraryWorkspaceRead) async throws -> LibraryWorkspaceResult
     func analyticsPreference() async throws -> ProductAnalyticsPreference
     func setAnalyticsPreference(_ change: ProductAnalyticsPreferenceChange) async throws -> ProductAnalyticsPreference
@@ -201,15 +200,12 @@ private extension DeviceAPI {
 }
 
 public extension DeviceCommandServing {
-    func analyticsPreference() async throws -> ProductAnalyticsPreference { throw LibraryAPIError(code:"unsupported",message:"Update the central Mac to configure analytics.") }
-    func setAnalyticsPreference(_ change: ProductAnalyticsPreferenceChange) async throws -> ProductAnalyticsPreference { throw LibraryAPIError(code:"unsupported",message:"Update the central Mac to configure analytics.") }
-    func ingestAnalytics(_ batch: ProductAnalyticsBatch) async throws -> ProductAnalyticsAcknowledgement { throw LibraryAPIError(code:"unsupported",message:"Update the central Mac to configure analytics.") }
+    func analyticsPreference() async throws -> ProductAnalyticsPreference { throw LibraryAPIError(code:"unsupported",message:"Product analytics are recorded on a Mac.") }
+    func setAnalyticsPreference(_ change: ProductAnalyticsPreferenceChange) async throws -> ProductAnalyticsPreference { throw LibraryAPIError(code:"unsupported",message:"Product analytics are recorded on a Mac.") }
+    func ingestAnalytics(_ batch: ProductAnalyticsBatch) async throws -> ProductAnalyticsAcknowledgement { throw LibraryAPIError(code:"unsupported",message:"Product analytics are recorded on a Mac.") }
 
     func executeTool(_ request: LibraryToolRequest, deviceID: String) async throws -> WovenMatterToolResponse {
-        throw LibraryAPIError(code: "unsupported", message: "Update the central Mac to use its tools from this device.")
-    }
-    func provisionExecutionWorkspace(id: String, device: PairedDevice) async throws -> ExecutionCredential {
-        throw LibraryAPIError(code: "unsupported", message: "This host does not provision independent execution workspaces.")
+        throw LibraryAPIError(code: "unsupported", message: "Library tools for other devices run on a Mac.")
     }
     func readWorkspace(_ request: LibraryWorkspaceRead) async throws -> LibraryWorkspaceResult {
         throw LibraryAPIError(code: "unsupported", message: "Update your Mac to use this feature.")
@@ -237,6 +233,10 @@ public final class DeviceAPI {
     /// A phone paired with its member key: the host signs its member entry
     /// (replacing an earlier key the user is pairing again). Throws to refuse.
     private let onMemberPaired: @MainActor @Sendable (_ deviceID: String, _ name: String, _ publicKey: Data) async throws -> Void
+    /// A phone member unpairs itself (`POST /v1/pair/unpair`, signed): the
+    /// host removes it from the library as Apple Devices does. Nil where this
+    /// machine cannot remove members; the phone is then told to use a Mac.
+    private let onMemberUnpaired: (@MainActor @Sendable (_ deviceID: String) async throws -> Void)?
     /// `GET /v1/sync/status`: every peer's state, so a phone can show
     /// "Update everything" when devices disagree on versions.
     private let syncStatus: @MainActor @Sendable () async -> LibrarySyncStatus?
@@ -246,7 +246,7 @@ public final class DeviceAPI {
                 commands: any DeviceCommandServing,
                 isActive: @escaping @MainActor @Sendable () -> Bool,
                 onCancelPairing: @escaping @MainActor @Sendable (PairedDevice) async throws -> Void = { _ in
-                    throw LibraryAPIError(code: "unavailable", message: "Revoke this device from the central Mac settings.")
+                    throw LibraryAPIError(code: "unavailable", message: "Unpair this device in Apple Devices on the Mac it paired with.")
                 },
                 discovery: @escaping @MainActor @Sendable () -> DiscoveryAdvertisement? = { nil },
                 onPair: @escaping @MainActor @Sendable () async -> Void = {},
@@ -256,10 +256,11 @@ public final class DeviceAPI {
                     throw LibraryAPIError(code: "linked_data_unavailable", message: "This database is unavailable on the Mac.")
                 }, members: MemberDirectory? = nil,
                 onMemberPaired: @escaping @MainActor @Sendable (String, String, Data) async throws -> Void = { _, _, _ in },
+                onMemberUnpaired: (@MainActor @Sendable (String) async throws -> Void)? = nil,
                 syncStatus: @escaping @MainActor @Sendable () async -> LibrarySyncStatus? = { nil },
                 hostName: @escaping @MainActor @Sendable () async -> String? = { nil }) {
         self.hostName = hostName
-        self.members = members; self.onMemberPaired = onMemberPaired; self.syncStatus = syncStatus
+        self.members = members; self.onMemberPaired = onMemberPaired; self.onMemberUnpaired = onMemberUnpaired; self.syncStatus = syncStatus
         self.database = database; self.authentication = authentication; self.commands = commands
         self.isActive = isActive; self.onPair = onPair; self.onMutation = onMutation; self.onRequest = onRequest
         self.linkedData = linkedData; self.discovery = discovery; self.onCancelPairing = onCancelPairing
@@ -275,16 +276,13 @@ public final class DeviceAPI {
         #endif
     }
 
-    /// A long request re-checks its principal: a grant must still be issued,
-    /// a member must still be on the member list.
+    /// A long request re-checks its member: it must still be on the member list.
     func isCurrent(_ device: PairedDevice) async -> Bool {
-        if device.isMember { return await members?.member(device.id) != nil }
-        return await authentication.isCurrent(device)
+        guard device.isMember else { return false }
+        return await members?.member(device.id) != nil
     }
-    func reauthenticate(_ device: PairedDevice, bearer: String) async throws {
-        if device.isMember {
-            guard await members?.member(device.id) != nil else { throw LibraryAPIError(code: "unauthorized", message: MemberRequestError.unknown.message) }
-        } else { _ = try await authentication.authenticate(bearer: bearer) }
+    func reauthenticate(_ device: PairedDevice) async throws {
+        guard await isCurrent(device) else { throw LibraryAPIError(code: "unauthorized", message: MemberRequestError.unknown.message) }
     }
 
     public func handle(_ request: LibraryHTTPRequest) async -> LibraryHTTPResponse {
@@ -369,11 +367,6 @@ public final class DeviceAPI {
                         result.libraryIDs = Array(Set(try await database.libraryExecutionWorkspaces().filter { !$0.deleted }.map(\.libraryID))).sorted()
                     }
                 }
-                // A client that confirms nothing is added at once, as before.
-                if let memberKey, command.requiresConfirmation != true {
-                    do { try await onMemberPaired(command.deviceID.lowercased(), command.deviceName, memberKey) }
-                    catch let error as LibraryAPIError { return .error(error.code, error.message, status: 409) }
-                }
                 await onPair()
                 return try .json(result)
             }
@@ -381,7 +374,6 @@ public final class DeviceAPI {
                 return .error("version_mismatch", "Update Woven Matter on both devices to compatible versions.", status: 426)
             }
             let device: PairedDevice
-            let bearer: String
             if MemberRequestVerifier.isSigned(request.headers) {
                 guard let members else { return .error("unauthorized", "This device does not accept member requests yet.", status: 401) }
                 let key: MemberKey
@@ -392,15 +384,14 @@ public final class DeviceAPI {
                     return .error(error.code, error.message, status: error.code == "wrong_device" ? 403 : 401)
                 }
                 guard let member = await members.member(key.deviceID) else { return .error("unauthorized", MemberRequestError.unknown.message, status: 401) }
-                device = .member(member); bearer = ""
+                device = .member(member)
             } else {
-                guard let presented = request.bearer else { return .error("unauthorized", "Pair this iPhone in Mac Settings.", status: 401) }
-                let metadata: DeviceMetadata?
-                if let rawKind = request.headers["x-woven-device-kind"], let kind = DeviceKind(rawValue: rawKind) {
-                    metadata = .init(kind: kind, osVersion: request.headers["x-woven-os-version"], appVersion: request.headers["x-woven-app-version"], developmentInstance: request.headers["x-woven-development-instance"])
-                } else { metadata = nil }
-                device = try await authentication.authenticate(bearer: presented, metadata: metadata)
-                bearer = presented
+                // A pairing bearer only confirms (above) or ends its own pairing;
+                // every other request is signed with the device's member key.
+                guard request.method == "POST", path == "/v1/pair/unpair", let presented = request.bearer else {
+                    return .error("unauthorized", "Sign this request with a member device key. Pair this device again if it has none.", status: 401)
+                }
+                device = try await authentication.authenticate(bearer: presented)
             }
             guard isActive() else {
                 return .error("unavailable", "Sharing with devices stopped before this request was accepted.", status: 503)
@@ -416,7 +407,16 @@ public final class DeviceAPI {
             if path == "/v1/analytics/preference", request.method == "POST" { return try .json(await commands.setAnalyticsPreference(JSONDecoder().decode(ProductAnalyticsPreferenceChange.self,from:request.body))) }
             if path == "/v1/analytics/events", request.method == "POST" { return try .json(await commands.ingestAnalytics(JSONDecoder().decode(ProductAnalyticsBatch.self,from:request.body))) }
             if request.method == "POST", path == "/v1/pair/unpair" {
-                guard !device.isMember else { return .error("unsupported", "Remove this device from a Mac's device list.", status: 400) }
+                if device.isMember {
+                    // Only a phone unpairs itself; a Mac is unpaired from another Mac.
+                    guard [.iPhone, .iPad].contains(device.kind), let onMemberUnpaired else {
+                        return .error("unsupported", "Unpair this device in Apple Devices on one of your Macs.", status: 400)
+                    }
+                    do { try await onMemberUnpaired(device.id) }
+                    catch let error as LibraryAPIError { return .error(error.code, error.message, status: 409) }
+                    await onPair()
+                    return try .json(["unpaired": true])
+                }
                 try await onCancelPairing(device)
                 if await authentication.isCurrent(device) { try await authentication.revoke(deviceID: device.id, expected: device) }
                 await onPair()
@@ -430,7 +430,7 @@ public final class DeviceAPI {
                 return try .json(try await database.libraryConnectionWorkspaces(activeDeviceIDs: active))
             }
             if path.hasPrefix("/v1/federation/") {
-                let response = try await FederationAPI.handle(request, path: path, query: values, device: device, database: database, commands: commands)
+                let response = try await FederationAPI.handle(request, path: path, query: values, device: device, database: database)
                 if request.method == "POST", response.status == 200 { onMutation() }
                 return response
             }
@@ -478,7 +478,7 @@ public final class DeviceAPI {
                     var page = try await database.libraryChanges(after: after, limit: limit)
                     while page.changes.isEmpty && !page.resetRequired && Date() < deadline && isActive() {
                         try await Task.sleep(for: .milliseconds(250))
-                        try await reauthenticate(device, bearer: bearer)
+                        try await reauthenticate(device)
                         page = try await database.libraryChanges(after: after, limit: limit)
                     }
                     return try .json(page)
@@ -516,7 +516,7 @@ public final class DeviceAPI {
                     defer { linkedReadInFlight = false }
                     let data = try await linkedData(link)
                     guard isActive() else { return .error("unavailable", "Sharing with devices is stopped.", status: 503) }
-                    try await reauthenticate(device, bearer: bearer)
+                    try await reauthenticate(device)
                     let response = try LibraryHTTPResponse.json(LinkedDataPreview(noteID: note.id, noteRevision: note.revision,
                         tableID: tableID, columns: data.columns, rows: data.rows, json: data.json))
                     guard response.body.count <= 32 * 1_024 * 1_024 else {
@@ -556,7 +556,7 @@ public final class DeviceAPI {
                     let read = try JSONDecoder().decode(LibraryWorkspaceRead.self, from: request.body)
                     let value = try await commands.readWorkspace(read)
                     guard isActive() else { return .error("unavailable", "Sharing with devices is stopped.", status: 503) }
-                    try await reauthenticate(device, bearer: bearer)
+                    try await reauthenticate(device)
                     return try .json(value)
                 }
                 if path == "/v1/mutations" {

@@ -97,7 +97,7 @@ final class ProductAnalyticsModel {
       return
     }
     // This frontend also avoids making an RPC for every qualifying action.
-    // Central admission enforces the same limit across all connected devices.
+    // The Mac that records analytics enforces the same limit for every device.
     if name == .appOpened || name == .active {
       let key = "wovenmatter.analytics.last-attempt." + preference.analyticsID + "." + name.rawValue
       let now = Date()

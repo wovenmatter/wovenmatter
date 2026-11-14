@@ -69,7 +69,7 @@ extension DeviceCommandService {
             }, hasMore: samples.count > 200)
         case .session(let id):
             if try await store.database.libraryExecutionOwner(conversationID: id) != nil {
-                return try await model.centralExecutionClient().readWorkspace(conversationID: id, request: request)
+                return try await model.memberExecutionClient().readWorkspace(conversationID: id, request: request)
             }
             var settings = try await sessionSettings(id)
             settings.goal = try await store.database.sessionGoals().first { $0.sessionID == id }
@@ -135,13 +135,13 @@ extension DeviceCommandService {
             try await store.mutateNote(id: id, mutation: mutation, expectedRevision: revision)
         case let .goal(id, mutation):
             if try await store.database.libraryExecutionOwner(conversationID: id) != nil {
-                _ = try await model.centralExecutionClient().perform(conversationID: id, action: action)
+                _ = try await model.memberExecutionClient().perform(conversationID: id, action: action)
             } else {
                 _ = try await model.mutateConversationGoal(id: id, mutation: mutation)
             }
         case let .configureSession(id, selectedModel, thinking, permission):
             if try await store.database.libraryExecutionOwner(conversationID: id) != nil {
-                _ = try await model.centralExecutionClient().perform(conversationID: id, action: action)
+                _ = try await model.memberExecutionClient().perform(conversationID: id, action: action)
                 return
             }
             let settings = try await sessionSettings(id)
@@ -158,7 +158,7 @@ extension DeviceCommandService {
             try await model.applyStagedSessionSelections(conversationID: id)
         case let .sessionTools(id, enabled, confirmed):
             if try await store.database.libraryExecutionOwner(conversationID: id) != nil {
-                _ = try await model.centralExecutionClient().perform(conversationID: id, action: action)
+                _ = try await model.memberExecutionClient().perform(conversationID: id, action: action)
                 return
             }
             _ = try await conversation(id)

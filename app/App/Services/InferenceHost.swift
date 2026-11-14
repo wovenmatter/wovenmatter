@@ -13,24 +13,17 @@ final class InferenceHost {
     typealias Run = @Sendable (Data, @escaping @Sendable (Data) async throws -> Void) async throws -> Void
     private let preparePayload: Prepare
     private let injectedRun: Run?
-    private let authentication: ExecutionAuthentication
     private let descriptor: ExecutionWorkspace
     private let directory: URL
     private let isActive: @MainActor @Sendable () -> Bool
-    /// Live authorization of the presented grant, by device and provenance. It
-    /// runs before provider credentials are prepared and again before a model
-    /// stream starts, so a revoked provisioning Mac ends access immediately
-    /// rather than when its grant is eventually deleted.
-    typealias Authorize = @MainActor @Sendable (String, String?) async throws -> Void
-    private let authorize: Authorize
     /// Signed member requests (`ios` and `mac`). Nil until this Mac has a member directory.
     private let members: MemberDirectory?
-    init(authentication: ExecutionAuthentication, descriptor: ExecutionWorkspace, directory: URL,
-         isActive: @escaping @MainActor @Sendable () -> Bool, authorize: @escaping Authorize, members: MemberDirectory? = nil,
+    init(descriptor: ExecutionWorkspace, directory: URL,
+         isActive: @escaping @MainActor @Sendable () -> Bool, members: MemberDirectory? = nil,
          preparePayload: @escaping Prepare = { try await ProviderAccountCoordinator.shared.prepare("local").data() },
          run: Run? = nil) {
-        self.authentication = authentication; self.descriptor = descriptor; self.directory = directory; self.isActive = isActive
-        self.authorize = authorize; self.members = members; self.preparePayload = preparePayload; self.injectedRun = run
+        self.descriptor = descriptor; self.directory = directory; self.isActive = isActive
+        self.members = members; self.preparePayload = preparePayload; self.injectedRun = run
     }
 
     /// Who is asking and how to re-check them before credentials are prepared

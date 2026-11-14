@@ -130,7 +130,7 @@ final class WorkspaceAssetSession: NSObject, @preconcurrency WMBrowserPageDelega
     }
 
     private func prepareBrowser() throws {
-        guard KeychainAccess.enforceCentralAuthorization() == 0 else {
+        guard KeychainAccess.disableUnrequestedPrompts() == 0 else {
             throw BrowserCredentialStore.AccessError.unavailable(-25308)
         }
         // Credentials are optional. Without access, CEF uses an in-memory

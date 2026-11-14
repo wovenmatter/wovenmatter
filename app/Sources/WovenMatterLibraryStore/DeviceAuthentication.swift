@@ -56,7 +56,7 @@ public enum DeviceGrantRole: String, Codable, Sendable {
   case client
   /// An explicitly approved Mac pairing that has not completed its signed join.
   case peerCandidate
-  /// A paired Mac admitted through a signed join or pinned handshake.
+  /// A paired Mac admitted through a signed join.
   case peer
 }
 
@@ -103,24 +103,12 @@ public actor DeviceAuthentication {
     var roster: [String: RosterRecord]?
     /// Every known unpair event, signed by the Mac that made it.
     var revocations: [PeerRevocation]?
-    /// Execution access this Mac issued for a device on another Mac's behalf.
-    var delegations: [Delegation]?
   }
   struct RosterRecord: Codable, Equatable {
     var name: String
     var kind: DeviceKind
     var introducedBy: String
     var admissions: [PeerAdmission]
-  }
-  /// One delegated grant's provenance. A staged record exists only while its
-  /// issuance is in flight; an issued record lasts until that grant is
-  /// replaced by a successful issuance or revoked with its provisioning Mac.
-  public struct Delegation: Codable, Equatable, Sendable {
-    public let deviceID: String
-    public let workspaceID: String
-    public let provisionedBy: String
-    public let acknowledged: [String]
-    public var issued: Bool?
   }
   private struct Offer { let digest: Data; let expiresAt: Date; let deviceID: String? }
   private let fileURL: URL
@@ -211,7 +199,7 @@ public actor DeviceAuthentication {
   }
 
   /// Shared membership: accepted Mac admissions with their original signatures,
-  /// names of mobile devices for display and delegation, and signed unpairs.
+  /// names of mobile devices for display, and signed unpairs.
   public func peerMembership() -> PeerMembership {
     var entries: [PeerRosterEntry] = []
     for (id, record) in (state.roster ?? [:]).sorted(by: { $0.key < $1.key }) {
@@ -295,7 +283,7 @@ public actor DeviceAuthentication {
       roster[admission.subjectDeviceID] = record; next.roster = roster
       if admission.subjectDeviceID != own.deviceID { next.pins = (next.pins ?? [:]).merging([admission.subjectDeviceID: pin]) { current, _ in current } }
     }
-    // Mobile names are display and delegation attestation only; they can
+    // Mobile names are for display only; they can
     // never describe a pinned Mac, this Mac, or a non-canonical identity.
     for entry in membership.entries where entry.admission == nil && entry.kind != .mac {
       guard let id = PeerIdentifier.canonical(entry.deviceID), id != own.deviceID, next.pins?[id] == nil,
@@ -421,142 +409,6 @@ public actor DeviceAuthentication {
     return device
   }
 
-  // MARK: Learned-peer handshake
-
-  private struct IssuedChallenge { let request: PairedMacChallengeRequest; let challenge: PairedMacChallenge; let expires: Date }
-  /// Issued challenges live only in this process: a restart invalidates them.
-  private var challenges: [String: IssuedChallenge] = [:]
-  private let serviceID = UUID().uuidString.lowercased()
-
-  /// A Mac this Mac already admits (for example one introduced while another
-  /// Mac is offline) asks for its own grant here. This Mac signs a one-use
-  /// challenge with its key; nothing is issued until the requester signs it.
-  public func issueChallenge(_ request: PairedMacChallengeRequest, route: PairedMacRoute, own: PeerSelf) throws -> PairedMacChallenge {
-    identity = own
-    guard let requester = PeerIdentifier.canonical(request.requesterDeviceID), PeerIdentifier.canonical(request.requesterLibraryID) != nil,
-          request.targetDeviceID == own.deviceID, request.targetLibraryID == own.libraryID, requester != own.deviceID,
-          route.deviceID == own.deviceID, state.pins?[requester]?.libraryID == request.requesterLibraryID,
-          Self.isActiveMac(requester, in: state, own: own.deviceID) else { throw Self.unauthorized }
-    let instant = now()
-    challenges = challenges.filter { $0.value.expires > instant }
-    guard challenges.count < 128 else { throw Self.error("rate_limited", "Too many paired Mac handshakes. Try again shortly.") }
-    let id = UUID().uuidString.lowercased(), nonce = PairedMacNetwork.nonce()
-    let signature = try own.key.signature(for: PairedMacChallenge.statement(challengeID: id, nonce: nonce, serviceID: serviceID, request: request, route: route))
-    let challenge = PairedMacChallenge(challengeID: id, nonce: nonce, serviceID: serviceID, route: route, signature: signature)
-    challenges[id] = .init(request: request, challenge: challenge, expires: instant.addingTimeInterval(60))
-    return challenge
-  }
-
-  /// Consumes the challenge before any check or side effect, verifies the
-  /// requester's pinned key, and issues a grant valid only at this Mac. A
-  /// retry after a lost reply needs a new challenge and supersedes the grant.
-  public func completeHandshake(_ handshake: PairedMacHandshake, own: PeerSelf) throws -> PairedMacGrant {
-    guard let issued = challenges.removeValue(forKey: handshake.challengeID) else { throw Self.unauthorized }
-    let requester = handshake.request.requesterDeviceID
-    guard issued.expires > now(), issued.request == handshake.request, PeerIdentifier.canonical(handshake.operationID) != nil,
-          Self.isActiveMac(requester, in: state, own: own.deviceID), let pin = state.pins?[requester],
-          let key = try? Curve25519.Signing.PublicKey(rawRepresentation: pin.publicKey),
-          key.isValidSignature(handshake.signature, for: PairedMacHandshake.statement(challenge: issued.challenge, request: handshake.request,
-            operationID: handshake.operationID)) else { throw Self.unauthorized }
-    let token = try Self.randomToken()
-    var next = state
-    next.devices.removeAll { $0.id == requester && $0.origin == "handshake" }
-    var device = PairedDevice(id: requester, name: state.roster?[requester]?.name ?? "Mac", pairedAt: now(), metadata: .init(kind: .mac),
-      credentialHash: Self.digest(token))
-    device.role = .peer; device.acknowledged = Self.events(requester, in: state).sorted(); device.origin = "handshake"
-    next.devices.append(device)
-    try persist(next); state = next
-    return .init(token: token)
-  }
-
-  /// Signs a fresh challenge for a requester holding a peer grant this Mac
-  /// issued, binding the expected target identity and route.
-  public func peerProof(_ challenge: PairedMacProofChallenge, route: PairedMacRoute, own: PeerSelf) throws -> PairedMacProof {
-    guard challenge.nonce.count == 32, challenge.targetDeviceID == own.deviceID, challenge.targetLibraryID == own.libraryID,
-          route.deviceID == own.deviceID,
-          let grant = state.devices.first(where: {
-            $0.id == challenge.deviceID && $0.role == .peer && Self.isActive($0, in: state)
-              && SHA256.hash(data: $0.credentialHash).hexString == challenge.credentialID
-          }), isAuthorizedPeer(grant) else { throw Self.unauthorized }
-    return .init(route: route, signature: try own.key.signature(for: PairedMacProof.statement(challenge, route: route)))
-  }
-
-  // MARK: Delegated execution provenance
-
-  /// Stages a paired Mac's request for this Mac's execution access for one of
-  /// its mobile devices. Earlier provenance for that device and workspace is
-  /// kept until the new grant is actually issued.
-  public func stageDelegation(deviceID: String, workspaceID: String, provisionedBy: String) throws {
-    guard PeerIdentifier.canonical(deviceID) != nil, state.pins?[deviceID] == nil, deviceID != identity?.deviceID else { throw Self.unauthorized }
-    var next = state
-    var delegations = (next.delegations ?? []).filter { !($0.deviceID == deviceID && $0.workspaceID == workspaceID && $0.provisionedBy == provisionedBy && $0.issued != true) }
-    delegations.append(.init(deviceID: deviceID, workspaceID: workspaceID, provisionedBy: provisionedBy,
-      acknowledged: Self.events(deviceID, in: state).sorted(), issued: false))
-    next.delegations = delegations
-    try persist(next); state = next
-  }
-  /// The staged grant was issued, which replaced the device's earlier grant for
-  /// this workspace: only now is earlier provenance retired.
-  public func confirmDelegation(deviceID: String, workspaceID: String, provisionedBy: String) throws {
-    var next = state
-    var delegations = (next.delegations ?? []).filter { !($0.deviceID == deviceID && $0.workspaceID == workspaceID && $0.issued == true) }
-    for index in delegations.indices where delegations[index].deviceID == deviceID && delegations[index].workspaceID == workspaceID
-      && delegations[index].provisionedBy == provisionedBy { delegations[index].issued = true }
-    next.delegations = delegations
-    try persist(next); state = next
-  }
-  /// This Mac issued the device its own grant for the workspace, which replaced
-  /// any delegated one: that delegated provenance is retired so a later unpair
-  /// of its provisioning Mac never queues cleanup against the new grant.
-  public func retireDelegations(deviceID: String, workspaceID: String) throws {
-    var next = state
-    next.delegations = (next.delegations ?? []).filter { !($0.deviceID == deviceID && $0.workspaceID == workspaceID) }
-    guard next.delegations != state.delegations else { return }
-    try persist(next); state = next
-  }
-  /// A failed issuance leaves every earlier grant and its provenance in place.
-  public func cancelStagedDelegation(deviceID: String, workspaceID: String, provisionedBy: String) throws {
-    var next = state
-    next.delegations = (next.delegations ?? []).filter { !($0.deviceID == deviceID && $0.workspaceID == workspaceID && $0.provisionedBy == provisionedBy && $0.issued != true) }
-    guard next.delegations != state.delegations else { return }
-    try persist(next); state = next
-  }
-  /// Live authorization for one delegated grant: its provisioning Mac is still
-  /// admitted and holds a peer grant here, and the device has no unpair the
-  /// delegation did not acknowledge.
-  public func delegationActive(deviceID: String, provisionedBy: String) -> Bool {
-    (state.delegations ?? []).contains { delegation in
-      delegation.deviceID == deviceID && delegation.provisionedBy == provisionedBy
-        && Self.events(deviceID, in: state).isSubset(of: Set(delegation.acknowledged))
-        && Self.isActiveMac(provisionedBy, in: state, own: nil)
-        && state.devices.contains { $0.id == provisionedBy && $0.role == .peer && Self.isActive($0, in: state) }
-    }
-  }
-  /// Live authorization for an execution or inference grant. A grant this Mac
-  /// issued directly needs the device's own active grant here; a delegated grant
-  /// needs its own provisioning Mac, regardless of other grants for the device.
-  public func authorizesExecution(deviceID: String, provisionedBy: String?) -> Bool {
-    if let provisionedBy { return delegationActive(deviceID: deviceID, provisionedBy: provisionedBy) }
-    return devices().contains { $0.id == deviceID }
-  }
-  public func delegations(provisionedBy deviceID: String) -> [Delegation] { (state.delegations ?? []).filter { $0.provisionedBy == deviceID } }
-  public func removeDelegations(provisionedBy deviceID: String) throws {
-    var next = state
-    next.delegations = (next.delegations ?? []).filter { $0.provisionedBy != deviceID }
-    guard next.delegations != state.delegations else { return }
-    try persist(next); state = next
-  }
-  /// Whether this Mac's execution or inference may serve a device: a grant it
-  /// issued, or a live delegation from a Mac that still holds a peer grant here.
-  public func mayExecute(deviceID: String) -> Bool {
-    if devices().contains(where: { $0.id == deviceID }) { return true }
-    return (state.delegations ?? []).contains { delegationActive(deviceID: deviceID, provisionedBy: $0.provisionedBy) && $0.deviceID == deviceID }
-  }
-  /// A mobile device another Mac may delegate for: never a pinned Mac or this Mac.
-  public func rosterName(for deviceID: String) -> String? { state.roster?[deviceID]?.name }
-  public func mayDelegate(for deviceID: String) -> Bool {
-    PeerIdentifier.canonical(deviceID) != nil && state.pins?[deviceID] == nil && deviceID != identity?.deviceID
-  }
   /// Unpaired devices whose effects this Mac must still apply locally.
   public func revokedDeviceContexts() -> [String: [String]] {
     Dictionary(grouping: (state.revocations ?? []), by: \.deviceID).mapValues { $0.map(\.eventID).sorted() }
@@ -654,12 +506,13 @@ public actor DeviceAuthentication {
   }
 
   public func pair(_ request: PairRequest, workspaceID: String) throws -> PairResponse {
-    guard request.protocolVersion == PairingPayload.currentProtocolVersion else {
+    // Every device confirms its pairing in a second request, so a lost reply never leaves a grant it does not hold.
+    guard request.protocolVersion == PairingPayload.currentProtocolVersion, request.requiresConfirmation == true else {
       throw Self.error("version_mismatch", "Update Woven Matter on both devices before pairing.")
     }
     _ = try previewPairing(request, workspaceID: workspaceID)
     let instant = try checkPairingRate()
-    if request.requiresConfirmation == true, let pending = state.pendingQRPairings?.first(where: {
+    if let pending = state.pendingQRPairings?.first(where: {
       $0.expiresAt > instant && $0.workspaceID == workspaceID && $0.device.id == request.deviceID &&
         $0.device.name == request.deviceName && $0.device.metadata == request.metadata && GrantSecrets.constantTimeEqual($0.offerProof, Self.digest(request.token))
     }) {
@@ -680,20 +533,15 @@ public actor DeviceAuthentication {
       name: request.deviceName, pairedAt: instant, revokedAt: nil,
       metadata: request.metadata, lastSeenAt: instant, credentialHash: Self.digest(credential))
     var next = state
-    if request.requiresConfirmation == true {
-      let encrypted = try AES.GCM.seal(Data(credential.utf8), using: Self.key(request.token)).combined!
-      next.pendingQRPairings = (next.pendingQRPairings ?? []).filter { $0.expiresAt > instant && $0.device.id != request.deviceID }
-      next.pendingQRPairings?.append(.init(device: device, workspaceID: workspaceID,
-        expiresAt: instant.addingTimeInterval(300), offerProof: Self.digest(request.token), encryptedCredential: encrypted, purpose: request.purpose,
-        memberPublicKey: request.memberPublicKey?.count == 32 ? request.memberPublicKey : nil))
-    } else {
-      // Legacy clients retain their v3 pairing contract.
-      next.devices.append(Self.issued(device, in: next, purpose: request.purpose))
-    }
+    let encrypted = try AES.GCM.seal(Data(credential.utf8), using: Self.key(request.token)).combined!
+    next.pendingQRPairings = (next.pendingQRPairings ?? []).filter { $0.expiresAt > instant && $0.device.id != request.deviceID }
+    next.pendingQRPairings?.append(.init(device: device, workspaceID: workspaceID,
+      expiresAt: instant.addingTimeInterval(300), offerProof: Self.digest(request.token), encryptedCredential: encrypted, purpose: request.purpose,
+      memberPublicKey: request.memberPublicKey?.count == 32 ? request.memberPublicKey : nil))
     try persist(next)
     state = next
     self.offer = nil
-    return PairResponse(workspaceID: workspaceID, deviceID: request.deviceID, credential: credential, confirmationRequired: request.requiresConfirmation == true ? true : nil)
+    return PairResponse(workspaceID: workspaceID, deviceID: request.deviceID, credential: credential, confirmationRequired: true)
   }
 
   public func authenticate(bearer: String, metadata: DeviceMetadata? = nil) throws -> PairedDevice {

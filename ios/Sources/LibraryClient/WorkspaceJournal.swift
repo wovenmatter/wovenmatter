@@ -5,10 +5,10 @@ import WovenMatterShared
 public struct WorkspaceJournalState: Codable, Equatable, Sendable {
   public var formatVersion = 1
   public var libraryID: String?
-  public var centralCursor: Int64 = 0
+  public var libraryCursor: Int64 = 0
   public var workspaces: [String: ExecutionWorkspace] = [:]
   public var pendingRegistrations: Set<String> = []
-  public var centralWorkspaceRevisions: [String: Int64] = [:]
+  public var libraryWorkspaceRevisions: [String: Int64] = [:]
   public var entries: [String: ExecutionJournalEntry] = [:]
   public var pendingEventIDs: Set<String> = []
   public var originSequences: [String: Int64] = [:]
@@ -30,17 +30,17 @@ public struct WorkspaceJournalState: Codable, Equatable, Sendable {
 }
 
 /// Runtime history is never part of the evictable transcript cache. Receipts and
-/// origin records survive process death and lost central acknowledgements.
+/// origin records survive process death and lost library acknowledgements.
 public actor WorkspaceJournal {
   public enum Failure: Error, LocalizedError {
     case incompatibleStore, wrongLibrary, replayGap, reusedIdentity, invalidAcknowledgement, storageFull, deletedWorkspace, recordTooLarge
     public var errorDescription: String? {
       switch self {
       case .incompatibleStore: "This workspace journal requires a newer application."
-      case .wrongLibrary: "This workspace belongs to another central library. Saved work has been retained."
+      case .wrongLibrary: "This workspace belongs to another library. Saved work has been retained."
       case .replayGap: "Workspace history has a missing or out-of-order record. Synchronization stopped without advancing its cursor."
       case .reusedIdentity: "A workspace reused a durable record identity with different contents."
-      case .invalidAcknowledgement: "The central library returned an incomplete acknowledgement. History remains saved locally."
+      case .invalidAcknowledgement: "The Mac or Linux machine returned an incomplete acknowledgement. History remains saved locally."
       case .storageFull: "The local execution history is full. Saved work has been retained."
       case .deletedWorkspace: "This execution workspace has been removed."
       case .recordTooLarge: "This execution history record exceeds the synchronization limit."
@@ -97,7 +97,7 @@ public actor WorkspaceJournal {
         throw LibraryActivityDetails.invalid
       }
       // A publisher may retry immutable chunks under new journal event IDs
-      // after a crash. Match the central store's (recordID, partIndex) identity:
+      // after a crash. Match the library store's (recordID, partIndex) identity:
       // identical bytes and manifests are idempotent; conflicting reuse is not.
       var uniqueParts: [Int: NativeRecordPart] = [:]
       for part in entries.compactMap(\.nativeRecord) {
@@ -129,7 +129,7 @@ public actor WorkspaceJournal {
   }
 
   /// Transfer only history produced on this device. Cached observers never
-  /// become publishers when the user attaches to a different central database.
+  /// become publishers when this device pairs with a different library.
   public func moveDeviceWorkspace(to libraryID: String, deviceID: String) throws {
     guard state.libraryID != libraryID else { return }
     try transaction { next in
@@ -147,7 +147,7 @@ public actor WorkspaceJournal {
       next.commands = next.commands.filter { owned.contains($0.value.command.workspaceID ?? "") }
       next.originSequences = next.originSequences.filter { owned.contains($0.key) }
       next.pendingEventIDs = Set(next.entries.keys); next.pendingRegistrations = Set(next.workspaces.keys)
-      next.centralWorkspaceRevisions = [:]; next.centralCursor = 0; next.directCursors = [:]
+      next.libraryWorkspaceRevisions = [:]; next.libraryCursor = 0; next.directCursors = [:]
       next.libraryID = libraryID
     }
   }
@@ -163,9 +163,9 @@ public actor WorkspaceJournal {
       let owned = Set(next.workspaces.values.filter { Self.isLocalExecutionOwner($0, deviceID: deviceID) }.map(\.id))
       for id in owned { next.workspaces[id]?.libraryID = libraryID }
       next.pendingRegistrations.formUnion(owned)
-      next.centralWorkspaceRevisions = [:]
+      next.libraryWorkspaceRevisions = [:]
       next.pendingEventIDs.formUnion(next.entries.values.filter { owned.contains($0.workspaceID) }.map(\.eventID))
-      next.centralCursor = 0
+      next.libraryCursor = 0
       next.libraryID = libraryID
     }
   }
@@ -183,7 +183,7 @@ public actor WorkspaceJournal {
       if let existing = next.workspaces[workspace.id], existing.revision > workspace.revision { return }
       next.workspaces[workspace.id] = workspace
       if pending { next.pendingRegistrations.insert(workspace.id) }
-      else { next.pendingRegistrations.remove(workspace.id); next.centralWorkspaceRevisions[workspace.id] = workspace.revision }
+      else { next.pendingRegistrations.remove(workspace.id); next.libraryWorkspaceRevisions[workspace.id] = workspace.revision }
     }
   }
   public func mergeRegistry(_ workspaces: [ExecutionWorkspace]) throws {
@@ -373,12 +373,12 @@ public actor WorkspaceJournal {
       // interleaved records that this client still needs to download.
     }
   }
-  public func receiveCentral(_ page: ExecutionJournalPage) throws {
+  public func receiveLibrary(_ page: ExecutionJournalPage) throws {
     try transaction { next in
       guard next.libraryID == page.libraryID else { throw Failure.wrongLibrary }
-      guard page.cursor == next.centralCursor + Int64(page.entries.count), !page.hasMore || !page.entries.isEmpty else { throw Failure.replayGap }
+      guard page.cursor == next.libraryCursor + Int64(page.entries.count), !page.hasMore || !page.entries.isEmpty else { throw Failure.replayGap }
       for entry in page.entries { try Self.insert(entry, into: &next) }
-      next.centralCursor = page.cursor
+      next.libraryCursor = page.cursor
     }
   }
   public func receiveWorkspace(_ page: ExecutionJournalPage, workspaceID: String, localDeviceID: String? = nil) throws {
@@ -501,7 +501,7 @@ public actor WorkspaceClient {
   private let transport: any ExecutionWorkspaceTransport
   private var refreshTask: Task<Void, Error>?
   private var launchTasks: [String: Task<MobileLaunchRecord, Error>] = [:]
-  private var centralHistory = false
+  private var servesLibraryHistory = false
   private var stream: StreamConnection?
   public init(store: MobileStore, workspaceID: String, transport: any ExecutionWorkspaceTransport) {
     self.store = store; self.workspaceID = workspaceID; self.transport = transport
@@ -525,7 +525,7 @@ public actor WorkspaceClient {
   private func verify() async throws {
     let workspace = try await transport.identity()
     guard workspace.id == workspaceID, !workspace.deleted else { throw MobileStore.Failure.wrongWorkspace }
-    centralHistory = workspace.capabilities.contains("history.central.v1")
+    servesLibraryHistory = workspace.capabilities.contains("history.library.v1")
     if let libraryID = await store.snapshot().workspaceID, libraryID != workspace.libraryID {
       guard let registered = await store.journal.snapshot().workspaces[workspaceID],
             registered.libraryID == workspace.libraryID, registered.ownerDeviceID == workspace.ownerDeviceID,
@@ -533,7 +533,7 @@ public actor WorkspaceClient {
     }
     if await store.journal.snapshot().workspaces[workspaceID] == nil {
       let deviceID = await store.snapshot().deviceID
-      try await store.journal.upsertWorkspace(workspace, pending: !centralHistory && WorkspaceJournal.isLocalExecutionOwner(workspace, deviceID: deviceID))
+      try await store.journal.upsertWorkspace(workspace, pending: !servesLibraryHistory && WorkspaceJournal.isLocalExecutionOwner(workspace, deviceID: deviceID))
     }
   }
   public func startConversation(_ requested: MobileLaunchRecord) async throws -> MobileLaunchRecord {
@@ -554,7 +554,7 @@ public actor WorkspaceClient {
       guard receipt.status == .completed else { return launch }
     }
     // Direct workspace prompts contain an explicit saved note snapshot; there is
-    // no dependency on synchronizing a central note revision first.
+    // no dependency on synchronizing a library note revision first.
     if !launch.sendPrepared { launch = try await store.prepareLaunchSend(id: launch.id, noteRevision: launch.initialSend.noteRevision) ?? launch }
     let receipt = try await submit(launch.initialSend)
     return try await store.rememberLaunchReceipt(receipt, launchID: launch.id) ?? launch
@@ -603,7 +603,7 @@ public actor WorkspaceClient {
   private func performRefresh() async throws {
     try await store.restoreExecutionProjection()
     try await verify()
-    if centralHistory { try await store.cacheCentralConversations(transport.conversations()) }
+    if servesLibraryHistory { try await store.cacheHostConversations(transport.conversations()) }
     for _ in 0..<100 {
       let cursor = await store.journal.snapshot().directCursors[workspaceID] ?? 0
       let page = try await transport.events(after: cursor)

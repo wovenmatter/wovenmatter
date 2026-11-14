@@ -417,7 +417,7 @@ extension ApplicationModel {
         }
         let federatedSource = try await store.database.libraryExecutionOwner(conversationID: source.id) != nil
         if federatedSource, command.options["workspace"] == nil || command.options["harness"] == nil {
-            throw WorkspaceToolError.invalid("Choose an explicit --workspace and --harness when creating a central session from another device.")
+            throw WorkspaceToolError.invalid("Choose an explicit --workspace and --harness when this session belongs to another device.")
         }
         let sameWorkspace = !federatedSource && workspaceID == source.remoteWorkspaceID
         let destinationFolder: String?

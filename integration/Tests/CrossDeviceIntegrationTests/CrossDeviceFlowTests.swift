@@ -27,7 +27,7 @@ struct CrossDeviceFlowTests {
     #expect(try await restarted.dictations.pendingCount() == 0)
     #expect(try await restarted.dictations.records() == [phone, desktop])
     #expect(try await fixture.database.dictationHistory() == [phone, desktop])
-    try await fixture.authentication.revoke(deviceID: fixture.credential.deviceID)
+    try await fixture.removeMember()
     do { _ = try await fixture.transport.dictationChanges(after: 0); Issue.record("Expected revoked access") }
     catch MobileConnectionError.http(401, _) { }
   }
@@ -41,12 +41,14 @@ struct CrossDeviceFlowTests {
     let folder = try await phone.createFolder(name: "Phone ideas")
     let note = try await phone.createNote(folderID: folder.id, title: "Keep writing", content: richDocument("Kept on the phone"))
     try await phone.detachWorkspace()
-    let existing = try await fixture.database.createNote(folderID: nil, content: richDocument("Existing central writing"))
+    let existing = try await fixture.database.createNote(folderID: nil, content: richDocument("Existing library writing"))
     let device = await phone.snapshot().deviceID
     let target = fixture.credential.workspaceID
     let offer = try await fixture.authentication.createOffer(endpoint: fixture.credential.endpoint)
-    let pair = PairRequest(token: offer.payload.token, deviceID: device, deviceName: "Repair iPhone",
+    let repaired = MemberIdentity(deviceID: device, kind: .ios, key: .init())
+    var pair = PairRequest(token: offer.payload.token, deviceID: device, deviceName: "Repair iPhone",
       metadata: .init(kind: .iPhone), expectedWorkspaceID: target, requiresConfirmation: true)
+    pair.memberPublicKey = repaired.publicKey
     func send(_ path: String, method: String = "POST", body: Data? = nil, token: String? = nil) async throws -> (Data, Int) {
       var request = URLRequest(url: URL(string: fixture.http.endpoint.absoluteString + path)!)
       request.httpMethod = method; request.httpBody = body
@@ -88,7 +90,11 @@ struct CrossDeviceFlowTests {
       })
     #expect(saved?.confirmationPending == nil)
     #expect(await fixture.authentication.devices().count == 2)
-    let transport = APITransport(serverURL: fixture.http.endpoint, credential: committed)
+    // Confirmation added the phone's member key; the bearer reads nothing.
+    #expect(await fixture.members.member(device)?.kind == .ios)
+    let (_, bearerRead) = try await send("/v1/snapshot", method: "GET", token: committed.token)
+    #expect(bearerRead == 401)
+    let transport = APITransport(serverURL: fixture.http.endpoint, credential: committed, member: repaired, audience: fixture.members.identity.deviceID)
     try await MobileSyncEngine(store: restarted, transport: transport).synchronize()
     #expect(try await fixture.database.libraryNote(id: note.id)?.content == note.content)
     #expect(try await fixture.database.libraryNote(id: existing) != nil)
@@ -121,7 +127,7 @@ struct CrossDeviceFlowTests {
     let before = try #require(try await fixture.database.libraryNote(id: id))
     func get(_ path: String) async throws -> (Data, Int) {
       var request = URLRequest(url: URL(string: fixture.http.endpoint.absoluteString + path)!)
-      request.setValue("Bearer " + fixture.credential.token, forHTTPHeaderField: "Authorization")
+      for (name, value) in try fixture.signed("GET", path) { request.setValue(value, forHTTPHeaderField: name) }
       request.setValue(String(LibraryProtocol.version), forHTTPHeaderField: "X-Woven-Protocol")
       request.setValue(fixture.credential.workspaceID, forHTTPHeaderField: "X-Woven-Workspace")
       let (data, response) = try await URLSession.shared.data(for: request)
@@ -238,23 +244,28 @@ struct CrossDeviceFlowTests {
     _ = try await fixture.mobile.createNote(folderID: nil, title: "Retain offline", content: richDocument("Private writing"))
     let wrongDB = try await WorkspaceDatabase(url: fixture.directory.appending(path: "other-workspace.sqlite"))
     let wrongCommands = FakeCommands(database: wrongDB)
-    let wrongAPI = DeviceAPI(database: wrongDB, authentication: fixture.authentication, commands: wrongCommands, isActive: { true })
+    // The same member identities, so only the library differs.
+    let wrongMembers = MemberDirectory(database: wrongDB, identity: MemberIdentity(deviceID: fixture.members.identity.deviceID, kind: .mac, key: .init()), cacheLifetime: 0)
+    try await wrongMembers.ensureSelf(name: "Other Mac", endpoints: [])
+    _ = try await wrongMembers.add(deviceID: fixture.member.deviceID, kind: .ios, name: "Fixture iPhone", publicKey: fixture.member.publicKey, endpoints: [])
+    let wrongAPI = DeviceAPI(database: wrongDB, authentication: fixture.authentication, commands: wrongCommands, isActive: { true }, members: wrongMembers)
     let wrongServer = try await FlowHTTPServer(api: wrongAPI)
     defer { wrongServer.stop() }
-    let wrongTransport = APITransport(serverURL: wrongServer.endpoint, credential: fixture.credential)
+    let wrongTransport = APITransport(serverURL: wrongServer.endpoint, credential: fixture.credential, member: fixture.member, audience: fixture.members.identity.deviceID)
     do { try await MobileSyncEngine(store: fixture.mobile, transport: wrongTransport).synchronize(); Issue.record("Expected workspace mismatch") }
     catch MobileConnectionError.http(409, _) {}
     #expect(await wrongTransport.count("POST /v1/mutations") == 0)
     #expect(try await wrongDB.librarySnapshot().notes.isEmpty)
     #expect(await fixture.mobile.snapshot().outbox.count == 1)
     for version in [1, 99] {
-      let incompatible = APITransport(serverURL: fixture.http.endpoint, credential: fixture.credential, protocolVersion: version)
+      let incompatible = APITransport(serverURL: fixture.http.endpoint, credential: fixture.credential, member: fixture.member,
+        audience: fixture.members.identity.deviceID, protocolVersion: version)
       do { try await MobileSyncEngine(store: fixture.mobile, transport: incompatible).synchronize(); Issue.record("Expected incompatible protocol") }
       catch MobileConnectionError.http(426, _) {}
       #expect(await incompatible.count("POST /v1/mutations") == 0)
       #expect(await fixture.mobile.snapshot().outbox.count == 1)
     }
-    try await fixture.authentication.revoke(deviceID: fixture.credential.deviceID)
+    try await fixture.removeMember()
     do { try await engine.synchronize(); Issue.record("Expected revoked access") }
     catch MobileConnectionError.http(401, _) {}
     #expect(await fixture.mobile.snapshot().outbox.count == 1)
@@ -398,6 +409,8 @@ private final class FlowFixture {
   let commands: FakeCommands
   let activity: FlowActivity
   let api: DeviceAPI
+  let members: MemberDirectory
+  let member: MemberIdentity
   let credential: MobileCredential
   let http: FlowHTTPServer
   let transport: APITransport
@@ -412,25 +425,48 @@ private final class FlowFixture {
     authentication = try DeviceAuthentication(fileURL: directory.appending(path: "devices.json"))
     commands = FakeCommands(database: database)
     activity = FlowActivity()
+    let host = try await database.libraryIdentity()
+    let members = MemberDirectory(database: database, identity: MemberIdentity(deviceID: host.hostDeviceID, kind: .mac, key: .init()), cacheLifetime: 0)
+    try await members.ensureSelf(name: "Fixture Mac", endpoints: [])
+    self.members = members
+    // Confirming a phone's pairing adds it as a member, as on the Mac.
     api = DeviceAPI(database: database, authentication: authentication, commands: commands, isActive: { [activity] in activity.active }, onCancelPairing: { [authentication] device in
       try await authentication.revoke(deviceID: device.id, expected: device)
-    }, linkedData: linkedData)
+    }, linkedData: linkedData, members: members, onMemberPaired: { id, name, key in
+      _ = try await members.add(deviceID: id, kind: .ios, name: name, publicKey: key, endpoints: [], replacingKey: true)
+    })
     http = try await FlowHTTPServer(api: api)
     let endpoint = URL(string: "https://fixture.test-tailnet.ts.net/wovenmatter")!
     let offer = try await authentication.createOffer(endpoint: endpoint)
-    let deviceID = await mobile.snapshot().deviceID
-    let pair = PairRequest(token: offer.payload.token, deviceID: deviceID, deviceName: "Fixture iPhone")
-    var request = URLRequest(url: URL(string: http.endpoint.absoluteString + "/v1/pair")!)
-    request.httpMethod = "POST"; request.httpBody = try JSONEncoder().encode(pair)
-    request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-    let session = URLSession(configuration: .ephemeral)
-    let (bytes, response) = try await session.data(for: request)
-    session.finishTasksAndInvalidate()
-    guard (response as? HTTPURLResponse)?.statusCode == 200 else { throw MobileConnectionError.invalidResponse }
-    let result = try JSONDecoder().decode(PairResponse.self, from: bytes)
+    member = MemberIdentity(deviceID: await mobile.snapshot().deviceID, kind: .ios, key: .init())
+    var pair = PairRequest(token: offer.payload.token, deviceID: member.deviceID, deviceName: "Fixture iPhone", metadata: .init(kind: .iPhone),
+                           requiresConfirmation: true)
+    pair.memberPublicKey = member.publicKey
+    let result = try JSONDecoder().decode(PairResponse.self, from: try await Self.post(http.endpoint, "/v1/pair", body: JSONEncoder().encode(pair)))
+    // The pairing bearer only confirms; every later request is signed.
+    _ = try await Self.post(http.endpoint, "/v1/pair/confirm", body: Data("{}".utf8), bearer: result.credential, workspaceID: result.workspaceID)
     credential = MobileCredential(endpoint: endpoint, workspaceID: result.workspaceID, deviceID: result.deviceID, token: result.credential)
-    transport = APITransport(serverURL: http.endpoint, credential: credential)
+    transport = APITransport(serverURL: http.endpoint, credential: credential, member: member, audience: host.hostDeviceID)
   }
+  private static func post(_ server: URL, _ path: String, body: Data, bearer: String? = nil, workspaceID: String? = nil) async throws -> Data {
+    var request = URLRequest(url: URL(string: server.absoluteString + path)!)
+    request.httpMethod = "POST"; request.httpBody = body
+    request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+    request.setValue(String(LibraryProtocol.version), forHTTPHeaderField: "X-Woven-Protocol")
+    if let bearer { request.setValue("Bearer " + bearer, forHTTPHeaderField: "Authorization") }
+    if let workspaceID { request.setValue(workspaceID, forHTTPHeaderField: "X-Woven-Workspace") }
+    let session = URLSession(configuration: .ephemeral)
+    defer { session.finishTasksAndInvalidate() }
+    let (bytes, response) = try await session.data(for: request)
+    guard (response as? HTTPURLResponse)?.statusCode == 200 else { throw MobileConnectionError.invalidResponse }
+    return bytes
+  }
+  /// Headers for `path` (below `/wovenmatter`) signed with the fixture phone's member key.
+  func signed(_ method: String, _ path: String, body: Data = Data()) throws -> [String: String] {
+    try member.signer.headers(method: method, target: "/wovenmatter" + path, body: body, audience: members.identity.deviceID)
+  }
+  /// Removes the phone from the member list, as unpairing it on a Mac does.
+  func removeMember() async throws { _ = try await members.remove(credential.deviceID) }
   func remove() { http.stop(); try? FileManager.default.removeItem(at: directory) }
 }
 
@@ -473,15 +509,18 @@ private actor APITransport: LibraryTransport, LibraryDictationTransport {
   let serverURL: URL
   let session: URLSession
   let credential: MobileCredential
+  let member: MemberIdentity
+  let audience: String
   let protocolVersion: Int
   var calls: [String: Int] = [:]
   var dropMutationResource: String?
   var dropCommand = false
   var dropCommandID: String?
-  init(serverURL: URL, credential: MobileCredential, protocolVersion: Int = LibraryProtocol.version) {
+  init(serverURL: URL, credential: MobileCredential, member: MemberIdentity, audience: String, protocolVersion: Int = LibraryProtocol.version) {
     precondition(serverURL.scheme == "http" && serverURL.host == "127.0.0.1" && serverURL.path == "/wovenmatter")
     precondition(PairingPayload.isValidEndpoint(credential.endpoint))
     self.serverURL = serverURL; self.credential = credential; self.protocolVersion = protocolVersion
+    self.member = member; self.audience = audience
     let configuration = URLSessionConfiguration.ephemeral
     configuration.httpCookieStorage = nil; configuration.urlCache = nil
     configuration.timeoutIntervalForRequest = 10; configuration.timeoutIntervalForResource = 15
@@ -519,7 +558,9 @@ private actor APITransport: LibraryTransport, LibraryDictationTransport {
     var request = URLRequest(url: URL(string: serverURL.absoluteString + path)!)
     request.httpMethod = method
     if method == "POST" { request.httpBody = body; request.setValue("application/json", forHTTPHeaderField: "Content-Type") }
-    request.setValue("Bearer " + credential.token, forHTTPHeaderField: "Authorization")
+    for (name, value) in try member.signer.headers(method: method, target: "/wovenmatter" + path, body: method == "POST" ? body : Data(), audience: audience) {
+      request.setValue(value, forHTTPHeaderField: name)
+    }
     request.setValue(credential.workspaceID, forHTTPHeaderField: "X-Woven-Workspace")
     request.setValue(String(protocolVersion), forHTTPHeaderField: "X-Woven-Protocol")
     let (bytes, response) = try await session.data(for: request)

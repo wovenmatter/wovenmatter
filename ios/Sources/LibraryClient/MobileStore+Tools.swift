@@ -88,7 +88,7 @@ extension MobileStore {
       state.outbox.append(.init(mutation: mutation(for: note, kind: .createNote, deviceID: state.deviceID)))
       return .object(["id": .string(id), "revision": .string(try MobileToolSupport.fingerprint(note))])
     }
-    guard var note = state.notes[id], !state.deletedNotes.contains(id), !state.uncachedNoteIDs.contains(id) else { throw WorkspaceToolError.notFound("This note is not saved on this device. Download it from the central library first.") }
+    guard var note = state.notes[id], !state.deletedNotes.contains(id), !state.uncachedNoteIDs.contains(id) else { throw WorkspaceToolError.notFound("This note is not saved on this device. Download it from your library first.") }
     if command.action == "read" { return try noteRead(note, command: command) }
     if command.action == "versions" { return try MobileToolSupport.page((state.toolNoteVersions ?? []).filter { $0.note.id == id }.reversed().map { .object(["id": .string($0.id), "noteID": .string(id), "title": .string($0.note.title), "createdAt": .string($0.savedAt)]) }, command: command) }
     guard state.conflicts[id] == nil else { throw WorkspaceToolError.revisionConflict("Resolve this note's sync conflict before editing.") }
@@ -110,7 +110,7 @@ extension MobileStore {
     guard note.content.utf8.count <= LibraryProtocol.maximumNoteBytes else { throw Failure.noteTooLarge }
     let candidateDocument = try NoteDocument.editableDocument(from: note.content)
     let hasLinkedTable = candidateDocument.blocks.contains { block in if case .table(let table) = block { return table.databaseLink != nil }; return false }
-    guard candidateDocument.databaseLink == nil, !hasLinkedTable else { throw WorkspaceToolError.invalid("Linked database artifacts are edited in their owning workspace. Use target central when connected; this device has not changed the note.") }
+    guard candidateDocument.databaseLink == nil, !hasLinkedTable else { throw WorkspaceToolError.invalid("Linked database artifacts are edited in their owning workspace; this device has not changed the note. Use a Mac or Linux workspace agent.") }
     note.updatedAt = ISO8601DateFormatter().string(from: Date()); note.contentByteCount = note.content.utf8.count
     var versions = state.toolNoteVersions ?? []
     if !versions.contains(where: { $0.id == revision }) { versions.append(.init(id: revision, note: original, savedAt: note.updatedAt)) }

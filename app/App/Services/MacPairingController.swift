@@ -37,7 +37,7 @@ final class MacPairingController {
               appVersion: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String, developmentInstance: DevelopmentLaunch.instance)
     }
     func requestPairing(with peer: DiscoveredPeer) async {
-        guard !isRequestPending, pendingClaim == nil, peer.advertisement.role == .central else { return }
+        guard !isRequestPending, pendingClaim == nil else { return }
         do {
             let request = PairingApprovalRequest(requestID: UUID().uuidString.lowercased(), requestSecret: try Self.secret(), identity: identity(), purpose: PairingPurpose.peerMac)
             let claim = StoredPairingClaim(endpoint: peer.endpoint, request: request, expiresAt: Date().addingTimeInterval(600))
@@ -53,7 +53,7 @@ final class MacPairingController {
             guard claim.request.identity.deviceID == identity().deviceID,
                   PairingPayload.isValidEndpoint(claim.endpoint), claim.expiresAt > Date() else {
                 try saveClaim(nil, identity().deviceID)
-                if claim.cancelled == true { errorMessage = "Cancellation could not be confirmed. Review paired devices on the central database before pairing again." }
+                if claim.cancelled == true { errorMessage = "Cancellation could not be confirmed. Check Apple Devices on the other Mac before pairing again." }
                 return
             }
             if claim.cancelled == true { beginCancellation(claim) } else { beginClaim(claim) }
@@ -109,7 +109,7 @@ final class MacPairingController {
         guard !isInstallingPairing, var claim = pendingClaim else { return }
         do {
             claim.cancelled = true
-            // Retain proof across disconnect/restart until the central database has
+            // Retain proof across disconnect/restart until the other Mac has
             // durably closed the request and queued any direct-access revokes.
             try saveClaim(claim, claim.request.identity.deviceID)
             beginCancellation(claim)
@@ -133,7 +133,7 @@ final class MacPairingController {
                     if claim.expiresAt <= Date() {
                         try? self.saveClaim(nil, claim.request.identity.deviceID)
                         self.pendingClaim = nil; self.isRequestPending = false
-                        self.errorMessage = "Cancellation could not be confirmed. Review paired devices on the central database before pairing again."
+                        self.errorMessage = "Cancellation could not be confirmed. Check Apple Devices on the other Mac before pairing again."
                         return
                     }
                 }

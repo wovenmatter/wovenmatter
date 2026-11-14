@@ -69,14 +69,19 @@ public actor MobileCalendarStore {
       return result
     }.sorted { $0.startsAt == $1.startsAt ? $0.occurrenceID < $1.occurrenceID : $0.startsAt < $1.startsAt }
   }
-  public func scheduledTasks() -> [ScheduledTaskItem] {
+  /// A task without a device owner runs on its agent's workspace (named by
+  /// `workspaceNames`), or on the Mac that holds it when its agent is that
+  /// Mac's own.
+  public func scheduledTasks(workspaceNames: [String: String] = [:]) -> [ScheduledTaskItem] {
     records().filter { $0.event.draft.task != nil }.map { record in
       let run = state.runs.values.filter { $0.eventID == record.id }.max { $0.scheduledAt < $1.scheduledAt }
       var event = record.event
       if let run { event.status = run.status; event.sessionID = run.sessionID }
       return .init(event: event, showsOnCalendar: event.draft.showsOnCalendar != false,
         runtimeName: event.draft.task?.runtime == "default_agent" ? "Pi Durable" : event.draft.task!.runtime,
-        workspaceName: record.ownerDeviceID == deviceID ? "This device" : record.ownerDeviceID == nil ? "Central Mac" : "Other device", lastRunAt: run?.scheduledAt)
+        workspaceName: record.ownerDeviceID == deviceID ? "This device"
+          : record.ownerDeviceID == nil ? event.draft.task?.workspaceID.flatMap { workspaceNames[$0.lowercased()] } ?? "Mac" : "Other device",
+        lastRunAt: run?.scheduledAt)
     }.sorted { $0.event.startsAt < $1.event.startsAt }
   }
   public func toolResult(requestID: String, arguments: String) throws -> LibraryCalendarRecord? {
@@ -120,7 +125,7 @@ public actor MobileCalendarStore {
   /// Moves a task this phone owns to a Mac or Linux agent. Ownership never
   /// changes in place: the phone no longer runs schedules, so its schedule is
   /// retired and a replacement with a new identity and no device owner is
-  /// created. The replacement uploads only after central accepts the
+  /// created. The replacement uploads only after the library accepts the
   /// retirement, so at most one runnable copy exists, and occurrences this
   /// phone already ran are excluded from it.
   @discardableResult public func reassign(id: String, expectedRevision: Int, draft: LibraryCalendarDraft,

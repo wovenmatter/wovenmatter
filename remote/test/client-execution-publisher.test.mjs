@@ -112,9 +112,9 @@ test('retained terminal preflight retries exact proofs before chronological jour
   const count=f.requests.length;await f.restart();await f.service.synchronizePublisher();assert.equal(f.requests.length,count)
 })
 
-// A v0.4.2 store also published to one central Mac and kept a library MCP
-// grant: opening it drops both (with the central bearer) and keeps the lanes.
-test('a v0.4.2 execution store loses its central publication and keeps its lanes', async t => {
+// A v0.4.2 store also published to one designated Mac and kept a library MCP
+// grant: opening it drops both (with that Mac's bearer) and keeps the lanes.
+test('a v0.4.2 execution store loses its single-Mac publication and keeps its lanes', async t => {
   const directory = mkdtempSync(join(tmpdir(), 'wm-v042-store-'))
   t.after(() => rmSync(directory, { recursive: true, force: true }))
   const db = new DatabaseSync(join(directory, 'execution.sqlite'))

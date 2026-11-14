@@ -52,7 +52,7 @@ extension WorkspaceDatabaseConnection {
     try transaction {
       var value = request.workspace
       let identity = try libraryIdentityUnlocked()
-      guard value.libraryID == (try libraryIDUnlocked()) else { throw federationError("library_mismatch", "This workspace belongs to another central library.") }
+      guard value.libraryID == (try libraryIDUnlocked()) else { throw federationError("library_mismatch", "This workspace belongs to another library.") }
       guard federationID(value.id), federationID(value.ownerDeviceID), (value.ownerDeviceID == deviceID || deviceID == identity.hostDeviceID),
             value.executionDeviceID.map(federationID) ?? true,
             value.developmentInstance.map({ !$0.isEmpty && $0.count <= 64 && $0.allSatisfy { $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "-") } }) ?? true,
@@ -79,7 +79,7 @@ extension WorkspaceDatabaseConnection {
         value.revision += 1
       } else {
         guard value.kind != .linux || deviceID == identity.hostDeviceID else {
-          throw federationError("wrong_owner", "Only the central Mac can provision a Linux execution workspace.")
+          throw federationError("wrong_owner", "A Linux workspace is added on the Mac that sets it up.")
         }
         guard request.expectedRevision == nil, !value.deleted else {
           throw federationError("revision_conflict", "A new workspace cannot replace or resurrect an existing identity.")

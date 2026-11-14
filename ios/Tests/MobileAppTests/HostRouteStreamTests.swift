@@ -114,9 +114,9 @@ private final class TestStreamServer: @unchecked Sendable {
   XCTFail("Timed out waiting for \(message)", file: file, line: line)
 }
 
-/// The iPhone streams the library host Mac's own sessions (the central
+/// The iPhone streams the library host Mac's own sessions (the host
 /// route), and nothing polls an execution workspace.
-final class CentralStreamTests: XCTestCase {
+final class HostRouteStreamTests: XCTestCase {
   private let hostDevice = "a0000000-0000-0000-0000-00000000000a"
   private let miniDevice = "b0000000-0000-0000-0000-00000000000b"
 
@@ -136,7 +136,7 @@ final class CentralStreamTests: XCTestCase {
     let store = try MobileStore(file: root.appendingPathComponent("library.json"))
     try await store.bindWorkspace("library-a")
     try await store.apply(LibrarySnapshot(workspaceID: "library-a", cursor: 1, folders: [], notes: [], conversations: [
-      .init(id: "central-chat", title: "Release plan", providerID: "local:codex", runtimeKind: "codex"),
+      .init(id: "host-chat", title: "Release plan", providerID: "local:codex", runtimeKind: "codex"),
     ]))
     let library = CountingLibrary()
     let model = MobileModel(store: store, transport: library)
@@ -145,9 +145,9 @@ final class CentralStreamTests: XCTestCase {
                              deviceID: model.state.deviceID, token: "synthetic-test-token")
     let studio = ExecutionWorkspace(id: "11111111-1111-4111-8111-111111111111", libraryID: "library-a", ownerDeviceID: hostDevice, kind: .mac,
       name: "Studio", endpoint: URL(string: "https://studio.tail1.ts.net/wovenmatter")!,
-      capabilities: ["execution.v1", "history.central.v1", StreamProtocol.capability], executionDeviceID: hostDevice)
+      capabilities: ["execution.v1", "history.library.v1", StreamProtocol.capability], executionDeviceID: hostDevice)
     let mini = ExecutionWorkspace(id: "22222222-2222-4222-8222-222222222222", libraryID: "library-a", ownerDeviceID: miniDevice, kind: .mac,
-      name: "Mini", endpoint: URL(string: "https://mini.tail1.ts.net/wovenmatter")!, capabilities: ["execution.v1", "history.central.v1"],
+      name: "Mini", endpoint: URL(string: "https://mini.tail1.ts.net/wovenmatter")!, capabilities: ["execution.v1", "history.library.v1"],
       executionDeviceID: miniDevice)
     try await store.journal.bind(libraryID: "library-a")
     try await store.journal.upsertWorkspace(studio, pending: false, trustedRegistry: true)
@@ -176,49 +176,49 @@ final class CentralStreamTests: XCTestCase {
     return socket
   }
 
-  /// A central-route chat (no workspace) is followed on the library host's
+  /// A host-route chat (no workspace) is followed on the library host's
   /// stream: `workspace` and `conversation` for the open chat. Its transcript,
   /// run state, questions, capabilities and settings arrive there, and no
   /// refresh reads them over HTTP.
-  @MainActor func testCentralChatsStreamFromTheLibraryHostAndNothingPollsThem() async throws {
+  @MainActor func testHostChatsStreamFromTheLibraryHostAndNothingPollsThem() async throws {
     let fixture = try await makeFixture(); let model = fixture.model
     defer { try? FileManager.default.removeItem(at: fixture.root) }
     await model.refreshExecutionWorkspaces(force: true)
-    XCTAssertEqual(model.centralExecutionWorkspace?.id, fixture.studio.id)
-    XCTAssertFalse(model.streamsCentral, "Advertised is not connected: until it connects, the central route is read")
+    XCTAssertEqual(model.hostExecutionWorkspace?.id, fixture.studio.id)
+    XCTAssertFalse(model.streamsHostRoute, "Advertised is not connected: until it connects, the host route is read")
     let socket = await openHost(fixture)
-    await waitUntil("streamed") { model.streamsCentral }
-    await model.selectConversation("central-chat")
-    XCTAssertEqual(model.selectedExecutionWorkspaceID, "central", "The chat keeps its central route")
+    await waitUntil("streamed") { model.streamsHostRoute }
+    await model.selectConversation("host-chat")
+    XCTAssertEqual(model.selectedExecutionWorkspaceID, "host", "The chat keeps its host route")
     await waitUntil("subscriptions") { await socket.subscriptions.count == 2 }
     let subscriptions = await socket.subscriptions
     XCTAssertEqual(subscriptions.map(\.stream), ["workspace", "conversation"])
-    XCTAssertEqual(subscriptions[1].params.conversationID, "central-chat")
+    XCTAssertEqual(subscriptions[1].params.conversationID, "host-chat")
     let workspaceSub = subscriptions[0].id, chat = subscriptions[1].id
 
-    await socket.push(.item(.init(id: chat, payload: .transcript(.init(transcript: .init(conversationID: "central-chat", messages: [
-      .init(id: "m1", conversationID: "central-chat", runID: "run", role: "user", content: "Plan the release"),
-      .init(id: "m2", conversationID: "central-chat", runID: "run", role: "assistant", content: "Reading", status: "streaming"),
+    await socket.push(.item(.init(id: chat, payload: .transcript(.init(transcript: .init(conversationID: "host-chat", messages: [
+      .init(id: "m1", conversationID: "host-chat", runID: "run", role: "user", content: "Plan the release"),
+      .init(id: "m2", conversationID: "host-chat", runID: "run", role: "assistant", content: "Reading", status: "streaming"),
     ], activeRunID: "run", runs: [.init(id: "run", status: "running")]), snapshot: true)))))
-    let question = PendingInteraction(id: "q1", conversationID: "central-chat", runID: "run", kind: .approval, title: "Run the tests?")
+    let question = PendingInteraction(id: "q1", conversationID: "host-chat", runID: "run", kind: .approval, title: "Run the tests?")
     await socket.push(.item(.init(id: workspaceSub, payload: .pending(.init(interactions: [question])))))
     await socket.push(.item(.init(id: chat, payload: .capabilities(.init(capabilities:
       .init(id: "local:codex", runtimeKind: "codex", displayName: "Codex", available: true, canSteer: true, canStop: true))))))
-    let settings = SessionSettings(conversationID: "central-chat", model: "gpt", thinking: nil, permission: nil, models: [], thinkingLevels: [],
+    let settings = SessionSettings(conversationID: "host-chat", model: "gpt", thinking: nil, permission: nil, models: [], thinkingLevels: [],
                                    permissions: [], availableTools: [], enabledTools: [], canConfigure: true)
     await socket.push(.item(.init(id: chat, payload: .session(.init(settings: settings)))))
     await waitUntil("transcript") { model.transcript?.messages.count == 2 }
     await waitUntil("question") { model.currentPending.map(\.id) == ["q1"] }
-    await waitUntil("settings") { model.streamedSessionSettings["central-chat"]?.model == "gpt" }
+    await waitUntil("settings") { model.streamedSessionSettings["host-chat"]?.model == "gpt" }
     XCTAssertEqual(model.activeRunID, "run")
     XCTAssertEqual(model.activeProvider?.canSteer, true)
-    XCTAssertTrue(model.streamsSessionSettings("central-chat"), "Settings are not read for a streamed central chat")
+    XCTAssertTrue(model.streamsSessionSettings("host-chat"), "Settings are not read for a streamed host chat")
 
     // A library sync, as the 15 s tick runs it, reads nothing live: no transcript, pending or receipts.
     await model.refresh(); await model.refresh()
     await model.refreshExecutionWorkspaces()
     let liveReads = await fixture.library.liveReads
-    XCTAssertEqual(liveReads, 0, "No central transcript, pending or receipt polling")
+    XCTAssertEqual(liveReads, 0, "No host route transcript, pending or receipt polling")
     let providerReads = await fixture.library.providerReads
     XCTAssertEqual(providerReads, 1, "The agent list is read once per connection, not every fifth refresh")
     XCTAssertEqual(model.currentPending.map(\.id), ["q1"], "One copy of each question, from the stream")
@@ -227,12 +227,12 @@ final class CentralStreamTests: XCTestCase {
 
     // A streamed row carries the compact projection; expanding it reads the
     // library host's details route once, and nothing else.
-    await socket.push(.item(.init(id: chat, payload: .transcript(.init(transcript: .init(conversationID: "central-chat", messages: [],
+    await socket.push(.item(.init(id: chat, payload: .transcript(.init(transcript: .init(conversationID: "host-chat", messages: [],
       activities: [.init(id: "a1", runID: "run", title: "Read file", status: "completed",
                          projectionJSON: #"{"id":"a1","kind":"tool","title":"Read file","content":"The wh","detailsAvailable":true,"locations":[],"changes":[],"planEntries":[]}"#)],
       activeRunID: "run", runs: [.init(id: "run", status: "running")]), snapshot: false)))))
     await waitUntil("compact row") { model.transcript?.activities.first?.id == "a1" }
-    let detail = try await model.conversationActivityDetail(conversationID: "central-chat", runID: "run", activityID: "a1")
+    let detail = try await model.conversationActivityDetail(conversationID: "host-chat", runID: "run", activityID: "a1")
     XCTAssertEqual(detail?.content, "The whole file")
     let detailReads = await fixture.library.detailReads
     XCTAssertEqual(detailReads, ["run/a1"])
@@ -240,7 +240,7 @@ final class CentralStreamTests: XCTestCase {
     XCTAssertEqual(transcriptReads, 0, "Details never read the whole transcript")
 
     // Leaving the chat ends its subscription; nothing else changes.
-    await model.selectConversation("central-chat-2")
+    await model.selectConversation("host-chat-2")
     await waitUntil("cancel") { await socket.cancels == [chat] }
   }
 
@@ -305,18 +305,18 @@ final class CentralStreamTests: XCTestCase {
     let digest = SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined()
     fixture.http.attachment = bytes
     let reference = LibraryAttachmentReference(id: digest, name: "photo/../.png", mimeType: "image/png")
-    await model.selectConversation("central-chat")
-    let url = try await model.attachmentURL(reference, conversationID: "central-chat")
+    await model.selectConversation("host-chat")
+    let url = try await model.attachmentURL(reference, conversationID: "host-chat")
     XCTAssertEqual(try Data(contentsOf: url), bytes)
     XCTAssertEqual(url.lastPathComponent, "photo...png", "No path separators from the sent name")
     XCTAssertEqual(fixture.http.paths(host: "studio.tail1.ts.net").filter { $0.contains("/attachments/") }, ["studio.tail1.ts.net/wovenmatter/v1/execution/attachments/" + digest])
     // Opened again: from this iPhone, with no request.
-    _ = try await model.attachmentURL(reference, conversationID: "central-chat")
+    _ = try await model.attachmentURL(reference, conversationID: "host-chat")
     XCTAssertEqual(fixture.http.paths(host: "studio.tail1.ts.net").filter { $0.contains("/attachments/") }.count, 1)
     // Damaged bytes are refused and nothing is kept.
     fixture.http.attachment = Data("damaged".utf8)
     let other = LibraryAttachmentReference(id: String(repeating: "c", count: 64), name: "notes.txt", mimeType: "text/plain")
-    do { _ = try await model.attachmentURL(other, conversationID: "central-chat"); XCTFail("Accepted damaged bytes") } catch {}
+    do { _ = try await model.attachmentURL(other, conversationID: "host-chat"); XCTFail("Accepted damaged bytes") } catch {}
     XCTAssertFalse(FileManager.default.fileExists(atPath: model.attachmentDirectory.appendingPathComponent(other.id).path))
   }
 
@@ -331,7 +331,7 @@ final class CentralStreamTests: XCTestCase {
     await model.workspaceReadTasks[fixture.mini.id]?.value
     let socket = await openHost(fixture)
     await waitUntil("workspace subscription") { await socket.subscriptions.count == 1 }
-    await waitUntil("streamed") { model.streamsCentral }
+    await waitUntil("streamed") { model.streamsHostRoute }
     XCTAssertFalse(model.liveViewFallbackNeeded, "Every open view streams: no tick")
 
     await model.selectConversation("mini-chat", workspaceID: fixture.mini.id)
@@ -348,9 +348,9 @@ final class CentralStreamTests: XCTestCase {
   }
 
   /// While the library host's stream does not serve `workspace` (it ended
-  /// it, or it is down), the central route's questions are read over HTTP on
+  /// it, or it is down), the host route's questions are read over HTTP on
   /// the tick, the stream's copy goes, and the library timer returns.
-  @MainActor func testTheCentralRouteIsReadOnTheTickWhileTheHostsStreamDoesNotServeIt() async throws {
+  @MainActor func testTheHostRouteIsReadOnTheTickWhileTheHostsStreamDoesNotServeIt() async throws {
     let fixture = try await makeFixture(); let model = fixture.model
     defer { try? FileManager.default.removeItem(at: fixture.root) }
     await model.refresh()
@@ -360,23 +360,23 @@ final class CentralStreamTests: XCTestCase {
     let workspaceSub = await socket.subscriptions[0].id
     await socket.push(.item(.init(id: workspaceSub, payload: .library(.init(cursor: 1)))))
     await waitUntil("announcing stream") { !model.librarySyncTimerNeeded }
-    let question = PendingInteraction(id: "q1", conversationID: "central-chat", runID: "run", kind: .approval, title: "Run the tests?")
+    let question = PendingInteraction(id: "q1", conversationID: "host-chat", runID: "run", kind: .approval, title: "Run the tests?")
     await socket.push(.item(.init(id: workspaceSub, payload: .pending(.init(interactions: [question])))))
     await waitUntil("question") { model.allPending.map(\.id) == ["q1"] }
     let reads = await fixture.library.pendingReads
     await model.refreshLiveViewsWithoutStream()
     let quiet = await fixture.library.pendingReads
-    XCTAssertEqual(quiet, reads, "Nothing is read while the stream serves the central route")
+    XCTAssertEqual(quiet, reads, "Nothing is read while the stream serves the host route")
 
     // The host ends `workspace` for good on this connection.
     await socket.push(.end(.init(id: workspaceSub, error: .init(.invalid, "No workspace here."))))
-    await waitUntil("not streamed") { !model.streamsCentral }
+    await waitUntil("not streamed") { !model.streamsHostRoute }
     XCTAssertTrue(model.librarySyncTimerNeeded, "The library timer returns")
     XCTAssertTrue(model.liveViewFallbackNeeded)
     XCTAssertTrue(model.allPending.isEmpty, "The stream's copy goes; the read one replaces it")
     await model.refreshLiveViewsWithoutStream()
     let read = await fixture.library.pendingReads
-    XCTAssertEqual(read, reads + 1, "The central questions are read on the tick")
+    XCTAssertEqual(read, reads + 1, "The host route's questions are read on the tick")
   }
 
   /// A workspace without a stream is read once when its client is made and
@@ -411,7 +411,7 @@ final class CentralStreamTests: XCTestCase {
     }, random: { 0.5 })
     await model.refreshExecutionWorkspaces(force: true)
     let socket = await openHost(fixture)
-    await model.selectConversation("central-chat")
+    await model.selectConversation("host-chat")
     await waitUntil("subscriptions") { await socket.subscriptions.count == 2 }
 
     model.sceneChanged(.background)
@@ -445,7 +445,7 @@ final class CentralStreamTests: XCTestCase {
     defer { try? FileManager.default.removeItem(at: fixture.root) }
     fixture.server.refuse(StreamConnectionError.memberTimeStale(serverTime: 1))
     await model.refreshExecutionWorkspaces(force: true)
-    await model.selectConversation("central-chat")
+    await model.selectConversation("host-chat")
     await waitUntil("stale clock") { model.selectedStreamProblem != nil }
     XCTAssertEqual(model.selectedStreamProblem, "This device's clock is wrong. Turn on Set Automatically in Settings › General › Date & Time.")
 

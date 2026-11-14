@@ -10,7 +10,7 @@ import WovenMatterClient
 /// approvals, the open chat's transcript, capabilities and settings, and
 /// commands. History arrives only by library sync. Nothing polls it.
 @MainActor @Suite(.serialized)
-struct CentralExecutionStreamTests {
+struct MemberExecutionStreamTests {
     private struct Setup {
         let fixture: FacadeFixture
         let workspace: ExecutionWorkspace
@@ -18,7 +18,7 @@ struct CentralExecutionStreamTests {
         let journalURL: URL
         let server: StreamFixtureServer
         let http: StreamFixtureHTTP
-        let client: CentralExecutionClient
+        let client: MemberExecutionClient
         let live: LiveChanges
     }
 
@@ -43,7 +43,7 @@ struct CentralExecutionStreamTests {
                     conversation: .init(id: id, title: "Chat \(index)", libraryID: workspace.libraryID, workspaceID: workspace.id)) }),
                 deviceID: workspace.executionDeviceID!)
         }
-        let client = try CentralExecutionClient(database: fixture.database, commandJournalURL: journalURL,
+        let client = try MemberExecutionClient(database: fixture.database, commandJournalURL: journalURL,
             makeSignedTransport: { _ in http },
             makeStream: { _ in { try server.connect() } },
             streamConfiguration: .init(pingInterval: .seconds(3600), requestTimeout: .seconds(5), retrySleep: retrySleep))
@@ -261,7 +261,7 @@ struct CentralExecutionStreamTests {
         // least recently viewed of those closes first, never an open one.
         let unheld = Array(others.suffix(8 + 1))
         for id in unheld { try await client.refresh(conversationID: id) }
-        #expect(client.watchedConversationIDs.count == open.count + CentralExecutionClient.maximumUnheldWatches)
+        #expect(client.watchedConversationIDs.count == open.count + MemberExecutionClient.maximumUnheldWatches)
         #expect(Set(open).isSubset(of: client.watchedConversationIDs))
         #expect(!client.watchedConversationIDs.contains(unheld[0]))
         let subscriptions = await socket.subscriptions.filter { $0.stream == "conversation" }
@@ -350,7 +350,7 @@ struct CentralExecutionStreamTests {
             try await client.refresh(conversationID: id)
             Issue.record("A chat whose live view ended was read as live")
         } catch let error as LibraryAPIError {
-            #expect(error.code == CentralExecutionClient.liveViewEnded && error.message.contains("too large"))
+            #expect(error.code == MemberExecutionClient.liveViewEnded && error.message.contains("too large"))
         }
         try await Task.sleep(for: .milliseconds(500))
         #expect(await socket.subscriptions.filter { $0.stream == "conversation" }.count == 1, "the ended chat was subscribed again")

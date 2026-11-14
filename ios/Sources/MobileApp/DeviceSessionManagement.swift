@@ -38,7 +38,7 @@ extension MobileModel {
       let transcript = journal?.transcripts[id] ?? state.transcripts[id]
       let text = (transcript?.messages ?? []).map { "## \($0.role.capitalized)\n\n\($0.content)" }.joined(separator: "\n\n")
       return .file(.init(name: "conversation-\(id).md", mimeType: "text/markdown", data: Data(text.utf8)))
-    default: throw DeviceExecutionError.unavailable("This action belongs to the central library.")
+    default: throw DeviceExecutionError.unavailable("Quick Chat doesn’t support this action.")
     }
   }
   func performDeviceAction(_ action: LibraryWorkspaceAction) async -> Bool {
@@ -86,7 +86,7 @@ extension MobileModel {
         try await configureDeviceChat(connection: connection, thinking: thinking, permission: mode, conversationID: id)
       case .sessionTools(let id, let enabled, _):
         try await configureDeviceChat(tools: enabled, conversationID: id)
-      default: throw DeviceExecutionError.unavailable("This action belongs to the central library.")
+      default: throw DeviceExecutionError.unavailable("Quick Chat doesn’t support this action.")
       }
       return true
     } catch { errorMessage = error.localizedDescription; return false }

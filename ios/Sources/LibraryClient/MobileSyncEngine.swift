@@ -70,7 +70,7 @@ public actor MobileSyncEngine {
     await analytics?.value
     analyticsTask = nil
     syncTask = nil
-    status.centralReachable = nil
+    status.hostReachable = nil
   }
   public func synchronizationStatus() async -> MobileSynchronizationStatus {
     await Self.makeStatus(store: store, previous: status)
@@ -133,7 +133,7 @@ public actor MobileSyncEngine {
         let (connection, hello, host) = try await hosts.connect(registry: registry)
         let changed = status.libraryHost?.endpoint != host.endpoint
         transport = connection
-        status.centralReachable = true; status.lastContactAt = Date(); status.libraryHost = host
+        status.hostReachable = true; status.lastContactAt = Date(); status.libraryHost = host
         let local = await store.snapshot()
         if let bound = local.workspaceID ?? local.detachedWorkspaceID, bound != hello.workspaceID, local.pairingTransitionWorkspaceID == nil {
           try await rebindLibraryHost(using: connection, libraryID: hello.workspaceID)
@@ -150,15 +150,15 @@ public actor MobileSyncEngine {
         }
       } else {
         identity = try await transport.workspaceIdentity()
-        status.centralReachable = true; status.lastContactAt = Date()
+        status.hostReachable = true; status.lastContactAt = Date()
         try await store.bindWorkspace(identity)
       }
       verifiedThisPass = true
     } catch {
       if case MobileConnectionError.updateRequired(let message) = error { status.updateRequired = message }
       await store.analytics.disconnect()
-      if case MobileConnectionError.http = error { status.centralReachable = true; status.lastContactAt = Date() }
-      else if !(error is MobileStore.Failure) { status.centralReachable = false }
+      if case MobileConnectionError.http = error { status.hostReachable = true; status.lastContactAt = Date() }
+      else if !(error is MobileStore.Failure) { status.hostReachable = false }
       throw error
     }
     try Task.checkCancellation()

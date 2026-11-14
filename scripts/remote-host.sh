@@ -721,9 +721,6 @@ def install(workspace_id,requested_port,mode,fingerprint,updating=False,roles=No
     previous_settings=parse_env() if old and ENV_FILE.exists() else {}
     if not TOKEN and old: TOKEN=previous_settings.get('WOVENMATTER_API_TOKEN','')
     if not re.fullmatch('[A-Za-z0-9+/=_-]{32,256}',TOKEN): fail('invalid_api_token','A 32-256 character generated API credential is required.',64)
-    # The secret that keys publisher and MCP grants at rest stays the first
-    # install's bearer, whatever bearer later installs stream or rotation sets.
-    service_secret=previous_settings.get('WOVENMATTER_SERVICE_SECRET') or previous_settings.get('WOVENMATTER_API_TOKEN') or TOKEN
     for directory in [ROOT,ROOT/'releases',ROOT/'node',ROOT/'browsers',ROOT/'workspace',ROOT/'databases',ROOT/'browser-profiles',ROOT/'run',CONFIG,UNIT.parent]: owned_directory(directory)
     port=old['port'] if old else choose_port(requested_port)
     stage=Path(tempfile.mkdtemp(prefix='.install-',dir=ROOT/'releases'))
@@ -816,7 +813,7 @@ def install(workspace_id,requested_port,mode,fingerprint,updating=False,roles=No
         settings={'WOVENMATTER_ACCESS_MODE':mode,'WOVENMATTER_WORKSPACE':str(ROOT/'workspace'),
             'WOVENMATTER_DATA_DIRECTORY':str(ROOT/'databases'),'WOVENMATTER_STATE_DIRECTORY':str(ROOT/'run'),
             'WOVENMATTER_BROWSER_PROFILES':str(ROOT/'browser-profiles'),'PLAYWRIGHT_BROWSERS_PATH':str(ROOT/'browsers/current'),
-            'WOVENMATTER_LISTEN_HOST':'127.0.0.1','WOVENMATTER_LISTEN_PORT':str(port),'WOVENMATTER_API_TOKEN':TOKEN,'WOVENMATTER_SERVICE_SECRET':service_secret,
+            'WOVENMATTER_LISTEN_HOST':'127.0.0.1','WOVENMATTER_LISTEN_PORT':str(port),'WOVENMATTER_API_TOKEN':TOKEN,
             'WOVENMATTER_SERVICE_FINGERPRINT':fingerprint,'WOVENMATTER_RELEASE_VERSION':release_version(manifest),'WOVENMATTER_HARNESS_PATH':':'.join([str(ROOT/'current/tooling/bin'),str(ROOT/'node/current/bin'),*harness_path()]),
             'WOVEN_DEFAULT_AGENT_DIRECTORY':str(ROOT/'workspace/.wovenmatter/default-agent'),
             'WOVENMATTER_DATA_ROOT':str(ROOT),'WOVENMATTER_WORKSPACE_ENABLED':'1' if roles['workspace'] else '0',
@@ -929,16 +926,13 @@ def wait_healthy(port,fingerprint):
     return False
 
 def rotate_token(workspace_id):
-    # Replaces the installer bearer (docs: "Installer bearer"). The service
-    # secret keeps the bearer it replaces when none is recorded yet, so grants
-    # stored under the old value still open. The running server switches to the
-    # new value itself; a restart reads it from here.
+    # Replaces the installer bearer (docs: "Installer bearer"). The running
+    # server switches to the new value itself; a restart reads it from here.
     import secrets
     require_owner(workspace_id); settings=parse_env()
-    secret=settings.get('WOVENMATTER_SERVICE_SECRET') or settings.get('WOVENMATTER_API_TOKEN','')
-    if not re.fullmatch('[A-Za-z0-9+/=_-]{32,256}',secret): fail('invalid_service_environment','The private host environment is unavailable or invalid.',78)
+    if not re.fullmatch('[A-Za-z0-9+/=_-]{32,256}',settings.get('WOVENMATTER_API_TOKEN','')): fail('invalid_service_environment','The private host environment is unavailable or invalid.',78)
     token=secrets.token_urlsafe(48)
-    update_service_environment({'WOVENMATTER_API_TOKEN':token,'WOVENMATTER_SERVICE_SECRET':secret})
+    update_service_environment({'WOVENMATTER_API_TOKEN':token})
     return {'rotated':True,'token':token}
 
 def system_python():
@@ -1186,8 +1180,7 @@ def main(args):
         if not count.isdigit() or not 1<=int(count)<=1000: fail('invalid_log_count','Choose between 1 and 1000 log lines.',64)
         output=text(run(['journalctl','--user','-u',UNIT_NAME,'--no-pager','-n',count],check=True))
         settings=parse_env()
-        for secret in (settings.get('WOVENMATTER_API_TOKEN',''),settings.get('WOVENMATTER_SERVICE_SECRET','')):
-            if secret: output=output.replace(secret,'[redacted]')
+        if settings.get('WOVENMATTER_API_TOKEN'): output=output.replace(settings['WOVENMATTER_API_TOKEN'],'[redacted]')
         return {'logs':output,'kind':'host'}
     if action in ('uninstall','delete') and 1<=len(args)<=2:
         if len(args)>1 and args[1]!='--data': fail('invalid_command','Use --data to remove persistent workspace data.',64)

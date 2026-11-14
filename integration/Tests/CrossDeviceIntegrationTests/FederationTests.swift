@@ -4,7 +4,7 @@ import Testing
 import WovenMatterCore
 @testable import WovenMatterLibraryStore
 
-@Suite("Central library federation", .serialized)
+@Suite("Library federation", .serialized)
 struct FederationTests {
   let owner = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
   let observer = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
@@ -85,7 +85,7 @@ struct FederationTests {
     await #expect(throws: LibraryAPIError.self) { try await db.executionJournal(after: 2) }
   }
 
-  @Test("transcript deltas merge while central archival cannot reserve or execute commands")
+  @Test("transcript deltas merge while library archival cannot reserve or execute commands")
   func transcriptAndReceipts() async throws {
     let directory = try fixture(); defer { try? FileManager.default.removeItem(at: directory) }
     let db = try await WorkspaceDatabase(url: directory.appendingPathComponent("workspace.sqlite"))
@@ -228,15 +228,15 @@ struct FederationTests {
     #expect(page.messages == legacy.messages && page.olderCursor == nil)
   }
 
-  @Test("central metadata and deletion remain authoritative until explicit restore")
-  func centralMetadata() async throws {
+  @Test("library metadata and deletion remain authoritative until explicit restore")
+  func libraryMetadata() async throws {
     let directory = try fixture(); defer { try? FileManager.default.removeItem(at: directory) }
     let db = try await WorkspaceDatabase(url: directory.appendingPathComponent("workspace.sqlite"))
     let workspace = try await register(db); let first = creation(workspace)
     _ = try await db.ingestExecutionJournal(.init(libraryID: workspace.libraryID, entries: [first]), deviceID: owner)
     try await db.write { connection in
       try connection.transaction {
-        try connection.toolsExecuteUnlocked("UPDATE conversations SET title='Central title',deleted_at='deleted' WHERE id=?", [first.conversationID])
+        try connection.toolsExecuteUnlocked("UPDATE conversations SET title='Library title',deleted_at='deleted' WHERE id=?", [first.conversationID])
       }
     }
     var replay = first; replay.eventID = uuid(); replay.originSequence = 2; replay.conversation?.title = "Stale title"
@@ -247,7 +247,7 @@ struct FederationTests {
     var restore = first; restore.eventID = uuid(); restore.originSequence = 3; restore.kind = .restoredConversation
     _ = try await db.ingestExecutionJournal(.init(libraryID: workspace.libraryID, entries: [restore]), deviceID: owner)
     #expect(try await db.librarySnapshot().conversations.count == 1)
-    #expect(try await db.librarySnapshot().conversations.first?.title == "Central title")
+    #expect(try await db.librarySnapshot().conversations.first?.title == "Library title")
   }
 
   @Test("structured artifacts sync conditionally without changing their kind")

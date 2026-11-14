@@ -252,7 +252,7 @@ final class BotsUpdateCoordinator {
         guard let row = setup.rows.first(where: { $0.mac.name.localizedCaseInsensitiveCompare(name) == .orderedSame }) else {
             return "It wasn't found on your tailnet."
         }
-        await setup.perform(.update, row: row, central: nil)
+        await setup.perform(.update, row: row, endpoint: nil)
         return row.error
     }
 }

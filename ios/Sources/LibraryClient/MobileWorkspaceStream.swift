@@ -8,10 +8,10 @@ import WovenMatterShared
 /// store's cache. The app stops it in the background and starts it again in
 /// the foreground.
 ///
-/// The library host's stream also carries the "central" route: the host's own
+/// The library host's stream also carries the "host" route: the host's own
 /// sessions, which its library holds unassigned. Its summaries keep that
 /// identity (`setLibraryHost`), and its `conversation` subscription follows an
-/// open central chat exactly as another workspace's follows its own.
+/// open host chat exactly as another workspace's follows its own.
 public actor MobileWorkspaceStream {
   public enum Update: Sendable, Equatable {
     case state(StreamConnection.State)
@@ -46,7 +46,7 @@ public actor MobileWorkspaceStream {
   public nonisolated let workspaceID: String
   public nonisolated let connection: StreamConnection
   private let libraryID: String
-  private let centralHistory: Bool
+  private let servesLibraryHistory: Bool
   private var libraryHost = false
   private let store: MobileStore
   private let update: @Sendable (Update) async -> Void
@@ -78,7 +78,7 @@ public actor MobileWorkspaceStream {
   public init(workspace: ExecutionWorkspace, store: MobileStore, connection: StreamConnection,
               update: @escaping @Sendable (Update) async -> Void) {
     workspaceID = workspace.id; libraryID = workspace.libraryID
-    centralHistory = workspace.capabilities.contains("history.central.v1")
+    servesLibraryHistory = workspace.capabilities.contains("history.library.v1")
     self.store = store; self.connection = connection; self.update = update
   }
 
@@ -204,9 +204,9 @@ public actor MobileWorkspaceStream {
     await flushJournal()
     switch item.payload {
     case .conversations(let value):
-      guard centralHistory else { return .accepted }
+      guard servesLibraryHistory else { return .accepted }
       if libraryHost { try? await store.cacheLibraryHostConversations(value.conversations) }
-      else { try? await store.cacheCentralConversations(value.conversations) }
+      else { try? await store.cacheHostConversations(value.conversations) }
       await update(.history)
     case .pending(let value):
       await update(.pending(value.interactions))

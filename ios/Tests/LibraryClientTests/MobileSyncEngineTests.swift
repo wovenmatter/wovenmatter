@@ -23,7 +23,7 @@ private actor FakeMac: LibraryTransport, FederationTransport, LibraryCalendarTra
   func refuseFolder(_ id: String) { refusedFolderIDs.insert(id) }
   func seedNotes(_ values: [LibraryNote]) { for note in values { notes[note.id] = note } }
   func seedConversations(_ values: [LibraryConversation], pages: [String: LibraryTranscript]) { conversationIndex = values; transcriptPages = pages }
-  func libraryIdentity() -> LibraryIdentity { .init(libraryID: workspace, hostDeviceID: "central") }
+  func libraryIdentity() -> LibraryIdentity { .init(libraryID: workspace, hostDeviceID: "host") }
   func executionWorkspaces() -> [ExecutionWorkspace] { registeredWorkspaces }
   func registerWorkspace(_ registration: LibraryWorkspaceRegistration) -> ExecutionWorkspace {
     var value = registration.workspace; value.revision += 1
@@ -147,7 +147,7 @@ final class MobileSyncEngineTests: XCTestCase {
     XCTAssertNotNil(local.conversations["remote-chat"], "Removing relay flags must retain cached history")
     let calendarCount = await store.calendar.pendingCount(); XCTAssertEqual(calendarCount, 0)
     let status = await engine.synchronizationStatus()
-    XCTAssertEqual(status.centralReachable, true)
+    XCTAssertEqual(status.hostReachable, true)
     XCTAssertEqual(status.lanes[.library]?.phase, .blocked)
     XCTAssertEqual(status.lanes[.library]?.pendingCount, 2)
     XCTAssertEqual(status.lanes[.journal]?.phase, .current)
@@ -157,7 +157,7 @@ final class MobileSyncEngineTests: XCTestCase {
     XCTAssertEqual(attempted, 1, "Do not spin on one permanent folder failure")
     try await engine.synchronizeRequiredLanes([.journal])
     await mac.configure(workspace: "different-library")
-    do { try await engine.synchronizeRequiredLanes([.journal]); XCTFail("An older successful journal pass cannot bypass a changed central identity") }
+    do { try await engine.synchronizeRequiredLanes([.journal]); XCTFail("An older successful journal pass cannot bypass a changed library identity") }
     catch MobileStore.Failure.wrongWorkspace { }
   }
 

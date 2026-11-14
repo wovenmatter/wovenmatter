@@ -52,13 +52,13 @@ extension MobileModel {
         await reload(); conversationID = id
       } else if workspaceID != "local" {
         try await requireWorkspaceConnection(workspaceID)
-        let agents = workspaceID == "central" ? providers : workspaceProviders[workspaceID] ?? []
-        guard (workspaceID == "central" ? online : workspaceReachable[workspaceID] == true),
+        let agents = workspaceID == "host" ? providers : workspaceProviders[workspaceID] ?? []
+        guard (workspaceID == "host" ? online : workspaceReachable[workspaceID] == true),
               agents.contains(where: { $0.id == agentID && $0.available && $0.canStart }) else {
           throw DeviceExecutionError.unavailable("This agent is currently unavailable.")
         }
         try await prepareExecutionFolder(folder, workspaceID: workspaceID)
-        let records = workspaceID == "central" ? await store.snapshot().commands : await store.journal.commandRecords(workspaceID: workspaceID)
+        let records = workspaceID == "host" ? await store.snapshot().commands : await store.journal.commandRecords(workspaceID: workspaceID)
         let launchCommands = Set(await store.snapshot().launches.map { $0.create.commandID })
         let pending = records.first {
           $0.command.commandID == pendingChatCreation?.commandID && $0.command.providerID == agentID &&
@@ -69,10 +69,10 @@ extension MobileModel {
         }
         var command = pending?.command ?? LibraryCommand(deviceID: state.deviceID, kind: .createSession,
           conversationID: UUID().uuidString.lowercased(), providerID: agentID, folderID: folder)
-        if workspaceID != "central" { command.workspaceID = workspaceID }
+        if workspaceID != "host" { command.workspaceID = workspaceID }
         pendingChatCreation = command
         let receipt: LibraryCommandReceipt
-        if workspaceID == "central" {
+        if workspaceID == "host" {
           guard let engine else { throw MobileConnectionError.offline }
           receipt = try await engine.submit(command)
         } else {

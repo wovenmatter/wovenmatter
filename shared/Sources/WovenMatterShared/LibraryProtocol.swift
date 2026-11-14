@@ -1,6 +1,6 @@
 import Foundation
 
-/// The legacy central-library protocol. Independent execution is negotiated through federation capabilities.
+/// The library API version every member serves. Execution features are negotiated through workspace capabilities.
 public enum LibraryProtocol {
   // Version 3 adds workspace management, Library, Calendar and session settings.
   public static let version = 3

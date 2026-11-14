@@ -604,7 +604,7 @@ final class MobileUITests: XCTestCase {
   }
 
   /// From a phone paired as a member with two Dev Macs that both serve
-  /// central history: the New Chat menu lists Quick Chat first, then each Mac
+  /// library history: the New Chat menu lists Quick Chat first, then each Mac
   /// once under its own name with its own agents, and no copied snapshot row.
   @MainActor func testNewChatMenuListsQuickChatFirstAndEachMacOnce() {
     let app = launch(tab: "Home", scenario: "member-macs")
@@ -618,9 +618,9 @@ final class MobileUITests: XCTestCase {
     let groups = app.staticTexts.matching(NSPredicate(format: "identifier BEGINSWITH %@", "chooser-group-"))
     XCTAssertEqual(groups.allElementsBoundByIndex.map(\.label), ["Quick Chat", "James’s MacBook Air (Dev) · worktrees-b8e80bfb02",
       "James’s Mac Mini (Dev) · woven-everywhere"], "Quick Chat leads; each Mac appears once under its own name")
-    XCTAssertLessThan(quickChat.frame.minY, app.staticTexts["chooser-group-central"].frame.minY)
-    // The library host's own agents, ready by its own report even though its cached central list was stale.
-    XCTAssertTrue(app.buttons["choose-chat-agent-central:local:default_agent"].isEnabled)
+    XCTAssertLessThan(quickChat.frame.minY, app.staticTexts["chooser-group-host"].frame.minY)
+    // The library host's own agents, ready by its own report even though its cached host list was stale.
+    XCTAssertTrue(app.buttons["choose-chat-agent-host:local:default_agent"].isEnabled)
     XCTAssertTrue(app.buttons["choose-chat-agent-" + air + ":local:codex"].exists, "Codex falls back to the Air's own fresh list")
     let miniAgent = app.buttons["choose-chat-agent-" + mini + ":local:claude_code"]
     reveal(miniAgent, in: app)

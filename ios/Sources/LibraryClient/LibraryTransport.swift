@@ -62,7 +62,7 @@ public enum MobileConnectionError: Error, LocalizedError {
   public var errorDescription: String? {
     switch self {
     case .http(_, let message): message
-    case .revoked: "This device’s access was revoked or expired. Pair again with the central Mac. Local notes remain available."
+    case .revoked: "This device’s access was revoked or expired. Pair again with any of your Macs. Local notes remain available."
     case .versionMismatch: "These devices need compatible versions of Woven Matter. Local notes remain available."
     case .invalidResponse: "The connected workspace returned an unreadable response."
     case .responseTooLarge: "This response exceeds the client download limit."
@@ -95,7 +95,7 @@ private actor MCPSessionCache {
   }
 }
 
-/// Requests that confirm or end this device's pairing with central.
+/// Requests that confirm or end this device's pairing with the Mac it paired with.
 public protocol MobilePairingRequests: Sendable {
   func confirmPairing() async throws
   func unpair() async throws
@@ -145,20 +145,21 @@ public final class HTTPSLibraryTransport: LibraryTransport, MobilePairingRequest
   public func unpair() async throws {
     let _: [String: Bool] = try await request("v1/pair/unpair", method: "POST", body: Data("{}".utf8))
   }
+  /// Every pairing is confirmed: the Mac adds this device only after `confirmPairing`.
   public static func pair(_ payload: PairingPayload, deviceID: String, deviceName: String,
                           metadata: DeviceMetadata? = nil, expectedWorkspaceID: String? = nil,
-                          requiresConfirmation: Bool = false, memberPublicKey: Data? = nil,
+                          memberPublicKey: Data? = nil,
                           performer: (any MobileHTTPPerforming)? = nil) async throws -> MobileCredential {
     let provisional = MobileCredential(endpoint: payload.endpoint, workspaceID: "", deviceID: deviceID, token: "")
     let transport = try HTTPSLibraryTransport(credential: provisional, metadata: metadata, performer: performer)
-    var request = PairRequest(token: payload.token, deviceID: deviceID, deviceName: deviceName, protocolVersion: payload.protocolVersion, metadata: metadata, expectedWorkspaceID: expectedWorkspaceID, requiresConfirmation: requiresConfirmation ? true : nil)
+    var request = PairRequest(token: payload.token, deviceID: deviceID, deviceName: deviceName, protocolVersion: payload.protocolVersion, metadata: metadata, expectedWorkspaceID: expectedWorkspaceID, requiresConfirmation: true)
     // The Mac signs an `ios` member entry for this key; the phone then signs
     // its requests to every Mac and Linux member, whichever is online.
     request.memberPublicKey = memberPublicKey
     let result: PairResponse = try await transport.request("v1/pair", method: "POST", body: JSONEncoder().encode(request))
     guard result.protocolVersion == LibraryProtocol.version, result.deviceID == deviceID else { throw MobileConnectionError.versionMismatch }
     guard expectedWorkspaceID == nil || result.workspaceID == expectedWorkspaceID,
-      !requiresConfirmation || result.confirmationRequired == true else { throw MobileConnectionError.versionMismatch }
+      result.confirmationRequired == true else { throw MobileConnectionError.versionMismatch }
     return MobileCredential(endpoint: payload.endpoint, workspaceID: result.workspaceID, deviceID: result.deviceID,
       token: result.credential, confirmationPending: result.confirmationRequired,
       hostDeviceID: result.hostDeviceID.flatMap { MemberRequestSignature.isDeviceID($0.lowercased()) ? $0 : nil },
@@ -290,8 +291,8 @@ public enum MobileCredentialVault {
     return nil
     #endif
   }
-  /// Disconnect the central library only. Provider and direct-workspace grants
-  /// use different services and remain available on this device.
+  /// Forgets the pairing only. Provider sign-ins use a different service and
+  /// remain available on this device.
   public static func clear() throws {
     #if canImport(Security)
     let status = SecItemDelete([kSecClass: kSecClassGenericPassword, kSecAttrService: service,

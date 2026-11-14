@@ -141,7 +141,7 @@
 		97AD203F32768DAAE8E74B8A /* InferenceHost.swift in Sources */ = {isa = PBXBuildFile; fileRef = DDAE8827A1011FA6113C72B1 /* InferenceHost.swift */; };
 		6D31E453B9DB807ED72C7E93 /* SavedArtifactsModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8AB39465A1E975E9B17949AD /* SavedArtifactsModel.swift */; };
 		3920C098CAD3AD073343D629 /* SavedArtifactsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CF0706BAE96F6819E10625D5 /* SavedArtifactsView.swift */; };
-		D9F61698E2250BF9BFAF5A2F /* CentralExecutionClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4C92277CA35CAFDF60ADE671 /* CentralExecutionClient.swift */; };
+		D9F61698E2250BF9BFAF5A2F /* MemberExecutionClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4C92277CA35CAFDF60ADE671 /* MemberExecutionClient.swift */; };
 		A7D1E2F3B4C5D6E7F8091A2B /* BackendWindowStreamSource.swift in Sources */ = {isa = PBXBuildFile; fileRef = B8E2F3A4C5D6E7F8091A2B3C /* BackendWindowStreamSource.swift */; };
 		FA2F7EB3AD102A068C2F070C /* FederatedExecutionBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = 306E57A53B3F8371623DCC8F /* FederatedExecutionBridge.swift */; };
 		04C170D0E4FB2920E4D214EF /* RemoteInteractionCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = 969050270F91397F88F6A49D /* RemoteInteractionCard.swift */; };
@@ -328,7 +328,7 @@
 		DDAE8827A1011FA6113C72B1 /* InferenceHost.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InferenceHost.swift; sourceTree = "<group>"; };
 		8AB39465A1E975E9B17949AD /* SavedArtifactsModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SavedArtifactsModel.swift; sourceTree = "<group>"; };
 		CF0706BAE96F6819E10625D5 /* SavedArtifactsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SavedArtifactsView.swift; sourceTree = "<group>"; };
-		4C92277CA35CAFDF60ADE671 /* CentralExecutionClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CentralExecutionClient.swift; sourceTree = "<group>"; };
+		4C92277CA35CAFDF60ADE671 /* MemberExecutionClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MemberExecutionClient.swift; sourceTree = "<group>"; };
 		B8E2F3A4C5D6E7F8091A2B3C /* BackendWindowStreamSource.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackendWindowStreamSource.swift; sourceTree = "<group>"; };
 		306E57A53B3F8371623DCC8F /* FederatedExecutionBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FederatedExecutionBridge.swift; sourceTree = "<group>"; };
 		969050270F91397F88F6A49D /* RemoteInteractionCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteInteractionCard.swift; sourceTree = "<group>"; };
@@ -614,7 +614,7 @@
 			children = (
 				A03000000000000000000002 /* DesktopUpdater.swift */,
 				306E57A53B3F8371623DCC8F /* FederatedExecutionBridge.swift */,
-				4C92277CA35CAFDF60ADE671 /* CentralExecutionClient.swift */,
+				4C92277CA35CAFDF60ADE671 /* MemberExecutionClient.swift */,
 				B8E2F3A4C5D6E7F8091A2B3C /* BackendWindowStreamSource.swift */,
 				DDAE8827A1011FA6113C72B1 /* InferenceHost.swift */,
 				0083907CDB98FA31255BD2C1 /* LibraryHostController.swift */,
@@ -800,7 +800,7 @@
 				F6B4787FBD7B038B70D58B68 /* WovenMCPHost.swift in Sources */,
 				04C170D0E4FB2920E4D214EF /* RemoteInteractionCard.swift in Sources */,
 				FA2F7EB3AD102A068C2F070C /* FederatedExecutionBridge.swift in Sources */,
-				D9F61698E2250BF9BFAF5A2F /* CentralExecutionClient.swift in Sources */,
+				D9F61698E2250BF9BFAF5A2F /* MemberExecutionClient.swift in Sources */,
 				A7D1E2F3B4C5D6E7F8091A2B /* BackendWindowStreamSource.swift in Sources */,
 				3920C098CAD3AD073343D629 /* SavedArtifactsView.swift in Sources */,
 				6D31E453B9DB807ED72C7E93 /* SavedArtifactsModel.swift in Sources */,

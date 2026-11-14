@@ -49,7 +49,7 @@ struct MacDeviceSetupModelTests {
         }), getRelease: { throw MacDeviceSetupError("No release fixture") }, pollDelay: {})
         await model.discover()
         let row = try #require(model.rows.first)
-        await model.perform(.pair, row: row, central: URL(string: "https://central.tail.ts.net:8443/wovenmatter")!)
+        await model.perform(.pair, row: row, endpoint: URL(string: "https://studio.tail.ts.net:8443/wovenmatter")!)
         #expect(row.error == nil)
         #expect(row.message == "Current request accepted")
         #expect(await fixture.polls == 2)

@@ -87,7 +87,7 @@ struct MobileToolBoundaryTests {
     let link = DatabaseArtifactLink(sourceID: "mac", databaseID: "source", relativePath: "data.sqlite")
     let document = NoteDocument(kind: .html, html: "<p>Saved</p>", databaseLink: operation == "cached-linked" ? link : nil)
     let note = LibraryNote(id: "saved-note", title: "Report", content: try document.encoded(), revision: 5, kind: .html)
-    try await store.apply(.init(workspaceID: "central", cursor: 1, notes: [note]))
+    try await store.apply(.init(workspaceID: "host", cursor: 1, notes: [note]))
     var args: [String]
     if operation == "link" {
       args = ["notes", "link", "--note-id", note.id, "--source-id", "mac", "--database-id", "source", "--path", "data.sqlite"]

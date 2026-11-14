@@ -9,15 +9,15 @@ import WovenMatterClient
 /// A machine this Mac holds no stream to is never read on a timer: its
 /// sessions show the history library sync brought, marked offline.
 @MainActor @Suite(.serialized)
-struct CentralExecutionClientTests {
+struct MemberExecutionClientTests {
     @MainActor private struct Setup {
         let fixture: FacadeFixture
         let workspace: ExecutionWorkspace
         let conversation: LibraryConversation
-        let remote: CentralExecutionFixtureTransport
+        let remote: MemberExecutionFixtureTransport
         let journal: URL
-        func client() throws -> CentralExecutionClient {
-            try CentralExecutionClient(database: fixture.database, commandJournalURL: journal,
+        func client() throws -> MemberExecutionClient {
+            try MemberExecutionClient(database: fixture.database, commandJournalURL: journal,
                 makeSignedTransport: { [remote] _ in remote })
         }
     }
@@ -41,9 +41,28 @@ struct CentralExecutionClientTests {
             }))
         _ = try await fixture.database.ingestExecutionJournal(.init(libraryID: identity.libraryID, entries: [origin, history]),
             deviceID: workspace.executionDeviceID!)
-        let remote = CentralExecutionFixtureTransport(workspace: workspace, conversation: conversation)
+        let remote = MemberExecutionFixtureTransport(workspace: workspace, conversation: conversation)
         return Setup(fixture: fixture, workspace: workspace, conversation: conversation, remote: remote,
-                     journal: fixture.directory.appending(path: "central-commands.json"))
+                     journal: fixture.directory.appending(path: "member-commands.json"))
+    }
+
+    /// The v0.4.2 command journal moves once to its current name; an existing
+    /// current journal wins and the old file is dropped.
+    @Test func theCommandJournalMovesOnceFromItsV042Name() throws {
+        let directory = FileManager.default.temporaryDirectory.appending(path: "member-journal-" + UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let legacy = directory.appending(path: "central-execution-commands.json")
+        let current = directory.appending(path: MemberExecutionClient.commandJournalName)
+        try Data("saved".utf8).write(to: legacy)
+        try MemberExecutionClient.moveLegacyCommandJournal(in: directory)
+        #expect(try Data(contentsOf: current) == Data("saved".utf8))
+        #expect(!FileManager.default.fileExists(atPath: legacy.path))
+        try MemberExecutionClient.moveLegacyCommandJournal(in: directory)
+        try Data("stale".utf8).write(to: legacy)
+        try MemberExecutionClient.moveLegacyCommandJournal(in: directory)
+        #expect(try Data(contentsOf: current) == Data("saved".utf8))
+        #expect(!FileManager.default.fileExists(atPath: legacy.path))
     }
 
     @Test func aMachineWithoutAStreamShowsItsLibraryHistoryOfflineAndIsNeverRead() async throws {
@@ -114,7 +133,7 @@ struct CentralExecutionClientTests {
     }
 }
 
-private actor CentralExecutionFixtureTransport: ExecutionWorkspaceTransport {
+private actor MemberExecutionFixtureTransport: ExecutionWorkspaceTransport {
     let workspace: ExecutionWorkspace
     let conversation: LibraryConversation
     var receipts: [String: LibraryCommandReceipt] = [:]

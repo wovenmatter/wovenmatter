@@ -175,7 +175,7 @@ extension ApplicationModel {
             try activity.projectionJSON.map { try JSONDecoder().decode(AgentRunActivity.self, from: Data($0.utf8)) }
         }
         var failure: (any Error)?
-        if let client = try? centralExecutionClient() {
+        if let client = try? memberExecutionClient() {
             do { return try decode(await client.activityDetails(conversationID: conversationID, runID: runID, activityID: activityID)) }
             catch { failure = error }
         }

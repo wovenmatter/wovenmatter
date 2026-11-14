@@ -4,7 +4,7 @@ import Testing
 
 @Suite("Folder owner resolution")
 struct LibraryFolderOwnerTests {
-  // The central Mac's registry id and host device id are random and unrelated
+  // A Mac's registry id and host device id are random and unrelated
   // to the `device:<device id>` owner its folders are bound to.
   let registryID = "3b7d3c64-6f0b-4f5b-9a55-1d1f0c3c2a10"
   let hostDeviceID = "8d1c2f5e-0a3b-4c6d-8e9f-112233445566"
@@ -15,8 +15,8 @@ struct LibraryFolderOwnerTests {
           executionDeviceID: hostDeviceID, folderOwnerID: folderOwnerID)
   }
 
-  @Test("a central Mac's folders resolve to its registry row through folderOwnerID")
-  func centralMacFolders() {
+  @Test("a Mac's folders resolve to its registry row through folderOwnerID")
+  func macFolders() {
     let owner = "device:" + localDeviceID
     #expect(ExecutionWorkspace.displayOwner(of: owner, in: [mac(folderOwnerID: nil)]) == nil,
             "Without the published owner the folders cannot be placed")

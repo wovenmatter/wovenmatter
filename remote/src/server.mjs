@@ -165,7 +165,7 @@ const defaultAgentControl = createDefaultAgentControl({
   cwd: () => workspaceRoot,
   environment: () => {
     const environment = { ...nonInteractiveSessionEnvironment(process.env, configuration), WOVEN_DEFAULT_AGENT_DIRECTORY: resolve(workspaceRoot, '.wovenmatter/default-agent') }
-    for (const key of ['WOVENMATTER_API_TOKEN', 'WOVENMATTER_SERVICE_SECRET']) delete environment[key]
+    delete environment.WOVENMATTER_API_TOKEN
     return environment
   },
 })

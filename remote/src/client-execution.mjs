@@ -102,7 +102,7 @@ export function createClientExecution({ directory, runtime, kind = 'linux', name
   }
   // An entry written outside a transaction is committed already.
   function journalWritten(sequence) { if (committedJournal) committedJournal.push(sequence); else notify({ kind: 'journal', sequence }) }
-  function assertIdentity() { if (!identity) throw fail(409, 'This workspace has not been enrolled in a central library.') }
+  function assertIdentity() { if (!identity) throw fail(409, 'This workspace has not joined a library yet. A Mac in your library enrolls it when it reaches this machine.') }
   function event(kind, conversationID, payload, runID) {
     const record = { eventID: randomUUID(), recordedAt:date(), workspaceID: identity.id, conversationID, kind, ...(runID ? {runID} : {}), ...payload }
     const result = db.prepare('INSERT INTO events(body) VALUES (?)').run('{}')
@@ -249,7 +249,7 @@ export function createClientExecution({ directory, runtime, kind = 'linux', name
       decipher.setAAD(Buffer.from(JSON.stringify([identity.libraryID,identity.id,device.id,[...device.scopes].sort()]))); decipher.setAuthTag(Buffer.from(tag,'base64'))
       const value = JSON.parse(Buffer.concat([decipher.update(Buffer.from(ciphertext,'base64')),decipher.final()]).toString('utf8'))
       rememberUnlockMaterial(value); return value
-    } catch { throw fail(403,'This device must be reauthorized by the central Mac before using stored model accounts.') }
+    } catch { throw fail(403,'Enroll this device again from one of your Macs before using stored model accounts.') }
   }
   function revoke(id) {
     transaction(() => {
@@ -507,7 +507,7 @@ export function createClientExecution({ directory, runtime, kind = 'linux', name
         else if (action.action === 'unpin') record.conversation.isPinned = false
         else if (action.action === 'move') record.conversation.folderID = action.folderID ?? null
         else throw fail(400,'This conversation action is unavailable on the execution workspace.')
-      } else throw fail(400,'This action belongs to the central library, not an execution workspace.')
+      } else throw fail(400,'This action is handled by library sync, not by an execution workspace.')
       const configured=transaction(() => {publish(record);return receipt(command,'completed')})
       // A runtime may keep its settings outside the record (OpenCode): live streams read them again.
       notify({kind:'session',conversationID:command.conversationID})
@@ -1090,7 +1090,7 @@ export function createClientExecution({ directory, runtime, kind = 'linux', name
         const content=record.transcript.messages.map(message=>`## ${message.role}\n\n${message.content}`).join('\n\n')
         return {file:{_0:{name:'conversation.md',mimeType:'text/markdown',data:Buffer.from(content).toString('base64')}}}
       }
-      throw fail(400,'This content belongs to the central library and is unavailable through execution transport.')
+      throw fail(400,'This content comes from library sync and is unavailable through execution transport.')
     },
     tickGoals,
     ownsConversation: id => identifier(id) && !!db.prepare('SELECT id FROM conversations WHERE id=?').get(id),

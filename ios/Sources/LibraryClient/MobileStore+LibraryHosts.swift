@@ -104,7 +104,7 @@ extension MobileStore {
       let changed = snapshot.conversations.filter { next.conversations[$0.id] != $0 }.map(\.id)
       next.dirtyTranscriptIDs = (next.dirtyTranscriptIDs ?? []).union(changed)
       let incoming = Set(snapshot.conversations.map(\.id))
-      next.centralConversationIDs = incoming; next.centralDeletedConversationIDs = []
+      next.libraryConversationIDs = incoming; next.libraryDeletedConversationIDs = []
       let execution = next.conversations.filter { next.executionConversationIDs?.contains($0.key) == true }
       next.conversations = Dictionary(snapshot.conversations.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         .merging(execution) { _, local in local }

@@ -2,8 +2,8 @@
 
 Every paired Mac runs the normal Woven Matter desktop app and saves a complete
 local shared library. Pairing combines libraries through ongoing synchronization;
-it does not move a database, retire a host, promote a node, or select a central
-Mac. Any Mac can add a remote workspace or pair another Apple device.
+it does not move a database, retire a host, promote a node, or make one Mac the
+authority. Any Mac can add a remote workspace or pair another Apple device.
 
 ## Shared data and execution ownership
 
@@ -172,11 +172,6 @@ Besides the join, paired-Mac bearers serve only:
 
 - `/v1/peers/usage`, read with the grant from pairing with that Mac (see
   "Usage across devices");
-- `/v1/peers/credential`, which enrolls a pre-member phone in another Mac's
-  workspace. A Mac without its own grant at that Mac first obtains one through
-  a one-use challenge signed with both pinned keys (`/v1/peers/challenge`,
-  `/v1/peers/handshake`); challenges are held in memory, so a restart
-  invalidates them;
 - the bearer-era roster (phone names, Mac introductions and signed unpair
   events), which rides along each signed exchange as an attachment so that
   grants issued before members are revoked with their device. It authenticates
@@ -257,8 +252,7 @@ provider services or real pairing credentials are consumed.
 - Confirm scheduled work runs only on its owner. Disconnecting another Mac must
   not start a duplicate execution or move an accepted run.
 - Remove a device from one Mac. After the other peers synchronize, its signed
-  requests and any remaining library, execution and inference grants must be
-  rejected. Retained local
+  requests and its pairing bearers must be rejected. Retained local
   writing must remain available on the unpaired device.
 
 Real multi-Mac Tailscale connectivity, macOS Keychain access, sleep/wake, and

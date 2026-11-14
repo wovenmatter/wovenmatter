@@ -18,12 +18,10 @@ struct InferenceHostTests {
         let linux = MemberIdentity(deviceID: UUID().uuidString.lowercased(), kind: .linux, key: .init())
         try await mac.add(deviceID: phone.deviceID, kind: .ios, name: "Phone", publicKey: phone.publicKey, endpoints: [])
         try await mac.add(deviceID: linux.deviceID, kind: .linux, name: "Linux", publicKey: linux.publicKey, endpoints: [])
-        let auth = try ExecutionAuthentication(fileURL: fixture.directory.appendingPathComponent("inference-devices.json"))
         let workspace = UUID().uuidString.lowercased()
         let descriptor = ExecutionWorkspace(id: workspace, libraryID: identity.libraryID, ownerDeviceID: identity.hostDeviceID, kind: .mac, name: "Mac")
         let probe = InferenceHostProbe(), principals = InferenceLines()
-        let host = InferenceHost(authentication: auth, descriptor: descriptor, directory: fixture.directory, isActive: { true },
-            authorize: { _, _ in Issue.record("A signed caller has no grant to authorize.") }, members: mac,
+        let host = InferenceHost(descriptor: descriptor, directory: fixture.directory, isActive: { true }, members: mac,
             preparePayload: { await probe.prepared(); return Data("{\"config\":{},\"credentials\":{}}".utf8) },
             run: { body, emit in
                 principals.append(Data(((try? JSONSerialization.jsonObject(with: body) as? [String: Any])?["principalID"] as? String ?? "").utf8))

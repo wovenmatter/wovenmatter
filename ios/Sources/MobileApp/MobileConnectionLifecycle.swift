@@ -40,15 +40,14 @@ extension MobileModel {
     // The pairing connection only confirms the pairing (and unpairs);
     // `completeMemberPairing` then signs every request, or nothing syncs.
     credential = committed; transport = connection
-    synchronizationStatus = .init(); online = false; connectionLabel = "Connecting"
-    centralRetryCount = 0; centralRefreshAfter = .distantPast; centralProvidersRefreshDue = true
+    synchronizationStatus = .init(); online = false
+    libraryRetryCount = 0; libraryRefreshAfter = .distantPast; hostProvidersRefreshDue = true
     pairingError = nil
     await reload()
     try await ensureDeviceWorkspace()
   }
 
-  func disconnectMac(clearCredential: () throws -> Void = MobileCredentialVault.clear,
-                     clearWorkspaceCredential: (String) throws -> Void = WorkspaceCredentialVault.clear) async {
+  func disconnectMac(clearCredential: () throws -> Void = MobileCredentialVault.clear) async {
     guard !pairingInProgress else { return }
     pairingInProgress = true
     defer { pairingInProgress = false }
@@ -58,10 +57,12 @@ extension MobileModel {
     workspaceReadTasks = [:]
     closeWorkspaceStreams()
     let previousEngine = engine
-    let previousTransport = transport
+    // A Mac removes this device from the library for every member; a Linux
+    // host can't, so the unpair goes to a Mac even while one is the host.
+    let previousTransport = await libraryHosts?.macTransport(current: membership?.currentHost, connection: transport,
+                                                             registry: executionWorkspaces) ?? transport
     credential = nil; transport = nil; engine = nil
-    online = false; connecting = false; connectionLabel = "Disconnected"
-    let workspaceIDs = Set(workspaceClients.keys).union(executionWorkspaces.map(\.id))
+    online = false; connecting = false
     workspaceClients = [:]; workspaceProviders = [:]; workspaceReachable = [:]
     remotePending = [:]; pending = []; providers = []
     await previousEngine?.cancelSynchronization()
@@ -72,10 +73,6 @@ extension MobileModel {
       clearMembership()
       try await store?.recoverPairingTransition()
       try await store?.detachWorkspace()
-      let journalIDs = await store?.journal.snapshot().workspaces.keys.map { $0 } ?? []
-      for id in workspaceIDs.union(journalIDs) where id != deviceWorkspaceID {
-        try clearWorkspaceCredential(id)
-      }
       pairingError = nil
       await reload()
     } catch { pairingError = error.localizedDescription }
@@ -179,7 +176,7 @@ extension MobileModel {
     // Every stream reconnects now, before the library sync below finishes.
     resumeWorkspaceStreams()
     guard automaticSynchronization, !fixture, !isolatedTestHost else { return }
-    centralRefreshAfter = .distantPast; centralProvidersRefreshDue = true
+    libraryRefreshAfter = .distantPast; hostProvidersRefreshDue = true
     requestSynchronization(immediately: true)
   }
 
@@ -189,8 +186,8 @@ extension MobileModel {
     connectionRefreshTask = Task { [weak self] in
       if !immediately { try? await Task.sleep(for: .milliseconds(500)) }
       guard let self, !Task.isCancelled, self.connectionForeground else { return }
-      // Edits coalesce promptly; an unavailable central gets bounded retries.
-      if immediately || self.online || Date() >= self.centralRefreshAfter { await self.refresh() }
+      // Edits coalesce promptly; an unreachable library host gets bounded retries.
+      if immediately || self.online || Date() >= self.libraryRefreshAfter { await self.refresh() }
       guard !Task.isCancelled else { return }
       await self.refreshExecutionWorkspaces(force: immediately)
     }
@@ -207,7 +204,7 @@ extension MobileModel {
     while !Task.isCancelled {
       // One pass when the loop starts; after that only on the timer.
       if connectionForeground, first || librarySyncTimerNeeded {
-        if Date() >= centralRefreshAfter { await refresh() }
+        if Date() >= libraryRefreshAfter { await refresh() }
         await refreshExecutionWorkspaces()
         if let engine { synchronizationStatus = await engine.synchronizationStatus() }
       }
@@ -227,7 +224,7 @@ extension MobileModel {
   func connectionDidBecomeReachable() {
     guard connectionForeground else { return }
     reconnectWorkspaceStreams()
-    centralRefreshAfter = .distantPast; centralProvidersRefreshDue = true
+    libraryRefreshAfter = .distantPast; hostProvidersRefreshDue = true
     requestSynchronization(immediately: true)
   }
 

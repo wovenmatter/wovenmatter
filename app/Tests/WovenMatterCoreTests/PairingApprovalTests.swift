@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+import WorkspaceFixtures
 import WovenMatterCore
 @testable import WovenMatterLibraryStore
 
@@ -135,7 +136,7 @@ private struct PairingFixture {
     }
     func pair(_ auth: DeviceAuthentication, kind: DeviceKind) async throws -> PairResponse {
         let offer = try await auth.createOffer(endpoint: URL(string: "https://fixture.test.ts.net:8443/wovenmatter")!)
-        return try await auth.pair(.init(token: offer.payload.token, deviceID: UUID().uuidString.lowercased(), deviceName: "Fixture",
+        return try await auth.pairConfirmed(.init(token: offer.payload.token, deviceID: UUID().uuidString.lowercased(), deviceName: "Fixture",
             metadata: .init(kind: kind, osVersion: "fixture", appVersion: "1")), workspaceID: libraryID)
     }
 }

@@ -42,11 +42,11 @@ public struct MacManagement: Sendable {
         _ = try await execute(mac, connection: connection, script: MacRemoteScripts.install,
             arguments: [release.downloadURL.absoluteString, release.sha256, release.version, String(release.build), try MacSetupRequest(action: .update).json(), release.minimumMacOS, requirePairingSupport ? "1" : "0"], timeout: 600)
     }
-    @discardableResult public func requestPairing(_ mac: TailnetMac, connection: MacSSHConnection, central: URL) async throws -> UUID {
-        guard PairingPayload.isValidEndpoint(central) else {
-            throw LibraryAPIError(code: "invalid_endpoint", message: "The central database is not ready for pairing.")
+    @discardableResult public func requestPairing(_ mac: TailnetMac, connection: MacSSHConnection, endpoint: URL) async throws -> UUID {
+        guard PairingPayload.isValidEndpoint(endpoint) else {
+            throw LibraryAPIError(code: "invalid_endpoint", message: "This Mac is not ready for pairing. Wait for it to connect to Tailscale.")
         }
-        let request = MacSetupRequest(action: .pair, endpoint: central)
+        let request = MacSetupRequest(action: .pair, endpoint: endpoint)
         _ = try await execute(mac, connection: connection, script: MacRemoteScripts.pair, arguments: [try request.json()])
         return request.id
     }

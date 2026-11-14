@@ -18,7 +18,7 @@ public struct SavedArtifactLibraryItem: Identifiable, Equatable, Sendable {
 }
 
 /// Presents committed client outputs without assigning them invented conversation identities.
-/// Opening copies are disposable; only the central committed chunks are authoritative.
+/// Opening copies are disposable; only the library's committed chunks are authoritative.
 public actor SavedArtifactLibraryService {
   private let database: WorkspaceDatabase
   private let directory: URL

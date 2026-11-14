@@ -9,7 +9,7 @@ import WovenMatterShared
 /// created on another workspace (`member_tool_sessions`) wakes that agent when
 /// it finishes or asks a question while the agent is idle.
 ///
-/// Changes come from `CentralExecutionClient`'s `workspace` stream of each
+/// Changes come from `MemberExecutionClient`'s `workspace` stream of each
 /// destination (`remoteItem`, filtered here to the sessions this Mac watches or
 /// waits on) and, for this Mac's own sessions, from its in-process changes
 /// (`localChanged`). Watched sessions and pending wake-ups are stored

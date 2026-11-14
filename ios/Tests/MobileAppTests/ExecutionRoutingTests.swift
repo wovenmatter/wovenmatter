@@ -5,7 +5,7 @@ import WovenMatterShared
 @testable import WovenMatterMobileApp
 
 private actor ExecutionTestLibrary: OfflineLibraryTransport {
-  func command(_ command: LibraryCommand) async throws -> LibraryCommandReceipt { XCTFail("Direct execution must not use the central library"); throw MobileConnectionError.offline }
+  func command(_ command: LibraryCommand) async throws -> LibraryCommandReceipt { XCTFail("Direct execution must not use the library host"); throw MobileConnectionError.offline }
 }
 
 private actor ExecutionTestWorkspace: ExecutionWorkspaceTransport {
@@ -86,7 +86,7 @@ final class ExecutionRoutingTests: XCTestCase {
     }
   }
 
-  @MainActor func testOfflineCentralMacCannotCreateChat() async throws {
+  @MainActor func testOfflineLibraryHostCannotCreateChat() async throws {
     let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     defer { try? FileManager.default.removeItem(at: root) }
     let store = try MobileStore(file: root.appendingPathComponent("library.json"))
@@ -94,7 +94,7 @@ final class ExecutionRoutingTests: XCTestCase {
     model.providers = [.init(id: "local:pi", runtimeKind: "default_agent", displayName: "Pi Durable", available: true)]
     model.online = false
     model.newChat()
-    await model.startNewChat(with: try XCTUnwrap(model.launcherAgents.first { $0.workspaceID == "central" }))
+    await model.startNewChat(with: try XCTUnwrap(model.launcherAgents.first { $0.workspaceID == "host" }))
     XCTAssertEqual(model.chatSetupProblem, MobileModel.deviceConnectionMessage)
     let saved = await store.snapshot()
     XCTAssertTrue(saved.commands.isEmpty); XCTAssertTrue(saved.launches.isEmpty)
@@ -139,7 +139,7 @@ final class ExecutionRoutingTests: XCTestCase {
     let model = MobileModel(store: store, transport: ExecutionTestLibrary())
     model.state = await store.snapshot()
     let workspace = ExecutionWorkspace(id: UUID().uuidString.lowercased(), libraryID: "library",
-      ownerDeviceID: "owner", kind: .mac, name: "Mac", capabilities: ["history.central.v1"])
+      ownerDeviceID: "owner", kind: .mac, name: "Mac", capabilities: ["history.library.v1"])
     try await store.journal.bind(libraryID: "library")
     try await store.journal.upsertWorkspace(workspace, pending: false)
     let direct = ExecutionTestWorkspace(workspace)
@@ -148,7 +148,7 @@ final class ExecutionRoutingTests: XCTestCase {
     model.selectedConversationID = id
     model.selectedConversationRoute = (id, workspace.id)
     model.workspaceReachable[workspace.id] = true; model.online = false
-    XCTAssertEqual(model.executionOwner(of: id), "central")
+    XCTAssertEqual(model.executionOwner(of: id), "host")
     XCTAssertTrue(model.executionAvailable(for: id))
     await model.submitExecutionCommand(.init(deviceID: model.state.deviceID, kind: .stop, conversationID: id, runID: runID))
     await model.respond(.init(id: "approval", conversationID: id, runID: runID, kind: .approval, title: "Approve"), response: .init(optionID: "allow"))
@@ -159,13 +159,13 @@ final class ExecutionRoutingTests: XCTestCase {
     let commands = await direct.commands
     XCTAssertEqual(commands.map(\.kind), [.stop, .respond, .workspace])
     XCTAssertTrue(commands.allSatisfy { $0.workspaceID == workspace.id && $0.conversationID == id })
-    XCTAssertEqual(model.executionOwner(of: id), "central")
-    XCTAssertEqual(model.executionRoute(for: "another-chat"), "central")
-    // The reverse fallback uses central transport while preserving the direct owner.
+    XCTAssertEqual(model.executionOwner(of: id), "host")
+    XCTAssertEqual(model.executionRoute(for: "another-chat"), "host")
+    // The reverse fallback uses host route transport while preserving the direct owner.
     model.conversationWorkspaceIDs[id] = workspace.id
-    model.selectedConversationRoute = (id, "central"); model.online = true
+    model.selectedConversationRoute = (id, "host"); model.online = true
     XCTAssertEqual(model.executionOwner(of: id), workspace.id)
-    XCTAssertEqual(model.executionRoute(for: id), "central")
+    XCTAssertEqual(model.executionRoute(for: id), "host")
     XCTAssertTrue(model.executionAvailable(for: id))
   }
 
@@ -176,30 +176,31 @@ final class ExecutionRoutingTests: XCTestCase {
     try await store.bindWorkspace("library")
     let model = MobileModel(store: store, transport: ExecutionTestLibrary())
     model.state = await store.snapshot()
-    let central = ExecutionWorkspace(id: UUID().uuidString.lowercased(), libraryID: "library",
-      ownerDeviceID: "central-owner", kind: .mac, name: "Central", capabilities: ["history.central.v1"])
+    let hostMac = ExecutionWorkspace(id: UUID().uuidString.lowercased(), libraryID: "library",
+      ownerDeviceID: "host-owner", kind: .mac, name: "Studio", capabilities: ["history.library.v1"])
     let other = ExecutionWorkspace(id: UUID().uuidString.lowercased(), libraryID: "library",
       ownerDeviceID: "other-owner", kind: .mac, name: "Another Mac")
     try await store.journal.bind(libraryID: "library")
-    for workspace in [central, other] { try await store.journal.upsertWorkspace(workspace, pending: false) }
+    for workspace in [hostMac, other] { try await store.journal.upsertWorkspace(workspace, pending: false) }
     let provider = HarnessCapabilities(id: "local:codex", runtimeKind: "codex", displayName: "Codex", available: true)
-    model.executionWorkspaces = [other, central]
-    model.providers = [provider]; model.workspaceProviders = [central.id: [provider], other.id: [provider]]
-    model.workspaceReachable = [central.id: true, other.id: true]; model.online = false
+    model.executionWorkspaces = [other, hostMac]
+    model.syncLibrary(with: "host-owner")
+    model.providers = [provider]; model.workspaceProviders = [hostMac.id: [provider], other.id: [provider]]
+    model.workspaceReachable = [hostMac.id: true, other.id: true]; model.online = false
     let id = UUID().uuidString.lowercased()
     model.state.conversations[id] = .init(id: id, title: "Existing", providerID: provider.id, runtimeKind: provider.runtimeKind)
     // Folders and Pending Requests both select a conversation without an explicit route.
     await model.selectConversation(id)
-    XCTAssertEqual(model.selectedExecutionWorkspaceID, central.id)
-    XCTAssertEqual(model.executionOwner(of: id), "central")
-    model.workspaceReachable[central.id] = false
-    XCTAssertEqual(model.preferredExecutionRoute(for: id), "central", "An unrelated Mac cannot substitute for this agent")
-    model.conversationWorkspaceIDs[id] = central.id; model.online = true
-    XCTAssertEqual(model.preferredExecutionRoute(for: id), "central")
+    XCTAssertEqual(model.selectedExecutionWorkspaceID, hostMac.id)
+    XCTAssertEqual(model.executionOwner(of: id), "host")
+    model.workspaceReachable[hostMac.id] = false
+    XCTAssertEqual(model.preferredExecutionRoute(for: id), "host", "An unrelated Mac cannot substitute for this agent")
+    model.conversationWorkspaceIDs[id] = hostMac.id; model.online = true
+    XCTAssertEqual(model.preferredExecutionRoute(for: id), "host")
     model.conversationWorkspaceIDs[id] = other.id
     XCTAssertEqual(model.preferredExecutionRoute(for: id), other.id)
     model.workspaceReachable[other.id] = false
-    XCTAssertEqual(model.preferredExecutionRoute(for: id), other.id, "Central access cannot substitute for another Mac's own session")
+    XCTAssertEqual(model.preferredExecutionRoute(for: id), other.id, "Host route access cannot substitute for another Mac's own session")
   }
 
   @MainActor func testHomeLauncherKeepsExactWorkspaceAndDimsDisconnectedAgents() async throws {
@@ -216,7 +217,7 @@ final class ExecutionRoutingTests: XCTestCase {
     model.workspaceClients[connected.id] = WorkspaceClient(store: try XCTUnwrap(model.store), workspaceID: connected.id, transport: ExecutionTestWorkspace(connected))
     model.providers = [agent]; model.online = false; model.selectedConversationID = "existing-chat"
     let launchers = model.launcherAgents
-    XCTAssertEqual(launchers.map(\.workspaceID), ["local", "central", connected.id, disconnected.id])
+    XCTAssertEqual(launchers.map(\.workspaceID), ["local", "host", connected.id, disconnected.id])
     XCTAssertFalse(try XCTUnwrap(launchers.last).isAvailable)
     XCTAssertEqual(model.launcherGroups.map(\.id), ["local", connected.id], "Only reachable workspaces are listed")
     await model.launchAgent(try XCTUnwrap(launchers.last))
@@ -231,7 +232,7 @@ final class ExecutionRoutingTests: XCTestCase {
     XCTAssertEqual(model.providerID, "pi-durable-device")
     model.online = true
     model.providers = [agent, .init(id: "remote:" + connected.id + ":pi", runtimeKind: "default_agent", displayName: "Pi Durable", routeName: connected.name, available: true)]
-    XCTAssertEqual(model.launcherAgents.filter { $0.workspaceID == "central" }.map(\.providerID), [agent.id])
+    XCTAssertEqual(model.launcherAgents.filter { $0.workspaceID == "host" }.map(\.providerID), [agent.id])
     XCTAssertEqual(model.launcherAgents.filter { $0.workspaceID == connected.id }.count, 1)
   }
 
@@ -442,7 +443,7 @@ final class ExecutionRoutingTests: XCTestCase {
     }
   }
 
-  @MainActor func testDirectWorkspaceRecoversLostSendReceiptWhileCentralIsOffline() async throws {
+  @MainActor func testDirectWorkspaceRecoversLostSendReceiptWhileTheLibraryHostIsOffline() async throws {
     let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     defer { try? FileManager.default.removeItem(at: root) }
     let store = try MobileStore(file: root.appendingPathComponent("library.json"))

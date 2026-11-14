@@ -4,7 +4,7 @@ import WovenMatterShared
 
 /// Live streams to every listed Mac and Linux workspace that serves `stream.v1`
 /// while the app is in the foreground: `workspace` on each, `conversation`
-/// only for the open chat. The library host's stream also carries the central
+/// only for the open chat. The library host's stream also carries the host
 /// route (its own sessions). A route without a connected stream (no
 /// `stream.v1`, or its stream down or ended) is read when its client is made,
 /// when a chat opens, after a command, and for the open chat and its
@@ -19,10 +19,10 @@ extension MobileModel {
   }
 
   /// The workspace whose stream carries `route`: the route's own workspace,
-  /// or for "central" the library host's registered Mac. Nil for this device
+  /// or for "host" the library host's registered Mac. Nil for this device
   /// and for a route nothing streams.
   func streamedWorkspace(forRoute route: String) -> ExecutionWorkspace? {
-    let workspace = route == "central" ? centralExecutionWorkspace : executionWorkspaces.first { $0.id == route }
+    let workspace = route == "host" ? hostExecutionWorkspace : executionWorkspaces.first { $0.id == route }
     return workspace.flatMap { streams($0) ? $0 : nil }
   }
 
@@ -32,11 +32,11 @@ extension MobileModel {
     workspaceStreams[workspaceID] != nil && liveStreamIDs.contains(workspaceID)
   }
 
-  /// Whether the central route's live view (transcript, run state, questions
+  /// Whether the host route's live view (transcript, run state, questions
   /// and approvals, capabilities) arrives now on the library host's connected
   /// stream. While it does not, they are read over HTTP.
-  var streamsCentral: Bool {
-    guard !fixture, let host = streamedWorkspace(forRoute: "central") else { return false }
+  var streamsHostRoute: Bool {
+    guard !fixture, let host = streamedWorkspace(forRoute: "host") else { return false }
     return streamConnected(host.id)
   }
 
@@ -57,7 +57,7 @@ extension MobileModel {
   }
 
   /// The chat a workspace's stream follows: the open chat when its route is
-  /// that workspace, or "central" and that workspace is the library host.
+  /// that workspace, or "host" and that workspace is the library host.
   func streamedConversationID(for workspaceID: String) -> String? {
     guard let id = selectedConversationID, streamedWorkspace(forRoute: executionRoute(for: id))?.id == workspaceID else { return nil }
     return id
@@ -90,9 +90,9 @@ extension MobileModel {
       }
       workspaceStreams[id] = stream; streamEndpoints[id] = endpoint
     }
-    let host = centralExecutionWorkspace?.id
-    // The central route's pending list comes from the host's stream alone.
-    if streamsCentral, !pending.isEmpty { pending = [] }
+    let host = hostExecutionWorkspace?.id
+    // The host route's pending list comes from the host's stream alone.
+    if streamsHostRoute, !pending.isEmpty { pending = [] }
     for (id, stream) in workspaceStreams {
       await workspaceClients[id]?.setStream(stream.connection)
       await stream.setLibraryHost(id == host)
@@ -158,7 +158,7 @@ extension MobileModel {
       case .open:
         workspaceReachable[id] = true; workspaceProblems.removeValue(forKey: id)
         await refreshStreamedWorkspace(id)
-        if id == centralExecutionWorkspace?.id { await recoverCentralReceipts() }
+        if id == hostExecutionWorkspace?.id { await recoverHostReceipts() }
       case .waiting(let error):
         workspaceReachable[id] = false; workspaceProblems[id] = streamProblem(error, workspaceID: id)
       case .memberRemoved:
@@ -193,7 +193,7 @@ extension MobileModel {
   /// nothing, so the library timer returns until the next `library` item.
   /// The foreground loop then starts or stops its tick.
   private func streamLive(_ id: String, _ live: Bool) {
-    let host = id == centralExecutionWorkspace?.id
+    let host = id == hostExecutionWorkspace?.id
     if live {
       guard liveStreamIDs.insert(id).inserted else { return }
       if host, !pending.isEmpty { pending = [] }
@@ -206,13 +206,13 @@ extension MobileModel {
   }
 
   /// The 15 s foreground tick for a live view no connected stream carries:
-  /// the central questions (and the open central chat) while the library
+  /// the host route's questions (and the open host chat) while the library
   /// host's stream is not connected, and the open chat of a workspace whose
   /// stream is not (no `stream.v1`, down, or ended), with its questions.
   /// Nothing is read for a route whose stream is connected.
   var liveViewFallbackNeeded: Bool {
     guard !fixture, connectionForeground else { return false }
-    if engine != nil, online, !streamsCentral { return true }
+    if engine != nil, online, !streamsHostRoute { return true }
     return unstreamedOpenWorkspace != nil
   }
 
@@ -220,7 +220,7 @@ extension MobileModel {
   private var unstreamedOpenWorkspace: String? {
     guard selectedConversationID != nil else { return nil }
     let route = selectedExecutionWorkspaceID
-    guard route != "central", route != "local", workspaceClients[route] != nil, !streamConnected(route) else { return nil }
+    guard route != "host", route != "local", workspaceClients[route] != nil, !streamConnected(route) else { return nil }
     return route
   }
 
@@ -228,8 +228,8 @@ extension MobileModel {
   /// whose stream is connected, and reads no agent list or offline copies.
   func refreshLiveViewsWithoutStream() async {
     guard liveViewFallbackNeeded else { return }
-    if engine != nil, online, !streamsCentral {
-      await refreshCentralConversation(selectedExecutionWorkspaceID == "central" ? selectedConversationID : nil)
+    if engine != nil, online, !streamsHostRoute {
+      await refreshHostConversation(selectedExecutionWorkspaceID == "host" ? selectedConversationID : nil)
     }
     guard let route = unstreamedOpenWorkspace, let client = workspaceClients[route], workspaceReadTasks[route] == nil else { return }
     do {
@@ -252,9 +252,9 @@ extension MobileModel {
     }
   }
 
-  /// Central commands whose reply was lost are resolved by receipt once per
+  /// Host route commands whose reply was lost are resolved by receipt once per
   /// connection to the host, never on a timer.
-  func recoverCentralReceipts() async {
+  func recoverHostReceipts() async {
     guard let engine else { return }
     do { try await engine.recoverCommandReceipts(); await reload() } catch { /* The next connection asks again. */ }
   }

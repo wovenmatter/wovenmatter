@@ -77,7 +77,7 @@ enum DefaultAgentHostUnlock {
         let payload = try await prepare(scope)
         let receipt = try await routes.configureDefaultAgent(payload.data())
         guard receipt.saved else {
-            throw LibraryAPIError(code: CentralExecutionClient.defaultAgentLocked, message: "The workspace did not accept this Mac's Pi Durable credentials.")
+            throw LibraryAPIError(code: MemberExecutionClient.defaultAgentLocked, message: "The workspace did not accept this Mac's Pi Durable credentials.")
         }
     }
 }
