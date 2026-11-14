@@ -62,7 +62,7 @@ extension WorkspaceDatabaseConnection {
         return try result(.conflict, "This folder ID already exists or was deleted.", folder: libraryFolderUnlocked(id: request.resourceID))
       }
       guard let binding = request.folderExecution else {
-        return result(.invalid, "Create the folder in an execution workspace with a bound directory. Update older clients before creating folders.")
+        return result(.invalid, "Create the folder in an execution workspace with a bound directory.")
       }
       let location = WorkspaceFolderLocation(workspaceID: binding.workspaceID, rootPath: binding.rootPath, managed: false)
       guard (try? validateExecutionLocation(location)) != nil else {

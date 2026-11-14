@@ -31,8 +31,9 @@ export function createMemberTransport({ library, fetchImpl = globalThis.fetch, a
    * from what the endpoint says about itself (Swift `MemberAudience.serving`):
    * a device ID from the member list, or a registry workspace, served by its
    * execution device when that is an active member (or a Mac's own ID), else
-   * by the one active Linux member advertising the endpoint's host (an older
-   * Linux record names its Node server's own execution device ID).
+   * by the one active Linux member advertising the endpoint's host (a workspace
+   * a host registered with a random ID before v0.4.0 names its Node server's
+   * own execution device ID).
    */
   async function audienceFor(audience) {
     const id = value => typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value) ? value.toLowerCase() : null
