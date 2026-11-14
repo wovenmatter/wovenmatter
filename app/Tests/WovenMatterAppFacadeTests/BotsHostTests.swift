@@ -269,6 +269,23 @@ struct BotsHostTests {
         #expect(fixture.recorded.first?.0 == "d3vice-0001" && fixture.recorded.first?.1.entries.count == 1)
     }
 
+    /// Settings → GitHub for the bots' containers: explicit nulls when nothing is set.
+    @Test func theHostAPIServesTheGitHubSetting() async throws {
+        let key = GitHubSSHKey(privateKey: GitHubSSHKeys.openSSHHeader + "\nk\n" + GitHubSSHKeys.openSSHFooter + "\n",
+                               publicKey: "ssh-ed25519 AAAA", fingerprint: "SHA256:x", comment: "woven-matter")
+        var configured: GitHubConfiguration?
+        let fixture = try HostFixture { $0.gitConfiguration = { GitHubHostConfiguration(configured) } }; defer { fixture.remove() }
+        let api = fixture.host.makeHostAPI(machineID: "d3vice-0001")
+        let token = fixture.host.persisted.hostToken
+        #expect(await api.handle(try hostRequest("POST", "/v1/bots-host/git", token: nil, body: [:])).status == 401)
+        let empty = await api.handle(try hostRequest("POST", "/v1/bots-host/git", token: token, body: [:]))
+        #expect(String(decoding: empty.body, as: UTF8.self).contains("\"sshKey\":null"))
+        configured = .init(key: key, identity: .init(name: "Ada", email: ""), revision: 1)
+        let reply = await api.handle(try hostRequest("POST", "/v1/bots-host/git", token: token, body: [:]))
+        let value = try JSONDecoder().decode(GitHubHostConfiguration.self, from: reply.body)
+        #expect(value.sshKey?.publicKey == "ssh-ed25519 AAAA woven-matter" && value.identity?.name == "Ada")
+    }
+
     @Test func otherMembersReachTheRuntimeOnlyThroughItsOwnBearer() async throws {
         let fixture = try HostFixture(); defer { fixture.remove() }
         let upgrade = LibraryHTTPRequest(method: "GET", target: "/v1/bots/ws", headers: [

@@ -77,6 +77,10 @@ extension WorkspaceDatabaseConnection {
   static let librarySchemaSteps: [LibrarySchemaStep] = [
     // v0.4.2 and earlier, which carried no version, to the first versioned schema.
     .init(version: 1, rewritesData: true) { try $0.upgradeLibrarySchemaUnlocked() },
+    // v0.4.3 to Settings → GitHub's two shared tables (`GitHubIdentitySync`).
+    .init(version: 2, rewritesData: false) { connection in
+      try connection.libraryStepUnlocked(2) { try connection.executeUnlocked(WorkspaceDatabaseConnection.gitHubIdentityTablesSQL) }
+    },
   ]
 
   /// `PRAGMA user_version` of the current schema: the last step. A library

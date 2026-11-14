@@ -3418,6 +3418,8 @@ final class ApplicationModel {
     var pendingDefaultAgentModelProvider: String?
     var pendingConnectionsScope: String?
     let connections = DefaultAgentSettingsModel()
+    /// Settings → GitHub: the user's GitHub SSH key and commit identity everywhere.
+    let github = GitHubSettingsModel()
 
     func refreshLocalACPRuntimesNow(checkCredentialsFor runtimeKinds: Set<AgentRuntimeKind> = []) {
         if isBackendFrontend { sendBackendRuntimeCommand(.refreshRuntimes(runtimeKinds)); return }
@@ -4261,6 +4263,9 @@ extension ApplicationModel {
             if request.method == "surfaceProfile.snapshot" {
                 return .init(id: request.id, result: try JSONEncoder().encode(macSurfaceProfile))
             }
+            if request.method.hasPrefix("github.") {
+                return .init(id: request.id, result: try await github.handle(method: request.method, payload: request.payload))
+            }
             if request.method.hasPrefix("connections.") {
                 return .init(id: request.id, result: try await BackendConnectionsService.handle(method: request.method, payload: request.payload, model: connections, remoteWorkspaces: remoteWorkspaces))
             }
@@ -4453,6 +4458,10 @@ extension ApplicationModel {
                 return try await self.callBackend(method: method, payload: payload)
             }
             connections.backendRequest = { [weak self] method, payload in
+                guard let self else { throw CancellationError() }
+                return try await self.callBackend(method: method, payload: payload)
+            }
+            github.backendRequest = { [weak self] method, payload in
                 guard let self else { throw CancellationError() }
                 return try await self.callBackend(method: method, payload: payload)
             }

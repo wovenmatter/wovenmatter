@@ -74,7 +74,7 @@ enum DefaultAgentHostUnlock {
                        existingKey: @Sendable (String) throws -> String? = { try DefaultAgentSupport.key("encryption-key", scope: $0) },
                        prepare: Prepare = { try await ProviderAccountCoordinator.shared.prepare($0) }) async throws {
         if let key = try existingKey(scope), !key.isEmpty, try await routes.unlockDefaultAgent(workspace: scope, unlockKey: key) { return }
-        let payload = try await prepare(scope)
+        let payload = try await prepare(scope).withGitHub()
         let receipt = try await routes.configureDefaultAgent(payload.data())
         guard receipt.saved else {
             throw LibraryAPIError(code: MemberExecutionClient.defaultAgentLocked, message: "The workspace did not accept this Mac's Pi Durable credentials.")

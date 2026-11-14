@@ -2,6 +2,7 @@ import { existsSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { githubDirectory, githubEnvironment } from './github-identity.mjs'
 
 export const shellQuote = value => `'${String(value).replaceAll("'", "'\\''")}'`
 
@@ -60,7 +61,11 @@ export function nonInteractiveSessionEnvironment(environment = process.env, conf
   const tools = sessionToolsDirectory(configuration)
   const askpass = resolve(tools, 'askpass')
   const paths = (environment.PATH ?? '').split(':').filter(path => path && path !== tools)
+  // Settings → GitHub: the user's key for github.com and their commit identity.
+  // The server writes its static files at start (github-identity.mjs).
+  const github = githubDirectory(configuration)
   return { ...environment, PATH: [tools, ...paths].join(':'),
+    ...(github && existsSync(resolve(github, 'ssh_config')) ? githubEnvironment(environment, github) : {}),
     GIT_TERMINAL_PROMPT: '0', GCM_INTERACTIVE: 'never', GIT_ASKPASS: askpass,
     SSH_ASKPASS: askpass, SSH_ASKPASS_REQUIRE: 'force', SUDO_ASKPASS: askpass,
     DEBIAN_FRONTEND: 'noninteractive' }

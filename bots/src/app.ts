@@ -16,6 +16,7 @@ import { DockerEngineAPI } from "./environment/engine-api.ts";
 import { PreviewManager, type PreviewTransport } from "./environment/previews.ts";
 import { type HostAPI, HostClient } from "./host/client.ts";
 import { HostCredentialStore } from "./host/credentials.ts";
+import { HostGitSource, NO_GIT } from "./host/git.ts";
 import { ModelAvailability } from "./limits.ts";
 import { MemoryExtractor, memorySection } from "./memory.ts";
 import { ConversationMirror } from "./mirror.ts";
@@ -103,6 +104,7 @@ export async function startRuntime(
   const settings = options.settings ?? (await SettingsStore.open(config.paths.settings));
   const host = options.host ?? new HostClient(config.host.url, config.host.token);
   const credentials = new HostCredentialStore(host);
+  const git = new HostGitSource(() => host.gitSetup?.() ?? Promise.resolve(NO_GIT));
   const searchProvider = async (): Promise<SearchProviderId | undefined> =>
     (await host.inferenceCredential("web-search").catch(() => undefined))?.searchProvider;
   const platform: BotPlatform = {
@@ -153,6 +155,7 @@ export async function startRuntime(
         machineId: config.machine.deviceID,
         probe,
         log,
+        ...(host.gitSetup ? { git: () => git.current() } : {}),
         ...options.environment,
       });
     const environment = env;

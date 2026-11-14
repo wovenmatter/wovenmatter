@@ -4,6 +4,8 @@
  * call is JSON over loopback HTTP; responses are size-bounded and error bodies are never echoed.
  */
 
+import { type GitSetup, validGitSetup } from "./git.ts";
+
 export type HostCredential =
   | { readonly type: "api_key"; readonly key: string }
   /** Access-only OAuth (renewal belongs to the host): ask again once `expires` (epoch ms) passes. */
@@ -65,6 +67,8 @@ export interface HostAPI {
   unpublishPreview(botID: string, port: number): Promise<void>;
   inferenceCredential(provider: string): Promise<InferenceCredentialResponse>;
   mirror(botID: string, batch: MirrorBatch): Promise<void>;
+  /** Settings → GitHub: the user's SSH key and commit identity for the bots' containers. */
+  gitSetup?(): Promise<GitSetup>;
 }
 
 const MAX_RESPONSE = 1024 * 1024;
@@ -152,6 +156,10 @@ export class HostClient implements HostAPI {
 
   async mirror(botID: string, batch: MirrorBatch): Promise<void> {
     await this.#call("POST", `/v1/bots-host/conversations/${encodeURIComponent(botID)}/entries`, batch);
+  }
+
+  async gitSetup(): Promise<GitSetup> {
+    return validGitSetup(await this.#call<unknown>("POST", "/v1/bots-host/git", {}));
   }
 }
 

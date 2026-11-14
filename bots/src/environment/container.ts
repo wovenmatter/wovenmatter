@@ -11,6 +11,7 @@ import {
   helperArchive,
   IMAGE_DIR,
 } from "./images.ts";
+import { CONTAINER_GIT_DIRECTORY, CONTAINER_GIT_TMPFS, type GitSetup, gitDigest, gitEnvironment, gitFiles, WRITE_GIT_FILES } from "../host/git.ts";
 import { AgentConnection, type AgentProcess, RemoteExecutionEnv } from "./remote.ts";
 
 export const CONTAINER_USER = "bot";
@@ -80,6 +81,10 @@ export type BotEnvironmentOptions = {
   readonly healthCheck?: (botId: string) => Promise<void>;
   /** How long a container start waits for an unavailable engine (tests shorten it). */
   readonly engineWaitMs?: number;
+  /** Settings → GitHub from the host (undefined: no answer yet), written into each container. */
+  readonly git?: () => Promise<GitSetup | undefined>;
+  /** Where in the container the files go (tests use a host path). */
+  readonly gitDirectory?: string;
   readonly log?: (message: string) => void;
 };
 
@@ -196,7 +201,9 @@ export class BotEnvironment implements BotEnvironmentAdapter {
         target.cwd && (target.cwd === WORKSPACE || target.cwd.startsWith(`${WORKSPACE}/`))
           ? target.cwd
           : WORKSPACE;
-      return new RemoteExecutionEnv(`woven:${containerName(botId)}`, cwd, this.#connection(botId));
+      return new RemoteExecutionEnv(`woven:${containerName(botId)}`, cwd, this.#connection(botId), () =>
+        this.#syncGit(botId),
+      );
     };
   }
 
@@ -210,9 +217,14 @@ export class BotEnvironment implements BotEnvironmentAdapter {
       connection = new AgentConnection(
         async () => {
           await this.ensure(botId);
+          // A new agent may be in a new (or restarted) container: always write before it starts.
+          await this.#syncGit(botId, true);
           return this.#engine.spawn(containerName(botId), AGENT_COMMAND, {
             user: CONTAINER_USER,
             workdir: WORKSPACE,
+            ...(this.#options.git
+              ? { env: Object.entries(gitEnvironment(this.#options.gitDirectory)).map(([key, value]) => `${key}=${value}`) }
+              : {}),
           }) as unknown as AgentProcess;
         },
         this.#log,
@@ -221,6 +233,35 @@ export class BotEnvironment implements BotEnvironmentAdapter {
       this.#connections.set(botId, connection);
     }
     return connection;
+  }
+
+  /** The setup digest last written into each running bot's container. */
+  readonly #gitWritten = new Map<string, string>();
+
+  /**
+   * Writes Settings → GitHub into the bot's container when it changed (the host is asked at most
+   * once a minute). Never fails a tool call: a bot without the files just uses its own git setup.
+   */
+  async #syncGit(botId: string, force = false): Promise<void> {
+    if (!this.#options.git) return;
+    if (force) this.#gitWritten.delete(botId);
+    try {
+      const setup = await this.#options.git();
+      if (!setup) return;
+      const digest = gitDigest(setup);
+      if (!force && this.#gitWritten.get(botId) === digest) return;
+      const directory = this.#options.gitDirectory ?? CONTAINER_GIT_DIRECTORY;
+      const input = JSON.stringify({ directory, files: gitFiles(setup, directory) });
+      const result = await this.#engine.run(containerName(botId), WRITE_GIT_FILES, {
+        user: CONTAINER_USER,
+        input,
+        timeoutMs: 20_000,
+      });
+      if (result.code !== 0) throw new Error(result.stderr.trim() || `exit ${result.code}`);
+      this.#gitWritten.set(botId, digest);
+    } catch (error) {
+      this.#log(`bot ${botId}: GitHub settings not written: ${error instanceof Error ? error.message : String(error)}`);
+    }
   }
 
   /** Serialize lifecycle operations per bot. */
@@ -287,6 +328,8 @@ export class BotEnvironment implements BotEnvironmentAdapter {
           { Type: "volume", Source: helper, Target: HELPER_MOUNT, ReadOnly: true },
         ],
         RestartPolicy: { Name: "no" },
+        // Settings → GitHub's key stays in memory, out of the disk and update snapshots.
+        ...(this.#options.git && !this.#options.gitDirectory ? { Tmpfs: { [CONTAINER_GIT_DIRECTORY]: CONTAINER_GIT_TMPFS } } : {}),
         CapDrop: [...DROPPED_CAPABILITIES],
         ShmSize: SHM_BYTES,
         ...(memory ? { Memory: memory, MemorySwap: memory } : {}),
@@ -559,6 +602,15 @@ export class BotEnvironment implements BotEnvironmentAdapter {
       const wasRunning = info.State.Running;
       const baseImage = await this.image();
       this.#connections.get(botId)?.close();
+      // A container created before Settings → GitHub has no tmpfs there, so the files are on
+      // its disk: clear them so the snapshot never holds the key. They are written again when
+      // the agent next starts, and the recreated container gets the tmpfs.
+      if (this.#options.git && wasRunning) {
+        await this.#engine
+          .run(name, ["rm", "-rf", CONTAINER_GIT_DIRECTORY], { user: CONTAINER_USER, timeoutMs: 20_000 })
+          .catch(() => {});
+      }
+      this.#gitWritten.delete(botId);
       await this.#engine.stopContainer(name, STOP_SECONDS);
       // Snapshot: only the last one is kept.
       await this.#engine.removeImage(snapshotImage(botId));

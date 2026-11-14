@@ -87,8 +87,8 @@ when an intentional design change is accepted.
   OpenCode under **Settings → Agents**. Agent pages return to Agents unless
   opened from a remote workspace's page. Spell **OpenCode** as one word throughout
   the app. Order the main Settings page as General, Permissions & Access,
-  Subscriptions & API Keys, Agents, Bots, Woven MCP, Workspaces, Apple Devices,
-  Background Server, then Dictation. Subscriptions & API Keys, Permissions &
+  Subscriptions & API Keys, GitHub, Agents, Bots, Woven MCP, Workspaces, Apple
+  Devices, Background Server, then Dictation. Subscriptions & API Keys, Permissions &
   Access, Woven MCP, and Bots return to the page whose link opened them.
 - **General:** Appearance, Conversation titles, Software, and Privacy only. Other
   settings live on the page for what they affect. Summary rows whose value would be
@@ -125,6 +125,14 @@ when an intentional design change is accepted.
   connecting one in the shared scope turns on its limit checks. Keep the "Accounts
   for" selector visible, since saved workspace accounts take priority and must stay
   reachable. Native harnesses sign in on their own agent pages.
+- **GitHub:** one SSH key and git identity for agents and bots on every
+  machine; there is no per-bot, per-workspace or per-harness GitHub key. The SSH
+  key section shows the key's name and fingerprint with a Ready status, the
+  public key in monospace, then Copy public key, Add key on GitHub, and Remove
+  key; Generate a key (Replace with a new key, after asking) and Paste an
+  existing private key follow. The private key is never shown after saving. Git
+  identity is a Name and Email form with Save identity; blank fields keep each
+  machine's own git settings. The landing row shows Key added or No key.
 - **Agent setup:** Pi Durable links to Subscriptions & API Keys with a one-line
   description and how many are connected, then shows Models, Defaults for new
   chats, and More. Models holds the default model, In the composer, and Fallbacks. Add

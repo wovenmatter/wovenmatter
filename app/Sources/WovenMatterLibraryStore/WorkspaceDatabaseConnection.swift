@@ -78,6 +78,7 @@ final class WorkspaceDatabaseConnection {
       try migrateLibraryMembers()
       try migrateMemberToolSessions()
       try migrateBotConversations()
+      try migrateGitHubIdentity()
       try migratePeerSync()
       try migrateExecutionStreamChanges()
       try migrateDeviceSyncWakes()
