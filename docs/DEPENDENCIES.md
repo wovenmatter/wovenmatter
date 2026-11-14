@@ -231,8 +231,8 @@ Maintenance checks both for newer releases; recorded does not mean frozen.
   peer validation. Real local WebSocket streaming/cancellation fixtures and the
   Chord/Durable suites validate this selection; review it on each Chord refresh.
   Pi AI 1.5.2 also pins older provider clients. Consumer-scoped minimum-only
-  overrides select the tested OpenAI 7.56.0, Anthropic 1.8.0, Google GenAI 3.3.0,
-  Bedrock Runtime and token providers 3.1168.0, and Smithy Node HTTP handler
+  overrides select the tested OpenAI 7.57.0, Anthropic 1.8.0, Google GenAI 3.3.0,
+  Bedrock Runtime and token providers 3.1169.0, and Smithy Node HTTP handler
   4.14.2 releases without
   changing vendor manifests. Keeping these clients current is required for
   provider API and transport compatibility, including Anthropic's 2026-10-21
@@ -323,13 +323,13 @@ an older configured channel. OpenCode and Executor retain the documented v2 API 
 maintenance must review a newer stable API major and implement its migration.
 
 `harnesses/catalog.json` records tested connector and engine minimums separately:
-Codex ACP 2.6.0 with Codex 0.169.0, and Claude ACP 0.107.0 with Claude SDK 0.3.323
-(native Claude Code 2.1.323). The standalone Codex and Claude sign-in CLIs use their
+Codex ACP 2.6.0 with Codex 0.169.0, and Claude ACP 0.107.0 with Claude SDK 0.3.325
+(native Claude Code 2.1.325). The standalone Codex and Claude sign-in CLIs use their
 official current stable release channels. Codex ACP's `^0.166.0` engine range
 otherwise keeps its chat engine behind; its `~2.4.0` ACP TypeScript SDK range
-also excludes the current 2.6.0. Claude ACP 0.107.0 pins the current SDK 0.3.323;
-the consumer-scoped override still selects the SDK independently so engine-only
-updates remain eligible when a future connector pin lags. Transcript-write loss
+also excludes the current 2.6.0. Claude ACP 0.107.0 pins SDK 0.3.323;
+the consumer-scoped override still selects SDK 0.3.325 independently so engine-only
+updates remain eligible while the connector pin lags. Transcript-write loss
 invalidates the native resume marker and refuses tool dispatch/continuation commits;
 config-only write loss leaves a valid response intact. Provider-free persistence
 fixtures verify canonical replay after recovery. Claude's connector selects protocol SDK
