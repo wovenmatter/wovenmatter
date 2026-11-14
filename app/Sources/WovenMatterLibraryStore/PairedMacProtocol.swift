@@ -84,7 +84,7 @@ extension WorkspaceDatabase {
           let query = try connection.prepareUnlocked("UPDATE execution_workspaces SET revision=?,payload=? WHERE id=?")
           defer { sqlite3_finalize(query) }
           sqlite3_bind_int64(query, 1, workspace.revision)
-          try connection.bind(JSONEncoder().encode(workspace), at: 2, to: query)
+          try connection.bindJSON(workspace, at: 2, to: query)
           try connection.bind(workspace.id, at: 3, to: query); try connection.stepDone(query)
         }
       }

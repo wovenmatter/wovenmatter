@@ -13,12 +13,12 @@ extension WorkspaceDatabaseConnection {
       );
       CREATE TABLE IF NOT EXISTS execution_workspaces (
         id TEXT PRIMARY KEY, owner_device_id TEXT NOT NULL, revision INTEGER NOT NULL,
-        deleted INTEGER NOT NULL DEFAULT 0, payload BLOB NOT NULL
+        deleted INTEGER NOT NULL DEFAULT 0, payload TEXT NOT NULL
       );
       CREATE TABLE IF NOT EXISTS execution_journal (
         cursor INTEGER PRIMARY KEY AUTOINCREMENT, event_id TEXT NOT NULL UNIQUE,
         workspace_id TEXT NOT NULL, origin_sequence INTEGER NOT NULL,
-        fingerprint BLOB NOT NULL, payload BLOB NOT NULL,
+        fingerprint BLOB NOT NULL, payload TEXT NOT NULL,
         UNIQUE(workspace_id, origin_sequence)
       );
       CREATE TABLE IF NOT EXISTS execution_retained_settlements (
@@ -26,10 +26,10 @@ extension WorkspaceDatabaseConnection {
       );
       CREATE TABLE IF NOT EXISTS execution_conversations (
         id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, deleted INTEGER NOT NULL DEFAULT 0,
-        conversation BLOB NOT NULL, transcript BLOB
+        conversation TEXT NOT NULL, transcript BLOB
       );
       CREATE TABLE IF NOT EXISTS execution_adoptions (
-        conversation_id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, payload BLOB NOT NULL
+        conversation_id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, payload TEXT NOT NULL
       );
       CREATE TABLE IF NOT EXISTS device_message_provenance (
         message_id TEXT PRIMARY KEY, source_id TEXT NOT NULL,
@@ -40,7 +40,7 @@ extension WorkspaceDatabaseConnection {
       );
       CREATE TABLE IF NOT EXISTS execution_receipts (
         workspace_id TEXT NOT NULL, command_id TEXT NOT NULL, device_id TEXT NOT NULL,
-        payload BLOB NOT NULL, PRIMARY KEY(workspace_id, command_id)
+        payload TEXT NOT NULL, PRIMARY KEY(workspace_id, command_id)
       );
       CREATE TABLE IF NOT EXISTS execution_native_history (
         workspace_id TEXT NOT NULL, record_id TEXT NOT NULL, conversation_id TEXT NOT NULL,
@@ -53,10 +53,10 @@ extension WorkspaceDatabaseConnection {
         PRIMARY KEY(workspace_id, record_id, part_index)
       );
       CREATE TABLE IF NOT EXISTS device_saved_artifacts (
-        id TEXT PRIMARY KEY, revision INTEGER NOT NULL, manifest BLOB NOT NULL
+        id TEXT PRIMARY KEY, revision INTEGER NOT NULL, manifest TEXT NOT NULL
       );
       CREATE TABLE IF NOT EXISTS device_artifact_uploads (
-        id TEXT PRIMARY KEY, revision INTEGER NOT NULL, manifest BLOB NOT NULL,
+        id TEXT PRIMARY KEY, revision INTEGER NOT NULL, manifest TEXT NOT NULL,
         next_offset INTEGER NOT NULL DEFAULT 0
       );
       CREATE TABLE IF NOT EXISTS device_artifact_chunks (

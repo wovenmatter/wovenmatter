@@ -1,3 +1,8 @@
+#if canImport(CryptoKit)
+import CryptoKit
+#else
+import Crypto
+#endif
 import Foundation
 
 /// Converts a library written by v0.4.2 to the current schema in place.
@@ -129,6 +134,19 @@ extension WorkspaceDatabaseConnection {
                         "origin_device_id"]),
   ]
 
+  /// JSON documents stored as BLOB, by their table's current name. They are
+  /// TEXT now, so SQLite's JSON functions read them without a cast. Binary
+  /// columns (hashes, artifact chunks, native history parts) stay BLOB, and
+  /// `execution_conversations.transcript` is left for its own removal.
+  static let jsonTextColumns: [(table: String, columns: [String])] = [
+    ("execution_workspaces", ["payload"]), ("execution_journal", ["payload"]),
+    ("execution_conversations", ["conversation"]), ("execution_adoptions", ["payload"]),
+    ("execution_receipts", ["payload"]), ("device_saved_artifacts", ["manifest"]),
+    ("device_artifact_uploads", ["manifest"]), ("product_analytics_preference", ["payload"]),
+    ("device_mutation_receipts", ["response"]), ("device_command_receipts", ["response"]),
+    ("device_tool_receipts", ["response"]),
+  ]
+
   /// Paired-sync bookkeeping that names a table (`table_name`) or holds a
   /// record payload (`$.table`, `$.key`, `$.row`).
   private static let peerNamedBookkeeping = ["paired_library_rows", "paired_library_frontier",
@@ -148,7 +166,13 @@ extension WorkspaceDatabaseConnection {
       let present = try columns(tables.contains(table) ? table : Self.renamedLibraryTables.first { $0.new == table }?.old ?? table)
       if !present.isDisjoint(with: dropped) { legacyColumns = true; break }
     }
-    guard legacyColumns || Self.renamedLibraryTables.contains(where: { tables.contains($0.old) })
+    var jsonBlobs = false
+    for (table, json) in Self.jsonTextColumns where !jsonBlobs {
+      let name = tables.contains(table) ? table : Self.renamedLibraryTables.first { $0.new == table }?.old ?? table
+      jsonBlobs = try !historyRowsUnlocked("SELECT 1 AS blob FROM pragma_table_info(?) WHERE upper(type)='BLOB' AND name IN (SELECT value FROM json_each(?))",
+                                            values: [name, String(decoding: try JSONEncoder().encode(json), as: UTF8.self)]).isEmpty
+    }
+    guard legacyColumns || jsonBlobs || Self.renamedLibraryTables.contains(where: { tables.contains($0.old) })
             || Self.droppedLibraryTables.contains(where: tables.contains) else { return }
 
     // Foreign keys stay off while tables are renamed and dropped (a dropped
@@ -252,6 +276,7 @@ extension WorkspaceDatabaseConnection {
           }
         }
       }
+      try storeJSONAsTextUnlocked(tables: tables, bookkeeping: bookkeeping)
       // v0.4.2 declared `runtime_kind DEFAULT 'openclaw'`; a column default
       // only changes by rebuilding the table, which keeps every row and rowid.
       if tables.contains("agents"), try historyRowsUnlocked(
@@ -281,6 +306,111 @@ extension WorkspaceDatabaseConnection {
       DROP TABLE \(table);
       ALTER TABLE \(rebuilt) RENAME TO \(table);
       """)
+  }
+
+  /// Rebuilds each table whose JSON columns are declared BLOB from its own
+  /// declaration with those columns as TEXT, keeping every row, rowid and
+  /// AUTOINCREMENT sequence; the regular schema creation that follows
+  /// recreates its indexes and triggers. Peer bookkeeping then records the
+  /// text, so the change is not sent to peers as a new version: each member
+  /// that updates converts the same values the same way. Hex is decoded here
+  /// rather than with SQL `unhex()`, which a Linux host's SQLite may lack.
+  private func storeJSONAsTextUnlocked(tables: Set<String>, bookkeeping: Set<String>) throws {
+    for (table, json) in Self.jsonTextColumns where tables.contains(table) {
+      let info = try historyRowsUnlocked("SELECT name,type FROM pragma_table_info(?)", values: [table]).compactMap(\.objectValue)
+      let blobs = info.filter { $0["type"]?.stringValue?.uppercased() == "BLOB" }.compactMap { $0["name"]?.stringValue }.filter(json.contains)
+      guard !blobs.isEmpty,
+            let sql = try historyRowsUnlocked("SELECT sql FROM sqlite_master WHERE type='table' AND name=?", values: [table])
+              .first?.objectValue?["sql"]?.stringValue, let open = sql.firstIndex(of: "(") else { continue }
+      let rebuilt = table + "_text"
+      var declaration = "CREATE TABLE " + Self.peerQuote(rebuilt) + sql[open...]
+      for column in blobs {
+        let pattern = #"([(,]\s*"?"# + NSRegularExpression.escapedPattern(for: column) + #""?\s+)BLOB\b"#
+        declaration = declaration.replacingOccurrences(of: pattern, with: "$1TEXT", options: [.regularExpression, .caseInsensitive])
+      }
+      try executeUnlocked("DROP TABLE IF EXISTS \(Self.peerQuote(rebuilt));\n" + declaration)
+      guard try historyRowsUnlocked("SELECT 1 AS blob FROM pragma_table_info(?) WHERE upper(type)='BLOB' AND name IN (SELECT value FROM json_each(?))",
+                                    values: [rebuilt, String(decoding: try JSONEncoder().encode(blobs), as: UTF8.self)]).isEmpty else {
+        throw WorkspaceDatabaseError.execute("Could not store \(table) JSON as text")
+      }
+      let names = info.compactMap { $0["name"]?.stringValue }
+      let values = names.map { blobs.contains($0) ? "CAST(\(Self.peerQuote($0)) AS TEXT)" : Self.peerQuote($0) }
+      let sequence = tables.contains("sqlite_sequence")
+        ? try historyRowsUnlocked("SELECT seq FROM sqlite_sequence WHERE name=?", values: [table]).first?.objectValue?["seq"]?.intValue : nil
+      try executeUnlocked("""
+        INSERT INTO \(Self.peerQuote(rebuilt))(rowid,\(names.map(Self.peerQuote).joined(separator: ","))) SELECT rowid,\(values.joined(separator: ",")) FROM \(Self.peerQuote(table));
+        DROP TABLE \(Self.peerQuote(table));
+        ALTER TABLE \(Self.peerQuote(rebuilt)) RENAME TO \(Self.peerQuote(table));
+        """)
+      if let sequence {
+        try toolsExecuteUnlocked("DELETE FROM sqlite_sequence WHERE name=? AND seq<?", [table, String(sequence)])
+        try toolsExecuteUnlocked("INSERT INTO sqlite_sequence(name,seq) SELECT ?,? WHERE NOT EXISTS(SELECT 1 FROM sqlite_sequence WHERE name=?)",
+                                 [table, String(sequence), table])
+      }
+    }
+
+    // Recorded versions of shared rows hold a blob as hex, or as a reference
+    // to a peer file of that hex when it was too large to travel inline.
+    let shared = Self.jsonTextColumns.filter { PairedLibraryTables.names.contains($0.table) }
+    guard !shared.isEmpty else { return }
+    let columns = Dictionary(uniqueKeysWithValues: shared.map { ($0.table, $0.columns) })
+    let list = String(decoding: try JSONEncoder().encode(shared.map(\.table)), as: UTF8.self)
+    let files = libraryFiles.supportDirectory.appending(path: "paired-records")
+    for name in Self.peerPayloadBookkeeping where bookkeeping.contains(name) {
+      let named = Self.peerNamedBookkeeping.contains(name)
+      let table = named ? "table_name" : "json_extract(payload,'$.table')"
+      let blob = shared.flatMap { entry in entry.columns.map { "json_extract(payload,'$.row.\($0).type') IN ('blob','reference:blob')" } }
+      let rowids = try historyRowsUnlocked("""
+        SELECT rowid AS id FROM \(name) WHERE \(named ? "" : "json_valid(payload) AND ")\(table) IN (SELECT value FROM json_each(?))
+          AND (\(Set(blob).sorted().joined(separator: " OR ")))
+        """, values: [list]).compactMap { $0.objectValue?["id"]?.intValue }
+      for rowid in rowids {
+        guard let payload = try historyRowsUnlocked("SELECT payload FROM \(name) WHERE rowid=?", values: [String(rowid)]).first?.objectValue?["payload"]?.stringValue,
+              let record = try? JSONDecoder().decode(PairedLibraryRecord.self, from: Data(payload.utf8)) else { continue }
+        for column in columns[record.table] ?? [] {
+          guard let value = record.row[column], let stored = value.value else { continue }
+          let text: PairedLibraryValue
+          switch value.type {
+          case "blob":
+            guard let decoded = Self.utf8FromHex(stored) else { continue }
+            text = .init(type: "text", value: decoded)
+          case "reference:blob":
+            let source = files.appending(path: stored)
+            guard stored.wholeMatch(of: /[0-9a-f]{64}/) != nil, let hex = try? String(contentsOf: source, encoding: .utf8),
+                  let decoded = Self.utf8FromHex(hex) else { continue }
+            let bytes = Data(decoded.utf8), hash = SHA256.hash(data: bytes).hexString, file = files.appending(path: hash)
+            if !FileManager.default.fileExists(atPath: file.path) {
+              try bytes.write(to: file, options: .atomic)
+              try FileManager.default.setAttributes([.posixPermissions: 0o400], ofItemAtPath: file.path)
+            }
+            text = .init(type: "reference:text", value: hash)
+          default: continue
+          }
+          try toolsExecuteUnlocked("UPDATE \(name) SET payload=json_set(payload,'$.row.\(column)',json_object('type',?,'value',?)) WHERE rowid=?",
+                                   [text.type, text.value, String(rowid)])
+        }
+      }
+    }
+  }
+
+  /// The UTF-8 text a hex string of bytes spells, or nil.
+  static func utf8FromHex(_ hex: String) -> String? {
+    let digits = Array(hex.utf8)
+    guard digits.count.isMultiple(of: 2) else { return nil }
+    var bytes = [UInt8](); bytes.reserveCapacity(digits.count / 2)
+    func nibble(_ digit: UInt8) -> UInt8? {
+      switch digit {
+      case 48...57: digit - 48
+      case 65...70: digit - 55
+      case 97...102: digit - 87
+      default: nil
+      }
+    }
+    for index in stride(from: 0, to: digits.count, by: 2) {
+      guard let high = nibble(digits[index]), let low = nibble(digits[index + 1]) else { return nil }
+      bytes.append(high << 4 | low)
+    }
+    return String(bytes: bytes, encoding: .utf8)
   }
 
   /// Rows the old columns hid or kept read-only stay that way once the

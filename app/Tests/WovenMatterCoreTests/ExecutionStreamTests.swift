@@ -675,10 +675,10 @@ struct ExecutionStreamTests {
       try await database.write { connection in try connection.withLock { try connection.executeUnlocked(sql) } }
     }
     let before = try await database.libraryWakeCursor()
-    try await run("INSERT INTO execution_workspaces(id, owner_device_id, revision, deleted, payload) VALUES ('w1', 'o', 1, 0, x'00')")
+    try await run("INSERT INTO execution_workspaces(id, owner_device_id, revision, deleted, payload) VALUES ('w1', 'o', 1, 0, '{}')")
     let registry = try await database.libraryWakeCursor()
     #expect(registry > before)
-    try await run("INSERT INTO device_saved_artifacts(id, revision, manifest) VALUES ('a1', 1, x'00')")
+    try await run("INSERT INTO device_saved_artifacts(id, revision, manifest) VALUES ('a1', 1, '{}')")
     #expect(try await database.libraryWakeCursor() > registry)
     let page = try await database.read { try $0.libraryChanges(after: before) }
     #expect(page.cursor == (try await database.libraryWakeCursor()) && page.changes.isEmpty, "wake entries advance a page and carry nothing")
@@ -696,7 +696,7 @@ struct ExecutionStreamTests {
     let start = try await database.libraryWakeCursor()
     #expect(seen.all == [start], "announced once on start")
     // Three commits inside the window: one sleep, then one read of the latest cursor.
-    for id in ["w2", "w3", "w4"] { try await run("INSERT INTO execution_workspaces(id, owner_device_id, revision, deleted, payload) VALUES ('\(id)', 'o', 1, 0, x'00')") }
+    for id in ["w2", "w3", "w4"] { try await run("INSERT INTO execution_workspaces(id, owner_device_id, revision, deleted, payload) VALUES ('\(id)', 'o', 1, 0, '{}')") }
     for _ in 0..<200 where sleeps.count == 0 { try await Task.sleep(for: .milliseconds(5)) }
     #expect(sleeps.count == 1)
     #expect(sleeps.waits.first.map { $0 > .zero && $0 <= StreamProtocol.libraryInterval } == true)

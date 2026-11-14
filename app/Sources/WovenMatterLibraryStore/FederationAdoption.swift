@@ -60,7 +60,7 @@ extension WorkspaceDatabaseConnection {
         let statement = try prepareUnlocked("INSERT INTO execution_conversations(id,workspace_id,conversation,transcript) VALUES (?,?,?,?)")
         defer { sqlite3_finalize(statement) }
         try bind(conversationID, at: 1, to: statement); try bind(workspaceID, at: 2, to: statement)
-        try bind(JSONEncoder().encode(conversation), at: 3, to: statement)
+        try bindJSON(conversation, at: 3, to: statement)
         try bind(JSONEncoder().encode(federationLegacyTranscriptUnlocked(conversationID)), at: 4, to: statement)
         try stepDone(statement)
         for runID in try libraryIDsUnlocked("SELECT id FROM runs WHERE conversation_id=?", bindings: [conversationID]) {
@@ -76,7 +76,7 @@ extension WorkspaceDatabaseConnection {
       let saved = try prepareUnlocked("INSERT INTO execution_adoptions(conversation_id,workspace_id,payload) VALUES (?,?,?)")
       defer { sqlite3_finalize(saved) }
       try bind(conversationID, at: 1, to: saved); try bind(workspaceID, at: 2, to: saved)
-      try bind(JSONEncoder().encode(adoption), at: 3, to: saved); try stepDone(saved)
+      try bindJSON(adoption, at: 3, to: saved); try stepDone(saved)
       var request = adoption
       request.transcript = try adoptionTranscriptUnlocked(conversationID)
       return request

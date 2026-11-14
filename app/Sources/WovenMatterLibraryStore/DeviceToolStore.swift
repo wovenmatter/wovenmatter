@@ -16,7 +16,7 @@ extension WorkspaceDatabaseConnection {
     try executeUnlocked("""
       CREATE TABLE IF NOT EXISTS device_tool_receipts (
         device_id TEXT NOT NULL, request_id TEXT NOT NULL, conversation_id TEXT NOT NULL,
-        fingerprint BLOB NOT NULL, response BLOB, PRIMARY KEY(device_id,request_id)
+        fingerprint BLOB NOT NULL, response TEXT, PRIMARY KEY(device_id,request_id)
       );
       CREATE TABLE IF NOT EXISTS device_scheduled_mcp_callers (
         run_id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL, workspace_id TEXT NOT NULL,
@@ -124,7 +124,7 @@ extension WorkspaceDatabaseConnection {
     try transaction {
       let update = try prepareUnlocked("UPDATE device_tool_receipts SET response=? WHERE device_id=? AND request_id=? AND response IS NULL")
       defer { sqlite3_finalize(update) }
-      try bind(JSONEncoder().encode(response.bounded()), at: 1, to: update)
+      try bindJSON(response.bounded(), at: 1, to: update)
       try bind(deviceID, at: 2, to: update)
       try bind(UUID(uuidString: requestID)?.uuidString.lowercased() ?? requestID, at: 3, to: update)
       try stepDone(update)

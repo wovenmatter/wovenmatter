@@ -90,7 +90,7 @@ extension WorkspaceDatabaseConnection {
       defer { sqlite3_finalize(statement) }
       try bind(value.id, at: 1, to: statement); try bind(value.ownerDeviceID, at: 2, to: statement)
       sqlite3_bind_int64(statement, 3, value.revision); sqlite3_bind_int(statement, 4, value.deleted ? 1 : 0)
-      try bind(JSONEncoder().encode(value), at: 5, to: statement); try stepDone(statement)
+      try bindJSON(value, at: 5, to: statement); try stepDone(statement)
       return value
     }
   }
@@ -138,7 +138,7 @@ extension WorkspaceDatabaseConnection {
         defer { sqlite3_finalize(insert) }
         try bind(entry.eventID, at: 1, to: insert); try bind(entry.workspaceID, at: 2, to: insert)
         sqlite3_bind_int64(insert, 3, entry.originSequence); try bind(fingerprint, at: 4, to: insert)
-        try bind(JSONEncoder().encode(entry), at: 5, to: insert); try stepDone(insert)
+        try bindJSON(entry, at: 5, to: insert); try stepDone(insert)
       }
       return try ExecutionJournalBatchResult(libraryID: libraryID, acceptedEventIDs: batch.entries.map(\.eventID), cursor: federationJournalCursorUnlocked())
     }

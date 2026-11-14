@@ -63,7 +63,7 @@ extension WorkspaceDatabaseConnection {
       let statement = try prepareUnlocked("INSERT INTO device_artifact_uploads(id,revision,manifest) VALUES (?,?,?)")
       defer { sqlite3_finalize(statement) }
       try bind(manifest.id, at: 1, to: statement); sqlite3_bind_int64(statement, 2, manifest.revision)
-      try bind(JSONEncoder().encode(manifest), at: 3, to: statement); try stepDone(statement)
+      try bindJSON(manifest, at: 3, to: statement); try stepDone(statement)
       return LibraryArtifactTransfer(manifest: manifest, nextOffset: 0, complete: false)
     }
   }
@@ -133,7 +133,7 @@ extension WorkspaceDatabaseConnection {
     let statement = try prepareUnlocked("INSERT INTO device_saved_artifacts VALUES (?,?,?) ON CONFLICT(id) DO UPDATE SET revision=excluded.revision,manifest=excluded.manifest")
     defer { sqlite3_finalize(statement) }
     try bind(manifest.id, at: 1, to: statement); sqlite3_bind_int64(statement, 2, manifest.revision)
-    try bind(JSONEncoder().encode(manifest), at: 3, to: statement); try stepDone(statement)
+    try bindJSON(manifest, at: 3, to: statement); try stepDone(statement)
   }
   public func libraryArtifactChunk(id: String, revision: Int64?, offset: Int64) throws -> LibraryArtifactChunk {
     try withLock {

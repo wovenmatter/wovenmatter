@@ -609,7 +609,7 @@ extension WorkspaceDatabase {
             defer { sqlite3_finalize(statement) }
             try db.bind(row.id, at: 1, to: statement); try db.bind(row.ownerDeviceID, at: 2, to: statement)
             sqlite3_bind_int64(statement, 3, row.revision)
-            try db.bind(JSONEncoder().encode(row), at: 4, to: statement); try db.stepDone(statement)
+            try db.bindJSON(row, at: 4, to: statement); try db.stepDone(statement)
         }
         return value
     }

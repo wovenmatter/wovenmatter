@@ -649,8 +649,8 @@ extension PairedLibraryTests {
     _ = try await a.database.registerExecutionWorkspace(.init(workspace: linux), deviceID: a.id)
     // The chat is adopted into the Linux workspace on A.
     try await a.database.write { connection in
-      try connection.toolsExecuteUnlocked("INSERT INTO execution_adoptions(conversation_id,workspace_id,payload) VALUES(?,?,x'7B7D')", [session, linux.id])
-      try connection.toolsExecuteUnlocked("INSERT OR REPLACE INTO execution_conversations(id,workspace_id,conversation) VALUES(?,?,x'7B7D')", [session, linux.id])
+      try connection.toolsExecuteUnlocked("INSERT INTO execution_adoptions(conversation_id,workspace_id,payload) VALUES(?,?,'{}')", [session, linux.id])
+      try connection.toolsExecuteUnlocked("INSERT OR REPLACE INTO execution_conversations(id,workspace_id,conversation) VALUES(?,?,'{}')", [session, linux.id])
     }
     try await a.send(to: b)
     // Runtime updates from the new executor's history, relayed by B, apply on A.
@@ -701,8 +701,8 @@ extension PairedLibraryTests {
     // The chat is adopted into the Linux workspace; B's copy follows it there.
     try await b.database.write { connection in
       try connection.executeUnlocked("UPDATE paired_library_clock SET applying=1")
-      try connection.toolsExecuteUnlocked("INSERT OR REPLACE INTO execution_conversations(id,workspace_id,conversation) VALUES(?,?,x'7B7D')", [session, linux.id])
-      try connection.toolsExecuteUnlocked("INSERT OR REPLACE INTO execution_adoptions(conversation_id,workspace_id,payload) VALUES(?,?,x'7B7D')", [session, linux.id])
+      try connection.toolsExecuteUnlocked("INSERT OR REPLACE INTO execution_conversations(id,workspace_id,conversation) VALUES(?,?,'{}')", [session, linux.id])
+      try connection.toolsExecuteUnlocked("INSERT OR REPLACE INTO execution_adoptions(conversation_id,workspace_id,payload) VALUES(?,?,'{}')", [session, linux.id])
       try connection.executeUnlocked("UPDATE paired_library_clock SET applying=0")
     }
     // Routing resolves to the independent Linux workspace, never the old Mac,

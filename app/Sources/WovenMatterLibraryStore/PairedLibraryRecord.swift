@@ -41,18 +41,9 @@ public struct PairedLibraryRecord: Codable, Equatable, Sendable {
 
   /// A product analytics preference that turns collection off.
   var optsOutOfAnalytics: Bool {
-    guard table == "product_analytics_preference", !deleted, let value = row["payload"], let text = value.value else { return false }
-    let data: Data?
-    if value.type == "blob" {
-      var bytes: [UInt8] = []
-      var index = text.startIndex
-      while index < text.endIndex, let next = text.index(index, offsetBy: 2, limitedBy: text.endIndex),
-            let byte = UInt8(text[index..<next], radix: 16) {
-        bytes.append(byte); index = next
-      }
-      data = index == text.endIndex ? Data(bytes) : nil
-    } else { data = Data(text.utf8) }
-    guard let data, let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return false }
+    guard table == "product_analytics_preference", !deleted, let value = row["payload"], value.type == "text",
+          let text = value.value,
+          let object = try? JSONSerialization.jsonObject(with: Data(text.utf8)) as? [String: Any] else { return false }
     return object["enabled"] as? Bool == false
   }
   public func dominates(_ other: Self) -> Bool {

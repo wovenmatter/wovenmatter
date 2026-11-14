@@ -279,20 +279,8 @@ extension WorkspaceDatabaseConnection {
   private struct PeerRecordRejected: Error { let message: String }
 
   private func peerText(_ value: PairedLibraryValue?) -> String? {
-    guard let value, let raw = value.value else { return nil }
-    switch value.type {
-    case "text", "integer": return raw
-    case "blob":
-      let chars = Array(raw.utf8)
-      guard chars.count.isMultiple(of: 2) else { return nil }
-      var bytes = Data(); bytes.reserveCapacity(chars.count / 2)
-      for index in stride(from: 0, to: chars.count, by: 2) {
-        guard let byte = UInt8(String(decoding: chars[index...index + 1], as: UTF8.self), radix: 16) else { return nil }
-        bytes.append(byte)
-      }
-      return String(data: bytes, encoding: .utf8)
-    default: return nil
-    }
+    guard let value, ["text", "integer"].contains(value.type) else { return nil }
+    return value.value
   }
 
   /// Rows whose meaning depends on who wrote them, checked as they arrive.
@@ -626,7 +614,7 @@ extension WorkspaceDatabaseConnection {
         AND NOT EXISTS(SELECT 1 FROM execution_adoptions a WHERE a.conversation_id=?1)
         AND NOT EXISTS(SELECT 1 FROM retained_execution_history r WHERE r.conversation_id=?1)
         AND NOT EXISTS(SELECT 1 FROM execution_conversations x WHERE x.id=?1 AND NOT EXISTS(
-          SELECT 1 FROM execution_workspaces w WHERE w.id=x.workspace_id AND json_extract(CAST(w.payload AS TEXT),'$.kind')='mac'))
+          SELECT 1 FROM execution_workspaces w WHERE w.id=x.workspace_id AND json_extract(w.payload,'$.kind')='mac'))
       """, values: [conversation, local]).isEmpty == false
   }
 
@@ -793,7 +781,7 @@ extension WorkspaceDatabaseConnection {
       let query = try prepareUnlocked("INSERT INTO execution_conversations(id,workspace_id,conversation,transcript) VALUES(?,?,?,?) ON CONFLICT(id) DO UPDATE SET workspace_id=excluded.workspace_id,conversation=excluded.conversation,transcript=excluded.transcript")
       defer { sqlite3_finalize(query) }
       try bind(id, at: 1, to: query); try bind(workspace.id, at: 2, to: query)
-      try bind(JSONEncoder().encode(projected), at: 3, to: query); try bind(JSONEncoder().encode(transcript), at: 4, to: query); try stepDone(query)
+      try bindJSON(projected, at: 3, to: query); try bind(JSONEncoder().encode(transcript), at: 4, to: query); try stepDone(query)
     }
   }
 

@@ -240,7 +240,7 @@ def disconnect_snapshot(file, *, device_id, source_device_id, execution_root, pu
                 else:
                     value.pop("activeRunID", None)
                 db.execute("UPDATE " + table + " SET " + column + "=? WHERE id=?",
-                           (json.dumps(value).encode(), identifier))
+                           (json.dumps(value), identifier))
         if "runs" in tables:
             db.execute("UPDATE runs SET status='interrupted' WHERE status IN ('running','queued','pending','accepted','cancelling','uncertain')")
         for name in ("workspace_session_deliveries", "workspace_calendar_runs"):

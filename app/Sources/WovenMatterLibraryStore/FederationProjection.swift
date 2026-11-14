@@ -60,7 +60,7 @@ extension WorkspaceDatabaseConnection {
       let statement = try prepareUnlocked("INSERT INTO execution_conversations(id,workspace_id,conversation) VALUES (?,?,?) ON CONFLICT(id) DO UPDATE SET conversation=excluded.conversation")
       defer { sqlite3_finalize(statement) }
       try bind(conversation.id, at: 1, to: statement); try bind(workspace.id, at: 2, to: statement)
-      try bind(JSONEncoder().encode(conversation), at: 3, to: statement); try stepDone(statement)
+      try bindJSON(conversation, at: 3, to: statement); try stepDone(statement)
       try toolsExecuteUnlocked("""
         INSERT INTO conversations(id,title,last_message_preview,folder_id,created_at,updated_at)
         VALUES (?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET title=excluded.title,last_message_preview=excluded.last_message_preview,
@@ -201,7 +201,7 @@ extension WorkspaceDatabaseConnection {
         conversation.updatedAt = now
         let update = try prepareUnlocked("UPDATE execution_conversations SET conversation = ? WHERE id = ?")
         defer { sqlite3_finalize(update) }
-        try bind(JSONEncoder().encode(conversation), at: 1, to: update); try bind(entry.conversationID, at: 2, to: update); try stepDone(update)
+        try bindJSON(conversation, at: 1, to: update); try bind(entry.conversationID, at: 2, to: update); try stepDone(update)
         try toolsExecuteUnlocked("UPDATE conversations SET last_message_preview=?,updated_at=? WHERE id=?", [conversation.preview, now, entry.conversationID])
       }
     case .receipt:
@@ -223,7 +223,7 @@ extension WorkspaceDatabaseConnection {
       let statement = try prepareUnlocked("INSERT INTO execution_receipts(workspace_id,command_id,device_id,payload) VALUES (?,?,?,?) ON CONFLICT(workspace_id,command_id) DO UPDATE SET payload=excluded.payload")
       defer { sqlite3_finalize(statement) }
       try bind(workspace.id, at: 1, to: statement); try bind(receipt.commandID, at: 2, to: statement)
-      try bind(receipt.deviceID, at: 3, to: statement); try bind(JSONEncoder().encode(receipt), at: 4, to: statement); try stepDone(statement)
+      try bind(receipt.deviceID, at: 3, to: statement); try bindJSON(receipt, at: 4, to: statement); try stepDone(statement)
     case .nativeRecord:
       guard let part = entry.nativeRecord, entry.conversation == nil, entry.transcript == nil, entry.receipt == nil else {
         throw federationError("invalid_event", "Native history must contain only its immutable record part.")

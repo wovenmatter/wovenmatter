@@ -63,6 +63,19 @@ import WovenMatterCore
     #expect(visible.keys.sorted() == ["conversation_id", "note_id", "revision_snapshot", "run_id"])
     #expect(visible["note_id"]?.stringValue == "5211f659-501c-4907-8391-c1b4061daffb" && visible["revision_snapshot"]?.stringValue == "note-revision-1")
     #expect(try await row(library, "SELECT * FROM product_analytics_events").keys.sorted() == ["created", "id"])
+    // JSON stored as BLOB is text, and so is every recorded version of it.
+    #expect(try await row(library, "SELECT typeof(payload) AS type,json_extract(payload,'$.analyticsID') AS id FROM product_analytics_preference")
+      == ["type": .string("text"), "id": .string("51a4c8ef-6df8-44d7-9366-520b62810816")])
+    #expect(try await library.productAnalyticsPreference().analyticsID == "51a4c8ef-6df8-44d7-9366-520b62810816")
+    let analytics = try await rows(library, """
+      SELECT payload FROM paired_library_rows WHERE table_name='product_analytics_preference'
+      UNION ALL SELECT payload FROM paired_library_changes WHERE json_extract(payload,'$.table')='product_analytics_preference'
+      """).compactMap { $0["payload"]?.stringValue.flatMap { try? JSONDecoder().decode(PairedLibraryRecord.self, from: Data($0.utf8)) } }
+    #expect(analytics.count == 2)
+    for record in analytics {
+      #expect(record.row["payload"]?.type == "text")
+      #expect(record.row["payload"]?.value?.contains("\"analyticsID\":\"51a4c8ef-6df8-44d7-9366-520b62810816\"") == true)
+    }
 
     // The dashboard chat stays readable as retained history; the platform
     // chat v0.4.2 never listed stays hidden; the gateway's own rows are gone.

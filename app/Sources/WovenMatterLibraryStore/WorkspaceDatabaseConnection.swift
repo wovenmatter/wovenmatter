@@ -142,6 +142,12 @@ final class WorkspaceDatabaseConnection {
     guard status == SQLITE_OK else { throw bindError() }
   }
 
+  /// Binds a value's JSON encoding as TEXT. Library columns that hold JSON
+  /// are TEXT, so SQLite's JSON functions read them directly.
+  func bindJSON<Value: Encodable>(_ value: Value, at index: Int32, to statement: OpaquePointer) throws {
+    try bind(String(decoding: try JSONEncoder().encode(value), as: UTF8.self), at: index, to: statement)
+  }
+
   func bind(_ value: Data, at index: Int32, to statement: OpaquePointer) throws {
     if value.isEmpty {
       guard sqlite3_bind_zeroblob(statement, index, 0) == SQLITE_OK else {

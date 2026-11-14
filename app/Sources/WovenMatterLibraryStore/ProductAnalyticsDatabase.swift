@@ -10,16 +10,14 @@ extension WorkspaceDatabaseConnection {
   func createProductAnalyticsSchemaUnlocked() throws {
     try executeUnlocked(
       """
-      CREATE TABLE IF NOT EXISTS product_analytics_preference(singleton INTEGER PRIMARY KEY CHECK(singleton=1), payload BLOB NOT NULL);
+      CREATE TABLE IF NOT EXISTS product_analytics_preference(singleton INTEGER PRIMARY KEY CHECK(singleton=1), payload TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS product_analytics_events(id TEXT PRIMARY KEY, created REAL NOT NULL);
       CREATE TABLE IF NOT EXISTS product_analytics_limits(name TEXT PRIMARY KEY, last_attempt REAL NOT NULL);
       """)
     let insert = try prepareUnlocked(
       "INSERT OR IGNORE INTO product_analytics_preference VALUES(1,?)")
     defer { sqlite3_finalize(insert) }
-    try bind(
-      JSONEncoder().encode(ProductAnalyticsPreference(analyticsID: UUID().uuidString.lowercased())),
-      at: 1, to: insert)
+    try bindJSON(ProductAnalyticsPreference(analyticsID: UUID().uuidString.lowercased()), at: 1, to: insert)
     try stepDone(insert)
   }
   func productAnalyticsPreference() throws -> ProductAnalyticsPreference {
@@ -49,7 +47,7 @@ extension WorkspaceDatabaseConnection {
         let stmt = try prepareUnlocked(
           "UPDATE product_analytics_preference SET payload=? WHERE singleton=1")
         defer { sqlite3_finalize(stmt) }
-        try bind(JSONEncoder().encode(value), at: 1, to: stmt)
+        try bindJSON(value, at: 1, to: stmt)
         try stepDone(stmt)
       }
       return value

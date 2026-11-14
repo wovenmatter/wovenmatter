@@ -114,7 +114,7 @@ extension WorkspaceDatabaseConnection {
     if try locallyOwnsConversationUnlocked(id) { return }
     if try historyRowsUnlocked("""
       SELECT 1 AS independent FROM execution_conversations x JOIN execution_workspaces w ON w.id=x.workspace_id
-      WHERE x.id=? AND w.deleted=0 AND json_extract(CAST(w.payload AS TEXT),'$.kind') IN ('linux','ios')
+      WHERE x.id=? AND w.deleted=0 AND json_extract(w.payload,'$.kind') IN ('linux','ios')
       """, values: [id]).isEmpty == false { return }
     throw try pairedForeignOwnerUnlocked(id) != nil ? WorkspaceConversationActionError.ownedByAnotherMac : WorkspaceConversationActionError.unavailable
   }

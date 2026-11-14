@@ -42,7 +42,7 @@ extension WorkspaceDatabase {
         let query = try connection.prepareUnlocked("INSERT OR IGNORE INTO execution_conversations(id,workspace_id,conversation) VALUES(?,?,?)")
         defer { sqlite3_finalize(query) }
         try connection.bind(id, at: 1, to: query); try connection.bind(workspace.id, at: 2, to: query)
-        try connection.bind(JSONEncoder().encode(value), at: 3, to: query); try connection.stepDone(query)
+        try connection.bindJSON(value, at: 3, to: query); try connection.stepDone(query)
         try connection.executeUnlocked("UPDATE paired_library_clock SET applying=0")
       }
     }
