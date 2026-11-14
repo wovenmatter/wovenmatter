@@ -1,20 +1,20 @@
 {
   "runtime": "Pyodide",
-  "version": "314.0.7",
+  "version": "314.0.8",
   "pythonVersion": "3.14.2",
-  "source": "https://github.com/pyodide/pyodide/tree/314.0.7",
-  "npmIntegrity": "sha512-0YvXxEhfEdpLfb/XkM2BFAeMROq0iMUX2bzzH9pOttyMcWkwq+HbE5uyuGD82LN7y2q+SNvi/6V5JEsOlD2R1A==",
+  "source": "https://github.com/pyodide/pyodide/tree/314.0.8",
+  "npmIntegrity": "sha512-74Wq1kXOC+CCEzAfxuRAO701nAcCMLjf8NrwvWpu8S41dVMXwXmLQ05dYB+F4e46AdnGo0oq7YHSVUpHsoarLQ==",
   "sources": {
     "worker.js": "df289119ad93c8cfabb9845bcb39a390a3b1e966e3051f1bbb0b6f3c2f592b93",
     "commands.py": "a68f8512bff033c560754fc7d1caca25cfddb7ac4e884af045947ada1577523a",
-    "package.json": "5b574a77c6d409668f70365dda1778c3ba0e20904cbbb47bb2ed181bc5643dd9",
-    "package-lock.json": "60ba3ea86188b4ea2154b7dde09190dfc2ea7c5842046951ffb3ae8f21af97fd",
-    "licenses.json": "c395c4f43affafb3a13f0bde5b6692e8e126c646b6b0c6e49fa7a6ddeb9703f8"
+    "package.json": "0ae3e33e2e02282984cd12335113e3814063d123102a3ed3e79886957248c42e",
+    "package-lock.json": "949692273294db16e3d3cff86fadd1883c9e307975dffe22077bdce7b9dba9cd",
+    "licenses.json": "edf248bb14d5d86b061b14509ae76ded2a9bf734f9c2ad55ebf08f57b5fc8345"
   },
   "resources": {
-    "worker.js": "8501e5b8bbcf9680c94433c2bcec5632ca7630ab5b22818d736f4c5d033425f6",
-    "pyodide.asm.wasm": "cc36e3cab04fdfc9a63ff13eb52eae2b911bf46c025cc7b281f394bd3de1d5e6",
-    "python_stdlib.zip": "fa1957e5777068fc4f7437f96d860ae2fbe9c19732ba06c84e004ec16dd7dd7a",
+    "worker.js": "8e163ddde4686e1a31956c49f3b80f7b7fe81514d667cecabc2296a7ca427175",
+    "pyodide.asm.wasm": "e14d49ceca9b4a0e274ea918f3a898de2d3880b6e5573a6cfe1a2267ecc70329",
+    "python_stdlib.zip": "2bd3394a145bfbbe5bbc9d9d6ab9136abbb986c6fef6c142b3a2962227aa5c28",
     "pyodide-lock.json": "a32a0001399cff875f9b8b84059fc756bcca3d78eb7a718d153aafce2244c626",
     "commands.py": "a68f8512bff033c560754fc7d1caca25cfddb7ac4e884af045947ada1577523a",
     "Pyodide-LICENSE.txt": "1f256ecad192880510e84ad60474eab7589218784b9a50bc7ceee34c2b91f1d5",
