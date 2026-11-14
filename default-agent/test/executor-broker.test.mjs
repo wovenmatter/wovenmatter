@@ -254,3 +254,16 @@ test('remote deployment waits for its private endpoint to become ready', async t
   assert.equal(result.ready, true); assert.equal(attempts, 3);
   assert.equal(result.version, null);
 });
+
+test('Executor broker reports its runtime and the newest supported release', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'woven-executor-versions-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const release = { bin: { executor: 'bin/executor.js' }, dist: { tarball: 'https://registry.npmjs.org/executor/-/executor.tgz', integrity: 'sha512-x' } };
+  const broker = await new ExecutorBroker(directory, { fetcher: async () => ({ ok: true,
+    json: async () => ({ versions: { '2.1.0': release, '2.4.0': release, '3.0.0': release } }) }) }).load();
+  broker.runtimeVersion = '2.1.0';
+  // The newest release of the supported major, not a newer major Woven can't drive.
+  assert.deepEqual(await broker.handle({ operation: 'versions' }), { installed: '2.1.0', latest: '2.4.0' });
+  const offline = await new ExecutorBroker(directory, { fetcher: async () => ({ ok: false }) }).load();
+  assert.deepEqual(await offline.handle({ operation: 'versions' }), { installed: null, latest: null });
+});

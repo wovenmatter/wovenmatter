@@ -66,6 +66,9 @@ public struct BotMachine: Codable, Equatable, Identifiable, Sendable {
     public var updating: Bool
     /// Why the machine's last bots engine update (the Mac VM) failed and was rolled back.
     public var engineUpdateFailure: String?
+    /// The workspace this machine serves (its registry ID, a configured Linux workspace's
+    /// lowercased UUID), so Settings → Updates can show that workspace's harnesses with it.
+    public var workspaceID: String?
 
     public init(id: String, name: String, kind: Kind, state: State, message: String? = nil, socket: BotSocketEndpoint? = nil,
                 versions: BotMachineVersions = .init(), resources: BotResourceSettings? = nil, capacity: BotMachineCapacity? = nil,
@@ -130,16 +133,16 @@ public struct BotsRemoteStatus: Codable, Equatable, Sendable {
                          expectedHostFingerprint: String?, thisMacLibrarySchema: String? = nil) -> String? {
         guard kind != .thisMac else { return nil }
         if let ours = thisMacLibrarySchema, let theirs = versions.librarySchema, ours != theirs {
-            return "Its library format differs from this Mac's, so the two cannot sync. Update everything to use its bots."
+            return "Its library format differs from this Mac's, so the two cannot sync. Update it in Settings → Updates to use its bots."
         }
         if kind == .linux, let expected = expectedHostFingerprint, versions.fingerprint != expected {
             if let app = versions.app, let ours = thisMacVersion, app != ours {
-                return "Runs Woven Matter \(app) and this Mac runs \(ours). Update everything to use its bots."
+                return "Runs Woven Matter \(app) and this Mac runs \(ours). Update it in Settings → Updates to use its bots."
             }
-            return "Runs a different Woven host release than this Mac's. Update everything to use its bots."
+            return "Runs a different Woven host release than this Mac's. Update it in Settings → Updates to use its bots."
         }
         if let app = versions.app, let ours = thisMacVersion, app != ours, versions.fingerprint == nil || expectedHostFingerprint == nil {
-            return "Runs Woven Matter \(app) and this Mac runs \(ours). Update everything to use its bots."
+            return "Runs Woven Matter \(app) and this Mac runs \(ours). Update it in Settings → Updates to use its bots."
         }
         return nil
     }
@@ -301,7 +304,7 @@ public struct BotDiscoveredDevice: Codable, Equatable, Identifiable, Sendable {
 
 // MARK: - Versions and updates
 
-/// What Settings and the Bots page say about mismatched versions.
+/// What Settings → Updates, and the pages that link to it, say about mismatched versions.
 public struct BotVersionReport: Equatable, Sendable {
     public struct Part: Equatable, Identifiable, Sendable {
         public enum Kind: String, Equatable, Sendable { case thisMac, mac, linux, bots }
@@ -345,13 +348,13 @@ public struct BotVersionReport: Equatable, Sendable {
     public var message: String? {
         guard needsUpdate else { return nil }
         if syncStopped {
-            return "Library sync stopped because your devices run different versions. Update everything to resume it."
+            return "Library sync stopped because your devices run different versions. Update everything in Settings → Updates to resume it."
         }
         // A machine can be behind on its app and its bots; name it once.
         var names: [String] = []
         for part in outdated where !names.contains(part.name) { names.append(part.name) }
         let list = names.count <= 2 ? names.joined(separator: " and ") : names.dropLast().joined(separator: ", ") + " and " + names.last!
-        return "\(list) \(names.count == 1 ? "runs" : "run") a different version. Update everything so every device matches."
+        return "\(list) \(names.count == 1 ? "runs" : "run") a different version. Update everything in Settings → Updates so every device matches."
     }
 
     /// Peer sync rejects a schema mismatch with this wording (`PairedLibraryStore`).
@@ -360,10 +363,16 @@ public struct BotVersionReport: Equatable, Sendable {
     }
 }
 
-/// "Update everything": other machines first, then each Mac's bots engine (the VM) and then
-/// its bots, then this Mac's app, which restarts. A machine already on this Mac's release is
-/// skipped; `runtime.update` is a no-op for bots already on their runtime's current image.
-public enum BotUpdatePlan {
+/// Woven Matter across devices, for Settings → Updates: other machines first, then each
+/// Mac's bots engine (the VM) and then its bots, then this Mac's app, which restarts.
+/// A machine already on the target release is skipped. `runtime.update` snapshots each bot,
+/// moves one made from an older bot image to the current one (new Node, Playwright and
+/// Chromium), updates the helper and Ubuntu packages, and rolls back on failure.
+///
+/// The target is the newest published release when it is known. Linux hosts can only
+/// receive the host release bundled in this Mac's app, so when this Mac is behind that
+/// release it updates first, alone: the rest of the plan runs after it restarts.
+public enum DeviceUpdatePlan {
     public enum Step: Equatable, Sendable {
         case linuxHost(id: String, name: String)
         case mac(id: String, name: String)
@@ -374,19 +383,15 @@ public enum BotUpdatePlan {
         case thisMacApp
     }
 
-    public static func steps(machines: [BotMachine], thisMacVersion: String?) -> [Step] {
+    public static func steps(machines: [BotMachine], thisMacVersion: String?, latestVersion: String? = nil) -> [Step] {
+        if thisMacIsBehind(thisMacVersion: thisMacVersion, latestVersion: latestVersion) { return [.thisMacApp] }
         let others = machines.filter { $0.kind != .thisMac && $0.state != .unreachable }
             .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
         var steps: [Step] = others.compactMap { machine in
             if machine.kind == .linux {
-                // The fingerprint is exact: a host on this Mac's release has nothing to update.
-                let current = machine.versions.fingerprint != nil ? machine.state != .needsUpdate
-                    : machine.versions.app != nil && machine.versions.app == thisMacVersion
-                return current ? nil : .linuxHost(id: machine.id, name: machine.name)
+                return linuxHostIsCurrent(machine, thisMacVersion: thisMacVersion) ? nil : .linuxHost(id: machine.id, name: machine.name)
             }
-            guard machine.versions.app == nil || machine.versions.app != thisMacVersion else { return nil }
-            if let theirs = machine.versions.app, let ours = thisMacVersion, isNewer(theirs, than: ours) { return nil }
-            return .mac(id: machine.id, name: machine.name)
+            return macIsCurrent(machine, thisMacVersion: thisMacVersion) ? nil : .mac(id: machine.id, name: machine.name)
         }
         for machine in machines where machine.state == .ready || machine.state == .needsUpdate {
             if machine.kind != .linux { steps.append(.engine(machineID: machine.id, name: machine.displayName)) }
@@ -394,6 +399,25 @@ public enum BotUpdatePlan {
         }
         if thisMacNeedsUpdate(machines: machines, thisMacVersion: thisMacVersion) { steps.append(.thisMacApp) }
         return steps
+    }
+
+    /// The fingerprint is exact: a host on this Mac's release has nothing to update.
+    public static func linuxHostIsCurrent(_ machine: BotMachine, thisMacVersion: String?) -> Bool {
+        machine.versions.fingerprint != nil ? machine.state != .needsUpdate
+            : machine.versions.app != nil && machine.versions.app == thisMacVersion
+    }
+
+    /// Another Mac on this Mac's version, or a newer one, which is never downgraded.
+    public static func macIsCurrent(_ machine: BotMachine, thisMacVersion: String?) -> Bool {
+        guard let theirs = machine.versions.app else { return false }
+        guard let ours = thisMacVersion else { return true }
+        return theirs == ours || isNewer(theirs, than: ours)
+    }
+
+    /// A newer release is published than the one this Mac runs.
+    public static func thisMacIsBehind(thisMacVersion: String?, latestVersion: String?) -> Bool {
+        guard let ours = thisMacVersion, let latest = latestVersion else { return false }
+        return isNewer(latest, than: ours)
     }
 
     /// Another Mac already runs a newer Woven Matter than this one.

@@ -111,7 +111,7 @@ struct BotMachinesTests {
         let socket = BotSocketEndpoint(url: URL(string: "ws://127.0.0.1:4000/v1/bots/ws")!, bearer: "secret")
         let mismatched = status.machine(kind: .linux, socket: socket, thisMacVersion: "1.4.0")
         #expect(mismatched.state == .needsUpdate)
-        #expect(mismatched.message?.contains("Update everything") == true)
+        #expect(mismatched.message?.contains("Settings → Updates") == true)
         let matched = status.machine(kind: .linux, socket: socket, thisMacVersion: "1.3.0")
         #expect(matched.state == .ready && matched.socket == socket)
         var off = status; off.enabled = false; off.state = "off"
@@ -143,7 +143,7 @@ struct BotMachinesTests {
         let machines = [machine("this", kind: .thisMac), machine("box", kind: .linux, app: "1.3.0"), machine("mini", kind: .mac, runtime: "0.1.0")]
         let report = BotVersionReport(thisMacVersion: "1.4.0", machines: machines)
         #expect(report.outdated.map(\.id) == ["box", "bots:mini"])
-        #expect(report.message?.contains("Update everything") == true)
+        #expect(report.message?.contains("Update everything in Settings → Updates") == true)
         let stopped = BotVersionReport(thisMacVersion: "1.4.0", machines: [machine("this", kind: .thisMac)],
                                        syncErrors: ["Update both Macs to the same Woven Matter version before synchronizing."])
         #expect(stopped.syncStopped && stopped.needsUpdate)
@@ -159,7 +159,7 @@ struct BotMachinesTests {
         let machines = [machine("this", kind: .thisMac), machine("box", kind: .linux, app: "1.3.0"),
                         machine("same", kind: .linux), machine("mini", kind: .mac, app: "1.5.0"),
                         machine("gone", kind: .linux, app: "1.0.0", state: .unreachable)]
-        let steps = BotUpdatePlan.steps(machines: machines, thisMacVersion: "1.4.0")
+        let steps = DeviceUpdatePlan.steps(machines: machines, thisMacVersion: "1.4.0")
         #expect(steps.first == .linuxHost(id: "box", name: "box"))
         #expect(!steps.contains(.linuxHost(id: "same", name: "same")))
         #expect(!steps.contains(.linuxHost(id: "gone", name: "gone")))
@@ -167,7 +167,7 @@ struct BotMachinesTests {
         #expect(!steps.contains(.mac(id: "mini", name: "mini")))
         #expect(steps.contains(.bots(machineID: "this", name: "This Mac")))
         #expect(steps.last == .thisMacApp)
-        #expect(!BotUpdatePlan.steps(machines: [machine("this", kind: .thisMac)], thisMacVersion: "1.4.0").contains(.thisMacApp))
+        #expect(!DeviceUpdatePlan.steps(machines: [machine("this", kind: .thisMac)], thisMacVersion: "1.4.0").contains(.thisMacApp))
     }
 
     @Test func aLinuxHostIsJudgedByItsReleaseFingerprint() {
@@ -197,14 +197,36 @@ struct BotMachinesTests {
 
         var stale = machine("box", kind: .linux, app: "1.4.0", state: .needsUpdate); stale.versions.fingerprint = theirs
         var current = machine("same", kind: .linux, app: "1.3.0"); current.versions.fingerprint = ours
-        let steps = BotUpdatePlan.steps(machines: [machine("this", kind: .thisMac), stale, current], thisMacVersion: "1.4.0")
+        let steps = DeviceUpdatePlan.steps(machines: [machine("this", kind: .thisMac), stale, current], thisMacVersion: "1.4.0")
         #expect(steps.contains(.linuxHost(id: "box", name: "box")))
         #expect(!steps.contains(.linuxHost(id: "same", name: "same")))
         #expect(BotVersionReport(thisMacVersion: "1.4.0", machines: [stale]).outdated.map(\.current) == ["release bbbbbbbb"])
     }
 
+    @Test func thisMacUpdatesFirstWhenANewerReleaseIsPublished() {
+        let machines = [machine("this", kind: .thisMac), machine("box", kind: .linux, app: "1.3.0"), machine("mini", kind: .mac, app: "1.3.0")]
+        // Linux hosts can only get this Mac's release, so this Mac goes first, alone.
+        #expect(DeviceUpdatePlan.steps(machines: machines, thisMacVersion: "1.4.0", latestVersion: "1.5.0") == [.thisMacApp])
+        // On the newest release, the rest of the fleet follows, and this Mac has nothing to do.
+        let current = DeviceUpdatePlan.steps(machines: machines, thisMacVersion: "1.5.0", latestVersion: "1.5.0")
+        #expect(current.first == .linuxHost(id: "box", name: "box"))
+        #expect(current.contains(.mac(id: "mini", name: "mini")) && !current.contains(.thisMacApp))
+        // An unknown newest release falls back to matching this Mac.
+        #expect(DeviceUpdatePlan.steps(machines: machines, thisMacVersion: "1.4.0").first == .linuxHost(id: "box", name: "box"))
+        #expect(DeviceUpdatePlan.thisMacIsBehind(thisMacVersion: "1.4.0", latestVersion: "1.10.0"))
+        #expect(!DeviceUpdatePlan.thisMacIsBehind(thisMacVersion: "1.10.0", latestVersion: "1.9.0"))
+        #expect(!DeviceUpdatePlan.thisMacIsBehind(thisMacVersion: "1.4.0", latestVersion: nil))
+    }
+
+    @Test func aMacIsCurrentOnThisMacsVersionOrNewer() {
+        #expect(DeviceUpdatePlan.macIsCurrent(machine("mini", kind: .mac, app: "1.4.0"), thisMacVersion: "1.4.0"))
+        #expect(DeviceUpdatePlan.macIsCurrent(machine("mini", kind: .mac, app: "1.5.0"), thisMacVersion: "1.4.0"))
+        #expect(!DeviceUpdatePlan.macIsCurrent(machine("mini", kind: .mac, app: "1.3.0"), thisMacVersion: "1.4.0"))
+        #expect(!DeviceUpdatePlan.macIsCurrent(machine("mini", kind: .mac, app: nil), thisMacVersion: "1.4.0"))
+    }
+
     @Test func updateEverythingUpdatesAMacsVMBeforeItsBots() {
-        let steps = BotUpdatePlan.steps(machines: [machine("this", kind: .thisMac), machine("mini", kind: .mac), machine("box", kind: .linux)],
+        let steps = DeviceUpdatePlan.steps(machines: [machine("this", kind: .thisMac), machine("mini", kind: .mac), machine("box", kind: .linux)],
                                         thisMacVersion: "1.4.0")
         let engine = steps.firstIndex(of: .engine(machineID: "this", name: "This Mac"))
         let bots = steps.firstIndex(of: .bots(machineID: "this", name: "This Mac"))

@@ -76,6 +76,15 @@ export async function helperArchive(
   return { tar, hash };
 }
 
+/** What the bot image carries, read from its Dockerfile: the base and the pinned tools. */
+export type ImageTools = { readonly base?: string; readonly node?: string; readonly playwright?: string };
+
+export async function imageTools(dir = IMAGE_DIR): Promise<ImageTools> {
+  const text = await readFile(join(dir, "Dockerfile"), "utf8").catch(() => "");
+  const arg = (name: string) => new RegExp(`^ARG ${name}=(\\S+)`, "m").exec(text)?.[1];
+  return { base: /^FROM (\S+)/m.exec(text)?.[1], node: arg("NODE_VERSION"), playwright: arg("PLAYWRIGHT_VERSION") };
+}
+
 export function helperVolumeName(hash: string): string {
   return `woven-bots-helper-${hash}`;
 }

@@ -3,9 +3,9 @@ import WovenMatterClient
 import WovenMatterCore
 import WovenMatterLibraryStore
 
-/// Settings → Bots: the one machine bots run on, installing on another device, and
-/// version notices. The chosen machine opens its own page; what bots may do through
-/// Woven MCP lives in Settings → Woven MCP.
+/// Settings → Bots: the one machine bots run on, installing on another device, and a
+/// link to Settings → Updates when versions differ. The chosen machine opens its own
+/// page; what bots may do through Woven MCP lives in Settings → Woven MCP.
 struct SettingsBotsView: View {
     @Bindable var model: ApplicationModel
     var reservesRailControlSpace = false
@@ -13,6 +13,7 @@ struct SettingsBotsView: View {
     let onBack: () -> Void
     let onOpenMachine: (String) -> Void
     let onOpenWovenMCP: () -> Void
+    var onOpenUpdates: () -> Void = {}
 
     private var bots: BotsModel { model.bots }
     @State private var mcp: WovenMCPAccessSnapshot?
@@ -29,7 +30,7 @@ struct SettingsBotsView: View {
             backTitle: backTitle,
             onBack: onBack
         ) {
-            BotsVersionNotice(bots: bots)
+            UpdatesStatusLink(bots: bots, onOpen: onOpenUpdates)
             whereSection
             SettingsSection {
                 SettingsSummaryLink(title: "Woven MCP access", value: mcpSummary, action: onOpenWovenMCP)
@@ -146,6 +147,7 @@ struct SettingsBotsMachineView: View {
     let onOpenResources: () -> Void
     var onOpenAccounts: (String) -> Void = { _ in }
     @State private var confirmation: BotsConfirmation?
+    @State private var confirmingImageMove: BotMachineSession?
 
     private var machine: BotMachine? { bots.machines.first { $0.id == machineID } }
 
@@ -166,6 +168,15 @@ struct SettingsBotsMachineView: View {
         }
         .task { await bots.refresh() }
         .modifier(BotsConfirmationPresenter(confirmation: $confirmation, bots: bots))
+        .confirmationDialog("Move bots to the new container image?", isPresented: Binding(
+            get: { confirmingImageMove != nil }, set: { if !$0 { confirmingImageMove = nil } }
+        ), titleVisibility: .visible, presenting: confirmingImageMove) { session in
+            Button("Update bots") { Task { await session.updateBots() }; confirmingImageMove = nil }
+            Button("Cancel", role: .cancel) { confirmingImageMove = nil }
+        } message: { session in
+            let count = session.runtimeStatus?.image?.staleBots ?? 0
+            Text("\(count == 1 ? "1 bot moves" : "\(count) bots move") to the current image (\(session.runtimeStatus?.image?.tools ?? "new tools")). Their files in /workspace stay; anything installed elsewhere in the container is replaced. Each bot is snapshotted first and rolled back if the update fails.")
+        }
     }
 
     private func statusSection(_ machine: BotMachine) -> some View {
@@ -181,7 +192,9 @@ struct SettingsBotsMachineView: View {
                         }
                         if let session, session.isConnected {
                             Button(session.updating ? "Updating bots…" : "Update bots") {
-                                Task { await session.updateBots() }
+                                // Moving bots to a new image replaces their containers: ask first.
+                                if (session.runtimeStatus?.image?.staleBots ?? 0) > 0 { confirmingImageMove = session }
+                                else { Task { await session.updateBots() } }
                             }
                             .disabled(session.updating)
                         }
@@ -207,7 +220,7 @@ struct SettingsBotsMachineView: View {
                 SettingsNote([bot, progress.text].compactMap { $0 }.joined(separator: ": "))
             }
             if session?.isConnected == true {
-                SettingsNote("Update bots stops running work, snapshots each bot, updates it, and rolls back on failure.")
+                SettingsNote("Update bots stops running work, snapshots each bot, moves it to the current container image if it is on an older one, updates it, and rolls back on failure.")
             }
         }
     }
@@ -376,7 +389,7 @@ enum BotMachineText {
     }
 
     /// The operating system bots run on, and how many bots once it is ready. No versions: a
-    /// machine that needs updating says so in its status and the "Update everything" notice.
+    /// machine that needs updating says so in its status and Settings → Updates.
     @MainActor
     static func summary(_ machine: BotMachine, bots: BotsModel) -> String {
         var parts = [machine.kind == .linux ? "Linux" : "Mac"]

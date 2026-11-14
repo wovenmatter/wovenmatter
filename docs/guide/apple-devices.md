@@ -66,9 +66,10 @@ shows **Versions don't match**, and **Synchronization needs attention** names th
 device that needs updating. Your own writing is saved while synchronization
 waits.
 
-Choose **Versions don't match** to open Settings → Bots, then **Update
-everything**. It updates each Linux host, your other Macs, and this Mac last,
-because the app restarts. You can also update a single device on its own.
+Choose **Versions don't match** to open Settings → Updates, then **Update
+everything**. It updates this Mac first when a newer release is out, then each
+Linux host, your other Macs, and every harness. You can also update a single
+device or harness on its own. See [Updates](updates.md).
 
 ## iPhone (beta)
 

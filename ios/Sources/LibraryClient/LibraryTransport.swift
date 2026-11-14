@@ -69,7 +69,7 @@ public enum MobileConnectionError: Error, LocalizedError {
     case .insecureEndpoint: "Pair using the Tailscale HTTPS address shown by Woven Matter on your Mac."
     case .offline: "This workspace is unavailable. Locally saved work remains available."
     case .memberUnknown: "The device you reached doesn’t recognize this one yet. It learns about it after it syncs with a Mac you paired with."
-    case .updateRequired(let message): "Update everything. " + message
+    case .updateRequired(let message): message + " On a Mac, open Settings → Updates and choose Update everything."
     }
   }
 }

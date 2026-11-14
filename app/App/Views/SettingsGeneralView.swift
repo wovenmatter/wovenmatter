@@ -8,6 +8,8 @@ struct SettingsGeneralView: View {
     var reservesRailControlSpace = false
     var onBack: () -> Void
     var onOpenCodex: () -> Void = {}
+    var onOpenUpdates: () -> Void = {}
+    @State private var updates = FleetUpdatesModel.shared
 
     @AppStorage(WovenTheme.storageKey) private var storedTheme = WovenTheme.green.rawValue
     @AppStorage(SidebarStyle.storageKey) private var storedSidebarStyle = SidebarStyle.defaultStyle.rawValue
@@ -94,6 +96,7 @@ struct SettingsGeneralView: View {
         CodexLogoStyle(rawValue: storedCodexLogoStyle) ?? .defaultStyle
     }
 
+    /// This Mac's version and its own update check, then the page for every device.
     private var softwareSection: some View {
         let updater = DesktopUpdater.shared
         return SettingsSection(title: "Software") {
@@ -102,7 +105,12 @@ struct SettingsGeneralView: View {
                     .buttonStyle(SettingsQuietButtonStyle())
                     .disabled(!updater.canCheckForUpdates)
             }
+            SettingsSummaryLink(title: "Updates", detail: "Woven Matter and harnesses on all your devices.",
+                                value: updates.summary,
+                                tone: updates.availableCount > 0 || updates.busyConfirmation != nil || updates.review != nil ? .warning : nil,
+                                action: onOpenUpdates)
         }
+        .task { updates.loadIfNeeded() }
     }
 
     private var currentVersion: String {
