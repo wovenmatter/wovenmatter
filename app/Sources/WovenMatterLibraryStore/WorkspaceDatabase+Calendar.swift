@@ -30,6 +30,67 @@ extension WorkspaceDatabaseConnection {
       return try JSONDecoder().decode(String.self, from: Data(json.utf8))
     }
   }
+  /// This device's scheduling state for a calendar item: when its task next
+  /// fires and the session a repeating task reuses. It is the work of the
+  /// device that runs the task, so it stays out of the shared
+  /// `calendar_items` row: a fire must never become a new version of the
+  /// item that competes with an edit of its title or time made elsewhere.
+  /// `item_updated_at` is the item's `updated_at` this state was computed
+  /// for; a later one (an edit received from another device) is rescheduled
+  /// here before anything fires (`rescheduleChangedCalendarItemsUnlocked`).
+  static let calendarSchedulesSQL = """
+    CREATE TABLE IF NOT EXISTS calendar_schedules(
+      item_id TEXT PRIMARY KEY, next_fire_at REAL, task_session_id TEXT, item_updated_at TEXT NOT NULL DEFAULT '');
+    """
+
+  private func calendarScheduleUnlocked(_ id: String) throws -> (next: Double?, taskSessionID: String?) {
+    let row = try historyRowsUnlocked("SELECT next_fire_at,task_session_id FROM calendar_schedules WHERE item_id=?", values: [id]).first?.objectValue
+    return (row?["next_fire_at"]?.doubleValue, row?["task_session_id"]?.stringValue)
+  }
+  private func setCalendarNextFireUnlocked(_ id: String, _ next: Date?) throws {
+    try toolsExecuteUnlocked("""
+      INSERT INTO calendar_schedules(item_id,next_fire_at,item_updated_at)
+      VALUES(?1,?2,COALESCE((SELECT updated_at FROM calendar_items WHERE id=?1),''))
+      ON CONFLICT(item_id) DO UPDATE SET next_fire_at=excluded.next_fire_at,item_updated_at=excluded.item_updated_at
+      """, [id, next.map { String($0.timeIntervalSince1970) }])
+  }
+  private func setCalendarTaskSessionUnlocked(_ id: String, _ sessionID: String?) throws {
+    try toolsExecuteUnlocked("""
+      INSERT INTO calendar_schedules(item_id,task_session_id,item_updated_at)
+      VALUES(?1,?2,COALESCE((SELECT updated_at FROM calendar_items WHERE id=?1),''))
+      ON CONFLICT(item_id) DO UPDATE SET task_session_id=excluded.task_session_id
+      """, [id, sessionID])
+  }
+  /// When an edited task next fires: its start, or, once it has run, the
+  /// next occurrence after `now`.
+  private func nextCalendarFireUnlocked(_ event: WorkspaceCalendarItemRecord, now: Date) throws -> Date? {
+    guard event.calendar.task != nil else { return nil }
+    let ran = try calendarRunsUnlocked(eventID: event.id).contains { $0.status != "cancelled" }
+    return ran ? WorkspaceCalendarSchedule.next(event, after: now) : event.startDate
+  }
+  /// Items this device runs whose definition changed since their schedule
+  /// was computed: an edit, or a new item, received from another device.
+  /// Each is scheduled as a local edit schedules it, and a repeating task
+  /// keeps its session only while it still runs in the same place.
+  private func rescheduleChangedCalendarItemsUnlocked(now: Date) throws {
+    let changed = Set(try historyRowsUnlocked("""
+      SELECT i.id FROM calendar_items i LEFT JOIN calendar_schedules s ON s.item_id=i.id
+      WHERE (s.item_id IS NULL OR s.item_updated_at IS NOT i.updated_at) AND \(PairedLibraryOwnership.localCalendarItem("i.id"))
+      """, values: []).compactMap { $0.objectValue?["id"]?.stringValue })
+    guard !changed.isEmpty else { return }
+    for event in try calendarItemsUnlocked(includeDeleted: true) where changed.contains(event.id) {
+      let deleted = try historyRowsUnlocked("SELECT 1 AS gone FROM calendar_items WHERE id=? AND deleted_at IS NOT NULL", values: [event.id]).isEmpty == false
+      try setCalendarNextFireUnlocked(event.id, deleted ? nil : try nextCalendarFireUnlocked(event, now: now))
+      try toolsExecuteUnlocked("""
+        UPDATE calendar_schedules SET task_session_id=NULL WHERE item_id=?1 AND task_session_id IS NOT NULL AND NOT EXISTS(
+          SELECT 1 FROM calendar_task_sessions t, calendar_items i WHERE t.id=calendar_schedules.task_session_id AND i.id=?1
+            AND json_extract(t.configuration_json,'$.runtimeKind') IS json_extract(i.calendar_json,'$.task.configuration.runtimeKind')
+            AND json_extract(t.configuration_json,'$.workspaceID') IS json_extract(i.calendar_json,'$.task.configuration.workspaceID')
+            AND json_extract(t.configuration_json,'$.nativeWorkingDirectory') IS json_extract(i.calendar_json,'$.task.configuration.nativeWorkingDirectory'))
+        """, [event.id])
+    }
+  }
+
   func migrateCalendar() throws {
     try transaction {
       try executeUnlocked("""
@@ -39,8 +100,9 @@ extension WorkspaceDatabaseConnection {
           task_json TEXT NOT NULL, title TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending',
           error TEXT, retry_after REAL, coalesced_through REAL NOT NULL, hidden_at TEXT,
           UNIQUE(event_id,scheduled_at));
-        CREATE INDEX IF NOT EXISTS calendar_items_due ON calendar_items(next_fire_at) WHERE deleted_at IS NULL;
-        CREATE INDEX IF NOT EXISTS calendar_runs_event ON calendar_runs(event_id);
+        \(Self.calendarSchedulesSQL)
+        CREATE INDEX IF NOT EXISTS calendar_schedules_due ON calendar_schedules(next_fire_at) WHERE next_fire_at IS NOT NULL;
+        CREATE INDEX IF NOT EXISTS calendar_runs_visible ON calendar_runs(scheduled_at,id) WHERE hidden_at IS NULL;
         CREATE INDEX IF NOT EXISTS calendar_runs_pending ON calendar_runs(status) WHERE status='pending';
         CREATE TABLE IF NOT EXISTS calendar_task_sessions(id TEXT PRIMARY KEY, configuration_json TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS calendar_remote_ownership(
@@ -141,9 +203,7 @@ extension WorkspaceDatabaseConnection {
                EXISTS(SELECT 1 FROM session_deliveries d WHERE d.id=calendar_runs.id AND d.transport_started=1))
             """,
             [newID, id, Self.timestamp(detached.startsAt)])
-          if !(try calendarRunsUnlocked(eventID: newID)).isEmpty {
-            try toolsExecuteUnlocked("UPDATE calendar_items SET next_fire_at=NULL WHERE id=?", [newID])
-          }
+          if !(try calendarRunsUnlocked(eventID: newID)).isEmpty { try setCalendarNextFireUnlocked(newID, nil) }
           return newID
         }
         var details = existing?.calendar ?? .init(createdBy: author)
@@ -195,19 +255,24 @@ extension WorkspaceDatabaseConnection {
       next = WorkspaceCalendarSchedule.next(event, after: now)
     }
     let source = details.createdBy.sessionID.map { "session:" + $0 } ?? "user"
+    let json = try toolsJSON(details)
+    // A repeating task keeps its session only while it still runs in the
+    // same place; compared before the item below takes its new definition.
     try toolsExecuteUnlocked("""
-      INSERT INTO calendar_items(id,kind,title,description,starts_at,ends_at,all_day,status,source,created_at,updated_at,calendar_json,next_fire_at)
-      VALUES(?,'event',?,?,?,?,?,'scheduled',?,?,?,?,?)
+      UPDATE calendar_schedules SET task_session_id=NULL WHERE item_id=?1 AND NOT EXISTS(SELECT 1 FROM calendar_items i WHERE i.id=?1
+        AND json_extract(i.calendar_json,'$.task.configuration.runtimeKind') IS json_extract(?2,'$.task.configuration.runtimeKind')
+        AND json_extract(i.calendar_json,'$.task.configuration.workspaceID') IS json_extract(?2,'$.task.configuration.workspaceID')
+        AND json_extract(i.calendar_json,'$.task.configuration.nativeWorkingDirectory') IS json_extract(?2,'$.task.configuration.nativeWorkingDirectory'))
+      """, [id, json])
+    try toolsExecuteUnlocked("""
+      INSERT INTO calendar_items(id,kind,title,description,starts_at,ends_at,all_day,status,source,created_at,updated_at,calendar_json)
+      VALUES(?,'event',?,?,?,?,?,'scheduled',?,?,?,?)
       ON CONFLICT(id) DO UPDATE SET title=excluded.title,description=excluded.description,starts_at=excluded.starts_at,
         ends_at=excluded.ends_at,all_day=excluded.all_day,updated_at=excluded.updated_at,
-        calendar_json=excluded.calendar_json,next_fire_at=excluded.next_fire_at,
-        task_session_id=CASE WHEN json_extract(calendar_items.calendar_json,'$.task.configuration.runtimeKind') IS json_extract(excluded.calendar_json,'$.task.configuration.runtimeKind')
-          AND json_extract(calendar_items.calendar_json,'$.task.configuration.workspaceID') IS json_extract(excluded.calendar_json,'$.task.configuration.workspaceID')
-          AND json_extract(calendar_items.calendar_json,'$.task.configuration.nativeWorkingDirectory') IS json_extract(excluded.calendar_json,'$.task.configuration.nativeWorkingDirectory')
-          THEN task_session_id ELSE NULL END
+        calendar_json=excluded.calendar_json
       """, [id, draft.title, draft.details.isEmpty ? nil : draft.details, Self.timestamp(draft.startsAt),
-        draft.endsAt.map(Self.timestamp), draft.allDay ? "1" : "0", source, existing?.createdAt ?? stamp, stamp,
-        try toolsJSON(details), next.map { String($0.timeIntervalSince1970) }])
+        draft.endsAt.map(Self.timestamp), draft.allDay ? "1" : "0", source, existing?.createdAt ?? stamp, stamp, json])
+    try setCalendarNextFireUnlocked(id, next)
   }
 
   public func deleteCalendarEvent(id: String, occurrence: Int? = nil, expectedRevision: Int? = nil,
@@ -230,7 +295,8 @@ extension WorkspaceDatabaseConnection {
           try toolsExecuteUnlocked("UPDATE calendar_items SET calendar_json=?,updated_at=? WHERE id=?", [try toolsJSON(details), Self.timestamp(now), id])
         } else {
           try cancelCalendarRunsUnlocked(eventID: id)
-          try toolsExecuteUnlocked("UPDATE calendar_items SET deleted_at=?,next_fire_at=NULL WHERE id=?", [Self.timestamp(now), id])
+          try toolsExecuteUnlocked("UPDATE calendar_items SET deleted_at=? WHERE id=?", [Self.timestamp(now), id])
+          try setCalendarNextFireUnlocked(id, nil)
         }
         if let callerID { try recordHistoryUnlocked(.init(conversationID: callerID, harness: "wovenmatter", kind: "calendar.remove", payload: try toolsJSON(["eventID": id]))) }
         return id
@@ -304,8 +370,11 @@ extension WorkspaceDatabaseConnection {
   /// Retain a pending occurrence through preparation errors and process restarts.
   public func dueCalendarRuns(now: Date = Date()) throws -> [WorkspaceCalendarRun] {
     try transaction {
-      let dueIDs = Set(try historyRowsUnlocked("SELECT id FROM calendar_items WHERE next_fire_at<=? AND deleted_at IS NULL AND \(PairedLibraryOwnership.localCalendarItem("calendar_items.id"))",
-        values: [String(now.timeIntervalSince1970)]).compactMap { $0.objectValue?["id"]?.stringValue })
+      try rescheduleChangedCalendarItemsUnlocked(now: now)
+      let dueIDs = Set(try historyRowsUnlocked("""
+        SELECT calendar_items.id FROM calendar_schedules s JOIN calendar_items ON calendar_items.id=s.item_id
+        WHERE s.next_fire_at<=? AND calendar_items.deleted_at IS NULL AND \(PairedLibraryOwnership.localCalendarItem("calendar_items.id"))
+        """, values: [String(now.timeIntervalSince1970)]).compactMap { $0.objectValue?["id"]?.stringValue })
       let delegated = try remoteCalendarWorkspaceIDsUnlocked()
       let clientOwned = try calendarForeignExecutionEventIDs()
       let events = dueIDs.isEmpty ? [] : try calendarItemsUnlocked().filter {
@@ -313,8 +382,8 @@ extension WorkspaceDatabaseConnection {
       }
       for event in events {
         guard let task = event.calendar.task, let start = event.startDate else { continue }
-        let row = try historyRowsUnlocked("SELECT next_fire_at,task_session_id FROM calendar_items WHERE id=?", values: [event.id]).first?.objectValue
-        guard let next = row?["next_fire_at"]?.doubleValue, next <= now.timeIntervalSince1970 else { continue }
+        let schedule = try calendarScheduleUnlocked(event.id)
+        guard let next = schedule.next, next <= now.timeIntervalSince1970 else { continue }
         let runs = try calendarRunsUnlocked(eventID: event.id)
         if runs.contains(where: { $0.isPending }) { continue }
         var index = WorkspaceCalendarSchedule.index(onOrBefore: now, start: start, recurrence: event.calendar.recurrence, timeZoneID: event.calendar.timeZoneID) ?? 0
@@ -323,7 +392,7 @@ extension WorkspaceDatabaseConnection {
               !runs.contains(where: { $0.scheduledAt == occurrence.startsAt && $0.status != "cancelled" }) else {
           try advanceCalendarUnlocked(event, after: now); continue
         }
-        let reusable = task.sessionMode == .same && event.calendar.recurrence != nil ? row?["task_session_id"]?.stringValue : nil
+        let reusable = task.sessionMode == .same && event.calendar.recurrence != nil ? schedule.taskSessionID : nil
         let sessionID = reusable ?? UUID().uuidString.lowercased()
         let id = UUID().uuidString.lowercased()
         try toolsExecuteUnlocked("""
@@ -340,9 +409,7 @@ extension WorkspaceDatabaseConnection {
           INSERT INTO calendar_task_sessions(id,configuration_json) VALUES(?,?)
           ON CONFLICT(id) DO UPDATE SET configuration_json=excluded.configuration_json
           """, [sessionID, try toolsJSON(task.configuration)])
-        if task.sessionMode == .same && event.calendar.recurrence != nil {
-          try toolsExecuteUnlocked("UPDATE calendar_items SET task_session_id=? WHERE id=?", [sessionID, event.id])
-        }
+        if task.sessionMode == .same && event.calendar.recurrence != nil { try setCalendarTaskSessionUnlocked(event.id, sessionID) }
       }
       let eligible = Set(try historyRowsUnlocked("""
         SELECT r.id FROM calendar_runs r LEFT JOIN session_deliveries d ON d.id=r.id
@@ -354,8 +421,7 @@ extension WorkspaceDatabaseConnection {
   }
 
   private func advanceCalendarUnlocked(_ event: WorkspaceCalendarItemRecord, after now: Date) throws {
-    let next = WorkspaceCalendarSchedule.next(event, after: now)
-    try toolsExecuteUnlocked("UPDATE calendar_items SET next_fire_at=? WHERE id=?", [next.map { String($0.timeIntervalSince1970) }, event.id])
+    try setCalendarNextFireUnlocked(event.id, WorkspaceCalendarSchedule.next(event, after: now))
   }
 
   public func isCalendarRunActive(_ id: String) throws -> Bool { try withLock { try calendarRunAuthorizedUnlocked(id) } }
@@ -415,8 +481,7 @@ extension WorkspaceDatabaseConnection {
     try toolsExecuteUnlocked("UPDATE calendar_runs SET status=?,error=NULL WHERE id=?", [status, run.id])
     let through = try historyRowsUnlocked("SELECT coalesced_through FROM calendar_runs WHERE id=?", values: [run.id])
       .first?.objectValue?["coalesced_through"]?.doubleValue.map(Date.init(timeIntervalSince1970:)) ?? run.scheduledAt
-    let next = try historyRowsUnlocked("SELECT next_fire_at FROM calendar_items WHERE id=?", values: [run.eventID])
-      .first?.objectValue?["next_fire_at"]?.doubleValue
+    let next = try calendarScheduleUnlocked(run.eventID).next
     // An edit may already have replaced this schedule while transport was in flight.
     if let next, next <= run.scheduledAt.timeIntervalSince1970,
        let event = try calendarItemsUnlocked().first(where: { $0.id == run.eventID }) {
@@ -502,7 +567,7 @@ extension WorkspaceDatabaseConnection {
   public func remoteCalendarExecutionSnapshot(workspaceID: UUID) throws -> [RemoteCalendarScheduleExport] {
     try withLock {
       try calendarItemsUnlocked().filter { $0.calendar.task?.configuration.workspaceID == workspaceID }.map { event in
-        let row = try historyRowsUnlocked("SELECT next_fire_at,task_session_id,(SELECT native_session_id FROM harness_sessions WHERE conversation_id=task_session_id) AS native_session_id FROM calendar_items WHERE id=?", values: [event.id]).first?.objectValue
+        let row = try historyRowsUnlocked("SELECT next_fire_at,task_session_id,(SELECT native_session_id FROM harness_sessions WHERE conversation_id=task_session_id) AS native_session_id FROM calendar_schedules WHERE item_id=?", values: [event.id]).first?.objectValue
         return RemoteCalendarScheduleExport(event: event,
           nextFireAt: row?["next_fire_at"]?.doubleValue.map(Date.init(timeIntervalSince1970:)),
           taskSessionID: row?["task_session_id"]?.stringValue,
@@ -538,11 +603,8 @@ extension WorkspaceDatabaseConnection {
     if let event = try calendarItemsUnlocked().first(where: { $0.id == run.eventID }),
        event.calendar.revision == eventRevision,
        event.calendar.task?.configuration.workspaceID == workspaceID {
-      if run.task.sessionMode == .same {
-        try toolsExecuteUnlocked("UPDATE calendar_items SET task_session_id=? WHERE id=?", [run.sessionID,run.eventID])
-      }
-      let row = try historyRowsUnlocked("SELECT next_fire_at FROM calendar_items WHERE id=?", values: [run.eventID]).first?.objectValue
-      if let next = row?["next_fire_at"]?.doubleValue, next <= run.scheduledAt.timeIntervalSince1970 {
+      if run.task.sessionMode == .same { try setCalendarTaskSessionUnlocked(run.eventID, run.sessionID) }
+      if let next = try calendarScheduleUnlocked(run.eventID).next, next <= run.scheduledAt.timeIntervalSince1970 {
         try advanceCalendarUnlocked(event, after: coalescedThrough ?? run.scheduledAt)
       }
     }
@@ -829,8 +891,12 @@ extension WorkspaceDatabaseConnection {
               let event = events.first(where: { $0.id == schedule.id }),
               event.calendar.task?.configuration.workspaceID == workspaceID,
               event.calendar.revision == schedule.revision else { continue }
-        try toolsExecuteUnlocked("UPDATE calendar_items SET next_fire_at=?,task_session_id=? WHERE id=?",
-          [schedule.nextFireAt.map { String($0.timeIntervalSince1970) },schedule.taskSessionID,schedule.id])
+        try toolsExecuteUnlocked("""
+          INSERT INTO calendar_schedules(item_id,next_fire_at,task_session_id,item_updated_at)
+          VALUES(?1,?2,?3,COALESCE((SELECT updated_at FROM calendar_items WHERE id=?1),''))
+          ON CONFLICT(item_id) DO UPDATE SET next_fire_at=excluded.next_fire_at,task_session_id=excluded.task_session_id,
+            item_updated_at=excluded.item_updated_at
+          """, [schedule.id,schedule.nextFireAt.map { String($0.timeIntervalSince1970) },schedule.taskSessionID])
         if let session = schedule.taskSessionID, let native = schedule.nativeSessionID {
           try toolsExecuteUnlocked("UPDATE harness_sessions SET native_session_id=? WHERE conversation_id=? AND remote_workspace_id=?",
             [native,session,workspaceID.uuidString.lowercased()])

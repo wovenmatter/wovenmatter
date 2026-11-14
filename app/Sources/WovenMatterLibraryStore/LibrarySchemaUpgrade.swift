@@ -148,6 +148,8 @@ extension WorkspaceDatabaseConnection {
     "workspace_coordinator", "workspace_delivery_event", "workspace_timer_due",
     "usage_events_dedupe_idx", "usage_events_timestamp_idx", "usage_events_harness_idx",
     "usage_events_model_idx", "usage_events_route_idx", "usage_events_source_idx",
+    // Indexes over columns the conversion renames or moves.
+    "bot_conversation_entries_conversation", "calendar_items_due", "calendar_runs_event",
   ]
 
   /// Columns renamed in place, by their table's current name.
@@ -158,6 +160,14 @@ extension WorkspaceDatabaseConnection {
     // The device that owns the agent: the Mac that created it, or the
     // workspace owner for a remote harness.
     ("agents", "authority_device_id", "owner_device_id"),
+    // A bot runtime's own number for a conversation, its parent and the
+    // entry a thread forked at. `conversation_id` names a library
+    // conversation everywhere else, and peer sync reads it as one.
+    ("bot_conversations", "conversation_id", "runtime_conversation_id"),
+    ("bot_conversations", "parent_conversation_id", "parent_runtime_conversation_id"),
+    ("bot_conversations", "forked_at", "forked_at_entry_id"),
+    ("bot_conversations", "pinned", "is_pinned"),
+    ("bot_conversation_entries", "conversation", "bot_conversation_id"),
   ]
 
   /// Columns dropped, by their table's current name. The six per-row columns
@@ -198,8 +208,10 @@ extension WorkspaceDatabaseConnection {
     ("activity_summaries", ["source_kind", "source_id", "activity_id"]),
     // An accepted analytics event is kept only to deduplicate its ID.
     ("product_analytics_events", ["payload", "status"]),
+    // `next_fire_at` and `task_session_id` are the running device's own
+    // state now (`calendar_schedules`).
     ("calendar_items", ["user_id", "agent_codename", "pinned_folder_id", "delivery_folder_id", "schedule_label",
-                        "origin_device_id"]),
+                        "origin_device_id", "next_fire_at", "task_session_id"]),
     // A whole transcript in one shared row; its rows hold it now.
     ("execution_conversations", ["transcript"]),
     // Bytes in shared rows; the chunk store holds them, named by `sha256`.
@@ -359,6 +371,15 @@ extension WorkspaceDatabaseConnection {
       }
       try addTranscriptColumnsUnlocked(tables: tables, columns: columns, bookkeeping: bookkeeping)
       try moveChunkBytesToFilesUnlocked(tables: tables, columns: columns, bookkeeping: bookkeeping)
+      // When a calendar item's task next fires, and the session it reuses,
+      // become the state of the device that runs it (`calendar_schedules`).
+      if tables.contains("calendar_items"), try columns("calendar_items").contains("next_fire_at") {
+        try executeUnlocked(Self.calendarSchedulesSQL + """
+          INSERT OR REPLACE INTO calendar_schedules(item_id,next_fire_at,task_session_id,item_updated_at)
+          SELECT id,next_fire_at,task_session_id,updated_at FROM calendar_items;
+          """)
+        tables.insert("calendar_schedules")
+      }
       for (table, dropped) in Self.droppedLibraryColumns where tables.contains(table) {
         let present = try columns(table), gone = dropped.filter(present.contains)
         guard !gone.isEmpty else { continue }
@@ -389,6 +410,9 @@ extension WorkspaceDatabaseConnection {
         "SELECT 1 AS present FROM sqlite_master WHERE name='agents' AND instr(sql,'''openclaw''')>0", values: []).isEmpty == false {
         try rebuildCoreTableUnlocked("agents")
       }
+      // Runs take a local order that is never renumbered (`runs.ordinal`);
+      // each keeps its rowid as it, so the fences goals hold stay right.
+      if tables.contains("runs"), !(try columns("runs")).contains("ordinal") { try rebuildCoreTableUnlocked("runs") }
       // Last, once every recorded row has its final columns.
       try reducePeerTombstonesUnlocked(bookkeeping: bookkeeping)
       try executeUnlocked("PRAGMA user_version=\(Self.librarySchemaVersion)")
@@ -754,7 +778,8 @@ extension WorkspaceDatabaseConnection {
   }
 
   /// Recreates a table from its current declaration in `sql` and copies its
-  /// rows, rowids included. Nothing references these tables by foreign key.
+  /// rows, rowids included. Foreign keys are off during the conversion, and
+  /// a table that references one of these names it, so the reference holds.
   private func rebuildCoreTableUnlocked(_ table: String, from sql: String = coreTablesSQL) throws {
     guard let start = sql.range(of: "CREATE TABLE IF NOT EXISTS \(table) ("),
           let end = sql.range(of: ");", range: start.upperBound..<sql.endIndex) else {

@@ -225,6 +225,64 @@ import WovenMatterCore
   /// releases left behind, as the maintainer's own library does: empty
   /// OpenClaw, dashboard, companion and usage-limit tables, a nullable
   /// `library_id`, and rows the app used to repair each time it read them.
+  /// What v0.4.2 kept in shapes this build changed: a calendar item's task
+  /// schedule becomes this device's own state, bot conversations keep their
+  /// values under the new column names, and every run keeps its place in
+  /// this device's run order, which goals hold and `VACUUM` must not move.
+  @Test func aV042LibraryKeepsItsSchedulesBotConversationsAndRunOrder() async throws {
+    let upgraded = try v042Library(); defer { upgraded.remove() }
+    try PersistenceSQL(url: upgraded.databaseURL).execute("""
+      INSERT INTO dashboard_calendar_items(id,kind,title,starts_at,created_at,updated_at,calendar_json,next_fire_at,task_session_id)
+        VALUES('cal-1','event','Daily report','2026-01-02T09:00:00.000Z','2026-01-01T00:00:00.000Z','2026-01-01T08:00:00.000Z','{}',1767344400.5,'task-session');
+      INSERT INTO bot_conversations(id,machine_id,bot_id,bot_name,conversation_id,kind,parent_conversation_id,forked_at,title,pinned,created_at,updated_at)
+        VALUES('m:b:2','m','b','Helper',2,'thread',1,7,'Thread',1,'2026-01-01T00:00:00Z','2026-01-01T00:00:00Z');
+      INSERT INTO bot_conversation_entries(id,conversation,entry_id,role,text,created_at)
+        VALUES('m:b:9','m:b:2',9,'user','Hello','2026-01-01T00:00:00Z');
+      UPDATE dashboard_runs SET rowid=rowid+100 WHERE id='dashboard-run';
+      CREATE TABLE fixture_run_order AS SELECT rowid AS place,id FROM dashboard_runs;
+      """)
+    // The peer bookkeeping v0.4.2's triggers wrote for those two rows.
+    let origin = "5ad85cf8-9a5e-4bc5-b320-5a705c1e5f04"
+    func recorded(_ table: String, _ id: String, _ row: String, clock: Int) -> String {
+      let payload = #"{"table":"\#(table)","key":"[\"\#(id)\"]","row":{\#(row)},"deleted":false,"clock":\#(clock),"origin":"\#(origin)","vector":{"\#(origin)":\#(clock)}}"#
+        .replacingOccurrences(of: "'", with: "''")
+      return "INSERT INTO paired_library_changes(payload) VALUES('\(payload)');"
+        + "INSERT INTO paired_library_rows VALUES('\(table)','[\"\(id)\"]','\(payload)');"
+    }
+    try PersistenceSQL(url: upgraded.databaseURL).execute(
+      recorded("dashboard_calendar_items", "cal-1", #""id":{"type":"text","value":"cal-1"},"title":{"type":"text","value":"Daily report"},"next_fire_at":{"type":"real","value":"1767344400.5"},"task_session_id":{"type":"text","value":"task-session"}"#, clock: 9001)
+      + recorded("bot_conversations", "m:b:2", #""id":{"type":"text","value":"m:b:2"},"conversation_id":{"type":"integer","value":"2"},"parent_conversation_id":{"type":"integer","value":"1"},"forked_at":{"type":"integer","value":"7"},"pinned":{"type":"integer","value":"1"}"#, clock: 9002))
+    _ = try UsageStore(databaseURL: upgraded.databaseURL)
+    let library = try await WorkspaceDatabase(url: upgraded.databaseURL)
+
+    let schedule = try await row(library, "SELECT next_fire_at,task_session_id,item_updated_at FROM calendar_schedules WHERE item_id='cal-1'")
+    #expect(schedule["next_fire_at"]?.doubleValue == 1767344400.5 && schedule["task_session_id"]?.stringValue == "task-session")
+    #expect(schedule["item_updated_at"]?.stringValue == "2026-01-01T08:00:00.000Z")
+    let item = try await rows(library, "SELECT payload FROM peer_sync_versions WHERE table_name='calendar_items' AND record_key='[\"cal-1\"]'")
+    #expect(item.count == 1)
+    #expect(item.first?["payload"]?.stringValue?.contains("next_fire_at") == false)
+
+    let conversation = try await row(library, "SELECT runtime_conversation_id,parent_runtime_conversation_id,forked_at_entry_id,is_pinned FROM bot_conversations WHERE id='m:b:2'")
+    #expect(conversation["runtime_conversation_id"]?.intValue == 2 && conversation["parent_runtime_conversation_id"]?.intValue == 1)
+    #expect(conversation["forked_at_entry_id"]?.intValue == 7 && conversation["is_pinned"]?.intValue == 1)
+    #expect(try await library.botConversationEntries(id: "m:b:2").map(\.text) == ["Hello"])
+    let shared = try await row(library, "SELECT payload FROM peer_sync_versions WHERE table_name='bot_conversations'")["payload"]?.stringValue ?? ""
+    for name in ["runtime_conversation_id", "parent_runtime_conversation_id", "forked_at_entry_id", "is_pinned"] { #expect(shared.contains("\"\(name)\"")) }
+    for name in ["conversation_id", "parent_conversation_id", "forked_at", "pinned"] { #expect(!shared.contains("\"\(name)\"")) }
+
+    // Every run kept its place, and a VACUUM leaves it there.
+    let moved = "SELECT count(*) AS n FROM runs r JOIN fixture_run_order o ON o.id=r.id WHERE r.ordinal IS NOT o.place"
+    #expect(try await row(library, "SELECT count(*) AS n FROM runs")["n"]?.intValue == 5)
+    #expect(try await row(library, moved)["n"]?.intValue == 0)
+    try await library.write { try $0.executeUnlocked("DELETE FROM runs WHERE id='a1a1a1a1-0000-4000-8000-000000000002'; VACUUM") }
+    #expect(try await row(library, moved)["n"]?.intValue == 0)
+    // A new run never takes a place a removed one held.
+    try await library.write { try $0.executeUnlocked("DELETE FROM runs WHERE id='dashboard-run'; INSERT INTO runs(id,conversation_id) VALUES('later','dashboard-chat')") }
+    let last = try await row(library, "SELECT ordinal FROM runs WHERE id='later'")["ordinal"]?.intValue ?? 0
+    let highest = try await row(library, "SELECT max(place) AS place FROM fixture_run_order")["place"]?.intValue ?? 0
+    #expect(last > highest)
+  }
+
   @Test func aLongLivedV042LibraryLosesWhatOlderReleasesLeftBehind() async throws {
     let upgraded = try v042Library(), fresh = try PersistenceFixture()
     defer { upgraded.remove(); fresh.remove() }

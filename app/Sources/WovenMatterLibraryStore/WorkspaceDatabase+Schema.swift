@@ -24,6 +24,11 @@ extension WorkspaceDatabaseConnection {
   ///   `details_record_id`, `is_transient`, `sequence` and `completed_at`;
   ///   `content` is then the owner's projection as it sent it.
   /// An empty `status` or `created_at` is one the owner did not send.
+  ///
+  /// `runs.ordinal` is the order in which this device recorded its runs. It
+  /// is local (peers exchange runs by `id`) and never reused or renumbered,
+  /// unlike an implicit rowid, which `VACUUM` may change: a goal's run
+  /// fences (`WorkspaceGoal.enrolledRunSequence`) hold it.
   static let coreTablesSQL = """
     CREATE TABLE IF NOT EXISTS surface_profiles (
       id TEXT PRIMARY KEY, device_id TEXT, theme TEXT NOT NULL DEFAULT 'green',
@@ -121,7 +126,8 @@ extension WorkspaceDatabaseConnection {
       revision_snapshot TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL DEFAULT ''
     );
     CREATE TABLE IF NOT EXISTS runs (
-      id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL DEFAULT '', agent_id TEXT,
+      ordinal INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT NOT NULL UNIQUE,
+      conversation_id TEXT NOT NULL DEFAULT '', agent_id TEXT,
       agent_codename TEXT NOT NULL DEFAULT '',
       native_session_id TEXT NOT NULL DEFAULT '', user_message_id TEXT,
       assistant_message_id TEXT, status TEXT NOT NULL DEFAULT 'queued', error TEXT,
@@ -170,8 +176,7 @@ extension WorkspaceDatabaseConnection {
       id TEXT PRIMARY KEY, kind TEXT NOT NULL DEFAULT '',
       title TEXT NOT NULL DEFAULT '', description TEXT, starts_at TEXT NOT NULL DEFAULT '',
       ends_at TEXT, all_day INTEGER NOT NULL DEFAULT 0, status TEXT NOT NULL DEFAULT 'scheduled',
-      source TEXT NOT NULL DEFAULT 'user', calendar_json TEXT, next_fire_at REAL,
-      task_session_id TEXT, deleted_at TEXT,
+      source TEXT NOT NULL DEFAULT 'user', calendar_json TEXT, deleted_at TEXT,
       created_at TEXT NOT NULL DEFAULT '', updated_at TEXT NOT NULL DEFAULT ''
     );
     CREATE TABLE IF NOT EXISTS workspace_revision (

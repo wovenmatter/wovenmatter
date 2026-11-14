@@ -79,12 +79,13 @@ extension WorkspaceDatabaseConnection {
     try withLock { try executeUnlocked("""
       CREATE TABLE IF NOT EXISTS bot_conversations(
         id TEXT PRIMARY KEY, machine_id TEXT NOT NULL, bot_id TEXT NOT NULL, bot_name TEXT NOT NULL,
-        conversation_id INTEGER NOT NULL, kind TEXT NOT NULL, parent_conversation_id INTEGER, forked_at INTEGER,
-        title TEXT, pinned INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, deleted_at TEXT);
+        runtime_conversation_id INTEGER NOT NULL, kind TEXT NOT NULL, parent_runtime_conversation_id INTEGER, forked_at_entry_id INTEGER,
+        title TEXT, is_pinned INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, deleted_at TEXT);
       CREATE TABLE IF NOT EXISTS bot_conversation_entries(
-        id TEXT PRIMARY KEY, conversation TEXT NOT NULL, entry_id INTEGER NOT NULL,
+        id TEXT PRIMARY KEY, bot_conversation_id TEXT NOT NULL, entry_id INTEGER NOT NULL,
         role TEXT NOT NULL, text TEXT NOT NULL, error TEXT, stopped INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL);
-      CREATE INDEX IF NOT EXISTS bot_conversation_entries_conversation ON bot_conversation_entries(conversation, entry_id);
+      CREATE INDEX IF NOT EXISTS bot_conversation_entries_conversation ON bot_conversation_entries(bot_conversation_id, entry_id);
+      CREATE INDEX IF NOT EXISTS bot_conversations_machine ON bot_conversations(machine_id, bot_id);
       """) }
   }
 
@@ -121,12 +122,12 @@ extension WorkspaceDatabase {
       try connection.transaction {
         for conversation in batch.conversations {
           try connection.toolsExecuteUnlocked("""
-            INSERT INTO bot_conversations(id,machine_id,bot_id,bot_name,conversation_id,kind,parent_conversation_id,forked_at,title,pinned,created_at,updated_at)
+            INSERT INTO bot_conversations(id,machine_id,bot_id,bot_name,runtime_conversation_id,kind,parent_runtime_conversation_id,forked_at_entry_id,title,is_pinned,created_at,updated_at)
             VALUES(?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET bot_name=excluded.bot_name,kind=excluded.kind,
-              parent_conversation_id=excluded.parent_conversation_id,forked_at=excluded.forked_at,title=excluded.title,
-              pinned=excluded.pinned,updated_at=excluded.updated_at,deleted_at=NULL
-            WHERE bot_name IS NOT excluded.bot_name OR kind IS NOT excluded.kind OR parent_conversation_id IS NOT excluded.parent_conversation_id
-              OR forked_at IS NOT excluded.forked_at OR title IS NOT excluded.title OR pinned IS NOT excluded.pinned OR deleted_at IS NOT NULL
+              parent_runtime_conversation_id=excluded.parent_runtime_conversation_id,forked_at_entry_id=excluded.forked_at_entry_id,title=excluded.title,
+              is_pinned=excluded.is_pinned,updated_at=excluded.updated_at,deleted_at=NULL
+            WHERE bot_name IS NOT excluded.bot_name OR kind IS NOT excluded.kind OR parent_runtime_conversation_id IS NOT excluded.parent_runtime_conversation_id
+              OR forked_at_entry_id IS NOT excluded.forked_at_entry_id OR title IS NOT excluded.title OR is_pinned IS NOT excluded.is_pinned OR deleted_at IS NOT NULL
             """, [WorkspaceDatabaseConnection.botKey(machine, bot, conversation.conversationId), machine, bot, name,
                   String(conversation.conversationId), conversation.kind, conversation.parentConversationId.map { String($0) },
                   conversation.forkedAt.map { String($0) }, conversation.title.map { String($0.prefix(256)) },
@@ -139,10 +140,10 @@ extension WorkspaceDatabase {
           let existing = try connection.historyRowsUnlocked("SELECT 1 FROM bot_conversation_entries WHERE id=?", values: [id]).first
           // Only a changed row is rewritten, so a resent batch adds no sync traffic.
           try connection.toolsExecuteUnlocked("""
-            INSERT INTO bot_conversation_entries(id,conversation,entry_id,role,text,error,stopped,created_at) VALUES(?,?,?,?,?,?,?,?)
-            ON CONFLICT(id) DO UPDATE SET conversation=excluded.conversation,role=excluded.role,text=excluded.text,
+            INSERT INTO bot_conversation_entries(id,bot_conversation_id,entry_id,role,text,error,stopped,created_at) VALUES(?,?,?,?,?,?,?,?)
+            ON CONFLICT(id) DO UPDATE SET bot_conversation_id=excluded.bot_conversation_id,role=excluded.role,text=excluded.text,
               error=excluded.error,stopped=excluded.stopped
-            WHERE conversation IS NOT excluded.conversation OR role IS NOT excluded.role OR text IS NOT excluded.text
+            WHERE bot_conversation_id IS NOT excluded.bot_conversation_id OR role IS NOT excluded.role OR text IS NOT excluded.text
               OR error IS NOT excluded.error OR stopped IS NOT excluded.stopped
             """, [id, conversation, String(entry.id), entry.role, entry.text, entry.error, entry.stopped == true ? "1" : "0", entry.createdAt])
           if existing == nil { inserted += 1 }
@@ -165,14 +166,14 @@ extension WorkspaceDatabase {
     try await read { connection in
       try connection.withLock {
         try connection.historyRowsUnlocked("""
-          SELECT * FROM bot_conversations WHERE deleted_at IS NULL AND (? IS NULL OR machine_id=?) ORDER BY bot_name,bot_id,conversation_id
+          SELECT * FROM bot_conversations WHERE deleted_at IS NULL AND (? IS NULL OR machine_id=?) ORDER BY bot_name,bot_id,runtime_conversation_id
           """, values: [machineID?.lowercased(), machineID?.lowercased()]).compactMap { row in
           guard let o = row.objectValue, let id = o["id"]?.stringValue, let machine = o["machine_id"]?.stringValue,
-                let bot = o["bot_id"]?.stringValue, let conversation = o["conversation_id"]?.intValue else { return nil }
+                let bot = o["bot_id"]?.stringValue, let conversation = o["runtime_conversation_id"]?.intValue else { return nil }
           return BotConversationRecord(id: id, machineID: machine, botID: bot, botName: o["bot_name"]?.stringValue ?? "Bot",
             conversationID: conversation, kind: o["kind"]?.stringValue ?? "main",
-            parentConversationID: o["parent_conversation_id"]?.intValue, title: o["title"]?.stringValue,
-            pinned: o["pinned"]?.intValue == 1, updatedAt: o["updated_at"]?.stringValue ?? "")
+            parentConversationID: o["parent_runtime_conversation_id"]?.intValue, title: o["title"]?.stringValue,
+            pinned: o["is_pinned"]?.intValue == 1, updatedAt: o["updated_at"]?.stringValue ?? "")
         }
       }
     }
@@ -182,7 +183,7 @@ extension WorkspaceDatabase {
     try await read { connection in
       try connection.withLock {
         try connection.historyRowsUnlocked("""
-          SELECT * FROM (SELECT * FROM bot_conversation_entries WHERE conversation=? ORDER BY entry_id DESC LIMIT ?) ORDER BY entry_id
+          SELECT * FROM (SELECT * FROM bot_conversation_entries WHERE bot_conversation_id=? ORDER BY entry_id DESC LIMIT ?) ORDER BY entry_id
           """, values: [id, String(max(1, min(limit, 1_000)))]).compactMap { row in
           guard let o = row.objectValue, let key = o["id"]?.stringValue, let entry = o["entry_id"]?.intValue else { return nil }
           return BotConversationEntryRecord(id: key, entryID: entry, role: o["role"]?.stringValue ?? "assistant",

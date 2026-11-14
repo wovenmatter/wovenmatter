@@ -25,6 +25,53 @@ struct WorkspaceCalendarTests {
     #expect(run.sessionID == checkpoint.taskSessionID)
   }
 
+  /// A task's schedule is the state of the Mac that runs it
+  /// (`calendar_schedules`), not part of the shared calendar item. Running
+  /// the task leaves the shared item as it was, so an edit made on another
+  /// Mac meanwhile is not competing with a newer version and applies; the
+  /// owner then schedules the edited task as it would its own edit.
+  @Test func runningATaskLeavesTheSharedItemAloneAndAnotherMacsEditReschedulesIt() async throws {
+    let (owner, a) = try await fixture(), (other, b) = try await fixture(); defer { a.remove(); b.remove() }
+    let ownerID = try await owner.libraryIdentity().hostDeviceID, otherID = try await other.libraryIdentity().hostDeviceID
+    func send(_ source: WorkspaceDatabase, _ id: String, to target: WorkspaceDatabase) async throws {
+      var cursor = try await target.peerSyncCursors(id).pulled
+      for _ in 0..<1000 {
+        let page = try await source.pairedLibraryPage(after: cursor)
+        try await target.receivePairedLibrary(page, from: id)
+        cursor = page.cursor
+        if !page.hasMore { return }
+      }
+    }
+    func itemVersions(_ database: WorkspaceDatabase) async throws -> [JSONValue] {
+      try await database.read { try $0.historyRowsUnlocked("SELECT origin,clock FROM peer_sync_versions WHERE table_name='calendar_items' ORDER BY cursor", values: []) }
+    }
+    let start = date("2026-09-01T13:00:00Z")
+    let id = try await insert(owner, start: start, repeatRule: .init(unit: .day))
+    try await send(owner, ownerID, to: other)
+    #expect(try await other.dueCalendarRuns(now: start).isEmpty)
+
+    // The other Mac renames the task and moves it an hour later while the owner runs it.
+    var draft = WorkspaceCalendarDraft(try await #require(other.calendarItems().first))
+    draft.title = "Renamed elsewhere"; draft.startsAt = start.addingTimeInterval(3_600)
+    try await other.saveCalendarEvent(id: id, draft: draft, creating: false, now: start.addingTimeInterval(60))
+    let before = try await itemVersions(owner)
+    let run = try await #require(owner.dueCalendarRuns(now: start).first)
+    try await accept(run, in: owner, now: start)
+    #expect(try await owner.dueCalendarRuns(now: start.addingTimeInterval(30)).isEmpty)
+    #expect(try await itemVersions(owner) == before)
+
+    // The edit applies, and the owner fires the series at its new time, in its session.
+    try await send(other, otherID, to: owner)
+    #expect(try await owner.calendarItems().first?.title == "Renamed elsewhere")
+    #expect(try await owner.dueCalendarRuns(now: start.addingTimeInterval(120)).isEmpty)
+    let next = try await #require(owner.dueCalendarRuns(now: start.addingTimeInterval(3_600)).first)
+    #expect(next.scheduledAt == start.addingTimeInterval(3_600) && next.title == "Renamed elsewhere")
+    #expect(next.sessionID == run.sessionID)
+    try await send(owner, ownerID, to: other)
+    #expect(try await other.calendarItems().first?.title == "Renamed elsewhere")
+    #expect(try await other.dueCalendarRuns(now: start.addingTimeInterval(3_600)).isEmpty)
+  }
+
   @Test func allDayAndMultiDayEventsOverlapTheirVisibleDays() async throws {
     let (db, persistence) = try await fixture(); defer { persistence.remove() }
     let draft = WorkspaceCalendarDraft(title: "Trip", startsAt: date("2026-09-20T14:00:00Z"), endsAt: date("2026-09-23T14:00:00Z"),
