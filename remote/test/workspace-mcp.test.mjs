@@ -39,30 +39,30 @@ test('workspace browser runs locally without library authority and returns inlin
 })
 
 test('Page tools follow the Notes permission and delegate to the library that owns the document',async t=>{
-  const requests=[],f=await fixture(t,{fetchImpl:async(url,options)=>{requests.push({url,body:JSON.parse(options.body),headers:options.headers});return {ok:true,status:200,text:async()=>JSON.stringify({jsonrpc:'2.0',id:'forwarded',result:{content:[{type:'text',text:'page'}]}})}}})
-  const listed=await f.service.mcp.handle(f.scope,{jsonrpc:'2.0',id:'discover',method:'tools/list'})
+  const offline=await fixture(t)
+  const listed=await offline.service.mcp.handle(offline.scope,{jsonrpc:'2.0',id:'discover',method:'tools/list'})
   const names=listed.result.tools.map(tool=>tool.name)
   for(const name of ['list','create','read','update','add_component','update_component','move_component','remove_component','link_session','unlink_session'])assert.ok(names.includes('woven_pages_'+name),name)
   for(const name of ['woven_notes_artifact_state','woven_notes_artifact_state_edit'])assert.ok(names.includes(name),name)
   assert.ok(!names.includes('woven_notes_canvas'))
   assert.ok(!names.some(name=>name.startsWith('woven_boards_')))
-  // Without a library connection a Page is unavailable, never served from a local copy.
-  assert.equal((await f.call('woven_pages_list')).error.code,-32602)
-  const own=f.service.descriptor()
-  f.service.mcp.configureLibrary({grantID:randomUUID(),libraryID:own.libraryID,workspaceID:own.id,executionDeviceID:own.executionDeviceID,endpointURL:'https://central.example.ts.net/wovenmatter/mcp/workspace',bearerToken:'private-library-mcp-grant'.repeat(2)})
+  // Without a Mac holding the library a Page is unavailable, never served from a local copy.
+  assert.equal((await offline.call('woven_pages_list')).error.code,-32602)
+  const requests=[],f=await fixture(t,{mac:async(url,options)=>{requests.push({url,options});return {status:200,body:{jsonrpc:'2.0',id:'forwarded',result:{content:[{type:'text',text:'page'}]}}}}})
+  const pages=()=>requests.filter(item=>item.options.body?.params?.name?.startsWith('woven_pages_'))
   const requestID=randomUUID()
   const input={pageID:randomUUID(),componentID:'task',componentRevision:'r',status:'done',requestID}
   assert.equal((await f.call('woven_pages_update_component',input)).result.content[0].text,'page')
-  assert.equal(requests.length,1)
-  assert.equal(requests[0].body.params.name,'woven_pages_update_component')
-  assert.deepEqual(requests[0].body.params.arguments,input)
-  assert.equal(requests[0].headers['x-woven-conversation-id'],f.id)
-  assert.ok(requests[0].headers['x-woven-enabled-groups'].split(',').includes('notes'))
+  assert.equal(pages().length,1)
+  assert.equal(String(pages()[0].url),'https://mac.example.ts.net/wovenmatter/mcp/workspace')
+  assert.deepEqual(pages()[0].options.body.params.arguments,input)
+  assert.equal(pages()[0].options.headers['x-woven-conversation-id'],f.id)
+  assert.ok(pages()[0].options.headers['x-woven-enabled-groups'].split(',').includes('notes'))
   // Attribution comes from the host, so the schema refuses it before anything is sent.
   assert.equal((await f.call('woven_pages_update_component',{...input,updatedBy:{kind:'user'}})).error.code,-32602)
   await f.command('workspace',{conversationID:f.id,workspaceAction:{sessionTools:{id:f.id,enabled:['goals']}}})
   assert.equal((await f.call('woven_pages_read',{pageID:randomUUID()})).error.code,-32602)
-  assert.equal(requests.length,1)
+  assert.equal(pages().length,1)
 })
 
 test('session and outside-agent MCP credentials preserve caller scope, readonly access, and current tool policy',async t=>{
