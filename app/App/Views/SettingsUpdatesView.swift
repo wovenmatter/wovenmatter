@@ -10,6 +10,9 @@ struct SettingsUpdatesView: View {
     var backTitle = "Settings"
     let onBack: () -> Void
     @State private var updates = FleetUpdatesModel.shared
+    /// The app's own resources don't change while it runs.
+    private static let bundled = BundledComponents.onThisMac()
+    private static let linuxServerTools = BundledComponents.linuxServer()
 
     var body: some View {
         SettingsPage(
@@ -26,7 +29,9 @@ struct SettingsUpdatesView: View {
                 SettingsNote("Update everything updates Woven Matter on every device first, then every harness. Update Woven Matter and Update harnesses do one half.")
                 SettingsNote("Linux servers get the server release that comes with this Mac's Woven Matter. When this Mac is behind the newest release, it updates first and restarts, then the update continues with your other devices and harnesses.")
                 SettingsNote("Before a Linux workspace runs a harness installer, you review its download. One review covers every download in the update.")
-                SettingsNote("If an update would stop chats that are running, you're asked first.")
+                SettingsNote("Update bots moves every bot to the current container image, so Node, Playwright and Chromium inside bots update too. Each bot is snapshotted first and rolled back if it fails.")
+                SettingsNote("If an update would stop chats that are running, or replace bot containers, you're asked first.")
+                SettingsNote("iPhone and iPad update through TestFlight.")
             }
         }
         .task {
@@ -39,7 +44,7 @@ struct SettingsUpdatesView: View {
             Button("Update now", role: .destructive) { updates.confirmBusy() }
             Button("Cancel", role: .cancel) { updates.busyConfirmation = nil }
         } message: { confirmation in
-            Text(confirmation.items.map(\.text).joined(separator: "\n") + "\n\nUpdating now stops this work.")
+            Text(confirmation.items.map(\.text).joined(separator: "\n\n"))
         }
         .confirmationDialog(reviewTitle, isPresented: Binding(
             get: { updates.review != nil }, set: { if !$0 { updates.cancelReview() } }
@@ -130,6 +135,11 @@ struct SettingsUpdatesView: View {
             }
             if let machine = model.bots.thisMachine, machine.versions.runtime != nil { bots(machine) }
             harnesses(on: .thisMac)
+            if !Self.bundled.isEmpty {
+                SettingsSummaryRow("Included with Woven Matter", value: "Updates with the app") {
+                    ForEach(Self.bundled) { SettingsValueRow(label: $0.name, value: $0.version) }
+                }
+            }
         }
     }
 
@@ -158,6 +168,9 @@ struct SettingsUpdatesView: View {
                     }
                 }
                 if machine.versions.runtime != nil { bots(machine) }
+                if machine.kind == .linux, let tools = Self.linuxServerTools {
+                    SettingsNote((updates.deviceIsOutdated(machine) ? "Updating the server brings " : "With the server: ") + tools + ".")
+                }
                 if let workspace = updates.workspace(for: machine) {
                     harnesses(on: .workspace(workspace.id))
                 } else {
@@ -178,7 +191,12 @@ struct SettingsUpdatesView: View {
     private func bots(_ machine: BotMachine) -> some View {
         let outdated = updates.botsAreOutdated(machine)
         let busy = updates.running && updates.currentItem == machine.id
-        return SettingsRow(title: "Bots", detail: machine.versions.runtime.map { "Runtime \($0)" }) {
+        let session = model.bots.session(for: machine.id)
+        let stale = updates.staleBots(machine)
+        let detail = [machine.versions.runtime.map { "Runtime \($0)" }, session?.runtimeStatus?.image?.tools,
+                      stale == 0 ? nil : stale == 1 ? "1 bot on an older image" : "\(stale) bots on an older image"]
+            .compactMap { $0 }.joined(separator: " · ")
+        return SettingsRow(title: "Bots", detail: detail.isEmpty ? nil : detail) {
             if busy || machine.updating { ProgressView().controlSize(.small) }
             SettingsStatus(outdated ? "Update available" : "Up to date", tone: outdated ? .warning : .good)
             Button("Update") { updates.start(.bots(machineID: machine.id)) }
@@ -238,10 +256,7 @@ struct SettingsUpdatesView: View {
 
     // MARK: Dialogs
 
-    private var busyTitle: String {
-        let count = updates.busyConfirmation?.items.count ?? 0
-        return count == 1 ? "Something is still running" : "\(count) things are still running"
-    }
+    private var busyTitle: String { "Before you update" }
 
     private var reviewTitle: String {
         let count = updates.review?.items.count ?? 0

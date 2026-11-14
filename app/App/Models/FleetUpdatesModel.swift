@@ -30,6 +30,8 @@ struct FleetHarness: Identifiable, Equatable {
     enum Kind: Hashable {
         case runtime(AgentRuntimeKind)
         case piDurableSDK
+        /// The Executor runtime behind Woven MCP's app tools, wherever it runs.
+        case executor
     }
     let location: Location
     let kind: Kind
@@ -46,7 +48,7 @@ struct FleetHarness: Identifiable, Equatable {
         case .workspace(let id): id.uuidString.lowercased()
         case .member(let id): "member-" + id.lowercased()
         }
-        let item = switch kind { case .runtime(let kind): kind.rawValue; case .piDurableSDK: "pi-durable-sdk" }
+        let item = switch kind { case .runtime(let kind): kind.rawValue; case .piDurableSDK: "pi-durable-sdk"; case .executor: "executor" }
         return place + "/" + item
     }
 }
@@ -119,6 +121,8 @@ final class FleetUpdatesModel {
     private(set) var memberInventories: [String: FleetMemberInventory] = [:]
     private(set) var memberErrors: [String: String] = [:]
     private(set) var loadingMembers: Set<String> = []
+    private(set) var executor: ExecutorVersions?
+    private(set) var executorError: String?
 
     @ObservationIgnored private weak var model: ApplicationModel?
     /// This run continues one that updated this Mac first.
@@ -192,10 +196,28 @@ final class FleetUpdatesModel {
         return deviceIsOutdated(machine)
     }
 
-    /// Bots on a machine whose runtime is older than the newest one on any machine.
+    /// Bots on a machine whose runtime is older than the newest one on any machine, or
+    /// with bots still on an older container image.
     func botsAreOutdated(_ machine: BotMachine) -> Bool {
         guard let model else { return false }
-        return model.bots.versionReport.outdated.contains { $0.id == "bots:" + machine.id }
+        return model.bots.versionReport.outdated.contains { $0.id == "bots:" + machine.id } || staleBots(machine) > 0
+    }
+
+    /// Bots whose containers came from an older bot image.
+    func staleBots(_ machine: BotMachine) -> Int {
+        model?.bots.session(for: machine.id)?.runtimeStatus?.image?.staleBots ?? 0
+    }
+
+    private func refreshExecutor() async {
+        guard let model, model.agentTools?.settings.executor != nil else { executor = nil; return }
+        do { executor = try await model.executorVersions(); executorError = nil }
+        catch { executorError = error.localizedDescription }
+    }
+
+    /// Asks each machine's bots runtime what its containers carry.
+    private func refreshBotImages() async {
+        guard let model else { return }
+        for machine in model.bots.botMachines { await model.bots.session(for: machine.id)?.refreshRuntimeStatus() }
     }
 
     /// Another machine whose harnesses this Mac reaches by signed request: every reachable
@@ -224,6 +246,15 @@ final class FleetUpdatesModel {
                                     error: failed ? model.runtimeFailureDetails[kind] ?? "The last update failed." : nil)
             }
             if let sdk = sdkRow(location: .thisMac, key: "local") { rows.insert(sdk, at: 0) }
+            if let executor, let config = model.agentTools?.settings.executor {
+                let setup = model.agentTools?.settings.executorSetup
+                let place = config.location == .remote ? " on \(config.host)" : ""
+                rows.append(FleetHarness(location: .thisMac, kind: .executor, name: "Executor" + place,
+                                         versions: "executor " + (executor.installed ?? "version unavailable")
+                                            + (executor.updateAvailable ? executor.latest.map { " → \($0)" } ?? "" : ""),
+                                         updateAvailable: executor.updateAvailable, checking: false,
+                                         updating: setup?.running == true, error: setup?.error ?? executorError))
+            }
             return rows
         case .workspace(let id):
             let remote = model.remoteWorkspaces
@@ -336,6 +367,8 @@ final class FleetUpdatesModel {
         if release == nil, releaseError == nil, !checking { Task { await checkRelease() } }
         Task {
             await model.bots.refresh()
+            await refreshBotImages()
+            if executor == nil { await refreshExecutor() }
             await refreshMembers(checkLatest: false, onlyMissing: true)
         }
     }
@@ -379,6 +412,8 @@ final class FleetUpdatesModel {
             }
         }
         await model.bots.refresh()
+        await refreshBotImages()
+        await refreshExecutor()
         await refreshMembers(checkLatest: true)
         await releaseCheck
         // Harness checks report through their own models; give them a moment to land.
@@ -521,6 +556,7 @@ final class FleetUpdatesModel {
             })
         }
         await refreshMembers(checkLatest: false)
+        await refreshBotImages()
         currentItem = nil
         resumedAfterUpdate = false
         await model.bots.refresh()
@@ -622,6 +658,14 @@ final class FleetUpdatesModel {
             for conversation in running where conversation.remoteWorkspaceID == nil {
                 add(conversation, "\(title(conversation)) is running on this Mac, which restarts to update.")
             }
+        }
+        // Moving bots to a new image replaces their containers; say so first.
+        for step in steps {
+            guard case .bots(let id, let name) = step,
+                  let machine = model.bots.machines.first(where: { $0.id == id }), staleBots(machine) > 0 else { continue }
+            let count = staleBots(machine)
+            let tools = model.bots.session(for: id)?.runtimeStatus?.image?.tools ?? "the current tools"
+            items.append(.init(id: "image:" + id, text: "\(count == 1 ? "1 bot" : "\(count) bots") on \(name) move to a new container image (\(tools)). Their files in /workspace stay; anything installed elsewhere in the container is replaced."))
         }
         for step in steps {
             guard case .linuxHost(let id, let name) = step,
@@ -759,6 +803,17 @@ final class FleetUpdatesModel {
             return await followMemberJob(machineID: machineID, item: kind.rawValue,
                                          .updateMemberHarness(machineID: machineID, kind: kind, sourceSHA256: preview?.sha256,
                                                               packageSpec: preview?.packageSpec, force: force))
+        case (_, .executor):
+            guard let tools = model.agentTools, let config = tools.settings.executor else { return "Executor isn't set up." }
+            do { try await tools.controlExecutor(.setup(config)) }
+            catch { return error.localizedDescription }
+            _ = await wait(timeout: .seconds(10)) { tools.settings.executorSetup?.running == true }
+            guard await wait(timeout: .seconds(900), until: { tools.settings.executorSetup?.running != true }) else {
+                return "It did not finish in time."
+            }
+            if let error = tools.settings.executorSetup?.error { return error }
+            await refreshExecutor()
+            return executor?.updateAvailable == true ? "It is still out of date." : nil
         case (.member(let machineID), .piDurableSDK):
             return await followMemberJob(machineID: machineID, item: "pi-durable-sdk", .updateMemberSDKs(machineID: machineID))
         case (_, .piDurableSDK):
@@ -860,4 +915,63 @@ struct FleetUpdateError: LocalizedError {
     let message: String
     init(_ message: String) { self.message = message }
     var errorDescription: String? { message }
+}
+
+/// Software that ships inside Woven Matter and updates only with it, read from the app's
+/// own resources so the page shows what this copy actually carries.
+enum BundledComponents {
+    struct Component: Identifiable, Equatable {
+        let name: String
+        let version: String
+        var id: String { name }
+    }
+
+    static func onThisMac(bundle: Bundle = .main) -> [Component] {
+        let resources = bundle.resourceURL, frameworks = bundle.privateFrameworksURL
+        var result: [Component] = []
+        func add(_ name: String, _ version: String?) { if let version, !version.isEmpty { result.append(.init(name: name, version: version)) } }
+        add("Chromium browser", frameworks.flatMap { plistVersion($0.appending(path: "Chromium Embedded Framework.framework/Resources/Info.plist")) }
+            .map { "CEF " + trimmed($0) })
+        add("Playwright", resources.flatMap { json($0.appending(path: "default-agent/node_modules/playwright-core/package.json"))?["version"] as? String })
+        add("Node", resources.flatMap { text($0.appending(path: "default-agent/.node-version")) })
+        add("Cua Driver (computer use)", resources.flatMap { json($0.appending(path: "Cua/cua-version.json"))?["version"] as? String })
+        if let guest = resources.flatMap({ json($0.appending(path: "WovenVM/guest-version.json")) }) {
+            let image = (guest["image"] as? [String: Any])?["serial"] as? String
+            let docker = ((guest["docker"] as? [String: Any])?["dockerCE"] as? String).map(debianVersion)
+            add("Bots VM", [image.map { "Ubuntu 26.04 (\($0))" }, docker.map { "Docker \($0)" }].compactMap { $0 }.joined(separator: " · "))
+        }
+        add("Sparkle updater", frameworks.flatMap { plistVersion($0.appending(path: "Sparkle.framework/Resources/Info.plist")) })
+        return result
+    }
+
+    /// What a Linux server gets from this Mac's release.
+    static func linuxServer(bundle: Bundle = .main) -> String? {
+        guard let record = bundle.resourceURL.flatMap({ json($0.appending(path: "remote/host/runtime-versions.json")) }) else { return nil }
+        let parts = [(record["nodeVersion"] as? String).map { "Node \($0)" },
+                     (record["playwrightVersion"] as? String).map { "Playwright \($0) with Chromium" },
+                     (record["dockerVersion"] as? String).map { "Docker Engine \($0)" }].compactMap { $0 }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    }
+
+    static func debianVersion(_ value: String) -> String {
+        let withoutEpoch = value.split(separator: ":", maxSplits: 1).last.map(String.init) ?? value
+        return withoutEpoch.split(separator: "-").first.map(String.init) ?? withoutEpoch
+    }
+
+    /// "156.0.30.0" → "156.0.30".
+    static func trimmed(_ version: String) -> String {
+        var parts = version.split(separator: ".").map(String.init)
+        while parts.count > 3, parts.last == "0" { parts.removeLast() }
+        return parts.joined(separator: ".")
+    }
+
+    private static func plistVersion(_ url: URL) -> String? {
+        (NSDictionary(contentsOf: url)?["CFBundleShortVersionString"] as? String)
+    }
+    private static func json(_ url: URL) -> [String: Any]? {
+        (try? Data(contentsOf: url)).flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
+    }
+    private static func text(_ url: URL) -> String? {
+        (try? String(contentsOf: url, encoding: .utf8))?.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
 }

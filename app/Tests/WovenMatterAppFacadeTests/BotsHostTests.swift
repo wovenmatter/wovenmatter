@@ -483,3 +483,26 @@ struct BotsHostTests {
         #expect(try await database.botConversations().isEmpty)
     }
 }
+
+@MainActor
+struct BundledComponentsTests {
+    @Test func versionsReadAsPeopleSeeThem() {
+        #expect(BundledComponents.debianVersion("5:29.9.3-1~ubuntu.26.04~resolute") == "29.9.3")
+        #expect(BundledComponents.debianVersion("2.4.2-4~ubuntu.26.04~resolute") == "2.4.2")
+        #expect(BundledComponents.trimmed("156.0.30.0") == "156.0.30")
+        #expect(BundledComponents.trimmed("2.10.1") == "2.10.1")
+        #expect(ExecutorVersions(installed: "2.3.0", latest: "2.4.1").updateAvailable)
+        #expect(!ExecutorVersions(installed: "2.4.1", latest: "2.4.1").updateAvailable)
+        #expect(!ExecutorVersions(installed: nil, latest: "2.4.1").updateAvailable)
+    }
+
+    @Test func imageToolsReadAsOneLine() {
+        let image = PiBotImageStatus(tag: "wovenmatter-bots:abc", base: "ubuntu:26.04", node: "26.13.1", playwright: "1.65.1", staleBots: 2)
+        #expect(image.tools == "Ubuntu 26.04 · Node 26.13.1 · Playwright 1.65.1 with Chromium")
+        let decoded = try? JSONDecoder().decode(PiBotRuntimeStatus.self, from: Data(
+            #"{"version":"0.1.0","environment":"mac-vm","bots":3,"image":{"tag":"t","node":"26.13.1","playwright":"1.65.1","staleBots":1}}"#.utf8))
+        #expect(decoded?.image?.staleBots == 1 && decoded?.image?.base == nil)
+        // A runtime from before image reporting still decodes.
+        #expect((try? JSONDecoder().decode(PiBotRuntimeStatus.self, from: Data(#"{"version":"0.1.0"}"#.utf8)))?.image == nil)
+    }
+}

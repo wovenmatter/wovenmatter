@@ -29,6 +29,12 @@ export interface BotEnvironmentAdapter {
   stop?(botId: string): Promise<void>;
   /** Snapshot, update in place, health-check, roll back on failure. */
   updateBot?(botId: string): Promise<import("./environment/container.ts").UpdateResult>;
+  /** The current bot image's tools, and the bots still on an older image. */
+  imageStatus?(): Promise<{
+    tag: string;
+    tools: import("./environment/images.ts").ImageTools;
+    staleBots: string[];
+  }>;
   /** Recreate the container from a clean image, keeping storage. */
   rebuild?(botId: string): Promise<void>;
   /**

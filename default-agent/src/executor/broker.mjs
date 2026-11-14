@@ -457,10 +457,22 @@ export class ExecutorBroker {
     for (const client of clients) await client.close().catch(() => {});
   }
   async stop() { await this.shutdownClients(); this.child?.kill('SIGTERM'); }
+  /** Settings → Updates: the runtime this connection runs, and the newest supported release. */
+  async versions() {
+    let installed = this.runtimeVersion ?? null;
+    const generation = this.server?.runtimeGeneration;
+    if (!installed && this.config?.location === 'local') {
+      const root = generation && uuid(generation) ? join(this.directory, 'runtime/generations', generation) : join(this.directory, 'runtime');
+      installed = JSON.parse(await readFile(join(root, 'node_modules/executor/package.json'), 'utf8').catch(() => '{}')).version ?? null;
+    }
+    const latest = await latestExecutorVersion(this.fetch).catch(() => null);
+    return { installed, latest };
+  }
   async handle(message) {
     switch (message.operation) {
       case 'configure': return this.configure(message.config, message.install);
       case 'inventory': return this.inventory();
+      case 'versions': return this.versions();
       case 'dashboard': return { url: await this.pair() };
       case 'scope': await this.scope(message.session, message.profiles, message.enabled); return {};
       case 'start': return this.start({ ...message, scope: await this.scope(message.session, message.profiles, true) });

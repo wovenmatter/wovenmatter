@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   BotEnvironment,
   containerName,
+  IMAGE_LABEL,
   snapshotImage,
   snapshotVolumeName,
   volumeName,
@@ -199,6 +200,23 @@ describe("bot containers on the Engine API", () => {
     expect(await readFile(join(engine.volumeDir(volumeName(BOT)), "state.txt"), "utf8")).toBe("pre-upgrade");
     // A bot that never had a container has nothing to update.
     expect(await env.updateBot("0b0b0b0b-0000-4000-8000-000000000099")).toMatchObject({ skipped: true });
+  });
+
+  it("moves a bot made from an older image to the current one, keeping its storage", async () => {
+    must(await shell().writeFile("keep.txt", "kept", ctx));
+    const container = engine.containers.get(containerName(BOT));
+    if (!container) throw new Error("no container");
+    container.labels[IMAGE_LABEL] = "woven-bots-test:older";
+    const before = await env.imageStatus();
+    expect(before.staleBots).toEqual([BOT]);
+    expect(before.tools.playwright).toMatch(/^\d+\.\d+/);
+    const moved = await env.updateBot(BOT);
+    expect(moved).toEqual({ botId: BOT, ok: true, movedToImage: true });
+    expect(engine.containers.get(containerName(BOT))?.image).toBe(await env.image());
+    expect(must(await shell().readTextFile("keep.txt", ctx))).toBe("kept");
+    expect((await env.imageStatus()).staleBots).toEqual([]);
+    // Already on the current image: the next update stays in place behind its snapshot.
+    expect(await env.updateBot(BOT)).toEqual({ botId: BOT, ok: true });
   });
 
   it("rebuilds from a clean image keeping storage, and purges everything", async () => {

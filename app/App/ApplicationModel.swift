@@ -4299,6 +4299,9 @@ extension ApplicationModel {
             if request.method == "runtime.snapshot" {
                 return .init(id: request.id, result: try JSONEncoder().encode(backendRuntimeSnapshot()))
             }
+            if request.method == "executor.versions" {
+                return .init(id: request.id, result: try JSONEncoder().encode(ExecutorVersionsReply(versions: try await executorVersions())))
+            }
             if request.method == "remoteWorkspaces.snapshot" {
                 return .init(id: request.id, result: try JSONEncoder().encode(remoteWorkspaces.backendSnapshot()))
             }

@@ -623,8 +623,29 @@ public struct PiBotRuntimeStatus: Codable, Equatable, Sendable {
     public let environment: String?
     /// How many bots this runtime has.
     public let bots: Int?
-    public init(version: String, environment: String? = nil, bots: Int? = nil) {
-        self.version = version; self.environment = environment; self.bots = bots
+    /// The bot container image: its tools, and how many bots are still on an older one.
+    public let image: PiBotImageStatus?
+    public init(version: String, environment: String? = nil, bots: Int? = nil, image: PiBotImageStatus? = nil) {
+        self.version = version; self.environment = environment; self.bots = bots; self.image = image
+    }
+}
+
+/// What every bot container gets from the current image. "Update bots" moves the bots
+/// in `staleBots` to it, so their Node, Playwright and Chromium update.
+public struct PiBotImageStatus: Codable, Equatable, Sendable {
+    public let tag: String
+    public let base: String?
+    public let node: String?
+    public let playwright: String?
+    public let staleBots: Int
+    public init(tag: String, base: String? = nil, node: String? = nil, playwright: String? = nil, staleBots: Int = 0) {
+        self.tag = tag; self.base = base; self.node = node; self.playwright = playwright; self.staleBots = staleBots
+    }
+
+    /// "Ubuntu 26.04 · Node 26.13.1 · Playwright 1.65.1 with Chromium"
+    public var tools: String {
+        [base.map { $0.replacingOccurrences(of: "ubuntu:", with: "Ubuntu ") }, node.map { "Node \($0)" },
+         playwright.map { "Playwright \($0) with Chromium" }].compactMap { $0 }.joined(separator: " · ")
     }
 }
 

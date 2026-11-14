@@ -40,6 +40,11 @@ export class RuntimeOperations {
     return this.#env;
   }
 
+  /** What `runtime.status` says about the bot image; nil where bots have no containers. */
+  async imageStatus() {
+    return (await this.#env?.imageStatus?.().catch(() => undefined)) ?? undefined;
+  }
+
   async environment(botId: string): Promise<EnvironmentSummary> {
     await this.#manager.record(botId);
     const env = this.#env;

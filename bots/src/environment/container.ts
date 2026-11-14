@@ -10,12 +10,18 @@ import {
   HELPER_MOUNT,
   helperArchive,
   IMAGE_DIR,
+  imageContext,
+  imageTag,
+  type ImageTools,
+  imageTools,
 } from "./images.ts";
 import { AgentConnection, type AgentProcess, RemoteExecutionEnv } from "./remote.ts";
 
 export const CONTAINER_USER = "bot";
 export const WORKSPACE = "/workspace";
 export const BOT_LABEL = "woven.bot";
+/** The bot image a container was made from (its tag), kept through in-place updates. */
+export const IMAGE_LABEL = "woven.bots.image";
 export const MACHINE_LABEL = "woven.bots.machine";
 /** The contract's fixed idle period: a bot stops fully after 15 minutes idle. */
 export const IDLE_STOP_MS = 15 * 60_000;
@@ -55,6 +61,8 @@ export type UpdateResult = {
   readonly ok: boolean;
   /** Nothing to update: the bot never had a container. */
   readonly skipped?: boolean;
+  /** It moved to the current bot image (new Node, Playwright, Chromium). */
+  readonly movedToImage?: boolean;
   readonly rolledBack?: boolean;
   readonly error?: string;
 };
@@ -172,6 +180,7 @@ export class BotEnvironment implements BotEnvironmentAdapter {
   readonly #lastUse = new Map<string, number>();
   #idleTimer: NodeJS.Timeout | undefined;
   #image: Promise<string> | undefined;
+  #currentTag: Promise<string> | undefined;
   #helper: Promise<string> | undefined;
   #closed = false;
 
@@ -271,7 +280,28 @@ export class BotEnvironment implements BotEnvironmentAdapter {
     return info.State.Running ? "running" : "stopped";
   }
 
-  async #create(botId: string, image: string, helper: string): Promise<void> {
+  /** The current bot image's tag, without building it. */
+  async currentImageTag(): Promise<string> {
+    this.#currentTag ??= imageContext(this.#options.imageDir ?? IMAGE_DIR).then((context) =>
+      imageTag(this.#options.imageName, context),
+    );
+    return this.#currentTag;
+  }
+
+  /** The current image's tools, and the bots whose containers came from an older image. */
+  async imageStatus(): Promise<{ tag: string; tools: ImageTools; staleBots: string[] }> {
+    const tag = await this.currentImageTag();
+    const staleBots: string[] = [];
+    for (const container of await this.#engine.listContainers(BOT_LABEL)) {
+      const botId = container.Labels[BOT_LABEL];
+      if (!botId || container.Labels[MACHINE_LABEL] !== this.#options.machineId) continue;
+      if (container.Labels[IMAGE_LABEL] !== tag) staleBots.push(botId);
+    }
+    return { tag, tools: await imageTools(this.#options.imageDir ?? IMAGE_DIR), staleBots };
+  }
+
+  /** `base` is the bot image the container descends from, recorded on it. */
+  async #create(botId: string, image: string, helper: string, base = image): Promise<void> {
     const memory = this.#options.memoryBytes;
     await this.#engine.createContainer(containerName(botId), {
       Image: image,
@@ -279,7 +309,7 @@ export class BotEnvironment implements BotEnvironmentAdapter {
       User: CONTAINER_USER,
       WorkingDir: WORKSPACE,
       Env: [`WOVEN_BOT_ID=${botId}`],
-      Labels: { ...this.#labels(), [BOT_LABEL]: botId, [HELPER_LABEL]: helper },
+      Labels: { ...this.#labels(), [BOT_LABEL]: botId, [HELPER_LABEL]: helper, [IMAGE_LABEL]: base },
       StopTimeout: STOP_SECONDS,
       HostConfig: {
         Mounts: [
@@ -548,7 +578,9 @@ export class BotEnvironment implements BotEnvironmentAdapter {
   /**
    * Update one bot in place: snapshot it (container commit + a copy of its storage, replacing the
    * previous snapshot), recreate it from that commit with the current helper, run the upgrade,
-   * health-check it, and roll back to the snapshot on any failure.
+   * health-check it, and roll back to the snapshot on any failure. A bot made from an older bot
+   * image moves to the current one instead (its storage stays), so its Node, Playwright and
+   * Chromium update too.
    */
   updateBot(botId: string): Promise<UpdateResult> {
     return this.#locked(botId, async () => {
@@ -556,8 +588,10 @@ export class BotEnvironment implements BotEnvironmentAdapter {
       const info = await this.#engine.inspectContainer(name);
       if (!info) return { botId, ok: true, skipped: true };
       const previousHelper = info.Config.Labels?.[HELPER_LABEL] ?? (await this.helper());
+      const previousBase = info.Config.Labels?.[IMAGE_LABEL] ?? "unknown";
       const wasRunning = info.State.Running;
       const baseImage = await this.image();
+      const moving = previousBase !== baseImage;
       this.#connections.get(botId)?.close();
       await this.#engine.stopContainer(name, STOP_SECONDS);
       // Snapshot: only the last one is kept.
@@ -571,7 +605,8 @@ export class BotEnvironment implements BotEnvironmentAdapter {
       try {
         const helper = await this.helper();
         await this.#engine.removeContainer(name);
-        await this.#create(botId, snapshotImage(botId), helper);
+        if (moving) await this.#create(botId, baseImage, helper, baseImage);
+        else await this.#create(botId, snapshotImage(botId), helper, previousBase);
         await this.#engine.startContainer(name);
         const upgrade = this.#options.upgradeCommand ?? DEFAULT_UPGRADE;
         const upgraded = await this.#engine.run(name, upgrade, { user: "root", timeoutMs: 30 * 60_000 });
@@ -580,16 +615,16 @@ export class BotEnvironment implements BotEnvironmentAdapter {
         }
         await this.#healthCheck(botId);
         this.touch(botId);
-        this.#log(`bot ${botId}: updated`);
+        this.#log(moving ? `bot ${botId}: updated and moved to ${baseImage}` : `bot ${botId}: updated`);
         void this.pruneHelpers().catch(() => {});
-        return { botId, ok: true };
+        return moving ? { botId, ok: true, movedToImage: true } : { botId, ok: true };
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         this.#log(`bot ${botId}: update failed, rolling back: ${message}`);
         this.#connections.get(botId)?.close();
         await this.#engine.removeContainer(name);
         await this.#copyVolume(snapshotVolumeName(botId), volumeName(botId), baseImage);
-        await this.#create(botId, snapshotImage(botId), previousHelper);
+        await this.#create(botId, snapshotImage(botId), previousHelper, previousBase);
         if (wasRunning) {
           await this.#engine.startContainer(name);
           this.touch(botId);

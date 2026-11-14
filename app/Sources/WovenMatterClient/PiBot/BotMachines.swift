@@ -365,8 +365,9 @@ public struct BotVersionReport: Equatable, Sendable {
 
 /// Woven Matter across devices, for Settings → Updates: other machines first, then each
 /// Mac's bots engine (the VM) and then its bots, then this Mac's app, which restarts.
-/// A machine already on the target release is skipped; `runtime.update` is a no-op for
-/// bots already on their runtime's current image.
+/// A machine already on the target release is skipped. `runtime.update` snapshots each bot,
+/// moves one made from an older bot image to the current one (new Node, Playwright and
+/// Chromium), updates the helper and Ubuntu packages, and rolls back on failure.
 ///
 /// The target is the newest published release when it is known. Linux hosts can only
 /// receive the host release bundled in this Mac's app, so when this Mac is behind that
