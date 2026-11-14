@@ -656,14 +656,14 @@ extension WorkspaceDatabaseConnection {
       for (id,role,content,stamp) in [(userMessageID,"user",run.task.prompt,started),
         (assistantID,"assistant",response,Self.timestamp(run.scheduledAt.addingTimeInterval(0.001)))] {
         try toolsExecuteUnlocked("""
-          INSERT INTO messages(id,conversation_id,run_id,role,content,status,owner_device_id,created_at,updated_at)
-          SELECT ?,id,?,?,?,?,owner_device_id,?,? FROM conversations WHERE id=?
+          INSERT INTO messages(id,conversation_id,run_id,role,content,status,created_at,updated_at)
+          SELECT ?,id,?,?,?,?,?,? FROM conversations WHERE id=?
           """, [id,runID,role,content,role == "user" ? "completed" : status,stamp,finished,run.sessionID])
       }
       try toolsExecuteUnlocked("""
-        INSERT INTO runs(id,conversation_id,agent_id,agent_codename,owner_device_id,native_session_id,
+        INSERT INTO runs(id,conversation_id,agent_id,agent_codename,native_session_id,
           user_message_id,assistant_message_id,status,started_at,created_at,updated_at,completed_at,error)
-        SELECT ?,id,agent_id,agent_codename,owner_device_id,?,?,?,?,?,?,?,?,? FROM conversations WHERE id=?
+        SELECT ?,id,agent_id,agent_codename,?,?,?,?,?,?,?,?,? FROM conversations WHERE id=?
         """, [runID,nativeSessionID ?? "",userMessageID,assistantID,status,started,started,finished,finished,error,run.sessionID])
       try toolsExecuteUnlocked("UPDATE runs SET status='running' WHERE id=?", [runID])
       var thoughtSequence = 0

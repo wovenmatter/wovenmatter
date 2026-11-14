@@ -75,7 +75,7 @@ extension WorkspaceDatabaseConnection {
     );
     CREATE TABLE IF NOT EXISTS conversations (
       id TEXT PRIMARY KEY, agent_id TEXT, agent_codename TEXT NOT NULL DEFAULT '',
-      owner_device_id TEXT, title TEXT NOT NULL DEFAULT 'New conversation',
+      title TEXT NOT NULL DEFAULT 'New conversation',
       unread INTEGER NOT NULL DEFAULT 0, last_message_preview TEXT,
       is_archived INTEGER NOT NULL DEFAULT 0, last_message_at TEXT NOT NULL DEFAULT '',
       folder_id TEXT, original_folder_id TEXT, is_pinned INTEGER NOT NULL DEFAULT 0, deleted_at TEXT,
@@ -87,7 +87,7 @@ extension WorkspaceDatabaseConnection {
     );
     CREATE TABLE IF NOT EXISTS messages (
       id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL DEFAULT '', client_message_id TEXT,
-      run_id TEXT, role TEXT NOT NULL DEFAULT 'assistant', owner_device_id TEXT,
+      run_id TEXT, role TEXT NOT NULL DEFAULT 'assistant',
       content TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'completed',
       created_at TEXT NOT NULL DEFAULT '', updated_at TEXT NOT NULL DEFAULT ''
     );
@@ -108,18 +108,15 @@ extension WorkspaceDatabaseConnection {
     );
     CREATE TABLE IF NOT EXISTS runs (
       id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL DEFAULT '', agent_id TEXT,
-      agent_codename TEXT NOT NULL DEFAULT '', owner_device_id TEXT,
+      agent_codename TEXT NOT NULL DEFAULT '',
       native_session_id TEXT NOT NULL DEFAULT '', user_message_id TEXT,
       assistant_message_id TEXT, status TEXT NOT NULL DEFAULT 'queued', error TEXT,
       started_at TEXT, completed_at TEXT,
       created_at TEXT NOT NULL DEFAULT '', updated_at TEXT NOT NULL DEFAULT ''
     );
     CREATE TABLE IF NOT EXISTS run_visible_notes (
-      run_id TEXT PRIMARY KEY, message_id TEXT NOT NULL DEFAULT '',
-      conversation_id TEXT NOT NULL DEFAULT '',
-      note_id TEXT NOT NULL DEFAULT '', note_title_snapshot TEXT NOT NULL DEFAULT '',
-      folder_id_snapshot TEXT, revision_snapshot TEXT NOT NULL DEFAULT '',
-      created_at TEXT NOT NULL DEFAULT ''
+      run_id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL DEFAULT '',
+      note_id TEXT NOT NULL DEFAULT '', revision_snapshot TEXT NOT NULL DEFAULT ''
     );
     CREATE TABLE IF NOT EXISTS run_program_statuses (
       run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,

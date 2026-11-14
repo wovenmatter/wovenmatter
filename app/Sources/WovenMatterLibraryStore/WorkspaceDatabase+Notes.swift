@@ -71,20 +71,14 @@ extension WorkspaceDatabaseConnection {
     try stepDone(reference)
 
     let visibleContext = try prepareUnlocked("""
-      INSERT INTO run_visible_notes (
-        run_id, message_id, conversation_id, note_id, note_title_snapshot,
-        folder_id_snapshot, revision_snapshot, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO run_visible_notes (run_id, conversation_id, note_id, revision_snapshot)
+      VALUES (?, ?, ?, ?)
       """)
     defer { sqlite3_finalize(visibleContext) }
     try bind(identifiers.runID, at: 1, to: visibleContext)
-    try bind(identifiers.userMessageID, at: 2, to: visibleContext)
-    try bind(conversationID, at: 3, to: visibleContext)
-    try bind(context.noteID, at: 4, to: visibleContext)
-    try bind(context.title, at: 5, to: visibleContext)
-    try bindNullable(context.folderID, at: 6, to: visibleContext)
-    try bind(context.revision, at: 7, to: visibleContext)
-    try bind(timestamp, at: 8, to: visibleContext)
+    try bind(conversationID, at: 2, to: visibleContext)
+    try bind(context.noteID, at: 3, to: visibleContext)
+    try bind(context.revision, at: 4, to: visibleContext)
     try stepDone(visibleContext)
 
     if let nonce = context.remoteEditNonce,

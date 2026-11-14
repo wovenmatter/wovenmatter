@@ -170,19 +170,18 @@ extension WorkspaceDatabaseConnection {
       let timestamp = Self.timestamp(createdAt)
       let conversation = try prepareUnlocked("""
         INSERT INTO conversations (
-          id, agent_id, agent_codename, owner_device_id, title, unread,
+          id, agent_id, agent_codename, title, unread,
           is_archived, last_message_at, is_pinned, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, 0, 0, ?, 0, ?, ?)
+        ) VALUES (?, ?, ?, ?, 0, 0, ?, 0, ?, ?)
         """)
       defer { sqlite3_finalize(conversation) }
       try bind(conversationID, at: 1, to: conversation)
       try bind(agentID, at: 2, to: conversation)
       try bind(codename, at: 3, to: conversation)
-      try bind(ownerDeviceID.uuidString.lowercased(), at: 4, to: conversation)
-      try bind(sessionTitle, at: 5, to: conversation)
+      try bind(sessionTitle, at: 4, to: conversation)
+      try bind(timestamp, at: 5, to: conversation)
       try bind(timestamp, at: 6, to: conversation)
       try bind(timestamp, at: 7, to: conversation)
-      try bind(timestamp, at: 8, to: conversation)
       try stepDone(conversation)
 
       let session = try prepareUnlocked("""
@@ -282,19 +281,18 @@ extension WorkspaceDatabaseConnection {
       let timestamp = Self.timestamp(createdAt)
       let conversation = try prepareUnlocked("""
         INSERT INTO conversations (
-          id, agent_id, agent_codename, owner_device_id, title, unread,
+          id, agent_id, agent_codename, title, unread,
           is_archived, last_message_at, is_pinned, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, 0, 0, ?, 0, ?, ?)
+        ) VALUES (?, ?, ?, ?, 0, 0, ?, 0, ?, ?)
         """)
       defer { sqlite3_finalize(conversation) }
       try bind(conversationID, at: 1, to: conversation)
       try bind(agentID, at: 2, to: conversation)
       try bind("remote-\(workspaceID.prefix(8))-\(runtimeKind.rawValue)", at: 3, to: conversation)
-      try bind(ownerDeviceID.uuidString.lowercased(), at: 4, to: conversation)
-      try bind(sessionTitle, at: 5, to: conversation)
+      try bind(sessionTitle, at: 4, to: conversation)
+      try bind(timestamp, at: 5, to: conversation)
       try bind(timestamp, at: 6, to: conversation)
       try bind(timestamp, at: 7, to: conversation)
-      try bind(timestamp, at: 8, to: conversation)
       try stepDone(conversation)
 
       let session = try prepareUnlocked("""
@@ -364,25 +362,22 @@ extension WorkspaceDatabaseConnection {
   ) throws -> (
     conversationID: String,
     assistantMessageID: String,
-    agentID: String,
-    ownerDeviceID: UUID
+    agentID: String
   ) {
     let statement = try prepareUnlocked("""
-      SELECT conversation_id, assistant_message_id, agent_id, owner_device_id
+      SELECT conversation_id, assistant_message_id, agent_id
       FROM runs
       WHERE id = ?
       """)
     defer { sqlite3_finalize(statement) }
     try bind(runID, at: 1, to: statement)
-    guard sqlite3_step(statement) == SQLITE_ROW,
-          let ownerDeviceID = UUID(uuidString: try text(statement, column: 3)) else {
+    guard sqlite3_step(statement) == SQLITE_ROW else {
       throw LocalACPSessionDatabaseError.runNotFound
     }
     return (
       try text(statement, column: 0),
       try text(statement, column: 1),
-      try text(statement, column: 2),
-      ownerDeviceID
+      try text(statement, column: 2)
     )
   }
 
@@ -505,7 +500,7 @@ extension WorkspaceDatabaseConnection {
 
       let context = try prepareUnlocked("""
         SELECT conversation.agent_id,
-          conversation.agent_codename, conversation.owner_device_id,
+          conversation.agent_codename,
           COALESCE(session.native_session_id, '')
         FROM conversations AS conversation
         JOIN harness_sessions AS session
@@ -520,10 +515,7 @@ extension WorkspaceDatabaseConnection {
       }
       let agentID = try text(context, column: 0)
       let codename = try text(context, column: 1)
-      guard let ownerDeviceID = UUID(uuidString: try text(context, column: 2)) else {
-        throw WorkspaceDatabaseError.corruptRow
-      }
-      let nativeSessionID = try text(context, column: 3)
+      let nativeSessionID = try text(context, column: 2)
       let identifiers = LocalACPRunIdentifiers(
         runID: UUID().uuidString.lowercased(),
         userMessageID: UUID().uuidString.lowercased(),
@@ -535,28 +527,26 @@ extension WorkspaceDatabaseConnection {
       try insertLocalACPTurnMessagesUnlocked(
         conversationID: conversationID, runID: identifiers.runID,
         userMessageID: identifiers.userMessageID, assistantMessageID: identifiers.assistantMessageID,
-        text: input.text, ownerDeviceID: ownerDeviceID,
-        userTimestamp: userTimestamp, assistantTimestamp: assistantTimestamp
+        text: input.text, userTimestamp: userTimestamp, assistantTimestamp: assistantTimestamp
       )
 
       let run = try prepareUnlocked("""
         INSERT INTO runs (
-          id, conversation_id, agent_id, agent_codename, owner_device_id, native_session_id,
+          id, conversation_id, agent_id, agent_codename, native_session_id,
           user_message_id, assistant_message_id, status, started_at, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'running', ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, 'running', ?, ?, ?)
         """)
       defer { sqlite3_finalize(run) }
       try bind(identifiers.runID, at: 1, to: run)
       try bind(conversationID, at: 2, to: run)
       try bind(agentID, at: 3, to: run)
       try bind(codename, at: 4, to: run)
-      try bind(ownerDeviceID.uuidString.lowercased(), at: 5, to: run)
-      try bind(nativeSessionID, at: 6, to: run)
-      try bind(identifiers.userMessageID, at: 7, to: run)
-      try bind(identifiers.assistantMessageID, at: 8, to: run)
+      try bind(nativeSessionID, at: 5, to: run)
+      try bind(identifiers.userMessageID, at: 6, to: run)
+      try bind(identifiers.assistantMessageID, at: 7, to: run)
+      try bind(userTimestamp, at: 8, to: run)
       try bind(userTimestamp, at: 9, to: run)
       try bind(userTimestamp, at: 10, to: run)
-      try bind(userTimestamp, at: 11, to: run)
       try stepDone(run)
       try insertNoteContextUnlocked(
         noteContext,
@@ -760,12 +750,12 @@ extension WorkspaceDatabaseConnection {
   /// local ACP turn starts with.
   private func insertLocalACPTurnMessagesUnlocked(
     conversationID: String, runID: String, userMessageID: String, assistantMessageID: String,
-    text: String, ownerDeviceID: UUID, userTimestamp: String, assistantTimestamp: String
+    text: String, userTimestamp: String, assistantTimestamp: String
   ) throws {
     let message = try prepareUnlocked("""
       INSERT INTO messages (
-        id, conversation_id, run_id, role, content, status, owner_device_id, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        id, conversation_id, run_id, role, content, status, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
       """)
     defer { sqlite3_finalize(message) }
     for (id, role, body, status, timestamp) in [
@@ -780,9 +770,8 @@ extension WorkspaceDatabaseConnection {
       try bind(role, at: 4, to: message)
       try bind(body, at: 5, to: message)
       try bind(status, at: 6, to: message)
-      try bind(ownerDeviceID.uuidString.lowercased(), at: 7, to: message)
+      try bind(timestamp, at: 7, to: message)
       try bind(timestamp, at: 8, to: message)
-      try bind(timestamp, at: 9, to: message)
       try stepDone(message)
     }
   }
@@ -859,8 +848,7 @@ extension WorkspaceDatabaseConnection {
       try insertLocalACPTurnMessagesUnlocked(
         conversationID: authority.conversationID, runID: runID,
         userMessageID: identifiers.userMessageID, assistantMessageID: identifiers.assistantMessageID,
-        text: input.text, ownerDeviceID: authority.ownerDeviceID,
-        userTimestamp: userTimestamp, assistantTimestamp: assistantTimestamp
+        text: input.text, userTimestamp: userTimestamp, assistantTimestamp: assistantTimestamp
       )
 
       if let deliveryID=input.historyDeliveryID {

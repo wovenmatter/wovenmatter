@@ -129,8 +129,8 @@ extension WorkspaceDatabaseConnection {
         let status = assistant && message["time"]["completed"].isNull && snapshot.active ? "streaming" : "completed"
         let insert = try prepareUnlocked("""
           INSERT INTO messages(id, conversation_id, client_message_id, run_id, role, content,
-            status, created_at, updated_at, owner_device_id)
-          SELECT ?, c.id, ?, ?, ?, ?, ?, ?, ?, c.owner_device_id
+            status, created_at, updated_at)
+          SELECT ?, c.id, ?, ?, ?, ?, ?, ?, ?
           FROM conversations c WHERE c.id = ?
           ON CONFLICT(id) DO UPDATE SET content=excluded.content, status=excluded.status, updated_at=excluded.updated_at
             WHERE messages.content IS NOT excluded.content OR messages.status IS NOT excluded.status
@@ -161,9 +161,9 @@ extension WorkspaceDatabaseConnection {
           let runStatus = status == "streaming" ? "running" : message["error"].isNull ? "completed" : "failed"
           let run = try prepareUnlocked("""
             INSERT INTO runs(id, conversation_id, agent_id, agent_codename,
-              owner_device_id, assistant_message_id, status, started_at,
+              assistant_message_id, status, started_at,
               completed_at, created_at, updated_at)
-            SELECT ?, c.id, c.agent_id, c.agent_codename, c.owner_device_id,
+            SELECT ?, c.id, c.agent_id, c.agent_codename,
               ?, ?, ?, ?, ?, ? FROM conversations c WHERE c.id = ?
             ON CONFLICT(id) DO UPDATE SET completed_at=excluded.completed_at, updated_at=excluded.updated_at
               WHERE runs.completed_at IS NOT excluded.completed_at

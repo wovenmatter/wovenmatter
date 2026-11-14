@@ -62,11 +62,11 @@ extension WorkspaceDatabaseConnection {
       try bind(conversation.id, at: 1, to: statement); try bind(workspace.id, at: 2, to: statement)
       try bind(JSONEncoder().encode(conversation), at: 3, to: statement); try stepDone(statement)
       try toolsExecuteUnlocked("""
-        INSERT INTO conversations(id,title,last_message_preview,folder_id,owner_device_id,created_at,updated_at)
-        VALUES (?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET title=excluded.title,last_message_preview=excluded.last_message_preview,
+        INSERT INTO conversations(id,title,last_message_preview,folder_id,created_at,updated_at)
+        VALUES (?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET title=excluded.title,last_message_preview=excluded.last_message_preview,
         folder_id=excluded.folder_id,updated_at=excluded.updated_at
         """, [conversation.id, conversation.title, conversation.preview, conversation.folderID,
-                         workspace.ownerDeviceID, now, conversation.updatedAt.isEmpty ? now : conversation.updatedAt])
+                         now, conversation.updatedAt.isEmpty ? now : conversation.updatedAt])
     case .transcript:
       guard let incoming = entry.transcript, incoming.conversationID == entry.conversationID,
             incoming.olderCursor == nil, entry.conversation == nil, entry.receipt == nil, entry.nativeRecord == nil,
@@ -103,15 +103,17 @@ extension WorkspaceDatabaseConnection {
           }
         }
         if let runID = message.runID { try claimFederationRunUnlocked(runID, conversationID: entry.conversationID, workspaceID: workspace.id) }
-        let previous = try prepareUnlocked("SELECT conversation_id,run_id,role,owner_device_id FROM messages WHERE id=?")
+        let previous = try prepareUnlocked("SELECT conversation_id,run_id,role FROM messages WHERE id=?")
         defer { sqlite3_finalize(previous) }
         try bind(message.id, at: 1, to: previous)
         let previousCode = sqlite3_step(previous)
         if previousCode == SQLITE_ROW {
+          // A phone may attach its native run to a message of this
+          // conversation (checked below), whose execution this workspace
+          // owns (checked above).
           let priorRun = optionalText(previous, column: 1)
           let canBackfillNativeRun = workspace.kind == .ios && priorRun == nil && message.runID != nil
             && message.sequence != nil && ((incoming.runs ?? []) + (transcript.runs ?? [])).contains(where: { $0.id == message.runID })
-            && optionalText(previous, column: 3) == workspace.ownerDeviceID
           guard try text(previous, column: 0) == entry.conversationID,
                 priorRun == message.runID || canBackfillNativeRun,
                 try text(previous, column: 2) == message.role else {
@@ -121,10 +123,10 @@ extension WorkspaceDatabaseConnection {
         if let index = transcript.messages.firstIndex(where: { $0.id == message.id }) { transcript.messages[index] = message }
         else { transcript.messages.append(message) }
         try toolsExecuteUnlocked("""
-          INSERT INTO messages(id,conversation_id,run_id,role,content,status,owner_device_id,created_at,updated_at)
-          VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET content=excluded.content,status=excluded.status,updated_at=excluded.updated_at,run_id=COALESCE(messages.run_id,excluded.run_id)
+          INSERT INTO messages(id,conversation_id,run_id,role,content,status,created_at,updated_at)
+          VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET content=excluded.content,status=excluded.status,updated_at=excluded.updated_at,run_id=COALESCE(messages.run_id,excluded.run_id)
           """, [message.id, entry.conversationID, message.runID, message.role, message.content, message.status ?? "completed",
-                           workspace.ownerDeviceID, message.createdAt.isEmpty ? now : message.createdAt, now])
+                           message.createdAt.isEmpty ? now : message.createdAt, now])
         if let source = message.agentSourceID {
           try toolsExecuteUnlocked("""
             INSERT INTO device_message_provenance(message_id,source_id,source_title,source_agent,kind)
@@ -153,9 +155,9 @@ extension WorkspaceDatabaseConnection {
       if let active = incoming.activeRunID { observedRuns.insert(active) }
       for runID in observedRuns {
         try toolsExecuteUnlocked("""
-          INSERT OR IGNORE INTO runs(id,conversation_id,status,owner_device_id,created_at,updated_at)
-          VALUES (?,?,'completed',?,?,?)
-          """, [runID, entry.conversationID, workspace.executionDeviceID ?? workspace.ownerDeviceID, now, now])
+          INSERT OR IGNORE INTO runs(id,conversation_id,status,created_at,updated_at)
+          VALUES (?,?,'completed',?,?)
+          """, [runID, entry.conversationID, now, now])
       }
       let activeRunID = incoming.activeRunID ?? (entry.runID != nil && entry.runID != transcript.activeRunID ? transcript.activeRunID : nil)
       if let previous = transcript.activeRunID, previous != activeRunID {
@@ -175,11 +177,10 @@ extension WorkspaceDatabaseConnection {
           }
           try claimFederationRunUnlocked(run.id, conversationID: entry.conversationID, workspaceID: workspace.id)
           try toolsExecuteUnlocked("""
-            INSERT INTO runs(id,conversation_id,status,owner_device_id,created_at,updated_at,started_at,completed_at)
-            VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET status=excluded.status,
+            INSERT INTO runs(id,conversation_id,status,created_at,updated_at,started_at,completed_at)
+            VALUES (?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET status=excluded.status,
             updated_at=excluded.updated_at,started_at=COALESCE(runs.started_at,excluded.started_at),completed_at=excluded.completed_at
             """, [run.id, entry.conversationID, run.status,
-              workspace.executionDeviceID ?? workspace.ownerDeviceID,
               run.startedAt ?? now, now, run.startedAt, run.completedAt])
           if let index = values.firstIndex(where: { $0.id == run.id }) { values[index] = run }
           else { values.append(run) }

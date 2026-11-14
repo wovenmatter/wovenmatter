@@ -58,6 +58,11 @@ import WovenMatterCore
     #expect(try await row(library, "SELECT name FROM folders")["name"]?.stringValue == "Project")
     let content = try await library.conversationContent(id: chat)
     #expect(content.messages.count == 2 && content.runs.count == 1)
+    // Columns nothing read are gone; their rows keep what is read.
+    let visible = try await row(library, "SELECT * FROM run_visible_notes WHERE conversation_id=?", chat)
+    #expect(visible.keys.sorted() == ["conversation_id", "note_id", "revision_snapshot", "run_id"])
+    #expect(visible["note_id"]?.stringValue == "5211f659-501c-4907-8391-c1b4061daffb" && visible["revision_snapshot"]?.stringValue == "note-revision-1")
+    #expect(try await row(library, "SELECT * FROM product_analytics_events").keys.sorted() == ["created", "id"])
 
     // The dashboard chat stays readable as retained history; the platform
     // chat v0.4.2 never listed stays hidden; the gateway's own rows are gone.
@@ -82,10 +87,18 @@ import WovenMatterCore
     #expect(tables.allSatisfy { !$0.hasPrefix("dashboard_") && !$0.hasPrefix("desktop_") && $0 != "profiles" })
     for payload in peer.compactMap({ $0["payload"]?.stringValue }) {
       for column in ["user_id", "governing_plane", "authority_kind", "authority_agent_id", "authority_device_id",
-                     "origin_device_id", "desktop_owned", "openclaw_session_key", "gateway_media_ref"] {
+                     "origin_device_id", "desktop_owned", "openclaw_session_key", "gateway_media_ref",
+                     "note_title_snapshot", "folder_id_snapshot"] {
         #expect(!payload.contains("\"\(column)\""), "\(column) in \(payload.prefix(120))")
       }
     }
+    for item in peer where ["conversations", "messages", "runs", "run_visible_notes"].contains(item["table_name"]?.stringValue ?? "") {
+      let payload = item["payload"]?.stringValue ?? ""
+      #expect(!payload.contains("\"owner_device_id\"") && !payload.contains("\"message_id\""), "a dropped column in \(payload.prefix(120))")
+    }
+    #expect(try await row(library, "SELECT payload FROM paired_library_rows WHERE table_name='run_visible_notes'")["payload"]?.stringValue
+      .flatMap { try? JSONDecoder().decode(PairedLibraryRecord.self, from: Data($0.utf8)) }?.row.keys.sorted()
+      == ["conversation_id", "note_id", "revision_snapshot", "run_id"])
     let runID = try #require(run["id"]?.stringValue)
     #expect(try await row(library, "SELECT json_extract(payload,'$.row.native_session_id.value') AS value FROM paired_library_rows WHERE table_name='runs' AND record_key=?", "[\"\(runID)\"]")["value"]?.stringValue == "native-session-1")
     #expect(try await row(library, "SELECT json_extract(payload,'$.row.is_archived.value') AS value FROM paired_library_rows WHERE table_name='conversations' AND record_key='[\"platform-chat\"]'")["value"]?.stringValue == "1")

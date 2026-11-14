@@ -254,12 +254,11 @@ final class ProductAnalyticsModel {
     }
     return value
   }
+  /// Debug builds never send. Offline and failed sends are dropped
+  /// permanently; the library keeps only each accepted event's ID and time.
   private func upload(_ events: [ProductAnalyticsEvent], preference: ProductAnalyticsPreference, epoch: Int) async {
-    guard let database, !database.isReadOnlyProjection else { return }
-    var status = "dropped"
-    #if DEBUG
-      status = "not sent (Debug build)"
-    #else
+    #if !DEBUG
+      guard let database, !database.isReadOnlyProjection else { return }
       do {
         let current = try await database.productAnalyticsPreference()
         guard epoch == generation, current.collects, current.revision == preference.revision,
@@ -274,12 +273,9 @@ final class ProductAnalyticsModel {
         request.httpBody = try JSONSerialization.data(withJSONObject: [
           "api_key": Self.projectToken, "batch": batch,
         ])
-        let (_, response) = try await session.data(for: request)
-        if let response = response as? HTTPURLResponse,
-          (200..<300).contains(response.statusCode) { status = "delivered" }
-      } catch { /* Offline and failed sends are dropped permanently. */ }
+        _ = try await session.data(for: request)
+      } catch {}
     #endif
-    try? await database.markProductAnalytics(events.map(\.id), status: status)
   }
 
 }

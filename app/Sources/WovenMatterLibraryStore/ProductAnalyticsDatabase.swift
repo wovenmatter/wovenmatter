@@ -11,7 +11,7 @@ extension WorkspaceDatabaseConnection {
     try executeUnlocked(
       """
       CREATE TABLE IF NOT EXISTS product_analytics_preference(singleton INTEGER PRIMARY KEY CHECK(singleton=1), payload BLOB NOT NULL);
-      CREATE TABLE IF NOT EXISTS product_analytics_events(id TEXT PRIMARY KEY, payload BLOB NOT NULL, status TEXT NOT NULL, created REAL NOT NULL);
+      CREATE TABLE IF NOT EXISTS product_analytics_events(id TEXT PRIMARY KEY, created REAL NOT NULL);
       CREATE TABLE IF NOT EXISTS product_analytics_limits(name TEXT PRIMARY KEY, last_attempt REAL NOT NULL);
       """)
     let insert = try prepareUnlocked(
@@ -81,13 +81,10 @@ extension WorkspaceDatabaseConnection {
             continue
           }
         }
-        let stmt = try prepareUnlocked(
-          "INSERT OR IGNORE INTO product_analytics_events(id,payload,status,created) VALUES(?,?,'attempted',?)"
-        )
+        let stmt = try prepareUnlocked("INSERT OR IGNORE INTO product_analytics_events(id,created) VALUES(?,?)")
         defer { sqlite3_finalize(stmt) }
         try bind(value.id, at: 1, to: stmt)
-        try bind(JSONEncoder().encode(value), at: 2, to: stmt)
-        sqlite3_bind_double(stmt, 3, value.timestamp.timeIntervalSince1970)
+        sqlite3_bind_double(stmt, 2, value.timestamp.timeIntervalSince1970)
         try stepDone(stmt)
         guard changedRowCountUnlocked > 0 else { discarded.append(value.id); continue }
         accepted.append(value.id)
@@ -117,18 +114,6 @@ extension WorkspaceDatabaseConnection {
         discardedEventIDs: discarded, nextSignalAt: next)
     }
   }
-  func markProductAnalytics(_ ids: [String], status: String) throws {
-    try transaction {
-      for id in ids {
-        let stmt = try prepareUnlocked(
-          "UPDATE product_analytics_events SET status=? WHERE id=?")
-        defer { sqlite3_finalize(stmt) }
-        try bind(status, at: 1, to: stmt)
-        try bind(id, at: 2, to: stmt)
-        try stepDone(stmt)
-      }
-    }
-  }
 }
 extension WorkspaceDatabase {
   public func productAnalyticsPreference() async throws -> ProductAnalyticsPreference {
@@ -140,7 +125,5 @@ extension WorkspaceDatabase {
   public func acceptProductAnalytics(_ events: [ProductAnalyticsEvent]) async throws
     -> ProductAnalyticsAcknowledgement
   { try await write { try $0.acceptProductAnalytics(events) } }
-  public func markProductAnalytics(_ ids: [String], status: String) async throws {
-    try await write { try $0.markProductAnalytics(ids, status: status) }
-  }
+
 }

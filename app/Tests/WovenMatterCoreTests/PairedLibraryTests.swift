@@ -534,12 +534,12 @@ extension PairedLibraryTests {
     let session = try await node.database.createFixtureLocalACPSession(runtimeKind: .codex, title: "Native session", ownerDeviceID: UUID())
     let run = try await node.database.beginLocalACPRun(conversationID: session, input: .init(text: "Native input"))
     let native = try await node.database.read { connection in
-      try #require(try connection.historyRowsUnlocked("SELECT agent_id,owner_device_id FROM conversations WHERE id=?", values: [session]).first?.objectValue)
+      try #require(try connection.historyRowsUnlocked("SELECT agent_id,agent_codename FROM conversations WHERE id=?", values: [session]).first?.objectValue)
     }
     // Another member held a federated projection of the same chat and run.
     try await peer.database.write { connection in
-      try connection.toolsExecuteUnlocked("INSERT INTO conversations(id,title,owner_device_id,created_at,updated_at) VALUES(?,?,?,?,?)",
-        [session, "Projected title", UUID().uuidString.lowercased(), "2020-01-01T00:00:00Z", "2020-01-01T00:00:00Z"])
+      try connection.toolsExecuteUnlocked("INSERT INTO conversations(id,title,agent_codename,created_at,updated_at) VALUES(?,?,?,?,?)",
+        [session, "Projected title", "projected", "2020-01-01T00:00:00Z", "2020-01-01T00:00:00Z"])
       try connection.toolsExecuteUnlocked("INSERT INTO runs(id,conversation_id,status,created_at) VALUES(?,?,'completed','2020-01-01T00:00:00Z')", [run.runID, session])
     }
     // Make the peer's copies win the deterministic order, as a busy peer would.
@@ -548,18 +548,18 @@ extension PairedLibraryTests {
     try await peer.database.write { try $0.toolsExecuteUnlocked("UPDATE runs SET status='completed',error='projection' WHERE id=?", [run.runID]) }
     try await peer.send(to: node)
     let after = try await node.database.read { connection in
-      try #require(try connection.historyRowsUnlocked("SELECT agent_id,owner_device_id,title FROM conversations WHERE id=?", values: [session]).first?.objectValue)
+      try #require(try connection.historyRowsUnlocked("SELECT agent_id,agent_codename,title FROM conversations WHERE id=?", values: [session]).first?.objectValue)
     }
     // Native binding and run state are the owner's truth; the shared title edit applies.
-    for key in ["agent_id", "owner_device_id"] { #expect(after[key] == native[key]) }
+    for key in ["agent_id", "agent_codename"] { #expect(after[key] == native[key]) }
     #expect(after["title"]?.stringValue == "Projected title ")
     #expect(try await node.database.activeRunID(conversationID: session) == run.runID)
     // The owner republishes its native rows, so the peer converges.
     try await node.send(to: peer)
     let converged = try await peer.database.read { connection in
-      try #require(try connection.historyRowsUnlocked("SELECT agent_id,owner_device_id FROM conversations WHERE id=?", values: [session]).first?.objectValue)
+      try #require(try connection.historyRowsUnlocked("SELECT agent_id,agent_codename FROM conversations WHERE id=?", values: [session]).first?.objectValue)
     }
-    #expect(converged["agent_id"] == native["agent_id"] && converged["owner_device_id"] == native["owner_device_id"])
+    #expect(converged["agent_id"] == native["agent_id"] && converged["agent_codename"] == native["agent_codename"])
     let status = try await peer.database.read { try $0.historyRowsUnlocked("SELECT status FROM runs WHERE id=?", values: [run.runID]).first?.objectValue?["status"]?.stringValue }
     #expect(status == "running")
   }

@@ -82,12 +82,9 @@ extension WorkspaceDatabaseConnection {
     // Each run's native harness session, which OpenClaw called its session key.
     ("runs", "openclaw_session_key", "native_session_id"),
     ("harness_sessions", "acp_session_id", "native_session_id"),
-    // The device that owns the row: the Mac that created it, or the
-    // workspace owner for a projected remote session.
+    // The device that owns the agent: the Mac that created it, or the
+    // workspace owner for a remote harness.
     ("agents", "authority_device_id", "owner_device_id"),
-    ("conversations", "authority_device_id", "owner_device_id"),
-    ("messages", "authority_device_id", "owner_device_id"),
-    ("runs", "authority_device_id", "owner_device_id"),
   ]
 
   /// Columns dropped, by their table's current name. The six per-row columns
@@ -96,7 +93,10 @@ extension WorkspaceDatabaseConnection {
   /// where `execution_location` says the same), `authority_kind`
   /// (always `device_owned`), `authority_agent_id` (a copy of `agent_id`),
   /// `origin_device_id` (a copy of the owner) and `desktop_owned` (always 1 for
-  /// rows Woven writes). The rest have no writer or no reader.
+  /// rows Woven writes). A conversation's, message's and run's device
+  /// (`authority_device_id`, later `owner_device_id`) was a copy that mixed
+  /// two kinds of device ID; ownership is the owner tables and
+  /// `execution_conversations`. The rest have no writer or no reader.
   static let droppedLibraryColumns: [(table: String, columns: [String])] = [
     ("surface_profiles", ["user_id", "surface", "authority_kind", "authority_device_id", "origin_device_id"]),
     ("folders", ["user_id", "origin_device_id"]),
@@ -105,21 +105,26 @@ extension WorkspaceDatabaseConnection {
                 "authority_agent_id", "model", "fallback_model", "is_primary", "runtime_metadata_json",
                 "origin_device_id", "desktop_owned"]),
     ("conversations", ["user_id", "governing_plane", "authority_kind", "authority_agent_id", "openclaw_session_key",
-                       "kind", "is_deletable", "context_generation", "origin_device_id", "desktop_owned", "is_main"]),
+                       "kind", "is_deletable", "context_generation", "origin_device_id", "desktop_owned", "is_main",
+                       "authority_device_id", "owner_device_id"]),
     ("messages", ["governing_plane", "authority_kind", "authority_agent_id", "message_source", "origin_device_id",
-                  "desktop_owned"]),
+                  "desktop_owned", "authority_device_id", "owner_device_id"]),
     ("message_attachments", ["governing_plane", "authority_kind", "authority_device_id", "authority_agent_id",
                              "desktop_owned", "gateway_media_ref", "origin_device_id"]),
     ("message_references", ["user_id", "governing_plane", "authority_kind", "authority_device_id",
                             "authority_agent_id", "desktop_owned", "origin_device_id"]),
-    ("runs", ["user_id", "governing_plane", "authority_kind", "authority_agent_id", "origin_device_id", "desktop_owned"]),
+    ("runs", ["user_id", "governing_plane", "authority_kind", "authority_agent_id", "origin_device_id", "desktop_owned",
+              "authority_device_id", "owner_device_id"]),
     ("run_visible_notes", ["user_id", "governing_plane", "authority_kind", "authority_device_id", "authority_agent_id",
-                           "desktop_owned", "folder_title_snapshot", "origin_device_id"]),
+                           "desktop_owned", "folder_title_snapshot", "origin_device_id",
+                           "message_id", "note_title_snapshot", "folder_id_snapshot", "created_at"]),
     ("run_activities", ["user_id", "governing_plane", "authority_kind", "authority_device_id", "authority_agent_id",
                         "desktop_owned", "origin_device_id"]),
     ("harness_sessions", ["governing_plane", "authority_kind", "authority_device_id", "authority_agent_id"]),
     // One row per run activity now that OpenClaw traces are gone.
-    ("activity_summaries", ["source_kind", "source_id"]),
+    ("activity_summaries", ["source_kind", "source_id", "activity_id"]),
+    // An accepted analytics event is kept only to deduplicate its ID.
+    ("product_analytics_events", ["payload", "status"]),
     ("calendar_items", ["user_id", "agent_codename", "pinned_folder_id", "delivery_folder_id", "schedule_label",
                         "origin_device_id"]),
   ]

@@ -31,8 +31,7 @@ extension WorkspaceDatabaseConnection {
         INSERT OR IGNORE INTO activity_revision VALUES(1,0);
         CREATE TABLE IF NOT EXISTS activity_summaries (
           id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL, run_id TEXT NOT NULL,
-          revision INTEGER NOT NULL, deleted INTEGER NOT NULL DEFAULT 0,
-          activity_id TEXT, summary TEXT);
+          revision INTEGER NOT NULL, deleted INTEGER NOT NULL DEFAULT 0, summary TEXT);
         CREATE INDEX IF NOT EXISTS activity_summaries_conversation_revision
           ON activity_summaries(conversation_id,revision);
         CREATE INDEX IF NOT EXISTS activity_summaries_run ON activity_summaries(run_id);
@@ -66,7 +65,7 @@ extension WorkspaceDatabaseConnection {
               VALUES(new.id,new.conversation_id,new.run_id,
                 (SELECT revision FROM activity_revision WHERE singleton=1),0)
             ON CONFLICT(id) DO UPDATE SET conversation_id=excluded.conversation_id,run_id=excluded.run_id,
-              revision=excluded.revision,deleted=excluded.deleted,summary=NULL,activity_id=NULL;
+              revision=excluded.revision,deleted=excluded.deleted,summary=NULL;
           END;
           """)
       }
@@ -83,11 +82,10 @@ extension WorkspaceDatabaseConnection {
 
   func storeActivitySummaryUnlocked(recordID: String, activity: AgentRunActivity) throws {
     let summary = String(decoding: try JSONEncoder().encode(activity.presentationSummary()), as: UTF8.self)
-    let update = try prepareUnlocked("UPDATE activity_summaries SET summary=?,activity_id=? WHERE id=? AND deleted=0")
+    let update = try prepareUnlocked("UPDATE activity_summaries SET summary=? WHERE id=? AND deleted=0")
     defer { sqlite3_finalize(update) }
     try bind(summary, at: 1, to: update)
-    try bind(activity.id, at: 2, to: update)
-    try bind(recordID, at: 3, to: update)
+    try bind(recordID, at: 2, to: update)
     try stepDone(update)
   }
 
