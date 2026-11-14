@@ -6,18 +6,32 @@ case "$mode" in
   *) printf '%s\n' 'usage: scripts/test-ios.sh [--package|--simulator|--ui|--all-devices]' >&2; exit 64 ;;
 esac
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-if [[ "$mode" == "--all-devices" ]]; then
-  "$root/scripts/test-ios.sh" --ui
-  WOVENMATTER_IOS_SIMULATOR_DESTINATION="" \
-    WOVENMATTER_IOS_SIMULATOR_DEVICE_TYPE="${WOVENMATTER_IOS_TABLET_DEVICE_TYPE:-com.apple.CoreSimulator.SimDeviceType.iPad-Pro-11-inch-M4-8GB}" \
-    "$root/scripts/test-ios.sh" --ui
-  exit 0
-fi
 cache="${WOVENMATTER_IOS_TEST_CACHE_DIR:-${TMPDIR:-/tmp}/wovenmatter-ios-tests}"
 mkdir -p "$cache"
+if [[ "$mode" == "--all-devices" ]]; then
+  # The package tests run once. Each device then builds into its own derived
+  # data on its own simulator, so the iPhone and iPad suites run at once.
+  "$root/scripts/test-ios.sh" --package
+  phone_device="${WOVENMATTER_IOS_SIMULATOR_DEVICE_TYPE:-com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro}"
+  tablet_device="${WOVENMATTER_IOS_TABLET_DEVICE_TYPE:-com.apple.CoreSimulator.SimDeviceType.iPad-Pro-11-inch-M4-8GB}"
+  WOVENMATTER_IOS_SKIP_PACKAGE=1 WOVENMATTER_IOS_TEST_CACHE_DIR="$cache/phone" \
+    WOVENMATTER_IOS_SIMULATOR_DEVICE_TYPE="$phone_device" "$root/scripts/test-ios.sh" --ui >"$cache/phone.log" 2>&1 &
+  phone=$!
+  WOVENMATTER_IOS_SKIP_PACKAGE=1 WOVENMATTER_IOS_TEST_CACHE_DIR="$cache/tablet" WOVENMATTER_IOS_SIMULATOR_DESTINATION="" \
+    WOVENMATTER_IOS_SIMULATOR_DEVICE_TYPE="$tablet_device" "$root/scripts/test-ios.sh" --ui >"$cache/tablet.log" 2>&1 &
+  tablet=$!
+  status=0
+  wait "$phone" || status=1
+  printf '%s\n' '--- iPhone' && cat "$cache/phone.log"
+  wait "$tablet" || status=1
+  printf '%s\n' '--- iPad' && cat "$cache/tablet.log"
+  exit "$status"
+fi
 export CLANG_MODULE_CACHE_PATH="$cache/modules"
 export SWIFTPM_MODULECACHE_OVERRIDE="$cache/modules"
-swift test --package-path "$root/ios" --scratch-path "$cache/package" --disable-sandbox
+if [[ -z "${WOVENMATTER_IOS_SKIP_PACKAGE:-}" ]]; then
+  swift test --package-path "$root/ios" --scratch-path "$cache/package" --disable-sandbox
+fi
 if [[ "$mode" != "--package" ]]; then
   destination="${WOVENMATTER_IOS_SIMULATOR_DESTINATION:-}"
   owned_simulator=""
