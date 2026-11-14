@@ -141,6 +141,21 @@ struct ACPSessionPermissionTests {
     }
 
     @Test(arguments: [true, false])
+    func olderCodexWorkspaceAccessIsNotOffered(modern: Bool) async throws {
+        // Older adapters used agent for workspace access, with no auto review
+        // classification and no separate workspace-write preset.
+        let idKey = modern ? "value" : "id"
+        let options: [[String: Any]] = [[idKey: "agent", "name": "Agent"], [idKey: "agent-full-access", "name": "Bypass"]]
+        let state: [String: Any] = modern
+            ? ["configOptions": [["id": "mode", "category": "mode", "currentValue": "agent", "options": options]]]
+            : ["modes": ["currentModeId": "agent", "availableModes": options]]
+        try await withClient(state: state) { _, _, initialized async throws in
+            #expect(initialized.configuration.permissionOptions == ["agent-full-access"])
+            #expect(initialized.configuration.permissionOptionMetadata["agent"] == nil)
+        }
+    }
+
+    @Test(arguments: [true, false])
     func codexSmartReviewRequiresNativeClassification(modern: Bool) async throws {
         let idKey = modern ? "value" : "id"
         let options: [[String: Any]] = [
@@ -293,7 +308,7 @@ struct ACPSessionPermissionTests {
     private func configuration(permission: String, id: String = "mode", model: String = "fixture-model") -> [String: Any] {
         ["configOptions": [
             ["id": id, "category": "mode", "currentValue": permission, "options": [
-                ["value": "agent", "name": "Native default label"],
+                ["value": "agent", "name": "Native default label", "_meta": ["kind": "auto_review"]],
                 ["value": "agent-full-access", "name": "Native full label", "description": "Native full description"],
             ]],
             ["id": "model", "category": "model", "currentValue": model, "options": [["value": "fixture-model"], ["value": "other"], ["value": "changed-model"]]],

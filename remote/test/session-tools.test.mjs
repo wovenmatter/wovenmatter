@@ -95,8 +95,11 @@ test('permission choices offer only Full access, then the harness auto mode', ()
   // The Mac's names: Codex's agent preset auto-reviews when the adapter offers workspace-write.
   assert.deepEqual(codex.map(item => [item.id, item.label]), [['agent-full-access', 'Full access'], ['agent', 'Approve for me']])
   assert.equal(codex[1].description, 'Only ask for actions detected as potentially unsafe.')
-  const workspace = presentPermissionChoices('codex', [{ id: 'agent', label: 'Agent' }, { id: 'read-only', label: 'Read', description: 'Native read only.' }])
-  assert.deepEqual(workspace.map(item => [item.label, item.description]), [['Workspace access', "Use Codex's workspace access preset with its native approval and sandbox rules."]])
+  // An older adapter's agent preset is workspace access, which is not offered.
+  const older = presentPermissionChoices('codex', [{ id: 'agent', label: 'Agent' }, { id: 'read-only', label: 'Read' }, { id: 'agent-full-access', label: 'Bypass' }])
+  assert.deepEqual(older.map(item => item.id), ['agent-full-access'])
+  const classified = presentPermissionChoices('codex', [{ id: 'agent', label: 'Agent', kind: 'auto_review' }, { id: 'agent-full-access', label: 'Bypass' }])
+  assert.deepEqual(classified.map(item => [item.id, item.label]), [['agent-full-access', 'Full access'], ['agent', 'Approve for me']])
   const claude = presentPermissionChoices('claude_code', [{ id: 'default', label: 'Default', description: 'Native ask.' }, { id: 'plan', label: 'Plan Mode' }, { id: 'auto', label: 'Auto' }, { id: 'acceptEdits', label: 'Accept' }, { id: 'bypassPermissions', label: 'Bypass' }])
   assert.deepEqual(claude.map(item => [item.id, item.label, item.description]), [['bypassPermissions', 'Full access', undefined], ['auto', 'Auto', "Claude's model classifier decides which actions may run automatically."]])
   assert.deepEqual(presentPermissionChoices('opencode', ['ask', 'allow', 'deny'].map(id => ({ id, label: id }))).map(item => item.id), ['allow'])

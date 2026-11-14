@@ -109,12 +109,15 @@ export function supportedPermission(runtimeKind, permission) {
 const permissionPresentation = Object.freeze({
   claude_code: { auto: ['Auto', "Claude's model classifier decides which actions may run automatically."] },
 })
-function permissionMetadata(runtimeKind, item, choices) {
+// Codex's agent preset is Approve for me only when the adapter also offers
+// workspace-write or marks it as auto review. Older adapters used agent for
+// workspace access, which Woven does not offer.
+function codexAgentReviews(choices) {
+  return choices.some(choice => choice.id === 'workspace-write' || choice.kind === 'auto_review')
+}
+function permissionMetadata(runtimeKind, item) {
   if (runtimeKind === 'codex' && item.id === 'agent') {
-    // Codex's agent preset auto-reviews unsafe actions when the adapter offers it.
-    const reviewed = choices.some(choice => choice.id === 'workspace-write' || choice.kind === 'auto_review')
-    return reviewed ? { ...item, label: 'Approve for me', description: 'Only ask for actions detected as potentially unsafe.' }
-      : { ...item, label: 'Workspace access', description: "Use Codex's workspace access preset with its native approval and sandbox rules." }
+    return { ...item, label: 'Approve for me', description: 'Only ask for actions detected as potentially unsafe.' }
   }
   const [label, description] = permissionPresentation[runtimeKind]?.[item.id] ?? []
   const value = { ...item, ...(label ? { label } : {}) }
@@ -127,10 +130,11 @@ function permissionMetadata(runtimeKind, item, choices) {
 // the native `description`; `kind` (the adapter's `_meta.kind`) is dropped.
 export function presentPermissionChoices(runtimeKind, choices) {
   const supported = supportedPermissions(runtimeKind)
-  return choices.filter(item => supported.includes(item.id))
+  const reviews = runtimeKind !== 'codex' || codexAgentReviews(choices)
+  return choices.filter(item => supported.includes(item.id) && (reviews || item.id !== 'agent'))
     .sort((a, b) => supported.indexOf(a.id) - supported.indexOf(b.id))
     .map(item => {
-      const value = permissionMetadata(runtimeKind, item, choices)
+      const value = permissionMetadata(runtimeKind, item)
       delete value.kind
       if (!value.description) delete value.description
       return item.id === fullAccessPermissions[runtimeKind] ? { ...value, label: 'Full access' } : value

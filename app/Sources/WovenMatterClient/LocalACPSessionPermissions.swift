@@ -34,6 +34,27 @@ enum LocalACPSessionPermissions {
         "bypassPermissions": .init(name: "Full access", description: "Allow commands and edits without ordinary approval prompts. Native deny rules, hooks, and administrator policies still apply."),
     ]
 
+    /// The native modes a session can choose: the supported modes the adapter
+    /// advertises. Codex's `agent` preset is Approve for me only when the
+    /// adapter also offers `workspace-write` or marks it as auto review; older
+    /// adapters used `agent` for workspace access, which is not offered.
+    static func permissionOptions(
+        runtimeKind: AgentRuntimeKind, ids: [String], options: [ACPJSONValue], idKeys: [String]
+    ) -> [String] {
+        let supported = runtimeKind.orderedPermissionOptions(ids)
+        guard runtimeKind == .codex, supported.contains("agent"),
+              !codexAgentReviews(ids: ids, options: options, idKeys: idKeys) else { return supported }
+        return supported.filter { $0 != "agent" }
+    }
+
+    private static func codexAgentReviews(ids: [String], options: [ACPJSONValue], idKeys: [String]) -> Bool {
+        ids.contains("workspace-write") || options.contains { option in
+            (idKeys.contains { option[$0]?.stringValue == "agent" }
+                && option["_meta"]?["kind"]?.stringValue == "auto_review")
+                || codexAgentReviews(ids: [], options: option["options"]?.arrayValue ?? [], idKeys: idKeys)
+        }
+    }
+
     /// Normalize known native policies without changing their identifiers or
     /// mistaking older Codex workspace presets for classifier-based review.
     static func nativeMetadata(
@@ -56,13 +77,10 @@ enum LocalACPSessionPermissions {
             var description = option["description"]?.stringValue
             switch (runtimeKind, id) {
             case (.codex, "agent"):
-                if separatesWorkspaceAccess || option["_meta"]?["kind"]?.stringValue == "auto_review" {
-                    name = "Approve for me"
-                    description = "Only ask for actions detected as potentially unsafe."
-                } else {
-                    name = "Workspace access"
-                    description = "Use Codex's workspace access preset with its native approval and sandbox rules."
-                }
+                // An older adapter's workspace access preset is not offered.
+                guard separatesWorkspaceAccess || option["_meta"]?["kind"]?.stringValue == "auto_review" else { continue }
+                name = "Approve for me"
+                description = "Only ask for actions detected as potentially unsafe."
             case (.codex, "agent-full-access"), (.claudeCode, "bypassPermissions"):
                 name = "Full access"
             case (.claudeCode, "auto"):

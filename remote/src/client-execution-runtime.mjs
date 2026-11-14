@@ -58,12 +58,16 @@ export function createClientExecutionRuntime({ defaultAgent, durableACP, catalog
   // requested destination default, or the harness's Full access mode when none
   // was saved; an adapter that does not offer it keeps its native mode.
   // Reattaching an existing session changes its permission only to move it off
-  // a mode Woven no longer offers (Ask for approval, read only, plan, …).
+  // a mode Woven no longer offers (Ask for approval, read only, plan, an older
+  // Codex adapter's workspace access, …).
   async function applyWorkspacePolicy(native, runtimeKind, call, creation) {
     const forced = workspacePermission(runtimeKind, undefined, configuration)
-    const requested = supportedPermission(runtimeKind, creation?.permission)
-    const current = runtimeKind === 'grok_build' ? undefined : project(runtimeKind, native.configuration ?? {}).permission
-    const unsupported = current != null && !supportedPermissions(runtimeKind).includes(current)
+    const projected = runtimeKind === 'grok_build' ? undefined : project(runtimeKind, native.configuration ?? {})
+    const offered = projected?.permissions?.map(choice => choice.id) ?? []
+    const offers = id => id != null && (offered.length ? offered.includes(id) : supportedPermissions(runtimeKind).includes(id))
+    const requested = offers(creation?.permission) ? creation.permission : undefined
+    const current = projected?.permission
+    const unsupported = current != null && !offers(current)
     const permission = forced ?? (creation ? requested ?? fullAccessPermissions[runtimeKind] : unsupported ? fullAccessPermissions[runtimeKind] : undefined)
     if (!permission || runtimeKind === 'grok_build') return
     await applyTaskConfiguration(async (method, params) => {

@@ -1877,10 +1877,14 @@ public actor LocalACPSessionCoordinator {
         canSetPermission: Bool = true
     ) -> String? {
         let runtimeKind = descriptor.runtimeKind
-        if let saved = runtimeKind.supportedPermission(descriptor.permission) { return saved }
+        // The supported modes this adapter offers. An older Codex adapter's
+        // `agent` (workspace access) is already left out by the client.
+        let offered = runtimeKind.orderedPermissionOptions(configuration.permissionOptions)
+        func offers(_ id: String) -> Bool { offered.isEmpty ? runtimeKind.supportsPermission(id) : offered.contains(id) }
+        if let saved = descriptor.permission, offers(saved) { return saved }
         guard canSetPermission, let current = configuration.permission ?? descriptor.permission,
-              !runtimeKind.supportsPermission(current) else { return nil }
-        return runtimeKind.orderedPermissionOptions(configuration.permissionOptions).first
+              !offers(current) else { return nil }
+        return offered.first
     }
 
     /// Grok's permission is a process flag, so an unsupported or missing choice
