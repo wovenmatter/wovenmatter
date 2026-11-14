@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { DatabaseSync } from 'node:sqlite'
-import { createClientExecution } from '../src/client-execution.mjs'
+import { createClientExecution, executionSchemaVersion } from '../src/client-execution.mjs'
 import { enroll } from './fixtures/execution.mjs'
 
 const tick=()=>new Promise(resolve=>setTimeout(resolve,5))
@@ -138,4 +138,5 @@ test('a v0.4.2 execution store loses its single-Mac publication and keeps its la
   assert.equal(store.prepare("SELECT failures FROM publication_lanes WHERE name='journal'").get().failures, 3)
   assert.deepEqual(store.prepare('PRAGMA table_info(saved_execution_artifacts)').all().map(column => column.name), ['id', 'manifest', 'bytes'])
   assert.equal(store.prepare('SELECT count(*) AS n FROM saved_execution_artifacts').get().n, 1)
+  assert.equal(store.prepare('PRAGMA user_version').get().user_version, executionSchemaVersion)
 })

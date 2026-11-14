@@ -57,6 +57,60 @@ function inputExtras(command) {
   if (command.attachments != null && (!Array.isArray(command.attachments) || command.attachments.length > 8)) throw fail(400, 'Attach up to 8 files to one message.')
 }
 
+// The schema version of `execution.sqlite`, kept in its `PRAGMA user_version`.
+// Files from builds before it was recorded read 0.
+export const executionSchemaVersion = 1
+// Opens `execution.sqlite`. A file from a newer Woven Matter is refused and
+// left as it is. Its tables belong to this module and to the ones
+// `createClientExecution` starts (publisher, session watch, member sessions,
+// workspace MCP, orchestration), which each create theirs with
+// `CREATE TABLE IF NOT EXISTS` on every open; `createClientExecution` records
+// the version once all of them have run. The one-time conversions of older
+// shapes happen here, in one transaction, only for a file below the version.
+function openExecutionStore(path) {
+  const db = new DatabaseSync(path)
+  const version = db.prepare('PRAGMA user_version').get().user_version
+  if (version > executionSchemaVersion) {
+    db.close()
+    throw Object.assign(new Error(`${path} was written by a newer Woven Matter (execution schema version ${version}); this build supports version ${executionSchemaVersion}. Update Woven Matter on this machine.`), { code: 'execution_store_newer' })
+  }
+  db.exec('PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL')
+  db.exec('BEGIN IMMEDIATE')
+  try {
+    // Step 1, from version 0: a v0.4.2 store also published to a single
+    // designated Mac (its `central_publication` target, encrypted bearer and
+    // receipts) and kept that Mac's library MCP grant: those are dropped, and
+    // its lanes are renamed to serve this machine's own library copy. Each
+    // statement is a no-op on a store without that shape.
+    if (version < 1) {
+      const tables = new Set(db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all().map(row => row.name))
+      db.exec('DROP TABLE IF EXISTS central_publication; DROP TABLE IF EXISTS retained_publication_receipts')
+      if (tables.has('central_publication_lanes') && !tables.has('publication_lanes')) db.exec('ALTER TABLE central_publication_lanes RENAME TO publication_lanes')
+      if (tables.has('saved_execution_artifacts') && db.prepare('PRAGMA table_info(saved_execution_artifacts)').all().some(column => column.name === 'uploaded'))
+        db.exec('ALTER TABLE saved_execution_artifacts DROP COLUMN uploaded')
+      db.exec('DROP TABLE IF EXISTS central_publication_lanes; DROP TABLE IF EXISTS mcp_library_connection')
+    }
+    // Step 2 goes here: `if (version < 2) { ... }`, with executionSchemaVersion raised to 2.
+    db.exec(`CREATE TABLE IF NOT EXISTS identity (id INTEGER PRIMARY KEY CHECK(id=1), body TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS devices (id TEXT PRIMARY KEY, digest TEXT NOT NULL, body TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS commands (id TEXT PRIMARY KEY, device TEXT NOT NULL, fingerprint TEXT NOT NULL, body TEXT NOT NULL, receipt TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS conversations (id TEXT PRIMARY KEY, body TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS events (sequence INTEGER PRIMARY KEY AUTOINCREMENT, body TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS runs (id TEXT PRIMARY KEY, commandID TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS mcp_tool_receipts (caller TEXT NOT NULL, request_id TEXT NOT NULL, fingerprint TEXT NOT NULL, response TEXT, PRIMARY KEY(caller,request_id));`)
+    db.exec('COMMIT')
+  } catch (error) {
+    try { db.exec('ROLLBACK') } catch {}
+    db.close()
+    throw error
+  }
+  return { db, version }
+}
+// A session saved before its harness started, which a crash left behind.
+// Older builds saved it without a title or `updatedAt`, and never a native session.
+const unfinishedCreation = record => record.creating === true
+  || (!record.conversation?.updatedAt && !Object.keys(record.native ?? {}).length && !record.transcript?.messages?.length)
+
 // This store is owned by the workspace service (the existing host lock fences
 // competing owners). Neither a phone nor an SSH attachment owns these runs.
 // `workspaceRoot` is where sessions run (default: two levels above
@@ -67,15 +121,8 @@ export function createClientExecution({ directory, runtime, kind = 'linux', name
   workspaceRoot = resolve(directory, '../..'), attachments = null, titleGenerator = null, performanceLog = null }) {
   mkdirSync(directory, { recursive: true, mode: 0o700 })
   const path = resolve(directory, 'execution.sqlite')
-  const db = new DatabaseSync(path)
+  const { db, version: storedSchemaVersion } = openExecutionStore(path)
   chmodSync(path, 0o600)
-  db.exec(`PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;
-    CREATE TABLE IF NOT EXISTS identity (id INTEGER PRIMARY KEY CHECK(id=1), body TEXT NOT NULL);
-    CREATE TABLE IF NOT EXISTS devices (id TEXT PRIMARY KEY, digest TEXT NOT NULL, body TEXT NOT NULL);
-    CREATE TABLE IF NOT EXISTS commands (id TEXT PRIMARY KEY, device TEXT NOT NULL, fingerprint TEXT NOT NULL, body TEXT NOT NULL, receipt TEXT NOT NULL);
-    CREATE TABLE IF NOT EXISTS conversations (id TEXT PRIMARY KEY, body TEXT NOT NULL);
-    CREATE TABLE IF NOT EXISTS events (sequence INTEGER PRIMARY KEY AUTOINCREMENT, body TEXT NOT NULL);
-    CREATE TABLE IF NOT EXISTS runs (id TEXT PRIMARY KEY, commandID TEXT NOT NULL);`)
   let identity = JSON.parse(db.prepare('SELECT body FROM identity WHERE id=1').get()?.body ?? 'null')
   const jobs = new Map(), queues = new Map(), dirty = new Map()
   let flushTimer
@@ -171,8 +218,10 @@ export function createClientExecution({ directory, runtime, kind = 'linux', name
       const current = JSON.parse(row.receipt)
       if (current.status === 'accepted') receipt(JSON.parse(row.body), 'outcomeUnknown', { ...current, status: 'outcomeUnknown', message: 'The workspace restarted. Check the saved conversation before sending again.' })
     }
-    for (const row of db.prepare('SELECT body FROM conversations').all()) {
+    for (const row of db.prepare('SELECT id,body FROM conversations').all()) {
       const record = JSON.parse(row.body)
+      // As a failed creation is: its command's receipt becomes outcomeUnknown above.
+      if (unfinishedCreation(record)) { db.prepare('DELETE FROM conversations WHERE id=?').run(row.id); continue }
       if(record.goal?.status==='active'){setGoalStatus(record.goal,'paused');record.goal.evidence='The execution owner restarted. Resume explicitly.';delete record.goal.pendingDeliveryID;save(record)}
       if (record.conversation.activeRunID) {
         delete record.presentationFrames
@@ -431,9 +480,15 @@ export function createClientExecution({ directory, runtime, kind = 'linux', name
       // choices in `sessionOptions`, validated above and below.
       const defaults=mcp.settings().harnessDefaults?.[selected]??{},initial=command.initialConfiguration??{}
       const enabledTools=initial.enabledTools??options.enabledTools??[...new Set([...(defaults.tools??mcp.settings().enabledByDefault),'goals'])]
+      // A title named at creation (a member's createSession, or the frozen intent) stays past the first message.
+      const named=[command.title,initial.title].find(value=>typeof value==='string'&&value.trim())?.trim().slice(0,256)
+      const conversation={ id: command.conversationID, title:named??'New conversation', preview: '', runtimeKind: selected,
+        providerID: provider.id, routeID: identity.id, workspaceID: identity.id, ...(command.folderID ? {folderID: command.folderID} : {}), updatedAt: date() }
       // The authenticated tool session exists before a native MCP client
       // discovers its catalog. No prompt has been submitted at this point.
-      save({native:{},pending:[],enabledTools,conversation:{id:command.conversationID,runtimeKind:selected,workspaceID:identity.id,routeID:identity.id,...(command.folderID?{folderID:command.folderID}:{})},transcript:{conversationID:command.conversationID,messages:[],activities:[]}})
+      // Streams show this record as a complete conversation; `creating`
+      // marks it for removal at startup if the process ends before the harness starts.
+      save({native:{},creating:true,pending:[],enabledTools,conversation:{...conversation},transcript:{conversationID:command.conversationID,messages:[],activities:[]}})
       let native
       try {
         const nativeWorkingDirectory=initial.nativeWorkingDirectory??await creationDirectory(command,options,trusted)
@@ -444,10 +499,7 @@ export function createClientExecution({ directory, runtime, kind = 'linux', name
       // ones, applied as the Mac applied them to a session it created over
       // SSH: one the harness does not offer, or a failure, keeps the native value.
       if(!command.initialConfiguration)await applySelections(native,selected,{model:options.model??defaults.model,thinking:options.thinking??defaults.thinking})
-      // A title named at creation (a member's createSession, or the frozen intent) stays past the first message.
-      const named=[command.title,initial.title].find(value=>typeof value==='string'&&value.trim())?.trim().slice(0,256)
-      const record = { native, pending: [], enabledTools, ...(named?{titled:true}:{}), conversation: { id: command.conversationID, title:named??'New conversation', preview: '', runtimeKind: selected,
-        providerID: provider.id, routeID: identity.id, workspaceID: identity.id, ...(command.folderID ? {folderID: command.folderID} : {}), updatedAt: date() },
+      const record = { native, pending: [], enabledTools, ...(named?{titled:true}:{}), conversation: { ...conversation, updatedAt: date() },
         transcript: { conversationID: command.conversationID, messages: [], activities: [] } }
       return transaction(() => { publish(record); return receipt(command, 'completed') })
     }
@@ -871,7 +923,6 @@ export function createClientExecution({ directory, runtime, kind = 'linux', name
   const localMCPTools=['woven_sessions_create','woven_sessions_send','woven_sessions_stop','woven_sessions_respond','woven_sessions_manage','woven_sessions_release','woven_sessions_notifications','woven_sessions_receipts','woven_context','woven_goals_get','woven_goals_set','woven_goals_pause','woven_goals_resume','woven_goals_clear','woven_goals_complete','woven_goals_block','woven_goals_checkpoint',
     'woven_sessions_list','woven_sessions_status','woven_sessions_wait','woven_sessions_harnesses','woven_history_search','woven_history_conversations','woven_history_conversation','woven_history_message','woven_history_runs','woven_history_trace','woven_history_events','woven_history_event',
     'woven_databases_list','woven_databases_create','woven_databases_query','woven_databases_execute',...(workspaceBrowser?['woven_browser_use','woven_browser_use_cancel']:[])]
-  db.exec('CREATE TABLE IF NOT EXISTS mcp_tool_receipts (caller TEXT NOT NULL, request_id TEXT NOT NULL, fingerprint TEXT NOT NULL, response TEXT, PRIMARY KEY(caller,request_id))')
   // `members` ({transport, deviceID, hasMac}) reaches other members with this
   // host's signed requests: sessions on any workspace, and the Mac-only tools.
   const memberDelegate=members?createMemberMacDelegate({transport:members.transport,workspaceID:()=>descriptor().id,hasMac:members.hasMac}):null
@@ -933,6 +984,9 @@ export function createClientExecution({ directory, runtime, kind = 'linux', name
     throw fail(503,'This workspace reaches other workspaces through its library host, which is not running.')
   }
   const orchestration=createWorkspaceMCPOrchestration({db,identity:descriptor,getRecord,command:(body,device)=>command(body,device,{internal:true}),runtime,settings:()=>mcp.settings(),runningSessions:()=>Number(db.prepare("SELECT count(*) AS count FROM conversations WHERE json_extract(body,'$.conversation.activeRunID') IS NOT NULL").get().count)+externalRunningSessions(),policy:id=>getRecord(id).enabledTools??mcp.settings().enabledByDefault,notifyApproval:setInteraction})
+  // Every module above has created its tables: the file is at the current
+  // schema version. Until this is recorded, the next open repeats step 1.
+  if (storedSchemaVersion < executionSchemaVersion) db.exec(`PRAGMA user_version=${executionSchemaVersion}`)
   // One operation on a session another workspace runs (or, for stop and
   // respond, one this caller coordinates here), through that workspace's
   // execution API.

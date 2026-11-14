@@ -11,17 +11,9 @@ const sameArtifact = (a,b) => ['id','workspaceID','title','mediaType','byteCount
 // library host) through the socket's `/v1/publisher/*` routes and reaches
 // other devices by peer sync. Without a library host nothing is published.
 export function createClientExecutionPublisher({ db, identity, events, flush = () => {}, intervalMilliseconds = 5000, localLibrary = null }) {
-  // One-time conversion of a v0.4.2 store, which also published to a single
-  // designated Mac (its `central_publication` target, encrypted bearer and
-  // receipts): those are dropped, and its lanes are renamed to serve this
-  // machine's own library copy. Each step is a no-op on a current store.
-  const tables = new Set(db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all().map(row => row.name))
-  db.exec('DROP TABLE IF EXISTS central_publication; DROP TABLE IF EXISTS retained_publication_receipts')
-  if (tables.has('central_publication_lanes') && !tables.has('publication_lanes')) db.exec('ALTER TABLE central_publication_lanes RENAME TO publication_lanes')
-  if (tables.has('saved_execution_artifacts') && db.prepare('PRAGMA table_info(saved_execution_artifacts)').all().some(column => column.name === 'uploaded'))
-    db.exec('ALTER TABLE saved_execution_artifacts DROP COLUMN uploaded')
-  db.exec(`DROP TABLE IF EXISTS central_publication_lanes;
-    CREATE TABLE IF NOT EXISTS publication_lanes (name TEXT PRIMARY KEY, failures INTEGER NOT NULL DEFAULT 0, next_attempt INTEGER NOT NULL DEFAULT 0, last_success TEXT, last_error_code TEXT);
+  // A v0.4.2 store's single-Mac publication tables are converted when
+  // `execution.sqlite` opens (client-execution.mjs, schema step 1).
+  db.exec(`CREATE TABLE IF NOT EXISTS publication_lanes (name TEXT PRIMARY KEY, failures INTEGER NOT NULL DEFAULT 0, next_attempt INTEGER NOT NULL DEFAULT 0, last_success TEXT, last_error_code TEXT);
     INSERT OR IGNORE INTO publication_lanes(name) VALUES ('journal'),('artifacts');
     CREATE TABLE IF NOT EXISTS saved_execution_artifacts (id TEXT PRIMARY KEY, manifest TEXT NOT NULL, bytes BLOB NOT NULL);
     CREATE TABLE IF NOT EXISTS local_library_publication (id INTEGER PRIMARY KEY CHECK(id=1), acknowledged INTEGER NOT NULL DEFAULT 0);

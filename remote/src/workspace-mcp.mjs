@@ -29,9 +29,9 @@ export function loadWorkspaceMCPCatalog() {
 // `memberDelegate` reaches any Mac member with signed requests for the tools
 // the library host does not serve (member-client.mjs).
 export function createWorkspaceMCP({db,identity,endpointURL,policy,localTools,localCall,catalog=loadWorkspaceMCPCatalog(),beforeLibraryCall=async()=>{},scopedHistoryAccess=()=>false,localLibrary=null,memberDelegate=null,onTimersChanged=()=>{},botTools=[]}) {
-  // A v0.4.2 host kept a single Mac's library MCP grant here; the library host serves it now.
-  db.exec(`DROP TABLE IF EXISTS mcp_library_connection;
-    CREATE TABLE IF NOT EXISTS mcp_external_clients (id TEXT PRIMARY KEY, digest TEXT NOT NULL UNIQUE, body TEXT NOT NULL);
+  // A v0.4.2 host's single-Mac library MCP grant is dropped when
+  // `execution.sqlite` opens (client-execution.mjs, schema step 1).
+  db.exec(`CREATE TABLE IF NOT EXISTS mcp_external_clients (id TEXT PRIMARY KEY, digest TEXT NOT NULL UNIQUE, body TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS mcp_preferences (id INTEGER PRIMARY KEY CHECK(id=1), body TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS mcp_bot_keys (bot_id TEXT PRIMARY KEY, digest TEXT NOT NULL UNIQUE, body TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS mcp_bot_revocations (bot_id TEXT PRIMARY KEY, revoked_at TEXT NOT NULL);`)
