@@ -1,5 +1,5 @@
 import Foundation
-import WovenMatterDashboardStore
+import WovenMatterLibraryStore
 
 /// A shared container port. The runtime already carries it to a loopback activity proxy
 /// over Engine API exec streams; this publishes that proxy with Tailscale Serve on its own

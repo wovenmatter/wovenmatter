@@ -12,7 +12,7 @@ public actor ExecutorBrokerClient {
     private let directory: URL
     public init(directory: URL) { self.directory = directory }
 
-    public func call(_ value: GatewayJSONValue) async throws -> GatewayJSONValue {
+    public func call(_ value: JSONValue) async throws -> JSONValue {
         let data = try JSONEncoder().encode(value)
         guard data.count <= 1_048_576 else { throw DefaultAgentError.message("Executor manager request is too large.") }
         if session?.process.isRunning != true {
@@ -44,7 +44,7 @@ public actor ExecutorBrokerClient {
                 if response.last == 10 { break }
             }
             guard !response.isEmpty else { throw DefaultAgentError.message("Executor manager stopped. Check existing effects before retrying a program.") }
-            let reply = try JSONDecoder().decode(GatewayJSONValue.self, from: response)
+            let reply = try JSONDecoder().decode(JSONValue.self, from: response)
             if let error = reply.objectValue?["error"]?.stringValue { throw DefaultAgentError.message(error) }
             return reply.objectValue?["result"] ?? .null
         }

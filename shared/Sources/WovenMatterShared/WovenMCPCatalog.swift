@@ -6,7 +6,7 @@ public enum WovenMCPCatalog {
   private struct Field: Sendable {
     let name: String
     let option: String
-    let schema: GatewayJSONValue
+    let schema: JSONValue
     var flag = false
     var json = false
   }
@@ -20,8 +20,8 @@ public enum WovenMCPCatalog {
   }
   public static let tools: [WovenMCPToolDefinition] = entries.map(\.definition)
 
-  public static func request(name: String, arguments: GatewayJSONValue, contextID: String? = nil,
-                             metadata: GatewayJSONValue? = nil) throws -> WovenMatterToolRequest {
+  public static func request(name: String, arguments: JSONValue, contextID: String? = nil,
+                             metadata: JSONValue? = nil) throws -> WovenMatterToolRequest {
     guard let entry = entries.first(where: { $0.definition.name == name }) else { throw invalid("Unknown Woven tool: \(name).") }
     guard let values = arguments.objectValue else { throw invalid("Tool arguments must be an object.") }
     var validationSchema = entry.definition.inputSchema
@@ -72,10 +72,10 @@ public enum WovenMCPCatalog {
     return .init(arguments: command, requestID: requestID, contextID: contextID)
   }
 
-  public static func result(_ response: WovenMatterToolResponse) -> GatewayJSONValue {
+  public static func result(_ response: WovenMatterToolResponse) -> JSONValue {
     let response = response.bounded()
     let structured = (try? json(response)) ?? .object(["success": .bool(false)])
-    let content: [GatewayJSONValue]
+    let content: [JSONValue]
     if response.success, let blocks = response.result?.objectValue?["content"]?.arrayValue {
       content = blocks
     } else {
@@ -85,16 +85,16 @@ public enum WovenMCPCatalog {
     return .object(["content": .array(content), "structuredContent": structured, "isError": .bool(!response.success)])
   }
 
-  public static func json<T: Encodable>(_ value: T) throws -> GatewayJSONValue {
-    try JSONDecoder().decode(GatewayJSONValue.self, from: JSONEncoder().encode(value))
+  public static func json<T: Encodable>(_ value: T) throws -> JSONValue {
+    try JSONDecoder().decode(JSONValue.self, from: JSONEncoder().encode(value))
   }
-  private static func encoded(_ value: GatewayJSONValue) throws -> String {
+  private static func encoded(_ value: JSONValue) throws -> String {
     let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
     return String(decoding: try encoder.encode(value), as: UTF8.self)
   }
   private static func invalid(_ message: String) -> WorkspaceToolError { .invalid(message) }
 
-  private static func validate(_ value: GatewayJSONValue, schema: GatewayJSONValue, path: String) throws {
+  private static func validate(_ value: JSONValue, schema: JSONValue, path: String) throws {
     guard let spec = schema.objectValue else { return }
     if let choices = spec["enum"]?.arrayValue, !choices.contains(value) { throw invalid("\(path) has an unsupported value.") }
     switch spec["type"]?.stringValue {
@@ -128,10 +128,10 @@ public enum WovenMCPCatalog {
     let key = name ?? option.split(separator: "-").enumerated().map { index, part in
       index == 0 ? String(part) : part == "id" ? "ID" : String(part).prefix(1).uppercased() + part.dropFirst()
     }.joined()
-    var schema: [String: GatewayJSONValue] = ["type": .string(type)]
+    var schema: [String: JSONValue] = ["type": .string(type)]
     if option == "request-id" { schema["format"] = .string("uuid") }
     if option == "profile" { schema["pattern"] = .string("^[a-z0-9-]{1,32}$"); schema["maxLength"] = .number(32) }
-    if let choices { schema["enum"] = .array(choices.map(GatewayJSONValue.string)) }
+    if let choices { schema["enum"] = .array(choices.map(JSONValue.string)) }
     if let minimum { schema["minimum"] = .number(minimum) }
     if let maximum { schema["maximum"] = .number(maximum) }
     if type == "array" { schema["items"] = .object(["type": .string("object")]); schema["maxItems"] = .number(128) }
@@ -154,12 +154,12 @@ public enum WovenMCPCatalog {
       let toolName = name ?? "woven_" + command.joined(separator: "_").replacingOccurrences(of: "-", with: "_")
       let fields = fields + [requestID]
       let required = Set(required.split(separator: " ").map(String.init))
-      let schema: GatewayJSONValue = .object(["type": .string("object"), "additionalProperties": .bool(false),
+      let schema: JSONValue = .object(["type": .string("object"), "additionalProperties": .bool(false),
         "properties": .object(Dictionary(uniqueKeysWithValues: fields.map { ($0.name, $0.schema) })),
-        "required": .array(required.sorted().map(GatewayJSONValue.string))])
+        "required": .array(required.sorted().map(JSONValue.string))])
       let detail = description ?? "\(path.replacingOccurrences(of: "-", with: " ").capitalized) using the authenticated caller's current Woven permissions."
       let text = detail + (mutation ? " Optionally supply a stable requestID UUID; the response returns one when omitted. Reuse the same UUID only for an identical retry; inspect current state after an uncertain external effect." : "")
-      var annotations: [String: GatewayJSONValue] = ["readOnlyHint": .bool(!mutation), "openWorldHint": .bool(true)]
+      var annotations: [String: JSONValue] = ["readOnlyHint": .bool(!mutation), "openWorldHint": .bool(true)]
       if let idempotent { annotations["idempotentHint"] = .bool(idempotent); annotations["destructiveHint"] = .bool(false) }
       result.append(.init(definition: .init(name: toolName, description: text, inputSchema: schema,
         annotations: .object(annotations)),

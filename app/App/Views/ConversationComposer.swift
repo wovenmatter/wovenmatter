@@ -1,0 +1,1344 @@
+import AppKit
+import SwiftUI
+import WovenMatterClient
+import WovenMatterCore
+
+struct PanelControlButton: View {
+    static let size: CGFloat = 36
+
+    let glyph: LucideGlyph
+    let accessibilityLabel: String
+    let help: String
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            LucideIcon(glyph: glyph, size: 18)
+                .frame(width: Self.size, height: Self.size)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(WovenIconButtonStyle())
+        .accessibilityLabel(accessibilityLabel)
+        .help(help)
+    }
+}
+
+struct ConversationComposer: View {
+    /// Inset above and below the content; the bottom control row ends here.
+    static let verticalPadding: CGFloat = 10
+
+    let placeholder: String
+    @Binding var draft: String
+    let attachedNoteTitle: String?
+    let attachments: [AgentMessageAttachmentDraft]
+    let agentTools: WorkspaceAgentToolsModel?
+    let sessionID: String?
+    let supportsGoals: Bool
+    let showsSessionControls: Bool
+    let showsPermissionControl: Bool
+    let sessionMetadataLoading: Bool
+    let sessionMetadata: LocalACPSessionMetadata?
+    let sessionControlsDisabled: Bool
+    let sendDisabled: Bool
+    let startsCollapsed: Bool
+    @Binding var collapseOverride: Bool?
+    let focusRequestGeneration: Int?
+    let onActivate: () -> Void
+    let onSelectModel: ((String) -> Void)?
+    let onSelectThinking: ((String) -> Void)?
+    let onSelectPermission: ((String) -> Void)?
+    let onAttachmentAction: (ComposerAttachmentAction) -> Void
+    let onRemoveAttachment: (String) -> Void
+    let onOpenAttachment: (AgentFileAttachmentDraft) -> Void
+    let onDropFiles: ([URL]) -> Bool
+    let onCommandNavigation: (ComposerNavigationDirection) -> Bool
+    let onSend: () -> Void
+    var onStop: (() -> Void)? = nil
+    var folderLabel: String? = nil
+    var availableFolders: [WorkspaceFolderRecord] = []
+    var selectedFolderID: String? = nil
+    var folderWorkspaceID: String? = nil
+    var folderSelectionDisabled = true
+    var onSelectFolder: ((String?) -> Void)? = nil
+    /// When set, the add button goes straight to the upload action under this label.
+    var directAttachmentLabel: String? = nil
+    /// Offered Escape first, after slash commands. Returns whether it handled the key.
+    var onEscapeKey: (() -> Bool)? = nil
+    @Environment(\.wovenTheme) private var theme
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.conversationTaskProgress) private var taskProgress
+    @Environment(\.conversationTranscriptState) private var transcriptState
+    @State private var localTasksExpanded = false
+    @State private var selectedSlashCommandID: String?
+    @State private var slashCommandsDismissed = false
+    @State private var slashNavigationRequest = 0
+    @State private var completionRequest = 0
+    @State private var caretAtEnd = true
+    @State private var focused = false
+    @State private var dictationEditor = DictationEditor()
+    @State private var dictationDraftID = UUID().uuidString
+    @State private var openMenu: ComposerMenuKind?
+    @State private var isDropTarget = false
+    @State private var permitsNarrowExpandedControls = false
+
+    private var isCollapsed: Bool {
+        collapseOverride ?? startsCollapsed
+    }
+
+    var body: some View {
+        VStack(spacing: 6) {
+            if let folderLabel {
+                HStack(spacing: 6) {
+                    Menu {
+                        Button("All Workspaces") { onSelectFolder?(nil) }
+                            .disabled(selectedFolderID == nil)
+                        ForEach(availableFolders) { folder in
+                            Button(folder.name) { onSelectFolder?(folder.id) }
+                                .disabled(selectedFolderID == folder.id
+                                    || (folder.executionWorkspaceID == nil || folder.executionWorkspaceID != folderWorkspaceID))
+                        }
+                    } label: {
+                        Label(folderLabel, systemImage: "folder")
+                            .font(.system(size: 11.5, weight: .medium))
+                            .lineLimit(1)
+                    }
+                    .menuStyle(.borderlessButton)
+                    .menuIndicator(folderSelectionDisabled || onSelectFolder == nil ? .hidden : .visible)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .disabled(folderSelectionDisabled || onSelectFolder == nil)
+                    .help(folderSelectionDisabled ? "The folder is fixed after the first message." : "Choose a folder in this agent's workspace")
+                    .accessibilityLabel("Chat folder: \(folderLabel)")
+                    Spacer(minLength: 0)
+                }
+            }
+            if let attachedNoteTitle {
+                HStack(spacing: 6) {
+                    Image(systemName: "doc.text")
+                    Text(attachedNoteTitle)
+                        .lineLimit(1)
+                    Text("shared on send")
+                        .foregroundStyle(WovenPalette.mutedForeground)
+                    Spacer(minLength: 0)
+                }
+                .font(.system(size: 11.5, weight: .medium))
+                .foregroundStyle(WovenPalette.foreground)
+                .accessibilityLabel("\(attachedNoteTitle) shared with the agent when you send")
+            }
+            if !attachments.isEmpty {
+                ScrollView(.horizontal) {
+                    HStack(spacing: 7) {
+                        ForEach(attachments) { attachment in
+                            DraftAttachmentChip(
+                                attachment: attachment,
+                                onRemove: { onRemoveAttachment(attachment.id) },
+                                onOpen: {
+                                    if case .file(let file) = attachment { onOpenAttachment(file) }
+                                }
+                            )
+                        }
+                    }
+                }
+                .scrollIndicators(.never)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            if let agentTools, let sessionID, !agentTools.policy(for: sessionID).enabled.contains(.history),
+               attachments.contains(where: { if case .reference(let reference) = $0 { return reference.kind == .conversation }; return false }) {
+                Text("Conversation history is off. Attached sessions grant read-only access to those sessions only.")
+                    .font(.system(size: 11)).foregroundStyle(WovenPalette.mutedForeground)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            if isCollapsed {
+                HStack(alignment: .bottom, spacing: 2) {
+                    composerTextEditor(maximumVisibleLines: 3)
+                    collapsedControls
+                }
+            } else {
+                composerTextEditor(maximumVisibleLines: 7)
+            }
+
+            if showsSlashCommands {
+                slashCommandPicker
+            }
+
+            if !isCollapsed {
+                ViewThatFits(in: .horizontal) {
+                    // Compare whole rows so a label's intrinsic width cannot
+                    // skip straight from truncation to the compact fallback.
+                    regularControls(permissionLabel: .full)
+                    if showsSessionControls && showsPermissionControl {
+                        if permissionLabels.short != nil {
+                            regularControls(permissionLabel: .short)
+                        }
+                        regularControls(permissionLabel: .icon)
+                    }
+                    compactControls
+                        .onAppear {
+                            if permitsNarrowExpandedControls {
+                                permitsNarrowExpandedControls = false
+                            } else {
+                                collapseOverride = true
+                            }
+                        }
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 12)
+        .padding(.vertical, Self.verticalPadding)
+        .glassEffect(
+            .regular.interactive(),
+            in: RoundedRectangle(
+                cornerRadius: WovenMetrics.composerRadius,
+                style: .continuous
+            )
+        )
+        .overlay {
+            RoundedRectangle(cornerRadius: WovenMetrics.composerRadius, style: .continuous)
+                .stroke(
+                    isDropTarget
+                        ? WovenPalette.primary
+                        : WovenPalette.foreground.opacity(0.06),
+                    lineWidth: isDropTarget ? 2 : 1
+                )
+        }
+        .shadow(
+            color: focused ? WovenPalette.primary.opacity(0.18) : WovenPalette.foreground.opacity(0.04),
+            radius: focused ? 14 : 2,
+            y: focused ? 8 : 1
+        )
+        .background {
+            RoundedRectangle(cornerRadius: WovenMetrics.composerRadius, style: .continuous)
+                .fill(.clear)
+                .contentShape(
+                    RoundedRectangle(cornerRadius: WovenMetrics.composerRadius, style: .continuous)
+                )
+                .onTapGesture {
+                    openMenu = nil
+                    focused = true
+                }
+        }
+        .conversationTasksBadge(taskProgress, isExpanded: Binding(
+            get: { transcriptState?.tasksExpanded ?? localTasksExpanded },
+            set: { if let transcriptState { transcriptState.tasksExpanded = $0 } else { localTasksExpanded = $0 } }
+        ), onInteraction: {
+            onActivate()
+            focused = true
+        })
+        .background {
+            ComposerClickAwayMonitor(isActive: focused || openMenu != nil) {
+                focused = false
+                openMenu = nil
+            }
+            .allowsHitTesting(false)
+        }
+        .onExitCommand {
+            if !dismissSlashCommands() {
+                focused = false
+                openMenu = nil
+            }
+        }
+        .onChange(of: draft) { _, _ in
+            slashCommandsDismissed = false
+            selectedSlashCommandID = nil
+        }
+        .dropDestination(for: URL.self) { urls, _ in
+            onActivate()
+            return onDropFiles(urls)
+        } isTargeted: { targeted in
+            isDropTarget = targeted
+        }
+        .onChange(of: focusRequestGeneration) { _, generation in
+            guard generation != nil else { return }
+            focused = true
+        }
+        .onChange(of: focused) { _, isFocused in
+            if isFocused {
+                onActivate()
+            }
+        }
+        .onAppear {
+            if focusRequestGeneration != nil {
+                focused = true
+            }
+        }
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.15), value: openMenu)
+    }
+
+    private func composerTextEditor(maximumVisibleLines: Int) -> some View {
+        ComposerTextEditor(
+            text: $draft,
+            isFocused: $focused,
+            placeholder: placeholder,
+            maximumVisibleLines: maximumVisibleLines,
+            onSubmit: {
+                if applySelectedSlashCommandIfNeeded() { return }
+                if canSend { onSend() }
+            },
+            onTab: applySelectedSlashCommandIfNeeded,
+            onCommandNavigation: onCommandNavigation,
+            onMoveSelection: moveSlashSelection,
+            onEscape: { dismissSlashCommands() || onEscapeKey?() == true },
+            completionRequest: $completionRequest,
+            onCaretAtEndChange: { caretAtEnd = $0 },
+            onAttachFiles: onDropFiles,
+            dictationEditor: dictationEditor,
+            dictationIdentity: sessionID ?? dictationDraftID
+        )
+        .frame(
+            minWidth: 0,
+            maxWidth: .infinity,
+            minHeight: isCollapsed ? 36 : 32,
+            alignment: .topLeading
+        )
+        .simultaneousGesture(TapGesture().onEnded { openMenu = nil })
+    }
+
+    private var canSend: Bool {
+        !sendDisabled
+            && (!draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                || !attachments.isEmpty)
+    }
+
+    private var slashQuery: String? {
+        guard draft.hasPrefix("/"), !draft.contains(where: \.isWhitespace) else { return nil }
+        return String(draft.dropFirst())
+    }
+
+    private var matchingSlashCommands: [LocalACPSlashCommand] {
+        guard let query = slashQuery else { return [] }
+        let goalCommands = supportsGoals
+            ? [LocalACPSlashCommand(name: "goal", detail: "Ask the agent to pursue a goal", argumentHint: "objective")] : []
+        let commands = goalCommands + (sessionMetadata?.slashCommands ?? []).filter {
+            !supportsGoals || $0.name.lowercased() != "goal"
+        }
+        let needle = query.lowercased()
+        return commands.filter { command in
+            needle.isEmpty || command.name.lowercased().hasPrefix(needle)
+        }
+    }
+
+    private var showsSlashCommands: Bool {
+        focused && caretAtEnd && !slashCommandsDismissed && !matchingSlashCommands.isEmpty
+    }
+
+    private var selectedSlashCommand: LocalACPSlashCommand? {
+        matchingSlashCommands.first { $0.id == selectedSlashCommandID }
+            ?? matchingSlashCommands.first
+    }
+
+    private var slashCommandPicker: some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 0) {
+                    ForEach(matchingSlashCommands) { command in
+                        Button {
+                            applySlashCommand(command)
+                        } label: {
+                            HStack(spacing: 8) {
+                                Text("/\(command.name)")
+                                    .font(.system(size: 12.5, weight: .medium))
+                                    .foregroundStyle(WovenPalette.foreground)
+                                if let hint = command.argumentHint, !hint.isEmpty {
+                                    Text(hint)
+                                        .font(.system(size: 11.5, design: .monospaced))
+                                        .foregroundStyle(WovenPalette.mutedForeground)
+                                        .lineLimit(1)
+                                }
+                                if let detail = command.detail, !detail.isEmpty {
+                                    Text(detail)
+                                        .font(.system(size: 11.5))
+                                        .foregroundStyle(WovenPalette.mutedForeground)
+                                        .lineLimit(1)
+                                }
+                                Spacer(minLength: 0)
+                            }
+                            .padding(.horizontal, 10)
+                            .frame(height: 32)
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .background(
+                            selectedSlashCommand?.id == command.id ? theme.palette.themeSoft : .clear,
+                            in: RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        )
+                        .onHover { hovering in
+                            if hovering { selectedSlashCommandID = command.id }
+                        }
+                        .accessibilityLabel("/\(command.name)")
+                        .accessibilityValue(selectedSlashCommand?.id == command.id ? "Selected" : "")
+                        .id(command.id)
+                    }
+                }
+            }
+            .scrollIndicators(.never)
+            .frame(height: min(CGFloat(matchingSlashCommands.count) * 32, 224))
+            .onChange(of: slashNavigationRequest) { _, _ in
+                if let command = selectedSlashCommand {
+                    proxy.scrollTo(command.id)
+                }
+            }
+            .onChange(of: slashQuery) { _, _ in
+                if let command = matchingSlashCommands.first {
+                    proxy.scrollTo(command.id, anchor: .top)
+                }
+            }
+        }
+    }
+
+    private func moveSlashSelection(_ direction: Int) -> Bool {
+        guard showsSlashCommands else { return false }
+        let commands = matchingSlashCommands
+        let current = commands.firstIndex { $0.id == selectedSlashCommand?.id } ?? 0
+        let next = min(max(current + direction, 0), commands.count - 1)
+        selectedSlashCommandID = commands[next].id
+        slashNavigationRequest += 1
+        return true
+    }
+
+    private func dismissSlashCommands() -> Bool {
+        guard showsSlashCommands else { return false }
+        slashCommandsDismissed = true
+        return true
+    }
+
+    private func applySelectedSlashCommandIfNeeded() -> Bool {
+        guard showsSlashCommands, let command = selectedSlashCommand else { return false }
+        applySlashCommand(command)
+        return true
+    }
+
+    private func applySlashCommand(_ command: LocalACPSlashCommand) {
+        draft = "/\(command.name) "
+        completionRequest += 1
+        focused = true
+        openMenu = nil
+    }
+
+    private func composerIconButton(
+        icon: LucideGlyph,
+        accessibilityLabel: String,
+        menu: ComposerMenuKind
+    ) -> some View {
+        Button {
+            onActivate()
+            focused = false
+            openMenu = openMenu == menu ? nil : menu
+        } label: {
+            LucideIcon(glyph: icon, size: 16)
+                .frame(width: 36, height: 36)
+                .contentShape(Circle())
+        }
+        .buttonStyle(ComposerControlButtonStyle())
+        .accessibilityLabel(accessibilityLabel)
+        .accessibilityValue(openMenu == menu ? "Expanded" : "Collapsed")
+        .help(accessibilityLabel)
+    }
+
+    @ViewBuilder
+    private var toolsControl: some View {
+        if let agentTools, let sessionID {
+            Button {
+                onActivate()
+                focused = false
+                openMenu = openMenu == .tools ? nil : .tools
+            } label: {
+                HStack(spacing: 3) {
+                    Text("Tools").font(.system(size: 11.5, weight: .medium))
+                    Image(systemName: "chevron.down").font(.system(size: 8, weight: .semibold))
+                }.padding(.horizontal, 6).frame(height: 36)
+            }
+            .buttonStyle(ComposerControlButtonStyle())
+            .accessibilityLabel("Session tools")
+            .accessibilityValue(openMenu == .tools ? "Expanded" : "Collapsed")
+            .popover(isPresented: Binding(get: { openMenu == .tools }, set: { if !$0, openMenu == .tools { openMenu = nil } })) {
+                WorkspaceSessionToolsMenu(tools: agentTools, sessionID: sessionID)
+            }
+        }
+    }
+
+    private func regularControls(permissionLabel: ComposerPermissionLabel) -> some View {
+        HStack(spacing: 4) {
+            attachmentControl
+
+            if showsSessionControls {
+                sessionMenu(
+                    kind: .model,
+                    icon: .cpu,
+                    title: sessionMetadata?.model.map { SessionOptionMetadata.modelButtonLabel(id: $0, metadata: sessionMetadata?.modelOptionMetadata?[$0]) } ?? "Model",
+                    menuTitle: "Model",
+                    accessibilityLabel: "Choose session model",
+                    options: sessionMetadata?.selectableModels ?? [],
+                    selection: sessionMetadata?.model,
+                    optionMetadata: sessionMetadata?.modelOptionMetadata ?? [:],
+                    action: onSelectModel
+                )
+                sessionMenu(
+                    kind: .thinking,
+                    icon: .brain,
+                    title: sessionMetadata?.thinking.map { sessionMetadata?.thinkingOptionMetadata?[$0]?.name ?? sessionThinkingLabel($0) } ?? "Thinking",
+                    menuTitle: "Thinking Level",
+                    accessibilityLabel: "Choose thinking level",
+                    options: sessionMetadata?.selectableThinkingLevels ?? [],
+                    selection: sessionMetadata?.thinking,
+                    optionMetadata: sessionMetadata?.thinkingOptionMetadata ?? [:],
+                    capitalizeOptions: true,
+                    action: onSelectThinking
+                )
+                if showsPermissionControl {
+                    permissionMenu(label: permissionLabel)
+                }
+            }
+            toolsControl
+
+            Spacer(minLength: 8)
+            collapseControl
+            voiceControl
+            sendControl
+        }
+        .onAppear {
+            if permitsNarrowExpandedControls {
+                permitsNarrowExpandedControls = false
+            }
+        }
+    }
+
+    private var compactControls: some View {
+        HStack(spacing: 4) {
+            HStack(spacing: 4) {
+                attachmentControl
+                if showsSessionControls {
+                    compactSessionMenu(
+                        kind: .model,
+                        icon: .cpu,
+                        title: sessionMetadata?.model.map { SessionOptionMetadata.modelButtonLabel(id: $0, metadata: sessionMetadata?.modelOptionMetadata?[$0]) } ?? "Model",
+                        menuTitle: "Model",
+                        accessibilityLabel: "Choose session model",
+                        options: sessionMetadata?.selectableModels ?? [],
+                        selection: sessionMetadata?.model,
+                        optionMetadata: sessionMetadata?.modelOptionMetadata ?? [:],
+                        action: onSelectModel
+                    )
+                    compactSessionMenu(
+                        kind: .thinking,
+                        icon: .brain,
+                        title: sessionMetadata?.thinking.map { sessionMetadata?.thinkingOptionMetadata?[$0]?.name ?? sessionThinkingLabel($0) } ?? "Thinking",
+                        menuTitle: "Thinking Level",
+                        accessibilityLabel: "Choose thinking level",
+                        options: sessionMetadata?.selectableThinkingLevels ?? [],
+                        selection: sessionMetadata?.thinking,
+                        optionMetadata: sessionMetadata?.thinkingOptionMetadata ?? [:],
+                        capitalizeOptions: true,
+                        action: onSelectThinking
+                    )
+                    if showsPermissionControl {
+                        permissionMenu(label: .icon)
+                    }
+                }
+                toolsControl
+            }
+
+            Spacer(minLength: 8)
+            collapseControl
+            voiceControl
+            sendControl
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var collapsedControls: some View {
+        HStack(spacing: 4) {
+            collapseControl
+            voiceControl
+            sendControl
+        }
+        .fixedSize(horizontal: true, vertical: false)
+    }
+
+    private var collapseControl: some View {
+        Button {
+            onActivate()
+            openMenu = nil
+            if isCollapsed {
+                permitsNarrowExpandedControls = true
+                collapseOverride = false
+            } else {
+                permitsNarrowExpandedControls = false
+                collapseOverride = true
+            }
+        } label: {
+            LucideIcon(glyph: .chevronDown, size: 18)
+                .rotationEffect(.degrees(isCollapsed ? 180 : 0))
+                .frame(width: 36, height: 36)
+                .contentShape(Circle())
+        }
+        .buttonStyle(ComposerControlButtonStyle())
+        .accessibilityLabel(isCollapsed ? "Expand composer" : "Collapse composer")
+        .accessibilityValue(isCollapsed ? "Collapsed" : "Expanded")
+        .help(isCollapsed ? "Expand composer" : "Collapse composer")
+    }
+
+    @ViewBuilder private var attachmentControl: some View {
+        if let directAttachmentLabel {
+            Button {
+                onActivate()
+                focused = false
+                openMenu = nil
+                onAttachmentAction(.upload)
+            } label: {
+                LucideIcon(glyph: .plus, size: 16)
+                    .frame(width: 36, height: 36)
+                    .contentShape(Circle())
+            }
+            .buttonStyle(ComposerControlButtonStyle())
+            .accessibilityLabel(directAttachmentLabel)
+            .help(directAttachmentLabel)
+        } else {
+            attachmentMenuControl
+        }
+    }
+
+    private var attachmentMenuControl: some View {
+        composerIconButton(
+            icon: .plus,
+            accessibilityLabel: "Add files or photos",
+            menu: .attachments
+        )
+        .overlay(alignment: .bottomLeading) {
+            if openMenu == .attachments {
+                ComposerAttachmentMenu { action in
+                    openMenu = nil
+                    onAttachmentAction(action)
+                }
+                .offset(y: -44)
+                .transition(.opacity.combined(with: .scale(scale: 0.96, anchor: .bottomLeading)))
+            }
+        }
+        .zIndex(openMenu == .attachments ? 3 : 0)
+    }
+
+    private var voiceControl: some View {
+        DictationMicrophone(editor: dictationEditor, onActivate: onActivate)
+    }
+
+    private var sendControl: some View {
+        let showsStop = onStop != nil && !canSend
+        return Button {
+            onActivate()
+            if showsStop { onStop?() } else { onSend() }
+        } label: {
+            Group {
+                if showsStop { Image(systemName: "stop.fill").font(.system(size: 12, weight: .semibold)) }
+                else { LucideIcon(glyph: .arrowUp, size: 16) }
+            }
+                .foregroundStyle(WovenPalette.primaryForeground)
+                .frame(width: 36, height: 36)
+                .background(WovenPalette.primaryFill)
+                .clipShape(Circle())
+                .overlay {
+                    if theme == .dark { Circle().stroke(theme.palette.themeRing, lineWidth: 1) }
+                }
+        }
+        .buttonStyle(.plain)
+        .disabled(!canSend && !showsStop)
+        .opacity(canSend || showsStop ? 1 : 0.4)
+        .accessibilityLabel(showsStop ? "Stop" : "Send")
+    }
+
+    private var permissionTitle: String {
+        if sessionMetadataLoading { return "Loading permissions…" }
+        return sessionMetadata?.permission.map {
+            sessionMetadata?.permissionOptionMetadata?[$0]?.name ?? $0
+        } ?? "Permissions"
+    }
+
+    private var permissionLabels: ComposerPermissionTitles {
+        ComposerPermissionTitles(title: permissionTitle)
+    }
+
+    @ViewBuilder
+    private func permissionMenu(label: ComposerPermissionLabel) -> some View {
+        let selection = sessionMetadata?.permission
+        let metadata = sessionMetadata?.permissionOptionMetadata ?? [:]
+        let title = permissionTitle
+        if label == .icon {
+            compactSessionMenu(
+                kind: .permission,
+                icon: .keyRound,
+                title: title,
+                menuTitle: "Permissions",
+                accessibilityLabel: "Choose session permissions",
+                options: sessionMetadata?.permissionOptions ?? [],
+                selection: selection,
+                optionMetadata: metadata,
+                capitalizeOptions: true,
+                action: onSelectPermission
+            )
+        } else {
+            sessionMenu(
+                kind: .permission,
+                icon: .keyRound,
+                title: title,
+                inlineTitle: label == .short ? permissionLabels.short : permissionLabels.full,
+                menuTitle: "Permissions",
+                accessibilityLabel: "Choose session permissions",
+                options: sessionMetadata?.permissionOptions ?? [],
+                selection: selection,
+                optionMetadata: metadata,
+                capitalizeOptions: true,
+                action: onSelectPermission
+            )
+        }
+    }
+
+    private func sessionMenuUnavailable(
+        kind: ComposerMenuKind,
+        options: [String],
+        selection: String?,
+        action: ((String) -> Void)?
+    ) -> Bool {
+        if sessionControlsDisabled { return true }
+        // Keep unsupported permission controls discoverable without inventing choices.
+        if kind == .permission { return sessionMetadataLoading }
+        let canChange = action != nil && (options.count > 1 || options.first != selection)
+        return options.isEmpty || !canChange
+    }
+
+    private func compactSessionMenu(
+        kind: ComposerMenuKind,
+        icon: LucideGlyph,
+        title: String,
+        menuTitle: String,
+        accessibilityLabel: String,
+        options: [String],
+        selection: String?,
+        optionMetadata: [String: SessionOptionMetadata] = [:],
+        capitalizeOptions: Bool = false,
+        action: ((String) -> Void)?
+    ) -> some View {
+        sessionMenuPresentation(
+            sessionMenuButton(kind: kind, options: options, selection: selection, action: action) {
+                LucideIcon(glyph: icon, size: 16)
+                    .frame(width: 36, height: 36)
+                    .contentShape(Circle())
+            },
+            kind: kind,
+            title: title,
+            menuTitle: menuTitle,
+            accessibilityLabel: accessibilityLabel,
+            options: options,
+            selection: selection,
+            optionMetadata: optionMetadata,
+            capitalizeOptions: capitalizeOptions,
+            action: action
+        )
+    }
+
+    private func sessionMenu(
+        kind: ComposerMenuKind,
+        icon: LucideGlyph,
+        title: String,
+        inlineTitle: String? = nil,
+        menuTitle: String,
+        accessibilityLabel: String,
+        options: [String],
+        selection: String?,
+        optionMetadata: [String: SessionOptionMetadata] = [:],
+        capitalizeOptions: Bool = false,
+        action: ((String) -> Void)?
+    ) -> some View {
+        sessionMenuPresentation(
+            sessionMenuButton(kind: kind, options: options, selection: selection, action: action) {
+                ComposerSessionLabel(
+                    icon: icon,
+                    title: inlineTitle ?? title,
+                    maximumTitleWidth: kind == .thinking ? 40 : nil
+                )
+            }
+            .fixedSize(horizontal: true, vertical: false),
+            kind: kind,
+            title: title,
+            menuTitle: menuTitle,
+            accessibilityLabel: accessibilityLabel,
+            options: options,
+            selection: selection,
+            optionMetadata: optionMetadata,
+            capitalizeOptions: capitalizeOptions,
+            action: action
+        )
+    }
+
+    private func sessionMenuButton<Label: View>(
+        kind: ComposerMenuKind,
+        options: [String],
+        selection: String?,
+        action: ((String) -> Void)?,
+        @ViewBuilder label: () -> Label
+    ) -> some View {
+        let unavailable = sessionMenuUnavailable(
+            kind: kind, options: options, selection: selection, action: action
+        )
+        let menuLabel = label()
+        return Button {
+            guard !unavailable else { return }
+            onActivate()
+            focused = false
+            openMenu = openMenu == kind ? nil : kind
+        } label: {
+            menuLabel
+        }
+        .buttonStyle(ComposerControlButtonStyle())
+        .disabled(unavailable)
+        .opacity(unavailable ? 0.4 : 1)
+    }
+
+    private func sessionMenuPresentation<Content: View>(
+        _ button: Content,
+        kind: ComposerMenuKind,
+        title: String,
+        menuTitle: String,
+        accessibilityLabel: String,
+        options: [String],
+        selection: String?,
+        optionMetadata: [String: SessionOptionMetadata],
+        capitalizeOptions: Bool,
+        action: ((String) -> Void)?
+    ) -> some View {
+        button
+            .accessibilityLabel(accessibilityLabel)
+            .accessibilityValue("\(title), \(openMenu == kind ? "Expanded" : "Collapsed")")
+            .help(kind == .model ? title : [title, selection, selection.flatMap { optionMetadata[$0]?.description }]
+                .compactMap { $0 }.joined(separator: "\n"))
+            .popover(isPresented: Binding(
+                get: { openMenu == kind },
+                set: { if !$0, openMenu == kind { openMenu = nil } }
+            ), arrowEdge: .bottom) {
+                ComposerOptionMenu(
+                    title: menuTitle,
+                    options: options,
+                    selection: selection,
+                    capitalizeOptions: capitalizeOptions,
+                    optionMetadata: optionMetadata,
+                    showsDescriptions: kind == .permission,
+                    emptyMessage: kind == .permission
+                        ? "This harness has not reported native permission choices."
+                        : nil
+                ) { option in
+                    openMenu = nil
+                    action?(option)
+                }
+            }
+            .zIndex(openMenu == kind ? 3 : 0)
+    }
+}
+
+struct ComposerClickAwayMonitor: NSViewRepresentable {
+    let isActive: Bool
+    let onClickAway: () -> Void
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator()
+    }
+
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView(frame: .zero)
+        context.coordinator.update(view: view, isActive: isActive, onClickAway: onClickAway)
+        return view
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        context.coordinator.update(view: nsView, isActive: isActive, onClickAway: onClickAway)
+    }
+
+    static func dismantleNSView(_ nsView: NSView, coordinator: Coordinator) {
+        coordinator.stop()
+    }
+
+    @MainActor
+    final class Coordinator {
+        private weak var view: NSView?
+        private var eventMonitor: Any?
+        private var onClickAway: () -> Void = {}
+
+        func update(view: NSView, isActive: Bool, onClickAway: @escaping () -> Void) {
+            self.view = view
+            self.onClickAway = onClickAway
+
+            if isActive, eventMonitor == nil {
+                eventMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) {
+                    [weak self] event in
+                    guard let self,
+                          let view = self.view,
+                          event.window === view.window
+                    else { return event }
+
+                    let point = view.convert(event.locationInWindow, from: nil)
+                    guard !view.bounds.contains(point) else { return event }
+
+                    DispatchQueue.main.async { [weak self] in
+                        self?.onClickAway()
+                    }
+                    return event
+                }
+            } else if !isActive {
+                stop()
+            }
+        }
+
+        func stop() {
+            if let eventMonitor {
+                NSEvent.removeMonitor(eventMonitor)
+                self.eventMonitor = nil
+            }
+        }
+    }
+}
+
+enum ComposerMenuKind {
+    case tools
+    case attachments
+    case model
+    case thinking
+    case permission
+}
+
+enum ComposerAttachmentAction {
+    case upload
+    case note
+    case conversation
+}
+
+enum AttachmentPickerKind: String, Identifiable {
+    case note
+    case conversation
+
+    var id: String { rawValue }
+}
+
+struct DraftAttachmentChip: View {
+    let attachment: AgentMessageAttachmentDraft
+    let onRemove: () -> Void
+    let onOpen: () -> Void
+
+    var body: some View {
+        HStack(spacing: 7) {
+            if case .file = attachment {
+                Button(action: onOpen) { attachmentLabel }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Open \(attachment.displayName)")
+                    .help("Open \(attachment.displayName)")
+            } else {
+                attachmentLabel
+            }
+            Button(action: onRemove) {
+                Image(systemName: "xmark")
+                    .font(.system(size: 9, weight: .bold))
+                    .frame(width: 18, height: 18)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Remove \(attachment.displayName)")
+        }
+        .padding(.leading, 6)
+        .padding(.trailing, 5)
+        .frame(height: 34)
+        .background(WovenPalette.foreground.opacity(0.055))
+        .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
+    }
+
+    private var attachmentLabel: some View {
+        HStack(spacing: 7) {
+            preview
+            Text(attachment.displayName)
+                .font(.system(size: 11.5, weight: .medium))
+                .lineLimit(1)
+        }
+        .frame(height: 34)
+        .contentShape(Rectangle())
+    }
+
+    @ViewBuilder
+    private var preview: some View {
+        switch attachment {
+        case .file(let file):
+            if file.kind == .image, let image = NSImage(contentsOf: file.localURL) {
+                Image(nsImage: image)
+                    .resizable()
+                    .scaledToFill()
+                    .frame(width: 25, height: 25)
+                    .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
+            } else {
+                Image(systemName: "doc")
+                    .foregroundStyle(WovenPalette.primary)
+                    .frame(width: 25, height: 25)
+            }
+        case .reference(let reference):
+            Image(systemName: reference.kind == .note ? "note.text" : "bubble.left.and.bubble.right")
+                .foregroundStyle(WovenPalette.primary)
+                .frame(width: 25, height: 25)
+        }
+    }
+}
+
+private enum ComposerPermissionLabel {
+    case full, short, icon
+}
+
+private struct ComposerPermissionTitles {
+    let full: String
+    let short: String?
+
+    init(title: String) {
+        let normalized = title.lowercased()
+            .replacingOccurrences(of: "-", with: " ")
+            .split(whereSeparator: \.isWhitespace).joined(separator: " ")
+        let labels: (String, String?)
+        switch normalized {
+        case "ask before it changes", "ask before changes": labels = ("Ask Before It Changes", "Ask")
+        case "ask approval": labels = ("Ask Approval", "Ask")
+        case "ask for approval": labels = ("Ask for Approval", "Ask")
+        case "full access": labels = ("Full Access", "Full")
+        case "auto accept edits": labels = ("Auto Accept Edits", "Auto Accept")
+        case "auto": labels = ("Auto", nil)
+        case "don't ask", "don’t ask": labels = ("Don't Ask", nil)
+        case "loading permissions…": labels = ("Loading Permissions", "Loading")
+        default: labels = (title, nil)
+        }
+        full = labels.0
+        short = labels.1
+    }
+}
+
+struct ComposerSessionLabel: View {
+    let icon: LucideGlyph
+    let title: String
+    var maximumTitleWidth: CGFloat? = nil
+
+    var body: some View {
+        HStack(spacing: 8) {
+            LucideIcon(glyph: icon, size: 14)
+            Text(title)
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .fixedSize(horizontal: maximumTitleWidth == nil, vertical: false)
+                .frame(maxWidth: maximumTitleWidth)
+            LucideIcon(glyph: .chevronDown, size: 14)
+        }
+        .font(.system(size: 12, weight: .medium))
+        .padding(.horizontal, 10)
+        .frame(height: 36)
+        .contentShape(Capsule())
+    }
+}
+
+struct ComposerControlButtonStyle: ButtonStyle {
+    @State private var hovered = false
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .foregroundStyle(
+                hovered ? WovenPalette.primary : WovenPalette.mutedForeground
+            )
+            .onHover { hovered = $0 }
+            .animation(.easeOut(duration: 0.14), value: hovered)
+    }
+}
+
+struct ComposerAttachmentMenu: View {
+    let onSelect: (ComposerAttachmentAction) -> Void
+
+    var body: some View {
+        VStack(spacing: 2) {
+            menuRow(icon: .upload, title: "Upload photos or files", action: .upload)
+            menuRow(icon: .fileText, title: "Attach note", action: .note)
+            menuRow(icon: .messageSquare, title: "Attach conversation", action: .conversation)
+        }
+        .padding(8)
+        .frame(width: 224)
+        .composerPopover()
+    }
+
+    private func menuRow(
+        icon: LucideGlyph,
+        title: String,
+        action: ComposerAttachmentAction
+    ) -> some View {
+        ComposerPopoverRow(action: { onSelect(action) }) {
+            HStack(spacing: 12) {
+                LucideIcon(glyph: icon, size: 16)
+                    .foregroundStyle(WovenPalette.primary)
+                Text(title)
+                    .lineLimit(1)
+                Spacer(minLength: 0)
+            }
+            .font(.system(size: 13, weight: .medium))
+            .foregroundStyle(WovenPalette.foreground)
+            .padding(.horizontal, 12)
+            .frame(height: 40)
+        }
+    }
+}
+
+struct AttachmentPicker: View {
+    @Environment(\.dismiss) private var dismiss
+    let kind: AttachmentPickerKind
+    let notes: [WorkspaceNoteRecord]
+    let conversations: [WorkspaceConversationRecord]
+    let onSelectNote: (WorkspaceNoteRecord) -> Void
+    let onSelectConversation: (WorkspaceConversationRecord) -> Void
+    @State private var query = ""
+
+    var body: some View {
+        NavigationStack {
+            List {
+                if kind == .note {
+                    ForEach(filteredNotes) { note in
+                        Button { onSelectNote(note) } label: {
+                            pickerRow(
+                                icon: "note.text",
+                                title: note.title,
+                                detail: note.content
+                            )
+                        }
+                        .buttonStyle(.plain)
+                    }
+                } else {
+                    ForEach(filteredConversations) { conversation in
+                        Button { onSelectConversation(conversation) } label: {
+                            pickerRow(
+                                icon: "bubble.left.and.bubble.right",
+                                title: conversation.title,
+                                detail: conversation.agentCodename ?? "Conversation"
+                            )
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+            .scrollIndicators(.never)
+            .overlay {
+                if kind == .note && filteredNotes.isEmpty {
+                    ContentUnavailableView(query.isEmpty ? "No notes yet" : "No matching notes", systemImage: "note.text",
+                        description: Text(query.isEmpty ? "Create a note in your workspace, then attach it here." : "Try a different search."))
+                }
+            }
+            .searchable(text: $query, prompt: kind == .note ? "Search notes" : "Search conversations")
+            .navigationTitle(kind == .note ? "Attach note" : "Attach conversation")
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+            }
+        }
+        .frame(minWidth: 460, minHeight: 420)
+    }
+
+    private var filteredNotes: [WorkspaceNoteRecord] {
+        guard !query.isEmpty else { return notes }
+        return notes.filter {
+            $0.title.localizedCaseInsensitiveContains(query)
+                || $0.content.localizedCaseInsensitiveContains(query)
+        }
+    }
+
+    private var filteredConversations: [WorkspaceConversationRecord] {
+        guard !query.isEmpty else { return conversations }
+        return conversations.filter {
+            $0.title.localizedCaseInsensitiveContains(query)
+                || ($0.agentCodename?.localizedCaseInsensitiveContains(query) ?? false)
+        }
+    }
+
+    private func pickerRow(icon: String, title: String, detail: String) -> some View {
+        HStack(spacing: 11) {
+            Image(systemName: icon)
+                .foregroundStyle(WovenPalette.primary)
+                .frame(width: 24)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title)
+                    .font(.system(size: 13.5, weight: .medium))
+                    .foregroundStyle(WovenPalette.foreground)
+                Text(detail.replacingOccurrences(of: "\n", with: " "))
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(WovenPalette.mutedForeground)
+                    .lineLimit(1)
+            }
+        }
+        .contentShape(Rectangle())
+        .padding(.vertical, 4)
+    }
+}
+
+struct ComposerOptionMenu: View {
+    let title: String
+    let options: [String]
+    let selection: String?
+    let capitalizeOptions: Bool
+    var optionMetadata: [String: SessionOptionMetadata] = [:]
+    var showsDescriptions = false
+    var emptyMessage: String? = nil
+    let onSelect: (String) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(title)
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(WovenPalette.mutedForeground)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+
+            if options.isEmpty, let emptyMessage {
+                Text(emptyMessage)
+                    .font(.system(size: 12))
+                    .foregroundStyle(WovenPalette.mutedForeground)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(10)
+            } else {
+                ScrollView {
+                    LazyVStack(spacing: 2) {
+                        ForEach(options, id: \.self) { option in
+                            ComposerPopoverRow(action: { onSelect(option) }) {
+                                HStack(spacing: 12) {
+                                    VStack(alignment: .leading, spacing: 3) {
+                                        Text(optionLabel(option))
+                                            .lineLimit(isModelMenu ? nil : 1)
+                                            .fixedSize(horizontal: false, vertical: true)
+                                        if needsDisambiguation(option) {
+                                            Text(disambiguationLabel(option))
+                                                .font(.system(size: 10))
+                                                .foregroundStyle(WovenPalette.mutedForeground)
+                                                .lineLimit(isModelMenu ? nil : 1)
+                                                .fixedSize(horizontal: false, vertical: true)
+                                        }
+                                        if showsDescriptions, let description = optionDescription(option) {
+                                            Text(description)
+                                                .font(.system(size: 11.5))
+                                                .foregroundStyle(WovenPalette.mutedForeground)
+                                                .lineLimit(3)
+                                                .fixedSize(horizontal: false, vertical: true)
+                                        }
+                                    }
+                                    Spacer(minLength: 0)
+                                    if option == selection {
+                                        LucideIcon(glyph: .check, size: 14)
+                                            .foregroundStyle(WovenPalette.primary)
+                                    }
+                                }
+                                .font(.system(size: 13))
+                                .foregroundStyle(WovenPalette.foreground)
+                                .padding(.horizontal, 10)
+                                .frame(minHeight: rowHeight(option))
+                                .help(optionHelp(option))
+                                .accessibilityLabel(optionHelp(option))
+                                .accessibilityValue(option == selection ? "Selected" : "")
+                                .background(
+                                    option == selection ? WovenPalette.muted.opacity(0.55) : .clear,
+                                    in: RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                )
+                            }
+                        }
+                    }
+                }
+                .scrollIndicators(.never)
+                .frame(height: min(options.reduce(CGFloat(0)) { $0 + rowHeight($1) + 2 }, 248))
+            }
+        }
+        .padding(6)
+        .frame(width: showsDescriptions ? 320 : (isModelMenu ? 360 : 288))
+        .composerPopover()
+    }
+
+    private var isModelMenu: Bool { !showsDescriptions && !capitalizeOptions }
+
+    private func optionLabel(_ option: String) -> String {
+        if showsDescriptions {
+            return optionMetadata[option]?.name ?? option
+        }
+        if capitalizeOptions {
+            return optionMetadata[option]?.name ?? sessionThinkingLabel(option)
+        }
+        return SessionOptionMetadata.modelLabel(id: option, metadata: optionMetadata[option])
+    }
+
+    private func needsDisambiguation(_ option: String) -> Bool {
+        options.contains { $0 != option && optionLabel($0) == optionLabel(option) }
+    }
+
+    private func disambiguationLabel(_ option: String) -> String {
+        if isModelMenu, let description = optionDescription(option),
+           !options.contains(where: {
+               $0 != option && optionLabel($0) == optionLabel(option)
+                   && optionDescription($0) == description
+           }) {
+            return description
+        }
+        return option
+    }
+
+    private func optionDescription(_ option: String) -> String? {
+        guard let description = optionMetadata[option]?.description,
+              !description.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+        return description
+    }
+
+    private func optionHelp(_ option: String) -> String {
+        [optionLabel(option), optionLabel(option) == option ? nil : option,
+         optionDescription(option)].compactMap { $0 }.joined(separator: "\n")
+    }
+
+    private func rowHeight(_ option: String) -> CGFloat {
+        let base: CGFloat = needsDisambiguation(option) ? 52 : 38
+        return base + (showsDescriptions && optionDescription(option) != nil ? 48 : 0)
+    }
+}
+
+struct ComposerPopoverRow<Content: View>: View {
+    @Environment(\.wovenTheme) private var theme
+    let action: () -> Void
+    let content: Content
+    @State private var hovered = false
+
+    init(action: @escaping () -> Void, @ViewBuilder content: () -> Content) {
+        self.action = action
+        self.content = content()
+    }
+
+    var body: some View {
+        Button(action: action) {
+            content
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .background(
+            hovered ? theme.palette.themeSoft : .clear,
+            in: RoundedRectangle(cornerRadius: 10, style: .continuous)
+        )
+        .onHover { hovered = $0 }
+    }
+}
+
+struct ComposerPopoverModifier: ViewModifier {
+    @Environment(\.wovenTheme) private var theme
+
+    func body(content: Content) -> some View {
+        content
+            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .background(
+                WovenPalette.background.opacity(0.72),
+                in: RoundedRectangle(cornerRadius: 16, style: .continuous)
+            )
+            .overlay {
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .stroke(theme.palette.border.opacity(0.45), lineWidth: 1)
+            }
+            .shadow(color: WovenPalette.foreground.opacity(0.12), radius: 24, y: 14)
+    }
+}
+
+extension View {
+    func composerPopover() -> some View {
+        modifier(ComposerPopoverModifier())
+    }
+}
+
+func sessionThinkingLabel(_ value: String) -> String {
+    value.replacingOccurrences(of: "_", with: " ").capitalized
+}

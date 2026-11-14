@@ -189,7 +189,7 @@ export async function openDurableSession(engine, id, requested) {
     } });
     const registry = createNativeCompactionRegistry();
     openingStage = 'nativeStorage';
-    const storage = await openWorkspacePiStorage({databasePath:engine.databasePath,root,manifest,context});
+    const storage = await openWorkspacePiStorage({databasePath:engine.databasePath,manifest,context});
     if (record.lockError) throw new DefaultAgentError('The native session owner lock was lost. Reconnect before continuing.');
     openingStage = 'nativeHarness';
     const harness = await Harness.open(storage, { models, registry, settings: { retry: { enabled: false, maxRetries: 0 }, stream: { transport: 'sse', maxRetries: 0 }, toolExecution: 'sequential', compaction: { backgroundTokens: 0 } } }, context);

@@ -5,7 +5,7 @@ import SQLite3
 import Testing
 import WovenMatterClient
 import WovenMatterCore
-@testable import WovenMatterDashboardStore
+@testable import WovenMatterLibraryStore
 @testable import WovenMatterAppFacade
 
 /// Everything reaches everything: a Mac reaches another Mac's workspace and
@@ -21,11 +21,9 @@ struct MemberReachTests {
         try await directory.ensureSelf(name: "Mac B", endpoints: [])
         let descriptor = ExecutionWorkspace(id: UUID().uuidString.lowercased(), libraryID: try await macB.database.libraryIdentity().libraryID,
             ownerDeviceID: bDevice, kind: .mac, name: "Mac B", endpoint: URL(string: "https://mac-b.fixture.ts.net:8443/wovenmatter")!,
-            capabilities: ["execution.v1", "history.central.v1"], executionDeviceID: bDevice)
+            capabilities: ["execution.v1", "history.library.v1"], executionDeviceID: bDevice)
         let commands = ReachMacCommands()
-        let api = MacExecutionAPI(database: macB.database, commands: commands,
-            authentication: try ExecutionAuthentication(fileURL: macB.directory.appending(path: "execution-grants.json")),
-            descriptor: descriptor, isActive: { true }, members: directory)
+        let api = MacExecutionAPI(database: macB.database, commands: commands, descriptor: descriptor, isActive: { true }, members: directory)
         let send = Self.route { request in await api.handle(request) }
         let transport = try SignedExecutionWorkspaceTransport(workspace: descriptor, signer: macA.signer, send: send)
 
@@ -65,10 +63,8 @@ struct MemberReachTests {
         let linux = ReachLinuxHost(prefix: "/wovenmatter-execution/linux-l", workspaceID: UUID().uuidString.lowercased(),
                                    libraryID: identity.libraryID, members: [signer.deviceID: signer.publicKey])
         let workspace = try await macA.database.receiveSyncedWorkspace(linux.descriptor)
-        macA.model.federatedExecutionClient = try CentralExecutionClient(database: macA.database,
+        macA.model.federatedExecutionClient = try MemberExecutionClient(database: macA.database,
             commandJournalURL: macA.directory.appending(path: "commands.json"),
-            provision: { _ in throw LibraryAPIError(code: "unauthorized", message: "No grants in this test.") },
-            loadCredential: { _ in nil }, saveCredential: { _ in },
             makeSignedTransport: { workspace in try SignedExecutionWorkspaceTransport(workspace: workspace, signer: signer.signer, audience: linux.memberID, send: linux.send) })
 
         #expect(try await macA.model.resolveAgentToolDestination(workspace.id, callerWorkspace: nil) == .member(workspace))
@@ -120,10 +116,8 @@ struct MemberReachTests {
         row.kind = .mac; row.name = "James's MacBook Air"; row.retainedHistory = true
         let copied = try await macA.database.receiveSyncedWorkspace(row)
         final class Signed { var ids: [String] = [] }; let signed = Signed()
-        macA.model.federatedExecutionClient = try CentralExecutionClient(database: macA.database,
+        macA.model.federatedExecutionClient = try MemberExecutionClient(database: macA.database,
             commandJournalURL: macA.directory.appending(path: "commands.json"),
-            provision: { _ in throw LibraryAPIError(code: "unauthorized", message: "No grants in this test.") },
-            loadCredential: { _ in nil }, saveCredential: { _ in },
             makeSignedTransport: { workspace in
                 signed.ids.append(workspace.id)
                 return try SignedExecutionWorkspaceTransport(workspace: workspace, signer: signer.signer, audience: linux.memberID, send: linux.send)
@@ -143,7 +137,7 @@ struct MemberReachTests {
         #expect(created.success)
         #expect(linux.created.count == 1)
 
-        let client = try macA.model.centralExecutionClient()
+        let client = try macA.model.memberExecutionClient()
         await #expect(throws: LibraryAPIError.self) { _ = try await client.providers(workspace: copied) }
         #expect(!signed.ids.contains(copied.id))
         // A conversation with no live owner here is saved history, readable but not controllable.
@@ -164,16 +158,14 @@ struct MemberReachTests {
         let linux = ReachLinuxHost(prefix: "/wovenmatter-execution/linux-l", workspaceID: UUID().uuidString.lowercased(),
                                    libraryID: identity.libraryID, members: [signer.deviceID: signer.publicKey])
         let workspace = try await macA.database.receiveSyncedWorkspace(linux.descriptor)
-        macA.model.federatedExecutionClient = try CentralExecutionClient(database: macA.database,
+        macA.model.federatedExecutionClient = try MemberExecutionClient(database: macA.database,
             commandJournalURL: macA.directory.appending(path: "commands.json"),
-            provision: { _ in throw LibraryAPIError(code: "unauthorized", message: "No grants in this test.") },
-            loadCredential: { _ in nil }, saveCredential: { _ in },
             makeSignedTransport: { workspace in try SignedExecutionWorkspaceTransport(workspace: workspace, signer: signer.signer, audience: linux.memberID, send: linux.send) })
         let tools = try #require(macA.model.agentTools)
         let botID = UUID().uuidString.lowercased()
         _ = try await tools.issueBotKey(machineID: identity.hostDeviceID, botID: botID, botName: "Builder")
         let caller = WovenMCPCaller.bot(machineID: identity.hostDeviceID, botID: botID)
-        func call(_ name: String, _ arguments: [String: GatewayJSONValue]) async throws -> WovenMatterToolResponse {
+        func call(_ name: String, _ arguments: [String: JSONValue]) async throws -> WovenMatterToolResponse {
             await tools.handle(try WovenMCPCatalog.request(name: name, arguments: .object(arguments)), callerID: caller)
         }
 
@@ -247,17 +239,15 @@ struct MemberReachTests {
         let linux = ReachLinuxHost(prefix: "/wovenmatter-execution/linux-l", workspaceID: UUID().uuidString.lowercased(),
                                    libraryID: identity.libraryID, members: [signer.deviceID: signer.publicKey])
         let workspace = try await macB.database.receiveSyncedWorkspace(linux.descriptor)
-        macB.model.federatedExecutionClient = try CentralExecutionClient(database: macB.database,
+        macB.model.federatedExecutionClient = try MemberExecutionClient(database: macB.database,
             commandJournalURL: macB.directory.appending(path: "commands.json"),
-            provision: { _ in throw LibraryAPIError(code: "unauthorized", message: "No grants in this test.") },
-            loadCredential: { _ in nil }, saveCredential: { _ in },
             makeSignedTransport: { workspace in try SignedExecutionWorkspaceTransport(workspace: workspace, signer: signer.signer, audience: linux.memberID, send: linux.send) })
         // Mac A's agent for the host, as peer sync delivers it.
         let macA = UUID()
         let agentID = try await macB.database.ensureRemoteHarnessAgent(runtimeKind: .codex, remoteWorkspaceID: try #require(UUID(uuidString: workspace.id)),
                                                                        remoteWorkspaceName: "Linux L", ownerDeviceID: macA)
         try await macB.database.write { db in
-            try db.toolsExecuteUnlocked("INSERT OR REPLACE INTO paired_agent_owners VALUES(?,?)", [agentID.uuidString.lowercased(), macA.uuidString.lowercased()])
+            try db.toolsExecuteUnlocked("INSERT OR REPLACE INTO agent_owners VALUES(?,?)", [agentID.uuidString.lowercased(), macA.uuidString.lowercased()])
         }
         #expect(try await macB.database.pairedAgentWorkspaces()[agentID]?.id == workspace.id)
         let conversation = UUID()
@@ -290,11 +280,6 @@ struct MemberReachTests {
         #expect(linux.hostRequests == ["GET /v1/host/status", "GET /v1/host/logs?lines=500", "POST /v1/host/restart",
                                        "POST /v1/host/bots-configure", "GET /v1/host/status"])
         #expect(linux.botsBody == ["poolBytes": 8 << 30, "diskBytes": NSNull()] as NSDictionary)
-
-        // Enrolling a phone asks the host itself, not the Mac that added it.
-        let phone = UUID().uuidString.lowercased()
-        let credential = try await host.provisionAtLinuxHost(workspace, deviceID: phone, name: "Phone")
-        #expect(credential.deviceID == phone && credential.workspace.id == workspace.id)
 
         // "Update everything" updates it with the signed route: upload, then poll until it reports success.
         macB.model.remoteWorkspaces.sharedHostBundle = { (Data("host bundle".utf8), String(repeating: "f", count: 64)) }
@@ -512,8 +497,9 @@ final class ReachLinuxHost: @unchecked Sendable {
         self.prefix = prefix
         let host = UUID().uuidString.lowercased()
         memberID = host
-        // As in an older host's record, the Node server's execution device ID is its own, not the
-        // member ID, so these tests also cover the audience fallback kept for such records.
+        // As in a workspace a host registered with a random ID before v0.4.0, the Node server's
+        // execution device ID is its own, not the member ID, so these tests also cover the
+        // audience fallback kept for such workspaces.
         descriptor = .init(id: workspaceID, libraryID: libraryID, ownerDeviceID: UUID().uuidString.lowercased(), kind: .linux, name: "Linux L",
             endpoint: URL(string: "https://linux-l.fixture.ts.net" + prefix)!, capabilities: ["execution", "historyReplay"],
             executionDeviceID: UUID().uuidString.lowercased())
@@ -624,7 +610,7 @@ extension WorkspaceDatabase {
             defer { sqlite3_finalize(statement) }
             try db.bind(row.id, at: 1, to: statement); try db.bind(row.ownerDeviceID, at: 2, to: statement)
             sqlite3_bind_int64(statement, 3, row.revision)
-            try db.bind(JSONEncoder().encode(row), at: 4, to: statement); try db.stepDone(statement)
+            try db.bindJSON(row, at: 4, to: statement); try db.stepDone(statement)
         }
         return value
     }

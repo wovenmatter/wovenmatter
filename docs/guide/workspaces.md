@@ -87,9 +87,5 @@ permissions apply to the whole workspace; folders retain their ordinary Linux
 permissions. Execution and SQLite state stay on Linux while disconnected. See
 [Native Linux hosts](../reference/REMOTE_HOSTS.md).
 
-Remote container workspaces are no longer offered. A saved container workspace
-does not reconnect or launch agents, and its containers and data are left on
-the host. The separate Docker Executor is unaffected.
-
 Remote project files stay on their host; library sync carries conversations,
 not project files. Back up project files and Woven's data on each host.

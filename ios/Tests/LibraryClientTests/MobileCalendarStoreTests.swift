@@ -38,7 +38,7 @@ final class MobileCalendarStoreTests: XCTestCase, @unchecked Sendable {
   private func legacyPhoneTask(_ store: MobileCalendarStore, startsAt: Date, recurring: Bool) async throws -> LibraryCalendarRecord {
     // Earlier builds assigned tasks to the phone itself, which no longer runs schedules.
     let draft = LibraryCalendarDraft(title: "Digest", startsAt: startsAt, recurrenceUnit: recurring ? "day" : nil,
-      task: .init(prompt: "Summarize", runtime: "pi", workspaceID: device))
+      task: .init(prompt: "Summarize", runtime: "default_agent", workspaceID: device))
     let saved = try await store.save(expectedRevision: nil, draft: draft, ownerDeviceID: device)
     let upload = try await XCTUnwrapAsync(try await store.nextMutation())
     var accepted = saved; accepted.event.revision = 0
@@ -53,7 +53,7 @@ final class MobileCalendarStoreTests: XCTestCase, @unchecked Sendable {
     return run
   }
 
-  func testPhoneTaskMovesToCentralAsOneReplacementThatSurvivesReopen() async throws {
+  func testPhoneTaskMovesToAMacAsOneReplacementThatSurvivesReopen() async throws {
     let (store, file) = try fixture(); defer { try? FileManager.default.removeItem(at: file.deletingLastPathComponent()) }
     let legacy = try await legacyPhoneTask(store, startsAt: date("2026-01-01T09:00:00Z"), recurring: true)
     let ran = try await runOnPhone(store, now: date("2026-01-03T10:00:00Z"))
@@ -61,13 +61,13 @@ final class MobileCalendarStoreTests: XCTestCase, @unchecked Sendable {
     draft.task?.workspaceID = nil; draft.task?.runtime = "codex"
     let replacement = try await store.reassign(id: legacy.id, expectedRevision: legacy.event.revision, draft: draft, requestID: "move-1")
     XCTAssertNotEqual(replacement.id, legacy.id)
-    XCTAssertNil(replacement.ownerDeviceID, "The replacement belongs to the central Mac, not this phone")
+    XCTAssertNil(replacement.ownerDeviceID, "The replacement belongs to a Mac, not this phone")
     XCTAssertEqual(replacement.excludedOccurrences, [ran.occurrence], "Work this phone already ran is not repeated")
     let again = try await store.reassign(id: legacy.id, expectedRevision: legacy.event.revision, draft: draft, requestID: "move-1")
     XCTAssertEqual(again, replacement, "A retried request returns the same replacement")
     let tasks = await store.scheduledTasks()
     XCTAssertEqual(tasks.map(\.event.id), [replacement.id])
-    XCTAssertEqual(tasks.first?.workspaceName, "Central Mac")
+    XCTAssertEqual(tasks.first?.workspaceName, "Mac")
 
     // The retirement uploads first; the replacement waits until it is accepted.
     let retirement = try await XCTUnwrapAsync(try await store.nextMutation())
@@ -111,7 +111,7 @@ final class MobileCalendarStoreTests: XCTestCase, @unchecked Sendable {
     do { _ = try await store.reassign(id: replacement.id, expectedRevision: 0, draft: draft); XCTFail("Only phone-owned tasks are replaced") }
     catch LibraryCalendarError.conflict {}
 
-    // If central refuses the retirement, the replacement is held for an explicit decision instead of uploading.
+    // If the library refuses the retirement, the replacement is held for an explicit decision instead of uploading.
     let retirement = try await XCTUnwrapAsync(try await store.nextMutation())
     try await store.acknowledge(.init(mutationID: retirement.id, status: .conflict, record: legacy))
     let blocked = try await store.nextMutation()

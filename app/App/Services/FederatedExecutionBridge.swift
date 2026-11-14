@@ -2,7 +2,7 @@ import CryptoKit
 import Foundation
 import WovenMatterCore
 import LibraryClient
-import WovenMatterDashboardStore
+import WovenMatterLibraryStore
 
 enum FederatedExecutionAction: Codable, Sendable {
     case refresh(conversationID: String)
@@ -74,38 +74,22 @@ struct FederatedExecutionSnapshot: Codable, Sendable {
 }
 
 extension ApplicationModel {
-    func sharedLibraryFileURL(id: String) async throws -> URL {
-        if let client = liveLibraryClient { return try await client.exportFile(.libraryFile(id: id)) }
-        if DevelopmentLaunch.isClient, isBackendFrontend {
-            let bytes = try await callBackend(method: "library.command", payload: JSONEncoder().encode(BackendLibraryCommand.openShared(id: id)))
-            guard let url = try JSONDecoder().decode(BackendLibraryResult.self, from: bytes).url else {
-                throw WorkspaceToolError.invalid("The shared file is unavailable.")
-            }
-            return url
-        }
-        return try await library.fileURL(id: id)
-    }
-
     /// Signed execution between members. In a Dev snapshot it reaches only the
     /// workspaces the snapshot itself knows live (its own, paired members',
-    /// Linux hosts it added): `CentralExecutionClient` refuses every copied
+    /// Linux hosts it added): `MemberExecutionClient` refuses every copied
     /// owner (`retainedHistory`), whose chats stay read-only history.
-    func centralExecutionClient() throws -> CentralExecutionClient {
-        guard !isBackendFrontend, let dashboardStore else { throw ApplicationModelError.dashboardStoreUnavailable }
+    func memberExecutionClient() throws -> MemberExecutionClient {
+        guard !isBackendFrontend, let libraryStore else { throw ApplicationModelError.libraryStoreUnavailable }
         if let federatedExecutionClient { return federatedExecutionClient }
         // The command journal lives beside the library it addresses, never in a
         // global directory a fixture or another instance could share.
-        let directory = dashboardStore.database.supportDirectory
-        let storage = libraryHost.peerStorage
-        let client = try CentralExecutionClient(database: dashboardStore.database,
-            commandJournalURL: directory.appending(path: "central-execution-commands.json"),
-            provision: { [weak self] id in
-                guard let self else { throw CancellationError() }
-                return try await self.libraryHost.provisionCentralExecutionWorkspace(id: id)
-            }, loadCredential: storage.loadExecutionCredential, saveCredential: storage.saveExecutionCredential,
+        let directory = libraryStore.database.supportDirectory
+        try MemberExecutionClient.moveLegacyCommandJournal(in: directory)
+        let client = try MemberExecutionClient(database: libraryStore.database,
+            commandJournalURL: directory.appending(path: MemberExecutionClient.commandJournalName),
             makeSignedTransport: { [weak self] workspace in
                 // The iPhone is never an execution destination for signed calls.
-                // A workspace whose serving member is unknown cannot be addressed; its saved grant (if any) still works.
+                // A workspace whose serving member is unknown cannot be addressed.
                 guard let self, workspace.kind != .ios, let directory = try? await self.libraryHost.peerSync.members(),
                       let audience = await directory.audience(for: workspace) else { return nil }
                 return try SignedExecutionWorkspaceTransport(workspace: workspace, signer: directory.identity.signer, audience: audience)
@@ -135,11 +119,11 @@ extension ApplicationModel {
     /// The signed member routes of a Linux host this Mac added, by its
     /// configuration ID (which is its registry ID).
     func linuxMemberRoutes(_ id: UUID) async throws -> any MemberExecutionRoutes {
-        guard let database = dashboardStore?.database,
+        guard let database = libraryStore?.database,
               let workspace = try await database.libraryExecutionWorkspaces().first(where: { $0.id == id.uuidString.lowercased() && !$0.deleted }) else {
             throw LibraryAPIError(code: "unknown_workspace", message: "This Linux workspace is not in this library's workspaces yet. Reconnect it in Settings → Workspaces.")
         }
-        return try await centralExecutionClient().memberRoutes(for: workspace)
+        return try await memberExecutionClient().memberRoutes(for: workspace)
     }
 
     /// An agent's file on a Linux host, for Library retention: `path` as the
@@ -208,15 +192,7 @@ extension ApplicationModel {
         case .stop(let id, _), .configure(let id, _): targetID = id
         case .respond(let interaction, _): targetID = interaction.conversationID
         }
-        if let client = liveLibraryClient {
-            let snapshot = try await client.desktopExecution(action)
-            switch action {
-            case .refresh, .close, .earlier: break
-            case .stop, .configure, .respond: windowStreamRelayChanged([targetID])
-            }
-            return snapshot
-        }
-        let client = try centralExecutionClient()
+        let client = try memberExecutionClient()
         if case .close(let id) = action {
             await client.unwatch(id)
             guard let workspace = try await client.workspace(conversationID: id) else {
@@ -261,12 +237,12 @@ extension ApplicationModel {
     /// What this process still holds for a chat whose live read failed: its
     /// workspace and saved transcript, shown offline.
     func federatedSnapshotAfterFailure(_ id: String) async -> FederatedExecutionSnapshot? {
-        guard liveLibraryClient == nil, let client = federatedExecutionClient,
+        guard let client = federatedExecutionClient,
               let workspace = try? await client.workspace(conversationID: id) else { return nil }
         return federatedSnapshot(id, workspace: workspace, client: client, transcript: client.transcripts[id], session: nil)
     }
 
-    private func federatedSnapshot(_ id: String, workspace: ExecutionWorkspace, client: CentralExecutionClient,
+    private func federatedSnapshot(_ id: String, workspace: ExecutionWorkspace, client: MemberExecutionClient,
                                    transcript: LibraryTranscript?, session: SessionSettings?) -> FederatedExecutionSnapshot {
         // A chat still moving to its host, or whose live view its owner ended,
         // shows its saved history with why, as a machine that is not connected does.
@@ -279,7 +255,7 @@ extension ApplicationModel {
 
     /// A snapshot's copied history has no connection or credential to its former owner.
     func savedDevelopmentExecution(_ action: FederatedExecutionAction) async throws -> FederatedExecutionSnapshot {
-        guard let database = dashboardStore?.database else { throw ApplicationModelError.dashboardStoreUnavailable }
+        guard let database = libraryStore?.database else { throw ApplicationModelError.libraryStoreUnavailable }
         let id: String
         let before: String?
         switch action {
@@ -305,7 +281,7 @@ extension ApplicationModel {
     /// `RemoteChatMoveDeferredError` and is tried again on the next open or send.
     func adoptRegisteredRemoteConversationIfNeeded(_ conversation: WorkspaceConversationRecord) async throws {
         guard !conversation.isArchived, !isBackendFrontend, !adoptedExecutionConversations.contains(conversation.id),
-              let workspaceID = conversation.remoteWorkspaceID, let store = dashboardStore else { return }
+              let workspaceID = conversation.remoteWorkspaceID, let store = libraryStore else { return }
         let id = workspaceID.uuidString.lowercased()
         let owner = try await store.database.libraryExecutionOwner(conversationID: conversation.id)
         // Created on the host's server: there is nothing to move.
@@ -338,7 +314,7 @@ extension ApplicationModel {
                 }
                 self.federatedExecutionOwners[conversation.id] = id
                 do {
-                    let routes = try await self.centralExecutionClient().memberRoutes(for: workspace)
+                    let routes = try await self.memberExecutionClient().memberRoutes(for: workspace)
                     try await routes.adopt(JSONEncoder().encode(adoption))
                 } catch {
                     throw RemoteChatMoveDeferredError.classify(error, workspace: workspace.name)
@@ -367,7 +343,7 @@ extension ApplicationModel {
     /// execution ownership is looked up live as well as cached for presentation.
     func dispatchFederatedMessage(conversationID: String, input: AgentMessageInput, note: WorkspaceNoteRecord?,
                                   expectedRunID: String?, requiresIdle: Bool, dispatchFence: AgentDispatchFence) async throws -> Bool {
-        guard let database = dashboardStore?.database else { return false }
+        guard let database = libraryStore?.database else { return false }
         if let id = input.historyDeliveryID, try await database.toolDelivery(id: id)?.kind == .goal {
             // A primary-owner reservation can never become a foreign-owner send.
             // Adoption cancels this reservation; the new owner resumes its own goal.
@@ -392,10 +368,10 @@ extension ApplicationModel {
         }
         try await waitForAgentStop(conversationID: conversationID)
         try dispatchFence.check()
-        let client = try centralExecutionClient()
+        let client = try memberExecutionClient()
         try await client.refresh(conversationID: conversationID)
         try dispatchFence.check()
-        // The owner's live state can be newer than its central publication.
+        // The owner's live state can be newer than the history library sync brought.
         let active = client.transcripts[conversationID]?.activeRunID
         if requiresIdle && active != nil { throw LocalACPSessionDatabaseError.runAlreadyActive }
         if let expectedRunID, expectedRunID != active { throw LocalACPSessionDatabaseError.runNotFound }

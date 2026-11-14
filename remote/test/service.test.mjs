@@ -252,6 +252,8 @@ async function startService({ workspace, home, catalog, token, environmentOverri
       WOVENMATTER_LISTEN_PORT: String(port),
       WOVENMATTER_WORKSPACE: workspace,
       WOVENMATTER_HARNESS_CATALOG: catalog,
+      // On Linux the service is a native host; these fixtures run without its library host.
+      WOVENMATTER_LIBRARY: '0',
       ...environmentOverrides,
     },
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -623,9 +625,9 @@ test('host health reports native paths and source inventory without exposing its
   await mkdir(workspace)
   const token = 'native-host-fixture-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
   const service = await startService({ workspace, home, catalog: catalogPath, token, environmentOverrides: {
-    WOVENMATTER_RUNTIME_KIND: 'host', WOVENMATTER_ACCESS_MODE: 'fullRoot',
+    WOVENMATTER_ACCESS_MODE: 'fullRoot',
     WOVENMATTER_DATA_DIRECTORY: databases, WOVENMATTER_STATE_DIRECTORY: resolve(home, 'data/run'),
-    WOVENMATTER_SERVICE_FINGERPRINT: 'a'.repeat(64), WOVENMATTER_RELEASE_VERSION: '1.4.0', WOVENMATTER_LIBRARY: '0',
+    WOVENMATTER_SERVICE_FINGERPRINT: 'a'.repeat(64), WOVENMATTER_RELEASE_VERSION: '1.4.0',
   } })
   context.after(() => stopService(service.child))
   const headers = { Authorization: 'Bearer ' + token }
@@ -680,7 +682,7 @@ test('authorization input reports acceptance only after the write completes', as
   input.destroy()
 })
 
-test('installation uses latest adapter and fails unless actual components verify', async (context) => {
+test('installation never replaces a system CLI and fails unless actual components verify', async (context) => {
   const fixture = await temporaryFixture(context, 'wovenmatter-install-')
   const home = resolve(fixture, 'home')
   const workspace = resolve(fixture, 'workspace')
@@ -692,28 +694,16 @@ test('installation uses latest adapter and fails unless actual components verify
   await chmod(resolve(bin, 'flock'), 0o700)
   await writeFile(resolve(bin, 'ps'), '#!/bin/sh\nexit 0\n')
   await chmod(resolve(bin, 'ps'), 0o700)
-  const npm = resolve(bin, 'npm')
-  await writeFile(npm, `#!/bin/sh\nprintf '%s\\n' "$@" >> '${npmArguments}'\n`)
-  await chmod(npm, 0o700)
-
-  const catalog = JSON.parse(await readFile(catalogPath, 'utf8'))
-  const opencode = catalog.harnesses.find((value) => value.id === 'opencode')
-  const testCatalog = resolve(fixture, 'catalog.json')
-  await writeFile(testCatalog, JSON.stringify({
-    schemaVersion: 4,
-    harnesses: [{
-      ...opencode,
-      adapterPackage: '@example/opencode-adapter',
-      minimumAdapterVersion: '1.2.3',
-      command: 'opencode-adapter',
-      transportCheckCommand: null,
-    }],
-  }))
+  // An unsupported OpenCode the user installed, and an npm the host must never use.
+  await writeFile(resolve(bin, 'opencode'), "#!/bin/sh\necho 'opencode 1.18.29'\n")
+  await chmod(resolve(bin, 'opencode'), 0o700)
+  await writeFile(resolve(bin, 'npm'), `#!/bin/sh\nprintf '%s\\n' "$@" >> '${npmArguments}'\n`)
+  await chmod(resolve(bin, 'npm'), 0o700)
 
   const service = await startService({
     workspace,
     home,
-    catalog: testCatalog,
+    catalog: catalogPath,
     token: 'install-token-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
   })
   context.after(() => stopService(service.child))
@@ -734,7 +724,5 @@ test('installation uses latest adapter and fails unless actual components verify
   )
   assert.equal(operation.status, 'failed')
   assert.match(operation.error, /could not be verified/)
-  const argumentsValue = await readFile(npmArguments, 'utf8')
-  assert.match(argumentsValue, /@opencode\/cli/)
-  assert.match(argumentsValue, /@example\/opencode-adapter@latest/)
+  await assert.rejects(readFile(npmArguments, 'utf8'), { code: 'ENOENT' })
 })

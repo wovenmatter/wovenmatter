@@ -4,10 +4,10 @@ import WovenMatterClient
 struct RootView: View {
     @Bindable var model: ApplicationModel
     @Environment(\.openWindow) private var openWindow
-    @AppStorage(DashboardTheme.storageKey) private var themeRawValue = DashboardTheme.green.rawValue
+    @AppStorage(WovenTheme.storageKey) private var themeRawValue = WovenTheme.green.rawValue
 
-    private var theme: DashboardTheme {
-        DashboardTheme(rawValue: themeRawValue) ?? .green
+    private var theme: WovenTheme {
+        WovenTheme(rawValue: themeRawValue) ?? .green
     }
 
     var body: some View {
@@ -28,8 +28,8 @@ struct RootView: View {
             }
             await model.analytics.openInterface()
         }
-        .environment(\.dashboardTheme, theme)
-        .toggleStyle(DashboardSwitchToggleStyle())
+        .environment(\.wovenTheme, theme)
+        .toggleStyle(CompactSwitchToggleStyle())
         .preferredColorScheme(theme.colorScheme)
         .background(theme.palette.workspace)
         .onReceive(NotificationCenter.default.publisher(for: DefaultAgentSupport.credentialsChanged)) { _ in
@@ -56,7 +56,7 @@ struct RootView: View {
                     Spacer()
                     Button("Cancel", role: .cancel) { Task { await model.resolveSessionToolAccess(id: request.id, allowed: false) } }
                     Button("Allow access") { Task { await model.resolveSessionToolAccess(id: request.id, allowed: true) } }
-                        .buttonStyle(DashboardPrimaryButtonStyle())
+                        .buttonStyle(WovenPrimaryButtonStyle())
                 }
             }.padding(24).frame(width: 440)
         }
@@ -66,16 +66,16 @@ struct RootView: View {
         VStack(spacing: 0) {
             ZStack {
                 Circle()
-                    .fill(DashboardPalette.primaryFill)
+                    .fill(WovenPalette.primaryFill)
                     .frame(width: 56, height: 56)
-                    .shadow(color: DashboardPalette.primaryFill.opacity(0.3), radius: 15, y: 8)
+                    .shadow(color: WovenPalette.primaryFill.opacity(0.3), radius: 15, y: 8)
                 ProgressView()
                     .controlSize(.small)
-                    .tint(DashboardPalette.primaryForeground)
+                    .tint(WovenPalette.primaryForeground)
             }
             Text("Opening workspace…")
                 .font(.system(size: 15, weight: .medium))
-                .foregroundStyle(DashboardPalette.foreground)
+                .foregroundStyle(WovenPalette.foreground)
                 .padding(.top, 16)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -86,23 +86,23 @@ struct RootView: View {
         VStack(spacing: 0) {
             ZStack {
                 Circle()
-                    .fill(DashboardPalette.primaryFill)
+                    .fill(WovenPalette.primaryFill)
                     .frame(width: 56, height: 56)
                 Image(systemName: "exclamationmark.triangle")
                     .font(.system(size: 21, weight: .light))
-                    .foregroundStyle(DashboardPalette.primaryForeground)
+                    .foregroundStyle(WovenPalette.primaryForeground)
             }
             Text("Workspace unavailable")
                 .font(.system(size: 15, weight: .medium))
                 .padding(.top, 16)
             Text(message)
                 .font(.system(size: 12.5))
-                .foregroundStyle(DashboardPalette.mutedForeground)
+                .foregroundStyle(WovenPalette.mutedForeground)
                 .multilineTextAlignment(.center)
                 .frame(maxWidth: 440)
                 .padding(.top, 4)
             Button("Try Again") { model.retry() }
-                .buttonStyle(DashboardPrimaryButtonStyle())
+                .buttonStyle(WovenPrimaryButtonStyle())
                 .padding(.top, 16)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)

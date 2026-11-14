@@ -21,7 +21,7 @@ private struct CompactToolToggleStyle: ToggleStyle {
         .contentShape(Rectangle())
         .onTapGesture { if isEnabled { configuration.isOn.toggle() } }
       Toggle(isOn: configuration.$isOn) { configuration.label }
-        .labelsHidden().toggleStyle(SwitchToggleStyle(tint: DashboardPalette.primary))
+        .labelsHidden().toggleStyle(SwitchToggleStyle(tint: WovenPalette.primary))
         .fixedSize().scaleEffect(0.65).frame(width: 44, height: 44)
         .contentShape(Rectangle())
     }
@@ -35,7 +35,7 @@ struct ChatComposerSettings<Accessory: View, Submission: View>: View {
   @Bindable var model: MobileModel
   @ViewBuilder var accessory: () -> Accessory
   @ViewBuilder var submission: () -> Submission
-  @Environment(\.dashboardTheme) private var theme
+  @Environment(\.wovenTheme) private var theme
   @State private var readSettings: SessionSettings?
   /// A streamed workspace sends the open chat's settings as they change; any other is read.
   private var streamed: Bool { model.selectedConversationID.map(model.streamsSessionSettings) ?? false }
@@ -84,19 +84,19 @@ struct ChatComposerSettings<Accessory: View, Submission: View>: View {
       Button { dismissKeyboard(); problem = nil; modelOpen = true } label: {
         HStack(spacing: 3) {
           Text(modelLabel).lineLimit(1).minimumScaleFactor(0.8)
-          DashboardLucideIcon(glyph: .chevronDown, size: 10)
+          LucideIcon(glyph: .chevronDown, size: 10)
         }.font(.caption.weight(.medium)).frame(minHeight: 44)
       }.buttonStyle(.plain).accessibilityLabel("Choose model").accessibilityValue(modelLabel)
         .accessibilityIdentifier("chat-model").layoutPriority(1).disabled(saving)
         .popover(isPresented: $modelOpen) {
           popout("Model", height: min(420, max(160, CGFloat(local ? options.count : settings?.models.count ?? 0) * 44 + 130))) {
-            DashboardSearchField(text: $search, prompt: "Search models").padding(.bottom, 8)
+            WovenSearchField(text: $search, prompt: "Search models").padding(.bottom, 8)
             if local {
-              if options.isEmpty && !loading { Text("No signed-in providers.").font(.callout).foregroundStyle(DashboardPalette.mutedForeground) }
+              if options.isEmpty && !loading { Text("No signed-in providers.").font(.callout).foregroundStyle(WovenPalette.mutedForeground) }
               ForEach(connectionGroups) { connection in
                 let matches = options.filter { $0.connection.id == connection.id && (search.isEmpty || $0.descriptor.name.localizedCaseInsensitiveContains(search)) }
                 if !matches.isEmpty {
-                  Text(connection.name).font(.caption.weight(.semibold)).foregroundStyle(DashboardPalette.mutedForeground).padding(.top, 10)
+                  Text(connection.name).font(.caption.weight(.semibold)).foregroundStyle(WovenPalette.mutedForeground).padding(.top, 10)
                   ForEach(matches) { option in
                     selectionRow(option.descriptor.name, selected: model.selectedInferenceConnection?.id == option.connection.id && model.selectedInferenceConnection?.modelID == option.descriptor.id) {
                       var connection = option.connection; connection.modelID = option.descriptor.id; connection.selectedModel = option.descriptor
@@ -109,7 +109,7 @@ struct ChatComposerSettings<Accessory: View, Submission: View>: View {
               ForEach((settings?.models ?? []).filter { search.isEmpty || $0.label.localizedCaseInsensitiveContains(search) }) { option in
                 selectionRow(option.label, selected: option.id == settings?.model) { configureRemote(modelID: option.id) }
               }
-              if settings?.models.isEmpty != false && !loading { Text("No model choices available.").font(.callout).foregroundStyle(DashboardPalette.mutedForeground) }
+              if settings?.models.isEmpty != false && !loading { Text("No model choices available.").font(.callout).foregroundStyle(WovenPalette.mutedForeground) }
             }
           }.task { if local { await loadModels() } else { await loadSession() } }
         }
@@ -129,7 +129,7 @@ struct ChatComposerSettings<Accessory: View, Submission: View>: View {
           }
         }
       Button { dismissKeyboard(); problem = nil; permissionOpen = true } label: {
-        DashboardLucideIcon(glyph: .keyRound, size: 18).frame(width: 44, height: 44)
+        LucideIcon(glyph: .keyRound, size: 18).frame(width: 44, height: 44)
       }.buttonStyle(.plain).accessibilityLabel("Choose session permissions").accessibilityValue(permissionLabel)
         .accessibilityIdentifier("chat-permissions").disabled(saving)
         .popover(isPresented: $permissionOpen) {
@@ -141,14 +141,14 @@ struct ChatComposerSettings<Accessory: View, Submission: View>: View {
                 } else { configureRemote(permission: option.id) }
               }
               if local, let mode = DevicePermissionMode(rawValue: option.id) {
-                Text(mode.detail).font(.caption).foregroundStyle(DashboardPalette.mutedForeground).padding(.bottom, 6)
+                Text(mode.detail).font(.caption).foregroundStyle(WovenPalette.mutedForeground).padding(.bottom, 6)
               }
             }
-            if permissionOptions.isEmpty { Text("This agent has not reported permission choices.").font(.callout).foregroundStyle(DashboardPalette.mutedForeground) }
+            if permissionOptions.isEmpty { Text("This agent has not reported permission choices.").font(.callout).foregroundStyle(WovenPalette.mutedForeground) }
           }
         }
       Button { dismissKeyboard(); problem = nil; toolsOpen = true } label: {
-        DashboardLucideIcon(glyph: .settings, size: 18).frame(width: 44, height: 44)
+        LucideIcon(glyph: .settings, size: 18).frame(width: 44, height: 44)
       }.buttonStyle(.plain).accessibilityLabel("Session tools").accessibilityIdentifier("chat-tools").disabled(saving)
         .popover(isPresented: $toolsOpen) {
           // Each 44pt toggle row plus 6pt spacing; 64pt covers padding and the title, and a
@@ -165,7 +165,7 @@ struct ChatComposerSettings<Accessory: View, Submission: View>: View {
               })).toggleStyle(CompactToolToggleStyle()).disabled(!configurable)
                 .padding(.horizontal, 4)
             }
-            if toolOptions.isEmpty { Text("No configurable tools.").font(.callout).foregroundStyle(DashboardPalette.mutedForeground) }
+            if toolOptions.isEmpty { Text("No configurable tools.").font(.callout).foregroundStyle(WovenPalette.mutedForeground) }
           }.confirmationDialog("Removing timer access pauses this session’s timers.", isPresented: $confirmTimers, titleVisibility: .visible) {
             Button("Pause timers and remove access") { if let pendingTools { saveTools(pendingTools, confirmed: true) } }
             Button("Cancel", role: .cancel) { pendingTools = nil }
@@ -187,14 +187,14 @@ struct ChatComposerSettings<Accessory: View, Submission: View>: View {
       Text(title).font(.headline)
       ScrollView { VStack(alignment: .leading, spacing: 6) { content() }.frame(maxWidth: .infinity, alignment: .leading) }
       if loading || saving { ProgressView() }
-      if let problem { Text(problem).font(.caption).foregroundStyle(DashboardPalette.danger) }
+      if let problem { Text(problem).font(.caption).foregroundStyle(WovenPalette.danger) }
     }.padding(18).frame(width: 310, height: height).background(theme.palette.workspace)
-      .foregroundStyle(DashboardPalette.foreground).scrollIndicators(.never)
+      .foregroundStyle(WovenPalette.foreground).scrollIndicators(.never)
       .presentationCompactAdaptation(.popover)
   }
   private func selectionRow(_ label: String, selected: Bool, action: @escaping () -> Void) -> some View {
     Button(action: action) {
-      HStack { Text(label).multilineTextAlignment(.leading); Spacer(); if selected { DashboardLucideIcon(glyph: .check, size: 16) } }
+      HStack { Text(label).multilineTextAlignment(.leading); Spacer(); if selected { LucideIcon(glyph: .check, size: 16) } }
         .font(.callout).frame(minHeight: 44).contentShape(Rectangle())
     }.buttonStyle(.plain).disabled(!configurable).accessibilityAddTraits(selected ? .isSelected : [])
   }

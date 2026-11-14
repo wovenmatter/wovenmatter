@@ -4,11 +4,11 @@ import WovenMatterCore
 
 extension ApplicationModel {
     private static func automationSocket() throws -> URL {
-        LocalExecutionRole.backendSocketURL(workspaceDirectory: try dashboardSupportDirectory())
+        LocalExecutionRole.backendSocketURL(workspaceDirectory: try librarySupportDirectory())
             .deletingLastPathComponent().appending(path: "automation.sock")
     }
     func startAutomationHost() {
-        guard automationHost == nil, let database = dashboardStore?.database else { return }
+        guard automationHost == nil, let database = libraryStore?.database else { return }
         do {
             let host = WovenAutomationHost(assets: workspaceAssets, database: database,
                 allowsLocalSurfaces: LocalExecutionRole.current != .backend,
@@ -26,18 +26,19 @@ extension ApplicationModel {
                             requestID: UUID().uuidString.lowercased(), cancelling: true)
                     })
                 })
-            // Secondary Mac execution lives in this GUI process. It must not
-            // replace the primary library's GUI/backend automation socket.
-            if LocalExecutionRole.current != .backend, clientExecutionDirectory == nil {
+            #if !APP_FACADE_TESTS
+            // Facade test processes never bind the user's automation socket.
+            if LocalExecutionRole.current != .backend {
                 let url = try Self.automationSocket()
                 try WovenMatterBackendProcess.removeStaleSocketAfterAcquiringLease(url)
                 try host.start(at: url)
             }
+            #endif
             automationHost = host
         } catch { workspaceAssets.notice = error.localizedDescription }
     }
     func automationRemoteWorkspace(callerID: String) async throws -> RemoteWorkspaceConfiguration? {
-        guard let database = dashboardStore?.database else { throw ApplicationModelError.dashboardStoreUnavailable }
+        guard let database = libraryStore?.database else { throw ApplicationModelError.libraryStoreUnavailable }
         guard let root = try await database.sessionExecutionRoot(id: callerID), root.workspaceID.hasPrefix("remote:") else { return nil }
         guard let workspaceID = Self.remoteWorkspaceID(sourceID: root.workspaceID),
               let configuration = remoteWorkspaces.configuration(id: workspaceID),
@@ -48,7 +49,7 @@ extension ApplicationModel {
     }
     func handleAutomationTool(callerID: String, command: WovenMatterToolCommand,
                               request: WovenMatterToolRequest) async throws -> WovenMatterToolResponse {
-        guard let database = dashboardStore?.database else { throw ApplicationModelError.dashboardStoreUnavailable }
+        guard let database = libraryStore?.database else { throw ApplicationModelError.libraryStoreUnavailable }
         if command.action == "cancel" {
             let target = try command.required("id")
             if target == "all" { try await database.cancelAutomationRequests(callerID: callerID) }
@@ -74,7 +75,7 @@ extension ApplicationModel {
             let request = WovenMatterToolRequest(arguments: ["browser", "cancel", "--id", "all"])
             _ = try? await handleAutomationTool(callerID: callerID, command: WovenMatterToolCommand(request.arguments), request: request)
         } else {
-            if let database = dashboardStore?.database, !database.isReadOnlyProjection {
+            if let database = libraryStore?.database, !database.isReadOnlyProjection {
                 try? await database.cancelAutomationRequests(callerID: callerID)
             }
             await automationHost?.cancel(callerID: callerID)

@@ -85,9 +85,9 @@ struct OpenCodeSettingsSection: View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Models shown in Woven Matter").font(.settingsSection)
             TextField("Search models", text: $modelSearch)
-                .dashboardQuietTextInput()
+                .quietTextInput()
             if loadingModels { ProgressView() }
-            if let modelsError { Text(modelsError).font(.settingsSecondary).foregroundStyle(DashboardPalette.danger) }
+            if let modelsError { Text(modelsError).font(.settingsSecondary).foregroundStyle(WovenPalette.danger) }
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 10) {
                     ForEach(sortedPickerModels, id: \.self) { option in
@@ -98,7 +98,7 @@ struct OpenCodeSettingsSection: View {
                         )) {
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(option["name"].string ?? option["id"].text)
-                                Text(option["providerID"].text).font(.settingsSecondary).foregroundStyle(DashboardPalette.mutedForeground)
+                                Text(option["providerID"].text).font(.settingsSecondary).foregroundStyle(WovenPalette.mutedForeground)
                             }
                             .frame(maxWidth: .infinity, alignment: .leading)
                         }
@@ -113,7 +113,7 @@ struct OpenCodeSettingsSection: View {
             .scrollIndicators(.never)
             .frame(height: 300)
             Text("Existing chats keep their selected model.")
-                .font(.settingsSecondary).foregroundStyle(DashboardPalette.mutedForeground)
+                .font(.settingsSecondary).foregroundStyle(WovenPalette.mutedForeground)
         }
         .padding(16)
         .frame(width: 360)
@@ -179,7 +179,7 @@ private struct OpenCodeInstanceSettings: View {
             if let instance {
                 SettingsRow(title: "Name in Woven Matter") {
                     TextField("Agent name", text: $name)
-                        .dashboardInput()
+                        .wovenInput()
                         .frame(width: 220)
                     Button("Save") {
                         guard let agentID else { return }
@@ -229,7 +229,7 @@ private struct OpenCodeSessionLibrary: View {
                         Text(session["title"].string ?? "OpenCode session").font(.settingsRow)
                         Text(session["location"]["directory"].text)
                             .font(.system(size: 11.5, design: .monospaced))
-                            .foregroundStyle(DashboardPalette.mutedForeground).lineLimit(2)
+                            .foregroundStyle(WovenPalette.mutedForeground).lineLimit(2)
                     }
                     Spacer()
                     Button("Import") {

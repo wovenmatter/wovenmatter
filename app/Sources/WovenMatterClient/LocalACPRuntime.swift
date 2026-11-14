@@ -103,7 +103,6 @@ public enum LocalACPRuntimeCatalog {
         case .grokBuild: "direct-grok-build"
         case .opencode: "direct-opencode"
         case .defaultAgent: "direct-default-agent"
-        case .hermes, .openclaw, .cursor, .pi: nil
         }
     }
 }

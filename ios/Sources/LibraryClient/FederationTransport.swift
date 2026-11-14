@@ -15,23 +15,8 @@ public protocol FederationTransport: Sendable {
 }
 
 extension HTTPSLibraryTransport: FederationTransport {
-  public func registerExecutionManagement(_ grant: ExecutionManagementGrant) async throws {
-    struct Acknowledgement: Decodable {}
-    let _: Acknowledgement = try await request("v1/federation/workspaces/" + TailnetJSONClient.safeID(grant.workspaceID) + "/management", method: "POST", body: JSONEncoder().encode(grant))
-  }
-  public func executionCredential(workspaceID: String) async throws -> DirectWorkspaceCredential {
-    let value: ExecutionCredential = try await request("v1/federation/workspaces/" + TailnetJSONClient.safeID(workspaceID) + "/credential", method: "POST", body: Data("{}".utf8))
-    guard value.workspace.id == workspaceID, value.deviceID == credential.deviceID, let endpoint = value.workspace.endpoint else { throw MobileConnectionError.invalidResponse }
-    let identity = try await workspaceIdentity()
-    if value.workspace.libraryID != identity {
-      guard let known = try await executionWorkspaces().first(where: { $0.id == workspaceID }),
-            known.libraryID == value.workspace.libraryID, known.ownerDeviceID == value.workspace.ownerDeviceID,
-            known.endpoint == endpoint else { throw MobileStore.Failure.wrongWorkspace }
-    }
-    return .init(endpoint: endpoint, libraryID: value.workspace.libraryID, workspaceID: workspaceID, deviceID: value.deviceID, token: value.token)
-  }
   public func libraryIdentity() async throws -> LibraryIdentity { try await request("v1/federation/identity") }
-  public func executionWorkspaces() async throws -> [ExecutionWorkspace] { try await request("v1/federation/workspaces") }
+  public func executionWorkspaces() async throws -> [ExecutionWorkspace] { try await list("v1/federation/workspaces") }
   public func registerWorkspace(_ registration: LibraryWorkspaceRegistration) async throws -> ExecutionWorkspace {
     try await request("v1/federation/workspaces", method: "POST", body: JSONEncoder().encode(registration))
   }
@@ -39,7 +24,7 @@ extension HTTPSLibraryTransport: FederationTransport {
   public func importJournal(_ batch: ExecutionJournalBatch) async throws -> ExecutionJournalBatchResult {
     try await request("v1/federation/journal", method: "POST", body: JSONEncoder().encode(batch))
   }
-  public func artifactManifests() async throws -> [LibraryArtifactManifest] { try await request("v1/federation/artifacts") }
+  public func artifactManifests() async throws -> [LibraryArtifactManifest] { try await list("v1/federation/artifacts") }
   public func registerArtifact(_ registration: LibraryArtifactRegistration) async throws -> LibraryArtifactTransfer {
     try await request("v1/federation/artifacts/register", method: "POST", body: JSONEncoder().encode(registration))
   }
@@ -58,7 +43,7 @@ extension MobileSyncEngine {
   func synchronizeFederation(using transport: any FederationTransport) async throws {
     let identity: LibraryIdentity
     do { identity = try await transport.libraryIdentity() }
-    catch MobileConnectionError.http(404, _) { return } // Older paired Macs keep their v3 library contract.
+    catch MobileConnectionError.http(404, _) { return } // A Linux host has no federation routes; a Mac takes this lane.
     guard identity.protocolVersion == FederationProtocol.version else { throw MobileConnectionError.versionMismatch }
     try await store.verifyWorkspace(identity.libraryID)
     try await store.journal.bind(libraryID: identity.libraryID)
@@ -78,7 +63,7 @@ extension MobileSyncEngine {
       var registration = workspace
       // After moving to another host of the library, that host may already
       // hold this registration (synced from a peer) at its own revision.
-      let expected = local.centralWorkspaceRevisions[id] ?? registered.first(where: { $0.id == id })?.revision
+      let expected = local.libraryWorkspaceRevisions[id] ?? registered.first(where: { $0.id == id })?.revision
       registration.revision = expected ?? 0
       let canonical = try await transport.registerWorkspace(.init(workspace: registration, expectedRevision: expected))
       try await store.journal.upsertWorkspace(canonical, pending: false)
@@ -101,9 +86,9 @@ extension MobileSyncEngine {
     }
     for _ in 0..<100 {
       try Task.checkCancellation()
-      let page = try await transport.journal(after: store.journal.snapshot().centralCursor)
+      let page = try await transport.journal(after: store.journal.snapshot().libraryCursor)
       setLaneHasMore(.journal, page.hasMore)
-      try await store.journal.receiveCentral(page)
+      try await store.journal.receiveLibrary(page)
       try await store.restoreExecutionProjection()
       if !page.hasMore { break }
     }

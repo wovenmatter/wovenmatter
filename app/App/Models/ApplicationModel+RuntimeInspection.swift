@@ -1,7 +1,7 @@
 import Foundation
 import WovenMatterClient
 import WovenMatterCore
-import WovenMatterDashboardStore
+import WovenMatterLibraryStore
 
 extension ApplicationModel {
     func runtimeInspection(_ query: RuntimeInspectionRequest = .init()) async throws -> RuntimeInspection {
@@ -47,7 +47,7 @@ extension ApplicationModel {
                 detail: localACPSessionMetadata[id]?.model))
             // Query the owner's bounded history window, independent of whether a
             // particular frontend has opened or refreshed this conversation.
-            if let page = try await dashboardStore?.conversationHistoryPage(id: id, limit: 40, compactActivities: false) {
+            if let page = try await libraryStore?.conversationHistoryPage(id: id, limit: 40, compactActivities: false) {
                 for record in page.activities.suffix(100) where items.count < 1_000 {
                     let activity = record.activity
                     if let children = activity.subagents {

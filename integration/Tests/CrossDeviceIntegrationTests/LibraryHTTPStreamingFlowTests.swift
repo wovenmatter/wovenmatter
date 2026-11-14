@@ -1,6 +1,6 @@
 import Foundation
 import Testing
-import WovenMatterDashboardStore
+import WovenMatterLibraryStore
 
 /// Real loopback connections exercise transfer framing, progressive delivery,
 /// and cancellation of the producer that owns the inference-only process.

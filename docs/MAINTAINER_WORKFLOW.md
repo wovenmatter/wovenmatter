@@ -3,9 +3,8 @@
 ## Validation
 
 `scripts/test-changes.sh --all` runs deterministic checks and an unsigned macOS
-build. Use `--macos` or `--remote` for focused validation.
-Container lifecycle changes also use `scripts/test-container.sh` when Docker is
-available. Tests use temporary data and must not consume provider services.
+build. Use `--macos` or `--remote` for focused validation. Tests use temporary
+data and must not consume provider services.
 
 Every PR runs one Linux **CI** check: public-tree and syntax checks, then portable
 fixtures, agent/service tests and generated-resource verification selected by

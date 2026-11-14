@@ -28,7 +28,7 @@ struct SettingsBotsResourcesView: View {
                     }
                     HStack(spacing: 8) {
                         Button(saving ? "Applying…" : "Apply") { apply(settings, capacity) }
-                            .buttonStyle(DashboardPrimaryButtonStyle())
+                            .buttonStyle(WovenPrimaryButtonStyle())
                             .disabled(saving || draft == nil)
                         Button("Restore defaults") { draft = BotResourcePolicy.defaults(for: capacity) }
                             .buttonStyle(SettingsQuietButtonStyle())

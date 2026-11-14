@@ -2,7 +2,7 @@ import WorkspaceFixtures
 import Foundation
 import Testing
 @testable import WovenMatterClient
-import WovenMatterDashboardStore
+import WovenMatterLibraryStore
 
 struct OpenCodeStableCompatibilityTests {
 

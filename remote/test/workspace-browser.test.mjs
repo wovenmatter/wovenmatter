@@ -20,9 +20,9 @@ test('profile identities have separate directories, browsers and lifecycle and r
   t.after(() => rm(root, { recursive: true, force: true }))
   await mkdir(legacy); await writeFile(join(legacy, 'cookies-fixture'), 'existing browser state')
   const launches = [], contexts = []
-  const service = createWorkspaceBrowser({ profile: legacy, profilesRoot, launch: async (directory, options) => {
+  const service = createWorkspaceBrowser({ profile: legacy, profilesRoot, launch: async directory => {
     const context = Object.assign(new EventEmitter(), { pages: () => [], close: async () => { context.closed = true; context.emit('close') } })
-    contexts.push(context); launches.push({ directory, options }); return { context, endpoint: 'ws://127.0.0.1/' + contexts.length }
+    contexts.push(context); launches.push({ directory }); return { context, endpoint: 'ws://127.0.0.1/' + contexts.length }
   } })
   t.after(() => service.close())
   assert.deepEqual(await service.profiles(), { profiles: ['default'] })

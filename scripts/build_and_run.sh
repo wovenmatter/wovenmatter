@@ -22,7 +22,7 @@ while [ "$#" -gt 0 ]; do
     --plan) plan_only=true; shift ;;
     --fresh) fresh=true; shift ;;
     --help|-h)
-      printf '%s\n' 'usage: scripts/build_and_run.sh [run|debug|logs|verify] [--mode auto|client|snapshot|live] [--instance name] [--source directory] [--fresh] [--plan]'
+      printf '%s\n' 'usage: scripts/build_and_run.sh [run|debug|logs|verify] [--mode auto|snapshot|live] [--instance name] [--source directory] [--fresh] [--plan]'
       exit 0 ;;
     *) printf 'Unknown argument: %s\n' "$1" >&2; exit 64 ;;
   esac

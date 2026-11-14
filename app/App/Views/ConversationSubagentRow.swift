@@ -10,7 +10,7 @@ private struct ConversationArchiveConversationKey: EnvironmentKey {
 
 #if os(macOS)
 private struct ConversationSubagentHistoryKey: EnvironmentKey {
-    static let defaultValue: (@MainActor (BuiltInSubagentArchiveRequest) async throws -> GatewayJSONValue)? = nil
+    static let defaultValue: (@MainActor (BuiltInSubagentArchiveRequest) async throws -> JSONValue)? = nil
 }
 
 #endif
@@ -21,7 +21,7 @@ extension EnvironmentValues {
         set { self[ConversationArchiveConversationKey.self] = newValue }
     }
     #if os(macOS)
-    var conversationSubagentHistory: (@MainActor (BuiltInSubagentArchiveRequest) async throws -> GatewayJSONValue)? {
+    var conversationSubagentHistory: (@MainActor (BuiltInSubagentArchiveRequest) async throws -> JSONValue)? {
         get { self[ConversationSubagentHistoryKey.self] }
         set { self[ConversationSubagentHistoryKey.self] = newValue }
     }
@@ -66,11 +66,11 @@ struct ConversationSubagentRow: View {
                 if let label = child.statusLabel?.nonempty {
                     Text(label)
                         .font(.system(size: 11.5))
-                        .foregroundStyle(DashboardPalette.mutedForeground)
+                        .foregroundStyle(WovenPalette.mutedForeground)
                 }
                 Spacer(minLength: 0)
             }
-            .foregroundStyle(DashboardPalette.foreground.opacity(0.72))
+            .foregroundStyle(WovenPalette.foreground.opacity(0.72))
         }
     }
 
@@ -79,7 +79,7 @@ struct ConversationSubagentRow: View {
         if let value = value?.nonempty {
             Text("\(label): \(value)")
                 .font(.system(size: 11.5))
-                .foregroundStyle(DashboardPalette.mutedForeground)
+                .foregroundStyle(WovenPalette.mutedForeground)
                 .textSelection(.enabled)
                 .fixedSize(horizontal: false, vertical: true)
         }
@@ -93,7 +93,7 @@ struct ConversationSubagentRow: View {
                 .textSelection(.enabled)
                 .fixedSize(horizontal: false, vertical: true)
         }
-        .foregroundStyle(DashboardPalette.mutedForeground)
+        .foregroundStyle(WovenPalette.mutedForeground)
     }
 
     private func entries(_ label: String, _ values: [AgentRunSubagentActivity]) -> some View {
@@ -116,7 +116,7 @@ struct ConversationSubagentRow: View {
             .padding(.top, 5)
         }
         .font(.system(size: 11.5))
-        .foregroundStyle(DashboardPalette.mutedForeground)
+        .foregroundStyle(WovenPalette.mutedForeground)
     }
 }
 
@@ -128,7 +128,7 @@ private struct ConversationSubagentHistory: View {
     @Environment(\.conversationArchiveConversationID) private var conversationID
     @Environment(\.conversationSubagentHistory) private var loadHistory
     @State private var expanded = false
-    @State private var rows: [GatewayJSONValue] = []
+    @State private var rows: [JSONValue] = []
     @State private var cursor: Int64 = 0
     @State private var hasMore = true
     @State private var busy = false
@@ -144,10 +144,10 @@ private struct ConversationSubagentHistory: View {
                                 ConversationSubagentArchiveEvent(request: request(eventID: eventID), fields: fields)
                             }
                         }
-                        if let error { Text(error).foregroundStyle(DashboardPalette.danger).textSelection(.enabled) }
+                        if let error { Text(error).foregroundStyle(WovenPalette.danger).textSelection(.enabled) }
                         if hasMore {
                             Button(rows.isEmpty ? "Load history" : "Load more history") { Task { await loadNextPage() } }
-                                .buttonStyle(DashboardQuietButtonStyle())
+                                .buttonStyle(WovenQuietButtonStyle())
                                 .disabled(busy)
                         }
                         if busy { Text("Loading history…") }
@@ -155,7 +155,7 @@ private struct ConversationSubagentHistory: View {
                 }
             }
             .font(.system(size: 11.5))
-            .foregroundStyle(DashboardPalette.mutedForeground)
+            .foregroundStyle(WovenPalette.mutedForeground)
         }
     }
 
@@ -180,7 +180,7 @@ private struct ConversationSubagentHistory: View {
 
 private struct ConversationSubagentArchiveEvent: View {
     let request: BuiltInSubagentArchiveRequest
-    let fields: [String: GatewayJSONValue]
+    let fields: [String: JSONValue]
     @Environment(\.conversationSubagentHistory) private var loadHistory
     @State private var chunks: [String] = []
     @State private var offset = 0
@@ -197,10 +197,10 @@ private struct ConversationSubagentArchiveEvent: View {
                 ForEach(Array(chunks.enumerated()), id: \.offset) { _, chunk in
                     Text(chunk).font(.system(size: 11.5, design: .monospaced)).textSelection(.enabled)
                 }
-                if let error { Text(error).foregroundStyle(DashboardPalette.danger).textSelection(.enabled) }
+                if let error { Text(error).foregroundStyle(WovenPalette.danger).textSelection(.enabled) }
                 if hasMore {
                     Button(chunks.isEmpty ? "Read native record" : "Read more") { Task { await loadNextChunk() } }
-                        .buttonStyle(DashboardQuietButtonStyle()).disabled(busy)
+                        .buttonStyle(WovenQuietButtonStyle()).disabled(busy)
                 }
                 if busy { Text("Loading record…") }
             }

@@ -55,23 +55,22 @@ struct RemoteHostLiveValidationTests {
         if let bundlePath = environment["WOVENMATTER_LIVE_HOST_BUNDLE_ROOT"] {
             let bundleRoot = URL(fileURLWithPath: bundlePath, isDirectory: true)
             client = RemoteWorkspaceSSHClient(runner: RemoteWorkspaceSSHClient.runSSH,
-                scriptLoader: { try Data(contentsOf: bundleRoot.appending(path: "remote-workspace.sh")) },
+                scriptLoader: { try Data(contentsOf: bundleRoot.appending(path: "scripts/remote-host.sh")) },
                 deploymentRoot: bundleRoot,
                 streamingRunner: { destination, command, input, progress in
                     try RemoteWorkspaceSSHClient.runSSH(destination: destination, command: command, input: input,
                         timeLimit: nil, onStandardError: progress)
-                },
-                hostScriptLoader: { try Data(contentsOf: bundleRoot.appending(path: "scripts/remote-host.sh")) })
+                })
         } else {
             client = RemoteWorkspaceSSHClient()
         }
-        var inspection = try await client.preflight(hostName: host, userName: user, kind: .host, accessMode: accessMode)
+        var inspection = try await client.preflight(hostName: host, userName: user, accessMode: accessMode)
         if !inspection.ready {
             print("Host preparation actions: " + (inspection.requiredPrivilegedActions ?? inspection.preparationActions ?? []).joined(separator: "\n"))
             guard environment["WOVENMATTER_LIVE_HOST_PREPARE"] == "1" else {
                 throw RemoteWorkspaceClientError.invalidResponse("Review the reported host preparation actions and set WOVENMATTER_LIVE_HOST_PREPARE=1 to execute them.")
             }
-            inspection = try await client.prepareHost(hostName: host, userName: user, kind: .host, accessMode: accessMode)
+            inspection = try await client.prepareHost(hostName: host, userName: user, accessMode: accessMode)
         }
         #expect(inspection.ready)
         guard inspection.workspaceID == nil || inspection.workspaceID == workspaceID else {
@@ -137,7 +136,7 @@ struct RemoteHostLiveValidationTests {
         let before = try installationSnapshot(configuration: state.configuration)
         #expect(before.browserSelfTestDigest != nil)
         let sourceRoot = try RemoteWorkspaceSSHClient.loadDeploymentRoot()
-        let sourceDeployment = try RemoteWorkspaceDeployment(root: sourceRoot, kind: .host)
+        let sourceDeployment = try RemoteWorkspaceDeployment(root: sourceRoot)
         let candidateRoot = FileManager.default.temporaryDirectory.appending(path: ".wovenmatter-rollback-candidate-" + UUID().uuidString)
         try FileManager.default.createDirectory(at: candidateRoot, withIntermediateDirectories: false,
             attributes: [.posixPermissions: 0o700])
@@ -161,18 +160,17 @@ struct RemoteHostLiveValidationTests {
         }
         """#
         try Data(failedSelfTest.utf8).write(to: candidateRoot.appending(path: "remote/src/browser-selftest.mjs"))
-        let candidate = try RemoteWorkspaceDeployment(root: candidateRoot, kind: .host)
+        let candidate = try RemoteWorkspaceDeployment(root: candidateRoot)
         guard candidate.fingerprint != previousFingerprint else {
             throw RemoteWorkspaceClientError.invalidResponse("The rollback candidate must have a distinct source identity.")
         }
         let hostScript = try Data(contentsOf: sourceRoot.appending(path: "scripts/remote-host.sh"))
-        let containerScript = try Data(contentsOf: sourceRoot.appending(path: "scripts/remote-workspace.sh"))
         let updating = RemoteWorkspaceSSHClient(runner: RemoteWorkspaceSSHClient.runSSH,
-            scriptLoader: { containerScript }, deploymentRoot: candidateRoot,
+            scriptLoader: { hostScript }, deploymentRoot: candidateRoot,
             streamingRunner: { destination, command, input, progress in
                 try RemoteWorkspaceSSHClient.runSSH(destination: destination, command: command, input: input,
                     timeLimit: nil, onStandardError: progress)
-            }, hostScriptLoader: { hostScript })
+            })
         var rejectedByBrowserCheck = false
         do {
             _ = try await updating.deployHost(configuration: state.configuration, token: state.token, update: true) {

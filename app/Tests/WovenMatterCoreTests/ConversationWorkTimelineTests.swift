@@ -71,7 +71,7 @@ struct ConversationWorkTimelineTests {
     #expect(groups(failedThenThought).first?.hasFailure == true)
     let generic = AgentRunActivity(id: "generic", kind: .tool, title: "Use tool", status: "running", toolName: "web_search")
     #expect(generic.workTimelineLabel(active: true) == "Searching the web")
-    let snapshot = ConversationWorkGroup(id: "pi", activities: [
+    let snapshot = ConversationWorkGroup(id: "work", activities: [
       AgentRunActivity(id: "search", kind: .tool, title: "web_search", status: "failed", toolName: "other"),
       AgentRunActivity(id: "browser", kind: .tool, title: "woven_browser_use", status: "completed", toolName: "other"),
     ])

@@ -6,7 +6,7 @@ import Darwin
 #endif
 
 /// Whether a file may enter iCloud and computer backups. Writing that exists only
-/// on this device must survive a restore; caches the central library can supply
+/// on this device must survive a restore; caches the library can supply
 /// again are excluded. No secret is written here: credentials stay in
 /// device-only Keychain items, which backups never restore to another device.
 public enum MobileBackup: Sendable { case include, exclude }
@@ -19,13 +19,8 @@ enum MobileStorePersistence {
   /// Where a body comes from. Cached bodies may be absent after a restore and are fetched again.
   enum BodyRole: Hashable { case local, cachedNote(String), cachedBase(String), cachedTranscript(String) }
   static func load(from file: URL) throws -> MobileStoreState {
-    let data = try Data(contentsOf: file)
-    guard let envelope = try? JSONDecoder().decode(Envelope.self, from: data) else {
-      // The earliest stores kept all writing inline in this one excluded file.
-      let legacy = try JSONDecoder().decode(MobileStoreState.self, from: data)
-      try? applyBackupIfChanged(.include, at: file)
-      return legacy
-    }
+    let data = PersistedFieldRenames.upgrade(try Data(contentsOf: file), renaming: PersistedFieldRenames.store)
+    let envelope = try JSONDecoder().decode(Envelope.self, from: data)
     guard envelope.version == 2 else { throw MobileStore.Failure.incompatibleStore }
     var state = envelope.state
     var missing = Set<BodyRole>(), roles: [String: MobileBackup] = [:]
@@ -90,7 +85,7 @@ enum MobileStorePersistence {
   }
   private static func blobDirectory(_ file: URL) -> URL { file.deletingLastPathComponent().appendingPathComponent(file.lastPathComponent + ".bodies") }
   private static func digest(_ data: Data) -> String { SHA256.hash(data: data).hexString }
-  /// Notes are reproducible only after central has the same revision and content and no local change waits.
+  /// Notes are reproducible only after the library has the same revision and content and no local change waits.
   private static func cachedNoteIDs(_ state: MobileStoreState) -> Set<String> {
     guard state.workspaceID != nil else { return [] }
     return Set(state.notes.compactMap { id, note in
@@ -101,7 +96,7 @@ enum MobileStorePersistence {
   }
   private static func transform(_ state: inout MobileStoreState, _ body: (String, BodyRole) throws -> String) throws {
     let cachedNotes = cachedNoteIDs(state)
-    // Quick Chat history this device owns has no central copy until it is published.
+    // Quick Chat history this device owns has no library copy until it is published.
     let ownedTranscripts = (state.ownedConversationIDs ?? []).union(state.executionConversationIDs ?? [])
     for id in Array(state.notes.keys) { state.notes[id]!.content = try body(state.notes[id]!.content, cachedNotes.contains(id) ? .cachedNote(id) : .local) }
     for id in Array(state.bases.keys) { state.bases[id]!.content = try body(state.bases[id]!.content, cachedNotes.contains(id) || state.notes[id] == nil ? .cachedBase(id) : .local) }

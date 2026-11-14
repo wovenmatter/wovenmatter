@@ -54,8 +54,6 @@ public struct RemoteWorkspaceConfiguration: Codable, Equatable, Identifiable, Se
     public var hostName: String
     public var userName: String?
     public var remotePort: Int
-    public var memoryLimit: String?
-    public var swapLimit: String?
     public var createdAt: Date
     public var backgroundExecutionEnabled: Bool
     public var kind: RemoteWorkspaceKind
@@ -72,11 +70,9 @@ public struct RemoteWorkspaceConfiguration: Codable, Equatable, Identifiable, Se
         hostName: String,
         userName: String? = nil,
         remotePort: Int = 7337,
-        memoryLimit: String? = nil,
-        swapLimit: String? = nil,
         createdAt: Date = Date(),
         backgroundExecutionEnabled: Bool = true,
-        kind: RemoteWorkspaceKind = .container,
+        kind: RemoteWorkspaceKind = .host,
         accessMode: RemoteWorkspaceAccessMode = .user,
         dataRoot: String? = nil,
         workspaceRoot: String? = nil,
@@ -89,8 +85,6 @@ public struct RemoteWorkspaceConfiguration: Codable, Equatable, Identifiable, Se
         self.hostName = hostName
         self.userName = userName
         self.remotePort = remotePort
-        self.memoryLimit = memoryLimit
-        self.swapLimit = swapLimit
         self.createdAt = createdAt
         self.backgroundExecutionEnabled = backgroundExecutionEnabled
         self.kind = kind
@@ -102,7 +96,7 @@ public struct RemoteWorkspaceConfiguration: Codable, Equatable, Identifiable, Se
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, name, workspaceID, hostName, userName, remotePort, memoryLimit, swapLimit, createdAt, backgroundExecutionEnabled
+        case id, name, workspaceID, hostName, userName, remotePort, createdAt, backgroundExecutionEnabled
         case kind, accessMode, dataRoot, workspaceRoot, databasesDirectory, attachmentsDirectory
     }
 
@@ -114,11 +108,9 @@ public struct RemoteWorkspaceConfiguration: Codable, Equatable, Identifiable, Se
         hostName = try values.decode(String.self, forKey: .hostName)
         userName = try values.decodeIfPresent(String.self, forKey: .userName)
         remotePort = try values.decode(Int.self, forKey: .remotePort)
-        memoryLimit = try values.decodeIfPresent(String.self, forKey: .memoryLimit)
-        swapLimit = try values.decodeIfPresent(String.self, forKey: .swapLimit)
         createdAt = try values.decode(Date.self, forKey: .createdAt)
         backgroundExecutionEnabled = try values.decodeIfPresent(Bool.self, forKey: .backgroundExecutionEnabled) ?? true
-        kind = try values.decodeIfPresent(RemoteWorkspaceKind.self, forKey: .kind) ?? .container
+        kind = try values.decode(RemoteWorkspaceKind.self, forKey: .kind)
         accessMode = try values.decodeIfPresent(RemoteWorkspaceAccessMode.self, forKey: .accessMode) ?? .user
         dataRoot = try values.decodeIfPresent(String.self, forKey: .dataRoot)
         workspaceRoot = try values.decodeIfPresent(String.self, forKey: .workspaceRoot)
@@ -126,6 +118,20 @@ public struct RemoteWorkspaceConfiguration: Codable, Equatable, Identifiable, Se
         attachmentsDirectory = try values.decodeIfPresent(String.self, forKey: .attachmentsDirectory)
     }
 
+    /// Saved configurations, skipping any whose kind this build no longer has, such as
+    /// the removed Docker container workspaces.
+    public static func decodeSaved(_ data: Data) throws -> [RemoteWorkspaceConfiguration] {
+        try JSONDecoder().decode([Saved].self, from: data).compactMap(\.configuration)
+    }
+
+    private struct Saved: Decodable {
+        let configuration: RemoteWorkspaceConfiguration?
+
+        init(from decoder: any Decoder) throws {
+            let kind = try decoder.container(keyedBy: CodingKeys.self).decodeIfPresent(String.self, forKey: .kind)
+            configuration = kind.flatMap(RemoteWorkspaceKind.init(rawValue:)) == nil ? nil : try RemoteWorkspaceConfiguration(from: decoder)
+        }
+    }
 }
 
 /// How a chat that runs on this Mac launches its harness.
@@ -256,9 +262,6 @@ public struct RemoteHarnessStatus: Codable, Equatable, Identifiable, Sendable {
     public var source: String? = nil
     public var path: String? = nil
 
-    /// Older workspace services may still report the previous agent name.
-    public var presentationName: String { id == .defaultAgent ? id.displayName : displayName }
-
     /// Lifecycle responses are newer than the harness inventory fetched before launch.
     /// Reconcile only the native OpenCode instance; ACP authentication stays authoritative.
     public func reconcilingOpenCode(instance: RemoteWorkspaceInstanceStatus?, installed: Bool?) -> Self {
@@ -277,6 +280,7 @@ public struct RemoteHarnessStatus: Codable, Equatable, Identifiable, Sendable {
         )
     }
 }
+
 
 public struct RemoteWorkspaceInstanceStatus: Codable, Equatable, Sendable {
     public let kind: String
@@ -311,9 +315,6 @@ public struct RemoteRuntimeComponent: Codable, Equatable, Identifiable, Sendable
 public struct RemoteRuntimeMaintenance: Codable, Equatable, Identifiable, Sendable {
     public let id: AgentRuntimeKind
     public let displayName: String
-    // Decoded only for compatibility with workspaces created by older apps.
-    public let enabled: Bool
-    public let visible: Bool
     public let installed: Bool
     public let components: [RemoteRuntimeComponent]
     public let operation: RemoteHarnessOperation?
@@ -435,91 +436,6 @@ public enum RemoteMachineDiscovery {
     }
 }
 
-struct RemoteWorkspaceResourceCommandValues: Equatable, Sendable {
-    let memoryBytes: String
-    let memoryAndSwapBytes: String
-}
-
-enum RemoteWorkspaceResourceLimits {
-    static func commandValues(
-        for configuration: RemoteWorkspaceConfiguration
-    ) throws -> RemoteWorkspaceResourceCommandValues {
-        let memory = try configuration.memoryLimit.map {
-            try bytes(from: $0, label: "Memory limit", allowsZero: false)
-        }
-        if let memory, memory < 6 * 1_024 * 1_024 {
-            throw RemoteWorkspaceClientError.invalidResourceLimit(
-                "Memory limit must be at least 6 MB."
-            )
-        }
-
-        let additionalSwap = try configuration.swapLimit.map {
-            try bytes(from: $0, label: "Additional swap limit", allowsZero: true)
-        }
-        if additionalSwap != nil, memory == nil {
-            throw RemoteWorkspaceClientError.invalidResourceLimit(
-                "Set a memory limit before setting an additional swap limit."
-            )
-        }
-        let memoryAndSwap: Int64?
-        if let memory, let additionalSwap {
-            let (total, overflow) = memory.addingReportingOverflow(additionalSwap)
-            guard !overflow else {
-                throw RemoteWorkspaceClientError.invalidResourceLimit(
-                    "Memory plus swap exceeds the supported size."
-                )
-            }
-            memoryAndSwap = total
-        } else {
-            memoryAndSwap = nil
-        }
-
-        return RemoteWorkspaceResourceCommandValues(
-            memoryBytes: memory.map(String.init) ?? "",
-            memoryAndSwapBytes: memoryAndSwap.map(String.init) ?? ""
-        )
-    }
-
-    private static func bytes(
-        from input: String,
-        label: String,
-        allowsZero: Bool
-    ) throws -> Int64 {
-        let value = input.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        guard !value.isEmpty else {
-            throw RemoteWorkspaceClientError.invalidResourceLimit(
-                "\(label) is empty; leave the field blank for no explicit limit."
-            )
-        }
-        let suffix = value.last.map(String.init) ?? ""
-        let hasSuffix = ["b", "k", "m", "g", "t"].contains(suffix)
-        let digits = hasSuffix ? String(value.dropLast()) : value
-        guard !digits.isEmpty,
-              digits.allSatisfy(\.isNumber),
-              let amount = Int64(digits),
-              amount > 0 || allowsZero
-        else {
-            throw RemoteWorkspaceClientError.invalidResourceLimit(
-                "\(label) must be a whole number of gigabytes, such as 8."
-            )
-        }
-        let multiplier: Int64 = switch hasSuffix ? suffix : "g" {
-        case "k": 1_024
-        case "m": 1_024 * 1_024
-        case "g": 1_024 * 1_024 * 1_024
-        case "t": 1_024 * 1_024 * 1_024 * 1_024
-        default: 1
-        }
-        let (result, overflow) = amount.multipliedReportingOverflow(by: multiplier)
-        guard !overflow else {
-            throw RemoteWorkspaceClientError.invalidResourceLimit(
-                "\(label) exceeds the supported size."
-            )
-        }
-        return result
-    }
-}
-
 public actor RemoteWorkspaceSSHClient {
     public typealias Runner = @Sendable (
         _ destination: String,
@@ -531,8 +447,8 @@ public actor RemoteWorkspaceSSHClient {
     let runner: Runner
     let streamingRunner: StreamingRunner
     let deploymentRoot: URL?
-    private let scriptLoader: @Sendable () throws -> Data
     let hostScriptLoader: @Sendable () throws -> Data
+    private let executorDockerScriptLoader: @Sendable () throws -> Data
 
     public init() {
         self.runner = RemoteWorkspaceSSHClient.runSSH
@@ -541,30 +457,31 @@ public actor RemoteWorkspaceSSHClient {
                                                timeLimit: nil, onStandardError: progress)
         }
         self.deploymentRoot = nil
-        self.scriptLoader = { try RemoteWorkspaceSSHClient.loadLifecycleScript() }
         self.hostScriptLoader = { try RemoteWorkspaceSSHClient.loadLifecycleScript(named: "remote-host") }
+        self.executorDockerScriptLoader = { try RemoteWorkspaceSSHClient.loadLifecycleScript(named: "executor-docker") }
     }
 
+    /// `scriptLoader` supplies `remote-host.sh`; `executorDockerScriptLoader`, used by
+    /// Executor's Docker inspection, defaults to it.
     public init(
         runner: @escaping Runner,
         scriptLoader: @escaping @Sendable () throws -> Data,
         deploymentRoot: URL? = nil,
         streamingRunner: StreamingRunner? = nil,
-        hostScriptLoader: (@Sendable () throws -> Data)? = nil
+        executorDockerScriptLoader: (@Sendable () throws -> Data)? = nil
     ) {
         self.runner = runner
         self.streamingRunner = streamingRunner ?? { destination, command, input, _ in try runner(destination, command, input) }
         self.deploymentRoot = deploymentRoot
-        self.scriptLoader = scriptLoader
-        self.hostScriptLoader = hostScriptLoader ?? scriptLoader
+        self.hostScriptLoader = scriptLoader
+        self.executorDockerScriptLoader = executorDockerScriptLoader ?? scriptLoader
     }
 
-    /// `roles` (host only) is `remote-host.sh inspect`'s roles argument: the preparation
-    /// it lists is for those roles.
+    /// `roles` is `remote-host.sh inspect`'s roles argument: the preparation it lists
+    /// is for those roles.
     public func preflight(
         hostName: String,
         userName: String?,
-        kind: RemoteWorkspaceKind = .container,
         accessMode: RemoteWorkspaceAccessMode = .user,
         roles: String? = nil
     ) throws -> RemoteWorkspacePreflight {
@@ -573,10 +490,21 @@ public actor RemoteWorkspaceSSHClient {
             from: runScript(
                 hostName: hostName,
                 userName: userName,
-                arguments: kind == .host ? ["inspect", accessMode.rawValue] + (roles.map { [$0] } ?? []) : ["inspect"],
-                kind: kind
+                arguments: ["inspect", accessMode.rawValue] + (roles.map { [$0] } ?? [])
             )
         )
+    }
+
+    /// `executor-docker.sh inspect`: whether the host can run Executor's Docker container.
+    public func inspectExecutorHost(hostName: String, userName: String?) throws -> RemoteWorkspacePreflight {
+        try decode(RemoteWorkspacePreflight.self, from: runScript(
+            hostName: hostName, userName: userName, arguments: ["inspect"], script: executorDockerScriptLoader()))
+    }
+
+    /// `executor-docker.sh prepare`: installs Docker for Executor after the user authorized it.
+    public func prepareExecutorHost(hostName: String, userName: String?) throws -> RemoteWorkspacePreflight {
+        try decode(RemoteWorkspacePreflight.self, from: runScript(
+            hostName: hostName, userName: userName, arguments: ["prepare", "AUTHORIZED"], script: executorDockerScriptLoader()))
     }
 
     /// Enables a private HTTPS proxy to an existing loopback-only workspace.
@@ -585,8 +513,7 @@ public actor RemoteWorkspaceSSHClient {
         struct Result: Decodable { let endpoint: URL }
         let result = try decode(Result.self, from: runScript(
             hostName: configuration.hostName, userName: configuration.userName,
-            arguments: ["expose", configuration.workspaceID, String(configuration.remotePort), String(httpsPort)],
-            kind: configuration.kind))
+            arguments: ["expose", configuration.workspaceID, String(configuration.remotePort), String(httpsPort)]))
         guard result.endpoint.scheme == "https", result.endpoint.host?.hasSuffix(".ts.net") == true,
               result.endpoint.port == httpsPort, result.endpoint.user == nil, result.endpoint.password == nil,
               result.endpoint.query == nil, result.endpoint.fragment == nil,
@@ -596,11 +523,10 @@ public actor RemoteWorkspaceSSHClient {
         return result.endpoint
     }
 
-    /// `roles` (host only) is `remote-host.sh prepare`'s roles argument, such as `bots`.
+    /// `roles` is `remote-host.sh prepare`'s roles argument, such as `bots`.
     public func prepareHost(
         hostName: String,
         userName: String?,
-        kind: RemoteWorkspaceKind = .container,
         accessMode: RemoteWorkspaceAccessMode = .user,
         roles: String? = nil
     ) throws -> RemoteWorkspacePreflight {
@@ -609,8 +535,7 @@ public actor RemoteWorkspaceSSHClient {
             from: runScript(
                 hostName: hostName,
                 userName: userName,
-                arguments: ["prepare", "AUTHORIZED"] + (kind == .host ? [accessMode.rawValue] + (roles.map { [$0] } ?? []) : []),
-                kind: kind
+                arguments: ["prepare", "AUTHORIZED", accessMode.rawValue] + (roles.map { [$0] } ?? [])
             )
         )
     }
@@ -623,8 +548,7 @@ public actor RemoteWorkspaceSSHClient {
             from: runScript(
                 hostName: configuration.hostName,
                 userName: configuration.userName,
-                arguments: ["status", configuration.workspaceID],
-                kind: configuration.kind
+                arguments: ["status", configuration.workspaceID]
             )
         )
     }
@@ -638,17 +562,9 @@ public actor RemoteWorkspaceSSHClient {
             from: runScript(
                 hostName: configuration.hostName,
                 userName: configuration.userName,
-                arguments: [action.rawValue, configuration.workspaceID],
-                kind: configuration.kind
+                arguments: [action.rawValue, configuration.workspaceID]
             )
         )
-    }
-
-    public nonisolated static func validateResources(
-        configuration: RemoteWorkspaceConfiguration
-    ) throws {
-        if configuration.kind == .host { return }
-        _ = try RemoteWorkspaceResourceLimits.commandValues(for: configuration)
     }
 
     public nonisolated static func validateConfiguration(
@@ -665,47 +581,33 @@ public actor RemoteWorkspaceSSHClient {
             hostName: configuration.hostName,
             userName: configuration.userName
         )
-        try validateResources(configuration: configuration)
     }
 
     public func delete(
         configuration: RemoteWorkspaceConfiguration,
         removePersistentData: Bool
     ) throws {
-        var arguments = [configuration.kind == .host ? "uninstall" : "delete", configuration.workspaceID]
+        var arguments = ["uninstall", configuration.workspaceID]
         if removePersistentData { arguments.append("--data") }
         _ = try runScript(
             hostName: configuration.hostName,
             userName: configuration.userName,
-            arguments: arguments,
-            kind: configuration.kind
+            arguments: arguments
         )
     }
 
+    /// Runs `script` (`remote-host.sh` by default) over SSH with `arguments`.
     private func runScript(
         hostName: String,
         userName: String?,
         arguments: [String],
-        secret: String? = nil,
-        kind: RemoteWorkspaceKind = .container
+        script: Data? = nil
     ) throws -> Data {
         let destination = try Self.validatedDestination(
             hostName: hostName,
             userName: userName
         )
-        let script = try kind == .host ? hostScriptLoader() : scriptLoader()
-        if let secret {
-            guard !secret.contains("\n"), !secret.contains("\r") else {
-                throw RemoteWorkspaceClientError.invalidResponse(
-                    "A generated remote credential contained an invalid line break."
-                )
-            }
-            let command = "IFS= read -r WOVENMATTER_API_TOKEN; export WOVENMATTER_API_TOKEN; exec bash -s -- "
-                + arguments.map(RemoteWorkspaceExecTarget.quote).joined(separator: " ")
-            var input = Data((secret + "\n").utf8)
-            input.append(script)
-            return try runner(destination, command, input)
-        }
+        let script = try script ?? hostScriptLoader()
         let command = "exec bash -s -- "
             + arguments.map(RemoteWorkspaceExecTarget.quote).joined(separator: " ")
         return try runner(destination, command, script)
@@ -780,7 +682,7 @@ public actor RemoteWorkspaceSSHClient {
         return result.data
     }
 
-    private static func loadLifecycleScript(named name: String = "remote-workspace") throws -> Data {
+    private static func loadLifecycleScript(named name: String) throws -> Data {
         let currentDirectory = URL(
             fileURLWithPath: FileManager.default.currentDirectoryPath,
             isDirectory: true
@@ -840,7 +742,6 @@ public actor RemoteWorkspaceTunnel {
         localPort: Int,
         readinessProbe: @escaping @Sendable (Int) async -> Bool
     ) async throws {
-        try configuration.kind.requireSupported()
         // Revalidate the peer even when reusing a healthy tunnel.
         let destination: String
         let tailnetOptions: [String]
@@ -977,16 +878,16 @@ public struct RemoteTaskGatewayResult: Codable, Equatable, Sendable {
     public let id: String
     public let run: WorkspaceCalendarRun
     public let nativeSessionID: String?
-    public let updates: [GatewayJSONValue]
+    public let updates: [JSONValue]
     public let updateOffset: Int
     public let complete: Bool
-    public let result: GatewayJSONValue?
+    public let result: JSONValue?
     public let error: String?
     public let completedAt: Date
     public let eventRevision: Int?
     public init(id: String, run: WorkspaceCalendarRun, nativeSessionID: String? = nil,
-                updates: [GatewayJSONValue] = [], updateOffset: Int = 0, complete: Bool = true,
-                result: GatewayJSONValue? = nil, error: String? = nil, completedAt: Date, eventRevision: Int? = nil) {
+                updates: [JSONValue] = [], updateOffset: Int = 0, complete: Bool = true,
+                result: JSONValue? = nil, error: String? = nil, completedAt: Date, eventRevision: Int? = nil) {
         self.id = id; self.run = run; self.nativeSessionID = nativeSessionID; self.updates = updates
         self.updateOffset = updateOffset; self.complete = complete
         self.result = result; self.error = error; self.completedAt = completedAt; self.eventRevision = eventRevision
@@ -1038,7 +939,7 @@ public struct RemoteWorkspaceServiceClient: Sendable {
 
     /// `GET /v1/host/status`, whose `memberIdentity` is the Linux host's
     /// `{deviceID, kind, name, publicKey, endpoints, libraryEndpoint}`.
-    public func hostStatus() async throws -> GatewayJSONValue {
+    public func hostStatus() async throws -> JSONValue {
         try await request(path: "v1/host/status", method: "GET", body: nil)
     }
     /// Hands the Linux host the signed member records (a `LibraryMemberAdoption`);
@@ -1046,25 +947,12 @@ public struct RemoteWorkspaceServiceClient: Sendable {
     /// The server accepts the installer bearer only for the first adoption;
     /// after that it needs a signed `mac` member, so `signer` signs the request.
     /// `audience` is the host's member device ID from its `memberIdentity`.
-    public func adoptMembers(_ adoption: Data, signer: MemberRequestSigner? = nil, audience: String? = nil) async throws -> GatewayJSONValue {
+    public func adoptMembers(_ adoption: Data, signer: MemberRequestSigner? = nil, audience: String? = nil) async throws -> JSONValue {
         try await request(path: "v1/host/members/adopt", method: "POST", body: adoption, signer: signer.map { ($0, audience ?? "") })
     }
 
-    public func executionPublisherStatus() async throws -> ExecutionWorkspacePublisherStatus {
-        try await request(path: "v1/execution/publisher", method: "GET", body: nil)
-    }
-    public func configureExecutionPublisher(_ grant: ExecutionWorkspacePublisherGrant) async throws -> ExecutionWorkspacePublisherStatus {
-        try await request(path: "v1/execution/publisher", method: "POST", body: JSONEncoder().encode(grant))
-    }
-
-    public func executionMCPLibraryStatus() async throws -> ExecutionWorkspacePublisherStatus {
-        try await request(path: "v1/execution/mcp-library", method: "GET", body: nil)
-    }
-    public func configureExecutionMCPLibrary(_ grant: GatewayJSONValue) async throws -> ExecutionWorkspacePublisherStatus {
-        try await request(path: "v1/execution/mcp-library", method: "POST", body: JSONEncoder().encode(grant))
-    }
-
-    public func configureExecutionMCPSettings(_ settings: GatewayJSONValue) async throws -> ExecutionWorkspacePublisherStatus {
+    /// The host replies with the settings it saved.
+    public func configureExecutionMCPSettings(_ settings: JSONValue) async throws -> JSONValue {
         try await request(path: "v1/execution/mcp-settings", method: "POST", body: JSONEncoder().encode(settings))
     }
 
@@ -1158,7 +1046,7 @@ public struct RemoteWorkspaceServiceClient: Sendable {
 
     /// The native execution owner chooses the caller and the authenticated
     /// workspace. Neither authority is accepted from model tool arguments.
-    public func browserMCP(callerID: String, input: GatewayJSONValue, requestID: String,
+    public func browserMCP(callerID: String, input: JSONValue, requestID: String,
                            cancelling: Bool = false) async throws -> WovenMatterToolResponse {
         guard let callerUUID = UUID(uuidString: callerID), let requestUUID = UUID(uuidString: requestID),
               var arguments = input.objectValue else {
@@ -1168,10 +1056,10 @@ public struct RemoteWorkspaceServiceClient: Sendable {
         if cancelling, let target = arguments["id"]?.stringValue, let uuid = UUID(uuidString: target) {
             arguments["id"] = .string(uuid.uuidString.lowercased())
         }
-        let body = GatewayJSONValue.object(["callerID": .string(callerUUID.uuidString.lowercased()), "input": .object(arguments)])
+        let body = JSONValue.object(["callerID": .string(callerUUID.uuidString.lowercased()), "input": .object(arguments)])
         struct Response: Decodable {
             let success: Bool
-            let result: GatewayJSONValue?
+            let result: JSONValue?
             let error: String?
             let code: String?
             let requestID: String
@@ -1227,19 +1115,7 @@ public struct RemoteWorkspaceServiceClient: Sendable {
             path: checkLatest ? "v1/runtime-maintenance/check" : "v1/runtime-maintenance",
             method: checkLatest ? "POST" : "GET", body: nil
         )
-        var runtimes = document.runtimes
-        for index in runtimes.indices {
-            let runtime = runtimes[index]
-            // Existing containers may still persist the removed opt-in flags.
-            // Retire those flags on verified installations without rebuilding the workspace.
-            if runtime.installed && (!runtime.enabled || !runtime.visible) {
-                runtimes[index] = try await request(
-                    path: "v1/runtime-maintenance/\(runtime.id.rawValue)", method: "PATCH",
-                    body: JSONEncoder().encode(["enabled": true, "visible": true])
-                )
-            }
-        }
-        return runtimes
+        return document.runtimes
     }
 
     public func checkRuntimeUpdates(_ id: AgentRuntimeKind) async throws -> RemoteRuntimeMaintenance {
@@ -1756,7 +1632,7 @@ extension RemoteWorkspaceServiceClient {
 
 extension RemoteWorkspaceServiceClient {
     public func managedDatabaseOperation(action: String, id: String? = nil, sql: String? = nil, name: String? = nil,
-                                         snapshot: ManagedDatabaseSnapshot? = nil) async throws -> GatewayJSONValue {
+                                         snapshot: ManagedDatabaseSnapshot? = nil) async throws -> JSONValue {
         struct Request: Encodable { let databaseID: String?; let sql: String?; let name: String?; let snapshot: ManagedDatabaseSnapshot? }
         return try await request(path: "v1/databases/" + action, method: "POST",
             body: JSONEncoder().encode(Request(databaseID: id, sql: sql, name: name, snapshot: snapshot)))

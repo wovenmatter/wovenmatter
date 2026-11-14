@@ -2,7 +2,7 @@ import AppKit
 import Foundation
 import Observation
 import WovenMatterCore
-import WovenMatterDashboardStore
+import WovenMatterLibraryStore
 
 @MainActor @Observable
 final class LibraryModel {

@@ -1,7 +1,7 @@
 import Foundation
 
 /// The native caller supplies its synchronized conversation and current tool
-/// selection. Selection only narrows access; the central host also checks its
+/// selection. Selection only narrows access; the serving Mac also checks its
 /// persisted user-controlled policy. No device/caller authority comes from CLI
 /// arguments or this envelope: the host binds it to the authenticated device.
 public struct LibraryToolRequest: Codable, Sendable {

@@ -24,7 +24,7 @@ extension MobileModel {
   func downloadOfflineConversation(_ id: String) async throws {
     let owner = executionOwner(of: id)
     if owner == "local" { return } // Native checkpoint/history already lives here.
-    if owner == "central" {
+    if owner == "host" {
       guard let engine, online else { return } // The durable pin retries on reconnect.
       try await engine.keepTranscriptOffline(id)
     } else if workspaceReachable[owner] == true, let client = workspaceClients[owner], let store {
@@ -40,7 +40,7 @@ extension MobileModel {
 
   func artifactURL(_ id: String) async throws -> URL {
     if let url = await store?.artifacts.localURL(id: id) { return url }
-    guard let engine, online else { throw DeviceExecutionError.unavailable("Connect to the central database to download this artifact.") }
+    guard let engine, online else { throw DeviceExecutionError.unavailable("Connect to one of your Macs or Linux machines to download this artifact.") }
     return try await engine.ensureArtifactCached(id)
   }
 

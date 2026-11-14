@@ -1,7 +1,7 @@
 import Foundation
 import Testing
 import WovenMatterCore
-import WovenMatterDashboardStore
+import WovenMatterLibraryStore
 
 @MainActor
 struct SessionSelectionPreferencesTests {

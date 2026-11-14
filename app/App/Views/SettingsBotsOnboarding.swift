@@ -56,7 +56,7 @@ struct BotOnboardingView: View {
                 SettingsSection(title: "Sign in to get started",
                                 detail: "Admin Bot needs a subscription or API key from Subscriptions & API Keys; one is enough.") {
                     Button("Open Subscriptions & API Keys", action: onOpenConnections)
-                        .buttonStyle(DashboardPrimaryButtonStyle())
+                        .buttonStyle(WovenPrimaryButtonStyle())
                 }
             }
         }
@@ -76,9 +76,9 @@ struct BotOnboardingView: View {
     private func step(_ label: String, number: Int, done: Bool, current: Bool) -> some View {
         HStack(spacing: 7) {
             ZStack {
-                Circle().fill(done || current ? DashboardPalette.primary.opacity(0.12) : DashboardPalette.muted)
+                Circle().fill(done || current ? WovenPalette.primary.opacity(0.12) : WovenPalette.muted)
                     .frame(width: 24, height: 24)
-                if done { DashboardLucideIcon(glyph: .check, size: 12).foregroundStyle(DashboardPalette.success) }
+                if done { LucideIcon(glyph: .check, size: 12).foregroundStyle(WovenPalette.success) }
                 else { Text("\(number)").font(.settingsSecondary.weight(.semibold)) }
             }.accessibilityHidden(true)
             Text(label).font(.settingsBody.weight(current ? .semibold : .regular))
@@ -98,7 +98,7 @@ struct BotOnboardingView: View {
                 else {
                     let providers = listed(catalog)
                     if catalog.providers.reduce(0, { $0 + $1.models.count }) > Self.longList {
-                        DashboardSearchField(text: $search, prompt: "Search models")
+                        WovenSearchField(text: $search, prompt: "Search models")
                     }
                     if providers.isEmpty {
                         SettingsEmpty("No models match.")
@@ -113,7 +113,7 @@ struct BotOnboardingView: View {
                                     HStack(spacing: 6) {
                                         Text(provider.name).font(.settingsBody.weight(.medium))
                                         Text("\(provider.models.count)").font(.settingsSecondary)
-                                            .foregroundStyle(DashboardPalette.mutedForeground)
+                                            .foregroundStyle(WovenPalette.mutedForeground)
                                     }
                                 }
                             }
@@ -128,7 +128,7 @@ struct BotOnboardingView: View {
                             }
                         }
                     }
-                    .buttonStyle(DashboardPrimaryButtonStyle())
+                    .buttonStyle(WovenPrimaryButtonStyle())
                     // Only what's on screen: a search that hides the selection can't submit it.
                     .disabled(!providers.contains { provider in
                         provider.models.contains { "\(provider.id)/\($0.id)" == selectedModel(catalog) }
@@ -169,8 +169,8 @@ struct BotOnboardingView: View {
         return Button { selection = ref } label: {
             HStack(spacing: 10) {
                 ZStack {
-                    Circle().strokeBorder(selected ? DashboardPalette.primary : DashboardPalette.mutedForeground, lineWidth: 1.5)
-                    if selected { Circle().fill(DashboardPalette.primary).padding(3.5) }
+                    Circle().strokeBorder(selected ? WovenPalette.primary : WovenPalette.mutedForeground, lineWidth: 1.5)
+                    if selected { Circle().fill(WovenPalette.primary).padding(3.5) }
                 }
                 .frame(width: 14, height: 14)
                 .accessibilityHidden(true)

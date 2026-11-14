@@ -5,7 +5,7 @@ import Testing
 import WorkspaceFixtures
 import WovenMatterClient
 import WovenMatterCore
-@testable import WovenMatterDashboardStore
+@testable import WovenMatterLibraryStore
 
 extension BackendStreamChannel: StreamByteChannel {}
 
@@ -150,8 +150,8 @@ struct WindowStreamTests {
   func localTranscript(conversationID: String, before: String?) async throws -> LibraryTranscript {
     guard relayed[conversationID] == nil else { return LibraryTranscript(conversationID: conversationID) }
     let (messages, active) = try await database.read { connection in
-      (try connection.historyRowsUnlocked("SELECT id,run_id,role,content,status,created_at FROM dashboard_messages WHERE conversation_id=? ORDER BY created_at,id", values: [conversationID]),
-       try connection.historyRowsUnlocked("SELECT id FROM dashboard_runs WHERE conversation_id=? AND status IN ('queued','running') ORDER BY created_at DESC LIMIT 1", values: [conversationID]))
+      (try connection.historyRowsUnlocked("SELECT id,run_id,role,content,status,created_at FROM messages WHERE conversation_id=? ORDER BY created_at,id", values: [conversationID]),
+       try connection.historyRowsUnlocked("SELECT id FROM runs WHERE conversation_id=? AND status IN ('queued','running') ORDER BY created_at DESC LIMIT 1", values: [conversationID]))
     }
     return LibraryTranscript(conversationID: conversationID, messages: messages.compactMap { row in
       guard let value = row.objectValue, let id = value["id"]?.stringValue else { return nil }

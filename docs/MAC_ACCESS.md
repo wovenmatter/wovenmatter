@@ -183,7 +183,7 @@ approval for individual items. A stable app signature permits persistent system
 approval to survive compatible rebuilds; one-time Allow only authorizes the
 current access. The app caches successful app-owned reads for its session. Always Allow granted
 to an older ad-hoc test binary does not authorize a differently signed Dev app.
-The saved app consent centralizes recovery; it cannot combine macOS approval for
+The saved app consent keeps recovery in one app-wide place; it cannot combine macOS approval for
 distinct pre-existing Keychain items into a single OS dialog.
 
 Apple references: [Code signing requirements](https://developer.apple.com/documentation/technotes/tn3127-inside-code-signing-requirements),

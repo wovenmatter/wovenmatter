@@ -24,18 +24,18 @@ struct PairedWorkspaceSidebarTests {
         await fixture.model.refreshWorkspace()
 
         // The phone is listed even though it has no endpoint (offline phones stay visible).
-        let listed = DashboardPairedWorkspaceSidebarModel.workspaces(fixture.model.executionWorkspaceRegistry)
+        let listed = PairedWorkspaceSidebarModel.workspaces(fixture.model.executionWorkspaceRegistry)
         #expect(listed.map(\.id) == [phone.id])
         #expect(listed.first?.endpoint == nil)
         let conversations = fixture.model.workspaceOverview?.conversations ?? []
-        let history = DashboardPairedWorkspaceSidebarModel.history(
+        let history = PairedWorkspaceSidebarModel.history(
             for: phone, conversations: conversations, owners: fixture.model.federatedExecutionOwners)
         #expect(history.map(\.id) == [chat])
         #expect(history.first?.title == "Tea timer")
-        #expect(DashboardPairedWorkspaceSidebarModel.isPhoneHistory(
+        #expect(PairedWorkspaceSidebarModel.isPhoneHistory(
             owner: fixture.model.federatedExecutionOwners[chat], registry: fixture.model.executionWorkspaceRegistry))
         let local = conversations.first { fixture.model.federatedExecutionOwners[$0.id] == nil }
-        #expect(DashboardPairedWorkspaceSidebarModel.isPhoneHistory(
+        #expect(PairedWorkspaceSidebarModel.isPhoneHistory(
             owner: local.flatMap { fixture.model.federatedExecutionOwners[$0.id] },
             registry: fixture.model.executionWorkspaceRegistry) == false)
     }
@@ -45,8 +45,8 @@ struct PairedWorkspaceSidebarTests {
     /// not those this Mac already offers through a Linux host it manages.
     @Test func newChatListsEveryOtherMacAndLinuxWorkspaceButNeverThePhone() throws {
         func agent(_ runtime: AgentRuntimeKind) -> WorkspaceAgent {
-            .init(userID: "user", codename: runtime.rawValue, displayName: runtime.displayName, iconKey: "bot",
-                  executionLocation: .remote, governingPlane: .remoteWorkspace, runtimeKind: runtime)
+            .init(codename: runtime.rawValue, displayName: runtime.displayName, iconKey: "bot",
+                  executionLocation: .remote, runtimeKind: runtime)
         }
         let mac = ExecutionWorkspace(id: UUID().uuidString.lowercased(), libraryID: "library", ownerDeviceID: "mac-b", kind: .mac, name: "Studio")
         let linux = ExecutionWorkspace(id: UUID().uuidString.lowercased(), libraryID: "library", ownerDeviceID: "mac-b", kind: .linux, name: "Workstation")
@@ -61,13 +61,13 @@ struct PairedWorkspaceSidebarTests {
             {"id":"codex","displayName":"Codex","transport":"acp","capabilities":[],"state":"ready","authenticationStatus":"ready","setupMethods":[],"detectedProviders":[]}
             """.utf8))
         let agents = [linuxClaude, linuxCodex, linuxAgain, phoneAgent, managedCodex, macCodex, local]
-        let targets = DashboardNewChatPeerTarget.resolve(agents: agents, peerWorkspaces: peers,
+        let targets = NewChatPeerTarget.resolve(agents: agents, peerWorkspaces: peers,
             configured: [.init(configuration: managed, harness: harness)], folderOwnerID: nil)
         #expect(targets.map(\.workspace.name) == ["Studio", "Workstation", "Workstation"])
         #expect(targets.map(\.runtimeKind) == [.codex, .claudeCode, .codex])
         #expect(targets.map(\.agentID) == [macCodex.id, linuxClaude.id, linuxCodex.id])
         // A folder bound to one workspace offers only that workspace's agents.
-        let scoped = DashboardNewChatPeerTarget.resolve(agents: agents, peerWorkspaces: peers, configured: [], folderOwnerID: "device:" + mac.id)
+        let scoped = NewChatPeerTarget.resolve(agents: agents, peerWorkspaces: peers, configured: [], folderOwnerID: "device:" + mac.id)
         #expect(scoped.map(\.agentID) == [macCodex.id])
     }
 
@@ -81,7 +81,7 @@ struct PairedWorkspaceSidebarTests {
             .init(id: UUID().uuidString.lowercased(), libraryID: "library", ownerDeviceID: "gone", kind: .ios, name: "Removed iPad", deleted: true),
             .init(id: UUID().uuidString.lowercased(), libraryID: "library", ownerDeviceID: "ipad", kind: .ios, name: "iPad")
         ]
-        let listed = DashboardPairedWorkspaceSidebarModel.workspaces(registry)
+        let listed = PairedWorkspaceSidebarModel.workspaces(registry)
         #expect(listed.map(\.name) == ["iPad", "iPhone"])
 
         let folders = try JSONDecoder().decode([WorkspaceFolderRecord].self, from: Data("""
@@ -90,7 +90,7 @@ struct PairedWorkspaceSidebarTests {
              {"id":"loose","name":"Unbound","position":2,"is_pinned":0}]
             """.utf8))
         let phoneWorkspace = try #require(listed.first { $0.id == phone })
-        #expect(DashboardPairedWorkspaceSidebarModel.folders(for: phoneWorkspace, in: folders).map(\.id) == ["phone-folder"])
+        #expect(PairedWorkspaceSidebarModel.folders(for: phoneWorkspace, in: folders).map(\.id) == ["phone-folder"])
 
         let conversations = try JSONDecoder().decode([WorkspaceConversationRecord].self, from: Data("""
             [{"id":"older","title":"Older","unread":0,"is_pinned":0,"is_archived":0,"last_message_at":"2026-11-01T00:00:00Z"},
@@ -99,9 +99,9 @@ struct PairedWorkspaceSidebarTests {
              {"id":"mac-chat","title":"Mac chat","unread":0,"is_pinned":0,"is_archived":0}]
             """.utf8))
         let owners = ["older": phone, "newer": "device:" + phone, "archived": phone, "mac-chat": mac]
-        #expect(DashboardPairedWorkspaceSidebarModel.history(for: phoneWorkspace, conversations: conversations, owners: owners)
+        #expect(PairedWorkspaceSidebarModel.history(for: phoneWorkspace, conversations: conversations, owners: owners)
             .map(\.id) == ["newer", "older"])
-        #expect(DashboardPairedWorkspaceSidebarModel.isPhoneHistory(owner: mac, registry: registry) == false)
-        #expect(DashboardPairedWorkspaceSidebarModel.isPhoneHistory(owner: "device:" + phone, registry: registry))
+        #expect(PairedWorkspaceSidebarModel.isPhoneHistory(owner: mac, registry: registry) == false)
+        #expect(PairedWorkspaceSidebarModel.isPhoneHistory(owner: "device:" + phone, registry: registry))
     }
 }

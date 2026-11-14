@@ -25,7 +25,7 @@ public struct MobileCredential: Codable, Sendable, Equatable {
 }
 
 public protocol LibraryTransport: Sendable {
-  func executeMCP(_ message: GatewayJSONValue, conversationID: String, enabledGroups: [WorkspaceToolGroup], contextID: String?) async throws -> GatewayJSONValue
+  func executeMCP(_ message: JSONValue, conversationID: String, enabledGroups: [WorkspaceToolGroup], contextID: String?) async throws -> JSONValue
   func readWorkspace(_ request: LibraryWorkspaceRead) async throws -> LibraryWorkspaceResult
   func workspaceIdentity() async throws -> String
   func snapshot() async throws -> LibrarySnapshot
@@ -44,7 +44,7 @@ public protocol LibraryTransport: Sendable {
 }
 
 public extension LibraryTransport {
-  func executeMCP(_ message: GatewayJSONValue, conversationID: String, enabledGroups: [WorkspaceToolGroup], contextID: String? = nil) async throws -> GatewayJSONValue { throw MobileConnectionError.offline }
+  func executeMCP(_ message: JSONValue, conversationID: String, enabledGroups: [WorkspaceToolGroup], contextID: String? = nil) async throws -> JSONValue { throw MobileConnectionError.offline }
   func readWorkspace(_ request: LibraryWorkspaceRead) async throws -> LibraryWorkspaceResult { throw MobileConnectionError.offline }
   func linkedData(_ id: String, tableID: String?) async throws -> LinkedDataPreview { throw MobileConnectionError.offline }
   func transcript(_ id: String, before: String) async throws -> LibraryTranscript { throw MobileConnectionError.http(400, "This connection does not support older transcript pages.") }
@@ -57,21 +57,18 @@ public enum MobileConnectionError: Error, LocalizedError {
   case http(Int, String), revoked, versionMismatch, invalidResponse, responseTooLarge, insecureEndpoint, offline
   /// Signed: this host does not list this phone as a member (yet, or any more).
   case memberUnknown
-  /// Signed: this host is too old to accept member requests.
-  case memberUnsupported
   /// Devices disagree on versions; every device shows "Update everything".
   case updateRequired(String)
   public var errorDescription: String? {
     switch self {
     case .http(_, let message): message
-    case .revoked: "This device’s access was revoked or expired. Pair again with the central Mac. Local notes remain available."
+    case .revoked: "This device’s access was revoked or expired. Pair again with any of your Macs. Local notes remain available."
     case .versionMismatch: "These devices need compatible versions of Woven Matter. Local notes remain available."
     case .invalidResponse: "The connected workspace returned an unreadable response."
     case .responseTooLarge: "This response exceeds the client download limit."
     case .insecureEndpoint: "Pair using the Tailscale HTTPS address shown by Woven Matter on your Mac."
     case .offline: "This workspace is unavailable. Locally saved work remains available."
     case .memberUnknown: "The device you reached doesn’t recognize this one yet. It learns about it after it syncs with a Mac you paired with."
-    case .memberUnsupported: "Update everything: the device you reached needs a newer Woven Matter before this one can connect directly."
     case .updateRequired(let message): "Update everything. " + message
     }
   }
@@ -98,7 +95,7 @@ private actor MCPSessionCache {
   }
 }
 
-/// Requests that confirm or end this device's pairing with central.
+/// Requests that confirm or end this device's pairing with the Mac it paired with.
 public protocol MobilePairingRequests: Sendable {
   func confirmPairing() async throws
   func unpair() async throws
@@ -106,7 +103,8 @@ public protocol MobilePairingRequests: Sendable {
 
 public final class HTTPSLibraryTransport: LibraryTransport, MobilePairingRequests, @unchecked Sendable {
   let credential: MobileCredential
-  /// Signed member requests (no bearer). Nil for bearer-era pairing.
+  /// Signed member requests (no bearer). Nil only for the pairing requests
+  /// (`pair`, `confirmPairing`, `unpair`), which present the pairing credential.
   let signer: MemberRequestSigner?
   /// The host's member device ID, which every signed request names.
   let audience: String
@@ -147,26 +145,27 @@ public final class HTTPSLibraryTransport: LibraryTransport, MobilePairingRequest
   public func unpair() async throws {
     let _: [String: Bool] = try await request("v1/pair/unpair", method: "POST", body: Data("{}".utf8))
   }
+  /// Every pairing is confirmed: the Mac adds this device only after `confirmPairing`.
   public static func pair(_ payload: PairingPayload, deviceID: String, deviceName: String,
                           metadata: DeviceMetadata? = nil, expectedWorkspaceID: String? = nil,
-                          requiresConfirmation: Bool = false, memberPublicKey: Data? = nil,
+                          memberPublicKey: Data? = nil,
                           performer: (any MobileHTTPPerforming)? = nil) async throws -> MobileCredential {
     let provisional = MobileCredential(endpoint: payload.endpoint, workspaceID: "", deviceID: deviceID, token: "")
     let transport = try HTTPSLibraryTransport(credential: provisional, metadata: metadata, performer: performer)
-    var request = PairRequest(token: payload.token, deviceID: deviceID, deviceName: deviceName, protocolVersion: payload.protocolVersion, metadata: metadata, expectedWorkspaceID: expectedWorkspaceID, requiresConfirmation: requiresConfirmation ? true : nil)
+    var request = PairRequest(token: payload.token, deviceID: deviceID, deviceName: deviceName, protocolVersion: payload.protocolVersion, metadata: metadata, expectedWorkspaceID: expectedWorkspaceID, requiresConfirmation: true)
     // The Mac signs an `ios` member entry for this key; the phone then signs
     // its requests to every Mac and Linux member, whichever is online.
     request.memberPublicKey = memberPublicKey
     let result: PairResponse = try await transport.request("v1/pair", method: "POST", body: JSONEncoder().encode(request))
     guard result.protocolVersion == LibraryProtocol.version, result.deviceID == deviceID else { throw MobileConnectionError.versionMismatch }
     guard expectedWorkspaceID == nil || result.workspaceID == expectedWorkspaceID,
-      !requiresConfirmation || result.confirmationRequired == true else { throw MobileConnectionError.versionMismatch }
+      result.confirmationRequired == true else { throw MobileConnectionError.versionMismatch }
     return MobileCredential(endpoint: payload.endpoint, workspaceID: result.workspaceID, deviceID: result.deviceID,
       token: result.credential, confirmationPending: result.confirmationRequired,
       hostDeviceID: result.hostDeviceID.flatMap { MemberRequestSignature.isDeviceID($0.lowercased()) ? $0 : nil },
       libraryIDs: result.libraryIDs)
   }
-  public func executeMCP(_ message: GatewayJSONValue, conversationID: String, enabledGroups: [WorkspaceToolGroup], contextID: String? = nil) async throws -> GatewayJSONValue {
+  public func executeMCP(_ message: JSONValue, conversationID: String, enabledGroups: [WorkspaceToolGroup], contextID: String? = nil) async throws -> JSONValue {
     guard UUID(uuidString: conversationID) != nil else { throw MobileConnectionError.invalidResponse }
     var headers = ["X-Woven-Conversation-ID": conversationID,
       "X-Woven-Enabled-Groups": Set(enabledGroups).sorted { $0.rawValue < $1.rawValue }.map(\.rawValue).joined(separator: ","),
@@ -174,12 +173,12 @@ public final class HTTPSLibraryTransport: LibraryTransport, MobilePairingRequest
     if let contextID { headers["X-Woven-Context-ID"] = contextID }
     let initializationHeaders = headers
     let negotiated = try await mcpConnections.connect(conversationID) { [self] in
-      let initialize: GatewayJSONValue = .object(["jsonrpc": .string("2.0"), "id": .string(UUID().uuidString.lowercased()),
+      let initialize: JSONValue = .object(["jsonrpc": .string("2.0"), "id": .string(UUID().uuidString.lowercased()),
         "method": .string("initialize"), "params": .object(["protocolVersion": .string(WovenMCPServer.protocolVersion),
           "capabilities": .object([:]), "clientInfo": .object(["name": .string("woven-ios"), "version": .string("1.0.0")])])])
       let (bytes, response) = try await data("mcp", method: "POST", body: JSONEncoder().encode(initialize),
         maximumBytes: 1_048_576, timeout: 30, headers: initializationHeaders)
-      let reply = try JSONDecoder().decode(GatewayJSONValue.self, from: bytes)
+      let reply = try JSONDecoder().decode(JSONValue.self, from: bytes)
       guard let version = reply.objectValue?["result"]?.objectValue?["protocolVersion"]?.stringValue,
             WovenMCPServer.supportedProtocolVersions.contains(version) else { throw MobileConnectionError.versionMismatch }
       let sessionID = response.value(forHTTPHeaderField: "MCP-Session-Id")
@@ -187,7 +186,7 @@ public final class HTTPSLibraryTransport: LibraryTransport, MobilePairingRequest
       var notificationHeaders = initializationHeaders
       notificationHeaders["MCP-Protocol-Version"] = version
       if let sessionID { notificationHeaders["MCP-Session-Id"] = sessionID }
-      let initialized: GatewayJSONValue = .object(["jsonrpc": .string("2.0"), "method": .string("notifications/initialized")])
+      let initialized: JSONValue = .object(["jsonrpc": .string("2.0"), "method": .string("notifications/initialized")])
       _ = try await data("mcp", method: "POST", body: JSONEncoder().encode(initialized),
         maximumBytes: 1_048_576, timeout: 30, headers: notificationHeaders)
       return MCPSessionCache.Session(protocolVersion: version, id: sessionID)
@@ -196,7 +195,7 @@ public final class HTTPSLibraryTransport: LibraryTransport, MobilePairingRequest
     if let sessionID = negotiated.id { headers["MCP-Session-Id"] = sessionID }
     let (responseData, _) = try await data("mcp", method: "POST", body: JSONEncoder().encode(message),
       maximumBytes: 80 * 1_024 * 1_024, timeout: 24 * 60 * 60, headers: headers)
-    return try JSONDecoder().decode(GatewayJSONValue.self, from: responseData)
+    return try JSONDecoder().decode(JSONValue.self, from: responseData)
   }
   public func readWorkspace(_ value: LibraryWorkspaceRead) async throws -> LibraryWorkspaceResult { try await request("v1/workspace-read", method: "POST", body: JSONEncoder().encode(value)) }
   public func workspaceIdentity() async throws -> String {
@@ -221,8 +220,8 @@ public final class HTTPSLibraryTransport: LibraryTransport, MobilePairingRequest
   public func mutate(_ mutation: LibraryMutation) async throws -> LibraryMutationResult { try await request("v1/mutations", method: "POST", body: JSONEncoder().encode(mutation)) }
   public func note(_ id: String) async throws -> LibraryNote { try await request("v1/notes/\(try Self.safeID(id))") }
   public func linkedData(_ id: String, tableID: String?) async throws -> LinkedDataPreview { try await request("v1/assets/\(try Self.safeID(id))/linked-data", query: tableID.map { [.init(name: "tableID", value: $0)] } ?? []) }
-  public func providers() async throws -> [HarnessCapabilities] { try await request("v1/providers") }
-  public func pending() async throws -> [PendingInteraction] { try await request("v1/pending") }
+  public func providers() async throws -> [HarnessCapabilities] { try await list("v1/providers") }
+  public func pending() async throws -> [PendingInteraction] { try await list("v1/pending") }
   public func transcript(_ id: String) async throws -> LibraryTranscript { try await request("v1/sessions/\(try Self.safeID(id))/transcript") }
   public func transcript(_ id: String, before: String) async throws -> LibraryTranscript { try await request("v1/sessions/\(try Self.safeID(id))/transcript", query: [.init(name: "before", value: before)]) }
   public func activityDetails(_ id: String, runID: String, activityID: String) async throws -> LibraryActivity {
@@ -233,13 +232,15 @@ public final class HTTPSLibraryTransport: LibraryTransport, MobilePairingRequest
     do { return try await request("v1/command-receipts/\(try Self.safeID(id))") }
     catch MobileConnectionError.http(404, _) { return nil }
   }
-  public func deviceConnections() async throws -> [DeviceConnection] { try await request("v1/devices") }
-  public func suspendDevelopmentConnection() async throws {
-    let _: [String: Bool] = try await request("v1/devices/development/disconnect", method: "POST", body: Data("{}".utf8), timeout: 3)
-  }
+  public func deviceConnections() async throws -> [DeviceConnection] { try await list("v1/devices") }
   public func capabilities(_ id: String) async throws -> HarnessCapabilities { try await request("v1/sessions/\(try Self.safeID(id))/capabilities") }
   public func asset(_ id: String) async throws -> LibraryNote { try await request("v1/assets/\(try Self.safeID(id))") }
 
+  /// A list the host answers with. An element a newer host wrote and this
+  /// build cannot read is dropped; the rest of the list still arrives.
+  func list<Element: Decodable>(_ path: String) async throws -> [Element] {
+    (try await request(path) as LossyArray<Element>).wrappedValue
+  }
   func request<Result: Decodable>(_ path: String, method: String = "GET", query: [URLQueryItem] = [], body: Data? = nil, timeout: TimeInterval? = nil) async throws -> Result {
     let (data, _) = try await data(path, method: method, query: query, body: body, maximumBytes: 80 * 1_024 * 1_024, timeout: timeout)
     return try JSONDecoder().decode(Result.self, from: data)
@@ -284,7 +285,6 @@ public enum MobileCredentialVault {
   private static var service: String { ClientCredentialNamespace.service("com.wovenmatter.wovenmatter.pairing") }
   public static func load() throws -> MobileCredential? {
     #if canImport(Security)
-    LegacyKeychainItem.move(from: ClientCredentialNamespace.service("com.wovenmatter.companion.dev.pairing"), to: service, account: "paired-mac")
     var result: CFTypeRef?
     let status = SecItemCopyMatching([kSecClass: kSecClassGenericPassword, kSecAttrService: service,
       kSecAttrAccount: "paired-mac", kSecReturnData: true, kSecMatchLimit: kSecMatchLimitOne] as CFDictionary, &result)
@@ -295,8 +295,8 @@ public enum MobileCredentialVault {
     return nil
     #endif
   }
-  /// Disconnect the central library only. Provider and direct-workspace grants
-  /// use different services and remain available on this device.
+  /// Forgets the pairing only. Provider sign-ins use a different service and
+  /// remain available on this device.
   public static func clear() throws {
     #if canImport(Security)
     let status = SecItemDelete([kSecClass: kSecClassGenericPassword, kSecAttrService: service,
@@ -320,24 +320,6 @@ public enum MobileCredentialVault {
     #endif
   }
 }
-
-#if canImport(Security)
-/// Desktop apps from before November 2026 saved these items under
-/// `com.wovenmatter.companion.*` services. An item moves once, the first time it
-/// is read, so a Mac that is a library client stays paired.
-enum LegacyKeychainItem {
-  static func move(from legacy: String, to service: String, account: String) {
-    let current: [CFString: Any] = [kSecClass: kSecClassGenericPassword, kSecAttrService: service, kSecAttrAccount: account]
-    guard SecItemCopyMatching(current as CFDictionary, nil) == errSecItemNotFound else { return }
-    let old: [CFString: Any] = [kSecClass: kSecClassGenericPassword, kSecAttrService: legacy, kSecAttrAccount: account]
-    var result: CFTypeRef?
-    guard SecItemCopyMatching(old.merging([kSecReturnData: true, kSecMatchLimit: kSecMatchLimitOne]) { _, new in new } as CFDictionary,
-                              &result) == errSecSuccess, let data = result as? Data else { return }
-    let added = SecItemAdd(current.merging([kSecValueData: data, kSecAttrAccessible: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly]) { _, new in new } as CFDictionary, nil)
-    if added == errSecSuccess { SecItemDelete(old as CFDictionary) }
-  }
-}
-#endif
 
 /// Multiple desktop instances share a Keychain but must never share a device's
 /// library bearer. Preserve the established service for ordinary installations.

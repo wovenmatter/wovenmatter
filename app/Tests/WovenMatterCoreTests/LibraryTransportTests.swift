@@ -1,6 +1,7 @@
 import Foundation
 import XCTest
-@testable import WovenMatterDashboardStore
+import WorkspaceFixtures
+@testable import WovenMatterLibraryStore
 import WovenMatterCore
 
 final class LibraryTransportTests: XCTestCase {
@@ -13,10 +14,10 @@ final class LibraryTransportTests: XCTestCase {
     let offer = try await auth.createOffer(endpoint: endpoint)
     let deviceID = UUID().uuidString.lowercased()
     let request = PairRequest(token: offer.payload.token, deviceID: deviceID, deviceName: "Fixture iPhone")
-    let response = try await auth.pair(request, workspaceID: "fixture-workspace")
+    let response = try await auth.pairConfirmed(request, workspaceID: "fixture-workspace")
     let device = try await auth.authenticate(bearer: response.credential)
     XCTAssertEqual(device.id, deviceID)
-    do { _ = try await auth.pair(request, workspaceID: "fixture-workspace"); XCTFail("Pairing code was reused") }
+    do { _ = try await auth.pairConfirmed(request, workspaceID: "fixture-workspace"); XCTFail("Pairing code was reused") }
     catch { XCTAssertEqual((error as? LibraryAPIError)?.code, "invalid_pairing") }
     let disk = try String(contentsOf: file, encoding: .utf8)
     XCTAssertFalse(disk.contains(response.credential))
@@ -28,6 +29,16 @@ final class LibraryTransportTests: XCTestCase {
     let revoked = try DeviceAuthentication(fileURL: file)
     do { _ = try await revoked.authenticate(bearer: response.credential); XCTFail("Revoked credential was accepted") }
     catch { XCTAssertEqual((error as? LibraryAPIError)?.code, "unauthorized") }
+
+    // A store a newer Woven Matter wrote is refused and left as it is.
+    let saved = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any])
+    for (field, value) in [("admissionVersion", 4), ("version", 2)] {
+      var newer = saved; newer[field] = value
+      let data = try JSONSerialization.data(withJSONObject: newer, options: [.sortedKeys])
+      try data.write(to: file)
+      XCTAssertThrowsError(try DeviceAuthentication(fileURL: file)) { XCTAssertEqual(($0 as? LibraryAPIError)?.code, "credential_store") }
+      XCTAssertEqual(try Data(contentsOf: file), data)
+    }
   }
 
   func testHTTPReaderHandlesSplitUTF8AndRejectsSmugglingAndBrowserOrigins() async throws {

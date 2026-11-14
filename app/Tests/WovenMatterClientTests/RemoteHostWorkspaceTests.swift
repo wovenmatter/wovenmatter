@@ -43,7 +43,7 @@ struct RemoteHostWorkspaceTests {
 
 
     @Test func hostProgressNeverDisplaysInstallerOutput() {
-        #expect(RemoteWorkspaceBuildProgress.message("WM_PROGRESS selftest", kind: .host) == "Verifying the Chromium sandbox…")
-        #expect(RemoteWorkspaceBuildProgress.message("private output token=secret", kind: .host) == nil)
+        #expect(RemoteWorkspaceBuildProgress.message("WM_PROGRESS selftest") == "Verifying the Chromium sandbox…")
+        #expect(RemoteWorkspaceBuildProgress.message("private output token=secret") == nil)
     }
 }

@@ -1,12 +1,12 @@
 import Foundation
 import WovenMatterCore
 import WovenMatterClient
-import WovenMatterDashboardStore
+import WovenMatterLibraryStore
 
 /// `woven_sessions_wait` and wake-ups on this Mac (docs/architecture/WOVEN_EVERYWHERE.md,
 /// "Streaming", "Agent to agent"; `SessionWakeUp` in shared/), with the same
 /// behaviour as the Linux server. `SessionWakeUps` keeps the state; this
-/// connects it to `CentralExecutionClient`'s streams, this Mac's own changes,
+/// connects it to `MemberExecutionClient`'s streams, this Mac's own changes,
 /// and the delivery path timers and coordination notifications use.
 extension ApplicationModel {
     /// The key this Mac's own sessions use in `SessionWakeUps`.
@@ -14,7 +14,7 @@ extension ApplicationModel {
 
     /// The coordinator, created (and its stored state loaded) on first use.
     func sessionWakeUps() async -> SessionWakeUps? {
-        guard !isBackendFrontend, let agentTools, let database = dashboardStore?.database else { return nil }
+        guard !isBackendFrontend, let agentTools, let database = libraryStore?.database else { return nil }
         if let existing = agentTools.sessionWakeUps { return existing }
         let coordinator = SessionWakeUps(database: database, hooks: .init(
             caller: { [weak self] id in await self?.sessionWakeUpCaller(id) ?? .gone },
@@ -27,7 +27,7 @@ extension ApplicationModel {
             log: { NSLog("%@", $0) }))
         agentTools.sessionWakeUps = coordinator
         // Destinations' `workspace` streams, filtered there to watched sessions and waits.
-        if let client = try? centralExecutionClient() {
+        if let client = try? memberExecutionClient() {
             client.onWorkspaceItem = { [weak coordinator] workspaceID, payload in
                 await coordinator?.remoteItem(workspaceID: workspaceID, payload)
             }
@@ -51,7 +51,7 @@ extension ApplicationModel {
 
     /// One of this Mac's sessions, in `woven_sessions_status`'s terms.
     func localSessionSnapshot(_ id: String) async -> SessionWakeUps.Snapshot? {
-        guard let database = dashboardStore?.database else { return nil }
+        guard let database = libraryStore?.database else { return nil }
         let run = try? await database.activeRunID(conversationID: id)
         let pending = await libraryCommands.pendingInteractions().filter { $0.conversationID.lowercased() == id.lowercased() }
         // The stored run is what changes commit; it is the state, as on another workspace.
@@ -60,7 +60,7 @@ extension ApplicationModel {
 
     private func sessionWakeUpCaller(_ id: String) async -> SessionWakeUps.Caller {
         if WovenMCPCaller.parseBot(id) != nil { return .bot }
-        guard let database = dashboardStore?.database, (try? await database.sessionWakeUpCallerExists(id)) == true else { return .gone }
+        guard let database = libraryStore?.database, (try? await database.sessionWakeUpCallerExists(id)) == true else { return .gone }
         let activeRun = try? await database.activeRunID(conversationID: id)
         let idle = !runningToolSessionIDs.contains(id) && activeRun == nil
         guard idle else { return .conversation(idle: false, wokenRunsInARow: 0) }
@@ -70,7 +70,7 @@ extension ApplicationModel {
     /// Sends the wake-up into the idle caller like a coordination notification,
     /// never steering a running turn. False when it was not accepted.
     private func deliverSessionWakeUp(_ wakeUp: SessionWakeUps.Delivery) async -> Bool {
-        guard let database = dashboardStore?.database else { return false }
+        guard let database = libraryStore?.database else { return false }
         do {
             let delivery = try await database.reserveSessionWakeUpDelivery(id: wakeUp.id, callerID: wakeUp.callerID, sessionID: wakeUp.sessionID,
                 title: wakeUp.title, harness: wakeUp.harness, text: wakeUp.text, key: wakeUp.key)
@@ -93,7 +93,7 @@ extension ApplicationModel {
 
     /// A bot's wake-up reaches its runtime the way its notifications do.
     private func deliverBotWakeUp(_ wakeUp: SessionWakeUps.Delivery) async throws {
-        guard let database = dashboardStore?.database, let agentTools else { throw ApplicationModelError.dashboardStoreUnavailable }
+        guard let database = libraryStore?.database, let agentTools else { throw ApplicationModelError.libraryStoreUnavailable }
         let delivery = try await database.reserveSessionWakeUpDelivery(id: wakeUp.id, callerID: wakeUp.callerID, sessionID: wakeUp.sessionID,
             title: wakeUp.title, harness: wakeUp.harness, text: wakeUp.text, key: wakeUp.key)
         if delivery.status == "accepted" { return }
@@ -106,7 +106,7 @@ extension ApplicationModel {
     /// After a restart: what a watched workspace runs now, read once, and its stream opened.
     private func sessionWakeUpReconcile(_ workspaceID: String) async -> (conversations: [LibraryConversation], pending: [PendingInteraction])? {
         guard let (_, others) = try? await agentToolWorkspaces(), let workspace = others.first(where: { $0.id == workspaceID }),
-              workspace.endpoint != nil, let client = try? centralExecutionClient() else { return nil }
+              workspace.endpoint != nil, let client = try? memberExecutionClient() else { return nil }
         await client.openStream(workspace)
         guard let conversations = try? await client.conversations(workspace: workspace) else { return nil }
         return (conversations, (try? await client.pendingInteractions(workspace: workspace)) ?? [])
@@ -127,8 +127,8 @@ extension ApplicationModel {
     /// `woven_sessions_wait`: a session on another member's workspace resolves
     /// from that workspace's stream, one on this Mac from its own changes.
     func memberSessionWait(callerID: String, command: WovenMatterToolCommand, readsAll: Bool) async throws -> WovenMatterToolResponse {
-        guard let database = dashboardStore?.database, let coordinator = await sessionWakeUps() else {
-            throw ApplicationModelError.dashboardStoreUnavailable
+        guard let database = libraryStore?.database, let coordinator = await sessionWakeUps() else {
+            throw ApplicationModelError.libraryStoreUnavailable
         }
         let id = try command.required("id", allowPositional: true).lowercased()
         let until = try command.required("until")
@@ -138,7 +138,7 @@ extension ApplicationModel {
             guard readsAll || creator == callerID else {
                 throw WorkspaceToolError.invalid("Read only the sessions you created, or enable Conversation history.")
             }
-            let client = try centralExecutionClient()
+            let client = try memberExecutionClient()
             await client.openStream(workspace)
             let result = try await coordinator.wait(callerID: callerID, workspaceID: workspace.id, id: id, until: until, timeout: .seconds(seconds)) {
                 let response = try await self.memberSessionStatus(client: client, workspace: workspace, id: id, before: nil)

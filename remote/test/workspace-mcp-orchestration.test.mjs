@@ -15,7 +15,7 @@ async function fixture(t,{kind='opencode',sourcePermission='ask',destinationPerm
     settings:async({native})=>selections.get(native.sessionID),configure:async({native,options})=>Object.assign(selections.get(native.sessionID),options),capabilities:async()=>({canSteer:false}),
     run:async input=>{let end;const promise=new Promise(resolve=>end=resolve);runs.push({...input,end});await promise},
     close:async()=>{for(const run of runs)run.end()}}
-  const service=createClientExecution({directory,runtime,publisherKey:'owner'.repeat(10),publisherIntervalMilliseconds:0})
+  const service=createClientExecution({directory,runtime,publisherIntervalMilliseconds:0})
   const {principal}=enroll(service)
   const command=(kind,values={})=>service.command({commandID:randomUUID(),deviceID:principal.id,kind,...values},principal)
   const source=(await command('createSession',{providerID:kind})).conversationID,connection=service.mcp.sessionConnection(source),scope=service.mcp.resolvePrincipal('Bearer '+connection.bearerToken)

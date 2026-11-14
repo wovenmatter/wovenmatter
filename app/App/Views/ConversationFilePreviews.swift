@@ -40,12 +40,12 @@ private struct ConversationFileAttachment: View {
                           systemImage: file.kind == .photo ? "photo" : "doc.richtext")
                         .font(.system(size: 12)).lineLimit(1).truncationMode(.middle)
                 }
-                .buttonStyle(DashboardQuietButtonStyle())
+                .buttonStyle(WovenQuietButtonStyle())
                 .help("Preview \(file.title). Drag to copy the file.")
                 .accessibilityLabel("Preview \(file.title)")
                 .onDrag { dragProvider() }
                 Button { perform { await save($0) } } label: { Image(systemName: "arrow.down.to.line") }
-                    .buttonStyle(DashboardIconButtonStyle())
+                    .buttonStyle(WovenIconButtonStyle())
                     .help("Save \(file.title)…")
                     .accessibilityLabel("Save \(file.title)")
                 Menu {
@@ -62,7 +62,7 @@ private struct ConversationFileAttachment: View {
                 if loading { ProgressView().controlSize(.small) }
             }
             .disabled(loading)
-            if let error { Text(error).font(.caption).foregroundStyle(DashboardPalette.mutedForeground) }
+            if let error { Text(error).font(.caption).foregroundStyle(WovenPalette.mutedForeground) }
         }
     }
 

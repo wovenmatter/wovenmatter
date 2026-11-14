@@ -5,11 +5,11 @@ import WovenMatterShared
 extension MobileModel {
   /// Groups content by the workspace that owns it. Folder bindings and registry
   /// rows name the same device with or without a `device:`/`remote:` prefix, and
-  /// the central Mac's folders name the owner its registry row lists as
+  /// a Mac's own folders name the owner its registry row lists as
   /// `folderOwnerID`; this is display grouping only and never decides execution ownership.
   func canonicalWorkspaceID(_ id: String) -> String {
     if id == "local" || id == "device" { return Self.displayWorkspaceID(deviceWorkspaceID) }
-    if id == "central", let central = centralExecutionWorkspace { return Self.displayWorkspaceID(central.id) }
+    if id == "host", let host = hostExecutionWorkspace { return Self.displayWorkspaceID(host.id) }
     return ExecutionWorkspace.displayOwner(of: id, in: executionWorkspaces) ?? Self.displayWorkspaceID(id)
   }
   static func displayWorkspaceID(_ value: String) -> String { ExecutionWorkspace.displayID(value) }
@@ -26,7 +26,7 @@ extension MobileModel {
       let parts = provider.split(separator: ":")
       if parts.count == 3, parts[0] == "remote", UUID(uuidString: String(parts[1])) != nil { return canonicalWorkspaceID(String(parts[1])) }
       if providers.contains(where: { $0.id == provider }) {
-        return centralExecutionWorkspace.map { canonicalWorkspaceID($0.id) }
+        return hostExecutionWorkspace.map { canonicalWorkspaceID($0.id) }
       }
     }
     return nil
@@ -40,13 +40,13 @@ extension MobileModel {
   func workspaceIsActive(_ workspace: ExecutionWorkspace) -> Bool {
     guard !workspace.deleted, workspace.retainedHistory != true, workspace.kind != .ios else { return false }
     if workspaceReachable[workspace.id] == true { return true }
-    return online && centralExecutionWorkspace?.id == workspace.id
+    return online && hostExecutionWorkspace?.id == workspace.id
   }
   /// Quick Chat is always listed. A copied snapshot owner (`retainedHistory`)
   /// never is, even when its copied endpoint answers; its chats stay readable
   /// in All Workspaces and Recents. A workspace's group is listed while that
   /// workspace is active or any of its agents can start now (a Linux
-  /// workspace reached through the central Mac).
+  /// workspace reached through the library host).
   func agentGroupIsActive(_ group: AgentGroup) -> Bool {
     if group.id == "local" { return true }
     if executionWorkspaces.contains(where: { $0.id == group.id && ($0.retainedHistory == true || $0.deleted) }) { return false }
@@ -116,7 +116,7 @@ extension MobileModel {
   static let deviceConnectionMessage = "Can’t connect to this device. Make sure it’s online and connected to the internet."
   func workspaceIsConnected(_ id: String) -> Bool {
     if id == "local" { return true }
-    if id == "central" { return online && engine != nil && transport != nil }
+    if id == "host" { return online && engine != nil && transport != nil }
     return workspaceReachable[id] == true && workspaceClients[id] != nil
   }
   func workspaceActionMessage(_ error: any Error) -> String {
@@ -135,7 +135,7 @@ extension MobileModel {
   func requireWorkspaceConnection(_ id: String) async throws {
     guard workspaceIsConnected(id) else { throw DeviceExecutionError.unavailable(Self.deviceConnectionMessage) }
     if id == "local" { return }
-    if id == "central", let transport {
+    if id == "host", let transport {
       let identity = try await transport.workspaceIdentity()
       guard identity == state.workspaceID else { throw MobileStore.Failure.wrongWorkspace }
     } else if let client = workspaceClients[id] { try await client.checkConnection() }

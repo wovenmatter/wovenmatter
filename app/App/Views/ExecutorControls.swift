@@ -33,7 +33,7 @@ struct ExecutorAppsList: View {
                     }
                 }
             }
-            if apps.isEmpty { Text("Add apps and link their accounts in the Executor dashboard, then refresh.").font(.settingsBody).foregroundStyle(DashboardPalette.mutedForeground) }
+            if apps.isEmpty { Text("Add apps and link their accounts in the Executor dashboard, then refresh.").font(.settingsBody).foregroundStyle(WovenPalette.mutedForeground) }
         }
     }
 }
@@ -86,9 +86,9 @@ struct ExecutorConnectionsCard: View {
                         }
                         Button("Refresh machines") { model.remoteWorkspaces.discoverMachines() }
                     }.buttonStyle(SettingsQuietButtonStyle())
-                    SettingsField("Tailscale machine") { TextField("machine.tailnet.ts.net", text: $draft.host).dashboardInput() }
-                    SettingsField("SSH username") { TextField("From SSH config", text: $draft.user).dashboardInput() }
-                    SettingsField("Private HTTPS origin") { TextField("https://machine.tailnet.ts.net:8443", text: $draft.origin).dashboardInput() }
+                    SettingsField("Tailscale machine") { TextField("machine.tailnet.ts.net", text: $draft.host).wovenInput() }
+                    SettingsField("SSH username") { TextField("From SSH config", text: $draft.user).wovenInput() }
+                    SettingsField("Private HTTPS origin") { TextField("https://machine.tailnet.ts.net:8443", text: $draft.origin).wovenInput() }
                     HStack {
                         Button("Inspect host") { model.remoteWorkspaces.checkHost(hostName: draft.host, userName: draft.user) }
                         if model.remoteWorkspaces.isCheckingHost { ProgressView().controlSize(.small) }
@@ -125,10 +125,10 @@ struct ExecutorConnectionsCard: View {
                 SettingsNote("Set app-access defaults here and adjust access within each conversation between turns. Accounts are connected in Executor’s dashboard. Full access accepts action approvals; requested input still appears in the conversation. App selection remains enforced in every permission mode.")
                 Link("Learn more about Executor ↗", destination: URL(string: "https://executor.sh")!)
                     .font(.settingsBody)
-                    .foregroundStyle(DashboardPalette.success)
+                    .foregroundStyle(WovenPalette.success)
                 Text("Copyright 2026 Rhys Sullivan.")
                     .font(.settingsSecondary)
-                    .foregroundStyle(DashboardPalette.mutedForeground)
+                    .foregroundStyle(WovenPalette.mutedForeground)
             }
         }
         .task { if let config = tools.settings.executorSetup?.configuration ?? tools.settings.executor { draft = config }; model.remoteWorkspaces.discoverMachines() }
@@ -176,8 +176,8 @@ struct ExecutorConversationApps: View {
                         Task { do { try await tools.controlExecutor(.refresh) } catch { self.error = error.localizedDescription } }
                     }
                 }.buttonStyle(SettingsQuietButtonStyle())
-            } else { Text("Set up Executor in Settings → Woven MCP.").foregroundStyle(DashboardPalette.mutedForeground) }
-            if let error { Text(error).font(.settingsBody).foregroundStyle(DashboardPalette.mutedForeground) }
+            } else { Text("Set up Executor in Settings → Woven MCP.").foregroundStyle(WovenPalette.mutedForeground) }
+            if let error { Text(error).font(.settingsBody).foregroundStyle(WovenPalette.mutedForeground) }
         }
         .disabled(tools.executorBusy || tools.settings.executorSetup?.running == true)
         .sheet(isPresented: $dashboard) {

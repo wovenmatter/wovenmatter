@@ -30,7 +30,7 @@ struct SettingsPermissionsView: View {
                     Spacer(minLength: 16)
                     if !macAccess.remaining.isEmpty {
                         Button(macAccess.allowingAll ? "Allowing\u{2026}" : "Allow all") { macAccess.allowAll() }
-                            .buttonStyle(DashboardPrimaryButtonStyle())
+                            .buttonStyle(WovenPrimaryButtonStyle())
                             .disabled(macAccess.allowingAll || macAccess.settingUp != nil || model.isReconnectingSavedCredentials
                                       || macAccess.remaining.allSatisfy { macAccess.access($0) == .needsReopen })
                     }
@@ -99,7 +99,7 @@ struct SettingsPermissionsView: View {
             if access == .allowed {
                 MacPermissionStatusLabel(access: access)
             } else if isChecking(item) {
-                Text("Checking\u{2026}").font(.settingsSecondary).foregroundStyle(DashboardPalette.mutedForeground)
+                Text("Checking\u{2026}").font(.settingsSecondary).foregroundStyle(WovenPalette.mutedForeground)
             } else if access == .needsReopen {
                 Button("Reopen") { macAccess.reopenApp() }.buttonStyle(SettingsQuietButtonStyle())
             } else {
@@ -125,8 +125,8 @@ struct MacPermissionStatusLabel: View {
     var body: some View {
         if access == .allowed {
             HStack(spacing: 5) {
-                DashboardLucideIcon(glyph: .check, size: 13).foregroundStyle(DashboardPalette.success)
-                Text("Allowed").font(.settingsSecondary).foregroundStyle(DashboardPalette.mutedForeground)
+                LucideIcon(glyph: .check, size: 13).foregroundStyle(WovenPalette.success)
+                Text("Allowed").font(.settingsSecondary).foregroundStyle(WovenPalette.mutedForeground)
             }
             .accessibilityElement(children: .combine)
             .accessibilityLabel("Allowed")
@@ -145,7 +145,7 @@ struct MacPermissionStatusLink: View {
         let missing = items.filter { macAccess.access($0) != .allowed }
         HStack(alignment: .center, spacing: 8) {
             if missing.isEmpty {
-                DashboardLucideIcon(glyph: .check, size: 12).foregroundStyle(DashboardPalette.success)
+                LucideIcon(glyph: .check, size: 12).foregroundStyle(WovenPalette.success)
                 Text(items.count == 1 ? "\(items[0].permissionTitle) is allowed." : "Allowed on this Mac.")
             } else {
                 Text("\(PermissionNames.list(missing.map(\.permissionTitle))) \(missing.count == 1 ? "isn't" : "aren't") allowed yet on this Mac.")
@@ -158,11 +158,11 @@ struct MacPermissionStatusLink: View {
                 }
             }
             .buttonStyle(.plain)
-            .foregroundStyle(DashboardPalette.success)
+            .foregroundStyle(WovenPalette.success)
             .accessibilityHint("Opens Settings, Permissions & Access")
         }
         .font(.settingsSecondary)
-        .foregroundStyle(DashboardPalette.mutedForeground)
+        .foregroundStyle(WovenPalette.mutedForeground)
         .task { macAccess.refresh(keychainReady: nil) }
     }
 }

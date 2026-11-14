@@ -28,12 +28,9 @@ public struct ProductAnalyticsEvent: Codable, Equatable, Identifiable, Sendable 
     case active = "app_active"
     case updateCheckClicked = "update_check_clicked"
     case updateDownloadStarted = "update_download_started"
-    // Decode events from older clients; these callbacks were not button clicks.
-    case updateDownloadClicked = "update_download_clicked"
     case updateDownloadCompleted = "update_download_completed"
     case updateDownloadFailed = "update_download_failed"
     case updateInstallStarted = "update_install_started"
-    case updateInstallClicked = "update_install_clicked"
     case updateInstallCompleted = "update_install_completed"
     case updateInstallFailed = "update_install_failed"
   }
@@ -57,7 +54,7 @@ public struct ProductAnalyticsEvent: Codable, Equatable, Identifiable, Sendable 
   public var qualifying: Bool {
     name == .active
   }
-  /// Re-applied at the central ingestion boundary, including decoded remote input.
+  /// Re-applied where a Mac ingests analytics, including decoded remote input.
   public static func sanitize(_ values: [String: String]) -> [String: String] {
     let enums: [String: Set<String>] = [
       "platform": ["macos", "ios", "ipados"],

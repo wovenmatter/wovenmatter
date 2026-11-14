@@ -613,6 +613,33 @@ class HostFixtures(unittest.TestCase):
         self.assertIn('WOVENMATTER_LIBRARY="0"',self.service_starts[0])
         self.assertEqual(database.read_bytes(),b'user data')
         self.assertNotIn('WOVENMATTER_LIBRARY=',self.m.ENV_FILE.read_text()); self.assertTrue(self.active)
+    def execution_store(self):
+        store=self.m.EXECUTION_STORE; store.mkdir(parents=True,exist_ok=True)
+        (store/'execution.sqlite').write_bytes(b'execution data'); (store/'execution.sqlite-wal').write_bytes(b'execution wal')
+        return store
+    def test_a_failed_check_restores_the_execution_store_with_the_library(self):
+        fp,database=self.library_update_fixture(); store=self.execution_store(); self.fail_selftest=True
+        # The checked service opens the store: it upgrades the database and leaves new WAL files.
+        def opened(*a):
+            (store/'execution.sqlite').write_bytes(b'upgraded'); (store/'execution.sqlite-wal').write_bytes(b'new wal'); (store/'execution.sqlite-shm').write_bytes(b'new shm')
+            return {'serviceFingerprint':fp,'runtimeKind':'host'}
+        self.m.health=opened
+        with self.assertRaises(self.m.Failure) as error: self.m.install('fixture','7337','fullRoot',fp,True)
+        self.assertEqual(error.exception.code,'browser_selftest_failed')
+        self.assertEqual(database.read_bytes(),b'user data')
+        self.assertEqual((store/'execution.sqlite').read_bytes(),b'execution data')
+        self.assertEqual((store/'execution.sqlite-wal').read_bytes(),b'execution wal')
+        self.assertFalse((store/'execution.sqlite-shm').exists())
+    def test_a_failure_after_the_library_host_starts_keeps_the_execution_store(self):
+        fp,database=self.library_update_fixture(); store=self.execution_store()
+        def opened(*a):
+            if len(self.service_starts)>1: return None
+            (store/'execution.sqlite').write_bytes(b'upgraded')
+            return {'serviceFingerprint':fp,'runtimeKind':'host'}
+        self.m.health=opened; self.m.HEALTH_SECONDS=1
+        with self.assertRaises(self.m.Failure) as error: self.m.install('fixture','7337','fullRoot',fp,True)
+        self.assertEqual(error.exception.code,'host_health_failed')
+        self.assertEqual((store/'execution.sqlite').read_bytes(),b'upgraded')
     def test_a_failure_after_the_library_host_starts_keeps_the_migrated_database(self):
         fp,database=self.library_update_fixture()
         # Healthy while checked; unhealthy once restarted with the library host.
@@ -627,29 +654,29 @@ class HostFixtures(unittest.TestCase):
         self.assertEqual(database.read_bytes(),b'migrated'); self.assertTrue(self.active)
         self.assertEqual(os.readlink(self.m.ROOT/'current'),str(self.m.ROOT/'releases'/fp))
         self.assertNotIn('WOVENMATTER_LIBRARY=',self.m.ENV_FILE.read_text())
-    def test_rotating_the_installer_bearer_keeps_the_service_secret(self):
+    def test_rotating_the_installer_bearer_replaces_it(self):
         self.save_install()
         first=self.m.rotate_token('fixture'); settings=self.m.parse_env()
         self.assertTrue(first['rotated']); self.assertRegex(first['token'],'^[A-Za-z0-9_-]{64}$')
-        self.assertEqual(settings['WOVENMATTER_API_TOKEN'],first['token']); self.assertEqual(settings['WOVENMATTER_SERVICE_SECRET'],TOKEN)
+        self.assertEqual(settings['WOVENMATTER_API_TOKEN'],first['token']); self.assertNotIn('WOVENMATTER_SERVICE_SECRET',settings)
         second=self.m.rotate_token('fixture'); settings=self.m.parse_env()
         self.assertNotEqual(second['token'],first['token'])
-        self.assertEqual(settings['WOVENMATTER_API_TOKEN'],second['token']); self.assertEqual(settings['WOVENMATTER_SERVICE_SECRET'],TOKEN)
+        self.assertEqual(settings['WOVENMATTER_API_TOKEN'],second['token'])
         self.assertEqual(self.m.ENV_FILE.stat().st_mode&0o777,0o600)
         self.assertNotIn(second['token'],self.m.main(['logs','fixture'])['logs'])
         with self.assertRaises(self.m.Failure): self.m.rotate_token('other')
-    def test_an_update_keeps_the_service_secret_whatever_bearer_it_streams(self):
+    def test_an_update_keeps_the_rotated_bearer_when_none_is_streamed(self):
         self.m.ROOT.mkdir(parents=True)
         fp,stream=self.install_bundle(); self.m.TOKEN=''
         self.m.health=lambda *a:{'serviceFingerprint':fp,'runtimeKind':'host'}
         source=self.feed(stream)
         self.m.install('fixture','7337','fullRoot',fp)
-        self.assertEqual(self.m.parse_env()['WOVENMATTER_SERVICE_SECRET'],TOKEN)
+        self.assertEqual(self.m.parse_env()['WOVENMATTER_API_TOKEN'],TOKEN)
         rotated=self.m.rotate_token('fixture')['token']
         stream.write_bytes(b'\n'+self.home.joinpath('bundle.tar').read_bytes()); source.seek(0); self.m.TOKEN=''
         self.m.install('fixture','7337','fullRoot',fp,True)
         settings=self.m.parse_env()
-        self.assertEqual(settings['WOVENMATTER_API_TOKEN'],rotated); self.assertEqual(settings['WOVENMATTER_SERVICE_SECRET'],TOKEN)
+        self.assertEqual(settings['WOVENMATTER_API_TOKEN'],rotated); self.assertNotIn('WOVENMATTER_SERVICE_SECRET',settings)
     def test_a_compressed_library_binary_is_unpacked_and_verified_before_it_runs(self):
         binary=b'\x7fELF fixture library host '*4096
         self.m.ROOT.mkdir(parents=True)

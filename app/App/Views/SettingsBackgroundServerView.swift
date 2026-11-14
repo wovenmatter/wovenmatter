@@ -32,7 +32,7 @@ struct SettingsBackgroundServerView: View {
     }
 
     private var leaseURL: URL {
-        get throws { try ApplicationModel.dashboardSupportDirectory().appending(path: LocalExecutionRole.backend.leaseFileName) }
+        get throws { try ApplicationModel.librarySupportDirectory().appending(path: LocalExecutionRole.backend.leaseFileName) }
     }
 
     private var serverOptions: [UUID?] {
@@ -78,7 +78,7 @@ struct SettingsBackgroundServerView: View {
             if let actionInProgress {
                 ProgressView().controlSize(.small)
                 Text(actionInProgress == "start" ? "Starting server…" : actionInProgress == "restart" ? "Restarting server…" : "Stopping server…")
-                    .font(.settingsSecondary).foregroundStyle(DashboardPalette.mutedForeground)
+                    .font(.settingsSecondary).foregroundStyle(WovenPalette.mutedForeground)
             } else {
                 SettingsStatus(availability.label, tone: availability.tone)
                 Group {
@@ -244,7 +244,7 @@ struct RuntimeInspectionView: View {
         SettingsSummaryRow("Activity", value: summary, tone: connected ? .good : .neutral) {
             if let snapshot {
                 Text("\(connected ? "Observed" : "Last observed") \(snapshot.observedAt.formatted(date: .abbreviated, time: .standard))")
-                    .font(.settingsSecondary).foregroundStyle(DashboardPalette.mutedForeground)
+                    .font(.settingsSecondary).foregroundStyle(WovenPalette.mutedForeground)
                 RuntimeInspectionInventoryView(items: snapshot.items, connected: connected)
                 if snapshot.items.isEmpty { SettingsNote("No managed activity in this scope.") }
             } else {

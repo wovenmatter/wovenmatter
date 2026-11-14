@@ -62,7 +62,7 @@ export function queryWorkspaceMCPHistory(name,input,{records,events,callerID,wor
     ...(record.goal?{goal:{status:record.goal.status,objective:boundedText(record.goal.objective)}}:{})})
 
   if(name==='woven_sessions_harnesses')return page(providers.map((provider,index)=>({provider,sequence:index+1})),input,{offset:true,map:row=>({...row.provider,sequence:row.sequence,workspace:workspace.id})})
-  if(name==='woven_sessions_folders')throw fail(503,'Folder names and empty folders are not retained by this execution owner; query the central library folder catalog.','metadata_unavailable')
+  if(name==='woven_sessions_folders')throw fail(503,'Folder names and empty folders are not retained by this execution owner; query the library folder catalog.','metadata_unavailable')
   if(name==='woven_sessions_status') {
     const record=target(input.id),row={record,sequence:ordinal(record,records.indexOf(record))}
     return {...page([row],{} ,{map:conversationMetadata}),...(relationship?{relationship:relationship(input.id)}:{relationship:{sessionID:input.id,available:false,reason:'Coordination metadata is unavailable on this execution owner.'}})}

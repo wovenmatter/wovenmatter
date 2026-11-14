@@ -9,7 +9,7 @@ import WovenMatterCore
     private var snapshotWaiter: CheckedContinuation<NSImage, any Error>?
     private var contentHeight: CGFloat = 400
 
-    func capture(_ input: GatewayJSONValue) async throws -> GatewayJSONValue {
+    func capture(_ input: JSONValue) async throws -> JSONValue {
         guard let values = input.objectValue, values["action"]?.stringValue == "preview",
               let html = values["html"]?.stringValue else { throw WorkspaceToolError.invalid("Provide HTML to preview.") }
         _ = try ConversationHTMLPage(html: html, title: "Preview", height: 400)
@@ -22,7 +22,7 @@ import WovenMatterCore
         }
         let view = coordinator.makeWebView()
         view.setValue(true, forKey: "drawsBackground")
-        view.underPageBackgroundColor = NSColor((appearance == "dark" ? DashboardTheme.dark : .green).palette.workspace)
+        view.underPageBackgroundColor = NSColor((appearance == "dark" ? WovenTheme.dark : .green).palette.workspace)
         view.frame = NSRect(x: 0, y: 0, width: width, height: 600)
         defer { coordinator.stop(view) }
         coordinator.onHeight = { [weak self] in self?.contentHeight = $0 }
@@ -33,7 +33,7 @@ import WovenMatterCore
             if !Task.isCancelled { self?.finish(WorkspaceToolError.invalid("HTML preview timed out.")) }
         }
         defer { deadline.cancel() }
-        return try await withTaskCancellationHandler { () async throws -> GatewayJSONValue in
+        return try await withTaskCancellationHandler { () async throws -> JSONValue in
             try await withCheckedThrowingContinuation { continuation in
                 waiter = continuation
                 if Task.isCancelled { finish(CancellationError()); return }

@@ -95,13 +95,14 @@ public struct BotsRemoteStatus: Codable, Equatable, Sendable {
     public var versions: BotMachineVersions
     public var resources: BotResourceSettings?
     public var capacity: BotMachineCapacity?
-    public var paused: Bool?
-    /// The machine's bots engine is updating (Macs; absent from older servers).
+    public var paused: Bool
+    /// The machine's bots engine is updating. Macs send it; Linux hosts omit it, since their
+    /// engine updates with the host.
     public var updating: Bool?
     public var engineUpdateFailure: String?
 
     public init(machine: Machine, enabled: Bool, state: String, message: String? = nil, versions: BotMachineVersions,
-                resources: BotResourceSettings? = nil, capacity: BotMachineCapacity? = nil, paused: Bool? = nil) {
+                resources: BotResourceSettings? = nil, capacity: BotMachineCapacity? = nil, paused: Bool = false) {
         self.machine = machine; self.enabled = enabled; self.state = state; self.message = message; self.versions = versions
         self.resources = resources; self.capacity = capacity; self.paused = paused
     }
@@ -119,7 +120,7 @@ public struct BotsRemoteStatus: Codable, Equatable, Sendable {
         var result = BotMachine(id: machine.deviceID, name: machine.name, kind: kind, state: mismatch == nil ? base : .needsUpdate,
                                 message: mismatch ?? message,
                                 socket: enabled ? socket : nil, versions: versions, resources: resources, capacity: capacity,
-                                paused: paused ?? false, updating: updating ?? false)
+                                paused: paused, updating: updating ?? false)
         result.engineUpdateFailure = engineUpdateFailure
         return result
     }

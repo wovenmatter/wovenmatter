@@ -9,7 +9,7 @@ struct RemoteHarnessSetupView: View {
     let workspace: RemoteWorkspaceConfiguration
     let onClose: () -> Void
     @AppStorage private var savedSelection: String
-    @AppStorage(DashboardTheme.storageKey) private var themeRawValue = DashboardTheme.green.rawValue
+    @AppStorage(WovenTheme.storageKey) private var themeRawValue = WovenTheme.green.rawValue
     @State private var selection = RemoteHarnessSetupSelection()
     @State private var step = 0
     @State private var expanded: Set<AgentRuntimeKind> = [.defaultAgent]
@@ -18,7 +18,7 @@ struct RemoteHarnessSetupView: View {
     @State private var requestedStage: String?
     @State private var notice: String?
     private var model: RemoteWorkspacesModel { application.remoteWorkspaces }
-    private var theme: DashboardTheme { DashboardTheme(rawValue: themeRawValue) ?? .green }
+    private var theme: WovenTheme { WovenTheme(rawValue: themeRawValue) ?? .green }
     private var busy: Bool { model.busyWorkspaceIDs.contains(workspace.id) }
 
     init(application: ApplicationModel, workspace: RemoteWorkspaceConfiguration, onClose: @escaping () -> Void) {
@@ -34,7 +34,7 @@ struct RemoteHarnessSetupView: View {
             HStack(alignment: .top) {
                 VStack(alignment: .leading, spacing: 6) {
                     Text("Set up harnesses").font(.system(size: 22, weight: .semibold))
-                    Text(workspace.name).font(.system(size: 13)).foregroundStyle(DashboardPalette.mutedForeground)
+                    Text(workspace.name).font(.system(size: 13)).foregroundStyle(WovenPalette.mutedForeground)
                 }
                 Spacer()
                 Button("Set up later", action: finish).buttonStyle(SettingsQuietButtonStyle())
@@ -63,17 +63,17 @@ struct RemoteHarnessSetupView: View {
                             step = 1
                             expanded = selection.selected
                             beginInstalls()
-                        }.buttonStyle(DashboardPrimaryButtonStyle()).disabled(busy || model.isCreating)
+                        }.buttonStyle(WovenPrimaryButtonStyle()).disabled(busy || model.isCreating)
                     } else {
-                        Button("Done", action: finish).buttonStyle(DashboardPrimaryButtonStyle())
+                        Button("Done", action: finish).buttonStyle(WovenPrimaryButtonStyle())
                     }
                 }.padding(24)
             }
         }
         .frame(width: 760, height: 650)
-        .foregroundStyle(DashboardPalette.foreground)
+        .foregroundStyle(WovenPalette.foreground)
         .background(theme.palette.workspace)
-        .environment(\.dashboardTheme, theme)
+        .environment(\.wovenTheme, theme)
         .preferredColorScheme(theme.colorScheme)
         .disclosureGroupStyle(SettingsDisclosureGroupStyle())
         .modifier(RemoteHarnessInstallerConfirmation(model: model, workspaceID: workspace.id,
@@ -93,22 +93,22 @@ struct RemoteHarnessSetupView: View {
             VStack(spacing: 0) {
                 ForEach(AgentRuntimeKind.allCases.sorted { $0.presentationRank < $1.presentationRank }, id: \.self) { kind in
                     HStack(spacing: 12) {
-                        DashboardHarnessLogoIcon(logo: DashboardHarnessLogo(runtimeKind: kind), size: 24)
+                        HarnessLogoIcon(logo: HarnessLogo(runtimeKind: kind), size: 24)
                         VStack(alignment: .leading, spacing: 3) {
                             Text(kind.displayName).font(.system(size: 13, weight: .medium))
                             Text(kind == .defaultAgent ? "Included" : model.runtimeMaintenance[workspace.id]?.first(where: { $0.id == kind })?.installed == true ? "Installed" : "Install in this workspace")
-                                .font(.system(size: 11.5)).foregroundStyle(DashboardPalette.mutedForeground)
+                                .font(.system(size: 11.5)).foregroundStyle(WovenPalette.mutedForeground)
                         }
                         Spacer()
                         Toggle(kind.displayName, isOn: Binding(get: { selection.selected.contains(kind) },
                             set: { selection.select(kind, enabled: $0) }))
-                            .labelsHidden().toggleStyle(DashboardSwitchToggleStyle()).disabled(kind == .defaultAgent)
+                            .labelsHidden().toggleStyle(CompactSwitchToggleStyle()).disabled(kind == .defaultAgent)
                     }.padding(16)
                     if kind != AgentRuntimeKind.allCases.max(by: { $0.presentationRank < $1.presentationRank }) {
                         Rectangle().fill(theme.palette.border).frame(height: 1).padding(.horizontal, 16)
                     }
                 }
-            }.background(theme.palette.themeWhisper).clipShape(DashboardShapes.card)
+            }.background(theme.palette.themeWhisper).clipShape(DesktopShapes.card)
             SettingsNote("Sign in after installation. You can skip any account and return later.")
         }
     }
@@ -127,7 +127,7 @@ struct RemoteHarnessSetupView: View {
                     }
                 } label: {
                     HStack(spacing: 10) {
-                        DashboardHarnessLogoIcon(logo: DashboardHarnessLogo(runtimeKind: kind), size: 20)
+                        HarnessLogoIcon(logo: HarnessLogo(runtimeKind: kind), size: 20)
                         Text(kind.displayName)
                     }
                 }

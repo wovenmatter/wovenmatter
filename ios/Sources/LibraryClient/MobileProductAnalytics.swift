@@ -18,7 +18,7 @@ public actor MobileProductAnalytics {
   public init(file: URL) throws {
     self.file = file
     // A damaged telemetry file must not prevent the content library from opening.
-    // Reset without an identity, so collection waits for the central preference.
+    // Reset without an identity, so collection waits for the library's preference.
     state =
       (try? JSONDecoder().decode(MobileProductAnalyticsState.self, from: Data(contentsOf: file)))
       ?? .init()
@@ -61,10 +61,6 @@ public actor MobileProductAnalytics {
       Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
     values["os_major"] = String(ProcessInfo.processInfo.operatingSystemVersion.majorVersion)
     send(ProductAnalyticsEvent(preferenceRevision: preference.revision, name: name, properties: values))
-  }
-  public func sendUpdateReceipt(_ event: ProductAnalyticsEvent, analyticsID: String) {
-    guard state.preference?.analyticsID == analyticsID, event.name == .updateInstallCompleted else { return }
-    send(event)
   }
   private func send(_ event: ProductAnalyticsEvent) {
     guard let transport, state.pendingEnabled == nil,

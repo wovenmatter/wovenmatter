@@ -66,12 +66,12 @@ private actor NativeDiskCapture {
         let batch = try JSONDecoder().decode(WorkspaceNativeRunRecordBatch.self, from: data)
         for row in batch.records {
             if row.kind == "native-file.chunk" {
-                let value = try HermesValue.decode(Data(row.payload.utf8))
+                let value = try OpenCodeValue.decode(Data(row.payload.utf8))
                 let bytes = try #require(Data(base64Encoded: value["dataBase64"].text))
                 #expect(NativeHarnessArchive.digest(bytes) == value["sha256"].text)
                 try output.write(contentsOf: bytes); hash.update(data: bytes); byteCount += bytes.count
             } else if row.kind == "native-file.manifest" {
-                let value = try HermesValue.decode(Data(row.payload.utf8))
+                let value = try OpenCodeValue.decode(Data(row.payload.utf8))
                 expectedHash = value["sha256"].text; fidelity = value["byteFidelity"].text
                 #expect(value["totalBytes"].number == Double(byteCount))
             } else if row.completeness == "native-export-reference" {
@@ -87,7 +87,7 @@ private actor NativeDiskCapture {
     func closeAndValidate() throws {
         try output.close()
         #expect(hash.finalize().hexString == expectedHash)
-        let row = try #require(reference), value = try HermesValue.decode(Data(row.payload.utf8))
+        let row = try #require(reference), value = try OpenCodeValue.decode(Data(row.payload.utf8))
         let offset = try #require(value["byteOffset"].number), length = try #require(value["byteCount"].number)
         let input = try FileHandle(forReadingFrom: file)
         defer { try? input.close() }

@@ -52,13 +52,13 @@ extension MobileModel {
         await reload(); conversationID = id
       } else if workspaceID != "local" {
         try await requireWorkspaceConnection(workspaceID)
-        let agents = workspaceID == "central" ? providers : workspaceProviders[workspaceID] ?? []
-        guard (workspaceID == "central" ? online : workspaceReachable[workspaceID] == true),
+        let agents = workspaceID == "host" ? providers : workspaceProviders[workspaceID] ?? []
+        guard (workspaceID == "host" ? online : workspaceReachable[workspaceID] == true),
               agents.contains(where: { $0.id == agentID && $0.available && $0.canStart }) else {
           throw DeviceExecutionError.unavailable("This agent is currently unavailable.")
         }
         try await prepareExecutionFolder(folder, workspaceID: workspaceID)
-        let records = workspaceID == "central" ? await store.snapshot().commands : await store.journal.commandRecords(workspaceID: workspaceID)
+        let records = workspaceID == "host" ? await store.snapshot().commands : await store.journal.commandRecords(workspaceID: workspaceID)
         let launchCommands = Set(await store.snapshot().launches.map { $0.create.commandID })
         let pending = records.first {
           $0.command.commandID == pendingChatCreation?.commandID && $0.command.providerID == agentID &&
@@ -69,10 +69,10 @@ extension MobileModel {
         }
         var command = pending?.command ?? LibraryCommand(deviceID: state.deviceID, kind: .createSession,
           conversationID: UUID().uuidString.lowercased(), providerID: agentID, folderID: folder)
-        if workspaceID != "central" { command.workspaceID = workspaceID }
+        if workspaceID != "host" { command.workspaceID = workspaceID }
         pendingChatCreation = command
         let receipt: LibraryCommandReceipt
-        if workspaceID == "central" {
+        if workspaceID == "host" {
           guard let engine else { throw MobileConnectionError.offline }
           receipt = try await engine.submit(command)
         } else {
@@ -169,14 +169,14 @@ extension MobileModel {
 }
 
 struct NewChatChooser: View {
-  @Environment(\.dashboardTheme) private var theme
+  @Environment(\.wovenTheme) private var theme
   @Environment(\.dismiss) private var dismiss
   @Bindable var model: MobileModel
   var body: some View {
     VStack(spacing: 0) {
       header
       if let problem = model.chatSetupProblem {
-        Text(problem).font(.caption).foregroundStyle(DashboardPalette.danger)
+        Text(problem).font(.caption).foregroundStyle(WovenPalette.danger)
           .frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 20).padding(.vertical, 12)
           .accessibilityIdentifier("chat-setup-problem")
       }
@@ -186,13 +186,13 @@ struct NewChatChooser: View {
           ForEach(groups) { workspace in workspaceSection(workspace) }
           // A folder whose workspace is not reachable now offers no agents.
           if groups.isEmpty {
-            Text(MobileModel.deviceConnectionMessage).font(.caption).foregroundStyle(DashboardPalette.mutedForeground)
+            Text(MobileModel.deviceConnectionMessage).font(.caption).foregroundStyle(WovenPalette.mutedForeground)
               .frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 12)
               .accessibilityIdentifier("chat-no-agents")
           }
         }.padding(.horizontal, 20).padding(.bottom, 24)
       }.scrollIndicators(.never)
-    }.background(theme.palette.workspace).foregroundStyle(DashboardPalette.foreground)
+    }.background(theme.palette.workspace).foregroundStyle(WovenPalette.foreground)
       .presentationDetents([.medium, .large]).presentationDragIndicator(.visible)
       .interactiveDismissDisabled(model.startingChat)
       .task { await model.refreshAgentAvailability() }
@@ -202,8 +202,8 @@ struct NewChatChooser: View {
       Text("New Chat").font(.title3.weight(.semibold))
       Spacer()
       if model.startingChat { ProgressView() }
-      Button { dismiss() } label: { DashboardLucideIcon(glyph: .close, size: 20).frame(width: 44, height: 44) }
-        .buttonStyle(DashboardIconButtonStyle()).accessibilityLabel("Close agent chooser").disabled(model.startingChat)
+      Button { dismiss() } label: { LucideIcon(glyph: .close, size: 20).frame(width: 44, height: 44) }
+        .buttonStyle(WovenIconButtonStyle()).accessibilityLabel("Close agent chooser").disabled(model.startingChat)
     }.padding(.horizontal, 20).padding(.top, 10)
   }
   private func workspaceSection(_ workspace: AgentGroup) -> some View {
@@ -219,9 +219,9 @@ struct NewChatChooser: View {
         MobileAgentIcon(runtimeKind: agent.runtimeKind, size: 24)
         Text(agent.name).font(.body.weight(.medium))
         Spacer()
-        DashboardLucideIcon(glyph: .arrowRight, size: 16)
+        LucideIcon(glyph: .arrowRight, size: 16)
       }.frame(minHeight: 44).padding(12)
-        .background(theme.palette.themeWhisper, in: RoundedRectangle(cornerRadius: DashboardMetrics.cardRadius))
+        .background(theme.palette.themeWhisper, in: RoundedRectangle(cornerRadius: WovenMetrics.cardRadius))
     }.buttonStyle(.plain).disabled(model.startingChat)
       .opacity(agent.isAvailable ? 1 : 0.45).accessibilityIdentifier("choose-chat-agent-" + agent.id)
   }

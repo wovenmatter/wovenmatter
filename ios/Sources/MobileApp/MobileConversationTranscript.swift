@@ -24,11 +24,11 @@ struct MobileConversationTranscript: View {
             if message.isAgentAuthored == true || message.agentSourceID != nil {
               if let source = message.agentSourceID, let title = agentSourceTitle(source) {
                 Button("From " + title) { openAgentSource(source) }
-                  .font(.caption).foregroundStyle(DashboardPalette.mutedForeground).buttonStyle(.plain)
+                  .font(.caption).foregroundStyle(WovenPalette.mutedForeground).buttonStyle(.plain)
                   .accessibilityHint("Open the agent conversation that sent this message")
               } else {
                 Text(message.senderSessionTitle.map { "From " + $0 } ?? "Agent message")
-                  .font(.caption).foregroundStyle(DashboardPalette.mutedForeground)
+                  .font(.caption).foregroundStyle(WovenPalette.mutedForeground)
               }
             }
             let attachments = message.attachments ?? []
@@ -79,18 +79,18 @@ struct MobileMessageAttachments: View {
   private func chip(_ attachment: LibraryAttachmentReference) -> some View {
     HStack(spacing: 7) {
       Image(systemName: attachment.mimeType.hasPrefix("image/") ? "photo" : "doc")
-        .font(.caption.weight(.semibold)).foregroundStyle(DashboardPalette.primary)
+        .font(.caption.weight(.semibold)).foregroundStyle(WovenPalette.primary)
       VStack(alignment: .leading, spacing: 1) {
         Text(attachment.name).lineLimit(1)
         if let size = attachment.byteCount {
           Text(ByteCountFormatter.string(fromByteCount: size, countStyle: .file))
-            .font(.caption2).foregroundStyle(DashboardPalette.mutedForeground)
+            .font(.caption2).foregroundStyle(WovenPalette.mutedForeground)
         }
       }
     }.font(.caption.weight(.medium))
       .padding(.horizontal, 9).padding(.vertical, 7)
       .frame(maxWidth: .infinity, alignment: .leading)
-      .background(DashboardPalette.background.opacity(0.75), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+      .background(WovenPalette.background.opacity(0.75), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
       .contentShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
   }
 }
@@ -179,7 +179,7 @@ struct MobileConversationProjection {
       }
       let start = parsedDate(info?.startedAt ?? runMessages.first?.createdAt)
       let end = parsedDate(info?.completedAt ?? runMessages.last?.createdAt)
-      let duration = start.flatMap { start in end.map { dashboardRunDuration($0.timeIntervalSince(start)) } }
+      let duration = start.flatMap { start in end.map { formattedRunDuration($0.timeIntervalSince(start)) } }
       let status = isRunning ? "running" : (info?.status ?? (runMessages.last?.status == "error" ? "failed" : "completed"))
       let content = reply.joined(separator: "\n\n")
       let error = status == "failed" && content.isEmpty ? source.last(where: { $0.status == "failed" })?.detail : nil

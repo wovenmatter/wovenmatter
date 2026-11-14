@@ -8,11 +8,11 @@ enum BackendWorkspaceServiceCommand: Codable, Sendable {
     case consumePrefill(String, String)
     case refreshDatabases, createDatabase(sourceID: String, name: String)
     case databaseData(DatabaseArtifactLink)
-    case copyDatabase(database: DashboardAgentDatabase, destinationSourceID: String, name: String)
+    case copyDatabase(database: AgentDatabase, destinationSourceID: String, name: String)
 }
 
 struct BackendDatabasesSnapshot: Codable, Sendable {
-    var catalog: DashboardDatabasesSnapshot
+    var catalog: DatabasesSnapshot
     var refreshing: Bool
     var error: String?
 }

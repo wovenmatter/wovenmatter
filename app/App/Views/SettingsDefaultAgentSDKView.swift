@@ -89,10 +89,10 @@ struct SettingsDefaultAgentSDKView: View {
             if let operation = state.operation {
                 HStack(spacing: 8) {
                     ProgressView().controlSize(.small)
-                    Text(progress(operation)).font(.settingsSecondary).foregroundStyle(DashboardPalette.mutedForeground)
+                    Text(progress(operation)).font(.settingsSecondary).foregroundStyle(WovenPalette.mutedForeground)
                 }
             }
-            if let error = state.error { Text(error).font(.settingsBody).foregroundStyle(DashboardPalette.danger).textSelection(.enabled) }
+            if let error = state.error { Text(error).font(.settingsBody).foregroundStyle(WovenPalette.danger).textSelection(.enabled) }
         }
     }
 

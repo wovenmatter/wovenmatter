@@ -95,7 +95,7 @@ export function createSubagents({ record, engine, context, allTools, getTrustedI
           const message = answer?.model?.findLast(value => value.role === 'assistant');
           // Only an exposed final answer crosses into the parent's context.
           // Thinking, native records, tools and attachments keep their original
-          // identity in the child transcript and central archive.
+          // identity in the child transcript and library archive.
           const result = [textOf(message?.content), message?.stopReason === 'error' && typeof message.errorMessage === 'string' ? message.errorMessage : ''].filter(Boolean).join('\n');
           return { status: 'running', checkpoint: { phase: 'report', requestID: reportRequestID(task.id, task.input.conversationId, answer?.id), result, childStatus: message?.stopReason === 'error' ? 'failed' : 'completed' } };
         }, ctx);

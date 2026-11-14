@@ -1,7 +1,7 @@
 import Foundation
 import WovenMatterClient
 import WovenMatterCore
-import WovenMatterDashboardStore
+import WovenMatterLibraryStore
 
 enum BackendOpenCodeCommand: Codable, Sendable {
     case browserURL

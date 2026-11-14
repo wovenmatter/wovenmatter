@@ -49,9 +49,8 @@ public enum RuntimeMaintenance {
         fetch: @escaping Fetch = fetchMetadata,
         probe: @escaping Probe = probeVersion
     ) async -> RuntimeInventory {
-        guard AgentRuntimeKind.allCases.contains(kind),
-              let definition = kind == .opencode ? OpenCodeServiceLauncher.installDefinition : LocalACPRuntimeCatalog.definition(for: kind) else {
-            return RuntimeInventory(kind: kind, components: [], limitation: "This agent is retired. Its saved history remains available.")
+        guard let definition = kind == .opencode ? OpenCodeServiceLauncher.installDefinition : LocalACPRuntimeCatalog.definition(for: kind) else {
+            return RuntimeInventory(kind: kind, components: [], limitation: "This agent has no install definition.")
         }
         let resolution = resolver.resolve(runtimeKind: kind)
         let executable = kind == .opencode

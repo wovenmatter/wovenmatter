@@ -5,7 +5,7 @@ import LibraryClient
 import WovenMatterShared
 
 struct ChatPane: View {
-  @Environment(\.dashboardTheme) private var theme
+  @Environment(\.wovenTheme) private var theme
   @Bindable var model: MobileModel
   @State private var referencesPresented = false
   @State private var detailsPresented = false
@@ -14,7 +14,7 @@ struct ChatPane: View {
   @State private var filesPresented = false
   @State private var composerFocused = false
   @State private var dictationEditor = MobileDictationEditor()
-  @State private var scrollState = DashboardConversationScrollState()
+  @State private var scrollState = ConversationScrollState()
   @State private var isUserScrolling = false
   @State private var transcriptOwnsScroll = false
   @State private var scrollInteractionRevision = 0
@@ -28,7 +28,7 @@ struct ChatPane: View {
       HStack {
         VStack(alignment: .leading, spacing: 3) {
           Text(model.selectedConversation?.title ?? "New chat").font(.headline).lineLimit(1)
-          Text(model.executionName).font(.caption).foregroundStyle(DashboardPalette.mutedForeground)
+          Text(model.executionName).font(.caption).foregroundStyle(WovenPalette.mutedForeground)
         }.contextMenu {
           if model.selectedConversationID != nil {
             Button("Details and export") { detailsPresented = true }
@@ -40,8 +40,8 @@ struct ChatPane: View {
         Spacer()
         if !model.isViewingRemoteQuickChat { Button { composerFocused = false; Task { await model.newChatWithCurrentAgent() } } label: {
           if model.startingChat { ProgressView().frame(width: 44, height: 44) }
-          else { DashboardLucideIcon(glyph: .squarePen, size: 22).frame(width: 44, height: 44) }
-        }.buttonStyle(DashboardIconButtonStyle()).disabled(model.startingChat || model.sending || model.chatSettingsBusy)
+          else { LucideIcon(glyph: .squarePen, size: 22).frame(width: 44, height: 44) }
+        }.buttonStyle(WovenIconButtonStyle()).disabled(model.startingChat || model.sending || model.chatSettingsBusy)
           .accessibilityLabel("New chat with this agent").accessibilityIdentifier("chat-new-session") }
       }.padding(.horizontal, 20).padding(.top, 12).padding(.bottom, 10)
       ScrollViewReader { proxy in
@@ -54,7 +54,7 @@ struct ChatPane: View {
               Button(model.loadingHistory ? "Loading…" : "Load older messages", systemImage: "arrow.up") { takeScrollOwnership(); Task { await model.loadEarlierMessages() } }.font(.caption).disabled(!model.historyAvailable || model.loadingHistory)
             }
             if model.selectedConversationID != nil && model.displayedTranscript == nil {
-              Button("Load conversation") { Task { await model.refreshConversation() } }.buttonStyle(DashboardQuietButtonStyle())
+              Button("Load conversation") { Task { await model.refreshConversation() } }.buttonStyle(WovenQuietButtonStyle())
                 .disabled(!model.historyAvailable)
             }
             if let transcript = model.displayedTranscript {
@@ -67,7 +67,7 @@ struct ChatPane: View {
             }
             if let progress = model.sendProgress {
               // Quiet status under the message just sent, until its turn appears.
-              Text(progress).font(.caption).foregroundStyle(DashboardPalette.mutedForeground)
+              Text(progress).font(.caption).foregroundStyle(WovenPalette.mutedForeground)
                 .frame(maxWidth: .infinity, alignment: .trailing)
                 .accessibilityIdentifier("chat-send-progress")
             }
@@ -76,14 +76,14 @@ struct ChatPane: View {
             }
             if let problem = model.selectedStreamProblem {
               // The live view is not connected; saved history stays readable.
-              Text(problem).font(.caption).foregroundStyle(DashboardPalette.mutedForeground)
+              Text(problem).font(.caption).foregroundStyle(WovenPalette.mutedForeground)
                 .accessibilityIdentifier("chat-stream-problem")
             } else if model.activeRunID != nil && !model.executionOnline {
               Text("Workspace connection interrupted · execution stays there")
-                .font(.caption).foregroundStyle(DashboardPalette.mutedForeground)
+                .font(.caption).foregroundStyle(WovenPalette.mutedForeground)
             }
             if let notice = model.selectedMacAccessNotice {
-              Text(notice).font(.caption).foregroundStyle(DashboardPalette.mutedForeground)
+              Text(notice).font(.caption).foregroundStyle(WovenPalette.mutedForeground)
             }
             Color.clear.frame(height: 1).id("latest")
           }.padding(20)
@@ -99,8 +99,8 @@ struct ChatPane: View {
             scrollInteractionRevision += 1
           }
         }
-        .onScrollGeometryChange(for: DashboardConversationGeometry.self) { geometry in
-          DashboardConversationGeometry(contentHeight: geometry.contentSize.height,
+        .onScrollGeometryChange(for: ConversationGeometry.self) { geometry in
+          ConversationGeometry(contentHeight: geometry.contentSize.height,
             isNearBottom: geometry.visibleRect.maxY >= geometry.contentSize.height - 80,
             viewportHeight: geometry.visibleRect.height)
         } action: { old, new in
@@ -121,13 +121,13 @@ struct ChatPane: View {
         .overlay(alignment: .bottomTrailing) {
           if !scrollState.isNearBottom, model.selectedConversationID != nil, !isViewingHistory {
             Button("Latest reply", systemImage: "arrow.down") { showLatest(using: proxy) }
-              .buttonStyle(DashboardQuietButtonStyle()).padding(16)
+              .buttonStyle(WovenQuietButtonStyle()).padding(16)
           }
         }
       }
       if let id = model.unconfirmedSendConversationID, id == model.selectedConversationID {
         Button("Retry previous message") { Task { await model.retryUnconfirmedSend() } }
-          .buttonStyle(DashboardQuietButtonStyle()).disabled(model.sending).padding(.horizontal, 18)
+          .buttonStyle(WovenQuietButtonStyle()).disabled(model.sending).padding(.horizontal, 18)
           .accessibilityIdentifier("chat-retry-unconfirmed")
       }
       if model.selectedConversationID == nil {
@@ -135,12 +135,12 @@ struct ChatPane: View {
         ForEach(model.unconfirmedLaunches) { launch in
           VStack(alignment: .leading, spacing: 6) {
             Text("New chat not yet confirmed").font(.caption.weight(.semibold))
-            Text(launch.initialSend.text ?? "").font(.caption).lineLimit(2).foregroundStyle(DashboardPalette.mutedForeground)
+            Text(launch.initialSend.text ?? "").font(.caption).lineLimit(2).foregroundStyle(WovenPalette.mutedForeground)
             HStack {
               Button("Retry") { Task { await model.retryUnconfirmedLaunch(launch.id) } }
-                .buttonStyle(DashboardQuietButtonStyle()).disabled(model.sending)
+                .buttonStyle(WovenQuietButtonStyle()).disabled(model.sending)
               Button("Show in composer") { model.restoreUnconfirmedLaunch(launch.id) }
-                .buttonStyle(DashboardQuietButtonStyle())
+                .buttonStyle(WovenQuietButtonStyle())
             }
           }.frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 18)
             .accessibilityElement(children: .contain).accessibilityIdentifier("chat-unconfirmed-launch-" + launch.id)
@@ -148,14 +148,14 @@ struct ChatPane: View {
       }
       if model.canResumeLocalRun {
         HStack {
-          Button("Resume saved run") { Task { await model.resumeDeviceRun() } }.buttonStyle(DashboardPrimaryButtonStyle()).disabled(model.sending)
-          Button("Stop", role: .destructive) { Task { await model.stopOnDevice() } }.buttonStyle(DashboardQuietButtonStyle())
+          Button("Resume saved run") { Task { await model.resumeDeviceRun() } }.buttonStyle(WovenPrimaryButtonStyle()).disabled(model.sending)
+          Button("Stop", role: .destructive) { Task { await model.stopOnDevice() } }.buttonStyle(WovenQuietButtonStyle())
         }.padding(.horizontal, 18)
       }
       if !model.isViewingRemoteQuickChat, model.selectedExecutionWorkspaceID != "local", let id = model.selectedConversationID { MobileGoalControls(model: model, conversationID: id).id(id).padding(.horizontal, 18) }
       if model.isViewingRemoteQuickChat {
         Text("Quick Chat history · Continue on the device where it was created.")
-          .font(.caption).foregroundStyle(DashboardPalette.mutedForeground).padding(18)
+          .font(.caption).foregroundStyle(WovenPalette.mutedForeground).padding(18)
       } else { composer }
     }
     .task(id: model.inferenceConnections.count) { await refreshWebSearchConnected() }
@@ -165,7 +165,7 @@ struct ChatPane: View {
         Button { Task { await model.selectConversation(request.conversationID); pendingPresented = false } } label: {
           VStack(alignment: .leading, spacing: 4) {
             Text(request.title)
-            Text(model.state.conversations[request.conversationID]?.title ?? "Conversation").font(.caption).foregroundStyle(DashboardPalette.mutedForeground)
+            Text(model.state.conversations[request.conversationID]?.title ?? "Conversation").font(.caption).foregroundStyle(WovenPalette.mutedForeground)
           }
         }
       }.mobileNavigationPage("Pending requests")
@@ -185,7 +185,7 @@ struct ChatPane: View {
           Button("No note reference") { model.referencedNoteID = nil; referencesPresented = false }
           ForEach(model.notes.filter { !model.state.uncachedNoteIDs.contains($0.id) }) { note in
             Button { model.referencedNoteID = note.id; referencesPresented = false } label: {
-              VStack(alignment: .leading) { Text(note.title); Text(model.state.isDirty(note.id) ? "Will sync before sending" : "Revision \(note.revision)").font(.caption).foregroundStyle(DashboardPalette.mutedForeground) }
+              VStack(alignment: .leading) { Text(note.title); Text(model.state.isDirty(note.id) ? "Will sync before sending" : "Revision \(note.revision)").font(.caption).foregroundStyle(WovenPalette.mutedForeground) }
             }.disabled(model.state.conflicts[note.id] != nil)
           }
         }.mobileNavigationPage("Reference a note")
@@ -250,18 +250,18 @@ struct ChatPane: View {
         Button { model.executionSettingsPresented = true } label: {
           Text(model.inferenceConnections.isEmpty ? "Sign in to a model provider to use Quick Chat" : "Choose a model for Quick Chat")
             .font(.callout).frame(maxWidth: .infinity, alignment: .leading)
-        }.buttonStyle(.plain).foregroundStyle(DashboardPalette.success).accessibilityIdentifier("quick-chat-setup")
+        }.buttonStyle(.plain).foregroundStyle(WovenPalette.success).accessibilityIdentifier("quick-chat-setup")
       } else if model.selectedExecutionWorkspaceID == "local", webSearchConnected == false, model.selectedConversationID == nil {
         NavigationLink { QuickChatSearchSettingsPane(model: model) } label: {
           Text("Add a web search key for answers from the web").font(.callout).frame(maxWidth: .infinity, alignment: .leading)
-        }.buttonStyle(.plain).foregroundStyle(DashboardPalette.success).accessibilityIdentifier("quick-chat-web-search-setup")
+        }.buttonStyle(.plain).foregroundStyle(WovenPalette.success).accessibilityIdentifier("quick-chat-web-search-setup")
       }
       if let id = model.selectedConversationID, model.executionRecords[id]?.quickChatVersion == 0 {
-        Text("Earlier on-device agent chat · saved history").font(.caption).foregroundStyle(DashboardPalette.mutedForeground)
+        Text("Earlier on-device agent chat · saved history").font(.caption).foregroundStyle(WovenPalette.mutedForeground)
       }
 
       if let id = model.referencedNoteID, let note = model.state.notes[id] {
-        HStack { Label(note.title, glyph: .fileText).font(.caption); Spacer(); Button { model.referencedNoteID = nil } label: { DashboardLucideIcon(glyph: .close, size: 16).frame(width: 44, height: 44) }.accessibilityLabel("Remove note reference") }
+        HStack { Label(note.title, glyph: .fileText).font(.caption); Spacer(); Button { model.referencedNoteID = nil } label: { LucideIcon(glyph: .close, size: 16).frame(width: 44, height: 44) }.accessibilityLabel("Remove note reference") }
       }
       HStack(alignment: .bottom, spacing: 8) {
         MobileDictationComposer(text: $model.composer, focused: $composerFocused, editor: dictationEditor,
@@ -270,7 +270,7 @@ struct ChatPane: View {
           .overlay(alignment: .topLeading) {
             if model.composer.isEmpty {
               Text(model.activeRunID == nil ? "Chat…" : "Steer this run…")
-                .foregroundStyle(DashboardPalette.mutedForeground).allowsHitTesting(false)
+                .foregroundStyle(WovenPalette.mutedForeground).allowsHitTesting(false)
                 .accessibilityHidden(true)
             }
           }.accessibilityIdentifier("chat-composer")
@@ -280,21 +280,21 @@ struct ChatPane: View {
         Menu {
           Button("Reference a note", glyph: .fileText) { composerFocused = false; referencesPresented = true }
 
-        } label: { DashboardLucideIcon(glyph: .plus, size: 20).frame(width: 44, height: 44) }
-          .buttonStyle(DashboardIconButtonStyle()).accessibilityLabel("Add to chat")
+        } label: { LucideIcon(glyph: .plus, size: 20).frame(width: 44, height: 44) }
+          .buttonStyle(WovenIconButtonStyle()).accessibilityLabel("Add to chat")
       } submission: {
         if model.activeRunID != nil && model.activeProvider?.canStop == true {
           Button { Task { await model.stop() } } label: { Image(systemName: "stop.fill").frame(width: 44, height: 44) }
-            .buttonStyle(DashboardIconButtonStyle()).accessibilityLabel("Stop run").disabled(!model.executionOnline)
+            .buttonStyle(WovenIconButtonStyle()).accessibilityLabel("Stop run").disabled(!model.executionOnline)
         }
         if model.activeRunID == nil || model.activeProvider?.canSteer == true {
           Button { Task { await model.send() } } label: {
-            Group { if model.sending { ProgressView().tint(DashboardPalette.primaryForeground) } else { DashboardLucideIcon(glyph: .arrowUp, size: 20) } }
-              .frame(width: 44, height: 44).foregroundStyle(DashboardPalette.primaryForeground).background(canSend ? DashboardPalette.primaryFill : Color.gray.opacity(0.35), in: Circle())
+            Group { if model.sending { ProgressView().tint(WovenPalette.primaryForeground) } else { LucideIcon(glyph: .arrowUp, size: 20) } }
+              .frame(width: 44, height: 44).foregroundStyle(WovenPalette.primaryForeground).background(canSend ? WovenPalette.primaryFill : Color.gray.opacity(0.35), in: Circle())
           }.buttonStyle(.plain).disabled(!canSend).accessibilityLabel(model.activeRunID == nil ? "Send message" : "Steer run")
         }
       }
-    }.padding(15).background(theme.palette.themeWhisper, in: RoundedRectangle(cornerRadius: DashboardMetrics.composerRadius, style: .continuous)).padding(.horizontal, 18).padding(.vertical, 12)
+    }.padding(15).background(theme.palette.themeWhisper, in: RoundedRectangle(cornerRadius: WovenMetrics.composerRadius, style: .continuous)).padding(.horizontal, 18).padding(.vertical, 12)
   }
   private var canSend: Bool {
     !DictationSession.shared.isBusy && model.executionOnline && model.activeProvider?.available == true && !model.canResumeLocalRun && !model.sending && !model.startingChat && !model.chatSettingsBusy && model.configuringDeviceSessions.isEmpty && !model.composer.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
@@ -304,7 +304,7 @@ struct ChatPane: View {
 
 
 struct PendingInteractionView: View {
-  @Environment(\.dashboardTheme) private var theme
+  @Environment(\.wovenTheme) private var theme
   @Bindable var model: MobileModel
   var interaction: PendingInteraction
   @State private var answers: [String: Set<String>] = [:]
@@ -317,8 +317,8 @@ struct PendingInteractionView: View {
       if interaction.kind == .approval {
         ForEach(interaction.options) { option in
           Button { respond(.init(optionID: option.id)) } label: {
-            VStack(alignment: .leading) { Text(option.label); if let detail = option.detail { Text(detail).font(.caption).foregroundStyle(DashboardPalette.mutedForeground) } }.frame(maxWidth: .infinity, alignment: .leading)
-          }.buttonStyle(DashboardQuietButtonStyle())
+            VStack(alignment: .leading) { Text(option.label); if let detail = option.detail { Text(detail).font(.caption).foregroundStyle(WovenPalette.mutedForeground) } }.frame(maxWidth: .infinity, alignment: .leading)
+          }.buttonStyle(WovenQuietButtonStyle())
         }
       } else {
         ForEach(interaction.questions) { question in
@@ -335,7 +335,7 @@ struct PendingInteractionView: View {
               } label: { Label(option.label, systemImage: answers[question.id]?.contains(option.id) == true ? "checkmark.circle.fill" : "circle").frame(maxWidth: .infinity, alignment: .leading) }.buttonStyle(.plain).frame(minHeight: 44)
             }
             if question.allowsFreeText {
-              TextField("Your answer", text: Binding(get: { freeText[question.id] ?? "" }, set: { freeText[question.id] = $0; if !question.allowsMultiple { answers[question.id] = [] } }), axis: .vertical).dashboardInput()
+              TextField("Your answer", text: Binding(get: { freeText[question.id] ?? "" }, set: { freeText[question.id] = $0; if !question.allowsMultiple { answers[question.id] = [] } }), axis: .vertical).wovenInput()
             }
           }
         }
@@ -343,11 +343,11 @@ struct PendingInteractionView: View {
           var result = answers.mapValues { Array($0).sorted() }
           for (id, text) in freeText where !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { result[id, default: []].append(text) }
           respond(.init(answers: result))
-        }.buttonStyle(DashboardPrimaryButtonStyle()).disabled(!interaction.questions.allSatisfy { !$0.isRequired || !(answers[$0.id] ?? []).isEmpty || !(freeText[$0.id] ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty })
+        }.buttonStyle(WovenPrimaryButtonStyle()).disabled(!interaction.questions.allSatisfy { !$0.isRequired || !(answers[$0.id] ?? []).isEmpty || !(freeText[$0.id] ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty })
       }
       Button("Cancel request", role: .cancel) { respond(.init(cancelled: true)) }.font(.caption).frame(minHeight: 44)
-      Text(model.selectedExecutionWorkspaceID == "local" ? "This action runs on this device." : "The first valid answer on any authorized device wins.").font(.caption2).foregroundStyle(DashboardPalette.mutedForeground)
-    }.disabled(!model.executionOnline || responding).padding(16).background(theme.palette.themeWhisper, in: RoundedRectangle(cornerRadius: DashboardMetrics.cardRadius, style: .continuous))
+      Text(model.selectedExecutionWorkspaceID == "local" ? "This action runs on this device." : "The first valid answer on any authorized device wins.").font(.caption2).foregroundStyle(WovenPalette.mutedForeground)
+    }.disabled(!model.executionOnline || responding).padding(16).background(theme.palette.themeWhisper, in: RoundedRectangle(cornerRadius: WovenMetrics.cardRadius, style: .continuous))
   }
   private func respond(_ response: InteractionResponse) {
     responding = true
@@ -356,7 +356,7 @@ struct PendingInteractionView: View {
 }
 
 private struct MobileGoalControls: View {
-  @Environment(\.dashboardTheme) private var theme
+  @Environment(\.wovenTheme) private var theme
   @Bindable var model: MobileModel
   let conversationID: String
   @State private var readGoal: WorkspaceGoal?
@@ -375,7 +375,7 @@ private struct MobileGoalControls: View {
           TimelineView(.periodic(from: .now, by: 1)) { context in
                     Text(goal.elapsedPursuitText(at: context.date))
                 }.font(.caption2).monospacedDigit()
-            .foregroundStyle(DashboardPalette.mutedForeground)
+            .foregroundStyle(WovenPalette.mutedForeground)
           Spacer(minLength: 0)
           Button("Delete", role: .destructive) { change(.clear(id: goal.id)) }
             .frame(minHeight: 44).disabled(saving || !model.executionOnline)
@@ -387,15 +387,15 @@ private struct MobileGoalControls: View {
           Button("Expand") { showingDetails = true }.frame(minHeight: 44)
         }.font(.caption).buttonStyle(.borderless)
           .padding(.horizontal, 12).frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
-          .background(theme.palette.themeWhisper, in: RoundedRectangle(cornerRadius: DashboardMetrics.cardRadius))
+          .background(theme.palette.themeWhisper, in: RoundedRectangle(cornerRadius: WovenMetrics.cardRadius))
           .sheet(isPresented: $showingDetails) {
             NavigationStack {
               ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
-                  Text(goal.status.title).font(.subheadline).foregroundStyle(DashboardPalette.mutedForeground)
+                  Text(goal.status.title).font(.subheadline).foregroundStyle(WovenPalette.mutedForeground)
                   Text(goal.objective).textSelection(.enabled)
                   if let evidence = goal.evidence, !evidence.isEmpty {
-                    Text(evidence).font(.caption).foregroundStyle(DashboardPalette.mutedForeground).textSelection(.enabled)
+                    Text(evidence).font(.caption).foregroundStyle(WovenPalette.mutedForeground).textSelection(.enabled)
                   }
                 }.frame(maxWidth: .infinity, alignment: .leading).padding(20)
               }.scrollIndicators(.never)
@@ -450,7 +450,7 @@ struct RetainedDeviceFilesPane: View {
             Label(file.path, systemImage: "square.and.arrow.up").lineLimit(2)
           }.accessibilityIdentifier("retained-file-" + file.path)
         }
-        if files.isEmpty { Text("No files were saved in this chat.").foregroundStyle(DashboardPalette.mutedForeground) }
+        if files.isEmpty { Text("No files were saved in this chat.").foregroundStyle(WovenPalette.mutedForeground) }
       } footer: {
         Text("Files saved by an earlier on-device agent stay on this device. Share one to export it.")
       }

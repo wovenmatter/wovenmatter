@@ -11,16 +11,16 @@ extension MobileStore {
       let command = try WovenMatterToolCommand(request.arguments)
       if let id = command.options["request-id"], UUID(uuidString: id) != uuid { throw WorkspaceToolError.invalid("--request-id must match the request envelope.") }
       try context.authorize(command)
-      if command.action == "context" { return .init(result: request.contextID.map(GatewayJSONValue.string) ?? .null) }
+      if command.action == "context" { return .init(result: request.contextID.map(JSONValue.string) ?? .null) }
       let key = context.sessionID + ":" + uuid.uuidString.lowercased()
       if command.isMutation, let receipt = state.toolReceipts?[key] {
         guard receipt.arguments == command.operationArguments else { throw WorkspaceToolError.invalid("This request ID was already used for a different operation.") }
         return receipt.response
       }
-      let result: GatewayJSONValue
+      let result: JSONValue
       switch command.group {
       case .notes:
-        var response: GatewayJSONValue = .null
+        var response: JSONValue = .null
         // Receipt, version snapshot, note body, and sync outbox commit together.
         try transaction { next in
           response = try Self.notesTool(command, requestID: uuid.uuidString.lowercased(), context: context, state: &next)
@@ -33,7 +33,7 @@ extension MobileStore {
         }
         result = response
       case .timers:
-        var response: GatewayJSONValue = .null
+        var response: JSONValue = .null
         try transaction { next in
           response = try Self.timerTool(command, requestID: uuid.uuidString.lowercased(), context: context, state: &next)
           if command.isMutation {
@@ -59,7 +59,7 @@ extension MobileStore {
     } catch { return MobileToolSupport.response(error: error, requestID: request.requestID) }
   }
 
-  private static func notesTool(_ command: WovenMatterToolCommand, requestID: String, context: MobileToolContext, state: inout MobileStoreState) throws -> GatewayJSONValue {
+  private static func notesTool(_ command: WovenMatterToolCommand, requestID: String, context: MobileToolContext, state: inout MobileStoreState) throws -> JSONValue {
     let query = command.options["search"] ?? ""
     if command.action == "folders" { return try MobileToolSupport.page(state.folders.values.sorted { $0.id < $1.id }.map(MobileToolSupport.value), command: command) }
     if command.action == "list" {
@@ -88,7 +88,7 @@ extension MobileStore {
       state.outbox.append(.init(mutation: mutation(for: note, kind: .createNote, deviceID: state.deviceID)))
       return .object(["id": .string(id), "revision": .string(try MobileToolSupport.fingerprint(note))])
     }
-    guard var note = state.notes[id], !state.deletedNotes.contains(id), !state.uncachedNoteIDs.contains(id) else { throw WorkspaceToolError.notFound("This note is not saved on this device. Download it from the central library first.") }
+    guard var note = state.notes[id], !state.deletedNotes.contains(id), !state.uncachedNoteIDs.contains(id) else { throw WorkspaceToolError.notFound("This note is not saved on this device. Download it from your library first.") }
     if command.action == "read" { return try noteRead(note, command: command) }
     if command.action == "versions" { return try MobileToolSupport.page((state.toolNoteVersions ?? []).filter { $0.note.id == id }.reversed().map { .object(["id": .string($0.id), "noteID": .string(id), "title": .string($0.note.title), "createdAt": .string($0.savedAt)]) }, command: command) }
     guard state.conflicts[id] == nil else { throw WorkspaceToolError.revisionConflict("Resolve this note's sync conflict before editing.") }
@@ -110,7 +110,7 @@ extension MobileStore {
     guard note.content.utf8.count <= LibraryProtocol.maximumNoteBytes else { throw Failure.noteTooLarge }
     let candidateDocument = try NoteDocument.editableDocument(from: note.content)
     let hasLinkedTable = candidateDocument.blocks.contains { block in if case .table(let table) = block { return table.databaseLink != nil }; return false }
-    guard candidateDocument.databaseLink == nil, !hasLinkedTable else { throw WorkspaceToolError.invalid("Linked database artifacts are edited in their owning workspace. Use target central when connected; this device has not changed the note.") }
+    guard candidateDocument.databaseLink == nil, !hasLinkedTable else { throw WorkspaceToolError.invalid("Linked database artifacts are edited in their owning workspace; this device has not changed the note. Use a Mac or Linux workspace agent.") }
     note.updatedAt = ISO8601DateFormatter().string(from: Date()); note.contentByteCount = note.content.utf8.count
     var versions = state.toolNoteVersions ?? []
     if !versions.contains(where: { $0.id == revision }) { versions.append(.init(id: revision, note: original, savedAt: note.updatedAt)) }
@@ -122,7 +122,7 @@ extension MobileStore {
     }
     return .object(["id": .string(id), "title": .string(note.title), "revision": .string(try MobileToolSupport.fingerprint(note)), "replayed": .bool(false)])
   }
-  private static func noteRead(_ note: LibraryNote, command: WovenMatterToolCommand) throws -> GatewayJSONValue {
+  private static func noteRead(_ note: LibraryNote, command: WovenMatterToolCommand) throws -> JSONValue {
     var value = try MobileToolSupport.chunk(note.content, command: command)
     value["id"] = .string(note.id); value["title"] = .string(note.title); value["revision"] = .string(try MobileToolSupport.fingerprint(note)); value["kind"] = .string(note.kind?.rawValue ?? NoteDocument.decode(note.content).kind.rawValue)
     return .object(value)
@@ -159,7 +159,7 @@ extension MobileStore {
     }
   }
 
-  private static func timerTool(_ c: WovenMatterToolCommand, requestID: String, context: MobileToolContext, state: inout MobileStoreState) throws -> GatewayJSONValue {
+  private static func timerTool(_ c: WovenMatterToolCommand, requestID: String, context: MobileToolContext, state: inout MobileStoreState) throws -> JSONValue {
     let existingTimerID = c.options["id"] ?? c.positional.first
     let sessionID = c.options["session"] ?? existingTimerID.flatMap { state.toolTimers?[$0]?.sessionID } ?? context.sessionID
     if sessionID != context.sessionID {

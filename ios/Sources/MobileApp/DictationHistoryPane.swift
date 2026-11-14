@@ -14,12 +14,12 @@ struct DictationHistoryPane: View {
     ScrollView {
       LazyVStack(alignment: .leading, spacing: 12) {
         Text("Your completed dictations. Click on an entry to see it in full.")
-          .font(.subheadline).foregroundStyle(DashboardPalette.mutedForeground)
+          .font(.subheadline).foregroundStyle(WovenPalette.mutedForeground)
         if let problem = DictationSession.shared.historyError {
-          Text(problem).foregroundStyle(DashboardPalette.danger)
+          Text(problem).foregroundStyle(WovenPalette.danger)
           Button("Retry saving") { DictationSession.shared.retrySavingHistory() }
         }
-        if let error { Text(error).foregroundStyle(DashboardPalette.danger) }
+        if let error { Text(error).foregroundStyle(WovenPalette.danger) }
         if !loaded { ProgressView() }
         else if records.isEmpty {
           Text("No dictations yet").font(.headline)
@@ -30,22 +30,22 @@ struct DictationHistoryPane: View {
           HStack(spacing: 8) {
             if page > 0 {
               Button { changePage(to: 0) } label: {
-                DashboardLucideIcon(glyph: .chevronsLeft, size: 18).frame(width: 44, height: 44)
+                LucideIcon(glyph: .chevronsLeft, size: 18).frame(width: 44, height: 44)
               }.accessibilityLabel("First page")
             } else {
               Color.clear.frame(width: 44, height: 44).accessibilityHidden(true)
             }
             Button { changePage(to: page - 1) } label: {
-              DashboardLucideIcon(glyph: .arrowLeft, size: 18).frame(width: 44, height: 44)
+              LucideIcon(glyph: .arrowLeft, size: 18).frame(width: 44, height: 44)
             }.disabled(page == 0).accessibilityLabel("Previous page")
             Text("Page \(page + 1)").font(.subheadline).monospacedDigit()
-              .foregroundStyle(DashboardPalette.mutedForeground).fixedSize()
+              .foregroundStyle(WovenPalette.mutedForeground).fixedSize()
             Button { changePage(to: page + 1) } label: {
-              DashboardLucideIcon(glyph: .arrowRight, size: 18).frame(width: 44, height: 44)
+              LucideIcon(glyph: .arrowRight, size: 18).frame(width: 44, height: 44)
             }.disabled(!hasNextPage).accessibilityLabel("Next page")
             // Balance the first-page slot so the page number stays centered.
             Color.clear.frame(width: 44, height: 44).accessibilityHidden(true)
-          }.buttonStyle(DashboardIconButtonStyle()).frame(maxWidth: .infinity)
+          }.buttonStyle(WovenIconButtonStyle()).frame(maxWidth: .infinity)
         }
       }.padding(16)
     }.scrollIndicators(.never).mobileNavigationPage("Dictation")
@@ -83,7 +83,7 @@ private struct MobileDictationHistoryRow: View {
   var body: some View {
     VStack(alignment: .leading, spacing: 8) {
       Text(record.createdAt.formatted(date: .abbreviated, time: .shortened))
-        .font(.caption).foregroundStyle(DashboardPalette.mutedForeground)
+        .font(.caption).foregroundStyle(WovenPalette.mutedForeground)
       if expanded {
         Text(record.text).textSelection(.enabled)
         Button("Show less") { expanded = false }.font(.subheadline)
@@ -100,7 +100,7 @@ private struct MobileDictationHistoryRow: View {
           .font(.system(size: 11.5, weight: .medium))
           .frame(width: 44, height: 44)
           .contentShape(Rectangle())
-      }.buttonStyle(DashboardIconButtonStyle()).accessibilityLabel(copied ? "Copied dictation" : "Copy dictation")
+      }.buttonStyle(WovenIconButtonStyle()).accessibilityLabel(copied ? "Copied dictation" : "Copy dictation")
         .task(id: copied) {
           guard copied else { return }
           do { try await Task.sleep(for: .seconds(2)); copied = false } catch { }
@@ -108,6 +108,6 @@ private struct MobileDictationHistoryRow: View {
     }.frame(maxWidth: .infinity, alignment: .leading)
       // The 12-point list gap plus this 4-point top inset gives 16 points from copy button to next date.
       .padding(.horizontal, 12).padding(.top, 4)
-      .background(DashboardPalette.background, in: RoundedRectangle(cornerRadius: DashboardMetrics.controlRadius))
+      .background(WovenPalette.background, in: RoundedRectangle(cornerRadius: WovenMetrics.controlRadius))
   }
 }

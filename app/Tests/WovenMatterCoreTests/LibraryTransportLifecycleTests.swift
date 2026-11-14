@@ -8,7 +8,7 @@ import Musl
 #endif
 import Foundation
 import XCTest
-@testable import WovenMatterDashboardStore
+@testable import WovenMatterLibraryStore
 import WovenMatterCore
 
 @MainActor
@@ -64,7 +64,7 @@ private struct SupervisorFixture {
     let fixture = Self(directory: directory)
     do {
       _ = try await CLIProcessProbe().run(executable: URL(fileURLWithPath: "/usr/bin/xcrun"), arguments: ["swiftc", "-parse-as-library",
-        repository.appendingPathComponent("app/Sources/WovenMatterDashboardStore/TailscaleServeSupervisor.swift").path,
+        repository.appendingPathComponent("app/Sources/WovenMatterLibraryStore/TailscaleServeSupervisor.swift").path,
         repository.appendingPathComponent("scripts/test-support/TailscaleServeSupervisorFixture.swift").path,
         "-module-cache-path", directory.appendingPathComponent("ModuleCache").path, "-o", fixture.executable.path], timeout: 30)
       return fixture

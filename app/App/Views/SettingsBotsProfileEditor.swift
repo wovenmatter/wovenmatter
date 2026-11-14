@@ -19,11 +19,11 @@ struct BotSettingsProfileEditor: View {
         VStack(alignment: .leading, spacing: 4) {
             Text(profile.map { "Edit \($0.name)" } ?? "New profile").font(.settingsRow).padding(.top, 6)
             SettingsRow(title: "Name") {
-                TextField("e.g. Coding", text: $draft.name).dashboardInput().frame(width: 260).accessibilityLabel("Name")
+                TextField("e.g. Coding", text: $draft.name).wovenInput().frame(width: 260).accessibilityLabel("Name")
             }
             if profile == nil {
                 SettingsRow(title: "Id", detail: "Lowercase letters, digits, - and _. Can't be changed.") {
-                    TextField("e.g. coding", text: $draft.id).dashboardInput().frame(width: 260).accessibilityLabel("Id")
+                    TextField("e.g. coding", text: $draft.id).wovenInput().frame(width: 260).accessibilityLabel("Id")
                 }
             }
             BotSettingsEditorSection(title: "Main model", summary: draft.main.isEmpty ? "Not set" : draft.main, open: true) {
@@ -43,7 +43,7 @@ struct BotSettingsProfileEditor: View {
                     saving = true
                     Task { _ = await onSave(draft); saving = false }
                 }
-                .buttonStyle(DashboardPrimaryButtonStyle())
+                .buttonStyle(WovenPrimaryButtonStyle())
                 .disabled(!draft.canSave(isNew: profile == nil))
                 Button("Cancel", action: onCancel)
             }
@@ -60,16 +60,16 @@ struct BotSettingsProfileEditor: View {
             SettingsNote("Up to 5, tried in order when the main model hits a usage limit or runs out of credits. The bot switches back once it resets.")
             ForEach(Array(draft.fallbacks.enumerated()), id: \.element.id) { index, entry in
                 HStack(spacing: 6) {
-                    Text("\(index + 1).").font(.settingsSecondary).foregroundStyle(DashboardPalette.mutedForeground)
+                    Text("\(index + 1).").font(.settingsSecondary).foregroundStyle(WovenPalette.mutedForeground)
                     BotSettingsModelPicker(providers: providers, selection: Binding(
                         get: { draft.fallbacks.first { $0.id == entry.id }?.model ?? "" },
                         set: { value in if let at = draft.fallbacks.firstIndex(where: { $0.id == entry.id }) { draft.fallbacks[at].model = value } }),
                         label: "Fallback \(index + 1)")
-                    Button { draft.fallbacks.swapAt(index, index - 1) } label: { DashboardLucideIcon(glyph: .arrowUp, size: 13) }
+                    Button { draft.fallbacks.swapAt(index, index - 1) } label: { LucideIcon(glyph: .arrowUp, size: 13) }
                         .disabled(index == 0).accessibilityLabel("Move fallback \(index + 1) up")
-                    Button { draft.fallbacks.swapAt(index, index + 1) } label: { DashboardLucideIcon(glyph: .arrowDown, size: 13) }
+                    Button { draft.fallbacks.swapAt(index, index + 1) } label: { LucideIcon(glyph: .arrowDown, size: 13) }
                         .disabled(index == draft.fallbacks.count - 1).accessibilityLabel("Move fallback \(index + 1) down")
-                    Button { draft.fallbacks.removeAll { $0.id == entry.id } } label: { DashboardLucideIcon(glyph: .trash, size: 13) }
+                    Button { draft.fallbacks.removeAll { $0.id == entry.id } } label: { LucideIcon(glyph: .trash, size: 13) }
                         .accessibilityLabel("Remove fallback \(index + 1)")
                 }
             }
@@ -102,14 +102,14 @@ struct BotSettingsProfileEditor: View {
                             get: { draft.pool.first { $0.id == entry.id }?.model ?? "" },
                             set: { value in if let at = draft.pool.firstIndex(where: { $0.id == entry.id }) { draft.pool[at].model = value } }),
                             label: "Pool model \(index + 1)")
-                        Button { draft.pool.removeAll { $0.id == entry.id } } label: { DashboardLucideIcon(glyph: .trash, size: 13) }
+                        Button { draft.pool.removeAll { $0.id == entry.id } } label: { LucideIcon(glyph: .trash, size: 13) }
                             .accessibilityLabel("Remove pool model \(index + 1)")
                     }
                     BotSettingsModelFacts(providers: providers, model: entry.model)
                     TextField("Notes (optional)", text: Binding(
                         get: { draft.pool.first { $0.id == entry.id }?.useFor ?? "" },
                         set: { value in if let at = draft.pool.firstIndex(where: { $0.id == entry.id }) { draft.pool[at].useFor = value } }))
-                        .dashboardInput().accessibilityLabel("Notes on pool model \(index + 1)")
+                        .wovenInput().accessibilityLabel("Notes on pool model \(index + 1)")
                 }
             }
             Button { draft.pool.append(.init()) } label: { BotSettingsActionLabel(title: "Add pool model", glyph: .plus) }

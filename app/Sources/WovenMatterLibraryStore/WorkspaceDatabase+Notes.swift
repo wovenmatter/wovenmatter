@@ -1,0 +1,610 @@
+import Foundation
+#if canImport(SQLite3)
+import SQLite3
+#else
+import CSQLite
+#endif
+import WovenMatterClient
+import WovenMatterCore
+
+public enum WorkspaceNoteMutationError: LocalizedError, Equatable, Sendable {
+  case folderNotFound
+  case noteNotFound
+  case revisionConflict
+
+  public var errorDescription: String? {
+    switch self {
+    case .folderNotFound:
+      "The selected folder is no longer available."
+    case .noteNotFound:
+      "The note is no longer available."
+    case .revisionConflict:
+      "The note changed since it was read. Read it again before applying edits."
+    }
+  }
+}
+
+public struct PendingRemoteNoteEdit: Equatable, Sendable {
+  public let runID: String
+  public let assistantMessageID: String
+  public let noteID: String
+  public let expectedRevision: String
+  public let nonce: String
+  public let noteKind: NoteArtifactKind
+  public let assistantContent: String
+}
+
+// Note drafts, editing and mediated edit recovery within the original transactions.
+extension WorkspaceDatabaseConnection {
+  func insertNoteContextUnlocked(
+    _ context: AgentNoteContext?,
+    identifiers: LocalACPRunIdentifiers,
+    conversationID: String,
+    createdAt: Date
+  ) throws {
+    guard let context else { return }
+    if context.requireCurrentRevision == true {
+      // This executes inside run acceptance, after any asynchronous discovery or
+      // attachment staging, so a phone cannot grant editing from a stale base.
+      try requireToolUnlocked(.notes, sessionID: conversationID)
+      let current = try noteForEditingUnlocked(id: context.noteID)
+      guard current.revision == context.revision else {
+        throw WorkspaceNoteMutationError.revisionConflict
+      }
+    }
+    let timestamp = Self.timestamp(createdAt)
+    let reference = try prepareUnlocked("""
+      INSERT INTO message_references (
+        id, conversation_id, message_id, resource_type, resource_id, source,
+        title_snapshot, folder_id_snapshot, revision_snapshot, created_at
+      ) VALUES (?, ?, ?, 'note', ?, 'open_note', ?, ?, ?, ?)
+      """)
+    defer { sqlite3_finalize(reference) }
+    try bind(UUID().uuidString.lowercased(), at: 1, to: reference)
+    try bind(conversationID, at: 2, to: reference)
+    try bind(identifiers.userMessageID, at: 3, to: reference)
+    try bind(context.noteID, at: 4, to: reference)
+    try bind(context.title, at: 5, to: reference)
+    try bindNullable(context.folderID, at: 6, to: reference)
+    try bind(context.revision, at: 7, to: reference)
+    try bind(timestamp, at: 8, to: reference)
+    try stepDone(reference)
+
+    let visibleContext = try prepareUnlocked("""
+      INSERT INTO run_visible_notes (run_id, conversation_id, note_id, revision_snapshot)
+      VALUES (?, ?, ?, ?)
+      """)
+    defer { sqlite3_finalize(visibleContext) }
+    try bind(identifiers.runID, at: 1, to: visibleContext)
+    try bind(conversationID, at: 2, to: visibleContext)
+    try bind(context.noteID, at: 3, to: visibleContext)
+    try bind(context.revision, at: 4, to: visibleContext)
+    try stepDone(visibleContext)
+
+    if let nonce = context.remoteEditNonce,
+       let kind = context.artifactKind {
+      let pending = try prepareUnlocked("""
+        INSERT INTO remote_note_edits (
+          run_id, assistant_message_id, note_id, expected_revision,
+          nonce, note_kind, state, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?)
+        """)
+      defer { sqlite3_finalize(pending) }
+      try bind(identifiers.runID, at: 1, to: pending)
+      try bind(identifiers.assistantMessageID, at: 2, to: pending)
+      try bind(context.noteID, at: 3, to: pending)
+      try bind(context.revision, at: 4, to: pending)
+      try bind(nonce, at: 5, to: pending)
+      try bind(kind.rawValue, at: 6, to: pending)
+      try bind(timestamp, at: 7, to: pending)
+      try bind(timestamp, at: 8, to: pending)
+      try stepDone(pending)
+    }
+  }
+
+  public func pendingRemoteNoteEdits() throws -> [PendingRemoteNoteEdit] {
+    try withLock {
+      let statement = try prepareUnlocked("""
+        SELECT edit.run_id, edit.assistant_message_id, edit.note_id,
+          edit.expected_revision, edit.nonce, edit.note_kind, message.content
+        FROM remote_note_edits AS edit
+        JOIN runs AS run ON run.id = edit.run_id
+        JOIN messages AS message
+          ON message.id = edit.assistant_message_id AND message.run_id = edit.run_id
+        WHERE edit.state = 'pending' AND run.status = 'completed'
+        ORDER BY edit.created_at, edit.run_id
+        """)
+      defer { sqlite3_finalize(statement) }
+      var rows: [PendingRemoteNoteEdit] = []
+      while sqlite3_step(statement) == SQLITE_ROW {
+        let kind = try text(statement, column: 5)
+        guard let noteKind = NoteArtifactKind(rawValue: kind) else { continue }
+        rows.append(PendingRemoteNoteEdit(
+          runID: try text(statement, column: 0),
+          assistantMessageID: try text(statement, column: 1),
+          noteID: try text(statement, column: 2),
+          expectedRevision: try text(statement, column: 3),
+          nonce: try text(statement, column: 4),
+          noteKind: noteKind,
+          assistantContent: try text(statement, column: 6)
+        ))
+      }
+      return rows
+    }
+  }
+
+  public func applyPendingRemoteNoteEdit(
+    _ pending: PendingRemoteNoteEdit,
+    envelope: RemoteNoteEditEnvelope,
+    visibleAssistantContent: String
+  ) throws -> NoteEditingResponse {
+    try transaction {
+      let authorization = try prepareUnlocked("""
+        SELECT run.status
+        FROM remote_note_edits AS edit
+        JOIN runs AS run ON run.id = edit.run_id
+        JOIN run_visible_notes AS context ON context.run_id = edit.run_id
+        WHERE edit.run_id = ? AND edit.state = 'pending'
+          AND edit.assistant_message_id = ? AND edit.note_id = ?
+          AND edit.expected_revision = ? AND edit.nonce = ? AND edit.note_kind = ?
+          AND context.note_id = edit.note_id
+          AND context.revision_snapshot = edit.expected_revision
+        """)
+      defer { sqlite3_finalize(authorization) }
+      try bind(pending.runID, at: 1, to: authorization)
+      try bind(pending.assistantMessageID, at: 2, to: authorization)
+      try bind(pending.noteID, at: 3, to: authorization)
+      try bind(pending.expectedRevision, at: 4, to: authorization)
+      try bind(pending.nonce, at: 5, to: authorization)
+      try bind(pending.noteKind.rawValue, at: 6, to: authorization)
+      guard sqlite3_step(authorization) == SQLITE_ROW,
+            try text(authorization, column: 0) == "completed",
+            envelope.nonce == pending.nonce,
+            envelope.noteID == pending.noteID,
+            envelope.expectedRevision == pending.expectedRevision else {
+        throw RemoteNoteEditError.invalidEnvelope
+      }
+      let note = try noteForEditingUnlocked(id: pending.noteID)
+      guard note.revision == pending.expectedRevision else {
+        throw WorkspaceNoteMutationError.revisionConflict
+      }
+      try envelope.validateApplying(to: NoteDocument.editableDocument(from: note.content))
+      let response = try applyNoteEditsUnlocked(NoteEditingRequest(
+        command: .apply,
+        noteID: pending.noteID,
+        expectedRevision: pending.expectedRevision,
+        operations: envelope.operations
+      ))
+      let timestamp = Self.timestamp(Date())
+      let message = try prepareUnlocked("""
+        UPDATE messages SET content = ?, updated_at = ?
+        WHERE id = ? AND run_id = ? AND role = 'assistant'
+        """)
+      defer { sqlite3_finalize(message) }
+      try bind(visibleAssistantContent, at: 1, to: message)
+      try bind(timestamp, at: 2, to: message)
+      try bind(pending.assistantMessageID, at: 3, to: message)
+      try bind(pending.runID, at: 4, to: message)
+      try stepDone(message)
+      guard changedRowCountUnlocked == 1 else {
+        throw RemoteNoteEditError.invalidEnvelope
+      }
+      let conversation = try prepareUnlocked("""
+        UPDATE conversations
+        SET last_message_preview = ?, updated_at = ?
+        WHERE id = (
+          SELECT conversation_id FROM messages WHERE id = ?
+        ) AND NOT EXISTS (
+          SELECT 1 FROM messages AS newer
+          WHERE newer.conversation_id = conversations.id
+            AND newer.created_at > (
+              SELECT created_at FROM messages WHERE id = ?
+            )
+        )
+        """)
+      defer { sqlite3_finalize(conversation) }
+      try bind(Self.localPreview(visibleAssistantContent), at: 1, to: conversation)
+      try bind(timestamp, at: 2, to: conversation)
+      try bind(pending.assistantMessageID, at: 3, to: conversation)
+      try bind(pending.assistantMessageID, at: 4, to: conversation)
+      try stepDone(conversation)
+      let complete = try prepareUnlocked("""
+        UPDATE remote_note_edits
+        SET state = 'applied', updated_at = ?
+        WHERE run_id = ? AND state = 'pending'
+        """)
+      defer { sqlite3_finalize(complete) }
+      try bind(timestamp, at: 1, to: complete)
+      try bind(pending.runID, at: 2, to: complete)
+      try stepDone(complete)
+      guard changedRowCountUnlocked == 1 else {
+        throw RemoteNoteEditError.invalidEnvelope
+      }
+      return response
+    }
+  }
+
+  public func dismissPendingRemoteNoteEdit(runID: String) throws {
+    try transaction {
+      let lookup = try prepareUnlocked("""
+        SELECT message.id, message.content
+        FROM remote_note_edits AS edit
+        JOIN messages AS message
+          ON message.id = edit.assistant_message_id AND message.run_id = edit.run_id
+        WHERE edit.run_id = ? AND edit.state = 'pending'
+        """)
+      defer { sqlite3_finalize(lookup) }
+      try bind(runID, at: 1, to: lookup)
+      let timestamp = Self.timestamp(Date())
+      if sqlite3_step(lookup) == SQLITE_ROW {
+        let messageID = try text(lookup, column: 0)
+        let visible = RemoteNoteEditEnvelope.redactingEnvelopes(
+          in: try text(lookup, column: 1)
+        )
+        let message = try prepareUnlocked("""
+          UPDATE messages SET content = ?, updated_at = ? WHERE id = ?
+          """)
+        defer { sqlite3_finalize(message) }
+        try bind(visible, at: 1, to: message)
+        try bind(timestamp, at: 2, to: message)
+        try bind(messageID, at: 3, to: message)
+        try stepDone(message)
+        let conversation = try prepareUnlocked("""
+          UPDATE conversations SET last_message_preview = ?, updated_at = ?
+          WHERE id = (SELECT conversation_id FROM messages WHERE id = ?)
+            AND NOT EXISTS (
+              SELECT 1 FROM messages AS newer
+              WHERE newer.conversation_id = conversations.id
+                AND newer.created_at > (
+                  SELECT created_at FROM messages WHERE id = ?
+                )
+            )
+          """)
+        defer { sqlite3_finalize(conversation) }
+        try bind(Self.localPreview(visible), at: 1, to: conversation)
+        try bind(timestamp, at: 2, to: conversation)
+        try bind(messageID, at: 3, to: conversation)
+        try bind(messageID, at: 4, to: conversation)
+        try stepDone(conversation)
+      }
+      let statement = try prepareUnlocked("""
+        UPDATE remote_note_edits SET state = 'dismissed', updated_at = ?
+        WHERE run_id = ? AND state = 'pending'
+        """)
+      defer { sqlite3_finalize(statement) }
+      try bind(timestamp, at: 1, to: statement)
+      try bind(runID, at: 2, to: statement)
+      try stepDone(statement)
+    }
+  }
+
+  public func dismissTerminalRemoteNoteEdits() throws {
+    let runIDs = try withLock {
+      let statement = try prepareUnlocked("""
+        SELECT edit.run_id FROM remote_note_edits AS edit
+        JOIN runs AS run ON run.id = edit.run_id
+        WHERE edit.state = 'pending' AND run.status IN ('failed', 'cancelled')
+        """)
+      defer { sqlite3_finalize(statement) }
+      var values: [String] = []
+      while sqlite3_step(statement) == SQLITE_ROW {
+        values.append(try text(statement, column: 0))
+      }
+      return values
+    }
+    for runID in runIDs {
+      try dismissPendingRemoteNoteEdit(runID: runID)
+    }
+  }
+
+  @discardableResult
+  public func createNote(
+    id: UUID = UUID(),
+    folderID: String?,
+    title: String = "Untitled Note",
+    content: String = "",
+    kind: NoteArtifactKind = .note,
+    createdAt: Date = Date(),
+    callerConversationID: String? = nil,
+    requestID: String? = nil
+  ) throws -> String {
+    try transaction {
+      if let callerConversationID { try requireToolUnlocked(.notes, sessionID: callerConversationID) }
+      guard title.utf8.count <= 1_024 else {
+        throw WorkspaceToolError.invalid("A note title must be at most 1,024 bytes.")
+      }
+      return try performToolMutationUnlocked(callerID: callerConversationID, requestID: requestID,
+        operation: "notes.create", input: [folderID, title, content, kind.rawValue]) {
+        let content = try (content.isEmpty
+          ? NoteDocument(kind: kind)
+          : NoteDocument.editableDocument(from: content)).encoded()
+        guard content.utf8.count <= RemoteNoteEditEnvelope.maximumEnvelopeBytes else {
+          throw WorkspaceToolError.invalid("A note document must be at most 1 MiB.")
+        }
+        let noteID = id.uuidString.lowercased()
+        try validateFolderUnlocked(id: folderID)
+        let timestamp = Self.timestamp(createdAt)
+        let position = try nextNotePositionUnlocked(
+          folderID: folderID
+        )
+
+        let note = try prepareUnlocked("""
+          INSERT INTO notes (
+            id, folder_id, title, content, snippet, is_pinned, position,
+            created_at, updated_at
+          ) VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?)
+          """)
+        defer { sqlite3_finalize(note) }
+        try bind(noteID, at: 1, to: note)
+        try bindNullable(folderID, at: 2, to: note)
+        try bind(title, at: 3, to: note)
+        try bind(content, at: 4, to: note)
+        try bind(Self.noteSnippet(content), at: 5, to: note)
+        guard sqlite3_bind_int64(note, 6, Int64(position)) == SQLITE_OK else {
+          throw bindError()
+        }
+        try bind(timestamp, at: 7, to: note)
+        try bind(timestamp, at: 8, to: note)
+        try stepDone(note)
+
+        try checkpointNoteUnlocked(id: noteID, source: "created", force: true)
+        return noteID
+      }.result
+    }
+  }
+
+  /// Whole-document autosave shares the optimistic boundary used by mobile and
+  /// agent edits. A missing or deleted note is never recreated under its old ID.
+  @discardableResult
+  public func persistNoteDraft(
+    id: String,
+    title: String,
+    content: String,
+    updatedAt: Date = Date(),
+    expectedRevision: String? = nil,
+    operationID: String? = nil
+  ) throws -> Bool {
+    try transaction {
+      if let operationID, let receipt = try libraryDraftReceiptUnlocked(operationID: operationID) {
+        guard receipt.id == id, receipt.title == title,
+              receipt.content == Self.libraryContentFingerprint(content) else {
+          throw WorkspaceNoteMutationError.revisionConflict
+        }
+        return true
+      }
+      let note = try noteForEditingUnlocked(id: id)
+      if note.title == title, note.content == content {
+        try saveLibraryDraftReceiptUnlocked(operationID: operationID, id: id,
+          title: title, content: content, revision: note.revision)
+        return true
+      }
+      guard let expectedRevision, expectedRevision == note.revision else {
+        throw WorkspaceNoteMutationError.revisionConflict
+      }
+      // Decoding must preserve every supported field; persist the editor's raw
+      // bytes so a title-only change can retain an unsupported future document.
+      if content != note.content {
+        _ = try NoteDocument.editableDocument(from: note.content)
+        _ = try NoteDocument.editableDocument(from: content)
+      }
+      try checkpointNoteUnlocked(id: id, source: "editor", force: false)
+      try toolsExecuteUnlocked(
+        "UPDATE notes SET title = ?, content = ?, snippet = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL",
+        [title, content, Self.noteSnippet(content), try nextNoteUpdatedAtUnlocked(id: id, now: updatedAt), id]
+      )
+      guard changedRowCountUnlocked == 1 else { throw WorkspaceNoteMutationError.noteNotFound }
+      try checkpointNoteUnlocked(id: id, source: "editor", force: false)
+      let revision = try noteForEditingUnlocked(id: id).revision
+      try saveLibraryDraftReceiptUnlocked(operationID: operationID, id: id,
+        title: title, content: content, revision: revision)
+      return true
+    }
+  }
+
+  public func readNoteForEditing(id: String, callerConversationID: String? = nil) throws -> NoteEditingResponse {
+    try withLock {
+      if let callerConversationID { try requireToolUnlocked(.notes, sessionID: callerConversationID) }
+      let note = try noteForEditingUnlocked(id: id)
+      return NoteEditingResponse(
+        success: true,
+        noteID: id,
+        title: note.title,
+        revision: note.revision,
+        document: try NoteDocument.editableDocument(from: note.content)
+      )
+    }
+  }
+
+  public func applyNoteEdits(_ request: NoteEditingRequest, callerConversationID: String? = nil,
+                             requestID: String? = nil) throws -> NoteEditingResponse {
+    try transaction {
+      if let callerConversationID { try requireToolUnlocked(.notes, sessionID: callerConversationID) }
+      return try performToolMutationUnlocked(callerID: callerConversationID, requestID: requestID,
+        operation: "notes.apply", input: request, receipt: noteMutationReceipt) {
+          // Upgraded clients must still replay a completed legacy receipt whose
+          // original request predates mandatory revisions. Only new writes need
+          // the revision; current tool authority is checked before either path.
+          if RemoteNoteEditEnvelope.requiresRevision(request.operations),
+             request.expectedRevision == nil {
+            throw WorkspaceToolError.revisionRequired("This note operation requires --revision. Read the note again and pass its current revision.")
+          }
+          return try applyNoteEditsUnlocked(request)
+        }.result
+    }
+  }
+
+  private func applyNoteEditsUnlocked(
+    _ request: NoteEditingRequest
+  ) throws -> NoteEditingResponse {
+    let note = try noteForEditingUnlocked(id: request.noteID)
+    if let expected = request.expectedRevision, expected != note.revision {
+      throw WorkspaceNoteMutationError.revisionConflict
+    }
+    guard !request.operations.isEmpty else {
+      return NoteEditingResponse(
+        success: true, noteID: request.noteID, title: note.title,
+        revision: note.revision, document: try NoteDocument.editableDocument(from: note.content)
+      )
+    }
+    let currentDocument = try NoteDocument.editableDocument(from: note.content)
+    try RemoteNoteEditEnvelope.validate(operations: request.operations, applyingTo: currentDocument)
+    try checkpointNoteUnlocked(id: request.noteID, source: "before-agent-edit", force: true)
+    var document = currentDocument
+    if document.kind == .html,
+       request.operations.contains(where: {
+         if case .setTitle = $0 { true } else { false }
+       }) {
+      throw NoteEditError.artifactKindMismatch
+    }
+    let updatedTitle = try document.apply(request.operations) ?? note.title
+    let content = try document.encoded()
+    let updatedAt = try nextNoteUpdatedAtUnlocked(id: request.noteID)
+    let update = try prepareUnlocked("""
+      UPDATE notes SET title = ?, content = ?, snippet = ?, updated_at = ?
+      WHERE id = ? AND deleted_at IS NULL
+      """)
+    defer { sqlite3_finalize(update) }
+    try bind(updatedTitle, at: 1, to: update)
+    try bind(content, at: 2, to: update)
+    try bind(Self.noteSnippet(content), at: 3, to: update)
+    try bind(updatedAt, at: 4, to: update)
+    try bind(request.noteID, at: 5, to: update)
+    try stepDone(update)
+    guard changedRowCountUnlocked == 1 else {
+      throw WorkspaceNoteMutationError.noteNotFound
+    }
+    try checkpointNoteUnlocked(id: request.noteID, source: "agent", force: true)
+    return NoteEditingResponse(
+      success: true, noteID: request.noteID, title: updatedTitle,
+      revision: try noteForEditingUnlocked(id: request.noteID).revision, document: document
+    )
+  }
+
+  private func nextNotePositionUnlocked(
+    folderID: String?
+  ) throws -> Int {
+    let statement = try prepareUnlocked(folderID == nil ? """
+      SELECT COALESCE(MAX(position), -1) + 1
+      FROM notes
+      WHERE folder_id IS NULL AND deleted_at IS NULL
+      """ : """
+      SELECT COALESCE(MAX(position), -1) + 1
+      FROM notes
+      WHERE folder_id = ? AND deleted_at IS NULL
+      """)
+    defer { sqlite3_finalize(statement) }
+    if let folderID {
+      try bind(folderID, at: 1, to: statement)
+    }
+    guard sqlite3_step(statement) == SQLITE_ROW else { throw stepError() }
+    return Int(sqlite3_column_int64(statement, 0))
+  }
+
+  func noteForEditingUnlocked(
+    id: String
+  ) throws -> (title: String, content: String, revision: String) {
+    let statement = try prepareUnlocked("""
+      SELECT title, content, CAST(COALESCE((SELECT revision FROM device_sync_revisions WHERE kind = 'note' AND resource_id = notes.id), 1) AS TEXT)
+      FROM notes
+      WHERE id = ? AND deleted_at IS NULL
+      """)
+    defer { sqlite3_finalize(statement) }
+    try bind(id, at: 1, to: statement)
+    guard sqlite3_step(statement) == SQLITE_ROW else {
+      throw WorkspaceNoteMutationError.noteNotFound
+    }
+    return (
+      try text(statement, column: 0),
+      try text(statement, column: 1),
+      try text(statement, column: 2)
+    )
+  }
+
+  static func noteSnippet(_ content: String) -> String {
+    let content = (try? NoteDocument.editableDocument(from: content).plainText) ?? "Unsupported document"
+    let replacements: [(String, String, String.CompareOptions)] = [
+      (#"</p>\s*<p[^>]*>"#, " ", .regularExpression),
+      (#"<br\s*/?>"#, " ", [.regularExpression, .caseInsensitive]),
+      (#"</li>\s*<li[^>]*>"#, " ", [.regularExpression, .caseInsensitive]),
+      (#"<[^>]+>"#, "", .regularExpression),
+      ("&nbsp;", " ", []),
+      ("&amp;", "&", []),
+      ("&lt;", "<", []),
+      ("&gt;", ">", []),
+      ("&quot;", "\"", []),
+      ("&#39;", "'", []),
+      ("&#x27;", "'", [.caseInsensitive]),
+    ]
+    var text = content
+    for (source, replacement, options) in replacements {
+      text = text.replacingOccurrences(
+        of: source,
+        with: replacement,
+        options: options
+      )
+    }
+    text = text
+      .split(whereSeparator: \.isWhitespace)
+      .joined(separator: " ")
+      .trimmingCharacters(in: .whitespacesAndNewlines)
+    return text.count > 180 ? "\(text.prefix(177))..." : text
+  }
+}
+
+// MARK: - Async worker boundary
+
+extension WorkspaceDatabase {
+  public func pendingRemoteNoteEdits() async throws -> [PendingRemoteNoteEdit] {
+    try await read { try $0.pendingRemoteNoteEdits() }
+  }
+
+  public func applyPendingRemoteNoteEdit(
+    _ pending: PendingRemoteNoteEdit,
+    envelope: RemoteNoteEditEnvelope,
+    visibleAssistantContent: String
+  ) async throws -> NoteEditingResponse {
+    try await write { try $0.applyPendingRemoteNoteEdit(pending, envelope: envelope, visibleAssistantContent: visibleAssistantContent) }
+  }
+
+  public func dismissPendingRemoteNoteEdit(runID: String) async throws {
+    try await write { try $0.dismissPendingRemoteNoteEdit(runID: runID) }
+  }
+
+  public func dismissTerminalRemoteNoteEdits() async throws {
+    try await write { try $0.dismissTerminalRemoteNoteEdits() }
+  }
+
+  @discardableResult
+  public func createNote(
+    id: UUID = UUID(),
+    folderID: String?,
+    title: String = "Untitled Note",
+    content: String = "",
+    kind: NoteArtifactKind = .note,
+    createdAt: Date = Date(),
+    callerConversationID: String? = nil,
+    requestID: String? = nil
+  ) async throws -> String {
+    try await write { try $0.createNote(id: id, folderID: folderID, title: title, content: content, kind: kind, createdAt: createdAt, callerConversationID: callerConversationID, requestID: requestID) }
+  }
+
+  @discardableResult
+  public func persistNoteDraft(
+    id: String,
+    title: String,
+    content: String,
+    updatedAt: Date = Date(),
+    expectedRevision: String? = nil, operationID: String? = nil
+  ) async throws -> Bool {
+    try await write { try $0.persistNoteDraft(id: id, title: title, content: content, updatedAt: updatedAt, expectedRevision: expectedRevision, operationID: operationID) }
+  }
+
+  public func readNoteForEditing(id: String, callerConversationID: String? = nil) async throws -> NoteEditingResponse {
+    try await read { try $0.readNoteForEditing(id: id, callerConversationID: callerConversationID) }
+  }
+
+  public func applyNoteEdits(_ request: NoteEditingRequest, callerConversationID: String? = nil,
+                             requestID: String? = nil) async throws -> NoteEditingResponse {
+    try await write { try $0.applyNoteEdits(request, callerConversationID: callerConversationID, requestID: requestID) }
+  }
+}

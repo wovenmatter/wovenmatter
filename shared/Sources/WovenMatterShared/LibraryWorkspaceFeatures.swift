@@ -75,7 +75,9 @@ public struct SessionSettings: Codable, Equatable, Sendable {
   public var permissions: [SessionSettingOption]
   public var availableTools: [SessionSettingOption]
   public var enabledTools: [String]
-  public var goal: WorkspaceGoal?
+  /// A goal in a state a newer build added reads as no goal here; the rest of
+  /// the settings still arrive.
+  @LossyOptional public var goal: WorkspaceGoal?
   public var canConfigure: Bool
   /// The harness's slash commands (ACP `available_commands_update`), for the composer's palette.
   public var commands: [SessionCommand]?
@@ -110,7 +112,8 @@ public struct LibraryCalendarDraft: Codable, Equatable, Sendable {
   public var recurrenceUnit: String?
   public var recurrenceInterval: Int
   public var task: ScheduledTask?
-  /// Nil preserves the host’s existing visibility for older clients.
+  /// Nil reads as shown on the calendar, except that an edit to an existing task keeps the
+  /// task’s current visibility.
   public var showsOnCalendar: Bool?
   public init(title: String = "", details: String = "", startsAt: Date = Date(), endsAt: Date? = nil,
               allDay: Bool = false, timeZoneID: String = TimeZone.current.identifier,

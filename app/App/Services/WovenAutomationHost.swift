@@ -4,7 +4,7 @@ import FacadeBrowserTestBridge
 import Foundation
 import WovenMatterClient
 import WovenMatterCore
-import WovenMatterDashboardStore
+import WovenMatterLibraryStore
 import WovenMatterAutomation
 
 /// The visible app owns CEF and TCC grants. Background/remote runtimes reach
@@ -12,7 +12,7 @@ import WovenMatterAutomation
 @MainActor
 final class WovenAutomationHost {
     struct RemoteBrowserRoute {
-        let perform: @MainActor (GatewayJSONValue, String) async throws -> WovenMatterToolResponse
+        let perform: @MainActor (JSONValue, String) async throws -> WovenMatterToolResponse
         let cancel: @MainActor (String) async throws -> Void
     }
     private let assets: WorkspaceAssetSession
@@ -80,7 +80,7 @@ final class WovenAutomationHost {
             let json = try command.required("json")
             let limit = group == .html ? WovenMatterToolRequest.maximumHTMLRequestBytes : 3 * 1024 * 1024
             guard json.utf8.count <= limit else { throw WorkspaceToolError.invalid("Automation input exceeds its size limit.") }
-            let input = try JSONDecoder().decode(GatewayJSONValue.self, from: Data(json.utf8))
+            let input = try JSONDecoder().decode(JSONValue.self, from: Data(json.utf8))
             let task = Task { @MainActor [self] () -> WovenMatterToolResponse in
                 do {
                     let admit: @MainActor @Sendable () async throws -> Void = { @MainActor [database] in
@@ -90,7 +90,7 @@ final class WovenAutomationHost {
                         try Task.checkCancellation()
                     }
                     try await admit()
-                    let result: GatewayJSONValue
+                    let result: JSONValue
                     if group == .html {
                         guard allowsLocalSurfaces else { throw WorkspaceToolError.invalid("Open Woven Matter to preview HTML.") }
                         result = try await ConversationHTMLPreview().capture(input)
@@ -137,7 +137,7 @@ final class WovenAutomationHost {
             return result
         } catch { return .init(success: false, error: error.localizedDescription, code: "automation_unavailable", requestID: id) }
     }
-    private func browser(_ input: GatewayJSONValue, admit: @MainActor @escaping () async throws -> Void) async throws -> GatewayJSONValue {
+    private func browser(_ input: JSONValue, admit: @MainActor @escaping () async throws -> Void) async throws -> JSONValue {
         guard let args = input.objectValue, let action = args["action"]?.stringValue else { throw WorkspaceToolError.invalid("Provide a browser action.") }
         let keys: Set<String> = ["action", "tabId", "frame", "url", "selector", "text", "key", "x", "y", "button", "clickCount", "destination", "code", "value", "checked", "accept", "name", "mimeType", "data", "id", "offset"]
         guard Set(args.keys).isSubset(of: keys) else { throw WorkspaceToolError.invalid("Unknown browser parameter.") }
@@ -153,11 +153,11 @@ final class WovenAutomationHost {
         guard let raw = args["tabId"]?.stringValue, let id = UUID(uuidString: raw), let page = assets.pages[id], !page.closed else { throw WorkspaceToolError.invalid("Choose a current tabId from tabs or open.") }
         if action == "focus" { assets.focusAutomationBrowser(id); return .object(["focused": .bool(true)]) }
         if action == "close" { assets.close(.browser(id)); return .object(["closed": .bool(true)]) }
-        if action == "downloads" { return try JSONDecoder().decode(GatewayJSONValue.self, from: JSONSerialization.data(withJSONObject: page.automationDownloads)) }
+        if action == "downloads" { return try JSONDecoder().decode(JSONValue.self, from: JSONSerialization.data(withJSONObject: page.automationDownloads)) }
         if action == "read-download" {
             guard let downloadID = args["id"]?.stringValue, let offset = (args["offset"] ?? .number(0)).intValue,
                 offset >= 0, let value = page.readAutomationDownload(downloadID, offset: UInt(offset)) else { throw WorkspaceToolError.invalid("Choose a completed download ID and valid byte offset.") }
-            return try JSONDecoder().decode(GatewayJSONValue.self, from: JSONSerialization.data(withJSONObject: value))
+            return try JSONDecoder().decode(JSONValue.self, from: JSONSerialization.data(withJSONObject: value))
         }
         let runner = WovenBrowserActionProcess()
         return try await runner.run(page: page, id: id, input: input, admit: admit)
@@ -170,14 +170,14 @@ final class WovenAutomationHost {
 private final class WovenBrowserActionProcess {
     private var child: Process?
     private var writer: FileHandle?
-    private var waiter: CheckedContinuation<GatewayJSONValue, any Error>?
+    private var waiter: CheckedContinuation<JSONValue, any Error>?
     private var page: WMBrowserPage?
     private var admit: (@MainActor () async throws -> Void)?
     private var deadline: Task<Void, Never>?
     private var finished = false
-    private var outcome: Result<GatewayJSONValue, any Error>?
-    func run(page: WMBrowserPage, id: UUID, input: GatewayJSONValue,
-             admit: @MainActor @escaping () async throws -> Void) async throws -> GatewayJSONValue {
+    private var outcome: Result<JSONValue, any Error>?
+    func run(page: WMBrowserPage, id: UUID, input: JSONValue,
+             admit: @MainActor @escaping () async throws -> Void) async throws -> JSONValue {
         guard let root = DefaultAgentSupport.resources else { throw WorkspaceToolError.invalid("The bundled browser helper is unavailable.") }
         self.page = page; self.admit = admit
         let process = Process(), stdin = Pipe(), stdout = Pipe()
@@ -190,7 +190,7 @@ private final class WovenBrowserActionProcess {
             DispatchQueue.main.async { self?.completeAfterExit() }
         }
         page.automationMessageHandler = { [weak self] message in
-            guard let self, let json = try? JSONDecoder().decode(GatewayJSONValue.self, from: Data(message.utf8)) else { return }
+            guard let self, let json = try? JSONDecoder().decode(JSONValue.self, from: Data(message.utf8)) else { return }
             self.send(.object(["native": json]))
         }
         return try await withTaskCancellationHandler {
@@ -208,7 +208,7 @@ private final class WovenBrowserActionProcess {
                                 guard pending.count <= 8 * 1024 * 1024 else { throw WorkspaceToolError.invalid("Browser protocol response exceeds 8 MiB.") }
                                 while let newline = pending.firstIndex(of: 10) {
                                     let line = Data(pending[..<newline]); pending.removeSubrange(...newline)
-                                    let packet = try JSONDecoder().decode(GatewayJSONValue.self, from: line)
+                                    let packet = try JSONDecoder().decode(JSONValue.self, from: line)
                                     DispatchQueue.main.async { self?.receive(packet) }
                                 }
                             }
@@ -223,7 +223,7 @@ private final class WovenBrowserActionProcess {
             }
         } onCancel: { Task { @MainActor [weak self] in self?.finish(.failure(CancellationError())) } }
     }
-    private func receive(_ packet: GatewayJSONValue) {
+    private func receive(_ packet: JSONValue) {
         guard !finished, let object = packet.objectValue else { return }
         if let result = object["result"] { finish(.success(result)); return }
         if let error = object["error"]?.stringValue { finish(.failure(WorkspaceToolError.invalid(error))); return }
@@ -239,12 +239,12 @@ private final class WovenBrowserActionProcess {
             }
         }
     }
-    private func send(_ value: GatewayJSONValue) {
+    private func send(_ value: JSONValue) {
         guard !finished else { return }
         do { try writer?.write(contentsOf: JSONEncoder().encode(value) + Data([10])) }
         catch { finish(.failure(error)) }
     }
-    private func finish(_ result: Result<GatewayJSONValue, any Error>) {
+    private func finish(_ result: Result<JSONValue, any Error>) {
         guard !finished else { return }; finished = true
         outcome = result
         deadline?.cancel(); page?.detachAutomation(); try? writer?.close()

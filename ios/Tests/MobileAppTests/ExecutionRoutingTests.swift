@@ -5,7 +5,7 @@ import WovenMatterShared
 @testable import WovenMatterMobileApp
 
 private actor ExecutionTestLibrary: OfflineLibraryTransport {
-  func command(_ command: LibraryCommand) async throws -> LibraryCommandReceipt { XCTFail("Direct execution must not use the central library"); throw MobileConnectionError.offline }
+  func command(_ command: LibraryCommand) async throws -> LibraryCommandReceipt { XCTFail("Direct execution must not use the library host"); throw MobileConnectionError.offline }
 }
 
 private actor ExecutionTestWorkspace: ExecutionWorkspaceTransport {
@@ -22,9 +22,9 @@ private actor ExecutionTestWorkspace: ExecutionWorkspaceTransport {
     if identityOffline { throw MobileConnectionError.offline }
     return workspace
   }
-  func providers() async throws -> [HarnessCapabilities] { [.init(id: "pi", runtimeKind: "pi", displayName: "Pi Durable", available: true)] }
+  func providers() async throws -> [HarnessCapabilities] { [.init(id: "pi", runtimeKind: "default_agent", displayName: "Pi Durable", available: true)] }
   func pending() async throws -> [PendingInteraction] { [] }
-  func capabilities(_ id: String) async throws -> HarnessCapabilities { .init(id: "pi", runtimeKind: "pi", displayName: "Pi Durable", available: true) }
+  func capabilities(_ id: String) async throws -> HarnessCapabilities { .init(id: "pi", runtimeKind: "default_agent", displayName: "Pi Durable", available: true) }
   func command(_ command: LibraryCommand) async throws -> LibraryCommandReceipt {
     commands.append(command)
     let receipt = LibraryCommandReceipt(commandID: command.commandID, deviceID: command.deviceID, status: .completed, conversationID: command.conversationID)
@@ -86,15 +86,15 @@ final class ExecutionRoutingTests: XCTestCase {
     }
   }
 
-  @MainActor func testOfflineCentralMacCannotCreateChat() async throws {
+  @MainActor func testOfflineLibraryHostCannotCreateChat() async throws {
     let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     defer { try? FileManager.default.removeItem(at: root) }
     let store = try MobileStore(file: root.appendingPathComponent("library.json"))
     let model = MobileModel(store: store, transport: ExecutionTestLibrary())
-    model.providers = [.init(id: "local:pi", runtimeKind: "pi", displayName: "Pi Durable", available: true)]
+    model.providers = [.init(id: "local:pi", runtimeKind: "default_agent", displayName: "Pi Durable", available: true)]
     model.online = false
     model.newChat()
-    await model.startNewChat(with: try XCTUnwrap(model.launcherAgents.first { $0.workspaceID == "central" }))
+    await model.startNewChat(with: try XCTUnwrap(model.launcherAgents.first { $0.workspaceID == "host" }))
     XCTAssertEqual(model.chatSetupProblem, MobileModel.deviceConnectionMessage)
     let saved = await store.snapshot()
     XCTAssertTrue(saved.commands.isEmpty); XCTAssertTrue(saved.launches.isEmpty)
@@ -139,7 +139,7 @@ final class ExecutionRoutingTests: XCTestCase {
     let model = MobileModel(store: store, transport: ExecutionTestLibrary())
     model.state = await store.snapshot()
     let workspace = ExecutionWorkspace(id: UUID().uuidString.lowercased(), libraryID: "library",
-      ownerDeviceID: "owner", kind: .mac, name: "Mac", capabilities: ["history.central.v1"])
+      ownerDeviceID: "owner", kind: .mac, name: "Mac", capabilities: ["history.library.v1"])
     try await store.journal.bind(libraryID: "library")
     try await store.journal.upsertWorkspace(workspace, pending: false)
     let direct = ExecutionTestWorkspace(workspace)
@@ -148,7 +148,7 @@ final class ExecutionRoutingTests: XCTestCase {
     model.selectedConversationID = id
     model.selectedConversationRoute = (id, workspace.id)
     model.workspaceReachable[workspace.id] = true; model.online = false
-    XCTAssertEqual(model.executionOwner(of: id), "central")
+    XCTAssertEqual(model.executionOwner(of: id), "host")
     XCTAssertTrue(model.executionAvailable(for: id))
     await model.submitExecutionCommand(.init(deviceID: model.state.deviceID, kind: .stop, conversationID: id, runID: runID))
     await model.respond(.init(id: "approval", conversationID: id, runID: runID, kind: .approval, title: "Approve"), response: .init(optionID: "allow"))
@@ -159,13 +159,13 @@ final class ExecutionRoutingTests: XCTestCase {
     let commands = await direct.commands
     XCTAssertEqual(commands.map(\.kind), [.stop, .respond, .workspace])
     XCTAssertTrue(commands.allSatisfy { $0.workspaceID == workspace.id && $0.conversationID == id })
-    XCTAssertEqual(model.executionOwner(of: id), "central")
-    XCTAssertEqual(model.executionRoute(for: "another-chat"), "central")
-    // The reverse fallback uses central transport while preserving the direct owner.
+    XCTAssertEqual(model.executionOwner(of: id), "host")
+    XCTAssertEqual(model.executionRoute(for: "another-chat"), "host")
+    // The reverse fallback uses host route transport while preserving the direct owner.
     model.conversationWorkspaceIDs[id] = workspace.id
-    model.selectedConversationRoute = (id, "central"); model.online = true
+    model.selectedConversationRoute = (id, "host"); model.online = true
     XCTAssertEqual(model.executionOwner(of: id), workspace.id)
-    XCTAssertEqual(model.executionRoute(for: id), "central")
+    XCTAssertEqual(model.executionRoute(for: id), "host")
     XCTAssertTrue(model.executionAvailable(for: id))
   }
 
@@ -176,30 +176,31 @@ final class ExecutionRoutingTests: XCTestCase {
     try await store.bindWorkspace("library")
     let model = MobileModel(store: store, transport: ExecutionTestLibrary())
     model.state = await store.snapshot()
-    let central = ExecutionWorkspace(id: UUID().uuidString.lowercased(), libraryID: "library",
-      ownerDeviceID: "central-owner", kind: .mac, name: "Central", capabilities: ["history.central.v1"])
+    let hostMac = ExecutionWorkspace(id: UUID().uuidString.lowercased(), libraryID: "library",
+      ownerDeviceID: "host-owner", kind: .mac, name: "Studio", capabilities: ["history.library.v1"])
     let other = ExecutionWorkspace(id: UUID().uuidString.lowercased(), libraryID: "library",
       ownerDeviceID: "other-owner", kind: .mac, name: "Another Mac")
     try await store.journal.bind(libraryID: "library")
-    for workspace in [central, other] { try await store.journal.upsertWorkspace(workspace, pending: false) }
+    for workspace in [hostMac, other] { try await store.journal.upsertWorkspace(workspace, pending: false) }
     let provider = HarnessCapabilities(id: "local:codex", runtimeKind: "codex", displayName: "Codex", available: true)
-    model.executionWorkspaces = [other, central]
-    model.providers = [provider]; model.workspaceProviders = [central.id: [provider], other.id: [provider]]
-    model.workspaceReachable = [central.id: true, other.id: true]; model.online = false
+    model.executionWorkspaces = [other, hostMac]
+    model.syncLibrary(with: "host-owner")
+    model.providers = [provider]; model.workspaceProviders = [hostMac.id: [provider], other.id: [provider]]
+    model.workspaceReachable = [hostMac.id: true, other.id: true]; model.online = false
     let id = UUID().uuidString.lowercased()
     model.state.conversations[id] = .init(id: id, title: "Existing", providerID: provider.id, runtimeKind: provider.runtimeKind)
     // Folders and Pending Requests both select a conversation without an explicit route.
     await model.selectConversation(id)
-    XCTAssertEqual(model.selectedExecutionWorkspaceID, central.id)
-    XCTAssertEqual(model.executionOwner(of: id), "central")
-    model.workspaceReachable[central.id] = false
-    XCTAssertEqual(model.preferredExecutionRoute(for: id), "central", "An unrelated Mac cannot substitute for this agent")
-    model.conversationWorkspaceIDs[id] = central.id; model.online = true
-    XCTAssertEqual(model.preferredExecutionRoute(for: id), "central")
+    XCTAssertEqual(model.selectedExecutionWorkspaceID, hostMac.id)
+    XCTAssertEqual(model.executionOwner(of: id), "host")
+    model.workspaceReachable[hostMac.id] = false
+    XCTAssertEqual(model.preferredExecutionRoute(for: id), "host", "An unrelated Mac cannot substitute for this agent")
+    model.conversationWorkspaceIDs[id] = hostMac.id; model.online = true
+    XCTAssertEqual(model.preferredExecutionRoute(for: id), "host")
     model.conversationWorkspaceIDs[id] = other.id
     XCTAssertEqual(model.preferredExecutionRoute(for: id), other.id)
     model.workspaceReachable[other.id] = false
-    XCTAssertEqual(model.preferredExecutionRoute(for: id), other.id, "Central access cannot substitute for another Mac's own session")
+    XCTAssertEqual(model.preferredExecutionRoute(for: id), other.id, "Host route access cannot substitute for another Mac's own session")
   }
 
   @MainActor func testHomeLauncherKeepsExactWorkspaceAndDimsDisconnectedAgents() async throws {
@@ -211,12 +212,12 @@ final class ExecutionRoutingTests: XCTestCase {
     let disconnected = ExecutionWorkspace(id: "disconnected", libraryID: "library", ownerDeviceID: "owner", kind: .linux, name: "Disconnected")
     model.executionWorkspaces = [connected, disconnected]
     model.workspaceReachable = [connected.id: true, disconnected.id: false]
-    let agent = HarnessCapabilities(id: "pi", runtimeKind: "pi", displayName: "Pi Durable", available: true)
+    let agent = HarnessCapabilities(id: "pi", runtimeKind: "default_agent", displayName: "Pi Durable", available: true)
     model.workspaceProviders = [connected.id: [agent], disconnected.id: [agent]]
     model.workspaceClients[connected.id] = WorkspaceClient(store: try XCTUnwrap(model.store), workspaceID: connected.id, transport: ExecutionTestWorkspace(connected))
     model.providers = [agent]; model.online = false; model.selectedConversationID = "existing-chat"
     let launchers = model.launcherAgents
-    XCTAssertEqual(launchers.map(\.workspaceID), ["local", "central", connected.id, disconnected.id])
+    XCTAssertEqual(launchers.map(\.workspaceID), ["local", "host", connected.id, disconnected.id])
     XCTAssertFalse(try XCTUnwrap(launchers.last).isAvailable)
     XCTAssertEqual(model.launcherGroups.map(\.id), ["local", connected.id], "Only reachable workspaces are listed")
     await model.launchAgent(try XCTUnwrap(launchers.last))
@@ -230,8 +231,8 @@ final class ExecutionRoutingTests: XCTestCase {
     XCTAssertEqual(model.selectedExecutionWorkspaceID, "local")
     XCTAssertEqual(model.providerID, "pi-durable-device")
     model.online = true
-    model.providers = [agent, .init(id: "remote:" + connected.id + ":pi", runtimeKind: "pi", displayName: "Pi Durable", routeName: connected.name, available: true)]
-    XCTAssertEqual(model.launcherAgents.filter { $0.workspaceID == "central" }.map(\.providerID), [agent.id])
+    model.providers = [agent, .init(id: "remote:" + connected.id + ":pi", runtimeKind: "default_agent", displayName: "Pi Durable", routeName: connected.name, available: true)]
+    XCTAssertEqual(model.launcherAgents.filter { $0.workspaceID == "host" }.map(\.providerID), [agent.id])
     XCTAssertEqual(model.launcherAgents.filter { $0.workspaceID == connected.id }.count, 1)
   }
 
@@ -442,7 +443,7 @@ final class ExecutionRoutingTests: XCTestCase {
     }
   }
 
-  @MainActor func testDirectWorkspaceRecoversLostSendReceiptWhileCentralIsOffline() async throws {
+  @MainActor func testDirectWorkspaceRecoversLostSendReceiptWhileTheLibraryHostIsOffline() async throws {
     let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     defer { try? FileManager.default.removeItem(at: root) }
     let store = try MobileStore(file: root.appendingPathComponent("library.json"))
@@ -963,217 +964,5 @@ final class InferenceSetupTests: XCTestCase {
     let fresh = InferenceConnectionSetupState(provider: "opencode-go")
     fresh.receiveModels([first, recommended], generation: fresh.beginCatalog())
     XCTAssertEqual(fresh.modelID, "beta")
-  }
-}
-
-private actor MemoryWorkspaceInferenceCredentials: InferenceCredentialUpdating {
-  nonisolated let credentialStoreID = "memory-workspace-inference"
-  private var values: [String: String]
-  private var suspendNextRead = false
-  private var reader: CheckedContinuation<Void, Never>?
-  private(set) var readSuspended = false
-  init(_ values: [String: String]) { self.values = values }
-  func suspendRead() { suspendNextRead = true }
-  func resumeRead() { readSuspended = false; reader?.resume(); reader = nil }
-  func read(connectionID: String) async -> String? {
-    if suspendNextRead {
-      suspendNextRead = false
-      await withCheckedContinuation { reader = $0; readSuspended = true }
-    }
-    return values[connectionID]
-  }
-  private var suspendNextSave = false
-  private var saver: CheckedContinuation<Void, Never>?
-  private(set) var saveSuspended = false
-  func suspendSave() { suspendNextSave = true }
-  func resumeSave() { saveSuspended = false; saver?.resume(); saver = nil }
-  func save(_ secret: String, connectionID: String) async {
-    if suspendNextSave {
-      suspendNextSave = false
-      await withCheckedContinuation { saver = $0; saveSuspended = true }
-    }
-    values[connectionID] = secret
-  }
-  func remove(connectionID: String) { values.removeValue(forKey: connectionID) }
-  func compareAndSwap(connectionID: String, expected: String, replacement: String) -> Bool {
-    guard values[connectionID] == expected else { return false }
-    values[connectionID] = replacement; return true
-  }
-  func snapshot() -> [String: String] { values }
-}
-
-@MainActor private final class MemoryWorkspaceVault {
-  var credentials: [String: DirectWorkspaceCredential] = [:]
-  var storage: WorkspaceCredentialStorage {
-    .init(load: { [unowned self] in credentials[$0] }, save: { [unowned self] in credentials[$0.workspaceID] = $0 },
-          clear: { [unowned self] in credentials.removeValue(forKey: $0) })
-  }
-}
-
-extension ExecutionRoutingTests {
-  /// A renewed workspace token reaches the workspace vault and every inference
-  /// connection hosted by that workspace, never an unrelated connection.
-  @MainActor func testInstalledWorkspaceCredentialRefreshesVaultAndOnlyItsHostedInferenceConnections() async throws {
-    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-    defer { try? FileManager.default.removeItem(at: root) }
-    let store = try MobileStore(file: root.appendingPathComponent("library.json"))
-    let model = MobileModel(store: store, transport: ExecutionTestLibrary())
-    await model.reload()
-    let endpoint = URL(string: "https://other-mac.example.ts.net/wovenmatter")!
-    // Another paired Mac's workspace keeps its own library namespace.
-    try await store.journal.upsertWorkspace(.init(id: "foreign", libraryID: "library-b", ownerDeviceID: "mac-b", kind: .mac, name: "Other Mac", endpoint: endpoint))
-    let vault = MemoryWorkspaceVault()
-    model.workspaceCredentials = vault.storage
-    let deviceID = model.state.deviceID
-    func hosted(_ id: String, workspaceID: String = "foreign", libraryID: String = "library-b", device: String? = nil,
-                baseURL: String = endpoint.absoluteString) -> InferenceConnection {
-      .init(id: id, name: id, provider: "openai-codex", accountID: "account", route: .adapter, baseURL: baseURL, modelID: "m",
-            hostScope: .init(libraryID: libraryID, workspaceID: workspaceID, deviceID: device ?? deviceID, protocolVersion: LibraryProtocol.version))
-    }
-    let bound = hosted("bound"), pinned = hosted("pinned")
-    let unrelated = [hosted("other-workspace", workspaceID: "other"), hosted("other-library", libraryID: "library-c"),
-                     hosted("other-device", device: "other-phone"), hosted("moved", baseURL: "https://moved.example.ts.net/wovenmatter"),
-                     InferenceConnection(id: "direct", name: "Direct", provider: "openai", route: .direct, modelID: "m")]
-    var initial = Dictionary(uniqueKeysWithValues: ([bound, pinned] + unrelated).map { ($0.id, "old-token") })
-    initial["direct"] = "api-key"
-    let inference = MemoryWorkspaceInferenceCredentials(initial)
-    model.executionCredentialStore = inference
-    model.inferenceConnections = [bound] + unrelated
-    // A conversation pinned to its own copy of a hosted connection is bound too.
-    model.executionRecords["chat"] = DeviceConversationRecord(id: "chat", title: "Chat", connectionID: pinned.id, connection: pinned,
-      modelJSON: "{}", status: "ready", updatedAt: "")
-    let fresh = DirectWorkspaceCredential(endpoint: endpoint, libraryID: "library-b", workspaceID: "foreign", deviceID: deviceID, token: "fresh-token")
-    try await model.installWorkspaceCredential(fresh, generation: model.connectionGeneration)
-    XCTAssertEqual(vault.credentials, ["foreign": fresh])
-    var expected = initial; expected["bound"] = "fresh-token"; expected["pinned"] = "fresh-token"
-    var stored = await inference.snapshot()
-    XCTAssertEqual(stored, expected)
-
-    // A credential issued before a reconnect or re-pair installs nowhere.
-    var stale = fresh; stale.token = "stale-token"
-    do { try await model.installWorkspaceCredential(stale, generation: UUID()); XCTFail("Installed a superseded credential") }
-    catch MobileConnectionError.revoked { }
-    // Nor does one outside this phone's accepted namespaces or for another device.
-    var unregistered = fresh; unregistered.libraryID = "library-z"; unregistered.token = "unregistered-token"
-    var otherDevice = fresh; otherDevice.deviceID = "other-phone"; otherDevice.token = "other-device-token"
-    for rejected in [unregistered, otherDevice] {
-      do { try await model.installWorkspaceCredential(rejected, generation: model.connectionGeneration); XCTFail("Installed \(rejected.token)") }
-      catch MobileConnectionError.revoked { }
-    }
-    XCTAssertEqual(vault.credentials, ["foreign": fresh])
-    stored = await inference.snapshot()
-    XCTAssertEqual(stored, expected)
-
-    // A connection still holding an older token (saved before the renewal, or
-    // by an earlier build) is rebound from the vault's current credential.
-    await inference.save("old-token", connectionID: "bound")
-    try await model.bindInferenceConnections(to: fresh, generation: model.connectionGeneration)
-    stored = await inference.snapshot()
-    XCTAssertEqual(stored, expected)
-
-    // A disconnect or re-pair while a stored token is being read ends the
-    // install: the earlier generation's token is never written.
-    await inference.save("old-token", connectionID: "bound")
-    var renewed = fresh; renewed.token = "renewed-token"
-    await inference.suspendRead()
-    let install = Task { try await model.installWorkspaceCredential(renewed, generation: model.connectionGeneration) }
-    for _ in 0..<2_000 where !(await inference.readSuspended) { try await Task.sleep(for: .milliseconds(5)) }
-    let suspended = await inference.readSuspended
-    XCTAssertTrue(suspended)
-    model.connectionGeneration = UUID()
-    await inference.resumeRead()
-    do { try await install.value; XCTFail("Bound a superseded credential") } catch MobileConnectionError.revoked { }
-    stored = await inference.snapshot()
-    XCTAssertEqual(stored["bound"], "old-token")
-    XCTAssertEqual(stored["pinned"], "fresh-token")
-    XCTAssertNil(model.workspaceClients["foreign"])
-  }
-
-  /// Two installs in the same connection generation: the earlier one suspends
-  /// while reading or writing an inference token, and the later one saves its
-  /// credential to the vault meanwhile; its inference binding then waits for
-  /// the earlier binding. The earlier install never overwrites the later
-  /// credential, so the vault and every hosted inference connection present
-  /// the same token. Concurrent requests share one in-flight issuance.
-  @MainActor func testConcurrentInstallsConvergeOnTheVaultCredentialAndShareOneIssuance() async throws {
-    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-    defer { try? FileManager.default.removeItem(at: root) }
-    let store = try MobileStore(file: root.appendingPathComponent("library.json"))
-    let model = MobileModel(store: store, transport: ExecutionTestLibrary())
-    await model.reload()
-    let endpoint = URL(string: "https://other-mac.example.ts.net/wovenmatter")!
-    try await store.journal.upsertWorkspace(.init(id: "foreign", libraryID: "library-b", ownerDeviceID: "mac-b", kind: .mac, name: "Other Mac", endpoint: endpoint))
-    let vault = MemoryWorkspaceVault()
-    model.workspaceCredentials = vault.storage
-    let deviceID = model.state.deviceID
-    let bound = InferenceConnection(id: "bound", name: "bound", provider: "openai-codex", accountID: "account", route: .adapter,
-      baseURL: endpoint.absoluteString, modelID: "m",
-      hostScope: .init(libraryID: "library-b", workspaceID: "foreign", deviceID: deviceID, protocolVersion: LibraryProtocol.version))
-    let inference = MemoryWorkspaceInferenceCredentials(["bound": "old-token"])
-    model.executionCredentialStore = inference
-    model.inferenceConnections = [bound]
-    let first = DirectWorkspaceCredential(endpoint: endpoint, libraryID: "library-b", workspaceID: "foreign", deviceID: deviceID, token: "first-token")
-    var second = first; second.token = "second-token"
-    let installSecond = second
-    await inference.suspendRead()
-    let earlier = Task { try await model.installWorkspaceCredential(first, generation: model.connectionGeneration) }
-    for _ in 0..<2_000 where !(await inference.readSuspended) { try await Task.sleep(for: .milliseconds(5)) }
-    let suspended = await inference.readSuspended
-    XCTAssertTrue(suspended)
-    let overlapping = Task { try await model.installWorkspaceCredential(installSecond, generation: model.connectionGeneration) }
-    // The later install has saved its credential before the earlier read resumes.
-    for _ in 0..<2_000 where vault.credentials["foreign"] != second { try await Task.sleep(for: .milliseconds(5)) }
-    XCTAssertEqual(vault.credentials["foreign"], second)
-    await inference.resumeRead()
-    try await earlier.value
-    try await overlapping.value
-    XCTAssertEqual(vault.credentials["foreign"], second)
-    let stored = await inference.snapshot()
-    XCTAssertEqual(stored["bound"], "second-token")
-
-    // A connection without any token yet: the earlier install's first write
-    // suspends, a later install saves its credential meanwhile, and its
-    // binding, which waits for the earlier one, still writes last.
-    let fresh = InferenceConnection(id: "fresh", name: "fresh", provider: "openai-codex", accountID: "account", route: .adapter,
-      baseURL: endpoint.absoluteString, modelID: "m",
-      hostScope: .init(libraryID: "library-b", workspaceID: "foreign", deviceID: deviceID, protocolVersion: LibraryProtocol.version))
-    model.inferenceConnections = [fresh]
-    var third = first; third.token = "third-token"
-    var fourth = first; fourth.token = "fourth-token"
-    let installThird = third, installFourth = fourth
-    await inference.suspendSave()
-    let writing = Task { try await model.installWorkspaceCredential(installThird, generation: model.connectionGeneration) }
-    for _ in 0..<2_000 where !(await inference.saveSuspended) { try await Task.sleep(for: .milliseconds(5)) }
-    let saving = await inference.saveSuspended
-    XCTAssertTrue(saving)
-    let later = Task { try await model.installWorkspaceCredential(installFourth, generation: model.connectionGeneration) }
-    // The later install has saved its credential before the earlier save resumes.
-    for _ in 0..<2_000 where vault.credentials["foreign"] != fourth { try await Task.sleep(for: .milliseconds(5)) }
-    XCTAssertEqual(vault.credentials["foreign"], fourth)
-    await inference.resumeSave()
-    try await writing.value
-    try await later.value
-    XCTAssertEqual(vault.credentials["foreign"], fourth)
-    let rebound = await inference.snapshot()
-    XCTAssertEqual(rebound["fresh"], "fourth-token")
-
-    // A request made while an issuance is in flight joins it, and receives the
-    // credential the vault holds rather than one already replaced.
-    let replaced = second
-    let shared = Task<DirectWorkspaceCredential, any Error> { replaced }
-    model.workspaceIssuances["foreign"] = (model.connectionGeneration, shared)
-    let joined = try await model.issueWorkspaceCredential("foreign", generation: model.connectionGeneration)
-    XCTAssertEqual(joined, fourth)
-    model.workspaceIssuances.removeValue(forKey: "foreign")
-    vault.credentials["foreign"] = replaced
-    let current = Task<DirectWorkspaceCredential, any Error> { replaced }
-    model.workspaceIssuances["foreign"] = (model.connectionGeneration, current)
-    let same = try await model.issueWorkspaceCredential("foreign", generation: model.connectionGeneration)
-    XCTAssertEqual(same, replaced)
-    // A credential the vault no longer holds is never returned.
-    vault.credentials.removeValue(forKey: "foreign")
-    do { _ = try await model.issueWorkspaceCredential("foreign", generation: model.connectionGeneration); XCTFail("Returned a cleared credential") }
-    catch MobileConnectionError.revoked { }
-    model.workspaceIssuances.removeValue(forKey: "foreign")
   }
 }

@@ -183,11 +183,11 @@ describe("MemoryExtractor", () => {
   };
 
   /**
-   * `memory`: the profile's memory extraction model set as `memory_model = "faux/faux-2"`, as a
-   * legacy pool `background = true` flag on faux-2, or not at all (the active main model).
+   * `memory`: the profile's memory extraction model set as `memory_model = "faux/faux-2"`, or not
+   * at all (the active main model).
    */
   const open = async (
-    memory: "model" | "legacy" | "none",
+    memory: "model" | "none",
     options: { fallbacks?: string; availability?: ModelAvailability } = {},
   ) => {
     const profiles = new ProfileStore(
@@ -197,8 +197,7 @@ describe("MemoryExtractor", () => {
             name: "Default",
             main: "faux/faux-1",
             ...(options.fallbacks ? { fallbacks: [options.fallbacks] } : {}),
-            // The old pool background flag is now just the memory model.
-            ...(memory !== "none" ? { memoryModel: "faux/faux-2" } : {}),
+            ...(memory === "model" ? { memoryModel: "faux/faux-2" } : {}),
           },
         },
       }).modelProfiles,
@@ -384,15 +383,6 @@ describe("MemoryExtractor", () => {
     const before = await manager.registry.memory(bot.id);
     await expect(memory.extract(bot.id)).rejects.toThrow(/usage limit/);
     expect(await manager.registry.memory(bot.id)).toEqual(before);
-  });
-
-  it("reads a legacy pool background flag as the memory model", async () => {
-    await open("legacy");
-    const bot = await manager.create("Ada");
-    await say(bot.id, "I drink tea");
-    await expect(extractorFor().extract(bot.id)).resolves.toBe(2);
-    expect(prompts.map((prompt) => prompt.model)).toEqual(["faux-2"]);
-    expect(manager.memoryModels(bot.id)).toEqual(["faux/faux-2", "faux/faux-1"]);
   });
 
   it("keeps the memory model out of chat and delegation", async () => {

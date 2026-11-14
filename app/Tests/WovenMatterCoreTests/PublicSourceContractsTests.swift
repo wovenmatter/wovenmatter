@@ -1,7 +1,7 @@
 import Foundation
 import Testing
 import WovenMatterCore
-@testable import WovenMatterDashboardStore
+@testable import WovenMatterLibraryStore
 
 @Suite("Public source contracts", .serialized)
 struct PublicSourceContractsTests {
@@ -244,7 +244,7 @@ private final class UsageSourceAccessRecorder: @unchecked Sendable {
   var providerSourceChecks: [String] {
     let providerFragments = [
       "/.codex/", "/.claude/", "/.grok/", "/.cursor/",
-      "/.local/share/opencode/", "/.pi/", "/.openclaw/", "/.hermes/",
+      "/.local/share/opencode/", "/.pi/",
     ]
     return lock.withLock {
       checkedPaths.filter { path in

@@ -3,7 +3,7 @@ import Foundation
 import Testing
 import WovenMatterClient
 import WovenMatterCore
-@testable import WovenMatterDashboardStore
+@testable import WovenMatterLibraryStore
 
 struct ACPStopFailureTests {
     @Test func losingClientAfterFailedStopDoesNotAcknowledgeNativeCancellation() async throws {

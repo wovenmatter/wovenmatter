@@ -55,7 +55,8 @@ synchronize after approval.
 Under **Paired devices**, choose **Unpair device**. Removal is signed by this
 Mac, and every device applies it as soon as it synchronizes. Until every
 workspace has received it, the device stays under **Pending revocations** with
-the workspaces it is **Waiting for**.
+the workspaces it is **Waiting for**. Unpairing on an iPhone or iPad removes
+it the same way, through any of your Macs it can reach.
 
 ## Keep your library in sync
 

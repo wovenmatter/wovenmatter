@@ -34,7 +34,7 @@ struct SettingsRemoteHarnessAccountView: View {
     private var accountContent: some View {
         VStack(alignment: .leading, spacing: 12) {
             if let harness = model.currentHarnesses(for: workspace).first(where: { $0.id == runtimeKind }) {
-                if workspace.kind == .host, harness.source == "system", let path = harness.path {
+                if harness.source == "system", let path = harness.path {
                     SettingsNote("Using \(path) (installed on host)")
                 }
                 HStack {
@@ -66,7 +66,7 @@ struct SettingsRemoteHarnessAccountView: View {
         workspace: RemoteWorkspaceConfiguration
     ) -> some View {
         if harness.installationStatus.map({ $0 != "installed" }) ?? ["cli_missing", "adapter_missing"].contains(harness.state) {
-            Text("Install the harness first").font(.settingsSecondary).foregroundStyle(DashboardPalette.mutedForeground)
+            Text("Install the harness first").font(.settingsSecondary).foregroundStyle(WovenPalette.mutedForeground)
         } else if harness.authenticationStatus != "verified" && harness.authenticationStatus != "configured" {
             if harness.setupMethods.count == 1,
                let method = harness.setupMethods.first {
@@ -88,7 +88,7 @@ struct SettingsRemoteHarnessAccountView: View {
             } else {
                 Text("No supported sign-in methods")
                     .font(.settingsSecondary)
-                    .foregroundStyle(DashboardPalette.mutedForeground)
+                    .foregroundStyle(WovenPalette.mutedForeground)
             }
         } else {
             Button("Remove account") { confirmsRemoval = true }
@@ -132,7 +132,7 @@ struct SettingsRemoteHarnessAccountView: View {
                 }
                 Text(session.message)
                     .font(.settingsSecondary)
-                    .foregroundStyle(DashboardPalette.mutedForeground)
+                    .foregroundStyle(WovenPalette.mutedForeground)
 
                 if let notice = session.notice {
                     SettingsNote(notice)
@@ -172,11 +172,11 @@ struct SettingsRemoteHarnessAccountView: View {
         let label = session.credentialInputLabel ?? "Authorization code"
         if session.credentialInputSecret == true {
             SecureField(label, text: $authorizationCode)
-                .dashboardInput()
+                .wovenInput()
                 .onSubmit { submitAuthorizationCode(workspace) }
         } else {
             TextField(label, text: $authorizationCode)
-                .dashboardInput()
+                .wovenInput()
                 .onSubmit { submitAuthorizationCode(workspace) }
         }
     }

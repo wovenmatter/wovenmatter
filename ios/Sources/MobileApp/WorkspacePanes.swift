@@ -17,11 +17,11 @@ struct LibraryPane: View {
   var body: some View {
     VStack(spacing: 0) {
       HStack {
-        DashboardSearchField(text: $search, prompt: "Search files, links and photos").onSubmit { Task { await load() } }
+        WovenSearchField(text: $search, prompt: "Search files, links and photos").onSubmit { Task { await load() } }
         // Saved files filter as you type; the Library search runs on your Mac.
-        if !model.isStandalone { Button("Search") { Task { await load() } }.buttonStyle(DashboardQuietButtonStyle()).disabled(!model.online || loading) }
+        if !model.isStandalone { Button("Search") { Task { await load() } }.buttonStyle(WovenQuietButtonStyle()).disabled(!model.online || loading) }
       }.padding(.horizontal)
-      DashboardSegmentedSelector(options: ["", "file", "link", "photo"], selection: $kind) {
+      WovenSegmentedSelector(options: ["", "file", "link", "photo"], selection: $kind) {
         ["": "All", "file": "Files", "link": "Links", "photo": "Photos"][$0] ?? $0
       }.accessibilityLabel("Library item kind").padding()
       List {
@@ -38,29 +38,29 @@ struct LibraryPane: View {
             }
           }
         }
-        if let failure { Text(failure).foregroundStyle(DashboardPalette.mutedForeground) }
+        if let failure { Text(failure).foregroundStyle(WovenPalette.mutedForeground) }
         if model.isStandalone && savedArtifacts.isEmpty {
           Text("Pair with your Mac to see its files, links and photos here.")
-            .font(.callout).foregroundStyle(DashboardPalette.mutedForeground).listRowBackground(Color.clear)
+            .font(.callout).foregroundStyle(WovenPalette.mutedForeground).listRowBackground(Color.clear)
             .accessibilityIdentifier("library-standalone")
         }
         ForEach(items) { item in
           VStack(alignment: .leading, spacing: 6) {
             if let url = item.webURL, ["https", "http"].contains(url.scheme?.lowercased() ?? "") {
-              Link(destination: url) { Label(item.title, systemImage: "link") }.tint(DashboardPalette.success)
+              Link(destination: url) { Label(item.title, systemImage: "link") }.tint(WovenPalette.success)
             } else {
               Button { Task { await open(item) } } label: { Label(item.title, systemImage: item.kind == "photo" ? "photo" : "doc") }
                 .disabled(!model.online || !item.available)
             }
-            Text([item.agent, item.workspace].filter { !$0.isEmpty }.joined(separator: " · ")).font(.caption).foregroundStyle(DashboardPalette.mutedForeground)
-            if let error = item.error { Text(error).font(.caption).foregroundStyle(DashboardPalette.mutedForeground) }
+            Text([item.agent, item.workspace].filter { !$0.isEmpty }.joined(separator: " · ")).font(.caption).foregroundStyle(WovenPalette.mutedForeground)
+            if let error = item.error { Text(error).font(.caption).foregroundStyle(WovenPalette.mutedForeground) }
             HStack {
               Button("Open conversation") { Task { await model.selectConversation(item.conversationID) } }
               if !item.available { Button("Retry file") { Task { if await model.perform(.retryLibrary(id: item.id)) { await load() } } }.disabled(!model.online) }
             }.font(.caption).buttonStyle(.borderless)
           }.padding(.vertical, 4)
         }
-        if items.isEmpty && model.online && !loading && failure == nil { Text("No Library items match this search.").foregroundStyle(DashboardPalette.mutedForeground) }
+        if items.isEmpty && model.online && !loading && failure == nil { Text("No Library items match this search.").foregroundStyle(WovenPalette.mutedForeground) }
         if hasMore { Button("Load more") { Task { await load(more: true) } }.disabled(loading) }
       }.listStyle(.plain).scrollContentBackground(.hidden).refreshable { await load() }
     }.mobileNavigationPage("Library").toolbar { if loading { ToolbarItem(placement: .topBarTrailing) { ProgressView() } } }
@@ -108,7 +108,7 @@ struct TrashPane: View {
             Button("Restore") { Task { await restore(item) } }.disabled(!model.online)
           }
         }
-        if model.online && items.isEmpty && !model.executionRecords.values.contains(where: { $0.isTrashed == true }) && failure == nil { Text("Trash is empty.").foregroundStyle(DashboardPalette.mutedForeground) }
+        if model.online && items.isEmpty && !model.executionRecords.values.contains(where: { $0.isTrashed == true }) && failure == nil { Text("Trash is empty.").foregroundStyle(WovenPalette.mutedForeground) }
       }.listStyle(.plain).scrollContentBackground(.hidden).refreshable { await load() }
     }.mobileNavigationPage("Trash").task(id: model.online) { await load() }
   }

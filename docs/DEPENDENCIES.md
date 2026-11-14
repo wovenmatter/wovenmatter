@@ -62,75 +62,39 @@ Maintenance checks both for newer releases; recorded does not mean frozen.
   bots suite through `scripts/with-pinned-node.sh`, which on a Mac with another
   default Node uses the checksummed copy `prepare-default-agent.sh` caches. Linux images follow the
   same stable major (`node:<major>-trixie-slim`); `--pull --no-cache` picks up its
-  newest patch and Debian security updates on every image build. Workspace
-  creation may reuse matching local contents for less than 24 hours; an explicit
-  container update always rebuilds. The workspace
-  image also raises npm to its tested current stable minimum (`>=12.2.2`), since
-  Node's bundled npm may lag. Dependency maintenance reviews that Dockerfile
-  floor; locked installs and the container smoke test validate CLI compatibility.
-  Unused bundled Yarn is removed from the workspace image.
-- **Remote workspace tools** rebuild curl/libcurl 8.23.0 from authenticated
-  Debian unstable source against the stable runtime ABI. This replaces the
-  older stable and stable-backports builds, including the newly disclosed
-  HTTP/2 upload use-after-free affecting curl through 8.22.0.
-  The image copies Python 3.15.2 from the official `python:3.15.2-slim-trixie`
-  multi-architecture image, now published for amd64 and arm64. Its manifest-index
-  digest is recorded in `remote/Dockerfile` to preserve the verified interpreter,
-  native modules, and Debian ABI together. The current image rebuild uses the
-  current official Debian base refresh for both amd64 and arm64, retaining the same
-  Python source checksum, build options, and runtime entry points. This replaces
-  the temporary source build used while the registry lagged the expedited
-  security release.
-  Maintenance checks the current stable Python release, official image recipe,
-  both platform configurations, and image digest; refresh all records together.
-  The final image still upgrades its Debian runtime libraries at build time.
-  Tested minimums are
-  pip 26.3 and setuptools 84.2.1, instead of Debian's older interpreter and
-  vulnerable bundled venv wheel. The SQLite, TLS, and isolated execution paths
-  are exercised on native amd64 and arm64 hosts in the container tests. Local
-  checks without Docker validate the recipe but cannot replace those builds.
-  Archive::Tar 3.14 replaces Debian's affected module in both remote images
-  after its upstream test suite passes. The standalone Executor image applies
-  the same curl and base-package refresh before installing its exact resolved
-  V2 package.
-  They use GitHub CLI's official signed stable APT
-  repository (tested minimum 2.104.0), with the published keyring SHA-256 checked
-  before trusting it. Debian's older CLI retains CVE-2026-48501. Maintenance
-  reviews both the floor and signing-key record against upstream.
-  OpenSSH clients are built from the current 10.6p2 source in a separate image
-  stage: the Dockerfile records the exact release/SHA-256 and verifies its
-  detached signature against the upstream release-key fingerprint. This
-  security exception replaces Debian's client, which retains CVE-2026-60002
-  even in current backports. Maintenance must refresh the source record with
-  every new upstream stable release; image construction runs OpenSSH's unit
-  tests, and container validation checks the installed clients. Build tools
-  and the SSH server are not included in the final image.
+  newest patch and Debian security updates on every image build.
+- **Executor image tools** (`remote/Executor.Dockerfile`) rebuild curl/libcurl
+  8.23.0 from authenticated Debian unstable source against the stable runtime
+  ABI. This replaces the older stable and stable-backports builds, including the
+  newly disclosed HTTP/2 upload use-after-free affecting curl through 8.22.0.
+  Archive::Tar 3.14 replaces Debian's affected module after its upstream test
+  suite passes. The image applies the curl and base-package refresh before
+  installing its exact resolved V2 package.
   Debian stable source packages without timely fixes are rebuilt against the
   stable ABI from authenticated APT source indexes. `remote/security/backports.json`
   records exact source versions, reviewed patch origins, and patch SHA-256 values.
-  The current fixed Debian sources are used for tiff 4.7.2 and acl 2.4.0.
+  The current fixed Debian source is used for acl 2.4.0.
   Util-linux retains Debian stable 2.41.5 with the missing 2.41.6 security fixes
-  and the later stable-branch symlink-guard correction. Stable libxml2, ncurses, libsndfile, libX11, libXrender,
-  and libXtst retain their stable SONAMEs with reviewed Ubuntu or upstream
-  security patches. Package builds run their normal Debian checks and symbol
-  validation; the libxml2 critical fix also has an AddressSanitizer negative
-  control that reproduces CVE-2026-6653 before patching and passes after it.
+  and the later stable-branch symlink-guard correction. Stable ncurses retains its
+  stable SONAME with a reviewed Ubuntu security patch. Package builds run their
+  normal Debian checks and symbol validation.
   Build provenance is retained in the image. Maintenance must remove each local
   rebuild when Debian stable ships an equal or newer fix, refresh exact sources
   and patch checksums together, and validate both amd64 and arm64 images.
   npm 12.2.2 vendors undici 6.29.1, ip-address 10.7.5 and minimatch 10.2.5.
   Its bundled graph still needs the IP parser and glob security repairs below.
-  The workspace image retains the same reviewed current HTTP dispatcher across
-  Mac and Linux tooling, with tuple-header redirect credential stripping covered
-  by provider-free fixtures. It applies the independently locked security selection
-  in `remote/npm-runtime` (tested undici 8.12.4, ip-address 10.7.6 and minimatch 11.0.8), addressing CVE-2026-111997,
-  GHSA-xjj6-f33q-929c and the
-  related denial-of-service advisories. npm ignores overrides for its bundled
-  dependencies, so this replacement is explicit in the image definition.
+  Linux host releases and the bots image use the same
+  reviewed current HTTP dispatcher as Mac tooling, with tuple-header redirect
+  credential stripping covered by provider-free fixtures. They apply the
+  independently locked security selection in `remote/npm-runtime` (tested undici
+  8.12.4, ip-address 10.7.6 and minimatch 11.0.8), addressing CVE-2026-111997,
+  GHSA-xjj6-f33q-929c and the related denial-of-service advisories. npm ignores
+  overrides for its bundled dependencies, so this replacement is explicit in the
+  install recipe.
   Maintenance reviews npm's vendored selections on every refresh and removes
   the replacement once npm ships a secure version. Image construction tests
-  actual npm registry installation and `npm ci`; container validation checks
-  that npm resolves the intended module. The 10.7.6 IP parser also escapes
+  actual npm registry installation and `npm ci`, and checks that npm resolves the
+  intended module. The 10.7.6 IP parser also escapes
   invalid IPv6 characters in HTML error diagnostics; provider-free fixtures retain address classification and verify
   that escaping. Audit both lockfiles separately.
   The Executor image consumes the same npm runtime lock, plus
@@ -319,7 +283,7 @@ Maintenance checks both for newer releases; recorded does not mean frozen.
   live stream and bots relay (`remote/src/websocket.mjs`) load `ws` from the
   Built-in agent's locked graph (`default-agent/package.json` `>=8.22.2`,
   `default-agent/package-lock.json`), the same selection the bots runtime
-  uses. Every host release and workspace image already installs that graph
+  uses. Every host release already installs that graph
   with `npm ci` beside `src/`, as it does for the agent modules `server.mjs`
   loads, so there is one `ws` selection and no second lockfile to keep in
   sync. Maintenance refreshes it with the Built-in agent; `remote/test`

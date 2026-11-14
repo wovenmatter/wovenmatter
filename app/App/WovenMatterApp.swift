@@ -2,7 +2,7 @@ import AppKit
 import Darwin
 import Foundation
 import SwiftUI
-import WovenMatterDashboardStore
+import WovenMatterLibraryStore
 import WovenMatterClient
 import WovenMatterCore
 
@@ -355,8 +355,8 @@ final class WorkspaceProcessLease {
     }
 }
 
-/// Actions belong to the active workspace window, including a Dev client's
-/// local execution surface. Settings and setup windows publish no workspace actions.
+/// Actions belong to the active workspace window. Settings and setup windows
+/// publish no workspace actions.
 struct WorkspaceMenuActions {
     var newChat: @MainActor () -> Void
     var newNote: @MainActor () -> Void
@@ -383,6 +383,7 @@ enum WovenMatterEntryPoint {
         if let status = TailscaleServeSupervisor.dispatch(arguments: CommandLine.arguments) {
             Darwin.exit(status)
         }
+        WindowPreferenceUpgrade.moveRenamedKeys(in: .standard)
         // Dispatch before App.main and its delegate adaptor can initialize
         // NSApplication. A service is not a second instance of the GUI app:
         // LaunchServices and Sparkle must only see the frontend.
@@ -400,7 +401,7 @@ enum WovenMatterEntryPoint {
     @MainActor private static func runBackend() -> Never {
         do {
             try DevelopmentLaunch.validate()
-            KeychainAccess.enforceCentralAuthorization()
+            KeychainAccess.disableUnrequestedPrompts()
             let lease = WorkspaceProcessLease.acquireOrExit()
             try WovenMatterBackendProcess.removeStaleSocketAfterAcquiringLease(
                 LocalExecutionRole.backendSocketURL(workspaceDirectory:
@@ -438,8 +439,8 @@ enum WovenMatterEntryPoint {
 
 struct WorkspaceMenuCommands: Commands {
     @FocusedValue(\.workspaceMenuActions) private var actions
-    @AppStorage(DashboardTheme.storageKey) private var themeRawValue = DashboardTheme.green.rawValue
-    @AppStorage(DashboardSidebarStyle.storageKey) private var sidebarStyleRawValue = DashboardSidebarStyle.defaultStyle.rawValue
+    @AppStorage(WovenTheme.storageKey) private var themeRawValue = WovenTheme.green.rawValue
+    @AppStorage(SidebarStyle.storageKey) private var sidebarStyleRawValue = SidebarStyle.defaultStyle.rawValue
 
     private var dictationTitle: String {
         if DictationModel.shared.isRecording { return "Stop Dictation" }
@@ -470,13 +471,13 @@ struct WorkspaceMenuCommands: Commands {
         }
         CommandMenu("Appearance") {
             Picker("Theme", selection: $themeRawValue) {
-                ForEach(DashboardTheme.allCases) { theme in
+                ForEach(WovenTheme.allCases) { theme in
                     Text(theme.title).tag(theme.rawValue)
                 }
             }
             Divider()
             Picker("Sidebar Layout", selection: $sidebarStyleRawValue) {
-                ForEach(DashboardSidebarStyle.allCases) { style in
+                ForEach(SidebarStyle.allCases) { style in
                     Text(style.title).tag(style.rawValue)
                 }
             }
@@ -501,43 +502,17 @@ struct WovenMatterApp: App {
         if !isRunningUnitTests, LocalExecutionRole.current != .backend {
             HarnessSetupPresentation.shared.prepareForLaunch()
         }
-        if !isRunningUnitTests { KeychainAccess.enforceCentralAuthorization() }
+        if !isRunningUnitTests { KeychainAccess.disableUnrequestedPrompts() }
         workspaceProcessLease = isRunningUnitTests
             ? nil
             : WorkspaceProcessLease.acquireOrExit()
         _applicationModel = State(initialValue: ApplicationModel())
         if !isRunningUnitTests {
-            Self.markUpdateReadyIfRequested()
             if let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String,
                let build = Int(Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "") {
                 ProductAnalyticsModel.markUpdateLaunched(version: version, build: build)
             }
         }
-    }
-
-    private static func markUpdateReadyIfRequested() {
-        guard let flagIndex = CommandLine.arguments.firstIndex(
-            of: "--woven-update-ready"
-        ),
-        CommandLine.arguments.indices.contains(flagIndex + 1) else {
-            return
-        }
-        let marker = URL(
-            fileURLWithPath: CommandLine.arguments[flagIndex + 1]
-        ).standardizedFileURL
-        let updatesDirectory = LocalACPManagedRuntimePaths.applicationSupportDirectory
-            .appending(path: "Updates", directoryHint: .isDirectory)
-            .standardizedFileURL
-        guard marker.deletingLastPathComponent() == updatesDirectory,
-              marker.lastPathComponent.hasPrefix(".ready-") else {
-            return
-        }
-        guard let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String,
-              let buildString = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String,
-              let build = Int(buildString) else { return }
-        // A helper launch confirms replacement; clicking Install alone never does.
-        ProductAnalyticsModel.markUpdateLaunched(marker: marker, version: version, build: build)
-        try? Data().write(to: marker, options: .atomic)
     }
 
     var body: some Scene {
@@ -549,7 +524,7 @@ struct WovenMatterApp: App {
                     DesktopUpdater.shared.start(model: applicationModel)
                     lifecycleDelegate.prepareBrowserTermination = { await WorkspaceAssetSession.shutdown() }
                 }
-                .frame(minWidth: DashboardMetrics.windowMinimumWidth, minHeight: 640)
+                .frame(minWidth: WovenMetrics.windowMinimumWidth, minHeight: 640)
                 .task {
                     while !Task.isCancelled {
                         await RemoteDeviceSetup.handle(model: applicationModel)

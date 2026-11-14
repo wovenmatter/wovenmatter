@@ -14,7 +14,7 @@ private extension NSAttributedString.Key {
     static let noteDatabaseValueID = Self("wovenmatter.note.database-value-id")
 }
 
-struct DashboardNoteTextStatistics: Equatable {
+struct NoteTextStatistics: Equatable {
     let words: Int
     let characters: Int
 
@@ -32,7 +32,7 @@ struct DashboardNoteTextStatistics: Equatable {
 
 @MainActor
 @Observable
-final class DashboardNoteEditorController {
+final class NoteEditorController {
     @ObservationIgnored weak var textView: NSTextView?
     @ObservationIgnored private var document = NoteDocument()
     @ObservationIgnored private var onChange: ((NoteDocument) -> Void)?
@@ -255,7 +255,7 @@ final class DashboardNoteEditorController {
         let range = editableRange(in: textView)
         if range.length == 0 {
             let isHighlighted = textView.typingAttributes[.backgroundColor] != nil
-            applyAttribute(.backgroundColor, value: isHighlighted ? nil : DashboardColors.noteBackground(color))
+            applyAttribute(.backgroundColor, value: isHighlighted ? nil : WovenColors.noteBackground(color))
             return
         }
 
@@ -265,7 +265,7 @@ final class DashboardNoteEditorController {
             isFullyHighlighted = false
             stop.pointee = true
         }
-        applyAttribute(.backgroundColor, value: isFullyHighlighted ? nil : DashboardColors.noteBackground(color))
+        applyAttribute(.backgroundColor, value: isFullyHighlighted ? nil : WovenColors.noteBackground(color))
     }
 
     func recolorSelectedHighlights(_ color: NSColor) {
@@ -281,7 +281,7 @@ final class DashboardNoteEditorController {
               textView.shouldChangeText(in: range, replacementString: nil) else { return }
         storage.beginEditing()
         for highlightedRange in highlightedRanges {
-            storage.addAttribute(.backgroundColor, value: DashboardColors.noteBackground(color), range: highlightedRange)
+            storage.addAttribute(.backgroundColor, value: WovenColors.noteBackground(color), range: highlightedRange)
         }
         storage.endEditing()
         textView.didChangeText()
@@ -452,11 +452,11 @@ final class DashboardNoteEditorController {
     }
 }
 
-struct DashboardNoteEditor: NSViewRepresentable {
+struct NoteEditor: NSViewRepresentable {
     @Environment(\.isEnabled) private var isEnabled
     @Environment(\.colorScheme) private var colorScheme
     @Binding var document: NoteDocument
-    let controller: DashboardNoteEditorController
+    let controller: NoteEditorController
     var dictationEditor: DictationEditor? = nil
     var dictationIdentity = ""
 
@@ -526,11 +526,11 @@ struct DashboardNoteEditor: NSViewRepresentable {
 
     @MainActor
     final class Coordinator: NSObject, NSTextViewDelegate {
-        var parent: DashboardNoteEditor
+        var parent: NoteEditor
         var lastDocument: NoteDocument
         private var applying = false
 
-        init(parent: DashboardNoteEditor) {
+        init(parent: NoteEditor) {
             self.parent = parent
             lastDocument = parent.document
         }
@@ -732,14 +732,14 @@ private final class NoteTextView: NSTextView {
 
     override func viewDidChangeEffectiveAppearance() {
         super.viewDidChangeEffectiveAppearance()
-        insertionPointColor = DashboardColors.noteForeground()
+        insertionPointColor = WovenColors.noteForeground()
         if !didCaptureStandardLinkTextAttributes {
             standardLinkTextAttributes = linkTextAttributes
             didCaptureStandardLinkTextAttributes = true
         }
-        if DashboardColors.isDark(effectiveAppearance) {
+        if WovenColors.isDark(effectiveAppearance) {
             var attributes = standardLinkTextAttributes ?? [:]
-            attributes[.foregroundColor] = DashboardColors.success
+            attributes[.foregroundColor] = WovenColors.success
             linkTextAttributes = attributes
         } else {
             linkTextAttributes = standardLinkTextAttributes
@@ -793,7 +793,7 @@ private final class NoteTextView: NSTextView {
 private enum NoteAttributedDocument {
     static let defaultAttributes: [NSAttributedString.Key: Any] = [
         .font: NSFont.systemFont(ofSize: 14),
-        .foregroundColor: DashboardColors.noteForeground(),
+        .foregroundColor: WovenColors.noteForeground(),
     ]
 
     static func render(_ document: NoteDocument) -> NSAttributedString {
@@ -976,9 +976,9 @@ private enum NoteAttributedDocument {
                 cellBlock.setWidth(1, type: .absoluteValueType, for: .border)
                 cellBlock.setBorderColor(.separatorColor)
                 cellBlock.setWidth(7, type: .absoluteValueType, for: .padding)
-                cellBlock.backgroundColor = color(from: cell.backgroundHex).map(DashboardColors.noteBackground)
+                cellBlock.backgroundColor = color(from: cell.backgroundHex).map(WovenColors.noteBackground)
                     ?? (rowIndex < table.headerRowCount
-                        ? DashboardColors.noteBackground(.controlBackgroundColor) : .clear)
+                        ? WovenColors.noteBackground(.controlBackgroundColor) : .clear)
                 let paragraph = NSMutableParagraphStyle()
                 paragraph.textBlocks = [cellBlock]
                 paragraph.paragraphSpacing = 0
@@ -1016,10 +1016,10 @@ private enum NoteAttributedDocument {
         if run.italic { font = NSFontManager.shared.convert(font, toHaveTrait: .italicFontMask) }
         var attributes: [NSAttributedString.Key: Any] = [
             .font: font,
-            .foregroundColor: DashboardColors.noteForeground(color(from: run.foregroundHex) ?? .labelColor),
+            .foregroundColor: WovenColors.noteForeground(color(from: run.foregroundHex) ?? .labelColor),
         ]
         if run.underline { attributes[.underlineStyle] = NSUnderlineStyle.single.rawValue }
-        if let color = color(from: run.highlightHex) { attributes[.backgroundColor] = DashboardColors.noteBackground(color) }
+        if let color = color(from: run.highlightHex) { attributes[.backgroundColor] = WovenColors.noteBackground(color) }
         if let link = run.link.flatMap(URL.init(string:)) { attributes[.link] = link }
         if let link = run.databaseLink, let encoded = try? JSONEncoder().encode(link) {
             attributes[.noteDatabaseLink] = encoded
@@ -1047,8 +1047,8 @@ private enum NoteAttributedDocument {
                 bold: traits.contains(.boldFontMask),
                 italic: traits.contains(.italicFontMask),
                 underline: (attributes[.underlineStyle] as? Int ?? 0) != 0,
-                foregroundHex: DashboardColors.documentColorHex(attributes[.foregroundColor] as? NSColor),
-                highlightHex: DashboardColors.documentColorHex(attributes[.backgroundColor] as? NSColor),
+                foregroundHex: WovenColors.documentColorHex(attributes[.foregroundColor] as? NSColor),
+                highlightHex: WovenColors.documentColorHex(attributes[.backgroundColor] as? NSColor),
                 link: (attributes[.link] as? URL)?.absoluteString
                     ?? attributes[.link] as? String,
                 databaseLink: databaseLink,
@@ -1181,19 +1181,19 @@ private extension NSTextStorage {
     }
 }
 
-struct DashboardNoteFormattingBar: View {
-    let controller: DashboardNoteEditorController
+struct NoteFormattingBar: View {
+    let controller: NoteEditorController
     @State private var fontFamily = "System"
     @State private var fontSize = 14.0
     @State private var link = ""
-    @State private var highlightColor = DashboardNoteHighlightColor.yellow
+    @State private var highlightColor = NoteHighlightColor.yellow
     @State private var showsLinkEditor = false
 
     private let fontFamilies = ["System", "Helvetica Neue", "Avenir Next", "Georgia", "Menlo"]
     private let fontSizes = [11.0, 12, 13, 14, 16, 18, 21, 24, 30, 36]
 
     var body: some View {
-        DashboardNoteFormattingFlowLayout(horizontalSpacing: 6, verticalSpacing: 6) {
+        NoteFormattingFlowLayout(horizontalSpacing: 6, verticalSpacing: 6) {
             Menu {
                 ForEach(fontFamilies, id: \.self) { family in
                     Button(family) {
@@ -1206,14 +1206,14 @@ struct DashboardNoteFormattingBar: View {
                     }
                 }
             } label: {
-                DashboardNoteFormattingLabel(
+                NoteFormattingLabel(
                     title: fontFamily,
                     accessibilityLabel: "Font"
                 )
             }
             .menuStyle(.button)
             .menuIndicator(.hidden)
-            .buttonStyle(DashboardNoteFormattingButtonStyle())
+            .buttonStyle(NoteFormattingButtonStyle())
             .fixedSize()
             .help("Font")
 
@@ -1225,14 +1225,14 @@ struct DashboardNoteFormattingBar: View {
                     }
                 }
             } label: {
-                DashboardNoteFormattingLabel(
+                NoteFormattingLabel(
                     title: "\(Int(fontSize))",
                     accessibilityLabel: "Font size"
                 )
             }
             .menuStyle(.button)
             .menuIndicator(.hidden)
-            .buttonStyle(DashboardNoteFormattingButtonStyle())
+            .buttonStyle(NoteFormattingButtonStyle())
             .fixedSize()
             .help("Font size")
 
@@ -1244,7 +1244,7 @@ struct DashboardNoteFormattingBar: View {
                 controller.toggleHighlight(highlightColor.nsColor)
             }
 
-            DashboardNoteHighlightColorControl(
+            NoteHighlightColorControl(
                 color: $highlightColor,
                 apply: controller.recolorSelectedHighlights
             )
@@ -1257,14 +1257,14 @@ struct DashboardNoteFormattingBar: View {
                     controller.setParagraphStyle(.numberedList)
                 }
             } label: {
-                DashboardNoteFormattingLabel(
+                NoteFormattingLabel(
                     systemName: "list.bullet",
                     accessibilityLabel: "Lists"
                 )
             }
             .menuStyle(.button)
             .menuIndicator(.hidden)
-            .buttonStyle(DashboardNoteFormattingButtonStyle())
+            .buttonStyle(NoteFormattingButtonStyle())
             .fixedSize()
             .help("Lists")
 
@@ -1276,14 +1276,14 @@ struct DashboardNoteFormattingBar: View {
                     }
                 }
             } label: {
-                DashboardNoteFormattingLabel(
+                NoteFormattingLabel(
                     systemName: "paragraphsign",
                     accessibilityLabel: "Heading and style"
                 )
             }
             .menuStyle(.button)
             .menuIndicator(.hidden)
-            .buttonStyle(DashboardNoteFormattingButtonStyle())
+            .buttonStyle(NoteFormattingButtonStyle())
             .fixedSize()
             .help("Heading and style")
 
@@ -1306,10 +1306,10 @@ struct DashboardNoteFormattingBar: View {
                     .buttonStyle(.plain)
                 }
                 .font(.system(size: 12))
-                .foregroundStyle(DashboardPalette.mutedForeground)
+                .foregroundStyle(WovenPalette.mutedForeground)
                 .padding(.horizontal, 10)
                 .frame(height: 32)
-                .background(DashboardPalette.background.opacity(0.72))
+                .background(WovenPalette.background.opacity(0.72))
                 .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
             }
 
@@ -1326,14 +1326,14 @@ struct DashboardNoteFormattingBar: View {
                 Divider()
                 Button("Delete Table", role: .destructive) { controller.deleteTable() }
             } label: {
-                DashboardNoteFormattingLabel(
+                NoteFormattingLabel(
                     systemName: "tablecells",
                     accessibilityLabel: "Tables"
                 )
             }
             .menuStyle(.button)
             .menuIndicator(.hidden)
-            .buttonStyle(DashboardNoteFormattingButtonStyle())
+            .buttonStyle(NoteFormattingButtonStyle())
             .fixedSize()
             .help("Tables")
         }
@@ -1345,17 +1345,17 @@ struct DashboardNoteFormattingBar: View {
         action: @escaping () -> Void
     ) -> some View {
         Button(action: action) {
-            DashboardNoteFormattingLabel(
+            NoteFormattingLabel(
                 systemName: systemName,
                 accessibilityLabel: help
             )
         }
-        .buttonStyle(DashboardNoteFormattingButtonStyle())
+        .buttonStyle(NoteFormattingButtonStyle())
         .help(help)
     }
 }
 
-private enum DashboardNoteHighlightColor: String, CaseIterable, Identifiable {
+private enum NoteHighlightColor: String, CaseIterable, Identifiable {
     case yellow
     case green
 
@@ -1377,16 +1377,16 @@ private enum DashboardNoteHighlightColor: String, CaseIterable, Identifiable {
         }
     }
 
-    var color: Color { Color(nsColor: DashboardColors.noteBackground(nsColor)) }
+    var color: Color { Color(nsColor: WovenColors.noteBackground(nsColor)) }
 }
 
-private struct DashboardNoteHighlightColorControl: View {
-    @Binding var color: DashboardNoteHighlightColor
+private struct NoteHighlightColorControl: View {
+    @Binding var color: NoteHighlightColor
     let apply: (NSColor) -> Void
 
     var body: some View {
         Menu {
-            ForEach(DashboardNoteHighlightColor.allCases) { option in
+            ForEach(NoteHighlightColor.allCases) { option in
                 Button {
                     apply(option.nsColor)
                     color = option
@@ -1401,7 +1401,7 @@ private struct DashboardNoteHighlightColorControl: View {
             Circle()
                 .fill(color.color)
                 .overlay {
-                    Circle().stroke(DashboardPalette.mutedForeground.opacity(0.28), lineWidth: 1)
+                    Circle().stroke(WovenPalette.mutedForeground.opacity(0.28), lineWidth: 1)
                 }
                 .frame(width: 14, height: 14)
                 .padding(.horizontal, 9)
@@ -1411,13 +1411,13 @@ private struct DashboardNoteHighlightColorControl: View {
         }
         .menuStyle(.button)
         .menuIndicator(.hidden)
-        .buttonStyle(DashboardNoteFormattingButtonStyle())
+        .buttonStyle(NoteFormattingButtonStyle())
         .fixedSize()
         .help("Highlight color")
     }
 }
 
-private struct DashboardNoteFormattingLabel: View {
+private struct NoteFormattingLabel: View {
     var title: String?
     let systemName: String?
     let accessibilityLabel: String
@@ -1444,7 +1444,7 @@ private struct DashboardNoteFormattingLabel: View {
                     .lineLimit(1)
             }
         }
-        .foregroundStyle(DashboardPalette.mutedForeground)
+        .foregroundStyle(WovenPalette.mutedForeground)
         .padding(.horizontal, title == nil ? 8 : 9)
         .frame(height: 32)
         .contentShape(Rectangle())
@@ -1453,8 +1453,8 @@ private struct DashboardNoteFormattingLabel: View {
     }
 }
 
-private struct DashboardNoteFormattingButtonStyle: ButtonStyle {
-    @Environment(\.dashboardTheme) private var theme
+private struct NoteFormattingButtonStyle: ButtonStyle {
+    @Environment(\.wovenTheme) private var theme
     @State private var hovered = false
 
     func makeBody(configuration: Configuration) -> some View {
@@ -1465,7 +1465,7 @@ private struct DashboardNoteFormattingButtonStyle: ButtonStyle {
     }
 }
 
-private struct DashboardNoteFormattingFlowLayout: Layout {
+private struct NoteFormattingFlowLayout: Layout {
     let horizontalSpacing: CGFloat
     let verticalSpacing: CGFloat
 

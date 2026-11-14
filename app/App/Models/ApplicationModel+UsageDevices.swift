@@ -1,7 +1,7 @@
 import Foundation
 import WovenMatterClient
 import WovenMatterCore
-import WovenMatterDashboardStore
+import WovenMatterLibraryStore
 
 extension ApplicationModel {
     /// One Linux machine this Mac reads usage from, under one identity whichever Mac
@@ -59,7 +59,7 @@ extension ApplicationModel {
         let direct = Set(linux.flatMap { [$0.identity.id] + $0.formerIDs })
         let peerSync = libraryHost.peerSync
         // The route list is shared across the library, so it includes this Mac too.
-        let ownDeviceID = try? await dashboardStore?.database.libraryIdentity().hostDeviceID
+        let ownDeviceID = try? await libraryStore?.database.libraryIdentity().hostDeviceID
         var endpoints = peerSync.routes.filter { $0.deviceID != ownDeviceID }.map { route in
             UsageDeviceEndpoint(
                 identity: .init(id: route.deviceID, name: route.name, kind: .mac),
@@ -72,7 +72,7 @@ extension ApplicationModel {
         endpoints += linux.map { device in
             UsageDeviceEndpoint(identity: device.identity, formerIDs: device.formerIDs, fetch: device.fetch)
         }
-        if let database = dashboardStore?.database,
+        if let database = libraryStore?.database,
            let replicated = try? await database.libraryExecutionWorkspaces() {
             endpoints += replicated.filter { $0.kind == .ios && $0.isVisibleInConnections }.map { workspace in
                 UsageDeviceEndpoint.piDurableHistory(

@@ -1,7 +1,7 @@
 import Foundation
 import Testing
 import WovenMatterCore
-@testable import WovenMatterDashboardStore
+@testable import WovenMatterLibraryStore
 @testable import WovenMatterAppFacade
 
 /// A session another machine runs renders through the same window and
@@ -44,7 +44,7 @@ import WovenMatterCore
         return .init(conversationID: conversationID, messages: messages, runs: runs, activities: activities, hasOlderMessages: true)
     }
 
-    private func rendered(_ page: WorkspaceConversationHistoryPage) throws -> DashboardConversationPresentation {
+    private func rendered(_ page: WorkspaceConversationHistoryPage) throws -> ConversationPresentation {
         try #require(ApplicationModel.remotePresentation(page, previous: nil))
     }
 

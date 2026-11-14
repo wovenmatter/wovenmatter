@@ -25,12 +25,12 @@ private struct BotIssueButtons: View {
             switch issue {
             case .signIn:
                 Button("Open Subscriptions & API Keys", action: actions.openConnections)
-                    .buttonStyle(DashboardPrimaryButtonStyle())
+                    .buttonStyle(WovenPrimaryButtonStyle())
                 Button("Change model", action: actions.openSettings)
                     .buttonStyle(SettingsQuietButtonStyle())
             case .limit:
                 Button("Change model", action: actions.openSettings)
-                    .buttonStyle(DashboardPrimaryButtonStyle())
+                    .buttonStyle(WovenPrimaryButtonStyle())
                 Button("Subscriptions & API Keys", action: actions.openConnections)
                     .buttonStyle(SettingsQuietButtonStyle())
             }
@@ -43,8 +43,8 @@ private struct BotIssueButtons: View {
 /// is Woven's own chat UI over its protocol, with Pi Bot's thread behavior.
 struct BotConversationSurface: View {
     @Bindable var bots: BotsModel
-    let panelID: DashboardChatPanelID
-    let target: DashboardBotTarget
+    let panelID: ChatPanelID
+    let target: BotTarget
     let context: String?
     let headerInsets: BotHeaderInsets
     let focusGeneration: Int?
@@ -55,7 +55,7 @@ struct BotConversationSurface: View {
     let onActivate: () -> Void
     let onClosePanel: () -> Void
     let onAddPanel: () -> Void
-    let onRoute: (DashboardBotTarget) -> Void
+    let onRoute: (BotTarget) -> Void
     let onOpenLink: (URL) -> Void
     let onOpenSettings: () -> Void
     var onOpenConnections: () -> Void = {}
@@ -106,7 +106,7 @@ struct BotConversationSurface: View {
                 )
             } else if session.hasLoadedBots {
                 ZStack {
-                    DashboardConversationEmptyState(icon: .bot, title: "This bot was deleted",
+                    ConversationEmptyState(icon: .bot, title: "This bot was deleted",
                         detail: "Restore it from Settings → Bots, or choose another bot.")
                     controls
                 }
@@ -118,7 +118,7 @@ struct BotConversationSurface: View {
     private var unavailable: some View {
         ZStack {
             BotsUnavailableView(machine: session?.machine ?? bots.machines.first { $0.id == target.machineID },
-                                compatible: session?.isCompatible ?? true, onOpenSettings: onOpenSettings)
+                                onOpenSettings: onOpenSettings)
             controls
         }
     }
@@ -130,15 +130,15 @@ struct BotConversationSurface: View {
                 Spacer()
                 HStack {
                     if showsClosePanel {
-                        DashboardPanelControlButton(glyph: .panelRightOpen, accessibilityLabel: "Remove panel", help: "Remove panel", action: onClosePanel)
+                        PanelControlButton(glyph: .panelRightOpen, accessibilityLabel: "Remove panel", help: "Remove panel", action: onClosePanel)
                     }
                     Spacer()
                     if showsAddPanel {
-                        DashboardPanelControlButton(glyph: .panelLeftOpen, accessibilityLabel: "Add panel", help: "Add panel", action: onAddPanel)
+                        PanelControlButton(glyph: .panelLeftOpen, accessibilityLabel: "Add panel", help: "Add panel", action: onAddPanel)
                     }
                 }
                 .padding(.horizontal, 6)
-                .padding(.bottom, DashboardComposer.verticalPadding)
+                .padding(.bottom, ConversationComposer.verticalPadding)
             }
         }
     }
@@ -152,7 +152,7 @@ private struct BotConversationWorkspace: View {
 
     @Bindable var bots: BotMachineSession
     let bot: PiBotSummary
-    let target: DashboardBotTarget
+    let target: BotTarget
     let context: String?
     let headerInsets: BotHeaderInsets
     let focusGeneration: Int?
@@ -163,7 +163,7 @@ private struct BotConversationWorkspace: View {
     let onActivate: () -> Void
     let onClosePanel: () -> Void
     let onAddPanel: () -> Void
-    let onRoute: (DashboardBotTarget) -> Void
+    let onRoute: (BotTarget) -> Void
     let onOpenLink: (URL) -> Void
     @State private var threadWidth: CGFloat = 440
     @State private var dragStartWidth: CGFloat?
@@ -209,7 +209,7 @@ private struct BotConversationWorkspace: View {
             onActivate: onActivate,
             onClosePanel: onClosePanel,
             onAddPanel: onAddPanel,
-            onOpenThread: { onRoute(DashboardBotTarget(machineID: bots.machineID, botID: bot.id, conversationID: $0, showsThreadBesideMain: true)) },
+            onOpenThread: { onRoute(BotTarget(machineID: bots.machineID, botID: bot.id, conversationID: $0, showsThreadBesideMain: true)) },
             onOpenLink: onOpenLink
         )
         .id(BotConversationKey(machineID: bots.machineID, botID: bot.id, conversationID: conversationID))
@@ -221,18 +221,18 @@ private struct BotConversationWorkspace: View {
         if wide {
             actions.append(BotPaneAction(glyph: split ? .maximize : .columns,
                 title: split ? "Expand thread" : "Show beside Main") {
-                onRoute(DashboardBotTarget(machineID: bots.machineID, botID: bot.id, conversationID: conversationID, showsThreadBesideMain: !split))
+                onRoute(BotTarget(machineID: bots.machineID, botID: bot.id, conversationID: conversationID, showsThreadBesideMain: !split))
             })
         }
         actions.append(BotPaneAction(glyph: .close, title: "Back to Main") {
-            onRoute(DashboardBotTarget(machineID: bots.machineID, botID: bot.id))
+            onRoute(BotTarget(machineID: bots.machineID, botID: bot.id))
         })
         return pane(conversationID: conversationID, insets: insets, showsClose: showsClose, showsAdd: showsAdd, compact: split, actions: actions)
     }
 
     private func resizer(available: CGFloat) -> some View {
         Rectangle()
-            .fill(DashboardPalette.foreground.opacity(0.08))
+            .fill(WovenPalette.foreground.opacity(0.08))
             .frame(width: 1)
             .overlay {
                 Color.clear
@@ -258,7 +258,7 @@ private struct BotConversationWorkspace: View {
 }
 
 private struct BotPaneAction: Identifiable {
-    let glyph: DashboardLucideGlyph
+    let glyph: LucideGlyph
     let title: String
     let action: () -> Void
     var id: String { title }
@@ -292,7 +292,7 @@ private struct BotConversationPane: View {
     let onOpenThread: (Int) -> Void
     let onOpenLink: (URL) -> Void
 
-    @Environment(\.dashboardTheme) private var theme
+    @Environment(\.wovenTheme) private var theme
     @Environment(\.workspaceApplicationModel) private var appModel
     @State private var attached: BotConversationController?
     @State private var following = true
@@ -362,19 +362,19 @@ private struct BotConversationPane: View {
         HStack(spacing: 8) {
             Text(isThread ? (thread?.label ?? "Untitled thread") : bot.name)
                 .font(.system(size: 13, weight: .medium))
-                .foregroundStyle(isThread && thread?.title?.isEmpty != false ? DashboardPalette.mutedForeground : DashboardPalette.foreground)
+                .foregroundStyle(isThread && thread?.title?.isEmpty != false ? WovenPalette.mutedForeground : WovenPalette.foreground)
                 .lineLimit(1)
             if isThread {
                 Text(fromThread ? "in a thread" : "in \(bot.name)")
                     .font(.system(size: 12))
-                    .foregroundStyle(DashboardPalette.mutedForeground)
+                    .foregroundStyle(WovenPalette.mutedForeground)
                     .lineLimit(1)
             }
             Spacer(minLength: 8)
             if let profile = bot.profileName, !profile.isEmpty {
                 Text(profile)
                     .font(.system(size: 12))
-                    .foregroundStyle(DashboardPalette.mutedForeground)
+                    .foregroundStyle(WovenPalette.mutedForeground)
                     .lineLimit(1)
                     .help("Profile")
             }
@@ -384,11 +384,11 @@ private struct BotConversationPane: View {
             }
             ForEach(headerActions) { item in
                 Button(action: item.action) {
-                    DashboardLucideIcon(glyph: item.glyph, size: 14)
+                    LucideIcon(glyph: item.glyph, size: 14)
                         .frame(width: 28, height: 28)
                         .contentShape(Rectangle())
                 }
-                .buttonStyle(DashboardIconButtonStyle())
+                .buttonStyle(WovenIconButtonStyle())
                 .accessibilityLabel(item.title)
                 .help(item.title)
             }
@@ -433,8 +433,8 @@ private struct BotConversationPane: View {
             .onScrollPhaseChange { _, phase in
                 isUserScrolling = phase == .interacting || phase == .tracking || phase == .decelerating
             }
-            .onScrollGeometryChange(for: DashboardConversationGeometry.self) { geometry in
-                DashboardConversationGeometry(
+            .onScrollGeometryChange(for: ConversationGeometry.self) { geometry in
+                ConversationGeometry(
                     contentHeight: geometry.contentSize.height,
                     isNearBottom: geometry.visibleRect.maxY >= geometry.contentSize.height - 90,
                     viewportHeight: geometry.containerSize.height
@@ -469,7 +469,7 @@ private struct BotConversationPane: View {
                         following = true
                         jumpToEnd(proxy)
                     }
-                    .buttonStyle(DashboardQuietButtonStyle())
+                    .buttonStyle(WovenQuietButtonStyle())
                     .padding(.trailing, 32)
                     .padding(.bottom, bottomClearance)
                 }
@@ -489,7 +489,7 @@ private struct BotConversationPane: View {
         if controller.loading && entries.isEmpty && state.pending.isEmpty {
             HStack(spacing: 8) {
                 ProgressView().controlSize(.small)
-                Text("Loading…").font(.system(size: 13)).foregroundStyle(DashboardPalette.mutedForeground)
+                Text("Loading…").font(.system(size: 13)).foregroundStyle(WovenPalette.mutedForeground)
             }
             .frame(maxWidth: .infinity)
             .padding(.top, 40)
@@ -498,13 +498,13 @@ private struct BotConversationPane: View {
                 Text("New thread").font(.system(size: 15, weight: .semibold))
                 Text("It picks up from the message you chose.")
                     .font(.system(size: 13))
-                    .foregroundStyle(DashboardPalette.mutedForeground)
+                    .foregroundStyle(WovenPalette.mutedForeground)
             }
             .multilineTextAlignment(.center)
             .frame(maxWidth: .infinity)
             .padding(.top, 12)
         } else if isEmpty {
-            DashboardConversationEmptyState(
+            ConversationEmptyState(
                 icon: isThread ? .gitBranch : .bot,
                 title: isThread ? "New thread" : "Say hello to \(bot.name)",
                 detail: isThread ? "It picks up from the message you chose." : "This is its main conversation. Start a thread from any message."
@@ -565,33 +565,33 @@ private struct BotConversationPane: View {
             if let error = controller.error, error != entries.last?.error {
                 BotDismissibleError(text: error) { controller.error = nil }
                     .frame(maxWidth: 768)
-                    .padding(.horizontal, showsClosePanel || showsAddPanel ? DashboardPanelControlButton.size + 8 : 0)
+                    .padding(.horizontal, showsClosePanel || showsAddPanel ? PanelControlButton.size + 8 : 0)
             }
             HStack(alignment: .bottom, spacing: 8) {
                 Group {
                     if showsClosePanel {
-                        DashboardPanelControlButton(glyph: .panelRightOpen, accessibilityLabel: "Remove panel", help: "Remove panel", action: onClosePanel)
+                        PanelControlButton(glyph: .panelRightOpen, accessibilityLabel: "Remove panel", help: "Remove panel", action: onClosePanel)
                     } else if showsAddPanel {
                         Color.clear
-                            .frame(width: DashboardPanelControlButton.size, height: DashboardPanelControlButton.size)
+                            .frame(width: PanelControlButton.size, height: PanelControlButton.size)
                             .allowsHitTesting(false)
                             .accessibilityHidden(true)
                     }
                 }
-                .padding(.bottom, DashboardComposer.verticalPadding)
+                .padding(.bottom, ConversationComposer.verticalPadding)
                 composer
                     .frame(maxWidth: 768)
                 Group {
                     if showsAddPanel {
-                        DashboardPanelControlButton(glyph: .panelLeftOpen, accessibilityLabel: "Add panel", help: "Add panel", action: onAddPanel)
+                        PanelControlButton(glyph: .panelLeftOpen, accessibilityLabel: "Add panel", help: "Add panel", action: onAddPanel)
                     } else if showsClosePanel {
                         Color.clear
-                            .frame(width: DashboardPanelControlButton.size, height: DashboardPanelControlButton.size)
+                            .frame(width: PanelControlButton.size, height: PanelControlButton.size)
                             .allowsHitTesting(false)
                             .accessibilityHidden(true)
                     }
                 }
-                .padding(.bottom, DashboardComposer.verticalPadding)
+                .padding(.bottom, ConversationComposer.verticalPadding)
             }
         }
         .frame(maxWidth: .infinity)
@@ -630,7 +630,7 @@ private struct BotConversationPane: View {
     private var composer: some View {
         let ready = controller.isReady
         let placeholder = !ready ? "Connecting…" : isThread ? "Reply in thread…" : "Message \(bot.name)…"
-        return DashboardComposer(
+        return ConversationComposer(
             placeholder: placeholder,
             draft: draftBinding,
             attachedNoteTitle: nil,
@@ -725,7 +725,7 @@ private struct BotTimersButton: View {
     var body: some View {
         Button { shown.toggle() } label: {
             HStack(spacing: 4) {
-                DashboardLucideIcon(glyph: .calendarClockControl, size: 14)
+                LucideIcon(glyph: .calendarClockControl, size: 14)
                 Text("\(timers.count)")
                     .font(.system(size: 12))
                     .monospacedDigit()
@@ -734,7 +734,7 @@ private struct BotTimersButton: View {
             .frame(height: 28)
             .contentShape(Rectangle())
         }
-        .buttonStyle(DashboardIconButtonStyle())
+        .buttonStyle(WovenIconButtonStyle())
         .accessibilityLabel(timers.count == 1 ? "1 timer for \(botName)" : "\(timers.count) timers for \(botName)")
         .help(title)
         .popover(isPresented: $shown, arrowEdge: .bottom) {
@@ -744,7 +744,7 @@ private struct BotTimersButton: View {
                         .font(.system(size: 13, weight: .semibold))
                     Text("Each one reaches \(botName) as a message when it fires.")
                         .font(.system(size: 11.5))
-                        .foregroundStyle(DashboardPalette.mutedForeground)
+                        .foregroundStyle(WovenPalette.mutedForeground)
                 }
                 ForEach(timers) { timer in
                     HStack(alignment: .center, spacing: 8) {
@@ -757,18 +757,18 @@ private struct BotTimersButton: View {
                                 else { Text(timer.nextFireAt, format: .dateTime.month(.abbreviated).day().hour().minute()) }
                             }
                             .font(.system(size: 11))
-                            .foregroundStyle(DashboardPalette.mutedForeground)
+                            .foregroundStyle(WovenPalette.mutedForeground)
                         }
                         Spacer(minLength: 8)
                         Button(timer.isPaused ? "Resume" : "Pause") {
                             Task { await tools.pauseTimer(timer, paused: !timer.isPaused) }
                         }
-                        .buttonStyle(DashboardQuietButtonStyle())
+                        .buttonStyle(WovenQuietButtonStyle())
                         Button { Task { await tools.removeTimer(timer) } } label: {
-                            DashboardLucideIcon(glyph: .trash, size: 14)
+                            LucideIcon(glyph: .trash, size: 14)
                                 .frame(width: 24, height: 24)
                         }
-                        .buttonStyle(DashboardIconButtonStyle())
+                        .buttonStyle(WovenIconButtonStyle())
                         .accessibilityLabel("Remove timer: \(timer.instruction)")
                         .help("Remove timer")
                     }
@@ -799,7 +799,7 @@ private struct BotMessageRow: View {
                 if !entry.isUser {
                     Text(botName)
                         .font(.system(size: 12, weight: .medium))
-                        .foregroundStyle(DashboardPalette.foreground)
+                        .foregroundStyle(WovenPalette.foreground)
                         .padding(.horizontal, 4)
                 }
                 if !entry.text.isEmpty {
@@ -814,11 +814,11 @@ private struct BotMessageRow: View {
                 if entry.isStopped {
                     Text("Stopped")
                         .font(.system(size: 11.5))
-                        .foregroundStyle(DashboardPalette.mutedForeground)
+                        .foregroundStyle(WovenPalette.mutedForeground)
                         .padding(.horizontal, 4)
                 }
                 if let error = entry.error {
-                    DashboardInlineError(text: error)
+                    InlineError(text: error)
                     if entry.needsSignIn { BotIssueButtons(issue: .signIn) }
                     else if entry.hitLimit { BotIssueButtons(issue: .limit) }
                 }
@@ -841,25 +841,25 @@ private struct BotMessageRow: View {
                 NSPasteboard.general.clearContents()
                 copied = NSPasteboard.general.setString(entry.text, forType: .string)
             } label: {
-                DashboardLucideIcon(glyph: copied ? .check : .copy, size: 13)
+                LucideIcon(glyph: copied ? .check : .copy, size: 13)
                     .frame(width: 24, height: 24)
                     .contentShape(Rectangle())
             }
-            .buttonStyle(DashboardIconButtonStyle())
+            .buttonStyle(WovenIconButtonStyle())
             .focused($focusedAction, equals: .copy)
             .help("Copy message")
             .accessibilityLabel(copied ? "Message copied" : "Copy message")
             if canStartThread {
                 Button(action: onStartThread) {
                     HStack(spacing: 5) {
-                        DashboardLucideIcon(glyph: .gitBranch, size: 12)
+                        LucideIcon(glyph: .gitBranch, size: 12)
                         Text("Start thread").font(.system(size: 11.5, weight: .medium))
                     }
                     .padding(.horizontal, 6)
                     .frame(height: 24)
                     .contentShape(Rectangle())
                 }
-                .buttonStyle(DashboardIconButtonStyle())
+                .buttonStyle(WovenIconButtonStyle())
                 .focused($focusedAction, equals: .startThread)
             }
         }
@@ -878,12 +878,12 @@ private struct BotThreadReplies: View {
             ForEach(replies) { reply in
                 Button { onOpen(reply.conversationId) } label: {
                     HStack(spacing: 6) {
-                        DashboardLucideIcon(glyph: .messageSquareReply, size: 12)
+                        LucideIcon(glyph: .messageSquareReply, size: 12)
                         Text(reply.label)
                             .font(.system(size: 12, weight: .medium))
                             .lineLimit(1)
                     }
-                    .foregroundStyle(reply.title?.isEmpty == false ? DashboardPalette.success : DashboardPalette.mutedForeground)
+                    .foregroundStyle(reply.title?.isEmpty == false ? WovenPalette.success : WovenPalette.mutedForeground)
                     .padding(.horizontal, 6)
                     .frame(height: 24)
                     .contentShape(Rectangle())
@@ -898,13 +898,13 @@ private struct BotThreadReplies: View {
 private struct BotThreadOrigin: View {
     let entry: PiBotDisplayEntry
     let botName: String
-    @Environment(\.dashboardTheme) private var theme
+    @Environment(\.wovenTheme) private var theme
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("Started from")
                 .font(.system(size: 11.5, weight: .medium))
-                .foregroundStyle(DashboardPalette.mutedForeground)
+                .foregroundStyle(WovenPalette.mutedForeground)
             if entry.isUser {
                 Text(entry.text)
                     .font(.system(size: 13))
@@ -916,7 +916,7 @@ private struct BotThreadOrigin: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(12)
-        .background(theme.palette.themeWhisper, in: RoundedRectangle(cornerRadius: DashboardMetrics.cardRadius, style: .continuous))
+        .background(theme.palette.themeWhisper, in: RoundedRectangle(cornerRadius: WovenMetrics.cardRadius, style: .continuous))
     }
 }
 
@@ -941,7 +941,7 @@ private struct BotStreamingMessage: View {
         VStack(alignment: .leading, spacing: 6) {
             Text(botName)
                 .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(DashboardPalette.foreground)
+                .foregroundStyle(WovenPalette.foreground)
                 .padding(.horizontal, 4)
             if let text, !text.isEmpty {
                 ConversationResponse(content: text, isStreaming: true, showsCopyButton: false)
@@ -952,7 +952,7 @@ private struct BotStreamingMessage: View {
                     ProgressView().controlSize(.small)
                     Text("Thinking…")
                         .font(.system(size: 13))
-                        .foregroundStyle(DashboardPalette.mutedForeground)
+                        .foregroundStyle(WovenPalette.mutedForeground)
                 }
                 .padding(.horizontal, 4)
             }
@@ -969,15 +969,15 @@ private struct BotModelStatusBanner: View {
 
     private var tint: Color {
         switch text.tone {
-        case .success: DashboardPalette.success
-        case .warning: DashboardPalette.warning
-        case .error: DashboardPalette.danger
+        case .success: WovenPalette.success
+        case .warning: WovenPalette.warning
+        case .error: WovenPalette.danger
         }
     }
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 9) {
-            DashboardLucideIcon(glyph: text.tone == .success ? .circleCheck : .alertCircle, size: 15)
+            LucideIcon(glyph: text.tone == .success ? .circleCheck : .alertCircle, size: 15)
                 .foregroundStyle(tint)
                 .alignmentGuide(.firstTextBaseline) { $0[.bottom] - 2 }
             VStack(alignment: .leading, spacing: 2) {
@@ -985,7 +985,7 @@ private struct BotModelStatusBanner: View {
                 ForEach(text.lines, id: \.self) { line in
                     Text(line)
                         .font(.system(size: 12))
-                        .foregroundStyle(DashboardPalette.mutedForeground)
+                        .foregroundStyle(WovenPalette.mutedForeground)
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 if showsFixes { BotIssueButtons(issue: .limit).padding(.top, 4) }
@@ -997,7 +997,7 @@ private struct BotModelStatusBanner: View {
         .padding(.horizontal, 12)
         .padding(.vertical, 9)
         .background(tint.opacity(0.08))
-        .clipShape(RoundedRectangle(cornerRadius: DashboardMetrics.controlRadius, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: WovenMetrics.controlRadius, style: .continuous))
         .accessibilityElement(children: .contain)
     }
 }
@@ -1008,11 +1008,11 @@ struct BotDismissibleError: View {
 
     var body: some View {
         HStack(spacing: 9) {
-            DashboardLucideIcon(glyph: .alertCircle, size: 15)
+            LucideIcon(glyph: .alertCircle, size: 15)
             Text(text).lineLimit(3)
             Spacer(minLength: 8)
             Button(action: onDismiss) {
-                DashboardLucideIcon(glyph: .close, size: 12)
+                LucideIcon(glyph: .close, size: 12)
                     .frame(width: 22, height: 22)
                     .contentShape(Rectangle())
             }
@@ -1020,30 +1020,29 @@ struct BotDismissibleError: View {
             .accessibilityLabel("Dismiss")
         }
         .font(.system(size: 12))
-        .foregroundStyle(DashboardPalette.danger)
+        .foregroundStyle(WovenPalette.danger)
         .padding(.leading, 12)
         .padding(.trailing, 6)
         .padding(.vertical, 6)
-        .background(DashboardPalette.danger.opacity(0.07))
-        .clipShape(RoundedRectangle(cornerRadius: DashboardMetrics.controlRadius, style: .continuous))
+        .background(WovenPalette.danger.opacity(0.07))
+        .clipShape(RoundedRectangle(cornerRadius: WovenMetrics.controlRadius, style: .continuous))
     }
 }
 
 struct BotsUnavailableView: View {
     let machine: BotMachine?
-    var compatible = true
     let onOpenSettings: () -> Void
 
     var body: some View {
         VStack(spacing: 10) {
-            if machine?.state == .starting || (machine?.state == .ready && compatible) {
+            if machine?.state == .starting || machine?.state == .ready {
                 ProgressView().controlSize(.small)
             } else {
-                DashboardLucideIcon(glyph: .bot, size: 20)
+                LucideIcon(glyph: .bot, size: 20)
             }
             Text(title).font(.system(size: 15, weight: .semibold))
             if let detail {
-                Text(detail).font(.system(size: 12.5)).foregroundStyle(DashboardPalette.mutedForeground)
+                Text(detail).font(.system(size: 12.5)).foregroundStyle(WovenPalette.mutedForeground)
                     .multilineTextAlignment(.center).frame(maxWidth: 420)
             }
             Button("Open Bot Settings", action: onOpenSettings).buttonStyle(SettingsQuietButtonStyle())
@@ -1059,7 +1058,7 @@ struct BotsUnavailableView: View {
         switch machine.state {
         case .off: return machine.kind == .thisMac ? "Bots are off on this Mac" : "Bots are off on \(name)"
         case .starting: return "Starting bots on \(name)"
-        case .ready: return compatible ? "Connecting…" : "Update bots on \(name)"
+        case .ready: return "Connecting…"
         case .unreachable: return "\(name) is unavailable"
         case .needsUpdate: return "Update everything to use these bots"
         case .failed: return "Bots on \(name) could not start"
@@ -1068,7 +1067,6 @@ struct BotsUnavailableView: View {
 
     private var detail: String? {
         guard let machine else { return "Connect it in Settings → Apple Devices or Settings → Workspaces, then try again." }
-        if machine.state == .ready, !compatible { return "Its bots runtime is older than this app can use." }
         if machine.state == .off, machine.kind == .thisMac { return "Turn them on in Settings → Bots." }
         return machine.message
     }

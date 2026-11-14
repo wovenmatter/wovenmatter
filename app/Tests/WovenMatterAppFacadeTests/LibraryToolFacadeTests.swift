@@ -3,7 +3,7 @@ import Foundation
 import Testing
 import WovenMatterCore
 import WovenMatterClient
-@testable import WovenMatterDashboardStore
+@testable import WovenMatterLibraryStore
 @testable import WovenMatterAppFacade
 
 @MainActor @Suite(.serialized)
@@ -79,14 +79,21 @@ struct LibraryToolFacadeTests {
                 _ = try? await mac.add(deviceID: id, kind: .ios, name: name, publicKey: key, endpoints: [])
             })
         let offer = try await auth.createOffer(endpoint: URL(string: "https://fixture.ts.net/wovenmatter")!)
-        var pair = PairRequest(token: offer.payload.token, deviceID: phone.deviceID, deviceName: "Member phone", metadata: .init(kind: .iPhone))
+        var pair = PairRequest(token: offer.payload.token, deviceID: phone.deviceID, deviceName: "Member phone", metadata: .init(kind: .iPhone),
+                               requiresConfirmation: true)
         pair.memberPublicKey = phone.publicKey
         let paired = await api.handle(.init(method: "POST", target: "/v1/pair", headers: [:], body: try JSONEncoder().encode(pair)))
         #expect(paired.status == 200)
-        #expect(await mac.member(phone.deviceID)?.kind == .ios)
         // The reply names the Mac's member device ID: the phone's audience.
         let reply = try JSONDecoder().decode(PairResponse.self, from: paired.body)
         #expect(reply.hostDeviceID == mac.identity.deviceID)
+        // Confirming the pairing signs the phone's member entry.
+        #expect(await mac.member(phone.deviceID) == nil)
+        let confirmed = await api.handle(.init(method: "POST", target: "/v1/pair/confirm", headers: [
+            "authorization": "Bearer " + reply.credential, "x-woven-protocol": String(LibraryProtocol.version),
+            "x-woven-workspace": reply.workspaceID], body: Data()))
+        #expect(confirmed.status == 200)
+        #expect(await mac.member(phone.deviceID)?.kind == .ios)
         func hello() async throws -> Int {
             var headers = try phone.signer.headers(method: "GET", target: "/wovenmatter/v1/hello", audience: mac.identity.deviceID)
             headers["X-Woven-Protocol"] = String(LibraryProtocol.version)
@@ -148,41 +155,65 @@ struct LibraryToolFacadeTests {
         #expect(await mac.member(phoneID)?.publicKey == restored)
     }
 
-    @Test func httpEndpointUsesPairedIdentityAndCurrentRevocation() async throws {
+    @Test func httpEndpointUsesTheSignedMemberAndCurrentMembership() async throws {
         let fixture = try await FacadeFixture(); defer { fixture.remove() }
         let caller = try await importPhone(fixture)
         let auth = try DeviceAuthentication(fileURL: fixture.directory.appending(path: "test-devices.json"))
-        let offer = try await auth.createOffer(endpoint: URL(string: "https://fixture.ts.net/wovenmatter")!)
         let workspaceID = try await fixture.database.libraryID()
-        let paired = try await auth.pair(.init(token: offer.payload.token, deviceID: fixture.device,
-            deviceName: "Fixture phone", protocolVersion: LibraryProtocol.version), workspaceID: workspaceID)
+        let mac = MemberDirectory(database: fixture.database, identity: MemberIdentity(
+            deviceID: try await fixture.database.libraryIdentity().hostDeviceID, kind: .mac, key: .init()), cacheLifetime: 0)
+        try await mac.ensureSelf(name: "Mac", endpoints: [])
+        let phone = MemberIdentity(deviceID: fixture.device, kind: .ios, key: .init())
+        _ = try await mac.add(deviceID: phone.deviceID, kind: .ios, name: "Fixture phone", publicKey: phone.publicKey, endpoints: [])
         let api = DeviceAPI(database: fixture.database, authentication: auth,
-            commands: fixture.model.libraryCommands, isActive: { true })
-        let call: GatewayJSONValue = .object(["jsonrpc": .string("2.0"), "id": .number(1),
+            commands: fixture.model.libraryCommands, isActive: { true }, members: mac)
+        let call: JSONValue = .object(["jsonrpc": .string("2.0"), "id": .number(1),
             "method": .string("tools/call"), "params": .object(["name": .string("woven_notes_list"), "arguments": .object([:])])])
+        let body = try JSONEncoder().encode(call)
         var headers = ["x-woven-protocol": String(LibraryProtocol.version), "x-woven-workspace": workspaceID,
             "x-woven-conversation-id": caller, "x-woven-enabled-groups": "notes"]
-        #expect(await api.handle(.init(method: "POST", target: "/mcp", headers: headers,
-            body: try JSONEncoder().encode(call))).status == 401)
+        func send(_ target: String, signed: Bool = true) async throws -> LibraryHTTPResponse {
+            var request = headers
+            if signed {
+                for (name, value) in try phone.signer.headers(method: "POST", target: target, body: body, audience: mac.identity.deviceID) {
+                    request[name.lowercased()] = value
+                }
+            }
+            return await api.handle(.init(method: "POST", target: target, headers: request, body: body))
+        }
+        #expect(try await send("/mcp", signed: false).status == 401)
+        // A pairing bearer reaches nothing but its own confirmation and unpair.
+        let offer = try await auth.createOffer(endpoint: URL(string: "https://fixture.ts.net/wovenmatter")!)
+        let paired = try await auth.pairConfirmed(.init(token: offer.payload.token, deviceID: UUID().uuidString.lowercased(),
+            deviceName: "Bearer phone", protocolVersion: LibraryProtocol.version), workspaceID: workspaceID)
         headers["authorization"] = "Bearer " + paired.credential
-        let accepted = await api.handle(.init(method: "POST", target: "/wovenmatter/mcp", headers: headers,
-            body: try JSONEncoder().encode(call)))
+        #expect(try await send("/mcp", signed: false).status == 401)
+        headers.removeValue(forKey: "authorization")
+        let accepted = try await send("/wovenmatter/mcp")
         #expect(accepted.status == 200)
-        let result = try JSONDecoder().decode(GatewayJSONValue.self, from: accepted.body)
+        let result = try JSONDecoder().decode(JSONValue.self, from: accepted.body)
         #expect(result.objectValue?["result"]?.objectValue?["isError"] == .bool(false))
+        // A newer phone that knows one more tool group keeps the tools of the
+        // groups this Mac knows; the unknown name alone enables nothing.
+        headers["x-woven-enabled-groups"] = "notes,holograms"
+        let newer = try await send("/wovenmatter/mcp")
+        #expect(newer.status == 200)
+        #expect(try JSONDecoder().decode(JSONValue.self, from: newer.body).objectValue?["result"]?.objectValue?["isError"] == .bool(false))
+        headers["x-woven-enabled-groups"] = "holograms"
+        let unknownOnly = try await send("/wovenmatter/mcp")
+        #expect(unknownOnly.status == 200)
+        #expect(try JSONDecoder().decode(JSONValue.self, from: unknownOnly.body).objectValue?["result"]?.objectValue?["isError"] != .bool(false))
+        headers["x-woven-enabled-groups"] = "notes"
         headers["x-woven-conversation-id"] = try await fixture.database.createFixtureLocalACPSession(runtimeKind: .codex, title: "Unrelated Mac chat", ownerDeviceID: UUID())
-        #expect(await api.handle(.init(method: "POST", target: "/mcp", headers: headers,
-            body: try JSONEncoder().encode(call))).status == 403)
+        #expect(try await send("/mcp").status == 403)
         headers["x-woven-conversation-id"] = caller
-        try await auth.revoke(deviceID: fixture.device)
-        #expect(await api.handle(.init(method: "POST", target: "/mcp", headers: headers,
-            body: try JSONEncoder().encode(call))).status == 401)
+        _ = try await mac.remove(phone.deviceID)
+        #expect(try await send("/mcp").status == 401)
         #expect(await fixture.recorder.deliveries.isEmpty)
     }
 
     @Test func libraryToolRevocationFencesAutomationEvenAfterReenable() async throws {
         let fixture = try await FacadeFixture(); defer { fixture.remove() }
-        fixture.model.clientExecutionDirectory = fixture.directory
         let caller = try await fixture.database.createFixtureLocalACPSession(runtimeKind: .codex, title: "Mac caller", ownerDeviceID: UUID())
         try await fixture.database.setSessionTools(.init(enabled: [.browser, .computer]), sessionID: caller)
         let call = WovenMatterToolRequest(arguments: ["browser", "call", "--json", "{\"action\":\"tabs\"}"])

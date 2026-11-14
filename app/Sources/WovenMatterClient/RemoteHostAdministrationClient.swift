@@ -16,23 +16,23 @@ public struct RemoteHostAdministrationClient: Sendable {
     }
 
     /// `remote-host.sh status` plus `library` and `memberIdentity`.
-    public func status() async throws -> GatewayJSONValue {
+    public func status() async throws -> JSONValue {
         try await client.request("v1/host/status", timeout: 60)
     }
 
     public func logs(lines: Int = 200) async throws -> String {
         guard (1...1_000).contains(lines) else { throw RemoteWorkspaceClientError.invalidResponse("Choose between 1 and 1,000 log lines.") }
-        let value: GatewayJSONValue = try await client.request("v1/host/logs", query: [.init(name: "lines", value: String(lines))], timeout: 60)
+        let value: JSONValue = try await client.request("v1/host/logs", query: [.init(name: "lines", value: String(lines))], timeout: 60)
         return value.objectValue?["logs"]?.stringValue ?? ""
     }
 
     /// Accepted with 202; the host restarts its service a moment later.
     public func restart() async throws {
-        let _: GatewayJSONValue = try await client.request("v1/host/restart", method: "POST")
+        let _: JSONValue = try await client.request("v1/host/restart", method: "POST")
     }
 
     /// Bytes, or nil for no cap.
-    public func configureBots(poolBytes: Int64?, diskBytes: Int64?) async throws -> GatewayJSONValue {
+    public func configureBots(poolBytes: Int64?, diskBytes: Int64?) async throws -> JSONValue {
         let body: [String: Any] = ["poolBytes": poolBytes.map { $0 as Any } ?? NSNull(), "diskBytes": diskBytes.map { $0 as Any } ?? NSNull()]
         return try await client.request("v1/host/bots-configure", method: "POST", body: JSONSerialization.data(withJSONObject: body, options: [.sortedKeys]))
     }
@@ -42,12 +42,12 @@ public struct RemoteHostAdministrationClient: Sendable {
     public func update(bundle: Data, fingerprint: String, roles: String? = nil) async throws {
         var query = [URLQueryItem(name: "fingerprint", value: fingerprint)]
         if let roles { query.append(.init(name: "roles", value: roles)) }
-        let _: GatewayJSONValue = try await client.request("v1/host/update", method: "POST", query: query, body: bundle,
+        let _: JSONValue = try await client.request("v1/host/update", method: "POST", query: query, body: bundle,
             headers: ["Content-Type": "application/octet-stream"], timeout: 600)
     }
 
     /// `{state: none|running|succeeded|failed, result?, error?}`.
-    public func updateState() async throws -> GatewayJSONValue {
+    public func updateState() async throws -> JSONValue {
         try await client.request("v1/host/update")
     }
 
@@ -55,25 +55,12 @@ public struct RemoteHostAdministrationClient: Sendable {
     /// can no longer administer it over Tailscale SSH. The new value is never
     /// sent to a signed caller.
     public func rotateInstallerBearer() async throws {
-        let _: GatewayJSONValue = try await client.request("v1/host/installer-bearer", method: "POST")
+        let _: JSONValue = try await client.request("v1/host/installer-bearer", method: "POST")
     }
 
     /// Hands the host the signed member records (`LibraryMemberAdoption`).
-    public func adoptMembers(_ adoption: Data) async throws -> GatewayJSONValue {
+    public func adoptMembers(_ adoption: Data) async throws -> JSONValue {
         try await client.request("v1/host/members/adopt", method: "POST", body: adoption)
-    }
-
-    /// A device grant issued by the host itself (Mac members administer every
-    /// Linux host), for a phone that has no member key yet.
-    public func provisionExecutionDevice(workspace: ExecutionWorkspace, deviceID: String, name: String,
-                                         scopes: [String] = ["execution", "inference"]) async throws -> ExecutionCredential {
-        struct Payload: Encodable {
-            let libraryID: String; let workspaceID: String; let ownerDeviceID: String
-            let deviceID: String; let name: String; let workspaceName: String; let endpoint: URL?; let scopes: [String]
-        }
-        return try await client.request("v1/execution/devices", method: "POST", body: JSONEncoder().encode(Payload(
-            libraryID: workspace.libraryID, workspaceID: workspace.id, ownerDeviceID: workspace.ownerDeviceID, deviceID: deviceID,
-            name: name, workspaceName: workspace.name, endpoint: workspace.endpoint, scopes: scopes)))
     }
 
     /// The bundle a signed update uploads, built from this Mac's own app as an
@@ -81,7 +68,7 @@ public struct RemoteHostAdministrationClient: Sendable {
     public static func hostBundle(root: URL? = nil) throws -> (bundle: Data, fingerprint: String) {
         let root = try root ?? RemoteWorkspaceSSHClient.loadDeploymentRoot()
         try RemoteHostLibrary.require(root: root, architecture: nil)
-        let deployment = try RemoteWorkspaceDeployment(root: root, kind: .host)
+        let deployment = try RemoteWorkspaceDeployment(root: root)
         return (try RemoteHostBundle.archive(root: root, deployment: deployment), deployment.fingerprint)
     }
 }

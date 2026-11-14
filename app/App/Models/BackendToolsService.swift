@@ -3,8 +3,8 @@ import WovenMatterCore
 
 extension BackendApplicationService {
     func executeToolsMutation(_ mutation: BackendToolsMutation) async throws -> BackendApplicationResult {
-        guard let tools = model.agentTools, let database = model.dashboardStore?.database else {
-            throw ApplicationModelError.dashboardStoreUnavailable
+        guard let tools = model.agentTools, let database = model.libraryStore?.database else {
+            throw ApplicationModelError.libraryStoreUnavailable
         }
         do {
             switch mutation {

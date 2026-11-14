@@ -1,0 +1,305 @@
+import Foundation
+#if canImport(SQLite3)
+import SQLite3
+#else
+import CSQLite
+#endif
+import WovenMatterCore
+
+extension WorkspaceDatabaseConnection {
+  public func libraryIdentity() throws -> LibraryIdentity {
+    try withLock { try libraryIdentityUnlocked() }
+  }
+  func libraryIdentityUnlocked() throws -> LibraryIdentity {
+    let ids = try libraryIDsUnlocked("SELECT host_device_id FROM library_identity WHERE singleton = 1", bindings: [])
+    guard let deviceID = ids.first else { throw WorkspaceDatabaseError.corruptRow }
+    return try LibraryIdentity(libraryID: libraryIDUnlocked(), hostDeviceID: deviceID)
+  }
+  public func libraryExecutionWorkspaces() throws -> [ExecutionWorkspace] {
+    try withLock {
+      try federationValuesUnlocked("SELECT payload FROM execution_workspaces ORDER BY id", as: ExecutionWorkspace.self, skippingUnreadable: true)
+    }
+  }
+  public func libraryExecutionOwners() throws -> [String: String] {
+    try withLock {
+      let statement = try prepareUnlocked("SELECT id,workspace_id FROM execution_conversations")
+      defer { sqlite3_finalize(statement) }
+      var values: [String: String] = [:]
+      while true {
+        let code = sqlite3_step(statement)
+        if code == SQLITE_DONE { return values }
+        guard code == SQLITE_ROW else { throw stepError() }
+        values[try text(statement, column: 0)] = try text(statement, column: 1)
+      }
+    }
+  }
+  public func libraryExecutionOwner(conversationID: String) throws -> String? {
+    try withLock { try libraryIDsUnlocked("SELECT workspace_id FROM execution_conversations WHERE id=?", bindings: [conversationID]).first }
+  }
+  public func libraryConversationExecutionWorkspace(conversationID: String) throws -> ExecutionWorkspace? {
+    try withLock {
+      guard let id = try libraryIDsUnlocked("SELECT workspace_id FROM execution_conversations WHERE id=?", bindings: [conversationID]).first else { return nil }
+      return try federationWorkspaceUnlocked(id)
+    }
+  }
+  public func libraryExecutionOriginCursor(workspaceID: String) throws -> Int64 {
+    try withLock { try federationScalarUnlocked("SELECT COALESCE(MAX(origin_sequence),0) FROM execution_journal WHERE workspace_id=?", bindings: [workspaceID]) }
+  }
+  /// Strict, unlike the registry list: callers take nil as "not registered"
+  /// and may then register or accept a row under this identity, which must
+  /// never replace a newer member's row this build cannot read.
+  func federationWorkspaceUnlocked(_ id: String) throws -> ExecutionWorkspace? {
+    try federationValuesUnlocked("SELECT payload FROM execution_workspaces WHERE id = ?", bindings: [id], as: ExecutionWorkspace.self).first
+  }
+  public func registerExecutionWorkspace(_ request: LibraryWorkspaceRegistration, deviceID: String) throws -> ExecutionWorkspace {
+    try transaction {
+      var value = request.workspace
+      let identity = try libraryIdentityUnlocked()
+      guard value.libraryID == (try libraryIDUnlocked()) else { throw federationError("library_mismatch", "This workspace belongs to another library.") }
+      guard federationID(value.id), federationID(value.ownerDeviceID), (value.ownerDeviceID == deviceID || deviceID == identity.hostDeviceID),
+            value.executionDeviceID.map(federationID) ?? true,
+            value.developmentInstance.map({ !$0.isEmpty && $0.count <= 64 && $0.allSatisfy { $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "-") } }) ?? true,
+            !value.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, value.name.utf8.count <= 256,
+            value.journalDeviceIDs.count <= 64, value.journalDeviceIDs.allSatisfy(federationID),
+            value.capabilities.count <= 64, value.capabilities.allSatisfy({ $0.utf8.count <= 120 }),
+            value.macAccess.map({ access in value.kind == .mac && access.items.count <= 32
+              && access.items.keys.allSatisfy { $0.utf8.count <= 64 } && access.appName.utf8.count <= 120 }) ?? true,
+            value.folderOwnerID.map({ value.kind == .mac && ExecutionWorkspace.isValidFolderOwnerID($0) }) ?? true,
+            value.endpoint.map({ PairingPayload.isValidExecutionEndpoint($0, linux: value.kind == .linux) }) ?? true else {
+        throw federationError("invalid_workspace", "Only a workspace owner can register its identity and grants with a private Tailscale endpoint.")
+      }
+      value.journalDeviceIDs = Array(Set(value.journalDeviceIDs)).sorted()
+      value.capabilities = Array(Set(value.capabilities)).sorted()
+      if let existing = try federationWorkspaceUnlocked(value.id) {
+        guard existing.ownerDeviceID == value.ownerDeviceID, existing.kind == value.kind, (existing.executionDeviceID == nil || existing.executionDeviceID == value.executionDeviceID) else {
+          throw federationError("wrong_owner", "The execution owner and workspace kind cannot change.")
+        }
+        value.revision = existing.revision
+        if value == existing { return existing }
+        guard !existing.deleted, request.expectedRevision == existing.revision else {
+          throw federationError("revision_conflict", "The workspace changed or was deleted. Refresh before updating it.")
+        }
+        value.revision += 1
+      } else {
+        guard value.kind != .linux || deviceID == identity.hostDeviceID else {
+          throw federationError("wrong_owner", "A Linux workspace is added on the Mac that sets it up.")
+        }
+        guard request.expectedRevision == nil, !value.deleted else {
+          throw federationError("revision_conflict", "A new workspace cannot replace or resurrect an existing identity.")
+        }
+        value.revision = 1
+      }
+      let statement = try prepareUnlocked("INSERT INTO execution_workspaces(id,owner_device_id,revision,deleted,payload) VALUES (?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET revision=excluded.revision,deleted=excluded.deleted,payload=excluded.payload")
+      defer { sqlite3_finalize(statement) }
+      try bind(value.id, at: 1, to: statement); try bind(value.ownerDeviceID, at: 2, to: statement)
+      sqlite3_bind_int64(statement, 3, value.revision); sqlite3_bind_int(statement, 4, value.deleted ? 1 : 0)
+      try bindJSON(value, at: 5, to: statement); try stepDone(statement)
+      return value
+    }
+  }
+  func federationAuthorizedWorkspaceUnlocked(_ id: String, deviceID: String) throws -> ExecutionWorkspace {
+    guard let workspace = try federationWorkspaceUnlocked(id), !workspace.deleted,
+          workspace.kind == .linux ? workspace.executionDeviceID == deviceID
+            : workspace.ownerDeviceID == deviceID && (workspace.executionDeviceID == nil || workspace.executionDeviceID == deviceID) else {
+      throw federationError("wrong_owner", "This device is not authorized to publish this workspace's history or saved artifacts.")
+    }
+    return workspace
+  }
+  public func ingestExecutionJournal(_ batch: ExecutionJournalBatch, deviceID: String) throws -> ExecutionJournalBatchResult {
+    try transaction {
+      let libraryID = try libraryIDUnlocked()
+      guard batch.libraryID == libraryID else { throw federationError("library_mismatch", "History belongs to another library.") }
+      guard batch.entries.count <= FederationProtocol.maximumBatchEntries,
+            try JSONEncoder().encode(batch).count <= FederationProtocol.maximumBatchBytes else {
+        throw federationError("too_large", "Upload execution history in smaller batches.")
+      }
+      for entry in batch.entries {
+        let workspace = try federationAuthorizedWorkspaceUnlocked(entry.workspaceID, deviceID: deviceID)
+        guard federationID(entry.eventID), federationID(entry.conversationID), entry.originSequence > 0,
+              entry.runID.map(federationID) ?? true, try JSONEncoder().encode(entry).count <= FederationProtocol.maximumEntryBytes else {
+          throw federationError("invalid_event", "Execution history requires stable UUID identities and bounded records.")
+        }
+        let fingerprint = try libraryFingerprint(entry)
+        let lookup = try prepareUnlocked("SELECT event_id,workspace_id,origin_sequence,fingerprint FROM execution_journal WHERE event_id = ? OR (workspace_id = ? AND origin_sequence = ?)")
+        defer { sqlite3_finalize(lookup) }
+        try bind(entry.eventID, at: 1, to: lookup); try bind(entry.workspaceID, at: 2, to: lookup); sqlite3_bind_int64(lookup, 3, entry.originSequence)
+        let code = sqlite3_step(lookup)
+        if code == SQLITE_ROW {
+          guard try text(lookup, column: 0) == entry.eventID, try text(lookup, column: 1) == entry.workspaceID,
+                sqlite3_column_int64(lookup, 2) == entry.originSequence, try blob(lookup, column: 3) == fingerprint else {
+            throw federationError("event_conflict", "An event identity or origin sequence was reused with different content.")
+          }
+          continue
+        }
+        guard code == SQLITE_DONE else { throw stepError() }
+        let current = try federationScalarUnlocked("SELECT COALESCE(MAX(origin_sequence),0) FROM execution_journal WHERE workspace_id = ?", bindings: [entry.workspaceID])
+        guard entry.originSequence == current + 1 else {
+          throw federationError("origin_gap", "Upload the missing execution history before acknowledging later records. Expected sequence \(current + 1).")
+        }
+        try projectExecutionJournalUnlocked(entry, workspace: workspace)
+        let insert = try prepareUnlocked("INSERT INTO execution_journal(event_id,workspace_id,origin_sequence,fingerprint,payload) VALUES (?,?,?,?,?)")
+        defer { sqlite3_finalize(insert) }
+        try bind(entry.eventID, at: 1, to: insert); try bind(entry.workspaceID, at: 2, to: insert)
+        sqlite3_bind_int64(insert, 3, entry.originSequence); try bind(fingerprint, at: 4, to: insert)
+        try bindJSON(entry, at: 5, to: insert); try stepDone(insert)
+      }
+      return try ExecutionJournalBatchResult(libraryID: libraryID, acceptedEventIDs: batch.entries.map(\.eventID), cursor: federationJournalCursorUnlocked())
+    }
+  }
+  public func executionJournal(after cursor: Int64, limit: Int = 200) throws -> ExecutionJournalPage {
+    try transaction {
+      let current = try federationJournalCursorUnlocked()
+      guard cursor >= 0, cursor <= current else { throw federationError("invalid_cursor", "The library journal cursor is invalid.") }
+      let statement = try prepareUnlocked("SELECT cursor,payload,workspace_id,origin_sequence FROM execution_journal WHERE cursor > ? ORDER BY cursor LIMIT ?")
+      defer { sqlite3_finalize(statement) }
+      sqlite3_bind_int64(statement, 1, cursor); sqlite3_bind_int(statement, 2, Int32(max(1, min(limit, 200))))
+      var entries: [ExecutionJournalEntry] = []; var next = cursor; var bytes = 0
+      var skipped: [ExecutionJournalSkip] = []
+      while true {
+        let code = sqlite3_step(statement)
+        if code == SQLITE_DONE { break }
+        guard code == SQLITE_ROW else { throw stepError() }
+        let payload = try blob(statement, column: 1)
+        guard let entry = try? JSONDecoder().decode(ExecutionJournalEntry.self, from: payload) else {
+          // Peer sync stores a newer member's record as it is. This build
+          // cannot serve it, so the page names its position from the row's
+          // own columns and the cursor moves past it: the reader neither
+          // stalls on this page nor sees an unexplained gap in the sequence.
+          skipped.append(.init(workspaceID: try text(statement, column: 2), originSequence: sqlite3_column_int64(statement, 3)))
+          next = sqlite3_column_int64(statement, 0)
+          continue
+        }
+        if !entries.isEmpty && bytes + payload.count > 4 * 1_024 * 1_024 { break }
+        entries.append(entry)
+        next = sqlite3_column_int64(statement, 0); bytes += payload.count
+      }
+      SkippedValues.report(skipped.count, "unreadable execution journal row(s) a newer member wrote")
+      return try ExecutionJournalPage(libraryID: libraryIDUnlocked(), cursor: next, entries: entries, hasMore: next < current,
+                                      skipped: skipped.isEmpty ? nil : skipped)
+    }
+  }
+  func federationJournalCursorUnlocked() throws -> Int64 {
+    try federationScalarUnlocked("SELECT COALESCE(MAX(cursor),0) FROM execution_journal")
+  }
+  public func libraryFederatedTranscript(conversationID: String, before: String? = nil) throws -> LibraryTranscript? {
+    try withLock {
+      guard try federationConversationUnlocked(conversationID) != nil else { return nil }
+      let messageCount = try transcriptMessageCountUnlocked(conversationID)
+      let activityCount = try transcriptActivityCountUnlocked(conversationID)
+      var end = FederationTranscriptCursor(messages: messageCount, activities: activityCount)
+      if let before {
+        guard before.utf8.count <= 2_048, let data = Data(base64Encoded: before),
+              let cursor = try? JSONDecoder().decode(FederationTranscriptCursor.self, from: data),
+              cursor.messages >= 0, cursor.messages <= messageCount,
+              cursor.activities >= 0, cursor.activities <= activityCount else {
+          throw federationError("invalid_cursor", "This transcript cursor is no longer valid.")
+        }
+        end = cursor
+      }
+      // Page both message and activity history without dropping older tool
+      // output: at most 80 of each before the cursor, read in one window.
+      let messageOffset = max(0, end.messages - 80), activityOffset = max(0, end.activities - 80)
+      let messages = try transcriptMessagesUnlocked(conversationID, offset: messageOffset, limit: end.messages - messageOffset)
+      let activities = try transcriptActivitiesUnlocked(conversationID, offset: activityOffset, limit: end.activities - activityOffset)
+      var messageStart = end.messages; var activityStart = end.activities; var bytes = 0
+      while messageStart > messageOffset {
+        let size = try JSONEncoder().encode(messages[messageStart - 1 - messageOffset]).count
+        // Legacy native sessions may already contain an oversized individual
+        // message. Always make progress for one item rather than returning an
+        // unchanged cursor forever; normal incoming events are bounded at 1 MiB.
+        if bytes + size > 4 * 1_024 * 1_024, messageStart < end.messages { break }
+        bytes += size; messageStart -= 1
+      }
+      while activityStart > activityOffset {
+        let size = try JSONEncoder().encode(activities[activityStart - 1 - activityOffset]).count
+        if bytes + size > 8 * 1_024 * 1_024, bytes > 0 { break }
+        bytes += size; activityStart -= 1
+      }
+      let older = messageStart > 0 || activityStart > 0
+        ? try JSONEncoder().encode(FederationTranscriptCursor(messages: messageStart, activities: activityStart)).base64EncodedString() : nil
+      return LibraryTranscript(conversationID: conversationID,
+        messages: Array(messages[(messageStart - messageOffset)...]), activities: Array(activities[(activityStart - activityOffset)...]),
+        activeRunID: try libraryIDsUnlocked("SELECT active_run_id FROM execution_conversations WHERE id=? AND active_run_id IS NOT NULL",
+                                            bindings: [conversationID]).first,
+        olderCursor: older, runs: try transcriptRunsUnlocked(conversationID))
+    }
+  }
+  func federationConversationUnlocked(_ id: String) throws -> LibraryConversation? {
+    guard var value = try federationValuesUnlocked("SELECT f.conversation FROM execution_conversations f JOIN conversations c ON c.id=f.id WHERE f.id=? AND f.deleted=0 AND c.deleted_at IS NULL AND c.is_archived=0", bindings: [id], as: LibraryConversation.self).first else { return nil }
+    let statement = try prepareUnlocked("SELECT title,folder_id,is_pinned,updated_at FROM conversations WHERE id=?")
+    defer { sqlite3_finalize(statement) }
+    try bind(id, at: 1, to: statement)
+    guard sqlite3_step(statement) == SQLITE_ROW else { throw WorkspaceDatabaseError.corruptRow }
+    value.title = try text(statement, column: 0); value.folderID = optionalText(statement, column: 1)
+    value.isPinned = sqlite3_column_int(statement, 2) != 0; value.updatedAt = try text(statement, column: 3)
+    return value
+  }
+  /// `skippingUnreadable` is for lists read for display or routing: these
+  /// tables are replicated between members, so a newer build's row can sit in
+  /// this database, and one such row must not fail the list for every other
+  /// row. A lookup that decides a write keeps the default and throws.
+  func federationValuesUnlocked<Value: Decodable>(_ sql: String, bindings: [String] = [], as type: Value.Type,
+                                                  skippingUnreadable: Bool = false) throws -> [Value] {
+    let statement = try prepareUnlocked(sql); defer { sqlite3_finalize(statement) }
+    for (index, value) in bindings.enumerated() { try bind(value, at: Int32(index + 1), to: statement) }
+    var result: [Value] = [], unreadable = 0
+    while true {
+      let code = sqlite3_step(statement)
+      if code == SQLITE_DONE { break }
+      guard code == SQLITE_ROW else { throw stepError() }
+      let payload = try blob(statement, column: 0)
+      do { result.append(try JSONDecoder().decode(type, from: payload)) }
+      catch {
+        guard skippingUnreadable else { throw error }
+        unreadable += 1
+      }
+    }
+    if skippingUnreadable { SkippedValues.report(unreadable, "unreadable \(type) row(s) a newer member wrote") }
+    return result
+  }
+  func federationScalarUnlocked(_ sql: String, bindings: [String] = []) throws -> Int64 {
+    let statement = try prepareUnlocked(sql); defer { sqlite3_finalize(statement) }
+    for (index, value) in bindings.enumerated() { try bind(value, at: Int32(index + 1), to: statement) }
+    guard sqlite3_step(statement) == SQLITE_ROW else { throw stepError() }
+    return sqlite3_column_int64(statement, 0)
+  }
+  func federationID(_ value: String) -> Bool {
+    guard let id = UUID(uuidString: value) else { return false }
+    return id.uuidString.lowercased() == value
+  }
+  func federationError(_ code: String, _ message: String) -> LibraryAPIError { LibraryAPIError(code: code, message: message) }
+}
+
+extension WorkspaceDatabase {
+  public func libraryExecutionOwners() async throws -> [String: String] {
+    try await read { try $0.libraryExecutionOwners() }
+  }
+  public func libraryExecutionOwner(conversationID: String) async throws -> String? {
+    try await read { try $0.libraryExecutionOwner(conversationID: conversationID) }
+  }
+  public func libraryConversationExecutionWorkspace(conversationID: String) async throws -> ExecutionWorkspace? {
+    try await read { try $0.libraryConversationExecutionWorkspace(conversationID: conversationID) }
+  }
+  public func libraryExecutionOriginCursor(workspaceID: String) async throws -> Int64 {
+    try await read { try $0.libraryExecutionOriginCursor(workspaceID: workspaceID) }
+  }
+  public func libraryIdentity() async throws -> LibraryIdentity { try await read { try $0.libraryIdentity() } }
+  public func libraryExecutionWorkspaces() async throws -> [ExecutionWorkspace] { try await read { try $0.libraryExecutionWorkspaces() } }
+  public func registerExecutionWorkspace(_ request: LibraryWorkspaceRegistration, deviceID: String) async throws -> ExecutionWorkspace {
+    try await write { try $0.registerExecutionWorkspace(request, deviceID: deviceID) }
+  }
+  public func ingestExecutionJournal(_ batch: ExecutionJournalBatch, deviceID: String) async throws -> ExecutionJournalBatchResult {
+    try await write { try $0.ingestExecutionJournal(batch, deviceID: deviceID) }
+  }
+  public func executionJournal(after cursor: Int64, limit: Int = 200) async throws -> ExecutionJournalPage {
+    try await read { try $0.executionJournal(after: cursor, limit: limit) }
+  }
+  public func libraryFederatedTranscript(conversationID: String, before: String? = nil) async throws -> LibraryTranscript? {
+    try await read { try $0.libraryFederatedTranscript(conversationID: conversationID, before: before) }
+  }
+}
+
+private struct FederationTranscriptCursor: Codable {
+  var messages: Int
+  var activities: Int
+}

@@ -204,7 +204,7 @@ enum NativeHarnessArchive {
     }
 }
 
-/// Archive downloads and ordinary Hermes HTTP requests reject redirects, so
+/// Archive downloads and ordinary archive HTTP requests reject redirects, so
 /// authentication never travels to a different endpoint. Large downloads are
 /// bounded on disk; ordinary responses retain their existing in-memory limits.
 final class NativeArchiveDownloadDelegate: NSObject, URLSessionDownloadDelegate, @unchecked Sendable {

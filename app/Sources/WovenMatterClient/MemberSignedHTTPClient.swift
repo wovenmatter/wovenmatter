@@ -97,9 +97,6 @@ public enum MemberSignedHTTPError: Error, Equatable, Sendable, LocalizedError {
     return .http(status: status, code: reply?.code ?? reply?.error,
                  message: reply?.message ?? reply?.error ?? "The device answered \(status).")
   }
-  /// The peer does not accept this device's signature (not yet a member there,
-  /// or an older version that only knows bearer grants).
-  public var isUnauthorized: Bool { if case .http(let status, _, _) = self { return status == 401 || status == 403 }; return false }
   public var errorDescription: String? {
     switch self {
     case .insecureEndpoint: "Other devices are reached only at private tailnet HTTPS addresses."

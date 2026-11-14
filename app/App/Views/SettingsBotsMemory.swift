@@ -118,7 +118,7 @@ private struct BotSettingsFactForm: View {
     var body: some View {
         HStack(spacing: 8) {
             TextField(onCancel == nil ? "Something this bot should remember" : "", text: $value)
-                .dashboardInput().accessibilityLabel(label).focused($focused)
+                .wovenInput().accessibilityLabel(label).focused($focused)
                 .onChange(of: value) { _, text in if text.count > 1000 { value = String(text.prefix(1000)) } }
                 .onSubmit { save() }.onExitCommand { onCancel?() }
             Button(saving ? "Saving…" : action) { save() }

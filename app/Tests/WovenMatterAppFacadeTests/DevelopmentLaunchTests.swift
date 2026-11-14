@@ -3,7 +3,7 @@ import LibraryClient
 import Foundation
 import Testing
 import WovenMatterCore
-@testable import WovenMatterDashboardStore
+@testable import WovenMatterLibraryStore
 @testable import WovenMatterAppFacade
 
 @MainActor @Suite(.serialized)
@@ -11,7 +11,7 @@ struct DevelopmentLaunchTests {
 
     @Test func developmentNamesAreExplicitAndDistinctAcrossInstances() {
         #expect(DevelopmentLaunch.deviceName(host: "Mac", mode: nil, instance: nil) == "Mac")
-        for mode in [DevelopmentLaunch.Mode.client, .snapshot, .live] {
+        for mode in [DevelopmentLaunch.Mode.snapshot, .live] {
             #expect(DevelopmentLaunch.deviceName(host: "Mac", mode: mode, instance: "review") == "Mac (Dev) · review")
         }
         #expect(DevelopmentLaunch.deviceName(host: "Mac", mode: .snapshot, instance: "a") !=
@@ -32,13 +32,13 @@ struct DevelopmentLaunchTests {
     }
 
     @Test func liveHostUsesTheSameExclusiveLeaseAsProduction() throws {
-        for mode in [DevelopmentLaunch.Mode.client, .snapshot, .live] {
+        for mode in [DevelopmentLaunch.Mode.snapshot, .live] {
             let frontend = LocalExecutionRole.resolve(arguments: ["app"], developmentMode: mode)
             let backend = LocalExecutionRole.resolve(arguments: ["app", "--backend"], developmentMode: mode)
             #expect(frontend == .frontend && !frontend.ownsExecution)
             #expect(backend == .backend && backend.ownsExecution)
             #expect(frontend.leaseFileName != backend.leaseFileName)
-            let isolated = URL(fileURLWithPath: "/tmp/isolated-client-test")
+            let isolated = URL(fileURLWithPath: "/tmp/isolated-development-test")
             #expect(WorkspaceProcessLease.defaultFileURL(isolatedDirectory: isolated, role: frontend)
                 != WorkspaceProcessLease.defaultFileURL(isolatedDirectory: isolated, role: backend))
         }
@@ -70,7 +70,7 @@ struct DevelopmentLaunchTests {
 
     @Test func duplicateLaunchCanOnlyActivateItsOwnInstance() {
         let production = WorkspaceProcessLeaseOwner(processIdentifier: 1, bundleIdentifier: "wovenmatter.desktop", bundlePath: "/production")
-        let own = WorkspaceProcessLeaseOwner(processIdentifier: 2, bundleIdentifier: "wovenmatter.desktop.dev.a.client", bundlePath: "/own")
+        let own = WorkspaceProcessLeaseOwner(processIdentifier: 2, bundleIdentifier: "wovenmatter.desktop.dev.a.snapshot", bundlePath: "/own")
         var activated: [Int32] = []
         func candidate(_ owner: WorkspaceProcessLeaseOwner) -> WorkspaceProcessLeaseActivationCandidate {
             .init(owner: owner, isTerminated: { false }, activate: { activated.append(owner.processIdentifier); return true })

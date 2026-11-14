@@ -113,9 +113,9 @@ public struct WorkspaceToolSettings: Codable, Equatable, Sendable {
 public struct WorkspaceSessionTools: Codable, Equatable, Sendable {
   public var executorProfiles: Set<String>?
   private var selectedGroups: Set<WorkspaceToolGroup>
-  /// Goals and visual replies stay available even in older saved selections.
+  /// Goals and visual replies are always enabled.
   public var enabled: Set<WorkspaceToolGroup> {
-    get { selectedGroups.union([.goals, .html]) }
+    get { selectedGroups }
     set { selectedGroups = newValue.union([.goals, .html]) }
   }
   public init(enabled: Set<WorkspaceToolGroup> = Set(WorkspaceToolGroup.allCases.filter { $0 != .executor && $0 != .computer }), executorProfiles: Set<String>? = nil) {
@@ -155,7 +155,8 @@ public struct WorkspaceSessionCreationConfiguration: Codable, Equatable, Sendabl
   public var model: String?
   public var thinking: String?
   public var permission: String?
-  /// Missing in older reservations/tasks: their chosen permission stays explicit.
+  /// Whether the permission is the product default rather than a choice. Nil, as in
+  /// tasks made from a phone's calendar draft, means a choice.
   public var usesProductPermissionDefault: Bool?
   public var selectionWorkspace: String?
   public var nativeWorkingDirectory: String?

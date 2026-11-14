@@ -35,15 +35,20 @@ public struct InferenceHostScope: Codable, Sendable, Equatable {
 /// holds the key. `audience` is the host's member device ID.
 public enum InferenceMemberSigning {
   public typealias Sign = @Sendable (_ request: inout URLRequest, _ audience: String) throws -> Void
-  private final class Box: @unchecked Sendable { let lock = NSLock(); var sign: Sign? }
+  private final class Box: @unchecked Sendable { let lock = NSLock(); var sign: Sign?; var hosts: [String: String] = [:] }
   private static let box = Box()
   public static func install(_ sign: Sign?) { box.lock.withLock { box.sign = sign } }
+  /// The serving member of each workspace, by workspace ID, for connections
+  /// saved without `hostDeviceID`.
+  public static func updateHosts(_ hosts: [String: String]) { box.lock.withLock { box.hosts = hosts } }
   public static var current: Sign? { box.lock.withLock { box.sign } }
-  /// True when requests for `scope` are signed rather than carrying a grant.
+  /// True when requests for `scope` can be signed.
   public static func signs(_ scope: InferenceHostScope?) -> Bool { signer(for: scope) != nil }
   /// The signer to use for `scope`, when both a signer and the host's identity are known.
   static func signer(for scope: InferenceHostScope?) -> (Sign, String)? {
-    guard let audience = scope?.hostDeviceID, !audience.isEmpty, let sign = current else { return nil }
+    guard let scope else { return nil }
+    let (sign, known) = box.lock.withLock { (box.sign, box.hosts[scope.workspaceID]) }
+    guard let sign, let audience = scope.hostDeviceID.flatMap({ $0.isEmpty ? nil : $0 }) ?? known else { return nil }
     return (sign, audience)
   }
 }
@@ -230,6 +235,8 @@ public enum InferenceCatalog {
 public enum InferenceError: Error, LocalizedError, Sendable, Equatable {
   case invalidConfiguration, invalidEndpoint, adapterRequired, missingCredential, modelUnavailable, accountUnavailable, singleSubscriptionAccount
   case malformedResponse, interrupted, responseTooLarge, http(Int), connectionFailed, unsupportedImageInput
+  /// A hosted connection whose host this device cannot sign for yet.
+  case hostNotReachable
   public var errorDescription: String? {
     switch self {
     case .invalidConfiguration: "Choose a connection, account, and model before starting this agent."
@@ -247,6 +254,7 @@ public enum InferenceError: Error, LocalizedError, Sendable, Equatable {
     case .http(let status) where status == 402 || status == 429: "The inference connection has reached a usage or rate limit. Retry later or choose another connection explicitly."
     case .http(let status): "The inference endpoint returned HTTP \(status)."
     case .connectionFailed: "The inference endpoint could not be reached. Check connectivity and, for a private host, Tailscale."
+    case .hostNotReachable: "This device can't reach the inference host yet. It can once it syncs with your devices; pair again if it doesn't."
     }
   }
 }

@@ -5,8 +5,9 @@ import Crypto
 #endif
 import Foundation
 import Testing
+import WorkspaceFixtures
 import WovenMatterCore
-@testable import WovenMatterDashboardStore
+@testable import WovenMatterLibraryStore
 
 /// A paired Mac for fixtures: canonical UUIDs, a signing key and a local store.
 struct PeerIdentityFixture {
@@ -36,7 +37,7 @@ struct PairedMacIdentityTests {
   private func pair(_ requester: (DeviceAuthentication, PeerIdentityFixture), with issuer: (DeviceAuthentication, PeerIdentityFixture)) async throws -> (atIssuer: String, atRequester: String) {
     await requester.0.useIdentity(requester.1.own); await issuer.0.useIdentity(issuer.1.own)
     let offer = try await issuer.0.createOffer(endpoint: issuer.1.route.endpoint)
-    let response = try await issuer.0.pair(.init(token: offer.payload.token, deviceID: requester.1.id, deviceName: "Mac",
+    let response = try await issuer.0.pairConfirmed(.init(token: offer.payload.token, deviceID: requester.1.id, deviceName: "Mac",
       metadata: .init(kind: .mac), purpose: PairingPurpose.peerMac), workspaceID: issuer.1.library)
     let principal = try await issuer.0.authenticate(bearer: response.credential)
     let context = try await issuer.0.joinContext(for: principal)
@@ -50,16 +51,6 @@ struct PairedMacIdentityTests {
       acknowledgedRevocations: join.reciprocalRevocations, own: requester.1.own)
     return (response.credential, reciprocal)
   }
-  /// The learned-peer handshake, performed directly against the target store.
-  private func handshake(_ requester: PeerIdentityFixture, at target: (DeviceAuthentication, PeerIdentityFixture)) async throws -> String {
-    let request = PairedMacChallengeRequest(requesterDeviceID: requester.id, requesterLibraryID: requester.library,
-      targetDeviceID: target.1.id, targetLibraryID: target.1.library)
-    let challenge = try await target.0.issueChallenge(request, route: target.1.route, own: target.1.own)
-    let operation = UUID().uuidString.lowercased()
-    let signature = try requester.key.signature(for: PairedMacHandshake.statement(challenge: challenge, request: request, operationID: operation))
-    return try await target.0.completeHandshake(.init(challengeID: challenge.challengeID, request: request, operationID: operation, signature: signature), own: target.1.own).token
-  }
-
   @Test func bearersAuthenticateOnlyAtTheMacThatIssuedThem() async throws {
     defer { try? FileManager.default.removeItem(at: directory) }
     let a = PeerIdentityFixture(), b = PeerIdentityFixture(), c = PeerIdentityFixture()
@@ -68,63 +59,20 @@ struct PairedMacIdentityTests {
     let thirdTokens = try await pair((third, c), with: (air, a))
     // A phone paired with the Air.
     let offer = try await air.createOffer(endpoint: a.route.endpoint)
-    let phone = try await air.pair(.init(token: offer.payload.token, deviceID: UUID().uuidString.lowercased(), deviceName: "Phone",
+    let phone = try await air.pairConfirmed(.init(token: offer.payload.token, deviceID: UUID().uuidString.lowercased(), deviceName: "Phone",
       metadata: .init(kind: .iPhone)), workspaceID: a.library)
     try await mini.mergeMembership(air.peerMembership(), own: b.own)
     // The Mini knows C as an admitted Mac and the phone by name, but no bearer
     // the Air issued or minted authenticates at the Mini.
     #expect(await mini.isActiveMac(c.id))
-    #expect(await mini.rosterName(for: phone.deviceID) == "Phone")
     for bearer in [thirdTokens.atIssuer, thirdTokens.atRequester, phone.credential] {
       await #expect(throws: LibraryAPIError.self) { try await mini.authenticate(bearer: bearer) }
     }
-    // C proves its own key directly to the Mini and receives a Mini-local grant.
-    let local = try await handshake(c, at: (mini, b))
-    let principal = try await mini.authenticate(bearer: local)
-    #expect(await mini.isAuthorizedPeer(principal))
     // A phone bearer that later claims Mac metadata never becomes a peer.
     let phonePrincipal = try await air.authenticate(bearer: phone.credential, metadata: .init(kind: .mac))
     #expect(phonePrincipal.kind == .mac)
     #expect(await !air.isAuthorizedPeer(phonePrincipal))
     await #expect(throws: LibraryAPIError.self) { try await air.joinContext(for: phonePrincipal) }
-  }
-
-  @Test func handshakesRejectForgedSendersReplaysAndRestartedChallenges() async throws {
-    defer { try? FileManager.default.removeItem(at: directory) }
-    let a = PeerIdentityFixture(), b = PeerIdentityFixture(), c = PeerIdentityFixture(), stranger = PeerIdentityFixture()
-    let air = try store("air"), mini = try store("mini"), third = try store("third")
-    try await pair((mini, b), with: (air, a)); try await pair((third, c), with: (air, a))
-    try await mini.mergeMembership(air.peerMembership(), own: b.own)
-    let request = PairedMacChallengeRequest(requesterDeviceID: c.id, requesterLibraryID: c.library, targetDeviceID: b.id, targetLibraryID: b.library)
-    // An unknown Mac cannot even obtain a challenge.
-    await #expect(throws: LibraryAPIError.self) {
-      try await mini.issueChallenge(.init(requesterDeviceID: stranger.id, requesterLibraryID: stranger.library, targetDeviceID: b.id, targetLibraryID: b.library),
-        route: b.route, own: b.own)
-    }
-    // A forged sender signature fails, and its challenge is consumed anyway.
-    let forged = try await mini.issueChallenge(request, route: b.route, own: b.own)
-    let operation = UUID().uuidString.lowercased()
-    let bad = try stranger.key.signature(for: PairedMacHandshake.statement(challenge: forged, request: request, operationID: operation))
-    await #expect(throws: LibraryAPIError.self) {
-      try await mini.completeHandshake(.init(challengeID: forged.challengeID, request: request, operationID: operation, signature: bad), own: b.own)
-    }
-    let good = try c.key.signature(for: PairedMacHandshake.statement(challenge: forged, request: request, operationID: operation))
-    await #expect(throws: LibraryAPIError.self) {
-      try await mini.completeHandshake(.init(challengeID: forged.challengeID, request: request, operationID: operation, signature: good), own: b.own)
-    }
-    // A valid handshake cannot be replayed.
-    let challenge = try await mini.issueChallenge(request, route: b.route, own: b.own)
-    let signature = try c.key.signature(for: PairedMacHandshake.statement(challenge: challenge, request: request, operationID: operation))
-    let handshake = PairedMacHandshake(challengeID: challenge.challengeID, request: request, operationID: operation, signature: signature)
-    _ = try await mini.completeHandshake(handshake, own: b.own)
-    await #expect(throws: LibraryAPIError.self) { try await mini.completeHandshake(handshake, own: b.own) }
-    // A restarted Mac never honors a challenge issued before the restart.
-    let pending = try await mini.issueChallenge(request, route: b.route, own: b.own)
-    let restarted = try store("mini")
-    let late = try c.key.signature(for: PairedMacHandshake.statement(challenge: pending, request: request, operationID: operation))
-    await #expect(throws: LibraryAPIError.self) {
-      try await restarted.completeHandshake(.init(challengeID: pending.challengeID, request: request, operationID: operation, signature: late), own: b.own)
-    }
   }
 
   @Test func distinctConcurrentUnpairsAllRevokeAndOnlyAFreshPairingAcknowledgingThemSurvives() async throws {
@@ -218,7 +166,7 @@ struct PairedMacIdentityTests {
     let air = try store("air"), mini = try store("mini"), third = try store("third")
     await air.useIdentity(a.own)
     let offer = try await air.createOffer(endpoint: a.route.endpoint)
-    let response = try await air.pair(.init(token: offer.payload.token, deviceID: b.id, deviceName: "Mini", metadata: .init(kind: .mac),
+    let response = try await air.pairConfirmed(.init(token: offer.payload.token, deviceID: b.id, deviceName: "Mini", metadata: .init(kind: .mac),
       purpose: PairingPurpose.peerMac), workspaceID: a.library)
     let principal = try await air.authenticate(bearer: response.credential)
     let context = try await air.joinContext(for: principal)
@@ -231,16 +179,9 @@ struct PairedMacIdentityTests {
     let changed = PairedMacJoin(route: b.route, returnCredential: secret(), publicKey: b.publicKey, acknowledgedRevocations: context,
       subjectSignature: join.subjectSignature, reciprocalRevocations: [])
     await #expect(throws: LibraryAPIError.self) { try await air.admitJoin(principal, join: changed, own: a.own) }
-    // A Mac admitted only through a learned handshake has no join authority.
+    // A Mac learned through another Mac's membership holds no grant here.
     try await pair((third, c), with: (mini, b))
     try await air.mergeMembership(mini.peerMembership(), own: a.own)
-    let learned = try await air.authenticate(bearer: handshake(c, at: (air, a)))
-    #expect(await air.isAuthorizedPeer(learned))
-    await #expect(throws: LibraryAPIError.self) { try await air.joinContext(for: learned) }
-    await #expect(throws: LibraryAPIError.self) {
-      try await air.admitJoin(learned, join: .init(route: c.route, returnCredential: secret(), publicKey: c.publicKey, acknowledgedRevocations: [],
-        subjectSignature: try c.subjectSignature(issuer: a, acknowledged: []), reciprocalRevocations: []), own: a.own)
-    }
     // A pin is never replaced while that Mac is still admitted.
     await #expect(throws: LibraryAPIError.self) {
       try await air.enrollPeer(route: c.route, token: secret(), publicKey: b.publicKey,
@@ -250,77 +191,6 @@ struct PairedMacIdentityTests {
     // Restarting keeps the admission, the pin and the peer grant.
     let reopened = try store("air")
     #expect(await reopened.isAuthorizedPeer(principal))
-  }
-
-  @Test func routeProofsUseOnlyThePinnedKeyAndAcceptAnAuthenticatedRename() async throws {
-    defer { try? FileManager.default.removeItem(at: directory) }
-    let a = PeerIdentityFixture(), b = PeerIdentityFixture(), revoked = PeerIdentityFixture()
-    let air = try store("air"), mini = try store("mini")
-    let tokens = try await pair((air, a), with: (mini, b))
-    final class Recorder: @unchecked Sendable { var bearers: [String?] = []; var signer: PeerSelf?; var name = "Renamed Mini" }
-    let recorder = Recorder()
-    let network = PairedMacNetwork(request: { _, path, bearer, _, body in
-      recorder.bearers.append(bearer)
-      guard path == "v1/peers/proof", let body, let signer = recorder.signer else { throw URLError(.badServerResponse) }
-      let challenge = try JSONDecoder().decode(PairedMacProofChallenge.self, from: body)
-      let route = PairedMacRoute(deviceID: b.id, libraryID: b.library, endpoint: b.route.endpoint, name: recorder.name)
-      if signer.deviceID == b.id { return try JSONEncoder().encode(await mini.peerProof(challenge, route: route, own: signer)) }
-      return try JSONEncoder().encode(PairedMacProof(route: route, signature: try signer.key.signature(for: PairedMacProof.statement(challenge, route: route))))
-    })
-    let pin = try #require(await air.pin(for: b.id))
-    recorder.signer = b.own
-    let verified = try await network.verify(b.route, deviceID: a.id, token: tokens.atIssuer, pin: pin)
-    #expect(verified.name == "Renamed Mini" && verified.deviceID == b.id)
-    // A revoked Mac answering for B's poisoned route never verifies.
-    recorder.signer = revoked.own
-    await #expect(throws: LibraryAPIError.self) { try await network.verify(b.route, deviceID: a.id, token: tokens.atIssuer, pin: pin) }
-    #expect(recorder.bearers.allSatisfy { $0 == nil })
-  }
-
-  @Test func delegatedExecutionEndsWithItsProvisioningMacWhileOwnGrantsRemain() async throws {
-    defer { try? FileManager.default.removeItem(at: directory) }
-    let a = PeerIdentityFixture(), b = PeerIdentityFixture()
-    let air = try store("air"), mini = try store("mini")
-    try await pair((air, a), with: (mini, b))
-    let delegated = UUID().uuidString.lowercased()
-    let workspace = UUID().uuidString.lowercased()
-    try await mini.stageDelegation(deviceID: delegated, workspaceID: workspace, provisionedBy: a.id)
-    try await mini.confirmDelegation(deviceID: delegated, workspaceID: workspace, provisionedBy: a.id)
-    #expect(await mini.mayExecute(deviceID: delegated))
-    #expect(await !mini.mayDelegate(for: a.id))
-    let offer = try await mini.createOffer(endpoint: b.route.endpoint)
-    let own = try await mini.pair(.init(token: offer.payload.token, deviceID: UUID().uuidString.lowercased(), deviceName: "Mini's phone",
-      metadata: .init(kind: .iPhone)), workspaceID: b.library)
-    try await mini.revoke(deviceID: a.id)
-    #expect(await !mini.mayExecute(deviceID: delegated))
-    #expect(await mini.mayExecute(deviceID: own.deviceID))
-  }
-
-  @Test func aFailedReplacementKeepsTheEarlierProvenanceAndASuccessfulOneRetiresIt() async throws {
-    defer { try? FileManager.default.removeItem(at: directory) }
-    let a = PeerIdentityFixture(), b = PeerIdentityFixture(), d = PeerIdentityFixture()
-    let air = try store("air"), mini = try store("mini"), other = try store("other")
-    try await pair((air, a), with: (mini, b)); try await pair((other, d), with: (mini, b))
-    let phone = UUID().uuidString.lowercased(), workspace = UUID().uuidString.lowercased()
-    try await mini.stageDelegation(deviceID: phone, workspaceID: workspace, provisionedBy: a.id)
-    try await mini.confirmDelegation(deviceID: phone, workspaceID: workspace, provisionedBy: a.id)
-    // A replacement through D fails (busy or unreachable): A's grant may still
-    // be honored, so its provenance must survive for cleanup.
-    try await mini.stageDelegation(deviceID: phone, workspaceID: workspace, provisionedBy: d.id)
-    try await mini.cancelStagedDelegation(deviceID: phone, workspaceID: workspace, provisionedBy: d.id)
-    #expect(await mini.delegations(provisionedBy: a.id).map(\.workspaceID) == [workspace])
-    #expect(await mini.authorizesExecution(deviceID: phone, provisionedBy: a.id))
-    #expect(await !mini.authorizesExecution(deviceID: phone, provisionedBy: d.id))
-    // A delegated device has no direct grant here.
-    #expect(await !mini.authorizesExecution(deviceID: phone, provisionedBy: nil))
-    // A successful replacement through D replaced A's grant: only then is A's
-    // provenance retired, so a later unpair of A leaves D's grant alone.
-    try await mini.stageDelegation(deviceID: phone, workspaceID: workspace, provisionedBy: d.id)
-    try await mini.confirmDelegation(deviceID: phone, workspaceID: workspace, provisionedBy: d.id)
-    #expect(await mini.delegations(provisionedBy: a.id).isEmpty)
-    try await mini.revoke(deviceID: a.id)
-    #expect(await mini.authorizesExecution(deviceID: phone, provisionedBy: d.id))
-    #expect(await !mini.authorizesExecution(deviceID: phone, provisionedBy: a.id))
   }
 
   @Test func aDescendantIntroducedWithItsIntroducersUnpairIsRejectedInEveryOrder() async throws {

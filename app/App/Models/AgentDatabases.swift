@@ -1,7 +1,7 @@
 import Foundation
 import WovenMatterCore
 
-enum DashboardDatabaseSourceKind: String, CaseIterable, Codable, Sendable {
+enum DatabaseSourceKind: String, CaseIterable, Codable, Sendable {
     case local
     case remote
 
@@ -13,7 +13,7 @@ enum DashboardDatabaseSourceKind: String, CaseIterable, Codable, Sendable {
     }
 }
 
-struct DashboardAgentDatabase: Equatable, Identifiable, Codable, Sendable {
+struct AgentDatabase: Equatable, Identifiable, Codable, Sendable {
     let sourceID: String
     let databaseID: String
     let name: String
@@ -25,33 +25,33 @@ struct DashboardAgentDatabase: Equatable, Identifiable, Codable, Sendable {
     var id: String { "\(sourceID):\(databaseID)" }
 }
 
-struct DashboardDatabaseSource: Equatable, Identifiable, Codable, Sendable {
+struct DatabaseSource: Equatable, Identifiable, Codable, Sendable {
     let id: String
     let name: String
-    let kind: DashboardDatabaseSourceKind
+    let kind: DatabaseSourceKind
     let detail: String
-    let databases: [DashboardAgentDatabase]
+    let databases: [AgentDatabase]
     let error: String?
     let allowsCreation: Bool
 }
 
-struct DashboardDatabasesSnapshot: Equatable, Codable, Sendable {
-    static let empty = DashboardDatabasesSnapshot(sources: [])
+struct DatabasesSnapshot: Equatable, Codable, Sendable {
+    static let empty = DatabasesSnapshot(sources: [])
 
-    let sources: [DashboardDatabaseSource]
+    let sources: [DatabaseSource]
 
-    var databases: [DashboardAgentDatabase] {
+    var databases: [AgentDatabase] {
         sources.flatMap(\.databases)
     }
 
-    func database(sourceID: String, databaseID: String) -> DashboardAgentDatabase? {
+    func database(sourceID: String, databaseID: String) -> AgentDatabase? {
         sources.first { $0.id == sourceID }?.databases.first {
             $0.databaseID == databaseID
         }
     }
 }
 
-enum DashboardDatabaseLinkError: LocalizedError {
+enum DatabaseLinkError: LocalizedError {
     case databaseUnavailable
     case remoteDataUnavailable
     case sqliteQueryRequired

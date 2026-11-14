@@ -6,7 +6,7 @@ import CSQLite
 #endif
 import Testing
 import WovenMatterCore
-@testable import WovenMatterDashboardStore
+@testable import WovenMatterLibraryStore
 
 /// A credential store that never holds a key. With `recordsAccess`, every call
 /// records an issue so SQLite import fixtures prove they never touch credentials.

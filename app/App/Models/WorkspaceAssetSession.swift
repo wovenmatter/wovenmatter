@@ -16,7 +16,7 @@ final class WorkspaceAssetSession: NSObject, @preconcurrency WMBrowserPageDelega
     private(set) var pageRevision = 0
     private(set) var browserPresentationRevision = 0
     var notice: String?
-    var automationTabs: [GatewayJSONValue] {
+    var automationTabs: [JSONValue] {
         tabs.browserIDs.compactMap { id in
             pages[id].map { .object(["tabId": .string(id.uuidString.lowercased()), "url": .string($0.url),
                                     "title": .string($0.title), "loading": .bool($0.loading)]) }
@@ -130,7 +130,7 @@ final class WorkspaceAssetSession: NSObject, @preconcurrency WMBrowserPageDelega
     }
 
     private func prepareBrowser() throws {
-        guard KeychainAccess.enforceCentralAuthorization() == 0 else {
+        guard KeychainAccess.disableUnrequestedPrompts() == 0 else {
             throw BrowserCredentialStore.AccessError.unavailable(-25308)
         }
         // Credentials are optional. Without access, CEF uses an in-memory

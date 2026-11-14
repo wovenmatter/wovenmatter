@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { validateSqliteSchemaPrefix } from "@earendil-works/chord/sqlite";
 import type { SqliteDatabase, SqliteExecutor } from "@earendil-works/pi-durable/storage/sqlite";
 import type { LimitEntry } from "../limits.ts";
+import { BOTS_SCHEMA_VERSION, supportedSchemaVersion } from "./database.ts";
 
 /** Shared tables. Bot tables all start with `pibot_<32 hex>_`, so these can never collide. */
 export type SidebarGroup = { id: string; name: string; position: number };
@@ -48,11 +49,6 @@ export type BotRecord = {
   readonly groupId?: string;
   /** The model profile the bot runs (`[profiles.<id>]`); unset: the default profile. */
   readonly profile?: string;
-  /**
-   * Legacy per-bot model override (before profiles), read only by the startup migration that
-   * turns it into a profile assignment.
-   */
-  readonly legacyModel?: string;
 };
 
 export type BotKind = "admin" | "bot";
@@ -84,12 +80,11 @@ type BotRow = {
   is_manager: number;
   manager_id: string | null;
   is_orchestrator: number;
-  model: string | null;
   profile: string | null;
   group_id: string | null;
 };
 const BOT_COLUMNS =
-  "id, name, schema_prefix, created_at, kind, is_manager, manager_id, is_orchestrator, model, profile, group_id";
+  "id, name, schema_prefix, created_at, kind, is_manager, manager_id, is_orchestrator, profile, group_id";
 type ThreadRow = {
   bot_id: string;
   conversation_id: number;
@@ -122,7 +117,6 @@ function toBot(row: BotRow): BotRecord {
     orchestrator: row.is_orchestrator === 1,
     ...(row.group_id ? { groupId: row.group_id } : {}),
     ...(row.profile ? { profile: row.profile } : {}),
-    ...(row.model ? { legacyModel: row.model } : {}),
   };
 }
 
@@ -177,8 +171,26 @@ export class BotRegistry {
     this.#db = db;
   }
 
+  /**
+   * Brings the shared tables to `BOTS_SCHEMA_VERSION` and records it, in one transaction. A
+   * database from a newer Woven Matter is refused unchanged. Every open runs the idempotent
+   * `CREATE ... IF NOT EXISTS`; only a database below a version runs that version's step.
+   */
   async migrate(): Promise<void> {
-    await this.#db.exec(`
+    await this.#db.transaction(async (tx) => {
+      const version = await supportedSchemaVersion(tx);
+      await this.#createTables(tx);
+      // Step 1, from version 0: the shapes of builds before the version was recorded.
+      if (version < 1) await this.#addLaterColumns(tx);
+      // Step 2 goes here: `if (version < 2) ...`, with BOTS_SCHEMA_VERSION raised to 2.
+      await this.#createIndexes(tx);
+      if (version < BOTS_SCHEMA_VERSION)
+        await tx.exec(`PRAGMA user_version = ${BOTS_SCHEMA_VERSION}`);
+    });
+  }
+
+  async #createTables(db: SqliteExecutor): Promise<void> {
+    await db.exec(`
       CREATE TABLE IF NOT EXISTS ${GROUPS_TABLE} (
         id TEXT PRIMARY KEY, name TEXT NOT NULL, position INTEGER NOT NULL
       ) STRICT;
@@ -217,31 +229,27 @@ export class BotRegistry {
         updated_at TEXT NOT NULL
       ) STRICT;
     `);
-    const threadColumns = await this.#db.all<{ name: string }>(
+  }
+
+  async #addLaterColumns(db: SqliteExecutor): Promise<void> {
+    const threadColumns = await db.all<{ name: string }>(
       `PRAGMA table_info(${THREADS_TABLE})`,
     );
     if (!threadColumns.some((column) => column.name === "is_pinned"))
-      await this.#db.exec(
+      await db.exec(
         `ALTER TABLE ${THREADS_TABLE} ADD COLUMN is_pinned INTEGER NOT NULL DEFAULT 0`,
       );
     // Older databases lack later columns: add each missing one (existing bots are plain bots).
     const columns = new Set(
-      (await this.#db.all<{ name: string }>(`PRAGMA table_info(${BOTS_TABLE})`)).map(
+      (await db.all<{ name: string }>(`PRAGMA table_info(${BOTS_TABLE})`)).map(
         (column) => column.name,
       ),
     );
-    // The orchestrator was first stored as `is_top`: rename it in place (values kept) and drop the
-    // old index, which is recreated below under its new name.
-    if (columns.has("is_top") && !columns.has("is_orchestrator")) {
-      await this.#db.exec("DROP INDEX IF EXISTS pibot_bots_one_top");
-      await this.#db.exec(`ALTER TABLE ${BOTS_TABLE} RENAME COLUMN is_top TO is_orchestrator`);
-      columns.add("is_orchestrator");
-    }
-    const deliveryColumns = await this.#db.all<{ name: string }>(
+    const deliveryColumns = await db.all<{ name: string }>(
       `PRAGMA table_info(${DELIVERIES_TABLE})`,
     );
     if (!deliveryColumns.some((column) => column.name === "accepted")) {
-      await this.#db.exec(
+      await db.exec(
         `ALTER TABLE ${DELIVERIES_TABLE} ADD COLUMN accepted INTEGER NOT NULL DEFAULT 0`,
       );
     }
@@ -250,21 +258,23 @@ export class BotRegistry {
       ["kind", "TEXT NOT NULL DEFAULT 'bot'"],
       ["is_manager", "INTEGER NOT NULL DEFAULT 0"],
       ["manager_id", "TEXT"],
-      ["model", "TEXT"],
       ["profile", "TEXT"],
       ["group_id", `TEXT REFERENCES ${GROUPS_TABLE}(id) ON DELETE SET NULL`],
       ["is_orchestrator", "INTEGER NOT NULL DEFAULT 0"],
     ];
     for (const [name, type] of added) {
       if (!columns.has(name))
-        await this.#db.exec(`ALTER TABLE ${BOTS_TABLE} ADD COLUMN ${name} ${type}`);
+        await db.exec(`ALTER TABLE ${BOTS_TABLE} ADD COLUMN ${name} ${type}`);
     }
+  }
+
+  async #createIndexes(db: SqliteExecutor): Promise<void> {
     // At most one Admin Bot.
-    await this.#db.exec(
+    await db.exec(
       `CREATE UNIQUE INDEX IF NOT EXISTS pibot_bots_one_admin ON ${BOTS_TABLE}(kind) WHERE kind = 'admin'`,
     );
     // At most one orchestrator.
-    await this.#db.exec(
+    await db.exec(
       `CREATE UNIQUE INDEX IF NOT EXISTS pibot_bots_one_orchestrator ON ${BOTS_TABLE}(is_orchestrator) WHERE is_orchestrator = 1`,
     );
   }
@@ -431,11 +441,6 @@ export class BotRegistry {
   /** Assign a profile (undefined: the default). */
   async setProfile(id: string, profile: string | undefined): Promise<void> {
     await this.#db.run(`UPDATE ${BOTS_TABLE} SET profile = ? WHERE id = ?`, profile ?? null, id);
-  }
-
-  /** Startup migration: the legacy model override was turned into a profile assignment. */
-  async clearLegacyModel(id: string): Promise<void> {
-    await this.#db.run(`UPDATE ${BOTS_TABLE} SET model = NULL WHERE id = ?`, id);
   }
 
   /** Every bot (live or deleted) on `profile` goes back to the default profile. */

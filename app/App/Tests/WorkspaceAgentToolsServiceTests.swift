@@ -6,7 +6,7 @@ import Observation
 import Testing
 import WovenMatterCore
 import WovenMatterClient
-import WovenMatterDashboardStore
+import WovenMatterLibraryStore
 @testable import WovenMatterAppFacade
 
 // Process pipes must not occupy the cooperative workers serving MCP requests.
@@ -47,7 +47,7 @@ struct WorkspaceAgentToolsServiceTests {
         defer { service.stop() }
         service.automationHandler = { identity, command, _ in
             #expect(identity == caller)
-            let input = try JSONDecoder().decode(GatewayJSONValue.self, from: Data(command.required("json").utf8))
+            let input = try JSONDecoder().decode(JSONValue.self, from: Data(command.required("json").utf8))
             #expect(input.objectValue?["action"]?.stringValue == "preview")
             return .init(result: try await ConversationHTMLPreview().capture(input))
         }
@@ -105,16 +105,16 @@ struct WorkspaceAgentToolsServiceTests {
         let connection = try await service.mcpContext(sessionID: caller, captureID: "")
         let html = "<button onclick='this.textContent=42'>Calculate</button>" + (runtime == .codex
             ? "<img src='data:image/png;base64," + String(repeating: "A", count: 5 * 1024 * 1024) + "'>" : "")
-        let payload: GatewayJSONValue = .object(["action": .string("render"), "html": .string(html), "title": .string("Calculator"), "height": .number(160)])
+        let payload: JSONValue = .object(["action": .string("render"), "html": .string(html), "title": .string("Calculator"), "height": .number(160)])
         let json = String(decoding: try JSONEncoder().encode(payload), as: UTF8.self)
-        let data = try JSONEncoder().encode(GatewayJSONValue.object(["jsonrpc": .string("2.0"), "id": .number(1), "method": .string("tools/call"),
+        let data = try JSONEncoder().encode(JSONValue.object(["jsonrpc": .string("2.0"), "id": .number(1), "method": .string("tools/call"),
           "params": .object(["name": .string("woven_html_render"), "arguments": .object(["html": .string(html), "title": .string("Calculator"), "height": .number(160)])])]))
         var request = URLRequest(url: try #require(URL(string: connection.endpointURL)))
         request.httpMethod = "POST"; request.httpBody = data
         request.setValue("Bearer " + connection.bearerToken, forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         let (response, _) = try await URLSession.shared.data(for: request)
-        let envelope = try JSONDecoder().decode(GatewayJSONValue.self, from: response)
+        let envelope = try JSONDecoder().decode(JSONValue.self, from: response)
         let structured = try #require(envelope.objectValue?["result"]?.objectValue?["structuredContent"])
         let result = try JSONDecoder().decode(WovenMatterToolResponse.self, from: JSONEncoder().encode(structured))
         #expect(result.success)
@@ -253,16 +253,16 @@ extension WorkspaceAgentToolsServiceTests {
 
 @MainActor
 private func callMCPTool(_ service: WorkspaceAgentToolsModel, connection: WovenMCPConnection,
-                         name: String, arguments: [String: GatewayJSONValue],
+                         name: String, arguments: [String: JSONValue],
                          requestID: String = UUID().uuidString) async throws -> WovenMatterToolResponse {
     var arguments = arguments
     arguments["requestID"] = .string(requestID)
-    let message: GatewayJSONValue = .object(["jsonrpc": .string("2.0"), "id": .string(UUID().uuidString),
+    let message: JSONValue = .object(["jsonrpc": .string("2.0"), "id": .string(UUID().uuidString),
         "method": .string("tools/call"), "params": .object(["name": .string(name), "arguments": .object(arguments)])])
     let response = try #require(await service.handleMCP(.init(method: "POST", target: "/mcp",
         headers: ["authorization": "Bearer " + connection.bearerToken], body: try JSONEncoder().encode(message))))
     #expect(response.status == 200)
-    let decoded = try JSONDecoder().decode(GatewayJSONValue.self, from: response.body)
+    let decoded = try JSONDecoder().decode(JSONValue.self, from: response.body)
     if let error = decoded.objectValue?["error"]?.objectValue {
         return .init(success: false, error: error["message"]?.stringValue, code: "invalid_request", requestID: requestID)
     }
@@ -344,11 +344,11 @@ extension WorkspaceAgentToolsServiceTests {
             }, onMutation: {})
         defer { service.stop() }
         let connection = try await service.mcpContext(sessionID: caller, captureID: "")
-        func request(_ action: String, _ arguments: [String: GatewayJSONValue] = [:], id: String = UUID().uuidString.lowercased()) async throws -> WovenMatterToolResponse {
+        func request(_ action: String, _ arguments: [String: JSONValue] = [:], id: String = UUID().uuidString.lowercased()) async throws -> WovenMatterToolResponse {
             try await callMCPTool(service, connection: connection, name: "woven_calendar_" + action, arguments: arguments, requestID: id)
         }
         let id = UUID().uuidString.lowercased()
-        let creation: [String: GatewayJSONValue] = ["title": .string("Daily review"), "startsAt": .string("2026-09-01T13:00:00Z"),
+        let creation: [String: JSONValue] = ["title": .string("Daily review"), "startsAt": .string("2026-09-01T13:00:00Z"),
             "timeZone": .string("America/New_York"), "repeatUnit": .string("day"), "repeatInterval": .number(2),
             "prompt": .string("Review changes"), "sessionMode": .string("new")]
         #expect(try await request("create", creation, id: id).success)
@@ -382,7 +382,7 @@ extension WorkspaceAgentToolsServiceTests {
         #expect(try await request("read", ["id": .string(detachedID)]).success)
         #expect(try await database.calendarEvent(id: id, callerID: caller).calendar.excludedOccurrences == [1])
         let copyID = UUID().uuidString.lowercased()
-        let copy: [String: GatewayJSONValue] = ["id": .string(detachedID), "startsAt": .string("2026-09-20T13:00:00Z")]
+        let copy: [String: JSONValue] = ["id": .string(detachedID), "startsAt": .string("2026-09-20T13:00:00Z")]
         #expect(try await request("copy", copy, id: copyID).success)
         let copied = try await database.calendarEvent(id: copyID, callerID: caller)
         #expect(try await request("remove", ["id": .string(copyID), "revision": .number(Double(copied.calendar.revision))]).success)

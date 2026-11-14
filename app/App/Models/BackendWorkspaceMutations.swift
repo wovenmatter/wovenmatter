@@ -1,7 +1,7 @@
 import Foundation
 import WovenMatterClient
 import WovenMatterCore
-import WovenMatterDashboardStore
+import WovenMatterLibraryStore
 
 enum BackendWorkspaceMutation: Codable, Sendable {
     case saveSurfaceProfile(SurfaceProfile)
@@ -16,15 +16,15 @@ enum BackendWorkspaceMutation: Codable, Sendable {
     case note(id: String, mutation: WorkspaceNoteMutation, expectedRevision: String)
     case moveConversation(id: String, folderID: String?)
     case createNote(folderID: String?, kind: NoteArtifactKind)
-    case persistNoteDraft(DashboardNoteJournalEntry)
-    case preserveRecoveryCopy(DashboardNoteJournalEntry)
+    case persistNoteDraft(NoteJournalEntry)
+    case preserveRecoveryCopy(NoteJournalEntry)
     case checkpointNote(id: String)
     case restoreNote(id: String, versionID: String, expectedRevision: String)
 }
 
 extension BackendApplicationService {
     func executeWorkspaceMutation(_ mutation: BackendWorkspaceMutation) async throws -> BackendApplicationResult {
-        guard let store = model.dashboardStore else { throw ApplicationModelError.dashboardStoreUnavailable }
+        guard let store = model.libraryStore else { throw ApplicationModelError.libraryStoreUnavailable }
         var result = BackendApplicationResult()
         switch mutation {
         case .saveSurfaceProfile(let profile):

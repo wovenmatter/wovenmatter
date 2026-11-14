@@ -9,26 +9,26 @@ struct SettingsGeneralView: View {
     var onBack: () -> Void
     var onOpenCodex: () -> Void = {}
 
-    @AppStorage(DashboardTheme.storageKey) private var storedTheme = DashboardTheme.green.rawValue
-    @AppStorage(DashboardSidebarStyle.storageKey) private var storedSidebarStyle = DashboardSidebarStyle.defaultStyle.rawValue
-    @AppStorage(DashboardPiDurableLogoStyle.storageKey) private var storedPiDurableLogoStyle =
-        DashboardPiDurableLogoStyle.defaultStyle.rawValue
-    @AppStorage(DashboardCodexLogoStyle.storageKey) private var storedCodexLogoStyle =
-        DashboardCodexLogoStyle.defaultStyle.rawValue
-    @AppStorage(DashboardWorkspaceSidebarVisibility.localWorkspace.storageKey) private var showsLocalWorkspace = true
-    @AppStorage(DashboardWorkspaceSidebarVisibility.remoteWorkspaces.storageKey) private var showsRemoteWorkspaces = true
+    @AppStorage(WovenTheme.storageKey) private var storedTheme = WovenTheme.green.rawValue
+    @AppStorage(SidebarStyle.storageKey) private var storedSidebarStyle = SidebarStyle.defaultStyle.rawValue
+    @AppStorage(PiDurableLogoStyle.storageKey) private var storedPiDurableLogoStyle =
+        PiDurableLogoStyle.defaultStyle.rawValue
+    @AppStorage(CodexLogoStyle.storageKey) private var storedCodexLogoStyle =
+        CodexLogoStyle.defaultStyle.rawValue
+    @AppStorage(WorkspaceSidebarVisibility.localWorkspace.storageKey) private var showsLocalWorkspace = true
+    @AppStorage(WorkspaceSidebarVisibility.remoteWorkspaces.storageKey) private var showsRemoteWorkspaces = true
 
-    private var themeBinding: Binding<DashboardTheme> {
+    private var themeBinding: Binding<WovenTheme> {
         Binding(
-            get: { DashboardTheme(rawValue: storedTheme) ?? .green },
+            get: { WovenTheme(rawValue: storedTheme) ?? .green },
             set: { storedTheme = $0.rawValue }
         )
     }
 
-    private var sidebarStyleBinding: Binding<DashboardSidebarStyle> {
+    private var sidebarStyleBinding: Binding<SidebarStyle> {
         Binding(
             get: {
-                DashboardSidebarStyle(rawValue: storedSidebarStyle)
+                SidebarStyle(rawValue: storedSidebarStyle)
                     ?? .defaultStyle
             },
             set: { storedSidebarStyle = $0.rawValue }
@@ -57,41 +57,41 @@ struct SettingsGeneralView: View {
     private var appearanceSection: some View {
         SettingsSection(title: "Appearance") {
             SettingsRow(title: "Theme") {
-                DashboardSegmentedSelector(options: DashboardTheme.allCases, selection: themeBinding) { $0.title }
+                WovenSegmentedSelector(options: WovenTheme.allCases, selection: themeBinding) { $0.title }
                     .frame(width: 300)
             }
             SettingsRow(title: "Sidebar layout", detail: sidebarStyleBinding.wrappedValue.detail) {
-                DashboardSegmentedSelector(options: DashboardSidebarStyle.allCases, selection: sidebarStyleBinding) { style in
+                WovenSegmentedSelector(options: SidebarStyle.allCases, selection: sidebarStyleBinding) { style in
                     style.title.replacingOccurrences(of: " Sidebar", with: "")
                 }
                 .frame(width: 300)
             }
             SettingsSummaryRow("Sidebar sections", detail: "Hide or show the workspace sections in the sidebar.") {
-                Toggle(DashboardWorkspaceSidebarVisibility.localWorkspace.title, isOn: $showsLocalWorkspace)
-                Toggle(DashboardWorkspaceSidebarVisibility.remoteWorkspaces.title, isOn: $showsRemoteWorkspaces)
+                Toggle(WorkspaceSidebarVisibility.localWorkspace.title, isOn: $showsLocalWorkspace)
+                Toggle(WorkspaceSidebarVisibility.remoteWorkspaces.title, isOn: $showsRemoteWorkspaces)
                 SettingsNote("Hides or shows these sidebar sections. Workspaces and chats stay active.")
             }
             SettingsSummaryRow("Agent icons", detail: "Choose how the Pi Durable and Codex icons look throughout the app.") {
                 SettingsRow(title: "Pi Durable") {
                     SettingsPicker("Pi Durable icon", selection: Binding(
                         get: { piDurableLogoStyle }, set: { storedPiDurableLogoStyle = $0.rawValue }
-                    ), options: DashboardPiDurableLogoStyle.allCases) { $0.displayName }
+                    ), options: PiDurableLogoStyle.allCases) { $0.displayName }
                 }
                 SettingsRow(title: "Codex") {
                     SettingsPicker("Codex icon", selection: Binding(
                         get: { codexLogoStyle }, set: { storedCodexLogoStyle = $0.rawValue }
-                    ), options: DashboardCodexLogoStyle.allCases) { $0.displayName }
+                    ), options: CodexLogoStyle.allCases) { $0.displayName }
                 }
             }
         }
     }
 
-    private var piDurableLogoStyle: DashboardPiDurableLogoStyle {
-        DashboardPiDurableLogoStyle(rawValue: storedPiDurableLogoStyle) ?? .defaultStyle
+    private var piDurableLogoStyle: PiDurableLogoStyle {
+        PiDurableLogoStyle(rawValue: storedPiDurableLogoStyle) ?? .defaultStyle
     }
 
-    private var codexLogoStyle: DashboardCodexLogoStyle {
-        DashboardCodexLogoStyle(rawValue: storedCodexLogoStyle) ?? .defaultStyle
+    private var codexLogoStyle: CodexLogoStyle {
+        CodexLogoStyle(rawValue: storedCodexLogoStyle) ?? .defaultStyle
     }
 
     private var softwareSection: some View {

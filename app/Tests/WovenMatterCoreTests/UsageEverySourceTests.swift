@@ -6,7 +6,7 @@ import CSQLite
 #endif
 import Testing
 import WovenMatterCore
-@testable import WovenMatterDashboardStore
+@testable import WovenMatterLibraryStore
 
 /// Every harness and Pi Durable location on a Mac, and the rules that keep one reply,
 /// one turn and one device from counting twice.

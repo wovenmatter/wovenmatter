@@ -415,6 +415,49 @@ final class StreamConnectionTests: XCTestCase {
     XCTAssertEqual(methods, ["execution.receipt"], "The command itself is not resent")
   }
 
+  /// A receipt in a state a newer server added cannot be read here. That
+  /// command stays unresolved; the next one is still asked about.
+  func testAReceiptThisBuildCannotReadDoesNotStopTheOthersBeingResolved() async throws {
+    let file = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString).appending(path: "journal.json")
+    let journal = try WorkspaceJournal(file: file)
+    let server = FakeStreamServer()
+    let connection = server.connection()
+    await connection.start()
+    let socket = await open(server, connection)
+    let unread = try await journal.rememberCommand(.init(deviceID: "phone", kind: .stop, conversationID: "chat", runID: "run"), workspaceID: "linux")
+    let known = try await journal.rememberCommand(.init(deviceID: "phone", kind: .send, conversationID: "chat", text: "Hello"), workspaceID: "linux")
+    let completed = LibraryCommandReceipt(commandID: known.commandID, deviceID: "phone", status: .completed, conversationID: "chat")
+    let resolve = Task { try await StreamCommands.resolveUnknown(workspaceID: "linux", journal: journal, connection: connection) }
+    for index in 0..<2 {
+      await eventually("receipt request \(index)") { await socket.requests.count == index + 1 }
+      let ask = await socket.requests[index]
+      if try ask.decodeParams(StreamReceiptParams.self).commandID == known.commandID {
+        await socket.push(.response(try .init(id: ask.id, encoding: completed)))
+      } else {
+        await socket.push(try StreamProtocol.decode(Data(
+          #"{"t":"res","id":"\#(ask.id)","result":{"commandID":"\#(unread.commandID)","deviceID":"phone","status":"superseded"}}"#.utf8)))
+      }
+    }
+    let learned = try await resolve.value
+    XCTAssertEqual(learned, [completed])
+    let records = await journal.commandRecords(workspaceID: "linux")
+    XCTAssertEqual(records.first { $0.command.commandID == known.commandID }?.receipt, completed)
+    XCTAssertNil(records.first { $0.command.commandID == unread.commandID }?.receipt)
+  }
+
+  /// A frame that is JSON but holds a value this build cannot read is not a
+  /// protocol violation (which closes the socket with 4400 and reconnects
+  /// into the same frame); a frame that is not JSON still is.
+  func testAnItemThisBuildCannotReadIsIgnoredNotAProtocolViolation() throws {
+    let text = #"{"t":"item","id":"s1","seq":44,"kind":"journal","data":{"entry":{"eventID":"e","workspaceID":"w","originSequence":44,"conversationID":"c","kind":"forkedConversation"}}}"#
+    guard case .item(let item) = try WebSocketStreamTransport.decode(.string(text)) else { return XCTFail("Expected an item") }
+    XCTAssertEqual(item.seq, 44)
+    XCTAssertEqual(item.payload.kind, "journal")
+    if case .journal = item.payload { XCTFail("An entry of an unknown kind was read") }
+    XCTAssertThrowsError(try WebSocketStreamTransport.decode(.string("{")))
+    XCTAssertThrowsError(try WebSocketStreamTransport.decode(.data(Data(#"{"id":"s1"}"#.utf8))))
+  }
+
   func testARetriedCommandAsksForItsReceiptFirst() async throws {
     let file = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString).appending(path: "journal.json")
     let journal = try WorkspaceJournal(file: file)
@@ -647,10 +690,10 @@ final class StreamConnectionTests: XCTestCase {
 /// The fixture file the Swift and Node suites share, decoded through this client's own path.
 final class StreamFixtureDecodingTests: XCTestCase {
   private struct Fixtures: Decodable {
-    struct Named: Decodable { let name: String; let frame: GatewayJSONValue }
-    struct Prefixed: Decodable { let frame: GatewayJSONValue; let hex: String }
+    struct Named: Decodable { let name: String; let frame: JSONValue }
+    struct Prefixed: Decodable { let frame: JSONValue; let hex: String }
     let frames: [Named]
-    let unknownFrames: [GatewayJSONValue]
+    let unknownFrames: [JSONValue]
     let lengthPrefixed: Prefixed
   }
   private func fixtures() throws -> Fixtures {

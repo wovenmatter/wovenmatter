@@ -8,11 +8,11 @@ struct HarnessSetupView: View {
     @State private var step = 0
     @State private var connectionFocus: ConnectionSettingsFocus?
     @Environment(\.dismissWindow) private var dismissWindow
-    @AppStorage(DashboardTheme.storageKey) private var themeRawValue = DashboardTheme.green.rawValue
+    @AppStorage(WovenTheme.storageKey) private var themeRawValue = WovenTheme.green.rawValue
 
     init(model: ApplicationModel) { _setup = State(initialValue: HarnessSetupModel(application: model)) }
     private var model: ApplicationModel { setup.application }
-    private var theme: DashboardTheme { DashboardTheme(rawValue: themeRawValue) ?? .green }
+    private var theme: WovenTheme { WovenTheme(rawValue: themeRawValue) ?? .green }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -38,11 +38,11 @@ struct HarnessSetupView: View {
             footer
         }
         .frame(width: 760, height: 650)
-        .foregroundStyle(DashboardPalette.foreground)
+        .foregroundStyle(WovenPalette.foreground)
         .background(theme.palette.workspace)
-        .environment(\.dashboardTheme, theme)
+        .environment(\.wovenTheme, theme)
         .preferredColorScheme(theme.colorScheme)
-        .toggleStyle(DashboardSwitchToggleStyle())
+        .toggleStyle(CompactSwitchToggleStyle())
         .task { step = 0; connectionFocus = nil; setup.open() }
         .onDisappear { setup.close() }
     }
@@ -55,12 +55,12 @@ struct HarnessSetupView: View {
                 Spacer()
                 Text("\(step + 1) of 2")
                     .font(.system(size: 11.5, weight: .medium))
-                    .foregroundStyle(DashboardPalette.mutedForeground)
+                    .foregroundStyle(WovenPalette.mutedForeground)
             }
             Text(connectionFocus?.detail ?? (step == 0
                  ? "Use the tools already on your Mac, or choose more to install."
                  : "Pi Durable is included with Woven Matter. Add connections whenever you’re ready."))
-                .font(.system(size: 13)).foregroundStyle(DashboardPalette.mutedForeground)
+                .font(.system(size: 13)).foregroundStyle(WovenPalette.mutedForeground)
         }
         .padding(.horizontal, 24).padding(.top, 24).padding(.bottom, 8)
     }
@@ -82,7 +82,7 @@ struct HarnessSetupView: View {
                 }
             }
             .background(theme.palette.themeWhisper)
-            .clipShape(DashboardShapes.card)
+            .clipShape(DesktopShapes.card)
             if let notice = setup.notice { SettingsNote(notice) }
             if model.localRuntimeMaintenanceHasActiveConversation {
                 SettingsNote("Finish active local chats before installing or updating harnesses.")
@@ -97,12 +97,12 @@ struct HarnessSetupView: View {
         let busy = model.runtimeMaintenanceBusy(kind) || setup.activeInstall == kind
         return VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 12) {
-                DashboardHarnessLogoIcon(logo: DashboardHarnessLogo(runtimeKind: kind), size: 24)
+                HarnessLogoIcon(logo: HarnessLogo(runtimeKind: kind), size: 24)
                     .frame(width: 32, height: 32)
                 VStack(alignment: .leading, spacing: 4) {
                     Text(kind.displayName).font(.system(size: 13, weight: .medium))
                     Text(busy ? (model.updatingRuntimeKinds.contains(kind) ? "Updating…" : "Installing…") : installationLabel(inventory))
-                        .font(.system(size: 11.5)).foregroundStyle(DashboardPalette.mutedForeground)
+                        .font(.system(size: 11.5)).foregroundStyle(WovenPalette.mutedForeground)
                 }
                 Spacer(minLength: 8)
                 if busy {
@@ -136,7 +136,7 @@ struct HarnessSetupView: View {
                             .buttonStyle(SettingsQuietButtonStyle())
                         Spacer()
                         Button("Install \(kind.displayName)") { setup.resolveInstaller(install: true) }
-                            .buttonStyle(DashboardPrimaryButtonStyle())
+                            .buttonStyle(WovenPrimaryButtonStyle())
                     }.disabled(setup.resolvingInstaller)
                 }
             }
@@ -157,10 +157,10 @@ struct HarnessSetupView: View {
     private var piDurable: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 8) {
-                DashboardHarnessLogoIcon(logo: .defaultAgent, size: 20)
+                HarnessLogoIcon(logo: .defaultAgent, size: 20)
                 Text("Pi Durable").font(.system(size: 13, weight: .semibold))
                 Spacer()
-                Text("Included").font(.system(size: 11.5)).foregroundStyle(DashboardPalette.mutedForeground)
+                Text("Included").font(.system(size: 11.5)).foregroundStyle(WovenPalette.mutedForeground)
             }
             .frame(minHeight: 28)
             VStack(spacing: 0) {
@@ -169,19 +169,19 @@ struct HarnessSetupView: View {
                 piSetupRow(.webSearch, action: "Open web search settings")
             }
             .background(theme.palette.themeWhisper)
-            .clipShape(DashboardShapes.card)
+            .clipShape(DesktopShapes.card)
             SettingsNote("Both steps are optional. Reopen this guide from Settings → Agents. Provider connections and web search are also available in Settings → Subscriptions & API Keys.")
         }
     }
 
     private func piSetupRow(_ destination: ConnectionSettingsFocus, action: String) -> some View {
         HStack(spacing: 12) {
-            DashboardLucideIcon(glyph: destination == .providers ? .plug : .searchControl, size: 22)
+            LucideIcon(glyph: destination == .providers ? .plug : .searchControl, size: 22)
                 .frame(width: 32, height: 32)
             VStack(alignment: .leading, spacing: 4) {
                 Text(destination.title).font(.system(size: 13, weight: .medium))
                 Text(destination.detail)
-                    .font(.system(size: 11.5)).foregroundStyle(DashboardPalette.mutedForeground)
+                    .font(.system(size: 11.5)).foregroundStyle(WovenPalette.mutedForeground)
                     .fixedSize(horizontal: false, vertical: true)
             }
             Spacer(minLength: 12)
@@ -202,12 +202,12 @@ struct HarnessSetupView: View {
             if step == 0 {
                 if !setup.selected.isEmpty {
                     Button("Install selected (\(setup.selected.count))") { setup.installSelected() }
-                        .buttonStyle(DashboardPrimaryButtonStyle())
+                        .buttonStyle(WovenPrimaryButtonStyle())
                         .disabled(setup.busy || setup.maintenanceBusy || model.localRuntimeMaintenanceHasActiveConversation)
                     Button("Continue") { step = 1 }.buttonStyle(SettingsQuietButtonStyle())
                         .disabled(setup.activeInstall != nil)
                 } else {
-                    Button("Continue") { step = 1 }.buttonStyle(DashboardPrimaryButtonStyle())
+                    Button("Continue") { step = 1 }.buttonStyle(WovenPrimaryButtonStyle())
                         .keyboardShortcut(.defaultAction)
                 }
             } else {
@@ -216,7 +216,7 @@ struct HarnessSetupView: View {
                 }.buttonStyle(SettingsQuietButtonStyle())
                 Button(connectionFocus != nil ? "Done" : "Finish") {
                     if connectionFocus != nil { connectionFocus = nil } else { finish() }
-                }.buttonStyle(DashboardPrimaryButtonStyle()).keyboardShortcut(.defaultAction)
+                }.buttonStyle(WovenPrimaryButtonStyle()).keyboardShortcut(.defaultAction)
             }
         }.padding(.horizontal, 24).padding(.vertical, 16)
     }

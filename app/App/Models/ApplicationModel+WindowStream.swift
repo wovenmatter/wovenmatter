@@ -2,7 +2,7 @@ import Foundation
 import LibraryClient
 import WovenMatterClient
 import WovenMatterCore
-import WovenMatterDashboardStore
+import WovenMatterLibraryStore
 
 /// The background server's Unix-socket connection, read as the stream's byte channel.
 extension BackendStreamChannel: StreamByteChannel {}
@@ -344,7 +344,7 @@ extension ApplicationModel {
             Self.renderMessagePresentations(window.messages, activities: window.activities, runs: window.runs, reusing: previous)
         }.value
         guard conversationStatesByID[id] === state, state.presentationRevision == revision else { return false }
-        state.apply(DashboardConversationPresentation(window: window, messagesByID: rendered, runsByID: presentation.runsByID))
+        state.apply(ConversationPresentation(window: window, messagesByID: rendered, runsByID: presentation.runsByID))
         return true
     }
 

@@ -2,7 +2,7 @@ import Foundation
 import Testing
 import WovenMatterClient
 import WovenMatterCore
-import WovenMatterDashboardStore
+import WovenMatterLibraryStore
 @testable import WovenMatterAppFacade
 
 struct NativeInteractionProjectionTests {

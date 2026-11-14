@@ -57,7 +57,7 @@ struct SettingsPage<Content: View>: View {
                     if let detail {
                         Text(detail)
                             .font(.settingsText)
-                            .foregroundStyle(DashboardPalette.mutedForeground)
+                            .foregroundStyle(WovenPalette.mutedForeground)
                             .fixedSize(horizontal: false, vertical: true)
                     }
                 }
@@ -87,12 +87,12 @@ struct SettingsBackButton: View {
 
     var body: some View {
         Button(action: action) {
-            DashboardLucideIcon(glyph: .arrowLeft, size: 16)
+            LucideIcon(glyph: .arrowLeft, size: 16)
                 .frame(width: 32, height: 32)
                 .contentShape(Rectangle())
         }
-        .buttonStyle(DashboardIconButtonStyle())
-        .environment(\.dashboardSidebarForeground, DashboardPalette.foreground)
+        .buttonStyle(WovenIconButtonStyle())
+        .environment(\.sidebarForeground, WovenPalette.foreground)
         .accessibilityLabel("Back to " + title)
         .help("Back to " + title)
         .offset(x: -8)
@@ -101,7 +101,7 @@ struct SettingsBackButton: View {
 
 /// A row that opens another settings page. Its icon aligns with the page's left edge.
 struct SettingsDestinationRow<Icon: View>: View {
-    @Environment(\.dashboardTheme) private var theme
+    @Environment(\.wovenTheme) private var theme
     let title: String
     let detail: String?
     let status: String?
@@ -131,23 +131,23 @@ struct SettingsDestinationRow<Icon: View>: View {
             HStack(spacing: 12) {
                 icon
                     .frame(width: 16, height: 16)
-                    .foregroundStyle(DashboardPalette.mutedForeground)
+                    .foregroundStyle(WovenPalette.mutedForeground)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(title)
                         .font(.settingsRow)
-                        .foregroundStyle(DashboardPalette.foreground)
+                        .foregroundStyle(WovenPalette.foreground)
                     if let detail {
                         Text(detail)
                             .font(.settingsSecondary)
-                            .foregroundStyle(DashboardPalette.mutedForeground)
+                            .foregroundStyle(WovenPalette.mutedForeground)
                             .fixedSize(horizontal: false, vertical: true)
                     }
                 }
                 Spacer(minLength: 12)
                 if let status { SettingsStatus(status, tone: statusTone) }
-                DashboardLucideIcon(glyph: .chevronDown, size: 12)
+                LucideIcon(glyph: .chevronDown, size: 12)
                     .rotationEffect(.degrees(-90))
-                    .foregroundStyle(DashboardPalette.mutedForeground.opacity(0.7))
+                    .foregroundStyle(WovenPalette.mutedForeground.opacity(0.7))
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
@@ -155,7 +155,7 @@ struct SettingsDestinationRow<Icon: View>: View {
             .background(isHovering ? theme.palette.themeWhisper : Color.clear)
             .clipShape(
                 RoundedRectangle(
-                    cornerRadius: DashboardMetrics.controlRadius,
+                    cornerRadius: WovenMetrics.controlRadius,
                     style: .continuous
                 )
             )
@@ -174,8 +174,8 @@ struct SettingsDisclosureGroupStyle: DisclosureGroupStyle {
                 configuration.isExpanded.toggle()
             } label: {
                 HStack(spacing: 6) {
-                    DashboardLucideIcon(glyph: .chevronDown, size: 12)
-                        .foregroundStyle(DashboardPalette.mutedForeground)
+                    LucideIcon(glyph: .chevronDown, size: 12)
+                        .foregroundStyle(WovenPalette.mutedForeground)
                         .rotationEffect(.degrees(configuration.isExpanded ? 0 : -90))
                     configuration.label
                     Spacer(minLength: 0)
@@ -218,7 +218,7 @@ struct SettingsSection<Content: View>: View {
                     if let detail {
                         Text(detail)
                             .font(.settingsBody)
-                            .foregroundStyle(DashboardPalette.mutedForeground)
+                            .foregroundStyle(WovenPalette.mutedForeground)
                             .fixedSize(horizontal: false, vertical: true)
                     }
                 }
@@ -250,7 +250,7 @@ struct SettingsRow<Accessory: View>: View {
             if let detail {
                 Text(detail)
                     .font(.settingsSecondary)
-                    .foregroundStyle(DashboardPalette.mutedForeground)
+                    .foregroundStyle(WovenPalette.mutedForeground)
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
@@ -287,7 +287,7 @@ struct SettingsSwitchToggleStyle: ToggleStyle {
                 .onTapGesture { if isEnabled { configuration.isOn.toggle() } }
             Toggle(isOn: configuration.$isOn) { configuration.label }
                 .labelsHidden()
-                .toggleStyle(SwitchToggleStyle(tint: DashboardPalette.primary))
+                .toggleStyle(SwitchToggleStyle(tint: WovenPalette.primary))
                 .controlSize(.mini)
                 .fixedSize()
                 .scaleEffect(0.8)
@@ -314,7 +314,7 @@ struct SettingsToggleRow: View {
                 if let detail {
                     Text(detail)
                         .font(.settingsSecondary)
-                        .foregroundStyle(DashboardPalette.mutedForeground)
+                        .foregroundStyle(WovenPalette.mutedForeground)
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
@@ -335,12 +335,12 @@ private struct SettingsSummaryLabel: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text(title)
                     .font(.settingsRow)
-                    .foregroundStyle(DashboardPalette.foreground)
+                    .foregroundStyle(WovenPalette.foreground)
                     .lineLimit(1)
                 if let detail {
                     Text(detail)
                         .font(.settingsSecondary)
-                        .foregroundStyle(DashboardPalette.mutedForeground)
+                        .foregroundStyle(WovenPalette.mutedForeground)
                         .multilineTextAlignment(.leading)
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -351,14 +351,14 @@ private struct SettingsSummaryLabel: View {
                     if let tone { SettingsStatusDot(tone: tone) }
                     Text(value)
                         .font(.settingsBody)
-                        .foregroundStyle(DashboardPalette.mutedForeground)
+                        .foregroundStyle(WovenPalette.mutedForeground)
                         .lineLimit(1)
                         .truncationMode(.tail)
                 }
             }
             Spacer(minLength: 8)
-            DashboardLucideIcon(glyph: .chevronDown, size: 12)
-                .foregroundStyle(DashboardPalette.mutedForeground)
+            LucideIcon(glyph: .chevronDown, size: 12)
+                .foregroundStyle(WovenPalette.mutedForeground)
                 .rotationEffect(.degrees(chevronRotation))
         }
         .padding(.horizontal, 8)
@@ -448,7 +448,7 @@ struct SettingsHelp<Content: View>: View {
                 .padding(.top, 4)
                 .padding(.bottom, 6)
         } label: {
-            Text(title).font(.settingsBody).foregroundStyle(DashboardPalette.mutedForeground)
+            Text(title).font(.settingsBody).foregroundStyle(WovenPalette.mutedForeground)
         }
     }
 }
@@ -489,7 +489,7 @@ struct SettingsRuntimeSummaryRow<Actions: View>: View {
                 Text(title).font(.settingsRow)
                 Text(summary)
                     .font(.settingsSecondary)
-                    .foregroundStyle(DashboardPalette.mutedForeground)
+                    .foregroundStyle(WovenPalette.mutedForeground)
                     .fixedSize(horizontal: false, vertical: true)
                     .textSelection(.enabled)
             }.frame(maxWidth: .infinity, alignment: .leading)
@@ -660,7 +660,7 @@ struct SettingsField<Content: View>: View {
             Text(label)
                 .font(.system(size: 11, weight: .semibold))
                 .tracking(0.25)
-                .foregroundStyle(DashboardPalette.mutedForeground)
+                .foregroundStyle(WovenPalette.mutedForeground)
             content
         }
     }
@@ -690,7 +690,7 @@ struct SettingsNote: View {
     var body: some View {
         Text(text)
             .font(.system(size: 12.5))
-            .foregroundStyle(DashboardPalette.mutedForeground)
+            .foregroundStyle(WovenPalette.mutedForeground)
             .fixedSize(horizontal: false, vertical: true)
             .frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -731,14 +731,14 @@ struct SettingsPicker<Value: Hashable>: View {
             HStack(spacing: 8) {
                 Text(label(selection))
                     .font(.settingsBody.weight(.medium))
-                    .foregroundStyle(DashboardPalette.foreground)
+                    .foregroundStyle(WovenPalette.foreground)
                     .lineLimit(1)
                     .truncationMode(.middle)
                 Image(systemName: "chevron.up.chevron.down")
                     .font(.system(size: 10, weight: .semibold))
-                    .foregroundStyle(DashboardPalette.mutedForeground)
+                    .foregroundStyle(WovenPalette.mutedForeground)
             }
-            .contentShape(RoundedRectangle(cornerRadius: DashboardMetrics.controlRadius, style: .continuous))
+            .contentShape(RoundedRectangle(cornerRadius: WovenMetrics.controlRadius, style: .continuous))
         }
         .buttonStyle(SettingsQuietButtonStyle(isActive: isPresented))
         .accessibilityLabel(title)
@@ -750,7 +750,7 @@ struct SettingsPicker<Value: Hashable>: View {
                     if options.isEmpty {
                         Text("No options available")
                             .font(.settingsBody)
-                            .foregroundStyle(DashboardPalette.mutedForeground)
+                            .foregroundStyle(WovenPalette.mutedForeground)
                             .padding(.horizontal, 10)
                             .padding(.vertical, 6)
                     }
@@ -763,14 +763,14 @@ struct SettingsPicker<Value: Hashable>: View {
                             HStack {
                                 Text(label(option))
                                     .font(.settingsText)
-                                    .foregroundStyle(DashboardPalette.foreground)
+                                    .foregroundStyle(WovenPalette.foreground)
                                     .multilineTextAlignment(.leading)
                                     .fixedSize(horizontal: false, vertical: true)
                                 Spacer(minLength: 8)
                                 if option == selection {
                                     Image(systemName: "checkmark")
                                         .font(.system(size: 11, weight: .semibold))
-                                        .foregroundStyle(DashboardPalette.primary)
+                                        .foregroundStyle(WovenPalette.primary)
                                 }
                             }
                             .padding(.horizontal, 10)
@@ -794,7 +794,7 @@ struct SettingsPicker<Value: Hashable>: View {
 }
 
 struct SettingsMenuOptionButtonStyle: ButtonStyle {
-    @Environment(\.dashboardTheme) private var theme
+    @Environment(\.wovenTheme) private var theme
     @Environment(\.isEnabled) private var isEnabled
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var isHovering = false
@@ -810,7 +810,7 @@ struct SettingsMenuOptionButtonStyle: ButtonStyle {
             )
             .clipShape(
                 RoundedRectangle(
-                    cornerRadius: DashboardMetrics.controlRadius - 4,
+                    cornerRadius: WovenMetrics.controlRadius - 4,
                     style: .continuous
                 )
             )
@@ -830,7 +830,7 @@ struct SettingsEmpty: View {
     var body: some View {
         Text(text)
             .font(.system(size: 12.5))
-            .foregroundStyle(DashboardPalette.mutedForeground)
+            .foregroundStyle(WovenPalette.mutedForeground)
             .padding(.vertical, 4)
     }
 }
@@ -845,7 +845,7 @@ struct SettingsError: View {
     var body: some View {
         Text(text)
             .font(.system(size: 12, weight: .medium))
-            .foregroundStyle(DashboardPalette.danger)
+            .foregroundStyle(WovenPalette.danger)
             .textSelection(.enabled)
     }
 }
@@ -858,7 +858,7 @@ struct SettingsValueRow: View {
         HStack(alignment: .firstTextBaseline, spacing: 12) {
             Text(label)
                 .font(.system(size: 12.5))
-                .foregroundStyle(DashboardPalette.mutedForeground)
+                .foregroundStyle(WovenPalette.mutedForeground)
             Spacer(minLength: 12)
             Text(value)
                 .font(.settingsBody.weight(.medium))
@@ -880,8 +880,8 @@ struct SettingsStatusDot: View {
 
     var body: some View {
         Circle()
-            .fill(tone == .warning ? DashboardPalette.warning
-                : tone == .good ? DashboardPalette.success : DashboardPalette.mutedForeground.opacity(0.6))
+            .fill(tone == .warning ? WovenPalette.warning
+                : tone == .good ? WovenPalette.success : WovenPalette.mutedForeground.opacity(0.6))
             .frame(width: 6, height: 6)
             .accessibilityHidden(true)
     }
@@ -902,7 +902,7 @@ struct SettingsStatus: View {
             SettingsStatusDot(tone: tone)
             Text(text)
                 .font(.settingsSecondary)
-                .foregroundStyle(DashboardPalette.mutedForeground)
+                .foregroundStyle(WovenPalette.mutedForeground)
         }
         .fixedSize()
         .accessibilityElement(children: .combine)
@@ -928,7 +928,7 @@ struct SettingsQuietButtonStyle: ButtonStyle {
     var isActive = false
     /// Row-wide buttons such as disclosures stay clear until hovered.
     var idleFill = true
-    @Environment(\.dashboardTheme) private var theme
+    @Environment(\.wovenTheme) private var theme
     @Environment(\.isEnabled) private var isEnabled
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.settingsFilledControls) private var filledControls
@@ -937,7 +937,7 @@ struct SettingsQuietButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .font(.system(size: 12.5, weight: .medium))
-            .foregroundStyle(DashboardPalette.foreground)
+            .foregroundStyle(WovenPalette.foreground)
             .padding(.horizontal, horizontalPadding)
             .frame(minHeight: minimumHeight ?? (filledControls ? 32 : 36))
             .background(
@@ -946,7 +946,7 @@ struct SettingsQuietButtonStyle: ButtonStyle {
                         : (isEnabled && isHovering ? 0.72 : (idleFill && filledControls ? 0.45 : 0))
                 )
             )
-            .clipShape(RoundedRectangle(cornerRadius: DashboardMetrics.controlRadius, style: .continuous))
+            .clipShape(RoundedRectangle(cornerRadius: WovenMetrics.controlRadius, style: .continuous))
             .scaleEffect(configuration.isPressed && !reduceMotion ? 0.985 : 1)
             .opacity(isEnabled ? 1 : 0.4)
             .onHover { isHovering = $0 }
@@ -963,17 +963,17 @@ struct CredentialAccessDisclosureView: View {
             HStack(alignment: .top, spacing: 12) {
                 Image(systemName: "key.fill")
                     .font(.system(size: 18, weight: .medium))
-                    .foregroundStyle(DashboardPalette.primary)
+                    .foregroundStyle(WovenPalette.primary)
                     .frame(width: 34, height: 34)
                     .background(
-                        Circle().fill(DashboardPalette.primary.opacity(0.1))
+                        Circle().fill(WovenPalette.primary.opacity(0.1))
                     )
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Enable Keychain access")
                         .font(.system(size: 17, weight: .semibold))
                     Text(purpose)
                         .font(.system(size: 12.5))
-                        .foregroundStyle(DashboardPalette.mutedForeground)
+                        .foregroundStyle(WovenPalette.mutedForeground)
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
@@ -993,7 +993,7 @@ struct CredentialAccessDisclosureView: View {
             DisclosureGroup("Keychain prompts") {
                 Text("macOS may ask when you use Keychain in Settings → Permissions & Access. Choose Always Allow to remember access to the requested item. Background refreshes stay silent.")
                     .font(.system(size: 11.5))
-                    .foregroundStyle(DashboardPalette.mutedForeground)
+                    .foregroundStyle(WovenPalette.mutedForeground)
                     .fixedSize(horizontal: false, vertical: true)
                     .padding(.top, 6)
             }
@@ -1004,19 +1004,19 @@ struct CredentialAccessDisclosureView: View {
                 Button("Not now", role: .cancel, action: onCancel)
                     .buttonStyle(SettingsQuietButtonStyle())
                 Button("Enable Keychain access", action: onEnable)
-                    .buttonStyle(DashboardPrimaryButtonStyle())
+                    .buttonStyle(WovenPrimaryButtonStyle())
             }
         }
         .padding(24)
         .frame(width: 500)
-        .background(DashboardPalette.background)
+        .background(WovenPalette.background)
     }
 
     private func disclosureRow(_ text: String) -> some View {
         HStack(alignment: .top, spacing: 8) {
             Image(systemName: "checkmark.circle.fill")
                 .font(.system(size: 12))
-                .foregroundStyle(DashboardPalette.primary)
+                .foregroundStyle(WovenPalette.primary)
                 .padding(.top, 2)
             Text(text)
                 .font(.system(size: 12))
@@ -1060,7 +1060,7 @@ struct SettingsHarnessSignInControl: View {
                 HStack(spacing: 8) {
                     if hasCredentials {
                         Text(status?.accounts?.first?.name ?? status?.label ?? "Signed in")
-                            .font(.settingsSecondary).foregroundStyle(DashboardPalette.mutedForeground)
+                            .font(.settingsSecondary).foregroundStyle(WovenPalette.mutedForeground)
                     } else {
                         signInButton
                     }
@@ -1179,7 +1179,7 @@ struct SettingsHarnessSignInControl: View {
     private func keyEntry(_ method: HarnessSignInFlow.Method) -> some View {
         HStack(spacing: 8) {
             SecureField({ if case .keyBeforeStart(let label) = method.input { label } else { "Key" } }(), text: $key)
-                .dashboardInput()
+                .wovenInput()
                 .onSubmit { saveKey(method) }
             Button("Save key") { saveKey(method) }
                 .disabled(key.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
@@ -1206,13 +1206,13 @@ struct SettingsSignInHandoff: View {
         if let url {
             HStack {
                 Link("Open sign-in page", destination: url)
-                    .foregroundStyle(DashboardPalette.success)
+                    .foregroundStyle(WovenPalette.success)
                 Button("Copy link") { copy(url.absoluteString) }
             }
             Link(destination: url) {
                 Text(url.absoluteString).font(.settingsSecondary).multilineTextAlignment(.leading)
             }
-            .foregroundStyle(DashboardPalette.success)
+            .foregroundStyle(WovenPalette.success)
         }
         if let code {
             HStack {
@@ -1241,7 +1241,7 @@ struct SettingsHarnessSignInPanel: View {
                 SettingsSignInHandoff(url: session.url, code: session.code)
                 if case .codeFromPage(let label) = session.method.input, session.state == .waiting, session.url != nil {
                     HStack {
-                        TextField(label, text: $code).dashboardInput()
+                        TextField(label, text: $code).wovenInput()
                             .onSubmit { send() }
                         Button(session.sentCode ? "Sent" : "Continue") { send() }
                             .disabled(code.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
@@ -1250,7 +1250,7 @@ struct SettingsHarnessSignInPanel: View {
                 }
                 if let tail = session.outputTail {
                     Text(tail).font(.system(size: 11.5, design: .monospaced))
-                        .foregroundStyle(DashboardPalette.mutedForeground).textSelection(.enabled)
+                        .foregroundStyle(WovenPalette.mutedForeground).textSelection(.enabled)
                 }
                 if session.state == .failed { SettingsError(session.message) }
                 else { SettingsNote(session.message) }
@@ -1305,13 +1305,13 @@ struct SettingsHarnessAccountDetails: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 5) {
             Text(status?.label ?? fallback).font(.settingsSecondary)
-                .foregroundStyle(DashboardPalette.mutedForeground)
+                .foregroundStyle(WovenPalette.mutedForeground)
             if let accounts = status?.accounts, !accounts.isEmpty {
                 ForEach(Array(accounts.enumerated()), id: \.offset) { _, account in
                     VStack(alignment: .leading, spacing: 2) {
                         Text(account.name ?? account.method).font(.system(size: 12.5, weight: .medium))
                         Text(account.name == nil ? "\(account.method) · Name not provided by harness" : account.method)
-                            .font(.system(size: 11)).foregroundStyle(DashboardPalette.mutedForeground)
+                            .font(.system(size: 11)).foregroundStyle(WovenPalette.mutedForeground)
                     }
                 }
             } else if ["verified", "credentials_present"].contains(status?.state ?? "") {

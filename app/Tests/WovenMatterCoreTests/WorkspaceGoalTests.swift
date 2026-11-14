@@ -3,7 +3,7 @@ import Foundation
 import Testing
 import WovenMatterCore
 import WovenMatterClient
-@testable import WovenMatterDashboardStore
+@testable import WovenMatterLibraryStore
 
 @Suite("Persistent goals and safe continuation")
 struct WorkspaceGoalTests {
@@ -49,7 +49,7 @@ struct WorkspaceGoalTests {
 
     private func run(_ db: WorkspaceDatabase, session: String, id: String, status: String = "completed") async throws {
         try await db.write { connection in
-            try connection.toolsExecuteUnlocked("INSERT INTO dashboard_runs(id,conversation_id,status,created_at) VALUES(?,?,?,?)",
+            try connection.toolsExecuteUnlocked("INSERT INTO runs(id,conversation_id,status,created_at) VALUES(?,?,?,?)",
                 [id, session, status, WorkspaceDatabaseConnection.timestamp(Date())])
         }
     }

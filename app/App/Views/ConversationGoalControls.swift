@@ -2,7 +2,7 @@ import SwiftUI
 import WovenMatterCore
 
 struct ConversationGoalControls: View {
-    @Environment(\.dashboardTheme) private var theme
+    @Environment(\.wovenTheme) private var theme
     private let currentGoal: () -> WorkspaceGoal?
     let sessionID: String
     let update: (WorkspaceGoalMutation) async throws -> Void
@@ -27,7 +27,7 @@ struct ConversationGoalControls: View {
                 TimelineView(.periodic(from: .now, by: 1)) { context in
                     Text(goal.elapsedPursuitText(at: context.date))
                 }.font(.system(size: 11)).monospacedDigit()
-                    .foregroundStyle(DashboardPalette.mutedForeground)
+                    .foregroundStyle(WovenPalette.mutedForeground)
                 Spacer(minLength: 0)
                 Button(role: .destructive) { mutate(.clear(id: goal.id)) } label: {
                     Text("Delete").padding(.horizontal, 6).frame(height: 24)
@@ -48,22 +48,22 @@ struct ConversationGoalControls: View {
                 .accessibilityLabel("Expand goal")
             }
             .font(.system(size: 11))
-            .buttonStyle(DashboardIconButtonStyle())
+            .buttonStyle(WovenIconButtonStyle())
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, 12).padding(.vertical, 4)
-            .background(theme.palette.themeWhisper, in: DashboardShapes.card)
+            .background(theme.palette.themeWhisper, in: DesktopShapes.card)
             .sheet(isPresented: $showingDetails) {
                 VStack(alignment: .leading, spacing: 14) {
                     HStack {
                         Text("Goal").font(.headline)
                         Spacer()
-                        Text(goal.status.title).font(.caption).foregroundStyle(DashboardPalette.mutedForeground)
+                        Text(goal.status.title).font(.caption).foregroundStyle(WovenPalette.mutedForeground)
                     }
                     ScrollView {
                         VStack(alignment: .leading, spacing: 12) {
                             Text(goal.objective).textSelection(.enabled)
                             if let evidence = goal.evidence, !evidence.isEmpty {
-                                Text(evidence).font(.caption).foregroundStyle(DashboardPalette.mutedForeground)
+                                Text(evidence).font(.caption).foregroundStyle(WovenPalette.mutedForeground)
                                     .textSelection(.enabled)
                             }
                         }.frame(maxWidth: .infinity, alignment: .leading)

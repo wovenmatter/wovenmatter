@@ -2,7 +2,7 @@ import Foundation
 import Observation
 import WovenMatterClient
 import WovenMatterCore
-import WovenMatterDashboardStore
+import WovenMatterLibraryStore
 
 /// The window's view of bots on every machine: one session per machine whose Woven
 /// server hosts bots, plus host state projected from the process that owns execution.
@@ -38,7 +38,7 @@ final class BotsModel {
         jobs.first { $0.kind == kind && $0.target.lowercased() == target.lowercased() }
     }
 
-    func name(for target: DashboardBotTarget) -> String? {
+    func name(for target: BotTarget) -> String? {
         sessions[target.machineID]?.bots.first { $0.id == target.botID }?.name
     }
 
@@ -121,7 +121,7 @@ final class BotsModel {
         return headers
     }
 
-    func conversation(_ target: DashboardBotTarget) -> BotConversationController? {
+    func conversation(_ target: BotTarget) -> BotConversationController? {
         sessions[target.machineID]?.conversation(botID: target.botID, conversationID: target.conversationID)
     }
 }
@@ -136,7 +136,6 @@ final class BotMachineSession: Identifiable {
     private(set) var bots: [PiBotSummary] = []
     private(set) var groups: [PiBotGroup] = []
     private(set) var threadsByBot: [String: [PiBotThread]] = [:]
-    private(set) var capabilities: Set<String> = []
     private(set) var health: PiBotHealth?
     private(set) var onboarding: PiBotOnboardingStatus?
     private(set) var runtimeStatus: PiBotRuntimeStatus?
@@ -179,10 +178,7 @@ final class BotMachineSession: Identifiable {
     var connectedClient: PiBotClient? { connection == .open ? client : nil }
     var layout: PiBotSidebarLayout { PiBotSidebarLayout(bots: bots, groups: groups) }
     var isConnected: Bool { connection == .open }
-    var supportsGroups: Bool { capabilities.contains("groups") }
-    /// Old runtimes lack the protocol the bot UI runs on.
-    var isCompatible: Bool { health == nil || (health?.supports("groups") == true && health?.supports("message.context") == true) }
-    var isAvailable: Bool { machine.state == .ready && isCompatible }
+    var isAvailable: Bool { machine.state == .ready }
     var displayName: String { machine.displayName }
 
     func threads(for botID: String) -> [PiBotThread] { PiBotThread.sorted(threadsByBot[botID] ?? []) }
@@ -217,7 +213,6 @@ final class BotMachineSession: Identifiable {
         if let client { Task { await client.invalidate() } }
         client = nil; clientEndpoint = nil
         setConnection(.closed)
-        capabilities = []
     }
 
     private func setConnection(_ state: PiBotClient.ConnectionState) {
@@ -272,7 +267,6 @@ final class BotMachineSession: Identifiable {
             setConnection(state)
         case .hello(let health):
             self.health = health
-            capabilities = Set(health.capabilities ?? [])
             scheduleRefresh()
             conversations.values.forEach { $0.connectionOpened() }
             Task { await refreshOnboarding(); await refreshRuntimeStatus() }
@@ -315,7 +309,7 @@ final class BotMachineSession: Identifiable {
         let current = reloads
         do {
             let latest = try await client.bots()
-            let latestGroups = capabilities.contains("groups") ? try await client.groups() : []
+            let latestGroups = try await client.groups()
             // A reload that finishes late must not undo a newer one.
             guard client === self.client, current == reloads else { return }
             bots = latest

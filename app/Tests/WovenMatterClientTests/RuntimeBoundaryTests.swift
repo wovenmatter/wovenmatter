@@ -109,15 +109,8 @@ struct RuntimeBoundaryTests {
       workspaceID: "work-1",
       hostName: "linux-box",
       userName: "woven",
-      remotePort: 7440,
-      memoryLimit: "8",
-      swapLimit: "4"
+      remotePort: 7440
     )
-
-    // The retained lifecycle helper runs no host command.
-    #expect(throws: RemoteWorkspaceClientError.self) {
-      try RemoteWorkspaceExecTarget(configuration: configuration).command(["true"])
-    }
 
     let deleteRecorder = SSHRecorder(response: #"{"deleted":true}"#)
     let deleteClient = RemoteWorkspaceSSHClient(
@@ -127,9 +120,9 @@ struct RuntimeBoundaryTests {
       scriptLoader: { Data("script".utf8) }
     )
     try await deleteClient.delete(configuration: configuration, removePersistentData: false)
-    #expect(deleteRecorder.command == "exec bash -s -- 'delete' 'work-1'")
+    #expect(deleteRecorder.command == "exec bash -s -- 'uninstall' 'work-1'")
     try await deleteClient.delete(configuration: configuration, removePersistentData: true)
-    #expect(deleteRecorder.command == "exec bash -s -- 'delete' 'work-1' '--data'")
+    #expect(deleteRecorder.command == "exec bash -s -- 'uninstall' 'work-1' '--data'")
 
     #expect(throws: RemoteWorkspaceClientError.self) {
       try RemoteWorkspaceSSHClient.validatedDestination(

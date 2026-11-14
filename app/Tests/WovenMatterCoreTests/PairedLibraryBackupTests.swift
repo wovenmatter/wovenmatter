@@ -3,7 +3,7 @@ import Testing
 import WovenMatterClient
 import WorkspaceFixtures
 import WovenMatterCore
-@testable import WovenMatterDashboardStore
+@testable import WovenMatterLibraryStore
 
 /// The recovery backup taken before a library's first peer import. A real
 /// library of several gigabytes takes minutes to copy and verify; it once ran
@@ -35,12 +35,13 @@ struct PairedLibraryBackupTests {
   @Test func otherDatabaseWorkNeverWaitsForTheBackup() async throws {
     let (fixture, database) = try await Self.largeLibrary(); defer { fixture.remove() }
     let file = fixture.directory.appending(path: "Paired Mac Backups/before-peer-sync.sqlite")
-    let backup = Task { try await database.backUpBeforePeerSync() }
+    database.prepareForPeerSync()
+    let backup = Task { _ = try await database.peerImportsReady() }
     #expect(try await Self.backupStarted(fixture.directory))
     let route = PairedMacRoute(deviceID: UUID().uuidString, libraryID: UUID().uuidString,
       endpoint: URL(string: "https://mini.example.ts.net:8443/wovenmatter")!, name: "Mini")
-    try await database.savePairedMacRoute(route)
-    #expect(try await database.pairedMacRoutes().contains(route))
+    try await database.saveMacRoute(route)
+    #expect(try await database.macRoutes().contains(route))
     // A write and a read both finished while the backup was still running.
     #expect(!FileManager.default.fileExists(atPath: file.path))
     try await backup.value
@@ -156,7 +157,8 @@ struct PairedLibraryBackupTests {
     for suffix in ["", "-journal"] {
       FileManager.default.createFile(atPath: file.path + ".partial" + suffix, contents: Data(repeating: 7, count: 4096))
     }
-    try await database.backUpBeforePeerSync()
+    database.prepareForPeerSync()
+    _ = try await database.peerImportsReady()
     #expect(FileManager.default.fileExists(atPath: file.path))
     let leftovers = try FileManager.default.contentsOfDirectory(atPath: file.deletingLastPathComponent().path)
       .filter { $0.contains(".partial") }

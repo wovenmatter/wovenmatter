@@ -1,19 +1,19 @@
 import AppKit
 import Foundation
 import WovenMatterCore
-import WovenMatterDashboardStore
+import WovenMatterLibraryStore
 
 extension ApplicationModel {
     func mutateNote(id: String, mutation: WorkspaceNoteMutation) async throws {
         try beginNoteAction(id: id)
         defer { noteActionIDs.remove(id) }
-        guard let store = dashboardStore else { throw ApplicationModelError.dashboardStoreUnavailable }
+        guard let store = libraryStore else { throw ApplicationModelError.libraryStoreUnavailable }
         guard await flushNoteDrafts() else { throw ApplicationModelError.noteDraftSaveFailed }
         try checkNoteActionAdmission()
         let restoring: Bool = if case .restore = mutation { true } else { false }
         let revision = try await store.database.noteActionRevision(id: id, trashed: restoring)
         try checkNoteActionAdmission()
-        guard dashboardStore === store else { throw ApplicationModelError.dashboardStoreUnavailable }
+        guard libraryStore === store else { throw ApplicationModelError.libraryStoreUnavailable }
         if isBackendFrontend {
             _ = try await sendBackendCommand(.workspaceMutation(.note(id: id, mutation: mutation, expectedRevision: revision)))
         } else {
@@ -34,19 +34,19 @@ extension ApplicationModel {
             }
             return notes
         }
-        guard let dashboardStore else { throw ApplicationModelError.dashboardStoreUnavailable }
-        return try await dashboardStore.trashedNotes()
+        guard let libraryStore else { throw ApplicationModelError.libraryStoreUnavailable }
+        return try await libraryStore.trashedNotes()
     }
 
     func exportNote(id: String, format: WorkspaceNoteExportFormat = .standard) async throws -> WorkspaceNoteExport {
         try beginNoteAction(id: id)
         defer { noteActionIDs.remove(id) }
-        guard let store = dashboardStore else { throw ApplicationModelError.dashboardStoreUnavailable }
+        guard let store = libraryStore else { throw ApplicationModelError.libraryStoreUnavailable }
         guard await flushNoteDrafts() else { throw ApplicationModelError.noteDraftSaveFailed }
         try checkNoteActionAdmission()
         let revision = try await store.database.noteActionRevision(id: id)
         try checkNoteActionAdmission()
-        guard dashboardStore === store else { throw ApplicationModelError.dashboardStoreUnavailable }
+        guard libraryStore === store else { throw ApplicationModelError.libraryStoreUnavailable }
         if isBackendFrontend {
             guard let export = try await sendBackendCommand(.exportNote(id: id, format: format, expectedRevision: revision)).noteExport else {
                 throw WorkspaceNoteMutationError.noteNotFound

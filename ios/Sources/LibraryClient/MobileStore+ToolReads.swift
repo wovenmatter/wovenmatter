@@ -3,7 +3,7 @@ import CryptoKit
 import WovenMatterShared
 
 extension MobileStore {
-  static func historyTool(_ c: WovenMatterToolCommand, context: MobileToolContext, state: MobileStoreState, journal: WorkspaceJournalState) throws -> GatewayJSONValue {
+  static func historyTool(_ c: WovenMatterToolCommand, context: MobileToolContext, state: MobileStoreState, journal: WorkspaceJournalState) throws -> JSONValue {
     let conversations = state.conversations.merging(journal.conversations) { _, durable in durable }.filter { !journal.deletedConversationIDs.contains($0.key) }
     let transcripts = state.transcripts.merging(journal.transcripts) { _, durable in durable }
     let search = c.options["search"] ?? (c.action == "search" ? c.positional.first : nil) ?? ""
@@ -47,7 +47,7 @@ extension MobileStore {
     if c.action == "conversation" {
       let id = try c.required("id", allowPositional: true)
       guard permitted(id), let transcript = transcripts[id] else { throw WorkspaceToolError.notFound("This conversation transcript is not saved on this device.") }
-      let rows = try transcript.messages.map { message -> GatewayJSONValue in
+      let rows = try transcript.messages.map { message -> JSONValue in
         var value = try MobileToolSupport.value(message).objectValue ?? [:]
         value.merge(try MobileToolSupport.chunk(message.content, command: c)) { _, chunk in chunk }
         return .object(value)
@@ -64,7 +64,7 @@ extension MobileStore {
       return .object(value)
     }
     if c.action == "runs" {
-      var seen = Set<String>(), rows: [GatewayJSONValue] = []
+      var seen = Set<String>(), rows: [JSONValue] = []
       for transcript in transcripts.values.sorted(by: { $0.conversationID < $1.conversationID }) where permitted(transcript.conversationID) {
         for run in transcript.runs ?? [] where seen.insert(run.id).inserted {
           var value = try MobileToolSupport.value(run).objectValue ?? [:]
@@ -97,11 +97,11 @@ extension MobileStore {
         events.append(entry)
       }
       events.sort { a, b in a.workspaceID == b.workspaceID ? a.originSequence < b.originSequence : a.workspaceID < b.workspaceID }
-      var rows: [GatewayJSONValue] = []
+      var rows: [JSONValue] = []
       for event in events {
         // Native records retain full untruncated bodies. Reassemble and verify
         // their immutable chunks before applying character-window reads.
-        var value: [String: GatewayJSONValue] = try MobileToolSupport.value(event).objectValue ?? [:]
+        var value: [String: JSONValue] = try MobileToolSupport.value(event).objectValue ?? [:]
         value.removeValue(forKey: "nativeRecord")
         var content = event.conversation?.title ?? ""
         if let transcript = event.transcript {
@@ -157,7 +157,7 @@ extension MobileStore {
     throw WorkspaceToolError.invalid("This session operation requires the device execution adapter.")
   }
 
-  func libraryTool(_ c: WovenMatterToolCommand) async throws -> GatewayJSONValue {
+  func libraryTool(_ c: WovenMatterToolCommand) async throws -> JSONValue {
     let manifests = await artifacts.manifests().filter { !$0.deleted }
     if c.action == "read" {
       let id = try c.required("id", allowPositional: true)
@@ -176,7 +176,7 @@ extension MobileStore {
       let itemKind = mediaType.hasPrefix("image/") ? "photo" : mediaType == "text/uri-list" ? "link" : "file"
       return (query.isEmpty || item.title.localizedCaseInsensitiveContains(query)) && (workspaces == nil || workspaces!.contains(item.workspaceID)) && (kind == nil || itemKind == kind)
     }.sorted { $0.id < $1.id }
-    if c.options["harness"] != nil || c.options["sender"] != nil || c.options["since"] != nil || c.options["until"] != nil { throw WorkspaceToolError.invalid("These filters require the central library's retained-item attribution. Use target central when connected.") }
+    if c.options["harness"] != nil || c.options["sender"] != nil || c.options["since"] != nil || c.options["until"] != nil { throw WorkspaceToolError.invalid("These filters need retained-item attribution, which a Mac or Linux workspace agent can read.") }
     return try MobileToolSupport.page(rows.map(MobileToolSupport.value), command: c, offsetKey: "offset")
   }
 }

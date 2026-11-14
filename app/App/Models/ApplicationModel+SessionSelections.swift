@@ -1,7 +1,7 @@
 import Foundation
 import WovenMatterClient
 import WovenMatterCore
-import WovenMatterDashboardStore
+import WovenMatterLibraryStore
 
 extension ApplicationModel {
     /// Native host access is selected once for the workspace. Captured chat and
@@ -22,7 +22,7 @@ extension ApplicationModel {
         if isBackendFrontend {
             let result = try await sendBackendCommand(.loadAgentDefaults(runtime: runtime, workspace: workspace))
             guard let stored = result.selections, let resolved = result.resolvedSelections else {
-                throw ApplicationModelError.dashboardStoreUnavailable
+                throw ApplicationModelError.libraryStoreUnavailable
             }
             return (stored, resolved, result.usesSharedDefaults ?? stored.isEmpty)
         }
@@ -46,7 +46,7 @@ extension ApplicationModel {
             let result = try await sendBackendCommand(.saveAgentDefault(runtime: runtime, workspace: workspace,
                 field: field, selections: selections))
             guard let stored = result.selections, let resolved = result.resolvedSelections else {
-                throw ApplicationModelError.dashboardStoreUnavailable
+                throw ApplicationModelError.libraryStoreUnavailable
             }
             return (stored, resolved, result.usesSharedDefaults ?? stored.isEmpty)
         }
@@ -70,7 +70,7 @@ extension ApplicationModel {
         if isBackendFrontend {
             let result = try await sendBackendCommand(.setAgentDefaultsSharing(runtime: runtime, workspace: workspace, shared: shared))
             guard let stored = result.selections, let resolved = result.resolvedSelections else {
-                throw ApplicationModelError.dashboardStoreUnavailable
+                throw ApplicationModelError.libraryStoreUnavailable
             }
             return (stored, resolved, result.usesSharedDefaults ?? stored.isEmpty)
         }
@@ -94,8 +94,8 @@ extension ApplicationModel {
         if let captured = sessionSelectionPreferences.conversation(id: conversationID) {
             return await (captured.harness, try sessionSelectionWorkspaceID?(conversationID) ?? captured.workspace)
         }
-        guard let dashboardStore else { throw ApplicationModelError.dashboardStoreUnavailable }
-        let session = try await dashboardStore.database.localACPSession(conversationID: conversationID)
+        guard let libraryStore else { throw ApplicationModelError.libraryStoreUnavailable }
+        let session = try await libraryStore.database.localACPSession(conversationID: conversationID)
         let workspace: String
         if let resolved = try await sessionSelectionWorkspaceID?(conversationID) {
             workspace = resolved
@@ -115,9 +115,9 @@ extension ApplicationModel {
     /// for opening the chat or sending its first message to retry.
     func initializeNewSessionSelections(conversationID: String, capturedDefaults: SessionSelections? = nil,
         usesProductPermissionDefault: Bool? = nil) async throws {
-        guard let dashboardStore else { throw ApplicationModelError.dashboardStoreUnavailable }
+        guard let libraryStore else { throw ApplicationModelError.libraryStoreUnavailable }
         let context = try await sessionSelectionContext(conversationID: conversationID)
-        let native = try await dashboardStore.database.localACPSession(conversationID: conversationID)
+        let native = try await libraryStore.database.localACPSession(conversationID: conversationID)
         let forcedPermission = native.remoteWorkspaceID.flatMap { remoteWorkspaces.configuration(id: $0)?.fullRootPermission(for: native.runtimeKind) }
         let effectiveDefaults = selectionsApplyingWorkspaceAccess(
             capturedDefaults ?? sessionSelectionPreferences.defaults(harness: context.harness, workspace: context.workspace),
@@ -136,7 +136,7 @@ extension ApplicationModel {
             // Defaults are a starting preference, not a prerequisite for a chat.
             // Keep the native state that was actually accepted, including a
             // partially applied bundle, and leave its controls editable.
-            let actual = try? await dashboardStore.database.localACPSession(conversationID: conversationID)
+            let actual = try? await libraryStore.database.localACPSession(conversationID: conversationID)
             let metadata = localACPSessionMetadata[conversationID]
             sessionSelectionPreferences.replaceConfirmedSelections(id: conversationID,
                 selections: SessionSelections(model: metadata?.model ?? actual?.model,
@@ -169,19 +169,19 @@ extension ApplicationModel {
         defer { endSessionSelectionApplication(conversationID: conversationID) }
         guard let saved = sessionSelectionPreferences.conversation(id: conversationID),
               saved.requiresApplication else { return }
-        guard let dashboardStore else { throw ApplicationModelError.dashboardStoreUnavailable }
+        guard let libraryStore else { throw ApplicationModelError.libraryStoreUnavailable }
         // A chat its Linux host runs takes the choices through the host's server.
-        if try await dashboardStore.database.libraryExecutionOwner(conversationID: conversationID) != nil {
-            let native = try await dashboardStore.database.localACPSession(conversationID: conversationID)
+        if try await libraryStore.database.libraryExecutionOwner(conversationID: conversationID) != nil {
+            let native = try await libraryStore.database.localACPSession(conversationID: conversationID)
             let desired = selectionsApplyingWorkspaceAccess(saved.desiredSelections, runtime: native.runtimeKind, workspaceID: native.remoteWorkspaceID)
             if desired.model != nil || desired.thinking != nil || desired.permission != nil {
-                _ = try await centralExecutionClient().perform(conversationID: conversationID, action: .configureSession(id: conversationID,
-                    model: desired.model, thinking: desired.thinking, permission: native.runtimeKind == .pi ? nil : desired.permission))
+                _ = try await memberExecutionClient().perform(conversationID: conversationID, action: .configureSession(id: conversationID,
+                    model: desired.model, thinking: desired.thinking, permission: desired.permission))
             }
             sessionSelectionPreferences.markApplied(id: conversationID)
             return
         }
-        let native = try await dashboardStore.database.localACPSession(conversationID: conversationID)
+        let native = try await libraryStore.database.localACPSession(conversationID: conversationID)
         let forcedPermission = native.remoteWorkspaceID.flatMap { remoteWorkspaces.configuration(id: $0)?.fullRootPermission(for: native.runtimeKind) }
         var desired = selectionsApplyingWorkspaceAccess(saved.desiredSelections, runtime: native.runtimeKind, workspaceID: native.remoteWorkspaceID)
         let openCode = openCodeModel(for: conversationID)
@@ -197,21 +197,21 @@ extension ApplicationModel {
         } else {
             let permission = desired.permission
             if desired.model != nil || desired.thinking != nil || permission != nil {
-                guard let conversation = try await dashboardStore.database.workspaceOverview().conversations
+                guard let conversation = try await libraryStore.database.workspaceOverview().conversations
                     .first(where: { $0.id == conversationID }) else {
                     throw LocalACPSessionDatabaseError.sessionNotFound
                 }
                 let context = try await directACPLaunchContext(conversation: conversation,
                     runtimeKind: native.runtimeKind)
                 if saved.usesProductPermissionDefault && forcedPermission == nil {
-                    let available = try await dashboardStore.localACPSessionConfiguration(conversationID: conversationID,
+                    let available = try await libraryStore.localACPSessionConfiguration(conversationID: conversationID,
                         launch: context.launch, workspace: context.workspace)
                     desired = sessionSelectionPreferences.reconcileProductPermissionDefault(id: conversationID,
                         options: available.permissionOptions, nativePermission: available.permission)?.desiredSelections ?? desired
                 }
                 // Configure the actual session, including a retained native client.
                 // A DB seed alone cannot prove that its next prompt uses these values.
-                let configuration = try await dashboardStore.updateLocalACPSessionConfiguration(
+                let configuration = try await libraryStore.updateLocalACPSessionConfiguration(
                     conversationID: conversationID, model: desired.model, thinking: desired.thinking,
                     permission: desired.permission,
                     launch: context.launch, workspace: context.workspace)

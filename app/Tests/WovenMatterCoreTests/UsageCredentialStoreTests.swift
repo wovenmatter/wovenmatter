@@ -5,7 +5,7 @@ import Security
 import Testing
 import WovenMatterClient
 import WovenMatterCore
-@testable import WovenMatterDashboardStore
+@testable import WovenMatterLibraryStore
 
 @Suite("Usage credential prompt suppression")
 struct UsageCredentialStoreTests {

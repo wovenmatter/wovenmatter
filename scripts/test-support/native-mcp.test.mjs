@@ -136,7 +136,7 @@ test('native instructions preserve supplied settings, authored messages and resu
   configure('codex', fixture(t), [], persona);
   assert.equal(JSON.parse(persona.CODEX_CONFIG).developer_instructions, 'Existing instructions\n\nSelected persona\n\n' + wovenInstructions);
   assert.equal(persona.WOVENMATTER_ADDITIONAL_INSTRUCTIONS, undefined);
-  for (const runtime of ['pi', 'hermes', 'openclaw', 'cursor']) assert.throws(() => configure(runtime, fixture(t), [], {}), /Unsupported/);
+  for (const runtime of ['default_agent', 'opencode', 'unknown']) assert.throws(() => configure(runtime, fixture(t), [], {}), /Unsupported/);
   const prompt = { method: 'session/prompt', params: { prompt: [{ type: 'text', text: 'User text' }] } };
   const before = structuredClone(prompt);
   nativeSessionInstructions('claude_code', prompt, '/fixture/plugin');

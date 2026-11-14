@@ -1,0 +1,322 @@
+import Foundation
+#if canImport(SQLite3)
+import SQLite3
+#else
+import CSQLite
+#endif
+import WovenMatterCore
+import WovenMatterClient
+
+extension WorkspaceDatabaseConnection {
+  /// Only the app scheduler uses timer/notification kinds. Agent commands always
+  /// use message/created with a caller bound to their endpoint.
+  public func reserveToolDelivery(sourceID: String, targetID: String, text: String, requestID: String,
+                                  kind: WorkspaceSessionDeliveryKind = .message, purpose: String? = nil,
+                                  eventKey: String? = nil) throws -> WorkspaceSessionDelivery {
+    try transaction { try reserveToolDeliveryUnlocked(sourceID: sourceID, targetID: targetID, text: text,
+      requestID: requestID, kind: kind, purpose: purpose, eventKey: eventKey) }
+  }
+
+  func reserveToolDeliveryUnlocked(sourceID: String, targetID: String, text: String, requestID: String,
+                                   kind: WorkspaceSessionDeliveryKind, purpose: String? = nil,
+                                   eventKey: String? = nil) throws -> WorkspaceSessionDelivery {
+      let requestID = try persistedToolRequestID(requestID, in: .deliveries)
+      guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+            text.utf8.count <= 65_536,
+            purpose.map({ $0.utf8.count <= 65_536 }) ?? true,
+            eventKey.map({ !$0.isEmpty && $0.utf8.count <= 4_096 }) ?? true else {
+        throw WorkspaceToolError.invalid("A delivery has invalid or oversized content.")
+      }
+      if kind == .message || kind == .created {
+        try requireToolUnlocked(.sessions, sessionID: sourceID)
+        guard sourceID != targetID else { throw WorkspaceToolError.invalid("Use a timer for follow-ups to this session.") }
+      }
+      try requireToolSessionUnlocked(sourceID)
+      try requireToolSessionUnlocked(targetID)
+      if let existing = try deliveryUnlocked(requestID) {
+        let storedEventKey = try historyRowsUnlocked(
+          "SELECT event_key FROM session_deliveries WHERE id=?", values: [requestID])
+          .first?.objectValue?["event_key"]?.stringValue
+        guard existing.sourceID == sourceID, existing.targetID == targetID,
+              existing.text == text, existing.kind == kind,
+              existing.purpose == purpose, storedEventKey == eventKey else {
+          throw WorkspaceToolError.invalid("Delivery request ID collision.")
+        }
+        return existing
+      }
+      if let eventKey, let existing = try historyRowsUnlocked("SELECT id FROM session_deliveries WHERE event_key=?", values: [eventKey]).first?.objectValue?["id"]?.stringValue,
+         let delivery = try deliveryUnlocked(existing) { return delivery }
+      try toolsExecuteUnlocked("""
+        INSERT INTO session_deliveries(id,source_id,target_id,content,status,source_agent,source_title,
+          kind,purpose,target_title,target_harness,target_model,event_key)
+        SELECT ?,?,?,?,'queued',coalesce(b.display_name,s.runtime_kind,c.agent_codename,'wovenmatter'),
+          coalesce(b.display_name,c.title,'Outside agent'),?,?,coalesce(bt.display_name,t.title,'Bot'),
+          coalesce(bt.display_name,d.runtime_kind,t.agent_codename),d.model,?
+        FROM mcp_callers b JOIN mcp_callers bt ON bt.id=?
+        LEFT JOIN conversations c ON c.id=b.id
+        LEFT JOIN conversations t ON t.id=bt.id
+        LEFT JOIN harness_sessions s ON s.conversation_id=c.id
+        LEFT JOIN harness_sessions d ON d.conversation_id=t.id WHERE b.id=?
+        """, [requestID, sourceID, targetID, text, kind.rawValue, purpose, eventKey, targetID, sourceID])
+      guard let result = try deliveryUnlocked(requestID) else { throw WorkspaceToolError.invalid("Unable to reserve delivery.") }
+      return result
+  }
+
+  /// A durable claim prevents concurrent callbacks or retries dispatching twice.
+  /// Preparation is safe to recover; an unconfirmed native submission is not.
+  public func claimToolDelivery(id: String, now: Date = Date()) throws -> WorkspaceSessionDelivery? {
+    try transaction {
+      let id = try canonicalDeliveryID(id)
+      guard let delivery = try deliveryUnlocked(id), delivery.status == "queued" else { return nil }
+      let retryAfter = try historyRowsUnlocked("SELECT retry_after FROM session_deliveries WHERE id=?", values: [id])
+        .first?.objectValue?["retry_after"]?.doubleValue
+      if let retryAfter, retryAfter > now.timeIntervalSince1970 { return nil }
+      guard try toolDeliveryAuthorizedUnlocked(delivery) else {
+        try toolsExecuteUnlocked("UPDATE session_deliveries SET status='cancelled' WHERE id=?", [id])
+        return nil
+      }
+      try toolsExecuteUnlocked("UPDATE session_deliveries SET status='sending',transport_started=0,retry_after=NULL WHERE id=? AND status='queued'", [id])
+      return try deliveryUnlocked(id)
+    }
+  }
+
+  public func validateClaimedToolDelivery(id: String) throws {
+    try withLock { try validateClaimedToolDeliveryUnlocked(id: id) }
+  }
+
+  /// Native HTTP dispatch has no durable local input acceptance. Record this
+  /// boundary before issuing a request so a lost response can never be retried.
+  public func markToolDeliveryTransportStarted(id: String, targetID: String? = nil, nativeCommand: String? = nil) throws {
+    try transaction {
+      let id = try canonicalDeliveryID(id)
+      if let targetID, try deliveryUnlocked(id)?.targetID != targetID {
+        throw WorkspaceToolError.invalid("This delivery is not reserved for this session.")
+      }
+      try markToolDeliveryTransportStartedUnlocked(id: id)
+      if let nativeCommand {
+        guard !nativeCommand.isEmpty, nativeCommand.utf8.count <= 256 else { throw WorkspaceToolError.invalid("Invalid native command.") }
+        try toolsExecuteUnlocked("UPDATE session_deliveries SET native_command=? WHERE id=?", [nativeCommand, id])
+      }
+    }
+  }
+
+  func markToolDeliveryTransportStartedUnlocked(id: String) throws {
+    let id = try canonicalDeliveryID(id)
+    try validateClaimedToolDeliveryUnlocked(id: id)
+    try toolsExecuteUnlocked("UPDATE session_deliveries SET transport_started=1 WHERE id=?", [id])
+  }
+
+  /// A scheduler may retry preparation with the same occurrence identity. Once
+  /// input could have reached the backend, only reconciliation can settle it.
+  public func failToolDeliveryAttempt(id: String, now: Date = Date()) throws {
+    try transaction {
+      let id = try canonicalDeliveryID(id)
+      guard let delivery = try deliveryUnlocked(id), delivery.status == "sending" else { return }
+      let submitted = try historyRowsUnlocked("SELECT transport_started FROM session_deliveries WHERE id=?", values: [id])
+        .first?.objectValue?["transport_started"]?.intValue != 0
+      if !submitted, try !toolDeliveryAuthorizedUnlocked(delivery) {
+        try toolsExecuteUnlocked("UPDATE session_deliveries SET status='cancelled' WHERE id=?", [id])
+        return
+      }
+      let scheduled = WovenMCPCaller.parseBot(delivery.targetID) != nil || delivery.kind == .timer || delivery.kind == .notification || delivery.kind == .calendar || delivery.kind == .goal
+      let status = submitted ? "uncertain" : scheduled ? "queued" : "failed"
+      try toolsExecuteUnlocked("UPDATE session_deliveries SET status=?,retry_after=? WHERE id=?",
+        [status, status == "queued" ? String(now.addingTimeInterval(30).timeIntervalSince1970) : nil, id])
+    }
+  }
+
+  /// Call inside the final acceptance transaction, after asynchronous connection
+  /// and attachment preparation. A prior app-level check is only a preflight.
+  func validateClaimedToolDeliveryUnlocked(id: String) throws {
+    let id = try canonicalDeliveryID(id)
+    guard let delivery = try deliveryUnlocked(id), delivery.status == "sending",
+          try toolDeliveryAuthorizedUnlocked(delivery) else {
+      throw WorkspaceToolError.invalid("This delivery was cancelled or its access was revoked.")
+    }
+  }
+
+  private func toolDeliveryAuthorizedUnlocked(_ delivery: WorkspaceSessionDelivery) throws -> Bool {
+    // A wake-up's source is a session on another workspace (SessionWakeUps):
+    // only its target, the caller that created that session, must still allow it.
+    if delivery.kind == .notification,
+       let key = try historyRowsUnlocked("SELECT event_key FROM session_deliveries WHERE id=?", values: [delivery.id]).first?.objectValue?["event_key"]?.stringValue,
+       key.hasPrefix(Self.wakeUpEventPrefix) {
+      if !WovenMCPCaller.isAppWide(delivery.targetID) {
+        guard !(try historyRowsUnlocked("SELECT 1 FROM conversations WHERE id=? AND deleted_at IS NULL", values: [delivery.targetID])).isEmpty else { return false }
+      }
+      return (try? sessionToolsUnlocked(delivery.targetID))?.enabled.contains(.sessions) == true
+    }
+    for id in [delivery.sourceID, delivery.targetID] where !WovenMCPCaller.isAppWide(id) {
+      guard !(try historyRowsUnlocked("SELECT 1 FROM conversations WHERE id=? AND deleted_at IS NULL", values: [id])).isEmpty else { return false }
+    }
+    guard let source = try? sessionToolsUnlocked(delivery.sourceID),
+          let target = try? sessionToolsUnlocked(delivery.targetID) else { return false }
+    switch delivery.kind {
+    case .goal: return try goalDeliveryAuthorizedUnlocked(sessionID: delivery.targetID, deliveryID: delivery.id)
+    case .calendar: return try calendarRunAuthorizedUnlocked(delivery.id)
+    case .message, .created: return source.enabled.contains(.sessions) && (WovenMCPCaller.parseBot(delivery.targetID) == nil || target.enabled.contains(.sessions))
+    case .timer:
+      guard let timerID = try historyRowsUnlocked(
+        "SELECT id FROM session_timers WHERE session_id=? AND pending_delivery_id=? AND is_paused=0",
+        values: [delivery.targetID, delivery.id]).first?.objectValue?["id"]?.stringValue else { return false }
+      return try timerExecutionEnabledUnlocked(id: timerID, sessionID: delivery.targetID)
+    case .notification:
+      let relation = try relationshipUnlocked(delivery.sourceID)
+      if let key = try historyRowsUnlocked("SELECT event_key FROM session_deliveries WHERE id=?", values: [delivery.id]).first?.objectValue?["event_key"]?.stringValue,
+         key.hasPrefix("coordination:") {
+        let epoch = try historyRowsUnlocked("SELECT coordination_epoch FROM session_relationships WHERE session_id=?", values: [delivery.sourceID]).first?.objectValue?["coordination_epoch"]?.stringValue ?? ""
+        guard key.hasPrefix("coordination:" + epoch + ":") else { return false }
+      }
+      return target.enabled.contains(.sessions) && relation.coordinatorID == delivery.targetID && relation.notificationsEnabled
+    }
+  }
+
+  public func setToolDeliveryStatus(id: String, status: String, messageID: String? = nil,
+                                    failureCode: String? = nil, failureReason: String? = nil) throws {
+    guard ["queued", "accepted", "failed", "uncertain", "cancelled"].contains(status) else {
+      throw WorkspaceToolError.invalid("Invalid delivery status.")
+    }
+    guard failureCode.map({ !$0.isEmpty && $0.utf8.count <= 64 }) ?? true,
+          failureReason.map({ $0.utf8.count <= 1_024 }) ?? true else {
+      throw WorkspaceToolError.invalid("Invalid delivery failure details.")
+    }
+    try transaction {
+      let id = try canonicalDeliveryID(id)
+      guard let current = try deliveryUnlocked(id), current.status != "accepted" else { return }
+      try toolsExecuteUnlocked("UPDATE session_deliveries SET status=?,message_id=coalesce(?,message_id),failure_code=?,failure_reason=? WHERE id=?",
+        [status, messageID, failureCode, failureReason, id])
+    }
+  }
+
+  public func recoverToolDeliveries() throws {
+    try transaction {
+      try executeUnlocked("""
+        UPDATE session_deliveries SET status=CASE
+          WHEN transport_started=1 THEN 'uncertain'
+          WHEN kind IN ('timer','notification','calendar','goal') OR target_id IN (SELECT id FROM mcp_callers WHERE machine_id IS NOT NULL) THEN 'queued' ELSE 'failed' END
+          WHERE status='sending' AND message_id IS NULL
+        """)
+    }
+  }
+
+  public func toolDelivery(id: String) throws -> WorkspaceSessionDelivery? {
+    try withLock { try deliveryUnlocked(id) }
+  }
+
+  public func sessionDeliveries(sessionID: String? = nil, queuedOnly: Bool = false, limit: Int = 200, beforeID: String? = nil, activityOnly: Bool = false, includeCalendar: Bool = true) throws -> [WorkspaceSessionDelivery] {
+    try withLock {
+      var sql = "SELECT rowid AS sequence,* FROM session_deliveries WHERE 1=1"
+      var values: [String?] = []
+      if !includeCalendar { sql += " AND kind!='calendar'" }
+      if let sessionID {
+        if activityOnly {
+          sql += " AND ((source_id=? AND kind IN ('message','created')) OR (target_id=? AND native_command IS NOT NULL))"
+          values += [sessionID, sessionID]
+        } else { sql += " AND (source_id=? OR target_id=?)"; values += [sessionID, sessionID] }
+      }
+      if let beforeID {
+        guard !queuedOnly, let cursor = try deliveryUnlocked(beforeID),
+              sessionID == nil || cursor.sourceID == sessionID || cursor.targetID == sessionID else {
+          throw WorkspaceToolError.invalid("The delivery cursor is unavailable for this session.")
+        }
+        guard let sequence = cursor.sequence else { throw WorkspaceToolError.invalid("The delivery cursor is unavailable.") }
+        sql += " AND rowid<?"
+        values.append(String(sequence))
+      }
+      if queuedOnly {
+        sql += " AND status='queued' AND (retry_after IS NULL OR retry_after<=?)"
+        values.append(String(Date().timeIntervalSince1970))
+      }
+      sql += queuedOnly ? " ORDER BY rowid LIMIT ?" : " ORDER BY rowid DESC LIMIT ?"
+      values.append(String(min(max(limit, 1), 500)))
+      return try historyRowsUnlocked(sql, values: values).map(deliveryFromRow)
+    }
+  }
+
+  /// Refresh exactly the loaded transcript window, so polling updates receipt
+  /// statuses without dropping older pages or skipping bursts of new activity.
+  public func sessionActivityWindow(sessionID: String, throughID: String) throws -> [WorkspaceSessionDelivery] {
+    try withLock {
+      guard let cursor = try deliveryUnlocked(throughID),
+            cursor.sourceID == sessionID || (cursor.targetID == sessionID && cursor.nativeCommand != nil),
+            let sequence = cursor.sequence else {
+        throw WorkspaceToolError.invalid("The delivery cursor is unavailable for this session.")
+      }
+      return try historyRowsUnlocked("""
+        SELECT rowid AS sequence,* FROM session_deliveries
+          WHERE ((source_id=? AND kind IN ('message','created')) OR (target_id=? AND native_command IS NOT NULL))
+          AND rowid>=? ORDER BY rowid DESC
+        """, values: [sessionID, sessionID, String(sequence)]).map(deliveryFromRow)
+    }
+  }
+
+  private func deliveryUnlocked(_ id: String) throws -> WorkspaceSessionDelivery? {
+    let id = try canonicalDeliveryID(id)
+    return try historyRowsUnlocked("SELECT rowid AS sequence,* FROM session_deliveries WHERE id=?", values: [id]).first.map(deliveryFromRow)
+  }
+
+  func canonicalDeliveryID(_ id: String) throws -> String {
+    guard UUID(uuidString: id) != nil else { return id }
+    return try persistedToolRequestID(id, in: .deliveries)
+  }
+
+  private func deliveryFromRow(_ value: JSONValue) -> WorkspaceSessionDelivery {
+    let r = value.objectValue ?? [:]
+    func string(_ key: String) -> String { r[key]?.stringValue ?? "" }
+    return WorkspaceSessionDelivery(id: string("id"), sourceID: string("source_id"), targetID: string("target_id"), text: string("content"),
+      kind: WorkspaceSessionDeliveryKind(rawValue: string("kind")) ?? .message, status: string("status"), messageID: r["message_id"]?.stringValue,
+      sourceTitle: string("source_title"), sourceHarness: string("source_agent"), targetTitle: string("target_title"), targetHarness: string("target_harness"),
+      targetModel: r["target_model"]?.stringValue, purpose: r["purpose"]?.stringValue, createdAt: string("created_at"),
+      sequence: r["sequence"]?.intValue.map(Int64.init), nativeCommand: r["native_command"]?.stringValue,
+      failureCode: r["failure_code"]?.stringValue, failureReason: r["failure_reason"]?.stringValue)
+  }
+}
+
+// MARK: - Async worker boundary
+
+extension WorkspaceDatabase {
+  public func reserveToolDelivery(sourceID: String, targetID: String, text: String, requestID: String,
+                                  kind: WorkspaceSessionDeliveryKind = .message, purpose: String? = nil,
+                                  eventKey: String? = nil) async throws -> WorkspaceSessionDelivery {
+    try await write { try $0.reserveToolDelivery(sourceID: sourceID, targetID: targetID, text: text, requestID: requestID, kind: kind, purpose: purpose, eventKey: eventKey) }
+  }
+
+  public func claimToolDelivery(id: String, now: Date = Date()) async throws -> WorkspaceSessionDelivery? {
+    try await write { try $0.claimToolDelivery(id: id, now: now) }
+  }
+
+  public func validateClaimedToolDelivery(id: String) async throws {
+    try await read { try $0.validateClaimedToolDelivery(id: id) }
+  }
+
+  public func markToolDeliveryTransportStarted(id: String, targetID: String? = nil, nativeCommand: String? = nil) async throws {
+    try await write { try $0.markToolDeliveryTransportStarted(id: id, targetID: targetID, nativeCommand: nativeCommand) }
+  }
+
+  public func failToolDeliveryAttempt(id: String, now: Date = Date()) async throws {
+    try await finishWrite { try $0.failToolDeliveryAttempt(id: id, now: now) }
+  }
+
+  public func setToolDeliveryStatus(id: String, status: String, messageID: String? = nil,
+                                    failureCode: String? = nil, failureReason: String? = nil) async throws {
+    // Resolving an already claimed delivery is cleanup, including returning a
+    // known-unsent attempt to the queue. Preserve its outcome on cancellation.
+    try await finishWrite { try $0.setToolDeliveryStatus(id: id, status: status, messageID: messageID, failureCode: failureCode, failureReason: failureReason) }
+  }
+
+  public func recoverToolDeliveries() async throws {
+    try await write { try $0.recoverToolDeliveries() }
+  }
+
+  public func toolDelivery(id: String) async throws -> WorkspaceSessionDelivery? {
+    try await read { try $0.toolDelivery(id: id) }
+  }
+
+  public func sessionDeliveries(sessionID: String? = nil, queuedOnly: Bool = false, limit: Int = 200, beforeID: String? = nil, activityOnly: Bool = false, includeCalendar: Bool = true) async throws -> [WorkspaceSessionDelivery] {
+    try await read { try $0.sessionDeliveries(sessionID: sessionID, queuedOnly: queuedOnly, limit: limit, beforeID: beforeID, activityOnly: activityOnly, includeCalendar: includeCalendar) }
+  }
+
+  public func sessionActivityWindow(sessionID: String, throughID: String) async throws -> [WorkspaceSessionDelivery] {
+    try await read { try $0.sessionActivityWindow(sessionID: sessionID, throughID: throughID) }
+  }
+}

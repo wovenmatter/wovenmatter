@@ -7,9 +7,9 @@ struct DictationMicrophone: View {
     private var dictation: DictationModel { .shared }
     var body: some View {
         if usesNoteToolbarStyle {
-            microphoneButton.buttonStyle(DashboardIconButtonStyle())
+            microphoneButton.buttonStyle(WovenIconButtonStyle())
         } else {
-            microphoneButton.buttonStyle(DashboardComposerControlButtonStyle())
+            microphoneButton.buttonStyle(ComposerControlButtonStyle())
         }
     }
 
@@ -33,8 +33,8 @@ struct DictationMicrophone: View {
 
     private var microphoneIcon: some View {
         Image(systemName: dictation.isRecording ? "stop.circle.fill" : "mic")
-            .foregroundStyle(dictation.isRecording ? DashboardPalette.danger
-                             : usesNoteToolbarStyle ? DashboardPalette.mutedForeground : DashboardPalette.foreground)
+            .foregroundStyle(dictation.isRecording ? WovenPalette.danger
+                             : usesNoteToolbarStyle ? WovenPalette.mutedForeground : WovenPalette.foreground)
     }
 }
 
@@ -54,8 +54,8 @@ struct DictationFeedback: View {
                     .buttonStyle(SettingsQuietButtonStyle())
             }
             .padding(12)
-            .background(DashboardPalette.background)
-            .clipShape(DashboardShapes.card)
+            .background(WovenPalette.background)
+            .clipShape(DesktopShapes.card)
             .frame(maxWidth: 540)
         }
     }

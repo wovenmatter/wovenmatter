@@ -4,11 +4,11 @@ import WovenMatterClient
 
 extension ApplicationModel {
     func executorClient(install: Bool = false, config proposed: ExecutorConfiguration? = nil, prepareHost: Bool = false) async throws -> ExecutorBrokerClient {
-        guard !isBackendFrontend, let database = dashboardStore?.database else { throw ApplicationModelError.dashboardStoreUnavailable }
+        guard !isBackendFrontend, let database = libraryStore?.database else { throw ApplicationModelError.libraryStoreUnavailable }
         let saved = try await database.toolSettings().executor
         guard let config = proposed ?? saved else { throw DefaultAgentError.message("Set up Executor in Settings → Woven MCP first.") }
         if executorRuntime.client == nil {
-            executorRuntime.client = ExecutorBrokerClient(directory: try Self.dashboardSupportDirectory().appending(path: "executor"))
+            executorRuntime.client = ExecutorBrokerClient(directory: try Self.librarySupportDirectory().appending(path: "executor"))
         }
         let client = executorRuntime.client!
         do {
@@ -17,11 +17,11 @@ extension ApplicationModel {
                 let host = config.host, user = config.user
                 // Reuse Woven's read-only host inspection; setup refuses to silently provision a host.
                 let ssh = RemoteWorkspaceSSHClient()
-                var preflight = try await ssh.preflight(hostName: host, userName: user)
+                var preflight = try await ssh.inspectExecutorHost(hostName: host, userName: user)
                 if !preflight.ready, prepareHost {
                     guard preflight.canPrepare == true else { throw DefaultAgentError.message("This Linux host cannot be prepared automatically. Inspect its blocking issues in Settings → Workspaces.") }
-                    _ = try await ssh.prepareHost(hostName: host, userName: user)
-                    preflight = try await ssh.preflight(hostName: host, userName: user)
+                    _ = try await ssh.prepareExecutorHost(hostName: host, userName: user)
+                    preflight = try await ssh.inspectExecutorHost(hostName: host, userName: user)
                 }
                 guard preflight.ready else { throw DefaultAgentError.message("Prepare this Linux host through Settings → Workspaces, then deploy Executor.") }
             }
@@ -32,17 +32,17 @@ extension ApplicationModel {
     }
 
     func recoverExecutorSetup() async throws {
-        guard let database = dashboardStore?.database, let setup = try await database.toolSettings().executorSetup, setup.running else { return }
+        guard let database = libraryStore?.database, let setup = try await database.toolSettings().executorSetup, setup.running else { return }
         try await database.updateExecutor(setup: .init(configuration: setup.configuration, running: false, error: "Executor setup was interrupted. Retry install or deploy; existing data and keys are retained."))
         try await agentTools?.reload()
     }
 
-    func executorJSON<T: Encodable>(_ value: T) throws -> GatewayJSONValue {
-        try JSONDecoder().decode(GatewayJSONValue.self, from: JSONEncoder().encode(value))
+    func executorJSON<T: Encodable>(_ value: T) throws -> JSONValue {
+        try JSONDecoder().decode(JSONValue.self, from: JSONEncoder().encode(value))
     }
 
     func executeExecutorControl(_ control: ExecutorControl) async throws -> URL? {
-        guard let database = dashboardStore?.database else { throw ApplicationModelError.dashboardStoreUnavailable }
+        guard let database = libraryStore?.database else { throw ApplicationModelError.libraryStoreUnavailable }
         switch control {
         case let .setup(config, prepareHost):
             guard !executorRuntime.isSettingUp else { return nil }
@@ -110,7 +110,7 @@ extension ApplicationModel {
     }
 
     private func refreshExecutorInventory() async throws {
-        guard let database = dashboardStore?.database else { throw ApplicationModelError.dashboardStoreUnavailable }
+        guard let database = libraryStore?.database else { throw ApplicationModelError.libraryStoreUnavailable }
         let client = try await executorClient()
         let value = try await client.call(.object(["operation": .string("inventory")]))
         let apps = try JSONDecoder().decode([ExecutorAppTarget].self, from: JSONEncoder().encode(value))
@@ -118,7 +118,7 @@ extension ApplicationModel {
     }
 
     func synchronizeExecutorScope(_ session: String, policy: WorkspaceSessionTools) async throws {
-        guard let settings = try await dashboardStore?.database.toolSettings(), let config = settings.executor else {
+        guard let settings = try await libraryStore?.database.toolSettings(), let config = settings.executor else {
             if policy.enabled.contains(.executor) { throw DefaultAgentError.message("Set up Executor in Settings → Woven MCP first.") }; return
         }
         let profiles = config.apps.filter { policy.executorProfiles?.contains($0.id) == true }
@@ -128,11 +128,11 @@ extension ApplicationModel {
 
     func executorPolicy(_ session: String) async throws -> ExecutorApprovalPolicy {
         if WovenMCPCaller.isAppWide(session) {
-            guard let database = dashboardStore?.database else { throw ApplicationModelError.dashboardStoreUnavailable }
+            guard let database = libraryStore?.database else { throw ApplicationModelError.libraryStoreUnavailable }
             try await database.requireTool(.executor, sessionID: session)
             return .full
         }
-        guard let database = dashboardStore?.database else { throw ApplicationModelError.dashboardStoreUnavailable }
+        guard let database = libraryStore?.database else { throw ApplicationModelError.libraryStoreUnavailable }
         var runtime = workspaceOverview?.conversations.first { $0.id == session }?.localRuntimeKind
         if runtime == nil { runtime = try? await database.localACPSession(conversationID: session).runtimeKind }
         guard let runtime else { return .ask }
@@ -153,7 +153,7 @@ extension ApplicationModel {
 
     private func admitExecutorTool(_ session: String, command: WovenMatterToolCommand, request: WovenMatterToolRequest, fence: UUID) async throws -> WovenMatterToolResponse {
         guard !executorRuntime.isSettingUp else { throw DefaultAgentError.message("Executor setup is still running. Wait for Connections to show the runtime is ready.") }
-        guard let database = dashboardStore?.database else { throw ApplicationModelError.dashboardStoreUnavailable }
+        guard let database = libraryStore?.database else { throw ApplicationModelError.libraryStoreUnavailable }
         try await database.requireTool(.executor, sessionID: session)
         let policy = try await database.sessionTools(session)
         let client = try await executorClient()
@@ -169,7 +169,7 @@ extension ApplicationModel {
         switch command.action {
         case "execute": code = try command.required("code")
         case "search":
-            let input: GatewayJSONValue = .object(["query": .string(command.options["query"] ?? ""), "limit": .number(Double(try command.integer("limit", default: 30, range: 1...100)))])
+            let input: JSONValue = .object(["query": .string(command.options["query"] ?? ""), "limit": .number(Double(try command.integer("limit", default: 30, range: 1...100)))])
             code = "return await tools.search(" + String(decoding: try JSONEncoder().encode(input), as: UTF8.self) + ");"
         case "skills": code = ""
         default: throw WorkspaceToolError.invalid("Unknown Executor command.")
@@ -197,7 +197,7 @@ extension ApplicationModel {
     }
 
     private func driveExecutorJob(_ id: String, session: String, code: String, readOnly: Bool, client: ExecutorBrokerClient) async {
-        func message(_ operation: String, _ extra: [String: GatewayJSONValue] = [:]) -> GatewayJSONValue {
+        func message(_ operation: String, _ extra: [String: JSONValue] = [:]) -> JSONValue {
             .object(["operation": .string(operation), "id": .string(id), "session": .string(session)].merging(extra) { _, new in new })
         }
         do {
@@ -205,13 +205,13 @@ extension ApplicationModel {
             while !Task.isCancelled {
                 let currentPolicy = try await executorPolicy(session)
                 if !readOnly && currentPolicy != initialPolicy { throw CancellationError() }
-                try await dashboardStore?.database.requireTool(.executor, sessionID: session)
+                try await libraryStore?.database.requireTool(.executor, sessionID: session)
                 let result = try await client.call(message("status"))
                 let status = result.objectValue?["status"]?.stringValue ?? "interrupted"
                 if ["completed", "cancelled", "interrupted"].contains(status) { return }
                 if ["awaiting-approval", "approval-required", "input-required"].contains(status) {
                     let pending = try await client.call(message("interaction"))
-                    let response: GatewayJSONValue
+                    let response: JSONValue
                     if status == "input-required" {
                         var answer = await executorInput(pending, session: session)
                         while !Task.isCancelled {
@@ -240,7 +240,7 @@ extension ApplicationModel {
                     try Task.checkCancellation()
                     let resume = executorRuntime.serialized(session) { [self] in
                         try Task.checkCancellation()
-                        try await dashboardStore?.database.requireTool(.executor, sessionID: session)
+                        try await libraryStore?.database.requireTool(.executor, sessionID: session)
                         let freshPolicy = try await executorPolicy(session)
                         if !readOnly && freshPolicy != initialPolicy { throw CancellationError() }
                         // Scope is rechecked by Executor again when resume admits the action.
@@ -253,7 +253,7 @@ extension ApplicationModel {
         } catch { _ = try? await client.call(message("cancel")) }
     }
 
-    private func executorInput(_ pending: GatewayJSONValue, session: String, invalid: Bool = false) async -> GatewayJSONValue {
+    private func executorInput(_ pending: JSONValue, session: String, invalid: Bool = false) async -> JSONValue {
         let form = pending.objectValue?["elicitation"]?.objectValue ?? [:]
         let schema = form["requestedSchema"]?.objectValue ?? [:]
         let fields = schema["properties"]?.objectValue ?? [:]
@@ -281,13 +281,13 @@ extension ApplicationModel {
         }
         let answer = await requestLocalACPInteraction(conversationID: session, request: .questions(.init(title: title, questions: questions)))
         guard case let .answers(values) = answer else { return .object(["action": .string("cancel")]) }
-        func typed(_ value: String, type: String?) -> GatewayJSONValue {
+        func typed(_ value: String, type: String?) -> JSONValue {
             if type == "boolean", ["true", "false"].contains(value) { return .bool(value == "true") }
             if type == "number" || type == "integer", let number = Double(value), number.isFinite { return .number(number) }
-            if type == "array" || type == "object", let json = try? JSONDecoder().decode(GatewayJSONValue.self, from: Data(value.utf8)) { return json }
+            if type == "array" || type == "object", let json = try? JSONDecoder().decode(JSONValue.self, from: Data(value.utf8)) { return json }
             return .string(value)
         }
-        var content: [String: GatewayJSONValue] = [:]
+        var content: [String: JSONValue] = [:]
         for key in keys {
             let type = fields[key]?.objectValue?["type"]?.stringValue
             switch values[key] {

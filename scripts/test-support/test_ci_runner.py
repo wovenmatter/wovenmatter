@@ -9,7 +9,7 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
 SUITES = ('update_refresh', 'ios_runner', 'verify_ios_app', 'dev_build', 'executor_deployment',
-          'remote_image', 'cua_runtime')
+          'cua_runtime')
 
 
 class CIRunnerTests(unittest.TestCase):
@@ -27,10 +27,10 @@ class CIRunnerTests(unittest.TestCase):
             for suite in SUITES:
                 (support / f'test_{suite}.py').write_text('')
             for name in ('scan-public-tree.sh', 'test-release.sh',
-                         'test-dev-signing.sh', 'test-remote-workspace.sh',
+                         'test-dev-signing.sh', 'test-executor-docker.sh',
                          'test-remote-host.sh'):
                 script = scripts / name
-                recorded = name in ('test-remote-workspace.sh', 'test-remote-host.sh')
+                recorded = name in ('test-executor-docker.sh', 'test-remote-host.sh')
                 log = f"printf '%s\\n' '{json.dumps([name])}' >> \"$CI_FIXTURE_CALLS\"\n" if recorded else ''
                 reject = 'if [ "${CI_FIXTURE_HOST_FAIL:-0}" = 1 ]; then exit 43; fi\n' if name == 'test-remote-host.sh' else ''
                 script.write_text('#!/bin/sh\n' + log + reject + 'exit 0\n')
@@ -80,7 +80,7 @@ if os.environ.get('CI_FIXTURE_FAIL') == '1' and sys.argv[1:] == ['test', '--pref
         self.assertEqual(calls, [])
 
     def test_image_recipe_runs_portable_tests_without_building_images(self):
-        result, calls = self.run_fixture(['remote/Dockerfile'])
+        result, calls = self.run_fixture(['remote/Executor.Dockerfile'])
         self.assertEqual(result.returncode, 0, result.stderr)
         npm = [call[1:] for call in calls if call[0] == 'npm']
         self.assertEqual([call for call in npm if call[0] == 'test'], [['test', '--prefix', 'remote']])
@@ -109,12 +109,12 @@ if os.environ.get('CI_FIXTURE_FAIL') == '1' and sys.argv[1:] == ['test', '--pref
     def test_native_host_change_runs_portable_workspace_fixtures_once(self):
         result, calls = self.run_fixture(['scripts/remote-host.sh'])
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(calls, [['test-remote-workspace.sh'], ['test-remote-host.sh']])
+        self.assertEqual(calls, [['test-executor-docker.sh'], ['test-remote-host.sh']])
 
     def test_native_host_fixture_failure_cannot_pass_ci(self):
         result, calls = self.run_fixture(['scripts/remote-host.sh'], fail_host=True)
         self.assertEqual(result.returncode, 43, result.stderr)
-        self.assertEqual(calls, [['test-remote-workspace.sh'], ['test-remote-host.sh']])
+        self.assertEqual(calls, [['test-executor-docker.sh'], ['test-remote-host.sh']])
         self.assertNotIn('Portable CI passed.', result.stdout)
 
 

@@ -27,7 +27,7 @@ final class BotConversationController {
 
     @ObservationIgnored private weak var bots: BotMachineSession?
     @ObservationIgnored private var viewers = 0
-    @ObservationIgnored private var subscriptionID: GatewayJSONValue?
+    @ObservationIgnored private var subscriptionID: JSONValue?
     @ObservationIgnored private var openedOn: PiBotClient?
     @ObservationIgnored private var nextPendingID = 0
     @ObservationIgnored private var openGeneration = 0

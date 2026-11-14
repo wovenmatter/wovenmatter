@@ -74,7 +74,7 @@ struct BotSettingsBots: View {
             SettingsRow(title: "Profile") { profilePicker(bot, profiles: profiles) }
             if bot.isAdmin {
                 SettingsRow(title: "Team") {
-                    Text("Never on a team").font(.settingsBody).foregroundStyle(DashboardPalette.mutedForeground)
+                    Text("Never on a team").font(.settingsBody).foregroundStyle(WovenPalette.mutedForeground)
                 }
             } else {
                 SettingsRow(title: "Team") { teamPicker(bot, all: all) }
@@ -247,7 +247,7 @@ private struct BotSettingsBotName: View {
         if let draft, !bot.isAdmin {
             SettingsRow(title: "Name") {
                 TextField("", text: Binding(get: { self.draft ?? "" }, set: { self.draft = String($0.prefix(80)) }))
-                    .dashboardInput().frame(width: 220).accessibilityLabel("New name for \(bot.name)")
+                    .wovenInput().frame(width: 220).accessibilityLabel("New name for \(bot.name)")
                     .focused($focused).onSubmit { save() }.onExitCommand { self.draft = nil }
                 Button("Save") { save() }.disabled(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 Button("Cancel") { self.draft = nil }
@@ -260,7 +260,7 @@ private struct BotSettingsBotName: View {
         } else {
             SettingsRow(title: "Name", detail: note) {
                 if bot.isAdmin {
-                    Text(bot.name).font(.settingsBody).foregroundStyle(DashboardPalette.mutedForeground)
+                    Text(bot.name).font(.settingsBody).foregroundStyle(WovenPalette.mutedForeground)
                 } else {
                     Button("Rename") { draft = bot.name }
                         .accessibilityLabel("Rename \(bot.name)")

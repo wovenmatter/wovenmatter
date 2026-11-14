@@ -14,7 +14,7 @@ struct SavedArtifactDetailsPane: View {
       Section {
         Button(opening ? "Opening…" : "Open") { Task { await open() } }.disabled(opening)
       }
-      if let failure { Text(failure).font(.caption).foregroundStyle(DashboardPalette.mutedForeground) }
+      if let failure { Text(failure).font(.caption).foregroundStyle(WovenPalette.mutedForeground) }
     }.mobileNavigationPage(artifact.title).quickLookPreview($preview)
   }
   private func open() async {

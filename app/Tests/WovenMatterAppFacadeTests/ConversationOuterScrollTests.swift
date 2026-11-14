@@ -123,10 +123,10 @@ struct ConversationOuterScrollTests {
                       activity: .init(id: "thought", kind: .thought, status: running ? "running" : "completed", content: thought),
                       createdAt: "2026-10-27T15:46:18.000Z", sequence: 0)]
     }
-    var presentations: [String: DashboardMessagePresentation] {
+    var presentations: [String: MessagePresentation] {
         Dictionary(uniqueKeysWithValues: messages.map { message in
             let work = message.role == "assistant" ? activities : []
-            return (message.id, DashboardMessagePresentation(source: message.content, displayedBody: message.content,
+            return (message.id, MessagePresentation(source: message.content, displayedBody: message.content,
                 status: message.status, isStreaming: running && message.role == "assistant", createdAt: message.createdAt,
                 document: nil, activities: work, commentaryIDs: [],
                 workTimeline: ConversationWorkTimeline(records: work, commentaryIDs: []), textDeliveredAt: Date()))
@@ -141,7 +141,7 @@ struct ConversationOuterScrollTests {
     let model: ApplicationModel
     @ObservedObject var fixture: OuterTranscriptFixture
     var body: some View {
-        DashboardCloudConversation(model: model, agent: nil, conversation: fixture.conversation,
+        CloudConversation(model: model, agent: nil, conversation: fixture.conversation,
             messages: fixture.messages, messageAttachments: [], messageReferences: [], messagePresentations: fixture.presentations,
             activeRuns: fixture.runs, runActivities: fixture.activities, runPresentations: [:], attachedNoteTitle: nil,
             draft: .constant(""), attachments: [], sendInProgress: fixture.running && fixture.started,

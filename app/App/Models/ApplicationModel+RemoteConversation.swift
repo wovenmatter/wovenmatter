@@ -2,7 +2,7 @@ import Foundation
 import LibraryClient
 import WovenMatterClient
 import WovenMatterCore
-import WovenMatterDashboardStore
+import WovenMatterLibraryStore
 
 /// Chats another machine runs, rendered by the same conversation view and
 /// presentation as chats this Mac runs. Their live state is what the owner
@@ -78,7 +78,7 @@ extension ApplicationModel {
         guard let transcript = remoteTranscript(id) else { return }
         let state = ensureConversationState(id: id)
         let page = WorkspaceConversationHistoryPage(remote: transcript)
-        var presentation: DashboardConversationPresentation?
+        var presentation: ConversationPresentation?
         var revision: UInt64
         repeat {
             revision = state.presentationRevision
@@ -93,10 +93,10 @@ extension ApplicationModel {
 
     /// The same window and presentations a page of this Mac's own history renders.
     nonisolated static func remotePresentation(_ page: WorkspaceConversationHistoryPage,
-                                               previous: DashboardConversationPresentation?) -> DashboardConversationPresentation? {
-        let window = DashboardConversationWindow(page: page)
+                                               previous: ConversationPresentation?) -> ConversationPresentation? {
+        let window = ConversationWindow(page: page)
         guard previous?.window != window else { return nil }
-        return DashboardConversationPresentation(window: window,
+        return ConversationPresentation(window: window,
             messagesByID: renderMessagePresentations(window.messages, activities: window.activities, runs: window.runs,
                 reusing: previous?.messagesByID ?? [:]),
             runsByID: renderRunPresentations(window.runs, reusing: previous?.runsByID ?? [:]))
@@ -174,15 +174,12 @@ extension ApplicationModel {
         func decode(_ activity: LibraryActivity) throws -> AgentRunActivity? {
             try activity.projectionJSON.map { try JSONDecoder().decode(AgentRunActivity.self, from: Data($0.utf8)) }
         }
-        if let client = liveLibraryClient {
-            return try decode(await client.desktopActivityDetails(conversationID: conversationID, runID: runID, activityID: activityID))
-        }
         var failure: (any Error)?
-        if let client = try? centralExecutionClient() {
+        if let client = try? memberExecutionClient() {
             do { return try decode(await client.activityDetails(conversationID: conversationID, runID: runID, activityID: activityID)) }
             catch { failure = error }
         }
-        if let saved = try await dashboardStore?.database.conversationActivityDetails(conversationID: conversationID,
+        if let saved = try await libraryStore?.database.conversationActivityDetails(conversationID: conversationID,
             runID: runID, activityID: activityID) { return saved }
         if let failure { throw failure }
         return nil

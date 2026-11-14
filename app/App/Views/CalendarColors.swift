@@ -1,0 +1,120 @@
+import SwiftUI
+
+enum CalendarColor: String, CaseIterable {
+    case cognac
+    case britishRacingGreen = "green"
+    case green = "lime"
+    case blue, purple, red, pink, orange, yellow, black
+
+    init?(rawValue: String) {
+        // Carry existing selections into the renamed palette.
+        switch rawValue {
+        case "amber": self = .cognac
+        case "teal": self = .green
+        case "gray": self = .black
+        default:
+            guard let color = Self.allCases.first(where: { $0.rawValue == rawValue }) else { return nil }
+            self = color
+        }
+    }
+
+    var title: String {
+        switch self {
+        case .britishRacingGreen: "British Racing Green"
+        case .green: "Green"
+        case .blue: "Royal blue"
+        default: rawValue.capitalized
+        }
+    }
+
+    var color: Color {
+        switch self {
+        case .cognac: WovenPalette.calendarRecurringTask
+        case .britishRacingGreen: WovenPalette.primary
+        case .green: .hex(0x84CC16)
+        case .blue: WovenPalette.calendarTask
+        case .purple: WovenPalette.calendarRecurringEvent
+        case .red: .adaptiveHex(0xD23F3F, dark: 0xFF8383)
+        case .pink: .adaptiveHex(0xD75A95, dark: 0xED98B6)
+        case .orange: .adaptiveHex(0xE67E22, dark: 0xEBA563)
+        case .yellow: .hex(0xE6B800)
+        case .black: .adaptiveHex(0x000000, dark: WovenColors.darkMutedForeground)
+        }
+    }
+}
+
+struct CalendarColors: DynamicProperty {
+    @AppStorage("wovenmatter.calendar.color.event") private var event = CalendarColor.britishRacingGreen
+    @AppStorage("wovenmatter.calendar.color.task") private var task = CalendarColor.blue
+    @AppStorage("wovenmatter.calendar.color.recurring-event") private var recurringEvent = CalendarColor.purple
+    @AppStorage("wovenmatter.calendar.color.recurring-task") private var recurringTask = CalendarColor.cognac
+
+    func selection(for style: CalendarEntryStyle) -> Binding<CalendarColor> {
+        switch style {
+        case .event: $event
+        case .task: $task
+        case .recurringEvent: $recurringEvent
+        case .recurringTask: $recurringTask
+        }
+    }
+
+    func color(for style: CalendarEntryStyle) -> Color {
+        selection(for: style).wrappedValue.color
+    }
+}
+
+struct CalendarLegendItem: View {
+    let style: CalendarEntryStyle
+    @Binding var selection: CalendarColor
+    @State private var showsColors = false
+
+    var body: some View {
+        Button {
+            showsColors.toggle()
+        } label: {
+            HStack(spacing: 8) {
+                Circle().fill(selection.color).frame(width: 7, height: 7)
+                    .accessibilityHidden(true)
+                Text(style.title).font(.system(size: 11.5))
+                LucideIcon(glyph: .chevronDown, size: 10)
+                    .foregroundStyle(WovenPalette.mutedForeground)
+            }
+        }
+        .buttonStyle(WovenQuietButtonStyle())
+        .help("Change the color for \(style.title.lowercased())")
+        .accessibilityLabel("\(style.title) color")
+        .accessibilityValue(selection.title)
+        .popover(isPresented: $showsColors, arrowEdge: .top) {
+            VStack(alignment: .leading, spacing: 12) {
+                Text(style.title)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(WovenPalette.foreground)
+                LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 6) {
+                    ForEach(CalendarColor.allCases, id: \.self) { option in
+                        Button {
+                            selection = option
+                            showsColors = false
+                        } label: {
+                            HStack(spacing: 8) {
+                                Circle().fill(option.color).frame(width: 10, height: 10)
+                                    .accessibilityHidden(true)
+                                Text(option.title).lineLimit(1)
+                                Spacer(minLength: 0)
+                                if option == selection {
+                                    LucideIcon(glyph: .check, size: 12)
+                                }
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                        .buttonStyle(WovenQuietButtonStyle())
+                        .accessibilityLabel(option.title)
+                        .accessibilityAddTraits(option == selection ? .isSelected : [])
+                    }
+                }
+            }
+            .padding(16)
+            .frame(width: 440)
+            .onExitCommand { showsColors = false }
+        }
+    }
+}
