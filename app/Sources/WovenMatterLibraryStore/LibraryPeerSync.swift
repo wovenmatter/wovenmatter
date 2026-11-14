@@ -105,7 +105,7 @@ private extension URL {
 /// Peer-to-peer library synchronization among every Mac and Linux member
 /// (docs/architecture/WOVEN_EVERYWHERE.md, "Library on every surface").
 ///
-/// - A local commit that appended to the change log is announced once,
+/// - A local commit that recorded a new shared version is announced once,
 ///   debounced, to peers that are online; each pulls with one exchange.
 /// - A peer that contacts this device, or that this device reaches again,
 ///   is caught up once.
@@ -292,8 +292,8 @@ public actor LibraryPeerSync {
     return .init(deviceID: directory.identity.deviceID, version: configuration.version,
                  schema: (try? await database.pairedLibrarySchema()) ?? "",
                  peers: result,
-                 conflicts: (try? await database.pairedLibraryConflicts().count) ?? 0,
-                 quarantined: (try? await database.pairedLibraryQuarantineCount()) ?? 0)
+                 conflicts: (try? await database.peerSyncConflicts().count) ?? 0,
+                 quarantined: (try? await database.peerSyncQuarantineCount()) ?? 0)
   }
 
   /// Mac and Linux members other than this device. Phones use the mobile API.
@@ -311,7 +311,7 @@ public actor LibraryPeerSync {
 
   // MARK: Triggers
 
-  /// A local commit appended to the change log.
+  /// A local commit recorded a new shared version.
   public func localChanged() {
     guard started, announcing == nil else { return }
     let delay = configuration.announceDelay
@@ -324,7 +324,7 @@ public actor LibraryPeerSync {
   private func announce() async {
     announcing = nil
     guard started, let peers = try? await peers() else { return }
-    let cursor = (try? await database.pairedLibraryHead()) ?? 0
+    let cursor = (try? await database.peerSyncHead()) ?? 0
     let notice = LibraryPeerNotice(deviceID: directory.identity.deviceID, cursor: cursor)
     await withTaskGroup(of: Void.self) { group in
       for member in peers where statuses[member.deviceID]?.state == .online {
@@ -407,7 +407,7 @@ public actor LibraryPeerSync {
       let own = directory.identity.deviceID
       for _ in 0..<16 {
         guard await directory.member(member.deviceID) != nil else { return }
-        let cursors = try await database.pairedLibraryCursors(member.deviceID)
+        let cursors = try await database.peerSyncCursors(member.deviceID)
         let page = try await database.pairedLibraryPage(after: cursors.pushed)
         let exchange = LibraryPeerExchange(deviceID: own, after: cursors.pulled, page: page, version: configuration.version,
                                            attachment: await attachments?.outgoing(member.deviceID))
@@ -443,7 +443,7 @@ public actor LibraryPeerSync {
 
   /// Returns true when the peer's whole manifest was walked this turn.
   private func synchronizeFiles(with member: LibraryMember) async throws -> Bool {
-    var cursor = try await database.pairedLibraryFileCursor(member.deviceID), chunks = 0
+    var cursor = try await database.peerSyncFileCursor(member.deviceID), chunks = 0
     for _ in 0..<8 {
       // A removal made during a transfer sends no further request.
       guard await directory.member(member.deviceID) != nil else { return true }
@@ -462,7 +462,7 @@ public actor LibraryPeerSync {
         }
       }
       cursor = page.hasMore ? page.cursor : ""
-      try await database.savePairedLibraryFileCursor(cursor, peer: member.deviceID)
+      try await database.savePeerSyncFileCursor(cursor, peer: member.deviceID)
       if !page.hasMore { try await database.materializePendingPeerRecords(); return true }
     }
     try await database.materializePendingPeerRecords()
@@ -559,7 +559,7 @@ public actor LibraryPeerSync {
         let notice = try JSONDecoder().decode(LibraryPeerNotice.self, from: request.body)
         guard notice.deviceID == member.deviceID else { return .error("wrong_peer", "This notice names another device.", status: 403) }
         online(resolved, synchronized: false)
-        let pulled = try await database.pairedLibraryCursors(member.deviceID).pulled
+        let pulled = try await database.peerSyncCursors(member.deviceID).pulled
         if notice.cursor > pulled { scheduleSync(member.deviceID, reason: "notice") }
         return try .json(["accepted": true])
       case "/v1/peers/sync":

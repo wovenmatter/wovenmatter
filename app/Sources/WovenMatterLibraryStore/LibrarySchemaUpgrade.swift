@@ -25,8 +25,10 @@ import WovenMatterCore
 /// nothing reads any more, stores JSON as text, moves each execution
 /// owner's transcript document into its rows, moves the bytes of saved
 /// artifact chunks and native history parts into files of the chunk store,
-/// and rewrites the paired-sync bookkeeping to match, so paired Macs that
-/// update together keep their versions and cursors.
+/// and rewrites the peer-sync bookkeeping to match, so paired Macs that
+/// update together keep their versions and cursors. That bookkeeping is
+/// compacted first (`compactPeerBookkeepingUnlocked`), so every later
+/// rewrite runs over one entry per version that still matters.
 ///
 /// It runs on open, before anything else creates schema, for a library whose
 /// `user_version` is 0, and stamps `librarySchemaVersion` in the same
@@ -223,12 +225,16 @@ extension WorkspaceDatabaseConnection {
     ("device_tool_receipts", ["response"]),
   ]
 
-  /// Paired-sync bookkeeping that names a table (`table_name`) or holds a
-  /// record payload (`$.table`, `$.key`, `$.row`).
-  private static let peerNamedBookkeeping = ["paired_library_rows", "paired_library_frontier",
-                                             "paired_library_seeded", "paired_library_reassert"]
-  private static let peerPayloadBookkeeping = ["paired_library_rows", "paired_library_frontier", "paired_library_changes",
-                                               "paired_library_pending", "paired_library_quarantine", "paired_library_conflicts"]
+  /// Peer-sync bookkeeping, once compacted, that names a table
+  /// (`table_name`, with `record_key` where it holds a record), and the part
+  /// of it that holds a record payload (`$.table`, `$.key`, `$.row`).
+  private static let peerNamedBookkeeping = ["peer_sync_versions", "peer_sync_conflicts", "peer_sync_quarantine",
+                                             "peer_sync_seeded", "peer_sync_reassert"]
+  private static let peerPayloadBookkeeping = ["peer_sync_versions", "peer_sync_conflicts", "peer_sync_quarantine"]
+  /// v0.4.2's bookkeeping tables kept under a new name, unchanged.
+  private static let renamedPeerBookkeeping = [("paired_library_clock", "peer_sync_clock"), ("paired_library_cursors", "peer_sync_cursors"),
+    ("paired_library_file_cursors", "peer_sync_file_cursors"), ("paired_library_state", "peer_sync_state"),
+    ("paired_library_seeded", "peer_sync_seeded"), ("paired_library_reassert", "peer_sync_reassert")]
 
   func upgradeLibrarySchemaUnlocked() throws {
     var tables = Set(try historyRowsUnlocked("SELECT name FROM sqlite_master WHERE type='table'", values: [])
@@ -246,11 +252,15 @@ extension WorkspaceDatabaseConnection {
     // every reference to the new name.
     try executeUnlocked("PRAGMA foreign_keys=OFF; PRAGMA legacy_alter_table=OFF")
     try transaction {
-      let bookkeeping = tables.intersection(Self.peerPayloadBookkeeping + Self.peerNamedBookkeeping)
       for trigger in try historyRowsUnlocked("SELECT name FROM sqlite_master WHERE type='trigger'", values: [])
         .compactMap({ $0.objectValue?["name"]?.stringValue }) {
         try executeUnlocked("DROP TRIGGER IF EXISTS \(Self.peerQuote(trigger))")
       }
+      // Every later step rewrites recorded versions, so they are compacted
+      // first: one entry per version that still matters, not every version
+      // ever recorded.
+      try compactPeerBookkeepingUnlocked(tables: &tables)
+      let bookkeeping = tables.intersection(Self.peerNamedBookkeeping)
       for index in Self.droppedLibraryIndexes { try executeUnlocked("DROP INDEX IF EXISTS \(Self.peerQuote(index))") }
 
       var moved: [String: String] = [:]
@@ -270,19 +280,16 @@ extension WorkspaceDatabaseConnection {
         }
         tables.remove(old); tables.insert(new)
       }
-      // One pass over each bookkeeping table renames every moved table.
+      // One pass over each bookkeeping table renames every moved table, in
+      // its key column and in the records it holds.
       if !moved.isEmpty {
         let map = String(decoding: try JSONEncoder().encode(moved), as: UTF8.self)
         for table in Self.peerNamedBookkeeping where bookkeeping.contains(table) {
+          let payload = Self.peerPayloadBookkeeping.contains(table)
+            ? ",payload=json_set(payload,'$.table',(SELECT value FROM json_each(?1) WHERE key=table_name))" : ""
           try toolsExecuteUnlocked("""
-            UPDATE \(table) SET table_name=(SELECT value FROM json_each(?1) WHERE key=table_name)
+            UPDATE \(table) SET table_name=(SELECT value FROM json_each(?1) WHERE key=table_name)\(payload)
             WHERE table_name IN (SELECT key FROM json_each(?1))
-            """, [map])
-        }
-        for table in Self.peerPayloadBookkeeping where bookkeeping.contains(table) {
-          try toolsExecuteUnlocked("""
-            UPDATE \(table) SET payload=json_set(payload,'$.table',(SELECT value FROM json_each(?1) WHERE key=json_extract(payload,'$.table')))
-            WHERE json_valid(payload) AND json_extract(payload,'$.table') IN (SELECT key FROM json_each(?1))
             """, [map])
         }
       }
@@ -322,9 +329,9 @@ extension WorkspaceDatabaseConnection {
 
       try settleLegacyRowsUnlocked(tables: tables, columns: columns, operatorID: operatorID, bookkeeping: bookkeeping)
       // Markers of the one-time peer-sync upgrades v0.4.2 libraries already ran.
-      if tables.contains("paired_library_state") {
+      if tables.contains("peer_sync_state") {
         try executeUnlocked("""
-          DELETE FROM paired_library_state WHERE name IN ('owners.bootstrap','frontier.v1','projection.v2','frontier.v2')
+          DELETE FROM peer_sync_state WHERE name IN ('owners.bootstrap','frontier.v1','projection.v2','frontier.v2')
           """)
       }
 
@@ -339,7 +346,7 @@ extension WorkspaceDatabaseConnection {
         for name in Self.peerPayloadBookkeeping where bookkeeping.contains(name) {
           try toolsExecuteUnlocked("""
             UPDATE \(name) SET payload=json_set(json_remove(payload,'$.row.\(old)'),'$.row.\(new)',json(json_extract(payload,'$.row.\(old)')))
-            WHERE json_valid(payload) AND json_extract(payload,'$.table')=? AND json_type(payload,'$.row.\(old)') IS NOT NULL
+            WHERE table_name=? AND json_type(payload,'$.row.\(old)') IS NOT NULL
             """, [table])
         }
       }
@@ -352,8 +359,7 @@ extension WorkspaceDatabaseConnection {
         // One pass over each bookkeeping table removes all of a table's dropped columns.
         let paths = gone.map { "'$.row.\($0)'" }.joined(separator: ",")
         for name in Self.peerPayloadBookkeeping where bookkeeping.contains(name) {
-          let match = Self.peerNamedBookkeeping.contains(name) ? "table_name=?" : "json_valid(payload) AND json_extract(payload,'$.table')=?"
-          try toolsExecuteUnlocked("UPDATE \(name) SET payload=json_remove(payload,\(paths)) WHERE \(match)", [table])
+          try toolsExecuteUnlocked("UPDATE \(name) SET payload=json_remove(payload,\(paths)) WHERE table_name=?", [table])
         }
       }
       try storeJSONAsTextUnlocked(tables: tables, bookkeeping: bookkeeping)
@@ -369,9 +375,142 @@ extension WorkspaceDatabaseConnection {
         "SELECT 1 AS present FROM sqlite_master WHERE name='agents' AND instr(sql,'''openclaw''')>0", values: []).isEmpty == false {
         try rebuildCoreTableUnlocked("agents")
       }
+      // Last, once every recorded row has its final columns.
+      try reducePeerTombstonesUnlocked(bookkeeping: bookkeeping)
       try executeUnlocked("PRAGMA user_version=\(Self.librarySchemaVersion)")
     }
     try executeUnlocked("PRAGMA foreign_keys=ON")
+  }
+
+  /// v0.4.2 recorded each shared row twice over: its winner
+  /// (`paired_library_rows`) and every version it ever wrote or relayed
+  /// (`paired_library_changes`), beside concurrent versions
+  /// (`paired_library_frontier`) and versions waiting for their bytes
+  /// (`paired_library_pending`). They become `peer_sync_versions`: every
+  /// winner and concurrent version, and every waiting version no applied one
+  /// supersedes. Each keeps the newest log cursor that recorded exactly that
+  /// version, so a peer that pulled up to any cursor still receives every
+  /// version it lacks. A version the log never held takes the newest cursor
+  /// of its row if no other version has it, or else a new cursor after the
+  /// log's last. The sequence continues after the log's, which the cursors
+  /// other peers pulled count in. Conflicts and quarantined records gain
+  /// their version's identity and are pruned as at runtime; the other
+  /// tables keep their rows under `peer_sync_*` names. The identities are
+  /// read with set-based SQL; only the version payloads move, once.
+  private func compactPeerBookkeepingUnlocked(tables: inout Set<String>) throws {
+    for (name, new) in Self.renamedPeerBookkeeping where tables.contains(name) {
+      try executeUnlocked(tables.contains(new) ? "DROP TABLE \(name)" : "ALTER TABLE \(name) RENAME TO \(new)")
+      tables.remove(name); tables.insert(new)
+    }
+    let recorded = ["paired_library_rows", "paired_library_frontier", "paired_library_changes", "paired_library_pending",
+                    "paired_library_conflicts", "paired_library_quarantine"]
+    guard tables.isSuperset(of: recorded) else { return }
+    try executeUnlocked(Self.peerSyncTablesSQL)
+    tables.formUnion(["peer_sync_versions", "peer_sync_conflicts", "peer_sync_quarantine"])
+    let identity = """
+      json_valid(payload) AND json_type(payload,'$.table')='text' AND json_type(payload,'$.key')='text'
+        AND json_type(payload,'$.origin')='text' AND json_type(payload,'$.clock')='integer'
+      """
+    try executeUnlocked("""
+      CREATE TEMP TABLE peer_sync_logged AS
+        SELECT json_extract(payload,'$.table') AS table_name,json_extract(payload,'$.key') AS record_key,
+          json_extract(payload,'$.origin') AS origin,json_extract(payload,'$.clock') AS clock,MAX(cursor) AS cursor
+        FROM paired_library_changes WHERE \(identity) GROUP BY 1,2,3,4;
+      CREATE INDEX temp.peer_sync_logged_version ON peer_sync_logged(table_name,record_key,origin,clock);
+      CREATE TEMP TABLE peer_sync_kept AS SELECT * FROM (
+        SELECT 0 AS source,rowid AS source_row,table_name,record_key,json_extract(payload,'$.origin') AS origin,json_extract(payload,'$.clock') AS clock
+          FROM paired_library_rows WHERE \(identity)
+        UNION ALL SELECT 1,rowid,table_name,record_key,json_extract(payload,'$.origin'),json_extract(payload,'$.clock')
+          FROM paired_library_frontier WHERE \(identity))
+        ORDER BY source,table_name,record_key,origin,clock;
+      DELETE FROM peer_sync_kept WHERE rowid NOT IN (SELECT MIN(rowid) FROM peer_sync_kept GROUP BY table_name,record_key,origin,clock);
+      ALTER TABLE temp.peer_sync_kept ADD COLUMN cursor INTEGER;
+      UPDATE peer_sync_kept SET cursor=(SELECT l.cursor FROM peer_sync_logged l WHERE l.table_name=peer_sync_kept.table_name
+        AND l.record_key=peer_sync_kept.record_key AND l.origin=peer_sync_kept.origin AND l.clock=peer_sync_kept.clock);
+      CREATE INDEX temp.peer_sync_kept_cursor ON peer_sync_kept(cursor);
+      """)
+    let sequence = try historyRowsUnlocked("""
+      SELECT MAX(COALESCE((SELECT MAX(seq) FROM sqlite_sequence WHERE name='paired_library_changes'),0),
+        COALESCE((SELECT MAX(cursor) FROM paired_library_changes),0)) AS seq
+      """, values: []).first?.objectValue?["seq"]?.intValue ?? 0
+    var next = Int64(sequence)
+    /// The newest log cursor of the row when `taken` says nothing holds it, or the next new one.
+    func fallback(_ table: String, _ key: String, taken: (Int64) throws -> Bool) throws -> Int64 {
+      if let latest = try historyRowsUnlocked("SELECT MAX(cursor) AS cursor FROM peer_sync_logged WHERE table_name=? AND record_key=?",
+                                              values: [table, key]).first?.objectValue?["cursor"]?.intValue.map(Int64.init),
+         try !taken(latest) { return latest }
+      next += 1
+      return next
+    }
+    for item in try historyRowsUnlocked("SELECT rowid AS id,table_name,record_key FROM peer_sync_kept WHERE cursor IS NULL ORDER BY rowid", values: [])
+      .compactMap(\.objectValue) {
+      guard let id = item["id"]?.intValue, let table = item["table_name"]?.stringValue, let key = item["record_key"]?.stringValue else { continue }
+      let cursor = try fallback(table, key) { try !historyRowsUnlocked("SELECT 1 AS taken FROM peer_sync_kept WHERE cursor=?", values: [String($0)]).isEmpty }
+      try toolsExecuteUnlocked("UPDATE peer_sync_kept SET cursor=? WHERE rowid=?", [String(cursor), String(id)])
+    }
+    try executeUnlocked("""
+      INSERT INTO peer_sync_versions(cursor,table_name,record_key,origin,clock,payload)
+        SELECT k.cursor,k.table_name,k.record_key,k.origin,k.clock,r.payload FROM peer_sync_kept k JOIN paired_library_rows r ON r.rowid=k.source_row WHERE k.source=0
+        UNION ALL SELECT k.cursor,k.table_name,k.record_key,k.origin,k.clock,f.payload FROM peer_sync_kept k JOIN paired_library_frontier f ON f.rowid=k.source_row WHERE k.source=1;
+      """)
+    // A waiting version that an applied one equals or supersedes never wins.
+    let decoder = JSONDecoder()
+    for item in try historyRowsUnlocked("SELECT payload,peer_id FROM paired_library_pending ORDER BY id", values: []).compactMap(\.objectValue) {
+      guard let payload = item["payload"]?.stringValue, let peer = item["peer_id"]?.stringValue,
+            let record = try? decoder.decode(PairedLibraryRecord.self, from: Data(payload.utf8)) else { continue }
+      let members = try frontierMembersUnlocked(table: record.table, key: record.key)
+      guard !members.contains(where: { $0.vector == record.vector || $0.dominates(record) || ($0.origin == record.origin && $0.clock == record.clock) })
+      else { continue }
+      let taken = { (cursor: Int64) in try !self.historyRowsUnlocked("SELECT 1 AS taken FROM peer_sync_versions WHERE cursor=?", values: [String(cursor)]).isEmpty }
+      var cursor = try historyRowsUnlocked("""
+        SELECT cursor FROM peer_sync_logged WHERE table_name=? AND record_key=? AND origin=? AND clock=CAST(? AS INTEGER)
+        """, values: [record.table, record.key, record.origin, String(record.clock)]).first?.objectValue?["cursor"]?.intValue.map(Int64.init)
+      if let exact = cursor, try taken(exact) { cursor = nil }
+      try toolsExecuteUnlocked("""
+        INSERT OR IGNORE INTO peer_sync_versions(cursor,table_name,record_key,origin,clock,pending_peer,payload) VALUES(?,?,?,?,CAST(? AS INTEGER),?,?)
+        """, [String(try cursor ?? fallback(record.table, record.key, taken: taken)), record.table, record.key, record.origin,
+              String(record.clock), peer, payload])
+    }
+    try toolsExecuteUnlocked("""
+      UPDATE sqlite_sequence SET seq=MAX(seq,CAST(?1 AS INTEGER)) WHERE name='peer_sync_versions';
+      """, [String(next)])
+    try toolsExecuteUnlocked("""
+      INSERT INTO sqlite_sequence(name,seq) SELECT 'peer_sync_versions',CAST(?1 AS INTEGER)
+      WHERE NOT EXISTS(SELECT 1 FROM sqlite_sequence WHERE name='peer_sync_versions')
+      """, [String(next)])
+    try executeUnlocked("""
+      INSERT OR IGNORE INTO peer_sync_conflicts(id,table_name,record_key,origin,clock,payload)
+        SELECT id,json_extract(payload,'$.table'),json_extract(payload,'$.key'),json_extract(payload,'$.origin'),json_extract(payload,'$.clock'),payload
+        FROM paired_library_conflicts WHERE \(identity);
+      INSERT OR IGNORE INTO peer_sync_quarantine(id,peer_id,table_name,record_key,origin,clock,payload,error)
+        SELECT id,peer_id,json_extract(payload,'$.table'),json_extract(payload,'$.key'),json_extract(payload,'$.origin'),json_extract(payload,'$.clock'),payload,error
+        FROM paired_library_quarantine WHERE \(identity);
+      DROP TABLE temp.peer_sync_logged;
+      DROP TABLE temp.peer_sync_kept;
+      DELETE FROM sqlite_sequence WHERE name='paired_library_changes';
+      """)
+    for name in recorded { try executeUnlocked("DROP TABLE \(name)") }
+    tables.subtract(recorded)
+    try pruneSettledPeerStateUnlocked()
+    // The rotating position of the old waiting queue named a record hash.
+    try executeUnlocked("DELETE FROM peer_sync_state WHERE name='pending.after'")
+  }
+
+  /// A deletion recorded before carries the whole deleted row; it keeps only
+  /// what a deletion records now (`PeerTable.tombstoneColumns`). A record
+  /// that keeps a row trashed (`deleted_at` or `deleted` set) is not a
+  /// deletion of the row and stays whole.
+  private func reducePeerTombstonesUnlocked(bookkeeping: Set<String>) throws {
+    guard bookkeeping.contains("peer_sync_versions") else { return }
+    for table in try peerTables() {
+      let columns = table.tombstoneColumns
+      try toolsExecuteUnlocked("""
+        UPDATE peer_sync_versions SET payload=json_set(payload,'$.row',json_object(\(columns.map { "'\($0)',json(json_extract(payload,'$.row.\($0)'))" }.joined(separator: ","))))
+        WHERE table_name=? AND json_extract(payload,'$.deleted')=1 AND json_extract(payload,'$.row.deleted_at.value') IS NULL
+          AND json_extract(payload,'$.row.deleted.value') IS NOT '1'
+          AND \(columns.map { "json_type(payload,'$.row.\($0)') IS NOT NULL" }.joined(separator: " AND "))
+        """, [table.name])
+    }
   }
 
   /// Adds the transcript columns, fills them from each transcript an
@@ -506,9 +645,9 @@ extension WorkspaceDatabaseConnection {
     // every member records alike.
     if !deleted.isEmpty {
       let ids = String(decoding: try JSONEncoder().encode(deleted), as: UTF8.self)
-      for name in ["paired_library_rows", "paired_library_frontier"] where bookkeeping.contains(name) {
+      if bookkeeping.contains("peer_sync_versions") {
         try toolsExecuteUnlocked("""
-          UPDATE \(name) SET payload=json_set(payload,'$.deleted',json('true'))
+          UPDATE peer_sync_versions SET payload=json_set(payload,'$.deleted',json('true'))
           WHERE table_name='messages' AND record_key IN (SELECT json_array(value) FROM json_each(?))
           """, [ids])
       }
@@ -554,10 +693,8 @@ extension WorkspaceDatabaseConnection {
     let list = String(decoding: try JSONEncoder().encode(moving), as: UTF8.self)
     let records = libraryFiles.supportDirectory.appending(path: "paired-records")
     for name in Self.peerPayloadBookkeeping where bookkeeping.contains(name) {
-      let named = Self.peerNamedBookkeeping.contains(name)
-      let table = named ? "table_name" : "json_extract(payload,'$.table')"
       let rowids = try historyRowsUnlocked("""
-        SELECT rowid AS id FROM \(name) WHERE \(named ? "" : "json_valid(payload) AND ")\(table) IN (SELECT value FROM json_each(?))
+        SELECT rowid AS id FROM \(name) WHERE table_name IN (SELECT value FROM json_each(?))
           AND json_type(payload,'$.row.bytes') IS NOT NULL ORDER BY rowid
         """, values: [list]).compactMap { $0.objectValue?["id"]?.intValue }
       for rowid in rowids {
@@ -586,13 +723,12 @@ extension WorkspaceDatabaseConnection {
   /// names. The table is keyed by `id`.
   private func refreshPeerColumnsUnlocked(_ table: String, _ columns: [String], ids: [String]?, bookkeeping: Set<String>) throws {
     for name in Self.peerPayloadBookkeeping where bookkeeping.contains(name) {
-      let named = Self.peerNamedBookkeeping.contains(name)
-      let key = named ? "\(name).record_key" : "json_extract(\(name).payload,'$.key')"
+      let key = "\(name).record_key"
       let values = columns.map { column in
         let live = "(SELECT json_object('type',typeof(s.\(column)),'value',CAST(s.\(column) AS TEXT)) FROM \(Self.peerQuote(table)) s WHERE s.id=json_extract(\(key),'$[0]'))"
         return "'$.row.\(column)',json(COALESCE(\(live),json_object('type','null','value',NULL)))"
       }.joined(separator: ",")
-      var filter = named ? "table_name=?1" : "json_valid(payload) AND json_extract(payload,'$.table')=?1"
+      var filter = "table_name=?1"
       var bindings: [String?] = [table]
       if let ids {
         filter += " AND json_extract(\(key),'$[0]') IN (SELECT value FROM json_each(?2))"
@@ -672,11 +808,9 @@ extension WorkspaceDatabaseConnection {
     let list = String(decoding: try JSONEncoder().encode(shared.map(\.table)), as: UTF8.self)
     let files = libraryFiles.supportDirectory.appending(path: "paired-records")
     for name in Self.peerPayloadBookkeeping where bookkeeping.contains(name) {
-      let named = Self.peerNamedBookkeeping.contains(name)
-      let table = named ? "table_name" : "json_extract(payload,'$.table')"
       let blob = shared.flatMap { entry in entry.columns.map { "json_extract(payload,'$.row.\($0).type') IN ('blob','reference:blob')" } }
       let rowids = try historyRowsUnlocked("""
-        SELECT rowid AS id FROM \(name) WHERE \(named ? "" : "json_valid(payload) AND ")\(table) IN (SELECT value FROM json_each(?))
+        SELECT rowid AS id FROM \(name) WHERE table_name IN (SELECT value FROM json_each(?))
           AND (\(Set(blob).sorted().joined(separator: " OR ")))
         """, values: [list]).compactMap { $0.objectValue?["id"]?.intValue }
       for rowid in rowids {
@@ -795,9 +929,9 @@ extension WorkspaceDatabaseConnection {
 
     if tables.contains("surface_profiles"), try columns("surface_profiles").contains("surface") {
       try executeUnlocked("DELETE FROM surface_profiles WHERE surface<>'mac_native'")
-      for table in ["paired_library_rows", "paired_library_frontier"] where bookkeeping.contains(table) {
+      if bookkeeping.contains("peer_sync_versions") {
         try executeUnlocked("""
-          DELETE FROM \(table) WHERE table_name='surface_profiles'
+          DELETE FROM peer_sync_versions WHERE table_name='surface_profiles'
             AND json_extract(payload,'$.row.surface.value') IS NOT 'mac_native'
           """)
       }
@@ -808,9 +942,6 @@ extension WorkspaceDatabaseConnection {
   private func dropPeerRecordsUnlocked(_ table: String, bookkeeping: Set<String>) throws {
     for name in Self.peerNamedBookkeeping where bookkeeping.contains(name) {
       try toolsExecuteUnlocked("DELETE FROM \(name) WHERE table_name=?", [table])
-    }
-    for name in Self.peerPayloadBookkeeping where bookkeeping.contains(name) && !Self.peerNamedBookkeeping.contains(name) {
-      try toolsExecuteUnlocked("DELETE FROM \(name) WHERE json_valid(payload) AND json_extract(payload,'$.table')=?", [table])
     }
   }
 
@@ -823,18 +954,10 @@ extension WorkspaceDatabaseConnection {
     func value(_ key: String) -> String {
       "json((SELECT json_object('type',typeof(s.\(column)),'value',CAST(s.\(column) AS TEXT)) FROM \(table) s WHERE json_array(s.id)=\(key)))"
     }
-    for name in ["paired_library_rows", "paired_library_frontier"] where bookkeeping.contains(name) {
+    for name in Self.peerPayloadBookkeeping where bookkeeping.contains(name) {
       try toolsExecuteUnlocked("""
         UPDATE \(name) SET payload=json_set(payload,'$.row.\(column)',\(value("\(name).record_key")))
         WHERE table_name=? AND record_key IN (SELECT json_array(value) FROM json_each(?))
-        """, [table, list])
-    }
-    for name in ["paired_library_changes", "paired_library_pending", "paired_library_quarantine", "paired_library_conflicts"]
-    where bookkeeping.contains(name) {
-      try toolsExecuteUnlocked("""
-        UPDATE \(name) SET payload=json_set(payload,'$.row.\(column)',\(value("json_extract(\(name).payload,'$.key')")))
-        WHERE json_valid(payload) AND json_extract(payload,'$.table')=?
-          AND json_extract(payload,'$.key') IN (SELECT json_array(value) FROM json_each(?))
         """, [table, list])
     }
   }

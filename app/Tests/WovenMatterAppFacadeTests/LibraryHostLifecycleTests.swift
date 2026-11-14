@@ -649,10 +649,10 @@ extension LibraryHostLifecycleTests {
         let peer = try await air.host.peerRoute()
         for _ in 0..<4 {
             await mini.host.peerSync.synchronize(force: true)
-            if try await database.pairedLibraryFileCursor(peer.deviceID) == "" { break }
+            if try await database.peerSyncFileCursor(peer.deviceID) == "" { break }
         }
         #expect(mini.host.peerSync.errors.isEmpty)
-        #expect(try await database.pairedLibraryFileCursor(peer.deviceID) == "")
+        #expect(try await database.peerSyncFileCursor(peer.deviceID) == "")
         for item in contents.suffix(10) {
             #expect(try Data(contentsOf: mini.directory.appending(path: "library-files/" + item.0)) == item.1)
         }

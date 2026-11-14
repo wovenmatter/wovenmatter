@@ -244,6 +244,9 @@ class DevelopmentBuildTests(unittest.TestCase):
               INSERT INTO paired_calendar_owners VALUES('schedule','other-mac');
               CREATE TABLE paired_library_state(name TEXT, value TEXT);
               INSERT INTO paired_library_state VALUES('owners.bootstrap','1'),('baseline.other-mac','4');
+              -- A current library's peer sync bookkeeping.
+              CREATE TABLE peer_sync_versions(cursor INTEGER PRIMARY KEY, payload TEXT);
+              INSERT INTO peer_sync_versions VALUES(1,'production-private-sync');
               CREATE TABLE library_identity(singleton INTEGER, host_device_id TEXT, library_id TEXT);
               INSERT INTO library_identity VALUES(1,'source','production-identity');
               CREATE TABLE execution_workspaces(id TEXT,payload BLOB);
@@ -263,7 +266,7 @@ class DevelopmentBuildTests(unittest.TestCase):
             chunks = source / "library-chunks"; chunks.mkdir(); (chunks / "part").write_bytes(b"SQLite format 3\x00 first chunk")
             target = root / "dev"; dev.snapshot(source, target)
             with sqlite3.connect(target / "workspace.sqlite") as copy:
-                for table in ("mac_routes", "paired_library_clock", "paired_library_changes"):
+                for table in ("mac_routes", "paired_library_clock", "paired_library_changes", "peer_sync_versions"):
                     self.assertEqual(copy.execute("SELECT count(*) FROM " + table).fetchone()[0], 0)
                 # Ownership survives, so the snapshot never adopts another Mac's schedule.
                 self.assertEqual(copy.execute("SELECT device_id FROM calendar_item_owners").fetchall(), [("other-mac",)])

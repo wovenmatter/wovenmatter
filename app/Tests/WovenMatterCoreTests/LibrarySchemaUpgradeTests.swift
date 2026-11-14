@@ -97,11 +97,9 @@ import WovenMatterCore
     #expect(try await row(library, "SELECT typeof(payload) AS type,json_extract(payload,'$.analyticsID') AS id FROM product_analytics_preference")
       == ["type": .string("text"), "id": .string("51a4c8ef-6df8-44d7-9366-520b62810816")])
     #expect(try await library.productAnalyticsPreference().analyticsID == "51a4c8ef-6df8-44d7-9366-520b62810816")
-    let analytics = try await rows(library, """
-      SELECT payload FROM paired_library_rows WHERE table_name='product_analytics_preference'
-      UNION ALL SELECT payload FROM paired_library_changes WHERE json_extract(payload,'$.table')='product_analytics_preference'
-      """).compactMap { $0["payload"]?.stringValue.flatMap { try? JSONDecoder().decode(PairedLibraryRecord.self, from: Data($0.utf8)) } }
-    #expect(analytics.count == 2)
+    let analytics = try await rows(library, "SELECT payload FROM peer_sync_versions WHERE table_name='product_analytics_preference'")
+      .compactMap { $0["payload"]?.stringValue.flatMap { try? JSONDecoder().decode(PairedLibraryRecord.self, from: Data($0.utf8)) } }
+    #expect(analytics.count == 1)
     for record in analytics {
       #expect(record.row["payload"]?.type == "text")
       #expect(record.row["payload"]?.value?.contains("\"analyticsID\":\"51a4c8ef-6df8-44d7-9366-520b62810816\"") == true)
@@ -121,10 +119,7 @@ import WovenMatterCore
 
     // Peer bookkeeping names the new tables and columns only, and a settled
     // row's recorded versions carry its settled value.
-    let peer = try await rows(library, """
-      SELECT table_name,payload FROM paired_library_rows
-      UNION ALL SELECT json_extract(payload,'$.table'),payload FROM paired_library_changes
-      """)
+    let peer = try await rows(library, "SELECT table_name,payload FROM peer_sync_versions")
     let tables = Set(peer.compactMap { $0["table_name"]?.stringValue })
     #expect(tables.isSuperset(of: ["runs", "conversations", "messages", "agents", "run_activities", "agent_owners",
                                    "conversation_owners", "session_tools", "tool_settings", "history_events"]))
@@ -134,11 +129,11 @@ import WovenMatterCore
     // it in both the key column and the record.
     let agent = "5711c18c-4ab6-50f2-893f-e3d31837e15b", origin = "5ad85cf8-9a5e-4bc5-b320-5a705c1e5f04"
     #expect(try await row(library, "SELECT device_id FROM agent_owners WHERE id=?", agent)["device_id"]?.stringValue == origin)
-    let owner = try #require(try await row(library, "SELECT payload FROM paired_library_rows WHERE table_name='agent_owners' AND record_key=?", "[\"\(agent)\"]")["payload"]?.stringValue
+    let owner = try #require(try await row(library, "SELECT payload FROM peer_sync_versions WHERE table_name='agent_owners' AND record_key=?", "[\"\(agent)\"]")["payload"]?.stringValue
       .flatMap { try? JSONDecoder().decode(PairedLibraryRecord.self, from: Data($0.utf8)) })
     #expect(owner.table == "agent_owners" && owner.row["device_id"]?.value == origin)
-    #expect(try await rows(library, "SELECT cursor FROM paired_library_changes WHERE json_extract(payload,'$.table')='agent_owners'").count == 2)
-    #expect(try await rows(library, "SELECT table_name FROM paired_library_seeded WHERE table_name IN ('agent_owners','session_tools','history_events')").count == 3)
+    #expect(try await rows(library, "SELECT cursor FROM peer_sync_versions WHERE table_name='agent_owners'").count == 2)
+    #expect(try await rows(library, "SELECT table_name FROM peer_sync_seeded WHERE table_name IN ('agent_owners','session_tools','history_events')").count == 3)
     // History search still finds the native chat under its new name.
     #expect(try await rows(library, "SELECT rowid FROM history_search WHERE history_search MATCH 'files'").isEmpty == false)
     for payload in peer.compactMap({ $0["payload"]?.stringValue }) {
@@ -152,14 +147,14 @@ import WovenMatterCore
       let payload = item["payload"]?.stringValue ?? ""
       #expect(!payload.contains("\"owner_device_id\"") && !payload.contains("\"message_id\""), "a dropped column in \(payload.prefix(120))")
     }
-    #expect(try await row(library, "SELECT payload FROM paired_library_rows WHERE table_name='run_visible_notes'")["payload"]?.stringValue
+    #expect(try await row(library, "SELECT payload FROM peer_sync_versions WHERE table_name='run_visible_notes'")["payload"]?.stringValue
       .flatMap { try? JSONDecoder().decode(PairedLibraryRecord.self, from: Data($0.utf8)) }?.row.keys.sorted()
       == ["conversation_id", "note_id", "revision_snapshot", "run_id"])
     let runID = try #require(run["id"]?.stringValue)
-    #expect(try await row(library, "SELECT json_extract(payload,'$.row.native_session_id.value') AS value FROM paired_library_rows WHERE table_name='runs' AND record_key=?", "[\"\(runID)\"]")["value"]?.stringValue == "native-session-1")
-    #expect(try await row(library, "SELECT json_extract(payload,'$.row.is_archived.value') AS value FROM paired_library_rows WHERE table_name='conversations' AND record_key='[\"platform-chat\"]'")["value"]?.stringValue == "1")
-    #expect(try await rows(library, "SELECT table_name FROM paired_library_seeded WHERE table_name LIKE 'dashboard%' OR table_name LIKE 'desktop%' OR table_name LIKE 'workspace%' OR table_name LIKE 'paired%' OR table_name='profiles'").isEmpty)
-    #expect(try await rows(library, "SELECT name FROM paired_library_state").isEmpty)
+    #expect(try await row(library, "SELECT json_extract(payload,'$.row.native_session_id.value') AS value FROM peer_sync_versions WHERE table_name='runs' AND record_key=?", "[\"\(runID)\"]")["value"]?.stringValue == "native-session-1")
+    #expect(try await row(library, "SELECT json_extract(payload,'$.row.is_archived.value') AS value FROM peer_sync_versions WHERE table_name='conversations' AND record_key='[\"platform-chat\"]'")["value"]?.stringValue == "1")
+    #expect(try await rows(library, "SELECT table_name FROM peer_sync_seeded WHERE table_name LIKE 'dashboard%' OR table_name LIKE 'desktop%' OR table_name LIKE 'workspace%' OR table_name LIKE 'paired%' OR table_name='profiles'").isEmpty)
+    #expect(try await rows(library, "SELECT name FROM peer_sync_state").isEmpty)
 
     // A Linux host's and an iPhone's transcripts are their rows now, and read
     // back exactly as v0.4.2 served them. The legacy tool row the iPhone
@@ -173,17 +168,15 @@ import WovenMatterCore
       == "a1a1a1a1-0000-4000-8000-000000000002")
     // Recorded versions carry the new columns with the rows' values, and the
     // transcript document is gone from them.
-    let message = try #require(try await row(library, "SELECT payload FROM paired_library_changes WHERE json_extract(payload,'$.table')='messages' AND json_extract(payload,'$.key')=?",
+    let message = try #require(try await row(library, "SELECT payload FROM peer_sync_versions WHERE table_name='messages' AND record_key=?",
                                                   "[\"f2000000-0000-4000-8000-000000000001\"]")["payload"]?.stringValue
       .flatMap { try? JSONDecoder().decode(PairedLibraryRecord.self, from: Data($0.utf8)) })
     #expect(message.row["position"] == .init(type: "integer", value: "1") && message.row["status"] == .init(type: "text", value: ""))
     #expect(message.row["attachment_references"]?.type == "text" && message.row["sequence"]?.type == "null")
-    for table in ["paired_library_rows", "paired_library_changes"] {
-      let record = try #require(try await row(library, "SELECT payload FROM \(table) WHERE json_extract(payload,'$.table')='execution_conversations'")["payload"]?.stringValue
-        .flatMap { try? JSONDecoder().decode(PairedLibraryRecord.self, from: Data($0.utf8)) })
-      #expect(record.row.keys.sorted() == ["active_run_id", "conversation", "deleted", "id", "workspace_id"])
-      #expect(record.row["active_run_id"]?.value == "a1a1a1a1-0000-4000-8000-000000000002" && record.row["conversation"]?.type == "text")
-    }
+    let projection = try #require(try await row(library, "SELECT payload FROM peer_sync_versions WHERE table_name='execution_conversations'")["payload"]?.stringValue
+      .flatMap { try? JSONDecoder().decode(PairedLibraryRecord.self, from: Data($0.utf8)) })
+    #expect(projection.row.keys.sorted() == ["active_run_id", "conversation", "deleted", "id", "workspace_id"])
+    #expect(projection.row["active_run_id"]?.value == "a1a1a1a1-0000-4000-8000-000000000002" && projection.row["conversation"]?.type == "text")
 
     // A saved artifact's chunks and a native history record's parts are files
     // now; they read back byte for byte, whole and from any offset, and no
@@ -204,11 +197,9 @@ import WovenMatterCore
       #expect(try await rows(library, "SELECT * FROM \(table)").allSatisfy { $0["bytes"] == nil && $0["sha256"]?.stringValue?.count == 64 })
     }
     let chunkVersions = try await rows(library, """
-      SELECT payload FROM paired_library_rows WHERE table_name IN ('artifact_chunks','execution_native_history_parts')
-      UNION ALL SELECT payload FROM paired_library_changes WHERE json_extract(payload,'$.table') IN ('artifact_chunks','execution_native_history_parts')
-      UNION ALL SELECT payload FROM paired_library_pending
+      SELECT payload FROM peer_sync_versions WHERE table_name IN ('artifact_chunks','execution_native_history_parts')
       """).compactMap { $0["payload"]?.stringValue.flatMap { try? JSONDecoder().decode(PairedLibraryRecord.self, from: Data($0.utf8)) } }
-    #expect(chunkVersions.count == 9)
+    #expect(chunkVersions.count == 5)
     for record in chunkVersions {
       #expect(record.row["bytes"] == nil && record.row["sha256"]?.type == "text" && record.row["byte_count"]?.type == "integer")
     }
@@ -216,19 +207,74 @@ import WovenMatterCore
     try await library.materializePendingPeerRecords()
     #expect(try await row(library, "SELECT sha256,byte_count FROM artifact_chunks WHERE artifact_id='e5e5e5e5-0000-4000-8000-0000000000a2'")
       == ["sha256": .string(SHA256.hash(data: Self.peerChunk).hexString), "byte_count": .number(Double(Self.peerChunk.count))])
-    #expect(try await rows(library, "SELECT id FROM paired_library_pending").isEmpty)
+    #expect(try await rows(library, "SELECT cursor FROM peer_sync_versions WHERE pending_peer IS NOT NULL").isEmpty)
 
     // The converted library keeps working and syncing under its new names.
     try await library.updateLocalACPSessionID(conversationID: chat, sessionID: "native-session-2")
     let next = try await library.beginLocalACPRun(conversationID: chat, input: .init(text: "Again"))
     #expect(try await row(library, "SELECT native_session_id FROM runs WHERE id=?", next.runID)["native_session_id"]?.stringValue == "native-session-2")
-    #expect(try await row(library, "SELECT payload FROM paired_library_changes ORDER BY cursor DESC LIMIT 1")["payload"] != nil)
+    #expect(try await row(library, "SELECT payload FROM peer_sync_versions ORDER BY cursor DESC LIMIT 1")["payload"] != nil)
+  }
+
+  /// v0.4.2's winners, concurrent versions, change log and waiting versions
+  /// become one entry per version that still matters, each at the newest log
+  /// cursor that recorded it, so peers that pulled up to any cursor still get
+  /// what they lack. Settled conflicts and quarantined records go, and a
+  /// deletion keeps only its key and authority columns.
+  @Test func peerBookkeepingIsCompactedAndKeepsItsCursors() async throws {
+    let upgraded = try v042Library(); defer { upgraded.remove() }
+    let library = try await WorkspaceDatabase(url: upgraded.databaseURL)
+    let note = "[\"5211f659-501c-4907-8391-c1b4061daffb\"]", owner = "5ad85cf8-9a5e-4bc5-b320-5a705c1e5f04"
+    func cursor(_ table: String, _ key: String, _ origin: String = owner) async throws -> Int? {
+      try await row(library, "SELECT cursor FROM peer_sync_versions WHERE table_name=? AND record_key=? AND origin=?", table, key, origin)["cursor"]?.intValue
+    }
+    // Rows written several times keep the cursor of their last version.
+    #expect(try await cursor("conversations", "[\"3b078bf3-4268-4819-96d2-6d282542f205\"]") == 19)
+    #expect(try await cursor("messages", "[\"cfd2c844-3e21-42c8-9b4e-75c8bd08a620\"]") == 25)
+    #expect(try await cursor("runs", "[\"b4983c2d-3866-422d-8068-354d41f44962\"]") == 22)
+    #expect(try await cursor("notes", note) == 28)
+    // The concurrent version keeps the cursor it was relayed under, and
+    // stands beside the winner; every other row has one version.
+    #expect(try await cursor("notes", note, "0a0a0a0a-0000-4000-8000-0000000000f2") == 57)
+    #expect(try await rows(library, "SELECT record_key FROM peer_sync_versions GROUP BY table_name,record_key HAVING COUNT(*)>1")
+      .compactMap { $0["record_key"]?.stringValue } == [note])
+    // Versions the log never held take cursors after the log's last (60),
+    // and the sequence continues from there.
+    #expect(try await cursor("run_visible_notes", "[\"b4983c2d-3866-422d-8068-354d41f44962\"]") == 61)
+    #expect(try await cursor("artifact_chunks", "[\"e5e5e5e5-0000-4000-8000-0000000000a2\",1,0]", "e1e1e1e1-0000-4000-8000-0000000000ee") == 62)
+    #expect(try await rows(library, "SELECT cursor FROM peer_sync_versions WHERE cursor IN (59,60)").isEmpty)
+    #expect(try await library.peerSyncHead() >= 62)
+    let compacted = try await rows(library, "SELECT cursor FROM peer_sync_versions WHERE cursor<=61").count
+    #expect(compacted == 51)
+    // A deletion records only the key and the conversation its owner decides on.
+    let deletion = try #require(try await row(library, "SELECT payload FROM peer_sync_versions WHERE table_name='messages' AND record_key='[\"deleted-message\"]'")["payload"]?
+      .stringValue.flatMap { try? JSONDecoder().decode(PairedLibraryRecord.self, from: Data($0.utf8)) })
+    #expect(try await cursor("messages", "[\"deleted-message\"]") == 58)
+    #expect(deletion.deleted && deletion.row == ["id": .init(type: "text", value: "deleted-message"),
+                                                 "conversation_id": .init(type: "text", value: "dashboard-chat")])
+    // The superseded waiting version is gone; the waiting chunk stays queued.
+    #expect(try await rows(library, "SELECT table_name FROM peer_sync_versions WHERE pending_peer IS NOT NULL")
+      .compactMap { $0["table_name"]?.stringValue } == ["artifact_chunks"])
+    // Only the conflict and the quarantined record nothing has settled remain.
+    #expect(try await library.peerSyncConflicts().map(\.record.origin) == ["0a0a0a0a-0000-4000-8000-0000000000f2"])
+    #expect(try await rows(library, "SELECT origin FROM peer_sync_quarantine").compactMap { $0["origin"]?.stringValue }
+      == ["0c0c0c0c-0000-4000-8000-0000000000f4"])
+    #expect(try await rows(library, "SELECT name FROM sqlite_master WHERE name LIKE 'paired_library%'").isEmpty)
+    // A peer that pulled up to cursor 25 before the update receives exactly
+    // the versions written after it.
+    var after: Int64 = 25, received: [PairedLibraryRecord] = []
+    while true {
+      let page = try await library.pairedLibraryPage(after: after)
+      received += page.entries; after = page.cursor
+      if !page.hasMore { break }
+    }
+    #expect(received.contains { $0.table == "notes" && $0.origin == owner } && !received.contains { $0.table == "conversations" && $0.key == "[\"3b078bf3-4268-4819-96d2-6d282542f205\"]" })
   }
 
   /// Two Macs that convert the same v0.4.2 library record the same chunk and
-  /// part rows and the same versions of them, byte for byte, so neither
-  /// sends the other a new version.
-  @Test func twoMacsConvertChunkBytesIdentically() async throws {
+  /// part rows and the same peer bookkeeping, byte for byte and cursor for
+  /// cursor, so neither sends the other a new version.
+  @Test func twoMacsConvertTheLibraryIdentically() async throws {
     let first = try v042Library(), second = try v042Library()
     defer { first.remove(); second.remove() }
     func state(_ library: PersistenceFixture) async throws -> [String] {
@@ -237,15 +283,22 @@ import WovenMatterCore
         try connection.historyRowsUnlocked("""
           SELECT 'chunk ' || artifact_id || ' ' || revision || ' ' || offset || ' ' || sha256 || ' ' || byte_count AS line FROM artifact_chunks
           UNION ALL SELECT 'part ' || workspace_id || ' ' || record_id || ' ' || part_index || ' ' || sha256 || ' ' || byte_count FROM execution_native_history_parts
-          UNION ALL SELECT 'row ' || record_key || ' ' || payload FROM paired_library_rows WHERE table_name IN ('artifact_chunks','execution_native_history_parts')
-          UNION ALL SELECT 'change ' || cursor || ' ' || payload FROM paired_library_changes
-            WHERE json_extract(payload,'$.table') IN ('artifact_chunks','execution_native_history_parts')
-          UNION ALL SELECT 'pending ' || payload FROM paired_library_pending
+          UNION ALL SELECT 'version ' || cursor || ' ' || table_name || ' ' || record_key || ' ' || origin || ' ' || clock || ' '
+            || COALESCE(pending_peer,'') || ' ' || payload FROM peer_sync_versions
+          UNION ALL SELECT 'conflict ' || id || ' ' || table_name || ' ' || record_key || ' ' || origin || ' ' || clock || ' ' || payload FROM peer_sync_conflicts
+          UNION ALL SELECT 'quarantine ' || id || ' ' || peer_id || ' ' || table_name || ' ' || record_key || ' ' || payload FROM peer_sync_quarantine
+          UNION ALL SELECT 'sequence ' || seq FROM sqlite_sequence WHERE name='peer_sync_versions'
+          UNION ALL SELECT 'clock ' || tick || ' ' || vector FROM peer_sync_clock
           """, values: []).compactMap { $0.objectValue?["line"]?.stringValue }.sorted()
       }
     }
     let one = try await state(first), two = try await state(second)
-    #expect(one.count == 13 && one == two)
+    #expect(one.count > 50)
+    for (line, other) in zip(one, two) where line != other {
+      let same = zip(line, other).prefix { $0 == $1 }.count
+      Issue.record("Converted differently after \(line.prefix(80)):\n\(line.dropFirst(max(0, same - 120)).prefix(300))\n\(other.dropFirst(max(0, same - 120)).prefix(300))")
+    }
+    #expect(one == two)
     let files = { (library: PersistenceFixture) in
       try FileManager.default.contentsOfDirectory(atPath: library.directory.appending(path: "library-chunks").path).sorted()
     }

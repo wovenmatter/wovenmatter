@@ -237,7 +237,7 @@ def disconnect_snapshot(file, *, device_id, source_device_id, execution_root, pu
         # bookkeeping, the Mac routes and the remote workspace configurations.
         peer_routes = {"mac_routes", "remote_workspace_configurations"}
         for name in tables:
-            if name in transient or name.startswith("paired_") or name in peer_routes or name in source_state:
+            if name in transient or name.startswith(("paired_library_", "peer_sync_")) or name in peer_routes or name in source_state:
                 db.execute("DELETE FROM " + quote(name))
         # A new device identity seeds its own local harness catalog at startup.
         # Keep copied agent rows for history references, but retire them from the

@@ -421,12 +421,12 @@ extension WorkspaceDatabaseConnection {
         "SELECT content_hash,storage FROM library_items WHERE content_hash IS NOT NULL", values: [])
       let visible = Set(rows.compactMap { $0.objectValue?["content_hash"]?.stringValue })
       // Losing concurrent versions stay recoverable with their bytes: a hash
-      // referenced only by a retained peer conflict or frontier member is kept.
+      // referenced only by a retained peer conflict or a concurrent version is kept.
       let recoverable = try historyRowsUnlocked("""
-        SELECT json_extract(payload,'$.row.content_hash.value') AS content_hash FROM paired_library_conflicts
-        WHERE json_extract(payload,'$.table')='library_items' AND json_extract(payload,'$.row.storage.value')='retained'
-        UNION SELECT json_extract(payload,'$.row.content_hash.value') FROM paired_library_frontier
+        SELECT json_extract(payload,'$.row.content_hash.value') AS content_hash FROM peer_sync_conflicts
         WHERE table_name='library_items' AND json_extract(payload,'$.row.storage.value')='retained'
+        UNION SELECT json_extract(payload,'$.row.content_hash.value') FROM peer_sync_versions
+        WHERE table_name='library_items' AND pending_peer IS NULL AND json_extract(payload,'$.row.storage.value')='retained'
         """, values: []).compactMap { $0.objectValue?["content_hash"]?.stringValue }
       let retained = Set(
         rows.filter { $0.objectValue?["storage"]?.stringValue == "retained" }

@@ -63,7 +63,7 @@ final class WorkspaceDatabaseConnection {
       try migrateLibraryMembers()
       try migrateMemberToolSessions()
       try migrateBotConversations()
-      try migratePairedLibrary()
+      try migratePeerSync()
       try migrateExecutionStreamChanges()
       try migrateDeviceSyncWakes()
       // A fresh library is stamped once everything above exists.

@@ -222,7 +222,7 @@ final class PairedMacSyncController {
             case .online, .offline: errors.removeValue(forKey: peer.deviceID)
             }
         }
-        conflicts = (try? await database.pairedLibraryConflicts()) ?? conflicts
+        conflicts = (try? await database.peerSyncConflicts()) ?? conflicts
         if status.quarantined > 0 { errors["quarantine"] = "\(status.quarantined) shared record\(status.quarantined == 1 ? "" : "s") could not be applied. Local data is retained; update Woven Matter on every device." }
         else { errors.removeValue(forKey: "quarantine") }
         for peer in status.peers { if let date = peer.lastSynchronized { lastSynchronized[peer.deviceID] = date } }

@@ -364,14 +364,14 @@ struct MemberSyncTests {
     await b.sync.synchronize(with: memberA)
     for note in notes { #expect(await b.has(note)) }
     await b.sync.synchronize(with: memberA)
-    let pulled = try await b.database.pairedLibraryCursors(a.id).pulled
-    let pushed = try await a.database.pairedLibraryCursors(b.id).pushed
+    let pulled = try await b.database.peerSyncCursors(a.id).pulled
+    let pushed = try await a.database.peerSyncCursors(b.id).pushed
     #expect(pulled > 0 && pushed == pulled)
     // A's next push to B starts after what B holds: nothing is resent.
     #expect(try await a.database.pairedLibraryPage(after: pushed).entries.isEmpty)
     let memberB = try #require(await a.directory.member(b.id))
     await a.sync.synchronize(with: memberB)
-    #expect(try await a.database.pairedLibraryCursors(b.id).pushed == a.database.pairedLibraryHead())
+    #expect(try await a.database.peerSyncCursors(b.id).pushed == a.database.peerSyncHead())
 
     // A claim beyond this device's own change log is never recorded.
     let schema = try await b.database.pairedLibrarySchema()
@@ -381,7 +381,7 @@ struct MemberSyncTests {
     headers = Dictionary(uniqueKeysWithValues: headers.map { ($0.key.lowercased(), $0.value) })
     let response = try #require(await a.sync.handle(.init(method: "POST", target: "/v1/peers/sync", headers: headers, body: body)))
     #expect(response.status == 200)
-    #expect(try await a.database.pairedLibraryCursors(b.id).pushed == a.database.pairedLibraryHead())
+    #expect(try await a.database.peerSyncCursors(b.id).pushed == a.database.peerSyncHead())
   }
 
   @Test func differentSchemasReportUpdateRequired() async throws {
