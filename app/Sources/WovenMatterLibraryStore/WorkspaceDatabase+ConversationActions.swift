@@ -31,8 +31,7 @@ extension WorkspaceDatabaseConnection {
           """, [id, cleanTitle])
         try toolsExecuteUnlocked("UPDATE conversations SET title = ?, updated_at = ? WHERE id = ?",
           [cleanTitle, timestamp, id])
-        try toolsExecuteUnlocked("UPDATE harness_sessions SET title = ?, updated_at = ? WHERE conversation_id = ?",
-          [cleanTitle, timestamp, id])
+        try toolsExecuteUnlocked("UPDATE harness_sessions SET updated_at = ? WHERE conversation_id = ?", [timestamp, id])
       case .moveToTrash:
         // Recheck at the write boundary, including work admitted after the menu opened.
         if let run = try historyRowsUnlocked("""

@@ -186,16 +186,15 @@ extension WorkspaceDatabaseConnection {
 
       let session = try prepareUnlocked("""
         INSERT INTO harness_sessions (
-          conversation_id, agent_id, runtime_kind, revision, title, created_at, updated_at
-        ) VALUES (?, ?, ?, 1, ?, ?, ?)
+          conversation_id, agent_id, runtime_kind, revision, created_at, updated_at
+        ) VALUES (?, ?, ?, 1, ?, ?)
         """)
       defer { sqlite3_finalize(session) }
       try bind(conversationID, at: 1, to: session)
       try bind(agentID, at: 2, to: session)
       try bind(runtimeKind.rawValue, at: 3, to: session)
-      try bind(sessionTitle, at: 4, to: session)
+      try bind(timestamp, at: 4, to: session)
       try bind(timestamp, at: 5, to: session)
-      try bind(timestamp, at: 6, to: session)
       try stepDone(session)
       try adoptReservedSessionOriginUnlocked(conversationID, allowMissingCalendarFolder: allowMissingCalendarFolder)
       if let link = openCodeAssociation {
@@ -298,17 +297,16 @@ extension WorkspaceDatabaseConnection {
       let session = try prepareUnlocked("""
         INSERT INTO harness_sessions (
           conversation_id, agent_id, runtime_kind, revision,
-          title, remote_workspace_id, created_at, updated_at
-        ) VALUES (?, ?, ?, 1, ?, ?, ?, ?)
+          remote_workspace_id, created_at, updated_at
+        ) VALUES (?, ?, ?, 1, ?, ?, ?)
         """)
       defer { sqlite3_finalize(session) }
       try bind(conversationID, at: 1, to: session)
       try bind(agentID, at: 2, to: session)
       try bind(runtimeKind.rawValue, at: 3, to: session)
-      try bind(sessionTitle, at: 4, to: session)
-      try bind(workspaceID, at: 5, to: session)
+      try bind(workspaceID, at: 4, to: session)
+      try bind(timestamp, at: 5, to: session)
       try bind(timestamp, at: 6, to: session)
-      try bind(timestamp, at: 7, to: session)
       try stepDone(session)
       try adoptReservedSessionOriginUnlocked(conversationID, allowMissingCalendarFolder: allowMissingCalendarFolder)
       if let link = openCodeAssociation {

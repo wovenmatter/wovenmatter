@@ -38,14 +38,143 @@ import WovenMatterCore
 /// Each step checks what is present, so a partly converted or partly
 /// created library converges on the same result.
 extension WorkspaceDatabaseConnection {
-  /// `PRAGMA user_version` of the current schema. A library created or
-  /// converted by this build carries it, so it skips the conversion below
-  /// and the next schema change is gated on the version instead of on what
-  /// the file happens to contain. 0 is every library before it.
-  static let librarySchemaVersion = 1
+  /// One numbered change to the library schema. `apply` brings a library at
+  /// `version - 1` to `version` in one transaction of its own that also
+  /// sets `PRAGMA user_version` to `version` (`libraryStepUnlocked` does
+  /// both), so a step either happened or did not, and never runs twice.
+  struct LibrarySchemaStep: Sendable {
+    let version: Int
+    /// Whether it rewrites or removes existing data, so the library is
+    /// copied first (`backUpLibraryUnlocked`). A step that only adds a
+    /// table, column or index does not need it.
+    let rewritesData: Bool
+    let apply: @Sendable (WorkspaceDatabaseConnection) throws -> Void
+  }
+
+  /// Every schema step, in order. The regular creation that follows
+  /// (`CREATE ... IF NOT EXISTS` in each `migrate*`) declares the current
+  /// shape for a new library; a step brings an existing one to it.
+  ///
+  /// To change the schema in a later release:
+  /// 1. Change the declaration a new library is created from.
+  /// 2. Append a step here that makes the same change to an existing
+  ///    library, with `libraryStepUnlocked`. `librarySchemaVersion` follows.
+  /// 3. Add the previous release's schema as a fixture and extend
+  ///    `LibrarySchemaUpgradeTests`: a library upgraded from every earlier
+  ///    version must end with exactly the schema of a new one.
+  ///
+  /// For a table peers share (`PairedLibraryTables`), a step may add a
+  /// table, or a column that is nullable or has a default, and must leave
+  /// recorded peer versions (`peer_sync_versions`) as they are: devices on
+  /// the older release keep such records waiting until they update, and
+  /// apply older records by the columns they carry
+  /// (`PairedLibraryFormat`). Renaming, retyping or removing something
+  /// shared also has to rewrite the recorded versions, as step 1 does, and
+  /// raise `PairedLibraryFormat.exchange`, after which every device must
+  /// update before synchronizing.
+  static let librarySchemaSteps: [LibrarySchemaStep] = [
+    // v0.4.2 and earlier, which carried no version, to the first versioned schema.
+    .init(version: 1, rewritesData: true) { try $0.upgradeLibrarySchemaUnlocked() },
+  ]
+
+  /// `PRAGMA user_version` of the current schema: the last step. A library
+  /// created by this build is stamped with it once it exists. 0 is every
+  /// library before the version was recorded.
+  static var librarySchemaVersion: Int { librarySchemaSteps.last?.version ?? 0 }
 
   func libraryVersionUnlocked() throws -> Int {
     try historyRowsUnlocked("PRAGMA user_version", values: []).first?.objectValue?["user_version"]?.intValue ?? 0
+  }
+
+  /// The library's version, or an error for one a newer release wrote.
+  @discardableResult func refuseNewerLibraryUnlocked() throws -> Int {
+    let version = try libraryVersionUnlocked()
+    guard version <= Self.librarySchemaVersion else {
+      throw WorkspaceDatabaseError.newerLibrary(found: version, supported: Self.librarySchemaVersion)
+    }
+    return version
+  }
+
+  /// Runs each step an existing library at `version` still lacks. A file
+  /// with no library yet (new, or holding only the usage index) has
+  /// nothing to convert: the regular creation makes it current and stamps
+  /// it. Returns whether any step ran.
+  func upgradeLibraryUnlocked(from version: Int, file: URL) throws -> Bool {
+    let pending = Self.librarySchemaSteps.filter { $0.version > version }
+    guard !pending.isEmpty, try historyRowsUnlocked("""
+      SELECT 1 AS present FROM sqlite_master WHERE type='table' AND name IN ('conversations','dashboard_conversations') LIMIT 1
+      """, values: []).isEmpty == false else { return false }
+    if pending.contains(where: \.rewritesData) { backUpLibraryUnlocked(file, version: version) }
+    for step in pending { try step.apply(self) }
+    return true
+  }
+
+  /// A step's transaction: foreign keys off while tables are rebuilt, the
+  /// change, and the version it reaches, committed together.
+  func libraryStepUnlocked(_ version: Int, _ change: () throws -> Void) throws {
+    try executeUnlocked("PRAGMA foreign_keys=OFF; PRAGMA legacy_alter_table=OFF")
+    defer { try? executeUnlocked("PRAGMA foreign_keys=ON") }
+    try transaction {
+      try change()
+      try executeUnlocked("PRAGMA user_version=\(version)")
+    }
+  }
+
+  /// Where the copies made before a rewriting step are kept, beside the library.
+  static func libraryBackupDirectory(for file: URL) -> URL {
+    file.deletingLastPathComponent().appending(path: "Library Backups", directoryHint: .isDirectory)
+  }
+  /// How long such a copy is kept.
+  static let libraryBackupRetention: TimeInterval = 30 * 24 * 60 * 60
+
+  /// Copies the library as it is before a step rewrites it
+  /// (`Library Backups/before-library-version-N.sqlite`, N being the version
+  /// it reaches). The library is first folded into its main file, which is
+  /// then copied; on a Mac that copy is a clone that takes no time or space
+  /// until the step changes the original. Nothing else writes the library
+  /// during an open. A copy that cannot be made (a full disk on a Linux
+  /// host) does not stop the step, which is one transaction and leaves the
+  /// library as it was if it fails. Copies older than
+  /// `libraryBackupRetention` are removed on a later open.
+  private func backUpLibraryUnlocked(_ file: URL, version: Int) {
+    let directory = Self.libraryBackupDirectory(for: file)
+    let copy = directory.appending(path: "before-library-version-\(Self.librarySchemaVersion).sqlite")
+    guard !FileManager.default.fileExists(atPath: copy.path) else { return }
+    do {
+      try executeUnlocked("PRAGMA wal_checkpoint(TRUNCATE)")
+      try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+      let partial = directory.appending(path: copy.lastPathComponent + ".partial")
+      try? FileManager.default.removeItem(at: partial)
+      try FileManager.default.copyItem(at: file, to: partial)
+      try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: partial.path)
+      try FileManager.default.moveItem(at: partial, to: copy)
+    } catch {
+      NSLog("The library was not copied before its upgrade from version %d: %@", version, error.localizedDescription)
+    }
+  }
+
+  /// Removes copies made before earlier upgrades once they are old enough.
+  static func removeExpiredLibraryBackups(for file: URL, now: Date = Date()) {
+    let directory = libraryBackupDirectory(for: file)
+    guard let copies = try? FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: [.contentModificationDateKey]) else { return }
+    for copy in copies where copy.lastPathComponent.hasPrefix("before-library-version-") {
+      guard let written = try? copy.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate,
+            now.timeIntervalSince(written) > libraryBackupRetention else { continue }
+      try? FileManager.default.removeItem(at: copy)
+    }
+  }
+
+  /// Returns the pages deletions freed to the file system once they are
+  /// worth it: a quarter of the file and at least 32 MiB. It only has an
+  /// effect in a library created or converted with `auto_vacuum`
+  /// INCREMENTAL, and unlike VACUUM it never renumbers a row.
+  func reclaimFreeSpaceUnlocked() throws {
+    func number(_ pragma: String) throws -> Int {
+      try historyRowsUnlocked("PRAGMA \(pragma)", values: []).first?.objectValue?[pragma]?.intValue ?? 0
+    }
+    let free = try number("freelist_count"), pages = try number("page_count"), size = try number("page_size")
+    guard free * size >= 32 * 1_024 * 1_024, free * 4 >= pages else { return }
+    try executeUnlocked("PRAGMA incremental_vacuum")
   }
 
   static let renamedLibraryTables: [(old: String, new: String)] = [
@@ -206,7 +335,9 @@ extension WorkspaceDatabaseConnection {
                            "message_id", "note_title_snapshot", "folder_id_snapshot", "created_at"]),
     ("run_activities", ["user_id", "governing_plane", "authority_kind", "authority_device_id", "authority_agent_id",
                         "desktop_owned", "origin_device_id"]),
-    ("harness_sessions", ["governing_plane", "authority_kind", "authority_device_id", "authority_agent_id"]),
+    // `title` was a copy of the conversation's title that a rename made on
+    // another device never reached.
+    ("harness_sessions", ["governing_plane", "authority_kind", "authority_device_id", "authority_agent_id", "title"]),
     // One row per run activity now that OpenClaw traces are gone.
     ("activity_summaries", ["source_kind", "source_id", "activity_id"]),
     // An accepted analytics event is kept only to deduplicate its ID.
@@ -257,7 +388,7 @@ extension WorkspaceDatabaseConnection {
     ("paired_library_file_cursors", "peer_sync_file_cursors"), ("paired_library_state", "peer_sync_state"),
     ("paired_library_seeded", "peer_sync_seeded"), ("paired_library_reassert", "peer_sync_reassert")]
 
-  /// Returns whether a library was converted.
+  /// Step 1 (`librarySchemaSteps`). Returns whether a library was converted.
   @discardableResult func upgradeLibrarySchemaUnlocked() throws -> Bool {
     var tables = Set(try historyRowsUnlocked("SELECT name FROM sqlite_master WHERE type='table'", values: [])
       .compactMap { $0.objectValue?["name"]?.stringValue })
@@ -418,7 +549,7 @@ extension WorkspaceDatabaseConnection {
       if tables.contains("runs"), !(try columns("runs")).contains("ordinal") { try rebuildCoreTableUnlocked("runs") }
       // Last, once every recorded row has its final columns.
       try reducePeerTombstonesUnlocked(bookkeeping: bookkeeping)
-      try executeUnlocked("PRAGMA user_version=\(Self.librarySchemaVersion)")
+      try executeUnlocked("PRAGMA user_version=1")
     }
     try executeUnlocked("PRAGMA foreign_keys=ON")
     return true

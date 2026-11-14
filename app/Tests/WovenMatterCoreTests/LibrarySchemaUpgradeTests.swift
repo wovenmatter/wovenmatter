@@ -283,6 +283,62 @@ import WovenMatterCore
     #expect(last > highest)
   }
 
+  /// A library a newer release has changed is refused by everything that
+  /// opens the file, and left exactly as it was: an older build must never
+  /// run its statements over a schema it does not know.
+  @Test func aLibraryFromANewerReleaseIsRefusedAndLeftAlone() async throws {
+    let fixture = try PersistenceFixture(); defer { fixture.remove() }
+    let current = WorkspaceDatabaseConnection.librarySchemaVersion
+    #expect(current == WorkspaceDatabaseConnection.librarySchemaSteps.last?.version)
+    #expect(WorkspaceDatabaseConnection.librarySchemaSteps.map(\.version) == Array(1...current))
+    try PersistenceSQL(url: fixture.databaseURL).execute("""
+      PRAGMA user_version=\(current + 1);
+      CREATE TABLE conversations(id TEXT PRIMARY KEY, from_a_newer_release TEXT);
+      """)
+    let objects = try scalar(fixture.databaseURL, "SELECT count(*) FROM sqlite_master")
+    for readOnly in [false, true] {
+      do {
+        _ = try await WorkspaceDatabase(url: fixture.databaseURL, readOnlyProjection: readOnly)
+        Issue.record("A newer library opened (read-only: \(readOnly))")
+      } catch let error as WorkspaceDatabaseError {
+        guard case .open(let message) = error else { Issue.record("\(error)"); continue }
+        #expect(message.contains("newer Woven Matter"))
+      }
+      #expect(throws: (any Error).self) { _ = try UsageStore(databaseURL: fixture.databaseURL, readOnly: readOnly) }
+    }
+    #expect(try scalar(fixture.databaseURL, "PRAGMA user_version") == current + 1)
+    #expect(try scalar(fixture.databaseURL, "SELECT count(*) FROM sqlite_master") == objects)
+  }
+
+  /// A step that rewrites data copies the library first, and the copy is
+  /// removed once it is old enough. New and converted libraries both give
+  /// freed pages back without a VACUUM.
+  @Test func aRewritingStepCopiesTheLibraryFirstAndTheCopyExpires() async throws {
+    let upgraded = try v042Library(), fresh = try PersistenceFixture(); defer { upgraded.remove(); fresh.remove() }
+    let copy = WorkspaceDatabaseConnection.libraryBackupDirectory(for: upgraded.databaseURL)
+      .appending(path: "before-library-version-\(WorkspaceDatabaseConnection.librarySchemaVersion).sqlite")
+    do {
+      _ = try UsageStore(databaseURL: upgraded.databaseURL); _ = try UsageStore(databaseURL: fresh.databaseURL)
+      _ = try await WorkspaceDatabase(url: upgraded.databaseURL); _ = try await WorkspaceDatabase(url: fresh.databaseURL)
+    }
+    // The copy is the library as v0.4.2 left it.
+    #expect(try scalar(copy, "PRAGMA user_version") == 0)
+    #expect(try scalar(copy, "SELECT count(*) FROM sqlite_master WHERE name='dashboard_conversations'") == 1)
+    #expect(try scalar(copy, "SELECT count(*) FROM dashboard_runs") == 5)
+    #expect(try scalar(copy, "PRAGMA quick_check") == 0)
+    // A new library has nothing to copy.
+    #expect(!FileManager.default.fileExists(atPath: WorkspaceDatabaseConnection.libraryBackupDirectory(for: fresh.databaseURL).path))
+    for library in [upgraded, fresh] { #expect(try scalar(library.databaseURL, "PRAGMA auto_vacuum") == 2) }
+
+    // Reopening keeps a recent copy and removes an expired one.
+    do { _ = try await WorkspaceDatabase(url: upgraded.databaseURL) }
+    #expect(FileManager.default.fileExists(atPath: copy.path))
+    let old = Date().addingTimeInterval(-WorkspaceDatabaseConnection.libraryBackupRetention - 60)
+    try FileManager.default.setAttributes([.modificationDate: old], ofItemAtPath: copy.path)
+    do { _ = try await WorkspaceDatabase(url: upgraded.databaseURL) }
+    #expect(!FileManager.default.fileExists(atPath: copy.path))
+  }
+
   @Test func aLongLivedV042LibraryLosesWhatOlderReleasesLeftBehind() async throws {
     let upgraded = try v042Library(), fresh = try PersistenceFixture()
     defer { upgraded.remove(); fresh.remove() }
@@ -436,6 +492,20 @@ import WovenMatterCore
     sqlite3_bind_text(statement, 1, id, -1, unsafeBitCast(-1, to: sqlite3_destructor_type.self))
     guard sqlite3_step(statement) == SQLITE_ROW, let bytes = sqlite3_column_blob(statement, 0) else { throw WorkspaceDatabaseError.corruptRow }
     return try JSONDecoder().decode(LibraryTranscript.self, from: Data(bytes: bytes, count: Int(sqlite3_column_bytes(statement, 0))))
+  }
+
+  /// The first column of `sql`'s first row, read through a plain connection;
+  /// a text result (`quick_check`'s "ok") reads as 0.
+  private func scalar(_ url: URL, _ sql: String) throws -> Int {
+    var connection: OpaquePointer?
+    guard sqlite3_open_v2(url.path, &connection, SQLITE_OPEN_READWRITE, nil) == SQLITE_OK, let connection else { throw WorkspaceDatabaseError.open(url.path) }
+    defer { sqlite3_close(connection) }
+    sqlite3_busy_timeout(connection, 5_000)
+    var statement: OpaquePointer?
+    guard sqlite3_prepare_v2(connection, sql, -1, &statement, nil) == SQLITE_OK, let statement else { throw WorkspaceDatabaseError.prepare(sql) }
+    defer { sqlite3_finalize(statement) }
+    guard sqlite3_step(statement) == SQLITE_ROW else { throw WorkspaceDatabaseError.step(String(cString: sqlite3_errmsg(connection))) }
+    return Int(sqlite3_column_int64(statement, 0))
   }
 
   private func schema(_ database: WorkspaceDatabase) async throws -> [String: String] {

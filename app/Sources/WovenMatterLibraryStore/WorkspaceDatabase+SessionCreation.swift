@@ -135,7 +135,6 @@ extension WorkspaceDatabaseConnection {
       try validateFolderUnlocked(id: configuration.folderID)
       try toolsExecuteUnlocked("UPDATE conversations SET title=?,folder_id=? WHERE id=?",
         [configuration.title, configuration.folderID, targetID])
-      try toolsExecuteUnlocked("UPDATE harness_sessions SET title=? WHERE conversation_id=?", [configuration.title, targetID])
       try toolsExecuteUnlocked("UPDATE session_tools SET enabled_json=?,defaults_applied=1 WHERE session_id=?", [try toolsJSON(configuration.tools.enabled), targetID])
       try toolsExecuteUnlocked("UPDATE session_executor_profiles SET profiles_json=? WHERE session_id=?", [try toolsJSON(configuration.tools.executorProfiles ?? []), targetID])
     }

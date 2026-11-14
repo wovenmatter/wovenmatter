@@ -72,12 +72,11 @@ extension WorkspaceDatabaseConnection {
 
       let session = try prepareUnlocked("""
         UPDATE harness_sessions
-        SET title = ?, updated_at = ? WHERE conversation_id = ?
+        SET updated_at = ? WHERE conversation_id = ?
         """)
       defer { sqlite3_finalize(session) }
-      try bind(cleanTitle, at: 1, to: session)
-      try bind(timestamp, at: 2, to: session)
-      try bind(id, at: 3, to: session)
+      try bind(timestamp, at: 1, to: session)
+      try bind(id, at: 2, to: session)
       try stepDone(session)
 
       return true

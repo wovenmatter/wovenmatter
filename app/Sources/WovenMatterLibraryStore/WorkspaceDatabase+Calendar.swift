@@ -508,7 +508,6 @@ extension WorkspaceDatabaseConnection {
     // an app title so later native snapshots and recurring runs cannot reset it.
     try toolsExecuteUnlocked("INSERT OR IGNORE INTO conversation_titles(conversation_id,title) VALUES(?,?)", [id, title])
     try toolsExecuteUnlocked("UPDATE conversations SET title=(SELECT title FROM conversation_titles WHERE conversation_id=?),folder_id=? WHERE id=?", [id, folderID, id])
-    try toolsExecuteUnlocked("UPDATE harness_sessions SET title=? WHERE conversation_id=?", [title, id])
     try toolsExecuteUnlocked("UPDATE session_tools SET enabled_json=?,defaults_applied=1 WHERE session_id=?", [try toolsJSON(configuration.tools.enabled), id])
     try toolsExecuteUnlocked("UPDATE session_executor_profiles SET profiles_json=? WHERE session_id=?", [try toolsJSON(configuration.tools.executorProfiles ?? []), id])
   }

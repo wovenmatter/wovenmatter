@@ -14,6 +14,14 @@ public enum WorkspaceDatabaseError: Error, Equatable {
   case step(String)
   case readOnlyProjection
   case corruptRow
+
+  /// A library a newer Woven Matter has already changed. This build would
+  /// run its older statements against tables it does not know, so it leaves
+  /// the file untouched instead.
+  static func newerLibrary(found: Int, supported: Int) -> WorkspaceDatabaseError {
+    .open("This library was updated by a newer Woven Matter (library version \(found); this version reads up to \(supported)). " +
+          "Update Woven Matter on this device to open it.")
+  }
 }
 
 /// Synchronous SQL implementation. Only the async facade may own a connection;
@@ -43,14 +51,21 @@ final class WorkspaceDatabaseConnection {
       if readOnlyProjection {
         try execute("PRAGMA query_only = ON")
         try execute("PRAGMA busy_timeout = 5000")
+        try withLock { try refuseNewerLibraryUnlocked() }
         return
       }
       try execute("PRAGMA busy_timeout = 5000")
+      // A library a newer release wrote is refused before anything changes it.
+      let version = try withLock { try refuseNewerLibraryUnlocked() }
+      // A new library gives freed pages back to the file system without a
+      // full VACUUM (`reclaimFreeSpaceUnlocked`). SQLite fixes this mode when
+      // the first table is created, or at a VACUUM, and only before WAL.
+      try execute("PRAGMA auto_vacuum = INCREMENTAL")
       try execute("PRAGMA journal_mode = WAL")
-      // A library from before the versioned schema converts first; a
-      // current one skips straight to the idempotent creation below.
-      let version = try withLock { try libraryVersionUnlocked() }
-      let converted = version == 0 ? try upgradeLibrarySchemaUnlocked() : false
+      // A library an earlier release wrote is brought to this schema one
+      // numbered step at a time; a current one skips straight to the
+      // idempotent creation below.
+      let converted = try upgradeLibraryUnlocked(from: version, file: url)
       try execute("PRAGMA foreign_keys = ON")
       try migrate()
       try migrateWorkspaceHistory()
@@ -68,11 +83,16 @@ final class WorkspaceDatabaseConnection {
       try migrateDeviceSyncWakes()
       // A fresh library is stamped once everything above exists.
       if version < Self.librarySchemaVersion { try execute("PRAGMA user_version = \(Self.librarySchemaVersion)") }
+      Self.removeExpiredLibraryBackups(for: url)
       // The conversion leaves the space of the bookkeeping it compacted and
       // the tables it rebuilt free inside the file; give it back once. Nothing
       // else has the library open yet, and a failure only keeps the space.
       // VACUUM writes the whole file through the WAL; truncate it after.
       if converted, (try? execute("VACUUM")) != nil { try? execute("PRAGMA wal_checkpoint(TRUNCATE)") }
+      else { try? withLock { try reclaimFreeSpaceUnlocked() } }
+      // Planner statistics for the tables that have grown, within SQLite's
+      // own bound for a connection that stays open.
+      try? execute("PRAGMA optimize = 0x10002")
     } catch {
       sqlite3_close(database)
       connection = nil
@@ -99,7 +119,10 @@ final class WorkspaceDatabaseConnection {
 
   deinit {
     dispatchPrecondition(condition: .onQueue(workerQueue))
-    if let connection { sqlite3_close(connection) }
+    if let connection {
+      if !isReadOnlyProjection { sqlite3_exec(connection, "PRAGMA optimize", nil, nil, nil) }
+      sqlite3_close(connection)
+    }
   }
 
   func transaction<T>(_ operation: () throws -> T) throws -> T {

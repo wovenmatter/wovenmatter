@@ -163,7 +163,6 @@ extension WorkspaceDatabaseConnection {
     CREATE TABLE IF NOT EXISTS harness_sessions (
       conversation_id TEXT PRIMARY KEY, agent_id TEXT,
       runtime_kind TEXT NOT NULL, revision INTEGER NOT NULL DEFAULT 1,
-      title TEXT NOT NULL,
       native_session_id TEXT, model TEXT, thinking TEXT, permission TEXT,
       remote_workspace_id TEXT,
       created_at TEXT NOT NULL, updated_at TEXT NOT NULL
