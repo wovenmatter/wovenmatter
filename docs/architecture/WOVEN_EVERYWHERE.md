@@ -427,16 +427,21 @@ among Macs that still stand; they never decide who wins a dispute.
   resumes once every device has updated. A release that only adds a shared
   table or column leaves the format alone:
   - A device that does not know a record's table or one of its columns keeps
-    the record exactly as received (a waiting entry of `peer_sync_versions`),
+    the record exactly as received (a waiting entry of `peer_sync_versions`,
+    marked `waits_for_update`),
     relays it to its own peers, keeps synchronizing everything else, and
-    applies it once it updates. It never applies a cut-down row: a later
+    applies it once it updates, checked then against the member that sent
+    it. It never applies a cut-down row: a later
     local edit would send the cut-down row back and lose the new column on
     every device. A local edit made while such a version waits is concurrent
     with it, as with a version waiting for its bytes.
   - A device that knows more columns than a record carries applies the ones
-    it has; the others keep their local values, or their defaults in a new row.
-    A new shared column is therefore nullable or has a default, and the step
-    that adds it leaves recorded versions as they are.
+    it has. When such a version wins, each column it lacks is taken from the
+    highest-ranked concurrent version that carries it, so every device
+    arrives at the same row whatever order the versions came in; a column no
+    concurrent version carries keeps its local value, or its default in a
+    new row. A new shared column is therefore nullable or has a default, and
+    the step that adds it leaves recorded versions as they are.
   - `PairedLibraryRecord.needs` marks a record whose content, in a shape
     that did not change (a new case of a stored enum, a new field a validator
     requires), needs a newer build (`PairedLibraryFormat.content`). A device
