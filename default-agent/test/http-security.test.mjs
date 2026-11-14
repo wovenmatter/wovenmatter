@@ -103,6 +103,24 @@ test('Pi model globs retain matching semantics and reject amplification patterns
   `], { timeout: 10000, cwd: new URL('..', import.meta.url), env: { PATH: process.env.PATH } });
 });
 
+test('Pi brace expansion bounds total parser work and invalid limits in an isolated child', { timeout: 15000 }, async () => {
+  await execute(process.execPath, ['--max-old-space-size=96', '--input-type=module', '-e', `
+    import assert from 'node:assert/strict';
+    import { createRequire } from 'node:module';
+    const { expand } = createRequire(${JSON.stringify(piEntry)})('brace-expansion');
+    assert.deepEqual(expand('model-{alpha,beta}-{1..2}'),
+      ['model-alpha-1', 'model-alpha-2', 'model-beta-1', 'model-beta-2']);
+    assert.deepEqual(expand('{a,{b,c}}'), ['a', 'b', 'c']);
+    // Earlier Pi-pinned releases ignore this total work limit. Over-budget
+    // input remains literal rather than monopolizing the host's event loop.
+    assert.deepEqual(expand('{a,b}', { maxSteps: 0 }), ['{a,b}']);
+    const hostile = ('{{' + ','.repeat(316) + '}{' + ','.repeat(316) + '}}').repeat(24);
+    const result = expand(hostile, { maxSteps: NaN, maxDepth: NaN });
+    assert.ok(result.length <= 10000);
+    assert.ok(result.some(value => value.includes('{')));
+  `], { timeout: 10000, cwd: new URL('..', import.meta.url), env: { PATH: process.env.PATH } });
+});
+
 test('effective IP parser escapes invalid IPv6 characters while retaining address classification', { timeout: 10000 }, async () => {
   await execute(process.execPath, ['--input-type=module', '-e', `
     import assert from 'node:assert/strict';

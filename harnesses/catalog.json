@@ -54,7 +54,7 @@
         "attachments"
       ],
       "minimumEngineVersion": "0.169.0",
-      "minimumProtocolSDKVersion": "2.6.0"
+      "minimumProtocolSDKVersion": "2.7.0"
     },
     {
       "id": "claude_code",
@@ -111,7 +111,7 @@
         "attachments"
       ],
       "minimumEngineVersion": "0.3.325",
-      "minimumProtocolSDKVersion": "2.6.0"
+      "minimumProtocolSDKVersion": "2.7.0"
     },
     {
       "id": "grok_build",
