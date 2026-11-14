@@ -416,22 +416,46 @@ among Macs that still stand; they never decide who wins a dispute.
   on every device, with title and status. Transcripts for very recent
   sessions (updated in the last 3 days, or running), plus any session the
   user opens or keeps offline. Large files are fetched when opened.
-- **Versions.** Sync requires matching schemas (`PairedLibraryStore` already
-  rejects a mismatch). The schema is the SHA-256 hash of the shared tables
-  (`PairedLibraryTables`): per table, its column names with their declared
-  types, sorted by name, and its key columns in key order. Physical column
-  order is not part of it, so a library migrated over many releases (columns
-  added at the end) and a freshly created one, such as a Linux host's, agree;
-  rows are exchanged by column name. A column that only older libraries still
-  have is removed by a migration rather than tolerated, and the migration
-  removes it from the recorded versions too. The hash is prefixed
-  with a format version (`v3` since the v0.4.2 schema rename); a device on
-  another format answers or receives `update_required`. When peers disagree, every device shows which part
-  needs updating and offers "Update everything". There is no compatibility
+- **Versions.** Peers synchronize at the same exchange format
+  (`PairedLibraryFormat.exchange`, carried as `format` on every page), not
+  with identical schemas. The format covers how values and identities are
+  encoded, how concurrent versions are ordered, which columns a deletion
+  carries, and the name, type and key of every shared column that exists.
+  A release that renames, retypes or removes something shared raises it; a
+  device on another format, or on a build before it, answers or receives
+  `update_required`, nothing is applied and no cursor moves, so the exchange
+  resumes once every device has updated. A release that only adds a shared
+  table or column leaves the format alone:
+  - A device that does not know a record's table or one of its columns keeps
+    the record exactly as received (a waiting entry of `peer_sync_versions`),
+    relays it to its own peers, keeps synchronizing everything else, and
+    applies it once it updates. It never applies a cut-down row: a later
+    local edit would send the cut-down row back and lose the new column on
+    every device. A local edit made while such a version waits is concurrent
+    with it, as with a version waiting for its bytes.
+  - A device that knows more columns than a record carries applies the ones
+    it has; the others keep their local values, or their defaults in a new row.
+    A new shared column is therefore nullable or has a default, and the step
+    that adds it leaves recorded versions as they are.
+  - `PairedLibraryRecord.needs` marks a record whose content, in a shape
+    that did not change (a new case of a stored enum, a new field a validator
+    requires), needs a newer build (`PairedLibraryFormat.content`). A device
+    below it keeps the record waiting instead of rejecting it. Relays carry
+    the marker unchanged.
+  - File sync skips a file store this build does not keep.
+  The shared tables are still hashed (`schema`: per table, its column names
+  with their declared types, sorted by name, and its key columns in key
+  order; physical column order is not part of it, so a library migrated over
+  many releases and a freshly created one report the same). Peers report the
+  hash; a difference means one of them has additions the other keeps
+  waiting, and `LibrarySyncStatus.waitingForUpdate` counts them. When a
+  format differs, every device shows which part needs updating and offers
+  "Update everything". There is no compatibility
   layer. A mismatched exchange answers 409 `{code: "update_required",
   message, version, schema}`; `LibrarySyncStatus` (`{deviceID, version,
   schema, peers: [{deviceID, name, kind, state: online|offline|updateRequired|failing,
-  version, lastSynchronized, lastContact, error}], conflicts, quarantined}`,
+  version, lastSynchronized, lastContact, error}], conflicts, quarantined,
+  waitingForUpdate}`,
   `updateRequired`) is on the Mac's `LibraryHostSnapshot.librarySync`, the
   library socket's `GET /v1/sync/status` and, for phones, the mobile API's
   signed `GET /v1/sync/status` on every Mac and Linux host. On a Mac, a peer
@@ -448,7 +472,7 @@ among Macs that still stand; they never decide who wins a dispute.
   - `device_*` is what the library keeps for devices that reach it over the device API: the phone change feed (`device_sync_revisions`, `device_sync_changes`, written by the `<table>_device_sync_*` triggers), mutation, command, draft, tool and calendar receipts and scheduled MCP callers. Saved files are `saved_artifacts`, with uploads in progress in `artifact_uploads` and `artifact_chunks` (each chunk's bytes are a file in `library-chunks/` that the row names by SHA-256); `message_provenance` is the session that sent an agent's message.
   - `library_items`, `library_messages`, `library_settings` and `library_locations` index the Library pane (files and links found in chats); `library_members*` is the signed member list.
 
-  v0.4.2 still used the names of the OpenClaw dashboard the library came from (`dashboard_*`, `desktop_*`, OpenClaw gateway tables and columns, and per-row `user_id`, `governing_plane`, `authority_kind`, `authority_agent_id`, `origin_device_id` and `desktop_owned` columns every current writer sets to the same value). Its later tables were named for where they came from (`paired_*`, `device_*`, `workspace_*`), and it stored JSON as BLOB. Opening such a library converts it in place (`LibrarySchemaUpgrade.swift`, whose tables are the complete old-to-new map): tables and columns are renamed, dead ones dropped, JSON is stored as TEXT, every trigger is recreated under its `<table>_<purpose>_<op>` name and every index of a renamed table as `<table>_<purpose>`, and peer sync bookkeeping is rewritten to the new names and text values, so paired Macs that update together keep their versions and cursors. The conversion runs only for a library whose `PRAGMA user_version` is 0 and stamps the schema version (`librarySchemaVersion`, now 1) in the same transaction; a new library is stamped once it has been created, so the next schema change is gated on that version. Rows the old columns hid or kept read-only stay that way: a dashboard chat becomes retained read-only history, and a hidden one stays archived. Each machine's device ID file (`dashboard-device-id`, now `device-id`; `DeviceIdentityFile.moveLegacyFile`) and the window, sidebar and theme settings saved under `wovenmatter.dashboard.*` (`WindowPreferenceUpgrade` on the Mac; the iPhone moves its theme) move once.
+  v0.4.2 still used the names of the OpenClaw dashboard the library came from (`dashboard_*`, `desktop_*`, OpenClaw gateway tables and columns, and per-row `user_id`, `governing_plane`, `authority_kind`, `authority_agent_id`, `origin_device_id` and `desktop_owned` columns every current writer sets to the same value). Its later tables were named for where they came from (`paired_*`, `device_*`, `workspace_*`), and it stored JSON as BLOB. Opening such a library converts it in place (`LibrarySchemaUpgrade.swift`, whose tables are the complete old-to-new map): tables and columns are renamed, dead ones dropped, JSON is stored as TEXT, every trigger is recreated under its `<table>_<purpose>_<op>` name and every index of a renamed table as `<table>_<purpose>`, and peer sync bookkeeping is rewritten to the new names and text values, so paired Macs that update together keep their versions and cursors. The conversion is step 1 of the library's ordered schema steps (`librarySchemaSteps`): it runs only for a library whose `PRAGMA user_version` is 0 and records version 1 in the same transaction; a new library is stamped with the current version (`librarySchemaVersion`) once it has been created. Each later schema change is one more numbered step, run once and recorded the same way, so a library upgraded from any earlier release ends with exactly the schema of a new one. A step that rewrites data copies the library first (`Library Backups/before-library-version-N.sqlite` beside it; a clone on a Mac, removed after 30 days). A library whose version is higher than the build's is refused, untouched, by the writer, the read-only projection and the usage index: an older build never runs its statements over a newer schema. New and converted libraries use incremental auto-vacuum. Rows the old columns hid or kept read-only stay that way: a dashboard chat becomes retained read-only history, and a hidden one stays archived. Each machine's device ID file (`dashboard-device-id`, now `device-id`; `DeviceIdentityFile.moveLegacyFile`) and the window, sidebar and theme settings saved under `wovenmatter.dashboard.*` (`WindowPreferenceUpgrade` on the Mac; the iPhone moves its theme) move once.
 
 ### Library host (`wovenmatter-library`)
 
@@ -2112,10 +2136,12 @@ marks that bot's library conversations deleted.
 
 **Bot conversations in the library** are two paired-library tables, not chats:
 `bot_conversations(id = "<machine>:<bot>:<conversationId>", machine_id, bot_id,
-bot_name, conversation_id, kind, parent_conversation_id, forked_at, title, pinned,
-created_at, updated_at, deleted_at)` and `bot_conversation_entries(id =
-"<machine>:<bot>:<entryId>", conversation, entry_id, role, text, error, stopped,
-created_at)`. A resent row that has not changed is not rewritten, so it adds no sync
+bot_name, runtime_conversation_id, kind, parent_runtime_conversation_id,
+forked_at_entry_id, title, is_pinned, created_at, updated_at, deleted_at)` and
+`bot_conversation_entries(id = "<machine>:<bot>:<entryId>", bot_conversation_id,
+entry_id, role, text, error, stopped, created_at)`. `runtime_conversation_id` is the
+bot runtime's own number for the conversation; `conversation_id` names a library
+conversation everywhere else. A resent row that has not changed is not rewritten, so it adds no sync
 traffic. Regular chat lists never show them. The Swift entry point is
 `WorkspaceDatabase.recordBotConversation(machineID:_:)`, which a Linux library daemon
 can call with the same batch.
