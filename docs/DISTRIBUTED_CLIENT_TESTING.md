@@ -54,7 +54,8 @@ and fixtures do not prove UI, Tailscale, or real-account acceptance.
 - Save an artifact, interrupt its transfer, reconnect, and verify exact bytes.
   Workspace files and runtime checkpoints stay with their owner.
 - Run devices on different versions. Each must show which part needs updating
-  and offer **Update everything**; after updating, sync resumes.
+  and link to Settings → Updates, whose **Update everything** brings every
+  device up to date; after updating, sync resumes.
 - With the iPhone's paired Mac offline, the phone must sync with another Mac or
   the Linux host. Nothing on the phone should wait for its paired Mac.
 

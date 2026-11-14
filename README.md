@@ -95,8 +95,9 @@ can be offline, and the rest keep working.
 - Sync is peer-to-peer between every online host. It runs on changes, not on a
   timer, and a host catches up when it comes back online. Conflicting edits
   are kept as conflict copies.
-- Hosts must run matching versions to sync. When versions differ, each one
-  shows which part needs updating and offers **Update everything**.
+- Hosts must run matching versions to sync. Settings → Updates shows every
+  device's version and harnesses, and **Update everything** brings them all up
+  to date.
 
 ### Sessions across machines
 

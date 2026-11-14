@@ -3,9 +3,9 @@ import WovenMatterClient
 import WovenMatterCore
 import WovenMatterLibraryStore
 
-/// Settings → Bots: the one machine bots run on, installing on another device, and
-/// version notices. The chosen machine opens its own page; what bots may do through
-/// Woven MCP lives in Settings → Woven MCP.
+/// Settings → Bots: the one machine bots run on, installing on another device, and a
+/// link to Settings → Updates when versions differ. The chosen machine opens its own
+/// page; what bots may do through Woven MCP lives in Settings → Woven MCP.
 struct SettingsBotsView: View {
     @Bindable var model: ApplicationModel
     var reservesRailControlSpace = false
@@ -13,6 +13,7 @@ struct SettingsBotsView: View {
     let onBack: () -> Void
     let onOpenMachine: (String) -> Void
     let onOpenWovenMCP: () -> Void
+    var onOpenUpdates: () -> Void = {}
 
     private var bots: BotsModel { model.bots }
     @State private var mcp: WovenMCPAccessSnapshot?
@@ -29,7 +30,7 @@ struct SettingsBotsView: View {
             backTitle: backTitle,
             onBack: onBack
         ) {
-            BotsVersionNotice(bots: bots)
+            UpdatesStatusLink(bots: bots, onOpen: onOpenUpdates)
             whereSection
             SettingsSection {
                 SettingsSummaryLink(title: "Woven MCP access", value: mcpSummary, action: onOpenWovenMCP)
@@ -376,7 +377,7 @@ enum BotMachineText {
     }
 
     /// The operating system bots run on, and how many bots once it is ready. No versions: a
-    /// machine that needs updating says so in its status and the "Update everything" notice.
+    /// machine that needs updating says so in its status and Settings → Updates.
     @MainActor
     static func summary(_ machine: BotMachine, bots: BotsModel) -> String {
         var parts = [machine.kind == .linux ? "Linux" : "Mac"]

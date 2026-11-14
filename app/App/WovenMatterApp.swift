@@ -522,6 +522,7 @@ struct WovenMatterApp: App {
                     applicationModel.configureDictationHistory()
                     lifecycleDelegate.model = applicationModel
                     DesktopUpdater.shared.start(model: applicationModel)
+                    FleetUpdatesModel.shared.attach(applicationModel)
                     lifecycleDelegate.prepareBrowserTermination = { await WorkspaceAssetSession.shutdown() }
                 }
                 .frame(minWidth: WovenMetrics.windowMinimumWidth, minHeight: 640)

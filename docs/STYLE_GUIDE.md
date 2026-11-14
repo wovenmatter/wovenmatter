@@ -86,11 +86,20 @@ when an intentional design change is accepted.
 - **Settings navigation:** group Pi Durable, Codex, Claude Code, Grok Build, and
   OpenCode under **Settings → Agents**. Agent pages return to Agents unless
   opened from a remote workspace's page. Spell **OpenCode** as one word throughout
-  the app. Order the main Settings page as General, Permissions & Access,
+  the app. Order the main Settings page as General, Updates, Permissions & Access,
   Subscriptions & API Keys, Agents, Bots, Woven MCP, Workspaces, Apple Devices,
   Background Server, then Dictation. Subscriptions & API Keys, Permissions &
-  Access, Woven MCP, and Bots return to the page whose link opened them.
-- **General:** Appearance, Conversation titles, Software, and Privacy only. Other
+  Access, Woven MCP, Bots, and Updates return to the page whose link opened them.
+- **Updates:** the one home for versions and updates. A summary row with **Check
+  now**, then **Update everything** (primary), **Update Woven Matter**, and
+  **Update harnesses**. Then one section per device, This Mac first: its Woven
+  Matter or Woven server row with its own **Update**, its bots, and a
+  **Harnesses** summary row listing each harness with its versions and **Update**.
+  Work an update would stop is named in one alert before anything starts; Linux
+  harness downloads are reviewed together in one confirmation. Other pages show
+  only a "Versions don't match" link here.
+- **General:** Appearance, Conversation titles, Software, and Privacy only. Software
+  shows this Mac's version with **Check for updates** and an Updates summary link. Other
   settings live on the page for what they affect. Summary rows whose value would be
   unclear before opening (Sidebar sections, Agent icons) show a one-line description
   instead. Conversation titles show the Codex account they use and link to its page.
@@ -103,14 +112,14 @@ when an intentional design change is accepted.
   composer, and Settings sections and rows. A thread sits beside its bot's main channel
   at 760 points and wider. Message actions appear on hover. Bots run on one machine.
   **Settings → Bots** holds one "Run bots on" choice (Off, This Mac, or another Mac or
-  Linux machine), the chosen machine's row, Install on another device, and version
-  notices with "Update everything". Choosing a machine asks first, then turns bots off
+  Linux machine), the chosen machine's row, Install on another device, and a
+  "Versions don't match" link to Settings → Updates. Choosing a machine asks first, then turns bots off
   everywhere else; bots and their files stay where they were made. The machine opens
   its own page: a status row with a Manage menu, then summary links to Profiles, Bots
   and teams, Resources, and that machine's Subscriptions & API Keys. Profiles and bots
   are summary rows that open for editing. Bots' Woven MCP access lives in Settings →
   Woven MCP, with no pause switch; Bots shows it as one summary link. Apple Devices
-  shows only a version status link to Bots. Bots use Subscriptions & API Keys on the
+  shows only a version status link to Updates. Bots use Subscriptions & API Keys on the
   machine they run on; there is no separate bot sign-in.
 - **Harness setup:** use compact rows grouped on the theme-whisper surface for
   both harness installation and Pi Durable setup, with the same typography,

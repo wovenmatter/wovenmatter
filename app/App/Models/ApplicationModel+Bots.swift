@@ -130,7 +130,7 @@ extension ApplicationModel {
     /// (a bots-only server) is still reached through its SSH tunnel.
     func remoteBotMachines(thisMacVersion: String?, directory: BotsRemoteDirectory) async -> [BotMachine] {
         let members = await memberBotWorkspaces()
-        // A machine whose library schema differs cannot sync with this Mac: it needs Update everything.
+        // A machine whose library schema differs cannot sync with this Mac: it needs updating in Settings → Updates.
         let schema = try? await libraryStore?.database.pairedLibrarySchema()
         let signedIDs = Set(members.map(\.id))
         let tunnelled = remoteWorkspaces.workspaces.filter { !signedIDs.contains($0.id.uuidString.lowercased()) }
@@ -152,12 +152,16 @@ extension ApplicationModel {
             let client = try await remoteWorkspaces.botsService(for: configuration)
             let status = try await botsTimeout { try await client.botsStatus() }
             directory.linux[status.machine.deviceID.lowercased()] = configuration.id
-            return status.machine(kind: .linux, socket: client.botsSocket, thisMacVersion: thisMacVersion,
-                                  expectedHostFingerprint: await RemoteWorkspaceSSHClient.bundledHostFingerprint(),
-                                  thisMacLibrarySchema: schema)
+            var machine = status.machine(kind: .linux, socket: client.botsSocket, thisMacVersion: thisMacVersion,
+                                         expectedHostFingerprint: await RemoteWorkspaceSSHClient.bundledHostFingerprint(),
+                                         thisMacLibrarySchema: schema)
+            machine.workspaceID = configuration.id.uuidString.lowercased()
+            return machine
         } catch {
-            return BotMachine(id: "linux:" + configuration.id.uuidString.lowercased(), name: configuration.name, kind: .linux,
-                              state: .unreachable, message: Self.botsUnavailableText(error))
+            var machine = BotMachine(id: "linux:" + configuration.id.uuidString.lowercased(), name: configuration.name, kind: .linux,
+                                     state: .unreachable, message: Self.botsUnavailableText(error))
+            machine.workspaceID = configuration.id.uuidString.lowercased()
+            return machine
         }
     }
 
@@ -172,12 +176,16 @@ extension ApplicationModel {
             guard status.machine.deviceID.lowercased() == client.audience else { throw BotsError.unavailable("It answered as another device.") }
             directory.members[client.audience] = workspace.id
             let socket = BotSocketEndpoint.signed(client.endpoint.appending(path: "v1/bots/ws"), audience: client.audience)
-            return status.machine(kind: kind, socket: socket, thisMacVersion: thisMacVersion,
-                                  expectedHostFingerprint: kind == .linux ? await RemoteWorkspaceSSHClient.bundledHostFingerprint() : nil,
-                                  thisMacLibrarySchema: schema)
+            var machine = status.machine(kind: kind, socket: socket, thisMacVersion: thisMacVersion,
+                                         expectedHostFingerprint: kind == .linux ? await RemoteWorkspaceSSHClient.bundledHostFingerprint() : nil,
+                                         thisMacLibrarySchema: schema)
+            machine.workspaceID = workspace.id.lowercased()
+            return machine
         } catch {
-            return BotMachine(id: "member:" + workspace.id, name: workspace.name, kind: kind,
-                              state: .unreachable, message: Self.botsUnavailableText(error))
+            var machine = BotMachine(id: "member:" + workspace.id, name: workspace.name, kind: kind,
+                                     state: .unreachable, message: Self.botsUnavailableText(error))
+            machine.workspaceID = workspace.id.lowercased()
+            return machine
         }
     }
 

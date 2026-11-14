@@ -1060,7 +1060,7 @@ struct BotsUnavailableView: View {
         case .starting: return "Starting bots on \(name)"
         case .ready: return "Connecting…"
         case .unreachable: return "\(name) is unavailable"
-        case .needsUpdate: return "Update everything to use these bots"
+        case .needsUpdate: return "Update in Settings → Updates to use these bots"
         case .failed: return "Bots on \(name) could not start"
         }
     }
