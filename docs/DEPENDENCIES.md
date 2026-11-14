@@ -268,6 +268,11 @@ Maintenance checks both for newer releases; recorded does not mean frozen.
   recover transcript window gaps, and derive progress receipts only from new
   committed entries. Archive/subagent observers use `observeCommits`; SQLite
   migration verifies each batched commit receipt before activation.
+  Pi Coding Agent also pins brace-expansion 5.0.12. Its consumer-scoped
+  `>=5.0.13` override adds the upstream total parser-work bound for hostile
+  patterns. Retain it until Pi excludes earlier versions; bounded child-process
+  fixtures verify normal expansion, nesting and literal fallback for over-budget
+  input.
 - **Bots runtime** (`bots/`) consumes the same Pi family, Chord, Claude Agent
   SDK, typebox and ws selections as `default-agent`, with the same
   consumer-scoped pi-ai provider and Chord `ws` overrides, and minimum-only
@@ -327,18 +332,19 @@ Codex ACP 2.6.0 with Codex 0.169.0, and Claude ACP 0.107.0 with Claude SDK 0.3.3
 (native Claude Code 2.1.325). The standalone Codex and Claude sign-in CLIs use their
 official current stable release channels. Codex ACP's `^0.166.0` engine range
 otherwise keeps its chat engine behind; its `~2.4.0` ACP TypeScript SDK range
-also excludes the current 2.6.0. Claude ACP 0.107.0 pins SDK 0.3.323;
+also excludes the current 2.7.0. Claude ACP 0.107.0 pins SDK 0.3.323;
 the consumer-scoped override still selects SDK 0.3.325 independently so engine-only
 updates remain eligible while the connector pin lags. Transcript-write loss
 invalidates the native resume marker and refuses tool dispatch/continuation commits;
 config-only write loss leaves a valid response intact. Provider-free persistence
 fixtures verify canonical replay after recovery. Claude's connector selects protocol SDK
-2.6.0 directly. The catalog's independent ACP SDK floor is 2.6.0. Mac and native
-Linux/container explicit updates resolve its newest nondeprecated stable
+2.6.0 directly; its consumer-scoped override selects 2.7.0 independently. The
+catalog's independent ACP SDK floor is 2.7.0. Mac and native Linux/container
+explicit updates resolve its newest nondeprecated stable
 publication independently, retain the vendor manifests, and verify the exact
 consumer graph and ACP v1 handshake before activation. SDK-only updates appear
 in inventory even when connector and engine are current. Failed candidates
-leave the active generation intact. The 2.6 SDK retains stable v1;
+leave the active generation intact. The 2.7 SDK retains stable v1;
 its v2 changes remain experimental and do not change Woven Matter's wire API.
 The consumer graph created by `harnesses/install-adapter.mjs` therefore declares
 the independently selected engine and scopes an npm override to that connector.
