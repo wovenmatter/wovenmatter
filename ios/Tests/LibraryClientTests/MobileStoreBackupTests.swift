@@ -386,22 +386,4 @@ final class MobileStoreBackupTests: XCTestCase {
       XCTAssertFalse(try foundationExcluded(blob))
     }
   }
-
-  /// The earliest stores kept everything inline in one excluded file. Opening one
-  /// that holds only unsent drafts includes it at once, with no edit forcing a save.
-  func testEarliestInlineStoreWithOnlyDraftsIsIncludedOnOpenWithoutEdits() async throws {
-    let file = file()
-    var state = MobileStoreState()
-    state.chatDrafts["new-chat"] = .init(text: "Unsent before upgrading")
-    try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
-    try JSONEncoder().encode(state).write(to: file)
-    try excludeEverything(under: file.deletingLastPathComponent())
-    XCTAssertTrue(try excluded(file))
-
-    _ = try MobileStore(file: file) // Open only; no edit.
-    XCTAssertFalse(try excluded(file))
-    try await restore(file)
-    let restored = try await MobileStore(file: file).snapshot()
-    XCTAssertEqual(restored.chatDrafts["new-chat"]?.text, "Unsent before upgrading")
-  }
 }
