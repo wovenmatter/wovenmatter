@@ -112,12 +112,12 @@ struct WorkspaceCalendarTests {
     #expect(try await reopened.localACPSession(conversationID: run.sessionID).nativeSessionID == "native-deleted-folder")
     #expect(try await reopened.calendarRuns().first?.task.configuration.folderID == folder)
     let savedConfiguration = try #require(await reopened.read { connection in
-      try connection.historyRowsUnlocked("SELECT configuration_json FROM workspace_calendar_sessions WHERE id=?", values: [run.sessionID])
+      try connection.historyRowsUnlocked("SELECT configuration_json FROM calendar_task_sessions WHERE id=?", values: [run.sessionID])
         .first?.objectValue?["configuration_json"]?.stringValue
     })
     #expect(try JSONDecoder().decode(WorkspaceSessionCreationConfiguration.self, from: Data(savedConfiguration.utf8)).folderID == folder)
     let counts = try await reopened.read { connection in
-      try connection.historyRowsUnlocked("SELECT (SELECT count(*) FROM messages WHERE conversation_id=?) AS messages, (SELECT count(*) FROM workspace_calendar_remote_receipts WHERE id=?) AS receipts",
+      try connection.historyRowsUnlocked("SELECT (SELECT count(*) FROM messages WHERE conversation_id=?) AS messages, (SELECT count(*) FROM calendar_remote_receipts WHERE id=?) AS receipts",
         values: [run.sessionID, "deleted-folder-receipt"]).first?.objectValue
     }
     #expect(counts?["messages"]?.intValue == 2)

@@ -45,7 +45,7 @@ extension WorkspaceDatabaseConnection {
       let statement = try prepareUnlocked("INSERT INTO execution_conversations(id,workspace_id,conversation) VALUES (?,?,?)")
       defer { sqlite3_finalize(statement) }
       try bind(id, at: 1, to: statement); try bind(workspace.id, at: 2, to: statement)
-      try bind(JSONEncoder().encode(conversation), at: 3, to: statement); try stepDone(statement)
+      try bindJSON(conversation, at: 3, to: statement); try stepDone(statement)
       return id
     }
   }

@@ -28,14 +28,14 @@ extension WorkspaceDatabaseConnection {
         pending = false
       } catch WorkspaceToolError.accessRequired { pending = true }
       if pending {
-        let count = try historyRowsUnlocked("SELECT count(*) AS n FROM workspace_coordination_access_requests WHERE state='pending'", values: []).first?.objectValue?["n"]?.intValue ?? 0
+        let count = try historyRowsUnlocked("SELECT count(*) AS n FROM coordination_access_requests WHERE state='pending'", values: []).first?.objectValue?["n"]?.intValue ?? 0
         guard count < 48 else { throw WorkspaceToolError.invalid("Resolve the pending session access requests before requesting more.") }
       } else {
         try beginCoordinationUnlocked(sourceID: sourceID, targetID: targetID, purpose: purpose, notifications: notifications)
       }
       let epoch = pending ? nil : try relationshipUnlocked(targetID).coordinationEpoch
       try toolsExecuteUnlocked("""
-        INSERT INTO workspace_coordination_access_requests(id,source_id,target_id,purpose,notifications,state,coordination_epoch)
+        INSERT INTO coordination_access_requests(id,source_id,target_id,purpose,notifications,state,coordination_epoch)
         VALUES(?,?,?,?,?,?,?)
         """, [requestID, sourceID, targetID, purpose, notifications ? "1" : "0", pending ? "pending" : "accepted", epoch])
       guard let result = try coordinationAccessRequestUnlocked(requestID) else { throw WorkspaceToolError.invalid("Unable to save management request.") }
@@ -70,7 +70,7 @@ extension WorkspaceDatabaseConnection {
         }
       }
       let epoch = state == "accepted" ? try relationshipUnlocked(request.targetID).coordinationEpoch : nil
-      try toolsExecuteUnlocked("UPDATE workspace_coordination_access_requests SET state=?,error=?,coordination_epoch=? WHERE id=?", [state, reason, epoch, requestID])
+      try toolsExecuteUnlocked("UPDATE coordination_access_requests SET state=?,error=?,coordination_epoch=? WHERE id=?", [state, reason, epoch, requestID])
       guard let result = try coordinationAccessRequestUnlocked(requestID) else { throw WorkspaceToolError.invalid("The access request is unavailable.") }
       return result
     }
@@ -81,7 +81,7 @@ extension WorkspaceDatabaseConnection {
   public func cancelPendingCoordinationAccess() throws {
     try transaction {
       try executeUnlocked("""
-        UPDATE workspace_coordination_access_requests SET state='cancelled',
+        UPDATE coordination_access_requests SET state='cancelled',
           error='The access request was cancelled before approval. Use a new UUID with --request-id to ask again.' WHERE state='pending'
         """)
     }
@@ -90,8 +90,8 @@ extension WorkspaceDatabaseConnection {
   private var coordinationAccessSelect: String {
     """
       SELECT r.*,coalesce(s.title,b.display_name,'Outside agent') AS source_title,t.title AS target_title
-      FROM workspace_coordination_access_requests r
-      LEFT JOIN conversations s ON s.id=r.source_id LEFT JOIN workspace_mcp_callers b ON b.id=r.source_id JOIN conversations t ON t.id=r.target_id AND (s.id IS NOT NULL OR b.id IS NOT NULL)
+      FROM coordination_access_requests r
+      LEFT JOIN conversations s ON s.id=r.source_id LEFT JOIN mcp_callers b ON b.id=r.source_id JOIN conversations t ON t.id=r.target_id AND (s.id IS NOT NULL OR b.id IS NOT NULL)
       """
   }
 

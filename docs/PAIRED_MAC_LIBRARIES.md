@@ -81,17 +81,30 @@ the arrival order, page boundaries or restarts. An explicit later restore
 supersedes the deletion causally while a concurrent edit stays in the frontier.
 A local write supersedes the frontier it has seen. Losing live note content gets
 a stable, visible **Recovered edit** note; other losing versions remain in
-`paired_library_conflicts`, and library bytes they reference are not cleaned up.
-Replaying a conflict cannot create another copy. Older stores recompute their
-canonical winners once on upgrade.
+`peer_sync_conflicts` while they are still concurrent, and a losing library
+item's version stays there with its bytes. Replaying a conflict cannot create
+another copy.
+
+Each device keeps only the versions that still matter (`peer_sync_versions`):
+each row's frontier and the versions waiting for their bytes, each under the
+cursor of one sequence. A new or newly kept version takes the next cursor and
+the versions it supersedes are deleted, so a peer paging after its cursor
+receives each row's current versions once. That is all it needs: a version it
+misses was superseded by one that arrives later in the same order, and anything
+it writes meanwhile is concurrent with that later version. A deletion records
+the row's key and the columns that decide where it applies (its conversation,
+workspace or device), never the old row.
 
 Each pair retains separate push and receive cursors. Receive data and its cursor
 commit together. The sender advances only after an acknowledgement for the exact
 page. Process loss or a lost reply therefore retries durable identities. Peers
 relay the original records, rather than inventing a new edit origin. Persistent
-membership, routes, cursors, tombstones and recovery state survive restart.
+membership, routes, cursors, tombstones and recovery state survive restart. A
+quarantined record is dropped once a version that covers it applies.
 
-Large values are content-addressed separately from their row metadata. A receive
+Large values are content-addressed separately from their row metadata. Saved
+artifact chunks and native history parts never carry bytes: their rows name a
+file in `library-chunks/` by SHA-256 and size. A receive
 page can durably queue such a row until its bytes arrive, allowing other writing
 to continue; waiting rows are scanned from a rotating durable position, so
 unavailable bytes never starve ready rows. A waiting row is relayed at once,

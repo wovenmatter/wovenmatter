@@ -13,7 +13,7 @@ extension WorkspaceDatabaseConnection {
     try transaction {
       try executeUnlocked(
         """
-        CREATE TABLE IF NOT EXISTS workspace_session_deliveries(
+        CREATE TABLE IF NOT EXISTS session_deliveries(
           id TEXT PRIMARY KEY,source_id TEXT NOT NULL,target_id TEXT NOT NULL,content TEXT NOT NULL,
           status TEXT NOT NULL,message_id TEXT UNIQUE,source_agent TEXT,source_title TEXT,
           created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
@@ -21,8 +21,9 @@ extension WorkspaceDatabaseConnection {
           target_model TEXT, event_key TEXT, transport_started INTEGER NOT NULL DEFAULT 1, retry_after REAL,
           native_command TEXT, failure_code TEXT, failure_reason TEXT
         );
-        CREATE INDEX IF NOT EXISTS workspace_session_deliveries_source ON workspace_session_deliveries(source_id,created_at);
-        CREATE TABLE IF NOT EXISTS workspace_history_events(
+        CREATE INDEX IF NOT EXISTS session_deliveries_source ON session_deliveries(source_id,created_at);
+        CREATE INDEX IF NOT EXISTS session_deliveries_target ON session_deliveries(target_id,status);
+        CREATE TABLE IF NOT EXISTS history_events(
           sequence INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT NOT NULL UNIQUE,
           conversation_id TEXT, run_id TEXT, agent_id TEXT, harness TEXT NOT NULL,
           kind TEXT NOT NULL, payload TEXT NOT NULL, completeness TEXT NOT NULL DEFAULT 'observed',
@@ -30,22 +31,22 @@ extension WorkspaceDatabaseConnection {
           native_session_id TEXT, source_connection_id TEXT, source_id TEXT, native_record_id TEXT,
           native_revision_id TEXT, content_mode TEXT, text_content TEXT, projection_json TEXT
         );
-        CREATE INDEX IF NOT EXISTS workspace_history_events_conversation ON workspace_history_events(conversation_id,sequence);
-        CREATE INDEX IF NOT EXISTS workspace_history_events_run ON workspace_history_events(run_id,sequence);
-        CREATE INDEX IF NOT EXISTS workspace_history_events_harness ON workspace_history_events(harness,sequence);
-        CREATE INDEX IF NOT EXISTS workspace_history_events_native_session ON workspace_history_events(harness,source_connection_id,agent_id,native_session_id)
+        CREATE INDEX IF NOT EXISTS history_events_conversation ON history_events(conversation_id,sequence);
+        CREATE INDEX IF NOT EXISTS history_events_run ON history_events(run_id,sequence);
+        CREATE INDEX IF NOT EXISTS history_events_harness ON history_events(harness,sequence);
+        CREATE INDEX IF NOT EXISTS history_events_native_session ON history_events(harness,source_connection_id,agent_id,native_session_id)
           WHERE conversation_id IS NULL;
-        CREATE INDEX IF NOT EXISTS workspace_history_events_native_record ON workspace_history_events(harness,source_id,native_session_id,native_record_id,sequence);
+        CREATE INDEX IF NOT EXISTS history_events_native_record ON history_events(harness,source_id,native_session_id,native_record_id,sequence);
         -- Search covers everything but CLI journals, which may carry tool request bodies.
-        CREATE VIRTUAL TABLE IF NOT EXISTS workspace_history_search USING fts5(payload,content='');
-        CREATE TRIGGER IF NOT EXISTS workspace_history_events_search_insert AFTER INSERT ON workspace_history_events
+        CREATE VIRTUAL TABLE IF NOT EXISTS history_search USING fts5(payload,content='');
+        CREATE TRIGGER IF NOT EXISTS history_events_search_insert AFTER INSERT ON history_events
           WHEN new.kind NOT LIKE 'cli.%' BEGIN
-          INSERT INTO workspace_history_search(rowid,payload)
+          INSERT INTO history_search(rowid,payload)
             VALUES(new.sequence,new.payload||' '||coalesce(new.text_content,'')||' '||coalesce(new.projection_json,''));
         END;
-        CREATE TRIGGER IF NOT EXISTS workspace_history_events_search_delete AFTER DELETE ON workspace_history_events
+        CREATE TRIGGER IF NOT EXISTS history_events_search_delete AFTER DELETE ON history_events
           WHEN old.kind NOT LIKE 'cli.%' BEGIN
-          INSERT INTO workspace_history_search(workspace_history_search,rowid,payload)
+          INSERT INTO history_search(history_search,rowid,payload)
             VALUES('delete',old.sequence,old.payload||' '||coalesce(old.text_content,'')||' '||coalesce(old.projection_json,''));
         END;
         CREATE TABLE IF NOT EXISTS note_asset_versions(
@@ -56,7 +57,7 @@ extension WorkspaceDatabaseConnection {
         );
         CREATE INDEX IF NOT EXISTS note_asset_versions_note ON note_asset_versions(note_id,sequence DESC);
         CREATE TRIGGER IF NOT EXISTS opencode_sessions_history_insert AFTER INSERT ON opencode_sessions BEGIN
-          UPDATE workspace_history_events SET conversation_id=new.conversation_id
+          UPDATE history_events SET conversation_id=new.conversation_id
           WHERE conversation_id IS NULL AND harness='opencode'
             AND source_connection_id=new.connection_id AND native_session_id=new.session_id;
         END;
@@ -70,14 +71,14 @@ extension WorkspaceDatabaseConnection {
           """
           CREATE TRIGGER IF NOT EXISTS messages_history_\(suffix) AFTER \(operation) ON messages \(messageWhen)
           BEGIN
-            INSERT INTO workspace_history_events(id,conversation_id,run_id,harness,kind,payload)
+            INSERT INTO history_events(id,conversation_id,run_id,harness,kind,payload)
             VALUES(lower(hex(randomblob(16))),new.conversation_id,new.run_id,
               coalesce((SELECT runtime_kind FROM harness_sessions WHERE conversation_id=new.conversation_id),'unknown'),
               'message.\(suffix)',json_object('id',new.id,'role',new.role,'content',new.content,'contentMode','snapshot','status',new.status));
           END;
           CREATE TRIGGER IF NOT EXISTS runs_history_\(suffix) AFTER \(operation) ON runs
           BEGIN
-            INSERT INTO workspace_history_events(id,conversation_id,run_id,agent_id,harness,kind,payload)
+            INSERT INTO history_events(id,conversation_id,run_id,agent_id,harness,kind,payload)
             VALUES(lower(hex(randomblob(16))),new.conversation_id,new.id,new.agent_id,
               coalesce((SELECT runtime_kind FROM harness_sessions WHERE conversation_id=new.conversation_id),'unknown'),
               'run.\(suffix)',json_object('id',new.id,'status',new.status,'error',new.error,'nativeSession',new.native_session_id));
@@ -104,7 +105,7 @@ extension WorkspaceDatabaseConnection {
         values: [event.sourceConnectionID, key]).first?.objectValue?["conversation_id"]?.stringValue
     }
     let existing = try prepareUnlocked(
-      "SELECT payload,kind,harness,conversation_id,agent_id,run_id,completeness,native_session_id,source_connection_id,source_id,native_record_id,native_revision_id,content_mode,text_content,projection_json FROM workspace_history_events WHERE id=?")
+      "SELECT payload,kind,harness,conversation_id,agent_id,run_id,completeness,native_session_id,source_connection_id,source_id,native_record_id,native_revision_id,content_mode,text_content,projection_json FROM history_events WHERE id=?")
     defer { sqlite3_finalize(existing) }
     try bind(event.id, at: 1, to: existing)
     if sqlite3_step(existing) == SQLITE_ROW {
@@ -130,7 +131,7 @@ extension WorkspaceDatabaseConnection {
     }
     let statement = try prepareUnlocked(
       """
-      INSERT INTO workspace_history_events(id,conversation_id,run_id,agent_id,harness,kind,payload,completeness,native_session_id,source_connection_id,source_id,native_record_id,native_revision_id,content_mode,text_content,projection_json)
+      INSERT INTO history_events(id,conversation_id,run_id,agent_id,harness,kind,payload,completeness,native_session_id,source_connection_id,source_id,native_record_id,native_revision_id,content_mode,text_content,projection_json)
       VALUES(?,?,coalesce(?,(SELECT id FROM runs WHERE conversation_id=? AND ? IS NULL
         AND status IN ('queued','running') ORDER BY rowid DESC LIMIT 1)),?,?,?,?,?,?,?,?,?,?,?,?,?)
       """)
@@ -146,8 +147,8 @@ extension WorkspaceDatabaseConnection {
     try stepDone(statement)
     if event.kind.hasPrefix("cli.") {
       try executeUnlocked("""
-        DELETE FROM workspace_history_events WHERE kind LIKE 'cli.%' AND sequence NOT IN (
-          SELECT sequence FROM workspace_history_events WHERE kind LIKE 'cli.%'
+        DELETE FROM history_events WHERE kind LIKE 'cli.%' AND sequence NOT IN (
+          SELECT sequence FROM history_events WHERE kind LIKE 'cli.%'
             ORDER BY sequence DESC LIMIT 10000
         )
         """)
@@ -291,7 +292,7 @@ extension WorkspaceDatabaseConnection {
           values.append(search)
         } else {
           filters.append(
-            "e.sequence IN (SELECT rowid FROM workspace_history_search WHERE workspace_history_search MATCH ?)"
+            "e.sequence IN (SELECT rowid FROM history_search WHERE history_search MATCH ?)"
           )
           // Literal text search, not a user-supplied FTS expression.
           values.append("\"" + search.replacingOccurrences(of: "\"", with: "\"\"") + "\"")
@@ -304,7 +305,7 @@ extension WorkspaceDatabaseConnection {
           CASE WHEN woven_text_length(e.payload)<=8192 THEN e.payload ELSE NULL END AS payload,
           woven_text_length(e.text_content) AS text_characters,CASE WHEN woven_text_length(e.text_content)<=8192 THEN e.text_content ELSE NULL END AS text_content,
           woven_text_length(e.projection_json) AS projection_characters,CASE WHEN woven_text_length(e.projection_json)<=8192 THEN e.projection_json ELSE NULL END AS projection_json
-        FROM workspace_history_events e WHERE
+        FROM history_events e WHERE
         """ + " " + filters.joined(separator: " AND ") + " ORDER BY e.sequence"
     case "event":
       guard let id = query.id else { throw WorkspaceDatabaseError.open("event requires an ID") }
@@ -316,7 +317,7 @@ extension WorkspaceDatabaseConnection {
           woven_text_substr(payload,?,?) AS payload,
           woven_text_length(text_content) AS text_characters,CASE WHEN woven_text_length(text_content)>?+? THEN 1 ELSE 0 END AS text_has_more,woven_text_substr(text_content,?,?) AS text_content,
           woven_text_length(projection_json) AS projection_characters,CASE WHEN woven_text_length(projection_json)>?+? THEN 1 ELSE 0 END AS projection_has_more,woven_text_substr(projection_json,?,?) AS projection_json
-          FROM workspace_history_events WHERE id=? ORDER BY sequence
+          FROM history_events WHERE id=? ORDER BY sequence
         """
       values = [String(query.offset), String(query.offset), String(query.characters),
         String(query.offset + 1), String(query.characters),
@@ -345,7 +346,7 @@ extension WorkspaceDatabaseConnection {
         throw WorkspaceDatabaseError.open("conversation requires an ID")
       }
       sql =
-        "SELECT m.rowid AS sequence,m.id,m.conversation_id,m.run_id,m.role,woven_text_substr(m.content,?,?) AS content,woven_text_length(m.content) AS content_characters,? AS content_offset,CASE WHEN woven_text_length(m.content)>?+? THEN 1 ELSE 0 END AS content_has_more,m.status,m.created_at, COALESCE(d.source_id,p.source_id) AS sender_session_id,COALESCE(d.source_agent,p.source_agent) AS sender_agent,COALESCE(d.source_title,p.source_title) AS sender_session_title FROM messages m LEFT JOIN workspace_session_deliveries d ON d.message_id=m.id LEFT JOIN device_message_provenance p ON p.message_id=m.id WHERE m.conversation_id=? AND m.rowid>? ORDER BY m.rowid"
+        "SELECT m.rowid AS sequence,m.id,m.conversation_id,m.run_id,m.role,woven_text_substr(m.content,?,?) AS content,woven_text_length(m.content) AS content_characters,? AS content_offset,CASE WHEN woven_text_length(m.content)>?+? THEN 1 ELSE 0 END AS content_has_more,m.status,m.created_at, COALESCE(d.source_id,p.source_id) AS sender_session_id,COALESCE(d.source_agent,p.source_agent) AS sender_agent,COALESCE(d.source_title,p.source_title) AS sender_session_title FROM messages m LEFT JOIN session_deliveries d ON d.message_id=m.id LEFT JOIN message_provenance p ON p.message_id=m.id WHERE m.conversation_id=? AND m.rowid>? ORDER BY m.rowid"
       values = [String(query.offset + 1), String(query.characters), String(query.offset),
         String(query.offset), String(query.characters), id, String(query.after)]
     case "message":
@@ -566,7 +567,7 @@ extension WorkspaceDatabaseConnection {
     try validateClaimedToolDeliveryUnlocked(id: requestID)
     let statement = try prepareUnlocked(
       """
-      UPDATE workspace_session_deliveries SET message_id=?,status='accepted' WHERE id=?
+      UPDATE session_deliveries SET message_id=?,status='accepted' WHERE id=?
         AND target_id=(SELECT conversation_id FROM messages WHERE id=?)
         AND message_id IS NULL AND status='sending'
       """)

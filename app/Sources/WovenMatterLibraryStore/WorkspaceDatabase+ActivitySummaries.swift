@@ -31,8 +31,7 @@ extension WorkspaceDatabaseConnection {
         INSERT OR IGNORE INTO activity_revision VALUES(1,0);
         CREATE TABLE IF NOT EXISTS activity_summaries (
           id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL, run_id TEXT NOT NULL,
-          revision INTEGER NOT NULL, deleted INTEGER NOT NULL DEFAULT 0,
-          activity_id TEXT, summary TEXT);
+          revision INTEGER NOT NULL, deleted INTEGER NOT NULL DEFAULT 0, summary TEXT);
         CREATE INDEX IF NOT EXISTS activity_summaries_conversation_revision
           ON activity_summaries(conversation_id,revision);
         CREATE INDEX IF NOT EXISTS activity_summaries_run ON activity_summaries(run_id);
@@ -66,7 +65,7 @@ extension WorkspaceDatabaseConnection {
               VALUES(new.id,new.conversation_id,new.run_id,
                 (SELECT revision FROM activity_revision WHERE singleton=1),0)
             ON CONFLICT(id) DO UPDATE SET conversation_id=excluded.conversation_id,run_id=excluded.run_id,
-              revision=excluded.revision,deleted=excluded.deleted,summary=NULL,activity_id=NULL;
+              revision=excluded.revision,deleted=excluded.deleted,summary=NULL;
           END;
           """)
       }
@@ -83,11 +82,10 @@ extension WorkspaceDatabaseConnection {
 
   func storeActivitySummaryUnlocked(recordID: String, activity: AgentRunActivity) throws {
     let summary = String(decoding: try JSONEncoder().encode(activity.presentationSummary()), as: UTF8.self)
-    let update = try prepareUnlocked("UPDATE activity_summaries SET summary=?,activity_id=? WHERE id=? AND deleted=0")
+    let update = try prepareUnlocked("UPDATE activity_summaries SET summary=? WHERE id=? AND deleted=0")
     defer { sqlite3_finalize(update) }
     try bind(summary, at: 1, to: update)
-    try bind(activity.id, at: 2, to: update)
-    try bind(recordID, at: 3, to: update)
+    try bind(recordID, at: 2, to: update)
     try stepDone(update)
   }
 
@@ -170,17 +168,20 @@ extension WorkspaceDatabaseConnection {
   /// activity pages continue to read the bounded projection and summary index.
   private func libraryActivityDetailsUnlocked(conversationID: String, runID: String,
     activityID: String) throws -> AgentRunActivity? {
-    let lookup = try prepareUnlocked("SELECT workspace_id,transcript FROM execution_conversations WHERE id=? AND deleted=0 AND transcript IS NOT NULL")
+    // An activity the execution owner projected names its details record.
+    let lookup = try prepareUnlocked("""
+      SELECT c.workspace_id,a.details_record_id,a.content FROM execution_conversations c
+      JOIN run_activities a ON a.conversation_id=c.id
+      WHERE c.id=? AND c.deleted=0 AND a.id=? AND a.run_id=? AND a.title IS NOT NULL
+      """)
     defer { sqlite3_finalize(lookup) }
-    try bind(conversationID, at: 1, to: lookup)
+    try bind(conversationID, at: 1, to: lookup); try bind(activityID, at: 2, to: lookup); try bind(runID, at: 3, to: lookup)
     let lookupCode = sqlite3_step(lookup)
     if lookupCode == SQLITE_DONE { return nil }
     guard lookupCode == SQLITE_ROW else { throw stepError() }
     let workspaceID = try text(lookup, column: 0)
-    let transcript = try JSONDecoder().decode(LibraryTranscript.self, from: blob(lookup, column: 1))
-    guard let row = transcript.activities.first(where: { $0.id == activityID && $0.runID == runID }) else { return nil }
-    guard let recordID = row.detailsRecordID else {
-      return row.projectionJSON.flatMap { try? JSONDecoder().decode(AgentRunActivity.self, from: Data($0.utf8)) }
+    guard let recordID = optionalText(lookup, column: 1) else {
+      return try? JSONDecoder().decode(AgentRunActivity.self, from: Data(text(lookup, column: 2).utf8))
     }
     let data = try LibraryActivityDetails.reconstruct(recordID: recordID, activityID: activityID) { pointer in
       try libraryActivityRecordUnlocked(workspaceID: workspaceID, conversationID: conversationID,
@@ -207,7 +208,7 @@ extension WorkspaceDatabaseConnection {
     guard count > 0, count <= 65_536, size >= 0,
       size <= LibraryActivityDetails.maximumBytes else { throw LibraryActivityDetails.invalid }
     guard sqlite3_column_int(manifest, 6) == 1 else { throw LibraryActivityDetails.incomplete }
-    let parts = try prepareUnlocked("SELECT part_index,bytes FROM execution_native_history_parts WHERE workspace_id=? AND record_id=? ORDER BY part_index")
+    let parts = try prepareUnlocked("SELECT part_index,sha256,byte_count FROM execution_native_history_parts WHERE workspace_id=? AND record_id=? ORDER BY part_index")
     defer { sqlite3_finalize(parts) }
     try bind(workspaceID, at: 1, to: parts); try bind(recordID, at: 2, to: parts)
     var data = Data(), index = 0
@@ -216,8 +217,9 @@ extension WorkspaceDatabaseConnection {
       if code == SQLITE_DONE { break }
       guard code == SQLITE_ROW else { throw stepError() }
       guard sqlite3_column_int(parts, 0) == index else { throw LibraryActivityDetails.invalid }
-      let bytes = try blob(parts, column: 1)
-      guard bytes.count <= Int(size) - data.count else { throw LibraryActivityDetails.invalid }
+      let count = sqlite3_column_int64(parts, 2)
+      guard count >= 0, count <= size - Int64(data.count) else { throw LibraryActivityDetails.invalid }
+      let bytes = try libraryFiles.chunk(text(parts, column: 1), byteCount: count)
       data.append(bytes); index += 1
     }
     guard index == count, data.count == size,

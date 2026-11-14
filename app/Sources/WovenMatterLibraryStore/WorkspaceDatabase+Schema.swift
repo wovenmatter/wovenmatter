@@ -11,6 +11,19 @@ extension WorkspaceDatabaseConnection {
   /// calendar items and the local harness sessions. Every table is created
   /// in its current shape; `upgradeLibrarySchemaUnlocked` brings an older
   /// library to it first.
+  ///
+  /// A conversation's transcript (`libraryTranscriptUnlocked`) is its rows.
+  /// The columns only an execution owner's projection writes, NULL in rows
+  /// this Mac writes, hold what its `LibraryTranscript` said:
+  /// - `position` on messages, run activities and runs: the order in which
+  ///   the transcript first listed the row. A run with one is in the
+  ///   transcript's `runs`.
+  /// - `messages.sequence` and `attachment_references` (JSON of
+  ///   `[LibraryAttachmentReference]`, files the owner holds).
+  /// - on run activities, the transcript row's `title`, `detail`, `status`,
+  ///   `details_record_id`, `is_transient`, `sequence` and `completed_at`;
+  ///   `content` is then the owner's projection as it sent it.
+  /// An empty `status` or `created_at` is one the owner did not send.
   static let coreTablesSQL = """
     CREATE TABLE IF NOT EXISTS surface_profiles (
       id TEXT PRIMARY KEY, device_id TEXT, theme TEXT NOT NULL DEFAULT 'green',
@@ -75,7 +88,7 @@ extension WorkspaceDatabaseConnection {
     );
     CREATE TABLE IF NOT EXISTS conversations (
       id TEXT PRIMARY KEY, agent_id TEXT, agent_codename TEXT NOT NULL DEFAULT '',
-      owner_device_id TEXT, title TEXT NOT NULL DEFAULT 'New conversation',
+      title TEXT NOT NULL DEFAULT 'New conversation',
       unread INTEGER NOT NULL DEFAULT 0, last_message_preview TEXT,
       is_archived INTEGER NOT NULL DEFAULT 0, last_message_at TEXT NOT NULL DEFAULT '',
       folder_id TEXT, original_folder_id TEXT, is_pinned INTEGER NOT NULL DEFAULT 0, deleted_at TEXT,
@@ -87,9 +100,10 @@ extension WorkspaceDatabaseConnection {
     );
     CREATE TABLE IF NOT EXISTS messages (
       id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL DEFAULT '', client_message_id TEXT,
-      run_id TEXT, role TEXT NOT NULL DEFAULT 'assistant', owner_device_id TEXT,
+      run_id TEXT, role TEXT NOT NULL DEFAULT 'assistant',
       content TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'completed',
-      created_at TEXT NOT NULL DEFAULT '', updated_at TEXT NOT NULL DEFAULT ''
+      created_at TEXT NOT NULL DEFAULT '', updated_at TEXT NOT NULL DEFAULT '',
+      sequence INTEGER, position INTEGER, attachment_references TEXT
     );
     CREATE TABLE IF NOT EXISTS message_attachments (
       id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL DEFAULT '',
@@ -108,18 +122,16 @@ extension WorkspaceDatabaseConnection {
     );
     CREATE TABLE IF NOT EXISTS runs (
       id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL DEFAULT '', agent_id TEXT,
-      agent_codename TEXT NOT NULL DEFAULT '', owner_device_id TEXT,
+      agent_codename TEXT NOT NULL DEFAULT '',
       native_session_id TEXT NOT NULL DEFAULT '', user_message_id TEXT,
       assistant_message_id TEXT, status TEXT NOT NULL DEFAULT 'queued', error TEXT,
       started_at TEXT, completed_at TEXT,
-      created_at TEXT NOT NULL DEFAULT '', updated_at TEXT NOT NULL DEFAULT ''
+      created_at TEXT NOT NULL DEFAULT '', updated_at TEXT NOT NULL DEFAULT '',
+      position INTEGER
     );
     CREATE TABLE IF NOT EXISTS run_visible_notes (
-      run_id TEXT PRIMARY KEY, message_id TEXT NOT NULL DEFAULT '',
-      conversation_id TEXT NOT NULL DEFAULT '',
-      note_id TEXT NOT NULL DEFAULT '', note_title_snapshot TEXT NOT NULL DEFAULT '',
-      folder_id_snapshot TEXT, revision_snapshot TEXT NOT NULL DEFAULT '',
-      created_at TEXT NOT NULL DEFAULT ''
+      run_id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL DEFAULT '',
+      note_id TEXT NOT NULL DEFAULT '', revision_snapshot TEXT NOT NULL DEFAULT ''
     );
     CREATE TABLE IF NOT EXISTS run_program_statuses (
       run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
@@ -138,7 +150,9 @@ extension WorkspaceDatabaseConnection {
       id TEXT PRIMARY KEY, run_id TEXT NOT NULL DEFAULT '',
       conversation_id TEXT NOT NULL DEFAULT '',
       event_type TEXT NOT NULL DEFAULT '', content TEXT NOT NULL DEFAULT '',
-      created_at TEXT NOT NULL DEFAULT ''
+      created_at TEXT NOT NULL DEFAULT '',
+      position INTEGER, sequence INTEGER, title TEXT, detail TEXT, status TEXT,
+      details_record_id TEXT, is_transient INTEGER, completed_at TEXT
     );
     CREATE TABLE IF NOT EXISTS harness_sessions (
       conversation_id TEXT PRIMARY KEY, agent_id TEXT,
@@ -171,14 +185,22 @@ extension WorkspaceDatabaseConnection {
       INSERT OR IGNORE INTO workspace_revision (singleton, revision) VALUES (1, 0);
       CREATE INDEX IF NOT EXISTS conversations_recent
         ON conversations(is_archived, deleted_at, last_message_at DESC);
+      CREATE INDEX IF NOT EXISTS conversations_folder
+        ON conversations(folder_id) WHERE folder_id IS NOT NULL;
       CREATE INDEX IF NOT EXISTS messages_conversation_created
         ON messages(conversation_id, created_at, id);
+      CREATE INDEX IF NOT EXISTS messages_conversation_position
+        ON messages(conversation_id, position) WHERE position IS NOT NULL;
       CREATE INDEX IF NOT EXISTS message_attachments_message_created
         ON message_attachments(message_id, created_at, id);
       CREATE INDEX IF NOT EXISTS message_references_message_created
         ON message_references(message_id, created_at, id);
       CREATE INDEX IF NOT EXISTS run_activities_run_created
         ON run_activities(run_id, created_at, id);
+      CREATE INDEX IF NOT EXISTS run_activities_conversation_created
+        ON run_activities(conversation_id, created_at, id);
+      CREATE INDEX IF NOT EXISTS run_activities_conversation_position
+        ON run_activities(conversation_id, position) WHERE position IS NOT NULL;
       CREATE INDEX IF NOT EXISTS runs_conversation_user_message
         ON runs(conversation_id, user_message_id);
       CREATE INDEX IF NOT EXISTS runs_conversation_assistant_message
@@ -187,6 +209,10 @@ extension WorkspaceDatabaseConnection {
         ON runs(conversation_id, status, created_at DESC, id DESC);
       CREATE INDEX IF NOT EXISTS notes_recent
         ON notes(deleted_at, updated_at DESC);
+      CREATE INDEX IF NOT EXISTS notes_folder
+        ON notes(folder_id) WHERE folder_id IS NOT NULL;
+      CREATE INDEX IF NOT EXISTS opencode_submissions_conversation
+        ON opencode_submissions(conversation_id, status);
       """)
   }
 

@@ -350,8 +350,8 @@ among Macs that still stand; they never decide who wins a dispute.
   The peer and mobile routes are published with Tailscale Serve on the host,
   under the same path layout a Mac uses (`/wovenmatter`).
 - **Sync** is peer-to-peer among every online member, using the existing
-  row-level replication (`PairedLibraryStore`: change log, version vectors,
-  per-peer cursors, conflict copies). A local change is announced to online
+  row-level replication (`PairedLibraryStore`: one versions table paged by
+  cursor, version vectors, per-peer cursors, conflict copies). A local change is announced to online
   peers once and batched; a device that comes online catches up once. There is
   no constant polling: exchange is change-driven, with a slow presence check
   in place of the earlier 5-second loop.
@@ -362,7 +362,7 @@ among Macs that still stand; they never decide who wins a dispute.
     `after`; repeated until neither has more). `after` is the caller's
     committed receive cursor for the answering device, so the answering
     device also records it as what that caller holds (its pushed cursor for
-    the caller becomes the larger of the two, never past its own change log)
+    the caller becomes the larger of the two, never past its own last cursor)
     and its own later pushes start there. At most the last page of an exchange
     is sent back once, as an idempotent echo. `POST /v1/peers/notify
     {deviceID, cursor}` (the receiver pulls when `cursor` is past what it has),
@@ -370,13 +370,13 @@ among Macs that still stand; they never decide who wins a dispute.
     as before). A device sends only to advertised endpoints that are tailnet
     HTTPS (`LibraryPeerSync.isTailnetEndpoint`: `https://<name>.ts.net`, no
     credentials, query or fragment), as Node and the phone do.
-  - Only a real change enters the change log: an update that leaves every
+  - Only a real change records a version: an update that leaves every
     column as it was records nothing. Writers that run on a timer compare
     first: the Mac's 5-second registry refresh rewrites a
-    `paired_remote_workspaces` configuration (stored as sorted-key JSON) or a
+    `remote_workspace_configurations` row (stored as sorted-key JSON) or a
     `execution_workspaces` registration only when its decoded value
     changed.
-  - Triggers: a write that appends to the change log
+  - Triggers: a write that records a version
     (`WorkspaceDatabase.observePeerChanges`) is announced, debounced 300 ms,
     to peers that are online; starting, a newly learned member and a contact
     from a peer each catch up once; a presence check every 60 s (doubling to
@@ -399,7 +399,7 @@ among Macs that still stand; they never decide who wins a dispute.
     and after the change), `execution_conversations` only for that
     workspace's sessions, owner rows (`paired_*_owners`,
     `calendar_task_executors`, `calendar_run_publishers`) only naming
-    itself, and never `paired_mac_routes` or `paired_remote_workspaces`. Other
+    itself, and never `mac_routes` or `remote_workspace_configurations`. Other
     such rows it relays are skipped; they arrive from a Mac directly.
   - HTTP deadlines (both the Mac listener and `LibrarySocketHTTPServer`,
     `LibraryHTTPParser.Deadlines`): the request head within 15 s; then the
@@ -424,7 +424,7 @@ among Macs that still stand; they never decide who wins a dispute.
   added at the end) and a freshly created one, such as a Linux host's, agree;
   rows are exchanged by column name. A column that only older libraries still
   have is removed by a migration rather than tolerated, and the migration
-  removes it from the change log and merge state too. The hash is prefixed
+  removes it from the recorded versions too. The hash is prefixed
   with a format version (`v3` since the v0.4.2 schema rename); a device on
   another format answers or receives `update_required`. When peers disagree, every device shows which part
   needs updating and offers "Update everything". There is no compatibility
@@ -439,15 +439,16 @@ among Macs that still stand; they never decide who wins a dispute.
   everything" notice as a bots version mismatch (`ApplicationModel+Bots.swift`).
 
 - **Storage names.** Table names say what a table holds:
-  - The core library: `conversations`, their `messages`, `message_attachments` and `message_references`, the `runs` that answered them with each run's `run_activities` (tool calls, thoughts and other activity rows), `run_visible_notes` (the note a run could see) and `run_program_statuses`, plus `agents`, `folders`, `notes`, `calendar_items`, `conversation_titles` (a title set by the user, which wins over the harness's) and `session_imports`. `harness_sessions` is the native session of every harness, local or on a remote workspace (`native_session_id`); `opencode_sessions`, `opencode_submissions` and `opencode_hidden_messages` are OpenCode's. `workspace_revision`, `activity_revision`, `activity_summaries` and `message_revisions` are the change counters and caches the window reads. A row's `owner_device_id` is the Mac that created it, or the workspace owner of a projected remote session.
+  - The core library: `conversations`, their `messages`, `message_attachments` and `message_references`, the `runs` that answered them with each run's `run_activities` (tool calls, thoughts and other activity rows), `run_visible_notes` (the note a run could see) and `run_program_statuses`, plus `agents`, `folders`, `notes`, `calendar_items`, `conversation_titles` (a title set by the user, which wins over the harness's) and `session_imports`. `harness_sessions` is the native session of every harness, local or on a remote workspace (`native_session_id`); `opencode_sessions`, `opencode_submissions` and `opencode_hidden_messages` are OpenCode's. `workspace_revision`, `activity_revision`, `activity_summaries` and `message_revisions` are the change counters and caches the window reads. An agent's `owner_device_id` is the Mac that added it, or the workspace owner of a remote harness. Who runs a conversation is its `conversation_owners` row, or its `execution_conversations` projection for a session another member executes.
   - `library_identity` holds this replica's device ID (`host_device_id`) and the library's ID (`library_id`), which every paired device names.
-  - `paired_*` is peer sync between Macs and Linux hosts: the change log, cursors, version vectors and conflicts, plus the owner rows.
+  - `peer_sync_*` is peer sync between Macs and Linux hosts. `peer_sync_versions` holds each shared row's versions that still matter (the winner, concurrent versions, and versions waiting for their bytes, `pending_peer`), each under the cursor of one AUTOINCREMENT sequence that a new or newly kept version advances; a version it supersedes is deleted, so paging after a cursor returns each row's current versions once, and a deletion keeps only the row's key and authority columns (`conversation_id`, `workspace_id`, `device_id`, `owner_device_id`). `peer_sync_clock` is the Lamport clock and vector, `peer_sync_cursors` and `peer_sync_file_cursors` what each peer was sent and sent, `peer_sync_conflicts` losing versions while they stay concurrent (and every losing `library_items` version, whose bytes are kept), `peer_sync_quarantine` rejected records until a version covers them, and `peer_sync_state`, `peer_sync_seeded` and `peer_sync_reassert` the bookkeeping of the scan position, seeded tables and owner republishing. `agent_owners`, `conversation_owners` and `calendar_item_owners` name the member that runs each agent, conversation and calendar item; `mac_routes` is each Mac's address and `remote_workspace_configurations` the Linux hosts each Mac set up.
+  - A session's settings and relationships: `session_tools`, `session_executor_profiles`, `session_goals` (with `goal_runs` and `goal_usage`), `session_relationships`, `session_grants`, `session_timers`, `session_deliveries` and `session_creations`; `tool_settings` and `tool_mutations` are the agent tools' settings and receipts, `mcp_callers` and `mcp_bot_machines` their callers, `coordination_*` and `automation_*` coordination and automation requests, and `input_contexts` and `opencode_input_contexts` the note and text each delivered input carried. `history_events` (searched through `history_search`) is native harness history; `calendar_runs`, `calendar_task_sessions`, `calendar_remote_ownership` and `calendar_remote_receipts` are scheduled runs and their sessions.
   - `execution_*` is execution workspaces, this Mac's own included, with their journals, conversations, runs, adoptions, receipts, settlements, native history, and their scheduled MCP callers. Most of it is peer-synced library content (`PairedLibraryTables`).
-  - `calendar_task_executors` names the device that runs each scheduled item; `paired_calendar_owners` names the Mac that owns the row. `calendar_run_publishers` and `calendar_published_runs` are who may report runs and the runs they reported.
-  - `device_*` is what the library keeps for devices that reach it over the device API: the phone change feed (`device_sync_revisions`, `device_sync_changes`, written by the `<table>_device_sync_*` triggers), mutation, command, draft, tool and calendar receipts, scheduled MCP callers, saved files and message provenance.
+  - `calendar_task_executors` names the device that runs each scheduled item; `calendar_item_owners` names the Mac that owns the row. `calendar_run_publishers` and `calendar_published_runs` are who may report runs and the runs they reported.
+  - `device_*` is what the library keeps for devices that reach it over the device API: the phone change feed (`device_sync_revisions`, `device_sync_changes`, written by the `<table>_device_sync_*` triggers), mutation, command, draft, tool and calendar receipts and scheduled MCP callers. Saved files are `saved_artifacts`, with uploads in progress in `artifact_uploads` and `artifact_chunks` (each chunk's bytes are a file in `library-chunks/` that the row names by SHA-256); `message_provenance` is the session that sent an agent's message.
   - `library_items`, `library_messages`, `library_settings` and `library_locations` index the Library pane (files and links found in chats); `library_members*` is the signed member list.
 
-  v0.4.2 still used the names of the OpenClaw dashboard the library came from (`dashboard_*`, `desktop_*`, OpenClaw gateway tables and columns, and per-row `user_id`, `governing_plane`, `authority_kind`, `authority_agent_id`, `origin_device_id` and `desktop_owned` columns every current writer sets to the same value). Opening such a library converts it in place (`LibrarySchemaUpgrade.swift`, whose tables are the complete old-to-new map): tables and columns are renamed, dead ones dropped, every trigger is recreated under its `<table>_<purpose>_<op>` name and every renamed index as `<table>_<purpose>`, and peer sync bookkeeping is rewritten to the new names, so paired Macs that update together keep their versions and cursors. Rows the old columns hid or kept read-only stay that way: a dashboard chat becomes retained read-only history, and a hidden one stays archived. Each machine's device ID file (`dashboard-device-id`, now `device-id`; `DeviceIdentityFile.moveLegacyFile`) and the window, sidebar and theme settings saved under `wovenmatter.dashboard.*` (`WindowPreferenceUpgrade` on the Mac; the iPhone moves its theme) move once.
+  v0.4.2 still used the names of the OpenClaw dashboard the library came from (`dashboard_*`, `desktop_*`, OpenClaw gateway tables and columns, and per-row `user_id`, `governing_plane`, `authority_kind`, `authority_agent_id`, `origin_device_id` and `desktop_owned` columns every current writer sets to the same value). Its later tables were named for where they came from (`paired_*`, `device_*`, `workspace_*`), and it stored JSON as BLOB. Opening such a library converts it in place (`LibrarySchemaUpgrade.swift`, whose tables are the complete old-to-new map): tables and columns are renamed, dead ones dropped, JSON is stored as TEXT, every trigger is recreated under its `<table>_<purpose>_<op>` name and every index of a renamed table as `<table>_<purpose>`, and peer sync bookkeeping is rewritten to the new names and text values, so paired Macs that update together keep their versions and cursors. The conversion runs only for a library whose `PRAGMA user_version` is 0 and stamps the schema version (`librarySchemaVersion`, now 1) in the same transaction; a new library is stamped once it has been created, so the next schema change is gated on that version. Rows the old columns hid or kept read-only stay that way: a dashboard chat becomes retained read-only history, and a hidden one stays archived. Each machine's device ID file (`dashboard-device-id`, now `device-id`; `DeviceIdentityFile.moveLegacyFile`) and the window, sidebar and theme settings saved under `wovenmatter.dashboard.*` (`WindowPreferenceUpgrade` on the Mac; the iPhone moves its theme) move once.
 
 ### Library host (`wovenmatter-library`)
 
@@ -680,7 +681,7 @@ are unavailable. Session history is published to the local publisher routes,
 and bot conversation batches go to `/v1/bots/{botID}/entries`, waiting in the
 outbox while the host is down.
 
-**Timers on a library host.** Timers (`workspace_session_timers`) are not in
+**Timers on a library host.** Timers (`session_timers`) are not in
 the paired sync table set: each lives in the library copy of the machine that
 fires it, so a Linux session's or bot's timers keep firing with every Mac off.
 The timers group is served by `POST /v1/mcp` like the other library groups.

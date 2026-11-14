@@ -222,7 +222,7 @@ final class PairedMacSyncController {
             case .online, .offline: errors.removeValue(forKey: peer.deviceID)
             }
         }
-        conflicts = (try? await database.pairedLibraryConflicts()) ?? conflicts
+        conflicts = (try? await database.peerSyncConflicts()) ?? conflicts
         if status.quarantined > 0 { errors["quarantine"] = "\(status.quarantined) shared record\(status.quarantined == 1 ? "" : "s") could not be applied. Local data is retained; update Woven Matter on every device." }
         else { errors.removeValue(forKey: "quarantine") }
         for peer in status.peers { if let date = peer.lastSynchronized { lastSynchronized[peer.deviceID] = date } }
@@ -243,8 +243,8 @@ final class PairedMacSyncController {
     func restore() async throws {
         guard let host, let database = host.model?.libraryStore?.database else { return }
         let own = try await host.peerRoute()
-        try await database.savePairedMacRoute(own)
-        routes = try await database.pairedMacRoutes()
+        try await database.saveMacRoute(own)
+        routes = try await database.macRoutes()
         // A recovery backup interrupted by quitting resumes before any import.
         if (try? loadCredentials())?.isEmpty == false { database.prepareForPeerSync() }
         try await startMembers(own: own)
@@ -355,14 +355,14 @@ final class PairedMacSyncController {
         }
         try await authentication.enrollPeer(route: route, token: reciprocal, publicKey: reply.publicKey,
             subjectSignature: reply.subjectSignature, acknowledgedRevocations: join.reciprocalRevocations, own: identity)
-        try await database.savePairedMacRoute(route)
+        try await database.saveMacRoute(route)
         await addMember(route: route, publicKey: reply.publicKey)
         var credentials = try loadCredentials()
         if let index = credentials.firstIndex(where: { $0.route.deviceID == route.deviceID && $0.token == credential.token }) {
             credentials[index].needsJoin = nil; credentials[index].confirmationPending = nil
             try saveCredentials(credentials)
         }
-        routes = try await database.pairedMacRoutes()
+        routes = try await database.macRoutes()
         errors.removeValue(forKey: route.deviceID)
         nextAttempt[route.deviceID] = .distantPast
     }
@@ -425,8 +425,8 @@ final class PairedMacSyncController {
                 credentials.removeAll { $0.route.deviceID == principal.id }
                 credentials.append(.init(route: join.route, deviceID: identity.deviceID, token: join.returnCredential))
                 try saveCredentials(credentials)
-                try await database.savePairedMacRoute(join.route)
-                routes = try await database.pairedMacRoutes()
+                try await database.saveMacRoute(join.route)
+                routes = try await database.macRoutes()
                 nextAttempt[principal.id] = .distantPast
                 await addMember(route: join.route, publicKey: join.publicKey)
                 return try .json(PairedMacJoinReply(route: try await host.peerRoute(), publicKey: identity.publicKey,

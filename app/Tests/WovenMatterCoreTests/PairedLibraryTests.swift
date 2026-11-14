@@ -36,7 +36,7 @@ struct PairedLibraryTests {
       #expect(receipt.status == .accepted)
     }
     func send(to other: Mac) async throws {
-      var cursor = try await other.database.pairedLibraryCursors(id).pulled
+      var cursor = try await other.database.peerSyncCursors(id).pulled
       for _ in 0..<1000 {
         let page = try await database.pairedLibraryPage(after: cursor)
         try await other.database.receivePairedLibrary(page, from: id)
@@ -76,9 +76,9 @@ struct PairedLibraryTests {
     try await b.note(id, title: "Mini edit", revision: b.database.libraryNote(id: id)?.revision)
     try await a.send(to: b); try await b.send(to: a)
     #expect(try await a.database.libraryNote(id: id)?.title == b.database.libraryNote(id: id)?.title)
-    let versions = try await a.database.pairedLibraryConflicts().filter { $0.record.table == "notes" }
+    let versions = try await a.database.peerSyncConflicts().filter { $0.record.table == "notes" }
     #expect(versions.count == 1)
-    #expect(try await b.database.pairedLibraryConflicts().filter { $0.record.table == "notes" }.count == 1)
+    #expect(try await b.database.peerSyncConflicts().filter { $0.record.table == "notes" }.count == 1)
     let revision = try #require(try await a.database.libraryNote(id: id)?.revision)
     _ = try await a.database.applyLibraryMutation(.init(deviceID: a.id, kind: .deleteNote, resourceID: id, expectedRevision: revision))
     try await b.note(id, title: "Offline during deletion", revision: b.database.libraryNote(id: id)?.revision)
@@ -97,7 +97,7 @@ struct PairedLibraryTests {
     try await b.database.receivePairedLibrary(page, from: a.id)
     #expect(try await b.database.pairedLibraryPage(after: 0).cursor == before)
     let reopened = try await WorkspaceDatabase(url: b.database.fileURL)
-    #expect(try await reopened.pairedLibraryCursors(a.id).pulled == page.cursor)
+    #expect(try await reopened.peerSyncCursors(a.id).pulled == page.cursor)
     #expect(try await reopened.libraryNote(id: id)?.title == "Durable unsent writing")
     #expect(try await reopened.libraryIdentity().hostDeviceID == b.id)
   }
@@ -106,16 +106,16 @@ struct PairedLibraryTests {
     let a = try await Mac(), b = try await Mac(); defer { a.remove(); b.remove() }
     let tables = try await a.database.pairedLibraryPage(after: 0).entries.map(\.table)
     #expect(!tables.contains("harness_sessions"))
-    #expect(!tables.contains("workspace_session_deliveries"))
-    #expect(!tables.contains("workspace_session_timers"))
+    #expect(!tables.contains("session_deliveries"))
+    #expect(!tables.contains("session_timers"))
     #expect(!tables.contains("execution_workspace_publishers"))
     a.database.prepareForPeerSync()
     _ = try await a.database.peerImportsReady()
     #expect(FileManager.default.fileExists(atPath: a.directory.appending(path: "Paired Mac Backups/before-peer-sync.sqlite").path))
     let route = PairedMacRoute(deviceID: a.id, libraryID: try await a.database.libraryID(), endpoint: URL(string: "https://air.example.ts.net:8443/wovenmatter")!, name: "Air")
-    try await a.database.savePairedMacRoute(route)
+    try await a.database.saveMacRoute(route)
     try await a.send(to: b)
-    #expect(try await b.database.pairedMacRoutes() == [route])
+    #expect(try await b.database.macRoutes() == [route])
   }
 }
 
@@ -159,20 +159,68 @@ extension PairedLibraryTests {
 
   @Test func typedRowsKeepBinaryBytesAndIntegersBeyondJSONDoublePrecision() async throws {
     let a = try await Mac(), b = try await Mac(); defer { a.remove(); b.remove() }
-    let bytes = Data([0, 255, 0, 1, 128]), offset: Int64 = 9_007_199_254_740_993
+    let bytes = Data([0, 255, 0, 1, 128]), size: Int64 = 9_007_199_254_740_993
     try await a.database.write { connection in
-      let query = try connection.prepareUnlocked("INSERT INTO device_artifact_chunks VALUES('fixture',1,?,?)")
+      let query = try connection.prepareUnlocked("INSERT INTO execution_retained_settlements VALUES('fixture','workspace',?)")
       defer { sqlite3_finalize(query) }
-      sqlite3_bind_int64(query, 1, offset); try connection.bind(bytes, at: 2, to: query); try connection.stepDone(query)
+      try connection.bind(bytes, at: 1, to: query); try connection.stepDone(query)
+      try connection.toolsExecuteUnlocked("""
+        INSERT INTO execution_native_history(workspace_id,record_id,conversation_id,format,part_count,byte_count,sha256)
+        VALUES('workspace','fixture','conversation','fixture',1,CAST(? AS INTEGER),'')
+        """, [String(size)])
     }
     try await a.send(to: b)
     let result = try await b.database.read { connection -> (Int64, Data) in
-      let query = try connection.prepareUnlocked("SELECT offset,bytes FROM device_artifact_chunks WHERE artifact_id='fixture'")
+      let query = try connection.prepareUnlocked("""
+        SELECT n.byte_count,s.fingerprint FROM execution_native_history n, execution_retained_settlements s
+        WHERE n.record_id='fixture' AND s.event_id='fixture'
+        """)
       defer { sqlite3_finalize(query) }
       guard sqlite3_step(query) == SQLITE_ROW else { throw WorkspaceDatabaseError.corruptRow }
       return (sqlite3_column_int64(query, 0), try connection.blob(query, column: 1))
     }
-    #expect(result.0 == offset && result.1 == bytes)
+    #expect(result.0 == size && result.1 == bytes)
+  }
+
+  /// A chunk's row names its bytes; a receiving Mac applies it once the file
+  /// sync has brought that file, and serves the same bytes.
+  @Test func artifactChunkRowsWaitForTheirFiles() async throws {
+    let a = try await Mac(), b = try await Mac(); defer { a.remove(); b.remove() }
+    let bytes = Data((0..<1_500_000).map { UInt8(truncatingIfNeeded: $0 &* 31) }), id = UUID().uuidString.lowercased()
+    let hash = SHA256.hash(data: bytes).hexString
+    let manifest = LibraryArtifactManifest(id: id, workspaceID: "workspace", title: "Output.bin", mediaType: "application/octet-stream",
+                                           byteCount: Int64(bytes.count), sha256: hash, revision: 1)
+    try await a.database.write { connection in
+      let first = Data(bytes.prefix(FederationProtocol.maximumArtifactChunkBytes))
+      let chunks = [first, Data(bytes.dropFirst(first.count))]
+      var offset: Int64 = 0
+      for chunk in chunks {
+        let hash = try connection.libraryFiles.retainChunk(chunk)
+        try connection.toolsExecuteUnlocked("INSERT INTO artifact_chunks VALUES(?,1,CAST(? AS INTEGER),?,CAST(? AS INTEGER))",
+                                            [id, String(offset), hash, String(chunk.count)])
+        offset += Int64(chunk.count)
+      }
+      try connection.toolsExecuteUnlocked("INSERT INTO saved_artifacts VALUES(?,1,?)", [id, String(decoding: try JSONEncoder().encode(manifest), as: UTF8.self)])
+    }
+    #expect(try await a.database.libraryArtifactChunk(id: id, offset: 1_048_580).data == bytes.dropFirst(1_048_580))
+    for record in try await journal(a.database) where record.table == "artifact_chunks" {
+      #expect(record.row["bytes"] == nil && record.row["sha256"]?.type == "text" && record.row["byte_count"]?.type == "integer")
+    }
+    try await a.send(to: b)
+    let waiting = try await b.database.read {
+      try $0.historyRowsUnlocked("SELECT COUNT(*) AS count FROM peer_sync_versions WHERE pending_peer IS NOT NULL AND table_name='artifact_chunks'", values: [])
+        .first?.objectValue?["count"]?.intValue
+    }
+    #expect(waiting == 2)
+    await #expect(throws: (any Error).self) { try await b.database.libraryArtifactChunk(id: id, offset: 0) }
+    let sender = PairedLibraryFiles(root: a.directory), receiver = PairedLibraryFiles(root: b.directory)
+    for file in try await sender.page(after: "").files where file.store == "library-chunks" {
+      while let offset = try await receiver.nextOffset(file) { try await receiver.receive(sender.chunk(.init(file: file, offset: offset))) }
+    }
+    try await b.database.materializePendingPeerRecords()
+    var received = Data()
+    while received.count < bytes.count { received.append(try await b.database.libraryArtifactChunk(id: id, offset: Int64(received.count)).data) }
+    #expect(received == bytes)
   }
 
   @Test func observedScheduledTasksDoNotRunOnOtherMacs() async throws {
@@ -198,7 +246,7 @@ extension PairedLibraryTests {
     try await a.note(noteID, title: "Independent writing")
     try await a.send(to: b)
     #expect(try await b.database.libraryNote(id: noteID)?.title == "Independent writing")
-    #expect(try await b.database.read { try $0.historyRowsUnlocked("SELECT id FROM workspace_history_events WHERE id=?", values: [eventID]).isEmpty })
+    #expect(try await b.database.read { try $0.historyRowsUnlocked("SELECT id FROM history_events WHERE id=?", values: [eventID]).isEmpty })
     let files = PairedLibraryFiles(root: a.directory), receiver = PairedLibraryFiles(root: b.directory)
     let page = try await files.page(after: "")
     for file in page.files {
@@ -207,7 +255,7 @@ extension PairedLibraryTests {
       }
     }
     try await b.database.materializePendingPeerRecords()
-    let result = try await b.database.read { try $0.historyRowsUnlocked("SELECT payload FROM workspace_history_events WHERE id=?", values: [eventID]).first?.objectValue?["payload"]?.stringValue }
+    let result = try await b.database.read { try $0.historyRowsUnlocked("SELECT payload FROM history_events WHERE id=?", values: [eventID]).first?.objectValue?["payload"]?.stringValue }
     #expect(result == content)
   }
 
@@ -243,7 +291,7 @@ extension PairedLibraryTests {
     let sender = PairedLibrarySender(deviceID: linux.id, kind: .linux, members: [
       .init(deviceID: manager.id, kind: .mac, endpoints: [], revoked: false),
       .init(deviceID: linux.id, kind: .linux, endpoints: [], revoked: false)])
-    var cursor = try await observer.database.pairedLibraryCursors(linux.id).pulled
+    var cursor = try await observer.database.peerSyncCursors(linux.id).pulled
     for _ in 0..<1000 {
       let page = try await linux.database.pairedLibraryPage(after: cursor)
       try await observer.database.receivePairedLibrary(page, from: linux.id, sender: sender)
@@ -258,9 +306,10 @@ extension PairedLibraryTests {
 
 
 extension PairedLibraryTests {
+  /// Every version the database serves to peers, in cursor order.
   private func journal(_ database: WorkspaceDatabase) async throws -> [PairedLibraryRecord] {
     try await database.read { connection in
-      try connection.historyRowsUnlocked("SELECT payload FROM paired_library_changes ORDER BY cursor", values: [])
+      try connection.historyRowsUnlocked("SELECT payload FROM peer_sync_versions ORDER BY cursor", values: [])
         .compactMap { $0.objectValue?["payload"]?.stringValue }
         .map { try JSONDecoder().decode(PairedLibraryRecord.self, from: Data($0.utf8)) }
     }
@@ -269,13 +318,17 @@ extension PairedLibraryTests {
     let schema = try await database.pairedLibraryPage(after: 0).schema
     try await database.receivePairedLibrary(.init(schema: schema, entries: records, cursor: 0, hasMore: true), from: peer)
   }
-  private func lastChange(_ database: WorkspaceDatabase) async throws -> Int64 {
-    try await database.read { try $0.historyRowsUnlocked("SELECT COALESCE(MAX(cursor),0) AS cursor FROM paired_library_changes", values: []).first?.objectValue?["cursor"]?.intValue.map(Int64.init) ?? 0 }
+  private func lastChange(_ database: WorkspaceDatabase) async throws -> Int64 { try await database.peerSyncHead() }
+  /// The vector of the winning applied version of one row, as sorted JSON.
+  private func winnerVector(_ connection: WorkspaceDatabaseConnection, _ table: String, _ key: String) throws -> String? {
+    let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
+    return try PairedLibraryRecord.winner(connection.frontierMembersUnlocked(table: table, key: key))
+      .map { String(decoding: try encoder.encode($0.vector), as: UTF8.self) }
   }
   private func noteState(_ database: WorkspaceDatabase, _ id: String) async throws -> String {
     try await database.read { connection in
       let row = try connection.historyRowsUnlocked("SELECT title,deleted_at FROM notes WHERE id=?", values: [id]).first?.objectValue
-      let winner = try connection.historyRowsUnlocked("SELECT json_extract(payload,'$.vector') AS vector FROM paired_library_rows WHERE table_name='notes' AND record_key=?", values: ["[\"\(id)\"]"]).first?.objectValue?["vector"]?.stringValue ?? ""
+      let winner = try self.winnerVector(connection, "notes", "[\"\(id)\"]") ?? ""
       return (row?["deleted_at"]?.stringValue == nil ? (row?["title"]?.stringValue ?? "absent") : "deleted") + "|" + winner
     }
   }
@@ -283,15 +336,20 @@ extension PairedLibraryTests {
   @Test func deletionLaterRestoreAndConcurrentEditConvergeInEveryArrivalOrder() async throws {
     let a = try await Mac(), b = try await Mac(); defer { a.remove(); b.remove() }
     let id = UUID().uuidString.lowercased(), key = "[\"\(id)\"]"
+    // Each version supersedes the last, so it is read as it is written.
+    let current = { try await self.journal(a.database).last { $0.table == "notes" && $0.key == key } }
     try await a.note(id, title: "Original")
+    let create = try #require(try await current())
     try await a.send(to: b)
     try await b.note(id, title: "Mini edit", revision: b.database.libraryNote(id: id)?.revision)
     let revision = try #require(try await a.database.libraryNote(id: id)?.revision)
     _ = try await a.database.applyLibraryMutation(.init(deviceID: a.id, kind: .deleteNote, resourceID: id, expectedRevision: revision))
+    let deletion = try #require(try await current())
     // An explicit later restore is a causal successor of the deletion.
     try await a.database.write { try $0.toolsExecuteUnlocked("UPDATE notes SET deleted_at=NULL,title='Restored' WHERE id=?", [id]) }
-    let fromAir = try await journal(a.database).filter { $0.table == "notes" && $0.key == key }
-    let create = try #require(fromAir.first), deletion = try #require(fromAir.first { $0.deleted }), restore = try #require(fromAir.last)
+    let restore = try #require(try await current())
+    #expect(deletion.deleted)
+    #expect(try await journal(a.database).filter { $0.table == "notes" && $0.key == key } == [restore])
     let edit = try #require(try await journal(b.database).last { $0.table == "notes" && $0.key == key && $0.origin == b.id })
     #expect(!restore.deleted && restore.dominates(deletion))
     let orders = [[deletion, restore, edit], [deletion, edit, restore], [restore, deletion, edit],
@@ -351,13 +409,13 @@ extension PairedLibraryTests {
     let a = try await Mac(), b = try await Mac(); defer { a.remove(); b.remove() }
     let session = try await a.database.createFixtureLocalACPSession(runtimeKind: .codex, title: "Partially received", ownerDeviceID: UUID())
     let run = try await a.database.beginLocalACPRun(conversationID: session, input: .init(text: "Running elsewhere"))
-    let records = try await journal(a.database).filter { !$0.table.hasPrefix("paired_") }
+    let records = try await journal(a.database).filter { !$0.table.hasSuffix("_owners") }
     try await deliver(records, to: b.database, from: a.id)
     let reopened = try await WorkspaceDatabase(url: b.database.fileURL)
     let before = try await lastChange(reopened)
     try await reopened.recoverInterruptedLocalACPRuns()
     #expect(try await !reopened.read { try $0.locallyOwnsConversationUnlocked(session) })
-    #expect(try await reopened.read { try $0.historyRowsUnlocked("SELECT id FROM paired_conversation_owners WHERE id=?", values: [session]).isEmpty })
+    #expect(try await reopened.read { try $0.historyRowsUnlocked("SELECT id FROM conversation_owners WHERE id=?", values: [session]).isEmpty })
     #expect(try await lastChange(reopened) == before)
     let status = try await reopened.read { try $0.historyRowsUnlocked("SELECT status FROM runs WHERE id=?", values: [run.runID]).first?.objectValue?["status"]?.stringValue }
     #expect(status == "running")
@@ -382,18 +440,22 @@ extension PairedLibraryTests {
     try bytes.write(to: records.appending(path: hash))
     let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
     try await b.database.write { connection in
-      for index in 0..<120 {
-        let missing = String(format: "%064x", index + 1)
-        let payload = String(decoding: try encoder.encode(referencing(waiting, hash: missing)), as: UTF8.self)
-        try connection.toolsExecuteUnlocked("INSERT INTO paired_library_pending VALUES(?,?,?,1)", [String(format: "a%05d", index), payload, a.id])
+      func queue(_ record: PairedLibraryRecord) throws {
+        try connection.toolsExecuteUnlocked("INSERT INTO peer_sync_versions(table_name,record_key,origin,clock,pending_peer,payload) VALUES(?,?,?,?,?,?)",
+          [record.table, record.key, record.origin, String(record.clock), a.id, String(decoding: try encoder.encode(record), as: UTF8.self)])
       }
-      let payload = String(decoding: try encoder.encode(referencing(available, hash: hash)), as: UTF8.self)
-      try connection.toolsExecuteUnlocked("INSERT INTO paired_library_pending VALUES('z-ready',?,?,1)", [payload, a.id])
+      // 120 distinct versions of the blocked note, each from its own origin, queued first.
+      for index in 0..<120 {
+        let blocked = referencing(waiting, hash: String(format: "%064x", index + 1)), origin = UUID().uuidString.lowercased()
+        var vector = blocked.vector; vector[origin] = blocked.clock
+        try queue(.init(table: blocked.table, key: blocked.key, row: blocked.row, deleted: false, clock: blocked.clock, origin: origin, vector: vector))
+      }
+      try queue(referencing(available, hash: hash))
     }
     try await b.database.materializePendingPeerRecords()
     #expect(try await b.database.libraryNote(id: ready)?.title == "Ready bytes")
     #expect(try await b.database.libraryNote(id: blocked) == nil)
-    #expect(try await b.database.read { try $0.historyRowsUnlocked("SELECT id FROM paired_library_pending", values: []).count } == 120)
+    #expect(try await b.database.read { try $0.historyRowsUnlocked("SELECT cursor FROM peer_sync_versions WHERE pending_peer IS NOT NULL", values: []).count } == 120)
   }
 
   @Test func aCompleteDownloadInterruptedBeforeInstallFinishesOrRestarts() async throws {
@@ -462,18 +524,18 @@ extension PairedLibraryTests {
     try await a.send(to: b)
     #expect(try await b.database.libraryExecutionOwner(conversationID: session) == workspace.id)
     let marker = { () async throws -> String? in
-      try await b.database.read { try $0.historyRowsUnlocked("SELECT transcript FROM execution_conversations WHERE id=?", values: [session]).first?.objectValue?["transcript"]?.stringValue }
+      try await b.database.read { try $0.historyRowsUnlocked("SELECT json_extract(conversation,'$.title') AS title FROM execution_conversations WHERE id=?", values: [session]).first?.objectValue?["title"]?.stringValue }
     }
     try await b.database.write { connection in
-      try connection.executeUnlocked("UPDATE paired_library_clock SET applying=1")
-      try connection.toolsExecuteUnlocked("UPDATE execution_conversations SET transcript=NULL WHERE id=?", [session])
-      try connection.executeUnlocked("UPDATE paired_library_clock SET applying=0")
+      try connection.executeUnlocked("UPDATE peer_sync_clock SET applying=1")
+      try connection.toolsExecuteUnlocked("UPDATE execution_conversations SET conversation=json_set(conversation,'$.title','Untouched') WHERE id=?", [session])
+      try connection.executeUnlocked("UPDATE peer_sync_clock SET applying=0")
     }
     try await a.send(to: b)
-    #expect(try await marker() == nil)
+    #expect(try await marker() == "Untouched")
     try await a.database.write { try $0.toolsExecuteUnlocked("UPDATE conversations SET title='Renamed by owner' WHERE id=?", [session]) }
     try await a.send(to: b)
-    #expect(try await marker() != nil)
+    #expect(try await marker() == "Renamed by owner")
   }
 
   @Test func observersNeverCaptureWorkspaceFilesForAnotherMacsConversation() async throws {
@@ -507,12 +569,12 @@ extension PairedLibraryTests {
     let origin = UUID().uuidString.lowercased(), clock: Int64 = 50_000_000
     var row = base.row; row["revision"] = .init(type: "integer", value: "not-a-number"); row["title"] = .init(type: "text", value: "Malformed")
     let bad = PairedLibraryRecord(table: "notes", key: base.key, row: row, deleted: false, clock: clock, origin: origin, vector: [origin: clock])
-    let conflictsBefore = try await b.database.pairedLibraryConflicts().count
+    let conflictsBefore = try await b.database.peerSyncConflicts().count
     try await deliver([bad, good], to: b.database, from: a.id)
     #expect(try await b.database.libraryNote(id: other)?.title == "Independent")
     #expect(try await b.database.libraryNote(id: shared)?.title == "Shared")
-    #expect(try await b.database.pairedLibraryConflicts().count == conflictsBefore)
-    #expect(try await b.database.pairedLibraryQuarantineCount() == 1)
+    #expect(try await b.database.peerSyncConflicts().count == conflictsBefore)
+    #expect(try await b.database.peerSyncQuarantineCount() == 1)
     #expect(try await !b.database.librarySnapshot().notes.contains { $0.title.contains("Recovered edit") })
   }
 
@@ -535,32 +597,32 @@ extension PairedLibraryTests {
     let session = try await node.database.createFixtureLocalACPSession(runtimeKind: .codex, title: "Native session", ownerDeviceID: UUID())
     let run = try await node.database.beginLocalACPRun(conversationID: session, input: .init(text: "Native input"))
     let native = try await node.database.read { connection in
-      try #require(try connection.historyRowsUnlocked("SELECT agent_id,owner_device_id FROM conversations WHERE id=?", values: [session]).first?.objectValue)
+      try #require(try connection.historyRowsUnlocked("SELECT agent_id,agent_codename FROM conversations WHERE id=?", values: [session]).first?.objectValue)
     }
     // Another member held a federated projection of the same chat and run.
     try await peer.database.write { connection in
-      try connection.toolsExecuteUnlocked("INSERT INTO conversations(id,title,owner_device_id,created_at,updated_at) VALUES(?,?,?,?,?)",
-        [session, "Projected title", UUID().uuidString.lowercased(), "2020-01-01T00:00:00Z", "2020-01-01T00:00:00Z"])
+      try connection.toolsExecuteUnlocked("INSERT INTO conversations(id,title,agent_codename,created_at,updated_at) VALUES(?,?,?,?,?)",
+        [session, "Projected title", "projected", "2020-01-01T00:00:00Z", "2020-01-01T00:00:00Z"])
       try connection.toolsExecuteUnlocked("INSERT INTO runs(id,conversation_id,status,created_at) VALUES(?,?,'completed','2020-01-01T00:00:00Z')", [run.runID, session])
     }
     // Make the peer's copies win the deterministic order, as a busy peer would.
-    try await peer.database.write { try $0.executeUnlocked("UPDATE paired_library_clock SET tick=tick+1000000") }
+    try await peer.database.write { try $0.executeUnlocked("UPDATE peer_sync_clock SET tick=tick+1000000") }
     try await peer.database.write { try $0.toolsExecuteUnlocked("UPDATE conversations SET title='Projected title ' WHERE id=?", [session]) }
     try await peer.database.write { try $0.toolsExecuteUnlocked("UPDATE runs SET status='completed',error='projection' WHERE id=?", [run.runID]) }
     try await peer.send(to: node)
     let after = try await node.database.read { connection in
-      try #require(try connection.historyRowsUnlocked("SELECT agent_id,owner_device_id,title FROM conversations WHERE id=?", values: [session]).first?.objectValue)
+      try #require(try connection.historyRowsUnlocked("SELECT agent_id,agent_codename,title FROM conversations WHERE id=?", values: [session]).first?.objectValue)
     }
     // Native binding and run state are the owner's truth; the shared title edit applies.
-    for key in ["agent_id", "owner_device_id"] { #expect(after[key] == native[key]) }
+    for key in ["agent_id", "agent_codename"] { #expect(after[key] == native[key]) }
     #expect(after["title"]?.stringValue == "Projected title ")
     #expect(try await node.database.activeRunID(conversationID: session) == run.runID)
     // The owner republishes its native rows, so the peer converges.
     try await node.send(to: peer)
     let converged = try await peer.database.read { connection in
-      try #require(try connection.historyRowsUnlocked("SELECT agent_id,owner_device_id FROM conversations WHERE id=?", values: [session]).first?.objectValue)
+      try #require(try connection.historyRowsUnlocked("SELECT agent_id,agent_codename FROM conversations WHERE id=?", values: [session]).first?.objectValue)
     }
-    #expect(converged["agent_id"] == native["agent_id"] && converged["owner_device_id"] == native["owner_device_id"])
+    #expect(converged["agent_id"] == native["agent_id"] && converged["agent_codename"] == native["agent_codename"])
     let status = try await peer.database.read { try $0.historyRowsUnlocked("SELECT status FROM runs WHERE id=?", values: [run.runID]).first?.objectValue?["status"]?.stringValue }
     #expect(status == "running")
   }
@@ -577,7 +639,7 @@ extension PairedLibraryTests {
       "id": .init(type: "text", value: "item"), "content_hash": .init(type: "text", value: kept), "storage": .init(type: "text", value: "retained")],
       deleted: false, clock: 1, origin: UUID().uuidString.lowercased(), vector: [:])
     let payload = String(decoding: try JSONEncoder().encode(losing), as: UTF8.self)
-    try await mac.database.write { try $0.toolsExecuteUnlocked("INSERT INTO paired_library_conflicts VALUES('losing',?)", [payload]) }
+    try await mac.database.write { try $0.toolsExecuteUnlocked("INSERT INTO peer_sync_conflicts VALUES('losing','library_items','[\"item\"]',?,1,?)", [losing.origin, payload]) }
     try await mac.database.cleanupLibraryFiles()
     #expect(FileManager.default.fileExists(atPath: mac.directory.appending(path: "library-files/" + kept).path))
     #expect(!FileManager.default.fileExists(atPath: mac.directory.appending(path: "library-files/" + dropped).path))
@@ -610,7 +672,7 @@ extension PairedLibraryTests {
     #expect(try await deleted(a.database, idle) != nil)
     // Trashed chats are hidden from the goal list, so read the stored goal.
     let goalStatus = { (database: WorkspaceDatabase) in
-      try await database.read { try $0.historyRowsUnlocked("SELECT json_extract(value,'$.status') AS status FROM workspace_session_goals WHERE session_id=?", values: [idle]).first?.objectValue?["status"]?.stringValue }
+      try await database.read { try $0.historyRowsUnlocked("SELECT json_extract(value,'$.status') AS status FROM session_goals WHERE session_id=?", values: [idle]).first?.objectValue?["status"]?.stringValue }
     }
     #expect(try await goalStatus(a.database) == "paused")
     // The owner's decision converges back to the observer.
@@ -650,8 +712,8 @@ extension PairedLibraryTests {
     _ = try await a.database.registerExecutionWorkspace(.init(workspace: linux), deviceID: a.id)
     // The chat is adopted into the Linux workspace on A.
     try await a.database.write { connection in
-      try connection.toolsExecuteUnlocked("INSERT INTO execution_adoptions(conversation_id,workspace_id,payload) VALUES(?,?,x'7B7D')", [session, linux.id])
-      try connection.toolsExecuteUnlocked("INSERT OR REPLACE INTO execution_conversations(id,workspace_id,conversation) VALUES(?,?,x'7B7D')", [session, linux.id])
+      try connection.toolsExecuteUnlocked("INSERT INTO execution_adoptions(conversation_id,workspace_id,payload) VALUES(?,?,'{}')", [session, linux.id])
+      try connection.toolsExecuteUnlocked("INSERT OR REPLACE INTO execution_conversations(id,workspace_id,conversation) VALUES(?,?,'{}')", [session, linux.id])
     }
     try await a.send(to: b)
     // Runtime updates from the new executor's history, relayed by B, apply on A.
@@ -671,10 +733,10 @@ extension PairedLibraryTests {
     _ = try #require(try await a.database.mutateGoal(sessionID: session, mutation: .set(objective: "Continue", tokenBudget: nil, turnBudget: nil)))
     // The chat and its goal arrive before its owner record and workspace.
     let records = try await journal(a.database)
-    let metadata = records.filter { ["paired_conversation_owners", "execution_workspaces"].contains($0.table) }
-    try await deliver(records.filter { !["paired_conversation_owners", "execution_workspaces"].contains($0.table) }, to: b.database, from: a.id)
+    let metadata = records.filter { ["conversation_owners", "execution_workspaces"].contains($0.table) }
+    try await deliver(records.filter { !["conversation_owners", "execution_workspaces"].contains($0.table) }, to: b.database, from: a.id)
     let before = try await lastChange(b.database)
-    let goalValue = { try await b.database.read { try $0.historyRowsUnlocked("SELECT value FROM workspace_session_goals WHERE session_id=?", values: [session]).first?.objectValue?["value"]?.stringValue } }
+    let goalValue = { try await b.database.read { try $0.historyRowsUnlocked("SELECT value FROM session_goals WHERE session_id=?", values: [session]).first?.objectValue?["value"]?.stringValue } }
     let originalGoal = try await goalValue()
     await #expect(throws: WorkspaceConversationActionError.unavailable) { try await b.database.mutateConversation(id: session, mutation: .moveToTrash) }
     await #expect(throws: WorkspaceConversationActionError.unavailable) { try await b.database.mutateConversation(id: session, mutation: .restore) }
@@ -701,10 +763,10 @@ extension PairedLibraryTests {
     await #expect(throws: WorkspaceConversationActionError.ownedByAnotherMac) { try await b.database.mutateConversation(id: session, mutation: .moveToTrash) }
     // The chat is adopted into the Linux workspace; B's copy follows it there.
     try await b.database.write { connection in
-      try connection.executeUnlocked("UPDATE paired_library_clock SET applying=1")
-      try connection.toolsExecuteUnlocked("INSERT OR REPLACE INTO execution_conversations(id,workspace_id,conversation) VALUES(?,?,x'7B7D')", [session, linux.id])
-      try connection.toolsExecuteUnlocked("INSERT OR REPLACE INTO execution_adoptions(conversation_id,workspace_id,payload) VALUES(?,?,x'7B7D')", [session, linux.id])
-      try connection.executeUnlocked("UPDATE paired_library_clock SET applying=0")
+      try connection.executeUnlocked("UPDATE peer_sync_clock SET applying=1")
+      try connection.toolsExecuteUnlocked("INSERT OR REPLACE INTO execution_conversations(id,workspace_id,conversation) VALUES(?,?,'{}')", [session, linux.id])
+      try connection.toolsExecuteUnlocked("INSERT OR REPLACE INTO execution_adoptions(conversation_id,workspace_id,payload) VALUES(?,?,'{}')", [session, linux.id])
+      try connection.executeUnlocked("UPDATE peer_sync_clock SET applying=0")
     }
     // Routing resolves to the independent Linux workspace, never the old Mac,
     // and trash/restore work as for any independent workspace projection.
@@ -742,12 +804,9 @@ extension PairedLibraryTests {
     let id = UUID().uuidString.lowercased()
     try await a.note(id, title: "Writing beside bad settings")
     let records = try await journal(a.database)
-    let valid = try #require(records.last { $0.table == "workspace_tool_settings" && $0.row["value"]?.type == "text" })
+    let valid = try #require(records.last { $0.table == "tool_settings" && $0.row["value"]?.type == "text" })
     // Each malformed version supersedes the receiver's own, so it must materialize.
-    let local = try await b.database.read {
-      try $0.historyRowsUnlocked("SELECT json_extract(payload,'$.vector') AS vector FROM paired_library_rows WHERE table_name=? AND record_key=?",
-        values: [valid.table, valid.key]).first?.objectValue?["vector"]?.stringValue
-    }
+    let local = try await b.database.read { try self.winnerVector($0, valid.table, valid.key) }
     var vector = try local.map { try JSONDecoder().decode([String: Int64].self, from: Data($0.utf8)) } ?? [:]
     vector.merge(valid.vector, uniquingKeysWith: max)
     let validValue = try #require(valid.row["value"]?.value)
@@ -763,7 +822,7 @@ extension PairedLibraryTests {
       let malformed = PairedLibraryRecord(table: valid.table, key: valid.key, row: row, deleted: valid.deleted,
         clock: clock, origin: a.id, vector: vector)
       try await deliver(index == 0 ? [malformed, note] : [malformed], to: b.database, from: a.id)
-      #expect(try await b.database.pairedLibraryQuarantineCount() == index + 1)
+      #expect(try await b.database.peerSyncQuarantineCount() == index + 1)
     }
     #expect(try await b.database.libraryNote(id: id)?.title == "Writing beside bad settings")
     // The receiver's settings still load; nothing unreadable was stored.
@@ -808,8 +867,8 @@ extension PairedLibraryTests {
     let malformed = PairedLibraryRecord(table: valid.table, key: valid.key, row: row, deleted: false, clock: valid.clock, origin: a.id, vector: vector)
     let before = try await lastChange(b.database)
     try await deliver([malformed], to: b.database, from: a.id)
-    #expect(try await b.database.pairedLibraryQuarantineCount() == 1)
-    #expect(try await b.database.read { try $0.historyRowsUnlocked("SELECT id FROM paired_library_pending", values: []).isEmpty })
+    #expect(try await b.database.peerSyncQuarantineCount() == 1)
+    #expect(try await b.database.read { try $0.historyRowsUnlocked("SELECT cursor FROM peer_sync_versions WHERE pending_peer IS NOT NULL", values: []).isEmpty })
     #expect(try await lastChange(b.database) == before)
   }
 
@@ -820,11 +879,13 @@ extension PairedLibraryTests {
     let id = UUID().uuidString.lowercased(), later = UUID().uuidString.lowercased()
     try await a.note(id, title: "Shared")
     try await a.send(to: b); try await b.send(to: a)
+    // Each version reaches the Mini before the next supersedes it on the Air.
     try await largeEdit(a, id, title: "Large Air edit 1")
+    try await a.send(to: b)
     try await largeEdit(a, id, title: "Large Air edit 2")
     try await a.note(later, title: "Later Air writing")
     try await a.send(to: b)
-    #expect(try await b.database.read { try $0.historyRowsUnlocked("SELECT id FROM paired_library_pending", values: []).count } >= 2)
+    #expect(try await b.database.read { try $0.historyRowsUnlocked("SELECT cursor FROM peer_sync_versions WHERE pending_peer IS NOT NULL", values: []).count } >= 2)
     let restarted = try await WorkspaceDatabase(url: b.database.fileURL)
     let content = try NoteDocument(blocks: [.richText(.init(text: "Mini edit"))]).encoded()
     let receipt = try await restarted.applyLibraryMutation(.init(deviceID: b.id, kind: .updateNote, resourceID: id,
@@ -832,7 +893,7 @@ extension PairedLibraryTests {
     #expect(receipt.status == .accepted)
     try await copyRecordBytes(from: a, to: b)
     try await restarted.materializePendingPeerRecords()
-    #expect(try await restarted.read { try $0.historyRowsUnlocked("SELECT id FROM paired_library_pending", values: []).isEmpty })
+    #expect(try await restarted.read { try $0.historyRowsUnlocked("SELECT cursor FROM peer_sync_versions WHERE pending_peer IS NOT NULL", values: []).isEmpty })
     let names = Set(try await restarted.librarySnapshot().notes.map(\.title))
     #expect(names.contains("Mini edit") || names.contains("Mini edit (Recovered edit)"))
     #expect(names.contains("Large Air edit 2") || names.contains("Large Air edit 2 (Recovered edit)"))
@@ -876,7 +937,7 @@ extension PairedLibraryTests {
 /// host's) agree.
 extension PairedLibraryTests {
   private func exchange(from sender: WorkspaceDatabase, _ senderID: String, to receiver: WorkspaceDatabase) async throws {
-    var cursor = try await receiver.pairedLibraryCursors(senderID).pulled
+    var cursor = try await receiver.peerSyncCursors(senderID).pulled
     for _ in 0..<1000 {
       let page = try await sender.pairedLibraryPage(after: cursor)
       try await receiver.receivePairedLibrary(page, from: senderID)
@@ -893,8 +954,8 @@ extension PairedLibraryTests {
     try await extra.database.write { try $0.executeUnlocked("ALTER TABLE notes ADD COLUMN shade TEXT") }
     try await retyped.database.write { connection in
       try connection.executeUnlocked("""
-        DROP TABLE paired_mac_routes;
-        CREATE TABLE paired_mac_routes(device_id TEXT PRIMARY KEY,library_id TEXT NOT NULL,endpoint TEXT NOT NULL,name BLOB NOT NULL);
+        DROP TABLE mac_routes;
+        CREATE TABLE mac_routes(device_id TEXT PRIMARY KEY,library_id TEXT NOT NULL,endpoint TEXT NOT NULL,name BLOB NOT NULL);
         """)
     }
     let schema = try await a.database.pairedLibrarySchema()
@@ -913,11 +974,11 @@ extension PairedLibraryTests {
     let remote = RemoteWorkspaceConfiguration(name: "Linux host", workspaceID: "fixture", hostName: "linux.example.ts.net", dataRoot: "/srv/woven")
     let id = remote.id.uuidString.lowercased()
     func stored(_ database: WorkspaceDatabase) async throws -> String? {
-      try await database.read { try $0.historyRowsUnlocked("SELECT configuration FROM paired_remote_workspaces WHERE id=?", values: [id]).first?.objectValue?["configuration"]?.stringValue }
+      try await database.read { try $0.historyRowsUnlocked("SELECT configuration FROM remote_workspace_configurations WHERE id=?", values: [id]).first?.objectValue?["configuration"]?.stringValue }
     }
-    try await a.database.savePairedRemoteWorkspaces([remote])
+    try await a.database.saveRemoteWorkspaceConfigurations([remote])
     let saved = try await lastChange(a.database)
-    for _ in 0..<3 { try await a.database.savePairedRemoteWorkspaces([remote]) }
+    for _ in 0..<3 { try await a.database.saveRemoteWorkspaceConfigurations([remote]) }
     #expect(try await lastChange(a.database) == saved)
 
     let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
@@ -930,15 +991,15 @@ extension PairedLibraryTests {
     }).joined(separator: ",") + "}"
     #expect(reversed != sorted)
     #expect(try JSONDecoder().decode(RemoteWorkspaceConfiguration.self, from: Data(reversed.utf8)) == remote)
-    try await a.database.write { try $0.toolsExecuteUnlocked("UPDATE paired_remote_workspaces SET configuration=? WHERE id=?", [reversed, id]) }
+    try await a.database.write { try $0.toolsExecuteUnlocked("UPDATE remote_workspace_configurations SET configuration=? WHERE id=?", [reversed, id]) }
     let reordered = try await lastChange(a.database)
-    try await a.database.savePairedRemoteWorkspaces([remote])
+    try await a.database.saveRemoteWorkspaceConfigurations([remote])
     #expect(try await lastChange(a.database) == reordered)
     #expect(try await stored(a.database) == reversed)
 
     // A real change is written once, in sorted form, and reaches peers.
     var renamed = remote; renamed.name = "Renamed host"
-    try await a.database.savePairedRemoteWorkspaces([renamed])
+    try await a.database.saveRemoteWorkspaceConfigurations([renamed])
     #expect(try await lastChange(a.database) > reordered)
     #expect(try await stored(a.database) == String(decoding: try encoder.encode(renamed), as: UTF8.self))
     try await a.send(to: b)

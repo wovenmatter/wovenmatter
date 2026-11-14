@@ -47,7 +47,10 @@ final class WorkspaceDatabaseConnection {
       }
       try execute("PRAGMA busy_timeout = 5000")
       try execute("PRAGMA journal_mode = WAL")
-      try upgradeLibrarySchemaUnlocked()
+      // A library from before the versioned schema converts first; a
+      // current one skips straight to the idempotent creation below.
+      let version = try withLock { try libraryVersionUnlocked() }
+      let converted = version == 0 ? try upgradeLibrarySchemaUnlocked() : false
       try execute("PRAGMA foreign_keys = ON")
       try migrate()
       try migrateWorkspaceHistory()
@@ -60,9 +63,16 @@ final class WorkspaceDatabaseConnection {
       try migrateLibraryMembers()
       try migrateMemberToolSessions()
       try migrateBotConversations()
-      try migratePairedLibrary()
+      try migratePeerSync()
       try migrateExecutionStreamChanges()
       try migrateDeviceSyncWakes()
+      // A fresh library is stamped once everything above exists.
+      if version < Self.librarySchemaVersion { try execute("PRAGMA user_version = \(Self.librarySchemaVersion)") }
+      // The conversion leaves the space of the bookkeeping it compacted and
+      // the tables it rebuilt free inside the file; give it back once. Nothing
+      // else has the library open yet, and a failure only keeps the space.
+      // VACUUM writes the whole file through the WAL; truncate it after.
+      if converted, (try? execute("VACUUM")) != nil { try? execute("PRAGMA wal_checkpoint(TRUNCATE)") }
     } catch {
       sqlite3_close(database)
       connection = nil
@@ -140,6 +150,12 @@ final class WorkspaceDatabaseConnection {
       sqlite3_bind_text(statement, index, bytes, byteCount, SQLITE_TRANSIENT)
     }
     guard status == SQLITE_OK else { throw bindError() }
+  }
+
+  /// Binds a value's JSON encoding as TEXT. Library columns that hold JSON
+  /// are TEXT, so SQLite's JSON functions read them directly.
+  func bindJSON<Value: Encodable>(_ value: Value, at index: Int32, to statement: OpaquePointer) throws {
+    try bind(String(decoding: try JSONEncoder().encode(value), as: UTF8.self), at: index, to: statement)
   }
 
   func bind(_ value: Data, at index: Int32, to statement: OpaquePointer) throws {

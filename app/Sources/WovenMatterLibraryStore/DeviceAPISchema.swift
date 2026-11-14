@@ -27,11 +27,11 @@ extension WorkspaceDatabaseConnection {
       );
       CREATE TABLE IF NOT EXISTS device_mutation_receipts (
         device_id TEXT NOT NULL, operation_id TEXT NOT NULL, request BLOB NOT NULL,
-        response BLOB NOT NULL, PRIMARY KEY(device_id, operation_id)
+        response TEXT NOT NULL, PRIMARY KEY(device_id, operation_id)
       );
       CREATE TABLE IF NOT EXISTS device_command_receipts (
         device_id TEXT NOT NULL, command_id TEXT NOT NULL, request BLOB NOT NULL,
-        response BLOB NOT NULL, PRIMARY KEY(device_id, command_id)
+        response TEXT NOT NULL, PRIMARY KEY(device_id, command_id)
       );
       CREATE TABLE IF NOT EXISTS device_draft_receipts (
         operation_id TEXT PRIMARY KEY, note_id TEXT NOT NULL, title TEXT NOT NULL,

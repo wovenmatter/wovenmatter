@@ -28,14 +28,14 @@ extension WorkspaceDatabaseConnection {
         let id: String?
         switch query.command {
         case "message": lookup = "SELECT conversation_id FROM messages WHERE id=?"; id = query.id
-        case "event": lookup = "SELECT conversation_id FROM workspace_history_events WHERE id=?"; id = query.id
+        case "event": lookup = "SELECT conversation_id FROM history_events WHERE id=?"; id = query.id
         default: lookup = "SELECT conversation_id FROM runs WHERE id=?"; id = query.runID ?? query.id
         }
         guard let id else { throw WorkspaceToolError.invalid("A record ID is required.") }
         var rows = try historyRowsUnlocked(lookup, values: [id])
         if rows.isEmpty, query.command == "trace" {
           rows = try historyRowsUnlocked(
-            "SELECT conversation_id FROM workspace_history_events WHERE run_id=? LIMIT 1", values: [id])
+            "SELECT conversation_id FROM history_events WHERE run_id=? LIMIT 1", values: [id])
         }
         guard !rows.isEmpty else {
           throw WorkspaceToolError.notFound("The requested record was not found.")

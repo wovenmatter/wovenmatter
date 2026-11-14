@@ -102,11 +102,10 @@ extension WorkspaceDatabaseConnection {
     guard owner == nil || owner == workspace.id else { throw federationError("wrong_owner", "Retained history belongs to another execution workspace.") }
     if owner == nil {
       conversation.workspaceID = workspace.id; conversation.libraryID = workspace.libraryID; conversation.activeRunID = nil
-      let insert = try prepareUnlocked("INSERT INTO execution_conversations(id,workspace_id,conversation,transcript) VALUES (?,?,?,?)")
+      let insert = try prepareUnlocked("INSERT INTO execution_conversations(id,workspace_id,conversation) VALUES (?,?,?)")
       defer { sqlite3_finalize(insert) }
       try bind(entry.conversationID, at: 1, to: insert); try bind(workspace.id, at: 2, to: insert)
-      try bind(JSONEncoder().encode(conversation), at: 3, to: insert)
-      try bind(JSONEncoder().encode(federationLegacyTranscriptUnlocked(entry.conversationID)), at: 4, to: insert); try stepDone(insert)
+      try bindJSON(conversation, at: 3, to: insert); try stepDone(insert)
     }
     let runOwner = try libraryIDsUnlocked("SELECT workspace_id || '/' || conversation_id FROM execution_runs WHERE id=?", bindings: [proof.runID]).first
     guard runOwner == nil || runOwner == workspace.id + "/" + entry.conversationID else {

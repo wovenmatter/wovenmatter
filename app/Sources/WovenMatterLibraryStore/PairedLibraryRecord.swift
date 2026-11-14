@@ -41,18 +41,9 @@ public struct PairedLibraryRecord: Codable, Equatable, Sendable {
 
   /// A product analytics preference that turns collection off.
   var optsOutOfAnalytics: Bool {
-    guard table == "product_analytics_preference", !deleted, let value = row["payload"], let text = value.value else { return false }
-    let data: Data?
-    if value.type == "blob" {
-      var bytes: [UInt8] = []
-      var index = text.startIndex
-      while index < text.endIndex, let next = text.index(index, offsetBy: 2, limitedBy: text.endIndex),
-            let byte = UInt8(text[index..<next], radix: 16) {
-        bytes.append(byte); index = next
-      }
-      data = index == text.endIndex ? Data(bytes) : nil
-    } else { data = Data(text.utf8) }
-    guard let data, let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return false }
+    guard table == "product_analytics_preference", !deleted, let value = row["payload"], value.type == "text",
+          let text = value.value,
+          let object = try? JSONSerialization.jsonObject(with: Data(text.utf8)) as? [String: Any] else { return false }
     return object["enabled"] as? Bool == false
   }
   public func dominates(_ other: Self) -> Bool {
@@ -91,18 +82,18 @@ public struct PairedLibraryConflict: Codable, Identifiable, Sendable {
 enum PairedLibraryTables {
   static let names = [
     "surface_profiles", "folders", "folder_execution_roots", "notes", "dictation_history",
-    "paired_agent_owners", "paired_conversation_owners", "agents", "conversations", "conversation_titles",
+    "agent_owners", "conversation_owners", "agents", "conversations", "conversation_titles",
     "session_execution_roots", "messages", "message_attachments",
     "message_references", "runs", "run_visible_notes",
-    "run_activities", "workspace_history_events", "note_asset_versions",
-    "workspace_tool_settings", "workspace_session_tools", "workspace_session_relationships",
-    "workspace_session_grants", "workspace_session_goals", "workspace_goal_runs", "workspace_goal_usage",
-    "paired_calendar_owners", "calendar_items", "calendar_task_executors", "calendar_run_publishers", "calendar_published_runs",
+    "run_activities", "history_events", "note_asset_versions",
+    "tool_settings", "session_tools", "session_relationships",
+    "session_grants", "session_goals", "goal_runs", "goal_usage",
+    "calendar_item_owners", "calendar_items", "calendar_task_executors", "calendar_run_publishers", "calendar_published_runs",
     "execution_workspaces", "execution_journal", "execution_retained_settlements",
-    "execution_conversations", "execution_adoptions", "device_message_provenance",
+    "execution_conversations", "execution_adoptions", "message_provenance",
     "execution_runs", "execution_native_history", "execution_native_history_parts",
-    "device_saved_artifacts", "device_artifact_uploads", "device_artifact_chunks",
-    "library_messages", "library_items", "library_locations", "paired_mac_routes", "paired_remote_workspaces",
+    "saved_artifacts", "artifact_uploads", "artifact_chunks",
+    "library_messages", "library_items", "library_locations", "mac_routes", "remote_workspace_configurations",
     // Signed member entries and revocations; trust is resolved from signatures.
     "library_members", "library_member_revocations",
     "bot_conversations", "bot_conversation_entries",

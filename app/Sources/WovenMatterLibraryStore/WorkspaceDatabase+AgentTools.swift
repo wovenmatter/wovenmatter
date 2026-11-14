@@ -21,10 +21,10 @@ extension WorkspaceDatabaseConnection {
   }
 
   enum ToolReceiptTable: String {
-    case mutations = "workspace_tool_mutations"
-    case deliveries = "workspace_session_deliveries"
-    case creations = "workspace_session_creations"
-    case coordination = "workspace_coordination_access_requests"
+    case mutations = "tool_mutations"
+    case deliveries = "session_deliveries"
+    case creations = "session_creations"
+    case coordination = "coordination_access_requests"
   }
 
   /// New IDs use lowercase UUIDs; existing IDs retain their spelling so all
@@ -52,79 +52,80 @@ extension WorkspaceDatabaseConnection {
       // caller: a conversation or an app-wide caller such as a bot. A target
       // is always a conversation.
       try executeUnlocked("""
-        CREATE TABLE IF NOT EXISTS workspace_mcp_callers(id TEXT PRIMARY KEY, display_name TEXT, machine_id TEXT,
+        CREATE TABLE IF NOT EXISTS mcp_callers(id TEXT PRIMARY KEY, display_name TEXT, machine_id TEXT,
           revoked INTEGER NOT NULL DEFAULT 0);
-        CREATE TABLE IF NOT EXISTS workspace_mcp_bot_machines(machine_id TEXT PRIMARY KEY, active INTEGER NOT NULL);
-        CREATE TABLE IF NOT EXISTS workspace_input_contexts(
+        CREATE TABLE IF NOT EXISTS mcp_bot_machines(machine_id TEXT PRIMARY KEY, active INTEGER NOT NULL);
+        CREATE TABLE IF NOT EXISTS input_contexts(
           id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL REFERENCES conversations(id),
           note_id TEXT, created_at TEXT NOT NULL);
-        CREATE TABLE IF NOT EXISTS workspace_tool_mutations(
-          source_id TEXT NOT NULL REFERENCES workspace_mcp_callers(id), request_id TEXT NOT NULL,
+        CREATE TABLE IF NOT EXISTS tool_mutations(
+          source_id TEXT NOT NULL REFERENCES mcp_callers(id), request_id TEXT NOT NULL,
           operation TEXT NOT NULL, input_digest TEXT NOT NULL, result_json TEXT NOT NULL,
           PRIMARY KEY(source_id,request_id));
-        CREATE TABLE IF NOT EXISTS workspace_tool_settings(id INTEGER PRIMARY KEY CHECK(id=1), value TEXT NOT NULL);
-        CREATE TABLE IF NOT EXISTS workspace_opencode_input_context(
+        CREATE TABLE IF NOT EXISTS tool_settings(id INTEGER PRIMARY KEY CHECK(id=1), value TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS opencode_input_contexts(
           id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL, visible_text TEXT NOT NULL, delivery_id TEXT);
-        CREATE TABLE IF NOT EXISTS workspace_automation_requests(
-          source_id TEXT NOT NULL REFERENCES workspace_mcp_callers(id), request_id TEXT NOT NULL,
+        CREATE TABLE IF NOT EXISTS automation_requests(
+          source_id TEXT NOT NULL REFERENCES mcp_callers(id), request_id TEXT NOT NULL,
           input_digest TEXT NOT NULL, PRIMARY KEY(source_id,request_id));
-        CREATE TABLE IF NOT EXISTS workspace_automation_cancellations(
-          source_id TEXT NOT NULL REFERENCES workspace_mcp_callers(id), request_id TEXT NOT NULL,
+        CREATE TABLE IF NOT EXISTS automation_cancellations(
+          source_id TEXT NOT NULL REFERENCES mcp_callers(id), request_id TEXT NOT NULL,
           PRIMARY KEY(source_id,request_id));
-        CREATE TABLE IF NOT EXISTS workspace_session_tools(
+        CREATE TABLE IF NOT EXISTS session_tools(
           session_id TEXT PRIMARY KEY REFERENCES conversations(id), enabled_json TEXT NOT NULL,
           defaults_applied INTEGER NOT NULL DEFAULT 0);
-        CREATE TABLE IF NOT EXISTS workspace_executor_sessions(
+        CREATE TABLE IF NOT EXISTS session_executor_profiles(
           session_id TEXT PRIMARY KEY REFERENCES conversations(id), profiles_json TEXT NOT NULL);
-        CREATE TABLE IF NOT EXISTS workspace_session_grants(
-          source_id TEXT NOT NULL REFERENCES workspace_mcp_callers(id),
+        CREATE TABLE IF NOT EXISTS session_grants(
+          source_id TEXT NOT NULL REFERENCES mcp_callers(id),
           target_id TEXT NOT NULL REFERENCES conversations(id),
           kind TEXT NOT NULL CHECK(kind IN ('attachment','approved')),
           PRIMARY KEY(source_id,target_id,kind));
-        CREATE TABLE IF NOT EXISTS workspace_session_relationships(
+        CREATE TABLE IF NOT EXISTS session_relationships(
           session_id TEXT PRIMARY KEY REFERENCES conversations(id),
-          created_by TEXT REFERENCES workspace_mcp_callers(id),
-          coordinator_id TEXT REFERENCES workspace_mcp_callers(id),
+          created_by TEXT REFERENCES mcp_callers(id),
+          coordinator_id TEXT REFERENCES mcp_callers(id),
           purpose TEXT, notifications_enabled INTEGER NOT NULL DEFAULT 1,
           coordination_epoch TEXT, coordination_since TEXT,
           CHECK(session_id != created_by), CHECK(session_id != coordinator_id));
-        CREATE INDEX IF NOT EXISTS workspace_session_relationships_coordinator ON workspace_session_relationships(coordinator_id);
+        CREATE INDEX IF NOT EXISTS session_relationships_coordinator ON session_relationships(coordinator_id);
         -- A timer's target is a conversation or a bot principal (a bot's own
         -- schedule), so it references neither. Timers of a missing conversation
         -- are never listed or fired.
-        CREATE TABLE IF NOT EXISTS workspace_session_timers(
+        CREATE TABLE IF NOT EXISTS session_timers(
           id TEXT PRIMARY KEY, session_id TEXT NOT NULL,
           instruction TEXT NOT NULL, next_fire_at REAL NOT NULL, interval_seconds REAL,
           is_paused INTEGER NOT NULL DEFAULT 0, pending_delivery_id TEXT, outside_mcp INTEGER NOT NULL DEFAULT 0);
-        CREATE INDEX IF NOT EXISTS workspace_session_timers_due ON workspace_session_timers(is_paused,next_fire_at);
-        CREATE TABLE IF NOT EXISTS workspace_coordination_access_requests(
-          id TEXT PRIMARY KEY, source_id TEXT NOT NULL REFERENCES workspace_mcp_callers(id),
+        CREATE INDEX IF NOT EXISTS session_timers_due ON session_timers(is_paused,next_fire_at);
+        CREATE INDEX IF NOT EXISTS session_timers_session ON session_timers(session_id);
+        CREATE TABLE IF NOT EXISTS coordination_access_requests(
+          id TEXT PRIMARY KEY, source_id TEXT NOT NULL REFERENCES mcp_callers(id),
           target_id TEXT NOT NULL REFERENCES conversations(id), purpose TEXT NOT NULL,
           notifications INTEGER NOT NULL, state TEXT NOT NULL, error TEXT,
           created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')), coordination_epoch TEXT);
-        CREATE INDEX IF NOT EXISTS workspace_coordination_access_requests_state ON workspace_coordination_access_requests(state,created_at);
-        CREATE TABLE IF NOT EXISTS workspace_coordination_observations(
+        CREATE INDEX IF NOT EXISTS coordination_access_requests_state ON coordination_access_requests(state,created_at);
+        CREATE TABLE IF NOT EXISTS coordination_observations(
           epoch TEXT NOT NULL, event_key TEXT NOT NULL, PRIMARY KEY(epoch,event_key));
-        CREATE TABLE IF NOT EXISTS workspace_session_creations(
-          id TEXT PRIMARY KEY, source_id TEXT NOT NULL REFERENCES workspace_mcp_callers(id),
+        CREATE TABLE IF NOT EXISTS session_creations(
+          id TEXT PRIMARY KEY, source_id TEXT NOT NULL REFERENCES mcp_callers(id),
           target_id TEXT NOT NULL UNIQUE, arguments_json TEXT NOT NULL,
           purpose TEXT NOT NULL, managed INTEGER NOT NULL, status TEXT NOT NULL DEFAULT 'planned',
           configuration_json TEXT, configuration_applied INTEGER NOT NULL DEFAULT 0);
-        CREATE UNIQUE INDEX IF NOT EXISTS workspace_session_deliveries_event ON workspace_session_deliveries(event_key) WHERE event_key IS NOT NULL;
+        CREATE UNIQUE INDEX IF NOT EXISTS session_deliveries_event ON session_deliveries(event_key) WHERE event_key IS NOT NULL;
         """)
       for table in [ToolReceiptTable.mutations, .deliveries, .creations, .coordination] {
         let columns = table == .mutations ? "source_id,request_id COLLATE NOCASE" : "id COLLATE NOCASE"
         try executeUnlocked("CREATE INDEX IF NOT EXISTS \(table.rawValue)_request_case ON \(table.rawValue)(\(columns))")
       }
-      try toolsExecuteUnlocked("INSERT OR IGNORE INTO workspace_tool_settings(id,value) VALUES(1,?)",
+      try toolsExecuteUnlocked("INSERT OR IGNORE INTO tool_settings(id,value) VALUES(1,?)",
                                [try toolsJSON(WorkspaceToolSettings())])
       // Each new session takes a snapshot of the tool and executor defaults.
       try executeUnlocked("""
         CREATE TRIGGER IF NOT EXISTS conversations_session_tools_insert AFTER INSERT ON conversations BEGIN
-          INSERT OR IGNORE INTO workspace_session_tools(session_id,enabled_json,defaults_applied)
-            VALUES(new.id,(SELECT json_extract(value,'$.enabledByDefault') FROM workspace_tool_settings WHERE id=1),0);
-          INSERT OR IGNORE INTO workspace_executor_sessions(session_id,profiles_json)
-            VALUES(new.id,COALESCE((SELECT json_extract(value,'$.executor.defaultProfiles') FROM workspace_tool_settings WHERE id=1),'[]'));
+          INSERT OR IGNORE INTO session_tools(session_id,enabled_json,defaults_applied)
+            VALUES(new.id,(SELECT json_extract(value,'$.enabledByDefault') FROM tool_settings WHERE id=1),0);
+          INSERT OR IGNORE INTO session_executor_profiles(session_id,profiles_json)
+            VALUES(new.id,COALESCE((SELECT json_extract(value,'$.executor.defaultProfiles') FROM tool_settings WHERE id=1),'[]'));
         END;
         """)
       try migrateMCPCallersUnlocked()
@@ -138,22 +139,22 @@ extension WorkspaceDatabaseConnection {
   public func saveToolSettings(_ settings: WorkspaceToolSettings) throws {
     try settings.validate()
     try transaction {
-      try toolsExecuteUnlocked("UPDATE workspace_tool_settings SET value=? WHERE id=1", [try toolsJSON(settings)])
+      try toolsExecuteUnlocked("UPDATE tool_settings SET value=? WHERE id=1", [try toolsJSON(settings)])
       if !settings.botMCP.enabledGroups.contains(.sessions) {
-        try executeUnlocked("UPDATE workspace_session_relationships SET coordinator_id=NULL,coordination_epoch=NULL,coordination_since=NULL WHERE coordinator_id IN (SELECT id FROM workspace_mcp_callers WHERE machine_id IS NOT NULL)")
-        try executeUnlocked("DELETE FROM workspace_session_grants WHERE kind='approved' AND source_id IN (SELECT id FROM workspace_mcp_callers WHERE machine_id IS NOT NULL)")
-        try executeUnlocked("UPDATE workspace_session_deliveries SET status='cancelled' WHERE status='queued' AND (source_id IN (SELECT id FROM workspace_mcp_callers WHERE machine_id IS NOT NULL) OR target_id IN (SELECT id FROM workspace_mcp_callers WHERE machine_id IS NOT NULL))")
+        try executeUnlocked("UPDATE session_relationships SET coordinator_id=NULL,coordination_epoch=NULL,coordination_since=NULL WHERE coordinator_id IN (SELECT id FROM mcp_callers WHERE machine_id IS NOT NULL)")
+        try executeUnlocked("DELETE FROM session_grants WHERE kind='approved' AND source_id IN (SELECT id FROM mcp_callers WHERE machine_id IS NOT NULL)")
+        try executeUnlocked("UPDATE session_deliveries SET status='cancelled' WHERE status='queued' AND (source_id IN (SELECT id FROM mcp_callers WHERE machine_id IS NOT NULL) OR target_id IN (SELECT id FROM mcp_callers WHERE machine_id IS NOT NULL))")
       }
       if settings.externalMCP?.enabledGroups.contains(.sessions) != true {
-        try toolsExecuteUnlocked("UPDATE workspace_session_relationships SET coordinator_id=NULL,coordination_epoch=NULL,coordination_since=NULL WHERE coordinator_id=?", [WovenMCPCaller.outside])
-        try toolsExecuteUnlocked("DELETE FROM workspace_session_grants WHERE source_id=? AND kind='approved'", [WovenMCPCaller.outside])
-        try toolsExecuteUnlocked("UPDATE workspace_session_deliveries SET status='cancelled' WHERE source_id=? AND status='queued' AND kind IN ('message','created')", [WovenMCPCaller.outside])
+        try toolsExecuteUnlocked("UPDATE session_relationships SET coordinator_id=NULL,coordination_epoch=NULL,coordination_since=NULL WHERE coordinator_id=?", [WovenMCPCaller.outside])
+        try toolsExecuteUnlocked("DELETE FROM session_grants WHERE source_id=? AND kind='approved'", [WovenMCPCaller.outside])
+        try toolsExecuteUnlocked("UPDATE session_deliveries SET status='cancelled' WHERE source_id=? AND status='queued' AND kind IN ('message','created')", [WovenMCPCaller.outside])
       }
     }
   }
 
   func toolSettingsUnlocked() throws -> WorkspaceToolSettings {
-    let rows = try historyRowsUnlocked("SELECT value FROM workspace_tool_settings WHERE id=1", values: [])
+    let rows = try historyRowsUnlocked("SELECT value FROM tool_settings WHERE id=1", values: [])
     guard let value = rows.first?.objectValue?["value"]?.stringValue else {
       throw WorkspaceToolError.invalid("Tool settings are unavailable.")
     }
@@ -175,11 +176,11 @@ extension WorkspaceDatabaseConnection {
       return .init(enabled: access.enabledGroups, executorProfiles: settings.executor?.defaultProfiles ?? [])
     }
     try requireToolSessionUnlocked(id)
-    let rows = try historyRowsUnlocked("SELECT enabled_json FROM workspace_session_tools WHERE session_id=?", values: [id])
+    let rows = try historyRowsUnlocked("SELECT enabled_json FROM session_tools WHERE session_id=?", values: [id])
     guard let json = rows.first?.objectValue?["enabled_json"]?.stringValue else {
       throw WorkspaceToolError.invalid("Session tool settings are unavailable.")
     }
-    let selection = try historyRowsUnlocked("SELECT profiles_json FROM workspace_executor_sessions WHERE session_id=?", values: [id]).first?.objectValue?["profiles_json"]?.stringValue ?? "[]"
+    let selection = try historyRowsUnlocked("SELECT profiles_json FROM session_executor_profiles WHERE session_id=?", values: [id]).first?.objectValue?["profiles_json"]?.stringValue ?? "[]"
     return WorkspaceSessionTools(enabled: try JSONDecoder().decode(Set<WorkspaceToolGroup>.self, from: Data(json.utf8)), executorProfiles: try JSONDecoder().decode(Set<String>.self, from: Data(selection.utf8)))
   }
 
@@ -205,19 +206,19 @@ extension WorkspaceDatabaseConnection {
     confirmedPausingTimers: Bool) throws {
     try requireToolSessionUnlocked(sessionID)
     if !tools.enabled.contains(.timers) {
-      let active = try historyRowsUnlocked("SELECT id FROM workspace_session_timers WHERE session_id=? AND is_paused=0 LIMIT 1", values: [sessionID])
+      let active = try historyRowsUnlocked("SELECT id FROM session_timers WHERE session_id=? AND is_paused=0 LIMIT 1", values: [sessionID])
       guard active.isEmpty || confirmedPausingTimers else { throw WorkspaceToolError.timerPauseConfirmation }
-      try toolsExecuteUnlocked("UPDATE workspace_session_timers SET is_paused=1,pending_delivery_id=NULL WHERE session_id=?", [sessionID])
+      try toolsExecuteUnlocked("UPDATE session_timers SET is_paused=1,pending_delivery_id=NULL WHERE session_id=?", [sessionID])
     }
     if !tools.enabled.contains(.sessions) {
-      try toolsExecuteUnlocked("UPDATE workspace_session_relationships SET coordinator_id=NULL,coordination_epoch=NULL,coordination_since=NULL WHERE coordinator_id=?", [sessionID])
+      try toolsExecuteUnlocked("UPDATE session_relationships SET coordinator_id=NULL,coordination_epoch=NULL,coordination_since=NULL WHERE coordinator_id=?", [sessionID])
       // Approved access lasts for a management assignment; attachments are independent.
-      try toolsExecuteUnlocked("DELETE FROM workspace_session_grants WHERE source_id=? AND kind='approved'", [sessionID])
+      try toolsExecuteUnlocked("DELETE FROM session_grants WHERE source_id=? AND kind='approved'", [sessionID])
     }
     if let profiles = tools.executorProfiles {
-      try toolsExecuteUnlocked("UPDATE workspace_executor_sessions SET profiles_json=? WHERE session_id=?", [try toolsJSON(profiles), sessionID])
+      try toolsExecuteUnlocked("UPDATE session_executor_profiles SET profiles_json=? WHERE session_id=?", [try toolsJSON(profiles), sessionID])
     }
-    try toolsExecuteUnlocked("UPDATE workspace_session_tools SET enabled_json=?,defaults_applied=1 WHERE session_id=?", [try toolsJSON(tools.enabled), sessionID])
+    try toolsExecuteUnlocked("UPDATE session_tools SET enabled_json=?,defaults_applied=1 WHERE session_id=?", [try toolsJSON(tools.enabled), sessionID])
   }
 
   /// New-chat defaults are applied at most once, before any tools run. An
@@ -225,12 +226,12 @@ extension WorkspaceDatabaseConnection {
   public func applyInitialSessionTools(_ tools: WorkspaceSessionTools, sessionID: String) throws {
     try transaction {
       try requireToolSessionUnlocked(sessionID)
-      let row = try historyRowsUnlocked("SELECT defaults_applied FROM workspace_session_tools WHERE session_id=?", values: [sessionID]).first
+      let row = try historyRowsUnlocked("SELECT defaults_applied FROM session_tools WHERE session_id=?", values: [sessionID]).first
       guard row?.objectValue?["defaults_applied"]?.intValue == 0 else { return }
       if let profiles = tools.executorProfiles {
-        try toolsExecuteUnlocked("UPDATE workspace_executor_sessions SET profiles_json=? WHERE session_id=?", [try toolsJSON(profiles), sessionID])
+        try toolsExecuteUnlocked("UPDATE session_executor_profiles SET profiles_json=? WHERE session_id=?", [try toolsJSON(profiles), sessionID])
       }
-      try toolsExecuteUnlocked("UPDATE workspace_session_tools SET enabled_json=?,defaults_applied=1 WHERE session_id=?", [try toolsJSON(tools.enabled), sessionID])
+      try toolsExecuteUnlocked("UPDATE session_tools SET enabled_json=?,defaults_applied=1 WHERE session_id=?", [try toolsJSON(tools.enabled), sessionID])
     }
   }
 
@@ -267,7 +268,7 @@ extension WorkspaceDatabaseConnection {
   func grantSessionReadUnlocked(sourceID: String, targetID: String, kind: String) throws {
     try requireToolSessionUnlocked(sourceID)
     try requireToolSessionUnlocked(targetID)
-    try toolsExecuteUnlocked("INSERT OR IGNORE INTO workspace_session_grants(source_id,target_id,kind) VALUES(?,?,?)", [sourceID, targetID, kind])
+    try toolsExecuteUnlocked("INSERT OR IGNORE INTO session_grants(source_id,target_id,kind) VALUES(?,?,?)", [sourceID, targetID, kind])
   }
 
   func requireTranscriptAccessUnlocked(sourceID: String, targetID: String) throws {
@@ -281,13 +282,13 @@ extension WorkspaceDatabaseConnection {
   func canReadTranscriptUnlocked(sourceID: String, targetID: String, enabled: Set<WorkspaceToolGroup>) throws -> Bool {
     guard !(try historyRowsUnlocked("SELECT 1 FROM conversations WHERE id=? AND deleted_at IS NULL", values: [targetID])).isEmpty else { return false }
     if sourceID == targetID || enabled.contains(.history) { return true }
-    if !(try historyRowsUnlocked("SELECT 1 FROM workspace_session_grants WHERE source_id=? AND target_id=? AND kind='attachment'", values: [sourceID, targetID])).isEmpty { return true }
+    if !(try historyRowsUnlocked("SELECT 1 FROM session_grants WHERE source_id=? AND target_id=? AND kind='attachment'", values: [sourceID, targetID])).isEmpty { return true }
     return try enabled.contains(.sessions) && relationshipUnlocked(targetID).coordinatorID == sourceID
   }
 
   public func sessionRelationships() throws -> [WorkspaceSessionRelationship] {
     try withLock {
-      try historyRowsUnlocked("SELECT * FROM workspace_session_relationships", values: []).map(relationshipFromRow)
+      try historyRowsUnlocked("SELECT * FROM session_relationships", values: []).map(relationshipFromRow)
     }
   }
 
@@ -296,7 +297,7 @@ extension WorkspaceDatabaseConnection {
   }
 
   func relationshipUnlocked(_ id: String) throws -> WorkspaceSessionRelationship {
-    let rows = try historyRowsUnlocked("SELECT * FROM workspace_session_relationships WHERE session_id=?", values: [id])
+    let rows = try historyRowsUnlocked("SELECT * FROM session_relationships WHERE session_id=?", values: [id])
     return rows.first.map(relationshipFromRow) ?? WorkspaceSessionRelationship(sessionID: id)
   }
 
@@ -328,9 +329,9 @@ extension WorkspaceDatabaseConnection {
   func managedSessionCountUnlocked(_ sourceID: String, excluding targetID: String? = nil) throws -> Int {
     let rows = try historyRowsUnlocked("""
       SELECT count(*) AS n FROM (
-        SELECT r.session_id AS id FROM workspace_session_relationships r
+        SELECT r.session_id AS id FROM session_relationships r
           JOIN conversations c ON c.id=r.session_id WHERE r.coordinator_id=? AND c.deleted_at IS NULL
-        UNION SELECT target_id AS id FROM workspace_session_creations WHERE source_id=? AND managed=1 AND status='planned'
+        UNION SELECT target_id AS id FROM session_creations WHERE source_id=? AND managed=1 AND status='planned'
       ) WHERE id != coalesce(?,'')
       """, values: [sourceID, sourceID, targetID])
     return rows.first?.objectValue?["n"]?.intValue ?? 0
@@ -340,18 +341,18 @@ extension WorkspaceDatabaseConnection {
     let existing = try relationshipUnlocked(targetID).coordinatorID
     let epoch = UUID().uuidString.lowercased()
     try toolsExecuteUnlocked("""
-      INSERT INTO workspace_session_relationships(session_id,coordinator_id,purpose,notifications_enabled,coordination_epoch,coordination_since)
+      INSERT INTO session_relationships(session_id,coordinator_id,purpose,notifications_enabled,coordination_epoch,coordination_since)
       VALUES(?,?,?,?,?,?) ON CONFLICT(session_id) DO UPDATE SET
         coordinator_id=excluded.coordinator_id,purpose=excluded.purpose,notifications_enabled=excluded.notifications_enabled,
-        coordination_epoch=CASE WHEN workspace_session_relationships.coordinator_id=excluded.coordinator_id
-          THEN coalesce(workspace_session_relationships.coordination_epoch,excluded.coordination_epoch) ELSE excluded.coordination_epoch END,
-        coordination_since=CASE WHEN workspace_session_relationships.coordinator_id=excluded.coordinator_id
-          THEN coalesce(workspace_session_relationships.coordination_since,excluded.coordination_since) ELSE excluded.coordination_since END
+        coordination_epoch=CASE WHEN session_relationships.coordinator_id=excluded.coordinator_id
+          THEN coalesce(session_relationships.coordination_epoch,excluded.coordination_epoch) ELSE excluded.coordination_epoch END,
+        coordination_since=CASE WHEN session_relationships.coordinator_id=excluded.coordinator_id
+          THEN coalesce(session_relationships.coordination_since,excluded.coordination_since) ELSE excluded.coordination_since END
       """, [targetID, sourceID, purpose, notifications && sourceID != WovenMCPCaller.outside ? "1" : "0", epoch, Self.timestamp(Date())])
     if existing != sourceID {
       // A reassigned session must not deliver stale queued notifications from a
       // previous assignment, even if the same coordinator later acquires it.
-      try toolsExecuteUnlocked("UPDATE workspace_session_deliveries SET status='cancelled' WHERE source_id=? AND kind='notification' AND status='queued'", [targetID])
+      try toolsExecuteUnlocked("UPDATE session_deliveries SET status='cancelled' WHERE source_id=? AND kind='notification' AND status='queued'", [targetID])
     }
   }
 
@@ -364,7 +365,7 @@ extension WorkspaceDatabaseConnection {
       guard try relationshipUnlocked(targetID).coordinatorID == sourceID else {
         throw WorkspaceToolError.invalid("Only this session's coordinator may change its notifications.")
       }
-      try toolsExecuteUnlocked("UPDATE workspace_session_relationships SET notifications_enabled=? WHERE session_id=?", [enabled ? "1" : "0", targetID])
+      try toolsExecuteUnlocked("UPDATE session_relationships SET notifications_enabled=? WHERE session_id=?", [enabled ? "1" : "0", targetID])
     }
   }
 
@@ -388,7 +389,7 @@ extension WorkspaceDatabaseConnection {
                 relationship.coordinationEpoch == epoch else {
             throw WorkspaceToolError.revisionConflict("The coordination epoch is stale. Read sessions status and retry with its current epoch.")
           }
-          try toolsExecuteUnlocked("UPDATE workspace_session_relationships SET notifications_enabled=? WHERE session_id=?", [enabled ? "1" : "0", targetID])
+          try toolsExecuteUnlocked("UPDATE session_relationships SET notifications_enabled=? WHERE session_id=?", [enabled ? "1" : "0", targetID])
           return WorkspaceCoordinationMutationReceipt(sessionID: targetID,
             coordinationEpoch: epoch, action: "notifications", notificationsEnabled: enabled)
         }
@@ -413,8 +414,8 @@ extension WorkspaceDatabaseConnection {
                 relationship.coordinationEpoch == epoch else {
             throw WorkspaceToolError.revisionConflict("The coordination epoch is stale. Read sessions status and retry with its current epoch.")
           }
-          try toolsExecuteUnlocked("UPDATE workspace_session_relationships SET coordinator_id=NULL,coordination_epoch=NULL,coordination_since=NULL WHERE session_id=?", [targetID])
-          try toolsExecuteUnlocked("DELETE FROM workspace_session_grants WHERE target_id=? AND kind='approved'", [targetID])
+          try toolsExecuteUnlocked("UPDATE session_relationships SET coordinator_id=NULL,coordination_epoch=NULL,coordination_since=NULL WHERE session_id=?", [targetID])
+          try toolsExecuteUnlocked("DELETE FROM session_grants WHERE target_id=? AND kind='approved'", [targetID])
           return WorkspaceCoordinationMutationReceipt(sessionID: targetID,
             coordinationEpoch: epoch, action: "released")
         }
@@ -431,8 +432,8 @@ extension WorkspaceDatabaseConnection {
           throw WorkspaceToolError.coordinationConflict(existing)
         }
       }
-      try toolsExecuteUnlocked("UPDATE workspace_session_relationships SET coordinator_id=NULL,coordination_epoch=NULL,coordination_since=NULL WHERE session_id=?", [targetID])
-      try toolsExecuteUnlocked("DELETE FROM workspace_session_grants WHERE target_id=? AND kind='approved'", [targetID])
+      try toolsExecuteUnlocked("UPDATE session_relationships SET coordinator_id=NULL,coordination_epoch=NULL,coordination_since=NULL WHERE session_id=?", [targetID])
+      try toolsExecuteUnlocked("DELETE FROM session_grants WHERE target_id=? AND kind='approved'", [targetID])
     }
   }
 
@@ -444,28 +445,28 @@ extension WorkspaceDatabaseConnection {
       let id = try canonicalToolRequestID(request.requestID)
       try requireAutomationNotCancelled(callerID: callerID, requestID: id)
       let digest = SHA256.hash(data: try JSONEncoder().encode(request.operationArguments)).hexString
-      let rows = try historyRowsUnlocked("SELECT input_digest FROM workspace_automation_requests WHERE source_id=? AND request_id=?", values: [callerID, id])
+      let rows = try historyRowsUnlocked("SELECT input_digest FROM automation_requests WHERE source_id=? AND request_id=?", values: [callerID, id])
       if let prior = rows.first?.objectValue?["input_digest"]?.stringValue {
         guard prior == digest else { throw WorkspaceToolError.invalid("This request ID was already used for another automation call.") }
         return false
       }
       // Commit before crossing the UI boundary. A lost process or response can
       // never cause automatic repetition of a click, upload or typed text.
-      try toolsExecuteUnlocked("INSERT INTO workspace_automation_requests(source_id,request_id,input_digest) VALUES(?,?,?)", [callerID, id, digest])
+      try toolsExecuteUnlocked("INSERT INTO automation_requests(source_id,request_id,input_digest) VALUES(?,?,?)", [callerID, id, digest])
       return true
     }
   }
 
   func requireAutomationNotCancelled(callerID: String, requestID: String) throws {
     let id = try canonicalToolRequestID(requestID)
-    guard try historyRowsUnlocked("SELECT request_id FROM workspace_automation_cancellations WHERE source_id=? AND request_id=?", values: [callerID, id]).isEmpty else {
+    guard try historyRowsUnlocked("SELECT request_id FROM automation_cancellations WHERE source_id=? AND request_id=?", values: [callerID, id]).isEmpty else {
       throw WorkspaceToolError.invalid("This automation request was cancelled. Inspect fresh state before starting another action.")
     }
   }
 
   func cancelAutomationRequest(callerID: String, requestID: String) throws {
     let id = try canonicalToolRequestID(requestID)
-    try toolsExecuteUnlocked("INSERT OR IGNORE INTO workspace_automation_cancellations(source_id,request_id) VALUES(?,?)", [callerID, id])
+    try toolsExecuteUnlocked("INSERT OR IGNORE INTO automation_cancellations(source_id,request_id) VALUES(?,?)", [callerID, id])
   }
 
   func toolsJSON<T: Encodable>(_ value: T) throws -> String {
@@ -504,7 +505,7 @@ extension WorkspaceDatabaseConnection {
     encoder.outputFormatting = [.sortedKeys]
     let digest = SHA256.hash(data: try encoder.encode(input)).hexString
     let rows = try historyRowsUnlocked(
-      "SELECT operation,input_digest,result_json FROM workspace_tool_mutations WHERE source_id=? AND request_id=?",
+      "SELECT operation,input_digest,result_json FROM tool_mutations WHERE source_id=? AND request_id=?",
       values: [callerID, requestID])
     if let row = rows.first?.objectValue {
       guard row["operation"]?.stringValue == operation, row["input_digest"]?.stringValue == digest,
@@ -516,7 +517,7 @@ extension WorkspaceDatabaseConnection {
     let result = try mutation()
     let json = String(decoding: try encoder.encode(receipt(result)), as: UTF8.self)
     try toolsExecuteUnlocked(
-      "INSERT INTO workspace_tool_mutations(source_id,request_id,operation,input_digest,result_json) VALUES(?,?,?,?,?)",
+      "INSERT INTO tool_mutations(source_id,request_id,operation,input_digest,result_json) VALUES(?,?,?,?,?)",
       [callerID, requestID, operation, digest, json])
     return (result, false)
   }
@@ -541,7 +542,7 @@ extension WorkspaceDatabase {
   }
   public func cancelAutomationRequests(callerID: String) async throws {
     try await finishWrite {
-      try $0.toolsExecuteUnlocked("INSERT OR IGNORE INTO workspace_automation_cancellations(source_id,request_id) SELECT source_id,request_id FROM workspace_automation_requests WHERE source_id=?", [callerID])
+      try $0.toolsExecuteUnlocked("INSERT OR IGNORE INTO automation_cancellations(source_id,request_id) SELECT source_id,request_id FROM automation_requests WHERE source_id=?", [callerID])
     }
   }
   public func requireAutomationRequest(_ group: WorkspaceToolGroup, callerID: String, requestID: String) async throws {

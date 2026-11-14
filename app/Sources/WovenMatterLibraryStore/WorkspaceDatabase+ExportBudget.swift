@@ -38,12 +38,12 @@ extension WorkspaceDatabaseConnection {
     for table in ["messages", "runs"] {
       try consumeExportRows(table: table, predicate: "conversation_id = ?", values: [id], budget: &budget)
     }
-    for table in ["message_attachments", "message_references", "workspace_session_deliveries"] {
+    for table in ["message_attachments", "message_references", "session_deliveries"] {
       try consumeExportRows(table: table, predicate: "message_id IN (SELECT id FROM messages WHERE conversation_id = ?)",
         values: [id], budget: &budget)
     }
     if format == .fullRun {
-      for table in ["workspace_history_events", "run_activities"] {
+      for table in ["history_events", "run_activities"] {
         try consumeExportRows(table: table, predicate: "conversation_id = ? OR run_id IN (SELECT id FROM runs WHERE conversation_id = ?)",
           values: [id, id], budget: &budget)
       }

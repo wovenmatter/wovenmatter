@@ -378,7 +378,7 @@ extension LibraryHostLifecycleTests {
         _ = try await airDB.applyLibraryMutation(.init(deviceID: airID, kind: .createNote, resourceID: first, title: "Air offline", content: try NoteDocument(blocks: [.richText(.init(text: "Air writing"))]).encoded()))
         _ = try await thirdDB.applyLibraryMutation(.init(deviceID: thirdID, kind: .createNote, resourceID: second, title: "Third offline", content: try NoteDocument(blocks: [.richText(.init(text: "Third writing"))]).encoded()))
         let remote = RemoteWorkspaceConfiguration(name: "Added from third Mac", workspaceID: "new-remote", hostName: "linux.fixture.ts.net", kind: .host)
-        try await thirdDB.savePairedRemoteWorkspaces([remote])
+        try await thirdDB.saveRemoteWorkspaceConfigurations([remote])
         let phoneID = UUID().uuidString.lowercased()
         let authentication = try await third.host.peerAuthentication()
         let offer = try await authentication.createOffer(endpoint: third.host.peerRoute().endpoint)
@@ -387,7 +387,7 @@ extension LibraryHostLifecycleTests {
         await third.host.peerSync.synchronize(force: true)
         #expect(try await airDB.libraryNote(id: second)?.title == "Third offline")
         #expect(try await thirdDB.libraryNote(id: first)?.title == "Air offline")
-        #expect(try await airDB.read { try !$0.historyRowsUnlocked("SELECT 1 FROM paired_remote_workspaces WHERE id=?", values: [remote.id.uuidString.lowercased()]).isEmpty })
+        #expect(try await airDB.read { try !$0.historyRowsUnlocked("SELECT 1 FROM remote_workspace_configurations WHERE id=?", values: [remote.id.uuidString.lowercased()]).isEmpty })
         // The new phone is listed for display, but its bearer authenticates
         // only at the Mac it paired with.
         #expect(try await air.host.peerAuthentication().peerMembership().entries.contains { $0.deviceID == phoneID && $0.name == "New iPhone" })
@@ -577,7 +577,7 @@ extension LibraryHostLifecycleTests {
         let id = try await source.createFixtureLocalACPSession(runtimeKind: .codex, title: "Owner's conversation", ownerDeviceID: UUID())
         let run = try await source.beginLocalACPRun(conversationID: id, input: .init(text: "Saved native input"))
         try await source.completeLocalACPRun(runID: run.runID, error: nil)
-        let originalCount = try await source.read { try $0.historyRowsUnlocked("SELECT id FROM workspace_history_events WHERE conversation_id=?", values: [id]).count }
+        let originalCount = try await source.read { try $0.historyRowsUnlocked("SELECT id FROM history_events WHERE conversation_id=?", values: [id]).count }
         try await mesh.pair(air, with: mini)
         await air.host.peerSync.synchronize(force: true)
         #expect(air.host.peerSync.errors.isEmpty)
@@ -585,7 +585,7 @@ extension LibraryHostLifecycleTests {
         #expect(try await source.libraryExecutionOwner(conversationID: id) == nil)
         #expect(try await other.libraryFederatedTranscript(conversationID: id)?.messages.contains { $0.content == "Saved native input" } == true)
         #expect(try await other.read { try $0.historyRowsUnlocked("SELECT conversation_id FROM harness_sessions WHERE conversation_id=?", values: [id]).isEmpty })
-        #expect(try await other.read { try $0.historyRowsUnlocked("SELECT id FROM workspace_history_events WHERE conversation_id=?", values: [id]).count } == originalCount)
+        #expect(try await other.read { try $0.historyRowsUnlocked("SELECT id FROM history_events WHERE conversation_id=?", values: [id]).count } == originalCount)
         let sourceAgent = try #require(try await source.workspaceAgents().first)
         #expect(mini.model.peerAgentWorkspaces[sourceAgent.id] != nil)
         #expect(!mini.model.localCLIAgents.contains { $0.id == sourceAgent.id })
@@ -649,10 +649,10 @@ extension LibraryHostLifecycleTests {
         let peer = try await air.host.peerRoute()
         for _ in 0..<4 {
             await mini.host.peerSync.synchronize(force: true)
-            if try await database.pairedLibraryFileCursor(peer.deviceID) == "" { break }
+            if try await database.peerSyncFileCursor(peer.deviceID) == "" { break }
         }
         #expect(mini.host.peerSync.errors.isEmpty)
-        #expect(try await database.pairedLibraryFileCursor(peer.deviceID) == "")
+        #expect(try await database.peerSyncFileCursor(peer.deviceID) == "")
         for item in contents.suffix(10) {
             #expect(try Data(contentsOf: mini.directory.appending(path: "library-files/" + item.0)) == item.1)
         }

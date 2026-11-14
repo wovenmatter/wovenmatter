@@ -129,8 +129,8 @@ extension WorkspaceDatabaseConnection {
         let status = assistant && message["time"]["completed"].isNull && snapshot.active ? "streaming" : "completed"
         let insert = try prepareUnlocked("""
           INSERT INTO messages(id, conversation_id, client_message_id, run_id, role, content,
-            status, created_at, updated_at, owner_device_id)
-          SELECT ?, c.id, ?, ?, ?, ?, ?, ?, ?, c.owner_device_id
+            status, created_at, updated_at)
+          SELECT ?, c.id, ?, ?, ?, ?, ?, ?, ?
           FROM conversations c WHERE c.id = ?
           ON CONFLICT(id) DO UPDATE SET content=excluded.content, status=excluded.status, updated_at=excluded.updated_at
             WHERE messages.content IS NOT excluded.content OR messages.status IS NOT excluded.status
@@ -139,7 +139,7 @@ extension WorkspaceDatabaseConnection {
         try bind(id, at: 1, to: insert); try bind(nativeID, at: 2, to: insert)
         try bindNullable(runID, at: 3, to: insert)
         try bind(assistant ? "assistant" : message["type"].text == "user" ? "user" : "system", at: 4, to: insert)
-        let inputContext = try historyRowsUnlocked("SELECT visible_text,delivery_id FROM workspace_opencode_input_context WHERE id=? AND conversation_id=?", values: [nativeID, conversationID]).first?.objectValue
+        let inputContext = try historyRowsUnlocked("SELECT visible_text,delivery_id FROM opencode_input_contexts WHERE id=? AND conversation_id=?", values: [nativeID, conversationID]).first?.objectValue
         let visibleText = inputContext?["visible_text"]?.stringValue ?? OpenCodeSessionSnapshot.text(message)
         try bind(visibleText, at: 5, to: insert)
         try bind(status, at: 6, to: insert); try bind(created, at: 7, to: insert); try bind(now, at: 8, to: insert)
@@ -155,15 +155,15 @@ extension WorkspaceDatabaseConnection {
           }
         }
         if let deliveryID = inputContext?["delivery_id"]?.stringValue {
-          try toolsExecuteUnlocked("UPDATE workspace_session_deliveries SET message_id=?,status='accepted' WHERE id=? AND target_id=? AND (message_id IS NULL OR message_id=?)", [id, deliveryID, conversationID, id])
+          try toolsExecuteUnlocked("UPDATE session_deliveries SET message_id=?,status='accepted' WHERE id=? AND target_id=? AND (message_id IS NULL OR message_id=?)", [id, deliveryID, conversationID, id])
         }
         if let runID {
           let runStatus = status == "streaming" ? "running" : message["error"].isNull ? "completed" : "failed"
           let run = try prepareUnlocked("""
             INSERT INTO runs(id, conversation_id, agent_id, agent_codename,
-              owner_device_id, assistant_message_id, status, started_at,
+              assistant_message_id, status, started_at,
               completed_at, created_at, updated_at)
-            SELECT ?, c.id, c.agent_id, c.agent_codename, c.owner_device_id,
+            SELECT ?, c.id, c.agent_id, c.agent_codename,
               ?, ?, ?, ?, ?, ? FROM conversations c WHERE c.id = ?
             ON CONFLICT(id) DO UPDATE SET completed_at=excluded.completed_at, updated_at=excluded.updated_at
               WHERE runs.completed_at IS NOT excluded.completed_at
@@ -252,7 +252,7 @@ extension WorkspaceDatabaseConnection {
   /// takes precedence over the transport text Woven sent for it.
   private func openCodePreviewUnlocked(_ snapshot: OpenCodeSessionSnapshot, conversationID: String) throws -> String? {
     for message in snapshot.messages.reversed() {
-      let original = try historyRowsUnlocked("SELECT visible_text FROM workspace_opencode_input_context WHERE id=? AND conversation_id=?",
+      let original = try historyRowsUnlocked("SELECT visible_text FROM opencode_input_contexts WHERE id=? AND conversation_id=?",
         values: [message["id"].text, conversationID]).first?.objectValue?["visible_text"]?.stringValue
       let text = original ?? OpenCodeSessionSnapshot.text(message)
       if !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return text }
@@ -284,16 +284,16 @@ extension WorkspaceDatabaseConnection {
       }
       if let visibleText {
         if let deliveryID {
-          guard !(try historyRowsUnlocked("SELECT 1 FROM workspace_session_deliveries WHERE id=? AND target_id=? AND status='sending'", values: [deliveryID, conversationID])).isEmpty else {
+          guard !(try historyRowsUnlocked("SELECT 1 FROM session_deliveries WHERE id=? AND target_id=? AND status='sending'", values: [deliveryID, conversationID])).isEmpty else {
             throw WorkspaceToolError.invalid("This delivery is not reserved for this session.")
           }
         }
-        try toolsExecuteUnlocked("INSERT OR IGNORE INTO workspace_opencode_input_context(id,conversation_id,visible_text,delivery_id) VALUES(?,?,?,?)", [id, conversationID, visibleText, deliveryID])
+        try toolsExecuteUnlocked("INSERT OR IGNORE INTO opencode_input_contexts(id,conversation_id,visible_text,delivery_id) VALUES(?,?,?,?)", [id, conversationID, visibleText, deliveryID])
       }
       if status == "accepted" {
         try toolsExecuteUnlocked("""
-          UPDATE workspace_session_deliveries SET status='accepted'
-          WHERE id=(SELECT delivery_id FROM workspace_opencode_input_context WHERE id=? AND conversation_id=?)
+          UPDATE session_deliveries SET status='accepted'
+          WHERE id=(SELECT delivery_id FROM opencode_input_contexts WHERE id=? AND conversation_id=?)
           """, [id, conversationID])
       }
     }
@@ -314,7 +314,7 @@ extension WorkspaceDatabaseConnection {
   public func openCodeDisplaySnapshot(_ snapshot: OpenCodeSessionSnapshot, conversationID: String) throws -> OpenCodeSessionSnapshot {
     try withLock {
       var result = snapshot
-      let rows = try historyRowsUnlocked("SELECT id,visible_text FROM workspace_opencode_input_context WHERE conversation_id=?", values: [conversationID])
+      let rows = try historyRowsUnlocked("SELECT id,visible_text FROM opencode_input_contexts WHERE conversation_id=?", values: [conversationID])
       let textByID = Dictionary(uniqueKeysWithValues: rows.compactMap { value -> (String, String)? in
         guard let row = value.objectValue, let id = row["id"]?.stringValue, let text = row["visible_text"]?.stringValue else { return nil }
         return (id, text)

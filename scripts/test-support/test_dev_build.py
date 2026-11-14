@@ -172,29 +172,29 @@ class DevelopmentBuildTests(unittest.TestCase):
             root = Path(tmp); source = root / "source"; source.mkdir()
             with sqlite3.connect(source / "workspace.sqlite") as db:
                 db.executescript("""
-                  CREATE TABLE workspace_mcp_bot_machines(machine_id TEXT,active INTEGER);
-                  INSERT INTO workspace_mcp_bot_machines VALUES('fixture',1);
-                  CREATE TABLE workspace_session_relationships(session_id TEXT,coordinator_id TEXT,coordination_epoch TEXT,coordination_since TEXT);
-                  INSERT INTO workspace_session_relationships VALUES('session','woven:bot:fixture:bot','epoch','since');
-                  CREATE TABLE workspace_session_grants(source_id TEXT,kind TEXT);
-                  INSERT INTO workspace_session_grants VALUES('woven:bot:fixture:bot','approved');
-                  CREATE TABLE workspace_session_deliveries(id TEXT,status TEXT);
-                  INSERT INTO workspace_session_deliveries VALUES('event','queued');
-                  CREATE TABLE workspace_coordination_access_requests(source_id TEXT,state TEXT);
-                  INSERT INTO workspace_coordination_access_requests VALUES('woven:bot:fixture:bot','pending');
+                  CREATE TABLE mcp_bot_machines(machine_id TEXT,active INTEGER);
+                  INSERT INTO mcp_bot_machines VALUES('fixture',1);
+                  CREATE TABLE session_relationships(session_id TEXT,coordinator_id TEXT,coordination_epoch TEXT,coordination_since TEXT);
+                  INSERT INTO session_relationships VALUES('session','woven:bot:fixture:bot','epoch','since');
+                  CREATE TABLE session_grants(source_id TEXT,kind TEXT);
+                  INSERT INTO session_grants VALUES('woven:bot:fixture:bot','approved');
+                  CREATE TABLE session_deliveries(id TEXT,status TEXT);
+                  INSERT INTO session_deliveries VALUES('event','queued');
+                  CREATE TABLE coordination_access_requests(source_id TEXT,state TEXT);
+                  INSERT INTO coordination_access_requests VALUES('woven:bot:fixture:bot','pending');
                 """)
             (source / "mcp-access.json").write_text(json.dumps({"port": 12345, "botKeys": {"woven:bot:fixture:bot": "fixture-digest"}}))
             target = root / "snapshot"
             dev.snapshot(source, target)
             self.assertFalse((target / "mcp-access.json").exists())
             with sqlite3.connect(target / "workspace.sqlite") as db:
-                self.assertEqual(db.execute("SELECT active FROM workspace_mcp_bot_machines").fetchone(), (0,))
-                self.assertEqual(db.execute("SELECT coordinator_id,coordination_epoch,coordination_since FROM workspace_session_relationships").fetchone(), (None, None, None))
-                self.assertEqual(db.execute("SELECT count(*) FROM workspace_session_grants").fetchone(), (0,))
-                self.assertEqual(db.execute("SELECT status FROM workspace_session_deliveries").fetchone(), ('cancelled',))
-                self.assertEqual(db.execute("SELECT state FROM workspace_coordination_access_requests").fetchone(), ('cancelled',))
+                self.assertEqual(db.execute("SELECT active FROM mcp_bot_machines").fetchone(), (0,))
+                self.assertEqual(db.execute("SELECT coordinator_id,coordination_epoch,coordination_since FROM session_relationships").fetchone(), (None, None, None))
+                self.assertEqual(db.execute("SELECT count(*) FROM session_grants").fetchone(), (0,))
+                self.assertEqual(db.execute("SELECT status FROM session_deliveries").fetchone(), ('cancelled',))
+                self.assertEqual(db.execute("SELECT state FROM coordination_access_requests").fetchone(), ('cancelled',))
             with sqlite3.connect(source / "workspace.sqlite") as db:
-                self.assertEqual(db.execute("SELECT active FROM workspace_mcp_bot_machines").fetchone(), (1,))
+                self.assertEqual(db.execute("SELECT active FROM mcp_bot_machines").fetchone(), (1,))
 
     def test_snapshot_reads_either_device_id_file_and_writes_its_own(self):
         source_id = "c0ffee00-1234-4abc-8def-0123456789ab"
@@ -244,6 +244,9 @@ class DevelopmentBuildTests(unittest.TestCase):
               INSERT INTO paired_calendar_owners VALUES('schedule','other-mac');
               CREATE TABLE paired_library_state(name TEXT, value TEXT);
               INSERT INTO paired_library_state VALUES('owners.bootstrap','1'),('baseline.other-mac','4');
+              -- A current library's peer sync bookkeeping.
+              CREATE TABLE peer_sync_versions(cursor INTEGER PRIMARY KEY, payload TEXT);
+              INSERT INTO peer_sync_versions VALUES(1,'production-private-sync');
               CREATE TABLE library_identity(singleton INTEGER, host_device_id TEXT, library_id TEXT);
               INSERT INTO library_identity VALUES(1,'source','production-identity');
               CREATE TABLE execution_workspaces(id TEXT,payload BLOB);
@@ -260,12 +263,13 @@ class DevelopmentBuildTests(unittest.TestCase):
               INSERT INTO workspace_session_timers VALUES('timer',0,'pending');
             """)
             asset = source / "library-files"; asset.mkdir(); (asset / "blob").write_bytes(b"saved output")
+            chunks = source / "library-chunks"; chunks.mkdir(); (chunks / "part").write_bytes(b"SQLite format 3\x00 first chunk")
             target = root / "dev"; dev.snapshot(source, target)
             with sqlite3.connect(target / "workspace.sqlite") as copy:
-                for table in ("paired_mac_routes", "paired_library_clock", "paired_library_changes"):
+                for table in ("mac_routes", "paired_library_clock", "paired_library_changes", "peer_sync_versions"):
                     self.assertEqual(copy.execute("SELECT count(*) FROM " + table).fetchone()[0], 0)
                 # Ownership survives, so the snapshot never adopts another Mac's schedule.
-                self.assertEqual(copy.execute("SELECT device_id FROM paired_calendar_owners").fetchall(), [("other-mac",)])
+                self.assertEqual(copy.execute("SELECT device_id FROM calendar_item_owners").fetchall(), [("other-mac",)])
                 self.assertEqual(copy.execute("SELECT name FROM paired_library_state").fetchall(), [])
                 workspace = json.loads(copy.execute("SELECT payload FROM execution_workspaces").fetchone()[0])
                 self.assertTrue(workspace["retainedHistory"])
@@ -286,14 +290,15 @@ class DevelopmentBuildTests(unittest.TestCase):
                 self.assertEqual(copy.execute("SELECT COUNT(*) FROM calendar_task_executors").fetchone()[0], 1)
                 self.assertIn("retain me", copy.execute("SELECT calendar_json FROM calendar_items").fetchone()[0])
                 self.assertEqual(copy.execute("SELECT status FROM runs").fetchone()[0], "interrupted")
-                self.assertEqual(json.loads(copy.execute("SELECT value FROM workspace_session_goals").fetchone()[0])["status"], "paused")
-                self.assertEqual(copy.execute("SELECT is_paused,pending_delivery_id FROM workspace_session_timers").fetchone(), (1, None))
+                self.assertEqual(json.loads(copy.execute("SELECT value FROM session_goals").fetchone()[0])["status"], "paused")
+                self.assertEqual(copy.execute("SELECT is_paused,pending_delivery_id FROM session_timers").fetchone(), (1, None))
                 copy.execute("UPDATE notes SET content='private'"); copy.commit()
             self.assertEqual(writer.execute("SELECT content FROM notes").fetchone()[0], "shared content")
             self.assertEqual(writer.execute("SELECT deleted_at,status FROM dashboard_agents WHERE id='local-pi'").fetchone(), (None, "ready"))
             self.assertEqual(writer.execute("SELECT status FROM dashboard_runs").fetchone()[0], "running")
             self.assertEqual(writer.execute("SELECT is_paused,pending_delivery_id FROM workspace_session_timers").fetchone(), (0, "pending"))
             self.assertEqual((target / "library-files/blob").read_bytes(), b"saved output")
+            self.assertEqual((target / "library-chunks/part").read_bytes(), b"SQLite format 3\x00 first chunk")
             with self.assertRaises(ValueError): dev.snapshot(source, target)
 
     def test_snapshot_keeps_outside_tool_choices_without_inheriting_network_exposure(self):
@@ -301,16 +306,16 @@ class DevelopmentBuildTests(unittest.TestCase):
             root = Path(tmp); source = root / "production"; source.mkdir()
             settings = {"enabledByDefault": ["notes"], "externalMCP": {"isEnabled": True, "groups": ["notes", "calendar"]}}
             with sqlite3.connect(source / "workspace.sqlite") as db:
-                db.execute("CREATE TABLE workspace_tool_settings(id INTEGER PRIMARY KEY,value TEXT)")
-                db.execute("INSERT INTO workspace_tool_settings VALUES(1,?)", (json.dumps(settings),))
+                db.execute("CREATE TABLE tool_settings(id INTEGER PRIMARY KEY,value TEXT)")
+                db.execute("INSERT INTO tool_settings VALUES(1,?)", (json.dumps(settings),))
             target = root / "snapshot"
             dev.snapshot(source, target)
             with sqlite3.connect(target / "workspace.sqlite") as db:
-                copied = json.loads(db.execute("SELECT value FROM workspace_tool_settings").fetchone()[0])
+                copied = json.loads(db.execute("SELECT value FROM tool_settings").fetchone()[0])
             self.assertFalse(copied["externalMCP"]["isEnabled"])
             self.assertEqual(copied["externalMCP"]["groups"], ["notes", "calendar"])
             with sqlite3.connect(source / "workspace.sqlite") as db:
-                self.assertEqual(json.loads(db.execute("SELECT value FROM workspace_tool_settings").fetchone()[0]), settings)
+                self.assertEqual(json.loads(db.execute("SELECT value FROM tool_settings").fetchone()[0]), settings)
 
     def test_snapshot_refuses_source_alias_and_symlinked_assets(self):
         with tempfile.TemporaryDirectory() as tmp:

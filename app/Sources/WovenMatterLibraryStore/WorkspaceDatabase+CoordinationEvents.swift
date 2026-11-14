@@ -12,12 +12,12 @@ extension WorkspaceDatabaseConnection {
         SELECT r.id,r.conversation_id,r.status,r.error,r.user_message_id,r.started_at,
           coalesce(r.completed_at,r.updated_at,r.created_at) AS ended_at,
           m.coordination_epoch,m.coordinator_id FROM runs r
-        JOIN workspace_session_relationships m ON m.session_id=r.conversation_id
+        JOIN session_relationships m ON m.session_id=r.conversation_id
         JOIN conversations c ON c.id=r.conversation_id AND c.deleted_at IS NULL
         WHERE m.coordinator_id IS NOT NULL AND m.coordination_epoch IS NOT NULL
           AND r.status IN ('completed','failed','cancelled','canceled')
           AND coalesce(r.completed_at,r.updated_at,r.created_at,'') >= m.coordination_since
-          AND NOT EXISTS (SELECT 1 FROM workspace_coordination_observations o
+          AND NOT EXISTS (SELECT 1 FROM coordination_observations o
             WHERE o.epoch=m.coordination_epoch AND o.event_key='run:' || r.id)
         ORDER BY coalesce(r.completed_at,r.updated_at,r.created_at),r.id LIMIT ?
         """, values: [String(min(max(limit, 1), 200))])
@@ -29,12 +29,12 @@ extension WorkspaceDatabaseConnection {
         // Include all steering inputs assigned to the run. A real user or agent
         // instruction mixed into a notification-triggered turn makes it work.
         var inputs = try historyRowsUnlocked("""
-          SELECT d.kind FROM messages u LEFT JOIN workspace_session_deliveries d ON d.message_id=u.id
+          SELECT d.kind FROM messages u LEFT JOIN session_deliveries d ON d.message_id=u.id
           WHERE u.conversation_id=? AND u.role='user' AND (u.run_id=? OR u.id=?)
           """, values: [session, id, row["user_message_id"]?.stringValue])
         if inputs.isEmpty {
           inputs = try historyRowsUnlocked("""
-            SELECT d.kind FROM messages u LEFT JOIN workspace_session_deliveries d ON d.message_id=u.id
+            SELECT d.kind FROM messages u LEFT JOIN session_deliveries d ON d.message_id=u.id
             WHERE u.id=(SELECT id FROM messages WHERE conversation_id=? AND role='user'
               AND created_at<=coalesce(?,created_at) ORDER BY created_at DESC,rowid DESC LIMIT 1)
             """, values: [session, row["started_at"]?.stringValue])
@@ -43,7 +43,7 @@ extension WorkspaceDatabaseConnection {
         // A queued reply can still arrive after the worker's turn ends. Wait
         // for its receipt before deciding whether a fallback is needed.
         let replies = try historyRowsUnlocked("""
-          SELECT status FROM workspace_session_deliveries
+          SELECT status FROM session_deliveries
           WHERE source_id=? AND target_id=? AND kind='message'
             AND julianday(created_at)>=julianday(?) AND julianday(created_at)<=julianday(?)
           """, values: [session, row["coordinator_id"]?.stringValue,
@@ -68,7 +68,7 @@ extension WorkspaceDatabaseConnection {
       let native = try historyRowsUnlocked("""
         SELECT r.id,r.conversation_id,p.records_json FROM run_program_statuses p
         JOIN runs r ON r.id=p.run_id AND r.status='running'
-        JOIN workspace_session_relationships m ON m.session_id=r.conversation_id AND m.coordinator_id IS NOT NULL
+        JOIN session_relationships m ON m.session_id=r.conversation_id AND m.coordinator_id IS NOT NULL
         WHERE p.source='native' AND EXISTS (
           SELECT 1 FROM json_each(p.records_json,'$.records') WHERE json_extract(value,'$.state')='blocked')
         ORDER BY p.updated_at LIMIT ?
@@ -106,12 +106,12 @@ extension WorkspaceDatabaseConnection {
   private func recordCoordinationObservationUnlocked(sessionID: String, eventID: String, detail: String, suppress: Bool) throws -> WorkspaceSessionDelivery? {
     let relationship = try relationshipUnlocked(sessionID)
     guard let target = relationship.coordinatorID,
-          let epoch = try historyRowsUnlocked("SELECT coordination_epoch FROM workspace_session_relationships WHERE session_id=?", values: [sessionID]).first?.objectValue?["coordination_epoch"]?.stringValue else { return nil }
+          let epoch = try historyRowsUnlocked("SELECT coordination_epoch FROM session_relationships WHERE session_id=?", values: [sessionID]).first?.objectValue?["coordination_epoch"]?.stringValue else { return nil }
     // Another Mac hosts this bot and observes the same synchronized runs for it.
     if let bot = WovenMCPCaller.parseBot(target),
-       try historyRowsUnlocked("SELECT 1 FROM workspace_mcp_bot_machines WHERE machine_id=?", values: [bot.machineID]).isEmpty { return nil }
-    guard try historyRowsUnlocked("SELECT 1 FROM workspace_coordination_observations WHERE epoch=? AND event_key=?", values: [epoch, eventID]).isEmpty else { return nil }
-    try toolsExecuteUnlocked("INSERT INTO workspace_coordination_observations(epoch,event_key) VALUES(?,?)", [epoch, eventID])
+       try historyRowsUnlocked("SELECT 1 FROM mcp_bot_machines WHERE machine_id=?", values: [bot.machineID]).isEmpty { return nil }
+    guard try historyRowsUnlocked("SELECT 1 FROM coordination_observations WHERE epoch=? AND event_key=?", values: [epoch, eventID]).isEmpty else { return nil }
+    try toolsExecuteUnlocked("INSERT INTO coordination_observations(epoch,event_key) VALUES(?,?)", [epoch, eventID])
     guard !suppress, relationship.notificationsEnabled,
           try sessionToolsUnlocked(target).enabled.contains(.sessions) else { return nil }
     let title = try historyRowsUnlocked("SELECT title FROM conversations WHERE id=? AND deleted_at IS NULL", values: [sessionID]).first?.objectValue?["title"]?.stringValue ?? "Session"
@@ -128,12 +128,12 @@ extension WorkspaceDatabaseConnection {
   private func retireUnavailableCoordinationUnlocked(sessionID: String? = nil) throws {
     let predicate = """
       coordinator_id IS NOT NULL AND (? IS NULL OR session_id=?) AND (
-        NOT EXISTS (SELECT 1 FROM conversations c WHERE c.id=workspace_session_relationships.session_id AND c.deleted_at IS NULL)
-        OR (coordinator_id != 'woven:tailnet' AND coordinator_id NOT LIKE 'woven:bot:%' AND NOT EXISTS (SELECT 1 FROM conversations c WHERE c.id=workspace_session_relationships.coordinator_id AND c.deleted_at IS NULL))
-        OR (coordinator_id LIKE 'woven:bot:%' AND EXISTS (SELECT 1 FROM workspace_mcp_callers b JOIN workspace_mcp_bot_machines i ON i.machine_id=b.machine_id WHERE b.id=workspace_session_relationships.coordinator_id AND (i.active=0 OR b.revoked=1))))
+        NOT EXISTS (SELECT 1 FROM conversations c WHERE c.id=session_relationships.session_id AND c.deleted_at IS NULL)
+        OR (coordinator_id != 'woven:tailnet' AND coordinator_id NOT LIKE 'woven:bot:%' AND NOT EXISTS (SELECT 1 FROM conversations c WHERE c.id=session_relationships.coordinator_id AND c.deleted_at IS NULL))
+        OR (coordinator_id LIKE 'woven:bot:%' AND EXISTS (SELECT 1 FROM mcp_callers b JOIN mcp_bot_machines i ON i.machine_id=b.machine_id WHERE b.id=session_relationships.coordinator_id AND (i.active=0 OR b.revoked=1))))
       """
-    try toolsExecuteUnlocked("DELETE FROM workspace_session_grants WHERE kind='approved' AND target_id IN (SELECT session_id FROM workspace_session_relationships WHERE " + predicate + ")", [sessionID, sessionID])
-    try toolsExecuteUnlocked("UPDATE workspace_session_relationships SET coordinator_id=NULL,coordination_epoch=NULL,coordination_since=NULL WHERE " + predicate, [sessionID, sessionID])
+    try toolsExecuteUnlocked("DELETE FROM session_grants WHERE kind='approved' AND target_id IN (SELECT session_id FROM session_relationships WHERE " + predicate + ")", [sessionID, sessionID])
+    try toolsExecuteUnlocked("UPDATE session_relationships SET coordinator_id=NULL,coordination_epoch=NULL,coordination_since=NULL WHERE " + predicate, [sessionID, sessionID])
   }
 }
 

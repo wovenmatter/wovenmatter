@@ -121,7 +121,9 @@ def backup(source, destination):
                 raise ValueError("Snapshot integrity check failed.")
 
 
-def copy_assets(source, target):
+def copy_assets(source, target, content_addressed=False):
+    # A content-addressed file is named by its bytes, so it is copied as is
+    # even when it happens to begin with a SQLite header.
     if not source.exists():
         return
     if source.is_symlink():
@@ -131,11 +133,11 @@ def copy_assets(source, target):
         for child in source.iterdir():
             if child.name.endswith(("-wal", "-shm")):
                 continue
-            copy_assets(child, target / child.name)
+            copy_assets(child, target / child.name, content_addressed)
     elif source.is_file():
         with source.open("rb") as stream:
             is_sqlite = stream.read(16) == b"SQLite format 3\x00"
-        if is_sqlite:
+        if is_sqlite and not content_addressed:
             backup(source, target)
         else:
             shutil.copy2(source, target)
@@ -143,7 +145,8 @@ def copy_assets(source, target):
         raise ValueError(f"Unsupported snapshot asset: {source}")
 
 
-# A v0.4.2 library used these names. The app renames them in place on open
+# A library from before the versioned schema (v0.4.2 and the builds after
+# it) used these names. The app renames them in place on open
 # (app/Sources/WovenMatterLibraryStore/LibrarySchemaUpgrade.swift) and
 # converts the columns; a snapshot of such a library is renamed the same way
 # first, so its isolation below sees current table names.
@@ -158,6 +161,26 @@ LEGACY_TABLES = {
     "desktop_remote_note_edits": "remote_note_edits", "desktop_dashboard_revision": "workspace_revision",
     "desktop_activity_index": "activity_summaries", "desktop_activity_revision": "activity_revision",
     "desktop_message_revisions": "message_revisions",
+    "paired_agent_owners": "agent_owners", "paired_conversation_owners": "conversation_owners",
+    "paired_calendar_owners": "calendar_item_owners", "paired_mac_routes": "mac_routes",
+    "paired_remote_workspaces": "remote_workspace_configurations", "device_message_provenance": "message_provenance",
+    "device_saved_artifacts": "saved_artifacts", "device_artifact_uploads": "artifact_uploads",
+    "device_artifact_chunks": "artifact_chunks", "workspace_automation_cancellations": "automation_cancellations",
+    "workspace_automation_requests": "automation_requests",
+    "workspace_calendar_remote_ownership": "calendar_remote_ownership",
+    "workspace_calendar_remote_receipts": "calendar_remote_receipts", "workspace_calendar_runs": "calendar_runs",
+    "workspace_calendar_sessions": "calendar_task_sessions",
+    "workspace_coordination_access_requests": "coordination_access_requests",
+    "workspace_coordination_observations": "coordination_observations",
+    "workspace_executor_sessions": "session_executor_profiles", "workspace_goal_runs": "goal_runs",
+    "workspace_goal_usage": "goal_usage", "workspace_history_events": "history_events",
+    "workspace_history_search": "history_search", "workspace_input_contexts": "input_contexts",
+    "workspace_mcp_bot_machines": "mcp_bot_machines", "workspace_mcp_callers": "mcp_callers",
+    "workspace_opencode_input_context": "opencode_input_contexts", "workspace_session_creations": "session_creations",
+    "workspace_session_deliveries": "session_deliveries", "workspace_session_goals": "session_goals",
+    "workspace_session_grants": "session_grants", "workspace_session_relationships": "session_relationships",
+    "workspace_session_timers": "session_timers", "workspace_session_tools": "session_tools",
+    "workspace_tool_mutations": "tool_mutations", "workspace_tool_settings": "tool_settings",
 }
 
 
@@ -205,14 +228,16 @@ def disconnect_snapshot(file, *, device_id, source_device_id, execution_root, pu
         source_state = {"library_identity", "device_mutation_receipts", "device_command_receipts",
                         "device_draft_receipts", "device_tool_receipts", "device_scheduled_mcp_callers",
                         "execution_journal", "execution_adoptions", "execution_receipts",
-                        "execution_retained_settlements", "device_artifact_uploads", "calendar_task_executors",
+                        "execution_retained_settlements", "artifact_uploads", "calendar_task_executors",
                         "calendar_run_publishers", "calendar_published_runs", "device_calendar_receipts"}
-        # Execution ownership is durable metadata, not sync state. Keep it so a
-        # snapshot's new identity owns nothing it copied and never runs another
-        # Mac's (or the source's) schedules; drop routes, cursors and journals.
-        retained_paired = {"paired_conversation_owners", "paired_agent_owners", "paired_calendar_owners"}
+        # Execution ownership (agent_owners, conversation_owners,
+        # calendar_item_owners) is durable metadata, not sync state. Keep it so
+        # a snapshot's new identity owns nothing it copied and never runs
+        # another Mac's (or the source's) schedules; drop the peer sync
+        # bookkeeping, the Mac routes and the remote workspace configurations.
+        peer_routes = {"mac_routes", "remote_workspace_configurations"}
         for name in tables:
-            if name in transient or (name.startswith("paired_") and name not in retained_paired) or name in source_state:
+            if name in transient or name.startswith(("paired_library_", "peer_sync_")) or name in peer_routes or name in source_state:
                 db.execute("DELETE FROM " + quote(name))
         # A new device identity seeds its own local harness catalog at startup.
         # Keep copied agent rows for history references, but retire them from the
@@ -240,30 +265,33 @@ def disconnect_snapshot(file, *, device_id, source_device_id, execution_root, pu
                 else:
                     value.pop("activeRunID", None)
                 db.execute("UPDATE " + table + " SET " + column + "=? WHERE id=?",
-                           (json.dumps(value).encode(), identifier))
+                           (json.dumps(value), identifier))
+        if "execution_conversations" in tables and "active_run_id" in {
+                row[1] for row in db.execute("PRAGMA table_info(execution_conversations)")}:
+            db.execute("UPDATE execution_conversations SET active_run_id=NULL")
         if "runs" in tables:
             db.execute("UPDATE runs SET status='interrupted' WHERE status IN ('running','queued','pending','accepted','cancelling','uncertain')")
-        for name in ("workspace_session_deliveries", "workspace_calendar_runs"):
+        for name in ("session_deliveries", "calendar_runs"):
             if name in tables:
                 db.execute("UPDATE " + quote(name) + " SET status='cancelled' WHERE status IN ('queued','pending','sending','running','accepted')")
-        if "workspace_mcp_bot_machines" in tables:
-            db.execute("UPDATE workspace_mcp_bot_machines SET active=0")
-        if "workspace_session_relationships" in tables:
-            db.execute("UPDATE workspace_session_relationships SET coordinator_id=NULL,coordination_epoch=NULL,coordination_since=NULL WHERE coordinator_id LIKE 'woven:bot:%'")
-        if "workspace_session_grants" in tables:
-            db.execute("DELETE FROM workspace_session_grants WHERE source_id LIKE 'woven:bot:%'")
-        if "workspace_coordination_access_requests" in tables:
-            db.execute("UPDATE workspace_coordination_access_requests SET state='cancelled' WHERE source_id LIKE 'woven:bot:%' AND state='pending'")
+        if "mcp_bot_machines" in tables:
+            db.execute("UPDATE mcp_bot_machines SET active=0")
+        if "session_relationships" in tables:
+            db.execute("UPDATE session_relationships SET coordinator_id=NULL,coordination_epoch=NULL,coordination_since=NULL WHERE coordinator_id LIKE 'woven:bot:%'")
+        if "session_grants" in tables:
+            db.execute("DELETE FROM session_grants WHERE source_id LIKE 'woven:bot:%'")
+        if "coordination_access_requests" in tables:
+            db.execute("UPDATE coordination_access_requests SET state='cancelled' WHERE source_id LIKE 'woven:bot:%' AND state='pending'")
         # Network exposure belongs to the source instance, not a new snapshot.
         # Keep tool selections, but require an explicit enable in this instance.
-        if "workspace_tool_settings" in tables:
-            for identifier, raw in db.execute("SELECT id,value FROM workspace_tool_settings").fetchall():
+        if "tool_settings" in tables:
+            for identifier, raw in db.execute("SELECT id,value FROM tool_settings").fetchall():
                 value = json.loads(raw)
                 if value.get("externalMCP"):
                     value["externalMCP"]["isEnabled"] = False
-                    db.execute("UPDATE workspace_tool_settings SET value=? WHERE id=?", (json.dumps(value), identifier))
-        if "workspace_session_timers" in tables:
-            db.execute("UPDATE workspace_session_timers SET is_paused=1,pending_delivery_id=NULL")
+                    db.execute("UPDATE tool_settings SET value=? WHERE id=?", (json.dumps(value), identifier))
+        if "session_timers" in tables:
+            db.execute("UPDATE session_timers SET is_paused=1,pending_delivery_id=NULL")
         # Retain task definitions with an unreachable owner. New schedules use
         # this instance; copied occurrences cannot be admitted by its scheduler.
         if "calendar_items" in tables:
@@ -271,16 +299,16 @@ def disconnect_snapshot(file, *, device_id, source_device_id, execution_root, pu
             db.execute("INSERT OR REPLACE INTO calendar_task_executors(event_id,device_id) SELECT id,? FROM calendar_items", (str(uuid.uuid4()),))
         # Retain goal history without scheduling a continuation from the copy.
         for name in tables:
-            if name.startswith("workspace_goal"):
+            if name.startswith("goal_"):
                 columns = {r[1] for r in db.execute("PRAGMA table_info(" + quote(name) + ")")}
                 if "status" in columns:
                     db.execute("UPDATE " + quote(name) + " SET status='paused' WHERE status='active'")
-        if "workspace_session_goals" in tables:
-            for session, raw in db.execute("SELECT session_id,value FROM workspace_session_goals").fetchall():
+        if "session_goals" in tables:
+            for session, raw in db.execute("SELECT session_id,value FROM session_goals").fetchall():
                 value = json.loads(raw)
                 if value.get("status") == "active":
                     value["status"] = "paused"; value["pendingDeliveryID"] = None
-                    db.execute("UPDATE workspace_session_goals SET value=? WHERE session_id=?", (json.dumps(value), session))
+                    db.execute("UPDATE session_goals SET value=? WHERE session_id=?", (json.dumps(value), session))
         for _, sql in triggers:
             db.execute(sql)
         if db.execute("PRAGMA quick_check").fetchone() != ("ok",):
@@ -298,8 +326,9 @@ def snapshot(source, destination):
     temporary = Path(tempfile.mkdtemp(prefix=".snapshot-", dir=destination.parent))
     try:
         backup(source / "workspace.sqlite", temporary / "workspace.sqlite")
-        for name in ("library-files", "message-attachments", "ManagedDatabases"):
-            copy_assets(source / name, temporary / name)
+        for name in ("library-files", "library-chunks", "message-attachments"):
+            copy_assets(source / name, temporary / name, content_addressed=True)
+        copy_assets(source / "ManagedDatabases", temporary / "ManagedDatabases")
         catalog = temporary / "ManagedDatabases/catalog.json"
         if catalog.exists():
             rows = json.loads(catalog.read_text())

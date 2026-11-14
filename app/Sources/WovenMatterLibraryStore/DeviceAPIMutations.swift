@@ -37,7 +37,7 @@ extension WorkspaceDatabaseConnection {
       let receipt = try prepareUnlocked("INSERT INTO device_mutation_receipts(device_id, operation_id, request, response) VALUES (?, ?, ?, ?)")
       defer { sqlite3_finalize(receipt) }
       try bind(request.deviceID, at: 1, to: receipt); try bind(request.operationID, at: 2, to: receipt)
-      try bind(fingerprint, at: 3, to: receipt); try bind(JSONEncoder().encode(result), at: 4, to: receipt)
+      try bind(fingerprint, at: 3, to: receipt); try bindJSON(result, at: 4, to: receipt)
       try stepDone(receipt)
       return result
     }
@@ -173,7 +173,7 @@ extension WorkspaceDatabaseConnection {
       let insert = try prepareUnlocked("INSERT INTO device_command_receipts(device_id, command_id, request, response) VALUES (?, ?, ?, ?)")
       defer { sqlite3_finalize(insert) }
       try bind(request.deviceID, at: 1, to: insert); try bind(request.commandID, at: 2, to: insert)
-      try bind(fingerprint, at: 3, to: insert); try bind(JSONEncoder().encode(receipt), at: 4, to: insert)
+      try bind(fingerprint, at: 3, to: insert); try bindJSON(receipt, at: 4, to: insert)
       try stepDone(insert)
       return LibraryCommandReservation(receipt: receipt, isNew: true)
     }
@@ -183,7 +183,7 @@ extension WorkspaceDatabaseConnection {
     try transaction {
       let update = try prepareUnlocked("UPDATE device_command_receipts SET response = ? WHERE device_id = ? AND command_id = ?")
       defer { sqlite3_finalize(update) }
-      try bind(JSONEncoder().encode(receipt), at: 1, to: update)
+      try bindJSON(receipt, at: 1, to: update)
       try bind(receipt.deviceID, at: 2, to: update); try bind(receipt.commandID, at: 3, to: update)
       try stepDone(update)
       guard changedRowCountUnlocked == 1 else { throw WorkspaceDatabaseError.execute("No reserved command exists.") }

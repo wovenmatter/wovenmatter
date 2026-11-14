@@ -39,7 +39,7 @@ public struct PairedLibraryFileChunk: Codable, Sendable {
 /// or disconnected file never blocks ordinary writing from being synchronized.
 public actor PairedLibraryFiles {
   private let root: URL
-  private let stores = ["library-files", "message-attachments/blobs", "paired-records"]
+  private let stores = ["library-files", "library-chunks", "message-attachments/blobs", "paired-records"]
   public init(root: URL) { self.root = root }
   private var invalid: LibraryAPIError { .init(code: "peer_file", message: "A shared file failed its size, offset or content check. The local original is retained.") }
   private func validate(_ file: PairedLibraryFile) throws -> URL {

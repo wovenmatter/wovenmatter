@@ -39,6 +39,50 @@ public struct LibraryFileStore: Sendable {
     return hash
   }
 
+  /// The bytes of saved artifact chunks and native history parts, which
+  /// their shared rows name by SHA-256 and size: `library-chunks/<sha256>`.
+  /// Peers exchange them as files, so the rows never carry bytes.
+  static let chunkStore = "library-chunks"
+  private var chunkDirectory: URL { supportDirectory.appending(path: Self.chunkStore, directoryHint: .isDirectory) }
+
+  /// Keeps one chunk and returns its SHA-256.
+  func retainChunk(_ data: Data) throws -> String {
+    guard !readOnlyProjection else { throw WorkspaceDatabaseError.readOnlyProjection }
+    let hash = SHA256.hash(data: data).hexString
+    let url = chunkDirectory.appending(path: hash)
+    guard !FileManager.default.fileExists(atPath: url.path) else { return hash }
+    try FileManager.default.createDirectory(at: chunkDirectory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+    try data.write(to: url, options: .atomic)
+    try FileManager.default.setAttributes([.posixPermissions: 0o400], ofItemAtPath: url.path)
+    return hash
+  }
+
+  /// The size of a chunk this library holds, or nil.
+  func chunkSize(_ hash: String) -> Int64? {
+    guard hash.wholeMatch(of: /[0-9a-f]{64}/) != nil,
+          let values = try? chunkDirectory.appending(path: hash).resourceValues(forKeys: [.fileSizeKey, .isRegularFileKey, .isSymbolicLinkKey]),
+          values.isRegularFile == true, values.isSymbolicLink != true, let size = values.fileSize else { return nil }
+    return Int64(size)
+  }
+
+  /// A chunk's bytes: a regular file in the chunk store, opened without
+  /// following a link, and only while it has the size and digest its row names.
+  func chunk(_ hash: String, byteCount: Int64) throws -> Data {
+    guard hash.wholeMatch(of: /[0-9a-f]{64}/) != nil, byteCount >= 0,
+          byteCount <= Int64(FederationProtocol.maximumArtifactChunkBytes) else { throw WorkspaceDatabaseError.corruptRow }
+    let fd = Darwin.open(chunkDirectory.appending(path: hash).path, O_RDONLY | O_NOFOLLOW | O_NONBLOCK)
+    guard fd >= 0 else { throw WorkspaceDatabaseError.corruptRow }
+    let handle = FileHandle(fileDescriptor: fd, closeOnDealloc: true)
+    defer { try? handle.close() }
+    var info = stat()
+    guard fstat(fd, &info) == 0, info.st_mode & S_IFMT == S_IFREG, Int64(info.st_size) == byteCount else {
+      throw WorkspaceDatabaseError.corruptRow
+    }
+    let data = try handle.read(upToCount: Int(byteCount) + 1) ?? Data()
+    guard Int64(data.count) == byteCount, SHA256.hash(data: data).hexString == hash else { throw WorkspaceDatabaseError.corruptRow }
+    return data
+  }
+
   public func readLocal(source: String, root: URL) throws -> Data {
     guard let path = LibraryFileReference.path(source) else {
       throw AgentMessageAttachmentError.unreadableFile(source)

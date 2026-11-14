@@ -86,7 +86,7 @@ extension WorkspaceDatabaseConnection {
           CREATE TRIGGER IF NOT EXISTS harness_sessions_library_revision_\(operation.lowercased()) AFTER \(operation)\(sessionUpdate) ON harness_sessions
           WHEN EXISTS(SELECT 1 FROM library_items WHERE conversation_id=\(session).conversation_id)
           BEGIN UPDATE library_settings SET value=CAST(value AS INTEGER)+1 WHERE key='revision'; END;
-          CREATE TRIGGER IF NOT EXISTS workspace_session_deliveries_library_revision_\(operation.lowercased()) AFTER \(operation)\(deliveryUpdate) ON workspace_session_deliveries
+          CREATE TRIGGER IF NOT EXISTS session_deliveries_library_revision_\(operation.lowercased()) AFTER \(operation)\(deliveryUpdate) ON session_deliveries
           WHEN EXISTS(SELECT 1 FROM library_items WHERE \(deliveryMatch))
           BEGIN UPDATE library_settings SET value=CAST(value AS INTEGER)+1 WHERE key='revision'; END;
           """)
@@ -271,7 +271,7 @@ extension WorkspaceDatabaseConnection {
     """
   private static let libraryWorkspace = "coalesce(lower(s.remote_workspace_id),'local')"
   private static let librarySender =
-    "CASE WHEN m.role='user' AND NOT EXISTS(SELECT 1 FROM workspace_session_deliveries d WHERE d.message_id=m.id) THEN 'me' ELSE 'agent' END"
+    "CASE WHEN m.role='user' AND NOT EXISTS(SELECT 1 FROM session_deliveries d WHERE d.message_id=m.id) THEN 'me' ELSE 'agent' END"
   private static let libraryProjection = """
     SELECT json_object('id',i.id,'conversationID',c.id,'messageID',m.id,'conversationTitle',c.title,
       'workspaceID',\(libraryWorkspace),'workspaceName',coalesce(l.workspace_name,CASE WHEN s.remote_workspace_id IS NULL THEN 'Local workspace' ELSE 'Remote workspace' END),
@@ -421,12 +421,12 @@ extension WorkspaceDatabaseConnection {
         "SELECT content_hash,storage FROM library_items WHERE content_hash IS NOT NULL", values: [])
       let visible = Set(rows.compactMap { $0.objectValue?["content_hash"]?.stringValue })
       // Losing concurrent versions stay recoverable with their bytes: a hash
-      // referenced only by a retained peer conflict or frontier member is kept.
+      // referenced only by a retained peer conflict or a concurrent version is kept.
       let recoverable = try historyRowsUnlocked("""
-        SELECT json_extract(payload,'$.row.content_hash.value') AS content_hash FROM paired_library_conflicts
-        WHERE json_extract(payload,'$.table')='library_items' AND json_extract(payload,'$.row.storage.value')='retained'
-        UNION SELECT json_extract(payload,'$.row.content_hash.value') FROM paired_library_frontier
+        SELECT json_extract(payload,'$.row.content_hash.value') AS content_hash FROM peer_sync_conflicts
         WHERE table_name='library_items' AND json_extract(payload,'$.row.storage.value')='retained'
+        UNION SELECT json_extract(payload,'$.row.content_hash.value') FROM peer_sync_versions
+        WHERE table_name='library_items' AND pending_peer IS NULL AND json_extract(payload,'$.row.storage.value')='retained'
         """, values: []).compactMap { $0.objectValue?["content_hash"]?.stringValue }
       let retained = Set(
         rows.filter { $0.objectValue?["storage"]?.stringValue == "retained" }

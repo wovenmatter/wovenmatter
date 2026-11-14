@@ -239,7 +239,7 @@ struct OpenCodeIntegrationTests {
         func refreshes() -> Int { fixture.lock.withLock { fixture.inboxRequests } }
         func recordedAnswers(_ path: String) async throws -> Int {
             try await database.read { try $0.historyRowsUnlocked(
-                "SELECT id FROM workspace_history_events WHERE kind='wire.in' AND source_connection_id='fixture' AND json_extract(payload,'$.path')=?",
+                "SELECT id FROM history_events WHERE kind='wire.in' AND source_connection_id='fixture' AND json_extract(payload,'$.path')=?",
                 values: [path]) }.count
         }
         do {
@@ -295,7 +295,7 @@ struct OpenCodeIntegrationTests {
         }
         func journal() async throws -> [String] {
             try await database.read { try $0.historyRowsUnlocked(
-                "SELECT kind FROM workspace_history_events WHERE conversation_id=? AND kind IN ('message.update','run.update','activity.final') ORDER BY sequence",
+                "SELECT kind FROM history_events WHERE conversation_id=? AND kind IN ('message.update','run.update','activity.final') ORDER BY sequence",
                 values: [id]) }.compactMap { $0.objectValue?["kind"]?.stringValue }
         }
         func preview() async throws -> String? {

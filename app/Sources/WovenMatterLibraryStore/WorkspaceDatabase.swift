@@ -55,7 +55,7 @@ public final class WorkspaceDatabase: Sendable {
   }
 
   /// Calls `handler` (on the writer's queue; keep it short) after any write
-  /// that appended to the peer change log, so synchronization is change-driven.
+  /// that recorded a new peer-sync version, so synchronization is change-driven.
   @discardableResult
   public func observePeerChanges(_ handler: @escaping @Sendable (Int64) -> Void) -> UUID { changes.add(handler) }
   public func removePeerChangeObserver(_ id: UUID) { changes.remove(id) }
@@ -102,11 +102,11 @@ public final class WorkspaceDatabase: Sendable {
 
 }
 
-/// Tracks a change log's high-water mark on the writer connection. One
+/// Tracks a sequence's high-water mark on the writer connection. One
 /// indexed read of `sqlite_sequence` per write, only while observed.
 final class PeerChangeObservers: @unchecked Sendable {
   private let table: String
-  init(table: String = "paired_library_changes") { self.table = table }
+  init(table: String = "peer_sync_versions") { self.table = table }
   private let lock = NSLock()
   private var handlers: [UUID: @Sendable (Int64) -> Void] = [:]
   private var last: Int64?
