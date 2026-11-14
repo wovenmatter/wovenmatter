@@ -50,7 +50,7 @@ final class WorkspaceDatabaseConnection {
       // A library from before the versioned schema converts first; a
       // current one skips straight to the idempotent creation below.
       let version = try withLock { try libraryVersionUnlocked() }
-      if version == 0 { try upgradeLibrarySchemaUnlocked() }
+      let converted = version == 0 ? try upgradeLibrarySchemaUnlocked() : false
       try execute("PRAGMA foreign_keys = ON")
       try migrate()
       try migrateWorkspaceHistory()
@@ -68,6 +68,11 @@ final class WorkspaceDatabaseConnection {
       try migrateDeviceSyncWakes()
       // A fresh library is stamped once everything above exists.
       if version < Self.librarySchemaVersion { try execute("PRAGMA user_version = \(Self.librarySchemaVersion)") }
+      // The conversion leaves the space of the bookkeeping it compacted and
+      // the tables it rebuilt free inside the file; give it back once. Nothing
+      // else has the library open yet, and a failure only keeps the space.
+      // VACUUM writes the whole file through the WAL; truncate it after.
+      if converted, (try? execute("VACUUM")) != nil { try? execute("PRAGMA wal_checkpoint(TRUNCATE)") }
     } catch {
       sqlite3_close(database)
       connection = nil

@@ -125,6 +125,12 @@ extension WorkspaceDatabaseConnection {
     // Peer, workspace publisher and replica records of removed compatibility paths.
     "paired_library_seen", "execution_workspace_publishers", "execution_workspace_mcp_grants",
     "execution_replica_context", "calendar_replica_context", "calendar_execution_conflicts",
+    // Tables releases before v0.4.2 created and left behind empty: OpenClaw
+    // cron jobs, gateway links and transcript entries, the dashboard's view
+    // state, the companion workspace grant list and the old usage-limit cache.
+    "desktop_openclaw_cron_jobs", "desktop_openclaw_cron_runs", "desktop_openclaw_gateway_links",
+    "desktop_openclaw_transcript_entries", "dashboard_user_view_state", "companion_workspace_access",
+    "usage_limit_snapshots", "usage_limit_account_snapshots",
   ]
 
   /// Indexes recreated under a new name, or dropped with their table or column.
@@ -236,7 +242,8 @@ extension WorkspaceDatabaseConnection {
     ("paired_library_file_cursors", "peer_sync_file_cursors"), ("paired_library_state", "peer_sync_state"),
     ("paired_library_seeded", "peer_sync_seeded"), ("paired_library_reassert", "peer_sync_reassert")]
 
-  func upgradeLibrarySchemaUnlocked() throws {
+  /// Returns whether a library was converted.
+  @discardableResult func upgradeLibrarySchemaUnlocked() throws -> Bool {
     var tables = Set(try historyRowsUnlocked("SELECT name FROM sqlite_master WHERE type='table'", values: [])
       .compactMap { $0.objectValue?["name"]?.stringValue })
     func columns(_ table: String) throws -> Set<String> {
@@ -245,7 +252,7 @@ extension WorkspaceDatabaseConnection {
     }
     // A file without a library (new, or holding only the usage index) is
     // created and stamped by the regular schema creation instead.
-    guard tables.contains("conversations") || tables.contains("dashboard_conversations") else { return }
+    guard tables.contains("conversations") || tables.contains("dashboard_conversations") else { return false }
 
     // Foreign keys stay off while tables are renamed and dropped (a dropped
     // parent must not cascade into its children); renaming still rewrites
@@ -363,6 +370,13 @@ extension WorkspaceDatabaseConnection {
         }
       }
       try storeJSONAsTextUnlocked(tables: tables, bookkeeping: bookkeeping)
+      try repairOldRowsUnlocked(tables: tables, bookkeeping: bookkeeping)
+      // Libraries from before v0.4.0 added `library_id` as a nullable column.
+      if tables.contains("library_identity"), try historyRowsUnlocked(
+        "SELECT 1 AS present FROM pragma_table_info('library_identity') WHERE name='library_id' AND \"notnull\"=0", values: []).isEmpty == false {
+        try toolsExecuteUnlocked("UPDATE library_identity SET library_id=? WHERE library_id IS NULL", [UUID().uuidString.lowercased()])
+        try rebuildCoreTableUnlocked("library_identity", from: Self.federationTablesSQL)
+      }
       // The chunk columns were added nullable; their declaration says NOT NULL.
       for table in Self.peerChunkTables.sorted() where tables.contains(table) {
         if try historyRowsUnlocked("SELECT 1 AS present FROM pragma_table_info(?) WHERE name='sha256' AND \"notnull\"=0", values: [table]).isEmpty == false {
@@ -380,6 +394,7 @@ extension WorkspaceDatabaseConnection {
       try executeUnlocked("PRAGMA user_version=\(Self.librarySchemaVersion)")
     }
     try executeUnlocked("PRAGMA foreign_keys=ON")
+    return true
   }
 
   /// v0.4.2 recorded each shared row twice over: its winner
@@ -935,6 +950,64 @@ extension WorkspaceDatabaseConnection {
             AND json_extract(payload,'$.row.surface.value') IS NOT 'mac_native'
           """)
       }
+    }
+  }
+
+  /// Rows written before v0.4.0 that the app used to repair each time it read
+  /// them. Shared rows also record the repaired value in every version, so
+  /// each member that converts the same library agrees.
+  private func repairOldRowsUnlocked(tables: Set<String>, bookkeeping: Set<String>) throws {
+    // Builds before v0.3.2 saved the ID of a configuration-only Claude probe,
+    // which the adapter cannot reload; a chat with no history starts fresh.
+    if tables.isSuperset(of: ["harness_sessions", "conversations", "runs", "messages", "run_activities"]) {
+      let imports = tables.contains("session_imports")
+        ? "AND NOT EXISTS (SELECT 1 FROM session_imports WHERE conversation_id = h.conversation_id)" : ""
+      let retained = tables.contains("retained_execution_history")
+        ? "AND NOT EXISTS (SELECT 1 FROM retained_execution_history WHERE conversation_id = h.conversation_id)" : ""
+      try toolsExecuteUnlocked("""
+        UPDATE harness_sessions AS h SET native_session_id = NULL, revision = revision + 1, updated_at = ?
+        WHERE runtime_kind = 'claude_code' AND remote_workspace_id IS NULL AND native_session_id IS NOT NULL
+          AND EXISTS (SELECT 1 FROM conversations c WHERE c.id = h.conversation_id AND c.deleted_at IS NULL)
+          AND NOT EXISTS (SELECT 1 FROM runs WHERE conversation_id = h.conversation_id)
+          AND NOT EXISTS (SELECT 1 FROM messages WHERE conversation_id = h.conversation_id)
+          AND NOT EXISTS (SELECT 1 FROM run_activities WHERE conversation_id = h.conversation_id)
+          \(imports) \(retained)
+        """, [Self.timestamp(Date())])
+    }
+    // Tool selections saved before v0.3.2 may lack goals and visual replies,
+    // which every selection now includes. `enabled` stays sorted, as encoded.
+    for (table, column, path) in [("calendar_items", "calendar_json", "$.task.configuration.tools.enabled"),
+                                  ("calendar_task_sessions", "configuration_json", "$.tools.enabled"),
+                                  ("calendar_runs", "task_json", "$.configuration.tools.enabled"),
+                                  ("session_creations", "configuration_json", "$.tools.enabled")]
+    where tables.contains(table) {
+      let missing = """
+        json_type(\(column),'\(path)')='array' AND (
+          NOT EXISTS (SELECT 1 FROM json_each(\(table).\(column),'\(path)') WHERE value='goals')
+          OR NOT EXISTS (SELECT 1 FROM json_each(\(table).\(column),'\(path)') WHERE value='html'))
+        """
+      let ids = table == "calendar_items" ? try historyRowsUnlocked("SELECT id FROM calendar_items WHERE \(missing)", values: [])
+        .compactMap { $0.objectValue?["id"]?.stringValue } : []
+      try executeUnlocked("""
+        UPDATE \(table) SET \(column)=json_set(\(column),'\(path)',json((
+          SELECT json_group_array(value) FROM (
+            SELECT value FROM json_each(\(table).\(column),'\(path)') UNION SELECT 'goals' UNION SELECT 'html' ORDER BY value))))
+        WHERE \(missing)
+        """)
+      try refreshPeerFieldUnlocked(table, column, ids: ids, bookkeeping: bookkeeping)
+    }
+    // Releases up to v0.4.0 named a phone's note edits "companion".
+    if tables.contains("note_asset_versions") {
+      let ids = try historyRowsUnlocked("""
+        SELECT id FROM note_asset_versions WHERE source IN ('companion','before-companion-edit','before-companion-delete')
+        """, values: []).compactMap { $0.objectValue?["id"]?.stringValue }
+      try executeUnlocked("""
+        UPDATE note_asset_versions SET source = CASE source
+          WHEN 'companion' THEN 'device' WHEN 'before-companion-edit' THEN 'before-device-edit'
+          WHEN 'before-companion-delete' THEN 'before-device-delete' END
+        WHERE source IN ('companion','before-companion-edit','before-companion-delete')
+        """)
+      try refreshPeerFieldUnlocked("note_asset_versions", "source", ids: ids, bookkeeping: bookkeeping)
     }
   }
 

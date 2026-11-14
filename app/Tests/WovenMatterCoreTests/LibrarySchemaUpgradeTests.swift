@@ -221,6 +221,67 @@ import WovenMatterCore
   /// cursor that recorded it, so peers that pulled up to any cursor still get
   /// what they lack. Settled conflicts and quarantined records go, and a
   /// deletion keeps only its key and authority columns.
+  /// A library first created by an older release still carries what those
+  /// releases left behind, as the maintainer's own library does: empty
+  /// OpenClaw, dashboard, companion and usage-limit tables, a nullable
+  /// `library_id`, and rows the app used to repair each time it read them.
+  @Test func aLongLivedV042LibraryLosesWhatOlderReleasesLeftBehind() async throws {
+    let upgraded = try v042Library(), fresh = try PersistenceFixture()
+    defer { upgraded.remove(); fresh.remove() }
+    let note = "a5286605-4106-4343-9a90-8b93e8b268f2", probe = "e5e5e5e5-1111-4222-8333-444455556666"
+    let schedule = "f5f5f5f5-1111-4222-8333-444455556666"
+    try PersistenceSQL(url: upgraded.databaseURL).execute("""
+      CREATE TABLE desktop_openclaw_cron_jobs(id TEXT PRIMARY KEY, state TEXT);
+      CREATE INDEX desktop_openclaw_cron_jobs_state ON desktop_openclaw_cron_jobs(state);
+      CREATE TABLE desktop_openclaw_cron_runs(id TEXT PRIMARY KEY);
+      CREATE TABLE desktop_openclaw_gateway_links(id TEXT PRIMARY KEY);
+      CREATE TABLE desktop_openclaw_transcript_entries(conversation_id TEXT, entry_id TEXT, PRIMARY KEY(conversation_id, entry_id));
+      CREATE TABLE dashboard_user_view_state(id TEXT PRIMARY KEY);
+      CREATE TABLE companion_workspace_access(id TEXT PRIMARY KEY);
+      CREATE TABLE usage_limit_snapshots(id TEXT PRIMARY KEY);
+      CREATE TABLE usage_limit_account_snapshots(id TEXT PRIMARY KEY);
+      CREATE TABLE old_identity(singleton INTEGER PRIMARY KEY CHECK(singleton = 1), host_device_id TEXT NOT NULL, library_id TEXT);
+      INSERT INTO old_identity SELECT * FROM library_identity;
+      DROP TABLE library_identity;
+      ALTER TABLE old_identity RENAME TO library_identity;
+      UPDATE note_asset_versions SET source='companion' WHERE id='\(note)';
+      UPDATE paired_library_rows SET payload=json_set(payload,'$.row.source',json_object('type','text','value','companion'))
+        WHERE table_name='note_asset_versions';
+      UPDATE paired_library_changes SET payload=json_set(payload,'$.row.source',json_object('type','text','value','companion'))
+        WHERE json_extract(payload,'$.table')='note_asset_versions';
+      CREATE TEMP TABLE probe_chat AS SELECT * FROM dashboard_conversations WHERE id='3b078bf3-4268-4819-96d2-6d282542f205';
+      UPDATE probe_chat SET id='\(probe)', title='Claude probe';
+      INSERT INTO dashboard_conversations SELECT * FROM probe_chat;
+      CREATE TEMP TABLE probe_session AS SELECT * FROM desktop_local_acp_sessions WHERE conversation_id='3b078bf3-4268-4819-96d2-6d282542f205';
+      UPDATE probe_session SET conversation_id='\(probe)', runtime_kind='claude_code', acp_session_id='probe-session';
+      INSERT INTO desktop_local_acp_sessions SELECT * FROM probe_session;
+      INSERT INTO dashboard_calendar_items(id, kind, title, calendar_json)
+        VALUES('\(schedule)', 'task', 'Morning check', '{"task":{"configuration":{"tools":{"enabled":["notes","sessions"]}}}}');
+      -- The version a peer recorded for it, in the shape v0.4.2 records.
+      INSERT INTO paired_library_rows SELECT 'dashboard_calendar_items', json_array(c.id),
+        json_set(r.payload,'$.table','dashboard_calendar_items','$.key',printf('%s',json_array(c.id)),'$.row',json_object(
+          'id',json_object('type','text','value',c.id),'calendar_json',json_object('type','text','value',c.calendar_json)))
+        FROM dashboard_calendar_items c, paired_library_rows r WHERE c.id='\(schedule)' AND r.table_name='note_asset_versions';
+      """)
+    _ = try UsageStore(databaseURL: upgraded.databaseURL)
+    _ = try UsageStore(databaseURL: fresh.databaseURL)
+    let library = try await WorkspaceDatabase(url: upgraded.databaseURL)
+    let current = try await WorkspaceDatabase(url: fresh.databaseURL)
+
+    let expected = try await schema(current), actual = try await schema(library)
+    #expect(actual.keys.sorted() == expected.keys.sorted())
+    for key in expected.keys.sorted() where actual[key] != expected[key] {
+      Issue.record("\(key) differs:\nupgraded: \(actual[key] ?? "missing")\nfresh: \(expected[key]!)")
+    }
+    #expect(try await row(library, "SELECT source FROM note_asset_versions WHERE id=?", note)["source"]?.stringValue == "device")
+    #expect(try await row(library, "SELECT json_extract(payload,'$.row.source.value') AS source FROM peer_sync_versions WHERE table_name='note_asset_versions'")["source"]?.stringValue == "device")
+    #expect(try await row(library, "SELECT native_session_id FROM harness_sessions WHERE conversation_id=?", probe)["native_session_id"] == .null)
+    #expect(try await row(library, "SELECT native_session_id FROM harness_sessions WHERE conversation_id='3b078bf3-4268-4819-96d2-6d282542f205'")["native_session_id"]?.stringValue == "native-session-1")
+    #expect(try await row(library, "SELECT json_extract(calendar_json,'$.task.configuration.tools.enabled') AS enabled FROM calendar_items WHERE id=?", schedule)["enabled"]?.stringValue == #"["goals","html","notes","sessions"]"#)
+    #expect(try await row(library, "SELECT json_extract(payload,'$.row.calendar_json.value') AS json FROM peer_sync_versions WHERE table_name='calendar_items' AND record_key=json_array(?)", schedule)["json"]?.stringValue?.contains(#""goals""#) == true)
+    #expect(try await row(library, "PRAGMA user_version")["user_version"]?.doubleValue == 1)
+  }
+
   @Test func peerBookkeepingIsCompactedAndKeepsItsCursors() async throws {
     let upgraded = try v042Library(); defer { upgraded.remove() }
     let library = try await WorkspaceDatabase(url: upgraded.databaseURL)
