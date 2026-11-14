@@ -17,11 +17,11 @@ extension ApplicationModel {
                 let host = config.host, user = config.user
                 // Reuse Woven's read-only host inspection; setup refuses to silently provision a host.
                 let ssh = RemoteWorkspaceSSHClient()
-                var preflight = try await ssh.preflight(hostName: host, userName: user)
+                var preflight = try await ssh.inspectExecutorHost(hostName: host, userName: user)
                 if !preflight.ready, prepareHost {
                     guard preflight.canPrepare == true else { throw DefaultAgentError.message("This Linux host cannot be prepared automatically. Inspect its blocking issues in Settings → Workspaces.") }
-                    _ = try await ssh.prepareHost(hostName: host, userName: user)
-                    preflight = try await ssh.preflight(hostName: host, userName: user)
+                    _ = try await ssh.prepareExecutorHost(hostName: host, userName: user)
+                    preflight = try await ssh.inspectExecutorHost(hostName: host, userName: user)
                 }
                 guard preflight.ready else { throw DefaultAgentError.message("Prepare this Linux host through Settings → Workspaces, then deploy Executor.") }
             }

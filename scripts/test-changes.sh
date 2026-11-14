@@ -31,7 +31,7 @@ run_static_checks() {
   scripts/test-conversation-layout.sh
   python3 scripts/test-support/test_executor_deployment.py
   node --test scripts/test-support/native-mcp.test.mjs scripts/test-support/live-streaming-smoke.test.mjs
-  scripts/test-remote-workspace.sh
+  scripts/test-executor-docker.sh
   scripts/test-remote-host.sh
   for file in remote/src/*.mjs remote/test/*.test.mjs; do
     node --check "$file"

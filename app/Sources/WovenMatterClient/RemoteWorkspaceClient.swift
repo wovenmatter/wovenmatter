@@ -54,8 +54,6 @@ public struct RemoteWorkspaceConfiguration: Codable, Equatable, Identifiable, Se
     public var hostName: String
     public var userName: String?
     public var remotePort: Int
-    public var memoryLimit: String?
-    public var swapLimit: String?
     public var createdAt: Date
     public var backgroundExecutionEnabled: Bool
     public var kind: RemoteWorkspaceKind
@@ -72,11 +70,9 @@ public struct RemoteWorkspaceConfiguration: Codable, Equatable, Identifiable, Se
         hostName: String,
         userName: String? = nil,
         remotePort: Int = 7337,
-        memoryLimit: String? = nil,
-        swapLimit: String? = nil,
         createdAt: Date = Date(),
         backgroundExecutionEnabled: Bool = true,
-        kind: RemoteWorkspaceKind = .container,
+        kind: RemoteWorkspaceKind = .host,
         accessMode: RemoteWorkspaceAccessMode = .user,
         dataRoot: String? = nil,
         workspaceRoot: String? = nil,
@@ -89,8 +85,6 @@ public struct RemoteWorkspaceConfiguration: Codable, Equatable, Identifiable, Se
         self.hostName = hostName
         self.userName = userName
         self.remotePort = remotePort
-        self.memoryLimit = memoryLimit
-        self.swapLimit = swapLimit
         self.createdAt = createdAt
         self.backgroundExecutionEnabled = backgroundExecutionEnabled
         self.kind = kind
@@ -102,7 +96,7 @@ public struct RemoteWorkspaceConfiguration: Codable, Equatable, Identifiable, Se
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, name, workspaceID, hostName, userName, remotePort, memoryLimit, swapLimit, createdAt, backgroundExecutionEnabled
+        case id, name, workspaceID, hostName, userName, remotePort, createdAt, backgroundExecutionEnabled
         case kind, accessMode, dataRoot, workspaceRoot, databasesDirectory, attachmentsDirectory
     }
 
@@ -114,11 +108,9 @@ public struct RemoteWorkspaceConfiguration: Codable, Equatable, Identifiable, Se
         hostName = try values.decode(String.self, forKey: .hostName)
         userName = try values.decodeIfPresent(String.self, forKey: .userName)
         remotePort = try values.decode(Int.self, forKey: .remotePort)
-        memoryLimit = try values.decodeIfPresent(String.self, forKey: .memoryLimit)
-        swapLimit = try values.decodeIfPresent(String.self, forKey: .swapLimit)
         createdAt = try values.decode(Date.self, forKey: .createdAt)
         backgroundExecutionEnabled = try values.decodeIfPresent(Bool.self, forKey: .backgroundExecutionEnabled) ?? true
-        kind = try values.decodeIfPresent(RemoteWorkspaceKind.self, forKey: .kind) ?? .container
+        kind = try values.decode(RemoteWorkspaceKind.self, forKey: .kind)
         accessMode = try values.decodeIfPresent(RemoteWorkspaceAccessMode.self, forKey: .accessMode) ?? .user
         dataRoot = try values.decodeIfPresent(String.self, forKey: .dataRoot)
         workspaceRoot = try values.decodeIfPresent(String.self, forKey: .workspaceRoot)
@@ -126,6 +118,20 @@ public struct RemoteWorkspaceConfiguration: Codable, Equatable, Identifiable, Se
         attachmentsDirectory = try values.decodeIfPresent(String.self, forKey: .attachmentsDirectory)
     }
 
+    /// Saved configurations, skipping any whose kind this build no longer has, such as
+    /// the removed Docker container workspaces.
+    public static func decodeSaved(_ data: Data) throws -> [RemoteWorkspaceConfiguration] {
+        try JSONDecoder().decode([Saved].self, from: data).compactMap(\.configuration)
+    }
+
+    private struct Saved: Decodable {
+        let configuration: RemoteWorkspaceConfiguration?
+
+        init(from decoder: any Decoder) throws {
+            let kind = try decoder.container(keyedBy: CodingKeys.self).decodeIfPresent(String.self, forKey: .kind)
+            configuration = kind.flatMap(RemoteWorkspaceKind.init(rawValue:)) == nil ? nil : try RemoteWorkspaceConfiguration(from: decoder)
+        }
+    }
 }
 
 /// How a chat that runs on this Mac launches its harness.
@@ -444,8 +450,8 @@ public actor RemoteWorkspaceSSHClient {
     let runner: Runner
     let streamingRunner: StreamingRunner
     let deploymentRoot: URL?
-    private let scriptLoader: @Sendable () throws -> Data
     let hostScriptLoader: @Sendable () throws -> Data
+    private let executorDockerScriptLoader: @Sendable () throws -> Data
 
     public init() {
         self.runner = RemoteWorkspaceSSHClient.runSSH
@@ -454,30 +460,31 @@ public actor RemoteWorkspaceSSHClient {
                                                timeLimit: nil, onStandardError: progress)
         }
         self.deploymentRoot = nil
-        self.scriptLoader = { try RemoteWorkspaceSSHClient.loadLifecycleScript() }
         self.hostScriptLoader = { try RemoteWorkspaceSSHClient.loadLifecycleScript(named: "remote-host") }
+        self.executorDockerScriptLoader = { try RemoteWorkspaceSSHClient.loadLifecycleScript(named: "executor-docker") }
     }
 
+    /// `scriptLoader` supplies `remote-host.sh`; `executorDockerScriptLoader`, used by
+    /// Executor's Docker inspection, defaults to it.
     public init(
         runner: @escaping Runner,
         scriptLoader: @escaping @Sendable () throws -> Data,
         deploymentRoot: URL? = nil,
         streamingRunner: StreamingRunner? = nil,
-        hostScriptLoader: (@Sendable () throws -> Data)? = nil
+        executorDockerScriptLoader: (@Sendable () throws -> Data)? = nil
     ) {
         self.runner = runner
         self.streamingRunner = streamingRunner ?? { destination, command, input, _ in try runner(destination, command, input) }
         self.deploymentRoot = deploymentRoot
-        self.scriptLoader = scriptLoader
-        self.hostScriptLoader = hostScriptLoader ?? scriptLoader
+        self.hostScriptLoader = scriptLoader
+        self.executorDockerScriptLoader = executorDockerScriptLoader ?? scriptLoader
     }
 
-    /// `roles` (host only) is `remote-host.sh inspect`'s roles argument: the preparation
-    /// it lists is for those roles.
+    /// `roles` is `remote-host.sh inspect`'s roles argument: the preparation it lists
+    /// is for those roles.
     public func preflight(
         hostName: String,
         userName: String?,
-        kind: RemoteWorkspaceKind = .container,
         accessMode: RemoteWorkspaceAccessMode = .user,
         roles: String? = nil
     ) throws -> RemoteWorkspacePreflight {
@@ -486,10 +493,21 @@ public actor RemoteWorkspaceSSHClient {
             from: runScript(
                 hostName: hostName,
                 userName: userName,
-                arguments: kind == .host ? ["inspect", accessMode.rawValue] + (roles.map { [$0] } ?? []) : ["inspect"],
-                kind: kind
+                arguments: ["inspect", accessMode.rawValue] + (roles.map { [$0] } ?? [])
             )
         )
+    }
+
+    /// `executor-docker.sh inspect`: whether the host can run Executor's Docker container.
+    public func inspectExecutorHost(hostName: String, userName: String?) throws -> RemoteWorkspacePreflight {
+        try decode(RemoteWorkspacePreflight.self, from: runScript(
+            hostName: hostName, userName: userName, arguments: ["inspect"], script: executorDockerScriptLoader()))
+    }
+
+    /// `executor-docker.sh prepare`: installs Docker for Executor after the user authorized it.
+    public func prepareExecutorHost(hostName: String, userName: String?) throws -> RemoteWorkspacePreflight {
+        try decode(RemoteWorkspacePreflight.self, from: runScript(
+            hostName: hostName, userName: userName, arguments: ["prepare", "AUTHORIZED"], script: executorDockerScriptLoader()))
     }
 
     /// Enables a private HTTPS proxy to an existing loopback-only workspace.
@@ -498,8 +516,7 @@ public actor RemoteWorkspaceSSHClient {
         struct Result: Decodable { let endpoint: URL }
         let result = try decode(Result.self, from: runScript(
             hostName: configuration.hostName, userName: configuration.userName,
-            arguments: ["expose", configuration.workspaceID, String(configuration.remotePort), String(httpsPort)],
-            kind: configuration.kind))
+            arguments: ["expose", configuration.workspaceID, String(configuration.remotePort), String(httpsPort)]))
         guard result.endpoint.scheme == "https", result.endpoint.host?.hasSuffix(".ts.net") == true,
               result.endpoint.port == httpsPort, result.endpoint.user == nil, result.endpoint.password == nil,
               result.endpoint.query == nil, result.endpoint.fragment == nil,
@@ -509,11 +526,10 @@ public actor RemoteWorkspaceSSHClient {
         return result.endpoint
     }
 
-    /// `roles` (host only) is `remote-host.sh prepare`'s roles argument, such as `bots`.
+    /// `roles` is `remote-host.sh prepare`'s roles argument, such as `bots`.
     public func prepareHost(
         hostName: String,
         userName: String?,
-        kind: RemoteWorkspaceKind = .container,
         accessMode: RemoteWorkspaceAccessMode = .user,
         roles: String? = nil
     ) throws -> RemoteWorkspacePreflight {
@@ -522,8 +538,7 @@ public actor RemoteWorkspaceSSHClient {
             from: runScript(
                 hostName: hostName,
                 userName: userName,
-                arguments: ["prepare", "AUTHORIZED"] + (kind == .host ? [accessMode.rawValue] + (roles.map { [$0] } ?? []) : []),
-                kind: kind
+                arguments: ["prepare", "AUTHORIZED", accessMode.rawValue] + (roles.map { [$0] } ?? [])
             )
         )
     }
@@ -536,8 +551,7 @@ public actor RemoteWorkspaceSSHClient {
             from: runScript(
                 hostName: configuration.hostName,
                 userName: configuration.userName,
-                arguments: ["status", configuration.workspaceID],
-                kind: configuration.kind
+                arguments: ["status", configuration.workspaceID]
             )
         )
     }
@@ -551,8 +565,7 @@ public actor RemoteWorkspaceSSHClient {
             from: runScript(
                 hostName: configuration.hostName,
                 userName: configuration.userName,
-                arguments: [action.rawValue, configuration.workspaceID],
-                kind: configuration.kind
+                arguments: [action.rawValue, configuration.workspaceID]
             )
         )
     }
@@ -582,35 +595,22 @@ public actor RemoteWorkspaceSSHClient {
         _ = try runScript(
             hostName: configuration.hostName,
             userName: configuration.userName,
-            arguments: arguments,
-            kind: configuration.kind
+            arguments: arguments
         )
     }
 
+    /// Runs `script` (`remote-host.sh` by default) over SSH with `arguments`.
     private func runScript(
         hostName: String,
         userName: String?,
         arguments: [String],
-        secret: String? = nil,
-        kind: RemoteWorkspaceKind = .container
+        script: Data? = nil
     ) throws -> Data {
         let destination = try Self.validatedDestination(
             hostName: hostName,
             userName: userName
         )
-        let script = try kind == .host ? hostScriptLoader() : scriptLoader()
-        if let secret {
-            guard !secret.contains("\n"), !secret.contains("\r") else {
-                throw RemoteWorkspaceClientError.invalidResponse(
-                    "A generated remote credential contained an invalid line break."
-                )
-            }
-            let command = "IFS= read -r WOVENMATTER_API_TOKEN; export WOVENMATTER_API_TOKEN; exec bash -s -- "
-                + arguments.map(RemoteWorkspaceExecTarget.quote).joined(separator: " ")
-            var input = Data((secret + "\n").utf8)
-            input.append(script)
-            return try runner(destination, command, input)
-        }
+        let script = try script ?? hostScriptLoader()
         let command = "exec bash -s -- "
             + arguments.map(RemoteWorkspaceExecTarget.quote).joined(separator: " ")
         return try runner(destination, command, script)
@@ -685,7 +685,7 @@ public actor RemoteWorkspaceSSHClient {
         return result.data
     }
 
-    private static func loadLifecycleScript(named name: String = "remote-workspace") throws -> Data {
+    private static func loadLifecycleScript(named name: String) throws -> Data {
         let currentDirectory = URL(
             fileURLWithPath: FileManager.default.currentDirectoryPath,
             isDirectory: true
@@ -745,7 +745,6 @@ public actor RemoteWorkspaceTunnel {
         localPort: Int,
         readinessProbe: @escaping @Sendable (Int) async -> Bool
     ) async throws {
-        try configuration.kind.requireSupported()
         // Revalidate the peer even when reusing a healthy tunnel.
         let destination: String
         let tailnetOptions: [String]

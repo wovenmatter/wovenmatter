@@ -34,7 +34,7 @@ chmod +x "$fake_bin/uname" "$fake_bin/id" "$fake_bin/dpkg-query"
 inspection="$(
   PATH="$fake_bin" \
   WOVENMATTER_OS_RELEASE="$fixture_root/os-release" \
-  /bin/bash "$repo_root/scripts/remote-workspace.sh" inspect
+  /bin/bash "$repo_root/scripts/executor-docker.sh" inspect
 )"
 jq -e '
   .ready == false
@@ -87,7 +87,7 @@ chmod +x "$fake_bin/docker" "$fake_bin/df"
 inspection="$(
   PATH="$fake_bin" \
   WOVENMATTER_OS_RELEASE="$fixture_root/os-release" \
-  /bin/bash "$repo_root/scripts/remote-workspace.sh" inspect
+  /bin/bash "$repo_root/scripts/executor-docker.sh" inspect
 )"
 jq -e '
   .ready == true
@@ -104,7 +104,7 @@ inspection="$(
   PATH="$fake_bin" \
   WOVENMATTER_OS_RELEASE="$fixture_root/os-release" \
   WOVENMATTER_FAKE_AVAILABLE_KIB=5242880 \
-  /bin/bash "$repo_root/scripts/remote-workspace.sh" inspect
+  /bin/bash "$repo_root/scripts/executor-docker.sh" inspect
 )"
 jq -e '
   .ready == true
@@ -116,7 +116,7 @@ inspection="$(
   PATH="$fake_bin" \
   WOVENMATTER_OS_RELEASE="$fixture_root/os-release" \
   WOVENMATTER_FAKE_PLATFORM='Podman Engine' \
-  /bin/bash "$repo_root/scripts/remote-workspace.sh" inspect
+  /bin/bash "$repo_root/scripts/executor-docker.sh" inspect
 )"
 jq -e '
   .ready == false
@@ -127,7 +127,7 @@ inspection="$(
   PATH="$fake_bin" \
   WOVENMATTER_OS_RELEASE="$fixture_root/os-release" \
   WOVENMATTER_FAKE_ENDPOINT='tcp://remote-docker:2376' \
-  /bin/bash "$repo_root/scripts/remote-workspace.sh" inspect
+  /bin/bash "$repo_root/scripts/executor-docker.sh" inspect
 )"
 jq -e '
   .ready == false
@@ -140,7 +140,7 @@ for platform in '' 'Moby Engine'; do
     PATH="$fake_bin" WOVENMATTER_OS_RELEASE="$fixture_root/os-release" \
     WOVENMATTER_FAKE_PLATFORM="$platform" \
     WOVENMATTER_FAKE_COMPONENTS=$'Engine\ncontainerd\nrunc' \
-    /bin/bash "$repo_root/scripts/remote-workspace.sh" inspect
+    /bin/bash "$repo_root/scripts/executor-docker.sh" inspect
   )"
   jq -e '.ready == true and .preparationRequired == false and (.blockingIssues | length) == 0' \
     <<< "$inspection" >/dev/null
@@ -151,7 +151,7 @@ for components in '' 'Some Engine' 'Podman Engine'; do
   inspection="$(
     PATH="$fake_bin" WOVENMATTER_OS_RELEASE="$fixture_root/os-release" \
     WOVENMATTER_FAKE_PLATFORM='' WOVENMATTER_FAKE_COMPONENTS="$components" \
-    /bin/bash "$repo_root/scripts/remote-workspace.sh" inspect
+    /bin/bash "$repo_root/scripts/executor-docker.sh" inspect
   )"
   jq -e '.ready == false and .canPrepare == false and (.blockingIssues | length) == 1' \
     <<< "$inspection" >/dev/null
@@ -162,7 +162,7 @@ for version in '27.5.1' '' 'unknown'; do
   inspection="$(
     PATH="$fake_bin" WOVENMATTER_OS_RELEASE="$fixture_root/os-release" \
     WOVENMATTER_FAKE_VERSION="$version" \
-    /bin/bash "$repo_root/scripts/remote-workspace.sh" inspect
+    /bin/bash "$repo_root/scripts/executor-docker.sh" inspect
   )"
   jq -e '.ready == false and (.blockingIssues[0] | contains("Docker Engine 28"))' \
     <<< "$inspection" >/dev/null
@@ -172,7 +172,7 @@ for api in '1.40' '' 'unknown'; do
   inspection="$(
     PATH="$fake_bin" WOVENMATTER_OS_RELEASE="$fixture_root/os-release" \
     WOVENMATTER_FAKE_API="$api" \
-    /bin/bash "$repo_root/scripts/remote-workspace.sh" inspect
+    /bin/bash "$repo_root/scripts/executor-docker.sh" inspect
   )"
   jq -e '.ready == false and (.blockingIssues[0] | contains("API"))' \
     <<< "$inspection" >/dev/null
@@ -185,13 +185,13 @@ done
 inspection="$(
   PATH="$fake_bin" WOVENMATTER_OS_RELEASE="$fixture_root/os-release" \
   WOVENMATTER_FAKE_API=1.41 WOVENMATTER_FAKE_PLATFORM='' \
-  /bin/bash "$repo_root/scripts/remote-workspace.sh" inspect
+  /bin/bash "$repo_root/scripts/executor-docker.sh" inspect
 )"
 jq -e '.ready == true' <<< "$inspection" >/dev/null
 
 if PATH="$fake_bin" \
   WOVENMATTER_OS_RELEASE="$fixture_root/os-release" \
-  /bin/bash "$repo_root/scripts/remote-workspace.sh" prepare NOT_AUTHORIZED \
+  /bin/bash "$repo_root/scripts/executor-docker.sh" prepare NOT_AUTHORIZED \
   >"$fixture_root/unauthorized.out" 2>"$fixture_root/unauthorized.err"; then
   printf '%s\n' 'unauthorized host preparation unexpectedly succeeded' >&2
   exit 1
@@ -199,4 +199,4 @@ fi
 jq -e '.error == "host_preparation_not_authorized"' \
   "$fixture_root/unauthorized.err" >/dev/null
 
-printf '%s\n' 'remote workspace inspection tests passed'
+printf '%s\n' 'executor Docker inspection tests passed'

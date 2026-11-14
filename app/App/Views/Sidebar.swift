@@ -1074,7 +1074,7 @@ struct NewFolderPopover: View {
     }
 
     private var nativeHost: RemoteWorkspaceConfiguration? {
-        guard let workspaceID, let configuration = remoteWorkspaces.configuration(id: workspaceID), configuration.kind == .host else { return nil }
+        guard let workspaceID, let configuration = remoteWorkspaces.configuration(id: workspaceID) else { return nil }
         return configuration
     }
 

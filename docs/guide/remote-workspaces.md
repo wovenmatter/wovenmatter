@@ -8,9 +8,6 @@ while the Mac is disconnected.
 A Linux machine can also run bots without being a workspace; see [Bots](bots.md).
 Adding a workspace to it later reuses the same Woven server.
 
-Remote container workspaces are no longer offered or reconnected. Native Linux
-hosts replace that workflow. The separate Docker Executor feature is unchanged.
-
 ## What you need
 
 - An online amd64 or arm64 Linux host in your Tailnet.
