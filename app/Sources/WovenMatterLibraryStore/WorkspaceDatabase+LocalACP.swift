@@ -386,31 +386,6 @@ extension WorkspaceDatabaseConnection {
     )
   }
 
-  /// Repair IDs saved by older configuration-only Claude probes. A missing
-  /// native draft is replaceable only before this local chat has any history.
-  func discardUnpromptedClaudeDraftSessionID(conversationID: String, expectedSessionID: String) throws -> Bool {
-    try transaction {
-      let statement = try prepareUnlocked("""
-        UPDATE harness_sessions
-        SET native_session_id=NULL, revision=revision+1, updated_at=?
-        WHERE conversation_id=? AND native_session_id=? AND runtime_kind='claude_code'
-          AND remote_workspace_id IS NULL
-          AND EXISTS (SELECT 1 FROM conversations c WHERE c.id=harness_sessions.conversation_id AND c.deleted_at IS NULL)
-          AND NOT EXISTS (SELECT 1 FROM runs WHERE conversation_id=harness_sessions.conversation_id)
-          AND NOT EXISTS (SELECT 1 FROM messages WHERE conversation_id=harness_sessions.conversation_id)
-          AND NOT EXISTS (SELECT 1 FROM run_activities WHERE conversation_id=harness_sessions.conversation_id)
-          AND NOT EXISTS (SELECT 1 FROM session_imports WHERE conversation_id=harness_sessions.conversation_id)
-          AND NOT EXISTS (SELECT 1 FROM retained_execution_history WHERE conversation_id=harness_sessions.conversation_id)
-        """)
-      defer { sqlite3_finalize(statement) }
-      try bind(Self.timestamp(Date()), at: 1, to: statement)
-      try bind(conversationID, at: 2, to: statement)
-      try bind(expectedSessionID, at: 3, to: statement)
-      try stepDone(statement)
-      return changedRowCountUnlocked == 1
-    }
-  }
-
   public func updateLocalACPSessionID(
     conversationID: String,
     runID: String? = nil,

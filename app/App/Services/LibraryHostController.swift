@@ -723,8 +723,6 @@ final class LibraryHostController {
         guard !revocationRetryInProgress, model != nil else { return }
         revocationRetryInProgress = true
         defer { revocationRetryInProgress = false }
-        // Older persisted state may contain a device with no remote targets.
-        pendingRevocations = pendingRevocations.filter { !$0.value.isEmpty }
         for (deviceID, ids) in pendingRevocations {
             for id in ids where !enrollingWorkspaceIDs.contains(id) {
                 enrollingWorkspaceIDs.insert(id)

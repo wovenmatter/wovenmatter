@@ -626,12 +626,12 @@ struct SidebarNavigationPage: View {
             RailRow(
                 icon: .container,
                 harnessLogo: HarnessLogo(runtimeKind: target.harness.id),
-                title: target.harness.presentationName,
+                title: target.harness.displayName,
                 hoverID: "remote-harness:\(target.id)"
             ) {
                 actions.onSelectRemoteAgent(target)
             }
-            newChatButton(label: "New chat with \(target.harness.presentationName) in \(target.configuration.name)") {
+            newChatButton(label: "New chat with \(target.harness.displayName) in \(target.configuration.name)") {
                 actions.onStartRemoteChat(target)
             }
             .disabled(!canCreateChat(workspaceID: ApplicationModel.remoteDatabaseSourceID(target.configuration.id)))
@@ -1536,7 +1536,7 @@ struct NewChatDrawer: View {
                                     harnessLogo: HarnessLogo(
                                         runtimeKind: target.harness.id
                                     ),
-                                    title: target.harness.presentationName,
+                                    title: target.harness.displayName,
                                     detail: target.configuration.name
                                 )
                             }

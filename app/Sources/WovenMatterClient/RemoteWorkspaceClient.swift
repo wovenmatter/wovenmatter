@@ -262,9 +262,6 @@ public struct RemoteHarnessStatus: Codable, Equatable, Identifiable, Sendable {
     public var source: String? = nil
     public var path: String? = nil
 
-    /// Older workspace services may still report the previous agent name.
-    public var presentationName: String { id == .defaultAgent ? id.displayName : displayName }
-
     /// Lifecycle responses are newer than the harness inventory fetched before launch.
     /// Reconcile only the native OpenCode instance; ACP authentication stays authoritative.
     public func reconcilingOpenCode(instance: RemoteWorkspaceInstanceStatus?, installed: Bool?) -> Self {
