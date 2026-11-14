@@ -4,6 +4,12 @@ import CryptoKit
 import Crypto
 #endif
 import Foundation
+#if canImport(SQLite3)
+import SQLite3
+#else
+import CSQLite
+#endif
+import WovenMatterCore
 
 /// Converts a library written by v0.4.2, or by a build before the versioned
 /// schema, to the current schema in place.
@@ -16,7 +22,8 @@ import Foundation
 /// later tables were named for where they came from (`paired_*`, `device_*`,
 /// `workspace_*`) rather than what they hold, and it stored JSON as BLOB.
 /// This renames the tables and columns that hold current data, drops what
-/// nothing reads any more, stores JSON as text, and rewrites the paired-sync
+/// nothing reads any more, stores JSON as text, moves each execution
+/// owner's transcript document into its rows, and rewrites the paired-sync
 /// bookkeeping to match, so paired Macs that update together keep their
 /// versions and cursors.
 ///
@@ -184,12 +191,26 @@ extension WorkspaceDatabaseConnection {
     ("product_analytics_events", ["payload", "status"]),
     ("calendar_items", ["user_id", "agent_codename", "pinned_folder_id", "delivery_folder_id", "schedule_label",
                         "origin_device_id"]),
+    // A whole transcript in one shared row; its rows hold it now.
+    ("execution_conversations", ["transcript"]),
+  ]
+
+  /// Columns added, by their table's current name, with their declarations
+  /// (`coreTablesSQL` and `createFederationSchemaUnlocked` declare them for
+  /// a new library). They hold what an execution owner's transcript said,
+  /// which v0.4.2 kept only in `execution_conversations.transcript`.
+  static let addedLibraryColumns: [(table: String, columns: [(name: String, declaration: String)])] = [
+    ("messages", [("sequence", "INTEGER"), ("position", "INTEGER"), ("attachment_references", "TEXT")]),
+    ("runs", [("position", "INTEGER")]),
+    ("run_activities", [("position", "INTEGER"), ("sequence", "INTEGER"), ("title", "TEXT"), ("detail", "TEXT"),
+                        ("status", "TEXT"), ("details_record_id", "TEXT"), ("is_transient", "INTEGER"), ("completed_at", "TEXT")]),
+    ("execution_conversations", [("active_run_id", "TEXT")]),
   ]
 
   /// JSON documents stored as BLOB, by their table's current name. They are
   /// TEXT now, so SQLite's JSON functions read them without a cast. Binary
-  /// columns (hashes, artifact chunks, native history parts) stay BLOB, and
-  /// `execution_conversations.transcript` is left for its own removal.
+  /// columns (hashes, artifact chunks, native history parts) stay BLOB;
+  /// `execution_conversations.transcript` is dropped instead.
   static let jsonTextColumns: [(table: String, columns: [String])] = [
     ("execution_workspaces", ["payload"]), ("execution_journal", ["payload"]),
     ("execution_conversations", ["conversation"]), ("execution_adoptions", ["payload"]),
@@ -319,6 +340,7 @@ extension WorkspaceDatabaseConnection {
             """, [table])
         }
       }
+      try addTranscriptColumnsUnlocked(tables: tables, columns: columns, bookkeeping: bookkeeping)
       for (table, dropped) in Self.droppedLibraryColumns where tables.contains(table) {
         let present = try columns(table), gone = dropped.filter(present.contains)
         guard !gone.isEmpty else { continue }
@@ -340,6 +362,166 @@ extension WorkspaceDatabaseConnection {
       try executeUnlocked("PRAGMA user_version=\(Self.librarySchemaVersion)")
     }
     try executeUnlocked("PRAGMA foreign_keys=ON")
+  }
+
+  /// Adds the transcript columns, fills them from each transcript an
+  /// execution owner's projection kept as one document, and records the
+  /// values in every recorded version of those rows. Each member that
+  /// updates derives the same values from the same shared document, so
+  /// nothing is sent to peers as a new version.
+  private func addTranscriptColumnsUnlocked(tables: Set<String>, columns: (String) throws -> Set<String>,
+                                            bookkeeping: Set<String>) throws {
+    var added: [String: [String]] = [:]
+    for (table, wanted) in Self.addedLibraryColumns where tables.contains(table) {
+      let present = try columns(table)
+      for column in wanted where !present.contains(column.name) {
+        try executeUnlocked("ALTER TABLE \(Self.peerQuote(table)) ADD COLUMN \(Self.peerQuote(column.name)) \(column.declaration)")
+        added[table, default: []].append(column.name)
+      }
+    }
+    var changed: [String: Set<String>] = [:]
+    if tables.contains("execution_conversations"), try columns("execution_conversations").contains("transcript") {
+      changed = try moveTranscriptsToRowsUnlocked(bookkeeping: bookkeeping)
+    }
+    for (table, names) in added { try refreshPeerColumnsUnlocked(table, names, ids: nil, bookkeeping: bookkeeping) }
+    // Existing columns the move rewrote, in the rows it touched.
+    for (table, names) in [("messages", ["status", "created_at"]), ("run_activities", ["content", "created_at"]),
+                           ("runs", ["user_message_id", "assistant_message_id"])] {
+      guard let ids = changed[table], !ids.isEmpty else { continue }
+      try refreshPeerColumnsUnlocked(table, names, ids: ids.sorted(), bookkeeping: bookkeeping)
+    }
+  }
+
+  /// Writes what each Linux or iPhone transcript held into its rows: every
+  /// message's, activity's and run's position, the message and activity
+  /// fields only the transcript had, its active run, and any row it held
+  /// that the tables lack. A legacy tool message it retired is deleted. A
+  /// paired Mac's projection was a copy of that Mac's rows and is skipped.
+  /// Returns the IDs of existing rows whose existing columns changed, by table.
+  private func moveTranscriptsToRowsUnlocked(bookkeeping: Set<String>) throws -> [String: Set<String>] {
+    var documents: [(id: String, transcript: LibraryTranscript)] = []
+    let read = try prepareUnlocked("""
+      SELECT c.id,c.transcript FROM execution_conversations c LEFT JOIN execution_workspaces w ON w.id=c.workspace_id
+      WHERE c.transcript IS NOT NULL AND json_extract(CAST(w.payload AS TEXT),'$.kind') IS NOT 'mac'
+      """)
+    defer { sqlite3_finalize(read) }
+    while true {
+      let code = sqlite3_step(read)
+      if code == SQLITE_DONE { break }
+      guard code == SQLITE_ROW else { throw stepError() }
+      // An unreadable document has nothing to move; its rows stay as they are.
+      guard let transcript = try? JSONDecoder().decode(LibraryTranscript.self, from: blob(read, column: 1)) else { continue }
+      documents.append((try text(read, column: 0), transcript))
+    }
+    var changed: [String: Set<String>] = [:], deleted: [String] = []
+    let now = Self.timestamp(Date())
+    func owner(_ table: String, _ id: String) throws -> String? {
+      try libraryIDsUnlocked("SELECT conversation_id FROM \(table) WHERE id=?", bindings: [id]).first
+    }
+    for (conversationID, transcript) in documents {
+      try toolsExecuteUnlocked("UPDATE execution_conversations SET active_run_id=? WHERE id=?", [transcript.activeRunID, conversationID])
+      for (index, message) in transcript.messages.enumerated() {
+        let values: [String?] = [message.sequence.map(String.init), String(index + 1), try message.attachments.map { try toolsJSON($0) },
+                                 message.status ?? "", message.createdAt, message.id]
+        switch try owner("messages", message.id) {
+        case conversationID?:
+          try toolsExecuteUnlocked("UPDATE messages SET sequence=?,position=?,attachment_references=?,status=?,created_at=? WHERE id=?", values)
+          changed["messages", default: []].insert(message.id)
+        case nil:
+          try toolsExecuteUnlocked("""
+            INSERT INTO messages(sequence,position,attachment_references,status,created_at,id,conversation_id,run_id,role,content,updated_at)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?)
+            """, values + [conversationID, message.runID, message.role, message.content, now])
+        default: continue
+        }
+      }
+      for id in transcript.removedMessageIDs ?? [] {
+        guard try federationScalarUnlocked("SELECT COUNT(*) FROM messages WHERE id=? AND conversation_id=? AND role<>'user'",
+                                           bindings: [id, conversationID]) != 0 else { continue }
+        try toolsExecuteUnlocked("DELETE FROM messages WHERE id=?", [id])
+        deleted.append(id)
+      }
+      for (index, activity) in transcript.activities.enumerated() {
+        let present = try owner("run_activities", activity.id)
+        guard present == nil || present == conversationID else { continue }
+        // An activity read from this Mac's rows into the transcript (a chat
+        // that moved to its owner) carries only its title, detail and status,
+        // which its row already gives.
+        let legacy = activity.projectionJSON == nil && activity.detailsRecordID == nil && activity.isTransient == nil
+          && activity.sequence == nil && activity.createdAt == nil && activity.completedAt == nil
+        if legacy, present != nil {
+          try toolsExecuteUnlocked("UPDATE run_activities SET position=? WHERE id=?", [String(index + 1), activity.id])
+          continue
+        }
+        let content = try activity.projectionJSON.flatMap { json in
+          (try? JSONDecoder().decode(AgentRunActivity.self, from: Data(json.utf8))).map { _ in json }
+        } ?? toolsJSON(AgentRunActivity(id: activity.id, kind: .activity, title: activity.title, detail: activity.detail, status: activity.status))
+        let values: [String?] = [String(index + 1), activity.title, activity.detail, activity.status, activity.detailsRecordID,
+                                 activity.isTransient.map { $0 ? "1" : "0" }, activity.sequence.map(String.init), activity.completedAt,
+                                 activity.createdAt ?? "", content, activity.id]
+        if present == nil {
+          try toolsExecuteUnlocked("""
+            INSERT INTO run_activities(position,title,detail,status,details_record_id,is_transient,sequence,completed_at,created_at,content,id,
+              run_id,conversation_id,event_type) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,'activity')
+            """, values + [activity.runID, conversationID])
+        } else {
+          try toolsExecuteUnlocked("""
+            UPDATE run_activities SET position=?,title=?,detail=?,status=?,details_record_id=?,is_transient=?,sequence=?,completed_at=?,
+              created_at=?,content=? WHERE id=?
+            """, values)
+          changed["run_activities", default: []].insert(activity.id)
+        }
+      }
+      for (index, run) in (transcript.runs ?? []).enumerated() {
+        let values: [String?] = [String(index + 1), run.userMessageID, run.assistantMessageID, run.id]
+        switch try owner("runs", run.id) {
+        case conversationID?:
+          try toolsExecuteUnlocked("""
+            UPDATE runs SET position=?,user_message_id=COALESCE(?,user_message_id),assistant_message_id=COALESCE(?,assistant_message_id) WHERE id=?
+            """, values)
+          changed["runs", default: []].insert(run.id)
+        case nil:
+          try toolsExecuteUnlocked("""
+            INSERT INTO runs(position,user_message_id,assistant_message_id,id,conversation_id,status,started_at,completed_at,created_at,updated_at)
+            VALUES (?,?,?,?,?,?,?,?,?,?)
+            """, values + [conversationID, run.status, run.startedAt, run.completedAt, run.startedAt ?? now, now])
+        default: continue
+        }
+      }
+    }
+    // A deleted message's recorded versions become its deletion, which
+    // every member records alike.
+    if !deleted.isEmpty {
+      let ids = String(decoding: try JSONEncoder().encode(deleted), as: UTF8.self)
+      for name in ["paired_library_rows", "paired_library_frontier"] where bookkeeping.contains(name) {
+        try toolsExecuteUnlocked("""
+          UPDATE \(name) SET payload=json_set(payload,'$.deleted',json('true'))
+          WHERE table_name='messages' AND record_key IN (SELECT json_array(value) FROM json_each(?))
+          """, [ids])
+      }
+    }
+    return changed
+  }
+
+  /// Records the current value of `columns` (null for a row that is gone)
+  /// in every recorded version of the table's rows, or of the rows `ids`
+  /// names. The table is keyed by `id`.
+  private func refreshPeerColumnsUnlocked(_ table: String, _ columns: [String], ids: [String]?, bookkeeping: Set<String>) throws {
+    for name in Self.peerPayloadBookkeeping where bookkeeping.contains(name) {
+      let named = Self.peerNamedBookkeeping.contains(name)
+      let key = named ? "\(name).record_key" : "json_extract(\(name).payload,'$.key')"
+      let values = columns.map { column in
+        let live = "(SELECT json_object('type',typeof(s.\(column)),'value',CAST(s.\(column) AS TEXT)) FROM \(Self.peerQuote(table)) s WHERE s.id=json_extract(\(key),'$[0]'))"
+        return "'$.row.\(column)',json(COALESCE(\(live),json_object('type','null','value',NULL)))"
+      }.joined(separator: ",")
+      var filter = named ? "table_name=?1" : "json_valid(payload) AND json_extract(payload,'$.table')=?1"
+      var bindings: [String?] = [table]
+      if let ids {
+        filter += " AND json_extract(\(key),'$[0]') IN (SELECT value FROM json_each(?2))"
+        bindings.append(String(decoding: try JSONEncoder().encode(ids), as: UTF8.self))
+      }
+      try toolsExecuteUnlocked("UPDATE \(name) SET payload=json_set(payload,\(values)) WHERE \(filter)", bindings)
+    }
   }
 
   /// Recreates a core table from its current declaration and copies its rows,

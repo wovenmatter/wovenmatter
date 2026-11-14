@@ -169,36 +169,44 @@ extension WorkspaceDatabaseConnection {
   public func libraryFederatedTranscript(conversationID: String, before: String? = nil) throws -> LibraryTranscript? {
     try withLock {
       guard try federationConversationUnlocked(conversationID) != nil else { return nil }
-      let stored = try federationValuesUnlocked("SELECT transcript FROM execution_conversations WHERE id = ? AND deleted = 0 AND transcript IS NOT NULL", bindings: [conversationID], as: LibraryTranscript.self).first ?? LibraryTranscript(conversationID: conversationID)
-      var end = FederationTranscriptCursor(messages: stored.messages.count, activities: stored.activities.count)
+      let messageCount = try transcriptMessageCountUnlocked(conversationID)
+      let activityCount = try transcriptActivityCountUnlocked(conversationID)
+      var end = FederationTranscriptCursor(messages: messageCount, activities: activityCount)
       if let before {
         guard before.utf8.count <= 2_048, let data = Data(base64Encoded: before),
               let cursor = try? JSONDecoder().decode(FederationTranscriptCursor.self, from: data),
-              cursor.messages >= 0, cursor.messages <= stored.messages.count,
-              cursor.activities >= 0, cursor.activities <= stored.activities.count else {
+              cursor.messages >= 0, cursor.messages <= messageCount,
+              cursor.activities >= 0, cursor.activities <= activityCount else {
           throw federationError("invalid_cursor", "This transcript cursor is no longer valid.")
         }
         end = cursor
       }
-      // Page both message and activity history without dropping older tool output.
+      // Page both message and activity history without dropping older tool
+      // output: at most 80 of each before the cursor, read in one window.
+      let messageOffset = max(0, end.messages - 80), activityOffset = max(0, end.activities - 80)
+      let messages = try transcriptMessagesUnlocked(conversationID, offset: messageOffset, limit: end.messages - messageOffset)
+      let activities = try transcriptActivitiesUnlocked(conversationID, offset: activityOffset, limit: end.activities - activityOffset)
       var messageStart = end.messages; var activityStart = end.activities; var bytes = 0
-      while messageStart > 0, end.messages - messageStart < 80 {
-        let size = try JSONEncoder().encode(stored.messages[messageStart - 1]).count
+      while messageStart > messageOffset {
+        let size = try JSONEncoder().encode(messages[messageStart - 1 - messageOffset]).count
         // Legacy native sessions may already contain an oversized individual
         // message. Always make progress for one item rather than returning an
         // unchanged cursor forever; normal incoming events are bounded at 1 MiB.
         if bytes + size > 4 * 1_024 * 1_024, messageStart < end.messages { break }
         bytes += size; messageStart -= 1
       }
-      while activityStart > 0, end.activities - activityStart < 80 {
-        let size = try JSONEncoder().encode(stored.activities[activityStart - 1]).count
+      while activityStart > activityOffset {
+        let size = try JSONEncoder().encode(activities[activityStart - 1 - activityOffset]).count
         if bytes + size > 8 * 1_024 * 1_024, bytes > 0 { break }
         bytes += size; activityStart -= 1
       }
       let older = messageStart > 0 || activityStart > 0
         ? try JSONEncoder().encode(FederationTranscriptCursor(messages: messageStart, activities: activityStart)).base64EncodedString() : nil
-      return LibraryTranscript(conversationID: conversationID, messages: Array(stored.messages[messageStart..<end.messages]),
-        activities: Array(stored.activities[activityStart..<end.activities]), activeRunID: stored.activeRunID, olderCursor: older, runs: stored.runs)
+      return LibraryTranscript(conversationID: conversationID,
+        messages: Array(messages[(messageStart - messageOffset)...]), activities: Array(activities[(activityStart - activityOffset)...]),
+        activeRunID: try libraryIDsUnlocked("SELECT active_run_id FROM execution_conversations WHERE id=? AND active_run_id IS NOT NULL",
+                                            bindings: [conversationID]).first,
+        olderCursor: older, runs: try transcriptRunsUnlocked(conversationID))
     }
   }
   func federationConversationUnlocked(_ id: String) throws -> LibraryConversation? {

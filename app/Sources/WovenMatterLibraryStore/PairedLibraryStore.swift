@@ -731,7 +731,7 @@ extension WorkspaceDatabaseConnection {
   }
 
   /// Projects only conversations touched by this receive. Unchanged foreign
-  /// transcripts are not rewritten on every bounded synchronization turn.
+  /// conversations are not rewritten on every bounded synchronization turn.
   private func projectConversationOwners(_ scope: ProjectionScope) throws {
     guard !scope.conversations.isEmpty || !scope.owners.isEmpty else { return }
     let localID = try libraryIdentityUnlocked().hostDeviceID
@@ -761,11 +761,10 @@ extension WorkspaceDatabaseConnection {
         projected.folderID = current["folder_id"]?.stringValue
         projected.isPinned = current["is_pinned"]?.doubleValue == 1
       }
-      let transcript = try federationLegacyTranscriptUnlocked(id)
-      let query = try prepareUnlocked("INSERT INTO execution_conversations(id,workspace_id,conversation,transcript) VALUES(?,?,?,?) ON CONFLICT(id) DO UPDATE SET workspace_id=excluded.workspace_id,conversation=excluded.conversation,transcript=excluded.transcript")
+      let query = try prepareUnlocked("INSERT INTO execution_conversations(id,workspace_id,conversation) VALUES(?,?,?) ON CONFLICT(id) DO UPDATE SET workspace_id=excluded.workspace_id,conversation=excluded.conversation")
       defer { sqlite3_finalize(query) }
       try bind(id, at: 1, to: query); try bind(workspace.id, at: 2, to: query)
-      try bindJSON(projected, at: 3, to: query); try bind(JSONEncoder().encode(transcript), at: 4, to: query); try stepDone(query)
+      try bindJSON(projected, at: 3, to: query); try stepDone(query)
     }
   }
 

@@ -168,17 +168,20 @@ extension WorkspaceDatabaseConnection {
   /// activity pages continue to read the bounded projection and summary index.
   private func libraryActivityDetailsUnlocked(conversationID: String, runID: String,
     activityID: String) throws -> AgentRunActivity? {
-    let lookup = try prepareUnlocked("SELECT workspace_id,transcript FROM execution_conversations WHERE id=? AND deleted=0 AND transcript IS NOT NULL")
+    // An activity the execution owner projected names its details record.
+    let lookup = try prepareUnlocked("""
+      SELECT c.workspace_id,a.details_record_id,a.content FROM execution_conversations c
+      JOIN run_activities a ON a.conversation_id=c.id
+      WHERE c.id=? AND c.deleted=0 AND a.id=? AND a.run_id=? AND a.title IS NOT NULL
+      """)
     defer { sqlite3_finalize(lookup) }
-    try bind(conversationID, at: 1, to: lookup)
+    try bind(conversationID, at: 1, to: lookup); try bind(activityID, at: 2, to: lookup); try bind(runID, at: 3, to: lookup)
     let lookupCode = sqlite3_step(lookup)
     if lookupCode == SQLITE_DONE { return nil }
     guard lookupCode == SQLITE_ROW else { throw stepError() }
     let workspaceID = try text(lookup, column: 0)
-    let transcript = try JSONDecoder().decode(LibraryTranscript.self, from: blob(lookup, column: 1))
-    guard let row = transcript.activities.first(where: { $0.id == activityID && $0.runID == runID }) else { return nil }
-    guard let recordID = row.detailsRecordID else {
-      return row.projectionJSON.flatMap { try? JSONDecoder().decode(AgentRunActivity.self, from: Data($0.utf8)) }
+    guard let recordID = optionalText(lookup, column: 1) else {
+      return try? JSONDecoder().decode(AgentRunActivity.self, from: Data(text(lookup, column: 2).utf8))
     }
     let data = try LibraryActivityDetails.reconstruct(recordID: recordID, activityID: activityID) { pointer in
       try libraryActivityRecordUnlocked(workspaceID: workspaceID, conversationID: conversationID,

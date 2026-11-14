@@ -57,12 +57,10 @@ extension WorkspaceDatabaseConnection {
         conversation = existing
       } else {
         conversation.workspaceID = workspaceID; conversation.libraryID = identity.libraryID
-        let statement = try prepareUnlocked("INSERT INTO execution_conversations(id,workspace_id,conversation,transcript) VALUES (?,?,?,?)")
+        let statement = try prepareUnlocked("INSERT INTO execution_conversations(id,workspace_id,conversation) VALUES (?,?,?)")
         defer { sqlite3_finalize(statement) }
         try bind(conversationID, at: 1, to: statement); try bind(workspaceID, at: 2, to: statement)
-        try bindJSON(conversation, at: 3, to: statement)
-        try bind(JSONEncoder().encode(federationLegacyTranscriptUnlocked(conversationID)), at: 4, to: statement)
-        try stepDone(statement)
+        try bindJSON(conversation, at: 3, to: statement); try stepDone(statement)
         for runID in try libraryIDsUnlocked("SELECT id FROM runs WHERE conversation_id=?", bindings: [conversationID]) {
           try toolsExecuteUnlocked("INSERT INTO execution_runs(id,workspace_id,conversation_id) VALUES (?,?,?)", [runID, workspaceID, conversationID])
         }
@@ -83,13 +81,15 @@ extension WorkspaceDatabaseConnection {
     }
   }
 
-  /// The legacy history sent with an adoption: the newest messages and
-  /// activities that fit the host's request limit (8 MiB) and its counts
-  /// (`adoptionEntityLimit` of each), roles the host accepts. The full
-  /// history stays in this library either way.
+  /// The history sent with an adoption: the newest messages and activities
+  /// that fit the host's request limit (8 MiB) and its counts
+  /// (`adoptionEntityLimit` of each), roles the host accepts. The host starts
+  /// its own runs, so none are sent. The full history stays in this library
+  /// either way.
   func adoptionTranscriptUnlocked(_ conversationID: String, limit: Int = 6 * 1_024 * 1_024) throws -> LibraryTranscript {
-    var transcript = try federationLegacyTranscriptUnlocked(conversationID)
+    var transcript = try libraryTranscriptUnlocked(conversationID)
     transcript.messages.removeAll { !["user", "assistant", "system"].contains($0.role) }
+    transcript.activeRunID = nil; transcript.runs = nil
     return Self.fitted(transcript, limit: limit)
   }
 
@@ -111,37 +111,6 @@ extension WorkspaceDatabaseConnection {
       if !value.activities.isEmpty { value.activities.removeFirst(min(activities, value.activities.count)) }
     }
     return value
-  }
-
-  func federationLegacyTranscriptUnlocked(_ conversationID: String) throws -> LibraryTranscript {
-    let statement = try prepareUnlocked("SELECT id,run_id,role,content,status,created_at,COALESCE((SELECT kind FROM session_deliveries WHERE message_id=messages.id),(SELECT kind FROM message_provenance WHERE message_id=messages.id)),COALESCE((SELECT source_id FROM session_deliveries WHERE message_id=messages.id),(SELECT source_id FROM message_provenance WHERE message_id=messages.id)),COALESCE((SELECT source_title FROM session_deliveries WHERE message_id=messages.id),(SELECT source_title FROM message_provenance WHERE message_id=messages.id)),COALESCE((SELECT source_agent FROM session_deliveries WHERE message_id=messages.id),(SELECT source_agent FROM message_provenance WHERE message_id=messages.id)) FROM messages WHERE conversation_id=? ORDER BY created_at,id")
-    defer { sqlite3_finalize(statement) }
-    try bind(conversationID, at: 1, to: statement)
-    var transcript = LibraryTranscript(conversationID: conversationID)
-    while true {
-      let code = sqlite3_step(statement)
-      if code == SQLITE_DONE { break }
-      guard code == SQLITE_ROW else { throw stepError() }
-      transcript.messages.append(try LibraryMessage(id: text(statement, column: 0), conversationID: conversationID,
-        runID: optionalText(statement, column: 1), role: text(statement, column: 2), content: text(statement, column: 2) == "user" ? (optionalText(statement, column: 6) == "goal" ? "Continuing toward the goal." : WorkspaceGoal.displayPrompt(text(statement, column: 3))) : text(statement, column: 3),
-        status: optionalText(statement, column: 4), createdAt: text(statement, column: 5),
-        agentSourceID: optionalText(statement, column: 7), isAgentAuthored: optionalText(statement, column: 7) == nil ? nil : true,
-        senderSessionTitle: optionalText(statement, column: 8), senderHarness: optionalText(statement, column: 9), senderKind: optionalText(statement, column: 6)))
-    }
-    let events = try prepareUnlocked("SELECT id,run_id,content FROM run_activities WHERE conversation_id=? ORDER BY created_at,id")
-    defer { sqlite3_finalize(events) }
-    try bind(conversationID, at: 1, to: events)
-    while true {
-      let code = sqlite3_step(events)
-      if code == SQLITE_DONE { break }
-      guard code == SQLITE_ROW else { throw stepError() }
-      let raw = try text(events, column: 2)
-      let activity = try? JSONDecoder().decode(AgentRunActivity.self, from: Data(raw.utf8))
-      transcript.activities.append(try LibraryActivity(id: text(events, column: 0), runID: text(events, column: 1),
-        title: activity?.title ?? activity?.kind.rawValue ?? "Activity", detail: activity?.detail ?? activity?.content ?? raw,
-        status: activity?.status ?? "completed"))
-    }
-    return transcript
   }
 }
 

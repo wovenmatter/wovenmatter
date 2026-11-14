@@ -462,18 +462,18 @@ extension PairedLibraryTests {
     try await a.send(to: b)
     #expect(try await b.database.libraryExecutionOwner(conversationID: session) == workspace.id)
     let marker = { () async throws -> String? in
-      try await b.database.read { try $0.historyRowsUnlocked("SELECT transcript FROM execution_conversations WHERE id=?", values: [session]).first?.objectValue?["transcript"]?.stringValue }
+      try await b.database.read { try $0.historyRowsUnlocked("SELECT json_extract(conversation,'$.title') AS title FROM execution_conversations WHERE id=?", values: [session]).first?.objectValue?["title"]?.stringValue }
     }
     try await b.database.write { connection in
       try connection.executeUnlocked("UPDATE paired_library_clock SET applying=1")
-      try connection.toolsExecuteUnlocked("UPDATE execution_conversations SET transcript=NULL WHERE id=?", [session])
+      try connection.toolsExecuteUnlocked("UPDATE execution_conversations SET conversation=json_set(conversation,'$.title','Untouched') WHERE id=?", [session])
       try connection.executeUnlocked("UPDATE paired_library_clock SET applying=0")
     }
     try await a.send(to: b)
-    #expect(try await marker() == nil)
+    #expect(try await marker() == "Untouched")
     try await a.database.write { try $0.toolsExecuteUnlocked("UPDATE conversations SET title='Renamed by owner' WHERE id=?", [session]) }
     try await a.send(to: b)
-    #expect(try await marker() != nil)
+    #expect(try await marker() == "Renamed by owner")
   }
 
   @Test func observersNeverCaptureWorkspaceFilesForAnotherMacsConversation() async throws {

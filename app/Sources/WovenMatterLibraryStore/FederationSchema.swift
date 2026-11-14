@@ -26,7 +26,7 @@ extension WorkspaceDatabaseConnection {
       );
       CREATE TABLE IF NOT EXISTS execution_conversations (
         id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, deleted INTEGER NOT NULL DEFAULT 0,
-        conversation TEXT NOT NULL, transcript BLOB
+        conversation TEXT NOT NULL, active_run_id TEXT
       );
       CREATE TABLE IF NOT EXISTS execution_adoptions (
         conversation_id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, payload TEXT NOT NULL

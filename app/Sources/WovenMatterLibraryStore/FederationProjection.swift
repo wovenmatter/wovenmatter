@@ -75,18 +75,20 @@ extension WorkspaceDatabaseConnection {
             (incoming.removedMessageIDs ?? []).allSatisfy({ !$0.isEmpty && $0.utf8.count <= 256 }) else {
         throw federationError("invalid_event", "Transcript records must belong to their conversation and include explicit stable message identities.")
       }
-      var transcript = try federationValuesUnlocked("SELECT transcript FROM execution_conversations WHERE id = ? AND transcript IS NOT NULL", bindings: [entry.conversationID], as: LibraryTranscript.self).first ?? LibraryTranscript(conversationID: entry.conversationID)
-      // Retire exact legacy tool-only rows from this display projection. The
-      // original messages and immutable native journal stay intact.
-      // User input cannot be hidden by structured-tool migration.
-      let removed = Set((transcript.removedMessageIDs ?? []) + (incoming.removedMessageIDs ?? []))
-      for id in removed {
-        if let existing = transcript.messages.first(where: { $0.id == id }), existing.role == "user" {
+      // An entry upserts rows; the transcript is built from them on read.
+      let previousActiveRunID = try libraryIDsUnlocked("SELECT active_run_id FROM execution_conversations WHERE id=? AND active_run_id IS NOT NULL",
+                                                       bindings: [entry.conversationID]).first
+      // Delete exact legacy tool-only rows that structured activities
+      // replace. The immutable native journal stays intact. User input cannot
+      // be hidden by structured-tool migration.
+      let removed = Set(incoming.removedMessageIDs ?? [])
+      for id in removed.sorted() {
+        guard try federationScalarUnlocked("SELECT COUNT(*) FROM messages WHERE id=? AND conversation_id=? AND role='user'",
+                                           bindings: [id, entry.conversationID]) == 0 else {
           throw federationError("invalid_event", "Structured-tool migration cannot hide user messages.")
         }
-        transcript.messages.removeAll { $0.id == id && $0.role != "user" }
+        try toolsExecuteUnlocked("DELETE FROM messages WHERE id=? AND conversation_id=?", [id, entry.conversationID])
       }
-      transcript.removedMessageIDs = removed.isEmpty ? nil : removed.sorted()
       for message in incoming.messages where !removed.contains(message.id) || message.role == "user" {
         guard message.agentSourceID == nil || (UUID(uuidString: message.agentSourceID!) != nil && message.role == "user" && message.isAgentAuthored != false),
               message.isAgentAuthored != true || message.agentSourceID != nil,
@@ -95,10 +97,10 @@ extension WorkspaceDatabaseConnection {
               message.senderKind == nil || WorkspaceSessionDeliveryKind(rawValue: message.senderKind!) != nil else {
           throw federationError("invalid_event", "Agent message provenance requires a source session and a supported delivery kind.")
         }
-        if let prior = transcript.messages.first(where: { $0.id == message.id }), prior.agentSourceID != nil {
-          guard prior.agentSourceID == message.agentSourceID,
-                prior.isAgentAuthored != true || message.isAgentAuthored == true,
-                prior.senderKind == nil || prior.senderKind == message.senderKind else {
+        // Recorded provenance makes a message agent-authored for good.
+        if let prior = try historyRowsUnlocked("SELECT source_id,kind FROM message_provenance WHERE message_id=?", values: [message.id]).first?.objectValue {
+          guard prior["source_id"]?.stringValue == message.agentSourceID,
+                prior["kind"]?.stringValue == message.senderKind ?? "message" else {
             throw federationError("wrong_owner", "A message's agent provenance cannot change.")
           }
         }
@@ -112,21 +114,25 @@ extension WorkspaceDatabaseConnection {
           // conversation (checked below), whose execution this workspace
           // owns (checked above).
           let priorRun = optionalText(previous, column: 1)
-          let canBackfillNativeRun = workspace.kind == .ios && priorRun == nil && message.runID != nil
-            && message.sequence != nil && ((incoming.runs ?? []) + (transcript.runs ?? [])).contains(where: { $0.id == message.runID })
+          let canBackfillNativeRun = try workspace.kind == .ios && priorRun == nil && message.sequence != nil && message.runID.map { run in
+            try (incoming.runs ?? []).contains(where: { $0.id == run })
+              || federationScalarUnlocked("SELECT COUNT(*) FROM runs WHERE id=? AND conversation_id=? AND position IS NOT NULL",
+                                          bindings: [run, entry.conversationID]) != 0
+          } == true
           guard try text(previous, column: 0) == entry.conversationID,
                 priorRun == message.runID || canBackfillNativeRun,
                 try text(previous, column: 2) == message.role else {
             throw federationError("wrong_owner", "A message's conversation, run and role cannot change.")
           }
         } else if previousCode != SQLITE_DONE { throw stepError() }
-        if let index = transcript.messages.firstIndex(where: { $0.id == message.id }) { transcript.messages[index] = message }
-        else { transcript.messages.append(message) }
+        // A new message takes the next position; an updated one keeps its place.
         try toolsExecuteUnlocked("""
-          INSERT INTO messages(id,conversation_id,run_id,role,content,status,created_at,updated_at)
-          VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET content=excluded.content,status=excluded.status,updated_at=excluded.updated_at,run_id=COALESCE(messages.run_id,excluded.run_id)
-          """, [message.id, entry.conversationID, message.runID, message.role, message.content, message.status ?? "completed",
-                           message.createdAt.isEmpty ? now : message.createdAt, now])
+          INSERT INTO messages(id,conversation_id,run_id,role,content,status,created_at,updated_at,sequence,attachment_references,position)
+          VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,(SELECT COALESCE(MAX(position),0)+1 FROM messages WHERE conversation_id=?2 AND position IS NOT NULL))
+          ON CONFLICT(id) DO UPDATE SET content=excluded.content,status=excluded.status,created_at=excluded.created_at,updated_at=excluded.updated_at,
+          run_id=COALESCE(messages.run_id,excluded.run_id),sequence=excluded.sequence,attachment_references=excluded.attachment_references
+          """, [message.id, entry.conversationID, message.runID, message.role, message.content, message.status ?? "", message.createdAt, now,
+                message.sequence.map(String.init), try message.attachments.map { try toolsJSON($0) }])
         if let source = message.agentSourceID {
           try toolsExecuteUnlocked("""
             INSERT INTO message_provenance(message_id,source_id,source_title,source_agent,kind)
@@ -136,19 +142,25 @@ extension WorkspaceDatabaseConnection {
       }
       for activity in incoming.activities {
         try claimFederationRunUnlocked(activity.runID, conversationID: entry.conversationID, workspaceID: workspace.id)
-        if let index = transcript.activities.firstIndex(where: { $0.id == activity.id }) { transcript.activities[index] = activity }
-        else { transcript.activities.append(activity) }
         let existingActivity = try libraryIDsUnlocked("SELECT conversation_id || '/' || run_id FROM run_activities WHERE id=?", bindings: [activity.id])
         guard existingActivity.isEmpty || existingActivity.first == entry.conversationID + "/" + activity.runID else {
           throw federationError("wrong_owner", "An activity identity belongs to another conversation.")
         }
-        let display = activity.projectionJSON.flatMap { try? JSONDecoder().decode(AgentRunActivity.self, from: Data($0.utf8)) }
-          ?? AgentRunActivity(id: activity.id, kind: .activity, title: activity.title, detail: activity.detail, status: activity.status)
-        let encoded = String(decoding: try JSONEncoder().encode(display), as: UTF8.self)
+        // The owner's projection is kept as it was sent; one this Mac cannot
+        // read is replaced by the row's own title, detail and status.
+        let content = try activity.projectionJSON.flatMap { json in
+          (try? JSONDecoder().decode(AgentRunActivity.self, from: Data(json.utf8))).map { _ in json }
+        } ?? toolsJSON(AgentRunActivity(id: activity.id, kind: .activity, title: activity.title, detail: activity.detail, status: activity.status))
         try toolsExecuteUnlocked("""
-          INSERT INTO run_activities(id,run_id,conversation_id,event_type,content,created_at)
-          VALUES (?,?,?,'activity',?,?) ON CONFLICT(id) DO UPDATE SET content=excluded.content
-          """, [activity.id, activity.runID, entry.conversationID, encoded, activity.createdAt ?? now])
+          INSERT INTO run_activities(id,run_id,conversation_id,event_type,content,created_at,title,detail,status,details_record_id,is_transient,sequence,completed_at,position)
+          VALUES (?1,?2,?3,'activity',?4,?5,?6,?7,?8,?9,?10,?11,?12,
+            (SELECT COALESCE(MAX(position),0)+1 FROM run_activities WHERE conversation_id=?3 AND position IS NOT NULL))
+          ON CONFLICT(id) DO UPDATE SET content=excluded.content,created_at=excluded.created_at,title=excluded.title,detail=excluded.detail,
+          status=excluded.status,details_record_id=excluded.details_record_id,is_transient=excluded.is_transient,
+          sequence=excluded.sequence,completed_at=excluded.completed_at
+          """, [activity.id, activity.runID, entry.conversationID, content, activity.createdAt ?? "", activity.title, activity.detail,
+                activity.status, activity.detailsRecordID, activity.isTransient.map { $0 ? "1" : "0" },
+                activity.sequence.map(String.init), activity.completedAt])
       }
       if let runID = incoming.activeRunID { try claimFederationRunUnlocked(runID, conversationID: entry.conversationID, workspaceID: workspace.id) }
       var observedRuns = Set(incoming.messages.compactMap(\.runID) + incoming.activities.map(\.runID))
@@ -159,8 +171,8 @@ extension WorkspaceDatabaseConnection {
           VALUES (?,?,'completed',?,?)
           """, [runID, entry.conversationID, now, now])
       }
-      let activeRunID = incoming.activeRunID ?? (entry.runID != nil && entry.runID != transcript.activeRunID ? transcript.activeRunID : nil)
-      if let previous = transcript.activeRunID, previous != activeRunID {
+      let activeRunID = incoming.activeRunID ?? (entry.runID != nil && entry.runID != previousActiveRunID ? previousActiveRunID : nil)
+      if let previous = previousActiveRunID, previous != activeRunID {
         let terminal = incoming.messages.last(where: { $0.runID == previous && $0.role == "assistant" })?.status ?? "completed"
         let status = ["completed", "failed", "cancelled", "interrupted"].contains(terminal) ? terminal : "completed"
         try toolsExecuteUnlocked("UPDATE runs SET status=?,updated_at=?,completed_at=? WHERE id=?", [status, now, now, previous])
@@ -168,33 +180,25 @@ extension WorkspaceDatabaseConnection {
       if let active = incoming.activeRunID {
         try toolsExecuteUnlocked("UPDATE runs SET status='running',updated_at=? WHERE id=?", [now, active])
       }
-      if let runs = incoming.runs {
-        var values = transcript.runs ?? []
-        for run in runs {
-          guard ["queued", "running", "completed", "failed", "cancelled", "interrupted"].contains(run.status),
-                (run.startedAt?.utf8.count ?? 0) <= 128, (run.completedAt?.utf8.count ?? 0) <= 128 else {
-            throw federationError("invalid_event", "Run metadata requires a supported status and bounded timestamps.")
-          }
-          try claimFederationRunUnlocked(run.id, conversationID: entry.conversationID, workspaceID: workspace.id)
-          try toolsExecuteUnlocked("""
-            INSERT INTO runs(id,conversation_id,status,created_at,updated_at,started_at,completed_at)
-            VALUES (?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET status=excluded.status,
-            updated_at=excluded.updated_at,started_at=COALESCE(runs.started_at,excluded.started_at),completed_at=excluded.completed_at
-            """, [run.id, entry.conversationID, run.status,
-              run.startedAt ?? now, now, run.startedAt, run.completedAt])
-          if let index = values.firstIndex(where: { $0.id == run.id }) { values[index] = run }
-          else { values.append(run) }
+      for run in incoming.runs ?? [] {
+        guard ["queued", "running", "completed", "failed", "cancelled", "interrupted"].contains(run.status),
+              (run.startedAt?.utf8.count ?? 0) <= 128, (run.completedAt?.utf8.count ?? 0) <= 128 else {
+          throw federationError("invalid_event", "Run metadata requires a supported status and bounded timestamps.")
         }
-        transcript.runs = values
+        try claimFederationRunUnlocked(run.id, conversationID: entry.conversationID, workspaceID: workspace.id)
+        // A run joins the transcript's runs the first time the owner lists it.
+        try toolsExecuteUnlocked("""
+          INSERT INTO runs(id,conversation_id,status,created_at,updated_at,started_at,completed_at,user_message_id,assistant_message_id,position)
+          VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,(SELECT COALESCE(MAX(position),0)+1 FROM runs WHERE conversation_id=?2 AND position IS NOT NULL))
+          ON CONFLICT(id) DO UPDATE SET status=excluded.status,updated_at=excluded.updated_at,
+          started_at=COALESCE(runs.started_at,excluded.started_at),completed_at=excluded.completed_at,
+          user_message_id=COALESCE(excluded.user_message_id,runs.user_message_id),
+          assistant_message_id=COALESCE(excluded.assistant_message_id,runs.assistant_message_id),
+          position=COALESCE(runs.position,excluded.position)
+          """, [run.id, entry.conversationID, run.status, run.startedAt ?? now, now, run.startedAt, run.completedAt,
+                run.userMessageID, run.assistantMessageID])
       }
-      transcript.messages = transcript.messages.enumerated().sorted {
-        let left = $0.element.sequence ?? Int64.max, right = $1.element.sequence ?? Int64.max
-        return left == right ? $0.offset < $1.offset : left < right
-      }.map(\.element)
-      transcript.activeRunID = activeRunID
-      let statement = try prepareUnlocked("UPDATE execution_conversations SET transcript = ? WHERE id = ?")
-      defer { sqlite3_finalize(statement) }
-      try bind(JSONEncoder().encode(transcript), at: 1, to: statement); try bind(entry.conversationID, at: 2, to: statement); try stepDone(statement)
+      try toolsExecuteUnlocked("UPDATE execution_conversations SET active_run_id=? WHERE id=?", [activeRunID, entry.conversationID])
       if var conversation = try federationConversationUnlocked(entry.conversationID) {
         conversation.activeRunID = activeRunID
         if let message = incoming.messages.last { conversation.preview = String(message.content.prefix(300)) }

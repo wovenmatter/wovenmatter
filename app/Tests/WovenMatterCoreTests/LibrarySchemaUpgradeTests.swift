@@ -24,6 +24,15 @@ import WovenMatterCore
     let fixture = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
       .appending(path: "../Fixtures/library-v0.4.2.sql").standardizedFileURL
     try PersistenceSQL(url: upgraded.databaseURL).execute(try String(contentsOf: fixture, encoding: .utf8))
+    // What v0.4.2 served for each execution owner's conversation: its whole
+    // transcript document, one page of it.
+    let linuxChat = "c0ffee00-1111-4222-8333-444455556666", phoneChat = "d0d0d0d0-1111-4222-8333-444455556666"
+    var served: [String: LibraryTranscript] = [:]
+    for id in [linuxChat, phoneChat] {
+      let stored = try storedTranscript(upgraded.databaseURL, id)
+      served[id] = LibraryTranscript(conversationID: id, messages: stored.messages, activities: stored.activities,
+        activeRunID: stored.activeRunID, runs: stored.runs)
+    }
     // Open both the way the app does: the usage index first, then the library.
     _ = try UsageStore(databaseURL: upgraded.databaseURL)
     _ = try UsageStore(databaseURL: fresh.databaseURL)
@@ -84,7 +93,7 @@ import WovenMatterCore
     // The dashboard chat stays readable as retained history; the platform
     // chat v0.4.2 never listed stays hidden; the gateway's own rows are gone.
     let listed = Set(try await library.workspaceOverview().conversations.map(\.title))
-    #expect(listed == ["Native chat", "Dashboard chat"])
+    #expect(listed == ["Native chat", "Dashboard chat", "Linux chat", "Phone chat"])
     #expect(try await rows(library, "SELECT conversation_id FROM retained_execution_history").compactMap { $0["conversation_id"]?.stringValue } == ["dashboard-chat"])
     #expect(try await row(library, "SELECT is_archived FROM conversations WHERE id='platform-chat'")["is_archived"]?.intValue == 1)
     #expect(try await row(library, "SELECT imported_at FROM session_imports WHERE conversation_id='dashboard-chat'")["imported_at"] != nil)
@@ -135,11 +144,49 @@ import WovenMatterCore
     #expect(try await rows(library, "SELECT table_name FROM paired_library_seeded WHERE table_name LIKE 'dashboard%' OR table_name LIKE 'desktop%' OR table_name LIKE 'workspace%' OR table_name LIKE 'paired%' OR table_name='profiles'").isEmpty)
     #expect(try await rows(library, "SELECT name FROM paired_library_state").isEmpty)
 
+    // A Linux host's and an iPhone's transcripts are their rows now, and read
+    // back exactly as v0.4.2 served them. The legacy tool row the iPhone
+    // retired is gone.
+    for (id, expected) in served.sorted(by: { $0.key < $1.key }) {
+      #expect(try await library.libraryFederatedTranscript(conversationID: id) == expected)
+    }
+    #expect(served[linuxChat]?.messages.first?.attachments?.count == 1 && served[phoneChat]?.activities.last?.isTransient == true)
+    #expect(try await rows(library, "SELECT id FROM messages WHERE id=?", phoneChat + "-2-0").isEmpty)
+    #expect(try await row(library, "SELECT active_run_id FROM execution_conversations WHERE id=?", linuxChat)["active_run_id"]?.stringValue
+      == "a1a1a1a1-0000-4000-8000-000000000002")
+    // Recorded versions carry the new columns with the rows' values, and the
+    // transcript document is gone from them.
+    let message = try #require(try await row(library, "SELECT payload FROM paired_library_changes WHERE json_extract(payload,'$.table')='messages' AND json_extract(payload,'$.key')=?",
+                                                  "[\"f2000000-0000-4000-8000-000000000001\"]")["payload"]?.stringValue
+      .flatMap { try? JSONDecoder().decode(PairedLibraryRecord.self, from: Data($0.utf8)) })
+    #expect(message.row["position"] == .init(type: "integer", value: "1") && message.row["status"] == .init(type: "text", value: ""))
+    #expect(message.row["attachment_references"]?.type == "text" && message.row["sequence"]?.type == "null")
+    for table in ["paired_library_rows", "paired_library_changes"] {
+      let record = try #require(try await row(library, "SELECT payload FROM \(table) WHERE json_extract(payload,'$.table')='execution_conversations'")["payload"]?.stringValue
+        .flatMap { try? JSONDecoder().decode(PairedLibraryRecord.self, from: Data($0.utf8)) })
+      #expect(record.row.keys.sorted() == ["active_run_id", "conversation", "deleted", "id", "workspace_id"])
+      #expect(record.row["active_run_id"]?.value == "a1a1a1a1-0000-4000-8000-000000000002" && record.row["conversation"]?.type == "text")
+    }
+
     // The converted library keeps working and syncing under its new names.
     try await library.updateLocalACPSessionID(conversationID: chat, sessionID: "native-session-2")
     let next = try await library.beginLocalACPRun(conversationID: chat, input: .init(text: "Again"))
     #expect(try await row(library, "SELECT native_session_id FROM runs WHERE id=?", next.runID)["native_session_id"]?.stringValue == "native-session-2")
     #expect(try await row(library, "SELECT payload FROM paired_library_changes ORDER BY cursor DESC LIMIT 1")["payload"] != nil)
+  }
+
+  /// A conversation's transcript document in the file before it is converted.
+  private func storedTranscript(_ url: URL, _ id: String) throws -> LibraryTranscript {
+    var connection: OpaquePointer?
+    guard sqlite3_open(url.path, &connection) == SQLITE_OK, let connection else { throw WorkspaceDatabaseError.open(url.path) }
+    defer { sqlite3_close(connection) }
+    var statement: OpaquePointer?
+    guard sqlite3_prepare_v2(connection, "SELECT transcript FROM execution_conversations WHERE id=?", -1, &statement, nil) == SQLITE_OK,
+          let statement else { throw WorkspaceDatabaseError.prepare("transcript") }
+    defer { sqlite3_finalize(statement) }
+    sqlite3_bind_text(statement, 1, id, -1, unsafeBitCast(-1, to: sqlite3_destructor_type.self))
+    guard sqlite3_step(statement) == SQLITE_ROW, let bytes = sqlite3_column_blob(statement, 0) else { throw WorkspaceDatabaseError.corruptRow }
+    return try JSONDecoder().decode(LibraryTranscript.self, from: Data(bytes: bytes, count: Int(sqlite3_column_bytes(statement, 0))))
   }
 
   private func schema(_ database: WorkspaceDatabase) async throws -> [String: String] {

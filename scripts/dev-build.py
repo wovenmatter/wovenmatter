@@ -264,6 +264,9 @@ def disconnect_snapshot(file, *, device_id, source_device_id, execution_root, pu
                     value.pop("activeRunID", None)
                 db.execute("UPDATE " + table + " SET " + column + "=? WHERE id=?",
                            (json.dumps(value), identifier))
+        if "execution_conversations" in tables and "active_run_id" in {
+                row[1] for row in db.execute("PRAGMA table_info(execution_conversations)")}:
+            db.execute("UPDATE execution_conversations SET active_run_id=NULL")
         if "runs" in tables:
             db.execute("UPDATE runs SET status='interrupted' WHERE status IN ('running','queued','pending','accepted','cancelling','uncertain')")
         for name in ("session_deliveries", "calendar_runs"):

@@ -215,13 +215,16 @@ struct FederationTests {
     let db = try await WorkspaceDatabase(url: directory.appendingPathComponent("workspace.sqlite"))
     let workspace = try await register(db); let first = creation(workspace)
     _ = try await db.ingestExecutionJournal(.init(libraryID: workspace.libraryID, entries: [first]), deviceID: owner)
+    // A message this Mac wrote before the conversation moved to its owner.
     let legacy = LibraryTranscript(conversationID: first.conversationID, messages: [
-      .init(id: uuid(), conversationID: first.conversationID, role: "assistant", content: String(repeating: "x", count: 5 * 1_024 * 1_024))
+      .init(id: uuid(), conversationID: first.conversationID, role: "assistant", content: String(repeating: "x", count: 5 * 1_024 * 1_024),
+        status: "completed", createdAt: "2026-01-02T03:04:05.000Z")
     ])
-    let content = String(decoding: try JSONEncoder().encode(legacy), as: UTF8.self)
     try await db.write { connection in
       try connection.transaction {
-        try connection.toolsExecuteUnlocked("UPDATE execution_conversations SET transcript=? WHERE id=?", [content, first.conversationID])
+        let message = legacy.messages[0]
+        try connection.toolsExecuteUnlocked("INSERT INTO messages(id,conversation_id,role,content,status,created_at,updated_at) VALUES (?,?,?,?,?,?,?)",
+          [message.id, first.conversationID, message.role, message.content, message.status, message.createdAt, message.createdAt])
       }
     }
     let page = try #require(try await db.libraryFederatedTranscript(conversationID: first.conversationID))
