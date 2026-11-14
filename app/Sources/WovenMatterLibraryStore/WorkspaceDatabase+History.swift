@@ -60,7 +60,11 @@ extension WorkspaceDatabaseConnection {
           revision TEXT NOT NULL, source TEXT NOT NULL, bytes INTEGER NOT NULL,
           created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
         );
-        CREATE INDEX IF NOT EXISTS note_asset_versions_note ON note_asset_versions(note_id,sequence DESC);
+        -- Versions are shared rows; `sequence` is this Mac's arrival order and
+        -- differs between Macs, so "latest" and pruning order by (created_at,id),
+        -- which every Mac holds alike. `bytes` lets both prunes skip `content`.
+        CREATE INDEX IF NOT EXISTS note_asset_versions_note ON note_asset_versions(note_id,created_at DESC,id DESC,bytes);
+        CREATE INDEX IF NOT EXISTS note_asset_versions_created ON note_asset_versions(created_at DESC,id DESC,bytes);
         CREATE TRIGGER IF NOT EXISTS opencode_sessions_history_insert AFTER INSERT ON opencode_sessions BEGIN
           UPDATE history_events SET conversation_id=new.conversation_id
           WHERE conversation_id IS NULL AND harness='opencode'
@@ -454,7 +458,7 @@ extension WorkspaceDatabaseConnection {
     let content = try text(note, column: 1)
     let revision = try text(note, column: 2)
     let last = try prepareUnlocked(
-      "SELECT title,content,(julianday('now')-julianday(created_at))*86400 FROM note_asset_versions WHERE note_id=? ORDER BY sequence DESC LIMIT 1"
+      "SELECT title,content,(julianday('now')-julianday(created_at))*86400 FROM note_asset_versions WHERE note_id=? ORDER BY created_at DESC,id DESC LIMIT 1"
     )
     defer { sqlite3_finalize(last) }
     try bind(id, at: 1, to: last)
@@ -464,8 +468,17 @@ extension WorkspaceDatabaseConnection {
     }
     let bytes = title.utf8.count + content.utf8.count
     guard bytes <= 20 * 1024 * 1024 else { return }  // Current oversized documents are still saved.
+    // Versions order by (created_at, id). A version written in the same
+    // millisecond as the note's newest (a before-edit checkpoint and the edit),
+    // or before a peer's clock, takes the next millisecond, so it is newest.
     let insert = try prepareUnlocked(
-      "INSERT INTO note_asset_versions(id,note_id,title,content,revision,source,bytes) VALUES(?,?,?,?,?,?,?)"
+      """
+      INSERT INTO note_asset_versions(id,note_id,title,content,revision,source,bytes,created_at)
+      SELECT ?1,?2,?3,?4,?5,?6,?7,CASE WHEN newest IS NULL OR now>newest THEN now
+        ELSE strftime('%Y-%m-%dT%H:%M:%fZ',newest,'+0.001 seconds') END
+      FROM (SELECT strftime('%Y-%m-%dT%H:%M:%fZ','now') AS now,
+        (SELECT max(created_at) FROM note_asset_versions WHERE note_id=?2) AS newest)
+      """
     )
     defer { sqlite3_finalize(insert) }
     let versionID = UUID().uuidString.lowercased()
@@ -482,11 +495,20 @@ extension WorkspaceDatabaseConnection {
           decoding: try JSONEncoder().encode([
             "noteID": id, "versionID": versionID, "revision": revision, "source": source,
           ]), as: UTF8.self)))
+    try pruneNoteAssetVersionsUnlocked(noteID: id)
+  }
+
+  /// Keeps a note's newest 50 versions within 20 MB, and every note's within
+  /// 256 MB. Each prune deletion is shared with paired Macs, so "newest" is
+  /// by (created_at, id), which every Mac holding the same versions agrees
+  /// on; `sequence` is only this Mac's arrival order.
+  func pruneNoteAssetVersionsUnlocked(noteID id: String) throws {
     let prune = try prepareUnlocked(
       """
       DELETE FROM note_asset_versions WHERE sequence IN (
-        SELECT sequence FROM (SELECT sequence,row_number() OVER (ORDER BY sequence DESC) AS n,
-          sum(bytes) OVER (ORDER BY sequence DESC) AS total FROM note_asset_versions WHERE note_id=?)
+        SELECT sequence FROM (SELECT sequence,row_number() OVER newest AS n,
+          sum(bytes) OVER newest AS total FROM note_asset_versions WHERE note_id=?
+          WINDOW newest AS (ORDER BY created_at DESC,id DESC))
         WHERE n>50 OR total>20971520
       )
       """)
@@ -496,7 +518,7 @@ extension WorkspaceDatabaseConnection {
     try executeUnlocked(
       """
       DELETE FROM note_asset_versions WHERE sequence IN (
-        SELECT sequence FROM (SELECT sequence,sum(bytes) OVER (ORDER BY sequence DESC) AS total FROM note_asset_versions)
+        SELECT sequence FROM (SELECT sequence,sum(bytes) OVER (ORDER BY created_at DESC,id DESC) AS total FROM note_asset_versions)
         WHERE total>268435456
       )
       """)
@@ -505,7 +527,7 @@ extension WorkspaceDatabaseConnection {
   public func noteAssetVersions(id: String) throws -> [NoteAssetVersion] {
     try withLock {
       let rows = try historyRowsUnlocked(
-        "SELECT * FROM note_asset_versions WHERE note_id=? ORDER BY sequence DESC", values: [id])
+        "SELECT * FROM note_asset_versions WHERE note_id=? ORDER BY created_at DESC,id DESC", values: [id])
       return rows.compactMap { value -> NoteAssetVersion? in
         guard let row = value.objectValue else { return nil }
         func s(_ key: String) -> String { row[key]?.stringValue ?? "" }
