@@ -49,12 +49,19 @@ extension WorkspaceDatabaseConnection {
 
     public func sessionGoals() throws -> [WorkspaceGoal] {
         try withLock {
-            try historyRowsUnlocked("""
+            var unreadable = 0
+            defer { SkippedValues.report(unreadable, "goal(s) a newer build wrote") }
+            return try historyRowsUnlocked("""
                 SELECT g.value FROM session_goals g JOIN conversations c ON c.id=g.session_id
                 WHERE c.deleted_at IS NULL AND c.is_archived=0 ORDER BY g.session_id
                 """, values: []).compactMap { row in
-                    guard let json = row.objectValue?["value"]?.stringValue else { return nil }
-                    var goal = try JSONDecoder().decode(WorkspaceGoal.self, from: Data(json.utf8))
+                    // Goals are shared rows. One a newer build wrote that this
+                    // build cannot read is left out; the others still list.
+                    guard let json = row.objectValue?["value"]?.stringValue,
+                          var goal = try? JSONDecoder().decode(WorkspaceGoal.self, from: Data(json.utf8)) else {
+                        unreadable += 1
+                        return nil
+                    }
                     goal.completedTurns = try completedTurnsUnlocked(goal.id) ?? goal.completedTurns
                     return goal
                 }

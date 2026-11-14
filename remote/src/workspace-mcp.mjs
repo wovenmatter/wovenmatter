@@ -115,8 +115,10 @@ export function createWorkspaceMCP({db,identity,endpointURL,policy,localTools,lo
     if(!uuid(body.conversationID)||typeof body.label!=='string'||!body.label.trim()||body.label.length>256)throw fail(400,'Choose an existing conversation and client label.')
     policy(body.conversationID)
     const enabledGroups=body.enabledGroups??['notes','history','sessions','goals','usage','calendar','library','html']
-    if(!Array.isArray(enabledGroups)||enabledGroups.some(group=>!groups.has(group)))throw fail(400,'Invalid MCP client capabilities.')
-    const bearerToken=randomBytes(32).toString('base64url'),scope={id:randomUUID(),conversationID:body.conversationID,label:body.label.trim(),readOnly:body.readOnly!==false,enabledGroups:[...new Set(enabledGroups)],createdAt:new Date(Date.now()).toISOString()}
+    if(!Array.isArray(enabledGroups)||enabledGroups.some(group=>typeof group!=='string'))throw fail(400,'Invalid MCP client capabilities.')
+    // A newer Mac may name a tool group this host does not have. It is left
+    // out: the client gets the groups both know, and fewer tools is safe.
+    const bearerToken=randomBytes(32).toString('base64url'),scope={id:randomUUID(),conversationID:body.conversationID,label:body.label.trim(),readOnly:body.readOnly!==false,enabledGroups:[...new Set(enabledGroups.filter(group=>groups.has(group)))],createdAt:new Date(Date.now()).toISOString()}
     db.prepare('INSERT INTO mcp_external_clients VALUES(?,?,?)').run(scope.id,hash(bearerToken),JSON.stringify(scope))
     const externalEndpoint=own().endpoint?own().endpoint.replace(/\/$/,'')+'/mcp':endpoint()
     return {...scope,connection:{endpointURL:externalEndpoint,bearerToken,sessionID:scope.conversationID}}
@@ -206,8 +208,9 @@ export function createWorkspaceMCP({db,identity,endpointURL,policy,localTools,lo
       if(error.statusCode&&error.statusCode<500)throw fail(error.statusCode,'The saved schedule no longer authorizes this MCP caller.')
       throw error
     }
-    if(!Array.isArray(value?.enabledGroups)||value.enabledGroups.some(group=>!groups.has(group)))throw fail(502,'Invalid schedule tool policy.')
-    taskPolicies.set(scope.conversationID,value.enabledGroups)
+    if(!Array.isArray(value?.enabledGroups)||value.enabledGroups.some(group=>typeof group!=='string'))throw fail(502,'Invalid schedule tool policy.')
+    // Groups a newer Mac knows and this host does not are left out.
+    taskPolicies.set(scope.conversationID,value.enabledGroups.filter(group=>groups.has(group)))
   }
   async function libraryCall(scope,message,signal) {
     if(isBot(scope))throw fail(503,'This tool runs only on a Mac, which bots on this machine cannot reach. Notes, calendar, history, library, timers and sessions keep working.')
