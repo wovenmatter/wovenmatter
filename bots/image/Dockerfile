@@ -35,7 +35,7 @@ RUN set -eu; \
 
 # Playwright with Chromium (and its system libraries), usable by the bot user. Keep the version in
 # step with remote/host/runtime-versions.json.
-ARG PLAYWRIGHT_VERSION=1.65.0
+ARG PLAYWRIGHT_VERSION=1.65.1
 # Node's archive npm is bootstrap-only. Use the same integrity-verified private
 # npm and locked vendor repairs as managed CLI installs and SDK updates.
 # The container's bot user needs read/execute access; ownership stays with root.
