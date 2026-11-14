@@ -205,7 +205,7 @@ public struct StreamCancel: Codable, Equatable, Sendable {
 }
 
 public struct StreamConversations: Codable, Equatable, Sendable {
-  public var conversations: [LibraryConversation]
+  @LossyArray public var conversations: [LibraryConversation]
   public var deletedConversationIDs: [String]?
   public var snapshot: Bool
   public init(conversations: [LibraryConversation], deletedConversationIDs: [String]? = nil, snapshot: Bool) {
@@ -214,7 +214,8 @@ public struct StreamConversations: Codable, Equatable, Sendable {
 }
 
 public struct StreamPending: Codable, Equatable, Sendable {
-  public var interactions: [PendingInteraction]
+  /// A question or approval of a kind this build does not know is not listed.
+  @LossyArray public var interactions: [PendingInteraction]
   public init(interactions: [PendingInteraction]) { self.interactions = interactions }
 }
 
@@ -287,7 +288,8 @@ public struct StreamItem: Codable, Equatable, Sendable {
     case library(StreamLibrary)
     case synchronized
     case serverState(StreamServerState)
-    /// A kind this build does not know. Ignored, but a `seq` still advances.
+    /// A kind this build does not know, or an item of a known kind whose
+    /// data it cannot read. Ignored, but a `seq` still advances.
     case unknown(kind: String, data: JSONValue)
 
     public var kind: String {
@@ -320,18 +322,27 @@ public struct StreamItem: Codable, Equatable, Sendable {
     id = try container.decode(String.self, forKey: .id)
     seq = try container.decodeIfPresent(Int64.self, forKey: .seq)
     let kind = try container.decode(String.self, forKey: .kind)
-    switch Kind(rawValue: kind) {
-    case .conversations: payload = .conversations(try container.decode(StreamConversations.self, forKey: .data))
-    case .pending: payload = .pending(try container.decode(StreamPending.self, forKey: .data))
-    case .journal: payload = .journal(try container.decode(StreamJournal.self, forKey: .data))
-    case .transcript: payload = .transcript(try container.decode(StreamTranscript.self, forKey: .data))
-    case .capabilities: payload = .capabilities(try container.decode(StreamCapabilities.self, forKey: .data))
-    case .session: payload = .session(try container.decode(StreamSession.self, forKey: .data))
-    case .owner: payload = .owner(try container.decode(StreamOwner.self, forKey: .data))
-    case .library: payload = .library(try container.decode(StreamLibrary.self, forKey: .data))
-    case .synchronized: payload = .synchronized
-    case .serverState: payload = .serverState(try container.decode(StreamServerState.self, forKey: .data))
-    case nil: payload = .unknown(kind: kind, data: try container.decodeIfPresent(JSONValue.self, forKey: .data) ?? .null)
+    do {
+      switch Kind(rawValue: kind) {
+      case .conversations: payload = .conversations(try container.decode(StreamConversations.self, forKey: .data))
+      case .pending: payload = .pending(try container.decode(StreamPending.self, forKey: .data))
+      case .journal: payload = .journal(try container.decode(StreamJournal.self, forKey: .data))
+      case .transcript: payload = .transcript(try container.decode(StreamTranscript.self, forKey: .data))
+      case .capabilities: payload = .capabilities(try container.decode(StreamCapabilities.self, forKey: .data))
+      case .session: payload = .session(try container.decode(StreamSession.self, forKey: .data))
+      case .owner: payload = .owner(try container.decode(StreamOwner.self, forKey: .data))
+      case .library: payload = .library(try container.decode(StreamLibrary.self, forKey: .data))
+      case .synchronized: payload = .synchronized
+      case .serverState: payload = .serverState(try container.decode(StreamServerState.self, forKey: .data))
+      case nil: payload = .unknown(kind: kind, data: try container.decodeIfPresent(JSONValue.self, forKey: .data) ?? .null)
+      }
+    } catch {
+      // A newer server's item of a kind this build knows, holding a value it
+      // does not: the frame is valid JSON, so it is ignored like an unknown
+      // kind instead of closing the socket, which would reconnect into the
+      // same item forever.
+      payload = .unknown(kind: kind, data: try container.decodeIfPresent(JSONValue.self, forKey: .data) ?? .null)
+      NSLog("Ignoring an unreadable %@ stream item", kind)
     }
   }
 
