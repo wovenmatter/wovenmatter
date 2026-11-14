@@ -2,7 +2,7 @@ import SwiftUI
 import WebKit
 import WovenMatterCore
 
-struct DashboardSpreadsheetEditor: View {
+struct SpreadsheetEditor: View {
     @Binding var document: NoteDocument
 
     private var tableIndex: Int? {
@@ -198,7 +198,7 @@ struct DashboardSpreadsheetEditor: View {
     }
 }
 
-struct DashboardHTMLArtifactView: NSViewRepresentable {
+struct HTMLArtifactView: NSViewRepresentable {
     @Environment(\.colorScheme) private var colorScheme
     let html: String
     let linkedDataJSON: String?
@@ -241,11 +241,11 @@ struct DashboardHTMLArtifactView: NSViewRepresentable {
             coordinator.token = UUID().uuidString
             coordinator.latestWrites.removeAll()
             coordinator.saveErrors.removeAll()
-            coordinator.lastState = DashboardArtifactStateSnapshot(persistentState)
+            coordinator.lastState = DesktopArtifactStateSnapshot(persistentState)
             coordinator.linkedDataJSON = linkedDataJSON
             let config = Coordinator.Configuration(token: coordinator.token, state: coordinator.lastState!, editable: editable)
             let json = (try? String(decoding: JSONEncoder().encode(config), as: UTF8.self)) ?? "{}"
-            let rendered = DashboardHTMLArtifactDocument.render(html: html, linkedDataJSON: linkedDataJSON,
+            let rendered = HTMLArtifactDocument.render(html: html, linkedDataJSON: linkedDataJSON,
                 emptyAppearance: emptyAppearance, artifactConfigurationJSON: json)
             webView.loadHTMLString(rendered, baseURL: nil)
         } else {
@@ -267,21 +267,21 @@ struct DashboardHTMLArtifactView: NSViewRepresentable {
     @MainActor final class Coordinator: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
         struct Configuration: Encodable {
             let token: String
-            let state: DashboardArtifactStateSnapshot
+            let state: DesktopArtifactStateSnapshot
             let editable: Bool
         }
-        var parent: DashboardHTMLArtifactView
+        var parent: HTMLArtifactView
         weak var webView: WKWebView?
         var html: String?
         var linkedDataJSON: String?
-        var lastState: DashboardArtifactStateSnapshot?
+        var lastState: DesktopArtifactStateSnapshot?
         var emptyAppearance: ColorScheme?
         var editable = false
         var token = ""
         var retrySignal = 0
         var latestWrites: [String: (id: String, write: Task<ArtifactStateWriteResult, any Error>)] = [:]
         var saveErrors: [String: String] = [:]
-        init(parent: DashboardHTMLArtifactView) { self.parent = parent }
+        init(parent: HTMLArtifactView) { self.parent = parent }
 
         func updateSaveError(_ message: String?, key: String, generation: String) {
             guard generation == token else { return }
@@ -295,8 +295,8 @@ struct DashboardHTMLArtifactView: NSViewRepresentable {
                   message.webView === webView, editable, let save = parent.saveState,
                   let body = message.body as? [String: Any], body["token"] as? String == token,
                   let requestID = body["requestID"] as? String, !requestID.isEmpty, requestID.utf8.count <= 64 else { return }
-            let request: DashboardArtifactStateMessage
-            do { request = try DashboardArtifactStateMessage.decode(body, token: token) }
+            let request: ArtifactStateMessage
+            do { request = try ArtifactStateMessage.decode(body, token: token) }
             catch {
                 let key = (body["edit"] as? [String: Any])?["key"] as? String ?? "invalid-request"
                 updateSaveError(ArtifactInputError.invalidMessage.localizedDescription, key: key, generation: token)
@@ -340,10 +340,10 @@ struct DashboardHTMLArtifactView: NSViewRepresentable {
 
         private func reply(token requestToken: String, requestID: String, state: ArtifactStateSnapshot, error: String?) async {
             guard requestToken == token, let webView else { return }
-            let snapshot = DashboardArtifactStateSnapshot(state)
-            let payload: GatewayJSONValue = .object([
-                "state": (try? JSONDecoder().decode(GatewayJSONValue.self, from: Data(snapshot.json.utf8))) ?? .object([:]),
-                "error": error.map(GatewayJSONValue.string) ?? .null
+            let snapshot = DesktopArtifactStateSnapshot(state)
+            let payload: JSONValue = .object([
+                "state": (try? JSONDecoder().decode(JSONValue.self, from: Data(snapshot.json.utf8))) ?? .object([:]),
+                "error": error.map(JSONValue.string) ?? .null
             ])
             guard let data = try? JSONEncoder().encode(payload) else { return }
             _ = try? await webView.callAsyncJavaScript(
@@ -353,7 +353,7 @@ struct DashboardHTMLArtifactView: NSViewRepresentable {
         }
 
         func pushLatestState(force: Bool = false) {
-            let snapshot = DashboardArtifactStateSnapshot(parent.persistentState)
+            let snapshot = DesktopArtifactStateSnapshot(parent.persistentState)
             // Deliver the initial data event once after the authored document
             // loads. Later saved-input echoes must not redraw its interface.
             let dataChanged = force || parent.linkedDataJSON != linkedDataJSON
@@ -379,10 +379,10 @@ struct DashboardHTMLArtifactView: NSViewRepresentable {
     }
 }
 
-struct DashboardDatabaseLinkControl: View {
-    @Environment(\.dashboardTheme) private var theme
+struct DatabaseLinkControl: View {
+    @Environment(\.wovenTheme) private var theme
     @Binding var document: NoteDocument
-    let snapshot: DashboardDatabasesSnapshot
+    let snapshot: DatabasesSnapshot
     @State private var showsPopover = false
 
     private var links: [DatabaseArtifactLink] {
@@ -402,40 +402,40 @@ struct DashboardDatabaseLinkControl: View {
         Button {
             showsPopover.toggle()
         } label: {
-            DashboardLucideIcon(glyph: .database, size: 14)
+            LucideIcon(glyph: .database, size: 14)
                 .frame(width: 32, height: 32)
         }
-        .buttonStyle(DashboardIconButtonStyle())
+        .buttonStyle(WovenIconButtonStyle())
         .help(links.isEmpty ? "Link to database" : "Edit database link")
         .popover(isPresented: $showsPopover, arrowEdge: .top) {
-            DashboardDatabaseLinkPopover(
+            DatabaseLinkPopover(
                 document: $document,
                 snapshot: snapshot,
                 onClose: { showsPopover = false }
             )
-            .environment(\.dashboardTheme, theme)
+            .environment(\.wovenTheme, theme)
         }
     }
 }
 
-private struct DashboardDatabaseLinkPopover: View {
+private struct DatabaseLinkPopover: View {
     @Binding var document: NoteDocument
-    let snapshot: DashboardDatabasesSnapshot
+    let snapshot: DatabasesSnapshot
     let onClose: () -> Void
     @State private var sourceID = ""
     @State private var databaseID = ""
     @State private var targetTableID = ""
     @State private var sqliteQuery = ""
 
-    private var sources: [DashboardDatabaseSource] {
+    private var sources: [DatabaseSource] {
         snapshot.sources.filter { !$0.databases.isEmpty }
     }
 
-    private var databases: [DashboardAgentDatabase] {
+    private var databases: [AgentDatabase] {
         sources.first { $0.id == sourceID }?.databases ?? []
     }
 
-    private var selectedDatabase: DashboardAgentDatabase? {
+    private var selectedDatabase: AgentDatabase? {
         databases.first { $0.databaseID == databaseID }
     }
 
@@ -492,13 +492,13 @@ private struct DashboardDatabaseLinkPopover: View {
                 ForEach(databases) { Text($0.name).tag($0.databaseID) }
             }
             if let selectedDatabase {
-                Text(DashboardDatabaseFreshness.description(selectedDatabase))
+                Text(DatabaseFreshness.description(selectedDatabase))
                     .font(.system(size: 11))
                     .foregroundStyle(selectedDatabase.offline
-                        ? DashboardPalette.warning : DashboardPalette.mutedForeground)
+                        ? WovenPalette.warning : WovenPalette.mutedForeground)
             }
             TextField("SQL query, for example SELECT * FROM sales", text: $sqliteQuery, axis: .vertical)
-                .dashboardQuietTextInput(font: .system(size: 12, design: .monospaced))
+                .quietTextInput(font: .system(size: 12, design: .monospaced))
                 .lineLimit(2...5)
             Text(document.kind == .html
                 ? "Results are available as window.wovenMatterData. Your HTML refreshes when committed data changes."

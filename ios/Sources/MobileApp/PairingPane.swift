@@ -4,7 +4,7 @@ import VisionKit
 import AVFoundation
 
 struct PairingPane: View {
-  @Environment(\.dashboardTheme) private var theme
+  @Environment(\.wovenTheme) private var theme
   @Bindable var model: MobileModel
   @State private var scanning = false
   @State private var scannerError: String?
@@ -19,16 +19,16 @@ struct PairingPane: View {
             LabeledContent(member.name, value: peerState(member)).accessibilityIdentifier("pairing-member-" + member.kind)
           }
           Button("Unpair", role: .destructive) { confirmDisconnect = true }.disabled(model.pairingInProgress)
-        } header: { Text(model.memberMode ? "Your devices" : "Central database") } footer: {
+        } header: { Text("Your devices") } footer: {
           if let notice = model.membershipNotice { Text(notice).accessibilityIdentifier("pairing-membership-notice") }
-          else if model.memberMode { Text("\(model.deviceWorkspaceName) connects directly to each Mac and Linux machine. Any one that is online keeps it in sync.") }
+          else { Text("\(model.deviceWorkspaceName) connects directly to each Mac and Linux machine. Any one that is online keeps it in sync.") }
         }
         if model.needsMemberPairing { pairingControls(header: "Pair again", footer: "Scan the code from Woven Matter → Settings → Apple Devices on any of your Macs. Pairing once is enough for every device.") }
       } else {
         pairingControls(header: "Device Connections", footer: "On any Mac with Woven Matter, open Settings → Apple Devices. Scan its code or paste its link. Both devices must use the same Tailscale network. After pairing once, \(model.deviceWorkspaceInSentence) reaches every Mac and Linux machine directly.")
       }
       if let problem = model.pairingError ?? scannerError {
-        Section { Text(problem).font(.callout).foregroundStyle(DashboardPalette.danger).textSelection(.enabled) }
+        Section { Text(problem).font(.callout).foregroundStyle(WovenPalette.danger).textSelection(.enabled) }
       }
     }.mobileNavigationPage("Device Connections")
       .sheet(isPresented: $scanning) {
@@ -40,9 +40,9 @@ struct PairingPane: View {
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { scanning = false } } }
         }
       }
-      .confirmationDialog("Unpair from the central database?", isPresented: $confirmDisconnect, titleVisibility: .visible) {
+      .confirmationDialog("Unpair \(model.deviceWorkspaceInSentence)?", isPresented: $confirmDisconnect, titleVisibility: .visible) {
         Button("Unpair", role: .destructive) { Task { await model.disconnectMac() } }
-      } message: { Text("Your notes, chats, provider sign-ins, and pending changes stay on this device. Access to its connected workspaces ends until you pair again.") }
+      } message: { Text("Your notes, chats, provider sign-ins, and pending changes stay on \(model.deviceWorkspaceInSentence). It stops syncing with your Macs and Linux machines until you pair again.") }
       .tint(theme.palette.themeAccent)
   }
   @ViewBuilder private func pairingControls(header: String, footer: String) -> some View {
@@ -50,7 +50,7 @@ struct PairingPane: View {
       Button { Task { await beginScanning() } } label: { Label("Scan pairing code", systemImage: "qrcode.viewfinder") }
         .disabled(model.pairingInProgress).accessibilityIdentifier("pairing-scan")
       TextField("Paste pairing link", text: $model.pairingText, axis: .vertical)
-        .dashboardInput().textInputAutocapitalization(.never).autocorrectionDisabled().privacySensitive().accessibilityIdentifier("pairing-link")
+        .wovenInput().textInputAutocapitalization(.never).autocorrectionDisabled().privacySensitive().accessibilityIdentifier("pairing-link")
       Button(model.pairingInProgress ? "Pairing…" : "Pair") {
         guard let url = URL(string: model.pairingText.trimmingCharacters(in: .whitespacesAndNewlines)) else {
           model.pairingError = "Paste the full pairing link from your Mac."; return
@@ -62,8 +62,7 @@ struct PairingPane: View {
   }
   /// Every Mac and Linux member, from whichever one this phone synced with.
   private var memberDevices: [MobileLibraryMember] {
-    guard model.memberMode else { return [] }
-    return (model.membership?.members ?? []).filter { !$0.revoked && ($0.kind == "mac" || $0.kind == "linux") }
+    (model.membership?.members ?? []).filter { !$0.revoked && ($0.kind == "mac" || $0.kind == "linux") }
       .sorted { $0.kind == $1.kind ? $0.name.localizedStandardCompare($1.name) == .orderedAscending : $0.kind == "mac" }
   }
   private func peerState(_ member: MobileLibraryMember) -> String {
@@ -73,7 +72,13 @@ struct PairingPane: View {
     case "updateRequired": return "Update needed"
     case "failing": return "Not syncing"
     case "offline": return "Offline"
-    default: return member.kind == "mac" ? "Mac" : "Linux"
+    default:
+      // No sync report yet: say whether this iPhone reaches it directly.
+      let reached = model.executionWorkspaces.contains { workspace in
+        (workspace.ownerDeviceID.lowercased() == member.deviceID || workspace.executionDeviceID?.lowercased() == member.deviceID)
+          && model.workspaceReachable[workspace.id] == true
+      }
+      return reached ? "Connected" : member.kind == "mac" ? "Mac" : "Linux"
     }
   }
   private func beginScanning() async {

@@ -7,7 +7,9 @@ extension MobileModel {
     guard let store else { return nil }
     switch request {
     case .calendar(let from, let to): return .calendar(try await store.calendar.events(from: from, to: to))
-    case .scheduledTasks: return .scheduledTasks(await store.calendar.scheduledTasks())
+    case .scheduledTasks:
+      let names = Dictionary(executionWorkspaces.map { ($0.id.lowercased(), $0.name) }, uniquingKeysWith: { first, _ in first })
+      return .scheduledTasks(await store.calendar.scheduledTasks(workspaceNames: names))
     default: return nil
     }
   }

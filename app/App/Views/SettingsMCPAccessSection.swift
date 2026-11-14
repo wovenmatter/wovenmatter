@@ -24,14 +24,14 @@ struct SettingsMCPAccessSection: View {
                 if let snapshot {
                     Text(snapshot.endpointURL)
                         .font(.system(size: 11.5, design: .monospaced))
-                        .foregroundStyle(DashboardPalette.mutedForeground)
+                        .foregroundStyle(WovenPalette.mutedForeground)
                         .lineLimit(1)
                         .truncationMode(.middle)
                         .textSelection(.enabled)
                 } else {
                     Text(busy ? "Loading…" : "Unavailable")
                         .font(.settingsSecondary)
-                        .foregroundStyle(DashboardPalette.mutedForeground)
+                        .foregroundStyle(WovenPalette.mutedForeground)
                 }
                 Button("Refresh") { update(.status) }
                     .buttonStyle(SettingsQuietButtonStyle())

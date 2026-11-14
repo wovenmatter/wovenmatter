@@ -9,30 +9,28 @@ struct DeviceConnectionIcon: View {
     var body: some View {
         Group {
             switch kind {
-            case .mac: DashboardLucideIcon(glyph: .monitor, size: size)
-            case .iPhone: DashboardLucideIcon(glyph: .smartphone, size: size)
-            case .iPad: DashboardLucideIcon(glyph: .tablet, size: size)
-            case .unknown: DashboardLucideIcon(glyph: .panelsTopLeft, size: size)
+            case .mac: LucideIcon(glyph: .monitor, size: size)
+            case .iPhone: LucideIcon(glyph: .smartphone, size: size)
+            case .iPad: LucideIcon(glyph: .tablet, size: size)
+            case .unknown: LucideIcon(glyph: .panelsTopLeft, size: size)
             }
-        }.frame(width: size + 4, height: size + 4).foregroundStyle(DashboardPalette.foreground)
+        }.frame(width: size + 4, height: size + 4).foregroundStyle(WovenPalette.foreground)
     }
     static func label(_ kind: DeviceKind) -> String {
         switch kind { case .mac: "Mac"; case .iPhone: "iPhone"; case .iPad: "iPad"; case .unknown: "Device" }
     }
 }
 
+/// Discovery and pairing go through this Mac's library host (forwarded to the
+/// background server from a window), whose errors the pairing section shows.
 struct DevicePairingDiscoveryCard: View {
-    @Bindable var pairing: MacPairingController
     @Bindable var host: LibraryHostController
-    var canPairWithCentral: Bool
     @State private var devices = MacDeviceSetupModel()
     var body: some View {
         SettingsSummaryRow("Find on your network") {
             SettingsNote("Find other Macs on your Tailscale network, even when Woven Matter is closed.")
-            MacTailnetDiscoveryView(devices: devices, pairing: pairing, host: host, canPairWithCentral: canPairWithCentral)
+            MacTailnetDiscoveryView(devices: devices, host: host)
         }
-        // Stays visible when the row above is collapsed.
-        if let error = pairing.errorMessage { SettingsError(error) }
     }
 }
 
@@ -51,7 +49,7 @@ struct DevicePairingCodeCard: View {
                     VStack(alignment: .leading, spacing: 12) {
                         if let expiry = host.pairingExpiresAt {
                             Text("Expires at \(expiry.formatted(date: .omitted, time: .shortened))")
-                                .font(.settingsBody).foregroundStyle(DashboardPalette.mutedForeground)
+                                .font(.settingsBody).foregroundStyle(WovenPalette.mutedForeground)
                         }
                         Button("Copy pairing link") {
                             NSPasteboard.general.clearContents()

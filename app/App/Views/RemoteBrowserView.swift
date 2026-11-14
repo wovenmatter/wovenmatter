@@ -58,7 +58,7 @@ struct RemoteBrowserContent: View {
             HStack(spacing: 12) {
                 VStack(alignment: .leading, spacing: 3) {
                     Text("Workspace browser").font(.system(size: 14, weight: .semibold))
-                    Text(workspaceName).font(.system(size: 12)).foregroundStyle(DashboardPalette.mutedForeground)
+                    Text(workspaceName).font(.system(size: 12)).foregroundStyle(WovenPalette.mutedForeground)
                 }
                 Spacer()
                 if viewer.profiles.count > 1 {
@@ -80,7 +80,7 @@ struct RemoteBrowserContent: View {
                                 Text(tab.title.isEmpty ? "Untitled tab" : tab.title)
                                     .font(.system(size: 12)).lineLimit(1)
                                     .frame(maxWidth: 200).padding(.horizontal, 12).padding(.vertical, 8)
-                                    .background(viewer.selectedID == tab.id ? DashboardPalette.foreground.opacity(0.08) : .clear,
+                                    .background(viewer.selectedID == tab.id ? WovenPalette.foreground.opacity(0.08) : .clear,
                                                 in: RoundedRectangle(cornerRadius: 6))
                             }
                             .buttonStyle(.plain)
@@ -94,7 +94,7 @@ struct RemoteBrowserContent: View {
                     Button { viewer.enqueue(.init(kind: "back")) } label: { Image(systemName: "chevron.left") }.help("Back")
                     Button { viewer.enqueue(.init(kind: "forward")) } label: { Image(systemName: "chevron.right") }.help("Forward")
                     Button { viewer.enqueue(.init(kind: "reload")) } label: { Image(systemName: "arrow.clockwise") }.help("Reload")
-                    TextField("Address", text: $address).textFieldStyle(.plain).dashboardQuietTextInput()
+                    TextField("Address", text: $address).textFieldStyle(.plain).quietTextInput()
                         .focused($addressFocused)
                         .onSubmit {
                             var action = RemoteBrowserAction(kind: "navigate")
@@ -111,7 +111,7 @@ struct RemoteBrowserContent: View {
                 Divider()
             }
             ZStack {
-                DashboardPalette.foreground.opacity(0.025)
+                WovenPalette.foreground.opacity(0.025)
                 if let error = viewer.error {
                     ContentUnavailableView("Browser unavailable", systemImage: "globe",
                         description: Text(error))
@@ -133,10 +133,10 @@ struct RemoteBrowserContent: View {
                 Spacer()
                 if let date = viewer.updatedAt { Text(date, style: .time).monospacedDigit() }
             }
-            .font(.system(size: 11)).foregroundStyle(DashboardPalette.mutedForeground).padding(12)
+            .font(.system(size: 11)).foregroundStyle(WovenPalette.mutedForeground).padding(12)
         }
-        .foregroundStyle(DashboardPalette.foreground)
-        .background(DashboardPalette.background)
+        .foregroundStyle(WovenPalette.foreground)
+        .background(WovenPalette.background)
         .frame(minWidth: 640, idealWidth: 1000, maxWidth: .infinity, minHeight: 480, idealHeight: 720, maxHeight: .infinity)
     }
 }

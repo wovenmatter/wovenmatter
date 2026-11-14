@@ -4,7 +4,7 @@ import Observation
 import Security
 import WovenMatterClient
 import WovenMatterCore
-import WovenMatterDashboardStore
+import WovenMatterLibraryStore
 
 /// Window → owner-of-execution commands for bots. The background server runs them.
 enum BotsCommand: Codable, Sendable {

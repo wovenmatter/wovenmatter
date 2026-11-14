@@ -33,7 +33,7 @@ struct SettingsConnectionsView: View {
     @State private var expandedKeyFolds: [String: Bool] = [:]
     @State private var answer = ""
     @State private var confirmingCredentialReset = false
-    @Environment(\.dashboardTheme) private var theme
+    @Environment(\.wovenTheme) private var theme
     private var agent: DefaultAgentSettingsModel { model.connections }
     private var remote: RemoteWorkspaceConfiguration? {
         model.remoteWorkspaces.workspaces.first { $0.id.uuidString.lowercased() == agent.scope }
@@ -65,7 +65,7 @@ struct SettingsConnectionsView: View {
                     .padding(.horizontal, 16)
                     .padding(.vertical, 6)
                     .background(theme.palette.themeWhisper)
-                    .clipShape(DashboardShapes.card)
+                    .clipShape(DesktopShapes.card)
             }
             if focus == .providers, remote != nil {
                 SettingsSummaryRow("Account recovery") {
@@ -135,7 +135,7 @@ struct SettingsConnectionsView: View {
                 } label: {
                     Image(systemName: selected ? "largecircle.fill.circle" : "circle")
                         .font(.settingsText)
-                        .foregroundStyle(selected ? DashboardPalette.primary : DashboardPalette.mutedForeground)
+                        .foregroundStyle(selected ? WovenPalette.primary : WovenPalette.mutedForeground)
                         .frame(width: 20, height: SettingsMetrics.rowHeight)
                         .contentShape(Rectangle())
                 }
@@ -161,7 +161,7 @@ struct SettingsConnectionsView: View {
         )) {
             apiKeyContent(id).padding(.top, 4)
         } label: {
-            Text(title).font(.settingsBody).foregroundStyle(DashboardPalette.mutedForeground)
+            Text(title).font(.settingsBody).foregroundStyle(WovenPalette.mutedForeground)
         }
     }
 
@@ -226,7 +226,7 @@ struct SettingsConnectionsView: View {
                 DisclosureGroup {
                     VStack(alignment: .leading, spacing: 8) {
                         Text(account.createdAt.map { "Added " + $0.formatted(date: .abbreviated, time: .shortened) } ?? "Existing connection")
-                            .font(.settingsSecondary).foregroundStyle(DashboardPalette.mutedForeground)
+                            .font(.settingsSecondary).foregroundStyle(WovenPalette.mutedForeground)
                         HStack {
                             Button("Use first") { Task { await agent.selectAccount(account.id, provider: id, remote: remote) } }.disabled(account.isSelected)
                             Button("Move up") { Task { await agent.moveAccount(account.id, provider: id, offset: -1) } }.disabled(account.isSelected || index <= 1)
@@ -239,15 +239,15 @@ struct SettingsConnectionsView: View {
                     HStack {
                         Text(account.label)
                         Spacer()
-                        Text(account.isSelected ? "Primary" : "Backup \(index)").font(.settingsSecondary).foregroundStyle(DashboardPalette.mutedForeground)
-                        Text("Credential saved").font(.settingsSecondary).foregroundStyle(DashboardPalette.mutedForeground)
+                        Text(account.isSelected ? "Primary" : "Backup \(index)").font(.settingsSecondary).foregroundStyle(WovenPalette.mutedForeground)
+                        Text("Credential saved").font(.settingsSecondary).foregroundStyle(WovenPalette.mutedForeground)
                     }
                 }
             }
             if accounts.count < ProviderConnectionAccounts.limit {
                 keyEntry(id)
             } else {
-                Text("Four connections maximum. Remove one to add another.").font(.settingsSecondary).foregroundStyle(DashboardPalette.mutedForeground)
+                Text("Four connections maximum. Remove one to add another.").font(.settingsSecondary).foregroundStyle(WovenPalette.mutedForeground)
             }
             signInStatus(id)
         }
@@ -262,10 +262,10 @@ struct SettingsConnectionsView: View {
     private func keyEntry(_ id: String) -> some View {
         HStack {
             if focus != .webSearch {
-                TextField("Label (optional)", text: Binding(get: { keyLabels[id] ?? "" }, set: { keyLabels[id] = $0 })).dashboardInput().frame(maxWidth: 160)
+                TextField("Label (optional)", text: Binding(get: { keyLabels[id] ?? "" }, set: { keyLabels[id] = $0 })).wovenInput().frame(maxWidth: 160)
             }
             SecureField("Add API key", text: Binding(get: { keyDrafts[id] ?? "" }, set: { keyDrafts[id] = $0 }))
-                .dashboardInput().accessibilityLabel("\(id) API key")
+                .wovenInput().accessibilityLabel("\(id) API key")
             Button("Save key") {
                 Task { @MainActor in
                     guard await agent.saveKeyConfirmed(keyDrafts[id] ?? "", provider: id, label: (keyLabels[id] ?? "").isEmpty ? nil : keyLabels[id]) else { return }
@@ -283,7 +283,7 @@ struct SettingsConnectionsView: View {
             if let prompt = agent.prompt {
                 Text(prompt).font(.settingsBody)
                 if agent.promptOptions.isEmpty {
-                    HStack { TextField("Authorization code or redirect URL", text: $answer).dashboardInput(); Button("Continue") { agent.respond(answer); answer = "" } }
+                    HStack { TextField("Authorization code or redirect URL", text: $answer).wovenInput(); Button("Continue") { agent.respond(answer); answer = "" } }
                 } else {
                     HStack { ForEach(agent.promptOptions, id: \.id) { option in Button(option.label) { agent.respond(option.id) } } }
                 }

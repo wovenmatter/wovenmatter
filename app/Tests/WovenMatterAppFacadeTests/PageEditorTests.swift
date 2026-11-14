@@ -5,11 +5,11 @@ import WovenMatterCore
 @testable import WovenMatterAppFacade
 
 @MainActor @Suite(.serialized) struct PageEditorTests {
-    private func editor(_ original: NoteDocument, editsPageFlow: Bool = true) -> (DashboardNoteEditor.Coordinator, NSTextView, () -> NoteDocument) {
+    private func editor(_ original: NoteDocument, editsPageFlow: Bool = true) -> (NoteEditor.Coordinator, NSTextView, () -> NoteDocument) {
         final class Storage { var value: NoteDocument; init(_ value: NoteDocument) { self.value = value } }
         let storage = Storage(original)
-        let controller = DashboardNoteEditorController()
-        let editor = DashboardNoteEditor(document: Binding(get: { storage.value }, set: { storage.value = $0 }),
+        let controller = NoteEditorController()
+        let editor = NoteEditor(document: Binding(get: { storage.value }, set: { storage.value = $0 }),
             controller: controller, sizesToContent: true, editsPageFlow: editsPageFlow)
         let coordinator = editor.makeCoordinator()
         let view = NSTextView()
@@ -227,7 +227,7 @@ import WovenMatterCore
     /// barrier, even though no write is in flight; retrying or closing releases it.
     @Test func earlierFailedInputBlocksQuitUntilRetriedOrClosed() async throws {
         let f = try await FacadeFixture(); defer { f.remove() }
-        let coordinator = DashboardHTMLArtifactView(html: "", linkedDataJSON: nil,
+        let coordinator = HTMLArtifactView(html: "", linkedDataJSON: nil,
             reportUnsaved: { f.model.setArtifactInputsUnsaved(generation: $0, $1) }).makeCoordinator()
         coordinator.token = "current"
         coordinator.updateSaveError("Conflict", key: "app:a", generation: "current")
@@ -242,7 +242,7 @@ import WovenMatterCore
 
     @Test func anErrorOnOneKeySurvivesAnotherKeysSuccessAndOldGenerationReplies() {
         var visible: String?
-        let coordinator = DashboardHTMLArtifactView(html: "", linkedDataJSON: nil, onSaveError: { visible = $0 }).makeCoordinator()
+        let coordinator = HTMLArtifactView(html: "", linkedDataJSON: nil, onSaveError: { visible = $0 }).makeCoordinator()
         coordinator.token = "current"
         coordinator.updateSaveError("Keep this error", key: "app:a", generation: "current")
         coordinator.updateSaveError(nil, key: "app:b", generation: "current")
@@ -292,11 +292,11 @@ import WovenMatterCore
     }
 
     @Test func stateProjectionKeepsSavedNullAndRemovalVersionsDistinct() throws {
-        let snapshot = DashboardArtifactStateSnapshot([
+        let snapshot = DesktopArtifactStateSnapshot([
             "app:null": .init(value: .null, version: 2, updatedAt: "now"),
             "app:removed": .init(value: nil, version: 3, updatedAt: "now")
         ])
-        let value = try JSONDecoder().decode(GatewayJSONValue.self, from: Data(snapshot.json.utf8))
+        let value = try JSONDecoder().decode(JSONValue.self, from: Data(snapshot.json.utf8))
         #expect(value.objectValue?["values"]?.objectValue?["app:null"] == .null)
         #expect(value.objectValue?["values"]?.objectValue?["app:removed"] == nil)
         #expect(value.objectValue?["versions"]?.objectValue?["app:removed"]?.intValue == 3)
@@ -305,11 +305,11 @@ import WovenMatterCore
     @Test func nativeMessageIsBoundToItsDocumentGenerationAndHasNoDocumentSelector() throws {
         let body: [String: Any] = ["token": "current", "requestID": "1", "noteID": "forged-other-document",
             "edit": ["action": "set", "key": "app:x", "value": NSNull()]]
-        let request = try DashboardArtifactStateMessage.decode(body, token: "current")
+        let request = try ArtifactStateMessage.decode(body, token: "current")
         #expect(request.edit.value == .null)
-        #expect(throws: (any Error).self) { try DashboardArtifactStateMessage.decode(body, token: "different") }
+        #expect(throws: (any Error).self) { try ArtifactStateMessage.decode(body, token: "different") }
         #expect(throws: (any Error).self) {
-            try DashboardArtifactStateMessage.decode(["token": "current", "requestID": "2", "edit": ["value": String(repeating: "x", count: 90_000)]], token: "current")
+            try ArtifactStateMessage.decode(["token": "current", "requestID": "2", "edit": ["value": String(repeating: "x", count: 90_000)]], token: "current")
         }
     }
 
@@ -317,8 +317,8 @@ import WovenMatterCore
         let hostile = "</script><img src=x onerror=alert(1)>\u{2028}"
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.withoutEscapingSlashes]
-        let json = String(decoding: try encoder.encode(GatewayJSONValue.object(["value": .string(hostile)])), as: UTF8.self)
-        let html = DashboardHTMLArtifactDocument.render(html: "<main>Artifact</main>", linkedDataJSON: nil,
+        let json = String(decoding: try encoder.encode(JSONValue.object(["value": .string(hostile)])), as: UTF8.self)
+        let html = HTMLArtifactDocument.render(html: "<main>Artifact</main>", linkedDataJSON: nil,
             artifactConfigurationJSON: json)
         #expect(!html.contains(hostile))
         #expect(html.contains("\\u003c/script\\u003e"))

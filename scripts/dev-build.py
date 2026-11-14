@@ -19,8 +19,10 @@ def profile(root, instance, mode):
     instance = instance or (re.sub(r"[^a-z0-9-]", "-", root.parent.name.lower())[:40].strip("-") or "dev") + "-" + hashlib.sha256(os.fsencode(root)).hexdigest()[:10]
     if not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,63}", instance):
         raise ValueError("Use a lowercase instance name of up to 64 letters, digits, and hyphens.")
-    # Auto defaults to the complete, independent app; clients are explicit opt-in.
+    # Auto selects the complete, independent snapshot app; live is explicit opt-in.
     selected = "snapshot" if mode == "auto" else mode
+    if selected not in ("snapshot", "live"):
+        raise ValueError("Use --mode snapshot or --mode live.")
     support = Path.home() / "Library/Application Support"
     support = support / "Woven Matter" if selected == "live" else support / "Woven Matter Dev" / instance / selected
     return dict(instance=instance, mode=selected,
@@ -119,7 +121,9 @@ def backup(source, destination):
                 raise ValueError("Snapshot integrity check failed.")
 
 
-def copy_assets(source, target):
+def copy_assets(source, target, content_addressed=False):
+    # A content-addressed file is named by its bytes, so it is copied as is
+    # even when it happens to begin with a SQLite header.
     if not source.exists():
         return
     if source.is_symlink():
@@ -129,11 +133,11 @@ def copy_assets(source, target):
         for child in source.iterdir():
             if child.name.endswith(("-wal", "-shm")):
                 continue
-            copy_assets(child, target / child.name)
+            copy_assets(child, target / child.name, content_addressed)
     elif source.is_file():
         with source.open("rb") as stream:
             is_sqlite = stream.read(16) == b"SQLite format 3\x00"
-        if is_sqlite:
+        if is_sqlite and not content_addressed:
             backup(source, target)
         else:
             shutil.copy2(source, target)
@@ -141,34 +145,46 @@ def copy_assets(source, target):
         raise ValueError(f"Unsupported snapshot asset: {source}")
 
 
-# Libraries from before November 2026 used these names. The app renames them
-# in place on open (LegacyCompanionStorage.swift); a snapshot of such a library
-# is renamed the same way first, so its isolation below sees current names.
+# A library from before the versioned schema (v0.4.2 and the builds after
+# it) used these names. The app renames them in place on open
+# (app/Sources/WovenMatterLibraryStore/LibrarySchemaUpgrade.swift) and
+# converts the columns; a snapshot of such a library is renamed the same way
+# first, so its isolation below sees current table names.
 LEGACY_TABLES = {
-    "companion_library_identity": "library_identity", "companion_versions": "device_sync_revisions",
-    "companion_changes": "device_sync_changes", "companion_mutation_receipts": "device_mutation_receipts",
-    "companion_command_receipts": "device_command_receipts", "companion_draft_receipts": "device_draft_receipts",
-    "companion_tool_receipts": "device_tool_receipts", "companion_workspace_mcp_grants": "execution_workspace_mcp_grants",
-    "companion_workspace_publishers": "execution_workspace_publishers",
-    "companion_scheduled_mcp_callers": "device_scheduled_mcp_callers",
-    "companion_message_provenance": "device_message_provenance", "companion_saved_artifacts": "device_saved_artifacts",
-    "companion_artifact_uploads": "device_artifact_uploads", "companion_artifact_chunks": "device_artifact_chunks",
-    "companion_execution_workspaces": "execution_workspaces", "companion_execution_journal": "execution_journal",
-    "companion_execution_conversations": "execution_conversations",
-    "companion_execution_adoptions": "execution_adoptions", "companion_execution_runs": "execution_runs",
-    "companion_execution_receipts": "execution_receipts",
-    "companion_execution_replica_context": "execution_replica_context",
-    "companion_retained_settlements": "execution_retained_settlements",
-    "companion_native_history": "execution_native_history",
-    "companion_native_history_parts": "execution_native_history_parts",
-    "companion_calendar_owners": "calendar_task_executors", "companion_calendar_run_owners": "calendar_run_publishers",
-    "companion_calendar_runs": "calendar_published_runs", "companion_calendar_receipts": "device_calendar_receipts",
-    "companion_calendar_execution_context": "calendar_replica_context",
-    "companion_calendar_execution_conflicts": "calendar_execution_conflicts",
+    "dashboard_agents": "agents", "dashboard_conversations": "conversations", "dashboard_messages": "messages",
+    "dashboard_message_attachments": "message_attachments", "dashboard_message_references": "message_references",
+    "dashboard_runs": "runs", "dashboard_run_visible_context": "run_visible_notes", "dashboard_run_events": "run_activities",
+    "dashboard_calendar_items": "calendar_items", "desktop_local_acp_sessions": "harness_sessions",
+    "desktop_conversation_titles": "conversation_titles", "desktop_session_imports": "session_imports",
+    "desktop_opencode_sessions": "opencode_sessions", "desktop_opencode_submissions": "opencode_submissions",
+    "desktop_opencode_hidden_messages": "opencode_hidden_messages", "desktop_program_status": "run_program_statuses",
+    "desktop_remote_note_edits": "remote_note_edits", "desktop_dashboard_revision": "workspace_revision",
+    "desktop_activity_index": "activity_summaries", "desktop_activity_revision": "activity_revision",
+    "desktop_message_revisions": "message_revisions",
+    "paired_agent_owners": "agent_owners", "paired_conversation_owners": "conversation_owners",
+    "paired_calendar_owners": "calendar_item_owners", "paired_mac_routes": "mac_routes",
+    "paired_remote_workspaces": "remote_workspace_configurations", "device_message_provenance": "message_provenance",
+    "device_saved_artifacts": "saved_artifacts", "device_artifact_uploads": "artifact_uploads",
+    "device_artifact_chunks": "artifact_chunks", "workspace_automation_cancellations": "automation_cancellations",
+    "workspace_automation_requests": "automation_requests",
+    "workspace_calendar_remote_ownership": "calendar_remote_ownership",
+    "workspace_calendar_remote_receipts": "calendar_remote_receipts", "workspace_calendar_runs": "calendar_runs",
+    "workspace_calendar_sessions": "calendar_task_sessions",
+    "workspace_coordination_access_requests": "coordination_access_requests",
+    "workspace_coordination_observations": "coordination_observations",
+    "workspace_executor_sessions": "session_executor_profiles", "workspace_goal_runs": "goal_runs",
+    "workspace_goal_usage": "goal_usage", "workspace_history_events": "history_events",
+    "workspace_history_search": "history_search", "workspace_input_contexts": "input_contexts",
+    "workspace_mcp_bot_machines": "mcp_bot_machines", "workspace_mcp_callers": "mcp_callers",
+    "workspace_opencode_input_context": "opencode_input_contexts", "workspace_session_creations": "session_creations",
+    "workspace_session_deliveries": "session_deliveries", "workspace_session_goals": "session_goals",
+    "workspace_session_grants": "session_grants", "workspace_session_relationships": "session_relationships",
+    "workspace_session_timers": "session_timers", "workspace_session_tools": "session_tools",
+    "workspace_tool_mutations": "tool_mutations", "workspace_tool_settings": "tool_settings",
 }
 
 
-def disconnect_snapshot(file, *, device_id, execution_root, published_root):
+def disconnect_snapshot(file, *, device_id, source_device_id, execution_root, published_root):
     """Keep ownership/history; disable copied execution and isolate test projects."""
     with sqlite3.connect(file) as db:
         tables = {row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
@@ -178,72 +194,62 @@ def disconnect_snapshot(file, *, device_id, execution_root, published_root):
         quote = lambda name: '"' + name.replace('"', '""') + '"'
         for name, _ in triggers:
             db.execute("DROP TRIGGER " + quote(name))
-        # Old-named triggers are not restored: the app recreates every trigger
-        # under its current name.
-        triggers = [(name, sql) for name, sql in triggers if "companion_" not in name and "companion_" not in (sql or "")]
+        # Triggers of a renamed library are not restored: the app recreates
+        # every trigger under its current name.
+        if any(old in tables for old in LEGACY_TABLES):
+            triggers = []
         for old, new in LEGACY_TABLES.items():
             if old in tables:
                 db.execute(("DROP TABLE " + quote(old)) if new in tables else ("ALTER TABLE " + quote(old) + " RENAME TO " + quote(new)))
                 tables.discard(old); tables.add(new)
-        tables.discard("companion_workspace")
-        db.execute("DROP TABLE IF EXISTS companion_workspace")
-        source_device = (db.execute("SELECT device_id FROM desktop_local_identity WHERE singleton=1").fetchone()
-                         if "desktop_local_identity" in tables else None)
         # Ownership is durable metadata. Availability is a separate history state;
         # copied conversations never acquire authority to resume against production.
-        if "dashboard_conversations" in tables:
-            columns = {r[1] for r in db.execute("PRAGMA table_info(dashboard_conversations)")}
-            if {"desktop_owned", "is_archived"} <= columns:
-                db.execute("CREATE TABLE IF NOT EXISTS retained_execution_history(conversation_id TEXT PRIMARY KEY REFERENCES dashboard_conversations(id) ON DELETE CASCADE)")
-                db.execute("INSERT OR IGNORE INTO retained_execution_history SELECT id FROM dashboard_conversations WHERE desktop_owned=1 AND is_archived=0")
-                db.execute("UPDATE dashboard_conversations SET is_archived=1 WHERE id IN (SELECT conversation_id FROM retained_execution_history)")
-        if source_device and "folder_execution_roots" in tables:
+        # (A v0.4.2 library's desktop_owned=0 rows were already read-only.)
+        if "conversations" in tables:
+            columns = {r[1] for r in db.execute("PRAGMA table_info(conversations)")}
+            native = " AND desktop_owned=1" if "desktop_owned" in columns else ""
+            db.execute("CREATE TABLE IF NOT EXISTS retained_execution_history(conversation_id TEXT PRIMARY KEY REFERENCES conversations(id) ON DELETE CASCADE)")
+            db.execute("INSERT OR IGNORE INTO retained_execution_history SELECT id FROM conversations WHERE is_archived=0" + native)
+            db.execute("UPDATE conversations SET is_archived=1 WHERE id IN (SELECT conversation_id FROM retained_execution_history)")
+        if source_device_id and "folder_execution_roots" in tables:
             # Each source-local project keeps its folder identity and relationship,
             # with a new owner and blank directory inside this disposable instance.
             owner = "device:" + device_id
-            for (folder_id,) in db.execute("SELECT folder_id FROM folder_execution_roots WHERE workspace_id=?", ("device:" + source_device[0],)).fetchall():
+            for (folder_id,) in db.execute("SELECT folder_id FROM folder_execution_roots WHERE workspace_id=?", ("device:" + source_device_id,)).fetchall():
                 directory = execution_root / str(uuid.UUID(folder_id))
                 directory.mkdir(parents=True)
                 db.execute("UPDATE folder_execution_roots SET workspace_id=?,root_path=?,managed=1,reference_paths='[]' WHERE folder_id=?",
                            (owner, str(published_root / str(uuid.UUID(folder_id))), folder_id))
-        transient = {"desktop_local_identity", "desktop_local_acp_sessions", "desktop_opencode_sessions",
-                     "desktop_opencode_submissions", "desktop_openclaw_gateway_links",
-                     "desktop_openclaw_gateway_sessions", "desktop_openclaw_cron_jobs", "desktop_openclaw_cron_runs",
-                     "desktop_scheduled_result_routes", "desktop_scheduled_result_receipts"}
+        transient = {"harness_sessions", "opencode_sessions", "opencode_submissions"}
         # State the library keeps about devices and execution belongs to the
         # source instance: its identity and library ID, receipts, journals,
         # uploads, grants, schedule executors and replica roles. What devices
         # produced (revisions, changes, projected history, artifacts) is kept.
         source_state = {"library_identity", "device_mutation_receipts", "device_command_receipts",
-                        "device_draft_receipts", "device_tool_receipts", "execution_workspace_publishers",
-                        "execution_workspace_mcp_grants", "device_scheduled_mcp_callers", "execution_journal",
-                        "execution_adoptions", "execution_receipts", "execution_replica_context",
-                        "execution_retained_settlements", "device_artifact_uploads", "calendar_task_executors",
-                        "calendar_run_publishers", "calendar_published_runs", "device_calendar_receipts",
-                        "calendar_replica_context", "calendar_execution_conflicts"}
-        # Execution ownership is durable metadata, not sync state. Keep it so a
-        # snapshot's new identity owns nothing it copied and never runs another
-        # Mac's (or the source's) schedules; drop routes, cursors and journals.
-        retained_paired = {"paired_conversation_owners", "paired_agent_owners", "paired_calendar_owners", "paired_library_state"}
+                        "device_draft_receipts", "device_tool_receipts", "device_scheduled_mcp_callers",
+                        "execution_journal", "execution_adoptions", "execution_receipts",
+                        "execution_retained_settlements", "artifact_uploads", "calendar_task_executors",
+                        "calendar_run_publishers", "calendar_published_runs", "device_calendar_receipts"}
+        # Execution ownership (agent_owners, conversation_owners,
+        # calendar_item_owners) is durable metadata, not sync state. Keep it so
+        # a snapshot's new identity owns nothing it copied and never runs
+        # another Mac's (or the source's) schedules; drop the peer sync
+        # bookkeeping, the Mac routes and the remote workspace configurations.
+        peer_routes = {"mac_routes", "remote_workspace_configurations"}
         for name in tables:
-            if name in transient or (name.startswith("paired_") and name not in retained_paired) or name in source_state:
+            if name in transient or name.startswith(("paired_library_", "peer_sync_")) or name in peer_routes or name in source_state:
                 db.execute("DELETE FROM " + quote(name))
-        if "paired_library_state" in tables:
-            db.execute("DELETE FROM paired_library_state WHERE name<>'owners.bootstrap'")
         # A new device identity seeds its own local harness catalog at startup.
         # Keep copied agent rows for history references, but retire them from the
         # active catalog so they cannot appear as duplicate runnable harnesses.
-        if "dashboard_agents" in tables:
-            db.execute("""UPDATE dashboard_agents
+        if "agents" in tables:
+            db.execute("""UPDATE agents
                 SET deleted_at=strftime('%Y-%m-%dT%H:%M:%fZ','now'), status='offline'
-                WHERE governing_plane='wovenmatter_macos' AND authority_kind='device_owned'
-                  AND runtime_device_id IS NULL AND deleted_at IS NULL""")
+                WHERE execution_location='local' AND runtime_device_id IS NULL AND deleted_at IS NULL""")
         # A snapshot is a new library. Keep materialized foreign history, but
         # discard the old synchronization stream and all routes to its owners.
         library_id = str(uuid.uuid4())
         if "library_identity" in tables:
-            if "library_id" not in {r[1] for r in db.execute("PRAGMA table_info(library_identity)")}:
-                db.execute("ALTER TABLE library_identity ADD COLUMN library_id TEXT")
             db.execute("INSERT INTO library_identity(singleton,host_device_id,library_id) VALUES(1,?,?)",
                        (str(uuid.uuid4()), library_id))
         for table, column in (("execution_workspaces", "payload"),
@@ -259,47 +265,50 @@ def disconnect_snapshot(file, *, device_id, execution_root, published_root):
                 else:
                     value.pop("activeRunID", None)
                 db.execute("UPDATE " + table + " SET " + column + "=? WHERE id=?",
-                           (json.dumps(value).encode(), identifier))
-        if "dashboard_runs" in tables:
-            db.execute("UPDATE dashboard_runs SET status='interrupted' WHERE status IN ('running','queued','pending','accepted','cancelling','uncertain')")
-        for name in ("workspace_session_deliveries", "workspace_calendar_runs"):
+                           (json.dumps(value), identifier))
+        if "execution_conversations" in tables and "active_run_id" in {
+                row[1] for row in db.execute("PRAGMA table_info(execution_conversations)")}:
+            db.execute("UPDATE execution_conversations SET active_run_id=NULL")
+        if "runs" in tables:
+            db.execute("UPDATE runs SET status='interrupted' WHERE status IN ('running','queued','pending','accepted','cancelling','uncertain')")
+        for name in ("session_deliveries", "calendar_runs"):
             if name in tables:
                 db.execute("UPDATE " + quote(name) + " SET status='cancelled' WHERE status IN ('queued','pending','sending','running','accepted')")
-        if "workspace_mcp_bot_machines" in tables:
-            db.execute("UPDATE workspace_mcp_bot_machines SET active=0")
-        if "workspace_session_relationships" in tables:
-            db.execute("UPDATE workspace_session_relationships SET coordinator_id=NULL,coordination_epoch=NULL,coordination_since=NULL WHERE coordinator_id LIKE 'woven:bot:%'")
-        if "workspace_session_grants" in tables:
-            db.execute("DELETE FROM workspace_session_grants WHERE source_id LIKE 'woven:bot:%'")
-        if "workspace_coordination_access_requests" in tables:
-            db.execute("UPDATE workspace_coordination_access_requests SET state='cancelled' WHERE source_id LIKE 'woven:bot:%' AND state='pending'")
+        if "mcp_bot_machines" in tables:
+            db.execute("UPDATE mcp_bot_machines SET active=0")
+        if "session_relationships" in tables:
+            db.execute("UPDATE session_relationships SET coordinator_id=NULL,coordination_epoch=NULL,coordination_since=NULL WHERE coordinator_id LIKE 'woven:bot:%'")
+        if "session_grants" in tables:
+            db.execute("DELETE FROM session_grants WHERE source_id LIKE 'woven:bot:%'")
+        if "coordination_access_requests" in tables:
+            db.execute("UPDATE coordination_access_requests SET state='cancelled' WHERE source_id LIKE 'woven:bot:%' AND state='pending'")
         # Network exposure belongs to the source instance, not a new snapshot.
         # Keep tool selections, but require an explicit enable in this instance.
-        if "workspace_tool_settings" in tables:
-            for identifier, raw in db.execute("SELECT id,value FROM workspace_tool_settings").fetchall():
+        if "tool_settings" in tables:
+            for identifier, raw in db.execute("SELECT id,value FROM tool_settings").fetchall():
                 value = json.loads(raw)
                 if value.get("externalMCP"):
                     value["externalMCP"]["isEnabled"] = False
-                    db.execute("UPDATE workspace_tool_settings SET value=? WHERE id=?", (json.dumps(value), identifier))
-        if "workspace_session_timers" in tables:
-            db.execute("UPDATE workspace_session_timers SET is_paused=1,pending_delivery_id=NULL")
+                    db.execute("UPDATE tool_settings SET value=? WHERE id=?", (json.dumps(value), identifier))
+        if "session_timers" in tables:
+            db.execute("UPDATE session_timers SET is_paused=1,pending_delivery_id=NULL")
         # Retain task definitions with an unreachable owner. New schedules use
         # this instance; copied occurrences cannot be admitted by its scheduler.
-        if "dashboard_calendar_items" in tables:
+        if "calendar_items" in tables:
             db.execute("CREATE TABLE IF NOT EXISTS calendar_task_executors(event_id TEXT PRIMARY KEY, device_id TEXT NOT NULL, tools_json TEXT)")
-            db.execute("INSERT OR REPLACE INTO calendar_task_executors(event_id,device_id) SELECT id,? FROM dashboard_calendar_items", (str(uuid.uuid4()),))
+            db.execute("INSERT OR REPLACE INTO calendar_task_executors(event_id,device_id) SELECT id,? FROM calendar_items", (str(uuid.uuid4()),))
         # Retain goal history without scheduling a continuation from the copy.
         for name in tables:
-            if name.startswith("workspace_goal"):
+            if name.startswith("goal_"):
                 columns = {r[1] for r in db.execute("PRAGMA table_info(" + quote(name) + ")")}
                 if "status" in columns:
                     db.execute("UPDATE " + quote(name) + " SET status='paused' WHERE status='active'")
-        if "workspace_session_goals" in tables:
-            for session, raw in db.execute("SELECT session_id,value FROM workspace_session_goals").fetchall():
+        if "session_goals" in tables:
+            for session, raw in db.execute("SELECT session_id,value FROM session_goals").fetchall():
                 value = json.loads(raw)
                 if value.get("status") == "active":
                     value["status"] = "paused"; value["pendingDeliveryID"] = None
-                    db.execute("UPDATE workspace_session_goals SET value=? WHERE session_id=?", (json.dumps(value), session))
+                    db.execute("UPDATE session_goals SET value=? WHERE session_id=?", (json.dumps(value), session))
         for _, sql in triggers:
             db.execute(sql)
         if db.execute("PRAGMA quick_check").fetchone() != ("ok",):
@@ -317,8 +326,9 @@ def snapshot(source, destination):
     temporary = Path(tempfile.mkdtemp(prefix=".snapshot-", dir=destination.parent))
     try:
         backup(source / "workspace.sqlite", temporary / "workspace.sqlite")
-        for name in ("library-files", "message-attachments", "ManagedDatabases"):
-            copy_assets(source / name, temporary / name)
+        for name in ("library-files", "library-chunks", "message-attachments"):
+            copy_assets(source / name, temporary / name, content_addressed=True)
+        copy_assets(source / "ManagedDatabases", temporary / "ManagedDatabases")
         catalog = temporary / "ManagedDatabases/catalog.json"
         if catalog.exists():
             rows = json.loads(catalog.read_text())
@@ -329,11 +339,16 @@ def snapshot(source, destination):
             catalog.write_text(json.dumps(rows))
         device_id = str(uuid.uuid4())
         execution_root = temporary / "ExecutionHome" / ".woven-matter"
-        disconnect_snapshot(temporary / "workspace.sqlite", device_id=device_id, execution_root=execution_root,
+        # A v0.4.2 library that the app has not opened since still holds its
+        # ID as `dashboard-device-id`; the app moves it to `device-id` on open.
+        source_device_file = next((path for path in (source / "device-id", source / "dashboard-device-id") if path.exists()), None)
+        source_device_id = source_device_file.read_text().strip().lower() if source_device_file else None
+        disconnect_snapshot(temporary / "workspace.sqlite", device_id=device_id, source_device_id=source_device_id,
+                            execution_root=execution_root,
                             published_root=destination / "ExecutionHome" / ".woven-matter")
         (temporary / "mcp-access.json").unlink(missing_ok=True)
-        (temporary / "dashboard-device-id").write_text(device_id)
-        (temporary / "dashboard-device-id").chmod(0o600)
+        (temporary / "device-id").write_text(device_id)
+        (temporary / "device-id").chmod(0o600)
         (temporary / "development-snapshot.json").write_text(json.dumps({"version": 1, "id": str(uuid.uuid4()), "source": str(source), "createdAt": time.time()}))
         os.rename(temporary, destination)
     finally:
@@ -401,7 +416,7 @@ def main():
     plan = sub.add_parser("profile")
     plan.add_argument("--root", type=Path, required=True)
     plan.add_argument("--instance")
-    plan.add_argument("--mode", choices=("auto", "client", "snapshot", "live"), default="auto")
+    plan.add_argument("--mode", choices=("auto", "snapshot", "live"), default="auto")
     snap = sub.add_parser("snapshot")
     snap.add_argument("--source", type=Path, required=True)
     snap.add_argument("--destination", type=Path, required=True)

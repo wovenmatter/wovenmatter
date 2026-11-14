@@ -2,7 +2,7 @@ import Foundation
 import LibraryClient
 import WovenMatterCore
 import WovenMatterClient
-import WovenMatterDashboardStore
+import WovenMatterLibraryStore
 
 /// Where an agent's `woven_sessions_create` lands. Workspaces are named by ID:
 /// this Mac's own, a Linux host this Mac added that is not enrolled in the
@@ -21,7 +21,7 @@ extension ApplicationModel {
     /// snapshot owner (`retainedHistory`) is history, never a destination, as
     /// on the iPhone.
     func agentToolWorkspaces() async throws -> (own: ExecutionWorkspace?, others: [ExecutionWorkspace]) {
-        guard let database = dashboardStore?.database else { throw ApplicationModelError.dashboardStoreUnavailable }
+        guard let database = libraryStore?.database else { throw ApplicationModelError.libraryStoreUnavailable }
         let device = try await database.libraryIdentity().hostDeviceID
         let all = try await database.libraryExecutionWorkspaces().filter { !$0.deleted && $0.kind != .ios && $0.retainedHistory != true }
         let own = all.first { $0.kind == .mac && $0.executionDeviceID == device }
@@ -39,7 +39,7 @@ extension ApplicationModel {
         // A Linux host this Mac added is a member like any other once it is enrolled.
         if let uuid = UUID(uuidString: id), remoteWorkspaces.configuration(id: uuid) != nil, !others.contains(where: { $0.id == id }) { return .configured(uuid) }
         if let member = others.first(where: { $0.id == id }) { return .member(member) }
-        if let database = dashboardStore?.database,
+        if let database = libraryStore?.database,
            let named = try await database.libraryExecutionWorkspaces().first(where: { $0.id == id && !$0.deleted }) {
             if named.kind == .ios { throw WorkspaceToolError.invalid("An iPhone or iPad runs only its own Quick Chats. Choose a Mac or Linux workspace.") }
             if named.retainedHistory == true { throw WorkspaceToolError.invalid("\(named.name) is copied history in this snapshot and runs no sessions. Choose a Mac or Linux workspace.") }
@@ -54,8 +54,8 @@ extension ApplicationModel {
     /// derive from the caller and request, so a retry replays receipts.
     func createMemberToolSession(sourceID: String, requestID: String, workspace: ExecutionWorkspace,
                                  runtime: AgentRuntimeKind, title: String, text: String) async throws -> WovenMatterToolResponse {
-        let client = try centralExecutionClient()
-        guard let database = dashboardStore?.database else { throw ApplicationModelError.dashboardStoreUnavailable }
+        let client = try memberExecutionClient()
+        guard let database = libraryStore?.database else { throw ApplicationModelError.libraryStoreUnavailable }
         let device = try await database.libraryIdentity().hostDeviceID
         let providers = try await client.providers(workspace: workspace)
         guard let provider = providers.first(where: { $0.runtimeKind == runtime.rawValue && $0.available && $0.canStart }) else {
@@ -93,9 +93,9 @@ extension ApplicationModel {
     /// `woven_sessions_harnesses`: this Mac (its real workspace ID and name),
     /// then paired Macs, then Linux workspaces. A member that cannot be
     /// reached is listed once with `online: false`.
-    func agentToolHarnessRows() async throws -> [GatewayJSONValue] {
+    func agentToolHarnessRows() async throws -> [JSONValue] {
         let (own, others) = try await agentToolWorkspaces()
-        var rows: [GatewayJSONValue] = LocalACPRuntimeCatalog.definitions.map {
+        var rows: [JSONValue] = LocalACPRuntimeCatalog.definitions.map {
             .object(["harness": .string($0.runtimeKind.rawValue), "workspace": own.map { .string($0.id) } ?? .null,
                      "workspaceName": .string(own?.name ?? DevelopmentLaunch.deviceName()), "workspaceKind": .string("mac"),
                      "ready": .bool(isLocalACPAgentReady($0.runtimeKind))])
@@ -110,10 +110,10 @@ extension ApplicationModel {
                 }
                 continue
             }
-            let base: [String: GatewayJSONValue] = ["workspace": .string(workspace.id), "workspaceName": .string(workspace.name),
+            let base: [String: JSONValue] = ["workspace": .string(workspace.id), "workspaceName": .string(workspace.name),
                                                     "workspaceKind": .string(workspace.kind.rawValue)]
             do {
-                let providers = try await centralExecutionClient().providers(workspace: workspace)
+                let providers = try await memberExecutionClient().providers(workspace: workspace)
                 let kinds = Set(AgentRuntimeKind.allCases.map(\.rawValue))
                 for provider in providers where kinds.contains(provider.runtimeKind) {
                     rows.append(.object(base.merging(["harness": .string(provider.runtimeKind),
@@ -155,7 +155,7 @@ extension ApplicationModel {
     /// `woven_sessions_wait` is always answered here, for this Mac's sessions too.
     func handleMemberSessionTool(callerID: String, command: WovenMatterToolCommand,
                                  request: WovenMatterToolRequest) async throws -> WovenMatterToolResponse? {
-        guard let database = dashboardStore?.database else { throw ApplicationModelError.dashboardStoreUnavailable }
+        guard let database = libraryStore?.database else { throw ApplicationModelError.libraryStoreUnavailable }
         let readsAll = try await database.sessionTools(callerID).enabled.contains(.history)
         if command.action == "wait" { return try await memberSessionWait(callerID: callerID, command: command, readsAll: readsAll) }
         if command.action == "list" {
@@ -170,7 +170,7 @@ extension ApplicationModel {
         }
         let id = try command.required("id", allowPositional: true)
         guard let workspace = try await memberSessionWorkspace(id: id, named: command.options["workspace"]) else { return nil }
-        let client = try centralExecutionClient()
+        let client = try memberExecutionClient()
         switch command.action {
         case "status":
             let creator = try await database.memberToolSession(id: id)?.callerID
@@ -211,7 +211,7 @@ extension ApplicationModel {
             if case .member(let workspace) = try await resolveAgentToolDestination(named, callerWorkspace: nil) { return workspace }
             return nil
         }
-        guard UUID(uuidString: id) != nil, let database = dashboardStore?.database,
+        guard UUID(uuidString: id) != nil, let database = libraryStore?.database,
               let record = try await database.memberToolSession(id: id) else { return nil }
         let (own, others) = try await agentToolWorkspaces()
         if record.workspaceID == own?.id { return nil }
@@ -221,7 +221,7 @@ extension ApplicationModel {
         return workspace
     }
 
-    private func memberConversation(_ client: CentralExecutionClient, _ workspace: ExecutionWorkspace,
+    private func memberConversation(_ client: MemberExecutionClient, _ workspace: ExecutionWorkspace,
                                     _ id: String) async throws -> LibraryConversation {
         guard UUID(uuidString: id) != nil else { throw WorkspaceToolError.invalid("Name the session by its ID.") }
         guard let found = try await client.conversations(workspace: workspace).first(where: { $0.id.lowercased() == id.lowercased() }) else {
@@ -230,10 +230,10 @@ extension ApplicationModel {
         return found
     }
 
-    nonisolated static func describeMemberSession(_ conversation: LibraryConversation, on workspace: ExecutionWorkspace) -> [String: GatewayJSONValue] {
-        var value: [String: GatewayJSONValue] = [
+    nonisolated static func describeMemberSession(_ conversation: LibraryConversation, on workspace: ExecutionWorkspace) -> [String: JSONValue] {
+        var value: [String: JSONValue] = [
             "id": .string(conversation.id), "title": .string(conversation.title),
-            "harness": conversation.runtimeKind.map(GatewayJSONValue.string) ?? .null,
+            "harness": conversation.runtimeKind.map(JSONValue.string) ?? .null,
             "workspace": .string(workspace.id), "workspaceName": .string(workspace.name), "workspaceKind": .string(workspace.kind.rawValue),
             "state": .string(conversation.activeRunID == nil ? "idle" : "running")
         ]
@@ -247,42 +247,42 @@ extension ApplicationModel {
 
     /// State, pending questions and approvals, and the latest 20 messages
     /// (4000 characters each); `before` pages older ones.
-    func memberSessionStatus(client: CentralExecutionClient, workspace: ExecutionWorkspace,
+    func memberSessionStatus(client: MemberExecutionClient, workspace: ExecutionWorkspace,
                                      id: String, before: String?) async throws -> WovenMatterToolResponse {
         let found = try await memberConversation(client, workspace, id)
         let transcript = try await client.transcript(workspace: workspace, conversationID: found.id, before: before)
         let pending = ((try? await client.pendingInteractions(workspace: workspace)) ?? [])
             .filter { $0.conversationID.lowercased() == found.id.lowercased() }
-        let messages: [GatewayJSONValue] = transcript.messages.suffix(20).map { message in
-            var value: [String: GatewayJSONValue] = ["id": .string(message.id), "role": .string(message.role),
+        let messages: [JSONValue] = transcript.messages.suffix(20).map { message in
+            var value: [String: JSONValue] = ["id": .string(message.id), "role": .string(message.role),
                 "createdAt": .string(message.createdAt), "content": .string(Self.clip(message.content, 4000))]
             if let run = message.runID { value["runID"] = .string(run) }
             if let status = message.status { value["status"] = .string(status) }
             return .object(value)
         }
-        let questions: [GatewayJSONValue] = try pending.map { item in
-            var value: [String: GatewayJSONValue] = ["id": .string(item.id), "kind": .string(item.kind.rawValue), "title": .string(item.title),
-                "runID": item.runID.map(GatewayJSONValue.string) ?? .null,
+        let questions: [JSONValue] = try pending.map { item in
+            var value: [String: JSONValue] = ["id": .string(item.id), "kind": .string(item.kind.rawValue), "title": .string(item.title),
+                "runID": item.runID.map(JSONValue.string) ?? .null,
                 "options": try WovenMCPCatalog.json(item.options), "questions": try WovenMCPCatalog.json(item.questions)]
             if let detail = item.detail { value["detail"] = .string(Self.clip(detail, 2000)) }
             return .object(value)
         }
         var session = Self.describeMemberSession(found, on: workspace)
         if !pending.isEmpty { session["state"] = .string("needsInput") }
-        var page: [String: GatewayJSONValue] = ["messages": .array(messages)]
+        var page: [String: JSONValue] = ["messages": .array(messages)]
         if let older = transcript.olderCursor { page["before"] = .string(older) }
-        var result: [String: GatewayJSONValue] = ["session": .object(session), "pending": .array(questions), "transcript": .object(page)]
+        var result: [String: JSONValue] = ["session": .object(session), "pending": .array(questions), "transcript": .object(page)]
         if pending.contains(where: { $0.kind == .approval }) {
             result["note"] = .string("Permission approvals belong to the user unless this workspace’s user granted full access; answer questions with woven_sessions_respond.")
         }
         return .init(result: .object(result))
     }
 
-    private func memberCommand(_ client: CentralExecutionClient, _ workspace: ExecutionWorkspace, callerID: String,
+    private func memberCommand(_ client: MemberExecutionClient, _ workspace: ExecutionWorkspace, callerID: String,
                                requestID: String, conversation: String, step: String, kind: LibraryCommand.Kind,
                                runID: String? = nil, text: String? = nil, interactionID: String? = nil,
                                response: InteractionResponse? = nil) async throws -> LibraryCommandReceipt {
-        guard let database = dashboardStore?.database else { throw ApplicationModelError.dashboardStoreUnavailable }
+        guard let database = libraryStore?.database else { throw ApplicationModelError.libraryStoreUnavailable }
         let device = try await database.libraryIdentity().hostDeviceID
         let command = LibraryCommand(commandID: Self.memberToolID(callerID, requestID, workspace.id + ":" + conversation + ":" + step),
             deviceID: device, kind: kind, conversationID: conversation, runID: runID, text: text, interactionID: interactionID,
@@ -290,14 +290,14 @@ extension ApplicationModel {
         return try await client.submit(command, workspace: workspace)
     }
 
-    private static func receiptValue(_ receipt: LibraryCommandReceipt) -> GatewayJSONValue {
-        var value: [String: GatewayJSONValue] = ["commandID": .string(receipt.commandID), "status": .string(receipt.status.rawValue)]
+    private static func receiptValue(_ receipt: LibraryCommandReceipt) -> JSONValue {
+        var value: [String: JSONValue] = ["commandID": .string(receipt.commandID), "status": .string(receipt.status.rawValue)]
         if let run = receipt.runID { value["runID"] = .string(run) }
         return .object(value)
     }
 
     /// Sends to an idle session, or steers a running one when its harness can.
-    private func memberSessionSend(client: CentralExecutionClient, workspace: ExecutionWorkspace, callerID: String,
+    private func memberSessionSend(client: MemberExecutionClient, workspace: ExecutionWorkspace, callerID: String,
                                    requestID: String, id: String, text: String) async throws -> WovenMatterToolResponse {
         let found = try await memberConversation(client, workspace, id)
         let receipt: LibraryCommandReceipt
@@ -315,10 +315,10 @@ extension ApplicationModel {
         return .init(result: .object(["session": .object(Self.describeMemberSession(found, on: workspace)), "receipt": Self.receiptValue(receipt)]))
     }
 
-    private func memberSessionStop(client: CentralExecutionClient, workspace: ExecutionWorkspace, callerID: String,
+    private func memberSessionStop(client: MemberExecutionClient, workspace: ExecutionWorkspace, callerID: String,
                                    requestID: String, id: String) async throws -> WovenMatterToolResponse {
         let found = try await memberConversation(client, workspace, id)
-        let session = GatewayJSONValue.object(Self.describeMemberSession(found, on: workspace))
+        let session = JSONValue.object(Self.describeMemberSession(found, on: workspace))
         guard let run = found.activeRunID else {
             return .init(result: .object(["session": session, "stopped": .bool(false), "message": .string("The session is not running.")]))
         }
@@ -329,7 +329,7 @@ extension ApplicationModel {
     }
 
     /// Answers one pending question (or approval) of the session's current run.
-    private func memberSessionRespond(client: CentralExecutionClient, workspace: ExecutionWorkspace, callerID: String,
+    private func memberSessionRespond(client: MemberExecutionClient, workspace: ExecutionWorkspace, callerID: String,
                                       requestID: String, id: String, interactionID: String,
                                       response: InteractionResponse) async throws -> WovenMatterToolResponse {
         let found = try await memberConversation(client, workspace, id)
@@ -363,9 +363,9 @@ extension ApplicationModel {
     /// history, otherwise only those this caller created.
     private func memberSessionList(callerID: String, workspace: ExecutionWorkspace, readsAll: Bool,
                                    limit: Int) async throws -> WovenMatterToolResponse {
-        guard let database = dashboardStore?.database else { throw ApplicationModelError.dashboardStoreUnavailable }
+        guard let database = libraryStore?.database else { throw ApplicationModelError.libraryStoreUnavailable }
         let created = Set(try await database.memberToolSessions(callerID: callerID).map(\.id))
-        let rows = try await centralExecutionClient().conversations(workspace: workspace).filter { readsAll || created.contains($0.id.lowercased()) }
+        let rows = try await memberExecutionClient().conversations(workspace: workspace).filter { readsAll || created.contains($0.id.lowercased()) }
         return .init(result: .object(["rows": .array(rows.prefix(limit).map { .object(Self.describeMemberSession($0, on: workspace)) }),
                                       "hasMore": .bool(rows.count > limit)]))
     }
@@ -373,10 +373,10 @@ extension ApplicationModel {
     /// Every session `callerID` created on other workspaces, each with its live
     /// state; a workspace that does not answer marks its rows `online: false`.
     private func createdMemberSessions(callerID: String, limit: Int) async throws -> WovenMatterToolResponse {
-        guard let database = dashboardStore?.database else { throw ApplicationModelError.dashboardStoreUnavailable }
+        guard let database = libraryStore?.database else { throw ApplicationModelError.libraryStoreUnavailable }
         let mine = try await database.memberToolSessions(callerID: callerID)
         let (_, others) = try await agentToolWorkspaces()
-        var rows: [GatewayJSONValue] = []
+        var rows: [JSONValue] = []
         var order: [String] = [], byWorkspace: [String: [String]] = [:]
         for record in mine {
             if byWorkspace[record.workspaceID] == nil { order.append(record.workspaceID) }
@@ -389,7 +389,7 @@ extension ApplicationModel {
                 continue
             }
             do {
-                let live = try await centralExecutionClient().conversations(workspace: workspace)
+                let live = try await memberExecutionClient().conversations(workspace: workspace)
                 for id in ids {
                     if let conversation = live.first(where: { $0.id.lowercased() == id }) {
                         rows.append(.object(Self.describeMemberSession(conversation, on: workspace)))
@@ -410,7 +410,7 @@ extension ApplicationModel {
     /// commands, as another member's request would.
     func handleLocalSessionControl(callerID: String, command: WovenMatterToolCommand,
                                    request: WovenMatterToolRequest) async throws -> WovenMatterToolResponse {
-        guard let database = dashboardStore?.database else { throw ApplicationModelError.dashboardStoreUnavailable }
+        guard let database = libraryStore?.database else { throw ApplicationModelError.libraryStoreUnavailable }
         let id = try command.required("id", allowPositional: true)
         let relationship = try await database.sessionRelationship(id)
         guard relationship.createdBy == callerID || relationship.coordinatorID == callerID else {

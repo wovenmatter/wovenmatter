@@ -1,7 +1,7 @@
 import Foundation
 
-public struct DashboardChatPanelID: Hashable, Codable, Sendable, Identifiable {
-  public static let primary = DashboardChatPanelID(rawValue: "primary")
+public struct ChatPanelID: Hashable, Codable, Sendable, Identifiable {
+  public static let primary = ChatPanelID(rawValue: "primary")
 
   public let rawValue: String
 
@@ -14,7 +14,7 @@ public struct DashboardChatPanelID: Hashable, Codable, Sendable, Identifiable {
 
 /// A bot's channel or thread shown in a chat panel. The bot's runtime owns the
 /// conversation; the panel only records which one is on screen.
-public struct DashboardBotTarget: Hashable, Codable, Sendable {
+public struct BotTarget: Hashable, Codable, Sendable {
   /// The Woven device ID of the machine whose runtime hosts the bot.
   public var machineID: String
   public var botID: String
@@ -31,20 +31,20 @@ public struct DashboardBotTarget: Hashable, Codable, Sendable {
   }
 }
 
-public struct DashboardChatPanel: Equatable, Sendable, Identifiable {
-  public let id: DashboardChatPanelID
+public struct ChatPanel: Equatable, Sendable, Identifiable {
+  public let id: ChatPanelID
   public var conversationID: String?
   /// Mutually exclusive with `conversationID`.
-  public var botTarget: DashboardBotTarget?
+  public var botTarget: BotTarget?
 
-  public init(id: DashboardChatPanelID, conversationID: String?, botTarget: DashboardBotTarget? = nil) {
+  public init(id: ChatPanelID, conversationID: String?, botTarget: BotTarget? = nil) {
     self.id = id
     self.conversationID = conversationID
     self.botTarget = botTarget
   }
 }
 
-public struct DashboardChatPanelFrame: Equatable, Sendable {
+public struct ChatPanelFrame: Equatable, Sendable {
   public let x: Double
   public let y: Double
   public let width: Double
@@ -65,24 +65,24 @@ public struct DashboardChatPanelFrame: Equatable, Sendable {
   var midY: Double { y + height / 2 }
 }
 
-public enum DashboardChatPanelDirection: Sendable {
+public enum ChatPanelDirection: Sendable {
   case left
   case right
   case up
   case down
 }
 
-public struct DashboardChatPanelFocusRequest: Equatable, Sendable {
-  public let panelID: DashboardChatPanelID
+public struct ChatPanelFocusRequest: Equatable, Sendable {
+  public let panelID: ChatPanelID
   public let generation: Int
 
-  public init(panelID: DashboardChatPanelID, generation: Int) {
+  public init(panelID: ChatPanelID, generation: Int) {
     self.panelID = panelID
     self.generation = generation
   }
 }
 
-public enum DashboardChatPanelMetrics {
+public enum ChatPanelMetrics {
   public static let dividerThickness = 0.5
   public static let maximumPanelCount = 5
 }
@@ -90,17 +90,17 @@ public enum DashboardChatPanelMetrics {
 /// Window-scoped chat layout state. It owns presentation only and deliberately
 /// has no chat lifecycle dependency, so removing a panel cannot stop, archive,
 /// close, or delete the conversation displayed in it.
-public struct DashboardChatPanelState: Equatable, Sendable {
-  public private(set) var primary: DashboardChatPanel
-  public private(set) var auxiliaryRows: [[DashboardChatPanel]]
-  public private(set) var activePanelID: DashboardChatPanelID
+public struct ChatPanelState: Equatable, Sendable {
+  public private(set) var primary: ChatPanel
+  public private(set) var auxiliaryRows: [[ChatPanel]]
+  public private(set) var activePanelID: ChatPanelID
   public private(set) var assetPresented: Bool
-  public private(set) var focusRequest: DashboardChatPanelFocusRequest?
+  public private(set) var focusRequest: ChatPanelFocusRequest?
 
   private var focusGeneration: Int
 
   public init(primaryConversationID: String? = nil) {
-    primary = DashboardChatPanel(
+    primary = ChatPanel(
       id: .primary,
       conversationID: primaryConversationID
     )
@@ -111,7 +111,7 @@ public struct DashboardChatPanelState: Equatable, Sendable {
     focusGeneration = 0
   }
 
-  public var panels: [DashboardChatPanel] {
+  public var panels: [ChatPanel] {
     [primary] + auxiliaryRows.flatMap { $0 }
   }
 
@@ -123,24 +123,24 @@ public struct DashboardChatPanelState: Equatable, Sendable {
     panel(id: activePanelID)?.conversationID
   }
 
-  public var activeBotTarget: DashboardBotTarget? {
+  public var activeBotTarget: BotTarget? {
     panel(id: activePanelID)?.botTarget
   }
 
-  public func panel(id: DashboardChatPanelID) -> DashboardChatPanel? {
+  public func panel(id: ChatPanelID) -> ChatPanel? {
     panels.first { $0.id == id }
   }
 
-  public func canClosePanel(_ panelID: DashboardChatPanelID) -> Bool {
+  public func canClosePanel(_ panelID: ChatPanelID) -> Bool {
     panelID != .primary && panel(id: panelID) != nil
   }
 
-  public func canAddPanel(from panelID: DashboardChatPanelID) -> Bool {
+  public func canAddPanel(from panelID: ChatPanelID) -> Bool {
     if auxiliaryRows.isEmpty {
       return panelID == .primary
     }
     guard panelID != .primary,
-          panelCount < DashboardChatPanelMetrics.maximumPanelCount,
+          panelCount < ChatPanelMetrics.maximumPanelCount,
           let location = auxiliaryLocation(of: panelID) else {
       return false
     }
@@ -149,8 +149,8 @@ public struct DashboardChatPanelState: Equatable, Sendable {
 
   @discardableResult
   public mutating func addPanel(
-    from panelID: DashboardChatPanelID,
-    newPanelID: DashboardChatPanelID,
+    from panelID: ChatPanelID,
+    newPanelID: ChatPanelID,
     conversationID: String? = nil
   ) -> Bool {
     guard newPanelID != .primary,
@@ -160,7 +160,7 @@ public struct DashboardChatPanelState: Equatable, Sendable {
     }
 
     assetPresented = false
-    let panel = DashboardChatPanel(
+    let panel = ChatPanel(
       id: newPanelID,
       conversationID: conversationID
     )
@@ -183,7 +183,7 @@ public struct DashboardChatPanelState: Equatable, Sendable {
   }
 
   @discardableResult
-  public mutating func closePanel(_ panelID: DashboardChatPanelID) -> Bool {
+  public mutating func closePanel(_ panelID: ChatPanelID) -> Bool {
     guard let location = auxiliaryLocation(of: panelID) else { return false }
 
     let wasActive = activePanelID == panelID
@@ -207,7 +207,7 @@ public struct DashboardChatPanelState: Equatable, Sendable {
   }
 
   @discardableResult
-  public mutating func activatePanel(_ panelID: DashboardChatPanelID) -> Bool {
+  public mutating func activatePanel(_ panelID: ChatPanelID) -> Bool {
     guard panel(id: panelID) != nil else { return false }
     activePanelID = panelID
     return true
@@ -221,7 +221,7 @@ public struct DashboardChatPanelState: Equatable, Sendable {
   @discardableResult
   public mutating func setConversation(
     _ conversationID: String?,
-    in panelID: DashboardChatPanelID
+    in panelID: ChatPanelID
   ) -> Bool {
     updatePanel(panelID) {
       $0.conversationID = conversationID
@@ -230,14 +230,14 @@ public struct DashboardChatPanelState: Equatable, Sendable {
   }
 
   @discardableResult
-  public mutating func replaceActiveBot(with target: DashboardBotTarget?) -> Bool {
+  public mutating func replaceActiveBot(with target: BotTarget?) -> Bool {
     setBot(target, in: activePanelID)
   }
 
   @discardableResult
   public mutating func setBot(
-    _ target: DashboardBotTarget?,
-    in panelID: DashboardChatPanelID
+    _ target: BotTarget?,
+    in panelID: ChatPanelID
   ) -> Bool {
     updatePanel(panelID) {
       $0.botTarget = target
@@ -246,8 +246,8 @@ public struct DashboardChatPanelState: Equatable, Sendable {
   }
 
   private mutating func updatePanel(
-    _ panelID: DashboardChatPanelID,
-    _ change: (inout DashboardChatPanel) -> Void
+    _ panelID: ChatPanelID,
+    _ change: (inout ChatPanel) -> Void
   ) -> Bool {
     if panelID == .primary {
       change(&primary)
@@ -270,8 +270,8 @@ public struct DashboardChatPanelState: Equatable, Sendable {
 
   @discardableResult
   public mutating func navigate(
-    _ direction: DashboardChatPanelDirection
-  ) -> DashboardChatPanelID? {
+    _ direction: ChatPanelDirection
+  ) -> ChatPanelID? {
     guard hasAuxiliaryPanels,
           !assetPresented,
           let destination = neighbor(from: activePanelID, direction: direction) else {
@@ -282,19 +282,19 @@ public struct DashboardChatPanelState: Equatable, Sendable {
     return destination
   }
 
-  public func normalizedFrames() -> [DashboardChatPanelID: DashboardChatPanelFrame] {
+  public func normalizedFrames() -> [ChatPanelID: ChatPanelFrame] {
     guard hasAuxiliaryPanels else {
-      return [.primary: DashboardChatPanelFrame(x: 0, y: 0, width: 1, height: 1)]
+      return [.primary: ChatPanelFrame(x: 0, y: 0, width: 1, height: 1)]
     }
 
-    var result: [DashboardChatPanelID: DashboardChatPanelFrame] = [
-      .primary: DashboardChatPanelFrame(x: 0, y: 0, width: 0.5, height: 1)
+    var result: [ChatPanelID: ChatPanelFrame] = [
+      .primary: ChatPanelFrame(x: 0, y: 0, width: 0.5, height: 1)
     ]
     let rowHeight = 1 / Double(auxiliaryRows.count)
     for (rowIndex, row) in auxiliaryRows.enumerated() {
       let columnWidth = 0.5 / Double(row.count)
       for (columnIndex, panel) in row.enumerated() {
-        result[panel.id] = DashboardChatPanelFrame(
+        result[panel.id] = ChatPanelFrame(
           x: 0.5 + Double(columnIndex) * columnWidth,
           y: Double(rowIndex) * rowHeight,
           width: columnWidth,
@@ -306,9 +306,9 @@ public struct DashboardChatPanelState: Equatable, Sendable {
   }
 
   public func neighbor(
-    from panelID: DashboardChatPanelID,
-    direction: DashboardChatPanelDirection
-  ) -> DashboardChatPanelID? {
+    from panelID: ChatPanelID,
+    direction: ChatPanelDirection
+  ) -> ChatPanelID? {
     let frames = normalizedFrames()
     guard let source = frames[panelID] else { return nil }
     let order = Dictionary(uniqueKeysWithValues:
@@ -317,7 +317,7 @@ public struct DashboardChatPanelState: Equatable, Sendable {
     let epsilon = 0.000_001
 
     let candidates = panels.compactMap { panel -> (
-      id: DashboardChatPanelID,
+      id: ChatPanelID,
       gap: Double,
       perpendicularDistance: Double,
       order: Int
@@ -356,7 +356,7 @@ public struct DashboardChatPanelState: Equatable, Sendable {
   }
 
   private func auxiliaryLocation(
-    of panelID: DashboardChatPanelID
+    of panelID: ChatPanelID
   ) -> (row: Int, column: Int)? {
     for (rowIndex, row) in auxiliaryRows.enumerated() {
       if let columnIndex = row.firstIndex(where: { $0.id == panelID }) {
@@ -366,9 +366,9 @@ public struct DashboardChatPanelState: Equatable, Sendable {
     return nil
   }
 
-  private mutating func requestComposerFocus(for panelID: DashboardChatPanelID) {
+  private mutating func requestComposerFocus(for panelID: ChatPanelID) {
     focusGeneration += 1
-    focusRequest = DashboardChatPanelFocusRequest(
+    focusRequest = ChatPanelFocusRequest(
       panelID: panelID,
       generation: focusGeneration
     )

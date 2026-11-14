@@ -2,8 +2,8 @@
 
 Every paired Mac runs the normal Woven Matter desktop app and saves a complete
 local shared library. Pairing combines libraries through ongoing synchronization;
-it does not move a database, retire a host, promote a node, or select a central
-Mac. Any Mac can add a remote workspace or pair another Apple device.
+it does not move a database, retire a host, promote a node, or make one Mac the
+authority. Any Mac can add a remote workspace or pair another Apple device.
 
 ## Shared data and execution ownership
 
@@ -81,19 +81,32 @@ the arrival order, page boundaries or restarts. An explicit later restore
 supersedes the deletion causally while a concurrent edit stays in the frontier.
 A local write supersedes the frontier it has seen. Losing live note content gets
 a stable, visible **Recovered edit** note, except a Page or an Artifact's saved
-inputs: concurrent versions of those merge on every Mac into the same result
+inputs: concurrent versions of those merge on every device into the same result
 (see [Pages](PAGES.md)), so nothing needs recovering. Other losing versions remain in
-`paired_library_conflicts`, and library bytes they reference are not cleaned up.
-Replaying a conflict cannot create another copy. Older stores recompute their
-canonical winners once on upgrade.
+`peer_sync_conflicts` while they are still concurrent, and a losing library
+item's version stays there with its bytes. Replaying a conflict cannot create
+another copy.
+
+Each device keeps only the versions that still matter (`peer_sync_versions`):
+each row's frontier and the versions waiting for their bytes, each under the
+cursor of one sequence. A new or newly kept version takes the next cursor and
+the versions it supersedes are deleted, so a peer paging after its cursor
+receives each row's current versions once. That is all it needs: a version it
+misses was superseded by one that arrives later in the same order, and anything
+it writes meanwhile is concurrent with that later version. A deletion records
+the row's key and the columns that decide where it applies (its conversation,
+workspace or device), never the old row.
 
 Each pair retains separate push and receive cursors. Receive data and its cursor
 commit together. The sender advances only after an acknowledgement for the exact
 page. Process loss or a lost reply therefore retries durable identities. Peers
 relay the original records, rather than inventing a new edit origin. Persistent
-membership, routes, cursors, tombstones and recovery state survive restart.
+membership, routes, cursors, tombstones and recovery state survive restart. A
+quarantined record is dropped once a version that covers it applies.
 
-Large values are content-addressed separately from their row metadata. A receive
+Large values are content-addressed separately from their row metadata. Saved
+artifact chunks and native history parts never carry bytes: their rows name a
+file in `library-chunks/` by SHA-256 and size. A receive
 page can durably queue such a row until its bytes arrive, allowing other writing
 to continue; waiting rows are scanned from a rotating durable position, so
 unavailable bytes never starve ready rows. A waiting row is relayed at once,
@@ -149,8 +162,12 @@ key: `POST /v1/peers/sync`, `/v1/peers/notify`, `/v1/peers/files` and
 `/v1/peers/file`. A local commit is announced once, debounced, to online peers,
 and each pulls with one exchange; a peer that reappears is caught up once; a
 60-second presence check, backing off to 15 minutes for an offline peer,
-replaces constant polling. Peers must share the exact shared-table schema, and
-a mismatch is reported as "update required" rather than partially applied.
+replaces constant polling. Peers must share the exchange format
+(`PairedLibraryFormat`), and a mismatch is reported as "update required" rather
+than partially applied. A release that only adds a shared table or column keeps
+the format: a device that has not updated keeps the records it cannot apply
+yet, relays them, and applies them once it updates
+([Woven everywhere](architecture/WOVEN_EVERYWHERE.md), "Versions").
 Requests go only to tailnet HTTPS endpoints (`https://*.ts.net`) taken from
 signed member entries; there is no public directory, redirects and cookies are
 disabled, and merely appearing on the tailnet grants nothing. Once membership
@@ -174,11 +191,6 @@ Besides the join, paired-Mac bearers serve only:
 
 - `/v1/peers/usage`, read with the grant from pairing with that Mac (see
   "Usage across devices");
-- `/v1/peers/credential`, which enrolls a pre-member phone in another Mac's
-  workspace. A Mac without its own grant at that Mac first obtains one through
-  a one-use challenge signed with both pinned keys (`/v1/peers/challenge`,
-  `/v1/peers/handshake`); challenges are held in memory, so a restart
-  invalidates them;
 - the bearer-era roster (phone names, Mac introductions and signed unpair
   events), which rides along each signed exchange as an attachment so that
   grants issued before members are revoked with their device. It authenticates
@@ -208,14 +220,6 @@ refresh. Every new or renewed workspace credential also replaces the token of
 each inference connection bound to that workspace's exact host scope and
 endpoint.
 
-A Dev connected client (`scripts/build_and_run.sh --mode client`) is a library
-client of the production Mac it connects to and follows the same rule: it
-clears a rejected direct workspace credential, requests a replacement through
-that Mac until it succeeds (including after a restart), and never presents the
-rejected token again. The execution host it runs for its own sessions
-authorizes requests by token, so revocation there takes effect when queued
-cleanup reaches it.
-
 ## Upgrade and recovery
 
 Before the first peer import, each Mac saves a consistent, integrity-checked
@@ -233,34 +237,9 @@ copy, is retried after one minute, doubling to fifteen; meanwhile the first
 synchronization reports its error.
 Retain the original database and device-only credential vaults when recovering.
 Ownership of rows that existed before pairing is claimed exactly once, before any
-peer data arrives; a schedule assigned to a client device keeps that executor.
+peer data arrives; a schedule assigned to a phone keeps that executor.
 
-Older node preferences no longer select a reduced desktop interface. Upgrade
-preserves the old replica and command journal, takes backups, and imports a
-WAL-aware copy of a former node's native database on the same physical Mac; the
-original execution directory is never modified. Notes, folders and schedules
-that the node held only as projections of the Mac it was connected to are not
-imported, so that Mac's current writing wins; writing that existed only in the
-node's workspace is preserved. The import commits with its completion marker, so
-a retry never duplicates rows. Cached notes, conflicts and unsent composer text
-get deterministic **Saved before pairing upgrade** notes. Pending note and folder
-operations are sent to the original approved Mac with their original operation
-IDs before pairing, so its receipts make retries exact; any operation it does not
-apply is kept as a visible note rather than abandoned. Imported runs that were
-active are recovered during the upgrade launch. Goal membership is kept by
-stable run IDs: an imported active goal first enrolls the node's runs it had not
-yet counted, then is paused; usage for enrolled runs keeps counting, and only
-runs after the upgrade enroll later. A goal this library already had is never
-changed by the import. Nothing is replayed
-against the new local library and pending agent commands are never replayed.
-If an upgrade step fails (for example the retired node's lease is still held),
-the full app still opens, the failure is reported, paired synchronization stays
-paused, and the upgrade is retried on the next launch.
-
-SQLite recovery backups and original replica/native files preserve ambiguous
-legacy collisions. Provider credentials remain in their original local storage.
-The retired node's execution lease must be free before import; upgrade never
-force-kills another owner. A fresh Dev snapshot drops copied peer routes,
+Provider credentials remain in their original local storage. A fresh Dev snapshot drops copied peer routes,
 membership state, counters and cursors, retaining source history without
 connecting to production. It keeps the copied ownership records, so a snapshot's
 new identity owns nothing it copied and never runs another Mac's schedules.
@@ -292,11 +271,8 @@ provider services or real pairing credentials are consumed.
 - Confirm scheduled work runs only on its owner. Disconnecting another Mac must
   not start a duplicate execution or move an accepted run.
 - Remove a device from one Mac. After the other peers synchronize, its signed
-  requests and any remaining library, execution and inference grants must be
-  rejected. Retained local
+  requests and its pairing bearers must be rejected. Retained local
   writing must remain available on the unpaired device.
-- For a former node, confirm recovered writing and its original native sessions
-  survive the upgrade. Do not delete the original replica or recovery backups.
 
 Real multi-Mac Tailscale connectivity, macOS Keychain access, sleep/wake, and
 real-account execution require Trey's hands-on acceptance before merging.

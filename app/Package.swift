@@ -14,7 +14,7 @@ let package = Package(
     .library(name: "WovenMatterCore", targets: ["WovenMatterCore"]),
     .library(name: "WovenMatterClient", targets: ["WovenMatterClient"]),
     .library(name: "WovenMatterAutomation", targets: ["WovenMatterAutomation"]),
-    .library(name: "WovenMatterDashboardStore", targets: ["WovenMatterDashboardStore"]),
+    .library(name: "WovenMatterLibraryStore", targets: ["WovenMatterLibraryStore"]),
     .executable(name: "wovenmatter-library", targets: ["WovenMatterLibraryDaemon"]),
     .executable(name: "WovenCuaDesktopFixture", targets: ["WovenCuaDesktopFixture"])
   ],
@@ -55,7 +55,7 @@ let package = Package(
     .testTarget(name: "WovenMatterAutomationTests", dependencies: ["WovenMatterAutomation", "WovenMatterCore", "WovenMatterClient"]),
     .executableTarget(name: "WovenCuaDesktopFixture", dependencies: ["WovenMatterAutomation", "WovenMatterCore", "WovenMatterClient"], path: "TestsSupport/CuaDesktopFixture"),
     .target(
-      name: "WovenMatterDashboardStore",
+      name: "WovenMatterLibraryStore",
       dependencies: ["WovenMatterCore", "WovenMatterClient", linuxCrypto, linuxSQLite],
       swiftSettings: [
         .enableUpcomingFeature("ExistentialAny")
@@ -69,7 +69,7 @@ let package = Package(
     // Headless library host for Linux machines (docs/architecture/WOVEN_EVERYWHERE.md).
     .target(
       name: "WovenMatterLibraryHost",
-      dependencies: ["WovenMatterCore", "WovenMatterClient", "WovenMatterDashboardStore", linuxCrypto, linuxSQLite],
+      dependencies: ["WovenMatterCore", "WovenMatterClient", "WovenMatterLibraryStore", linuxCrypto, linuxSQLite],
       swiftSettings: [.enableUpcomingFeature("ExistentialAny")]
     ),
     .executableTarget(
@@ -79,16 +79,16 @@ let package = Package(
     ),
     .testTarget(
       name: "WovenMatterLibraryHostTests",
-      dependencies: ["WovenMatterLibraryHost", "WovenMatterDashboardStore", "WovenMatterCore", linuxSQLite,
+      dependencies: ["WovenMatterLibraryHost", "WovenMatterLibraryStore", "WovenMatterCore", linuxSQLite,
                      // The phone client, for the in-process Mac + Linux + phone reach test.
                      .product(name: "LibraryClient", package: "ios", condition: .when(platforms: [.macOS]))]
     ),
-    .target(name: "WorkspaceFixtures", dependencies: ["WovenMatterCore", "WovenMatterClient", "WovenMatterDashboardStore", linuxCrypto, linuxSQLite], path: "TestsSupport/WorkspaceFixtures"),
+    .target(name: "WorkspaceFixtures", dependencies: ["WovenMatterCore", "WovenMatterClient", "WovenMatterLibraryStore", linuxCrypto, linuxSQLite], path: "TestsSupport/WorkspaceFixtures"),
     .testTarget(
       name: "WovenMatterCoreTests",
       dependencies: [
         "WovenMatterCore",
-        "WovenMatterDashboardStore", "WorkspaceFixtures", linuxCrypto, linuxSQLite,
+        "WovenMatterLibraryStore", "WorkspaceFixtures", linuxCrypto, linuxSQLite,
         // The window's stream client, for the Unix-socket stream tests.
         .product(name: "LibraryClient", package: "ios", condition: .when(platforms: [.macOS]))
       ]
@@ -110,7 +110,7 @@ let package = Package(
     // Both test suites exercise those same services without starting providers.
     .target(
       name: "WovenMatterAppFacade",
-      dependencies: ["FacadeBrowserTestBridge", "WovenMatterCore", "WovenMatterClient", "WovenMatterDashboardStore", "WovenMatterAutomation", .product(name: "LibraryClient", package: "ios")],
+      dependencies: ["FacadeBrowserTestBridge", "WovenMatterCore", "WovenMatterClient", "WovenMatterLibraryStore", "WovenMatterAutomation", .product(name: "LibraryClient", package: "ios")],
       path: "App",
       exclude: ["Assets.xcassets", "SharedAssets.xcassets", "Info.plist", "Tests"],
       sources: ["ApplicationModel.swift", "WovenMatterApp.swift", "WovenMatterLifecycleDelegate.swift", "Models", "Services", "Views"],
@@ -118,12 +118,12 @@ let package = Package(
     ),
     .testTarget(
       name: "WovenMatterAgentToolsTests",
-      dependencies: ["WovenMatterAppFacade", "WovenMatterCore", "WovenMatterClient", "WovenMatterDashboardStore", "WorkspaceFixtures"],
+      dependencies: ["WovenMatterAppFacade", "WovenMatterCore", "WovenMatterClient", "WovenMatterLibraryStore", "WorkspaceFixtures"],
       path: "App/Tests"
     ),
     .testTarget(
       name: "WovenMatterAppFacadeTests",
-      dependencies: ["WovenMatterAppFacade", "WovenMatterDashboardStore", "WorkspaceFixtures", .product(name: "LibraryClient", package: "ios")]
+      dependencies: ["WovenMatterAppFacade", "WovenMatterLibraryStore", "WorkspaceFixtures", .product(name: "LibraryClient", package: "ios")]
     )
   ]
 )

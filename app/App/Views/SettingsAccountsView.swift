@@ -1,7 +1,7 @@
 import SwiftUI
 import WovenMatterClient
 import WovenMatterCore
-import WovenMatterDashboardStore
+import WovenMatterLibraryStore
 
 /// The one place for provider sign-ins and API keys. Pi Durable chats and usage limits
 /// both read these accounts; native harnesses keep their own sign-in on their agent pages.

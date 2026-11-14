@@ -23,7 +23,7 @@ struct MobilePageComponentDetails: View {
     NavigationStack {
       Form {
         if !exists {
-          Text("This component is no longer on the Page.").foregroundStyle(DashboardPalette.mutedForeground)
+          Text("This component is no longer on the Page.").foregroundStyle(WovenPalette.mutedForeground)
         } else {
           taskSection
           Section {
@@ -53,16 +53,16 @@ struct MobilePageComponentDetails: View {
                   Spacer()
                   Button("Open chat") { openChat(id) }.font(.caption)
                 }
-              }.foregroundStyle(DashboardPalette.mutedForeground)
+              }.foregroundStyle(WovenPalette.mutedForeground)
             }
             if let date = updatedDate {
-              Text(date, format: .dateTime.month().day().hour().minute()).font(.caption2).foregroundStyle(DashboardPalette.mutedForeground)
+              Text(date, format: .dateTime.month().day().hour().minute()).font(.caption2).foregroundStyle(WovenPalette.mutedForeground)
             }
           }
           chatSection
         }
         if let problem {
-          Text(problem).font(.caption).foregroundStyle(DashboardPalette.danger).textSelection(.enabled)
+          Text(problem).font(.caption).foregroundStyle(WovenPalette.danger).textSelection(.enabled)
             .accessibilityIdentifier("page-details-error")
         }
       }.scrollIndicators(.never)
@@ -107,10 +107,10 @@ struct MobilePageComponentDetails: View {
           if let chat = model.state.conversations[id] {
             Button(chat.title.isEmpty ? "Untitled chat" : chat.title) { openChat(id) }.lineLimit(1)
           } else {
-            Text("Chat unavailable on this device").font(.caption).foregroundStyle(DashboardPalette.mutedForeground)
+            Text("Chat unavailable on this device").font(.caption).foregroundStyle(WovenPalette.mutedForeground)
           }
           Spacer()
-          Button { unlink(id) } label: { DashboardLucideIcon(glyph: .close, size: 14).frame(width: 44, height: 44) }
+          Button { unlink(id) } label: { LucideIcon(glyph: .close, size: 14).frame(width: 44, height: 44) }
             .buttonStyle(.plain).accessibilityLabel("Remove chat link").accessibilityHint("Keeps the chat")
             .accessibilityIdentifier("page-details-unlink-\(id)")
         }
@@ -127,7 +127,7 @@ struct MobilePageComponentDetails: View {
   }
 
   private func caption(_ text: String) -> some View {
-    Text(text).font(.caption).foregroundStyle(DashboardPalette.mutedForeground)
+    Text(text).font(.caption).foregroundStyle(WovenPalette.mutedForeground)
   }
   private var reviewLabel: String {
     switch item.review {

@@ -2,9 +2,9 @@ import CryptoKit
 import Foundation
 import Testing
 import WovenMatterCore
-@testable import WovenMatterDashboardStore
+@testable import WovenMatterLibraryStore
 
-@Suite("Central library federation", .serialized)
+@Suite("Library federation", .serialized)
 struct FederationTests {
   let owner = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
   let observer = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
@@ -23,7 +23,7 @@ struct FederationTests {
   func creation(_ workspace: ExecutionWorkspace, id: String? = nil, sequence: Int64 = 1) -> ExecutionJournalEntry {
     let id = id ?? uuid()
     return .init(workspaceID: workspace.id, originSequence: sequence, conversationID: id, kind: .conversation,
-      conversation: .init(id: id, title: "Mobile execution", runtimeKind: "pi"))
+      conversation: .init(id: id, title: "Mobile execution", runtimeKind: "default_agent"))
   }
 
   @Test("additive migration keeps library identity and existing notes across restart")
@@ -85,7 +85,7 @@ struct FederationTests {
     await #expect(throws: LibraryAPIError.self) { try await db.executionJournal(after: 2) }
   }
 
-  @Test("transcript deltas merge while central archival cannot reserve or execute commands")
+  @Test("transcript deltas merge while library archival cannot reserve or execute commands")
   func transcriptAndReceipts() async throws {
     let directory = try fixture(); defer { try? FileManager.default.removeItem(at: directory) }
     let db = try await WorkspaceDatabase(url: directory.appendingPathComponent("workspace.sqlite"))
@@ -189,7 +189,7 @@ struct FederationTests {
       try await db.beginLocalACPRun(conversationID: conversationID, input: .init(text: "Legacy execution must stay fenced"))
     }
     #expect(try await db.libraryFederatedTranscript(conversationID: conversationID)?.messages.contains(where: { $0.content == "Preserve this history" }) == true)
-    #expect(try await db.localACPSession(conversationID: conversationID).acpSessionID == "native-existing")
+    #expect(try await db.localACPSession(conversationID: conversationID).nativeSessionID == "native-existing")
     let repeated = try await db.prepareExecutionAdoption(conversationID: conversationID, workspaceID: descriptor.id, deviceID: identity.hostDeviceID)
     #expect(repeated.knownRunIDs == transfer.knownRunIDs)
     let event = ExecutionJournalEntry(workspaceID: descriptor.id, originSequence: 1, conversationID: conversationID,
@@ -197,13 +197,11 @@ struct FederationTests {
     await #expect(throws: LibraryAPIError.self) {
       try await db.ingestExecutionJournal(.init(libraryID: identity.libraryID, entries: [event]), deviceID: identity.hostDeviceID)
     }
-    let publisher = try await db.issueExecutionWorkspacePublisher(workspaceID: descriptor.id,
-      endpoint: URL(string: "https://central.test.ts.net/wovenmatter")!, deviceID: identity.hostDeviceID)
-    _ = try await db.ingestExecutionJournal(.init(libraryID: identity.libraryID, entries: [event]), deviceID: publisher.executionDeviceID)
+    _ = try await db.ingestExecutionJournal(.init(libraryID: identity.libraryID, entries: [event]), deviceID: try #require(descriptor.executionDeviceID))
     #expect(try await db.libraryExecutionOriginCursor(workspaceID: descriptor.id) == 1)
     try await db.write { connection in
       try connection.transaction {
-        try connection.toolsExecuteUnlocked("UPDATE dashboard_runs SET status='running' WHERE id=?", [run.runID])
+        try connection.toolsExecuteUnlocked("UPDATE runs SET status='running' WHERE id=?", [run.runID])
       }
     }
     let reopened = try await WorkspaceDatabase(url: directory.appendingPathComponent("workspace.sqlite"))
@@ -217,28 +215,31 @@ struct FederationTests {
     let db = try await WorkspaceDatabase(url: directory.appendingPathComponent("workspace.sqlite"))
     let workspace = try await register(db); let first = creation(workspace)
     _ = try await db.ingestExecutionJournal(.init(libraryID: workspace.libraryID, entries: [first]), deviceID: owner)
+    // A message this Mac wrote before the conversation moved to its owner.
     let legacy = LibraryTranscript(conversationID: first.conversationID, messages: [
-      .init(id: uuid(), conversationID: first.conversationID, role: "assistant", content: String(repeating: "x", count: 5 * 1_024 * 1_024))
+      .init(id: uuid(), conversationID: first.conversationID, role: "assistant", content: String(repeating: "x", count: 5 * 1_024 * 1_024),
+        status: "completed", createdAt: "2026-01-02T03:04:05.000Z")
     ])
-    let content = String(decoding: try JSONEncoder().encode(legacy), as: UTF8.self)
     try await db.write { connection in
       try connection.transaction {
-        try connection.toolsExecuteUnlocked("UPDATE execution_conversations SET transcript=? WHERE id=?", [content, first.conversationID])
+        let message = legacy.messages[0]
+        try connection.toolsExecuteUnlocked("INSERT INTO messages(id,conversation_id,role,content,status,created_at,updated_at) VALUES (?,?,?,?,?,?,?)",
+          [message.id, first.conversationID, message.role, message.content, message.status, message.createdAt, message.createdAt])
       }
     }
     let page = try #require(try await db.libraryFederatedTranscript(conversationID: first.conversationID))
     #expect(page.messages == legacy.messages && page.olderCursor == nil)
   }
 
-  @Test("central metadata and deletion remain authoritative until explicit restore")
-  func centralMetadata() async throws {
+  @Test("library metadata and deletion remain authoritative until explicit restore")
+  func libraryMetadata() async throws {
     let directory = try fixture(); defer { try? FileManager.default.removeItem(at: directory) }
     let db = try await WorkspaceDatabase(url: directory.appendingPathComponent("workspace.sqlite"))
     let workspace = try await register(db); let first = creation(workspace)
     _ = try await db.ingestExecutionJournal(.init(libraryID: workspace.libraryID, entries: [first]), deviceID: owner)
     try await db.write { connection in
       try connection.transaction {
-        try connection.toolsExecuteUnlocked("UPDATE dashboard_conversations SET title='Central title',deleted_at='deleted' WHERE id=?", [first.conversationID])
+        try connection.toolsExecuteUnlocked("UPDATE conversations SET title='Library title',deleted_at='deleted' WHERE id=?", [first.conversationID])
       }
     }
     var replay = first; replay.eventID = uuid(); replay.originSequence = 2; replay.conversation?.title = "Stale title"
@@ -249,7 +250,7 @@ struct FederationTests {
     var restore = first; restore.eventID = uuid(); restore.originSequence = 3; restore.kind = .restoredConversation
     _ = try await db.ingestExecutionJournal(.init(libraryID: workspace.libraryID, entries: [restore]), deviceID: owner)
     #expect(try await db.librarySnapshot().conversations.count == 1)
-    #expect(try await db.librarySnapshot().conversations.first?.title == "Central title")
+    #expect(try await db.librarySnapshot().conversations.first?.title == "Library title")
   }
 
   @Test("structured artifacts sync conditionally without changing their kind")

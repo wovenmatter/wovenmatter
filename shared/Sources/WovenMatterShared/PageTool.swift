@@ -141,10 +141,10 @@ public enum PageTool {
   /// A replay acknowledges the original revision; it never returns old contents.
   public static func acknowledgement(pageID: String, title: String?, revision: String?, replayed: Bool,
                                      componentID: String?, document: NoteDocument?,
-                                     assets: [String: BoardAssetSummary]) throws -> GatewayJSONValue {
-    var object: [String: GatewayJSONValue] = [
+                                     assets: [String: BoardAssetSummary]) throws -> JSONValue {
+    var object: [String: JSONValue] = [
       "pageID": .string(pageID),
-      "revision": revision.map(GatewayJSONValue.string) ?? .null,
+      "revision": revision.map(JSONValue.string) ?? .null,
       "replayed": .bool(replayed),
     ]
     if let title { object["title"] = .string(title) }
@@ -166,7 +166,7 @@ public enum PageTool {
   /// use directly. It says the same in text for clients that drop structure.
   public static func conflict(pageID: String, componentID: String?, stored: NoteDocument?, revision: String?,
                               assets: [String: BoardAssetSummary]) -> WovenMatterToolResponse {
-    var object: [String: GatewayJSONValue] = ["pageID": .string(pageID)]
+    var object: [String: JSONValue] = ["pageID": .string(pageID)]
     var message = componentID.map { "Page component \($0) changed since it was read." } ?? "The Page changed since it was read."
     if let stored {
       // Reads project an unmigrated Page, so tokens here match what the write compared.

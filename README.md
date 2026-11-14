@@ -74,7 +74,7 @@ app. There is no Woven Matter account and no hosted service in between.
 | Linux host | Headless. One Woven server hosts agents, your bots, or both, along with a library copy and Woven MCP. The Mac app installs and updates it over Tailscale SSH. |
 
 You can have as many Macs and Linux hosts as you want, and they all work in
-parallel. Every host is an equal member: none is the central one, any of them
+parallel. Every host is an equal member with a complete library: any of them
 can be offline, and the rest keep working.
 
 ### Devices and pairing

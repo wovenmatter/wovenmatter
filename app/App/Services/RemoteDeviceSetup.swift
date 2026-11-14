@@ -1,6 +1,6 @@
 import AppKit
 import Foundation
-import WovenMatterDashboardStore
+import WovenMatterLibraryStore
 
 /// The app, rather than an SSH script, owns transitions across the execution lease.
 /// This mailbox contains no pairing link, token or account credential.

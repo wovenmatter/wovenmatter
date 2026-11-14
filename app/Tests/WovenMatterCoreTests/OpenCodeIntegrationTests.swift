@@ -6,7 +6,7 @@ import FoundationNetworking
 import Testing
 import WovenMatterClient
 import WovenMatterCore
-@testable import WovenMatterDashboardStore
+@testable import WovenMatterLibraryStore
 
 @Suite(.serialized)
 struct OpenCodeIntegrationTests {
@@ -239,7 +239,7 @@ struct OpenCodeIntegrationTests {
         func refreshes() -> Int { fixture.lock.withLock { fixture.inboxRequests } }
         func recordedAnswers(_ path: String) async throws -> Int {
             try await database.read { try $0.historyRowsUnlocked(
-                "SELECT id FROM workspace_history_events WHERE kind='wire.in' AND source_connection_id='fixture' AND json_extract(payload,'$.path')=?",
+                "SELECT id FROM history_events WHERE kind='wire.in' AND source_connection_id='fixture' AND json_extract(payload,'$.path')=?",
                 values: [path]) }.count
         }
         do {
@@ -288,18 +288,18 @@ struct OpenCodeIntegrationTests {
         try await database.saveOpenCodeSnapshot(snapshot, conversationID: id)
         func rows() async throws -> [String] {
             try await database.read { try $0.historyRowsUnlocked("""
-                SELECT id || ' ' || updated_at || ' ' || status AS row FROM dashboard_messages WHERE conversation_id=?1
-                UNION ALL SELECT id || ' ' || updated_at || ' ' || status FROM dashboard_runs WHERE conversation_id=?1
-                UNION ALL SELECT id || ' ' || updated_at FROM dashboard_conversations WHERE id=?1 ORDER BY 1
+                SELECT id || ' ' || updated_at || ' ' || status AS row FROM messages WHERE conversation_id=?1
+                UNION ALL SELECT id || ' ' || updated_at || ' ' || status FROM runs WHERE conversation_id=?1
+                UNION ALL SELECT id || ' ' || updated_at FROM conversations WHERE id=?1 ORDER BY 1
                 """, values: [id]) }.compactMap { $0.objectValue?["row"]?.stringValue }
         }
         func journal() async throws -> [String] {
             try await database.read { try $0.historyRowsUnlocked(
-                "SELECT kind FROM workspace_history_events WHERE conversation_id=? AND kind IN ('message.update','run.update','activity.final') ORDER BY sequence",
+                "SELECT kind FROM history_events WHERE conversation_id=? AND kind IN ('message.update','run.update','activity.final') ORDER BY sequence",
                 values: [id]) }.compactMap { $0.objectValue?["kind"]?.stringValue }
         }
         func preview() async throws -> String? {
-            try await database.read { try $0.historyRowsUnlocked("SELECT last_message_preview FROM dashboard_conversations WHERE id=?", values: [id]) }
+            try await database.read { try $0.historyRowsUnlocked("SELECT last_message_preview FROM conversations WHERE id=?", values: [id]) }
                 .first?.objectValue?["last_message_preview"]?.stringValue
         }
         #expect(try await preview() == "Final answer")

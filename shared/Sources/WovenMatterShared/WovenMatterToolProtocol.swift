@@ -34,12 +34,12 @@ public struct WovenMatterToolRequest: Codable, Sendable {
 
 public struct WovenMatterToolResponse: Codable, Equatable, Sendable {
   public let success: Bool
-  public let result: GatewayJSONValue?
+  public let result: JSONValue?
   public let error: String?
   public let code: String?
   public let silent: Bool
   public let requestID: String?
-  public init(success: Bool = true, result: GatewayJSONValue? = nil, error: String? = nil,
+  public init(success: Bool = true, result: JSONValue? = nil, error: String? = nil,
               code: String? = nil, silent: Bool = false, requestID: String? = nil) {
     self.success = success; self.result = result; self.error = error; self.code = code
     self.silent = silent; self.requestID = requestID
@@ -64,7 +64,7 @@ public struct WovenMatterToolResponse: Codable, Equatable, Sendable {
   public static func value<T: Encodable>(_ value: T) throws -> Self {
     let encoder = JSONEncoder()
     encoder.dateEncodingStrategy = .iso8601
-    return Self(result: try JSONDecoder().decode(GatewayJSONValue.self, from: encoder.encode(value)))
+    return Self(result: try JSONDecoder().decode(JSONValue.self, from: encoder.encode(value)))
   }
 }
 

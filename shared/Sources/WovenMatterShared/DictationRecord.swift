@@ -29,8 +29,8 @@ public enum DictationHistoryError: Error, LocalizedError {
     switch self {
     case .invalidRecord: "This dictation could not be saved."
     case .identityConflict: "A different dictation already uses this history entry’s identity."
-    case .wrongWorkspace: "Dictation history belongs to a different central database. Local dictations have been kept."
-    case .invalidPage: "The central database returned incomplete dictation history."
+    case .wrongWorkspace: "This dictation history belongs to a different library. Local dictations have been kept."
+    case .invalidPage: "The Mac or Linux machine returned incomplete dictation history."
     }
   }
 }

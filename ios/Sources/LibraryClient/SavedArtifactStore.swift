@@ -196,7 +196,7 @@ public actor SavedArtifactStore {
       record.downloadedBytes = 0; try update(id, record); throw Failure.checksumMismatch
     }
     guard state.records[id]?.manifest == manifest else { throw Failure.invalidTransfer }
-    // Downloads are central copies and can be fetched again after a restore, unless
+    // Downloads are library copies and can be fetched again after a restore, unless
     // identical bytes also belong to a file saved here. Verified identical bytes already
     // stored are kept as they are, so a download never downgrades another record's blob.
     var after = state; after.records[id] = record

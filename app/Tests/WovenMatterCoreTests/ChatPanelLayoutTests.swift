@@ -2,14 +2,14 @@ import Testing
 @testable import WovenMatterCore
 
 struct ChatPanelLayoutTests {
-  private let a = DashboardChatPanelID(rawValue: "a")
-  private let b = DashboardChatPanelID(rawValue: "b")
-  private let c = DashboardChatPanelID(rawValue: "c")
-  private let d = DashboardChatPanelID(rawValue: "d")
+  private let a = ChatPanelID(rawValue: "a")
+  private let b = ChatPanelID(rawValue: "b")
+  private let c = ChatPanelID(rawValue: "c")
+  private let d = ChatPanelID(rawValue: "d")
 
   @Test("closing every three and four panel shape compacts rows")
   func closeCompaction() {
-    var onlyAuxiliary = DashboardChatPanelState(primaryConversationID: "p")
+    var onlyAuxiliary = ChatPanelState(primaryConversationID: "p")
     let addedOnlyAuxiliary = onlyAuxiliary.addPanel(from: .primary, newPanelID: a)
     let closedOnlyAuxiliary = onlyAuxiliary.closePanel(a)
     #expect(addedOnlyAuxiliary)
@@ -42,7 +42,7 @@ struct ChatPanelLayoutTests {
 
   @Test("spatial navigation follows geometry and focuses only successful destinations")
   func spatialNavigationAndFocus() {
-    let cases: [(DashboardChatPanelState, [(DashboardChatPanelDirection, DashboardChatPanelID?)])] = [
+    let cases: [(ChatPanelState, [(ChatPanelDirection, ChatPanelID?)])] = [
       (fivePanelState(), [(.left, nil), (.up, nil), (.down, nil), (.right, b),
         (.right, d), (.right, nil), (.down, c), (.left, a), (.left, .primary),
         (.right, b), (.down, a), (.up, b), (.up, nil)]),
@@ -56,21 +56,21 @@ struct ChatPanelLayoutTests {
         let previous = state.focusRequest
         #expect(state.navigate(direction) == destination)
         let expected = destination.map {
-          DashboardChatPanelFocusRequest(panelID: $0, generation: (previous?.generation ?? 0) + 1)
+          ChatPanelFocusRequest(panelID: $0, generation: (previous?.generation ?? 0) + 1)
         } ?? previous
         #expect(state.focusRequest == expected)
       }
     }
   }
 
-  private func threePanelState() -> DashboardChatPanelState {
-    var state = DashboardChatPanelState(primaryConversationID: "primary")
+  private func threePanelState() -> ChatPanelState {
+    var state = ChatPanelState(primaryConversationID: "primary")
     _ = state.addPanel(from: .primary, newPanelID: a)
     _ = state.addPanel(from: a, newPanelID: b)
     return state
   }
 
-  private func fivePanelState() -> DashboardChatPanelState {
+  private func fivePanelState() -> ChatPanelState {
     var state = threePanelState()
     _ = state.addPanel(from: a, newPanelID: c)
     _ = state.addPanel(from: b, newPanelID: d)
@@ -81,8 +81,8 @@ struct ChatPanelLayoutTests {
 
 struct ChatPanelBotTargetTests {
     @Test func aPanelHoldsEitherABotOrAConversationNeverBoth() {
-        var state = DashboardChatPanelState(primaryConversationID: "chat")
-        let target = DashboardBotTarget(machineID: "machine", botID: "bot", conversationID: 7)
+        var state = ChatPanelState(primaryConversationID: "chat")
+        let target = BotTarget(machineID: "machine", botID: "bot", conversationID: 7)
         state.replaceActiveBot(with: target)
         #expect(state.activeBotTarget == target)
         #expect(state.activeConversationID == nil)
@@ -92,9 +92,9 @@ struct ChatPanelBotTargetTests {
     }
 
     @Test func botSelectionFollowsTheActivePanel() throws {
-        var state = DashboardChatPanelState(primaryConversationID: "chat")
-        state.replaceActiveBot(with: DashboardBotTarget(machineID: "machine", botID: "bot"))
-        let added = DashboardChatPanelID(rawValue: "added")
+        var state = ChatPanelState(primaryConversationID: "chat")
+        state.replaceActiveBot(with: BotTarget(machineID: "machine", botID: "bot"))
+        let added = ChatPanelID(rawValue: "added")
         let wasAdded = state.addPanel(from: .primary, newPanelID: added, conversationID: "second")
         #expect(wasAdded)
         #expect(state.activeBotTarget == nil)
@@ -104,18 +104,18 @@ struct ChatPanelBotTargetTests {
     }
 
     @Test func routingAnAuxiliaryPanelLeavesThePrimaryAlone() {
-        var state = DashboardChatPanelState(primaryConversationID: "chat")
-        let added = DashboardChatPanelID(rawValue: "added")
+        var state = ChatPanelState(primaryConversationID: "chat")
+        let added = ChatPanelID(rawValue: "added")
         state.addPanel(from: .primary, newPanelID: added, conversationID: nil)
-        state.setBot(DashboardBotTarget(machineID: "machine", botID: "bot", conversationID: 3, showsThreadBesideMain: true), in: added)
+        state.setBot(BotTarget(machineID: "machine", botID: "bot", conversationID: 3, showsThreadBesideMain: true), in: added)
         #expect(state.panel(id: added)?.botTarget?.conversationID == 3)
         #expect(state.primary.conversationID == "chat")
         #expect(state.primary.botTarget == nil)
     }
 
     @Test func showingTheSideAreaKeepsThePrimaryBot() {
-        var state = DashboardChatPanelState()
-        state.replaceActiveBot(with: DashboardBotTarget(machineID: "machine", botID: "bot"))
+        var state = ChatPanelState()
+        state.replaceActiveBot(with: BotTarget(machineID: "machine", botID: "bot"))
         state.presentAsset()
         #expect(state.assetPresented)
         #expect(state.primary.botTarget?.botID == "bot")

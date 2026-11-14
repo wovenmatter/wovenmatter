@@ -233,7 +233,7 @@ public actor StreamConnection {
   private var nextRequestID = 0
   private var subscriptions: [Int: Subscription] = [:]
   private var wire: [String: Int] = [:]
-  private var pending: [String: CheckedContinuation<GatewayJSONValue, any Error>] = [:]
+  private var pending: [String: CheckedContinuation<JSONValue, any Error>] = [:]
   private var deadlines: [String: Task<Void, Never>] = [:]
   private var openWaiters: [Int: CheckedContinuation<Void, any Error>] = [:]
   private var nextWaiter = 0
@@ -616,7 +616,7 @@ public actor StreamConnection {
 
   /// One call. Waits up to `openWait` for a connection that is opening; never
   /// queued past that and never replayed.
-  public func request(_ method: String, params: GatewayJSONValue = .object([:]), timeout: Duration? = nil) async throws -> GatewayJSONValue {
+  public func request(_ method: String, params: JSONValue = .object([:]), timeout: Duration? = nil) async throws -> JSONValue {
     let socket = try await openSocket()
     let current = generation
     nextRequestID += 1
@@ -637,7 +637,7 @@ public actor StreamConnection {
 
   public func request<Params: Encodable & Sendable, Result: Decodable>(_ method: StreamProtocol.Method, _ params: Params,
       as type: Result.Type, timeout: Duration? = nil) async throws -> Result {
-    try await request(method.rawValue, params: GatewayJSONValue(encoding: params), timeout: timeout).decode(type)
+    try await request(method.rawValue, params: JSONValue(encoding: params), timeout: timeout).decode(type)
   }
 
   private func openSocket() async throws -> any StreamTransport {
@@ -766,7 +766,11 @@ public enum StreamCommands {
     var learned: [LibraryCommandReceipt] = []
     for record in await journal.commandRecords(workspaceID: workspaceID)
     where record.receipt == nil || record.receipt?.status == .outcomeUnknown {
-      guard let receipt = try await connection.receipt(record.command.commandID),
+      // A receipt in a state a newer server added cannot be read here. That
+      // command stays unresolved; the others are still asked about.
+      let answer: LibraryCommandReceipt?
+      do { answer = try await connection.receipt(record.command.commandID) } catch is DecodingError { continue }
+      guard let receipt = answer,
             receipt.commandID == record.command.commandID, receipt.deviceID == record.command.deviceID,
             receipt.status != .outcomeUnknown else { continue }
       try await journal.rememberReceipt(receipt, workspaceID: workspaceID)

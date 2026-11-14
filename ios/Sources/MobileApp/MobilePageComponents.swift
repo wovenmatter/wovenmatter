@@ -13,7 +13,7 @@ struct MobilePageTaskToggle: View {
     Button(action: toggle) {
       Image(systemName: done ? "checkmark.circle.fill" : "circle")
         .font(.system(size: 20, weight: .regular))
-        .foregroundStyle(done ? DashboardPalette.primary : DashboardPalette.mutedForeground)
+        .foregroundStyle(done ? WovenPalette.primary : WovenPalette.mutedForeground)
         .frame(width: 32, height: 44)
     }.buttonStyle(.plain).disabled(!editable).keepsKeyboard()
       .accessibilityRepresentation {
@@ -39,10 +39,10 @@ struct MobilePageItemSummary: View {
         if let assignee = item.task?.assignee, !assignee.isEmpty { Label(assignee, glyph: .userRound) }
         if item.role == .instructions { Label("Reference instructions", systemImage: "book.closed") }
         if item.review == .needed { Label("Needs review", systemImage: "tray") }
-      }.foregroundStyle(DashboardPalette.mutedForeground)
+      }.foregroundStyle(WovenPalette.mutedForeground)
       if let outcome = item.task?.outcome, !outcome.isEmpty { Text(outcome).textSelection(.enabled) }
       if let change = item.lastChange, !change.isEmpty {
-        Text(change).foregroundStyle(DashboardPalette.mutedForeground).textSelection(.enabled)
+        Text(change).foregroundStyle(WovenPalette.mutedForeground).textSelection(.enabled)
       }
     }.font(.caption).frame(maxWidth: .infinity, alignment: .leading)
   }
@@ -50,7 +50,7 @@ struct MobilePageItemSummary: View {
 
 /// A Page table. Tapping a cell edits it; the original shape rules apply on save.
 struct MobilePageTable: View {
-  @Environment(\.dashboardTheme) private var theme
+  @Environment(\.wovenTheme) private var theme
   let table: NoteTableBlock
   let editable: Bool
   var maximumRows = Int.max
@@ -139,7 +139,7 @@ struct MobilePageCellEditor: View {
         Section {
           TextField("Cell text", text: $text, axis: .vertical).lineLimit(1...8).accessibilityIdentifier("page-cell-text")
         }
-        if let problem { Text(problem).font(.caption).foregroundStyle(DashboardPalette.danger).accessibilityIdentifier("page-cell-error") }
+        if let problem { Text(problem).font(.caption).foregroundStyle(WovenPalette.danger).accessibilityIdentifier("page-cell-error") }
         Section("Row \(target.row + 1)") {
           Button("Add row below") { run("Add row") { $0.insertingRow(after: target.row) } }.accessibilityIdentifier("page-cell-add-row")
           Button("Remove row", role: .destructive) { run("Remove row") { $0.removingRow(target.row) } }
@@ -227,7 +227,7 @@ struct MobilePageComponentMenu: View {
       }
     } label: {
       Image(systemName: "ellipsis").font(.system(size: 15, weight: .medium)).frame(width: 32, height: 44)
-        .foregroundStyle(DashboardPalette.mutedForeground)
+        .foregroundStyle(WovenPalette.mutedForeground)
     }.accessibilityLabel("Component actions").accessibilityIdentifier("page-component-actions-\(componentID)")
   }
   private func update(_ action: String, _ patch: BoardItemPatch) {
@@ -259,7 +259,7 @@ struct MobilePageComponentMenu: View {
 /// An embedded original, previewed as its own pane shows it. Opening it uses
 /// the normal pane; a missing original keeps its place and reference.
 struct MobilePageEmbed<Actions: View>: View {
-  @Environment(\.dashboardTheme) private var theme
+  @Environment(\.wovenTheme) private var theme
   @Bindable var model: MobileModel
   let page: NoteDocument
   let componentID: String
@@ -280,30 +280,30 @@ struct MobilePageEmbed<Actions: View>: View {
         if let task = item?.task {
           MobilePageTaskToggle(componentID: componentID, label: title, done: task.status == .done, editable: editable, toggle: onToggleTask)
         }
-        if let asset { MobileNoteIcon(content: asset.content).frame(width: 24).foregroundStyle(DashboardPalette.mutedForeground) }
+        if let asset { MobileNoteIcon(content: asset.content).frame(width: 24).foregroundStyle(WovenPalette.mutedForeground) }
         VStack(alignment: .leading, spacing: 1) {
           Text(title).font(.subheadline.weight(.semibold)).lineLimit(2)
           Label(source.map { "Original · \($0.kind.displayName)" } ?? "Original", systemImage: "link")
-            .font(.caption2).foregroundStyle(DashboardPalette.mutedForeground)
+            .font(.caption2).foregroundStyle(WovenPalette.mutedForeground)
         }
         Spacer(minLength: 4)
-        Button { open() } label: { DashboardLucideIcon(glyph: .externalLink, size: 17).frame(width: 36, height: 44) }
+        Button { open() } label: { LucideIcon(glyph: .externalLink, size: 17).frame(width: 36, height: 44) }
           .buttonStyle(.plain).disabled(asset == nil)
           .accessibilityLabel("Open original asset").accessibilityIdentifier("page-open-original-\(componentID)")
         actions
       }
       if let asset {
         if !cached {
-          Text("Not saved on this device yet. Open it to download the original.").font(.caption).foregroundStyle(DashboardPalette.mutedForeground)
+          Text("Not saved on this device yet. Open it to download the original.").font(.caption).foregroundStyle(WovenPalette.mutedForeground)
         } else if let source { preview(asset, source) }
       } else {
-        Text("The original asset is unavailable. Its reference is retained.").font(.caption).foregroundStyle(DashboardPalette.mutedForeground)
+        Text("The original asset is unavailable. Its reference is retained.").font(.caption).foregroundStyle(WovenPalette.mutedForeground)
           .accessibilityIdentifier("page-original-unavailable-\(componentID)")
       }
       if let item, item.hasMobileSummary || item.task?.status == .doing { MobilePageItemSummary(item: item, showsPlainStatus: false) }
     }
     .padding(12)
-    .background(theme.palette.themeWhisper, in: RoundedRectangle(cornerRadius: DashboardMetrics.controlRadius, style: .continuous))
+    .background(theme.palette.themeWhisper, in: RoundedRectangle(cornerRadius: WovenMetrics.controlRadius, style: .continuous))
   }
   @ViewBuilder private func preview(_ asset: LibraryNote, _ source: NoteDocument) -> some View {
     switch source.kind {
@@ -311,12 +311,12 @@ struct MobilePageEmbed<Actions: View>: View {
       Button { open() } label: {
         Label("Open nested Page · \(source.materializedPage().blocks.count) components", glyph: .panelsTopLeft)
           .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
-      }.buttonStyle(DashboardQuietButtonStyle())
+      }.buttonStyle(WovenQuietButtonStyle())
     case .note:
       Button { open() } label: {
         Text(source.plainText.isEmpty ? "Empty note" : source.plainText).font(.callout).lineLimit(8)
           .multilineTextAlignment(.leading).frame(maxWidth: .infinity, alignment: .leading)
-          .foregroundStyle(source.plainText.isEmpty ? DashboardPalette.mutedForeground : DashboardPalette.foreground)
+          .foregroundStyle(source.plainText.isEmpty ? WovenPalette.mutedForeground : WovenPalette.foreground)
       }.buttonStyle(.plain).accessibilityHint("Opens the original note")
     case .spreadsheet:
       if source.databaseLink != nil { LinkedArtifactPreview(model: model, note: asset, tableID: nil, html: nil) }
@@ -328,7 +328,7 @@ struct MobilePageEmbed<Actions: View>: View {
         if source.databaseLink != nil { LinkedArtifactPreview(model: model, note: asset, tableID: nil, html: source.html) }
         else { SafeHTMLPreview(html: source.html, state: source.artifactStateSnapshot) }
       }.frame(height: max(240, min(720, page.canvasPlacement(for: componentID).height)))
-        .clipShape(RoundedRectangle(cornerRadius: DashboardMetrics.controlRadius, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: WovenMetrics.controlRadius, style: .continuous))
     }
   }
   private func open() { Task { await model.openNote(assetID) } }
@@ -348,7 +348,7 @@ struct MobilePageAssetPicker: View {
   var body: some View {
     NavigationStack {
       VStack(spacing: 8) {
-        DashboardSearchField(text: $search, prompt: "Search assets").padding(.horizontal, 20)
+        WovenSearchField(text: $search, prompt: "Search assets").padding(.horizontal, 20)
         ScrollView {
           LazyVStack(spacing: 2) {
             ForEach(assets) { asset in
@@ -358,7 +358,7 @@ struct MobilePageAssetPicker: View {
               }.accessibilityIdentifier("page-asset-\(asset.id)")
             }
             if assets.isEmpty {
-              Text("No other assets on this device.").font(.callout).foregroundStyle(DashboardPalette.mutedForeground).padding(20)
+              Text("No other assets on this device.").font(.callout).foregroundStyle(WovenPalette.mutedForeground).padding(20)
             }
           }.padding(.horizontal, 12)
         }.scrollIndicators(.never)

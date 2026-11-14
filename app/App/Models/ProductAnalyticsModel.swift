@@ -1,9 +1,8 @@
-import LibraryClient
 import Foundation
 import Observation
 import WovenMatterClient
 import WovenMatterCore
-import WovenMatterDashboardStore
+import WovenMatterLibraryStore
 
 @MainActor @Observable
 final class ProductAnalyticsModel {
@@ -11,7 +10,6 @@ final class ProductAnalyticsModel {
   var errorMessage: String?
   private let defaults: UserDefaults
   init(defaults: UserDefaults = .standard) { self.defaults = defaults }
-  private var client: MobileProductAnalytics?
   private var database: WorkspaceDatabase?
   private var rpc: BackendRPCClient?
   private var uploads: [UUID: Task<Void, Never>] = [:]
@@ -29,16 +27,6 @@ final class ProductAnalyticsModel {
     self.publisher = publisher
   }
   func configure(rpc: BackendRPCClient) { self.rpc = rpc }
-  /// The secondary Mac relays updater events through its central library too.
-  /// Its interface/open lifecycle belongs to MobileAnalyticsModel.
-  func configure(client: MobileProductAnalytics) async {
-    self.client = client
-    database = nil
-    rpc = nil
-    cancelUploads()
-    interface = true
-    await refresh()
-  }
   func openInterface() async {
     interface = true
     await refresh()
@@ -48,11 +36,7 @@ final class ProductAnalyticsModel {
   func refresh() async {
     let epoch = generation
     do {
-      if let client {
-        let state = await client.snapshot()
-        locallyDisabled = state.pendingEnabled != nil || state.preference?.collects != true
-        preference = state.preference
-      } else if let rpc {
+      if let rpc {
         let current = try JSONDecoder().decode(
           ProductAnalyticsPreference.self,
           from: await rpc.call(method: "analytics.preference", payload: Data(), timeout: 5))
@@ -108,16 +92,12 @@ final class ProductAnalyticsModel {
     } catch { errorMessage = "The analytics preference could not be saved. Please retry." }
   }
   func record(_ name: ProductAnalyticsEvent.Name, properties: [String: String] = [:]) async {
-    if let client {
-      try? await client.record(name, properties: properties, platform: "macos")
-      return
-    }
     guard !locallyDisabled,
       let preference, preference.collects else {
       return
     }
     // This frontend also avoids making an RPC for every qualifying action.
-    // Central admission enforces the same limit across all connected devices.
+    // The Mac that records analytics enforces the same limit for every device.
     if name == .appOpened || name == .active {
       let key = "wovenmatter.analytics.last-attempt." + preference.analyticsID + "." + name.rawValue
       let now = Date()
@@ -139,9 +119,7 @@ final class ProductAnalyticsModel {
     let epoch = generation
     guard let preference else { return }
     do {
-      if let client {
-        await client.sendUpdateReceipt(event, analyticsID: preference.analyticsID)
-      } else if let rpc {
+      if let rpc {
         let acknowledgement = try JSONDecoder().decode(
           ProductAnalyticsAcknowledgement.self,
           from: await rpc.call(
@@ -180,14 +158,6 @@ final class ProductAnalyticsModel {
   }
   func cancelUpdateInstallation() {
     defaults.removeObject(forKey: Self.updateReceiptKey)
-  }
-  static func markUpdateLaunched(marker: URL, version: String, build: Int) {
-    let defaults = UserDefaults.standard
-    guard let data = defaults.data(forKey: updateReceiptKey),
-      var receipt = try? JSONDecoder().decode(ProductAnalyticsUpdateReceipt.self, from: data),
-      receipt.confirmLaunch(marker: marker, version: version, build: build),
-      let updated = try? JSONEncoder().encode(receipt) else { return }
-    defaults.set(updated, forKey: updateReceiptKey)
   }
   static func markUpdateLaunched(version: String, build: Int) {
     let defaults = UserDefaults.standard
@@ -284,12 +254,11 @@ final class ProductAnalyticsModel {
     }
     return value
   }
+  /// Debug builds never send. Offline and failed sends are dropped
+  /// permanently; the library keeps only each accepted event's ID and time.
   private func upload(_ events: [ProductAnalyticsEvent], preference: ProductAnalyticsPreference, epoch: Int) async {
-    guard let database, !database.isReadOnlyProjection else { return }
-    var status = "dropped"
-    #if DEBUG
-      status = "not sent (Debug build)"
-    #else
+    #if !DEBUG
+      guard let database, !database.isReadOnlyProjection else { return }
       do {
         let current = try await database.productAnalyticsPreference()
         guard epoch == generation, current.collects, current.revision == preference.revision,
@@ -304,12 +273,9 @@ final class ProductAnalyticsModel {
         request.httpBody = try JSONSerialization.data(withJSONObject: [
           "api_key": Self.projectToken, "batch": batch,
         ])
-        let (_, response) = try await session.data(for: request)
-        if let response = response as? HTTPURLResponse,
-          (200..<300).contains(response.statusCode) { status = "delivered" }
-      } catch { /* Offline and failed sends are dropped permanently. */ }
+        _ = try await session.data(for: request)
+      } catch {}
     #endif
-    try? await database.markProductAnalytics(events.map(\.id), status: status)
   }
 
 }
@@ -322,11 +288,6 @@ struct ProductAnalyticsUpdateReceipt: Codable, Equatable {
   var event: ProductAnalyticsEvent
   var confirmed = false
 
-  mutating func confirmLaunch(marker: URL, version: String, build: Int, now: Date = Date()) -> Bool {
-    guard marker.lastPathComponent == ".ready-" + event.id else { return false }
-    return confirmLaunch(version: version, build: build, now: now)
-  }
-  // Sparkle relaunches without the legacy installer's command-line marker.
   // The running app must match the exact intended version AND build.
   mutating func confirmLaunch(version: String, build: Int, now: Date = Date()) -> Bool {
     guard !confirmed, self.version == version, self.build == build,

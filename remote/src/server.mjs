@@ -90,7 +90,7 @@ const releaseTaskOwner = runningAsService
   : null
 // Sessions this server runs use durable channels in process, whether or not
 // background execution is on. Nothing outside this server attaches to them.
-const durableACP = createDurableACP({ catalog, workspaceRoot, runtimeKind: configuration.runtimeKind, configuration,
+const durableACP = createDurableACP({ catalog, workspaceRoot, configuration,
   environment: harness => harness.id === 'codex' ? harnessRuntimeEnvironment(harness) : harnessEnvironment(),
   isHarnessEnabled:id => maintenance.isInstalled(id) })
 const taskGateway = runningAsService ? createTaskGateway({
@@ -111,7 +111,7 @@ const taskGateway = runningAsService ? createTaskGateway({
 }) : null
 
 const workspaceBrowser = createWorkspaceBrowser({ profile: configuration.legacyBrowserProfile,
-  profilesRoot: configuration.browserProfilesRoot, runtimeKind: configuration.runtimeKind })
+  profilesRoot: configuration.browserProfilesRoot })
 let browserSelfTestPending
 const browserMCPSchemas = new Map(loadWorkspaceMCPCatalog().filter(tool => ['woven_browser_use', 'woven_browser_use_cancel'].includes(tool.name)).map(tool => [tool.name, tool.inputSchema]))
 
@@ -122,7 +122,7 @@ const browserMCPSchemas = new Map(loadWorkspaceMCPCatalog().filter(tool => ['wov
 // verify signed member requests against its member list.
 // WOVENMATTER_LIBRARY=0 turns it off; WOVENMATTER_LIBRARY_BINARY,
 // _DATA_ROOT, _SERVE=0 and _HTTPS_PORT let isolated tests run side by side.
-const nativeLinuxHost = runningAsService && configuration.runtimeKind === 'host' && process.platform === 'linux'
+const nativeLinuxHost = runningAsService && process.platform === 'linux'
 const libraryState = resolve(configuration.stateDirectory, 'library')
 let memberIdentityRecord = null
 const library = runningAsService && (nativeLinuxHost || process.env.WOVENMATTER_LIBRARY_BINARY) && process.env.WOVENMATTER_LIBRARY !== '0' ? createLibraryHostSupervisor({
@@ -144,8 +144,7 @@ const hostAdmin = nativeLinuxHost ? createHostAdministration({ serviceRoot: conf
   extra: async () => ({ library: library?.status() ?? null, memberIdentity: memberIdentityRecord }),
   ...(library ? {
     adoptMembers: async body => { const list = await library.client.adoptMembers(body); await members.refresh().catch(() => {}); return list },
-    // A library host that predates `adopted` reports none: fall back to any Mac member.
-    adopted: async () => { const list = await library.client.members(); return typeof list.adopted === 'boolean' ? list.adopted : (list.members ?? []).some(item => item.kind === 'mac') },
+    adopted: async () => (await library.client.members()).adopted === true,
   } : {}) }) : null
 // Requests this host makes to other members, signed by its library host.
 const memberTransport = library ? createMemberTransport({ library: library.client }) : null
@@ -166,15 +165,13 @@ const defaultAgentControl = createDefaultAgentControl({
   cwd: () => workspaceRoot,
   environment: () => {
     const environment = { ...nonInteractiveSessionEnvironment(process.env, configuration), WOVEN_DEFAULT_AGENT_DIRECTORY: resolve(workspaceRoot, '.wovenmatter/default-agent') }
-    for (const key of ['WOVENMATTER_API_TOKEN', 'WOVENMATTER_SERVICE_SECRET']) delete environment[key]
+    delete environment.WOVENMATTER_API_TOKEN
     return environment
   },
 })
 
 const clientExecution = runningAsService ? createClientExecution({
   directory: resolve(workspaceRoot, '.wovenmatter/client-execution'),
-  // Stable across bearer rotations: it keys the publisher and MCP grants at rest.
-  publisherKey: configuration.serviceSecret || apiToken,
   mcpEndpointURL: () => `http://127.0.0.1:${server.address()?.port ?? listenPort}/mcp`, managedDataRoot,externalRunningSessions:()=>taskGateway.status().activeRuns, workspaceRoot, performanceLog,
   attachments: createExecutionAttachments({ directory: resolve(workspaceRoot, '.wovenmatter/attachments') }),
   // Chats named by their first message get a title from this host's Codex
@@ -229,7 +226,7 @@ function hostRelease() {
   return { version: configuration.releaseVersion, fingerprint: configuration.serviceFingerprint, librarySchema: ready?.schema ?? null }
 }
 
-const bots = runningAsService && configuration.runtimeKind === 'host' && process.platform === 'linux' ? createBotsService({
+const bots = nativeLinuxHost ? createBotsService({
   configuration, mcp: clientExecution.mcp, release: hostRelease, defaultAgent, serverPort: () => server.address()?.port ?? listenPort,
   libraryHost: library, memberIdentity, registry: memberSockets, installerBearer,
   // Signed members, or the installer bearer on the SSH tunnel only; device grants open nothing.
@@ -318,7 +315,6 @@ const server = createServer({ maxHeaderSize: 16_384, headersTimeout: 10_000,
     }
     if (bots && await bots.handleClient(request, response, url, { readJSON, json, administrator, device })) return
     if (url.pathname === '/v1/host/installer-bearer' && request.method === 'POST') {
-      if (configuration.runtimeKind !== 'host') return json(response, 404, { error: 'not_found' })
       if (!administrator) return json(response, 403, { error: 'administrator_required' })
       const installer = authorized(request), bearer = await installerBearer.rotate()
       // Only the installing Mac, on its own SSH tunnel, learns the new value.
@@ -345,12 +341,6 @@ const server = createServer({ maxHeaderSize: 16_384, headersTimeout: 10_000,
       if(request.method==='GET')return json(response,200,clientExecution.mcp.settings())
       if(request.method==='POST')return json(response,200,clientExecution.mcp.configureSettings(await readJSON(request)))
     }
-    if (url.pathname === '/v1/execution/mcp-library') {
-      if(!administrator)return json(response,403,{error:'administrator_required'})
-      if(request.method==='GET')return json(response,200,clientExecution.mcp.libraryStatus())
-      if(request.method==='POST')return json(response,200,clientExecution.mcp.configureLibrary(await readJSON(request)))
-      if(request.method==='DELETE')return json(response,200,clientExecution.mcp.clearLibrary())
-    }
     if (url.pathname === '/v1/mcp/clients') {
       if(!administrator)return json(response,403,{error:'administrator_required'})
       if(request.method==='GET')return json(response,200,{clients:clientExecution.mcp.clients()})
@@ -360,11 +350,6 @@ const server = createServer({ maxHeaderSize: 16_384, headersTimeout: 10_000,
     if(revokeMCP&&request.method==='DELETE') {
       if(!administrator)return json(response,403,{error:'administrator_required'})
       return json(response,200,clientExecution.mcp.revokeClient(revokeMCP[1]))
-    }
-    if (url.pathname === '/v1/execution/publisher') {
-      if (!administrator) return json(response,403,{error:'administrator_required'})
-      if (request.method === 'GET') return json(response,200,clientExecution.publisherStatus())
-      if (request.method === 'POST') return json(response,200,clientExecution.configurePublisher(await readJSON(request)))
     }
     if (url.pathname === '/v1/execution/artifacts' && request.method === 'POST') {
       const body=await readJSON(request,8*1024*1024)
@@ -555,12 +540,10 @@ const server = createServer({ maxHeaderSize: 16_384, headersTimeout: 10_000,
 
     if (request.method === 'GET' && url.pathname === '/v1/directories') {
       if (!administrator) return json(response, 403, { error: 'administrator_required' })
-      if (configuration.runtimeKind !== 'host') return json(response, 409, { error: 'host_workspace_required' })
       return json(response, 200, await listHostDirectories(url.searchParams.get('path') ?? workspaceRoot))
     }
     if (request.method === 'POST' && url.pathname === '/v1/projects/link') {
       if (!administrator) return json(response, 403, { error: 'administrator_required' })
-      if (configuration.runtimeKind !== 'host') return json(response, 409, { error: 'host_workspace_required' })
       return json(response, 200, await linkHostProject((await readJSON(request, 8192)).path))
     }
     if (request.method === 'POST' && url.pathname === '/v1/projects') {
@@ -594,8 +577,6 @@ const server = createServer({ maxHeaderSize: 16_384, headersTimeout: 10_000,
     if (maintenanceMatch) {
       const harness = requireHarness(maintenanceMatch[1])
       if (request.method === 'POST' && maintenanceMatch[2] === 'check') return json(response, 200, await maintenance.inventory(harness, true))
-      // Older apps may send retired visibility/enable preferences. Ignore them.
-      if (request.method === 'PATCH' && !maintenanceMatch[2]) { await readJSON(request); return json(response, 200, await maintenance.inventory(harness)) }
       if (request.method === 'POST' && maintenanceMatch[2]) return json(response, 202, await maintenance.start(harness, maintenanceMatch[2], await readJSON(request)))
     }
 
@@ -604,7 +585,8 @@ const server = createServer({ maxHeaderSize: 16_384, headersTimeout: 10_000,
         status: 'ready',
         version: '0.1.0',
         workspaceRoot,
-        runtimeKind: configuration.runtimeKind,
+        // Installers and older apps confirm the native host by this field.
+        runtimeKind: 'host',
         serviceFingerprint: configuration.serviceFingerprint,
         release: hostRelease(),
         databasesDirectory: managedDataRoot,

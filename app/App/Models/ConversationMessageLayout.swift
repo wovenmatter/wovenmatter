@@ -70,19 +70,19 @@ struct ConversationWorkTranscriptPresentation {
 }
 
 // Shared desktop/mobile transcript scroll policy.
-enum DashboardConversationScrollAction: Equatable {
+enum ConversationScrollAction: Equatable {
     case none
     case jumpToBottom
     case followBottom
 }
 
-struct DashboardConversationGeometry: Equatable {
+struct ConversationGeometry: Equatable {
     let contentHeight: CGFloat
     let isNearBottom: Bool
     var viewportHeight: CGFloat? = nil
 }
 
-struct DashboardConversationScrollState: Equatable {
+struct ConversationScrollState: Equatable {
     private(set) var positionedConversationID: String?
     private(set) var isNearBottom = true
 
@@ -96,7 +96,7 @@ struct DashboardConversationScrollState: Equatable {
         conversationID: String?,
         hasMessages: Bool,
         isPrependingHistory: Bool
-    ) -> DashboardConversationScrollAction {
+    ) -> ConversationScrollAction {
         guard let conversationID, hasMessages else { return .none }
         if positionedConversationID != conversationID {
             positionedConversationID = conversationID
@@ -113,8 +113,8 @@ struct DashboardConversationScrollState: Equatable {
 
     /// Content-only tool updates and keyboard resizing follow the same bottom
     /// policy as message growth. Opening work or reading history owns the view.
-    mutating func geometryChanged(from previous: DashboardConversationGeometry,
-                                  to current: DashboardConversationGeometry,
+    mutating func geometryChanged(from previous: ConversationGeometry,
+                                  to current: ConversationGeometry,
                                   isUserScrolling: Bool, transcriptOwnsScroll: Bool,
                                   isPrependingHistory: Bool) -> Bool {
         let resized = previous.contentHeight != current.contentHeight || previous.viewportHeight != current.viewportHeight

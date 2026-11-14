@@ -7,6 +7,7 @@ import sqlite3
 import subprocess
 import tempfile
 import unittest
+import uuid
 
 spec = importlib.util.spec_from_file_location("dev_build", Path(__file__).resolve().parents[1] / "dev-build.py")
 dev = importlib.util.module_from_spec(spec)
@@ -73,9 +74,9 @@ class FreshSnapshotTests(unittest.TestCase):
             dev_root = root / "Woven Matter Dev"
             production = root / "Woven Matter"; production.mkdir()
             unmarked = dev_root / "x" / "snapshot"; unmarked.mkdir(parents=True)
-            client = dev_root / "x" / "client"; client.mkdir(parents=True)
+            live = dev_root / "x" / "live"; live.mkdir(parents=True)
             security = FakeSecurity([])
-            for path in (production, client, dev_root):
+            for path in (production, live, dev_root):
                 with self.assertRaises(ValueError):
                     dev.reset(path, self.bundle, dev_root=dev_root, trash=root / "Trash", run=security)
             with self.assertRaises(ValueError):  # right bundle ID, but not a development snapshot
@@ -112,7 +113,7 @@ class DevelopmentBuildTests(unittest.TestCase):
             binaries = root / "bin"; binaries.mkdir()
             compiler = binaries / "xcrun"
             compiler.write_text("#!/bin/sh\nexit 77\n"); compiler.chmod(0o755)
-            for suffix in ("a.client", "c.live", "b.snapshot", "a.unrecognized.extra"):
+            for suffix in ("c.live", "b.snapshot", "a.unrecognized.extra"):
                 identifier = "wovenmatter.desktop.dev." + suffix
                 scratch = root / suffix
                 environment = dict(os.environ, PATH=str(binaries) + os.pathsep + os.environ["PATH"],
@@ -130,17 +131,16 @@ class DevelopmentBuildTests(unittest.TestCase):
                                      {"wovenmatter.desktop", "wovenmatter.desktop.dev", identifier})
 
     def test_profile_identity_and_modes_are_independent(self):
-        a = dev.profile(Path("/tmp/work-a/repo"), None, "client")
-        b = dev.profile(Path("/tmp/work-b/repo"), None, "client")
+        a = dev.profile(Path("/tmp/work-a/repo"), None, "snapshot")
+        b = dev.profile(Path("/tmp/work-b/repo"), None, "snapshot")
         self.assertNotEqual(a["bundle"], b["bundle"])
-        self.assertNotEqual(a["support"], dev.profile(Path("/tmp/work-a/repo"), None, "snapshot")["support"])
-        self.assertEqual(a, dev.profile(Path("/tmp/work-a/repo"), None, "client"))
-        with self.assertRaises(ValueError): dev.profile(Path("/tmp/a"), "../production", "client")
+        self.assertNotEqual(a["support"], dev.profile(Path("/tmp/work-a/repo"), None, "live")["support"])
+        self.assertEqual(a, dev.profile(Path("/tmp/work-a/repo"), None, "snapshot"))
+        with self.assertRaises(ValueError): dev.profile(Path("/tmp/a"), "../production", "snapshot")
 
-    def test_auto_always_launches_full_app_and_client_remains_explicit(self):
+    def test_auto_always_launches_the_full_snapshot_app(self):
         root = Path("/tmp/work-a/repo")
         self.assertEqual(dev.profile(root, "fixture", "auto")["mode"], "snapshot")
-        self.assertEqual(dev.profile(root, "fixture", "client")["mode"], "client")
 
     def test_default_launcher_plan_selects_the_standalone_snapshot(self):
         root = Path(__file__).resolve().parents[2]
@@ -154,7 +154,7 @@ class DevelopmentBuildTests(unittest.TestCase):
     def test_live_host_is_explicit_and_shares_only_the_production_data_path(self):
         root = Path(__file__).resolve().parents[2]
         profiles = {}
-        for mode in ("client", "snapshot", "live"):
+        for mode in ("snapshot", "live"):
             result = subprocess.run(["bash", str(root / "scripts/build_and_run.sh"), "--plan",
                                      "--mode", mode, "--instance", "fixture"], check=True, capture_output=True, text=True)
             profiles[mode] = json.loads(result.stdout)
@@ -162,8 +162,7 @@ class DevelopmentBuildTests(unittest.TestCase):
             self.assertEqual(profiles[mode]["bundle"], "wovenmatter.desktop.dev.fixture." + mode)
         production = str(Path.home() / "Library/Application Support/Woven Matter")
         self.assertEqual(profiles["live"]["support"], production)
-        for mode in ("client", "snapshot"):
-            self.assertNotEqual(profiles[mode]["support"], production)
+        self.assertNotEqual(profiles["snapshot"]["support"], production)
         other = dev.profile(root, "other", "live")
         self.assertEqual(other["support"], production)
         self.assertNotEqual(other["bundle"], profiles["live"]["bundle"])
@@ -173,29 +172,49 @@ class DevelopmentBuildTests(unittest.TestCase):
             root = Path(tmp); source = root / "source"; source.mkdir()
             with sqlite3.connect(source / "workspace.sqlite") as db:
                 db.executescript("""
-                  CREATE TABLE workspace_mcp_bot_machines(machine_id TEXT,active INTEGER);
-                  INSERT INTO workspace_mcp_bot_machines VALUES('fixture',1);
-                  CREATE TABLE workspace_session_relationships(session_id TEXT,coordinator_id TEXT,coordination_epoch TEXT,coordination_since TEXT);
-                  INSERT INTO workspace_session_relationships VALUES('session','woven:bot:fixture:bot','epoch','since');
-                  CREATE TABLE workspace_session_grants(source_id TEXT,kind TEXT);
-                  INSERT INTO workspace_session_grants VALUES('woven:bot:fixture:bot','approved');
-                  CREATE TABLE workspace_session_deliveries(id TEXT,status TEXT);
-                  INSERT INTO workspace_session_deliveries VALUES('event','queued');
-                  CREATE TABLE workspace_coordination_access_requests(source_id TEXT,state TEXT);
-                  INSERT INTO workspace_coordination_access_requests VALUES('woven:bot:fixture:bot','pending');
+                  CREATE TABLE mcp_bot_machines(machine_id TEXT,active INTEGER);
+                  INSERT INTO mcp_bot_machines VALUES('fixture',1);
+                  CREATE TABLE session_relationships(session_id TEXT,coordinator_id TEXT,coordination_epoch TEXT,coordination_since TEXT);
+                  INSERT INTO session_relationships VALUES('session','woven:bot:fixture:bot','epoch','since');
+                  CREATE TABLE session_grants(source_id TEXT,kind TEXT);
+                  INSERT INTO session_grants VALUES('woven:bot:fixture:bot','approved');
+                  CREATE TABLE session_deliveries(id TEXT,status TEXT);
+                  INSERT INTO session_deliveries VALUES('event','queued');
+                  CREATE TABLE coordination_access_requests(source_id TEXT,state TEXT);
+                  INSERT INTO coordination_access_requests VALUES('woven:bot:fixture:bot','pending');
                 """)
             (source / "mcp-access.json").write_text(json.dumps({"port": 12345, "botKeys": {"woven:bot:fixture:bot": "fixture-digest"}}))
             target = root / "snapshot"
             dev.snapshot(source, target)
             self.assertFalse((target / "mcp-access.json").exists())
             with sqlite3.connect(target / "workspace.sqlite") as db:
-                self.assertEqual(db.execute("SELECT active FROM workspace_mcp_bot_machines").fetchone(), (0,))
-                self.assertEqual(db.execute("SELECT coordinator_id,coordination_epoch,coordination_since FROM workspace_session_relationships").fetchone(), (None, None, None))
-                self.assertEqual(db.execute("SELECT count(*) FROM workspace_session_grants").fetchone(), (0,))
-                self.assertEqual(db.execute("SELECT status FROM workspace_session_deliveries").fetchone(), ('cancelled',))
-                self.assertEqual(db.execute("SELECT state FROM workspace_coordination_access_requests").fetchone(), ('cancelled',))
+                self.assertEqual(db.execute("SELECT active FROM mcp_bot_machines").fetchone(), (0,))
+                self.assertEqual(db.execute("SELECT coordinator_id,coordination_epoch,coordination_since FROM session_relationships").fetchone(), (None, None, None))
+                self.assertEqual(db.execute("SELECT count(*) FROM session_grants").fetchone(), (0,))
+                self.assertEqual(db.execute("SELECT status FROM session_deliveries").fetchone(), ('cancelled',))
+                self.assertEqual(db.execute("SELECT state FROM coordination_access_requests").fetchone(), ('cancelled',))
             with sqlite3.connect(source / "workspace.sqlite") as db:
-                self.assertEqual(db.execute("SELECT active FROM workspace_mcp_bot_machines").fetchone(), (1,))
+                self.assertEqual(db.execute("SELECT active FROM mcp_bot_machines").fetchone(), (1,))
+
+    def test_snapshot_reads_either_device_id_file_and_writes_its_own(self):
+        source_id = "c0ffee00-1234-4abc-8def-0123456789ab"
+        for name in ("device-id", "dashboard-device-id"):
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp); source = root / "source"; source.mkdir()
+                with sqlite3.connect(source / "workspace.sqlite") as db:
+                    db.executescript(f"""
+                      CREATE TABLE folder_execution_roots(folder_id TEXT, workspace_id TEXT, root_path TEXT, managed INTEGER, reference_paths TEXT);
+                      INSERT INTO folder_execution_roots VALUES('{uuid.uuid4()}','device:{source_id}','/source/project',0,'[]');
+                    """)
+                (source / name).write_text(source_id.upper() + "\n")
+                target = root / "snapshot"
+                dev.snapshot(source, target)
+                device_id = (target / "device-id").read_text()
+                self.assertNotEqual(device_id, source_id)
+                self.assertEqual((target / "device-id").stat().st_mode & 0o777, 0o600)
+                self.assertFalse((target / "dashboard-device-id").exists())
+                with sqlite3.connect(target / "workspace.sqlite") as db:
+                    self.assertEqual(db.execute("SELECT workspace_id FROM folder_execution_roots").fetchone(), ("device:" + device_id,))
 
     def test_snapshot_includes_wal_and_assets_without_changing_source(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -205,13 +224,16 @@ class DevelopmentBuildTests(unittest.TestCase):
             writer.executescript("""
               PRAGMA journal_mode=WAL;
               CREATE TABLE notes(id TEXT PRIMARY KEY, content TEXT);
+              -- A v0.4.2 library, still on its old table names.
               CREATE TABLE desktop_local_acp_sessions(id TEXT);
-              CREATE TABLE dashboard_agents(id TEXT PRIMARY KEY, governing_plane TEXT,
-                authority_kind TEXT, runtime_device_id TEXT, deleted_at TEXT, status TEXT);
-              CREATE TABLE dashboard_conversations(id TEXT PRIMARY KEY, agent_id TEXT REFERENCES dashboard_agents(id));
-              INSERT INTO dashboard_agents VALUES('local-pi','wovenmatter_macos','device_owned',NULL,NULL,'ready');
-              INSERT INTO dashboard_agents VALUES('remote-pi','remote_workspace','device_owned','remote',NULL,'ready');
-              INSERT INTO dashboard_conversations VALUES('history','local-pi');
+              CREATE TABLE dashboard_agents(id TEXT PRIMARY KEY, execution_location TEXT, governing_plane TEXT,
+                runtime_device_id TEXT, deleted_at TEXT, status TEXT);
+              CREATE TABLE dashboard_conversations(id TEXT PRIMARY KEY, agent_id TEXT REFERENCES dashboard_agents(id),
+                is_archived INTEGER NOT NULL DEFAULT 0, desktop_owned INTEGER NOT NULL DEFAULT 1);
+              CREATE TRIGGER desktop_dashboard_revision_notes_insert AFTER INSERT ON notes BEGIN SELECT 1; END;
+              INSERT INTO dashboard_agents VALUES('local-pi','local','wovenmatter_macos',NULL,NULL,'ready');
+              INSERT INTO dashboard_agents VALUES('remote-pi','remote','remote_workspace','remote',NULL,'ready');
+              INSERT INTO dashboard_conversations(id,agent_id) VALUES('history','local-pi');
               CREATE TABLE paired_mac_routes(device_id TEXT, endpoint TEXT);
               CREATE TABLE paired_library_clock(device_id TEXT, tick INTEGER);
               CREATE TABLE paired_library_changes(cursor INTEGER,payload TEXT);
@@ -222,59 +244,61 @@ class DevelopmentBuildTests(unittest.TestCase):
               INSERT INTO paired_calendar_owners VALUES('schedule','other-mac');
               CREATE TABLE paired_library_state(name TEXT, value TEXT);
               INSERT INTO paired_library_state VALUES('owners.bootstrap','1'),('baseline.other-mac','4');
-              -- A library from before November 2026, still on the old table names.
-              CREATE TABLE companion_workspace(singleton INTEGER, workspace_id TEXT);
-              CREATE TABLE companion_library_identity(singleton INTEGER, host_device_id TEXT);
-              INSERT INTO companion_library_identity VALUES(1,'source');
-              CREATE TABLE companion_execution_workspaces(id TEXT,payload BLOB);
-              CREATE TRIGGER companion_notes_insert AFTER INSERT ON notes BEGIN SELECT 1; END;
-              INSERT INTO companion_execution_workspaces VALUES('source-mac','{"libraryID":"production-identity","name":"Mac","endpoint":"https://fixture.test.ts.net/wovenmatter"}');
+              -- A current library's peer sync bookkeeping.
+              CREATE TABLE peer_sync_versions(cursor INTEGER PRIMARY KEY, payload TEXT);
+              INSERT INTO peer_sync_versions VALUES(1,'production-private-sync');
+              CREATE TABLE library_identity(singleton INTEGER, host_device_id TEXT, library_id TEXT);
+              INSERT INTO library_identity VALUES(1,'source','production-identity');
+              CREATE TABLE execution_workspaces(id TEXT,payload BLOB);
+              INSERT INTO execution_workspaces VALUES('source-mac','{"libraryID":"production-identity","name":"Mac","endpoint":"https://fixture.test.ts.net/wovenmatter"}');
               CREATE TABLE dashboard_calendar_items(id TEXT, calendar_json TEXT);
               CREATE TABLE dashboard_runs(id TEXT,status TEXT);
               CREATE TABLE workspace_session_goals(session_id TEXT,value TEXT);
               CREATE TABLE workspace_session_timers(id TEXT,is_paused INTEGER,pending_delivery_id TEXT);
               INSERT INTO notes VALUES('note','shared content');
               INSERT INTO desktop_local_acp_sessions VALUES('production-session');
-              INSERT INTO companion_workspace VALUES(1,'production-identity');
               INSERT INTO dashboard_calendar_items VALUES('job','{"task":{"prompt":"retain me"}}');
               INSERT INTO dashboard_runs VALUES('run','running');
               INSERT INTO workspace_session_goals VALUES('session','{"status":"active"}');
               INSERT INTO workspace_session_timers VALUES('timer',0,'pending');
             """)
             asset = source / "library-files"; asset.mkdir(); (asset / "blob").write_bytes(b"saved output")
+            chunks = source / "library-chunks"; chunks.mkdir(); (chunks / "part").write_bytes(b"SQLite format 3\x00 first chunk")
             target = root / "dev"; dev.snapshot(source, target)
             with sqlite3.connect(target / "workspace.sqlite") as copy:
-                for table in ("paired_mac_routes", "paired_library_clock", "paired_library_changes"):
+                for table in ("mac_routes", "paired_library_clock", "paired_library_changes", "peer_sync_versions"):
                     self.assertEqual(copy.execute("SELECT count(*) FROM " + table).fetchone()[0], 0)
                 # Ownership survives, so the snapshot never adopts another Mac's schedule.
-                self.assertEqual(copy.execute("SELECT device_id FROM paired_calendar_owners").fetchall(), [("other-mac",)])
-                self.assertEqual(copy.execute("SELECT name FROM paired_library_state").fetchall(), [("owners.bootstrap",)])
+                self.assertEqual(copy.execute("SELECT device_id FROM calendar_item_owners").fetchall(), [("other-mac",)])
+                self.assertEqual(copy.execute("SELECT name FROM paired_library_state").fetchall(), [])
                 workspace = json.loads(copy.execute("SELECT payload FROM execution_workspaces").fetchone()[0])
                 self.assertTrue(workspace["retainedHistory"])
                 self.assertNotIn("endpoint", workspace)
                 self.assertEqual(workspace["name"], "Mac")
                 self.assertEqual(copy.execute("SELECT content FROM notes").fetchone()[0], "shared content")
-                self.assertEqual(copy.execute("SELECT COUNT(*) FROM desktop_local_acp_sessions").fetchone()[0], 0)
-                self.assertIsNotNone(copy.execute("SELECT deleted_at FROM dashboard_agents WHERE id='local-pi'").fetchone()[0])
-                self.assertEqual(copy.execute("SELECT status FROM dashboard_agents WHERE id='local-pi'").fetchone()[0], "offline")
-                self.assertEqual(copy.execute("SELECT a.id FROM dashboard_conversations c JOIN dashboard_agents a ON c.agent_id=a.id").fetchone()[0], "local-pi")
-                self.assertIsNone(copy.execute("SELECT deleted_at FROM dashboard_agents WHERE id='remote-pi'").fetchone()[0])
+                self.assertEqual(copy.execute("SELECT COUNT(*) FROM harness_sessions").fetchone()[0], 0)
+                self.assertIsNotNone(copy.execute("SELECT deleted_at FROM agents WHERE id='local-pi'").fetchone()[0])
+                self.assertEqual(copy.execute("SELECT status FROM agents WHERE id='local-pi'").fetchone()[0], "offline")
+                self.assertEqual(copy.execute("SELECT a.id FROM conversations c JOIN agents a ON c.agent_id=a.id").fetchone()[0], "local-pi")
+                self.assertIsNone(copy.execute("SELECT deleted_at FROM agents WHERE id='remote-pi'").fetchone()[0])
                 identity = copy.execute("SELECT host_device_id,library_id FROM library_identity").fetchall()
                 self.assertEqual(len(identity), 1)
                 self.assertNotIn(identity[0][0], ("source", None)); self.assertNotIn(identity[0][1], ("production-identity", None))
                 self.assertEqual(json.loads(copy.execute("SELECT payload FROM execution_workspaces").fetchone()[0])["libraryID"], identity[0][1])
-                self.assertEqual(copy.execute("SELECT name FROM sqlite_master WHERE name LIKE 'companion%'").fetchall(), [])
+                self.assertEqual(copy.execute("SELECT name FROM sqlite_master WHERE name LIKE 'dashboard%' OR name LIKE 'desktop%'").fetchall(), [])
+                self.assertEqual(copy.execute("SELECT conversation_id FROM retained_execution_history").fetchall(), [("history",)])
                 self.assertEqual(copy.execute("SELECT COUNT(*) FROM calendar_task_executors").fetchone()[0], 1)
-                self.assertIn("retain me", copy.execute("SELECT calendar_json FROM dashboard_calendar_items").fetchone()[0])
-                self.assertEqual(copy.execute("SELECT status FROM dashboard_runs").fetchone()[0], "interrupted")
-                self.assertEqual(json.loads(copy.execute("SELECT value FROM workspace_session_goals").fetchone()[0])["status"], "paused")
-                self.assertEqual(copy.execute("SELECT is_paused,pending_delivery_id FROM workspace_session_timers").fetchone(), (1, None))
+                self.assertIn("retain me", copy.execute("SELECT calendar_json FROM calendar_items").fetchone()[0])
+                self.assertEqual(copy.execute("SELECT status FROM runs").fetchone()[0], "interrupted")
+                self.assertEqual(json.loads(copy.execute("SELECT value FROM session_goals").fetchone()[0])["status"], "paused")
+                self.assertEqual(copy.execute("SELECT is_paused,pending_delivery_id FROM session_timers").fetchone(), (1, None))
                 copy.execute("UPDATE notes SET content='private'"); copy.commit()
             self.assertEqual(writer.execute("SELECT content FROM notes").fetchone()[0], "shared content")
             self.assertEqual(writer.execute("SELECT deleted_at,status FROM dashboard_agents WHERE id='local-pi'").fetchone(), (None, "ready"))
             self.assertEqual(writer.execute("SELECT status FROM dashboard_runs").fetchone()[0], "running")
             self.assertEqual(writer.execute("SELECT is_paused,pending_delivery_id FROM workspace_session_timers").fetchone(), (0, "pending"))
             self.assertEqual((target / "library-files/blob").read_bytes(), b"saved output")
+            self.assertEqual((target / "library-chunks/part").read_bytes(), b"SQLite format 3\x00 first chunk")
             with self.assertRaises(ValueError): dev.snapshot(source, target)
 
     def test_snapshot_keeps_outside_tool_choices_without_inheriting_network_exposure(self):
@@ -282,16 +306,16 @@ class DevelopmentBuildTests(unittest.TestCase):
             root = Path(tmp); source = root / "production"; source.mkdir()
             settings = {"enabledByDefault": ["notes"], "externalMCP": {"isEnabled": True, "groups": ["notes", "calendar"]}}
             with sqlite3.connect(source / "workspace.sqlite") as db:
-                db.execute("CREATE TABLE workspace_tool_settings(id INTEGER PRIMARY KEY,value TEXT)")
-                db.execute("INSERT INTO workspace_tool_settings VALUES(1,?)", (json.dumps(settings),))
+                db.execute("CREATE TABLE tool_settings(id INTEGER PRIMARY KEY,value TEXT)")
+                db.execute("INSERT INTO tool_settings VALUES(1,?)", (json.dumps(settings),))
             target = root / "snapshot"
             dev.snapshot(source, target)
             with sqlite3.connect(target / "workspace.sqlite") as db:
-                copied = json.loads(db.execute("SELECT value FROM workspace_tool_settings").fetchone()[0])
+                copied = json.loads(db.execute("SELECT value FROM tool_settings").fetchone()[0])
             self.assertFalse(copied["externalMCP"]["isEnabled"])
             self.assertEqual(copied["externalMCP"]["groups"], ["notes", "calendar"])
             with sqlite3.connect(source / "workspace.sqlite") as db:
-                self.assertEqual(json.loads(db.execute("SELECT value FROM workspace_tool_settings").fetchone()[0]), settings)
+                self.assertEqual(json.loads(db.execute("SELECT value FROM tool_settings").fetchone()[0]), settings)
 
     def test_snapshot_refuses_source_alias_and_symlinked_assets(self):
         with tempfile.TemporaryDirectory() as tmp:

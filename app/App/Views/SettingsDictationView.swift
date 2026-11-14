@@ -20,10 +20,10 @@ struct SettingsDictationView: View {
             languageSection
             SettingsSection(title: "History", detail: "Your completed dictations. Click an entry to see it in full.") {
             if let problem = DictationSession.shared.historyError {
-                Text(problem).font(.settingsText).foregroundStyle(DashboardPalette.danger)
+                Text(problem).font(.settingsText).foregroundStyle(WovenPalette.danger)
                 Button("Retry saving") { DictationSession.shared.retrySavingHistory() }.buttonStyle(SettingsQuietButtonStyle())
             }
-            if let error { Text(error).font(.settingsText).foregroundStyle(DashboardPalette.danger) }
+            if let error { Text(error).font(.settingsText).foregroundStyle(WovenPalette.danger) }
             if !loaded { ProgressView() }
             else if records.isEmpty {
                 SettingsEmpty("Completed dictations will appear here when you stop recording.")
@@ -35,22 +35,22 @@ struct SettingsDictationView: View {
                 HStack(spacing: 8) {
                     if page > 0 {
                         Button { changePage(to: 0) } label: {
-                            DashboardLucideIcon(glyph: .chevronsLeft, size: 16).frame(width: 32, height: 32)
+                            LucideIcon(glyph: .chevronsLeft, size: 16).frame(width: 32, height: 32)
                         }.accessibilityLabel("First page").help("First page")
                     } else {
                         Color.clear.frame(width: 32, height: 32).accessibilityHidden(true)
                     }
                     Button { changePage(to: page - 1) } label: {
-                        DashboardLucideIcon(glyph: .arrowLeft, size: 16).frame(width: 32, height: 32)
+                        LucideIcon(glyph: .arrowLeft, size: 16).frame(width: 32, height: 32)
                     }.disabled(page == 0).accessibilityLabel("Previous page").help("Previous page")
                     Text("Page \(page + 1)").font(.settingsBody).monospacedDigit()
-                        .foregroundStyle(DashboardPalette.mutedForeground).fixedSize()
+                        .foregroundStyle(WovenPalette.mutedForeground).fixedSize()
                     Button { changePage(to: page + 1) } label: {
-                        DashboardLucideIcon(glyph: .arrowRight, size: 16).frame(width: 32, height: 32)
+                        LucideIcon(glyph: .arrowRight, size: 16).frame(width: 32, height: 32)
                     }.disabled(!hasNextPage).accessibilityLabel("Next page").help("Next page")
                     // Balance the first-page slot so the page number stays centered.
                     Color.clear.frame(width: 32, height: 32).accessibilityHidden(true)
-                }.buttonStyle(DashboardIconButtonStyle()).frame(maxWidth: .infinity)
+                }.buttonStyle(WovenIconButtonStyle()).frame(maxWidth: .infinity)
             }
             }
         }
@@ -88,7 +88,7 @@ struct SettingsDictationView: View {
     private func reload() async {
         let requestedPage = page
         do {
-            guard let database = model.dashboardStore?.database else { throw ApplicationModelError.dashboardStoreUnavailable }
+            guard let database = model.libraryStore?.database else { throw ApplicationModelError.libraryStoreUnavailable }
             let fetched = try await database.dictationHistory(limit: pageSize + 1, offset: requestedPage * pageSize)
             guard !Task.isCancelled, page == requestedPage else { return }
             records = Array(fetched.prefix(pageSize)); hasNextPage = fetched.count > pageSize
@@ -104,11 +104,11 @@ private struct DictationHistoryRow: View {
     let record: DictationRecord
     @State private var expanded = false
     @State private var copied = false
-    @Environment(\.dashboardTheme) private var theme
+    @Environment(\.wovenTheme) private var theme
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text(record.createdAt.formatted(date: .abbreviated, time: .shortened))
-                .font(.settingsSecondary).foregroundStyle(DashboardPalette.mutedForeground)
+                .font(.settingsSecondary).foregroundStyle(WovenPalette.mutedForeground)
             if expanded {
                 Text(record.text).font(.settingsText).textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)
@@ -128,7 +128,7 @@ private struct DictationHistoryRow: View {
                     .font(.settingsSecondary.weight(.medium))
                     .frame(width: 28, height: 28)
                     .contentShape(Rectangle())
-            }.buttonStyle(DashboardIconButtonStyle())
+            }.buttonStyle(WovenIconButtonStyle())
                 .help(copied ? "Copied" : "Copy dictation")
                 .accessibilityLabel(copied ? "Copied dictation" : "Copy dictation")
                 .task(id: copied) {
@@ -138,6 +138,6 @@ private struct DictationHistoryRow: View {
         }.frame(maxWidth: .infinity, alignment: .leading)
             // The 8-point row gap plus this 8-point top inset gives 16 points from copy button to next date.
             .padding(.horizontal, 16).padding(.top, 8)
-            .background(theme.palette.workspace).clipShape(DashboardShapes.card)
+            .background(theme.palette.workspace).clipShape(DesktopShapes.card)
     }
 }

@@ -31,7 +31,7 @@ extension MobileModel {
     let nativeCallID = object["toolCallID"] as? String ?? UUID().uuidString.lowercased()
     let toolCallID = conversationID + ":" + String(describing: object["taskID"] ?? "root") + ":" + nativeCallID
     if WovenMCPCatalog.tools.contains(where: { $0.name == name }) {
-      let input = try JSONDecoder().decode(GatewayJSONValue.self, from: JSONSerialization.data(withJSONObject: arguments))
+      let input = try JSONDecoder().decode(JSONValue.self, from: JSONSerialization.data(withJSONObject: arguments))
       return try await performDeviceMCP(name: name, arguments: input.objectValue ?? [:],
         conversationID: conversationID, requestID: toolCallID)
     }

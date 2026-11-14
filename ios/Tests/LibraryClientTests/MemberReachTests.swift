@@ -60,7 +60,7 @@ final class MemberReachTests: XCTestCase {
   }
 
   /// An expanded row reads its activity once from the owner's details route,
-  /// with free-form activity and run IDs in the query; a central chat's from
+  /// with free-form activity and run IDs in the query; a host chat's from
   /// the library host's. An owner without the route falls back to its transcript.
   func testExpandedActivitiesReadTheDetailsRouteOnce() async throws {
     let identity = try MobileMemberKeyVault.loadOrCreate(deviceID: phoneID, storage: .memory())
@@ -83,16 +83,17 @@ final class MemberReachTests: XCTestCase {
 
     let library = try HTTPSLibraryTransport(host: URL(string: "https://studio.tail1.ts.net/wovenmatter")!, hostDeviceID: mac, identity: identity, performer: http)
     let store = try MobileStore(file: FileManager.default.temporaryDirectory.appending(path: UUID().uuidString).appending(path: "store.json"))
-    let central = try await MobileSyncEngine(store: store, transport: library).transcriptActivityDetail(conversation, runID: "run 1", activityID: "tool/1 #a")
-    XCTAssertEqual(central, full)
+    let viaHost = try await MobileSyncEngine(store: store, transport: library).transcriptActivityDetail(conversation, runID: "run 1", activityID: "tool/1 #a")
+    XCTAssertEqual(viaHost, full)
     XCTAssertEqual(http.requests.last?.url?.path, "/wovenmatter/v1/sessions/\(conversation)/activity")
     XCTAssertEqual(http.requests.count, 2, "One read per expansion; no transcript read when the route answers")
   }
 
-  func testSignedFailuresDistinguishUnknownOldAndUpdateRequired() {
+  func testSignedFailuresDistinguishUnknownNotReadyAndUpdateRequired() {
     func body(_ code: String, _ message: String) -> Data { try! JSONEncoder().encode(LibraryAPIError(code: code, message: message)) }
-    guard case .memberUnsupported = MobileRequestSigning.failure(status: 401, data: body("unauthorized", "This device does not accept member requests yet."), signed: true, fallback: "") else { return XCTFail() }
-    guard case .memberUnsupported = MobileRequestSigning.failure(status: 401, data: Data(#"{"error":"member_auth_unavailable"}"#.utf8), signed: true, fallback: "") else { return XCTFail() }
+    // A host that has not loaded its member list yet is not ready; it does not mean "pair again".
+    guard case .http(401, _) = MobileRequestSigning.failure(status: 401, data: body("unauthorized", "This device does not accept member requests yet."), signed: true, fallback: "") else { return XCTFail() }
+    guard case .http(401, _) = MobileRequestSigning.failure(status: 401, data: Data(#"{"error":"member_auth_unavailable"}"#.utf8), signed: true, fallback: "") else { return XCTFail() }
     guard case .memberUnknown = MobileRequestSigning.failure(status: 401, data: body("unauthorized", "This device is not a member, or it was removed."), signed: true, fallback: "") else { return XCTFail() }
     guard case .revoked = MobileRequestSigning.failure(status: 401, data: Data(), signed: false, fallback: "") else { return XCTFail() }
     guard case .updateRequired = MobileRequestSigning.failure(status: 409, data: body("update_required", "Mac Mini runs version 2."), signed: true, fallback: "") else { return XCTFail() }
@@ -167,17 +168,6 @@ final class MemberReachTests: XCTestCase {
     let next = await hosts.snapshot()
     XCTAssertEqual(next.preferredHostDeviceID, "a0000000-0000-0000-0000-000000000003")
     XCTAssertEqual(next.candidates().first?.name, "Box")
-  }
-
-  func testConnectReportsAnOldPairedMacSoThePhoneSaysUpdateEverything() async throws {
-    let state = MobileMembershipState(deviceID: phoneID, pairedEndpoint: URL(string: "https://studio.tail1.ts.net/wovenmatter")!)
-    let refusal = try JSONEncoder().encode(LibraryAPIError(code: "unauthorized", message: "This device does not accept member requests yet."))
-    let http = RecordingHTTP { _ in (401, refusal) }
-    let hosts = try MobileLibraryHosts(state: state, identity: try MobileMemberKeyVault.loadOrCreate(deviceID: phoneID, storage: .memory()), file: nil, performer: http)
-    do { _ = try await hosts.connect(registry: []); XCTFail("Expected a refusal") }
-    catch MobileConnectionError.memberUnsupported {}
-    let snapshot = await hosts.snapshot()
-    XCTAssertEqual(snapshot.memberRequestsAccepted, false)
   }
 
   /// The move to another host of the same library: revisions are the host's,
@@ -256,7 +246,7 @@ final class MemberReachTests: XCTestCase {
     let device = phoneID
     try await journal.upsertWorkspace(.init(id: device, libraryID: "library-a", ownerDeviceID: device, kind: .ios, name: "iPhone"))
     let conversation = UUID().uuidString.lowercased()
-    _ = try await journal.append(workspaceID: device, conversation: .init(id: conversation, title: "Quick chat", runtimeKind: "pi"))
+    _ = try await journal.append(workspaceID: device, conversation: .init(id: conversation, title: "Quick chat", runtimeKind: "default_agent"))
     let entries = await journal.pendingOwnerEntries(deviceID: device)
     try await journal.acknowledge(.init(libraryID: "library-a", acceptedEventIDs: entries.map(\.eventID), cursor: 1), submitted: entries)
     let drained = await journal.pendingOwnerEntries(deviceID: device)

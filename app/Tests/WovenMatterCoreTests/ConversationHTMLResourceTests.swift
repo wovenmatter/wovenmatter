@@ -2,7 +2,7 @@ import WorkspaceFixtures
 import Foundation
 import Testing
 import WovenMatterCore
-import WovenMatterDashboardStore
+import WovenMatterLibraryStore
 
 @Suite("HTML resource preparation", .serialized)
 struct ConversationHTMLResourceTests {

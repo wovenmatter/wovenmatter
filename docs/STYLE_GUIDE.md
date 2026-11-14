@@ -11,18 +11,18 @@ when an intentional design change is accepted.
   Keep Window for native close, minimize, zoom, layout, and window-switching
   controls. Harness setup belongs in Settings. Disable macOS window tabbing so
   Window does not offer tab-management commands; in-app browser tabs are separate.
-- **Colors and geometry:** use `DashboardTheme`, `DashboardPalette`,
-  `DashboardMetrics` in [DashboardStyle.swift](../app/App/Views/DashboardStyle.swift),
-  and desktop `DashboardShapes` in `DashboardDesign.swift`. Preserve the
+- **Colors and geometry:** use `WovenTheme`, `WovenPalette`,
+  `WovenMetrics` in [WovenStyle.swift](../app/App/Views/WovenStyle.swift),
+  and `DesktopShapes` in `DesktopDesign.swift`. Preserve the
   Green and Cognac light themes. Dark uses warm charcoal, forest-tinted rails,
-  cream text, and lighter green/Cognac accents from shared `DashboardColors`.
+  cream text, and lighter green/Cognac accents from shared `WovenColors`.
   The selected theme controls native appearance on macOS, iPhone, and iPad.
   Filled primary actions retain British Racing Green. Keep spacing, radii, and
   surface treatments consistent with adjacent screens; keep exact values in code.
 - **Typography:** use the macOS system font and the existing size/weight
   hierarchy. Use monospaced text for code and monospaced digits for aligned
   numeric displays.
-- **Text links:** use `DashboardPalette.success` (`#0D8F5A`) for conversation
+- **Text links:** use `WovenPalette.success` (`#0D8F5A`) for conversation
   Markdown links and SwiftUI external-link labels so they stand out against the
   body text. The shared token supplies lighter green in Dark.
 - **Composer selectors:** use title-case popout headings, such as `Thinking Level`,
@@ -45,7 +45,7 @@ when an intentional design change is accepted.
   quiet action above the input. Use regular-weight secondary text, allow wrapping,
   and open Pi Durable settings in the relevant workspace scope.
 - **Components:** reuse the shared cards, selectors, search fields, and button
-  styles in `DashboardStyle.swift` and `DashboardDesign.swift`, and the page/row
+  styles in `WovenStyle.swift` and `DesktopDesign.swift`, and the page/row
   patterns in
   [SettingsComponents.swift](../app/App/Views/SettingsComponents.swift).
   Preserve intentional differences such as borderless Usage sections.
@@ -223,7 +223,7 @@ when an intentional design change is accepted.
   OpenRouter, OpenCode, Exa, Brave, and Firecrawl show API-key controls directly when expanded.
   Keep their content at the same indentation as the content
   inside the nested credential groups.
-- **Icons:** use the existing `DashboardLucideIcon` glyphs and bundled harness
+- **Icons:** use the existing `LucideIcon` glyphs and bundled harness
   logos, matching nearby icon sizes and stroke weights. Pi Durable’s color and
   black-and-white variants share the same circular black badge, padding, and mark
   bounds.
@@ -237,7 +237,7 @@ when an intentional design change is accepted.
   events, and Cognac recurring scheduled tasks. The picker offers Cognac, British
   Racing Green, lighter green, royal blue, purple, red, pink, orange, yellow, and
   black. Choices persist and may be reused across categories.
-- **Sidebar foregrounds:** use `DashboardPalette.foreground` (`#0A1F16` in Green and Cognac, cream in Dark) for text and interface icons in both rails, including section headings, metadata, and pinned indicators. Keep colored agent/harness logos in their original colors; monochrome marks use a contrasting foreground in Dark. Shared controls use the sidebar foreground environment only inside the rails.
+- **Sidebar foregrounds:** use `WovenPalette.foreground` (`#0A1F16` in Green and Cognac, cream in Dark) for text and interface icons in both rails, including section headings, metadata, and pinned indicators. Keep colored agent/harness logos in their original colors; monochrome marks use a contrasting foreground in Dark. Shared controls use the sidebar foreground environment only inside the rails.
 - **Workspace naming:** use Local workspace and Remote workspaces in the sidebar,
   and Workspaces and Apple Devices for Settings pages.
   Describe local workspaces as agents and files on this Mac, remote workspaces as
@@ -264,16 +264,16 @@ when an intentional design change is accepted.
 - **Sidebar headers:** in Single and Adaptive layouts, mirror the header button
   order when the sidebar moves to the right, and point the workspace back arrow
   toward the navigation rail. Keep titles and list content in normal reading order.
-- **Switches:** settings pages use `SettingsSwitchToggleStyle`, with the switch on the right edge of its row like every other control. Elsewhere, use `DashboardSwitchToggleStyle` for boolean controls and multi-select toggles. It supplies compact native switches in a 28 × 16-point control frame before their labels on the left, in the shared forest-green action color and is the default at the app root. iPhone Tools popouts keep native switches at 65% scale inside 44 × 44-point touch frames, with labels on the left and padding around the scroll content. Markdown task-list markers remain document content.
+- **Switches:** settings pages use `SettingsSwitchToggleStyle`, with the switch on the right edge of its row like every other control. Elsewhere, use `CompactSwitchToggleStyle` for boolean controls and multi-select toggles. It supplies compact native switches in a 28 × 16-point control frame before their labels on the left, in the shared forest-green action color and is the default at the app root. iPhone Tools popouts keep native switches at 65% scale inside 44 × 44-point touch frames, with labels on the left and padding around the scroll content. Markdown task-list markers remain document content.
 - **Interaction:** keep controls compact, selection fills restrained, and focus
-  styling quiet. Popover and sheet text inputs use `dashboardQuietTextInput()`
+  styling quiet. Popover and sheet text inputs use `quietTextInput()`
   for a neutral border without a colored focus ring. Clicking noninteractive
   content inside a form releases text focus without closing it.
   Shared controls distinguish enabled hover, press, selection,
   and disabled states without making quiet or icon actions look primary. Do not
   add persistent colored focus rings. Preserve keyboard navigation and accessible
   labels and states, and respect Reduce Motion and Reduce Transparency.
-- **Text inputs:** use `DashboardSearchField` for search and `.dashboardInput()` for
+- **Text inputs:** use `WovenSearchField` for search and `.wovenInput()` for
   new text/secure fields, including desktop settings. These use
   plain native editing on the theme-whisper surface, matching sidebar chat search.
   Never use `.textFieldStyle(.roundedBorder)`, native blue focus outlines, or a
@@ -346,12 +346,12 @@ Code cleanup alone should not alter appearance or interaction.
 
 ## iPhone and iPad
 
-Both Xcode targets compile `app/App/Views/DashboardStyle.swift` and bundle
+Both Xcode targets compile `app/App/Views/WovenStyle.swift` and bundle
 `app/App/SharedAssets.xcassets`. These are the canonical Lucide glyphs, harness
 logos, Green/Cognac/Dark palettes, radii, search field, segmented selectors, and
 primary/quiet/icon buttons.
 Do not copy the icon catalog or introduce a parallel mobile palette. Desktop
-runtime metadata and window-specific controls remain in `DashboardDesign.swift`.
+runtime metadata and window-specific controls remain in `DesktopDesign.swift`.
 
 The iOS app keeps Dynamic Type and a 44-point minimum for shared touch controls;
 desktop sizing is unchanged. Dark uses the same shared palette on both platforms. Native sheets, pickers, switches, QR scanning and share controls retain

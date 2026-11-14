@@ -14,7 +14,7 @@ struct ConversationHTMLRenderView: View {
     let activity: AgentRunActivity
     let runID: String
     @Environment(\.conversationActivityDetails) private var loadDetails
-    @Environment(\.dashboardTheme) private var theme
+    @Environment(\.wovenTheme) private var theme
     @State private var page: ConversationHTMLPage?
     @State private var failure: String?
     @State private var height: CGFloat = 400
@@ -36,19 +36,19 @@ struct ConversationHTMLRenderView: View {
                 .disabled(page == nil)
             }
             .font(.system(size: 11.5, weight: .medium))
-            .foregroundStyle(DashboardPalette.mutedForeground)
+            .foregroundStyle(WovenPalette.mutedForeground)
             .buttonStyle(.plain)
             .padding(.vertical, 8)
             if let page {
                 web(page).frame(height: min(20_000, max(80, height * zoom)))
             } else if let failure {
-                Text(failure).font(.system(size: 13)).foregroundStyle(DashboardPalette.mutedForeground)
+                Text(failure).font(.system(size: 13)).foregroundStyle(WovenPalette.mutedForeground)
                     .padding(.vertical, 16)
                 Button("Retry") { self.failure = nil; Task { await load() } }.buttonStyle(.plain)
             } else {
                 Text("Loading visual reply…")
                     .font(.system(size: 13))
-                    .foregroundStyle(DashboardPalette.mutedForeground)
+                    .foregroundStyle(WovenPalette.mutedForeground)
                     .frame(maxWidth: .infinity)
                     .frame(height: CGFloat(min(2000, max(80, activity.htmlRender?.height ?? 160))))
             }
@@ -67,7 +67,7 @@ struct ConversationHTMLRenderView: View {
                 if let page { web(page, fitsHeight: false) }
             }
             .frame(minWidth: expandedMinimumWidth, minHeight: 440)
-            .environment(\.dashboardTheme, theme)
+            .environment(\.wovenTheme, theme)
         }
         .alert("Open external link?", isPresented: Binding(
             get: { pendingLink != nil }, set: { if !$0 { pendingLink = nil } }
@@ -131,12 +131,12 @@ struct ConversationHTMLRenderView: View {
 }
 
 enum ConversationHTMLTheme {
-    static func value(_ theme: DashboardTheme) -> [String: Any] {
+    static func value(_ theme: WovenTheme) -> [String: Any] {
         let dark = theme == .dark
-        let foreground = dark ? String(format: "#%06x", DashboardColors.darkForeground) : "#0a1f16"
-        let muted = dark ? String(format: "#%06x", DashboardColors.darkMutedForeground) : "#5c6f64"
+        let foreground = dark ? String(format: "#%06x", WovenColors.darkForeground) : "#0a1f16"
+        let muted = dark ? String(format: "#%06x", WovenColors.darkMutedForeground) : "#5c6f64"
         let accent = hex(theme.palette.themeAccent)
-        let success = dark ? String(format: "#%06x", DashboardColors.darkGreen) : "#0d8f5a"
+        let success = dark ? String(format: "#%06x", WovenColors.darkGreen) : "#0d8f5a"
         let danger = dark ? "#ff8383" : "#ef4444"
         let warning = dark ? "#f5b84d" : "#f59e0b"
         let info = dark ? "#91a7ef" : "#4169e1"

@@ -63,11 +63,11 @@ fi
 if enabled scripts; then
   # These fixtures stub external tools; native fixtures run in manual validation.
   scripts/test-release.sh --portable
-  for suite in update_refresh ios_runner verify_ios_app dev_build executor_deployment remote_image cua_runtime; do
+  for suite in update_refresh ios_runner verify_ios_app dev_build executor_deployment cua_runtime; do
     python3 "scripts/test-support/test_${suite}.py"
   done
   scripts/test-dev-signing.sh
-  scripts/test-remote-workspace.sh
+  scripts/test-executor-docker.sh
   scripts/test-remote-host.sh
   while IFS= read -r -d '' file; do
     [ ! -f "$file" ] || node --check "$file"

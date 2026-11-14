@@ -8,8 +8,8 @@ consent, recovery, and Dev signing are documented in
 ## Ownership and lifecycle
 
 `WorkspaceAssetSession` owns ephemeral tabs independently of chats.
-`DashboardAssetPane` owns pane navigation and shared toolbar controls;
-`DashboardNotePane` supplies the selected note-like asset's editor.
+`AssetPane` owns pane navigation and shared toolbar controls;
+`DesktopNotePane` supplies the selected note-like asset's editor.
 SwiftUI redraws, reparenting, and hidden panes retain each page's AppKit view.
 
 The runtime retains pages until CEF's `OnBeforeClose`; clients hold weak page
@@ -38,9 +38,7 @@ The helper receives no MCP bearer or provider credentials. Shared tabs remain
 owned by ApplicationModel's WorkspaceAssetSession across pane visibility changes.
 
 Each Mac's agents drive that Mac's own embedded browser; there is no shared
-browser across Macs. A Dev connected client injects its window's asset session
-into its own execution workspace and dispatches automation in process, so its
-tabs remain accessible in its Browser pane. Quick Chat on iPhone offers neither
+browser across Macs. Quick Chat on iPhone offers neither
 capability and never controls iPhone UI. Execution access is checked before
 acceptance and between native input steps. Cancellation retains caller
 ownership and works after capability or execution-access revocation.
@@ -122,7 +120,7 @@ all proprietary Chrome services, codecs, or DRM. Sources:
 
 - Core tests cover tab limits/selection, hidden-pane retention, address handling,
   and snapshot transport. Credential tests cover persistence, origin isolation,
-  failed writes, and centralized prompt policy using fake Keychain operations.
+  failed writes, and the app-wide prompt policy using fake Keychain operations.
 - Native lifecycle fixtures cover retained owners, unload cancellation, restart
   recovery, and deferred shutdown without loading CEF or accessing Keychain.
   The normal build validates the actual framework/helper bundles and signatures.

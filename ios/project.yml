@@ -17,8 +17,8 @@ targets:
     platform: iOS
     sources:
       - path: Sources/MobileApp
-      - path: ../app/App/Views/DashboardStyle.swift
-      - path: ../app/App/Views/DashboardColors.swift
+      - path: ../app/App/Views/WovenStyle.swift
+      - path: ../app/App/Views/WovenColors.swift
       - path: ../app/App/Models/ConversationMarkdownDocument.swift
       - path: ../app/App/Views/ConversationResponse.swift
       - path: ../app/App/Views/ConversationHTMLRenderView.swift

@@ -1,13 +1,12 @@
 import Foundation
 import WovenMatterCore
 import WovenMatterClient
-import WovenMatterDashboardStore
+import WovenMatterLibraryStore
 
 /// Content identities and display metadata cross the boundary. The execution owner
 /// resolves retained files and creates opening copies; the UI reads the shared catalog.
 enum BackendLibraryCommand: Codable, Sendable {
     case open(id: String)
-    case openShared(id: String)
     case openSavedArtifact(id: String, revision: Int64)
     /// `remoteConversationID` names a session another machine runs, whose file
     /// this Mac reads from that machine the first time it opens.
@@ -28,7 +27,6 @@ struct BackendLibraryService: Sendable {
 
     func execute(_ command: BackendLibraryCommand) async throws -> BackendLibraryResult {
         switch command {
-        case .openShared: throw BackendRPCError.remote("The shared library is unavailable.")
         case let .openSavedArtifact(id, revision):
             return try await .init(url: service.openSavedArtifactURL(id: id, revision: revision))
         case let .open(id): return try await .init(url: service.openURL(id: id))

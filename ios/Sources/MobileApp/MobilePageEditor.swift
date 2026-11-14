@@ -15,7 +15,7 @@ struct MobilePageCellTarget: Identifiable, Equatable {
 /// indentation and disclosure, tables, and embedded originals. Every change goes
 /// through shared Page edits and the note's own undo and save path.
 struct MobilePageEditor<TextRow: View>: View {
-  @Environment(\.dashboardTheme) private var theme
+  @Environment(\.wovenTheme) private var theme
   @Bindable var model: MobileModel
   let note: LibraryNote
   let layout: MobilePageLayout
@@ -52,17 +52,17 @@ struct MobilePageEditor<TextRow: View>: View {
                 }
               }
             } label: { Label("\(review.count) to review", systemImage: "tray").font(.caption).frame(minHeight: 44) }
-              .foregroundStyle(DashboardPalette.mutedForeground).accessibilityIdentifier("page-review")
+              .foregroundStyle(WovenPalette.mutedForeground).accessibilityIdentifier("page-review")
           }
         }.keepsKeyboard().padding(.horizontal, 20)
       }
       ScrollView {
         LazyVStack(alignment: .leading, spacing: 6) {
-          if !editable { Text("Page · read only · linked data").font(.caption).foregroundStyle(DashboardPalette.mutedForeground) }
+          if !editable { Text("Page · read only · linked data").font(.caption).foregroundStyle(WovenPalette.mutedForeground) }
           TextField("Add a description…", text: Binding(get: { page.boardPurpose ?? "" }, set: { value in
             _ = commit("Description") { try $0.applyPageEdit(.init(action: .setPurpose, purpose: value)) }
           }), axis: .vertical)
-            .font(.callout).foregroundStyle(DashboardPalette.mutedForeground).lineLimit(1...4)
+            .font(.callout).foregroundStyle(WovenPalette.mutedForeground).lineLimit(1...4)
             .disabled(!editable).accessibilityIdentifier("page-purpose").padding(.bottom, 6)
           ForEach(layout.rows.filter(visible)) { row in
             rowView(row).padding(.leading, CGFloat(row.depth) * 16)
@@ -73,12 +73,12 @@ struct MobilePageEditor<TextRow: View>: View {
     }
     .sheet(item: $details) { target in
       MobilePageComponentDetails(model: model, note: note, page: page, componentID: target.id, commit: commit)
-        .environment(\.dashboardTheme, theme)
+        .environment(\.wovenTheme, theme)
     }
     .sheet(item: $insertion) { insertion in
       MobilePageAssetPicker(model: model, pageID: note.id) { assetID in
         add(.asset, assetID: assetID, at: insertion.position)
-      }.environment(\.dashboardTheme, theme)
+      }.environment(\.wovenTheme, theme)
     }
     .sheet(item: $cell) { target in
       if case .table(let table)? = layout.blocks[target.tableID] {
@@ -90,7 +90,7 @@ struct MobilePageEditor<TextRow: View>: View {
             try page.applyPageEdit(.init(action: .update, id: target.tableID, expectedRevision: page.boardItemRevision(for: target.tableID),
               block: .table(try transform(current))))
           }
-        }.environment(\.dashboardTheme, theme)
+        }.environment(\.wovenTheme, theme)
       }
     }
   }
@@ -131,8 +131,8 @@ struct MobilePageEditor<TextRow: View>: View {
         Button {
           if isCollapsed { collapsed.remove(row.id) } else { collapsed.insert(row.id) }
         } label: {
-          DashboardLucideIcon(glyph: .chevronDown, size: 14).rotationEffect(.degrees(isCollapsed ? -90 : 0)).frame(width: 28, height: 44)
-        }.buttonStyle(.plain).foregroundStyle(DashboardPalette.mutedForeground)
+          LucideIcon(glyph: .chevronDown, size: 14).rotationEffect(.degrees(isCollapsed ? -90 : 0)).frame(width: 28, height: 44)
+        }.buttonStyle(.plain).foregroundStyle(WovenPalette.mutedForeground)
           .accessibilityLabel(isCollapsed ? "Expand section" : "Collapse section").accessibilityIdentifier("page-section-toggle-\(row.id)")
         TextField("Section", text: Binding(get: { layout.blocks[row.id]?.plainText ?? "" }, set: { text in
           _ = commit("Section title") { page in
@@ -144,8 +144,8 @@ struct MobilePageEditor<TextRow: View>: View {
           .accessibilityIdentifier("page-section-title-\(row.id)")
         if editable {
           Menu { addActions(.init(parentID: row.id)) } label: {
-            DashboardLucideIcon(glyph: .plus, size: 16).frame(width: 32, height: 44)
-          }.foregroundStyle(DashboardPalette.mutedForeground)
+            LucideIcon(glyph: .plus, size: 16).frame(width: 32, height: 44)
+          }.foregroundStyle(WovenPalette.mutedForeground)
             .accessibilityLabel("Add inside section").accessibilityIdentifier("page-add-inside-\(row.id)")
           componentMenu(row.id)
         }
@@ -226,7 +226,7 @@ struct MobilePageEditor<TextRow: View>: View {
         VStack(alignment: .leading, spacing: 6) {
           ForEach(connections) { connection in
             Text("\(connection.fromText.isEmpty ? "Component" : connection.fromText) → \(connection.toText.isEmpty ? "Component" : connection.toText)\(connection.label.isEmpty ? "" : ": " + connection.label)")
-              .font(.caption).foregroundStyle(DashboardPalette.mutedForeground).textSelection(.enabled)
+              .font(.caption).foregroundStyle(WovenPalette.mutedForeground).textSelection(.enabled)
           }
         }
       }.font(.subheadline).padding(.top, 16)

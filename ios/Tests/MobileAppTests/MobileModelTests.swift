@@ -4,7 +4,7 @@ import LibraryClient
 import WovenMatterShared
 @testable import WovenMatterMobileApp
 
-/// Offline central-library defaults shared by the app test transports.
+/// Offline library defaults shared by the app test transports.
 protocol OfflineLibraryTransport: LibraryTransport {}
 extension OfflineLibraryTransport {
   func workspaceIdentity() async throws -> String { throw MobileConnectionError.offline }
@@ -135,8 +135,9 @@ final class MobileModelTests: XCTestCase {
   @MainActor func testWorkspaceGroupingMatchesPrefixedFolderBindingsWithoutChangingRoute() {
     let model = MobileModel()
     let registryID = UUID().uuidString.lowercased()
-    let mac = ExecutionWorkspace(id: registryID, libraryID: "library", ownerDeviceID: registryID, kind: .mac, name: "Mac", capabilities: ["history.central.v1"], executionDeviceID: registryID)
+    let mac = ExecutionWorkspace(id: registryID, libraryID: "library", ownerDeviceID: registryID, kind: .mac, name: "Mac", capabilities: ["history.library.v1"], executionDeviceID: registryID)
     model.executionWorkspaces = [mac]; model.workspaceReachable[registryID] = true
+    model.syncLibrary(with: registryID)
     let folder = LibraryFolder(id: "project", name: "Project", execution: .init(workspaceID: "device:" + registryID.uppercased(), rootPath: "/project"))
     let chat = LibraryConversation(id: "chat", title: "Chat", providerID: "pi", workspaceID: registryID)
     model.state.folders[folder.id] = folder; model.state.conversations[chat.id] = chat
@@ -144,19 +145,19 @@ final class MobileModelTests: XCTestCase {
     XCTAssertEqual(model.folderOwner(folder), registryID)
     XCTAssertEqual(model.conversationOwner(chat), registryID)
     XCTAssertEqual(model.executionOwner(of: chat.id), registryID, "Execution requests must retain the registered route identity")
-    XCTAssertTrue(model.routeOwnsFolder(workspaceID: "central", folderID: folder.id))
+    XCTAssertTrue(model.routeOwnsFolder(workspaceID: "host", folderID: folder.id))
     model.openFolder(folder.id)
     XCTAssertEqual(model.selectedFolderWorkspaceID, registryID)
   }
 
-  /// The central Mac's registry id and host device id are generated apart from
-  /// the `device:<dashboard device id>` its existing folders are bound to.
-  @MainActor func testCentralMacFoldersGroupUnderItsWorkspaceThroughPublishedFolderOwner() {
+  /// A Mac's registry id and host device id are generated apart from
+  /// the `device:<device id>` its existing folders are bound to.
+  @MainActor func testMacFoldersGroupUnderItsWorkspaceThroughPublishedFolderOwner() {
     let model = MobileModel()
     let registryID = UUID().uuidString.lowercased(), hostDeviceID = UUID().uuidString.lowercased()
     let folderOwner = "device:" + UUID().uuidString.lowercased()
     var mac = ExecutionWorkspace(id: registryID, libraryID: "library", ownerDeviceID: hostDeviceID, kind: .mac, name: "Mac Mini",
-                                          capabilities: ["history.central.v1"], executionDeviceID: hostDeviceID)
+                                          capabilities: ["history.library.v1"], executionDeviceID: hostDeviceID)
     let folder = LibraryFolder(id: "launch", name: "Launch research", execution: .init(workspaceID: folderOwner, rootPath: "/tmp/Launch"))
     let note = LibraryNote(id: "pilot", folderID: folder.id, title: "Pilot checklist", content: "")
     model.state.folders[folder.id] = folder; model.state.notes[note.id] = note
@@ -184,15 +185,16 @@ final class MobileModelTests: XCTestCase {
     let model = MobileModel()
     let macID = UUID().uuidString.lowercased(), linuxID = UUID().uuidString.lowercased()
     let mac = ExecutionWorkspace(id: macID, libraryID: "library", ownerDeviceID: macID, kind: .mac, name: "James's MacBook Air",
-                                          capabilities: ["history.central.v1"], executionDeviceID: macID)
+                                          capabilities: ["history.library.v1"], executionDeviceID: macID)
     let linux = ExecutionWorkspace(id: linuxID, libraryID: "library", ownerDeviceID: macID, kind: .linux, name: "Build server")
     model.executionWorkspaces = [mac, linux]
+    model.syncLibrary(with: macID)
     let ready = HarnessCapabilities(id: "local:default_agent", runtimeKind: "default_agent", displayName: "Pi Durable", available: true)
     let notReady = HarnessCapabilities(id: "local:codex", runtimeKind: "codex", displayName: "Codex", available: false, canStart: false)
     // The saved catalog from an earlier connection.
     model.providers = [ready, notReady]
-    model.workspaceProviders = [macID: [ready, notReady], linuxID: [.init(id: "pi", runtimeKind: "pi", displayName: "Pi Durable", available: true)]]
-    model.knownAgentIDs = ["central:local:codex", macID + ":local:codex", linuxID + ":pi"]
+    model.workspaceProviders = [macID: [ready, notReady], linuxID: [.init(id: "pi", runtimeKind: "default_agent", displayName: "Pi Durable", available: true)]]
+    model.knownAgentIDs = ["host:local:codex", macID + ":local:codex", linuxID + ":pi"]
     let orphan = LibraryFolder(id: "orphan", name: "Old Mac folder", execution: .init(workspaceID: "device:" + UUID().uuidString.lowercased(), rootPath: "/old"))
     let linuxFolder = LibraryFolder(id: "linux-folder", name: "Releases", execution: .init(workspaceID: "remote:" + linuxID, rootPath: "/srv"))
     model.state.folders = [orphan.id: orphan, linuxFolder.id: linuxFolder]
@@ -220,10 +222,10 @@ final class MobileModelTests: XCTestCase {
     // The library host this phone syncs with is reachable; its agents that are
     // not ready there are listed dimmed rather than hidden.
     model.online = true
-    let central = try? XCTUnwrap(model.launcherGroups.first { $0.id == "central" })
-    XCTAssertEqual(central?.name, mac.name)
-    XCTAssertEqual(central?.agents.map(\.name), ["Pi Durable", "Codex"])
-    XCTAssertEqual(central?.agents.map(\.isAvailable), [true, false])
+    let hostGroup = try? XCTUnwrap(model.launcherGroups.first { $0.id == "host" })
+    XCTAssertEqual(hostGroup?.name, mac.name)
+    XCTAssertEqual(hostGroup?.agents.map(\.name), ["Pi Durable", "Codex"])
+    XCTAssertEqual(hostGroup?.agents.map(\.isAvailable), [true, false])
     XCTAssertEqual(model.folderWorkspaceGroups.map(\.id), [local, macID])
     XCTAssertFalse(model.launcherGroups.contains { $0.id == linuxID })
     model.online = false
@@ -232,7 +234,7 @@ final class MobileModelTests: XCTestCase {
     // A copied snapshot owner is history only, even when its copied endpoint answers.
     let copiedID = UUID().uuidString.lowercased()
     var copied = ExecutionWorkspace(id: copiedID, libraryID: "library", ownerDeviceID: copiedID, kind: .mac, name: "James's MacBook Air",
-                                             capabilities: ["history.central.v1"], executionDeviceID: copiedID)
+                                             capabilities: ["history.library.v1"], executionDeviceID: copiedID)
     copied.retainedHistory = true
     var copiedPhone = ExecutionWorkspace(id: UUID().uuidString.lowercased(), libraryID: "library", ownerDeviceID: "phone", kind: .ios, name: "iPhone")
     copiedPhone.retainedHistory = true
@@ -245,7 +247,7 @@ final class MobileModelTests: XCTestCase {
     XCTAssertFalse(model.listedLauncherAgents.contains { $0.workspaceID == copiedID })
     XCTAssertEqual(model.folderWorkspaceGroups.map(\.id), [local])
     model.online = true
-    XCTAssertEqual(model.launcherGroups.first { $0.id == "central" }?.workspace?.id, macID, "The live Mac, not the copy, is the central workspace")
+    XCTAssertEqual(model.launcherGroups.first { $0.id == "host" }?.workspace?.id, macID, "The live Mac, not the copy, is the host workspace")
     XCTAssertFalse(model.launcherGroups.contains { $0.id == copiedID })
   }
 
@@ -257,7 +259,7 @@ final class MobileModelTests: XCTestCase {
     XCTAssertEqual(model.folderRecentItems.map(\.resourceID), ["offset", "fraction", "whole"])
   }
 
-  @MainActor func testUnpairedNoteRenameAndMovePersistWithoutCentralRequests() async throws {
+  @MainActor func testUnpairedNoteRenameAndMovePersistWithoutLibraryRequests() async throws {
     let model = MobileModel()
     let store = try XCTUnwrap(model.store)
     let note = try await store.createNote(folderID: nil, title: "Before", content: NoteDocument().encoded())
@@ -497,4 +499,15 @@ final class MobileModelTests: XCTestCase {
 private struct RenderedNoteHost: View {
   @Bindable var model: MobileModel
   var body: some View { if let note = model.selectedNote { NotePane(model: model, note: note) } }
+}
+
+extension MobileModel {
+  /// The phone syncs its library with the Mac member `deviceID`, so that
+  /// Mac's own sessions are the host route.
+  func syncLibrary(with deviceID: String) {
+    let endpoint = URL(string: "https://studio.example.ts.net/wovenmatter")!
+    var saved = MobileMembershipState(deviceID: state.deviceID, pairedEndpoint: endpoint, pairedHostDeviceID: deviceID)
+    saved.currentHost = .init(deviceID: deviceID, kind: "mac", name: "Studio", endpoint: endpoint)
+    membership = saved
+  }
 }

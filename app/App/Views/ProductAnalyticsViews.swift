@@ -20,7 +20,7 @@ struct ProductAnalyticsSettingsSection: View {
                 SettingsNote("App opens and active use are sampled at most once every six hours. No content or action details are sent. This choice applies to all of your devices; offline devices get it when they reconnect.")
                 Link("Privacy policy", destination: ProductAnalyticsPolicy.url)
                     .font(.settingsBody.weight(.medium))
-                    .foregroundStyle(DashboardPalette.success)
+                    .foregroundStyle(WovenPalette.success)
             }
         }.task { await analytics.refresh() }
     }

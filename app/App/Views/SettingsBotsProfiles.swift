@@ -131,7 +131,7 @@ struct BotSettingsProfiles: View {
                                 titleDraft = nil
                             }
                         }
-                    }.buttonStyle(DashboardPrimaryButtonStyle())
+                    }.buttonStyle(WovenPrimaryButtonStyle())
                     Button("Reset") { titleDraft = nil }
                 }
             }

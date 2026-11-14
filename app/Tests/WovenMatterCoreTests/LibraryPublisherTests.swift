@@ -7,7 +7,7 @@ import WorkspaceFixtures
 import Foundation
 import Testing
 import WovenMatterCore
-@testable import WovenMatterDashboardStore
+@testable import WovenMatterLibraryStore
 
 @Suite("Execution owner publication", .serialized)
 @MainActor
@@ -19,7 +19,7 @@ struct LibraryPublisherTests {
     let firstRun = try await f.database.beginLocalACPRun(conversationID: conversationID, input: .init(text: "First"))
     try await f.database.updateLocalACPSessionID(conversationID: conversationID, runID: firstRun.runID, sessionID: "native")
     let secondRun = UUID().uuidString.lowercased()
-    try await f.database.write { try $0.toolsExecuteUnlocked("INSERT INTO dashboard_runs(id,conversation_id,status,openclaw_session_key) VALUES (?,?,'running','native')", [secondRun, conversationID]) }
+    try await f.database.write { try $0.toolsExecuteUnlocked("INSERT INTO runs(id,conversation_id,status,native_session_id) VALUES (?,?,'running','native')", [secondRun, conversationID]) }
     func entry(_ run: String, _ sequence: Int64) -> ExecutionJournalEntry {
       .init(workspaceID: f.workspace.id, originSequence: sequence, conversationID: conversationID, runID: run, kind: .conversation,
         conversation: .init(id: conversationID, title: "Offline history", runtimeKind: "codex"),
@@ -28,20 +28,20 @@ struct LibraryPublisherTests {
     let entries = [entry(firstRun.runID, 1), entry(secondRun, 2)]
     let first = ExecutionJournalBatch(libraryID: f.identity.libraryID, entries: [entries[0]])
     let all = ExecutionJournalBatch(libraryID: f.identity.libraryID, entries: entries)
-    let path = "/v1/federation/publisher/retained/settle"
-    #expect(try await DevicePublisherAPI.handle(f.request(path, first), path: path, database: f.database).status == 200)
+    let path = "/v1/publisher/retained/settle"
+    #expect(try await DevicePublisherAPI.handleLocal(f.request(path, first), path: path, database: f.database).status == 200)
     #expect(try await f.database.libraryExecutionOwner(conversationID: conversationID) == nil)
     await #expect(throws: (any Error).self) { _ = try await f.database.ingestExecutionJournal(first, deviceID: f.workspace.executionDeviceID!) }
-    #expect(try await DevicePublisherAPI.handle(f.request(path, all), path: path, database: f.database).status == 200)
-    #expect(try await DevicePublisherAPI.handle(f.request(path, all), path: path, database: f.database).status == 200)
+    #expect(try await DevicePublisherAPI.handleLocal(f.request(path, all), path: path, database: f.database).status == 200)
+    #expect(try await DevicePublisherAPI.handleLocal(f.request(path, all), path: path, database: f.database).status == 200)
     var changed = first; changed.entries[0].retainedExecution?.status = "failed"
     await #expect(throws: (any Error).self) { _ = try await f.database.settleLibraryRetainedRuns(changed, deviceID: f.workspace.executionDeviceID!) }
     let active = UUID().uuidString.lowercased()
-    try await f.database.write { try $0.toolsExecuteUnlocked("INSERT INTO dashboard_runs(id,conversation_id,status,openclaw_session_key) VALUES (?,?,'running','native')", [active, conversationID]) }
+    try await f.database.write { try $0.toolsExecuteUnlocked("INSERT INTO runs(id,conversation_id,status,native_session_id) VALUES (?,?,'running','native')", [active, conversationID]) }
     await #expect(throws: (any Error).self) { _ = try await f.database.ingestExecutionJournal(all, deviceID: f.workspace.executionDeviceID!) }
-    #expect(try await f.database.read { try $0.libraryIDsUnlocked("SELECT status FROM dashboard_runs WHERE id=?", bindings: [active]).first } == "running")
+    #expect(try await f.database.read { try $0.libraryIDsUnlocked("SELECT status FROM runs WHERE id=?", bindings: [active]).first } == "running")
     #expect(try await f.database.libraryExecutionOwner(conversationID: conversationID) == nil)
-    try await f.database.write { try $0.toolsExecuteUnlocked("UPDATE dashboard_runs SET status='completed' WHERE id=?", [active]) }
+    try await f.database.write { try $0.toolsExecuteUnlocked("UPDATE runs SET status='completed' WHERE id=?", [active]) }
     _ = try await f.database.ingestExecutionJournal(all, deviceID: f.workspace.executionDeviceID!)
     #expect(try await f.database.libraryExecutionOwner(conversationID: conversationID) == f.workspace.id)
     #expect(try await f.database.executionJournal(after: 0).entries.map(\.eventID) == entries.map(\.eventID))
@@ -265,6 +265,91 @@ struct LibraryPublisherTests {
     #expect(PairingPayload.isValidExecutionEndpoint(URL(string: "https://mac.tail.ts.net:8443/wovenmatter")!, linux: false))
   }
 
+  /// Peer sync stores a newer member's rows as they are. An older build skips
+  /// the ones it cannot read: the registry still lists every other workspace,
+  /// and a journal page names the unread record's position and moves past
+  /// it, so a reader never asks for the same page again.
+  @Test func rowsANewerMemberWroteAreSkippedAndTheJournalCursorStillAdvances() async throws {
+    let f = try await Fixture(); defer { f.remove() }
+    func conversation(_ sequence: Int64) -> ExecutionJournalEntry {
+      let id = UUID().uuidString.lowercased()
+      return .init(workspaceID: f.workspace.id, originSequence: sequence, conversationID: id, kind: .conversation,
+        conversation: .init(id: id, title: "Chat \(sequence)", runtimeKind: "default_agent"))
+    }
+    let entries = (1...4).map { conversation(Int64($0)) }
+    _ = try await f.database.ingestExecutionJournal(.init(libraryID: f.identity.libraryID, entries: entries), deviceID: f.workspace.executionDeviceID!)
+    let registry = try await f.database.libraryExecutionWorkspaces().map(\.id)
+    let future = UUID().uuidString.lowercased()
+    var row = try #require(try JSONSerialization.jsonObject(with: JSONEncoder().encode(f.workspace)) as? [String: Any])
+    row["id"] = future; row["kind"] = "visionos"
+    let payload = String(decoding: try JSONSerialization.data(withJSONObject: row), as: UTF8.self)
+    try await f.database.write {
+      try $0.toolsExecuteUnlocked("UPDATE execution_journal SET payload=json_set(payload,'$.kind','forkedConversation') WHERE event_id IN (?,?)",
+                                  [entries[1].eventID, entries[3].eventID])
+      try $0.toolsExecuteUnlocked("INSERT INTO execution_workspaces(id,owner_device_id,revision,deleted,payload) VALUES (?,?,1,0,?)",
+                                  [future, f.identity.hostDeviceID, payload])
+    }
+
+    // The registry and the connections list keep every workspace this build can read.
+    #expect(try await f.database.libraryExecutionWorkspaces().map(\.id) == registry)
+    #expect(try await f.database.libraryConnectionWorkspaces(activeDeviceIDs: []).map(\.id) == registry)
+    // A lookup that decides a write does not take the unread row for a missing one.
+    await #expect(throws: DecodingError.self) { _ = try await f.database.read { try $0.federationWorkspaceUnlocked(future) } }
+    var replacement = f.workspace; replacement.id = future
+    await #expect(throws: DecodingError.self) {
+      _ = try await f.database.registerExecutionWorkspace(.init(workspace: replacement), deviceID: f.identity.hostDeviceID)
+    }
+
+    let page = try await f.database.executionJournal(after: 0)
+    #expect(page.entries.map(\.eventID) == [entries[0].eventID, entries[2].eventID])
+    #expect(page.skipped == [.init(workspaceID: f.workspace.id, originSequence: 2), .init(workspaceID: f.workspace.id, originSequence: 4)])
+    #expect(page.cursor == 4 && !page.hasMore)
+    // One row at a time: a page that holds only an unread record still advances.
+    var cursor: Int64 = 0, read: [Int64] = [], skipped: [Int64] = []
+    for _ in 0..<4 {
+      let next = try await f.database.executionJournal(after: cursor, limit: 1)
+      #expect(next.cursor == cursor + 1 && next.hasMore == (next.cursor < 4))
+      cursor = next.cursor
+      read += next.entries.map(\.originSequence); skipped += (next.skipped ?? []).map(\.originSequence)
+    }
+    #expect(read == [1, 3] && skipped == [2, 4])
+    #expect(try await f.database.executionJournal(after: 4) == .init(libraryID: f.identity.libraryID, cursor: 4))
+  }
+
+  /// Entries are sequenced, so a host that cannot read one must not accept the
+  /// rest: the batch is refused as a whole, as a request that does not match
+  /// the protocol, and the sender keeps it until the host is updated.
+  @Test func journalIngestRefusesABatchWithAKindThisBuildDoesNotKnow() async throws {
+    let f = try await Fixture(); defer { f.remove() }
+    let known = UUID().uuidString.lowercased(), newer = UUID().uuidString.lowercased()
+    let entries = [known, newer].enumerated().map { index, id in
+      ExecutionJournalEntry(workspaceID: f.workspace.id, originSequence: Int64(index + 1), conversationID: id, kind: .conversation,
+        conversation: .init(id: id, title: "Chat", runtimeKind: "default_agent"))
+    }
+    let batch = ExecutionJournalBatch(libraryID: f.identity.libraryID, entries: entries)
+    var body = try #require(try JSONSerialization.jsonObject(with: JSONEncoder().encode(batch)) as? [String: Any])
+    var rows = try #require(body["entries"] as? [[String: Any]])
+    rows[1]["kind"] = "forkedConversation"; body["entries"] = rows
+    let path = "/v1/publisher/journal"
+    let request = LibraryHTTPRequest(method: "POST", target: path, headers: ["x-woven-workspace": f.identity.libraryID],
+                                     body: try JSONSerialization.data(withJSONObject: body))
+    await #expect(throws: DecodingError.self) { _ = try await DevicePublisherAPI.handleLocal(request, path: path, database: f.database) }
+    // Nothing of the batch was taken, not even the entry this build can read.
+    #expect(try await f.database.executionJournal(after: 0).entries.isEmpty)
+    #expect(try await f.database.libraryExecutionOriginCursor(workspaceID: f.workspace.id) == 0)
+    // The same batch is accepted once every entry can be read.
+    #expect(try await DevicePublisherAPI.handleLocal(f.request(path, batch), path: path, database: f.database).status == 200)
+    #expect(try await f.database.libraryExecutionOriginCursor(workspaceID: f.workspace.id) == 2)
+  }
+
+  /// A newer caller may select a tool group this build does not have. The
+  /// name is ignored and the groups both builds know still apply.
+  @Test func anUnknownToolGroupNameIsIgnoredNotRefused() {
+    #expect(WorkspaceToolGroup.selected(["notes", " calendar ", "holograms", ""]) == [.notes, .calendar])
+    #expect(WorkspaceToolGroup.selected(["holograms"]).isEmpty)
+    #expect(WorkspaceToolGroup.selected([]).isEmpty)
+  }
+
   /// A Linux host refuses an adopted transcript of more than 10,000 messages
   /// or activities; a longer chat sends its newest ones, as the byte limit
   /// does, so a retry never repeats a refused shape.
@@ -291,47 +376,47 @@ struct LibraryPublisherTests {
     let chat = try await f.database.createFixtureRemoteACPSession(runtimeKind: .codex, remoteWorkspaceID: UUID(uuidString: f.workspace.id)!,
       remoteWorkspaceName: "Linux", title: "Ran over SSH", ownerDeviceID: UUID(uuidString: f.identity.hostDeviceID)!)
     let running = try await f.database.beginLocalACPRun(conversationID: chat, input: .init(text: "Still running"))
-    try await f.database.write { try $0.toolsExecuteUnlocked("UPDATE dashboard_messages SET content='partial' WHERE id=?", [running.assistantMessageID]) }
+    try await f.database.write { try $0.toolsExecuteUnlocked("UPDATE messages SET content='partial' WHERE id=?", [running.assistantMessageID]) }
     let local = try await f.database.createFixtureLocalACPSession(runtimeKind: .codex, title: "On this Mac", ownerDeviceID: UUID(uuidString: f.identity.hostDeviceID)!)
     let localRun = try await f.database.beginLocalACPRun(conversationID: local, input: .init(text: "Local"))
     try await f.database.recoverInterruptedLocalACPRuns()
-    func row(_ sql: String, _ id: String) async throws -> [String: GatewayJSONValue] {
+    func row(_ sql: String, _ id: String) async throws -> [String: JSONValue] {
       try #require(try await f.database.read { try $0.historyRowsUnlocked(sql, values: [id]) }.first?.objectValue)
     }
     let detail = "This run on Linux was interrupted when Woven Matter updated."
-    var run = try await row("SELECT status,error FROM dashboard_runs WHERE id=?", running.runID)
+    var run = try await row("SELECT status,error FROM runs WHERE id=?", running.runID)
     #expect(run["status"]?.stringValue == "interrupted" && run["error"]?.stringValue == detail)
-    var reply = try await row("SELECT status,content FROM dashboard_messages WHERE id=?", running.assistantMessageID)
+    var reply = try await row("SELECT status,content FROM messages WHERE id=?", running.assistantMessageID)
     #expect(reply["status"]?.stringValue == "interrupted" && reply["content"]?.stringValue == "partial")
-    #expect(try await row("SELECT status FROM dashboard_runs WHERE id=?", localRun.runID)["status"]?.stringValue == "failed")
+    #expect(try await row("SELECT status FROM runs WHERE id=?", localRun.runID)["status"]?.stringValue == "failed")
     // A run an earlier release left uncertain settles with its reply when the chat moves.
     let uncertain = try await f.database.beginLocalACPRun(conversationID: chat, input: .init(text: "Unknown outcome"))
     try await f.database.write {
-      try $0.toolsExecuteUnlocked("UPDATE dashboard_runs SET status='uncertain' WHERE id=?", [uncertain.runID])
-      try $0.toolsExecuteUnlocked("UPDATE dashboard_messages SET status='uncertain',content='' WHERE id=?", [uncertain.assistantMessageID])
+      try $0.toolsExecuteUnlocked("UPDATE runs SET status='uncertain' WHERE id=?", [uncertain.runID])
+      try $0.toolsExecuteUnlocked("UPDATE messages SET status='uncertain',content='' WHERE id=?", [uncertain.assistantMessageID])
     }
     try await f.database.interruptLegacyRemoteRuns(conversationID: chat)
-    run = try await row("SELECT status,error FROM dashboard_runs WHERE id=?", uncertain.runID)
+    run = try await row("SELECT status,error FROM runs WHERE id=?", uncertain.runID)
     #expect(run["status"]?.stringValue == "interrupted" && run["error"]?.stringValue == detail)
-    reply = try await row("SELECT status,content FROM dashboard_messages WHERE id=?", uncertain.assistantMessageID)
+    reply = try await row("SELECT status,content FROM messages WHERE id=?", uncertain.assistantMessageID)
     #expect(reply["status"]?.stringValue == "interrupted" && reply["content"]?.stringValue == detail)
     let sent = try await f.database.read { try $0.adoptionTranscriptUnlocked(chat) }
     #expect(!sent.messages.contains { ["running", "uncertain", "streaming"].contains($0.status ?? "") })
   }
 
   private struct Fixture {
-    let persistence: PersistenceFixture, database: WorkspaceDatabase, identity: LibraryIdentity, workspace: ExecutionWorkspace, grant: ExecutionWorkspacePublisherGrant
+    let persistence: PersistenceFixture, database: WorkspaceDatabase, identity: LibraryIdentity, workspace: ExecutionWorkspace
     init() async throws {
       persistence = try PersistenceFixture()
       database = try await persistence.openDatabase()
       identity = try await database.libraryIdentity()
       workspace = try await database.registerExecutionWorkspace(.init(workspace: .init(id: UUID().uuidString.lowercased(), libraryID: identity.libraryID,
         ownerDeviceID: identity.hostDeviceID, kind: .linux, name: "Linux", executionDeviceID: UUID().uuidString.lowercased(), journalDeviceIDs: [identity.hostDeviceID, "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"])), deviceID: identity.hostDeviceID)
-      grant = try await database.issueExecutionWorkspacePublisher(workspaceID: workspace.id, endpoint: URL(string: "https://central.tail.ts.net/wovenmatter")!, deviceID: identity.hostDeviceID)
     }
     func remove() { persistence.remove() }
     func request<T: Encodable>(_ path: String, _ value: T, libraryID: String? = nil) throws -> LibraryHTTPRequest {
-      .init(method: "POST", target: path, headers: ["authorization": "Bearer " + grant.token, "x-woven-workspace": libraryID ?? identity.libraryID], body: try JSONEncoder().encode(value))
+      // The library host's local socket: its own Node server publishes there.
+      .init(method: "POST", target: path, headers: ["x-woven-workspace": libraryID ?? identity.libraryID], body: try JSONEncoder().encode(value))
     }
   }
 

@@ -7,7 +7,7 @@ import CSQLite
 #endif
 import Testing
 import WovenMatterCore
-@testable import WovenMatterDashboardStore
+@testable import WovenMatterLibraryStore
 
 @Suite("Usage import atomicity")
 struct UsageImportAtomicityTests {

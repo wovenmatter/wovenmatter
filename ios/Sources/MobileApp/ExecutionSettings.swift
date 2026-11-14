@@ -59,12 +59,6 @@ struct DeviceAgentSettingsPane: View {
   @State private var catalogTask: Task<Void, Never>?
   @State private var saveTask: Task<Void, Never>?
   @State private var generation = UUID()
-  private var policy: PiExecutionPolicy { defaults.executionPolicy ?? .init() }
-  private func policyBinding<Value>(_ path: WritableKeyPath<PiExecutionPolicy, Value>) -> Binding<Value> {
-    Binding(get: { policy[keyPath: path] }, set: { value in
-      var updated = policy; updated[keyPath: path] = value; defaults.executionPolicy = updated
-    })
-  }
   private var selectedConnection: InferenceConnection? { model.inferenceConnections.first { $0.id == connectionID } }
   private var toolDefinitions: [SessionSettingOption] { MobileModel.deviceToolAccessOptions }
   private var selectedModel: InferenceModel? { models.first { $0.id == selectedModelID } }
@@ -114,10 +108,10 @@ struct DeviceAgentSettingsPane: View {
         VStack(alignment: .leading, spacing: 6) {
           Text("Tool Access")
           Text("Choose which Woven MCP tools are available to new chats by default.")
-            .font(.subheadline).fontWeight(.regular).foregroundStyle(DashboardPalette.mutedForeground)
+            .font(.subheadline).fontWeight(.regular).foregroundStyle(WovenPalette.mutedForeground)
         }.textCase(nil)
       }
-      if let failure { Section { Text(failure).foregroundStyle(DashboardPalette.danger); Button("Retry") { loadModels() } } }
+      if let failure { Section { Text(failure).foregroundStyle(WovenPalette.danger); Button("Retry") { loadModels() } } }
     }.disabled(saving).scrollIndicators(.never).mobileNavigationPage("Quick Chat")
       .toolbar { ToolbarItem(placement: .confirmationAction) { Button(saving ? "Saving…" : "Save") { save() }.disabled(saving || loading) } }
       .onAppear {
@@ -335,7 +329,7 @@ private struct InferenceConnectionEditor: View {
       else if state.loadingModels && !state.isOAuth { Section { ProgressView() } }
       if let problem = state.problem {
         Section {
-          Text(problem).foregroundStyle(DashboardPalette.danger)
+          Text(problem).foregroundStyle(WovenPalette.danger)
           if state.modelID.isEmpty || state.pendingSignInSave {
             Button("Retry") { if state.modelID.isEmpty { loadModels(force: true) } else { save() } }.disabled(state.saving)
           }
@@ -404,7 +398,7 @@ private struct InferenceConnectionEditor: View {
       if state.mode == .device && !state.isCustomServer {
         Button("Refresh models") { loadModels(force: true) }.disabled(state.loadingModels)
       }
-      if !state.modelID.isEmpty { Text(state.modelID).font(.caption).foregroundStyle(DashboardPalette.mutedForeground) }
+      if !state.modelID.isEmpty { Text(state.modelID).font(.caption).foregroundStyle(WovenPalette.mutedForeground) }
     }.disabled(!setupAllowed || state.saving)
   }
   private func initialize() async {
@@ -468,9 +462,7 @@ private struct InferenceConnectionEditor: View {
         let result = try await MobileInferenceService(connection: catalog, credentials: InferenceSetupCredential(value: credential.token)).hostCatalog()
         guard !Task.isCancelled, state.catalogGeneration == generation else { return }
         state.endpoint = credential.endpoint.absoluteString
-        // Older hosts may still advertise backup subscription accounts.
-        state.accounts = InferenceConnectionPolicy.isSingleSubscription(provider)
-          ? Array(result.accounts.filter { $0.provider == provider }.prefix(1)) : result.accounts
+        state.accounts = result.accounts
         state.receiveModels(result.models, generation: generation)
         let accounts = state.accounts.filter { $0.provider == provider && $0.connected }
         if !accounts.contains(where: { $0.id == state.accountID }) { state.accountID = accounts.count == 1 ? accounts[0].id : "" }

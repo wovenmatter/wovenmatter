@@ -27,7 +27,7 @@ struct ConversationTasksBadge: View {
     @Binding var isExpanded: Bool
     /// Runs after each toggle, for example to return focus to the composer.
     var onInteraction: @MainActor () -> Void = {}
-    @Environment(\.dashboardTheme) private var theme
+    @Environment(\.wovenTheme) private var theme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @State private var width: CGFloat = 0
@@ -64,15 +64,15 @@ struct ConversationTasksBadge: View {
         HStack(spacing: 4) {
             Image(systemName: "checklist")
                 .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(DashboardPalette.mutedForeground)
+                .foregroundStyle(WovenPalette.mutedForeground)
                 .frame(width: 24)
             HStack(spacing: 6) {
                 Text("Tasks")
-                    .foregroundStyle(DashboardPalette.mutedForeground)
+                    .foregroundStyle(WovenPalette.mutedForeground)
                     .fixedSize()
                 Text(progress.currentStep.label)
                     .fontWeight(.medium)
-                    .foregroundStyle(DashboardPalette.foreground.opacity(0.8))
+                    .foregroundStyle(WovenPalette.foreground.opacity(0.8))
                     .lineLimit(1)
                     .truncationMode(.tail)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -80,7 +80,7 @@ struct ConversationTasksBadge: View {
             HStack(spacing: 8) {
                 Text("\(progress.completedCount)/\(progress.totalCount)")
                     .monospacedDigit()
-                    .foregroundStyle(progress.isComplete ? DashboardPalette.success : DashboardPalette.mutedForeground)
+                    .foregroundStyle(progress.isComplete ? WovenPalette.success : WovenPalette.mutedForeground)
                     .fixedSize()
                 if (2...10).contains(progress.totalCount), width >= Self.segmentMinimumWidth {
                     segments
@@ -88,7 +88,7 @@ struct ConversationTasksBadge: View {
                 Image(systemName: "chevron.up")
                     .font(.system(size: 10, weight: .semibold))
                     .rotationEffect(.degrees(isExpanded ? 180 : 0))
-                    .foregroundStyle(DashboardPalette.mutedForeground)
+                    .foregroundStyle(WovenPalette.mutedForeground)
             }
             .padding(.trailing, 6)
         }
@@ -140,20 +140,20 @@ struct ConversationTasksBadge: View {
         let shape = UnevenRoundedRectangle(topLeadingRadius: 16, topTrailingRadius: 16, style: .continuous)
         return ZStack {
             if reduceTransparency {
-                shape.fill(DashboardPalette.background)
+                shape.fill(WovenPalette.background)
             } else {
                 shape.fill(.regularMaterial)
             }
             shape.fill(theme.palette.themeWhisper)
-            shape.stroke(DashboardPalette.foreground.opacity(0.06), lineWidth: 1)
+            shape.stroke(WovenPalette.foreground.opacity(0.06), lineWidth: 1)
         }
     }
 
     private func segmentColor(_ status: ConversationTaskProgress.Status) -> Color {
         switch status {
-        case .completed: DashboardPalette.success
+        case .completed: WovenPalette.success
         case .inProgress: theme.palette.themeAccent
-        case .pending, .cancelled: DashboardPalette.mutedForeground.opacity(0.25)
+        case .pending, .cancelled: WovenPalette.mutedForeground.opacity(0.25)
         }
     }
 
@@ -167,17 +167,17 @@ struct ConversationTasksBadge: View {
 
     private func iconColor(_ status: ConversationTaskProgress.Status) -> Color {
         switch status {
-        case .completed: DashboardPalette.success
+        case .completed: WovenPalette.success
         case .inProgress: theme.palette.themeAccent
-        case .pending, .cancelled: DashboardPalette.mutedForeground.opacity(0.4)
+        case .pending, .cancelled: WovenPalette.mutedForeground.opacity(0.4)
         }
     }
 
     private func labelColor(_ status: ConversationTaskProgress.Status) -> Color {
         switch status {
-        case .completed: DashboardPalette.mutedForeground.opacity(0.55)
-        case .inProgress: DashboardPalette.foreground.opacity(0.9)
-        case .pending, .cancelled: DashboardPalette.mutedForeground.opacity(0.7)
+        case .completed: WovenPalette.mutedForeground.opacity(0.55)
+        case .inProgress: WovenPalette.foreground.opacity(0.9)
+        case .pending, .cancelled: WovenPalette.mutedForeground.opacity(0.7)
         }
     }
 
@@ -194,7 +194,7 @@ struct ConversationTasksBadge: View {
 /// A full-width row with a quiet hover fill. It never draws a focus ring, and
 /// a click does not take keyboard focus from the composer.
 private struct ConversationTasksRowButtonStyle: ButtonStyle {
-    @Environment(\.dashboardTheme) private var theme
+    @Environment(\.wovenTheme) private var theme
     @State private var hovered = false
 
     func makeBody(configuration: Configuration) -> some View {

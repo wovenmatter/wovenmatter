@@ -1,0 +1,675 @@
+import SwiftUI
+import WovenMatterClient
+import WovenMatterCore
+
+/// Through v0.4.2 the window, sidebar and theme settings were saved under
+/// "wovenmatter.dashboard." keys. Each moves once at launch, so this Mac keeps
+/// its layout, theme, pinned agents and sidebar choices.
+enum WindowPreferenceUpgrade {
+    static let renamedKeys: [String: String] = [
+        "wovenmatter.dashboard.theme": WovenTheme.storageKey,
+        "wovenmatter.dashboard.sidebar-style": SidebarStyle.storageKey,
+        "wovenmatter.dashboard.single-sidebar-side": SidebarSide.storageKey,
+        "wovenmatter.dashboard.left-rail": "wovenmatter.layout.left-rail",
+        "wovenmatter.dashboard.right-rail": "wovenmatter.layout.right-rail",
+        "wovenmatter.dashboard.single-rail": "wovenmatter.layout.single-rail",
+        "wovenmatter.dashboard.chat-width-percent": "wovenmatter.layout.chat-width-percent",
+        "wovenmatter.dashboard.note-on-left": "wovenmatter.layout.note-on-left",
+        "wovenmatter.dashboard.workspace-mode": "wovenmatter.layout.workspace-mode",
+        "wovenmatter.dashboard.show-localWorkspace": WorkspaceSidebarVisibility.localWorkspace.storageKey,
+        "wovenmatter.dashboard.show-remoteWorkspaces": WorkspaceSidebarVisibility.remoteWorkspaces.storageKey,
+        "wovenmatter.dashboard.collapsed-agent-sections": AgentDisclosureStore.storageKey,
+        "wovenmatter.dashboard.agent-order-by-group": AgentOrderStore.storageKey,
+        "wovenmatter.dashboard.pinned-agent-ids": PinnedAgentsStore.storageKey,
+        "wovenmatter.dashboard.bots.expanded-threads": BotThreadDisclosure.storageKey,
+    ]
+
+    static func moveRenamedKeys(in defaults: UserDefaults) {
+        for (legacy, current) in renamedKeys {
+            guard let value = defaults.object(forKey: legacy) else { continue }
+            if defaults.object(forKey: current) == nil { defaults.set(value, forKey: current) }
+            defaults.removeObject(forKey: legacy)
+        }
+    }
+}
+
+enum NewChatSource: String, CaseIterable, Identifiable {
+    case acpDirect
+    case remoteWorkspace
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .acpDirect: "Local workspace agents"
+        case .remoteWorkspace: "Remote workspace agents"
+        }
+    }
+}
+
+/// Left-rail agent groupings for Woven Matter's product terminology.
+/// Each agent's `AgentBucket` follows its execution location.
+enum AgentSidebarGroup: String, CaseIterable, Identifiable, Hashable, Sendable {
+    case pinned
+    case localWorkspace
+    case remoteWorkspaces
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .pinned: "Pinned"
+        case .localWorkspace: "Local workspace"
+        case .remoteWorkspaces: "Remote workspaces"
+        }
+    }
+
+    var orderKey: String { rawValue }
+
+    static func contains(
+        _ agent: WorkspaceAgent,
+        in group: AgentSidebarGroup,
+        pinnedIDs: Set<UUID>
+    ) -> Bool {
+        switch group {
+        case .pinned:
+            return pinnedIDs.contains(agent.id)
+        case .localWorkspace:
+            return agent.bucket == .localCLIAgents
+                && !pinnedIDs.contains(agent.id)
+        case .remoteWorkspaces:
+            return agent.bucket == .remoteWorkspaceAgents
+                && !pinnedIDs.contains(agent.id)
+        }
+    }
+
+    static func agents(
+        from agents: [WorkspaceAgent],
+        in group: AgentSidebarGroup,
+        pinnedIDs: Set<UUID>,
+        customOrder: [UUID] = []
+    ) -> [WorkspaceAgent] {
+        switch group {
+        case .pinned:
+            return applyOrder(
+                agents.filter { contains($0, in: .pinned, pinnedIDs: pinnedIDs) },
+                preferred: customOrder
+            )
+        case .localWorkspace:
+            let defaultOrder = agents
+                .filter { contains($0, in: group, pinnedIDs: pinnedIDs) }
+                .sorted { lhs, rhs in
+                    if lhs.runtimeKind != rhs.runtimeKind {
+                        return lhs.runtimeKind.presentationRank
+                            < rhs.runtimeKind.presentationRank
+                    }
+                    let comparison = lhs.displayName.localizedCaseInsensitiveCompare(
+                        rhs.displayName
+                    )
+                    if comparison != .orderedSame { return comparison == .orderedAscending }
+                    return lhs.id.uuidString < rhs.id.uuidString
+                }
+            return applyPreferredOrder(defaultOrder, preferred: customOrder)
+        case .remoteWorkspaces:
+            let defaultOrder = agents
+                .filter { contains($0, in: group, pinnedIDs: pinnedIDs) }
+                .sorted { lhs, rhs in
+                    if lhs.runtimeKind != rhs.runtimeKind {
+                        return lhs.runtimeKind.presentationRank
+                            < rhs.runtimeKind.presentationRank
+                    }
+                    if lhs.displayName != rhs.displayName {
+                        return lhs.displayName.localizedCaseInsensitiveCompare(
+                            rhs.displayName
+                        ) == .orderedAscending
+                    }
+                    return lhs.id.uuidString < rhs.id.uuidString
+                }
+            return applyPreferredOrder(defaultOrder, preferred: customOrder)
+        }
+    }
+
+    /// Stable display order: preferred IDs first (when present), then name-sorted remainder.
+    static func applyOrder(
+        _ agents: [WorkspaceAgent],
+        preferred: [UUID]
+    ) -> [WorkspaceAgent] {
+        guard !agents.isEmpty else { return [] }
+        let byID = Dictionary(uniqueKeysWithValues: agents.map { ($0.id, $0) })
+        var seen = Set<UUID>()
+        var ordered: [WorkspaceAgent] = []
+        for id in preferred {
+            guard let agent = byID[id], seen.insert(id).inserted else { continue }
+            ordered.append(agent)
+        }
+        let remaining = agents
+            .filter { seen.insert($0.id).inserted }
+            .sorted {
+                $0.displayName.localizedCaseInsensitiveCompare($1.displayName)
+                    == .orderedAscending
+            }
+        return ordered + remaining
+    }
+
+    /// Applies preferred IDs while retaining the caller's fallback ordering.
+    static func applyPreferredOrder(
+        _ agents: [WorkspaceAgent],
+        preferred: [UUID]
+    ) -> [WorkspaceAgent] {
+        guard !agents.isEmpty, !preferred.isEmpty else { return agents }
+        let byID = Dictionary(uniqueKeysWithValues: agents.map { ($0.id, $0) })
+        var seen = Set<UUID>()
+        let preferredAgents = preferred.compactMap { id -> WorkspaceAgent? in
+            guard let agent = byID[id], seen.insert(id).inserted else { return nil }
+            return agent
+        }
+        return preferredAgents + agents.filter { seen.insert($0.id).inserted }
+    }
+}
+
+struct RemoteWorkspaceSidebarLink: Equatable, Identifiable {
+    let configuration: RemoteWorkspaceConfiguration
+    let readyTargets: [RemoteHarnessChatTarget]
+
+    var id: UUID { configuration.id }
+}
+
+enum RemoteWorkspaceSidebarModel {
+    /// Membership is persisted separately from transient connection/readiness checks.
+    static func agents(_ saved: [WorkspaceAgent], in workspaceID: UUID) -> [WorkspaceAgent] {
+        saved.filter { $0.executionLocation == .remote && $0.runtimeDeviceID == workspaceID }
+    }
+
+    static func links(
+        workspaces: [RemoteWorkspaceConfiguration],
+        readyTargets: [RemoteHarnessChatTarget]
+    ) -> [RemoteWorkspaceSidebarLink] {
+        let targetsByWorkspaceID = Dictionary(
+            grouping: readyTargets,
+            by: { $0.configuration.id }
+        )
+        return workspaces
+            .sorted { lhs, rhs in
+                let comparison = lhs.name.localizedCaseInsensitiveCompare(rhs.name)
+                if comparison != .orderedSame { return comparison == .orderedAscending }
+                return lhs.id.uuidString < rhs.id.uuidString
+            }
+            .map { configuration in
+                RemoteWorkspaceSidebarLink(
+                    configuration: configuration,
+                    readyTargets: (targetsByWorkspaceID[configuration.id] ?? [])
+                        .sorted { lhs, rhs in
+                            lhs.harness.id.presentationRank
+                                < rhs.harness.id.presentationRank
+                        }
+                )
+            }
+    }
+}
+
+/// Paired iPhone and iPad workspaces, derived from the synced execution workspace
+/// registry so every Mac lists them, online or not. Quick Chats belong to the
+/// workspace that runs them; folders to the workspace they are bound to. Unfiled
+/// notes have no owner and stay in All Workspaces, as on the iPhone.
+enum PairedWorkspaceSidebarModel {
+    /// Folder bindings say `device:<id>` where registry rows say `<id>`; this is
+    /// display grouping only and never decides execution ownership.
+    static func canonicalID(_ value: String) -> String {
+        for prefix in ["device:", "remote:"] where value.hasPrefix(prefix) {
+            if let id = UUID(uuidString: String(value.dropFirst(prefix.count))) { return id.uuidString.lowercased() }
+        }
+        return UUID(uuidString: value)?.uuidString.lowercased() ?? value
+    }
+
+    static func workspaces(_ registry: [ExecutionWorkspace]) -> [ExecutionWorkspace] {
+        var seen = Set<String>()
+        return registry
+            .filter { $0.kind == .ios && !$0.deleted && seen.insert(canonicalID($0.id)).inserted }
+            .sorted {
+                let comparison = $0.name.localizedStandardCompare($1.name)
+                return comparison == .orderedSame ? $0.id < $1.id : comparison == .orderedAscending
+            }
+    }
+
+    /// Quick Chat history this workspace ran, newest first.
+    static func history(
+        for workspace: ExecutionWorkspace,
+        conversations: [WorkspaceConversationRecord],
+        owners: [String: String]
+    ) -> [WorkspaceConversationRecord] {
+        let owner = canonicalID(workspace.id)
+        return conversations
+            .filter { !$0.isArchived && owners[$0.id].map(canonicalID) == owner }
+            .sorted { ($0.lastMessageAt ?? "") > ($1.lastMessageAt ?? "") }
+    }
+
+    static func folders(for workspace: ExecutionWorkspace, in folders: [WorkspaceFolderRecord]) -> [WorkspaceFolderRecord] {
+        let owner = canonicalID(workspace.id)
+        return folders.filter { $0.executionWorkspaceID.map(canonicalID) == owner }
+    }
+
+    /// True when the conversation's execution owner is an iPhone or iPad.
+    static func isPhoneHistory(owner: String?, registry: [ExecutionWorkspace]) -> Bool {
+        guard let owner else { return false }
+        let id = canonicalID(owner)
+        return registry.contains { $0.kind == .ios && canonicalID($0.id) == id }
+    }
+}
+
+/// Presentation-only preferences, independent of runtime visibility and section expansion.
+enum WorkspaceSidebarVisibility: String {
+    case localWorkspace
+    case remoteWorkspaces
+
+    var storageKey: String {
+        "wovenmatter.sidebar.show-\(rawValue)"
+    }
+
+    var title: String {
+        switch self {
+        case .localWorkspace: AgentSidebarGroup.localWorkspace.title
+        case .remoteWorkspaces: AgentSidebarGroup.remoteWorkspaces.title
+        }
+    }
+}
+
+enum AgentDisclosureKey {
+    static let localWorkspace = "section:local-workspace"
+    static let remoteWorkspaces = "section:remote-workspaces"
+
+    static func workspace(_ id: UUID) -> String {
+        "workspace:\(id.uuidString.lowercased())"
+    }
+}
+
+enum AgentDisclosureStore {
+    static let storageKey = "wovenmatter.sidebar.collapsed-agent-sections"
+
+    static func decode(_ raw: String) -> Set<String> {
+        guard let data = raw.data(using: .utf8),
+              let values = try? JSONDecoder().decode([String].self, from: data) else {
+            return []
+        }
+        return Set(values)
+    }
+
+    static func encode(_ collapsed: Set<String>) -> String {
+        guard let data = try? JSONEncoder().encode(collapsed.sorted()),
+              let raw = String(data: data, encoding: .utf8) else {
+            return "[]"
+        }
+        return raw
+    }
+
+    static func isExpanded(_ key: String, in raw: String) -> Bool {
+        !decode(raw).contains(key)
+    }
+
+    static func toggle(_ key: String, in raw: inout String) {
+        var collapsed = decode(raw)
+        if !collapsed.insert(key).inserted {
+            collapsed.remove(key)
+        }
+        raw = encode(collapsed)
+    }
+}
+
+enum AgentListMoveDirection: Sendable {
+    case up
+    case down
+}
+
+/// Device-local order of agents within each sidebar group (`AppStorage` JSON map).
+enum AgentOrderStore {
+    static let storageKey = "wovenmatter.sidebar.agent-order-by-group"
+
+    static func decode(_ raw: String) -> [String: [UUID]] {
+        guard let data = raw.data(using: .utf8),
+              let values = try? JSONDecoder().decode([String: [String]].self, from: data) else {
+            return [:]
+        }
+        var result: [String: [UUID]] = [:]
+        for (key, ids) in values {
+            var seen = Set<UUID>()
+            result[key] = ids.compactMap { UUID(uuidString: $0) }.filter { seen.insert($0).inserted }
+        }
+        return result
+    }
+
+    static func encode(_ map: [String: [UUID]]) -> String {
+        let values = map.mapValues { $0.map { $0.uuidString.lowercased() } }
+        guard let data = try? JSONEncoder().encode(values),
+              let raw = String(data: data, encoding: .utf8) else {
+            return "{}"
+        }
+        return raw
+    }
+
+    static func order(forKey key: String, in raw: String) -> [UUID] {
+        decode(raw)[key] ?? []
+    }
+
+    /// Preferred IDs first when present, then remaining present IDs in their given order.
+    static func mergePreferred(_ preferred: [UUID], present: [UUID]) -> [UUID] {
+        let presentSet = Set(present)
+        var seen = Set<UUID>()
+        var result: [UUID] = []
+        for id in preferred where presentSet.contains(id) && seen.insert(id).inserted {
+            result.append(id)
+        }
+        for id in present where seen.insert(id).inserted {
+            result.append(id)
+        }
+        return result
+    }
+
+    static func move(
+        id: UUID,
+        direction: AgentListMoveDirection,
+        inKey key: String,
+        presentIDs: [UUID],
+        raw: inout String
+    ) {
+        var map = decode(raw)
+        var ids = presentIDs
+        guard let index = ids.firstIndex(of: id) else { return }
+        let target: Int
+        switch direction {
+        case .up:
+            guard index > 0 else { return }
+            target = index - 1
+        case .down:
+            guard index < ids.count - 1 else { return }
+            target = index + 1
+        }
+        ids.swapAt(index, target)
+        map[key] = ids
+        raw = encode(map)
+    }
+
+    static func canMove(
+        id: UUID,
+        direction: AgentListMoveDirection,
+        presentIDs: [UUID]
+    ) -> Bool {
+        guard let index = presentIDs.firstIndex(of: id) else { return false }
+        switch direction {
+        case .up: return index > 0
+        case .down: return index < presentIDs.count - 1
+        }
+    }
+}
+
+struct AgentPresentation: Equatable {
+    let displayName: String
+    let iconKey: String
+}
+
+extension HarnessLogo {
+    init(runtimeKind: AgentRuntimeKind) {
+        switch runtimeKind {
+        case .codex: self = .codex
+        case .claudeCode: self = .claude
+        case .grokBuild: self = .grok
+        case .defaultAgent: self = .defaultAgent
+        case .opencode: self = .openCode
+        }
+    }
+}
+
+enum SidebarStyle: String, CaseIterable, Identifiable {
+    case adaptive
+    case single
+    case split
+
+    static let storageKey = "wovenmatter.layout.sidebar-style"
+    static let defaultStyle = SidebarStyle.split
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .adaptive: "Adaptive Sidebar"
+        case .single: "Single Sidebar"
+        case .split: "Split Sidebar"
+        }
+    }
+
+    var detail: String {
+        switch self {
+        case .adaptive: "Keep navigation visible and open folder contents beside it."
+        case .single: "Open folder contents in place of the movable navigation sidebar."
+        case .split: "Keep navigation and workspace sidebars visible on opposite sides."
+        }
+    }
+}
+
+enum SidebarSide: String, CaseIterable, Identifiable {
+    case left
+    case right
+
+    static let storageKey = "wovenmatter.layout.single-sidebar-side"
+    static let defaultSide = SidebarSide.left
+
+    var id: String { rawValue }
+
+    var opposite: SidebarSide {
+        switch self {
+        case .left: .right
+        case .right: .left
+        }
+    }
+}
+
+enum SidebarPage: Hashable, Sendable {
+    case navigation
+    case workspace
+}
+
+struct SidebarNavigationState: Equatable, Sendable {
+    private(set) var singlePage = SidebarPage.navigation
+    private(set) var adaptiveWorkspaceVisible = false
+
+    mutating func selectFolder() {
+        singlePage = .workspace
+        adaptiveWorkspaceVisible = true
+    }
+
+    mutating func showNavigation() {
+        singlePage = .navigation
+        adaptiveWorkspaceVisible = false
+    }
+
+    /// A compact window has room for one rail page, so Adaptive then shows the
+    /// folder's contents alone, with a back button, as Single does.
+    func pages(
+        for side: SidebarSide,
+        style: SidebarStyle,
+        collapsesAdaptivePages: Bool = false
+    ) -> [SidebarPage] {
+        switch style {
+        case .adaptive:
+            guard adaptiveWorkspaceVisible else { return [.navigation] }
+            if collapsesAdaptivePages { return [.workspace] }
+            return side == .left
+                ? [.navigation, .workspace]
+                : [.workspace, .navigation]
+        case .single:
+            return [singlePage]
+        case .split:
+            return [side == .left ? .navigation : .workspace]
+        }
+    }
+}
+
+enum DesktopShapes {
+    /// Keeps full-height inset surfaces optically aligned with the macOS window.
+    /// The system supplies the window's container shape; the fixed value is only
+    /// a minimum for corners that are too far from a window edge to resolve.
+    static var windowAlignedSurface: ConcentricRectangle {
+        ConcentricRectangle(
+            corners: .concentric(
+                minimum: .fixed(WovenMetrics.windowAlignedSurfaceMinimumRadius)
+            ),
+            isUniform: true
+        )
+    }
+
+    static var card: RoundedRectangle {
+        RoundedRectangle(cornerRadius: WovenMetrics.cardRadius, style: .continuous)
+    }
+}
+
+struct WorkspaceLayoutState: Equatable {
+    let compact: Bool
+    let showsLeftRail: Bool
+    let showsRightRail: Bool
+
+    static func resolve(
+        width: CGFloat,
+        leftRailRequested: Bool,
+        rightRailRequested: Bool,
+        sidebarStyle: SidebarStyle = .defaultStyle,
+        singleSidebarSide: SidebarSide = .defaultSide,
+        singleRailRequested: Bool = true,
+        compactRail: SidebarSide? = nil
+    ) -> WorkspaceLayoutState {
+        // Below the breakpoint the rails hide on their own. Revealing one docks
+        // it beside the conversation exactly as at full width; the minimum
+        // window always leaves one rail and the minimum workspace room.
+        let compact = width < WovenMetrics.desktopBreakpoint
+        let showsLeftRail: Bool
+        let showsRightRail: Bool
+        switch sidebarStyle {
+        case .adaptive, .single:
+            showsLeftRail = compact
+                ? compactRail == .left && singleSidebarSide == .left
+                : singleRailRequested && singleSidebarSide == .left
+            showsRightRail = compact
+                ? compactRail == .right && singleSidebarSide == .right
+                : singleRailRequested && singleSidebarSide == .right
+        case .split:
+            showsLeftRail = compact ? compactRail == .left : leftRailRequested
+            showsRightRail = compact ? compactRail == .right : rightRailRequested
+        }
+        return WorkspaceLayoutState(
+            compact: compact,
+            showsLeftRail: showsLeftRail,
+            showsRightRail: showsRightRail
+        )
+    }
+}
+
+struct RailBackground: View {
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.wovenTheme) private var theme
+    @State private var hovered = false
+
+    var body: some View {
+        let palette = theme.palette
+        DesktopShapes.windowAlignedSurface
+            .fill(reduceTransparency ? palette.railReducedFill : palette.workspace)
+            .overlay {
+                if !reduceTransparency {
+                    DesktopShapes.windowAlignedSurface
+                        .fill(palette.railFill)
+                }
+            }
+            .overlay {
+                DesktopShapes.windowAlignedSurface
+                    .stroke(hovered ? palette.railHoverRim : palette.railRim, lineWidth: 1)
+            }
+            .overlay {
+                DesktopShapes.windowAlignedSurface
+                    .stroke(hovered ? palette.railHoverInner : palette.railInnerLight, lineWidth: 1)
+                    .padding(1)
+            }
+            .overlay {
+                DesktopShapes.windowAlignedSurface
+                    .stroke(palette.railEdge, lineWidth: 0.5)
+            }
+            .onHover { hovered = $0 }
+            .animation(reduceMotion ? nil : .easeOut(duration: 0.22), value: hovered)
+    }
+}
+
+struct ActiveConversationRowBackground: View {
+    @Environment(\.wovenTheme) private var theme
+    let presentation: ConversationActivityPresentation
+    let selected: Bool
+    let hovered: Bool
+    let cornerRadius: CGFloat
+
+    var body: some View {
+        let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+        ZStack {
+            shape.fill(presentation.isActive ? theme.palette.themeWhisper : .clear)
+            if presentation.allowsMotion {
+                TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { context in
+                    // Animate drawing, rather than a child's frame and offset.
+                    // Active rows appear in both rails; relaying their sweep
+                    // through layout repeatedly invalidates the whole window.
+                    Canvas(rendersAsynchronously: true) { canvas, size in
+                        let progress = context.date.timeIntervalSinceReferenceDate
+                            .truncatingRemainder(dividingBy: 4.2) / 4.2
+                        let start = size.width * (-1.7 + 2.7 * progress)
+                        canvas.fill(
+                            Path(CGRect(x: start, y: 0, width: size.width * 1.7, height: size.height)),
+                            with: .linearGradient(
+                                Gradient(colors: [.clear, WovenPalette.primary.opacity(0.055), .clear]),
+                                startPoint: CGPoint(x: start, y: 0),
+                                endPoint: CGPoint(x: start + size.width * 1.7, y: 0)
+                            )
+                        )
+                    }
+                    .clipShape(shape)
+                }
+            }
+            shape.fill(
+                selected
+                    ? theme.palette.themeStrong
+                    : hovered ? theme.palette.themeSoft : .clear
+            )
+        }
+    }
+}
+
+struct RoundedCard<Content: View>: View {
+    let content: Content
+
+    init(@ViewBuilder content: () -> Content) {
+        self.content = content()
+    }
+
+    var body: some View {
+        content
+            .padding(16)
+            .clipShape(RoundedRectangle(cornerRadius: WovenMetrics.controlRadius, style: .continuous))
+    }
+}
+
+/// Compact native switches share the app's forest-green action color.
+/// Keeping the native control preserves keyboard and accessibility behavior.
+struct CompactSwitchToggleStyle: ToggleStyle {
+    @Environment(\.isEnabled) private var isEnabled
+
+    func makeBody(configuration: Configuration) -> some View {
+        HStack(spacing: 8) {
+            Toggle(isOn: configuration.$isOn) { configuration.label }
+                .labelsHidden()
+                .toggleStyle(SwitchToggleStyle(tint: WovenPalette.primary))
+                .controlSize(.mini)
+                .fixedSize()
+                .scaleEffect(0.8)
+                .frame(width: 28, height: 16)
+            configuration.label
+                .contentShape(Rectangle())
+                .onTapGesture { if isEnabled { configuration.isOn.toggle() } }
+        }
+        .accessibilityRepresentation {
+            Toggle(isOn: configuration.$isOn) { configuration.label }
+                .toggleStyle(.switch)
+        }
+    }
+}

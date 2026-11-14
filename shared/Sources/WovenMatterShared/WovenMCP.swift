@@ -15,8 +15,8 @@ public struct WovenMCPConnection: Codable, Equatable, Sendable {
 public struct WovenMCPToolDefinition: Codable, Equatable, Sendable {
   public let name: String
   public let description: String
-  public let inputSchema: GatewayJSONValue
-  public let annotations: GatewayJSONValue
+  public let inputSchema: JSONValue
+  public let annotations: JSONValue
   /// Local capability metadata; these computed fields are not part of MCP wire definitions.
   public var group: WorkspaceToolGroup? {
     if name == "woven_context" || name.hasPrefix("woven_databases_") || name.hasPrefix("woven_pages_") { return .notes }
@@ -31,15 +31,15 @@ public struct WovenMCPToolDefinition: Codable, Equatable, Sendable {
 public enum WovenMCPServer {
   public static let protocolVersion = "2025-11-25"
   public static let supportedProtocolVersions = ["2025-11-25", "2025-06-18", "2025-03-26"]
-  public static func maximumRequestBytes(for message: GatewayJSONValue) -> Int {
+  public static func maximumRequestBytes(for message: JSONValue) -> Int {
     let name = message.objectValue?["params"]?.objectValue?["name"]?.stringValue ?? ""
     return message.objectValue?["method"] == .string("tools/call") && ["woven_html_preview", "woven_html_render"].contains(name)
       ? WovenMatterToolRequest.maximumHTMLRequestBytes : 4 * 1_024 * 1_024
   }
 
-  public static func handle(_ message: GatewayJSONValue, contextID: String? = nil,
+  public static func handle(_ message: JSONValue, contextID: String? = nil,
                            allowedTools: Set<String>? = nil, outsideCaller: Bool = false, botCaller: Bool = false,
-                           perform: @Sendable (WovenMatterToolRequest) async -> WovenMatterToolResponse) async -> GatewayJSONValue? {
+                           perform: @Sendable (WovenMatterToolRequest) async -> WovenMatterToolResponse) async -> JSONValue? {
     guard let object = message.objectValue, object["jsonrpc"] == .string("2.0"),
           let method = object["method"]?.stringValue,
           object["id"].map(validID) ?? true else {
@@ -51,7 +51,7 @@ public enum WovenMCPServer {
       return error(id: id, code: -32602, message: "Parameters must be an object.")
     }
     let params = object["params"]?.objectValue ?? [:]
-    let result: GatewayJSONValue
+    let result: JSONValue
     switch method {
     case "initialize":
       guard let requested = params["protocolVersion"]?.stringValue,
@@ -119,7 +119,7 @@ public enum WovenMCPServer {
     return .object(["jsonrpc": .string("2.0"), "id": id, "result": result])
   }
 
-  public static func error(id: GatewayJSONValue = .null, code: Int, message: String) -> GatewayJSONValue {
+  public static func error(id: JSONValue = .null, code: Int, message: String) -> JSONValue {
     .object(["jsonrpc": .string("2.0"), "id": id,
       "error": .object(["code": .number(Double(code)), "message": .string(message)])])
   }
@@ -127,7 +127,7 @@ public enum WovenMCPServer {
   private static func needsOutsideTarget(_ name: String) -> Bool {
     name.hasPrefix("woven_goals_") || name.hasPrefix("woven_timers_") || name == "woven_html_render"
   }
-  private static func validID(_ value: GatewayJSONValue) -> Bool {
+  private static func validID(_ value: JSONValue) -> Bool {
     switch value { case .string, .null: true; case .number(let number): number.isFinite; default: false }
   }
 }

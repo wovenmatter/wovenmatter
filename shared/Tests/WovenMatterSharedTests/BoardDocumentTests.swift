@@ -366,7 +366,7 @@ struct BoardDocumentTests {
     document.blocks.append(.richText(.init(id: "c", text: "Label")))
     document.boardItems?["c"] = .init(role: .instructions, updatedAt: "2026-03-01T00:00:00Z")
     let assets = ["present": BoardAssetSummary(id: "present", available: true, title: "Guide", kind: "note", revision: "7")]
-    func components(_ configure: (inout BoardReadFilter) -> Void) throws -> [[String: GatewayJSONValue]] {
+    func components(_ configure: (inout BoardReadFilter) -> Void) throws -> [[String: JSONValue]] {
       var filter = BoardReadFilter(); configure(&filter)
       let value = try document.pageReadValue(id: "page", title: "Plan", revision: "4", filter: filter, assets: assets)
       #expect(value.objectValue?["purpose"]?.stringValue == "Launch")

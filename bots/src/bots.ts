@@ -543,7 +543,6 @@ export class BotManager {
   static async open(options: BotManagerOptions): Promise<BotManager> {
     const manager = new BotManager(options);
     await manager.registry.migrate();
-    await manager.#migrateLegacyModels();
     if (options.ensureAdmin) {
       if (await manager.registry.admin()) await manager.registry.renameAdmin(ADMIN_NAME);
       else await manager.#insert(ADMIN_NAME, { kind: "admin", manager: false });
@@ -747,63 +746,6 @@ export class BotManager {
       if (bot) await this.#applyProfile(bot).catch((error) => this.#options.onReport?.(error));
     }
     this.#options.onBotsChanged?.();
-  }
-
-  /**
-   * Before profiles, a bot could have its own model. Turn each such override into a profile
-   * assignment: a profile whose main model it is, or a new one copying the default's pool.
-   */
-  async #migrateLegacyModels(): Promise<void> {
-    const profiles = this.#options.profiles;
-    if (!profiles) return;
-    for (const record of await this.registry.list()) {
-      const legacy = record.legacyModel;
-      if (!legacy) continue;
-      try {
-        await this.#migrateLegacyModel(profiles, record, legacy);
-      } catch (error) {
-        // Left as is (the bot runs the default profile meanwhile); retried on the next open.
-        this.#options.log?.(
-          `could not migrate bot "${record.name}" model ${legacy}: ${(error as Error).message}`,
-        );
-      }
-    }
-  }
-
-  async #migrateLegacyModel(
-    profiles: ProfileStore,
-    record: BotRecord,
-    legacy: string,
-  ): Promise<void> {
-    if (!record.profile) {
-      const fallback = profiles.resolve(undefined);
-      let target =
-        fallback.main === legacy ? fallback : profiles.list().find((p) => p.main === legacy);
-      if (!target) {
-        const base = record.name
-          .toLowerCase()
-          .replace(/[^a-z0-9]+/g, "-")
-          .replace(/^-+|-+$/g, "");
-        let id = (base || "bot").slice(0, 32);
-        for (let n = 2; profiles.get(id); n += 1) id = `${(base || "bot").slice(0, 32)}-${n}`;
-        target = await profiles.save(
-          {
-            id,
-            name: record.name,
-            main: legacy,
-            pool: fallback.pool.map((entry) => ({ ...entry })),
-            ...(fallback.memoryModel ? { memoryModel: fallback.memoryModel } : {}),
-            ...(fallback.guidance ? { guidance: fallback.guidance } : {}),
-          },
-          { create: true },
-        );
-      }
-      if (target.id !== profiles.defaultId) await this.registry.setProfile(record.id, target.id);
-      this.#options.log?.(
-        `migrated bot "${record.name}" model ${legacy} to profile "${target.id}"`,
-      );
-    }
-    await this.registry.clearLegacyModel(record.id);
   }
 
   /** The Admin Bot (undefined only without `ensureAdmin`). */

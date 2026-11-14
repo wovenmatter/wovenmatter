@@ -43,9 +43,9 @@ private actor SlowWorkspace: ExecutionWorkspaceTransport {
   var holding: Bool { held != nil }
   func release() { held?.resume(); held = nil }
   func identity() async throws -> ExecutionWorkspace { workspace }
-  func providers() async throws -> [HarnessCapabilities] { [.init(id: "pi", runtimeKind: "pi", displayName: "Pi Durable", available: true)] }
+  func providers() async throws -> [HarnessCapabilities] { [.init(id: "pi", runtimeKind: "default_agent", displayName: "Pi Durable", available: true)] }
   func pending() async throws -> [PendingInteraction] { [] }
-  func capabilities(_ id: String) async throws -> HarnessCapabilities { .init(id: "pi", runtimeKind: "pi", displayName: "Pi Durable", available: true) }
+  func capabilities(_ id: String) async throws -> HarnessCapabilities { .init(id: "pi", runtimeKind: "default_agent", displayName: "Pi Durable", available: true) }
   func command(_ command: LibraryCommand) async throws -> LibraryCommandReceipt {
     await withCheckedContinuation { held = $0 }
     let runID = "run-" + command.commandID
@@ -68,15 +68,15 @@ final class MemberMacsTests: XCTestCase {
   private var air: ExecutionWorkspace {
     .init(id: "0446435c-8e64-440e-b9eb-3c5dadb27e04", libraryID: "library-a", ownerDeviceID: airHost, kind: .mac,
           name: "James’s MacBook Air (Dev) · worktrees-b8e80bfb02", endpoint: URL(string: "https://air.tail1.ts.net/wovenmatter"),
-          capabilities: ["execution.v1", "history.central.v1"], executionDeviceID: airHost)
+          capabilities: ["execution.v1", "history.library.v1"], executionDeviceID: airHost)
   }
   private var mini: ExecutionWorkspace {
     .init(id: "b03923c3-89d1-4f29-910a-b7e3ce7b586c", libraryID: "library-b", ownerDeviceID: miniHost, kind: .mac,
           name: "James’s Mac Mini (Dev) · woven-everywhere", endpoint: URL(string: "https://mini.tail1.ts.net/wovenmatter"),
-          capabilities: ["execution.v1", "history.central.v1"], executionDeviceID: miniHost)
+          capabilities: ["execution.v1", "history.library.v1"], executionDeviceID: miniHost)
   }
 
-  /// Both Dev Macs advertise central history. The central list is the
+  /// Both Dev Macs advertise library history. The host list is the
   /// library host's (the Air's), so the Air appears once and the Mini under
   /// its own name; Quick Chat leads. A Linux workspace is listed by the same
   /// paired-and-reachable rule once its own connection answers, under its
@@ -95,9 +95,9 @@ final class MemberMacsTests: XCTestCase {
     model.workspaceProviders = [air.id: [pi, codex], mini.id: [pi, codex], linux.id: [pi]]
     model.workspaceReachable = [air.id: true, mini.id: true]
     model.online = true
-    XCTAssertEqual(model.centralExecutionWorkspace?.id, air.id)
+    XCTAssertEqual(model.hostExecutionWorkspace?.id, air.id)
     XCTAssertEqual(model.launcherGroups.map(\.name), [model.deviceWorkspaceName, air.name, mini.name])
-    XCTAssertEqual(model.chatLauncherGroups.map(\.id), ["local", "central", mini.id])
+    XCTAssertEqual(model.chatLauncherGroups.map(\.id), ["local", "host", mini.id])
     XCTAssertTrue(model.launcherGroups[1].agents.allSatisfy(\.isAvailable))
     XCTAssertTrue(model.launcherGroups[2].agents.allSatisfy { $0.workspaceID == mini.id })
 
@@ -112,7 +112,7 @@ final class MemberMacsTests: XCTestCase {
   /// The library host's agent list is fetched again when the New Chat menu
   /// opens and on reconnect, so an agent set up since then is not left as
   /// needing setup.
-  @MainActor func testCentralAgentListRefreshesWhenNewChatOpensAndOnReconnect() async throws {
+  @MainActor func testHostAgentListRefreshesWhenNewChatOpensAndOnReconnect() async throws {
     let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     defer { try? FileManager.default.removeItem(at: root) }
     let store = try MobileStore(file: root.appendingPathComponent("library.json"))
@@ -150,7 +150,7 @@ final class MemberMacsTests: XCTestCase {
     defer { try? FileManager.default.removeItem(at: root) }
     let store = try MobileStore(file: root.appendingPathComponent("library.json"))
     try await store.apply(LibrarySnapshot(workspaceID: "library-a", cursor: 0, conversations: [
-      .init(id: "chat", title: "Hello", providerID: "pi", runtimeKind: "pi", workspaceID: air.id)]))
+      .init(id: "chat", title: "Hello", providerID: "pi", runtimeKind: "default_agent", workspaceID: air.id)]))
     let earlier = LibraryTranscript(conversationID: "chat", messages: [
       .init(id: "hello", conversationID: "chat", runID: "run-1", role: "user", content: "Hey"),
       .init(id: "reply", conversationID: "chat", runID: "run-1", role: "assistant", content: "Hi", status: "completed")])

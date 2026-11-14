@@ -3,7 +3,7 @@ import AppKit
 import SwiftUI
 import Testing
 import WovenMatterShared
-import WovenMatterDashboardStore
+import WovenMatterLibraryStore
 @testable import WovenMatterAppFacade
 
 @MainActor
@@ -49,7 +49,7 @@ struct MacDeviceSetupModelTests {
         }), getRelease: { throw MacDeviceSetupError("No release fixture") }, pollDelay: {})
         await model.discover()
         let row = try #require(model.rows.first)
-        await model.perform(.pair, row: row, central: URL(string: "https://central.tail.ts.net:8443/wovenmatter")!)
+        await model.perform(.pair, row: row, endpoint: URL(string: "https://studio.tail.ts.net:8443/wovenmatter")!)
         #expect(row.error == nil)
         #expect(row.message == "Current request accepted")
         #expect(await fixture.polls == 2)
@@ -74,14 +74,13 @@ struct MacDeviceSetupModelTests {
         let defaults = try #require(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
         let application = ApplicationModel(applicationDefaults: defaults, startsAutomatically: false, ownsExecutionOverride: false)
-        let pairing = MacPairingController(identity: { .init(deviceID: UUID().uuidString, deviceName: "Fixture", metadata: .init(kind: .mac)) }, onPaired: { _, _ in })
-        for theme in DashboardTheme.allCases {
+        for theme in WovenTheme.allCases {
             for width: CGFloat in [440, 920] {
                 let view = SettingsPage(title: "Apple Devices") {
                     SettingsSection(title: "Find devices", detail: "Find other Macs on your Tailscale network, even when Woven Matter is closed.") {
-                        MacTailnetDiscoveryView(devices: devices, pairing: pairing, host: application.libraryHost, canPairWithCentral: false)
+                        MacTailnetDiscoveryView(devices: devices, host: application.libraryHost)
                     }
-                }.background(theme.palette.workspace).environment(\.dashboardTheme, theme).preferredColorScheme(theme.colorScheme)
+                }.background(theme.palette.workspace).environment(\.wovenTheme, theme).preferredColorScheme(theme.colorScheme)
                 let host = NSHostingView(rootView: view)
                 let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: width, height: 820), styleMask: [.borderless], backing: .buffered, defer: false)
                 window.isReleasedWhenClosed = false; window.contentView = host

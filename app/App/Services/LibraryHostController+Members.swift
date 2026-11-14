@@ -1,7 +1,7 @@
 import Foundation
 import WovenMatterCore
 import WovenMatterClient
-import WovenMatterDashboardStore
+import WovenMatterLibraryStore
 
 extension LibraryHostController {
     /// This Mac's member signer: the same key as its paired-Mac identity.
@@ -17,15 +17,5 @@ extension LibraryHostController {
             throw LibraryAPIError(code: "workspace_unavailable", message: "\(workspace.name)'s address or member identity has not reached this Mac yet.")
         }
         return try RemoteHostAdministrationClient(endpoint: endpoint, signer: directory.identity.signer, audience: host, send: remoteHostSend)
-    }
-
-    /// A delegated device grant issued by the Linux host itself, so enrolling a
-    /// phone never needs the Mac that added the host.
-    func provisionAtLinuxHost(_ workspace: ExecutionWorkspace, deviceID: String, name: String) async throws -> ExecutionCredential {
-        let credential = try await hostAdministration(for: workspace).provisionExecutionDevice(workspace: workspace, deviceID: deviceID, name: name)
-        guard credential.deviceID == deviceID, credential.workspace.id == workspace.id, credential.workspace.libraryID == workspace.libraryID else {
-            throw LibraryAPIError(code: "wrong_workspace", message: "The workspace returned an execution grant for a different identity.")
-        }
-        return credential
     }
 }

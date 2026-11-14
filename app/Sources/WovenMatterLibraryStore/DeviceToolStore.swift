@@ -1,0 +1,149 @@
+import Foundation
+#if canImport(SQLite3)
+import SQLite3
+#else
+import CSQLite
+#endif
+import WovenMatterCore
+
+public struct LibraryToolReservation: Sendable {
+  public var isNew: Bool
+  public var response: WovenMatterToolResponse?
+}
+
+extension WorkspaceDatabaseConnection {
+  func createDeviceToolSchemaUnlocked() throws {
+    try executeUnlocked("""
+      CREATE TABLE IF NOT EXISTS device_tool_receipts (
+        device_id TEXT NOT NULL, request_id TEXT NOT NULL, conversation_id TEXT NOT NULL,
+        fingerprint BLOB NOT NULL, response TEXT, PRIMARY KEY(device_id,request_id)
+      );
+      CREATE TABLE IF NOT EXISTS device_scheduled_mcp_callers (
+        run_id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL, workspace_id TEXT NOT NULL,
+        event_id TEXT NOT NULL, scheduled_at TEXT NOT NULL, native_session_id TEXT,
+        UNIQUE(event_id,scheduled_at)
+      );
+      """)
+  }
+
+  /// An imported session is a valid tool caller, but a device may never claim a
+  /// Mac-local session, another device's session, or a workspace it merely relays.
+  public func authorizeLibraryTool(_ value: LibraryToolRequest, deviceID: String) throws {
+    try withLock { try authorizeLibraryToolUnlocked(value, deviceID: deviceID) }
+  }
+
+  private func authorizeLibraryToolUnlocked(_ value: LibraryToolRequest, deviceID: String) throws {
+    let command = try WovenMatterToolCommand(value.request.arguments)
+    let maximumBytes = command.group == .html ? WovenMatterToolRequest.maximumHTMLRequestBytes : command.group?.isAutomation == true ? 4 * 1_024 * 1_024 : WovenMatterToolResponse.maximumResponseBytes
+    guard UUID(uuidString: deviceID) != nil, UUID(uuidString: value.conversationID) != nil,
+          value.request.schemaVersion == 1, UUID(uuidString: value.request.requestID) != nil,
+          try JSONEncoder().encode(value).count <= maximumBytes,
+          command.group?.isAutomation != true || (command.options["json"]?.utf8.count ?? 0) <= (command.group == .html ? WovenMatterToolRequest.maximumHTMLRequestBytes : 3 * 1_024 * 1_024) else {
+      throw LibraryAPIError(code: "invalid_request", message: "Tool calls require bounded requests and stable UUID identities.")
+    }
+    var owners = try libraryIDsUnlocked("""
+      SELECT f.workspace_id FROM execution_conversations f
+      JOIN conversations c ON c.id=f.id
+      WHERE f.id=? AND f.deleted=0 AND c.deleted_at IS NULL AND c.is_archived=0
+      """, bindings: [value.conversationID])
+    if owners.isEmpty {
+      owners = try libraryIDsUnlocked("SELECT DISTINCT f.workspace_id FROM device_scheduled_mcp_callers f JOIN conversations c ON c.id=f.conversation_id WHERE f.conversation_id=? AND c.deleted_at IS NULL AND c.is_archived=0", bindings: [value.conversationID])
+      if command.isMutation {
+        guard try libraryIDsUnlocked("SELECT run_id FROM device_scheduled_mcp_callers WHERE conversation_id=? AND native_session_id IS NOT NULL", bindings: [value.conversationID]).isEmpty == false else {
+          throw LibraryAPIError(code: "unavailable", message: "The scheduled agent has not bound its native session yet.")
+        }
+      }
+    }
+    guard owners.count == 1, let workspaceID = owners.first, let workspace = try federationWorkspaceUnlocked(workspaceID),
+          !workspace.deleted,
+          workspace.kind == .linux
+            ? workspace.executionDeviceID == deviceID
+            : (workspace.kind == .ios || workspace.kind == .mac) && workspace.ownerDeviceID == deviceID
+              && (workspace.executionDeviceID ?? workspace.ownerDeviceID) == deviceID else {
+      throw LibraryAPIError(code: "wrong_owner", message: "Sync this device's conversation before using library tools on this Mac.")
+    }
+    if let supplied = command.options["request-id"] {
+      guard UUID(uuidString: supplied) == UUID(uuidString: value.request.requestID) else {
+        throw LibraryAPIError(code: "invalid_request", message: "--request-id must match the request envelope.")
+      }
+    }
+    if command.action != "context", let group = command.group {
+      // Cleanup retains device/caller ownership, including after revocation.
+      if group.isAutomation, command.action == "cancel" { return }
+      guard group == .html || value.enabledGroups.contains(group) else { throw WorkspaceToolError.disabled(group) }
+      // History retains the desktop's independent attachment/management checks.
+      // All other groups require the session's persisted tool policy here as well.
+      if group != .history { try requireToolUnlocked(group, sessionID: value.conversationID) }
+    }
+  }
+
+  /// Recheck caller ownership between native input steps. Workspace access
+  /// follows pairing; a retired execution owner still cannot issue automation.
+  public func requireLibraryAutomationAccess(callerID: String) throws {
+    try withLock {
+      let owners = try libraryIDsUnlocked("SELECT workspace_id FROM execution_conversations WHERE id=? UNION SELECT workspace_id FROM device_scheduled_mcp_callers WHERE conversation_id=?", bindings: [callerID, callerID])
+      guard let id = owners.first else { return }
+      guard let owner = try federationWorkspaceUnlocked(id), !owner.deleted else {
+        throw LibraryAPIError(code: "wrong_owner", message: "The automation caller's execution workspace is unavailable.")
+      }
+    }
+  }
+
+  public func reserveLibraryTool(_ value: LibraryToolRequest, deviceID: String) throws -> LibraryToolReservation {
+    try transaction {
+      try authorizeLibraryToolUnlocked(value, deviceID: deviceID)
+      let id = UUID(uuidString: value.request.requestID)!.uuidString.lowercased()
+      var normalized = value
+      normalized.request.requestID = id
+      normalized.request.arguments = value.request.operationArguments
+      normalized.enabledGroups = Array(Set(value.enabledGroups)).sorted { $0.rawValue < $1.rawValue }
+      let fingerprint = try libraryFingerprint(normalized)
+      let lookup = try prepareUnlocked("SELECT fingerprint,response FROM device_tool_receipts WHERE device_id=? AND request_id=?")
+      defer { sqlite3_finalize(lookup) }
+      try bind(deviceID, at: 1, to: lookup); try bind(id, at: 2, to: lookup)
+      let status = sqlite3_step(lookup)
+      if status == SQLITE_ROW {
+        guard try blob(lookup, column: 0) == fingerprint else {
+          throw LibraryAPIError(code: "receipt_conflict", message: "This tool request ID was already used for different content.")
+        }
+        let response = sqlite3_column_type(lookup, 1) == SQLITE_NULL ? nil
+          : try JSONDecoder().decode(WovenMatterToolResponse.self, from: blob(lookup, column: 1))
+        return LibraryToolReservation(isNew: false, response: response)
+      }
+      guard status == SQLITE_DONE else { throw stepError() }
+      let insert = try prepareUnlocked("INSERT INTO device_tool_receipts(device_id,request_id,conversation_id,fingerprint) VALUES (?,?,?,?)")
+      defer { sqlite3_finalize(insert) }
+      try bind(deviceID, at: 1, to: insert); try bind(id, at: 2, to: insert)
+      try bind(value.conversationID, at: 3, to: insert); try bind(fingerprint, at: 4, to: insert)
+      try stepDone(insert)
+      return LibraryToolReservation(isNew: true, response: nil)
+    }
+  }
+
+  public func finishLibraryTool(_ response: WovenMatterToolResponse, requestID: String, deviceID: String) throws {
+    try transaction {
+      let update = try prepareUnlocked("UPDATE device_tool_receipts SET response=? WHERE device_id=? AND request_id=? AND response IS NULL")
+      defer { sqlite3_finalize(update) }
+      try bindJSON(response.bounded(), at: 1, to: update)
+      try bind(deviceID, at: 2, to: update)
+      try bind(UUID(uuidString: requestID)?.uuidString.lowercased() ?? requestID, at: 3, to: update)
+      try stepDone(update)
+      guard changedRowCountUnlocked == 1 else { throw WorkspaceDatabaseError.execute("No pending tool receipt exists.") }
+    }
+  }
+}
+
+extension WorkspaceDatabase {
+  public func requireLibraryAutomationAccess(callerID: String) async throws {
+    try await read { try $0.requireLibraryAutomationAccess(callerID: callerID) }
+  }
+  public func authorizeLibraryTool(_ value: LibraryToolRequest, deviceID: String) async throws {
+    try await read { try $0.authorizeLibraryTool(value, deviceID: deviceID) }
+  }
+  public func reserveLibraryTool(_ value: LibraryToolRequest, deviceID: String) async throws -> LibraryToolReservation {
+    try await write { try $0.reserveLibraryTool(value, deviceID: deviceID) }
+  }
+  public func finishLibraryTool(_ response: WovenMatterToolResponse, requestID: String, deviceID: String) async throws {
+    try await finishWrite { try $0.finishLibraryTool(response, requestID: requestID, deviceID: deviceID) }
+  }
+}

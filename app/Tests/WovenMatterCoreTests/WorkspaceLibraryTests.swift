@@ -4,7 +4,7 @@ import Testing
 import WovenMatterClient
 import WovenMatterCore
 
-@testable import WovenMatterDashboardStore
+@testable import WovenMatterLibraryStore
 
 @Suite("Library", .serialized)
 struct WorkspaceLibraryTests {
@@ -63,7 +63,6 @@ struct WorkspaceLibraryTests {
     init() async throws {
       persistence = try PersistenceFixture()
       db = try await persistence.openDatabase()
-      try await db.bindDeviceOwnership(ownerDeviceID: UUID())
     }
     func close() { persistence.remove() }
     func session(_ name: String = "Research", _ kind: AgentRuntimeKind = .codex) async throws -> String {
@@ -130,20 +129,13 @@ struct WorkspaceLibraryTests {
     let opened = try files.url(for: file)
     #expect(opened.pathExtension == "png")
     #expect(try Data(contentsOf: opened) == Data([1, 2, 3]))
-      // Keep the workspace's inferred operator stable while this one chat changes owner.
-    _ = try await f.db.createFixtureFolder(name: "Local work")
-    _ = try await f.db.createFixtureFolder(name: "More local work")
+    // A trashed chat's items leave the library with it.
     let visibleRevision = try await f.db.libraryRevision()
     try await f.db.write { connection in try connection.transaction {
       try connection.toolsExecuteUnlocked(
-        "UPDATE dashboard_conversations SET desktop_owned=0,user_id='different-operator' WHERE id=?", [chat])
+        "UPDATE conversations SET deleted_at='2026-01-01T00:00:00Z' WHERE id=?", [chat])
      } }
     #expect(try await f.db.libraryRevision() > visibleRevision)
-    #expect(try await f.db.libraryItems().isEmpty)
-    try await f.db.write { connection in try connection.transaction {
-      try connection.toolsExecuteUnlocked(
-        "UPDATE dashboard_conversations SET desktop_owned=1,governing_plane='platform' WHERE id=?", [chat])
-     } }
     #expect(try await f.db.libraryItems().isEmpty)
     #expect(try await f.db.pendingLibraryFiles().isEmpty)
     #expect(try await f.db.libraryItem(id: file.id) == nil)
@@ -158,7 +150,7 @@ struct WorkspaceLibraryTests {
     let remoteChat = try await f.session("Remote")
     try await f.db.write { connection in try connection.transaction {
       try connection.toolsExecuteUnlocked(
-        "UPDATE desktop_local_acp_sessions SET remote_workspace_id=? WHERE conversation_id=?", [UUID().uuidString.lowercased(), remoteChat])
+        "UPDATE harness_sessions SET remote_workspace_id=? WHERE conversation_id=?", [UUID().uuidString.lowercased(), remoteChat])
     } }
     _ = try await f.exchange(remoteChat, text: "Report", reply: "[Report](./report.pdf)")
     let gate = LibraryPassGate()
@@ -198,7 +190,7 @@ struct WorkspaceLibraryTests {
       kind: .host, dataRoot: "/srv/wovenmatter-test", workspaceRoot: "/srv/wovenmatter-test/workspace")
     try await f.db.write { connection in try connection.transaction {
       try connection.toolsExecuteUnlocked(
-        "UPDATE desktop_local_acp_sessions SET remote_workspace_id=? WHERE conversation_id=?",
+        "UPDATE harness_sessions SET remote_workspace_id=? WHERE conversation_id=?",
         [configuration.id.uuidString.lowercased(), chat])
      } }
     let run = try await f.exchange(chat, text: "https://example.com", reply: "[Report](./report.pdf)")
@@ -231,15 +223,9 @@ struct WorkspaceLibraryTests {
     #expect(
       try FileManager.default.contentsOfDirectory(atPath: f.root.appending(path: "library-files").path).count == 1)
     try await f.db.write { connection in try connection.transaction {
-      try connection.toolsExecuteUnlocked("DELETE FROM dashboard_messages WHERE id=?", [run.userMessageID])
+      try connection.toolsExecuteUnlocked("DELETE FROM messages WHERE id=?", [run.userMessageID])
      } }
     #expect(try await f.db.libraryItems().count == 1)
-    try await f.db.write { connection in try connection.transaction {
-      try connection.toolsExecuteUnlocked(
-        "UPDATE dashboard_conversations SET context_generation=context_generation+1 WHERE id=?", [chat])
-     } }
-    try await f.db.indexLibraryMessages()
-    #expect(try await f.db.libraryItems().isEmpty)
   }
 
 }

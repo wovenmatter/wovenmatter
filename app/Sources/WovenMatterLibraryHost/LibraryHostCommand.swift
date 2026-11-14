@@ -7,7 +7,7 @@ import Musl
 #endif
 import Foundation
 import WovenMatterCore
-import WovenMatterDashboardStore
+import WovenMatterLibraryStore
 
 /// `wovenmatter-library` command line. Every path is explicit or derived from
 /// `--data-root`; nothing reads a default production location.

@@ -28,12 +28,9 @@ public struct MobileMembershipState: Codable, Equatable, Sendable {
   /// The last host a synchronization succeeded with; tried first next time.
   public var preferredHostDeviceID: String?
   public var currentHost: MobileLibraryHost?
-  /// False once the paired Mac answered that it does not accept member
-  /// requests; the phone then keeps its bearer grant and says "Update everything".
-  public var memberRequestsAccepted: Bool?
   /// True when the paired Mac answered that it does not list this phone's
   /// key (it did not add it, or the key changed, as after a backup is
-  /// restored): pair again. Also keeps the bearer grant.
+  /// restored): pair again. Nothing syncs meanwhile.
   public var memberRejected: Bool?
   public var syncStatus: MobileLibrarySyncStatus?
   public var updatedAt: Date?
@@ -158,20 +155,27 @@ public actor MobileLibraryHosts {
   /// current Mac host, else a signed connection to the preferred Mac.
   public func analyticsTransport(current: MobileLibraryHost?, connection: HTTPSLibraryTransport?,
                                  registry: [ExecutionWorkspace] = []) -> HTTPSLibraryTransport? {
+    macTransport(current: current, connection: connection, registry: registry)
+  }
+  /// A connection to a Mac: `connection` when it reaches the current host and
+  /// that host is a Mac, else a signed connection to the preferred Mac. Only a
+  /// Mac records analytics and removes this device when it unpairs.
+  public func macTransport(current: MobileLibraryHost?, connection: HTTPSLibraryTransport?,
+                           registry: [ExecutionWorkspace] = []) -> HTTPSLibraryTransport? {
     guard let host = state.analyticsHost(current: current, registry: registry) else { return nil }
     if let connection, host == current { return connection }
     return try? transport(for: host)
   }
   public func transport(for host: MobileLibraryHost) throws -> HTTPSLibraryTransport {
-    // A paired Mac that never named its member device ID predates member requests.
-    guard MemberRequestSignature.isDeviceID(host.deviceID) else { throw MobileConnectionError.memberUnsupported }
+    // A host whose member device ID is not known yet cannot be addressed.
+    guard MemberRequestSignature.isDeviceID(host.deviceID) else { throw MobileConnectionError.memberUnknown }
     return try HTTPSLibraryTransport(host: host.endpoint, hostDeviceID: host.deviceID, identity: identity, metadata: metadata, performer: performer)
   }
 
   /// Chooses a reachable host, trying candidates in order and failing over
   /// automatically. Each attempt is one short hello; nothing polls. A host that
   /// does not know this phone yet (it has not synced with the Mac that added
-  /// it) or is too old is skipped like an offline one.
+  /// it) is skipped like an offline one.
   public func connect(registry: [ExecutionWorkspace]) async throws -> (HTTPSLibraryTransport, LibraryHello, MobileLibraryHost) {
     var failures: [any Error] = []
     for host in state.candidates(registry: registry) {
@@ -181,14 +185,11 @@ public actor MobileLibraryHosts {
         let hello = try await transport.probe()
         update { next in
           next.preferredHostDeviceID = host.deviceID; next.currentHost = host
-          if host.endpoint == next.pairedEndpoint || host.deviceID == next.pairedHostDeviceID { next.memberRequestsAccepted = true; next.memberRejected = nil }
+          if host.endpoint == next.pairedEndpoint || host.deviceID == next.pairedHostDeviceID { next.memberRejected = nil }
         }
         return (transport, hello, host)
       } catch {
         if error is CancellationError { throw error }
-        if case MobileConnectionError.memberUnsupported = error, host.endpoint == state.pairedEndpoint || host.deviceID == state.pairedHostDeviceID {
-          update { $0.memberRequestsAccepted = false }
-        }
         failures.append(error)
       }
     }
@@ -202,8 +203,6 @@ public actor MobileLibraryHosts {
     if !failures.isEmpty, failures.allSatisfy({ if case MobileConnectionError.memberUnknown = $0 { true } else { false } }) {
       return MobileConnectionError.memberUnknown
     }
-    if failures.contains(where: { if case MobileConnectionError.memberUnsupported = $0 { true } else { false } }),
-       !failures.contains(where: { $0 is URLError }) { return MobileConnectionError.memberUnsupported }
     return failures.first(where: { $0 is URLError }) ?? failures.first ?? MobileConnectionError.offline
   }
 
@@ -231,18 +230,9 @@ public actor MobileLibraryHosts {
     }
     await refreshSyncStatus(from: transport)
   }
-  /// The host the phone currently syncs with, by member device ID.
-  public func currentHostDeviceID() -> String? { state.currentHost?.deviceID }
   public func refreshSyncStatus(from transport: HTTPSLibraryTransport) async {
     if let status = try? await transport.syncStatus() { update { $0.syncStatus = status } }
   }
-  public func setPairedHost(deviceID: String?, name: String?) {
-    update { next in
-      if let deviceID { next.pairedHostDeviceID = deviceID.lowercased() }
-      if let name { next.pairedName = name }
-    }
-  }
-  public func markMemberRequests(accepted: Bool) { update { $0.memberRequestsAccepted = accepted } }
 
   static func sameBase(_ lhs: URL, _ rhs: URL) -> Bool {
     MobileMembershipState.libraryEndpoint(lhs, tailnet: nil) == MobileMembershipState.libraryEndpoint(rhs, tailnet: nil)

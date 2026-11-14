@@ -4,7 +4,7 @@ import Foundation
 import Testing
 import WovenMatterClient
 import WovenMatterCore
-@testable import WovenMatterDashboardStore
+@testable import WovenMatterLibraryStore
 
 struct ACPConfigurationLifecycleTests {
 
@@ -43,8 +43,8 @@ struct ACPConfigurationLifecycleTests {
     #expect(lease.holds == 0)
     let expectedID: String? = outcome == "unsent" ? nil : "native-first"
     #expect(fence.hasDispatched == (outcome != "unsent"))
-    #expect(try await database.localACPSession(conversationID: id).acpSessionID == expectedID)
-    let content = try await database.read { try $0.libraryIDsUnlocked("SELECT content FROM dashboard_messages WHERE id=?", bindings: [run.assistantMessageID]).first }
+    #expect(try await database.localACPSession(conversationID: id).nativeSessionID == expectedID)
+    let content = try await database.read { try $0.libraryIDsUnlocked("SELECT content FROM messages WHERE id=?", bindings: [run.assistantMessageID]).first }
     // An unsent cancellation terminalizes the placeholder with the app's
     // stopped-before-response message, never provider output.
     #expect(content == (outcome == "unsent" ? "Stopped before the agent produced a response." : "Partial first response"))
@@ -56,7 +56,7 @@ struct ACPConfigurationLifecycleTests {
       }, prompt: { _, _, _, _ in .endTurn }, configuration: { config }, setConfiguration: { _, _ in config }, cancel: {}, shutdown: {})
     })
     _ = try await resumed.configuration(conversationID: id, launch: launch, workspace: workspace)
-    #expect(try await database.localACPSession(conversationID: id).acpSessionID == expectedID)
+    #expect(try await database.localACPSession(conversationID: id).nativeSessionID == expectedID)
     await resumed.shutdown()
     if expectedID != nil {
       let forked = LocalACPSessionCoordinator(database: database, clientFactory: { _, _ in
@@ -71,7 +71,7 @@ struct ACPConfigurationLifecycleTests {
       } catch {
         #expect(error.localizedDescription == "The harness could not reconnect the existing session to change permissions.")
       }
-      #expect(try await database.localACPSession(conversationID: id).acpSessionID == expectedID)
+      #expect(try await database.localACPSession(conversationID: id).nativeSessionID == expectedID)
       await forked.shutdown()
     }
   }
@@ -92,72 +92,44 @@ struct ACPConfigurationLifecycleTests {
     let workspace = LocalACPWorkspaceLaunchConfiguration(rootURL: persistence.directory)
     _ = try await coordinator.configuration(conversationID: id, launch: launch, workspace: workspace)
     #expect(probe.shutdowns == 1)
-    #expect(try await database.localACPSession(conversationID: id).acpSessionID == nil)
+    #expect(try await database.localACPSession(conversationID: id).nativeSessionID == nil)
     let configured = try await coordinator.updateConfiguration(conversationID: id, permission: "auto", launch: launch, workspace: workspace)
     #expect(configured.permission == "auto")
     #expect(permission.shutdowns == 1)
-    #expect(try await database.localACPSession(conversationID: id).acpSessionID == nil)
+    #expect(try await database.localACPSession(conversationID: id).nativeSessionID == nil)
     _ = try await coordinator.accept(conversationID: id, input: .init(text: "First prompt"), launch: launch, workspace: workspace)
     _ = try await pollUntil(attempts: 500, interval: .milliseconds(10)) { lease.holds == 0 }
     #expect(lease.holds == 0)
     #expect(prompt.shutdowns == 1)
-    #expect(try await database.localACPSession(conversationID: id).acpSessionID == "durable")
+    #expect(try await database.localACPSession(conversationID: id).nativeSessionID == "durable")
     let changed = try await coordinator.updateConfiguration(conversationID: id, permission: "ask", launch: launch, workspace: workspace)
     #expect(changed.permission == "ask")
     #expect(resumed.shutdowns == 1)
-    #expect(try await database.localACPSession(conversationID: id).acpSessionID == "durable")
+    #expect(try await database.localACPSession(conversationID: id).nativeSessionID == "durable")
     await coordinator.shutdown()
   }
 
-  @Test(arguments: [false, true])
-  func obsoleteClaudeDraftCanBeReplacedOnlyWithoutPriorHistory(hasPriorRun: Bool) async throws {
+  @Test func aMissingClaudeSessionIsNeverSilentlyReplaced() async throws {
     let persistence = try PersistenceFixture(); defer { persistence.remove() }
     let database = try await persistence.openDatabase()
     let id = try await database.createFixtureLocalACPSession(runtimeKind: .claudeCode, title: "Older Claude", ownerDeviceID: UUID())
     try await database.updateLocalACPSessionID(conversationID: id, sessionID: "older-id")
     try await database.updateLocalACPSessionConfiguration(conversationID: id, model: nil, thinking: nil, permission: "ask")
-    if hasPriorRun {
-      let run = try await database.beginLocalACPRun(conversationID: id, input: .init(text: "Existing prompt"))
-      try await database.completeLocalACPRun(runID: run.runID)
-    }
+    let run = try await database.beginLocalACPRun(conversationID: id, input: .init(text: "Existing prompt"))
+    try await database.completeLocalACPRun(runID: run.runID)
     let driver = SelectorDriverState(expectedExistingSessionID: "older-id", sessionID: "replacement", missingExistingSession: true)
     let coordinator = LocalACPSessionCoordinator(database: database, processLease: ConfigurationTestProcessLease(),
       clientFactory: { _, _ in driver.driver() })
     let launch = LocalACPRuntimeLaunchConfiguration(runtimeKind: .claudeCode,
       executableURL: URL(filePath: "/nonexistent-claude-draft-fixture"), arguments: [])
     let workspace = LocalACPWorkspaceLaunchConfiguration(rootURL: persistence.directory)
-    if hasPriorRun {
-      await #expect(throws: (any Error).self) {
-        try await coordinator.updateConfiguration(conversationID: id, permission: "auto", launch: launch, workspace: workspace)
-      }
-      #expect(try await database.localACPSession(conversationID: id).acpSessionID == "older-id")
-      #expect(try await database.localACPSession(conversationID: id).permission == "ask")
-    } else {
-      let configured = try await coordinator.updateConfiguration(conversationID: id, permission: "auto", launch: launch, workspace: workspace)
-      #expect(configured.permission == "auto")
-      #expect(try await database.localACPSession(conversationID: id).acpSessionID == nil)
+    await #expect(throws: (any Error).self) {
+      try await coordinator.updateConfiguration(conversationID: id, permission: "auto", launch: launch, workspace: workspace)
     }
+    #expect(try await database.localACPSession(conversationID: id).nativeSessionID == "older-id")
+    #expect(try await database.localACPSession(conversationID: id).permission == "ask")
     #expect(driver.shutdowns == 1)
     await coordinator.shutdown()
-  }
-
-  @Test(arguments: ["message", "event", "trace", "import", "retained"])
-  func claudeDraftRepairRejectsStandaloneHistoryEvidence(evidence: String) async throws {
-    let persistence = try PersistenceFixture(); defer { persistence.remove() }
-    let database = try await persistence.openDatabase()
-    let id = try await database.createFixtureLocalACPSession(runtimeKind: .claudeCode, title: "Retained Claude", ownerDeviceID: UUID())
-    try await database.updateLocalACPSessionID(conversationID: id, sessionID: "native")
-    let sql: String = switch evidence {
-    case "message": "INSERT INTO dashboard_messages(id,conversation_id) VALUES ('fixture',?)"
-    case "event": "INSERT INTO dashboard_run_events(id,conversation_id) VALUES ('fixture',?)"
-    case "trace": "INSERT INTO dashboard_run_trace_events(id,conversation_id) VALUES ('fixture',?)"
-    case "import": "INSERT INTO desktop_session_imports(conversation_id,imported_at) VALUES (?,'fixture')"
-    default: "INSERT INTO retained_execution_history(conversation_id) VALUES (?)"
-    }
-    try await database.write { try $0.toolsExecuteUnlocked(sql, [id]) }
-    let cleared = try await database.write { try $0.discardUnpromptedClaudeDraftSessionID(conversationID: id, expectedSessionID: "native") }
-    #expect(!cleared)
-    #expect(try await database.localACPSession(conversationID: id).acpSessionID == "native")
   }
 
   @Test func executionAdoptionDetachesOnlyItsIdleClientAndRejectsLegacyReopen() async throws {

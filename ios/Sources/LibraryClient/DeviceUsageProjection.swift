@@ -3,7 +3,7 @@ import CryptoKit
 import WovenMatterShared
 
 /// Reads immutable Pi entries already saved for synchronization. It never opens a
-/// runtime, refreshes a provider, or combines central usage with device usage.
+/// runtime, refreshes a provider, or combines library usage with device usage.
 public enum DeviceUsageProjection {
   public static func samples(in journal: WorkspaceJournalState, workspaceID: String, from: Date, to: Date) throws -> [LibraryUsageSample] {
     let entries = journal.entries.values.filter {

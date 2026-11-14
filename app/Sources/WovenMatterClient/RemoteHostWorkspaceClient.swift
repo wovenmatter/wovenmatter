@@ -69,7 +69,7 @@ private actor BundledHostFingerprint {
         if let task { return await task.value }
         let task = Task.detached(priority: .utility) { () -> String? in
             guard let root = try? RemoteWorkspaceSSHClient.loadDeploymentRoot() else { return nil }
-            return try? RemoteWorkspaceDeployment(root: root, kind: .host).fingerprint
+            return try? RemoteWorkspaceDeployment(root: root).fingerprint
         }
         self.task = task
         return await task.value
@@ -92,9 +92,6 @@ extension RemoteWorkspaceSSHClient {
     public func deployHost(configuration: RemoteWorkspaceConfiguration, token: String? = nil,
                            update: Bool = false, mode: RemoteHostInstallMode = .workspace, architecture: String? = nil,
                            progress: @escaping @Sendable (String) -> Void = { _ in }) throws -> RemoteWorkspaceStatus {
-        guard configuration.kind == .host else {
-            throw RemoteWorkspaceClientError.invalidResponse("Select a Linux host workspace for native deployment.")
-        }
         try Self.validateConfiguration(configuration)
         let secret = token ?? ""
         guard !secret.contains("\n"), !secret.contains("\r"), !secret.contains("\0"), update || !secret.isEmpty else {
@@ -103,7 +100,7 @@ extension RemoteWorkspaceSSHClient {
         let destination = try Self.validatedDestination(hostName: configuration.hostName, userName: configuration.userName)
         let root = try deploymentRoot ?? Self.loadDeploymentRoot()
         try RemoteHostLibrary.require(root: root, architecture: architecture)
-        let deployment = try RemoteWorkspaceDeployment(root: root, kind: .host)
+        let deployment = try RemoteWorkspaceDeployment(root: root)
         progress("Preparing the host service bundle…")
         let bundle = try RemoteHostBundle.archive(root: root, deployment: deployment)
         let script = try String(data: hostScriptLoader(), encoding: .utf8).unwrapHostScript()
@@ -114,7 +111,7 @@ extension RemoteWorkspaceSSHClient {
             + arguments.map(RemoteWorkspaceExecTarget.quote).joined(separator: " ")
         var input = Data((secret + "\n").utf8)
         input.append(bundle)
-        let updates = RemoteWorkspaceBuildProgress(kind: .host, report: progress)
+        let updates = RemoteWorkspaceBuildProgress(report: progress)
         progress("Uploading the host service…")
         return try decode(RemoteWorkspaceStatus.self,
             from: streamingRunner(destination, command, input) { updates.receive($0) })
@@ -126,16 +123,11 @@ extension RemoteWorkspaceSSHClient {
         }
         try Self.validateConfiguration(configuration)
         let destination = try Self.validatedDestination(hostName: configuration.hostName, userName: configuration.userName)
-        if configuration.kind == .host {
-            let script = try String(data: hostScriptLoader(), encoding: .utf8).unwrapHostScript()
-            let command = "exec bash -c " + RemoteWorkspaceExecTarget.quote(script) + " -- "
-                + ["logs", configuration.workspaceID, String(count)].map(RemoteWorkspaceExecTarget.quote).joined(separator: " ")
-            struct Response: Decodable { let logs: String }
-            return try decode(Response.self, from: runner(destination, command, nil)).logs
-        }
-        let command = ["docker", "logs", "--tail", String(count), "wovenmatter-" + configuration.workspaceID]
-            .map(RemoteWorkspaceExecTarget.quote).joined(separator: " ")
-        return String(decoding: try runner(destination, command, nil), as: UTF8.self)
+        let script = try String(data: hostScriptLoader(), encoding: .utf8).unwrapHostScript()
+        let command = "exec bash -c " + RemoteWorkspaceExecTarget.quote(script) + " -- "
+            + ["logs", configuration.workspaceID, String(count)].map(RemoteWorkspaceExecTarget.quote).joined(separator: " ")
+        struct Response: Decodable { let logs: String }
+        return try decode(Response.self, from: runner(destination, command, nil)).logs
     }
 
 }

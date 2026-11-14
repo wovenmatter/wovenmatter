@@ -25,21 +25,10 @@ preserving durable acknowledgement rather than the adapter's NORMAL default.
 SQLite commits storage atomically; Harness recovery, durable task checkpoints,
 and request identities still determine safe execution and avoid duplicate sends.
 
-## Existing sessions
+## Activation
 
-The first open validates the legacy JSONL store using the SDK's storage recovery
-code without opening a Harness or running tools. A format-1 migration reader
-resolves reclaimed sidecars and imports committed writes in sequence. Namespace
-creation, all imported commits, and the activation receipt share one outer
-SQLite transaction. An import failure leaves the source available and no
-partially activated namespace; opening fails instead of silently choosing JSONL.
-
-After activation, `native/main.jsonl` is made read-only and retained with its
-sidecars as a recovery backup. Older app versions cannot append a competing
-history under ordinary user permissions. Rollback to an older binary requires
-an explicit data recovery decision; do not restore write permissions while the
-SQLite owner is running. A backup chmod failure also fails opening and retries
-protection on the next open, while the committed SQLite activation remains final.
+A session's first open creates its namespace and writes its activation receipt in
+one SQLite transaction, so a failure leaves no partially activated namespace.
 
 Transport archives and session manifests keep their existing formats. They are
 not the authoritative Pi scheduler store. Backups must capture the complete
@@ -48,9 +37,7 @@ file while an owner is running is insufficient.
 
 ## Validation
 
-Provider-free fixtures cover native child ownership, pending tasks, receipts,
-rewindable and latest-document checkpoints, migration rollback/retry, namespace
-isolation, and recovery after SIGKILL immediately following an acknowledged
-submission. The existing engine recovery and subagent suites run against SQLite.
+Provider-free fixtures cover activation rollback and retry, and recovery after
+SIGKILL immediately following an acknowledged submission. The existing engine recovery and subagent suites run against SQLite.
 Power-loss durability relies on SQLite FULL synchronization and the host's
 storage guarantees; the tests do not simulate physical disk failure.

@@ -3,19 +3,7 @@ import WovenMatterCore
 
 extension ApplicationModel {
     func mutateConversation(id: String, mutation: WorkspaceConversationMutation) async throws {
-        if let client = liveLibraryClient, client.isForeignConversation(id) {
-            let action: String
-            var title: String?
-            switch mutation {
-            case .rename(let value): action = "rename"; title = value
-            case .setPinned(let value): action = value ? "pin" : "unpin"
-            case .moveToTrash: action = "trash"
-            case .restore: action = "restore"
-            }
-            guard await client.perform(.conversation(id: id, action: action, title: title, folderID: nil)) else {
-                throw WorkspaceToolError.invalid(client.errorMessage ?? "The library could not save this change.")
-            }
-        } else if isBackendFrontend {
+        if isBackendFrontend {
             _ = try await sendBackendCommand(.workspaceMutation(.conversation(id: id, mutation: mutation)))
         } else if !mutation.isPresentationOnly, try await pairedOwnerWorkspace(conversationID: id) != nil {
             // Trash and restore change another Mac's running work; that Mac
@@ -23,11 +11,11 @@ extension ApplicationModel {
             let action: String = if case .moveToTrash = mutation { "trash" } else { "restore" }
             try await performOnOwner(conversationID: id, action: .conversation(id: id, action: action, title: nil, folderID: nil))
         } else {
-            guard let dashboardStore else { throw ApplicationModelError.dashboardStoreUnavailable }
+            guard let libraryStore else { throw ApplicationModelError.libraryStoreUnavailable }
             let trashing: Bool = if case .moveToTrash = mutation { true } else { false }
             if trashing { try beginConversationTrash(id: id) }
             defer { if trashing { finishConversationTrash(id: id) } }
-            try await dashboardStore.mutateConversation(id: id, mutation: mutation)
+            try await libraryStore.mutateConversation(id: id, mutation: mutation)
         }
         await refreshWorkspace()
         if LocalExecutionRole.current != .backend {
@@ -42,28 +30,25 @@ extension ApplicationModel {
             }
             return conversations
         }
-        guard let dashboardStore else { throw ApplicationModelError.dashboardStoreUnavailable }
-        return try await dashboardStore.trashedConversations()
+        guard let libraryStore else { throw ApplicationModelError.libraryStoreUnavailable }
+        return try await libraryStore.trashedConversations()
     }
 
     func exportConversation(id: String, format: WorkspaceConversationExportFormat) async throws -> URL {
-        if let client = liveLibraryClient, client.isForeignConversation(id) {
-            return try await client.exportFile(.exportConversation(id: id, format: format.rawValue))
-        }
         if isBackendFrontend {
             guard let url = try await sendBackendCommand(.exportConversation(id: id, format: format)).exportURL else {
                 throw WorkspaceConversationActionError.unavailable
             }
             return url
         }
-        guard let dashboardStore else { throw ApplicationModelError.dashboardStoreUnavailable }
-        return try await dashboardStore.exportConversation(id: id, format: format)
+        guard let libraryStore else { throw ApplicationModelError.libraryStoreUnavailable }
+        return try await libraryStore.exportConversation(id: id, format: format)
     }
 
     /// The execution workspace of the paired Mac that runs this chat, when it
     /// is another Mac. Independent Linux and iOS workspaces are not included.
     func pairedOwnerWorkspace(conversationID id: String) async throws -> ExecutionWorkspace? {
-        guard let database = dashboardStore?.database,
+        guard let database = libraryStore?.database,
               let workspace = try await database.libraryConversationExecutionWorkspace(conversationID: id), workspace.kind == .mac,
               try await workspace.ownerDeviceID != database.libraryIdentity().hostDeviceID else { return nil }
         return workspace
@@ -71,7 +56,7 @@ extension ApplicationModel {
 
     /// Sends a chat action to the Mac that runs it and surfaces its refusal.
     func performOnOwner(conversationID id: String, action: LibraryWorkspaceAction) async throws {
-        let receipt = try await centralExecutionClient().perform(conversationID: id, action: action)
+        let receipt = try await memberExecutionClient().perform(conversationID: id, action: action)
         if receipt.status == .rejected {
             throw LibraryAPIError(code: "rejected", message: receipt.message ?? WorkspaceConversationActionError.ownedByAnotherMac.localizedDescription)
         }

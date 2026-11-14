@@ -42,7 +42,7 @@ struct WovenMCPTests {
   }
 
   @Test func pageToolsAcceptNoProvenanceAndRequireTheirRevisions() throws {
-    let base: [String: GatewayJSONValue] = ["pageID": .string("p"), "componentID": .string("c"), "componentRevision": .string("r")]
+    let base: [String: JSONValue] = ["pageID": .string("p"), "componentID": .string("c"), "componentRevision": .string("r")]
     for forged in ["updatedBy", "createdBy", "actor", "updatedAt", "createdAt", "caller", "conversationID"] {
       #expect(throws: WorkspaceToolError.self) {
         try WovenMCPCatalog.request(name: "woven_pages_update_component", arguments: .object(base.merging([forged: .string("forged")]) { $1 }))
@@ -113,8 +113,8 @@ struct WovenMCPTests {
     #expect(wait.options["until"] == "either" && wait.options["timeout-seconds"] == "50" && wait.options["workspace"] == workspace)
     let tool = try #require(WovenMCPCatalog.tools.first { $0.name == "woven_sessions_wait" })
     #expect(tool.group == .sessions && !tool.isMutation)
-    #expect(tool.inputSchema.objectValue?["required"] == .array(["id", "timeoutSeconds", "until"].map(GatewayJSONValue.string)))
-    for arguments: [String: GatewayJSONValue] in [["id": .string(id), "until": .string("done"), "timeoutSeconds": .number(5)],
+    #expect(tool.inputSchema.objectValue?["required"] == .array(["id", "timeoutSeconds", "until"].map(JSONValue.string)))
+    for arguments: [String: JSONValue] in [["id": .string(id), "until": .string("done"), "timeoutSeconds": .number(5)],
                                                    ["id": .string(id), "until": .string("idle"), "timeoutSeconds": .number(Double(StreamProtocol.maximumWaitSeconds + 1))],
                                                    ["id": .string(id), "until": .string("idle"), "timeoutSeconds": .number(0)],
                                                    ["id": .string(id), "timeoutSeconds": .number(5)]] {
@@ -149,7 +149,7 @@ struct WovenMCPTests {
       "action": .string("snapshot"), "pid": .number(7), "windowID": .number(9), "treeFormat": .string("elements")]))
     let command = try WovenMatterToolCommand(request.arguments)
     #expect(command.group == .computer && command.action == "call")
-    let input = try JSONDecoder().decode(GatewayJSONValue.self, from: Data(command.required("json").utf8))
+    let input = try JSONDecoder().decode(JSONValue.self, from: Data(command.required("json").utf8))
     #expect(input.objectValue?["windowID"] == .number(9))
     for key in ["session", "endpoint", "socket", "screenshot_out_file", "prompt"] {
       #expect(throws: WorkspaceToolError.self) {
@@ -192,11 +192,11 @@ struct WovenMCPTests {
     let html = "<img src='data:image/png;base64," + String(repeating: "A", count: 600_000) + "'>"
     let request = try WovenMCPCatalog.request(name: render.name, arguments: .object(["html": .string(html), "title": .string("Chart"), "height": .number(160)]))
     let command = try WovenMatterToolCommand(request.arguments)
-    let page = try JSONDecoder().decode(GatewayJSONValue.self, from: Data(command.required("json").utf8))
+    let page = try JSONDecoder().decode(JSONValue.self, from: Data(command.required("json").utf8))
     #expect(command.group == .html)
     #expect(page.objectValue?["action"] == .string("render"))
     #expect(page.objectValue?["html"] == .string(html))
-    let message: GatewayJSONValue = .object(["method": .string("tools/call"), "params": .object(["name": .string(render.name)])])
+    let message: JSONValue = .object(["method": .string("tools/call"), "params": .object(["name": .string(render.name)])])
     #expect(WovenMCPServer.maximumRequestBytes(for: message) == 40 * 1024 * 1024)
     #expect(WovenMCPServer.maximumRequestBytes(for: .object(["method": .string("tools/list")])) == 4 * 1024 * 1024)
     #expect(throws: WorkspaceToolError.self) {

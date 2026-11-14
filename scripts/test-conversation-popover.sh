@@ -11,8 +11,8 @@ cache_root="$(mktemp -d "${TMPDIR:-/tmp}/wovenmatter-popover-tests.XXXXXX")"
 app_path="$cache_root/PopoverFixture.app"
 mkdir -p "$app_path/Contents/MacOS" "$cache_root/ModuleCache"
 xcrun swiftc -module-cache-path "$cache_root/ModuleCache" \
-  "$repo_root/app/App/Views/DashboardConversationPopover.swift" \
-  "$repo_root/scripts/test-support/DashboardConversationPopoverTests.swift" \
+  "$repo_root/app/App/Views/ConversationPopover.swift" \
+  "$repo_root/scripts/test-support/ConversationPopoverTests.swift" \
   -o "$app_path/Contents/MacOS/PopoverFixture"
 cat > "$app_path/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>

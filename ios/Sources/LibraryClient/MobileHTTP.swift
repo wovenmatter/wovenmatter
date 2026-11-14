@@ -76,7 +76,10 @@ public enum MobileRequestSigning {
     switch status {
     case 401, 403:
       guard signed else { return .revoked }
-      if code == "member_auth_unavailable" || error?.message.contains("does not accept member requests") == true { return .memberUnsupported }
+      // The host has not loaded its member list yet; try again later.
+      if code == "member_auth_unavailable" || error?.message.contains("does not accept member requests") == true {
+        return .http(status, error?.message ?? "The device you reached isn’t ready for member requests yet.")
+      }
       if code == "clock_skew" { return .http(status, error?.message ?? "This device's clock is more than five minutes off.") }
       if code == "wrong_device" || code == "wrong_workspace" { return .http(status, error?.message ?? fallback) }
       return .memberUnknown

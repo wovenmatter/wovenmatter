@@ -271,7 +271,7 @@ test('scheduled full-root Pi runs replace saved approval modes before dispatch a
       async poll() { return { done: true, result: { stopReason: 'end_turn' }, updates: [], cursor: 0 } },
     }
     const executor = createTaskExecutor({ catalog: new Map(), workspaceRoot: '/tmp', environment: () => ({}), defaultAgent,
-      configuration: loadRuntimeConfiguration({ WOVENMATTER_RUNTIME_KIND: 'host', WOVENMATTER_ACCESS_MODE: 'fullRoot' }) })
+      configuration: loadRuntimeConfiguration({ WOVENMATTER_ACCESS_MODE: 'fullRoot' }) })
     const running = executor({ run: { id: 'run', task: { prompt: 'fixture', configuration: { runtimeKind: 'default_agent', permission: 'ask', usesProductPermissionDefault: true } } },
       signal: new AbortController().signal, publish() {}, bindSession() {} })
     if (supported) {

@@ -1,6 +1,6 @@
 import Foundation
 import Observation
-import WovenMatterDashboardStore
+import WovenMatterLibraryStore
 
 @MainActor @Observable
 final class MacDeviceRow: Identifiable {
@@ -71,7 +71,7 @@ final class MacDeviceSetupModel {
         do { row.installation = try await management.inspect(row.mac, connection: row.connection) }
         catch { row.error = "Installation could not be checked. Verify existing SSH access in Connection settings, then retry. " + error.localizedDescription }
     }
-    func perform(_ action: Action, row: MacDeviceRow, central: URL?) async {
+    func perform(_ action: Action, row: MacDeviceRow, endpoint: URL?) async {
         guard !row.busy, !row.checking else { return }
         row.busy = true; row.error = nil; row.message = nil
         defer { row.busy = false }
@@ -85,17 +85,17 @@ final class MacDeviceSetupModel {
                 guard let release else { throw MacDeviceSetupError("Check for updates before downloading Woven Matter.") }
                 row.message = "Downloading and verifying Woven Matter \(release.version)…"
                 try await management.install(row.mac, connection: row.connection, release: release,
-                    requirePairingSupport: action == .installAndPair && central != nil)
+                    requirePairingSupport: action == .installAndPair && endpoint != nil)
                 row.installation = try await management.inspect(row.mac, connection: row.connection)
                 row.message = "Woven Matter \(row.installation?.version ?? release.version) installed."
             }
             if action != .update && action != .download {
-                guard let central else { throw MacDeviceSetupError("Wait for this Mac’s central database to become available before pairing.") }
+                guard let endpoint else { throw MacDeviceSetupError("Wait for this Mac to connect to Tailscale before pairing.") }
                 guard row.installation?.supportsSetup == true else {
                     throw MacDeviceSetupError("This version needs to be updated before pairing from here. You can also open Apple Devices on that Mac to pair manually.")
                 }
                 row.message = "Opening Woven Matter and requesting pairing…"
-                let requestID = try await management.requestPairing(row.mac, connection: row.connection, central: central)
+                let requestID = try await management.requestPairing(row.mac, connection: row.connection, endpoint: endpoint)
                 // Surface target-side transition failures instead of implying success
                 // merely because LaunchServices accepted an open request.
                 for _ in 0..<30 {

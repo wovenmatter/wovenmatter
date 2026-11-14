@@ -15,7 +15,7 @@ if (args.includes('--migrate-only')) { process.stdout.write('{"event":"migrated"
 if (process.env.FAKE_LIBRARY_EXIT) process.exit(Number(process.env.FAKE_LIBRARY_EXIT))
 const socketPath = option('--socket') ?? join(dataRoot, 'run/library.sock'), tokenFile = option('--token-file') ?? join(dataRoot, 'run/library-api.token')
 const token = readFileSync(tokenFile, 'utf8').trim()
-const deviceFile = join(dataRoot, 'library/dashboard-device-id')
+const deviceFile = join(dataRoot, 'library/device-id')
 if (!existsSync(deviceFile)) writeFileSync(deviceFile, randomUUID() + '\n', { mode: 0o600 })
 const deviceID = readFileSync(deviceFile, 'utf8').trim()
 // A real member key, as `secrets/member-signing.key` (raw 32-byte seed, base64).

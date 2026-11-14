@@ -3,12 +3,12 @@ import Testing
 @testable import WovenMatterAppFacade
 import WovenMatterCore
 import WovenMatterClient
-import WovenMatterDashboardStore
+import WovenMatterLibraryStore
 
 /// `woven_sessions_wait` and wake-ups through the Mac's own tool path
 /// (`ApplicationModel+SessionWaits.swift`), against a Linux host that reports
 /// its sessions' state. The destination's `workspace` stream items are handed
-/// to `SessionWakeUps` as `CentralExecutionClient.onWorkspaceItem` hands them.
+/// to `SessionWakeUps` as `MemberExecutionClient.onWorkspaceItem` hands them.
 @Suite("Mac session waits", .serialized) @MainActor
 struct SessionWaitTests {
     @MainActor final class Setup {
@@ -24,14 +24,12 @@ struct SessionWaitTests {
                                    libraryID: identity.libraryID, members: [signer.deviceID: signer.publicKey])
             workspace = try await mac.database.receiveSyncedWorkspace(linux.descriptor)
             let linux = linux
-            mac.model.federatedExecutionClient = try CentralExecutionClient(database: mac.database,
+            mac.model.federatedExecutionClient = try MemberExecutionClient(database: mac.database,
                 commandJournalURL: mac.directory.appending(path: "commands.json"),
-                provision: { _ in throw LibraryAPIError(code: "unauthorized", message: "No grants in this test.") },
-                loadCredential: { _ in nil }, saveCredential: { _ in },
                 makeSignedTransport: { workspace in try SignedExecutionWorkspaceTransport(workspace: workspace, signer: signer.signer, audience: linux.memberID, send: linux.send) })
             tools = try #require(mac.model.agentTools)
         }
-        func call(_ caller: String, _ name: String, _ arguments: [String: GatewayJSONValue]) async throws -> WovenMatterToolResponse {
+        func call(_ caller: String, _ name: String, _ arguments: [String: JSONValue]) async throws -> WovenMatterToolResponse {
             await tools.handle(try WovenMCPCatalog.request(name: name, arguments: .object(arguments)), callerID: caller)
         }
         /// What the Linux host's `workspace` stream sends for its current state.
@@ -92,7 +90,7 @@ struct SessionWaitTests {
         let delivery = try #require(try await s.mac.database.toolDelivery(id: deliveryID))
         #expect(delivery.kind == .notification && delivery.sourceID == id && delivery.targetID == caller && delivery.sourceTitle == "Build it")
         let run = try #require(try await s.mac.database.activeRunID(conversationID: caller))
-        try await s.mac.model.refreshClientExecutionState()
+        try await s.mac.model.reconcileLocalRunState()
 
         // A question while the woken turn runs: held until that turn ends.
         let sent = try await s.call(caller, "woven_sessions_send", ["id": .string(id), "text": .string("Ask first")])
@@ -104,7 +102,7 @@ struct SessionWaitTests {
         #expect(await s.mac.recorder.deliveries.count == 1, "a running caller is not woken")
         #expect(wakeUps.pending(callerID: caller).map(\.kind) == [.needsInput])
         try await s.mac.database.completeLocalACPRun(runID: run)
-        try await s.mac.model.refreshClientExecutionState()
+        try await s.mac.model.reconcileLocalRunState()
         await wakeUps.deliverPending()
         try await woken(s, "woken once its turn ended", count: 2)
         #expect(await s.mac.recorder.deliveries.last?.input.text.contains("is waiting for your answer: Which log? Read it with woven_sessions_status") == true)
@@ -125,7 +123,7 @@ struct SessionWaitTests {
         // The wait told the caller: no wake-up once its turn ends.
         let woken = try #require(try await s.mac.database.activeRunID(conversationID: caller))
         try await s.mac.database.completeLocalACPRun(runID: woken)
-        try await s.mac.model.refreshClientExecutionState()
+        try await s.mac.model.reconcileLocalRunState()
         await wakeUps.deliverPending()
         #expect(await s.mac.recorder.deliveries.count == 2)
 
@@ -173,7 +171,7 @@ struct SessionWaitTests {
         try await eventually("the wait began") { wakeUps.isTracking(workspaceID: ApplicationModel.sessionWaitThisMac) }
         let started = ContinuousClock.now
         try await s.mac.database.completeLocalACPRun(runID: run)
-        try await s.mac.model.refreshClientExecutionState()
+        try await s.mac.model.reconcileLocalRunState()
         let finished = try await waiting.value
         #expect(finished.result?.objectValue?["state"] == .string("idle") && finished.result?.objectValue?["timedOut"] == .bool(false))
         #expect(ContinuousClock.now - started < .seconds(10), "resolved by the change, not the timeout")

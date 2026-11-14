@@ -85,19 +85,4 @@ public struct SessionSelectionSnapshot: Codable, Equatable, Sendable {
     self.requiresApplication = requiresApplication
     self.usesProductPermissionDefault = usesProductPermissionDefault
   }
-
-  private enum CodingKeys: String, CodingKey {
-    case harness, workspace, selections, desiredSelections, requiresApplication, usesProductPermissionDefault
-  }
-
-  public init(from decoder: any Decoder) throws {
-    let container = try decoder.container(keyedBy: CodingKeys.self)
-    harness = try container.decode(String.self, forKey: .harness)
-    workspace = try container.decode(String.self, forKey: .workspace)
-    selections = try container.decode(SessionSelections.self, forKey: .selections)
-    desiredSelections = try container.decode(SessionSelections.self, forKey: .desiredSelections)
-    // Older snapshots already represented captured sessions, not pending work.
-    requiresApplication = try container.decodeIfPresent(Bool.self, forKey: .requiresApplication) ?? false
-    usesProductPermissionDefault = try container.decodeIfPresent(Bool.self, forKey: .usesProductPermissionDefault) ?? false
-  }
 }

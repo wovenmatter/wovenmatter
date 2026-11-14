@@ -1,7 +1,7 @@
 import Foundation
 import WovenMatterClient
 import WovenMatterCore
-import WovenMatterDashboardStore
+import WovenMatterLibraryStore
 
 /// The headless library host (`wovenmatter-library`). It owns one library
 /// database and serves:
@@ -43,7 +43,7 @@ public final class LibraryHost: @unchecked Sendable {
   ]
 
   public let layout: LibraryHostLayout
-  public let store: DashboardStore
+  public let store: LibraryStore
   public let database: WorkspaceDatabase
   public let identity: MemberIdentity
   public let members: MemberDirectory
@@ -66,7 +66,7 @@ public final class LibraryHost: @unchecked Sendable {
     LinuxSecretStore.directory = layout.secrets
     self.layout = layout
     token = try LibraryHostToken.load(tokenFile ?? layout.defaultTokenFile)
-    store = try await DashboardStore(supportDirectory: layout.library)
+    store = try await LibraryStore(supportDirectory: layout.library)
     try await store.prepareLocalWorkspace()
     database = store.database
     executor = WorkspaceToolExecutor(database: database)
@@ -383,7 +383,7 @@ public final class LibraryHost: @unchecked Sendable {
     guard request.method == "POST" else { return .error("method_not_allowed", "Use POST.", status: 405) }
     guard request.body.count <= 16_384 else { return .error("too_large", "The caller registration is too large.", status: 413) }
     let registration = try JSONDecoder().decode(CallerRegistration.self, from: request.body)
-    let groups = try Self.groups(registration.enabledGroups ?? [])
+    let groups = WorkspaceToolGroup.selected(registration.enabledGroups ?? [])
     let id = try await ensureCaller(registration.conversationID, groups: groups, title: registration.title,
       runtimeKind: registration.runtimeKind, workingDirectory: registration.workingDirectory)
     return try .json(["conversationID": id, "enabledGroups": groups.map(\.rawValue).sorted().joined(separator: ",")])
@@ -432,9 +432,9 @@ public final class LibraryHost: @unchecked Sendable {
           request.headers["x-woven-conversation-id"] != nil || request.headers["x-woven-caller"] != nil else {
       return .error("invalid_request", "MCP requires a conversation binding (or a bot caller) and its current tool selection.", status: 400)
     }
-    let groups = try Self.groups(rawGroups.split(separator: ",").map(String.init))
-    let message: GatewayJSONValue
-    do { message = try JSONDecoder().decode(GatewayJSONValue.self, from: request.body) }
+    let groups = WorkspaceToolGroup.selected(rawGroups.split(separator: ",").map(String.init))
+    let message: JSONValue
+    do { message = try JSONDecoder().decode(JSONValue.self, from: request.body) }
     catch { return try .json(WovenMCPServer.error(code: -32700, message: "The MCP request could not be decoded.")) }
     guard request.body.count <= WovenMCPServer.maximumRequestBytes(for: message) else {
       return .error("too_large", "The MCP request exceeds its size limit.", status: 413)
@@ -470,14 +470,6 @@ public final class LibraryHost: @unchecked Sendable {
     return try .json(result)
   }
 
-  static func groups(_ names: [String]) throws -> Set<WorkspaceToolGroup> {
-    let values = names.map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
-    let groups = values.compactMap(WorkspaceToolGroup.init(rawValue:))
-    guard groups.count == values.count else {
-      throw LibraryAPIError(code: "invalid_request", message: "An unknown tool group was selected.")
-    }
-    return Set(groups)
-  }
 }
 
 /// The mobile API's command surface on a headless host: library tools run

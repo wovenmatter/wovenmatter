@@ -2,7 +2,7 @@ import WorkspaceFixtures
 import Foundation
 import Testing
 import WovenMatterShared
-import WovenMatterDashboardStore
+import WovenMatterLibraryStore
 @testable import WovenMatterAppFacade
 
 @Suite("Desktop update completion")

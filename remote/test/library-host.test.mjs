@@ -111,11 +111,10 @@ test('a host that exits while the server is shutting down is not restarted', asy
   await library.stop()
 })
 
-async function executionFixture(t, library, { fetchImpl } = {}) {
+async function executionFixture(t, library) {
   const directory = mkdtempSync(join(tmpdir(), 'woven-linux-library-'))
   const runtime = { providers: async () => [{ id: 'default_agent', runtimeKind: 'default_agent', available: true }], create: async () => ({ sessionID: randomUUID() }), close: async () => {} }
-  const service = createClientExecution({ directory, runtime, managedDataRoot: join(directory, 'databases'), publisherKey: 'k'.repeat(40), publisherFetch: fetchImpl ?? (async () => { throw new Error('No Mac is reachable.') }),
-    publisherIntervalMilliseconds: 0, library: { client: library.client, available: library.available } })
+  const service = createClientExecution({ directory, runtime, managedDataRoot: join(directory, 'databases'), publisherIntervalMilliseconds: 0, library: { client: library.client, available: library.available } })
   t.after(async () => { await service.close(); rmSync(directory, { recursive: true, force: true }) })
   const { principal: device, enrollment } = enroll(service)
   const command = (kind, values = {}) => service.command({ commandID: randomUUID(), deviceID: device.id, kind, ...values }, device)
@@ -126,11 +125,10 @@ async function executionFixture(t, library, { fetchImpl } = {}) {
 }
 const resultOf = reply => JSON.parse(reply.result.content[0].text)
 
-test('a Linux session reads and edits notes in its own library with no Mac grant and no Mac reachable', async t => {
+test('a Linux session reads and edits notes in its own library with no Mac reachable', async t => {
   const directory = scratch(t, 'wl-mcp-'), logPath = join(directory, 'requests.jsonl')
   const library = await startedLibrary(t, directory, { FAKE_LIBRARY_LOG: logPath })
   const f = await executionFixture(t, library)
-  assert.equal(f.service.mcp.libraryStatus().configured, false, 'no single-Mac library grant exists')
   const created = await f.call('woven_notes_create', { title: 'Linux note' })
   assert.equal(created.result.isError, false, JSON.stringify(created))
   const { noteID } = resultOf(created)
@@ -170,15 +168,13 @@ test('history goes to the library when it runs and falls back to the local journ
 test('session history is published into the local library instead of a Mac', async t => {
   const directory = scratch(t, 'wl-pub-')
   const library = await startedLibrary(t, directory)
-  const fetched = []
-  const f = await executionFixture(t, library, { fetchImpl: async url => { fetched.push(url); throw new Error('unreachable') } })
+  const f = await executionFixture(t, library)
   await f.service.synchronizePublisher()
   const status = f.service.publisherStatus()
   assert.equal(status.target, 'local'); assert.equal(status.configured, true)
   const { journal } = await debugState(library)
   assert.ok(journal.length > 0); assert.ok(journal.every(entry => entry.workspaceID === f.enrollment.workspaceID))
   assert.equal(status.acknowledgedOriginSequence, Math.max(...journal.map(entry => entry.originSequence)))
-  assert.equal(fetched.length, 0, 'no Mac publisher endpoint is contacted')
   // Nothing is sent twice.
   const before = journal.length
   await f.service.synchronizePublisher()

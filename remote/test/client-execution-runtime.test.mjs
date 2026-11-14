@@ -31,7 +31,7 @@ test('full-root direct Pi sessions apply workspace permissions on creation and l
     async cancelActive() {},
   }
   const runtime = createClientExecutionRuntime({ defaultAgent, durableACP: { async stopAll() {} }, catalog: new Map(), workspaceRoot: root,
-    configuration: loadRuntimeConfiguration({ WOVENMATTER_RUNTIME_KIND: 'host', WOVENMATTER_ACCESS_MODE: 'fullRoot' }) })
+    configuration: loadRuntimeConfiguration({ WOVENMATTER_ACCESS_MODE: 'fullRoot' }) })
   t.after(() => runtime.close())
   const native = await runtime.create({ runtimeKind: 'default_agent', conversationID: randomUUID(), nativeWorkingDirectory: root, permission: 'ask' })
   assert.equal(calls.find(value => value.method === 'session/set_config_option').params.value, 'full')

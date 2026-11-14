@@ -43,14 +43,14 @@ private enum SettingsRoute: Equatable {
 struct SettingsView: View {
     @Bindable var model: ApplicationModel
     var reservesRailControlSpace = false
-    @AppStorage(DashboardTheme.storageKey) private var storedTheme = DashboardTheme.green.rawValue
+    @AppStorage(WovenTheme.storageKey) private var storedTheme = WovenTheme.green.rawValue
     @State private var route: SettingsRoute = .landing
     /// Where each cross-linked page was opened from; Back returns there.
     @State private var origins: [CrossLinkedPage: SettingsRoute] = [:]
     @State private var macAccess = MacAccessSetupModel.shared
 
-    private var theme: DashboardTheme {
-        DashboardTheme(rawValue: storedTheme) ?? .green
+    private var theme: WovenTheme {
+        WovenTheme(rawValue: storedTheme) ?? .green
     }
 
     var body: some View {
@@ -185,10 +185,10 @@ struct SettingsView: View {
                 )
             }
         }
-        .foregroundStyle(DashboardPalette.foreground)
-        .environment(\.dashboardTheme, theme)
+        .foregroundStyle(WovenPalette.foreground)
+        .environment(\.wovenTheme, theme)
         .preferredColorScheme(theme.colorScheme)
-        .tint(DashboardPalette.primary)
+        .tint(WovenPalette.primary)
         .task {
             model.refreshLocalACPRuntimesNow()
         }
@@ -300,7 +300,7 @@ struct SettingsView: View {
                 SettingsDestinationRow(
                     title: "General",
                     detail: "Appearance, software updates, and privacy.",
-                    icon: { DashboardLucideIcon(glyph: .settings, size: 15) },
+                    icon: { LucideIcon(glyph: .settings, size: 15) },
                     action: { route = .general }
                 )
                 SettingsDestinationRow(
@@ -308,55 +308,55 @@ struct SettingsView: View {
                     detail: "Keychain and the macOS permissions agents use.",
                     status: macAccess.summary,
                     statusTone: macAccess.remaining.isEmpty ? .good : .warning,
-                    icon: { DashboardLucideIcon(glyph: .shieldCheck, size: 15) },
+                    icon: { LucideIcon(glyph: .shieldCheck, size: 15) },
                     action: { open(.permissions, .permissions, from: .landing) }
                 )
                 SettingsDestinationRow(
                     title: "Subscriptions & API Keys",
                     detail: "ChatGPT, Claude, Grok, and other providers, plus web search.",
-                    icon: { DashboardLucideIcon(glyph: .keyRound, size: 15) },
+                    icon: { LucideIcon(glyph: .keyRound, size: 15) },
                     action: { open(.accounts, .accounts("global"), from: .landing) }
                 )
                 SettingsDestinationRow(
                     title: "Agents",
                     detail: "Pi Durable, Codex, Claude Code, Grok Build, and OpenCode.",
-                    icon: { DashboardLucideIcon(glyph: .bot, size: 15) },
+                    icon: { LucideIcon(glyph: .bot, size: 15) },
                     action: { route = .agents }
                 )
                 SettingsDestinationRow(
                     title: "Bots",
                     detail: "Where your bots run, their models, and their resources.",
-                    icon: { DashboardLucideIcon(glyph: .sparkles, size: 15) },
+                    icon: { LucideIcon(glyph: .sparkles, size: 15) },
                     action: { open(.bots, .bots, from: .landing) }
                 )
                 SettingsDestinationRow(
                     title: "Woven MCP",
                     detail: "Agent tools, connected apps, bots, and outside access.",
-                    icon: { DashboardLucideIcon(glyph: .plug, size: 15) },
+                    icon: { LucideIcon(glyph: .plug, size: 15) },
                     action: { open(.wovenMCP, .wovenMCP, from: .landing) }
                 )
                 SettingsDestinationRow(
                     title: "Workspaces",
                     detail: "Agents and files on this Mac and on remote Linux machines.",
-                    icon: { DashboardLucideIcon(glyph: .container, size: 15) },
+                    icon: { LucideIcon(glyph: .container, size: 15) },
                     action: { route = .workspaces(nil) }
                 )
                 SettingsDestinationRow(
                     title: "Apple Devices",
                     detail: "Connect Macs, iPhones, and iPads to share your library.",
-                    icon: { DashboardLucideIcon(glyph: .monitor, size: 15) },
+                    icon: { LucideIcon(glyph: .monitor, size: 15) },
                     action: { route = .appleDevices }
                 )
                 SettingsDestinationRow(
                     title: "Background Server",
                     detail: "Keep agents working and see what is running.",
-                    icon: { DashboardLucideIcon(glyph: .terminal, size: 15) },
+                    icon: { LucideIcon(glyph: .terminal, size: 15) },
                     action: { route = .backgroundServer }
                 )
                 SettingsDestinationRow(
                     title: "Dictation",
                     detail: "Language and your previous dictations.",
-                    icon: { DashboardLucideIcon(glyph: .mic, size: 15) },
+                    icon: { LucideIcon(glyph: .mic, size: 15) },
                     action: { route = .dictation }
                 )
             }
@@ -383,7 +383,7 @@ private struct SettingsAgentsView: View {
                         title: runtime.displayName,
                         status: status.text,
                         statusTone: status.tone,
-                        icon: { DashboardHarnessLogoIcon(logo: DashboardHarnessLogo(runtimeKind: runtime), size: 15) },
+                        icon: { HarnessLogoIcon(logo: HarnessLogo(runtimeKind: runtime), size: 15) },
                         action: { onOpen(runtime) }
                     )
                 }

@@ -1,8 +1,6 @@
 # Woven session instructions
 
 Woven launches Pi Durable, Codex, Claude Code, Grok Build, and OpenCode.
-Standalone Pi CLI, Cursor, Hermes, and OpenClaw integrations are retired. Their
-saved history remains readable; start a new supported chat to continue work.
 
 The one maintained block is [harnesses/woven-instructions.txt](../harnesses/woven-instructions.txt).
 It points agents to app tools and current session context. It prescribes no file

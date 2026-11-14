@@ -3,15 +3,15 @@ import CryptoKit
 import Testing
 import LibraryClient
 import WovenMatterCore
-import WovenMatterDashboardStore
+import WovenMatterLibraryStore
 
 /// These flows cross the durable portable journal, real pairing/authentication,
-/// production API routes and central SQLite. Only transport reply loss and the
+/// production API routes and the serving Mac's SQLite library. Only transport reply loss and the
 /// remote execution source are controlled; no model providers are contacted.
 @Suite("Federated execution complete flows", .serialized)
 @MainActor
 struct FederatedExecutionFlowTests {
-  @Test("offline execution survives lost central acknowledgement and restart without re-execution")
+  @Test("offline execution survives a lost library acknowledgement and restart without re-execution")
   func offlineExecutionLostAcknowledgement() async throws {
     let fixture = try await FederationFlowFixture()
     defer { fixture.remove() }
@@ -21,7 +21,7 @@ struct FederatedExecutionFlowTests {
     try await owner.store.journal.upsertWorkspace(workspace)
     let conversationID = UUID().uuidString.lowercased()
     let runID = UUID().uuidString.lowercased()
-    let conversation = LibraryConversation(id: conversationID, title: "Created with central Mac offline",
+    let conversation = LibraryConversation(id: conversationID, title: "Created with the Mac offline",
       runtimeKind: "default_agent", activeRunID: runID, libraryID: fixture.libraryID, workspaceID: workspace.id)
     try await owner.store.journal.append(workspaceID: workspace.id, conversation: conversation)
     // More than one wire page, with distinct identities and lossless message bodies.
@@ -56,7 +56,7 @@ struct FederatedExecutionFlowTests {
     owner.transport.dropNextJournalAcknowledgement = true
     do {
       try await MobileSyncEngine(store: owner.store, transport: owner.transport).synchronize()
-      Issue.record("Expected central reply loss after committing the first page")
+      Issue.record("Expected the Mac's reply to be lost after committing the first page")
     } catch MobileConnectionError.offline {}
     #expect(try await fixture.database.executionJournal(after: 0).entries.count == 200)
     #expect(await owner.store.journal.snapshot().pendingEventIDs.count > 200)
@@ -88,18 +88,18 @@ struct FederatedExecutionFlowTests {
       .filter { $0.recordID == recordID }.sorted { $0.partIndex < $1.partIndex }
     #expect(importedParts.count == partCount)
     #expect(importedParts.reduce(into: Data()) { $0.append($1.data) } == nativeBytes)
-    var centralBytes = Data()
+    var libraryBytes = Data()
     for index in 0..<partCount {
       let part = try #require(try await fixture.database.libraryNativeHistoryPart(workspaceID: workspace.id, recordID: recordID, partIndex: index))
-      centralBytes.append(part.data)
+      libraryBytes.append(part.data)
     }
-    #expect(centralBytes == nativeBytes)
+    #expect(libraryBytes == nativeBytes)
     #expect(fixture.commands.executions == 0)
-    // Opening either replica never upgrades it into a second central database.
+    // Opening either replica never binds it to another library.
     #expect(await otherMac.store.snapshot().workspaceID == fixture.libraryID)
   }
 
-  @Test("observers retain remote history but only its execution workspace publishes centrally")
+  @Test("observers retain remote history but only its execution workspace publishes it")
   func ownerPublicationAndObserverIsolation() async throws {
     let fixture = try await FederationFlowFixture()
     defer { fixture.remove() }
@@ -108,17 +108,15 @@ struct FederatedExecutionFlowTests {
     let identity = try await fixture.database.libraryIdentity()
     var workspace = ExecutionWorkspace(id: UUID().uuidString.lowercased(), libraryID: fixture.libraryID,
       ownerDeviceID: identity.hostDeviceID, kind: .linux, name: "Linux",
-      // Deliberately collide with a paired client's ID: only the dedicated
-      // publisher credential may publish Linux history, even in this case.
+      // Deliberately collide with a paired client's ID: only the workspace's
+      // own library host may publish Linux history, even in this case.
       executionDeviceID: mac.credential.deviceID,
       journalDeviceIDs: [phone.credential.deviceID, mac.credential.deviceID])
     workspace = try await fixture.database.registerExecutionWorkspace(.init(workspace: workspace), deviceID: identity.hostDeviceID)
-    let grant = try await fixture.database.issueExecutionWorkspacePublisher(workspaceID: workspace.id,
-      endpoint: URL(string: "https://central.test-tailnet.ts.net/wovenmatter")!, deviceID: identity.hostDeviceID)
     let conversationID = UUID().uuidString.lowercased()
     let conversation = LibraryConversation(id: conversationID, title: "One execution owner", workspaceID: workspace.id)
     let message = LibraryMessage(id: UUID().uuidString.lowercased(), conversationID: conversationID,
-      role: "assistant", content: "Saved on the Linux workspace while the central Mac was offline.")
+      role: "assistant", content: "Saved on the Linux workspace while the Mac was offline.")
     let entries = [
       ExecutionJournalEntry(workspaceID: workspace.id, originSequence: 1, conversationID: conversationID,
         kind: .conversation, conversation: conversation),
@@ -144,15 +142,14 @@ struct FederatedExecutionFlowTests {
       try await fixture.database.ingestExecutionJournal(batch, deviceID: identity.hostDeviceID)
     }
 
-    // No observing client participates: the workspace's scoped publisher reaches
-    // the real central API. Replaying its lost acknowledgement is idempotent.
-    let request = LibraryHTTPRequest(method: "POST", target: "/wovenmatter/v1/federation/publisher/journal", headers: [
-      "authorization": "Bearer " + grant.token, "x-woven-workspace": fixture.libraryID,
-      "x-woven-protocol": String(LibraryProtocol.version)
-    ], body: try JSONEncoder().encode(batch))
-    let published = await fixture.api.handle(request)
+    // No observing client participates: the workspace publishes into its library
+    // host's local socket. Replaying its lost acknowledgement is idempotent.
+    let path = "/v1/publisher/journal"
+    let request = LibraryHTTPRequest(method: "POST", target: path, headers: ["x-woven-workspace": fixture.libraryID],
+      body: try JSONEncoder().encode(batch))
+    let published = try await DevicePublisherAPI.handleLocal(request, path: path, database: fixture.database)
     #expect(published.status == 200)
-    let replay = await fixture.api.handle(request)
+    let replay = try await DevicePublisherAPI.handleLocal(request, path: path, database: fixture.database)
     #expect(replay.status == 200)
     #expect(try await fixture.database.executionJournal(after: 0).entries == entries)
     #expect(try await fixture.database.libraryFederatedTranscript(conversationID: conversationID)?.messages == [message])
@@ -162,8 +159,8 @@ struct FederatedExecutionFlowTests {
     }
     #expect(fixture.commands.executions == 0)
     #expect(await source.submissions == 0)
-    try await fixture.authentication.revoke(deviceID: phone.credential.deviceID)
-    do { _ = try await phone.transport.libraryIdentity(); Issue.record("Revoked pairing must not read federation data") }
+    _ = try await fixture.members.remove(phone.credential.deviceID)
+    do { _ = try await phone.transport.libraryIdentity(); Issue.record("A removed member must not read federation data") }
     catch MobileConnectionError.http(let status, _) { #expect(status == 401) }
     #expect(await phone.store.snapshot().transcripts[conversationID]?.messages == [message])
   }
@@ -208,40 +205,56 @@ private final class FederationFlowFixture {
     let file: URL
     let store: MobileStore
     let credential: MobileCredential
+    let member: MemberIdentity
     let transport: FederationAPITransport
   }
   let directory: URL
   let database: WorkspaceDatabase
   let authentication: DeviceAuthentication
+  let members: MemberDirectory
   let commands = RejectExecutionCommands()
   let api: DeviceAPI
   let libraryID: String
   init() async throws {
     directory = FileManager.default.temporaryDirectory.appending(path: "woven-federation-flow-\(UUID())")
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-    database = try await WorkspaceDatabase(url: directory.appending(path: "central.sqlite"))
+    database = try await WorkspaceDatabase(url: directory.appending(path: "library.sqlite"))
     libraryID = try await database.libraryID()
     authentication = try DeviceAuthentication(fileURL: directory.appending(path: "paired-devices.json"))
-    api = DeviceAPI(database: database, authentication: authentication, commands: commands, isActive: { true })
+    let identity = try await database.libraryIdentity()
+    let members = MemberDirectory(database: database, identity: MemberIdentity(deviceID: identity.hostDeviceID, kind: .mac, key: .init()), cacheLifetime: 0)
+    try await members.ensureSelf(name: "Studio Mac", endpoints: [])
+    self.members = members
+    // Confirming a phone's pairing adds it as a member, as on the Mac.
+    api = DeviceAPI(database: database, authentication: authentication, commands: commands, isActive: { true }, members: members,
+      onMemberPaired: { id, name, key in _ = try await members.add(deviceID: id, kind: .ios, name: name, publicKey: key, endpoints: [], replacingKey: true) })
   }
   func client(_ name: String) async throws -> Client {
     let file = directory.appending(path: name + "/library.json")
     let store = try MobileStore(file: file)
-    let endpoint = URL(string: "https://central.test-tailnet.ts.net/wovenmatter")!
+    let endpoint = URL(string: "https://studio.test-tailnet.ts.net/wovenmatter")!
     let offer = try await authentication.createOffer(endpoint: endpoint)
-    let request = PairRequest(token: offer.payload.token, deviceID: await store.snapshot().deviceID, deviceName: name)
+    let member = MemberIdentity(deviceID: await store.snapshot().deviceID, kind: .ios, key: .init())
+    var request = PairRequest(token: offer.payload.token, deviceID: member.deviceID, deviceName: name, metadata: .init(kind: .iPhone), requiresConfirmation: true)
+    request.memberPublicKey = member.publicKey
     let response = await api.handle(.init(method: "POST", target: "/wovenmatter/v1/pair", headers: [:], body: try JSONEncoder().encode(request)))
     #expect(response.status == 200)
     let paired = try JSONDecoder().decode(PairResponse.self, from: response.body)
+    // The pairing bearer only confirms; every later request is signed.
+    let confirmed = await api.handle(.init(method: "POST", target: "/wovenmatter/v1/pair/confirm", headers: [
+      "authorization": "Bearer " + paired.credential, "x-woven-workspace": paired.workspaceID,
+      "x-woven-protocol": String(LibraryProtocol.version)], body: Data("{}".utf8)))
+    #expect(confirmed.status == 200)
     let credential = MobileCredential(endpoint: endpoint, workspaceID: paired.workspaceID, deviceID: paired.deviceID, token: paired.credential)
     try await store.apply(LibrarySnapshot(workspaceID: libraryID, cursor: 0))
-    return Client(file: file, store: store, credential: credential, transport: .init(api: api, credential: credential))
+    return Client(file: file, store: store, credential: credential, member: member,
+                  transport: .init(api: api, credential: credential, member: member, audience: members.identity.deviceID))
   }
   func remove() { try? FileManager.default.removeItem(at: directory) }
 }
 
 /// Uses the production authenticated API, only replacing network I/O. Every
-/// request crosses JSON encoding/decoding and the ordinary pairing credential.
+/// request crosses JSON encoding/decoding and is signed with the phone's member key.
 @MainActor
 private final class FederationAPITransport: LibraryTransport, FederationTransport {
   let api: DeviceAPI
@@ -249,13 +262,18 @@ private final class FederationAPITransport: LibraryTransport, FederationTranspor
   var dropNextJournalAcknowledgement = false
   var dropNextArtifactChunkAcknowledgement = false
   var journalImports = 0
-  init(api: DeviceAPI, credential: MobileCredential) { self.api = api; self.credential = credential }
+  let member: MemberIdentity
+  let audience: String
+  init(api: DeviceAPI, credential: MobileCredential, member: MemberIdentity, audience: String) {
+    self.api = api; self.credential = credential; self.member = member; self.audience = audience
+  }
   private func request<T: Decodable & Sendable>(_ path: String, method: String = "GET", body: Data = Data()) async throws -> T {
-    let response = await api.handle(.init(method: method, target: "/wovenmatter" + path, headers: [
-      "authorization": "Bearer " + credential.token,
-      "x-woven-workspace": credential.workspaceID,
-      "x-woven-protocol": String(LibraryProtocol.version)
-    ], body: body))
+    let target = "/wovenmatter" + path
+    var headers = try member.signer.headers(method: method, target: target, body: body, audience: audience)
+    headers["X-Woven-Workspace"] = credential.workspaceID
+    headers["X-Woven-Protocol"] = String(LibraryProtocol.version)
+    let response = await api.handle(.init(method: method, target: target,
+      headers: Dictionary(uniqueKeysWithValues: headers.map { ($0.key.lowercased(), $0.value) }), body: body))
     guard response.status == 200 else {
       let error = try JSONDecoder().decode(LibraryAPIError.self, from: response.body)
       throw MobileConnectionError.http(response.status, error.message)

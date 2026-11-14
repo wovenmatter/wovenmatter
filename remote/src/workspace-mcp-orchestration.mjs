@@ -15,7 +15,6 @@ export function createWorkspaceMCPOrchestration({db,identity,getRecord,command,r
     CREATE TABLE IF NOT EXISTS mcp_session_messages (id TEXT PRIMARY KEY, caller TEXT NOT NULL, target TEXT NOT NULL, text TEXT NOT NULL, status TEXT NOT NULL, receipt TEXT, created_at TEXT NOT NULL, notification INTEGER NOT NULL DEFAULT 0);
     CREATE TABLE IF NOT EXISTS mcp_session_access_requests (id TEXT PRIMARY KEY, caller TEXT NOT NULL, target TEXT NOT NULL, interaction_id TEXT NOT NULL, state TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS mcp_coordination_notifications (id TEXT PRIMARY KEY);`)
-  if(!db.prepare('PRAGMA table_info(mcp_session_messages)').all().some(column=>column.name==='notification'))db.exec('ALTER TABLE mcp_session_messages ADD COLUMN notification INTEGER NOT NULL DEFAULT 0')
   db.prepare("UPDATE mcp_session_access_requests SET state='rejected' WHERE state='pending'").run()
   for(const row of db.prepare('SELECT id,body FROM conversations').all()){const record=JSON.parse(row.body);if(record.pending?.some(item=>item.mcpManageAccessID)){record.pending=record.pending.filter(item=>!item.mcpManageAccessID);db.prepare('UPDATE conversations SET body=? WHERE id=?').run(JSON.stringify(record),row.id)}}
   const pumps=new Map()

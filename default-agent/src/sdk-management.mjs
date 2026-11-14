@@ -193,8 +193,6 @@ for (const name of ['createCodingTools','createCodemodeExtension','DefaultResour
 const durable = await import('@earendil-works/pi-durable');
 for (const name of ['createRegistry','ConversationTranscript','defineDoc','defineExtension']) if (typeof durable[name] !== 'function') throw Error('Durable API unavailable');
 if (typeof durable.Harness?.open !== 'function') throw Error('Durable API unavailable');
-const storage = await import('@earendil-works/pi-durable/storage/jsonl/node');
-if (typeof storage.openNodeJsonlStorage !== 'function') throw Error('Durable migration reader unavailable');
 const sqlite = await import('@earendil-works/pi-durable/storage/sqlite/node');
 if (typeof sqlite.openNodeSqliteDatabase !== 'function') throw Error('Durable SQLite storage unavailable');
 const ai = await import('@earendil-works/pi-ai');

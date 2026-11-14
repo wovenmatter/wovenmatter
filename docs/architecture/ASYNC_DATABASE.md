@@ -28,7 +28,7 @@ for transaction, migration, and recovery boundaries.
 
 The async boundary is outside each existing transaction. No transaction suspends
 halfway through. Operations that look like reads but journal access, such as agent
-history queries, remain writer jobs. Dashboard and tool-state refreshes read their
+history queries, remain writer jobs. Workspace snapshot and tool-state refreshes read their
 related records and revision together. UI views consume published model state;
 they do not query SQLite while rendering.
 

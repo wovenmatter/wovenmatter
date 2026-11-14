@@ -3,10 +3,10 @@ import WovenMatterCore
 
 /// A question or approval from a session another machine runs, answered
 /// through its owner (`PendingInteraction`). Sessions this Mac runs use the
-/// ACP cards (`DashboardLocalPermissionCard`, `DashboardLocalQuestionCard`);
+/// ACP cards (`LocalPermissionCard`, `LocalQuestionCard`);
 /// this card has their look for the owner's wire shape.
 struct RemoteInteractionCard: View {
-    @Environment(\.dashboardTheme) private var theme
+    @Environment(\.wovenTheme) private var theme
     let interaction: PendingInteraction
     let respond: (InteractionResponse) async -> Void
     @State private var selected: [String: Set<String>] = [:]
@@ -26,14 +26,14 @@ struct RemoteInteractionCard: View {
         VStack(alignment: .leading, spacing: 10) {
             Text(interaction.kind == .approval ? "Approval needed" : "Agent has a question")
                 .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(DashboardPalette.mutedForeground)
+                .foregroundStyle(WovenPalette.mutedForeground)
                 .textCase(.uppercase)
                 .tracking(0.8)
             Text(interaction.title)
                 .font(.system(size: 13, weight: .medium))
                 .fixedSize(horizontal: false, vertical: true)
             if let detail = interaction.detail {
-                Text(detail).font(.system(size: 12.5)).foregroundStyle(DashboardPalette.mutedForeground)
+                Text(detail).font(.system(size: 12.5)).foregroundStyle(WovenPalette.mutedForeground)
                     .fixedSize(horizontal: false, vertical: true)
             }
             ForEach(interaction.questions) { question in
@@ -48,7 +48,7 @@ struct RemoteInteractionCard: View {
                     }
                     if question.allowsFreeText {
                         TextField("Answer", text: Binding(get: { freeText[question.id, default: ""] }, set: { freeText[question.id] = $0 }))
-                            .dashboardInput()
+                            .wovenInput()
                     }
                 }
             }
@@ -61,23 +61,23 @@ struct RemoteInteractionCard: View {
         .padding(13)
         .frame(maxWidth: 768, alignment: .leading)
         .background(theme.palette.themeWhisper)
-        .clipShape(DashboardShapes.card)
-        .overlay { DashboardShapes.card.stroke(theme.palette.border, lineWidth: 1) }
+        .clipShape(DesktopShapes.card)
+        .overlay { DesktopShapes.card.stroke(theme.palette.border, lineWidth: 1) }
     }
 
     @ViewBuilder private var actions: some View {
         ForEach(Array(interaction.options.enumerated()), id: \.element.id) { index, option in
             if index == 0 {
-                Button(option.label) { send(.init(optionID: option.id)) }.buttonStyle(DashboardPrimaryButtonStyle())
+                Button(option.label) { send(.init(optionID: option.id)) }.buttonStyle(WovenPrimaryButtonStyle())
             } else {
-                Button(option.label) { send(.init(optionID: option.id)) }.buttonStyle(DashboardQuietButtonStyle())
+                Button(option.label) { send(.init(optionID: option.id)) }.buttonStyle(WovenQuietButtonStyle())
             }
         }
         if !interaction.questions.isEmpty {
-            Button("Submit answers") { send(.init(answers: answers)) }.buttonStyle(DashboardPrimaryButtonStyle())
+            Button("Submit answers") { send(.init(answers: answers)) }.buttonStyle(WovenPrimaryButtonStyle())
                 .disabled(interaction.questions.contains { $0.isRequired && answers[$0.id]?.isEmpty != false })
         }
-        Button("Cancel", role: .cancel) { send(.init(cancelled: true)) }.buttonStyle(DashboardQuietButtonStyle())
+        Button("Cancel", role: .cancel) { send(.init(cancelled: true)) }.buttonStyle(WovenQuietButtonStyle())
     }
 
     private func send(_ response: InteractionResponse) {

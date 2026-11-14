@@ -32,7 +32,7 @@ Opening a preview does not add document contents to a new agent prompt.
 - Upload a PDF, DOCX, XLSX, CSV, and image. Click the composer attachment and the
   sent attachment; verify the preview opens beside the conversation.
 - Open a generated file's Preview button, the same file in Library, and a saved
-  artifact. Confirm the expected filename and contents, including in client mode.
+  artifact. Confirm the expected filename and contents.
 - Mix document, note, and browser tabs. Reopen a file, switch chats, hide/reveal the
   pane, move it left/right, focus it, resize narrow/wide, and close the active tab.
 - Open eight documents, then a ninth. Confirm the capacity message; an existing

@@ -2,7 +2,7 @@
   {
     "short_id": "tTQt82KB",
     "name": "DAU \u2014 qualified active libraries, rolling 24 hours",
-    "description": "Distinct central-library IDs with an app_active signal in the last 24 hours. Qualifying human actions trigger at most one signal per six hours per library. Opens, updates, offline usage and failed sends are excluded.",
+    "description": "Distinct library IDs with an app_active signal in the last 24 hours. Qualifying human actions trigger at most one signal per six hours per library. Opens, updates, offline usage and failed sends are excluded.",
     "query": {
       "kind": "DataVisualizationNode",
       "source": {
@@ -15,7 +15,7 @@
   {
     "short_id": "TFtQSjU3",
     "name": "WAU \u2014 active libraries, rolling 7 days",
-    "description": "Distinct central-library IDs with an app_active signal in the last rolling 7 days. Signals are sampled at most once per six hours. App opens and updater events do not qualify.",
+    "description": "Distinct library IDs with an app_active signal in the last rolling 7 days. Signals are sampled at most once per six hours. App opens and updater events do not qualify.",
     "query": {
       "kind": "DataVisualizationNode",
       "source": {
@@ -28,7 +28,7 @@
   {
     "short_id": "b1lYwhWw",
     "name": "MAU \u2014 active libraries, rolling 30 days",
-    "description": "Distinct central-library IDs with an app_active signal in the last rolling 30 days. Signals are sampled at most once per six hours. Daily unique counts are never summed.",
+    "description": "Distinct library IDs with an app_active signal in the last rolling 30 days. Signals are sampled at most once per six hours. Daily unique counts are never summed.",
     "query": {
       "kind": "DataVisualizationNode",
       "source": {
@@ -41,7 +41,7 @@
   {
     "short_id": "z2fDY4L3",
     "name": "Qualified libraries by UTC date \u2014 30 day trend",
-    "description": "Distinct central-library IDs with generic app_active signals by UTC date. Headline DAU, WAU and MAU use rolling windows; this chart uses calendar dates. No action types or content are reported.",
+    "description": "Distinct library IDs with generic app_active signals by UTC date. Headline DAU, WAU and MAU use rolling windows; this chart uses calendar dates. No action types or content are reported.",
     "query": {
       "kind": "DataVisualizationNode",
       "source": {
@@ -77,7 +77,7 @@
   {
     "short_id": "M2PnDLkA",
     "name": "App activity signals by UTC date \u2014 30 days",
-    "description": "Received generic app_active signals and distinct active central libraries by UTC date. At most one activity signal per library per six hours. These are sampled signals; individual content changes, sessions and messages are not counted separately.",
+    "description": "Received generic app_active signals and distinct active libraries by UTC date. At most one activity signal per library per six hours. These are sampled signals; individual content changes, sessions and messages are not counted separately.",
     "query": {
       "kind": "DataVisualizationNode",
       "source": {
@@ -90,7 +90,7 @@
   {
     "short_id": "4GBAnZ6I",
     "name": "Active libraries by country \u2014 30 days",
-    "description": "Distinct central-library IDs with generic app_active signals by country over 30 days. Country reflects the central Mac network; no content or action details are reported.",
+    "description": "Distinct library IDs with generic app_active signals by country over 30 days. Country reflects the sending Mac's network; no content or action details are reported.",
     "query": {
       "kind": "DataVisualizationNode",
       "source": {

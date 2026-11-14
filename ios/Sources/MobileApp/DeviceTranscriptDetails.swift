@@ -23,12 +23,12 @@ extension MobileModel {
     }
     // The chat's owner serves the full projection on its details route
     // (`GET v1/execution/conversations/<id>/activity`, or the library host's
-    // `GET v1/sessions/<id>/activity` for a central chat); its streamed rows
+    // `GET v1/sessions/<id>/activity` for a host chat); its streamed rows
     // carry only the compact one. An owner too old for the route answers with
     // the activity as its transcript carries it.
     let remote: LibraryActivity?
     let route = executionRoute(for: conversationID)
-    if route != "central", route != "local", let client = workspaceClients[route] {
+    if route != "host", route != "local", let client = workspaceClients[route] {
       if let detail = try? await client.activityDetails(conversationID, runID: runID, activityID: activityID) { remote = detail }
       else { remote = try await client.refreshTranscript(conversationID).activities.first { $0.id == activityID } }
     } else if let engine {

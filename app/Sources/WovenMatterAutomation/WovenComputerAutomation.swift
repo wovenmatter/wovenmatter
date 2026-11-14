@@ -8,8 +8,8 @@ import WovenMatterClient
 /// cancellation and inline-image limits; agents never receive the driver socket.
 @MainActor
 public final class WovenComputerAutomation {
-    typealias DriverCall = @MainActor (String, [String: GatewayJSONValue], String,
-        @MainActor () async throws -> Void) async throws -> GatewayJSONValue
+    typealias DriverCall = @MainActor (String, [String: JSONValue], String,
+        @MainActor () async throws -> Void) async throws -> JSONValue
     private let runtime: WovenCuaRuntime
     private let driverCall: DriverCall?
     private let permissionCheck: @MainActor () -> Bool
@@ -22,13 +22,13 @@ public final class WovenComputerAutomation {
         runtime = WovenCuaRuntime(executable: executable, bundleID: Bundle.main.bundleIdentifier ?? "wovenmatter.desktop")
         self.permissionCheck = permissionCheck; self.driverCall = driverCall
     }
-    public static var permissions: GatewayJSONValue {
+    public static var permissions: JSONValue {
         .object(["engine": .string("cua"), "screenRecording": .bool(CGPreflightScreenCaptureAccess()), "accessibility": .bool(AXIsProcessTrusted())])
     }
     public func revoke(callerID: String) { runtime.revoke(callerID: callerID) }
     public func revokeAll() { runtime.stop() }
-    public func execute(_ value: GatewayJSONValue, callerID: String,
-                        admit: @MainActor () async throws -> Void) async throws -> GatewayJSONValue {
+    public func execute(_ value: JSONValue, callerID: String,
+                        admit: @MainActor () async throws -> Void) async throws -> JSONValue {
         try await admit(); try Task.checkCancellation()
         guard let args = value.objectValue, let action = args["action"]?.stringValue else { throw Self.invalid("Provide a computer action.") }
         if action == "status" {
@@ -38,7 +38,7 @@ public final class WovenComputerAutomation {
         let call = try Self.invocation(args)
         guard permissionCheck() else { throw Self.invalid("Grant Woven Matter Screen Recording and Accessibility in macOS System Settings, then reopen the app. Agents cannot grant these permissions.") }
         try await admit(); try Task.checkCancellation()
-        let result: GatewayJSONValue
+        let result: JSONValue
         if let driverCall { result = try await driverCall(call.tool, call.arguments, callerID, admit) }
         else { result = try await runtime.call(call.tool, arguments: call.arguments, callerID: callerID, admit: admit) }
         try await admit(); try Task.checkCancellation()
@@ -48,10 +48,10 @@ public final class WovenComputerAutomation {
         }
         return try Self.inlineImages(result)
     }
-    struct Invocation: Equatable { let tool: String; let arguments: [String: GatewayJSONValue] }
-    static func invocation(_ args: [String: GatewayJSONValue]) throws -> Invocation {
+    struct Invocation: Equatable { let tool: String; let arguments: [String: JSONValue] }
+    static func invocation(_ args: [String: JSONValue]) throws -> Invocation {
         let action = args["action"]?.stringValue ?? ""
-        var allowed: Set<String> = ["action"], input: [String: GatewayJSONValue] = [:]
+        var allowed: Set<String> = ["action"], input: [String: JSONValue] = [:]
         let tool: String
         switch action {
         case "apps": tool = "list_apps"
@@ -113,7 +113,7 @@ public final class WovenComputerAutomation {
                 allowed.insert("key")
                 let key = try string(args["key"], "key", 100).stringValue!
                 let keys = key.split(whereSeparator: { $0 == "+" || $0 == "," }).map(String.init)
-                if keys.count > 1 { tool = "hotkey"; input["keys"] = .array(keys.map(GatewayJSONValue.string)) }
+                if keys.count > 1 { tool = "hotkey"; input["keys"] = .array(keys.map(JSONValue.string)) }
                 else { tool = "press_key"; input["key"] = .string(key) }
             case "scroll":
                 tool = "scroll"; allowed.formUnion(["x", "y", "direction", "amount"])
@@ -134,16 +134,16 @@ public final class WovenComputerAutomation {
         return .init(tool: tool, arguments: input)
     }
     private static func invalid(_ message: String) -> WorkspaceToolError { .invalid(message) }
-    private static func integer(_ value: GatewayJSONValue?, _ name: String, _ range: ClosedRange<Int>) throws -> GatewayJSONValue {
+    private static func integer(_ value: JSONValue?, _ name: String, _ range: ClosedRange<Int>) throws -> JSONValue {
         guard let n = value?.intValue, range.contains(n) else { throw invalid("\(name) must be an integer in \(range).") }; return .number(Double(n))
     }
-    private static func coordinate(_ value: GatewayJSONValue?, _ name: String) throws -> GatewayJSONValue {
+    private static func coordinate(_ value: JSONValue?, _ name: String) throws -> JSONValue {
         guard let n = value?.doubleValue, n.isFinite, (0...100_000).contains(n) else { throw invalid("Provide a nonnegative screenshot pixel coordinate for \(name).") }; return .number(n)
     }
-    private static func string(_ value: GatewayJSONValue?, _ name: String, _ maximum: Int) throws -> GatewayJSONValue {
+    private static func string(_ value: JSONValue?, _ name: String, _ maximum: Int) throws -> JSONValue {
         guard let s = value?.stringValue, !s.isEmpty, s.utf8.count <= maximum else { throw invalid("Provide \(name) within \(maximum) UTF-8 bytes.") }; return .string(s)
     }
-    private static func inlineImages(_ result: GatewayJSONValue) throws -> GatewayJSONValue {
+    private static func inlineImages(_ result: JSONValue) throws -> JSONValue {
         guard var object = result.objectValue, let content = object["content"]?.arrayValue else { throw invalid("Invalid Cua tool result.") }
         object["content"] = .array(try content.map { block in
             guard var image = block.objectValue, image["type"] == .string("image") else { return block }

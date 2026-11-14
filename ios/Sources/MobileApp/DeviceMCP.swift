@@ -8,7 +8,6 @@ extension MobileModel {
   static var deviceToolGroups: [WorkspaceToolGroup] { QuickChatCapabilities.groups }
   static func deviceToolSelectionID(_ group: WorkspaceToolGroup) -> String { "woven_" + group.rawValue }
   static var deviceToolAccessOptions: [SessionSettingOption] { QuickChatCapabilities.options }
-  static func migratedDeviceToolSelection(_ selection: [String]?) -> [String]? { MobileToolSupport.migratedMCPSelection(selection) }
   static func deviceToolEnabled(_ name: String, selection: [String]?) -> Bool { QuickChatCapabilities.enabled(name, selection: selection) }
   static var deviceMCPTools: [[String: Any]] {
     WovenMCPCatalog.tools.filter { QuickChatCapabilities.toolNames.contains($0.name) }.compactMap { definition in
@@ -36,7 +35,7 @@ extension MobileModel {
   /// The same fixed allowlist is enforced here and at the native tool entry point.
   /// Quick Chat can change its notes, timers and calendar replicas, never invoke
   /// host MCP automation or schedule agent work on this phone.
-  func performDeviceMCP(name: String, arguments: [String: GatewayJSONValue], conversationID: String, requestID: String) async throws -> String {
+  func performDeviceMCP(name: String, arguments: [String: JSONValue], conversationID: String, requestID: String) async throws -> String {
     let id = Self.deviceMCPRequestID(requestID)
     let response: WovenMatterToolResponse
     do {
@@ -74,5 +73,4 @@ extension MobileModel {
     } catch { response = MobileToolSupport.response(error: error, requestID: id) }
     return String(decoding: try JSONEncoder().encode(WovenMCPCatalog.result(response)), as: UTF8.self)
   }
-  func deviceTokenUsage(_ runtime: PiDurableRuntime) async throws -> Int64? { try await runtime.tokenUsage() }
 }

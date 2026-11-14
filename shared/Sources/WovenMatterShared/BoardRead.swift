@@ -63,7 +63,7 @@ public struct BoardReadFilter: Equatable, Sendable {
 public extension NoteDocument {
   /// The agent-facing projection of one component. Host-specific fields stay out of it.
   /// Project a Board that has never been written first, so its tokens match the first write.
-  func pageComponentValue(id: String, assets: [String: BoardAssetSummary] = [:], includeLayout: Bool = false) throws -> GatewayJSONValue {
+  func pageComponentValue(id: String, assets: [String: BoardAssetSummary] = [:], includeLayout: Bool = false) throws -> JSONValue {
     let document = materializedPage()
     guard let block = document.blocks.first(where: { $0.id == id }) else { throw NoteEditError.blockNotFound(id) }
     return try document.pageComponentValue(block: block, assets: assets, includeLayout: includeLayout)
@@ -71,7 +71,7 @@ public extension NoteDocument {
 
   /// One read of a Page for `woven_pages_read`, on any host that holds its document.
   func pageReadValue(id: String, title: String, revision: String, filter: BoardReadFilter,
-                     assets: [String: BoardAssetSummary]) throws -> GatewayJSONValue {
+                     assets: [String: BoardAssetSummary]) throws -> JSONValue {
     let document = materializedPage()
     let matching = document.blocks.filter { filter.matches(document.boardItems?[$0.id]) }
     let start = min(filter.offset, matching.count)
@@ -80,9 +80,9 @@ public extension NoteDocument {
     let components = try matching[start..<end].map {
       try document.pageComponentValue(block: $0, assets: assets, includeLayout: filter.includeLayout)
     }
-    var value: [String: GatewayJSONValue] = [
+    var value: [String: JSONValue] = [
       "id": .string(id), "title": .string(title), "kind": .string("page"), "revision": .string(revision),
-      "purpose": document.boardPurpose.map(GatewayJSONValue.string) ?? .null,
+      "purpose": document.boardPurpose.map(JSONValue.string) ?? .null,
       "components": .array(components), "totalComponents": .number(Double(document.blocks.count)),
       "matchingComponents": .number(Double(matching.count)),
       "hasMore": .bool(end < matching.count), "nextOffset": .number(Double(end)),
@@ -113,18 +113,18 @@ public extension NoteDocument {
 }
 
 private extension NoteDocument {
-  func pageComponentValue(block: NoteBlock, assets: [String: BoardAssetSummary], includeLayout: Bool) throws -> GatewayJSONValue {
+  func pageComponentValue(block: NoteBlock, assets: [String: BoardAssetSummary], includeLayout: Bool) throws -> JSONValue {
     let id = block.id
     let kind = pageComponentKind(block: block)
     let item = boardItems?[id] ?? BoardItem()
-    var value: [String: GatewayJSONValue] = [
+    var value: [String: JSONValue] = [
       "componentID": .string(id),
       "componentRevision": .string(pageRevision(of: block)),
       "kind": .string(kind.rawValue),
-      "parentID": pageNodes?[id]?.parentID.map(GatewayJSONValue.string) ?? .null,
+      "parentID": pageNodes?[id]?.parentID.map(JSONValue.string) ?? .null,
       "depth": .number(Double(pageDepth(for: id))),
       "role": .string(item.role.rawValue),
-      "sessions": .array(item.sessions.map(GatewayJSONValue.string)),
+      "sessions": .array(item.sessions.map(JSONValue.string)),
     ]
     switch kind {
     case .section:

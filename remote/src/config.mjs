@@ -11,26 +11,22 @@ export function defaultAgentModule(name) {
   return existsSync(bundled) ? bundled.href : new URL('../../default-agent/' + name, import.meta.url).href
 }
 
-// This is shared by the HTTP service, maintenance and host launch helpers. Keep
-// container defaults stable: persisted volumes and older clients depend on them.
+// This is shared by the HTTP service, maintenance and host launch helpers. The
+// service runs only on native hosts (remote-host.sh installs it as a systemd
+// user unit).
 export function loadRuntimeConfiguration(environment = process.env) {
   const home = environment.HOME ?? homedir()
   const serviceRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
-  const runtimeKind = environment.WOVENMATTER_RUNTIME_KIND ?? 'container'
   const accessMode = environment.WOVENMATTER_ACCESS_MODE ?? 'user'
-  if (!['container', 'host'].includes(runtimeKind)) throw new Error('invalid_runtime_kind')
   if (!['fullRoot', 'user'].includes(accessMode)) throw new Error('invalid_access_mode')
   const listenHost = environment.WOVENMATTER_LISTEN_HOST ?? '127.0.0.1'
-  if (runtimeKind === 'host' && !['127.0.0.1', '::1'].includes(listenHost)) throw new Error('host_listener_must_be_loopback')
+  if (!['127.0.0.1', '::1'].includes(listenHost)) throw new Error('host_listener_must_be_loopback')
   const port = Number.parseInt(environment.WOVENMATTER_LISTEN_PORT ?? '', 10)
   const managedDataRoot = environment.WOVENMATTER_DATA_DIRECTORY ?? resolve(home, '.local/share/wovenmatter/databases')
   return Object.freeze({
-    home, serviceRoot, runtimeKind, accessMode, listenHost,
+    home, serviceRoot, accessMode, listenHost,
     listenPort: Number.isInteger(port) && port > 0 && port <= 65535 ? port : 7337,
     apiToken: environment.WOVENMATTER_API_TOKEN ?? '',
-    // Keys the publisher and MCP grants at rest; set once the installer bearer
-    // rotates (remote-host.sh rotate-token), older installs use the bearer.
-    serviceSecret: environment.WOVENMATTER_SERVICE_SECRET || null,
     catalogPath: environment.WOVENMATTER_HARNESS_CATALOG ?? resolve(serviceRoot, 'harnesses/catalog.json'),
     workspaceRoot: environment.WOVENMATTER_WORKSPACE ?? resolve(home, '.woven-matter'),
     managedDataRoot,
@@ -77,12 +73,15 @@ export function runtimeHarnessEnvironment(environment = process.env, configurati
   return nonInteractiveSessionEnvironment({ ...environment, HOME: configuration.home, PATH: paths.join(':'), WOVENMATTER_WORKSPACE: configuration.workspaceRoot }, configuration)
 }
 
+// This is the release's patched npm, not Node's stock bundled npm or a user
+// shim. Explicit Node also prevents npm's /usr/bin/env shebang selecting an
+// unrelated runtime earlier in the user's harness PATH.
+export function runtimeNPMInvocation(configuration = runtimeConfiguration, nodeExecutable = process.execPath) {
+  return [nodeExecutable, resolve(configuration.serviceRoot, 'tooling/lib/node_modules/npm/bin/npm-cli.js')]
+}
+
 export function runtimeNPMCommand(configuration = runtimeConfiguration, nodeExecutable = process.execPath) {
-  if (configuration.runtimeKind !== 'host') return 'npm'
-  // This is the release's patched npm, not Node's stock bundled npm or a user
-  // shim. Explicit Node also prevents npm's /usr/bin/env shebang selecting an
-  // unrelated runtime earlier in the user's harness PATH.
-  return [nodeExecutable, resolve(configuration.serviceRoot, 'tooling/lib/node_modules/npm/bin/npm-cli.js')].map(shellQuote).join(' ')
+  return runtimeNPMInvocation(configuration, nodeExecutable).map(shellQuote).join(' ')
 }
 
 // Each harness's native Full access mode. New sessions start here unless the
@@ -136,13 +135,13 @@ export function presentPermissionChoices(runtimeKind, choices) {
 }
 
 export function workspacePermission(runtimeKind, requested, configuration = runtimeConfiguration) {
-  if (configuration.runtimeKind !== 'host' || configuration.accessMode !== 'fullRoot') return requested
+  if (configuration.accessMode !== 'fullRoot') return requested
   return fullAccessPermissions[runtimeKind] ?? requested
 }
 
 export function workspaceExecutionConfiguration(value, configuration = runtimeConfiguration) {
   const permission = workspacePermission(value.runtimeKind, value.permission, configuration)
-  return configuration.runtimeKind === 'host' && configuration.accessMode === 'fullRoot'
+  return configuration.accessMode === 'fullRoot'
     ? { ...value, permission, usesProductPermissionDefault: false } : value
 }
 

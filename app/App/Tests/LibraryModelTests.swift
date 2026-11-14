@@ -4,7 +4,7 @@ import WorkspaceFixtures
 import Foundation
 import Testing
 import WovenMatterCore
-import WovenMatterDashboardStore
+import WovenMatterLibraryStore
 
 @MainActor
 struct LibraryModelTests {
@@ -13,7 +13,7 @@ struct LibraryModelTests {
         let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
-        let store = try await DashboardStore(supportDirectory: root)
+        let store = try await LibraryStore(supportDirectory: root)
         let source = root.appending(path: "Screenshot.png")
         let bytes = Data([1, 2, 3])
         try bytes.write(to: source)
@@ -44,7 +44,7 @@ struct LibraryModelTests {
         let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
-        let store = try await DashboardStore(supportDirectory: root)
+        let store = try await LibraryStore(supportDirectory: root)
         let bytes = Data("fixture image bytes".utf8)
         let hash = SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined()
         final class Reads: @unchecked Sendable {

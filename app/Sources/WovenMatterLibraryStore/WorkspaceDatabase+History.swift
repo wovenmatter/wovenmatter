@@ -1,0 +1,669 @@
+import Foundation
+#if canImport(SQLite3)
+import SQLite3
+#else
+import CSQLite
+#endif
+import WovenMatterCore
+import WovenMatterClient
+
+// MARK: - User-owned history (same workspace.sqlite; independent of UI projections)
+extension WorkspaceDatabaseConnection {
+  func migrateWorkspaceHistory() throws {
+    try transaction {
+      try executeUnlocked(
+        """
+        CREATE TABLE IF NOT EXISTS session_deliveries(
+          id TEXT PRIMARY KEY,source_id TEXT NOT NULL,target_id TEXT NOT NULL,content TEXT NOT NULL,
+          status TEXT NOT NULL,message_id TEXT UNIQUE,source_agent TEXT,source_title TEXT,
+          created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+          kind TEXT NOT NULL DEFAULT 'message', purpose TEXT, target_title TEXT, target_harness TEXT,
+          target_model TEXT, event_key TEXT, transport_started INTEGER NOT NULL DEFAULT 1, retry_after REAL,
+          native_command TEXT, failure_code TEXT, failure_reason TEXT
+        );
+        CREATE INDEX IF NOT EXISTS session_deliveries_source ON session_deliveries(source_id,created_at);
+        CREATE INDEX IF NOT EXISTS session_deliveries_target ON session_deliveries(target_id,status);
+        -- The dispatcher's queue (`sessionDeliveries(queuedOnly:)`), in rowid order.
+        CREATE INDEX IF NOT EXISTS session_deliveries_queued ON session_deliveries(status) WHERE status='queued';
+        CREATE TABLE IF NOT EXISTS history_events(
+          sequence INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT NOT NULL UNIQUE,
+          conversation_id TEXT, run_id TEXT, agent_id TEXT, harness TEXT NOT NULL,
+          kind TEXT NOT NULL, payload TEXT NOT NULL, completeness TEXT NOT NULL DEFAULT 'observed',
+          recorded_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+          native_session_id TEXT, source_connection_id TEXT, source_id TEXT, native_record_id TEXT,
+          native_revision_id TEXT, content_mode TEXT, text_content TEXT, projection_json TEXT
+        );
+        CREATE INDEX IF NOT EXISTS history_events_conversation ON history_events(conversation_id,sequence);
+        CREATE INDEX IF NOT EXISTS history_events_run ON history_events(run_id,sequence);
+        CREATE INDEX IF NOT EXISTS history_events_harness ON history_events(harness,sequence);
+        CREATE INDEX IF NOT EXISTS history_events_native_session ON history_events(harness,source_connection_id,agent_id,native_session_id)
+          WHERE conversation_id IS NULL;
+        CREATE INDEX IF NOT EXISTS history_events_native_record ON history_events(harness,source_id,native_session_id,native_record_id,sequence);
+        -- CLI journal events, which `recordHistoryUnlocked` keeps to the newest 10,000.
+        -- Its prune repeats this exact WHERE term so SQLite can use the index.
+        CREATE INDEX IF NOT EXISTS history_events_cli ON history_events(sequence) WHERE kind LIKE 'cli.%';
+        -- Search covers everything but CLI journals, which may carry tool request bodies.
+        CREATE VIRTUAL TABLE IF NOT EXISTS history_search USING fts5(payload,content='');
+        CREATE TRIGGER IF NOT EXISTS history_events_search_insert AFTER INSERT ON history_events
+          WHEN new.kind NOT LIKE 'cli.%' BEGIN
+          INSERT INTO history_search(rowid,payload)
+            VALUES(new.sequence,new.payload||' '||coalesce(new.text_content,'')||' '||coalesce(new.projection_json,''));
+        END;
+        CREATE TRIGGER IF NOT EXISTS history_events_search_delete AFTER DELETE ON history_events
+          WHEN old.kind NOT LIKE 'cli.%' BEGIN
+          INSERT INTO history_search(history_search,rowid,payload)
+            VALUES('delete',old.sequence,old.payload||' '||coalesce(old.text_content,'')||' '||coalesce(old.projection_json,''));
+        END;
+        CREATE TABLE IF NOT EXISTS note_asset_versions(
+          sequence INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT NOT NULL UNIQUE,
+          note_id TEXT NOT NULL, title TEXT NOT NULL, content TEXT NOT NULL,
+          revision TEXT NOT NULL, source TEXT NOT NULL, bytes INTEGER NOT NULL,
+          created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+        );
+        -- Versions are shared rows; `sequence` is this Mac's arrival order and
+        -- differs between Macs, so "latest" and pruning order by (created_at,id),
+        -- which every Mac holds alike. `bytes` lets both prunes skip `content`.
+        CREATE INDEX IF NOT EXISTS note_asset_versions_note ON note_asset_versions(note_id,created_at DESC,id DESC,bytes);
+        CREATE INDEX IF NOT EXISTS note_asset_versions_created ON note_asset_versions(created_at DESC,id DESC,bytes);
+        CREATE TRIGGER IF NOT EXISTS opencode_sessions_history_insert AFTER INSERT ON opencode_sessions BEGIN
+          UPDATE history_events SET conversation_id=new.conversation_id
+          WHERE conversation_id IS NULL AND harness='opencode'
+            AND source_connection_id=new.connection_id AND native_session_id=new.session_id;
+        END;
+        """)
+      // Current-state events complement native capture, covering human input and run
+      // status even when an adapter fails before it emits a transport frame.
+      for operation in ["INSERT", "UPDATE"] {
+        let suffix = operation.lowercased()
+        let messageWhen = operation == "UPDATE" ? "WHEN new.status != 'streaming'" : ""
+        try executeUnlocked(
+          """
+          CREATE TRIGGER IF NOT EXISTS messages_history_\(suffix) AFTER \(operation) ON messages \(messageWhen)
+          BEGIN
+            INSERT INTO history_events(id,conversation_id,run_id,harness,kind,payload)
+            VALUES(lower(hex(randomblob(16))),new.conversation_id,new.run_id,
+              coalesce((SELECT runtime_kind FROM harness_sessions WHERE conversation_id=new.conversation_id),'unknown'),
+              'message.\(suffix)',json_object('id',new.id,'role',new.role,'content',new.content,'contentMode','snapshot','status',new.status));
+          END;
+          CREATE TRIGGER IF NOT EXISTS runs_history_\(suffix) AFTER \(operation) ON runs
+          BEGIN
+            INSERT INTO history_events(id,conversation_id,run_id,agent_id,harness,kind,payload)
+            VALUES(lower(hex(randomblob(16))),new.conversation_id,new.id,new.agent_id,
+              coalesce((SELECT runtime_kind FROM harness_sessions WHERE conversation_id=new.conversation_id),'unknown'),
+              'run.\(suffix)',json_object('id',new.id,'status',new.status,'error',new.error,'nativeSession',new.native_session_id));
+          END;
+          """)
+      }
+    }
+  }
+
+  /// Atomic and idempotent. An ID may only refer to the exact same event.
+  public func recordHistory(_ event: WorkspaceHistoryEvent) throws {
+    try transaction { try recordHistoryUnlocked(event) }
+  }
+
+  func recordHistoryUnlocked(_ incoming: WorkspaceHistoryEvent) throws {
+    var event = incoming
+    event.payload = event.kind.hasPrefix("wire.")
+      ? WorkspaceHistoryPrivacy.redactingTransportSecrets(event.payload)
+      : WorkspaceHistoryPrivacy.redactingToolEndpoints(event.payload)
+    event.textContent = event.textContent.map(WorkspaceHistoryPrivacy.redactingToolEndpoints)
+    event.projectionJSON = event.projectionJSON.map(WorkspaceHistoryPrivacy.redactingToolEndpoints)
+    if event.conversationID == nil, let key = event.nativeSessionID, event.harness == "opencode" {
+      event.conversationID = try historyRowsUnlocked("SELECT conversation_id FROM opencode_sessions WHERE connection_id=? AND session_id=?",
+        values: [event.sourceConnectionID, key]).first?.objectValue?["conversation_id"]?.stringValue
+    }
+    let existing = try prepareUnlocked(
+      "SELECT payload,kind,harness,conversation_id,agent_id,run_id,completeness,native_session_id,source_connection_id,source_id,native_record_id,native_revision_id,content_mode,text_content,projection_json FROM history_events WHERE id=?")
+    defer { sqlite3_finalize(existing) }
+    try bind(event.id, at: 1, to: existing)
+    if sqlite3_step(existing) == SQLITE_ROW {
+      guard try text(existing, column: 0) == event.payload,
+        try text(existing, column: 1) == event.kind,
+        try text(existing, column: 2) == event.harness,
+        optionalText(existing,column:3) == event.conversationID,
+        optionalText(existing,column:4) == event.agentID,
+        event.runID == nil || optionalText(existing,column:5) == event.runID,
+        try text(existing,column:6) == event.completeness,
+        optionalText(existing,column:7) == event.nativeSessionID,
+        optionalText(existing,column:8) == event.sourceConnectionID,
+        optionalText(existing,column:9) == event.sourceID,
+        optionalText(existing,column:10) == event.nativeRecordID,
+        optionalText(existing,column:11) == event.nativeRevisionID,
+        optionalText(existing,column:12) == event.contentMode,
+        optionalText(existing,column:13) == event.textContent,
+        optionalText(existing,column:14) == event.projectionJSON
+      else {
+        throw WorkspaceDatabaseError.open("History event ID collision")
+      }
+      return
+    }
+    let statement = try prepareUnlocked(
+      """
+      INSERT INTO history_events(id,conversation_id,run_id,agent_id,harness,kind,payload,completeness,native_session_id,source_connection_id,source_id,native_record_id,native_revision_id,content_mode,text_content,projection_json)
+      VALUES(?,?,coalesce(?,(SELECT id FROM runs WHERE conversation_id=? AND ? IS NULL
+        AND status IN ('queued','running') ORDER BY rowid DESC LIMIT 1)),?,?,?,?,?,?,?,?,?,?,?,?,?)
+      """)
+    defer { sqlite3_finalize(statement) }
+    for (index, value) in [
+      event.id, event.conversationID, event.runID, event.conversationID, event.sourceID,
+      event.agentID, event.harness, event.kind, event.payload, event.completeness,
+      event.nativeSessionID, event.sourceConnectionID,
+      event.sourceID,event.nativeRecordID,event.nativeRevisionID,event.contentMode,event.textContent,event.projectionJSON,
+    ].enumerated() {
+      try bindNullable(value, at: Int32(index + 1), to: statement)
+    }
+    try stepDone(statement)
+    if event.kind.hasPrefix("cli.") {
+      // Everything at or before the 10,001st newest CLI event: one short walk
+      // of `history_events_cli` finds it, and the delete is a range of that
+      // index. Nothing is deleted while there are 10,000 or fewer.
+      try executeUnlocked("""
+        DELETE FROM history_events WHERE kind LIKE 'cli.%' AND sequence <= (
+          SELECT sequence FROM history_events WHERE kind LIKE 'cli.%'
+            ORDER BY sequence DESC LIMIT 1 OFFSET 10000
+        )
+        """)
+    }
+  }
+
+  func recordOpenCodeObservation(connectionID: String, direction: String, data: Data) throws {
+    if direction == "native" {
+      let batch = try JSONDecoder().decode(WorkspaceNativeRunRecordBatch.self, from: data)
+      let conversationID = try historyRowsUnlocked("SELECT conversation_id FROM opencode_sessions WHERE connection_id=? AND session_id=?", values: [connectionID, batch.nativeSessionID]).first?.objectValue?["conversation_id"]?.stringValue
+      try recordNativeRunRecords(batch, conversationID: conversationID, harness: "opencode", sourceConnectionID: connectionID)
+      return
+    }
+    let frame = try JSONDecoder().decode(WorkspaceHTTPObservation.self, from: data)
+    let parts = frame.path.split(separator: "/").map(String.init)
+    let nativeID = parts.firstIndex(of: "session").flatMap { index in
+      index + 1 < parts.count ? parts[index + 1].removingPercentEncoding : nil
+    }
+    try transaction {
+      let conversationID: String?
+      if let nativeID {
+        conversationID = try historyRowsUnlocked("SELECT conversation_id FROM opencode_sessions WHERE connection_id=? AND session_id=?", values: [connectionID, nativeID]).first?.objectValue?["conversation_id"]?.stringValue
+      } else { conversationID = nil }
+      try recordHistoryUnlocked(.init(conversationID: conversationID, harness: "opencode",
+        kind: "wire.\(direction)", payload: String(decoding: data, as: UTF8.self),
+        nativeSessionID: nativeID, sourceConnectionID: connectionID))
+    }
+  }
+
+  /// Agents cannot write application records through this API. The service itself
+  /// journals query access; results are referenced, never recursively re-embedded.
+  public func queryHistory(_ query: WorkspaceHistoryQuery) throws -> JSONValue {
+    let queryID = UUID().uuidString.lowercased()
+    try recordHistory(
+      WorkspaceHistoryEvent(
+        id: queryID, conversationID: query.callerConversationID,
+        harness: "woven-history", kind: "cli.query",
+        payload: String(decoding: try JSONEncoder().encode([
+          "command": query.command,
+          "hasSearch": query.search == nil ? "false" : "true",
+          "scoped": query.conversationID == nil && query.folderID == nil ? "false" : "true"
+        ]), as: UTF8.self)))
+    do {
+      return try transaction {
+        guard query.schemaVersion == 1, (1...200).contains(query.limit), query.after >= 0,
+          query.offset >= 0, query.offset < Int.max, (1...65536).contains(query.characters),
+          ["oldest", "newest"].contains(query.sort)
+        else {
+          throw WorkspaceDatabaseError.open("Unsupported history schema or invalid pagination")
+        }
+        let result = try queryHistoryUnlocked(query)
+        let rowIDs = (result.objectValue?["rows"]?.arrayValue ?? []).compactMap {
+          $0.objectValue?["id"]?.stringValue
+        }
+        try recordHistoryUnlocked(
+          WorkspaceHistoryEvent(
+            conversationID: query.callerConversationID,
+            harness: "woven-history", kind: "cli.query.result",
+            payload: String(
+              decoding: try JSONEncoder().encode(
+                [
+                  "queryID": queryID, "command": query.command,
+                  "resultIDs": rowIDs.joined(separator: ","),
+                ]), as: UTF8.self)))
+        return result
+      }
+    } catch {
+      try recordHistory(
+        WorkspaceHistoryEvent(
+          conversationID: query.callerConversationID, harness: "woven-history",
+          kind: "cli.query.error",
+          payload: String(
+            decoding: try JSONEncoder().encode(
+              ["queryID": queryID, "error": error.localizedDescription]), as: UTF8.self)))
+      throw error
+    }
+  }
+
+  func queryHistoryUnlocked(_ query: WorkspaceHistoryQuery) throws -> JSONValue {
+    if let nativeConversationID = query.nativeConversationID {
+      guard ["events", "search", "trace"].contains(query.command),
+        !nativeConversationID.isEmpty, nativeConversationID.utf8.count <= 256,
+        query.sourceID?.isEmpty == false, query.nativeSessionID?.isEmpty == false else {
+        throw WorkspaceToolError.invalid("A native conversation filter requires its source ID and native session ID.")
+      }
+    }
+    if let since = query.since, let until = query.until {
+      guard let start = Self.date(since), let end = Self.date(until), end >= start else {
+        throw WorkspaceToolError.invalid("--until must be at or after --since.")
+      }
+    }
+    var values: [String?] = []
+    var sql: String
+    switch query.command {
+    case "events", "search", "trace":
+      if query.command == "trace", query.id == nil, query.runID == nil {
+        throw WorkspaceDatabaseError.open("trace requires a run ID")
+      }
+      var filters = ["e.sequence > ?"]
+      values.append(String(query.after))
+      if query.command == "search", query.kind == nil {
+        // Retrieval journals contain the search term itself. Keep them available
+        // through events/trace or an explicit kind filter, but do not let that
+        // audit traffic manufacture a local match and suppress folder fallback.
+        filters.append("e.kind NOT LIKE 'cli.%'")
+      }
+      for (column, value) in [
+        ("conversation_id", query.conversationID),
+        ("run_id", query.runID ?? (query.command == "trace" ? query.id : nil)),
+        ("harness", query.harness), ("kind", query.kind),
+        ("source_id", query.sourceID), ("native_session_id", query.nativeSessionID), ("native_record_id", query.nativeRecordID),
+      ] {
+        if let value {
+          // A harness has few distinct values; with a conversation or run
+          // also named, `+` keeps SQLite on that narrower index instead of
+          // walking every event of the harness through `history_events_harness`.
+          let narrower = query.conversationID != nil || query.runID != nil || query.command == "trace"
+          filters.append(column == "harness" && narrower ? "+e.harness = ?" : "e.\(column) = ?")
+          values.append(value)
+        }
+      }
+      if let nativeConversationID = query.nativeConversationID {
+        filters.append("CASE WHEN json_valid(e.projection_json) THEN CAST(json_extract(e.projection_json,'$.nativeConversationID') AS TEXT) END = ?")
+        values.append(nativeConversationID)
+      }
+      if let since = query.since {
+        filters.append("e.recorded_at >= ?")
+        guard let date = Self.date(since) else { throw WorkspaceToolError.invalid("--since requires an ISO 8601 date with a time zone.") }
+        values.append(Self.timestamp(date))
+      }
+      if let until = query.until {
+        filters.append("e.recorded_at <= ?")
+        guard let date = Self.date(until) else { throw WorkspaceToolError.invalid("--until requires an ISO 8601 date with a time zone.") }
+        values.append(Self.timestamp(date))
+      }
+      if let folderID = query.folderID {
+        filters.append("e.conversation_id IN (SELECT id FROM conversations WHERE folder_id=?)")
+        values.append(folderID)
+      }
+      if let search = query.search, !search.isEmpty {
+        if query.kind?.hasPrefix("cli.") == true {
+          // CLI audit events are intentionally absent from FTS so a search does
+          // not find its own journal. Explicit audit searches use a literal scan.
+          filters.append("instr(lower(e.payload),lower(?))>0")
+          values.append(search)
+        } else {
+          filters.append(
+            "e.sequence IN (SELECT rowid FROM history_search WHERE history_search MATCH ?)"
+          )
+          // Literal text search, not a user-supplied FTS expression.
+          values.append("\"" + search.replacingOccurrences(of: "\"", with: "\"\"") + "\"")
+        }
+      }
+      sql = """
+        SELECT e.sequence,e.id,e.conversation_id,e.run_id,e.agent_id,e.harness,e.kind,
+          e.completeness,e.recorded_at,e.native_session_id,e.source_connection_id,e.source_id,e.native_record_id,e.native_revision_id,e.content_mode,
+          woven_text_length(e.payload) AS payload_characters,
+          CASE WHEN woven_text_length(e.payload)<=8192 THEN e.payload ELSE NULL END AS payload,
+          woven_text_length(e.text_content) AS text_characters,CASE WHEN woven_text_length(e.text_content)<=8192 THEN e.text_content ELSE NULL END AS text_content,
+          woven_text_length(e.projection_json) AS projection_characters,CASE WHEN woven_text_length(e.projection_json)<=8192 THEN e.projection_json ELSE NULL END AS projection_json
+        FROM history_events e WHERE
+        """ + " " + filters.joined(separator: " AND ") + " ORDER BY e.sequence"
+    case "event":
+      guard let id = query.id else { throw WorkspaceDatabaseError.open("event requires an ID") }
+      sql = """
+        SELECT sequence,id,conversation_id,run_id,agent_id,harness,kind,completeness,recorded_at,
+          native_session_id,source_connection_id,source_id,native_record_id,native_revision_id,content_mode,
+          woven_text_length(payload) AS payload_characters,? AS payload_offset,
+          CASE WHEN woven_text_length(payload)>?+? THEN 1 ELSE 0 END AS payload_has_more,
+          woven_text_substr(payload,?,?) AS payload,
+          woven_text_length(text_content) AS text_characters,CASE WHEN woven_text_length(text_content)>?+? THEN 1 ELSE 0 END AS text_has_more,woven_text_substr(text_content,?,?) AS text_content,
+          woven_text_length(projection_json) AS projection_characters,CASE WHEN woven_text_length(projection_json)>?+? THEN 1 ELSE 0 END AS projection_has_more,woven_text_substr(projection_json,?,?) AS projection_json
+          FROM history_events WHERE id=? ORDER BY sequence
+        """
+      values = [String(query.offset), String(query.offset), String(query.characters),
+        String(query.offset + 1), String(query.characters),
+        String(query.offset), String(query.characters),String(query.offset + 1), String(query.characters),
+        String(query.offset), String(query.characters),String(query.offset + 1), String(query.characters),id]
+    case "conversations":
+      let newest = query.sort == "newest"
+      sql = """
+        SELECT c.rowid AS sequence,c.id,c.title,c.agent_codename,c.folder_id,c.created_at,c.updated_at,c.deleted_at,
+          coalesce(s.runtime_kind,CASE WHEN o.session_id IS NOT NULL THEN 'opencode' END,'unknown') AS harness,
+          s.model,s.thinking,s.remote_workspace_id,
+          (SELECT status FROM runs WHERE conversation_id=c.id ORDER BY rowid DESC LIMIT 1) AS status
+        FROM conversations c LEFT JOIN harness_sessions s ON s.conversation_id=c.id
+        LEFT JOIN opencode_sessions o ON o.conversation_id=c.id
+        WHERE c.rowid \(newest ? "<" : ">") ? AND c.deleted_at IS NULL
+        """
+      values = [String(query.after)]
+      if let id = query.id { sql += " AND c.id=?"; values.append(id) }
+      if let folderID = query.folderID { sql += " AND c.folder_id=?"; values.append(folderID) }
+      if let search = query.search {
+        sql += " AND instr(lower(c.title),lower(?))>0"; values.append(search)
+      }
+      sql += " ORDER BY c.rowid " + (newest ? "DESC" : "ASC")
+    case "conversation":
+      guard let id = query.id else {
+        throw WorkspaceDatabaseError.open("conversation requires an ID")
+      }
+      sql =
+        "SELECT m.rowid AS sequence,m.id,m.conversation_id,m.run_id,m.role,woven_text_substr(m.content,?,?) AS content,woven_text_length(m.content) AS content_characters,? AS content_offset,CASE WHEN woven_text_length(m.content)>?+? THEN 1 ELSE 0 END AS content_has_more,m.status,m.created_at, COALESCE(d.source_id,p.source_id) AS sender_session_id,COALESCE(d.source_agent,p.source_agent) AS sender_agent,COALESCE(d.source_title,p.source_title) AS sender_session_title FROM messages m LEFT JOIN session_deliveries d ON d.message_id=m.id LEFT JOIN message_provenance p ON p.message_id=m.id WHERE m.conversation_id=? AND m.rowid>? ORDER BY m.rowid"
+      values = [String(query.offset + 1), String(query.characters), String(query.offset),
+        String(query.offset), String(query.characters), id, String(query.after)]
+    case "message":
+      guard let id = query.id else { throw WorkspaceDatabaseError.open("message requires an ID") }
+      sql = "SELECT rowid AS sequence,id,conversation_id,woven_text_length(content) AS content_characters,? AS content_offset,CASE WHEN woven_text_length(content)>?+? THEN 1 ELSE 0 END AS content_has_more,woven_text_substr(content,?,?) AS content FROM messages WHERE id=? ORDER BY rowid"
+      values = [String(query.offset), String(query.offset), String(query.characters),
+        String(query.offset + 1), String(query.characters), id]
+    case "runs":
+      sql =
+        "SELECT rowid AS sequence,id,conversation_id,agent_codename,status,error,started_at,completed_at FROM runs WHERE rowid>?"
+      values = [String(query.after)]
+      if let id = query.conversationID {
+        sql += " AND conversation_id=?"
+        values.append(id)
+      }
+      sql += " ORDER BY rowid"
+    case "versions":
+      guard let id = query.id else {
+        throw WorkspaceDatabaseError.open("versions requires a note ID")
+      }
+      sql =
+        "SELECT sequence,id,note_id,title,revision,source,bytes,created_at FROM note_asset_versions WHERE note_id=? AND sequence>? ORDER BY sequence"
+      values = [id, String(query.after)]
+    case "version":
+      guard let id = query.id else {
+        throw WorkspaceDatabaseError.open("version requires a version ID")
+      }
+      sql = "SELECT sequence,id,note_id,title,revision,source,bytes,created_at,woven_text_length(content) AS content_characters,? AS content_offset,CASE WHEN woven_text_length(content)>?+? THEN 1 ELSE 0 END AS content_has_more,woven_text_substr(content,?,?) AS content FROM note_asset_versions WHERE id=? ORDER BY sequence"
+      values = [String(query.offset), String(query.offset), String(query.characters),
+        String(query.offset + 1), String(query.characters), id]
+    default: throw WorkspaceDatabaseError.open("Unknown read-only history command")
+    }
+    sql += " LIMIT ?"
+    values.append(String(query.limit + 1))
+    var rows = try historyRowsUnlocked(sql, values: values)
+    let more = rows.count > query.limit
+    if more { rows.removeLast() }
+    let cursor = rows.last?.objectValue?["sequence"] ?? .number(Double(query.after))
+    return .object([
+      "schemaVersion": .number(1), "rows": .array(rows), "hasMore": .bool(more),
+      "nextCursor": cursor,
+      "historicalCoverage": .string("Retained native records and app projections; each record identifies its source and observed coverage."),
+    ])
+  }
+
+  func historyRowsUnlocked(_ sql: String, values: [String?]) throws -> [JSONValue] {
+    var rows: [JSONValue] = []
+    try forEachHistoryRowUnlocked(sql, values: values) { rows.append($0) }
+    return rows
+  }
+
+  func forEachHistoryRowUnlocked(_ sql: String, values: [String?], redactingCapabilities: Bool = false,
+    _ body: (JSONValue) throws -> Void) throws {
+    let statement = try prepareUnlocked(sql)
+    defer { sqlite3_finalize(statement) }
+    for (index, value) in values.enumerated() {
+      try bindNullable(value, at: Int32(index + 1), to: statement)
+    }
+    while true {
+      let status = sqlite3_step(statement)
+      if status == SQLITE_DONE { break }
+      guard status == SQLITE_ROW else { throw stepError() }
+      try body(historyRowUnlocked(statement, redactingCapabilities: redactingCapabilities))
+    }
+  }
+
+  private func historyRowUnlocked(_ statement: OpaquePointer, redactingCapabilities: Bool) throws -> JSONValue {
+    var row: [String: JSONValue] = [:]
+    for column in 0..<sqlite3_column_count(statement) {
+      let name = String(cString: sqlite3_column_name(statement, column))
+      switch sqlite3_column_type(statement, column) {
+      case SQLITE_NULL: row[name] = .null
+      case SQLITE_INTEGER, SQLITE_FLOAT: row[name] = .number(sqlite3_column_double(statement, column))
+      default:
+        let value = try text(statement, column: column)
+        row[name] = .string(redactingCapabilities ? WorkspaceHistoryPrivacy.redactingToolEndpoints(value) : value)
+      }
+    }
+    return .object(row)
+  }
+
+  /// Five-minute editor checkpoints; explicit agent/restore boundaries are immediate.
+  /// Limits affect historical snapshots only, never the current notes row or events.
+  func checkpointNoteUnlocked(id: String, source: String, force: Bool) throws {
+    let note = try prepareUnlocked(
+      """
+      SELECT title,content,CAST(COALESCE((SELECT revision FROM device_sync_revisions WHERE kind='note' AND resource_id=notes.id),1) AS TEXT) FROM notes WHERE id=? AND deleted_at IS NULL
+      """)
+    defer { sqlite3_finalize(note) }
+    try bind(id, at: 1, to: note)
+    guard sqlite3_step(note) == SQLITE_ROW else { return }
+    let title = try text(note, column: 0)
+    let content = NoteSync.strip(try text(note, column: 1))
+    let revision = try text(note, column: 2)
+    let last = try prepareUnlocked(
+      "SELECT title,content,(julianday('now')-julianday(created_at))*86400 FROM note_asset_versions WHERE note_id=? ORDER BY created_at DESC,id DESC LIMIT 1"
+    )
+    defer { sqlite3_finalize(last) }
+    try bind(id, at: 1, to: last)
+    if sqlite3_step(last) == SQLITE_ROW {
+      if try text(last, column: 0) == title, try text(last, column: 1) == content { return }
+      if !force && sqlite3_column_double(last, 2) < 300 { return }
+    }
+    let bytes = title.utf8.count + content.utf8.count
+    guard bytes <= 20 * 1024 * 1024 else { return }  // Current oversized documents are still saved.
+    // Versions order by (created_at, id). A version written in the same
+    // millisecond as the note's newest (a before-edit checkpoint and the edit),
+    // or before a peer's clock, takes the next millisecond, so it is newest.
+    let insert = try prepareUnlocked(
+      """
+      INSERT INTO note_asset_versions(id,note_id,title,content,revision,source,bytes,created_at)
+      SELECT ?1,?2,?3,?4,?5,?6,?7,CASE WHEN newest IS NULL OR now>newest THEN now
+        ELSE strftime('%Y-%m-%dT%H:%M:%fZ',newest,'+0.001 seconds') END
+      FROM (SELECT strftime('%Y-%m-%dT%H:%M:%fZ','now') AS now,
+        (SELECT max(created_at) FROM note_asset_versions WHERE note_id=?2) AS newest)
+      """
+    )
+    defer { sqlite3_finalize(insert) }
+    let versionID = UUID().uuidString.lowercased()
+    for (index, value) in [versionID, id, title, content, revision, source, String(bytes)]
+      .enumerated()
+    {
+      try bind(value, at: Int32(index + 1), to: insert)
+    }
+    try stepDone(insert)
+    try recordHistoryUnlocked(
+      WorkspaceHistoryEvent(
+        harness: "woven-note", kind: "asset.checkpoint",
+        payload: String(
+          decoding: try JSONEncoder().encode([
+            "noteID": id, "versionID": versionID, "revision": revision, "source": source,
+          ]), as: UTF8.self)))
+    try pruneNoteAssetVersionsUnlocked(noteID: id)
+  }
+
+  /// Keeps a note's newest 50 versions within 20 MB, and every note's within
+  /// 256 MB. Each prune deletion is shared with paired Macs, so "newest" is
+  /// by (created_at, id), which every Mac holding the same versions agrees
+  /// on; `sequence` is only this Mac's arrival order.
+  func pruneNoteAssetVersionsUnlocked(noteID id: String) throws {
+    let prune = try prepareUnlocked(
+      """
+      DELETE FROM note_asset_versions WHERE sequence IN (
+        SELECT sequence FROM (SELECT sequence,row_number() OVER newest AS n,
+          sum(bytes) OVER newest AS total FROM note_asset_versions WHERE note_id=?
+          WINDOW newest AS (ORDER BY created_at DESC,id DESC))
+        WHERE n>50 OR total>20971520
+      )
+      """)
+    defer { sqlite3_finalize(prune) }
+    try bind(id, at: 1, to: prune)
+    try stepDone(prune)
+    try executeUnlocked(
+      """
+      DELETE FROM note_asset_versions WHERE sequence IN (
+        SELECT sequence FROM (SELECT sequence,sum(bytes) OVER (ORDER BY created_at DESC,id DESC) AS total FROM note_asset_versions)
+        WHERE total>268435456
+      )
+      """)
+  }
+
+  public func noteAssetVersions(id: String) throws -> [NoteAssetVersion] {
+    try withLock {
+      let rows = try historyRowsUnlocked(
+        "SELECT * FROM note_asset_versions WHERE note_id=? ORDER BY created_at DESC,id DESC", values: [id])
+      return rows.compactMap { value -> NoteAssetVersion? in
+        guard let row = value.objectValue else { return nil }
+        func s(_ key: String) -> String { row[key]?.stringValue ?? "" }
+        return NoteAssetVersion(
+          id: s("id"), noteID: s("note_id"), title: s("title"), content: s("content"),
+          revision: s("revision"), createdAt: s("created_at"), source: s("source"))
+      }
+    }
+  }
+
+  /// Restore is an application mutation, deliberately not a history CLI command.
+  public func restoreNoteAssetVersion(noteID: String, versionID: String, expectedRevision: String, callerConversationID: String? = nil,
+                                      requestID: String? = nil) throws -> NoteEditingResponse
+  {
+    try transaction {
+      if let callerConversationID { try requireToolUnlocked(.notes, sessionID: callerConversationID) }
+      return try performToolMutationUnlocked(callerID: callerConversationID, requestID: requestID,
+        operation: "notes.restore", input: [noteID, versionID, expectedRevision], receipt: noteMutationReceipt) {
+        let current = try noteForEditingUnlocked(id: noteID)
+        guard current.revision == expectedRevision else {
+          throw WorkspaceNoteMutationError.revisionConflict
+        }
+        let rows = try historyRowsUnlocked(
+          "SELECT title,content FROM note_asset_versions WHERE id=? AND note_id=?",
+          values: [versionID, noteID])
+        guard let row = rows.first?.objectValue, let title = row["title"]?.stringValue,
+          var content = row["content"]?.stringValue
+        else {
+          throw WorkspaceDatabaseError.open("This version is no longer retained")
+        }
+        // Restoring an Artifact's code must not rewind what users have entered since,
+        // or versions of saved inputs would run backwards under another open view.
+        if let restored = try? NoteDocument.editableDocument(from: content), restored.kind == .html,
+           let live = try? NoteDocument.editableDocument(from: current.content), live.kind == .html,
+           restored.artifactState != live.artifactState {
+          content = try restored.replacingArtifactState(with: live.artifactState).encoded()
+        }
+        try checkpointNoteUnlocked(id: noteID, source: "before-restore", force: true)
+        let update = try prepareUnlocked(
+          "UPDATE notes SET title=?,content=?,snippet=?,updated_at=? WHERE id=?")
+        defer { sqlite3_finalize(update) }
+        let updatedAt = try nextNoteUpdatedAtUnlocked(id: noteID)
+        for (index, value) in [
+          title, try syncedNoteContentUnlocked(id: noteID, content: content, title: title), Self.noteSnippet(content), updatedAt, noteID,
+        ].enumerated() {
+          try bind(value, at: Int32(index + 1), to: update)
+        }
+        try stepDone(update)
+        try checkpointNoteUnlocked(id: noteID, source: "restore", force: true)
+        return NoteEditingResponse(
+          success: true, noteID: noteID, title: title,
+          revision: try noteForEditingUnlocked(id: noteID).revision,
+          document: NoteDocument.decode(content))
+      }.result
+    }
+  }
+}
+
+extension WorkspaceDatabaseConnection {
+  public func checkpointNote(id: String) throws {
+    try transaction { try checkpointNoteUnlocked(id: id, source: "editor-checkpoint", force: true) }
+  }
+}
+
+extension WorkspaceDatabaseConnection {
+  // Preserve chronological metadata even for writes within one millisecond.
+  // Optimistic revision tokens come from device_sync_revisions, never this timestamp.
+  func nextNoteUpdatedAtUnlocked(id: String, now: Date = Date()) throws -> String {
+    let rows = try historyRowsUnlocked("SELECT updated_at FROM notes WHERE id=?", values: [id])
+    let previous = rows.first?.objectValue?["updated_at"]?.stringValue.flatMap(Self.date)
+    return Self.timestamp(max(now, (previous ?? .distantPast).addingTimeInterval(0.002)))
+  }
+}
+
+extension WorkspaceDatabaseConnection {
+  func attachSessionMessageUnlocked(requestID: String, messageID: String) throws {
+    let requestID = try canonicalDeliveryID(requestID)
+    try validateClaimedToolDeliveryUnlocked(id: requestID)
+    let statement = try prepareUnlocked(
+      """
+      UPDATE session_deliveries SET message_id=?,status='accepted' WHERE id=?
+        AND target_id=(SELECT conversation_id FROM messages WHERE id=?)
+        AND message_id IS NULL AND status='sending'
+      """)
+    defer { sqlite3_finalize(statement) }
+    try bind(messageID, at: 1, to: statement)
+    try bind(requestID, at: 2, to: statement)
+    try bind(messageID, at: 3, to: statement)
+    try stepDone(statement)
+    guard changedRowCountUnlocked == 1 else {
+      throw WorkspaceDatabaseError.open("Unable to attach session attribution")
+    }
+  }
+}
+
+// MARK: - Async worker boundary
+
+extension WorkspaceDatabase {
+  public func recordHistory(_ event: WorkspaceHistoryEvent) async throws {
+    try await write { try $0.recordHistory(event) }
+  }
+
+  public func queryHistory(_ query: WorkspaceHistoryQuery) async throws -> JSONValue {
+    try await write { try $0.queryHistory(query) }
+  }
+
+  public func noteAssetVersions(id: String) async throws -> [NoteAssetVersion] {
+    try await read { try $0.noteAssetVersions(id: id) }
+  }
+
+  public func restoreNoteAssetVersion(noteID: String, versionID: String, expectedRevision: String, callerConversationID: String? = nil,
+                                      requestID: String? = nil) async throws -> NoteEditingResponse {
+    try await write { try $0.restoreNoteAssetVersion(noteID: noteID, versionID: versionID, expectedRevision: expectedRevision, callerConversationID: callerConversationID, requestID: requestID) }
+  }
+
+  public func checkpointNote(id: String) async throws {
+    try await write { try $0.checkpointNote(id: id) }
+  }
+
+  public func historyWireRecorder(conversationID: String? = nil, agentID: String? = nil,
+    harness: String, sourceScope: String? = nil) -> WorkspaceWireRecorder {
+    { [self] direction, data in
+      if direction == "native" {
+        var batch = try JSONDecoder().decode(WorkspaceNativeRunRecordBatch.self, from: data)
+        if let sourceScope { batch.sourceID = sourceScope + ":" + batch.sourceID }
+        try await recordNativeRunRecords(batch, conversationID: conversationID, agentID: agentID, harness: harness)
+        return
+      }
+      try await recordHistory(.init(conversationID: conversationID, agentID: agentID,
+        harness: harness, kind: "wire.\(direction)", payload: String(decoding: data, as: UTF8.self)))
+    }
+  }
+
+  public func openCodeHistoryRecorder(connectionID: String) -> WorkspaceWireRecorder {
+    { [self] direction, data in
+      try await write { try $0.recordOpenCodeObservation(connectionID: connectionID, direction: direction, data: data) }
+    }
+  }
+}

@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync,rmSync,readFileSync } from 'node:fs'
+import { mkdtempSync,rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
@@ -8,10 +8,13 @@ import { createClientExecution } from '../src/client-execution.mjs'
 import { maximumMCPRequestBytes } from '../src/workspace-mcp.mjs'
 import { enroll } from './fixtures/execution.mjs'
 
-async function fixture(t,{fetchImpl,workspaceBrowser}={}) {
+// `mac` answers the signed requests a Mac member would receive (member-client.mjs).
+async function fixture(t,{mac,workspaceBrowser}={}) {
   const directory=mkdtempSync(join(tmpdir(),'woven-workspace-mcp-'))
   const runtime={providers:async()=>[{id:'default_agent',runtimeKind:'default_agent',available:true}],create:async()=>({sessionID:randomUUID()}),close:async()=>{}}
-  const service=createClientExecution({directory,runtime,managedDataRoot:join(directory,'databases'),publisherKey:'k'.repeat(40),publisherFetch:fetchImpl,publisherIntervalMilliseconds:0,workspaceBrowser})
+  const members=mac?{deviceID:()=>randomUUID(),hasMac:()=>true,transport:{workspaces:async()=>[],
+    macs:async()=>[{deviceID:randomUUID(),name:'Mac',endpoint:'https://mac.example.ts.net/wovenmatter'}],request:async(url,options)=>mac(url,options)}}:null
+  const service=createClientExecution({directory,runtime,managedDataRoot:join(directory,'databases'),publisherIntervalMilliseconds:0,workspaceBrowser,members})
   t.after(async()=>{await service.close();rmSync(directory,{recursive:true,force:true})})
   const {principal:device}=enroll(service)
   const command=(kind,values={})=>service.command({commandID:randomUUID(),deviceID:device.id,kind,...values},device)
@@ -66,6 +69,10 @@ test('session and outside-agent MCP credentials preserve caller scope, readonly 
   const f=await fixture(t)
   assert.equal(f.service.mcp.resolvePrincipal('Bearer unrelated'),null)
   const client=f.service.mcp.provisionClient({conversationID:f.id,label:'Outside reviewer'})
+  // A tool group a newer Mac names and this host does not have is left out, not refused.
+  const newer=f.service.mcp.provisionClient({conversationID:f.id,label:'From a newer Mac',enabledGroups:['notes','a-later-group']})
+  assert.deepEqual(newer.enabledGroups,['notes'])
+  assert.throws(()=>f.service.mcp.provisionClient({conversationID:f.id,label:'Malformed',enabledGroups:['notes',7]}),{statusCode:400})
   const principal=f.service.mcp.resolvePrincipal('Bearer '+client.connection.bearerToken)
   const denied=await f.call('woven_goals_set',{objective:'Must be denied'},principal)
   assert.equal(denied.error.code,-32602)
@@ -97,45 +104,26 @@ test('goal MCP mutations retain stable receipts and reject request IDs reused wi
   assert.match(conflict.result.content[0].text,/request ID/)
 })
 
-test('library MCP grant uses separate encrypted authority and cannot be forged from publisher access',async t=>{
-  const requests=[],f=await fixture(t,{fetchImpl:async(url,options)=>{requests.push({url,options});return {ok:true,status:200,text:async()=>JSON.stringify({jsonrpc:'2.0',id:'forwarded',result:{content:[{type:'text',text:'note'}]}})}}})
-  const own=f.service.descriptor(),token='private-library-mcp-grant'.repeat(2)
-  const grant={grantID:randomUUID(),libraryID:own.libraryID,workspaceID:own.id,executionDeviceID:own.executionDeviceID,endpointURL:'https://central.example.ts.net/wovenmatter/mcp/workspace',bearerToken:token}
-  assert.equal(f.service.mcp.configureLibrary(grant).configured,true)
-  assert.equal(readFileSync(join(f.directory,'execution.sqlite')).includes(Buffer.from(token)),false)
-  assert.throws(()=>f.service.mcp.configureLibrary({...grant,workspaceID:randomUUID()}),/match this workspace/)
-  const reply=await f.call('woven_notes_read',{noteID:randomUUID()})
-  assert.equal(reply.result.content[0].text,'note')
-  assert.equal(requests.length,1)
-  assert.equal(requests[0].options.headers.authorization,'Bearer '+token)
-  assert.equal(requests[0].options.headers['x-woven-conversation-id'],f.id)
-  assert.equal(requests[0].options.headers['x-woven-workspace'],own.libraryID)
-  f.service.mcp.clearLibrary()
-  assert.equal((await f.call('woven_notes_read',{noteID:randomUUID()})).error.code,-32602)
-})
-
 test('remote harnesses delegate prepared HTML with their authenticated caller and retain ordinary request limits',async t=>{
-  const requests=[],f=await fixture(t,{fetchImpl:async(url,options)=>{requests.push({url,options});return {ok:true,status:200,text:async()=>JSON.stringify({jsonrpc:'2.0',id:'html',result:{content:[],structuredContent:{success:true}}})}}})
-  const own=f.service.descriptor()
-  f.service.mcp.configureLibrary({grantID:randomUUID(),libraryID:own.libraryID,workspaceID:own.id,executionDeviceID:own.executionDeviceID,endpointURL:'https://central.example.ts.net/wovenmatter/mcp/workspace',bearerToken:'t'.repeat(43)})
+  const requests=[],f=await fixture(t,{mac:async(url,options)=>{requests.push({url,options});return {status:200,body:{jsonrpc:'2.0',id:'html',result:{content:[],structuredContent:{success:true}}}}}})
   // Visual replies remain available even on an older persisted optional-tool selection.
   await f.command('workspace',{conversationID:f.id,workspaceAction:{sessionTools:{id:f.id,enabled:['goals']}}})
   const html='<img src="data:image/png;base64,'+'A'.repeat(5*1024*1024)+'">',requestID=randomUUID()
   assert.equal((await f.call('woven_html_render',{html,title:'Chart',height:240,requestID})).result.structuredContent.success,true)
-  const forwarded=requests.find(item=>JSON.parse(item.options.body).params?.name==='woven_html_render')
+  const forwarded=requests.find(item=>item.options.body.params?.name==='woven_html_render')
+  assert.equal(String(forwarded.url),'https://mac.example.ts.net/wovenmatter/mcp/workspace')
   assert.equal(forwarded.options.headers['x-woven-conversation-id'],f.id)
   assert.ok(forwarded.options.headers['x-woven-enabled-groups'].split(',').includes('html'))
-  assert.equal(JSON.parse(forwarded.options.body).params.arguments.html,html)
-  assert.equal(JSON.parse(forwarded.options.body).params.arguments.requestID,requestID)
+  assert.equal(forwarded.options.body.params.arguments.html,html)
+  assert.equal(forwarded.options.body.params.arguments.requestID,requestID)
   assert.equal((await f.call('woven_html_render',{html,title:'Chart',height:240,conversationID:randomUUID()})).error.code,-32602)
   assert.equal(maximumMCPRequestBytes({method:'tools/call',params:{name:'woven_html_render'}}),40*1024*1024)
   assert.equal(maximumMCPRequestBytes({method:'tools/call',params:{name:'woven_notes_read'}}),4*1024*1024)
   assert.equal(maximumMCPRequestBytes({method:'tools/list',params:{name:'woven_html_render'}}),4*1024*1024)
 })
 
-test('owner-local database MCP tools work without a Mac grant and roll back failed SQL atomically',async t=>{
+test('owner-local database MCP tools work with no Mac and roll back failed SQL atomically',async t=>{
   const f=await fixture(t)
-  assert.deepEqual(f.service.mcp.libraryStatus(),{configured:false})
   const created=await f.call('woven_databases_create',{title:'Offline collection',requestID:randomUUID()})
   assert.equal(created.result.isError,false)
   const row=created.result.structuredContent.result
@@ -152,9 +140,8 @@ test('owner-local database MCP tools work without a Mac grant and roll back fail
 })
 
 test('scheduled MCP callers expose safe content tools and a null input capture without claiming a second lifecycle owner',async t=>{
-  const f=await fixture(t,{fetchImpl:async url=>({ok:true,status:200,json:async()=>({enabledGroups:['notes','sessions','goals','timers','browser']}),text:async()=>JSON.stringify({jsonrpc:'2.0',id:'fixture',result:{content:[]}})})})
-  const own=f.service.descriptor()
-  f.service.mcp.configureLibrary({grantID:randomUUID(),libraryID:own.libraryID,workspaceID:own.id,executionDeviceID:own.executionDeviceID,endpointURL:'https://central.example.ts.net/wovenmatter/mcp/workspace',bearerToken:'t'.repeat(43)})
+  const f=await fixture(t,{mac:async url=>String(url).endsWith('/prepare')?{status:200,body:{enabledGroups:['notes','sessions','goals','timers','browser','a-later-group']}}
+    :{status:200,body:{jsonrpc:'2.0',id:'fixture',result:{content:[]}}}})
   const run={id:randomUUID(),sessionID:randomUUID(),eventID:randomUUID(),task:{configuration:{tools:{enabled:['notes','sessions','goals','timers','browser']}}}}
   const connection=await f.service.prepareTaskMCP({run,eventRevision:1})
   const scope=f.service.mcp.resolvePrincipal('Bearer '+connection.bearerToken)

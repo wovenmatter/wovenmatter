@@ -1,6 +1,6 @@
 import Foundation
 
-/// The legacy central-library protocol. Independent execution is negotiated through federation capabilities.
+/// The library API version every member serves. Execution features are negotiated through workspace capabilities.
 public enum LibraryProtocol {
   // Version 3 adds workspace management, Library, Calendar and session settings.
   public static let version = 3
@@ -36,7 +36,9 @@ public struct LibraryNote: Codable, Equatable, Identifiable, Sendable {
   public var content: String
   public var contentIncluded: Bool
   public var contentByteCount: Int
-  public var kind: NoteArtifactKind?
+  /// A hint derived from `content`. A kind a newer build added reads as nil,
+  /// exactly as an older host reports it; `content` is untouched either way.
+  @LossyOptional public var kind: NoteArtifactKind?
   public var revision: Int64
   public var isPinned: Bool?
   public var updatedAt: String
@@ -223,12 +225,17 @@ public struct InteractionResponse: Codable, Equatable, Sendable {
 public struct LibrarySnapshot: Codable, Equatable, Sendable {
   public var workspaceID: String
   public var cursor: Int64
-  public var folders: [LibraryFolder]
-  public var notes: [LibraryNote]
-  public var conversations: [LibraryConversation]
+  @LossyArray public var folders: [LibraryFolder]
+  @LossyArray public var notes: [LibraryNote]
+  @LossyArray public var conversations: [LibraryConversation]
   public init(workspaceID: String, cursor: Int64, folders: [LibraryFolder] = [], notes: [LibraryNote] = [], conversations: [LibraryConversation] = []) {
     self.workspaceID = workspaceID; self.cursor = cursor; self.folders = folders; self.notes = notes; self.conversations = conversations
   }
+  /// Whether each list is all the host holds. A reader takes "absent from the
+  /// snapshot" as "deleted" only for a list that decoded in full.
+  public var hasEveryFolder: Bool { $folders.unreadable.isEmpty }
+  public var hasEveryNote: Bool { $notes.unreadable.isEmpty }
+  public var hasEveryConversation: Bool { $conversations.unreadable.isEmpty }
 }
 
 public struct LibraryMutation: Codable, Equatable, Sendable {
@@ -282,7 +289,9 @@ public struct LibraryChange: Codable, Equatable, Identifiable, Sendable {
 public struct LibraryChangePage: Codable, Equatable, Sendable {
   public var workspaceID: String
   public var cursor: Int64
-  public var changes: [LibraryChange]
+  /// A change this build cannot read (a resource kind a newer host added) is
+  /// dropped; `cursor` still covers it, so the reader moves past it.
+  @LossyArray public var changes: [LibraryChange]
   public var hasMore: Bool
   public var resetRequired: Bool
   public init(workspaceID: String, cursor: Int64, changes: [LibraryChange] = [], hasMore: Bool = false, resetRequired: Bool = false) {

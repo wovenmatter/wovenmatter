@@ -19,7 +19,7 @@ enum PiBotSettingsSection: String, CaseIterable, Identifiable, Sendable {
         case .bots: "Roles, teams, memory, rebuilds, and deleted bots."
         }
     }
-    var glyph: DashboardLucideGlyph {
+    var glyph: LucideGlyph {
         switch self {
         case .profiles: .brain
         case .bots: .bot

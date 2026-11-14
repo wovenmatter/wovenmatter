@@ -82,7 +82,6 @@ in your installed version.
 
 - [Contributing](../CONTRIBUTING.md), including documentation style
 - [Maintainer workflow](MAINTAINER_WORKFLOW.md)
-- [Development builds](DEVELOPMENT_BUILDS.md)
 - [Dependency policy](DEPENDENCIES.md)
 - [Desktop updates](DESKTOP_UPDATES.md)
 - [Distributed client acceptance](DISTRIBUTED_CLIENT_TESTING.md)

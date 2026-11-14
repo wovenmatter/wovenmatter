@@ -1,19 +1,16 @@
 import Foundation
 import WovenMatterClient
 import WovenMatterCore
-import WovenMatterDashboardStore
+import WovenMatterLibraryStore
 
 /// What the background server's windows read on their live connection
 /// (`ExecutionWindowStreamServer`). A conversation this Mac runs is read from
 /// its own tables, exactly as for a member's WebSocket. A conversation another
 /// machine runs is relayed from what this server already holds for it: the
-/// one WebSocket it keeps to that machine (`CentralExecutionClient`), read
+/// one WebSocket it keeps to that machine (`MemberExecutionClient`), read
 /// again only when that stream pushes or an action finishes. A machine this
 /// server cannot reach shows the history library sync brought, marked offline;
-/// nothing polls it. A client-mode Dev build relays what its one stream to its
-/// live host carries (`CentralLibraryClientModel`, signed with its local-only
-/// Dev stream key): it reads a chat again only when that stream pushes, a
-/// library pass lands, or an action finishes.
+/// nothing polls it.
 @MainActor
 final class BackendWindowStreamSource: ExecutionConversationSource {
     private unowned let model: ApplicationModel
@@ -31,7 +28,7 @@ final class BackendWindowStreamSource: ExecutionConversationSource {
 
     private var database: WorkspaceDatabase {
         get throws {
-            guard let database = model.dashboardStore?.database else { throw ApplicationModelError.dashboardStoreUnavailable }
+            guard let database = model.libraryStore?.database else { throw ApplicationModelError.libraryStoreUnavailable }
             return database
         }
     }
@@ -45,8 +42,7 @@ final class BackendWindowStreamSource: ExecutionConversationSource {
         openCounts[conversationID, default: 0] += 1
         guard kind == .remote, openCounts[conversationID] == 1 else { return }
         // Every chat open in a window stays live, however many are open.
-        if let client = model.liveLibraryClient { client.followConversation(conversationID) }
-        else { (try? model.centralExecutionClient())?.hold(conversationID) }
+        (try? model.memberExecutionClient())?.hold(conversationID)
         await read(conversationID)
     }
 
@@ -67,7 +63,6 @@ final class BackendWindowStreamSource: ExecutionConversationSource {
     /// else (OpenCode, remote-workspace and gateway sessions) the window keeps
     /// reading from its projection when `server.state` names it.
     private func classify(_ id: String) async throws -> Kind {
-        if model.liveLibraryClient?.isForeignConversation(id) == true { return .remote }
         let database = try database
         if try await database.libraryExecutionOwner(conversationID: id) != nil { return .remote }
         guard let conversation = try await database.libraryConversations(ids: [id])[id], MacExecutionAPI.runsLocally(conversation) else {
@@ -152,7 +147,7 @@ extension ApplicationModel {
     /// The background server's side of its windows' live connection, started
     /// with the first window that connects once the store is open.
     func acceptWindowStream(_ channel: BackendStreamChannel) {
-        guard !backendStopping, let database = dashboardStore?.database else { channel.close(); return }
+        guard !backendStopping, let database = libraryStore?.database else { channel.close(); return }
         if let server = backendWindowStream { server.accept(channel); return }
         let source = BackendWindowStreamSource(model: self)
         let server = ExecutionWindowStreamServer(database: database, source: source) { [weak self] in
@@ -183,7 +178,7 @@ extension ApplicationModel {
     }
 
     private func windowStreamHello() async -> StreamHello {
-        let identity = try? await dashboardStore?.database.libraryIdentity()
+        let identity = try? await libraryStore?.database.libraryIdentity()
         let libraryID = identity?.libraryID ?? ""
         return StreamHello(deviceID: identity?.hostDeviceID ?? "", libraryID: libraryID,
             workspaceID: libraryID.isEmpty ? "" : libraryHost.localExecutionWorkspaceID(libraryID: libraryID),

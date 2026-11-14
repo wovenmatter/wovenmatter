@@ -17,14 +17,14 @@ build_dir="$(swift build --force-resolved-versions --package-path "$repo_root/ap
 # keeps per-source objects and a separate Modules directory.
 if [ -f "$build_dir/WovenMatterCore.o" ]; then
   module_dir="$build_dir"
-  objects=("$build_dir/WovenMatterShared.o" "$build_dir/WovenMatterCore.o" "$build_dir/WovenMatterClient.o" "$build_dir/WovenMatterDashboardStore.o")
+  objects=("$build_dir/WovenMatterShared.o" "$build_dir/WovenMatterCore.o" "$build_dir/WovenMatterClient.o" "$build_dir/WovenMatterLibraryStore.o")
 else
   module_dir="$build_dir/Modules"
   objects=(
     "$build_dir"/WovenMatterShared.build/*.swift.o
     "$build_dir"/WovenMatterCore.build/*.swift.o
     "$build_dir"/WovenMatterClient.build/*.swift.o
-    "$build_dir"/WovenMatterDashboardStore.build/*.swift.o
+    "$build_dir"/WovenMatterLibraryStore.build/*.swift.o
   )
 fi
 xcrun swiftc -swift-version 6 -parse-as-library \

@@ -5,7 +5,7 @@ extension ApplicationModel {
     @discardableResult
     func mutateConversationGoal(id: String, mutation: WorkspaceGoalMutation,
                                 dispatchFence suppliedFence: AgentDispatchFence? = nil) async throws -> WorkspaceGoal? {
-        guard let database = dashboardStore?.database else { throw ApplicationModelError.dashboardStoreUnavailable }
+        guard let database = libraryStore?.database else { throw ApplicationModelError.libraryStoreUnavailable }
         switch mutation {
         case let .set(objective, tokens, turns), let .edit(_, objective, tokens, turns):
             try WorkspaceGoal.validate(objective: objective, tokenBudget: tokens, turnBudget: turns)
@@ -51,7 +51,7 @@ extension ApplicationModel {
     }
 
     private func blockGoalDelivery(_ delivery: WorkspaceSessionDelivery, reason: String) async {
-        guard let database = dashboardStore?.database,
+        guard let database = libraryStore?.database,
               let goal = try? await database.sessionGoals().first(where: { $0.sessionID == delivery.targetID }),
               goal.status == .active, goal.pendingDeliveryID == delivery.id else { return }
         let clean = reason.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -61,7 +61,7 @@ extension ApplicationModel {
     }
 
     func runConversationGoals() async {
-        guard !isBackendFrontend, !backendStopping, let database = dashboardStore?.database else { return }
+        guard !isBackendFrontend, !backendStopping, let database = libraryStore?.database else { return }
         do {
             // Provider preparation, queued user sends and active tools retain precedence.
             let busy = runningToolSessionIDs.union(loadingLocalACPSessionIDs).union(updatingLocalACPSessionIDs).union(preparingAgentDispatchIDs)

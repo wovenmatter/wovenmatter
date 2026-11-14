@@ -18,16 +18,15 @@ public struct PairingDeviceIdentity: Codable, Equatable, Sendable {
     self.deviceID = deviceID; self.deviceName = deviceName; self.metadata = metadata
   }
 }
-public enum DiscoveryRole: String, Codable, Sendable { case central, client }
-/// Public to this tailnet; deliberately contains no workspace contents or secrets.
+/// A library member Mac's advertisement. Public to this tailnet; deliberately
+/// contains no workspace contents or secrets.
 public struct DiscoveryAdvertisement: Codable, Equatable, Sendable {
-  public let role: DiscoveryRole
   public let identity: PairingDeviceIdentity
   public let protocolVersion: Int
   public let capabilities: [String]?
-  public init(role: DiscoveryRole, identity: PairingDeviceIdentity, protocolVersion: Int = LibraryProtocol.version, capabilities: [String]? = nil) {
+  public init(identity: PairingDeviceIdentity, protocolVersion: Int = LibraryProtocol.version, capabilities: [String]? = nil) {
     self.capabilities = capabilities
-    self.role = role; self.identity = identity; self.protocolVersion = protocolVersion
+    self.identity = identity; self.protocolVersion = protocolVersion
   }
 }
 public struct DiscoveredPeer: Codable, Equatable, Sendable, Identifiable {

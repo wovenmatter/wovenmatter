@@ -12,11 +12,11 @@ struct WorkspaceSessionIndicators: View {
     var body: some View {
         HStack(spacing: 5) {
             if model?.agentTools?.relationships[sessionID]?.coordinatorID != nil {
-                Circle().fill(DashboardPalette.foreground).frame(width: 5, height: 5)
+                Circle().fill(WovenPalette.foreground).frame(width: 5, height: 5)
                     .help("Actively coordinated by another session").accessibilityLabel("Actively coordinated")
             }
             if model?.agentTools?.timers.contains(where: { $0.sessionID == sessionID && !$0.isPaused }) == true {
-                Image(systemName: "timer").font(.system(size: 10)).foregroundStyle(DashboardPalette.foreground)
+                Image(systemName: "timer").font(.system(size: 10)).foregroundStyle(WovenPalette.foreground)
                     .help("Active timer").accessibilityLabel("Active timer")
             }
         }
@@ -36,7 +36,7 @@ struct WorkspaceSessionProvenance: View {
                 let timers = tools.timers.filter { $0.sessionID == sessionID && !$0.isPaused }
                 if !timers.isEmpty {
                     Label(timers.count == 1 ? "Active timer" : "\(timers.count) active timers", systemImage: "timer")
-                        .font(.system(size: 12)).foregroundStyle(DashboardPalette.foreground)
+                        .font(.system(size: 12)).foregroundStyle(WovenPalette.foreground)
                 }
             }
         }
@@ -47,7 +47,7 @@ struct WorkspaceSessionProvenance: View {
             HStack(alignment: .top, spacing: 7) {
                 Image(systemName: "arrow.up.right").font(.system(size: 10))
                 Text("\(prefix) \(title ?? "unavailable session")").lineLimit(2).multilineTextAlignment(.leading)
-            }.font(.system(size: 12)).foregroundStyle(DashboardPalette.foreground)
+            }.font(.system(size: 12)).foregroundStyle(WovenPalette.foreground)
         }.buttonStyle(.plain).disabled(title == nil)
     }
 }
@@ -61,11 +61,11 @@ struct WorkspaceIncomingAgentHeader: View {
             let receipt = model?.agentTools?.receipts[message.conversationID]?.first { $0.messageID == message.id }
             let kind = message.senderKind ?? receipt?.kind
             if kind == .goal {
-                HStack(spacing: 5) { DashboardLucideIcon(glyph: .compass, size: 12); Text("Goal continuation") }
-                    .font(.system(size: 11.5, weight: .medium)).foregroundStyle(DashboardPalette.mutedForeground)
+                HStack(spacing: 5) { LucideIcon(glyph: .compass, size: 12); Text("Goal continuation") }
+                    .font(.system(size: 11.5, weight: .medium)).foregroundStyle(WovenPalette.mutedForeground)
             } else if kind == .timer {
                 Label("Timer", systemImage: "timer").font(.system(size: 11.5, weight: .medium))
-                    .foregroundStyle(DashboardPalette.mutedForeground)
+                    .foregroundStyle(WovenPalette.mutedForeground)
             } else {
                 Button { open(source) } label: {
                     HStack(spacing: 5) {
@@ -74,10 +74,10 @@ struct WorkspaceIncomingAgentHeader: View {
                             .lineLimit(2).multilineTextAlignment(.trailing)
                         if let harness = message.senderAgent {
                             Text(AgentRuntimeKind(rawValue: harness)?.displayName ?? harness)
-                                .foregroundStyle(DashboardPalette.mutedForeground)
+                                .foregroundStyle(WovenPalette.mutedForeground)
                         }
                         Image(systemName: "arrow.up.right")
-                    }.font(.system(size: 11.5, weight: .medium)).foregroundStyle(DashboardPalette.foreground)
+                    }.font(.system(size: 11.5, weight: .medium)).foregroundStyle(WovenPalette.foreground)
                 }.buttonStyle(.plain).help("Open the session that sent this message")
             }
         }
@@ -87,7 +87,7 @@ struct WorkspaceIncomingAgentHeader: View {
 struct WorkspaceOutgoingReceipt: View {
     @Environment(\.workspaceApplicationModel) private var model
     @Environment(\.openWorkspaceConversation) private var open
-    @Environment(\.dashboardTheme) private var theme
+    @Environment(\.wovenTheme) private var theme
     let receipt: WorkspaceSessionDelivery
     @State private var expanded = false
 
@@ -138,16 +138,16 @@ struct WorkspaceOutgoingReceipt: View {
                     }.font(.system(size: 13, weight: .medium))
                 }.buttonStyle(.plain).help("Open destination session")
                 Spacer(minLength: 8)
-                Text(deliveryStatus).font(.system(size: 11)).foregroundStyle(DashboardPalette.mutedForeground)
+                Text(deliveryStatus).font(.system(size: 11)).foregroundStyle(WovenPalette.mutedForeground)
             }
             ViewThatFits(in: .horizontal) {
                 HStack(spacing: 8) { metadata }
                 VStack(alignment: .leading, spacing: 3) { metadata }
-            }.font(.system(size: 11)).foregroundStyle(DashboardPalette.mutedForeground)
+            }.font(.system(size: 11)).foregroundStyle(WovenPalette.mutedForeground)
             if receipt.kind == .created, let purpose = receipt.purpose, !purpose.isEmpty {
                 Text(purpose).font(.system(size: 12.5)).fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
                 if model?.agentTools?.relationships[receipt.targetID]?.coordinatorID == receipt.sourceID {
-                    Text("Coordinated from this session").font(.system(size: 11)).foregroundStyle(DashboardPalette.mutedForeground)
+                    Text("Coordinated from this session").font(.system(size: 11)).foregroundStyle(WovenPalette.mutedForeground)
                 }
             }
             Text(receipt.text).font(.system(size: 12.5)).lineLimit(expanded ? nil : 3).textSelection(.enabled)
@@ -156,11 +156,11 @@ struct WorkspaceOutgoingReceipt: View {
                     .font(.system(size: 11)).buttonStyle(.plain)
             }
         }
-        .foregroundStyle(DashboardPalette.foreground)
+        .foregroundStyle(WovenPalette.foreground)
         .padding(receipt.kind == .created ? 14 : 10)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(receipt.kind == .created ? theme.palette.themeSoft : DashboardPalette.foreground.opacity(0.025),
-            in: RoundedRectangle(cornerRadius: DashboardMetrics.controlRadius))
+        .background(receipt.kind == .created ? theme.palette.themeSoft : WovenPalette.foreground.opacity(0.025),
+            in: RoundedRectangle(cornerRadius: WovenMetrics.controlRadius))
         .accessibilityElement(children: .contain)
     }
 
@@ -200,16 +200,16 @@ struct WorkspaceIncomingCommandReceipt: View {
                             Image(systemName: "arrow.down.left")
                             Text("From \(receipt.sourceTitle)").lineLimit(2).multilineTextAlignment(.trailing)
                             Text(AgentRuntimeKind(rawValue: receipt.sourceHarness)?.displayName ?? receipt.sourceHarness)
-                                .foregroundStyle(DashboardPalette.mutedForeground)
+                                .foregroundStyle(WovenPalette.mutedForeground)
                             Image(systemName: "arrow.up.right")
                         }.font(.system(size: 11.5, weight: .medium))
                     }.buttonStyle(.plain).help("Open the session that sent this command")
                 }
                 ConversationUserMessage(content: receipt.text, attachments: [], references: [])
-                Text(outcome).font(.system(size: 11)).foregroundStyle(DashboardPalette.mutedForeground)
+                Text(outcome).font(.system(size: 11)).foregroundStyle(WovenPalette.mutedForeground)
             }
         }
-        .foregroundStyle(DashboardPalette.foreground)
+        .foregroundStyle(WovenPalette.foreground)
         .fixedSize(horizontal: false, vertical: true)
         .accessibilityElement(children: .contain)
     }

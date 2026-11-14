@@ -4,13 +4,13 @@ import Foundation
 /// library history, recovery and replication apply without separate storage.
 public struct ArtifactStateEntry: Codable, Equatable, Sendable {
   /// `nil` is a tombstone and is omitted from JSON. `.null` is a saved JSON null.
-  public var value: GatewayJSONValue?
+  public var value: JSONValue?
   /// At least 1, and it only ever increases for a key while its entry is retained.
   public var version: Int
   /// Stamped by the writing host; no edit can supply it.
   public var updatedAt: String
 
-  public init(value: GatewayJSONValue?, version: Int, updatedAt: String) {
+  public init(value: JSONValue?, version: Int, updatedAt: String) {
     self.value = value; self.version = version; self.updatedAt = updatedAt
   }
 
@@ -21,7 +21,7 @@ public struct ArtifactStateEntry: Codable, Equatable, Sendable {
   // Synthesized optional coding cannot tell a saved null from a tombstone.
   public init(from decoder: any Decoder) throws {
     let values = try decoder.container(keyedBy: CodingKeys.self)
-    value = values.contains(.value) ? try values.decode(GatewayJSONValue.self, forKey: .value) : nil
+    value = values.contains(.value) ? try values.decode(JSONValue.self, forKey: .value) : nil
     version = try values.decode(Int.self, forKey: .version)
     updatedAt = try values.decode(String.self, forKey: .updatedAt)
   }
@@ -41,11 +41,11 @@ public struct ArtifactStateEdit: Codable, Equatable, Sendable {
   public var action: Action
   public var key: String
   /// Required for `set`. A JSON null decodes to `.null`, not to a missing value.
-  public var value: GatewayJSONValue?
+  public var value: JSONValue?
   /// The version that was read. `nil` requires that the key has no entry at all.
   public var expectedVersion: Int?
 
-  public init(action: Action, key: String, value: GatewayJSONValue? = nil, expectedVersion: Int? = nil) {
+  public init(action: Action, key: String, value: JSONValue? = nil, expectedVersion: Int? = nil) {
     self.action = action; self.key = key; self.value = value; self.expectedVersion = expectedVersion
   }
 
@@ -55,7 +55,7 @@ public struct ArtifactStateEdit: Codable, Equatable, Sendable {
     let values = try decoder.container(keyedBy: CodingKeys.self)
     action = try values.decode(Action.self, forKey: .action)
     key = try values.decode(String.self, forKey: .key)
-    value = values.contains(.value) ? try values.decode(GatewayJSONValue.self, forKey: .value) : nil
+    value = values.contains(.value) ? try values.decode(JSONValue.self, forKey: .value) : nil
     expectedVersion = try values.decodeIfPresent(Int.self, forKey: .expectedVersion)
   }
 
@@ -72,11 +72,11 @@ public struct ArtifactStateEdit: Codable, Equatable, Sendable {
 public struct ArtifactStateSnapshot: Codable, Equatable, Sendable {
   public static let empty = ArtifactStateSnapshot()
   /// Live values only. A saved `.null` is present.
-  public var values: [String: GatewayJSONValue]
+  public var values: [String: JSONValue]
   /// Every retained entry, including tombstones, so a removed key can be re-created.
   public var versions: [String: Int]
 
-  public init(values: [String: GatewayJSONValue] = [:], versions: [String: Int] = [:]) {
+  public init(values: [String: JSONValue] = [:], versions: [String: Int] = [:]) {
     self.values = values; self.versions = versions
   }
 }
@@ -262,9 +262,9 @@ public extension NoteDocument {
     }
   }
 
-  private static func validateArtifactValue(_ value: GatewayJSONValue, key: String) throws {
+  private static func validateArtifactValue(_ value: JSONValue, key: String) throws {
     var nodes = 0
-    func visit(_ value: GatewayJSONValue, depth: Int) throws {
+    func visit(_ value: JSONValue, depth: Int) throws {
       nodes += 1
       guard depth <= ArtifactStateLimits.maximumDepth else { throw ArtifactStateError.invalidValue("Artifact state may nest at most \(ArtifactStateLimits.maximumDepth) levels.") }
       guard nodes <= ArtifactStateLimits.maximumNodes else { throw ArtifactStateError.invalidValue("An Artifact state value may contain at most \(ArtifactStateLimits.maximumNodes) values.") }

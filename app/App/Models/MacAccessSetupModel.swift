@@ -385,7 +385,7 @@ extension ApplicationModel {
     func macAccessNotice(for conversation: WorkspaceConversationRecord) async -> MacAccessSessionNotice? {
         guard conversation.remoteWorkspaceID == nil, !conversation.isArchived else { return nil }
         let computerUse = agentTools?.sessionPolicies[conversation.id]?.enabled.contains(.computer) == true
-        if let database = dashboardStore?.database,
+        if let database = libraryStore?.database,
            let workspace = try? await database.libraryConversationExecutionWorkspace(conversationID: conversation.id),
            workspace.kind == .mac,
            let identity = try? await database.libraryIdentity(),

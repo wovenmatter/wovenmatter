@@ -5,7 +5,7 @@ import WovenMatterCore
 
 @MainActor struct CanvasViewStateTests {
     @Test func undoKeepsLocalChangesAndIncomingWorkClearsHistory() throws {
-        var state = DashboardCanvasViewState()
+        var state = CanvasViewState()
         let original = NoteDocument(kind: .canvas)
         let card = NoteRichTextBlock(id: "card", text: "Agent-created option")
         var agent = original
@@ -40,7 +40,7 @@ import WovenMatterCore
         #expect(state.undoStack.isEmpty)
     }
     @Test func anUnobservedIncomingChangeAlsoFencesUndo() throws {
-        var state = DashboardCanvasViewState()
+        var state = CanvasViewState()
         let original = NoteDocument(kind: .canvas)
         var local = original
         _ = try local.apply([.appendText("User work", .paragraph)])
@@ -53,7 +53,7 @@ import WovenMatterCore
         #expect(state.error != nil)
     }
     @Test func normalizedTextTypingRetainsLocalUndoHistory() throws {
-        var state = DashboardCanvasViewState()
+        var state = CanvasViewState()
         let block = NoteRichTextBlock(id: "text", text: "Before")
         let before = NoteDocument(kind: .canvas, blocks: [.richText(block)])
         var edited = before

@@ -55,13 +55,13 @@ import ApplicationServices
     }
     func saveTarget() {
         let selected = (field.currentEditor() as? NSTextView)?.selectedRange().length ?? 0
-        let value: GatewayJSONValue = .object(["pid": .number(Double(ProcessInfo.processInfo.processIdentifier)),
+        let value: JSONValue = .object(["pid": .number(Double(ProcessInfo.processInfo.processIdentifier)),
             "windowID": .number(Double(window.windowNumber)), "count": .number(Double(count)),
             "text": .string(field.currentEditor()?.string ?? field.stringValue), "selected": .number(Double(selected))])
         try? JSONEncoder().encode(value).write(to: root.appending(path: "target.json"), options: .atomic)
     }
-    func saveReport(_ report: [String: GatewayJSONValue]) {
-        try? JSONEncoder().encode(GatewayJSONValue.object(report)).write(to: root.appending(path: "report.json"), options: .atomic)
+    func saveReport(_ report: [String: JSONValue]) {
+        try? JSONEncoder().encode(JSONValue.object(report)).write(to: root.appending(path: "report.json"), options: .atomic)
     }
     func beginWhenPermitted() async {
         guard !started else { return }
@@ -75,13 +75,13 @@ import ApplicationServices
         } catch { saveReport(["status": .string("failed"), "error": .string(error.localizedDescription)]) }
         computer.revokeAll()
     }
-    func invoke(_ arguments: [String: GatewayJSONValue], caller: String = "fixture-one", expectError: Bool = false) async throws -> GatewayJSONValue {
-        let message: GatewayJSONValue = .object(["jsonrpc": .string("2.0"), "id": .string(UUID().uuidString), "method": .string("tools/call"),
+    func invoke(_ arguments: [String: JSONValue], caller: String = "fixture-one", expectError: Bool = false) async throws -> JSONValue {
+        let message: JSONValue = .object(["jsonrpc": .string("2.0"), "id": .string(UUID().uuidString), "method": .string("tools/call"),
             "params": .object(["name": .string("woven_computer_use"), "arguments": .object(arguments)])])
         let response = await WovenMCPServer.handle(message) { [self] request in
             do {
                 let command = try WovenMatterToolCommand(request.arguments)
-                let input = try JSONDecoder().decode(GatewayJSONValue.self, from: Data(command.required("json").utf8))
+                let input = try JSONDecoder().decode(JSONValue.self, from: Data(command.required("json").utf8))
                 let value = try await computer.execute(input, callerID: caller, admit: { [self] in
                     guard enabled else { throw WorkspaceToolError.disabled(.computer) }
                 })
@@ -96,17 +96,17 @@ import ApplicationServices
         guard let result = envelope["structuredContent"]?.objectValue?["result"] else { throw failure("Missing MCP result") }
         return result
     }
-    func targetState() throws -> [String: GatewayJSONValue] {
-        try JSONDecoder().decode(GatewayJSONValue.self, from: Data(contentsOf: root.appending(path: "target.json"))).objectValue!
+    func targetState() throws -> [String: JSONValue] {
+        try JSONDecoder().decode(JSONValue.self, from: Data(contentsOf: root.appending(path: "target.json"))).objectValue!
     }
-    func waitFor(_ key: String, _ value: GatewayJSONValue) async throws {
+    func waitFor(_ key: String, _ value: JSONValue) async throws {
         for _ in 0..<100 {
             if (try? targetState()[key]) == value { return }
             try await Task.sleep(for: .milliseconds(50))
         }
         throw failure("Independent app state did not confirm \(key)=\(value)")
     }
-    func verify() async throws -> [String: GatewayJSONValue] {
+    func verify() async throws -> [String: JSONValue] {
         _ = try await invoke(["action": .string("apps")], expectError: true)
         enabled = true
         let config = NSWorkspace.OpenConfiguration(); config.activates = false
@@ -121,16 +121,16 @@ import ApplicationServices
         try await Task.sleep(for: .milliseconds(200))
         let front = NSWorkspace.shared.frontmostApplication?.processIdentifier, pointer = NSEvent.mouseLocation
         let state = try targetState(), pid = state["pid"]!, wid = state["windowID"]!
-        let target: [String: GatewayJSONValue] = ["pid": pid, "windowID": wid]
+        let target: [String: JSONValue] = ["pid": pid, "windowID": wid]
         _ = try await invoke(["action": .string("apps")])
         _ = try await invoke(["action": .string("launch"), "app": .string("wovenmatter.desktop.dev.cua-verification.target")])
         _ = try await invoke(["action": .string("windows"), "pid": pid])
         let desktop = try await invoke(["action": .string("screenshot")])
         guard desktop.objectValue?["content"]?.arrayValue?.contains(where: { $0.objectValue?["type"] == .string("image") }) == true else { throw failure("Desktop screenshot was not returned inline") }
-        func snapshot() async throws -> GatewayJSONValue {
+        func snapshot() async throws -> JSONValue {
             try await invoke(target.merging(["action": .string("snapshot"), "treeFormat": .string("elements")]) { _, new in new })
         }
-        func token(_ result: GatewayJSONValue, label: String) throws -> GatewayJSONValue {
+        func token(_ result: JSONValue, label: String) throws -> JSONValue {
             let elements = result.objectValue?["structuredContent"]?.objectValue?["elements"]?.arrayValue ?? []
             guard let row = elements.first(where: { $0.objectValue?["label"]?.stringValue == label }),
                   let token = row.objectValue?["element_token"] else { throw failure("Missing accessibility element \(label): \(result)") }

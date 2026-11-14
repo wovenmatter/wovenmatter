@@ -1,9 +1,13 @@
-import { stat } from "node:fs/promises";
+import { readdir, readFile, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import type { SqliteExecutor } from "@earendil-works/pi-durable/storage/sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { openSharedDatabase, sharedDatabaseView } from "../src/storage/database.ts";
+import {
+  BOTS_SCHEMA_VERSION,
+  openSharedDatabase,
+  sharedDatabaseView,
+} from "../src/storage/database.ts";
 import {
   BOTS_TABLE,
   BotRegistry,
@@ -43,6 +47,75 @@ describe("shared storage", () => {
     }
   });
 
+  it("records the schema version in a new database", async () => {
+    const db = await openSharedDatabase(join(dir.path, "bots.sqlite"));
+    try {
+      await new BotRegistry(db).migrate();
+      expect(BOTS_SCHEMA_VERSION).toBe(1);
+      expect(await db.get("PRAGMA user_version")).toEqual({ user_version: BOTS_SCHEMA_VERSION });
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("refuses a database from a newer Woven Matter and leaves it unchanged", async () => {
+    const path = join(dir.path, "bots.sqlite");
+    const db = await openSharedDatabase(path);
+    await new BotRegistry(db).migrate();
+    await db.exec(`PRAGMA user_version = ${BOTS_SCHEMA_VERSION + 1}`);
+    await db.close();
+    const before = await readFile(path);
+    const files = (await readdir(dir.path)).sort();
+    const refusal = new RegExp(
+      `written by a newer Woven Matter \\(bots schema version ${BOTS_SCHEMA_VERSION + 1}\\); this build supports version ${BOTS_SCHEMA_VERSION}\\. Update Woven Matter`,
+    );
+    await expect(openSharedDatabase(path)).rejects.toThrow(refusal);
+    expect(await readFile(path)).toEqual(before);
+    expect((await readdir(dir.path)).sort()).toEqual(files);
+    // `migrate` refuses it too, on a connection opened some other way.
+    const memory = await openSharedDatabase(":memory:");
+    try {
+      await memory.exec(`PRAGMA user_version = ${BOTS_SCHEMA_VERSION + 1}`);
+      await expect(new BotRegistry(memory).migrate()).rejects.toThrow(refusal);
+      expect(await memory.all("SELECT name FROM sqlite_master")).toEqual([]);
+    } finally {
+      await memory.close();
+    }
+  });
+
+  it("upgrades a version-0 database of an older shape and records the version", async () => {
+    const db = await openSharedDatabase(join(dir.path, "bots.sqlite"));
+    try {
+      await db.exec(
+        `CREATE TABLE ${DELIVERIES_TABLE} (id TEXT PRIMARY KEY, created_at INTEGER NOT NULL) STRICT`,
+      );
+      await new BotRegistry(db).migrate();
+      const columns = await db.all<{ name: string }>(`PRAGMA table_info(${DELIVERIES_TABLE})`);
+      expect(columns.map((column) => column.name)).toContain("accepted");
+      expect(await db.get("PRAGMA user_version")).toEqual({ user_version: BOTS_SCHEMA_VERSION });
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("reopens a current database without changing its schema", async () => {
+    const path = join(dir.path, "bots.sqlite");
+    const schema = (db: SqliteExecutor) =>
+      db.all("SELECT type, name, sql FROM sqlite_master ORDER BY type, name");
+    let db = await openSharedDatabase(path);
+    await new BotRegistry(db).migrate();
+    const before = await schema(db);
+    await db.close();
+    db = await openSharedDatabase(path);
+    try {
+      await new BotRegistry(db).migrate();
+      expect(await schema(db)).toEqual(before);
+      expect(await db.get("PRAGMA user_version")).toEqual({ user_version: BOTS_SCHEMA_VERSION });
+    } finally {
+      await db.close();
+    }
+  });
+
   it("migrates legacy threads, persists pins, and keeps newest-first order within each group", async () => {
     const path = join(dir.path, "pins.sqlite");
     let db = await openSharedDatabase(path);
@@ -56,8 +129,9 @@ describe("shared storage", () => {
       botPrefix(botId),
       "2026-01-01",
     );
-    // Reproduce a pre-pin table with real existing thread rows.
-    await db.exec(`ALTER TABLE ${THREADS_TABLE} DROP COLUMN is_pinned`);
+    // Reproduce a pre-pin table with real existing thread rows, in a database from before the
+    // schema version was recorded.
+    await db.exec(`ALTER TABLE ${THREADS_TABLE} DROP COLUMN is_pinned; PRAGMA user_version = 0`);
     for (const [id, created] of [
       [2, "2026-01-01"],
       [3, "2026-01-02"],
@@ -255,64 +329,6 @@ describe("shared storage", () => {
       ).rejects.toThrow();
       await registry.setOrchestrator(undefined);
       expect((await registry.list()).filter((bot) => bot.orchestrator)).toEqual([]);
-    } finally {
-      await db.close();
-    }
-  });
-
-  it("renames the top-bot column to is_orchestrator and keeps who holds it", async () => {
-    const dbPath = join(dir.path, "pi-bot.sqlite");
-    const db = await openSharedDatabase(dbPath);
-    const ids = ["0b9e1c2d-3f4a-4b5c-8d6e-7f8091a2b3c4", "1b9e1c2d-3f4a-4b5c-8d6e-7f8091a2b3c4"];
-    const [adminId, botId] = ids as [string, string];
-    // The registry as it was with the first "top bot": is_top and its unique index.
-    await db.exec(
-      `CREATE TABLE ${BOTS_TABLE} (id TEXT PRIMARY KEY, name TEXT NOT NULL, schema_prefix TEXT NOT NULL UNIQUE, created_at TEXT NOT NULL, deleted_at TEXT, kind TEXT NOT NULL DEFAULT 'bot', is_manager INTEGER NOT NULL DEFAULT 0, manager_id TEXT, model TEXT, profile TEXT, is_top INTEGER NOT NULL DEFAULT 0) STRICT;
-      CREATE UNIQUE INDEX pibot_bots_one_top ON ${BOTS_TABLE}(is_top) WHERE is_top = 1`,
-    );
-    await db.run(
-      `INSERT INTO ${BOTS_TABLE} (id, name, schema_prefix, created_at, kind) VALUES (?, ?, ?, ?, 'admin')`,
-      adminId,
-      "Admin Bot",
-      botPrefix(adminId),
-      "2026-01-01T00:00:00.000Z",
-    );
-    await db.run(
-      `INSERT INTO ${BOTS_TABLE} (id, name, schema_prefix, created_at, is_manager, is_top, profile) VALUES (?, ?, ?, ?, 1, 1, 'fast')`,
-      botId,
-      "Chief",
-      botPrefix(botId),
-      "2026-01-02T00:00:00.000Z",
-    );
-    const registry = new BotRegistry(db);
-    try {
-      await registry.migrate();
-      await registry.migrate();
-      const columns = (await db.all<{ name: string }>(`PRAGMA table_info(${BOTS_TABLE})`)).map(
-        (column) => column.name,
-      );
-      expect(columns).toContain("is_orchestrator");
-      expect(columns).not.toContain("is_top");
-      const indexes = (
-        await db.all<{ name: string }>(
-          `SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = '${BOTS_TABLE}'`,
-        )
-      ).map((index) => index.name);
-      expect(indexes).toContain("pibot_bots_one_orchestrator");
-      expect(indexes).not.toContain("pibot_bots_one_top");
-      expect(await registry.list()).toEqual([
-        expect.objectContaining({ id: adminId, name: "Admin Bot", orchestrator: false }),
-        expect.objectContaining({
-          id: botId,
-          name: "Chief",
-          manager: true,
-          orchestrator: true,
-          profile: "fast",
-        }),
-      ]);
-      await expect(
-        db.run(`UPDATE ${BOTS_TABLE} SET is_orchestrator = 1 WHERE id = ?`, adminId),
-      ).rejects.toThrow();
     } finally {
       await db.close();
     }

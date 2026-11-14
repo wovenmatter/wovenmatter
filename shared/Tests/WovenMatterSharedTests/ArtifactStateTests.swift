@@ -6,7 +6,7 @@ import Testing
 struct ArtifactStateTests {
   private let time = "2026-11-06T00:00:00Z"
   private func artifact() -> NoteDocument { NoteDocument(kind: .html, html: "<input id=\"name\">") }
-  private func set(_ key: String, _ value: GatewayJSONValue, expected: Int? = nil) -> ArtifactStateEdit {
+  private func set(_ key: String, _ value: JSONValue, expected: Int? = nil) -> ArtifactStateEdit {
     ArtifactStateEdit(action: .set, key: key, value: value, expectedVersion: expected)
   }
 
@@ -144,7 +144,7 @@ struct ArtifactStateTests {
       var copy = artifact()
       try copy.applyArtifactStateEdits([set("app:inf", .array([.number(.infinity)]))], at: time)
     }
-    var deep = GatewayJSONValue.null
+    var deep = JSONValue.null
     for _ in 0...ArtifactStateLimits.maximumDepth { deep = .array([deep]) }
     #expect(throws: ArtifactStateError.self) {
       var copy = artifact()
@@ -152,7 +152,7 @@ struct ArtifactStateTests {
     }
     #expect(throws: ArtifactStateError.self) {
       var copy = artifact()
-      let many = GatewayJSONValue.array(Array(repeating: .null, count: ArtifactStateLimits.maximumNodes + 1))
+      let many = JSONValue.array(Array(repeating: .null, count: ArtifactStateLimits.maximumNodes + 1))
       try copy.applyArtifactStateEdits([set("app:many", many)], at: time)
     }
     #expect(throws: ArtifactStateError.self) {
@@ -251,7 +251,7 @@ struct ArtifactStateTests {
   }
 
   @Test func draftsCarryOnlyWhatTheyChanged() throws {
-    func entry(_ value: GatewayJSONValue?, _ version: Int) -> ArtifactStateEntry { .init(value: value, version: version, updatedAt: time) }
+    func entry(_ value: JSONValue?, _ version: Int) -> ArtifactStateEntry { .init(value: value, version: version, updatedAt: time) }
     let base = ["form:a": entry(.number(1), 1), "form:b": entry(.number(1), 1), "form:c": entry(.number(1), 1)]
     // A stale draft that left state alone takes every newer value.
     let newer = ["form:a": entry(.number(2), 2), "form:b": entry(nil, 2), "form:c": entry(.number(1), 1), "form:new": entry(.null, 1)]

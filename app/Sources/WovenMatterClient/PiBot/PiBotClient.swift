@@ -37,12 +37,11 @@ public actor PiBotClient {
     private let session: URLSession
     private var task: URLSessionWebSocketTask?
     private var nextID = 1
-    private var pending: [Int: CheckedContinuation<GatewayJSONValue, any Error>] = [:]
+    private var pending: [Int: CheckedContinuation<JSONValue, any Error>] = [:]
     private var stopped = true
     private var attempt = 0
     private var reconnect: Task<Void, Never>?
     private var generation = 0
-    private var expectingRestart = false
     public private(set) var state = ConnectionState.closed
 
     /// `socketURL` is the full WebSocket address: `ws://127.0.0.1:<port>/ws` for this Mac's
@@ -139,8 +138,7 @@ public actor PiBotClient {
         failPending("Connection lost.")
         update(.closed)
         guard !stopped else { return }
-        // A deliberate restart comes back quickly, so don't back off from it.
-        let delay = expectingRestart ? 0.5 : min(0.5 * pow(2, Double(attempt)), 10)
+        let delay = min(0.5 * pow(2, Double(attempt)), 10)
         attempt += 1
         reconnect?.cancel()
         reconnect = Task { [weak self] in
@@ -149,9 +147,6 @@ public actor PiBotClient {
             await self?.reopen()
         }
     }
-
-    /// The server was told to restart: keep retrying promptly until it is back.
-    public func expectRestart() { expectingRestart = true }
 
     private func reopen() {
         guard !stopped, task == nil, authorizing == nil else { return }
@@ -171,12 +166,11 @@ public actor PiBotClient {
     }
 
     private func handle(_ text: String) {
-        guard let value = try? JSONDecoder().decode(GatewayJSONValue.self, from: Data(text.utf8)),
+        guard let value = try? JSONDecoder().decode(JSONValue.self, from: Data(text.utf8)),
               let object = value.objectValue, let type = object["type"]?.stringValue else { return }
         switch type {
         case "hello":
             attempt = 0
-            expectingRestart = false
             update(.open)
             if let data = try? JSONEncoder().encode(value),
                let hello = try? JSONDecoder().decode(PiBotHello.self, from: data) {
@@ -219,7 +213,7 @@ public actor PiBotClient {
         }
     }
 
-    private func call(_ type: String, _ fields: [String: GatewayJSONValue] = [:]) async throws -> GatewayJSONValue {
+    private func call(_ type: String, _ fields: [String: JSONValue] = [:]) async throws -> JSONValue {
         let timeout = Self.timeout(for: type)
         guard let socket = task, state == .open else { throw RemoteError(message: "Pi Bot is not connected.") }
         let id = nextID
@@ -227,7 +221,7 @@ public actor PiBotClient {
         var body = fields
         body["id"] = .number(Double(id))
         body["type"] = .string(type)
-        let text = String(decoding: try JSONEncoder().encode(GatewayJSONValue.object(body)), as: UTF8.self)
+        let text = String(decoding: try JSONEncoder().encode(JSONValue.object(body)), as: UTF8.self)
         return try await withCheckedThrowingContinuation { continuation in
             pending[id] = continuation
             Task {
@@ -245,7 +239,7 @@ public actor PiBotClient {
         pending.removeValue(forKey: id)?.resume(throwing: error)
     }
 
-    private func decode<T: Decodable>(_ value: GatewayJSONValue, as type: T.Type = T.self) throws -> T {
+    private func decode<T: Decodable>(_ value: JSONValue, as type: T.Type = T.self) throws -> T {
         try JSONDecoder().decode(T.self, from: JSONEncoder().encode(value))
     }
 
@@ -284,15 +278,15 @@ public actor PiBotClient {
     }
     public func deleteGroup(id: String) async throws { _ = try await call("groups.delete", ["groupId": .string(id)]) }
     public func reorderGroups(ids: [String]) async throws {
-        _ = try await call("groups.reorder", ["groupIds": .array(ids.map(GatewayJSONValue.string))])
+        _ = try await call("groups.reorder", ["groupIds": .array(ids.map(JSONValue.string))])
     }
     public func setGroup(botID: String, groupID: String?) async throws {
-        _ = try await call("bots.setGroup", ["botId": .string(botID), "groupId": groupID.map(GatewayJSONValue.string) ?? .null])
+        _ = try await call("bots.setGroup", ["botId": .string(botID), "groupId": groupID.map(JSONValue.string) ?? .null])
     }
     /// `deliveryID` makes a retry after a lost acknowledgement safe. `context` is what is open
     /// beside the bot right now, for this message only.
     public func send(botID: String, conversationID: Int? = nil, text: String, context: String? = nil, deliveryID: String? = nil) async throws {
-        var fields: [String: GatewayJSONValue] = ["botId": .string(botID), "text": .string(text)]
+        var fields: [String: JSONValue] = ["botId": .string(botID), "text": .string(text)]
         if let conversationID { fields["conversationId"] = .number(Double(conversationID)) }
         if let context { fields["context"] = .string(context) }
         if let deliveryID { fields["deliveryId"] = .string(deliveryID) }
@@ -302,12 +296,12 @@ public actor PiBotClient {
     // MARK: Conversations
 
     public func openConversation(botID: String, conversationID: Int?) async throws -> PiBotConversationSnapshot {
-        var fields: [String: GatewayJSONValue] = ["botId": .string(botID)]
+        var fields: [String: JSONValue] = ["botId": .string(botID)]
         if let conversationID { fields["conversationId"] = .number(Double(conversationID)) }
         return try decode(try await call("conversation.open", fields))
     }
-    public func closeConversation(botID: String, conversationID: Int, subscriptionID: GatewayJSONValue?) async throws {
-        var fields: [String: GatewayJSONValue] = ["botId": .string(botID), "conversationId": .number(Double(conversationID))]
+    public func closeConversation(botID: String, conversationID: Int, subscriptionID: JSONValue?) async throws {
+        var fields: [String: JSONValue] = ["botId": .string(botID), "conversationId": .number(Double(conversationID))]
         if let subscriptionID { fields["subscriptionId"] = subscriptionID }
         _ = try await call("conversation.close", fields)
     }
@@ -342,16 +336,16 @@ public actor PiBotClient {
     // MARK: Roles, teams, and deleted bots
 
     public func setProfile(botID: String, profileID: String?) async throws {
-        _ = try await call("bots.setProfile", ["botId": .string(botID), "profileId": profileID.map(GatewayJSONValue.string) ?? .null])
+        _ = try await call("bots.setProfile", ["botId": .string(botID), "profileId": profileID.map(JSONValue.string) ?? .null])
     }
     public func setManager(botID: String, manager: Bool) async throws {
         _ = try await call("bots.setManager", ["botId": .string(botID), "manager": .bool(manager)])
     }
     public func setTeam(botID: String, managerID: String?) async throws {
-        _ = try await call("bots.setTeam", ["botId": .string(botID), "managerId": managerID.map(GatewayJSONValue.string) ?? .null])
+        _ = try await call("bots.setTeam", ["botId": .string(botID), "managerId": managerID.map(JSONValue.string) ?? .null])
     }
     public func setOrchestrator(botID: String?) async throws {
-        _ = try await call("bots.setOrchestrator", ["botId": botID.map(GatewayJSONValue.string) ?? .null])
+        _ = try await call("bots.setOrchestrator", ["botId": botID.map(JSONValue.string) ?? .null])
     }
     public func replaceManager(managerID: String, newManagerID: String) async throws {
         _ = try await call("bots.replaceManager", ["managerId": .string(managerID), "newManagerId": .string(newManagerID)])
@@ -389,8 +383,8 @@ public actor PiBotClient {
     /// Starts at once and returns: it stops running work, snapshots each bot, updates it,
     /// health-checks it and rolls back on failure. Progress arrives as `runtime.update` pushes.
     public func updateBots(botIDs: [String]? = nil) async throws {
-        var fields: [String: GatewayJSONValue] = [:]
-        if let botIDs { fields["botIds"] = .array(botIDs.map(GatewayJSONValue.string)) }
+        var fields: [String: JSONValue] = [:]
+        if let botIDs { fields["botIds"] = .array(botIDs.map(JSONValue.string)) }
         _ = try await call("runtime.update", fields)
     }
     /// Recreates one bot from a clean image, keeping its storage.
@@ -401,14 +395,13 @@ public actor PiBotClient {
         try decode(try await call("bots.environment", ["botId": .string(botID)]), as: EnvironmentResult.self).environment
     }
     public func previews(botID: String? = nil) async throws -> [PiBotPreview] {
-        var fields: [String: GatewayJSONValue] = [:]
+        var fields: [String: JSONValue] = [:]
         if let botID { fields["botId"] = .string(botID) }
         return try decode(try await call("previews.list", fields), as: PreviewsResult.self).previews
     }
     @discardableResult public func stopPreview(botID: String, port: Int) async throws -> Bool {
         try decode(try await call("previews.stop", ["botId": .string(botID), "port": .number(Double(port))]), as: StoppedResult.self).stopped
     }
-    public func wovenStatus() async throws -> PiBotWovenStatus { try decode(try await call("woven.status")) }
 }
 
 private struct PiBotHello: Decodable {

@@ -15,7 +15,7 @@ struct WovenComputerAutomationTests {
   }
 
   @MainActor @Test func exactTargetsAndBackgroundDefaultsReachCuaWithoutCallerAuthority() throws {
-    let target: [String: GatewayJSONValue] = ["action": .string("click"), "pid": .number(7), "windowID": .number(9), "elementToken": .string("s00000001:2")]
+    let target: [String: JSONValue] = ["action": .string("click"), "pid": .number(7), "windowID": .number(9), "elementToken": .string("s00000001:2")]
     let call = try WovenComputerAutomation.invocation(target)
     #expect(call.tool == "click")
     #expect(call.arguments["target"] == .object(["kind": .string("window"), "pid": .number(7), "window_id": .number(9)]))

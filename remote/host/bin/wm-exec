@@ -30,7 +30,7 @@ except (OSError,ValueError):
     fail('The host service environment is unavailable. Install or repair this workspace.',69)
 allow={'WOVENMATTER_API_TOKEN','WOVENMATTER_LISTEN_PORT','WOVENMATTER_WORKSPACE',
        'WOVENMATTER_DATA_DIRECTORY','WOVENMATTER_STATE_DIRECTORY','WOVENMATTER_HARNESS_PATH',
-       'PLAYWRIGHT_BROWSERS_PATH','WOVENMATTER_RUNTIME_KIND','WOVENMATTER_ACCESS_MODE'}
+       'PLAYWRIGHT_BROWSERS_PATH','WOVENMATTER_ACCESS_MODE'}
 env=os.environ.copy()
 for key in tuple(env):
     if key.startswith('WOVENMATTER_') and key!='WOVENMATTER_ADDITIONAL_INSTRUCTIONS': env.pop(key)

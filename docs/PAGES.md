@@ -150,7 +150,7 @@ are retained for review instead of silently replacing another participant's
 work. Incoming changes fence local undo history.
 
 Pages and Artifacts merge wherever they sync: between paired Macs, Linux library
-hosts, iPhones and iPads, and a Mac using another Mac's library. Changes to
+hosts, and iPhones and iPads. Changes to
 different components all stay, as do moves, title and purpose changes made
 alongside them. When two writers changed the same component while apart, one
 version keeps its place and the other sits next to it, marked for review, the

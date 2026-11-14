@@ -1,11 +1,11 @@
 import Foundation
 import WovenMatterClient
 import WovenMatterCore
-import WovenMatterDashboardStore
+import WovenMatterLibraryStore
 
 extension DeviceCommandService {
     func readWorkspace(_ request: LibraryWorkspaceRead) async throws -> LibraryWorkspaceResult {
-        guard let store = model.dashboardStore else { throw CommandError.unavailable }
+        guard let store = model.libraryStore else { throw CommandError.unavailable }
         switch request {
         case let .library(search, kind, offset):
             guard search.utf8.count <= 4_096, (0...100_000).contains(offset),
@@ -69,7 +69,7 @@ extension DeviceCommandService {
             }, hasMore: samples.count > 200)
         case .session(let id):
             if try await store.database.libraryExecutionOwner(conversationID: id) != nil {
-                return try await model.centralExecutionClient().readWorkspace(conversationID: id, request: request)
+                return try await model.memberExecutionClient().readWorkspace(conversationID: id, request: request)
             }
             var settings = try await sessionSettings(id)
             settings.goal = try await store.database.sessionGoals().first { $0.sessionID == id }
@@ -99,7 +99,7 @@ extension DeviceCommandService {
     }
 
     func performWorkspaceAction(_ action: LibraryWorkspaceAction) async throws {
-        guard let store = model.dashboardStore, !model.backendStopping else { throw CommandError.unavailable }
+        guard let store = model.libraryStore, !model.backendStopping else { throw CommandError.unavailable }
         switch action {
         case let .conversation(id, action, title, folderID):
             if action == "move" {
@@ -135,13 +135,13 @@ extension DeviceCommandService {
             try await store.mutateNote(id: id, mutation: mutation, expectedRevision: revision)
         case let .goal(id, mutation):
             if try await store.database.libraryExecutionOwner(conversationID: id) != nil {
-                _ = try await model.centralExecutionClient().perform(conversationID: id, action: action)
+                _ = try await model.memberExecutionClient().perform(conversationID: id, action: action)
             } else {
                 _ = try await model.mutateConversationGoal(id: id, mutation: mutation)
             }
         case let .configureSession(id, selectedModel, thinking, permission):
             if try await store.database.libraryExecutionOwner(conversationID: id) != nil {
-                _ = try await model.centralExecutionClient().perform(conversationID: id, action: action)
+                _ = try await model.memberExecutionClient().perform(conversationID: id, action: action)
                 return
             }
             let settings = try await sessionSettings(id)
@@ -158,7 +158,7 @@ extension DeviceCommandService {
             try await model.applyStagedSessionSelections(conversationID: id)
         case let .sessionTools(id, enabled, confirmed):
             if try await store.database.libraryExecutionOwner(conversationID: id) != nil {
-                _ = try await model.centralExecutionClient().perform(conversationID: id, action: action)
+                _ = try await model.memberExecutionClient().perform(conversationID: id, action: action)
                 return
             }
             _ = try await conversation(id)
@@ -212,7 +212,7 @@ extension DeviceCommandService {
 
     private func sessionSettings(_ id: String) async throws -> SessionSettings {
         _ = try await conversation(id)
-        guard let store = model.dashboardStore else { throw CommandError.unavailable }
+        guard let store = model.libraryStore else { throw CommandError.unavailable }
         // Reading settings does not launch or authenticate a provider. Options
         // come from the Mac's already-negotiated session metadata.
         let saved = try? await store.database.localACPSession(conversationID: id)

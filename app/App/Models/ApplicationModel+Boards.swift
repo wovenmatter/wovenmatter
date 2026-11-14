@@ -43,7 +43,7 @@ extension ApplicationModel {
         // unrelated note, so this Page's own saved copy decides whether to send.
         let flushed = await flushNoteDrafts()
         guard !noteEditingSuspended, !backendStopping else { throw BoardDispatchError.saveFailed }
-        guard let database = dashboardStore?.database,
+        guard let database = libraryStore?.database,
               let saved = try await database.readNoteForEditing(id: boardID).document,
               saved.kind == .canvas else {
             throw BoardDispatchError.saveFailed

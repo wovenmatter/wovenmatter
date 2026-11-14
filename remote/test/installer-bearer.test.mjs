@@ -91,7 +91,7 @@ test('the server refuses the installer bearer through Serve and any Mac rotates 
   const port = await freePort()
   const child = spawn(process.execPath, [resolve(repositoryRoot, 'remote/src/server.mjs')], { cwd: repositoryRoot, stdio: ['ignore', 'pipe', 'pipe'], env: {
     HOME: home, PATH: tools + ':' + process.env.PATH, LANG: 'C', WOVENMATTER_API_TOKEN: token, WOVENMATTER_LISTEN_HOST: '127.0.0.1', WOVENMATTER_LISTEN_PORT: String(port),
-    WOVENMATTER_RUNTIME_KIND: 'host', WOVENMATTER_WORKSPACE: join(home, 'workspace'), WOVENMATTER_HARNESS_CATALOG: resolve(repositoryRoot, 'harnesses/catalog.json'),
+    WOVENMATTER_WORKSPACE: join(home, 'workspace'), WOVENMATTER_HARNESS_CATALOG: resolve(repositoryRoot, 'harnesses/catalog.json'),
     WOVENMATTER_STATE_DIRECTORY: join(home, 'state'), WOVENMATTER_DATA_ROOT: join(directory, 'data'), WOVENMATTER_DATA_DIRECTORY: join(directory, 'data/databases'),
     WOVENMATTER_LIBRARY_BINARY: library, WOVENMATTER_LIBRARY_SERVE: '0', FAKE_LIBRARY_MEMBERS: membersPath, WOVENMATTER_HOST_SCRIPT: script } })
   const exited = new Promise(resolve => child.once('exit', resolve))

@@ -5,7 +5,7 @@ import SQLite3
 import Testing
 import WovenMatterCore
 import WovenMatterClient
-@testable import WovenMatterDashboardStore
+@testable import WovenMatterLibraryStore
 @testable import WovenMatterAppFacade
 
 private func sessionIsLocked() -> Bool {
@@ -116,7 +116,7 @@ struct DesktopJourneyTests {
         f.model.updateNoteDraft(note: note, content: content)
         await #expect(throws: ApplicationModelError.noteDraftSaveFailed) { try await f.model.mutateNote(id: id, mutation: .rename("Renamed")) }
         await #expect(throws: ApplicationModelError.noteDraftSaveFailed) { _ = try await f.model.exportNote(id: id) }
-        let journal = DashboardNoteDraftJournal(fileURL: f.directory.appending(path: "fixture-drafts.ndjson"))
+        let journal = NoteDraftJournal(fileURL: f.directory.appending(path: "fixture-drafts.ndjson"))
         #expect(try journal.entries().map(\.content) == [content])
         try sql(f, "DROP TRIGGER reject_note")
         f.model.retryNoteDraft(note: note)
@@ -183,17 +183,17 @@ struct DesktopJourneyTests {
         let run = try await f.database.beginLocalACPRun(conversationID: id, input: .init(text: "Retained private body"))
         let capability = "/private/tmp/wmtools-" + String(repeating: "a", count: 32) + "/" + String(repeating: "b", count: 32) + ".sock"
         let native = "{\"token\":\"retained-protocol-token\",\"toolEndpoint\":\"\(capability)\"}"
-        try await f.database.upsertDeviceOwnedRunActivity(runID: run.runID,
+        try await f.database.upsertRunActivity(runID: run.runID,
             activity: .init(id: "private-endpoint", kind: .tool, rawOutputJSON: native, rawPayloadJSON: native))
         try await f.database.completeLocalACPRun(runID: run.runID)
         try await f.database.write { db in
             try db.executeUnlocked("""
                 WITH RECURSIVE n(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM n WHERE x < 85)
-                INSERT INTO dashboard_messages(id,conversation_id,role,content,created_at,updated_at,desktop_owned)
+                INSERT INTO messages(id,conversation_id,role,content,created_at,updated_at)
                 SELECT printf('historical-%03d', x), '\(id)', 'user', 'Older body ' || x,
-                  '2020-01-01', '2020-01-01', 1 FROM n
+                  '2020-01-01', '2020-01-01' FROM n
                 """)
-            try db.toolsExecuteUnlocked("UPDATE dashboard_messages SET content=? WHERE id='historical-085'",
+            try db.toolsExecuteUnlocked("UPDATE messages SET content=? WHERE id='historical-085'",
                 ["<wovenmatter-goal-continuation>\nPrivate continuation instructions"])
         }
         await f.model.refreshWorkspace()
@@ -214,7 +214,7 @@ struct DesktopJourneyTests {
         }
         _ = await f.model.canonicalActiveRunID(conversationID: id)
         _ = try await f.model.libraryCommands.sessionCapabilities(conversationID: id)
-        #expect(!trace.statements.contains { $0.contains("FROM dashboard_messages") })
+        #expect(!trace.statements.contains { $0.contains("FROM messages") })
         let backend = BackendApplicationService(model: f.model)
         #expect(await backend.handle(try rpc(.loadAgentDefaults(runtime: .codex, workspace: nil))).error == nil)
         #expect(await backend.handle(try rpc(.sessionMetadata(conversationID: id))).error == nil)
@@ -225,7 +225,7 @@ struct DesktopJourneyTests {
         let olderCursor = try #require(page.olderCursor)
         #expect(page.messages.first { $0.id == "historical-085" }?.content == "Continuing toward the goal.")
         let firstBodyQueries = trace.statements.dropFirst(bodyQueryStart).filter {
-            $0.contains("FROM dashboard_messages") && $0.contains("message.content")
+            $0.contains("FROM messages") && $0.contains("message.content")
         }
         #expect(firstBodyQueries.count == 1)
         #expect(firstBodyQueries.allSatisfy { $0.contains("LIMIT 81") })
@@ -236,7 +236,7 @@ struct DesktopJourneyTests {
         let messageIDs = Set((page.messages + older.messages).map(\.id))
         #expect(Set((1...85).map { String(format: "historical-%03d", $0) }).isSubset(of: messageIDs))
         let olderBodyQueries = trace.statements.dropFirst(nextQueryStart).filter {
-            $0.contains("FROM dashboard_messages") && $0.contains("message.content")
+            $0.contains("FROM messages") && $0.contains("message.content")
         }
         #expect(olderBodyQueries.count == 1)
         #expect(olderBodyQueries.allSatisfy { $0.contains("LIMIT 81") })
@@ -251,7 +251,7 @@ struct DesktopJourneyTests {
             }
         }
         #expect(!trace.statements.dropFirst(invalidCursorStart).contains {
-            $0.contains("FROM dashboard_messages") && $0.contains("message.content")
+            $0.contains("FROM messages") && $0.contains("message.content")
         })
         let providers = Set(ProviderKind.supportedAccounts)
         f.usageProbe.expectPassiveLimits(providers: providers)
@@ -287,7 +287,7 @@ struct DesktopJourneyTests {
         let run = try #require(try await f.database.activeRunID(conversationID: child.id))
         try await f.model.cancelCanonicalRun(conversationID: child.id, runID: run)
         try await f.model.waitForAgentStop(conversationID: child.id)
-        try await f.model.refreshClientExecutionState()
+        try await f.model.reconcileLocalRunState()
         let send = WovenMatterToolRequest(arguments: ["sessions", "send", child.id, "--text", "Revoked work"])
         let preparation = FacadeGate(); preparation.hold(); defer { preparation.open() }
         tools.facadeFixtureMCPConnection = { _, local in await preparation.pass(); return local }
@@ -346,7 +346,7 @@ struct DesktopJourneyTests {
         let run = try #require(try await f.database.activeRunID(conversationID: id))
         try await f.model.cancelCanonicalRun(conversationID: id, runID: run)
         try await f.model.waitForAgentStop(conversationID: id)
-        try await f.model.refreshClientExecutionState()
+        try await f.model.reconcileLocalRunState()
         let pending = UUID().uuidString.lowercased()
         _ = try await f.database.reserveToolDelivery(sourceID: source, targetID: id, text: "Never after trash", requestID: pending)
         #expect(try await f.database.claimToolDelivery(id: pending) != nil)
@@ -378,13 +378,13 @@ struct DesktopJourneyTests {
         for index in 0..<5 {
             let run = try await f.database.beginLocalACPRun(conversationID: id,
                 input: .init(text: "Input \(index)", attachments: index == 0 ? attachments : []))
-            try await f.database.upsertDeviceOwnedRunActivity(runID: run.runID,
+            try await f.database.upsertRunActivity(runID: run.runID,
                 activity: .init(id: "activity-\(index)", kind: .tool, phase: "completed", title: "Read", content: "Output \(index)"))
             try await f.database.completeLocalACPRun(runID: run.runID)
         }
         let other = try #require(await f.model.createLocalACPSession(runtimeKind: .codex))
         let tail = try await f.database.conversationHistoryPage(id: id, limit: 4)
-        let initial = DashboardConversationWindow(page: tail)
+        let initial = ConversationWindow(page: tail)
         let cursor = WorkspaceConversationHistoryCursor(createdAt: try #require(initial.messages.first).createdAt, messageID: try #require(initial.messages.first).id)
         let older = try await f.database.conversationHistoryPage(id: id, before: cursor, limit: 20)
         let expanded = initial.prepending(older, requestedFrom: initial)
@@ -392,18 +392,18 @@ struct DesktopJourneyTests {
         #expect(Set(refreshed.messages.map(\.id)).count == refreshed.messages.count)
         #expect(refreshed.messages.filter { $0.role == "user" }.map(\.content) == (0..<5).map { "Input \($0)" })
         #expect(refreshed.runs.allSatisfy { $0.conversationID == id })
-        let a = DashboardConversationState(conversationID: id), b = DashboardConversationState(conversationID: other)
+        let a = ConversationState(conversationID: id), b = ConversationState(conversationID: other)
         let stale = a.beginRefresh(); let current = a.beginRefresh(); let separate = b.beginRefresh()
         #expect(!a.isCurrentRefresh(stale) && a.isCurrentRefresh(current) && b.isCurrentRefresh(separate))
         let foreign = try await f.database.conversationHistoryPage(id: other, limit: 4)
-        #expect(DashboardConversationWindow(page: foreign).messages.isEmpty)
+        #expect(ConversationWindow(page: foreign).messages.isEmpty)
         #expect(expanded.messages.count > initial.messages.count)
         #expect(expanded.activities.count == 5)
         let oldest = try #require(expanded.messages.first)
         #expect(expanded.attachments.map(\.messageID) == [oldest.id])
         #expect(expanded.references.map(\.messageID) == [oldest.id])
         let removedID = oldest.id
-        try await f.database.write { try $0.toolsExecuteUnlocked("DELETE FROM dashboard_messages WHERE id=?", [removedID]) }
+        try await f.database.write { try $0.toolsExecuteUnlocked("DELETE FROM messages WHERE id=?", [removedID]) }
         let afterDelete = try await f.database.conversationHistoryPage(id: id, limit: 4,
             knownMessageIDs: expanded.messages.map(\.id))
         let reconciled = expanded.refreshing(with: afterDelete, knownMessageIDs: Set(expanded.messages.map(\.id)))

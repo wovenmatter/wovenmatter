@@ -3,7 +3,7 @@ import Foundation
 import Testing
 import WovenMatterCore
 import WovenMatterClient
-@testable import WovenMatterDashboardStore
+@testable import WovenMatterLibraryStore
 
 @Suite("Calendar events, recurrence and scheduled sessions")
 struct WorkspaceCalendarTests {
@@ -23,6 +23,106 @@ struct WorkspaceCalendarTests {
     #expect(try await db.dueCalendarRuns(now:start).isEmpty)
     let run = try await #require(db.dueCalendarRuns(now:start.addingTimeInterval(86_400)).first)
     #expect(run.sessionID == checkpoint.taskSessionID)
+  }
+
+  /// A task's schedule is the state of the Mac that runs it
+  /// (`calendar_schedules`), not part of the shared calendar item. Running
+  /// the task leaves the shared item as it was, so an edit made on another
+  /// Mac meanwhile is not competing with a newer version and applies; the
+  /// owner then schedules the edited task as it would its own edit.
+  @Test func runningATaskLeavesTheSharedItemAloneAndAnotherMacsEditReschedulesIt() async throws {
+    let (owner, a) = try await fixture(), (other, b) = try await fixture(); defer { a.remove(); b.remove() }
+    let ownerID = try await owner.libraryIdentity().hostDeviceID, otherID = try await other.libraryIdentity().hostDeviceID
+    func send(_ source: WorkspaceDatabase, _ id: String, to target: WorkspaceDatabase) async throws {
+      var cursor = try await target.peerSyncCursors(id).pulled
+      for _ in 0..<1000 {
+        let page = try await source.pairedLibraryPage(after: cursor)
+        try await target.receivePairedLibrary(page, from: id)
+        cursor = page.cursor
+        if !page.hasMore { return }
+      }
+    }
+    func itemVersions(_ database: WorkspaceDatabase) async throws -> [JSONValue] {
+      try await database.read { try $0.historyRowsUnlocked("SELECT origin,clock FROM peer_sync_versions WHERE table_name='calendar_items' ORDER BY cursor", values: []) }
+    }
+    let start = date("2026-09-01T13:00:00Z")
+    let id = try await insert(owner, start: start, repeatRule: .init(unit: .day))
+    try await send(owner, ownerID, to: other)
+    #expect(try await other.dueCalendarRuns(now: start).isEmpty)
+
+    // The other Mac renames the task and moves it an hour later while the owner runs it.
+    var draft = WorkspaceCalendarDraft(try await #require(other.calendarItems().first))
+    draft.title = "Renamed elsewhere"; draft.startsAt = start.addingTimeInterval(3_600)
+    try await other.saveCalendarEvent(id: id, draft: draft, creating: false, now: start.addingTimeInterval(60))
+    let before = try await itemVersions(owner)
+    let run = try await #require(owner.dueCalendarRuns(now: start).first)
+    try await accept(run, in: owner, now: start)
+    #expect(try await owner.dueCalendarRuns(now: start.addingTimeInterval(30)).isEmpty)
+    #expect(try await itemVersions(owner) == before)
+
+    // The edit applies, and the owner fires the series at its new time, in its session.
+    try await send(other, otherID, to: owner)
+    #expect(try await owner.calendarItems().first?.title == "Renamed elsewhere")
+    #expect(try await owner.dueCalendarRuns(now: start.addingTimeInterval(120)).isEmpty)
+    let next = try await #require(owner.dueCalendarRuns(now: start.addingTimeInterval(3_600)).first)
+    #expect(next.scheduledAt == start.addingTimeInterval(3_600) && next.title == "Renamed elsewhere")
+    #expect(next.sessionID == run.sessionID)
+    try await send(owner, ownerID, to: other)
+    #expect(try await other.calendarItems().first?.title == "Renamed elsewhere")
+    #expect(try await other.dueCalendarRuns(now: start.addingTimeInterval(3_600)).isEmpty)
+  }
+
+  /// An edit that does not change when or where a task runs (a new title, a
+  /// removed occurrence) leaves the owner's schedule where it is, also when
+  /// it arrives from another Mac right as the next occurrence falls due.
+  @Test func anEditThatLeavesTheScheduleAloneDoesNotMoveIt() async throws {
+    let (owner, a) = try await fixture(), (other, b) = try await fixture(); defer { a.remove(); b.remove() }
+    let ownerID = try await owner.libraryIdentity().hostDeviceID, otherID = try await other.libraryIdentity().hostDeviceID
+    func send(_ source: WorkspaceDatabase, _ id: String, to target: WorkspaceDatabase) async throws {
+      var cursor = try await target.peerSyncCursors(id).pulled
+      for _ in 0..<1000 {
+        let page = try await source.pairedLibraryPage(after: cursor)
+        try await target.receivePairedLibrary(page, from: id)
+        cursor = page.cursor
+        if !page.hasMore { return }
+      }
+    }
+    let start = date("2026-09-01T13:00:00Z"), day: TimeInterval = 86_400
+    let id = try await insert(owner, start: start, repeatRule: .init(unit: .day))
+    let first = try await #require(owner.dueCalendarRuns(now: start).first)
+    try await accept(first, in: owner, now: start)
+    try await send(owner, ownerID, to: other)
+    var draft = WorkspaceCalendarDraft(try await #require(other.calendarItems().first)); draft.title = "Renamed only"
+    try await other.saveCalendarEvent(id: id, draft: draft, creating: false, now: start.addingTimeInterval(60))
+    try await other.deleteCalendarEvent(id: id, occurrence: 3, now: start.addingTimeInterval(61))
+    try await send(other, otherID, to: owner)
+    // The occurrence a day later is due exactly now: it fires, once, and is not passed over.
+    let next = try await #require(owner.dueCalendarRuns(now: start.addingTimeInterval(day)).first)
+    #expect(next.scheduledAt == start.addingTimeInterval(day) && next.title == "Renamed only" && next.sessionID == first.sessionID)
+  }
+
+  /// A Mac that hands a workspace's tasks to its Linux host publishes every
+  /// task of that workspace, also one another Mac created, with the time it
+  /// next fires.
+  @Test func aTaskAnotherMacCreatedIsPublishedToTheDelegatedHostWithItsNextFire() async throws {
+    let (publisher, a) = try await fixture(), (author, b) = try await fixture(); defer { a.remove(); b.remove() }
+    let authorID = try await author.libraryIdentity().hostDeviceID
+    let workspace = UUID(), start = date("2026-09-22T12:00:00Z")
+    var remoteTask = task(); remoteTask.configuration.workspaceID = workspace
+    let id = try await author.saveCalendarEvent(draft: .init(title: "Remote", startsAt: start, timeZoneID: "UTC", recurrence: .init(unit: .day), task: remoteTask), creating: true, now: start)
+    try await publisher.setRemoteCalendarExecutionOwnership(workspaceID: workspace, state: .pending)
+    try await publisher.setRemoteCalendarExecutionOwnership(workspaceID: workspace, state: .remote)
+    var cursor: Int64 = 0
+    for _ in 0..<1000 {
+      let page = try await author.pairedLibraryPage(after: cursor)
+      try await publisher.receivePairedLibrary(page, from: authorID)
+      cursor = page.cursor
+      if !page.hasMore { break }
+    }
+    let exported = try await #require(publisher.remoteCalendarExecutionSnapshot(workspaceID: workspace).first { $0.event.id == id })
+    #expect(exported.nextFireAt == start)
+    // The publisher hands it to the host; it does not run it itself.
+    #expect(try await publisher.dueCalendarRuns(now: start).isEmpty)
   }
 
   @Test func allDayAndMultiDayEventsOverlapTheirVisibleDays() async throws {
@@ -94,7 +194,7 @@ struct WorkspaceCalendarTests {
         remoteWorkspaceName: "Fixture", title: "Remote", ownerDeviceID: owner,
         requestedConversationID: UUID(uuidString: run.sessionID))
     }
-    let updates = try JSONDecoder().decode([GatewayJSONValue].self, from: Data(#"[{"sessionUpdate":"agent_thought_chunk","content":{"text":"Check it."}},{"sessionUpdate":"tool_call","toolCallId":"tool-1","title":"Read file","status":"completed"},{"sessionUpdate":"agent_message_chunk","content":{"text":"Done."}}]"#.utf8))
+    let updates = try JSONDecoder().decode([JSONValue].self, from: Data(#"[{"sessionUpdate":"agent_thought_chunk","content":{"text":"Check it."}},{"sessionUpdate":"tool_call","toolCallId":"tool-1","title":"Read file","status":"completed"},{"sessionUpdate":"agent_message_chunk","content":{"text":"Done."}}]"#.utf8))
     func importTranscript(_ database: WorkspaceDatabase) async throws {
       try await database.importRemoteCalendarTranscript(receiptID: "deleted-folder-receipt", run: run,
         workspaceID: workspace, workspaceName: "Fixture", ownerDeviceID: owner,
@@ -109,21 +209,21 @@ struct WorkspaceCalendarTests {
     let session = try await #require(reopened.workspaceOverview().conversations.first { $0.id == run.sessionID })
     #expect(session.folderID == nil)
     #expect(session.title == "Scheduled: " + remoteTask.configuration.title)
-    #expect(try await reopened.localACPSession(conversationID: run.sessionID).acpSessionID == "native-deleted-folder")
+    #expect(try await reopened.localACPSession(conversationID: run.sessionID).nativeSessionID == "native-deleted-folder")
     #expect(try await reopened.calendarRuns().first?.task.configuration.folderID == folder)
     let savedConfiguration = try #require(await reopened.read { connection in
-      try connection.historyRowsUnlocked("SELECT configuration_json FROM workspace_calendar_sessions WHERE id=?", values: [run.sessionID])
+      try connection.historyRowsUnlocked("SELECT configuration_json FROM calendar_task_sessions WHERE id=?", values: [run.sessionID])
         .first?.objectValue?["configuration_json"]?.stringValue
     })
     #expect(try JSONDecoder().decode(WorkspaceSessionCreationConfiguration.self, from: Data(savedConfiguration.utf8)).folderID == folder)
     let counts = try await reopened.read { connection in
-      try connection.historyRowsUnlocked("SELECT (SELECT count(*) FROM dashboard_messages WHERE conversation_id=?) AS messages, (SELECT count(*) FROM workspace_calendar_remote_receipts WHERE id=?) AS receipts",
+      try connection.historyRowsUnlocked("SELECT (SELECT count(*) FROM messages WHERE conversation_id=?) AS messages, (SELECT count(*) FROM calendar_remote_receipts WHERE id=?) AS receipts",
         values: [run.sessionID, "deleted-folder-receipt"]).first?.objectValue
     }
     #expect(counts?["messages"]?.intValue == 2)
     #expect(counts?["receipts"]?.intValue == 1)
     let activities = try await reopened.read { connection in
-      try connection.historyRowsUnlocked("SELECT id FROM dashboard_run_events WHERE conversation_id=?", values: [run.sessionID])
+      try connection.historyRowsUnlocked("SELECT id FROM run_activities WHERE conversation_id=?", values: [run.sessionID])
     }
     #expect(activities.count == 2)
     #expect(try await reopened.dueCalendarRuns(now: start.addingTimeInterval(100)).isEmpty)

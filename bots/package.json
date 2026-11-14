@@ -17,7 +17,7 @@
     "test:engine": "node test/require-node.mjs && vitest run test/engine-integration.test.ts"
   },
   "dependencies": {
-    "@anthropic-ai/claude-agent-sdk": ">=0.3.323",
+    "@anthropic-ai/claude-agent-sdk": ">=0.3.325",
     "@earendil-works/chord": ">=1.5.2",
     "@earendil-works/pi-ai": ">=1.5.2",
     "@earendil-works/pi-durable": ">=1.5.2",
@@ -34,12 +34,12 @@
   },
   "overrides": {
     "@earendil-works/pi-ai": {
-      "openai": ">=7.56.0",
+      "openai": ">=7.57.0",
       "@anthropic-ai/sdk": ">=1.8.0",
       "@google/genai": ">=3.3.0",
-      "@aws-sdk/client-bedrock-runtime": ">=3.1168.0",
+      "@aws-sdk/client-bedrock-runtime": ">=3.1169.0",
       "@smithy/node-http-handler": ">=4.14.2",
-      "@aws-sdk/token-providers": ">=3.1168.0"
+      "@aws-sdk/token-providers": ">=3.1169.0"
     },
     "@earendil-works/chord": {
       "ws": "$ws"

@@ -4,8 +4,9 @@ import WovenMatterShared
 public actor MobileSyncEngine {
   public let store: MobileStore
   private var transport: any LibraryTransport
-  /// Member mode: the phone syncs with any online Mac or Linux library host,
-  /// failing over automatically. Nil for a bearer-era pairing with one Mac.
+  /// The library hosts the phone syncs with: any online Mac or Linux member,
+  /// failing over automatically. Nil only in tests that give the engine one
+  /// fixed transport.
   public nonisolated let hosts: MobileLibraryHosts?
   private var learnedAt: Date?
   private var syncTask: Task<Void, Error>?
@@ -58,28 +59,9 @@ public actor MobileSyncEngine {
   /// The offline cache does not read them again; they stream.
   private var streamedTranscriptIDs: Set<String> = []
   public func setStreamedTranscripts(_ ids: Set<String>) { streamedTranscriptIDs = ids }
-  private var scheduledTask: Task<Void, Never>?
-  private var schedulingGeneration: UInt64 = 0
-  private var syncRequested = false
-  /// Writes request a short coalesced flush; connection lifecycle owns retry cadence.
-  public func scheduleSynchronization() {
-    syncRequested = true
-    guard scheduledTask == nil else { return }
-    schedulingGeneration &+= 1
-    let generation = schedulingGeneration
-    scheduledTask = Task {
-      defer { if generation == schedulingGeneration { scheduledTask = nil } }
-      do { try await Task.sleep(for: .milliseconds(150)) } catch { return }
-      while syncRequested, !Task.isCancelled, generation == schedulingGeneration {
-        syncRequested = false
-        do { try await synchronize() } catch { }
-      }
-    }
-  }
   public func cancelSynchronization() async {
-    schedulingGeneration &+= 1; syncGeneration &+= 1; syncRequested = false
+    syncGeneration &+= 1
     let running = syncTask
-    scheduledTask?.cancel(); scheduledTask = nil
     running?.cancel()
     await store.analytics.disconnect()
     let analytics = analyticsTask
@@ -89,13 +71,10 @@ public actor MobileSyncEngine {
     await analytics?.value
     analyticsTask = nil
     syncTask = nil
-    status.centralReachable = nil
+    status.hostReachable = nil
   }
   public func synchronizationStatus() async -> MobileSynchronizationStatus {
     await Self.makeStatus(store: store, previous: status)
-  }
-  public static func localSynchronizationStatus(store: MobileStore) async -> MobileSynchronizationStatus {
-    await makeStatus(store: store, previous: .init())
   }
   private static func makeStatus(store: MobileStore, previous: MobileSynchronizationStatus) async -> MobileSynchronizationStatus {
     let local = await store.snapshot(), history = await store.journal.snapshot()
@@ -155,7 +134,7 @@ public actor MobileSyncEngine {
         let (connection, hello, host) = try await hosts.connect(registry: registry)
         let changed = status.libraryHost?.endpoint != host.endpoint
         transport = connection
-        status.centralReachable = true; status.lastContactAt = Date(); status.libraryHost = host
+        status.hostReachable = true; status.lastContactAt = Date(); status.libraryHost = host
         let local = await store.snapshot()
         if let bound = local.workspaceID ?? local.detachedWorkspaceID, bound != hello.workspaceID, local.pairingTransitionWorkspaceID == nil {
           try await rebindLibraryHost(using: connection, libraryID: hello.workspaceID)
@@ -172,15 +151,15 @@ public actor MobileSyncEngine {
         }
       } else {
         identity = try await transport.workspaceIdentity()
-        status.centralReachable = true; status.lastContactAt = Date()
+        status.hostReachable = true; status.lastContactAt = Date()
         try await store.bindWorkspace(identity)
       }
       verifiedThisPass = true
     } catch {
       if case MobileConnectionError.updateRequired(let message) = error { status.updateRequired = message }
       await store.analytics.disconnect()
-      if case MobileConnectionError.http = error { status.centralReachable = true; status.lastContactAt = Date() }
-      else if !(error is MobileStore.Failure) { status.centralReachable = false }
+      if case MobileConnectionError.http = error { status.hostReachable = true; status.lastContactAt = Date() }
+      else if !(error is MobileStore.Failure) { status.hostReachable = false }
       throw error
     }
     try Task.checkCancellation()
@@ -227,6 +206,9 @@ public actor MobileSyncEngine {
     let deviceID = await store.snapshot().deviceID
     let snapshot = try await connection.snapshot()
     guard snapshot.workspaceID == libraryID else { throw MobileStore.Failure.wrongWorkspace }
+    // A move compares everything this device holds with everything the host
+    // holds, so it needs the host's whole list; see `MobileStore.rebindLibrary`.
+    guard snapshot.hasEveryNote, snapshot.hasEveryFolder, snapshot.hasEveryConversation else { throw MobileConnectionError.invalidResponse }
     var bodies: [String: LibraryNote] = [:]
     for id in await store.notesNeedingBodies(for: snapshot) {
       try Task.checkCancellation()
@@ -377,7 +359,11 @@ public actor MobileSyncEngine {
     }
     let records = await store.snapshot().commands
     for record in records where record.receipt == nil || record.receipt?.status == .accepted || record.receipt?.status == .outcomeUnknown {
-      if let receipt = try await transport.receipt(record.id) { try await store.rememberReceipt(receipt) }
+      // A receipt in a state a newer host added cannot be read here. That
+      // command stays unresolved; the others are still asked about.
+      let answer: LibraryCommandReceipt?
+      do { answer = try await transport.receipt(record.id) } catch is DecodingError { continue }
+      if let receipt = answer { try await store.rememberReceipt(receipt) }
     }
   }
   public func linkedData(note: LibraryNote, tableID: String? = nil) async throws -> LinkedDataPreview {

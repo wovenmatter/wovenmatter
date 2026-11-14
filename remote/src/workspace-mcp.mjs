@@ -1,4 +1,4 @@
-import { createHash, randomBytes, randomUUID, createCipheriv, createDecipheriv } from 'node:crypto'
+import { randomBytes, randomUUID } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { sha256 as hash } from './durable-json.mjs'
 import { libraryServedGroups, libraryServedTools } from './library-tools.mjs'
@@ -27,16 +27,15 @@ export function loadWorkspaceMCPCatalog() {
 // session connection or separately created outside-client credential owns it.
 // `localLibrary` is this machine's library host (library-tools.mjs);
 // `memberDelegate` reaches any Mac member with signed requests for the tools
-// the library host does not serve (member-client.mjs). The saved single-Mac
-// grant (`mcp_library_connection`) is only a fallback for hosts without either.
-export function createWorkspaceMCP({db,identity,secret,endpointURL,policy,localTools,localCall,fetchImpl=globalThis.fetch,catalog=loadWorkspaceMCPCatalog(),beforeLibraryCall=async()=>{},scopedHistoryAccess=()=>false,localLibrary=null,memberDelegate=null,onTimersChanged=()=>{},botTools=[]}) {
+// the library host does not serve (member-client.mjs).
+export function createWorkspaceMCP({db,identity,endpointURL,policy,localTools,localCall,catalog=loadWorkspaceMCPCatalog(),beforeLibraryCall=async()=>{},scopedHistoryAccess=()=>false,localLibrary=null,memberDelegate=null,onTimersChanged=()=>{},botTools=[]}) {
+  // A v0.4.2 host's single-Mac library MCP grant is dropped when
+  // `execution.sqlite` opens (client-execution.mjs, schema step 1).
   db.exec(`CREATE TABLE IF NOT EXISTS mcp_external_clients (id TEXT PRIMARY KEY, digest TEXT NOT NULL UNIQUE, body TEXT NOT NULL);
-    CREATE TABLE IF NOT EXISTS mcp_library_connection (id INTEGER PRIMARY KEY CHECK(id=1), envelope TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS mcp_preferences (id INTEGER PRIMARY KEY CHECK(id=1), body TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS mcp_bot_keys (bot_id TEXT PRIMARY KEY, digest TEXT NOT NULL UNIQUE, body TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS mcp_bot_revocations (bot_id TEXT PRIMARY KEY, revoked_at TEXT NOT NULL);`)
-  const key = typeof secret === 'string' && secret.length >= 16 ? createHash('sha256').update('wovenmatter-workspace-mcp-library-v1\0'+secret).digest() : null
-  const sessions = new Map(), controllers = new Set(), taskPolicies=new Map(),inFlight=new Map()
+  const sessions = new Map(), taskPolicies=new Map(),inFlight=new Map()
   let stopped = false
   const definition = new Map(catalog.map(tool=>[tool.name,tool]))
   const local = new Set(localTools)
@@ -69,38 +68,6 @@ export function createWorkspaceMCP({db,identity,secret,endpointURL,policy,localT
     db.prepare('INSERT INTO mcp_preferences VALUES(1,?) ON CONFLICT(id) DO UPDATE SET body=excluded.body').run(JSON.stringify(normalized))
     return settings()
   }
-  function libraryGrant() {
-    if (!key) return null
-    const row = db.prepare('SELECT envelope FROM mcp_library_connection WHERE id=1').get()
-    if (!row) return null
-    try {
-      const saved=JSON.parse(row.envelope),workspace=own(), decipher=createDecipheriv('aes-256-gcm',key,Buffer.from(saved.iv,'base64'))
-      decipher.setAAD(Buffer.from(JSON.stringify([workspace.libraryID,workspace.id,workspace.executionDeviceID])))
-      decipher.setAuthTag(Buffer.from(saved.tag,'base64'))
-      return JSON.parse(Buffer.concat([decipher.update(Buffer.from(saved.ciphertext,'base64')),decipher.final()]).toString('utf8'))
-    } catch { return null }
-  }
-  function libraryStatus() {
-    const value=libraryGrant()
-    return {configured:!!value,...(value?{grantID:value.grantID,libraryID:value.libraryID,workspaceID:value.workspaceID,executionDeviceID:value.executionDeviceID}:{})}
-  }
-  function configureLibrary(value) {
-    const workspace=own();let endpoint
-    try {endpoint=new URL(value.endpointURL)} catch {throw fail(400,'Invalid library MCP endpoint.')}
-    if(!key||!uuid(value.grantID)||value.libraryID!==workspace.libraryID||value.workspaceID!==workspace.id||value.executionDeviceID!==workspace.executionDeviceID
-      ||typeof value.bearerToken!=='string'||value.bearerToken.length<32||value.bearerToken.length>256
-      ||endpoint.protocol!=='https:'||!endpoint.hostname.endsWith('.ts.net')||endpoint.username||endpoint.password||endpoint.search||endpoint.hash||!endpoint.pathname.endsWith('/mcp/workspace')) {
-      throw fail(400,'The MCP library grant must match this workspace and its private central endpoint.')
-    }
-    if(value.toolSettings)configureSettings(value.toolSettings)
-    const iv=randomBytes(12),cipher=createCipheriv('aes-256-gcm',key,iv)
-    cipher.setAAD(Buffer.from(JSON.stringify([workspace.libraryID,workspace.id,workspace.executionDeviceID])))
-    const encrypted=Buffer.concat([cipher.update(JSON.stringify(value),'utf8'),cipher.final()])
-    db.prepare('INSERT INTO mcp_library_connection VALUES(1,?) ON CONFLICT(id) DO UPDATE SET envelope=excluded.envelope')
-      .run(JSON.stringify({iv:iv.toString('base64'),ciphertext:encrypted.toString('base64'),tag:cipher.getAuthTag().toString('base64')}))
-    return libraryStatus()
-  }
-  function clearLibrary() {db.prepare('DELETE FROM mcp_library_connection').run();return libraryStatus()}
   function endpoint() {const value=typeof endpointURL==='function'?endpointURL():endpointURL;if(!value)throw fail(503,'The Woven MCP listener is not ready.');return value}
   function sessionConnection(conversationID) {
     if(!uuid(conversationID)||stopped)throw fail(409,'Invalid Woven MCP session.')
@@ -148,8 +115,10 @@ export function createWorkspaceMCP({db,identity,secret,endpointURL,policy,localT
     if(!uuid(body.conversationID)||typeof body.label!=='string'||!body.label.trim()||body.label.length>256)throw fail(400,'Choose an existing conversation and client label.')
     policy(body.conversationID)
     const enabledGroups=body.enabledGroups??['notes','history','sessions','goals','usage','calendar','library','html']
-    if(!Array.isArray(enabledGroups)||enabledGroups.some(group=>!groups.has(group)))throw fail(400,'Invalid MCP client capabilities.')
-    const bearerToken=randomBytes(32).toString('base64url'),scope={id:randomUUID(),conversationID:body.conversationID,label:body.label.trim(),readOnly:body.readOnly!==false,enabledGroups:[...new Set(enabledGroups)],createdAt:new Date(Date.now()).toISOString()}
+    if(!Array.isArray(enabledGroups)||enabledGroups.some(group=>typeof group!=='string'))throw fail(400,'Invalid MCP client capabilities.')
+    // A newer Mac may name a tool group this host does not have. It is left
+    // out: the client gets the groups both know, and fewer tools is safe.
+    const bearerToken=randomBytes(32).toString('base64url'),scope={id:randomUUID(),conversationID:body.conversationID,label:body.label.trim(),readOnly:body.readOnly!==false,enabledGroups:[...new Set(enabledGroups.filter(group=>groups.has(group)))],createdAt:new Date(Date.now()).toISOString()}
     db.prepare('INSERT INTO mcp_external_clients VALUES(?,?,?)').run(scope.id,hash(bearerToken),JSON.stringify(scope))
     const externalEndpoint=own().endpoint?own().endpoint.replace(/\/$/,'')+'/mcp':endpoint()
     return {...scope,connection:{endpointURL:externalEndpoint,bearerToken,sessionID:scope.conversationID}}
@@ -183,10 +152,9 @@ export function createWorkspaceMCP({db,identity,secret,endpointURL,policy,localT
     if(groupFor(message.params?.name??'')==='history')await Promise.resolve().then(beforeLibraryCall).catch(()=>{})
     return localLibrary.call({conversationID:scope.conversationID,groups:activeGroups(scope),message,signal})
   }
-  // Any Mac member (signed) or the legacy grant can serve the rest. Never for
-  // bots: a Mac's /mcp/workspace binds every call to a conversation, so it
-  // refuses a bot caller on either route.
-  const delegated=scope=>!isBot(scope)&&(!!libraryGrant()||!!memberDelegate?.available())
+  // Any Mac member (signed) can serve the rest. Never for bots: a Mac's
+  // /mcp/workspace binds every call to a conversation, so it refuses a bot caller.
+  const delegated=scope=>!isBot(scope)&&!!memberDelegate?.available()
   function inventory(scope) {
     if(isBot(scope)) {
       // Only what a bot can call: the groups this host's own library copy
@@ -232,53 +200,24 @@ export function createWorkspaceMCP({db,identity,secret,endpointURL,policy,localT
   }
   // The schedule's tool policy comes from a Mac, which holds the schedule.
   async function prepareTaskCaller(scope,signal) {
-    const grant=libraryGrant()
+    if(!memberDelegate?.available())throw fail(503,'No Mac is reachable to confirm this schedule’s tools.')
     let value
-    if(memberDelegate?.available()) {
-      try {value=await memberDelegate.prepare(scope,{signal})}
-      catch(error) {
-        // A Mac that answered decides; only unreachable Macs fall back to the grant.
-        if(error.statusCode&&error.statusCode<500)throw fail(error.statusCode,'The saved schedule no longer authorizes this MCP caller.')
-        if(!grant)throw error
-      }
+    try {value=await memberDelegate.prepare(scope,{signal})}
+    catch(error) {
+      // A Mac that answered decides.
+      if(error.statusCode&&error.statusCode<500)throw fail(error.statusCode,'The saved schedule no longer authorizes this MCP caller.')
+      throw error
     }
-    if(value===undefined) {
-      if(!grant)throw fail(503,'No Mac is reachable to confirm this schedule’s tools.')
-      const response=await fetchImpl(grant.endpointURL+'/prepare',{method:'POST',redirect:'error',signal:signal??AbortSignal.timeout(15000),
-        headers:{authorization:'Bearer '+grant.bearerToken,'content-type':'application/json','x-woven-protocol':'3','x-woven-workspace':grant.libraryID},body:JSON.stringify(scope.taskProof)})
-      if(!response.ok)throw fail(response.status,'The saved schedule no longer authorizes this MCP caller.')
-      value=await response.json()
-    }
-    if(!Array.isArray(value?.enabledGroups)||value.enabledGroups.some(group=>!groups.has(group)))throw fail(502,'Invalid schedule tool policy.')
-    taskPolicies.set(scope.conversationID,value.enabledGroups)
+    if(!Array.isArray(value?.enabledGroups)||value.enabledGroups.some(group=>typeof group!=='string'))throw fail(502,'Invalid schedule tool policy.')
+    // Groups a newer Mac knows and this host does not are left out.
+    taskPolicies.set(scope.conversationID,value.enabledGroups.filter(group=>groups.has(group)))
   }
   async function libraryCall(scope,message,signal) {
     if(isBot(scope))throw fail(503,'This tool runs only on a Mac, which bots on this machine cannot reach. Notes, calendar, history, library, timers and sessions keep working.')
-    if(memberDelegate?.available()) {
-      if(scope.taskProof)await prepareTaskCaller(scope,signal)
-      else await Promise.resolve().then(beforeLibraryCall).catch(()=>{})
-      try {return await memberDelegate.call(scope,message,{groups:activeGroups(scope),signal})}
-      catch(error){if(!libraryGrant())throw error}
-    }
-    const grant=libraryGrant()
-    if(!grant)throw fail(503,'No Mac is reachable for this tool right now. Notes, calendar, history and this workspace’s own tools keep working.')
-    const controller=new AbortController();controllers.add(controller)
-    const timer=setTimeout(()=>controller.abort(),115000);timer.unref()
-    const headers={authorization:'Bearer '+grant.bearerToken,'content-type':'application/json',accept:'application/json, text/event-stream','mcp-protocol-version':'2025-06-18',
-      'x-woven-protocol':'3','x-woven-workspace':grant.libraryID,'x-woven-enabled-groups':[...activeGroups(scope)].join(','),
-      'x-woven-conversation-id':scope.conversationID}
-    try {
-      if(scope.taskProof)await prepareTaskCaller(scope,signal)
-      else await beforeLibraryCall()
-      const response=await fetchImpl(grant.endpointURL,{method:'POST',headers,redirect:'error',body:JSON.stringify(message),signal:signal?AbortSignal.any([controller.signal,signal]):controller.signal})
-      if(!response.ok)throw fail(response.status,'The central library did not authorize this Woven MCP request. Refresh the workspace connection before retrying.')
-      const text=await response.text()
-      if(Buffer.byteLength(text)>4*1024*1024)throw fail(413,'The library MCP response is too large. Request a smaller page.')
-      return response.status===202?null:JSON.parse(text)
-    } catch(error) {
-      if(error.statusCode)throw error
-      throw fail(503,'The central library is unavailable. Local workspace tools remain available; inspect prior effects before retrying mutations.')
-    } finally {clearTimeout(timer);controllers.delete(controller)}
+    if(!memberDelegate?.available())throw fail(503,'No Mac is reachable for this tool right now. Notes, calendar, history and this workspace’s own tools keep working.')
+    if(scope.taskProof)await prepareTaskCaller(scope,signal)
+    else await Promise.resolve().then(beforeLibraryCall).catch(()=>{})
+    return await memberDelegate.call(scope,message,{groups:activeGroups(scope),signal})
   }
   async function handle(scope,message,{signal}={}) {
     if(!scope)throw fail(401,'A valid Woven MCP credential is required.')
@@ -327,9 +266,9 @@ export function createWorkspaceMCP({db,identity,secret,endpointURL,policy,localT
       return {jsonrpc:'2.0',id,result:{isError:true,content:[{type:'text',text:error.message??'The Woven MCP request failed.'}],structuredContent:{success:false,...(operationRequestID?{requestID:operationRequestID}:{}),error:error.message??'The Woven MCP request failed.',code:error.statusCode===403?'capability_denied':error.statusCode===503?'unavailable':'operation_failed'}}}
     } finally {if(requestKey&&inFlight.get(requestKey)===requestController)inFlight.delete(requestKey)}
   }
-  return {settings,configureSettings,sessionConnection,prepareTask,resolvePrincipal,handle,libraryStatus,configureLibrary,clearLibrary,provisionClient,clients,revokeClient,
+  return {settings,configureSettings,sessionConnection,prepareTask,resolvePrincipal,handle,provisionClient,clients,revokeClient,
     issueBotKey,revokeBotKey,reinstateBot,botKeys,revokedBots,configureBots,
-    revokeSession:conversationID=>sessions.delete(conversationID),close(){stopped=true;sessions.clear();taskPolicies.clear();for(const controller of inFlight.values())controller.abort();inFlight.clear();for(const controller of controllers)controller.abort();controllers.clear()}}
+    revokeSession:conversationID=>sessions.delete(conversationID),close(){stopped=true;sessions.clear();taskPolicies.clear();for(const controller of inFlight.values())controller.abort();inFlight.clear()}}
 }
 
 // The canonical catalog uses flat named inputs. Validate its public schema at

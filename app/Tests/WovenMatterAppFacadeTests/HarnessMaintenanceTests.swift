@@ -3,7 +3,7 @@ import Foundation
 import Testing
 import WovenMatterClient
 import WovenMatterCore
-import WovenMatterDashboardStore
+import WovenMatterLibraryStore
 @testable import WovenMatterAppFacade
 
 @MainActor @Suite(.serialized)
@@ -84,15 +84,15 @@ struct HarnessMaintenanceTests {
 
         // A new database/model instance has no SSH results, tokens or network calls.
         fixture.defaults.set(try JSONEncoder().encode([fixture.remote]), forKey: "wovenmatter.remote-workspaces.v1")
-        let reopenedStore = try await DashboardStore(supportDirectory: fixture.directory)
-        let reopened = ApplicationModel(applicationDefaults: fixture.defaults, dashboardStore: reopenedStore,
+        let reopenedStore = try await LibraryStore(supportDirectory: fixture.directory)
+        let reopened = ApplicationModel(applicationDefaults: fixture.defaults, libraryStore: reopenedStore,
                                         startsAutomatically: false, localUsageService: fixture.usageService)
         await reopened.refreshWorkspace()
         #expect(reopened.remoteWorkspaces.statuses.isEmpty)
         #expect(reopened.remoteWorkspaces.runtimeMaintenance.isEmpty)
         #expect(reopened.remoteWorkspaces.readyChatTargets.isEmpty)
-        #expect(DashboardRemoteWorkspaceSidebarModel.agents(reopened.remoteWorkspaceAgents, in: fixture.remote.id) == saved)
-        #expect(DashboardRemoteWorkspaceSidebarModel.agents(reopened.remoteWorkspaceAgents, in: UUID()).isEmpty)
+        #expect(RemoteWorkspaceSidebarModel.agents(reopened.remoteWorkspaceAgents, in: fixture.remote.id) == saved)
+        #expect(RemoteWorkspaceSidebarModel.agents(reopened.remoteWorkspaceAgents, in: UUID()).isEmpty)
         // A failed refresh (no inventory) must not remove or rewrite known agents.
         await reopened.synchronizeRemoteAgentCatalog()
         #expect(reopened.remoteWorkspaceAgents == saved)

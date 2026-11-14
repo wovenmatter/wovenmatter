@@ -1,7 +1,7 @@
 import Foundation
 import WovenMatterClient
 import WovenMatterCore
-import WovenMatterDashboardStore
+import WovenMatterLibraryStore
 
 /// Timers fire on the machine whose library holds them (timers are not synced):
 /// the library host decides what is due and records each occurrence, and the

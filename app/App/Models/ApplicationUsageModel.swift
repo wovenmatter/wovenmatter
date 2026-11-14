@@ -2,7 +2,7 @@ import Foundation
 import Observation
 import WovenMatterClient
 import WovenMatterCore
-import WovenMatterDashboardStore
+import WovenMatterLibraryStore
 
 private struct UsageAnalyticsRefreshKey: Hashable, Sendable {
     let range: String

@@ -16,8 +16,8 @@ scripts/build_and_run.sh
 ```
 
 Each worktree gets its own instance, bundle ID, caches, and isolated data. See
-[development builds](docs/DEVELOPMENT_BUILDS.md) for the snapshot, client, and
-live modes. Development builds are separate from signed production releases;
+[build and run](README.md#build-and-run) for the snapshot and live modes.
+Development builds are separate from signed production releases;
 build and test scripts never publish or notarize a release. Follow the
 [style guide](docs/STYLE_GUIDE.md) for UI changes.
 
@@ -42,13 +42,6 @@ build and test scripts never publish or notarize a release. Follow the
 ```sh
 scripts/test-changes.sh          # suites chosen from the files you changed
 scripts/test-changes.sh --all    # changes that span components
-```
-
-When container lifecycle behavior changes (bots or the Executor image) and
-Docker is available, also run:
-
-```sh
-scripts/test-container.sh
 ```
 
 Tests must be deterministic, need no provider credentials, and make no real

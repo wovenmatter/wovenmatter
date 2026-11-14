@@ -139,25 +139,25 @@ public struct StreamHello: Codable, Equatable, Sendable {
 public struct StreamRequest: Codable, Equatable, Sendable {
   public var id: String
   public var method: String
-  public var params: GatewayJSONValue
-  public init(id: String, method: String, params: GatewayJSONValue = .object([:])) {
+  public var params: JSONValue
+  public init(id: String, method: String, params: JSONValue = .object([:])) {
     self.id = id; self.method = method; self.params = params
   }
   public init<Params: Encodable>(id: String, method: StreamProtocol.Method, params: Params) throws {
-    self.init(id: id, method: method.rawValue, params: try GatewayJSONValue(encoding: params))
+    self.init(id: id, method: method.rawValue, params: try JSONValue(encoding: params))
   }
   public func decodeParams<Params: Decodable>(_ type: Params.Type) throws -> Params { try params.decode(type) }
 }
 
 public struct StreamResponse: Codable, Equatable, Sendable {
   public var id: String
-  public var result: GatewayJSONValue?
+  public var result: JSONValue?
   public var error: StreamError?
-  public init(id: String, result: GatewayJSONValue? = nil, error: StreamError? = nil) {
+  public init(id: String, result: JSONValue? = nil, error: StreamError? = nil) {
     self.id = id; self.result = result; self.error = error
   }
   public init<Result: Encodable>(id: String, encoding result: Result) throws {
-    self.init(id: id, result: try GatewayJSONValue(encoding: result))
+    self.init(id: id, result: try JSONValue(encoding: result))
   }
   public func decodeResult<Result: Decodable>(_ type: Result.Type) throws -> Result {
     if let error { throw error }
@@ -205,7 +205,7 @@ public struct StreamCancel: Codable, Equatable, Sendable {
 }
 
 public struct StreamConversations: Codable, Equatable, Sendable {
-  public var conversations: [LibraryConversation]
+  @LossyArray public var conversations: [LibraryConversation]
   public var deletedConversationIDs: [String]?
   public var snapshot: Bool
   public init(conversations: [LibraryConversation], deletedConversationIDs: [String]? = nil, snapshot: Bool) {
@@ -214,7 +214,8 @@ public struct StreamConversations: Codable, Equatable, Sendable {
 }
 
 public struct StreamPending: Codable, Equatable, Sendable {
-  public var interactions: [PendingInteraction]
+  /// A question or approval of a kind this build does not know is not listed.
+  @LossyArray public var interactions: [PendingInteraction]
   public init(interactions: [PendingInteraction]) { self.interactions = interactions }
 }
 
@@ -287,8 +288,9 @@ public struct StreamItem: Codable, Equatable, Sendable {
     case library(StreamLibrary)
     case synchronized
     case serverState(StreamServerState)
-    /// A kind this build does not know. Ignored, but a `seq` still advances.
-    case unknown(kind: String, data: GatewayJSONValue)
+    /// A kind this build does not know, or an item of a known kind whose
+    /// data it cannot read. Ignored, but a `seq` still advances.
+    case unknown(kind: String, data: JSONValue)
 
     public var kind: String {
       switch self {
@@ -320,18 +322,27 @@ public struct StreamItem: Codable, Equatable, Sendable {
     id = try container.decode(String.self, forKey: .id)
     seq = try container.decodeIfPresent(Int64.self, forKey: .seq)
     let kind = try container.decode(String.self, forKey: .kind)
-    switch Kind(rawValue: kind) {
-    case .conversations: payload = .conversations(try container.decode(StreamConversations.self, forKey: .data))
-    case .pending: payload = .pending(try container.decode(StreamPending.self, forKey: .data))
-    case .journal: payload = .journal(try container.decode(StreamJournal.self, forKey: .data))
-    case .transcript: payload = .transcript(try container.decode(StreamTranscript.self, forKey: .data))
-    case .capabilities: payload = .capabilities(try container.decode(StreamCapabilities.self, forKey: .data))
-    case .session: payload = .session(try container.decode(StreamSession.self, forKey: .data))
-    case .owner: payload = .owner(try container.decode(StreamOwner.self, forKey: .data))
-    case .library: payload = .library(try container.decode(StreamLibrary.self, forKey: .data))
-    case .synchronized: payload = .synchronized
-    case .serverState: payload = .serverState(try container.decode(StreamServerState.self, forKey: .data))
-    case nil: payload = .unknown(kind: kind, data: try container.decodeIfPresent(GatewayJSONValue.self, forKey: .data) ?? .null)
+    do {
+      switch Kind(rawValue: kind) {
+      case .conversations: payload = .conversations(try container.decode(StreamConversations.self, forKey: .data))
+      case .pending: payload = .pending(try container.decode(StreamPending.self, forKey: .data))
+      case .journal: payload = .journal(try container.decode(StreamJournal.self, forKey: .data))
+      case .transcript: payload = .transcript(try container.decode(StreamTranscript.self, forKey: .data))
+      case .capabilities: payload = .capabilities(try container.decode(StreamCapabilities.self, forKey: .data))
+      case .session: payload = .session(try container.decode(StreamSession.self, forKey: .data))
+      case .owner: payload = .owner(try container.decode(StreamOwner.self, forKey: .data))
+      case .library: payload = .library(try container.decode(StreamLibrary.self, forKey: .data))
+      case .synchronized: payload = .synchronized
+      case .serverState: payload = .serverState(try container.decode(StreamServerState.self, forKey: .data))
+      case nil: payload = .unknown(kind: kind, data: try container.decodeIfPresent(JSONValue.self, forKey: .data) ?? .null)
+      }
+    } catch {
+      // A newer server's item of a kind this build knows, holding a value it
+      // does not: the frame is valid JSON, so it is ignored like an unknown
+      // kind instead of closing the socket, which would reconnect into the
+      // same item forever.
+      payload = .unknown(kind: kind, data: try container.decodeIfPresent(JSONValue.self, forKey: .data) ?? .null)
+      NSLog("Ignoring an unreadable %@ stream item", kind)
     }
   }
 
@@ -411,9 +422,9 @@ public struct StreamReceiptParams: Codable, Equatable, Sendable {
   public init(commandID: String) { self.commandID = commandID }
 }
 
-public extension GatewayJSONValue {
+public extension JSONValue {
   init<Value: Encodable>(encoding value: Value) throws {
-    self = try JSONDecoder().decode(GatewayJSONValue.self, from: JSONEncoder().encode(value))
+    self = try JSONDecoder().decode(JSONValue.self, from: JSONEncoder().encode(value))
   }
   func decode<Value: Decodable>(_ type: Value.Type) throws -> Value {
     try JSONDecoder().decode(type, from: JSONEncoder().encode(self))

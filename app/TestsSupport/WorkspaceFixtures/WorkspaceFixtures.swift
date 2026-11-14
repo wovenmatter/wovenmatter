@@ -1,7 +1,7 @@
 import Foundation
 import WovenMatterCore
 import WovenMatterClient
-import WovenMatterDashboardStore
+import WovenMatterLibraryStore
 
 /// A unique temporary directory that owns one workspace database file.
 public struct PersistenceFixture: Sendable {
@@ -31,7 +31,7 @@ public nonisolated(nonsending) func pollUntil(attempts: Int, interval: Duration,
   return false
 }
 
-public func rows(_ value: GatewayJSONValue) -> [GatewayJSONValue] {
+public func rows(_ value: JSONValue) -> [JSONValue] {
   value.objectValue?["rows"]?.arrayValue ?? []
 }
 
@@ -130,5 +130,19 @@ extension WorkspaceDatabase {
       location = .init(workspaceID: owner, rootPath: root, managed: false)
     } else { location = .init(workspaceID: workspaceID, rootPath: path, managed: false) }
     return .init(folderID: configuration?.folderID, location: location, defaultPath: path)
+  }
+}
+
+extension DeviceAuthentication {
+  /// Pairs and confirms, as a device does with its two requests: `request`
+  /// with confirmation required, then `confirmPairing` with the returned bearer.
+  public func pairConfirmed(_ request: PairRequest, workspaceID: String) async throws -> PairResponse {
+    var confirmed = PairRequest(token: request.token, deviceID: request.deviceID, deviceName: request.deviceName,
+      protocolVersion: request.protocolVersion, metadata: request.metadata, expectedWorkspaceID: request.expectedWorkspaceID,
+      requiresConfirmation: true, purpose: request.purpose)
+    confirmed.memberPublicKey = request.memberPublicKey
+    let response = try await pair(confirmed, workspaceID: workspaceID)
+    try await confirmPairing(bearer: response.credential, workspaceID: workspaceID)
+    return response
   }
 }

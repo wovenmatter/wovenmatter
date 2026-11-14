@@ -7,7 +7,7 @@ import Crypto
 import Testing
 import WorkspaceFixtures
 import WovenMatterCore
-@testable import WovenMatterDashboardStore
+@testable import WovenMatterLibraryStore
 
 /// In-process network of members. Each endpoint host (`<name>.ts.net`)
 /// routes to one peer's handler; Linux hosts sit behind a Serve-style
@@ -111,7 +111,7 @@ struct MemberSyncTests {
   @Test func sharedVectorsVerifyWithThisPlatformsEd25519() async throws {
     let url = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
       .appending(path: "../../../shared/Tests/WovenMatterSharedTests/MemberSignatureVectors.json").standardizedFileURL
-    let vectors = try #require(try JSONDecoder().decode(GatewayJSONValue.self, from: Data(contentsOf: url)).objectValue)
+    let vectors = try #require(try JSONDecoder().decode(JSONValue.self, from: Data(contentsOf: url)).objectValue)
     let key = try #require(vectors["publicKeyBase64"]?.stringValue.flatMap { Data(base64Encoded: $0) })
     let device = try #require(vectors["deviceID"]?.stringValue), audience = try #require(vectors["audience"]?.stringValue)
     for vector in try #require(vectors["cases"]?.arrayValue).compactMap(\.objectValue) {
@@ -364,14 +364,14 @@ struct MemberSyncTests {
     await b.sync.synchronize(with: memberA)
     for note in notes { #expect(await b.has(note)) }
     await b.sync.synchronize(with: memberA)
-    let pulled = try await b.database.pairedLibraryCursors(a.id).pulled
-    let pushed = try await a.database.pairedLibraryCursors(b.id).pushed
+    let pulled = try await b.database.peerSyncCursors(a.id).pulled
+    let pushed = try await a.database.peerSyncCursors(b.id).pushed
     #expect(pulled > 0 && pushed == pulled)
     // A's next push to B starts after what B holds: nothing is resent.
     #expect(try await a.database.pairedLibraryPage(after: pushed).entries.isEmpty)
     let memberB = try #require(await a.directory.member(b.id))
     await a.sync.synchronize(with: memberB)
-    #expect(try await a.database.pairedLibraryCursors(b.id).pushed == a.database.pairedLibraryHead())
+    #expect(try await a.database.peerSyncCursors(b.id).pushed == a.database.peerSyncHead())
 
     // A claim beyond this device's own change log is never recorded.
     let schema = try await b.database.pairedLibrarySchema()
@@ -381,15 +381,16 @@ struct MemberSyncTests {
     headers = Dictionary(uniqueKeysWithValues: headers.map { ($0.key.lowercased(), $0.value) })
     let response = try #require(await a.sync.handle(.init(method: "POST", target: "/v1/peers/sync", headers: headers, body: body)))
     #expect(response.status == 200)
-    #expect(try await a.database.pairedLibraryCursors(b.id).pushed == a.database.pairedLibraryHead())
+    #expect(try await a.database.peerSyncCursors(b.id).pushed == a.database.peerSyncHead())
   }
 
-  @Test func differentSchemasReportUpdateRequired() async throws {
+  @Test func anotherExchangeFormatReportsUpdateRequired() async throws {
     let network = Network()
     let a = try await Member("a.test", kind: .mac, network: network), b = try await Member("b.test", kind: .mac, network: network)
     defer { Task { await a.remove(); await b.remove() } }
     try await a.add(b); try await b.add(a)
-    let page = PairedLibraryPage(schema: "older", entries: [], cursor: 0, hasMore: false)
+    // A build before the exchange format sends none.
+    let page = PairedLibraryPage(format: nil, schema: "older", entries: [], cursor: 0, hasMore: false)
     let body = try JSONEncoder().encode(LibraryPeerExchange(deviceID: b.id, after: 0, page: page, version: "0.9"))
     var headers = try b.identity.signer.headers(method: "POST", target: "/v1/peers/sync", body: body, audience: a.id)
     headers = Dictionary(uniqueKeysWithValues: headers.map { ($0.key.lowercased(), $0.value) })

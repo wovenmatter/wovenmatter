@@ -14,12 +14,12 @@ import CSQLite
 import Testing
 @testable import WovenMatterShared
 import WovenMatterCore
-import WovenMatterDashboardStore
+import WovenMatterLibraryStore
 @testable import WovenMatterLibraryHost
 
 /// A one-request HTTP/1.1 client; the host closes every connection after its response.
 private struct HTTPReply { let status: Int; let headers: [String: String]; let body: Data
-  var json: GatewayJSONValue? { try? JSONDecoder().decode(GatewayJSONValue.self, from: body) }
+  var json: JSONValue? { try? JSONDecoder().decode(JSONValue.self, from: body) }
 }
 
 private func send(_ method: String, _ path: String, unix: String? = nil, port: UInt16? = nil,
@@ -88,8 +88,8 @@ private final class HostFixture {
   }
 
   func mcp(_ caller: String, groups: String = "notes,history,calendar,library", _ method: String,
-           _ params: [String: GatewayJSONValue] = [:]) throws -> GatewayJSONValue {
-    let message: GatewayJSONValue = .object(["jsonrpc": .string("2.0"), "id": .number(1), "method": .string(method), "params": .object(params)])
+           _ params: [String: JSONValue] = [:]) throws -> JSONValue {
+    let message: JSONValue = .object(["jsonrpc": .string("2.0"), "id": .number(1), "method": .string(method), "params": .object(params)])
     let reply = try send("POST", "/v1/mcp", unix: socket, headers: [
       "Authorization": "Bearer " + token, "X-Woven-Conversation-ID": caller, "X-Woven-Enabled-Groups": groups,
       "MCP-Protocol-Version": "2025-06-18"], body: try JSONEncoder().encode(message))
@@ -97,10 +97,10 @@ private final class HostFixture {
     return try #require(reply.json)
   }
 
-  struct ToolResult { let success: Bool; let value: [String: GatewayJSONValue]; let error: String? }
+  struct ToolResult { let success: Bool; let value: [String: JSONValue]; let error: String? }
 
   /// Calls a tool; its structured content is the WovenMatterToolResponse.
-  func call(_ caller: String, _ name: String, _ arguments: [String: GatewayJSONValue]) throws -> ToolResult {
+  func call(_ caller: String, _ name: String, _ arguments: [String: JSONValue]) throws -> ToolResult {
     let reply = try mcp(caller, "tools/call", ["name": .string(name), "arguments": .object(arguments)])
     let response = try #require(reply.objectValue?["result"]?.objectValue?["structuredContent"]?.objectValue, "\(reply)")
     return ToolResult(success: response["success"] == .bool(true), value: response["result"]?.objectValue ?? [:],
@@ -197,7 +197,7 @@ struct LibraryHostTests {
   /// start and then after each change a phone syncs, at most every 300 ms.
   @Test func libraryChangesAreAnnouncedForTheNodeServer() async throws {
     #expect(LibraryHost.libraryLine(42) == "{\"event\":\"library\",\"cursor\":42}\n")
-    let line = try JSONDecoder().decode(GatewayJSONValue.self, from: Data(LibraryHost.libraryLine(7).utf8))
+    let line = try JSONDecoder().decode(JSONValue.self, from: Data(LibraryHost.libraryLine(7).utf8))
     #expect(line == .object(["event": .string("library"), "cursor": .number(7)]))
     let fixture = try await HostFixture(); defer { fixture.remove() }
     final class Seen: @unchecked Sendable { let lock = NSLock(); var values: [Int64] = []; var all: [Int64] { lock.withLock { values } } }
@@ -232,13 +232,19 @@ struct LibraryHostTests {
     // A caller without the group is refused by the shared executor's policy check.
     let narrowed = try fixture.mcp(caller, groups: "history", "tools/call", ["name": .string("woven_notes_list"), "arguments": .object([:])])
     #expect(narrowed.objectValue?["error"] != nil)
+    // A newer caller's group this build does not have is ignored: the known
+    // groups still work, and the unknown name grants nothing.
+    let newer = try fixture.mcp(caller, groups: "notes,holograms", "tools/call", ["name": .string("woven_notes_list"), "arguments": .object([:])])
+    #expect(newer.objectValue?["result"]?.objectValue?["structuredContent"]?.objectValue?["success"] == .bool(true), "\(newer)")
+    let unknownOnly = try fixture.mcp(caller, groups: "holograms", "tools/call", ["name": .string("woven_notes_list"), "arguments": .object([:])])
+    #expect(unknownOnly.objectValue?["error"] != nil)
   }
 
   @Test func historyCursorsStayExactThroughJSON() async throws {
     let fixture = try await HostFixture(); defer { fixture.remove() }
     let caller = UUID().uuidString.lowercased()
     // An empty newest-first page returns its start cursor; Int64.max came back as 9.223372036854776e+18.
-    let message: GatewayJSONValue = .object(["jsonrpc": .string("2.0"), "id": .number(1), "method": .string("tools/call"),
+    let message: JSONValue = .object(["jsonrpc": .string("2.0"), "id": .number(1), "method": .string("tools/call"),
       "params": .object(["name": .string("woven_history_conversations"), "arguments": .object(["search": .string("no such conversation")])])])
     let reply = try send("POST", "/v1/mcp", unix: fixture.socket, headers: [
       "Authorization": "Bearer " + fixture.token, "X-Woven-Conversation-ID": caller, "X-Woven-Enabled-Groups": "history",
@@ -275,9 +281,9 @@ struct LibraryHostTests {
     ], list: .init(levels: [.init(id: "list-1", markerFormat: "{decimal}.")], headIndent: 36.5, firstLineHeadIndent: 18.25)))
     let operations: [NoteEditOperation] = [.replaceBlock(id: blockID, block: block), .setTitle("Paritý 1/2"),
                                            .setParagraphStyle(blockID: blockID, style: .heading2)]
-    let blockJSON = try JSONDecoder().decode(GatewayJSONValue.self, from: JSONEncoder().encode(block))
+    let blockJSON = try JSONDecoder().decode(JSONValue.self, from: JSONEncoder().encode(block))
     for (name, arguments) in [
-      ("woven_notes_replace_block", ["id": GatewayJSONValue.string(blockID), "block": blockJSON]),
+      ("woven_notes_replace_block", ["id": JSONValue.string(blockID), "block": blockJSON]),
       ("woven_notes_set_title", ["title": .string("Paritý 1/2")]),
       ("woven_notes_format", ["blockID": .string(blockID), "style": .string("heading2")])
     ] {
@@ -462,7 +468,7 @@ struct LibraryHostTests {
     let fixture = try await HostFixture(); defer { fixture.remove() }
     let auth = ["Authorization": "Bearer " + fixture.token]
     let bot = UUID().uuidString.lowercased()
-    let batch: GatewayJSONValue = .object([
+    let batch: JSONValue = .object([
       "bot": .object(["id": .string(bot), "name": .string("Helper")]),
       "conversations": .array([.object(["conversationId": .number(1), "kind": .string("main"), "title": .string("Main")])]),
       "entries": .array([.object(["id": .number(1), "conversationId": .number(1), "role": .string("user"),
@@ -573,8 +579,8 @@ struct LibraryHostTests {
     settings.botMCP = .init(isEnabled: true, groups: [.notes])
     try await fixture.host.database.saveToolSettings(settings)
     let bot = UUID().uuidString.lowercased(), principal = "woven:bot:\(fixture.host.identity.deviceID):\(bot)"
-    func call(_ name: String, _ arguments: [String: GatewayJSONValue], groups: String = "notes", botID: String? = nil) throws -> GatewayJSONValue? {
-      let message: GatewayJSONValue = .object(["jsonrpc": .string("2.0"), "id": .number(1), "method": .string("tools/call"),
+    func call(_ name: String, _ arguments: [String: JSONValue], groups: String = "notes", botID: String? = nil) throws -> JSONValue? {
+      let message: JSONValue = .object(["jsonrpc": .string("2.0"), "id": .number(1), "method": .string("tools/call"),
         "params": .object(["name": .string(name), "arguments": .object(arguments)])])
       let reply = try send("POST", "/v1/mcp", unix: fixture.socket, headers: [
         "Authorization": "Bearer " + fixture.token, "X-Woven-Caller": principal, "X-Woven-Bot-ID": botID ?? bot,

@@ -2,12 +2,12 @@ import WorkspaceFixtures
 import Foundation
 import Testing
 import WovenMatterCore
-@testable import WovenMatterDashboardStore
+@testable import WovenMatterLibraryStore
 
 @Suite("Page and Artifact persistence", .serialized)
 struct PageAndArtifactPersistenceTests {
   private func text(_ id: String, _ value: String) -> NoteBlock { .richText(.init(id: id, text: value)) }
-  private func set(_ key: String, _ value: GatewayJSONValue, expected: Int? = nil) -> ArtifactStateEdit {
+  private func set(_ key: String, _ value: JSONValue, expected: Int? = nil) -> ArtifactStateEdit {
     .init(action: .set, key: key, value: value, expectedVersion: expected)
   }
   private func legacyBoard() -> NoteDocument {

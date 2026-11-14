@@ -7,16 +7,16 @@ import WovenMatterShared
 @MainActor
 final class ConversationPresentationTests: XCTestCase {
   func testDarkThemeUsesSharedColorsWithoutChangingSavedNoteColors() {
-    XCTAssertEqual(DashboardTheme.allCases.map(\.rawValue), ["green", "cognac", "dark"])
-    XCTAssertEqual(DashboardTheme.dark.colorScheme, .dark)
-    XCTAssertEqual(DashboardTheme.green.colorScheme, .light)
-    XCTAssertEqual(DashboardTheme.cognac.colorScheme, .light)
+    XCTAssertEqual(WovenTheme.allCases.map(\.rawValue), ["green", "cognac", "dark"])
+    XCTAssertEqual(WovenTheme.dark.colorScheme, .dark)
+    XCTAssertEqual(WovenTheme.green.colorScheme, .light)
+    XCTAssertEqual(WovenTheme.cognac.colorScheme, .light)
     let darkTraits = UITraitCollection(userInterfaceStyle: .dark)
-    XCTAssertEqual(DashboardColors.documentColorHex(DashboardColors.foreground), "#0A1F16")
-    let ink = DashboardColors.noteForeground(DashboardColors.color(0x111827))
-    let highlight = DashboardColors.noteBackground(DashboardColors.color(0xFFEB94))
-    XCTAssertEqual(DashboardColors.documentColorHex(ink), "#111827")
-    XCTAssertEqual(DashboardColors.documentColorHex(highlight), "#FFEB94")
+    XCTAssertEqual(WovenColors.documentColorHex(WovenColors.foreground), "#0A1F16")
+    let ink = WovenColors.noteForeground(WovenColors.color(0x111827))
+    let highlight = WovenColors.noteBackground(WovenColors.color(0xFFEB94))
+    XCTAssertEqual(WovenColors.documentColorHex(ink), "#111827")
+    XCTAssertEqual(WovenColors.documentColorHex(highlight), "#FFEB94")
     var red: CGFloat = 0, green: CGFloat = 0, blue: CGFloat = 0, alpha: CGFloat = 0
     XCTAssertTrue(ink.resolvedColor(with: darkTraits).getRed(&red, green: &green, blue: &blue, alpha: &alpha))
     XCTAssertGreaterThan(red, 0.5)

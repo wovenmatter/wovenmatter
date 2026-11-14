@@ -2,7 +2,7 @@ import WorkspaceFixtures
 import Foundation
 import Testing
 import WovenMatterCore
-@testable import WovenMatterDashboardStore
+@testable import WovenMatterLibraryStore
 
 @Suite("Library canonical persistence", .serialized)
 struct LibraryWorkspaceTests {
@@ -81,6 +81,33 @@ struct LibraryWorkspaceTests {
     let createLarge = LibraryMutation(deviceID: device, kind: .createNote, resourceID: UUID().uuidString.lowercased(), title: "Big", content: large)
     #expect(try await db.applyLibraryMutation(createLarge).status == .invalid)
     #expect(try await db.libraryNote(id: pageID)?.revision == 2)
+  }
+
+  @Test("libraries holding the same note versions in different arrival orders agree on the newest and the pruned")
+  func noteVersionOrderIsTheSameOnEveryMac() async throws {
+    let noteID = UUID().uuidString.lowercased()
+    // 60 versions over 30 milliseconds: pairs share a created_at, so the ID decides between them.
+    let versions = (0..<60).map { index in
+      (id: UUID().uuidString.lowercased(), createdAt: String(format: "2026-11-13T22:18:11.%03dZ", index / 2))
+    }
+    let newestFirst = versions.sorted { ($0.createdAt, $0.id) > ($1.createdAt, $1.id) }
+    var kept: [[String]] = []
+    for arrival in [versions, versions.reversed(), versions.shuffled()] {
+      let fixture = try PersistenceFixture(); defer { fixture.remove() }
+      let db = try await fixture.openDatabase()
+      try await db.write { connection in
+        for version in arrival {
+          try connection.toolsExecuteUnlocked("""
+            INSERT INTO note_asset_versions(id,note_id,title,content,revision,source,bytes,created_at)
+            VALUES(?,?,'Plan','{}','1','device',2,?)
+            """, [version.id, noteID, version.createdAt])
+        }
+        try connection.pruneNoteAssetVersionsUnlocked(noteID: noteID)
+      }
+      kept.append(try await db.noteAssetVersions(id: noteID).map(\.id))
+    }
+    #expect(kept[0] == Array(newestFirst.prefix(50).map(\.id)))
+    #expect(kept[1] == kept[0] && kept[2] == kept[0])
   }
 
   private func document(_ text: String) throws -> String {

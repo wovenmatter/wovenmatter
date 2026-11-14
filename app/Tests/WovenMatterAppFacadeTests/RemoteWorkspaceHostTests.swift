@@ -92,14 +92,13 @@ private final class HostInspectionFixture: @unchecked Sendable {
         if !idle { Issue.record("Host operation did not settle") }
     }
 
-    @Test func nativeReadinessIsBoundToWorkspaceKindAndAccessLevel() async throws {
+    @Test func nativeReadinessIsBoundToTheAccessLevel() async throws {
         let fixture = HostInspectionFixture(); fixture.setReady(true)
         let model = makeModel(fixture)
-        model.checkHost(hostName: "native.invalid", userName: "trey", kind: .host, accessMode: .fullRoot)
+        model.checkHost(hostName: "native.invalid", userName: "trey", accessMode: .fullRoot)
         try await settled(model)
-        #expect(model.preflight(hostName: "native.invalid", userName: "trey", kind: .host, accessMode: .fullRoot)?.ready == true)
-        #expect(model.preflight(hostName: "native.invalid", userName: "trey", kind: .host, accessMode: .user) == nil)
-        #expect(model.preflight(hostName: "native.invalid", userName: "trey", kind: .container, accessMode: .fullRoot) == nil)
+        #expect(model.preflight(hostName: "native.invalid", userName: "trey", accessMode: .fullRoot)?.ready == true)
+        #expect(model.preflight(hostName: "native.invalid", userName: "trey", accessMode: .user) == nil)
         #expect(fixture.calls.count == 1)
         #expect(fixture.calls.first?.contains("'fullRoot'") == true)
     }
@@ -128,10 +127,10 @@ private final class HostInspectionFixture: @unchecked Sendable {
         defer { defaults.removePersistentDomain(forName: suite) }
         defaults.set(try JSONEncoder().encode([placeholder]), forKey: "wovenmatter.remote-workspaces.v1")
         let model = RemoteWorkspacesModel(defaults: defaults, backendProjection: false, sshClient: fixture.client)
-        model.checkHost(hostName: placeholder.hostName, userName: "trey", kind: .host, accessMode: .fullRoot)
+        model.checkHost(hostName: placeholder.hostName, userName: "trey", accessMode: .fullRoot)
         try await settled(model)
         model.create(name: "Studio", workspaceID: "studio", hostName: placeholder.hostName, userName: "trey",
-            port: 7448, kind: .host, accessMode: .fullRoot)
+            port: 7448, accessMode: .fullRoot)
         #expect(model.errorMessage?.contains("same access level") == true)
         #expect(!model.isCreating && model.workspaces == [placeholder])
     }
@@ -144,10 +143,10 @@ private final class HostInspectionFixture: @unchecked Sendable {
         let existing = RemoteWorkspaceConfiguration(name: "Native", workspaceID: "native", hostName: "native.invalid", userName: "trey", kind: .host, accessMode: .fullRoot)
         defaults.set(try JSONEncoder().encode([existing]), forKey: "wovenmatter.remote-workspaces.v1")
         let model = RemoteWorkspacesModel(defaults: defaults, backendProjection: false, sshClient: fixture.client)
-        model.checkHost(hostName: existing.hostName, userName: "trey", kind: .host, accessMode: .fullRoot)
+        model.checkHost(hostName: existing.hostName, userName: "trey", accessMode: .fullRoot)
         try await settled(model)
         model.create(name: "Another", workspaceID: "another", hostName: existing.hostName, userName: "trey",
-            port: 7448, kind: .host, accessMode: .fullRoot)
+            port: 7448, accessMode: .fullRoot)
         #expect(model.errorMessage?.contains("already configured for this host and user") == true)
         #expect(!model.isCreating && model.workspaces == [existing])
         #expect(fixture.calls.count == 1)
@@ -179,29 +178,6 @@ private final class HostInspectionFixture: @unchecked Sendable {
         #expect(!fixture.calls.contains { $0.contains("'create'") })
         #expect(model.workspaces == originalWorkspaces)
         #expect(model.pendingHostPreparation == nil)
-    }
-
-    @Test func deprecatedContainersNeverReconnectOrRunLifecycleCommands() async throws {
-        let fixture = HostInspectionFixture()
-        let suite = "deprecated-remote-container-" + UUID().uuidString
-        let defaults = try #require(UserDefaults(suiteName: suite))
-        defer { defaults.removePersistentDomain(forName: suite) }
-        let legacy = RemoteWorkspaceConfiguration(name: "Legacy", workspaceID: "legacy", hostName: "fixture.invalid")
-        defaults.set(try JSONEncoder().encode([legacy]), forKey: "wovenmatter.remote-workspaces.v1")
-        let model = RemoteWorkspacesModel(defaults: defaults, backendProjection: false, sshClient: fixture.client)
-        #expect(model.workspaces.isEmpty)
-        model.refreshRuntimeMaintenanceAtStartup()
-        model.reconnect(legacy)
-        model.lifecycle(.start, configuration: legacy)
-        model.updateContainer(legacy)
-        model.delete(legacy, removePersistentData: true)
-        model.checkHost(hostName: legacy.hostName, userName: "", kind: .container)
-        model.prepareHost(hostName: legacy.hostName, userName: "", kind: .container)
-        model.create(name: "Legacy", workspaceID: "legacy", hostName: legacy.hostName, userName: "",
-            port: 7337, kind: .container)
-        #expect(model.errorMessage?.contains("deprecated") == true)
-        #expect(fixture.calls.isEmpty)
-        #expect(!model.isCreating)
     }
 
     @Test func startupChecksConnectionWithoutStartingStoppedWorkspace() async throws {
@@ -311,7 +287,7 @@ private final class BotsHostFixture: @unchecked Sendable {
         RemoteWorkspaceSSHClient(runner: { [self] _, command, _ in
             lock.withLock { sent.append(command) }
             return inspect()
-        }, scriptLoader: { Data("container-lifecycle".utf8) }, deploymentRoot: root,
+        }, scriptLoader: { Data("host-lifecycle".utf8) }, deploymentRoot: root,
         streamingRunner: { [self] _, command, input, progress in
             lock.withLock {
                 sent.append(command)
@@ -319,6 +295,6 @@ private final class BotsHostFixture: @unchecked Sendable {
             }
             progress(Data("WM_PROGRESS bots-engine\n".utf8))
             return Data(#"{"id":"studio","name":"Studio","state":"running","running":true,"startedAt":"","image":"native","memoryBytes":0,"swapBytes":0,"hostPort":7400,"persistentVolume":"/home/trey/.local/share/wovenmatter","capabilities":{"memory":false,"swap":false},"storageKind":"host","hostStorageLow":false,"legacyStorage":false,"kind":"host"}"#.utf8)
-        }, hostScriptLoader: { Data("host-lifecycle".utf8) })
+        })
     }
 }

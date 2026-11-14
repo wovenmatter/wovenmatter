@@ -87,13 +87,6 @@ public enum RichDocumentEditing {
     }
   }
 
-  public static func togglingBold(in content: String, blockID: String) throws -> String {
-    try changeBlock(content, blockID: blockID) { raw, block in
-      let enabled = !block.runs.allSatisfy(\.bold)
-      raw["runs"] = try runsJSON(block.runs.map { var run = $0; run.bold = enabled; return run })
-    }
-  }
-
   public enum TextFormat: Sendable {
     case bold, italic, underline
     case highlight(String?), fontFamily(String?), fontSize(Double), link(String?)

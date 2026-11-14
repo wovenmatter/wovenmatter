@@ -54,10 +54,10 @@ test('status checks never start login and do not equate a timeout with sign-out'
   const statuses = await signInStatuses([
     { id: 'codex', name: 'Codex', executable: '/fixture/codex' },
     { id: 'claude_code', name: 'Claude', executable: '/fixture/claude' },
-    { id: 'pi', name: 'Pi', enabled: false },
+    { id: 'disabled_fixture', name: 'Disabled', enabled: false },
     { id: 'opencode', executable: '/fixture/opencode' },
     { id: 'grok_build', executable: '/fixture/grok' },
-    ...['pi', 'hermes', 'openclaw', 'cursor'].map(id => ({ id, executable: '/fixture/retired-' + id })),
+    ...['unknown_one', 'unknown_two'].map(id => ({ id, executable: '/fixture/' + id })),
   ], async (file, args) => {
     calls.push(args);
     if (file.endsWith('claude')) throw { killed: true };

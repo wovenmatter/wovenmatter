@@ -12,40 +12,31 @@ struct SettingsAppleDevicesView: View {
     var reservesRailControlSpace = false
     var onBack: () -> Void
     var onOpenBots: () -> Void = {}
-    private var client: CentralLibraryClientModel { model.libraryClient }
 
     var body: some View {
         SettingsPage(title: "Apple Devices", reservesRailControlSpace: reservesRailControlSpace, onBack: onBack) {
             BotsVersionStatusLink(bots: model.bots, onOpen: onOpenBots)
-            if DevelopmentLaunch.isClient {
-                SettingsSection {
-                    deviceRow(icon: .mac, title: model.backendReplica.endpoint?.host ?? "Live library", detail: model.backendReplica.status)
-                    SettingsNote("This development instance keeps a local database synchronized with the live library. Its own background server runs its agents and scheduled work.")
-                }
-            } else {
-                SettingsSection {
-                    deviceRow(icon: .mac, title: DevelopmentLaunch.deviceName(), detail: "This Mac")
-                }
-                if !host.pendingPairingRequests.isEmpty { pairingRequests }
-                if host.pairedDevices.contains(where: { $0.id != host.peerIdentity?.deviceID }) { pairedDevices }
-                if !host.pendingDeviceRevocations.isEmpty { pendingRevocations }
-                pairSection
-                if !host.peerSyncErrors.isEmpty {
-                    SettingsSection(title: "Synchronization needs attention", detail: "Local writing is saved while synchronization retries.") {
-                        ForEach(Array(Set(host.peerSyncErrors.values)).sorted(), id: \.self) { message in
-                            SettingsError(message)
-                        }
+            SettingsSection {
+                deviceRow(icon: .mac, title: DevelopmentLaunch.deviceName(), detail: "This Mac")
+            }
+            if !host.pendingPairingRequests.isEmpty { pairingRequests }
+            if host.pairedDevices.contains(where: { $0.id != host.peerIdentity?.deviceID }) { pairedDevices }
+            if !host.pendingDeviceRevocations.isEmpty { pendingRevocations }
+            pairSection
+            if !host.peerSyncErrors.isEmpty {
+                SettingsSection(title: "Synchronization needs attention", detail: "Local writing is saved while synchronization retries.") {
+                    ForEach(Array(Set(host.peerSyncErrors.values)).sorted(), id: \.self) { message in
+                        SettingsError(message)
                     }
                 }
-                if !model.recoveredNoteDrafts.isEmpty { recoveredDrafts }
             }
+            if !model.recoveredNoteDrafts.isEmpty { recoveredDrafts }
             SettingsHelp {
                 SettingsNote("Each Mac keeps a complete local library with shared notes, chats, library files, settings, and connections. You can add workspaces or Apple devices from any Mac. Offline changes synchronize automatically when the Macs reconnect.")
                 SettingsNote("Paired devices can use all available workspaces, listed in Settings → Workspaces. Agents and scheduled work keep running on the workspace that owns them.")
             }
         }
         .task {
-            guard !DevelopmentLaunch.isClient else { return }
             while !Task.isCancelled {
                 await host.refreshStatus()
                 do { try await Task.sleep(for: .seconds(2)) } catch { return }
@@ -59,7 +50,7 @@ struct SettingsAppleDevicesView: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text(title).font(.settingsRow)
                 if let detail {
-                    Text(detail).font(.settingsSecondary).foregroundStyle(DashboardPalette.mutedForeground)
+                    Text(detail).font(.settingsSecondary).foregroundStyle(WovenPalette.mutedForeground)
                 }
             }
             Spacer(minLength: 0)
@@ -70,13 +61,13 @@ struct SettingsAppleDevicesView: View {
     /// Three ways to pair, closed until needed.
     private var pairSection: some View {
         SettingsSection(title: "Pair a device") {
-            DevicePairingDiscoveryCard(pairing: client.devicePairing, host: host, canPairWithCentral: true)
+            DevicePairingDiscoveryCard(host: host)
             DevicePairingCodeCard(host: host)
             SettingsSummaryRow("Paste a pairing link") {
                 SettingsNote("Copy a pairing link from the other Mac’s Apple Devices settings.")
                 HStack {
                     SecureField("Pairing link", text: $pairingLink)
-                        .dashboardInput()
+                        .wovenInput()
                         .accessibilityIdentifier("devices.peer-link")
                     Button("Pair Mac") {
                         let link = pairingLink; pairingLink = ""; pairingLinkBusy = true
@@ -103,7 +94,7 @@ struct SettingsAppleDevicesView: View {
                     DeviceConnectionIcon(kind: request.identity.metadata.kind, size: 16)
                     VStack(alignment: .leading, spacing: 2) {
                         Text(request.identity.deviceName).font(.settingsRow)
-                        Text(DeviceConnectionIcon.label(request.identity.metadata.kind)).font(.settingsSecondary).foregroundStyle(DashboardPalette.mutedForeground)
+                        Text(DeviceConnectionIcon.label(request.identity.metadata.kind)).font(.settingsSecondary).foregroundStyle(WovenPalette.mutedForeground)
                     }
                     Spacer()
                     Button("Decline") { Task { await host.denyPairing(id: request.id) } }.buttonStyle(SettingsQuietButtonStyle())
@@ -128,7 +119,7 @@ struct SettingsAppleDevicesView: View {
                                 Text("\(DeviceConnectionIcon.label(device.kind)) · Paired \(device.pairedAt.formatted(date: .abbreviated, time: .shortened))")
                             }
                         }
-                        .font(.settingsSecondary).foregroundStyle(DashboardPalette.mutedForeground)
+                        .font(.settingsSecondary).foregroundStyle(WovenPalette.mutedForeground)
                     }
                     Spacer()
                     Button("Unpair device", role: .destructive) { Task { await host.revoke(device.id) } }
@@ -149,7 +140,7 @@ struct SettingsAppleDevicesView: View {
                         host.executionWorkspaces.first { $0.id == workspaceID }?.name ?? "Unavailable workspace"
                     }
                     Text("Waiting for " + names.joined(separator: ", "))
-                        .font(.settingsSecondary).foregroundStyle(DashboardPalette.mutedForeground)
+                        .font(.settingsSecondary).foregroundStyle(WovenPalette.mutedForeground)
                 }
             }
         }

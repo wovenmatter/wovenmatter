@@ -60,7 +60,7 @@ extension ApplicationModel {
                 guard let value = result.artifactStateResult else { throw ArtifactInputError.saveFailed }
                 response = value
             } else {
-                guard let database = dashboardStore?.database else { throw ArtifactInputError.unavailable }
+                guard let database = libraryStore?.database else { throw ArtifactInputError.unavailable }
                 response = try await database.applyArtifactStateEdit(noteID: noteID, edit: edit)
             }
             scheduleArtifactWorkspaceRefresh()
@@ -72,7 +72,7 @@ extension ApplicationModel {
             if isBackendFrontend {
                 snapshot = try? await sendBackendCommand(.workspaceMutation(.readArtifactState(noteID: noteID))).artifactStateSnapshot
             } else {
-                snapshot = try? await dashboardStore?.database.artifactStateSnapshot(noteID: noteID)
+                snapshot = try? await libraryStore?.database.artifactStateSnapshot(noteID: noteID)
             }
             scheduleArtifactWorkspaceRefresh()
             throw ArtifactInputFailure(message: error.localizedDescription, snapshot: snapshot)

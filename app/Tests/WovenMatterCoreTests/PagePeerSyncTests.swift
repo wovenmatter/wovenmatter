@@ -3,7 +3,7 @@ import WovenMatterClient
 import WorkspaceFixtures
 import Testing
 import WovenMatterCore
-@testable import WovenMatterDashboardStore
+@testable import WovenMatterLibraryStore
 
 /// Pages and Artifacts edited at once on paired Macs and a Linux host, by people, agents and
 /// phones, merge into one version on every replica.
@@ -24,7 +24,7 @@ struct PagePeerSyncTests {
     func send(to other: Replica, members: [Replica]) async throws {
       let sender = isLinux ? PairedLibrarySender(deviceID: id, kind: .linux,
         members: members.map { .init(deviceID: $0.id, kind: $0.isLinux ? .linux : .mac, endpoints: [], revoked: false) }) : nil
-      var cursor = try await other.database.pairedLibraryCursors(id).pulled
+      var cursor = try await other.database.peerSyncCursors(id).pulled
       for _ in 0..<1000 {
         let page = try await database.pairedLibraryPage(after: cursor)
         try await other.database.receivePairedLibrary(page, from: id, sender: sender)
