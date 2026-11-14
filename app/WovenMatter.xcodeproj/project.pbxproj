@@ -166,6 +166,7 @@
 		2D11BF999DCFCAD843281985 /* ApplicationModel+MCPAccess.swift in Sources */ = {isa = PBXBuildFile; fileRef = 392AA3B531FF25C552C29E12 /* ApplicationModel+MCPAccess.swift */; };
 		DE6A299C4400AB55B5D0CE55 /* BackendMCPService.swift in Sources */ = {isa = PBXBuildFile; fileRef = DC1EEBCD8EBF7AD5965C8DF8 /* BackendMCPService.swift */; };
 		895A902611CD21FC10814499 /* ApplicationModel+Bots.swift in Sources */ = {isa = PBXBuildFile; fileRef = C29A70F944FF97D2DD457E7C /* ApplicationModel+Bots.swift */; };
+		E35BED05C94DA2E0A80AD62E /* ApplicationModel+FleetMaintenance.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4F0AC7FE219EA8ACCBED86DB /* ApplicationModel+FleetMaintenance.swift */; };
 		2A9DD382F8055BA4D1817FEB /* RemoteWorkspacesModel+SharedHosts.swift in Sources */ = {isa = PBXBuildFile; fileRef = C675F53C9F1FED2C8ED7B721 /* RemoteWorkspacesModel+SharedHosts.swift */; };
 		CA2FBC8830FD2860BE268EA5 /* ApplicationModel+MemberSessions.swift in Sources */ = {isa = PBXBuildFile; fileRef = EE5A3B5C1BAA5CF305BDFD9C /* ApplicationModel+MemberSessions.swift */; };
 		93DD64C0702470963BF9F70B /* ApplicationModel+SessionWaits.swift in Sources */ = {isa = PBXBuildFile; fileRef = 04597A93224A7D9BD469CB00 /* ApplicationModel+SessionWaits.swift */; };
@@ -355,6 +356,7 @@
 		392AA3B531FF25C552C29E12 /* ApplicationModel+MCPAccess.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ApplicationModel+MCPAccess.swift"; sourceTree = "<group>"; };
 		DC1EEBCD8EBF7AD5965C8DF8 /* BackendMCPService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "BackendMCPService.swift"; sourceTree = "<group>"; };
 		C29A70F944FF97D2DD457E7C /* ApplicationModel+Bots.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ApplicationModel+Bots.swift"; sourceTree = "<group>"; };
+		4F0AC7FE219EA8ACCBED86DB /* ApplicationModel+FleetMaintenance.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ApplicationModel+FleetMaintenance.swift"; sourceTree = "<group>"; };
 		C675F53C9F1FED2C8ED7B721 /* RemoteWorkspacesModel+SharedHosts.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "RemoteWorkspacesModel+SharedHosts.swift"; sourceTree = "<group>"; };
 		EE5A3B5C1BAA5CF305BDFD9C /* ApplicationModel+MemberSessions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ApplicationModel+MemberSessions.swift"; sourceTree = "<group>"; };
 		04597A93224A7D9BD469CB00 /* ApplicationModel+SessionWaits.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ApplicationModel+SessionWaits.swift"; sourceTree = "<group>"; };
@@ -482,6 +484,7 @@
 				392AA3B531FF25C552C29E12 /* ApplicationModel+MCPAccess.swift */,
 				DC1EEBCD8EBF7AD5965C8DF8 /* BackendMCPService.swift */,
 				C29A70F944FF97D2DD457E7C /* ApplicationModel+Bots.swift */,
+				4F0AC7FE219EA8ACCBED86DB /* ApplicationModel+FleetMaintenance.swift */,
 				C675F53C9F1FED2C8ED7B721 /* RemoteWorkspacesModel+SharedHosts.swift */,
 				EE5A3B5C1BAA5CF305BDFD9C /* ApplicationModel+MemberSessions.swift */,
 				04597A93224A7D9BD469CB00 /* ApplicationModel+SessionWaits.swift */,
@@ -779,6 +782,7 @@
 				E71AABCCC66026E6318FBD29 /* SettingsMCPAccessSection.swift in Sources */,
 				DE6A299C4400AB55B5D0CE55 /* BackendMCPService.swift in Sources */,
 				895A902611CD21FC10814499 /* ApplicationModel+Bots.swift in Sources */,
+				E35BED05C94DA2E0A80AD62E /* ApplicationModel+FleetMaintenance.swift in Sources */,
 				2A9DD382F8055BA4D1817FEB /* RemoteWorkspacesModel+SharedHosts.swift in Sources */,
 				CA2FBC8830FD2860BE268EA5 /* ApplicationModel+MemberSessions.swift in Sources */,
 				93DD64C0702470963BF9F70B /* ApplicationModel+SessionWaits.swift in Sources */,
