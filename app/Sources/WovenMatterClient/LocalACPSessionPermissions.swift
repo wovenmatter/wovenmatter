@@ -27,13 +27,10 @@ enum LocalACPSessionPermissions {
         return runtimeKind == .grokBuild ? explicitGrokPermission(in: arguments) : nil
     }
 
-    static let grokOptions = AgentRuntimeKind.grokBuild.orderedPermissionOptions(["default", "auto", "acceptEdits", "dontAsk", "bypassPermissions"])
+    static let grokOptions = AgentRuntimeKind.grokBuild.orderedPermissionOptions(["auto", "bypassPermissions"])
 
     static let grokMetadata: [String: SessionOptionMetadata] = [
-        "default": .init(name: "Ask for approval", description: "Grok asks for approval beyond its built-in read-only and preapproved actions."),
-        "acceptEdits": .init(name: "Auto-accept edits", description: "Allow file edits; ask before other actions that need approval."),
         "auto": .init(name: "Auto", description: "Grok's safety checker decides which actions may run automatically."),
-        "dontAsk": .init(name: "Don't ask", description: "Grok denies actions that are not already approved instead of asking."),
         "bypassPermissions": .init(name: "Full access", description: "Allow commands and edits without ordinary approval prompts. Native deny rules, hooks, and administrator policies still apply."),
     ]
 
@@ -58,11 +55,6 @@ enum LocalACPSessionPermissions {
             var name = option["name"]?.stringValue
             var description = option["description"]?.stringValue
             switch (runtimeKind, id) {
-            case (.codex, "read-only"):
-                name = "Read only"
-                description = description ?? "Codex's native read-only sandbox and approval policy."
-            case (.claudeCode, "default"):
-                name = "Ask for approval"
             case (.codex, "agent"):
                 if separatesWorkspaceAccess || option["_meta"]?["kind"]?.stringValue == "auto_review" {
                     name = "Approve for me"
@@ -76,17 +68,10 @@ enum LocalACPSessionPermissions {
             case (.claudeCode, "auto"):
                 name = "Auto"
                 description = "Claude's model classifier decides which actions may run automatically."
-            case (.claudeCode, "acceptEdits"):
-                name = "Auto-accept edits"
-            case (.claudeCode, "plan"):
-                name = "Plan"
-                description = description ?? "Plan without executing commands or editing files."
-            case (.claudeCode, "dontAsk"):
-                name = "Don't ask"
-                description = description ?? "Deny actions requiring permission instead of asking for approval."
             default:
                 break
             }
+            guard runtimeKind.supportsPermission(id) else { continue }
             result[id] = SessionOptionMetadata(name: name, description: description)
         }
         return result

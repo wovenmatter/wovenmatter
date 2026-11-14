@@ -14,18 +14,8 @@ extension MobileModel {
       guard let query = arguments["query"] as? String else { throw QuickChatSearchError.invalidQuery }
       let limit = (arguments["numResults"] as? NSNumber)?.intValue ?? 5
       result = try await service.search(query, limit: limit)
-      quickChatSearchResults[conversationID, default: []].formUnion(QuickChatWebReadProvenance.resultURLs(result))
     }
     return try Self.toolJSON(["content": [["type": "text", "text": result]]])
-  }
-}
-
-extension MobileModel {
-  /// Addresses from the user's own messages, including the pending prompt, or from this chat's searches.
-  func quickChatWebReadExpected(_ address: String, conversationID: String) -> Bool {
-    let userMessages = (state.transcripts[conversationID]?.messages ?? []).filter { $0.role == "user" }.map(\.content)
-      + [executionRecords[conversationID]?.pendingInput].compactMap { $0 }
-    return QuickChatWebReadProvenance.isExpected(address, userMessages: userMessages, searchResults: quickChatSearchResults[conversationID] ?? [])
   }
 }
 

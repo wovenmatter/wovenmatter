@@ -36,11 +36,6 @@ extension MobileModel {
         conversationID: conversationID, requestID: toolCallID)
     }
     if name == "web_search" || name == "web_read" {
-      // Ask for Approval shows a model-composed address before it leaves the phone.
-      if name == "web_read", let address = arguments["url"] as? String, !quickChatWebReadExpected(address, conversationID: conversationID) {
-        try await requireDeviceApproval(id: toolCallID, conversationID: conversationID, title: "Read this webpage?",
-          detail: "Quick Chat chose an address that you didn’t provide and no search returned. The search provider will fetch exactly:\n" + address)
-      }
       return try await performQuickChatSearch(arguments, conversationID: conversationID, reading: name == "web_read")
     }
     let output: String
@@ -88,30 +83,6 @@ extension MobileModel {
     }
     visit(root, prefix: "", depth: 0)
     return result.sorted { $0.path.localizedStandardCompare($1.path) == .orderedAscending }
-  }
-  func requireDeviceApproval(id: String, conversationID: String, title: String, detail: String) async throws {
-    try Task.checkCancellation()
-    if let record = executionRecords[conversationID], (record.permissionMode ?? .defaultMode) == .full { return }
-    let token = UUID().uuidString
-    let cancelWait: @MainActor @Sendable () -> Void = { [weak self] in
-      self?.cancelDeviceApproval(id, token: token)
-    }
-    let outcome = await withTaskCancellationHandler {
-      await withCheckedContinuation { (continuation: CheckedContinuation<LocalApprovalOutcome, Never>) in
-        guard !Task.isCancelled else { continuation.resume(returning: .withdrawn); return }
-        localApprovals[id] = .init(token: token, conversationID: conversationID, continuation: continuation)
-        localPending.append(.init(id: id, conversationID: conversationID, runID: executionRecords[conversationID]?.runID,
-          kind: .approval, title: title, detail: detail, options: [.init(id: "allow", label: "Allow once"), .init(id: "deny", label: "Don’t allow")]))
-      }
-    } onCancel: { [cancelWait] in
-      Task { @MainActor [cancelWait] in cancelWait() }
-    }
-    try Task.checkCancellation()
-    switch outcome {
-    case .allowed: return
-    case .declined: throw DeviceExecutionError.unavailable("The user declined this tool action.")
-    case .withdrawn: throw CancellationError()
-    }
   }
   func askDeviceQuestion(id: String, conversationID: String, question: String) async throws -> String {
     let token = UUID().uuidString

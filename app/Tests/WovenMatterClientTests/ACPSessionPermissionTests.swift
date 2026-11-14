@@ -16,11 +16,11 @@ struct ACPSessionPermissionTests {
 
     @Test(arguments: [String?.none, "existing-parent"])
     func earlyConfigurationUpdatesWaitForSessionIdentity(existingID: String?) async throws {
-        let parent = notification(configuration(permission: "default").merging(["sessionUpdate": "config_option_update"]) { _, new in new }, session: existingID ?? "permission-session")
-        let child = notification(configuration(permission: "full").merging(["sessionUpdate": "config_option_update"]) { _, new in new }, session: "child-session")
+        let parent = notification(configuration(permission: "agent").merging(["sessionUpdate": "config_option_update"]) { _, new in new }, session: existingID ?? "permission-session")
+        let child = notification(configuration(permission: "agent-full-access").merging(["sessionUpdate": "config_option_update"]) { _, new in new }, session: "child-session")
         try await withClient(state: [:], existingID: existingID, sessionPrelude: parent + "\n" + child) { client, _, initialized async throws in
-            #expect(initialized.configuration.permission == "default")
-            #expect(initialized.configuration.permissionOptions == ["default", "full"])
+            #expect(initialized.configuration.permission == "agent")
+            #expect(initialized.configuration.permissionOptions == ["agent-full-access", "agent"])
             #expect(initialized.loadedExistingSession == (existingID != nil))
             #expect(await client.sessionConfiguration() == initialized.configuration)
         }
@@ -28,7 +28,7 @@ struct ACPSessionPermissionTests {
 
 
 
-    @Test(arguments: [true, false], ["plan", "dontAsk"])
+    @Test(arguments: [true, false], ["auto", "bypassPermissions"])
     func claudeSavedNativePolicyCanBeRestored(modern: Bool, saved: String) async throws {
         let options = ["default", "auto", "acceptEdits", "bypassPermissions", "plan", "dontAsk"].map {
             [modern ? "value" : "id": $0, "name": "Native " + $0]
@@ -44,32 +44,36 @@ struct ACPSessionPermissionTests {
             #expect(initialized.configuration.permission == "default")
             let restored = try await client.setSessionPermission(saved)
             #expect(restored.permission == saved)
-            // Full access first, auto-approve modes next, Ask for approval last.
-            #expect(restored.permissionOptions == ["bypassPermissions", "auto", "acceptEdits", "plan", "dontAsk", "default"])
+            // Only Full access and Auto are offered; Ask for approval, plan and the rest are not.
+            #expect(restored.permissionOptions == ["bypassPermissions", "auto"])
+            #expect(restored.permissionOptionMetadata["default"] == nil && restored.permissionOptionMetadata["plan"] == nil)
             #expect(try await client.setSessionPermission(saved).permission == saved)
+            for removed in ["default", "acceptEdits", "plan", "dontAsk"] {
+                await #expect(throws: LocalACPClientError.self) { try await client.setSessionPermission(removed) }
+            }
             #expect(try fixture.requests(method: modern ? "session/set_config_option" : "session/set_mode").count == 1)
         }
     }
 
     @Test func notificationsPreserveCommandsAndAuthoritativeModelClamp() async throws {
-        let clamped = configuration(permission: "default", model: "changed-model")
-        let update = notification(["sessionUpdate": "current_mode_update", "currentModeId": "full"])
+        let clamped = configuration(permission: "agent", model: "changed-model")
+        let update = notification(["sessionUpdate": "current_mode_update", "currentModeId": "agent-full-access"])
         let commands = notification(["sessionUpdate": "available_commands_update", "availableCommands": [["name": "review"]]])
-        try await withClient(state: configuration(permission: "default"), handlers: [
-            "session/set_config_option": update + "\n" + respond(configuration(permission: "full")),
+        try await withClient(state: configuration(permission: "agent"), handlers: [
+            "session/set_config_option": update + "\n" + respond(configuration(permission: "agent-full-access")),
             "session/prompt": commands + "\n" + notification(clamped.merging(["sessionUpdate": "config_option_update"]) { _, new in new })
                 + "\n" + respond(["stopReason": "end_turn"]),
         ]) { client, _, _ async throws in
             let snapshots = PermissionSnapshots()
             await client.setConfigurationHandler { await snapshots.append($0) }
-            _ = try await client.setSessionPermission("full")
-            #expect(await snapshots.values().map(\.permission) == ["default", "full"])
+            _ = try await client.setSessionPermission("agent-full-access")
+            #expect(await snapshots.values().map(\.permission) == ["agent", "agent-full-access"])
             _ = try await client.prompt(.init(text: "fixture"))
             let result = await client.sessionConfiguration()
-            #expect(result.permission == "default")
+            #expect(result.permission == "agent")
             #expect(result.model == "changed-model")
             #expect(result.slashCommands.map(\.name) == ["review"])
-            #expect(await snapshots.values().map(\.permission) == ["default", "full", "full", "default"])
+            #expect(await snapshots.values().map(\.permission) == ["agent", "agent-full-access", "agent-full-access", "agent"])
         }
     }
 
@@ -98,11 +102,11 @@ struct ACPSessionPermissionTests {
     }
 
     @Test func fullRootWorkspaceCannotSilentlyAcceptClampedPermission() async throws {
-        let state = configuration(permission: "default")
+        let state = configuration(permission: "agent")
         let fixture = try PermissionFixture(kind: .codex, state: state,
             handlers: ["session/set_config_option": respond(state)], sessionPrelude: "")
         defer { try? FileManager.default.removeItem(at: fixture.root) }
-        let client = try fixture.client(requestedPermission: "full", environment: ["WOVENMATTER_HOST_ACCESS_MODE": "fullRoot"])
+        let client = try fixture.client(requestedPermission: "agent-full-access", environment: ["WOVENMATTER_HOST_ACCESS_MODE": "fullRoot"])
         do {
             await #expect(throws: LocalACPClientError.self) {
                 try await client.initializeSession(workingDirectory: fixture.root, existingSessionID: nil, title: nil)
@@ -151,12 +155,12 @@ struct ACPSessionPermissionTests {
         try await withClient(state: state) { _, fixture, initialized async throws in
             let value = initialized.configuration
             #expect(value.permission == "agent")
-            #expect(value.permissionOptions == ["agent-full-access", "agent", "read-only", "future-policy"])
-            #expect(value.permissionOptionMetadata["read-only"]?.name == "Read only")
+            // Read only and unknown native modes are not offered.
+            #expect(value.permissionOptions == ["agent-full-access", "agent"])
+            #expect(value.permissionOptionMetadata["read-only"] == nil)
             #expect(value.permissionOptionMetadata["agent"]?.name == "Approve for me")
             #expect(value.permissionOptionMetadata["agent-full-access"]?.name == "Full access")
-            #expect(value.permissionOptionMetadata["future-policy"]?.name == "Native future mode")
-            #expect(value.permissionOptionMetadata["future-policy"]?.description == "Native future behavior")
+            #expect(value.permissionOptionMetadata["future-policy"] == nil)
             #expect(try fixture.requests(method: "session/set_config_option").isEmpty)
             #expect(try fixture.requests(method: "session/set_mode").isEmpty)
         }
@@ -167,7 +171,7 @@ struct ACPSessionPermissionTests {
     // this response does not carry the older _meta.kind classification.
 
     @Test func nativeErrorAndUnknownValuesNeverEscalate() async throws {
-        try await withClient(state: configuration(permission: "default"), handlers: [
+        try await withClient(state: configuration(permission: "agent"), handlers: [
             "session/set_config_option": #"printf '{"jsonrpc":"2.0","id":%s,"error":{"code":-32602,"message":"Policy rejects full"}}\n' "$id""#,
         ]) { client, fixture, _ async throws in
             do {
@@ -176,23 +180,23 @@ struct ACPSessionPermissionTests {
             } catch LocalACPClientError.invalidConfigurationValue { }
             #expect(try fixture.requests(method: "session/set_config_option").isEmpty)
             do {
-                _ = try await client.setSessionPermission("full")
+                _ = try await client.setSessionPermission("agent-full-access")
                 Issue.record("A rejected native change was accepted")
             } catch LocalACPClientError.agent(let code, _) { #expect(code == -32602) }
-            #expect(await client.sessionConfiguration().permission == "default")
+            #expect(await client.sessionConfiguration().permission == "agent")
         }
     }
 
     @Test func foreignConfigurationCannotConfirmPermissionChange() async throws {
-        let childMode = notification(["sessionUpdate": "current_mode_update", "currentModeId": "full"], session: "child-session")
-        let childOptions = notification(configuration(permission: "full").merging(["sessionUpdate": "config_option_update"]) { _, new in new }, session: "child-session")
-        try await withClient(state: configuration(permission: "default"), handlers: [
+        let childMode = notification(["sessionUpdate": "current_mode_update", "currentModeId": "agent-full-access"], session: "child-session")
+        let childOptions = notification(configuration(permission: "agent-full-access").merging(["sessionUpdate": "config_option_update"]) { _, new in new }, session: "child-session")
+        try await withClient(state: configuration(permission: "agent"), handlers: [
             "session/set_config_option": childMode + "\n" + childOptions + "\n" + respond([:]),
         ]) { client, _, initialized async throws in
             let snapshots = PermissionSnapshots()
             await client.setConfigurationHandler { await snapshots.append($0) }
             do {
-                _ = try await client.setSessionPermission("full")
+                _ = try await client.setSessionPermission("agent-full-access")
                 Issue.record("A child session's mode falsely confirmed the parent setter")
             } catch LocalACPClientError.configurationNotConfirmed { }
             #expect(await client.sessionConfiguration() == initialized.configuration)
@@ -201,7 +205,7 @@ struct ACPSessionPermissionTests {
     }
 
 
-    @Test(arguments: [String?.none, "default", "auto", "bypassPermissions"])
+    @Test(arguments: [String?.none, "auto", "bypassPermissions"])
     func grokLaunchPolicyRequiresReconnectAndPreservesNativeSession(permission: String?) async throws {
         try await withClient(kind: .grokBuild, state: configuration(permission: "unused"),
             existingID: "existing-grok", requestedPermission: permission) { client, fixture, initialized async throws in
@@ -216,7 +220,7 @@ struct ACPSessionPermissionTests {
                 #expect(try fixture.launchArguments() == ["agent", "stdio"])
             }
             do {
-                _ = try await client.setSessionPermission(permission == "default" ? "auto" : "default")
+                _ = try await client.setSessionPermission(permission == "auto" ? "bypassPermissions" : "auto")
                 Issue.record("Grok's no-op mode setter was used as a live policy setter")
             } catch LocalACPClientError.permissionChangeRequiresRestart { }
             #expect(try fixture.requests(method: "session/new").isEmpty)
@@ -289,8 +293,8 @@ struct ACPSessionPermissionTests {
     private func configuration(permission: String, id: String = "mode", model: String = "fixture-model") -> [String: Any] {
         ["configOptions": [
             ["id": id, "category": "mode", "currentValue": permission, "options": [
-                ["value": "default", "name": "Native default label"],
-                ["value": "full", "name": "Native full label", "description": "Native full description"],
+                ["value": "agent", "name": "Native default label"],
+                ["value": "agent-full-access", "name": "Native full label", "description": "Native full description"],
             ]],
             ["id": "model", "category": "model", "currentValue": model, "options": [["value": "fixture-model"], ["value": "other"], ["value": "changed-model"]]],
             ["id": "effort", "category": "thought_level", "currentValue": "low", "options": [["value": "low"], ["value": "high"]]],

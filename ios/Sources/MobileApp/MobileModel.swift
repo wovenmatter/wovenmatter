@@ -169,7 +169,6 @@ import MobileInference
   var executionDirectory: URL?
   var executionRefreshTasks: [String: Task<Void, Never>] = [:]
   var executionCredentialStore: any InferenceCredentialUpdating = InferenceCredentialStore()
-  var quickChatSearchResults: [String: Set<String>] = [:]
   /// Web search requests; tests inject a fixture transport.
   @ObservationIgnored var searchTransport: any InferenceHTTPTransport = InferenceURLSessionTransport()
   /// Timer reminder notifications; test models and UI fixtures record them in memory so

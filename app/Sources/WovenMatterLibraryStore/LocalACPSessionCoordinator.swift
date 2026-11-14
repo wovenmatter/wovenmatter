@@ -821,6 +821,10 @@ public actor LocalACPSessionCoordinator {
                 systemPrompt: systemPrompt
             )
         }
+        if let permission, !launch.runtimeKind.supportsPermission(permission) {
+            // Only Full access and the harness's auto mode are offered.
+            throw LocalACPClientError.invalidConfigurationValue(field: "permission", value: permission)
+        }
         try ensureNoPermissionMutation(conversationID: conversationID)
         if permission != nil {
             // Configuration reads can leave a native-idle probe holding an
@@ -1678,7 +1682,9 @@ public actor LocalACPSessionCoordinator {
                 }
             }
             var configuration = initialized.configuration
-            if let permission = descriptor.permission, permission != configuration.permission {
+            if let permission = Self.startingPermission(descriptor: descriptor, configuration: configuration,
+                                                        canSetPermission: started.setPermission != nil),
+               permission != configuration.permission {
                 do {
                     guard let setPermission = started.setPermission else {
                         throw LocalACPClientError.unsupportedConfiguration("permissions")
@@ -1801,7 +1807,7 @@ public actor LocalACPSessionCoordinator {
             environmentKeysToRemove: launch.environmentKeysToRemove,
             environmentKeyPrefixesToRemove: launch.environmentKeyPrefixesToRemove,
             processWorkingDirectoryURL: launch.processWorkingDirectoryURL,
-            requestedPermission: descriptor.permission,
+            requestedPermission: Self.launchPermission(descriptor),
             wrappedCommand: launch.wrappedCommand
         )
         launch.mcpConnection = mcpConnection
@@ -1859,6 +1865,30 @@ public actor LocalACPSessionCoordinator {
         _ runtimeKind: AgentRuntimeKind
     ) -> Bool {
         runtimeKind == .codex || runtimeKind == .claudeCode
+    }
+
+    /// The saved permission when the product still offers it. A saved or native
+    /// mode it no longer offers (Ask for approval, read only, plan, …) moves to
+    /// Full access, or the harness's auto mode when the adapter withholds Full
+    /// access; an adapter that offers neither, or cannot change modes, keeps
+    /// its native mode.
+    static func startingPermission(
+        descriptor: LocalACPSessionDescriptor, configuration: LocalACPSessionConfiguration,
+        canSetPermission: Bool = true
+    ) -> String? {
+        let runtimeKind = descriptor.runtimeKind
+        if let saved = runtimeKind.supportedPermission(descriptor.permission) { return saved }
+        guard canSetPermission, let current = configuration.permission ?? descriptor.permission,
+              !runtimeKind.supportsPermission(current) else { return nil }
+        return runtimeKind.orderedPermissionOptions(configuration.permissionOptions).first
+    }
+
+    /// Grok's permission is a process flag, so an unsupported or missing choice
+    /// becomes Full access before launch rather than Grok's native ask default.
+    static func launchPermission(_ descriptor: LocalACPSessionDescriptor) -> String? {
+        let runtimeKind = descriptor.runtimeKind
+        guard runtimeKind == .grokBuild else { return descriptor.permission }
+        return runtimeKind.supportedPermission(descriptor.permission) ?? runtimeKind.fullAccessPermission
     }
 
     private func persistConfiguration(

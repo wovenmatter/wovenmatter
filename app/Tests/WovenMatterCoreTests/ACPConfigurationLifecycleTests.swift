@@ -13,7 +13,7 @@ struct ACPConfigurationLifecycleTests {
     let persistence = try PersistenceFixture(); defer { persistence.remove() }
     let database = try await persistence.openDatabase()
     let id = try await database.createFixtureLocalACPSession(runtimeKind: runtime, title: "Interrupted first prompt", ownerDeviceID: UUID())
-    let config = LocalACPSessionConfiguration(permission: "ask", permissionOptions: ["ask", "auto"])
+    let config = LocalACPSessionConfiguration(permission: runtime.fullAccessPermission, permissionOptions: runtime.supportedPermissions)
     let interruption = DraftPromptInterruption(), lease = ConfigurationTestProcessLease()
     let coordinator = LocalACPSessionCoordinator(database: database, processLease: lease, clientFactory: { _, _ in
       LocalACPSessionDriver(initializeSession: { _, existing, _, _ in
@@ -66,7 +66,7 @@ struct ACPConfigurationLifecycleTests {
         }, prompt: { _, _, _, _ in .endTurn }, configuration: { config }, setConfiguration: { _, _ in config }, cancel: {}, shutdown: {})
       })
       do {
-        _ = try await forked.updateConfiguration(conversationID: id, permission: "auto", launch: launch, workspace: workspace)
+        _ = try await forked.updateConfiguration(conversationID: id, permission: runtime.autoPermission, launch: launch, workspace: workspace)
         Issue.record("Interrupted native session identity was allowed to fork")
       } catch {
         #expect(error.localizedDescription == "The harness could not reconnect the existing session to change permissions.")
@@ -102,8 +102,8 @@ struct ACPConfigurationLifecycleTests {
     #expect(lease.holds == 0)
     #expect(prompt.shutdowns == 1)
     #expect(try await database.localACPSession(conversationID: id).nativeSessionID == "durable")
-    let changed = try await coordinator.updateConfiguration(conversationID: id, permission: "ask", launch: launch, workspace: workspace)
-    #expect(changed.permission == "ask")
+    let changed = try await coordinator.updateConfiguration(conversationID: id, permission: "bypassPermissions", launch: launch, workspace: workspace)
+    #expect(changed.permission == "bypassPermissions")
     #expect(resumed.shutdowns == 1)
     #expect(try await database.localACPSession(conversationID: id).nativeSessionID == "durable")
     await coordinator.shutdown()
@@ -114,7 +114,7 @@ struct ACPConfigurationLifecycleTests {
     let database = try await persistence.openDatabase()
     let id = try await database.createFixtureLocalACPSession(runtimeKind: .claudeCode, title: "Older Claude", ownerDeviceID: UUID())
     try await database.updateLocalACPSessionID(conversationID: id, sessionID: "older-id")
-    try await database.updateLocalACPSessionConfiguration(conversationID: id, model: nil, thinking: nil, permission: "ask")
+    try await database.updateLocalACPSessionConfiguration(conversationID: id, model: nil, thinking: nil, permission: "bypassPermissions")
     let run = try await database.beginLocalACPRun(conversationID: id, input: .init(text: "Existing prompt"))
     try await database.completeLocalACPRun(runID: run.runID)
     let driver = SelectorDriverState(expectedExistingSessionID: "older-id", sessionID: "replacement", missingExistingSession: true)
@@ -127,7 +127,7 @@ struct ACPConfigurationLifecycleTests {
       try await coordinator.updateConfiguration(conversationID: id, permission: "auto", launch: launch, workspace: workspace)
     }
     #expect(try await database.localACPSession(conversationID: id).nativeSessionID == "older-id")
-    #expect(try await database.localACPSession(conversationID: id).permission == "ask")
+    #expect(try await database.localACPSession(conversationID: id).permission == "bypassPermissions")
     #expect(driver.shutdowns == 1)
     await coordinator.shutdown()
   }
@@ -203,7 +203,7 @@ private final class SelectorDriverState: @unchecked Sendable {
       thinking: "low",
       modelOptions: ["default-model", "selected-model"],
       thinkingOptions: ["low", "high"],
-      permission: "ask", permissionOptions: ["ask", "auto"]
+      permission: "bypassPermissions", permissionOptions: ["bypassPermissions", "auto"]
     )
     current = initial
   }

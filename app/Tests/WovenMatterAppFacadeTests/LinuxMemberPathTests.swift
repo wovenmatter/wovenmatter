@@ -24,7 +24,7 @@ struct LinuxMemberPathTests {
         let fixture = try await FacadeFixture(); defer { fixture.remove() }
         let (workspace, fake) = try await enrolled(fixture)
         let scope = ApplicationModel.remoteDatabaseSourceID(fixture.remote.id)
-        fixture.model.sessionSelectionPreferences.saveDefaults(.init(model: "large", thinking: "high", permission: "read-only",
+        fixture.model.sessionSelectionPreferences.saveDefaults(.init(model: "large", thinking: "high", permission: "agent",
             tools: ["notes", "executor:fixture", "sessions"]), harness: "codex", workspace: scope)
         let root = "/srv/linked-project"
         let folder = try await fixture.store.createFolder(name: "Linked", location: .init(workspaceID: scope, rootPath: root, managed: false))
@@ -35,7 +35,7 @@ struct LinuxMemberPathTests {
         #expect(create.providerID == "codex" && create.runtimeKind == "codex" && create.folderID == folder)
         #expect(create.title == "New Codex chat")
         #expect(create.sessionOptions == LibrarySessionOptions(workingDirectory: root, model: "large", thinking: "high",
-            permission: "read-only", enabledTools: ["notes", "sessions"]))
+            permission: "agent", enabledTools: ["notes", "sessions"]))
         // The library keeps the chat in its folder, owned and run by the host.
         #expect(try await fixture.database.libraryExecutionOwner(conversationID: id) == workspace.id)
         #expect(try await fixture.database.localACPSession(conversationID: id).remoteWorkspaceID == fixture.remote.id)

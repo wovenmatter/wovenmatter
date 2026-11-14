@@ -40,6 +40,38 @@ test('full-root direct Pi sessions apply workspace permissions on creation and l
   assert.equal(calls.filter(value => value.method === 'session/set_config_option').at(-1).params.value, 'full')
 })
 
+test('an Ask session or request moves to Full access; a supported mode stays', async t => {
+  const root = mkdtempSync(join(tmpdir(), 'woven-no-ask-'))
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  const calls = [], permission = { id: 'permission_mode', currentValue: 'ask', options: [{ value: 'ask' }, { value: 'full' }] }
+  const defaultAgent = {
+    async status() { return { locked: false, epoch: 'epoch' } },
+    async invoke(value) {
+      calls.push(value)
+      if (['session/new', 'woven/adopt'].includes(value.method)) return { result: { sessionId: value.params.sessionId ?? 'session', configOptions: [permission] } }
+      if (value.method === 'session/set_config_option') {
+        permission.currentValue = value.params.value
+        return { result: { configOptions: [permission] } }
+      }
+      return { result: {} }
+    },
+    async cancelActive() {},
+  }
+  const runtime = createClientExecutionRuntime({ defaultAgent, durableACP: { async stopAll() {} }, catalog: new Map(), workspaceRoot: root,
+    configuration: loadRuntimeConfiguration({ HOME: root }) })
+  t.after(() => runtime.close())
+  const changes = () => calls.filter(value => value.method === 'session/set_config_option').map(value => value.params.value)
+  await runtime.create({ runtimeKind: 'default_agent', conversationID: randomUUID(), nativeWorkingDirectory: root, permission: 'ask' })
+  assert.deepEqual(changes(), ['full'], 'A requested Ask mode creates the session in Full access')
+  // An existing session saved in Ask moves to Full access when it is reattached.
+  permission.currentValue = 'ask'
+  await runtime.adopt({ native: { sessionID: 'earlier', nativeWorkingDirectory: root }, runtimeKind: 'default_agent' })
+  assert.deepEqual(changes(), ['full', 'full'])
+  // A session already in a supported mode is left alone.
+  await runtime.adopt({ native: { sessionID: 'current', nativeWorkingDirectory: root }, runtimeKind: 'default_agent' })
+  assert.deepEqual(changes(), ['full', 'full'])
+})
+
 test('direct clients run an actual fixture ACP process, answer approvals and replay saved output',async t=>{
   const workspaceRoot=mkdtempSync(join(tmpdir(),'wm-direct-acp-'))
   const executable=join(workspaceRoot,'fixture.mjs')

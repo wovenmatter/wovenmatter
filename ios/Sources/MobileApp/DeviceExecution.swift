@@ -5,15 +5,12 @@ import WovenMatterShared
 import MobileInference
 import PiDurableRuntime
 
-enum DevicePermissionMode: String, Codable, CaseIterable {
-  // Full access is the default and listed first; Ask stays available, listed last.
-  case full, ask
-  static let defaultMode: Self = .full
-  var label: String { self == .full ? "Full Access" : "Ask for Approval" }
-  var detail: String {
-    self == .full ? "Quick Chat edits notes, sets timers and reads webpages without approval prompts."
-      : "Ask before Quick Chat saves a change or reads a webpage you didn’t provide."
-  }
+/// Quick Chat always runs with Full Access, its only permission mode. Records
+/// saved with the former Ask for Approval mode ignore that field.
+enum DevicePermission {
+  static let id = "full"
+  static let label = "Full Access"
+  static let detail = "Quick Chat edits notes, sets timers and reads webpages without approval prompts."
 }
 
 struct DeviceConversationRecord: Codable, Equatable {
@@ -27,7 +24,6 @@ struct DeviceConversationRecord: Codable, Equatable {
   var isTrashed: Bool?
   var enabledTools: [String]?
   var thinkingLevel: String?
-  var permissionMode: DevicePermissionMode?
   var executionPolicy: PiExecutionPolicy?
   var additionalInstructions: String?
   var connectionID: String
@@ -61,7 +57,6 @@ struct DeviceAgentDefaults: Codable, Equatable {
 struct DeviceChatSettings: Codable, Equatable {
   var connection: InferenceConnection?
   var thinkingLevel: String?
-  var permissionMode: DevicePermissionMode?
   var enabledTools: [String]?
 }
 
@@ -439,7 +434,7 @@ extension MobileModel {
         let service = MobileInferenceService(connection: connection, credentials: executionCredentialStore)
         let model = try await service.model()
         executionRecords[id] = .init(id: id, title: String(text.prefix(80)), folderID: selectedFolderID,
-          enabledTools: chatSettings.enabledTools ?? defaults.enabledTools, thinkingLevel: chatSettings.thinkingLevel.flatMap { model.supportedThinkingLevels.contains($0) ? $0 : nil } ?? defaults.thinking(for: model), permissionMode: chatSettings.permissionMode, executionPolicy: defaults.executionPolicy ?? .init(), additionalInstructions: defaults.instructions, connectionID: connection.id, connection: connection, modelJSON: try model.descriptorJSON(), status: "ready", updatedAt: Self.executionTimestamp())
+          enabledTools: chatSettings.enabledTools ?? defaults.enabledTools, thinkingLevel: chatSettings.thinkingLevel.flatMap { model.supportedThinkingLevels.contains($0) ? $0 : nil } ?? defaults.thinking(for: model), executionPolicy: defaults.executionPolicy ?? .init(), additionalInstructions: defaults.instructions, connectionID: connection.id, connection: connection, modelJSON: try model.descriptorJSON(), status: "ready", updatedAt: Self.executionTimestamp())
         try persistExecutionConfiguration()
         if userInitiated { await analytics.record(.active) }
       }

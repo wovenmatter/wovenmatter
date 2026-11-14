@@ -6,7 +6,7 @@ import { spawn } from 'node:child_process'
 import { createInterface } from 'node:readline'
 import { isAbsolute, dirname, join } from 'node:path'
 import { ensureScratchDirectory } from './projects.mjs'
-import { runtimeConfiguration, workspaceExecutionConfiguration } from './config.mjs'
+import { runtimeConfiguration, workspaceExecutionConfiguration, supportedPermissions } from './config.mjs'
 
 const before = message => Object.assign(new Error(message), { beforePrompt:true })
 const values = options => (options ?? []).flatMap(o => o.value == null ? values(o.options) : [o.value])
@@ -71,7 +71,7 @@ export function createTaskExecutor({ catalog,workspaceRoot,environment,defaultAg
     if (!isAbsolute(directory) || directory.includes('\0')) throw before('The task working directory is invalid.')
     let args = [...harness.arguments]
     if (harness.id === 'grok_build' && config.permission) {
-      if (!['default','acceptEdits','auto','bypassPermissions','dontAsk'].includes(config.permission)) throw before('The saved Grok permission is unavailable.')
+      if (!supportedPermissions('grok_build').includes(config.permission)) throw before('The saved Grok permission is unavailable.')
       const index = args.indexOf('--permission-mode'); if (index >= 0) args.splice(index,2)
       args.unshift('--permission-mode',config.permission)
       const agentIndex=args.indexOf('agent');if(agentIndex>=0)args.splice(agentIndex+1,0,'--no-leader')

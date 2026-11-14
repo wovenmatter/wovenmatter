@@ -52,26 +52,37 @@ public enum AgentRuntimeKind: String, Codable, CaseIterable, Hashable, Sendable 
     }
   }
 
-  /// Presentation order for native permission modes: Full access first, then
-  /// the harness's auto-approve modes, then its other modes. The ask-for-approval
-  /// mode stays available but is listed last. Unknown modes keep native order.
-  public func orderedPermissionOptions(_ options: [String]) -> [String] {
-    func rank(_ id: String) -> Int {
-      if id == fullAccessPermission { return 0 }
-      switch (self, id) {
-      case (.codex, "agent"), (.claudeCode, "auto"), (.claudeCode, "acceptEdits"),
-           (.grokBuild, "auto"), (.grokBuild, "acceptEdits"):
-        return 1
-      case (.codex, "workspace-write"), (.claudeCode, "default"), (.grokBuild, "default"),
-           (.opencode, "ask"), (.defaultAgent, "ask"):
-        return 3
-      default:
-        return 2
-      }
+  /// The harness's native auto mode, where it has one: the harness (or its
+  /// reviewer) decides which actions run without asking.
+  public var autoPermission: String? {
+    switch self {
+    case .codex: "agent"
+    case .claudeCode, .grokBuild: "auto"
+    case .defaultAgent, .opencode: nil
     }
-    return options.enumerated()
-      .sorted { (rank($0.element), $0.offset) < (rank($1.element), $1.offset) }
-      .map(\.element)
+  }
+
+  /// The only permission modes the product offers, in presentation order: Full
+  /// access, then the harness's auto mode. Ask for approval and every other
+  /// native mode (read only, plan, deny, accept edits, …) are not offered.
+  public var supportedPermissions: [String] {
+    [fullAccessPermission, autoPermission].compactMap { $0 }
+  }
+
+  public func supportsPermission(_ id: String) -> Bool {
+    supportedPermissions.contains(id)
+  }
+
+  /// A saved choice the product still offers, or nil for a mode it no longer
+  /// does. Nil lets the product default (Full access) apply instead.
+  public func supportedPermission(_ id: String?) -> String? {
+    id.flatMap { supportsPermission($0) ? $0 : nil }
+  }
+
+  /// The native modes a session can choose: the supported modes the adapter
+  /// advertises, Full access first.
+  public func orderedPermissionOptions(_ options: [String]) -> [String] {
+    supportedPermissions.filter(options.contains)
   }
 }
 

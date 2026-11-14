@@ -109,11 +109,8 @@ extension MobileModel {
   var deviceChatThinking: String {
     selectedConversationID.flatMap { executionRecords[$0]?.thinkingLevel } ?? (selectedConversationID == nil ? draftDeviceSettings.thinkingLevel ?? deviceAgentDefaults.thinking(for: deviceChatModel) : "off")
   }
-  var deviceChatPermission: DevicePermissionMode {
-    selectedConversationID.flatMap { executionRecords[$0]?.permissionMode } ?? (selectedConversationID == nil ? draftDeviceSettings.permissionMode ?? .defaultMode : .defaultMode)
-  }
   static var devicePermissionOptions: [SessionSettingOption] {
-    DevicePermissionMode.allCases.map { .init(id: $0.rawValue, label: $0.label) }
+    [.init(id: DevicePermission.id, label: DevicePermission.label)]
   }
   var deviceChatTools: [String] {
     let enabled = selectedConversationID.flatMap { executionRecords[$0]?.enabledTools } ?? (selectedConversationID == nil ? draftDeviceSettings.enabledTools ?? deviceAgentDefaults.enabledTools : nil)
@@ -128,7 +125,7 @@ extension MobileModel {
   }
 
   /// Session changes never edit the account's saved defaults or another conversation.
-  func configureDeviceChat(connection: InferenceConnection? = nil, thinking: String? = nil, permission: DevicePermissionMode? = nil, tools: [String]? = nil, conversationID: String? = nil) async throws {
+  func configureDeviceChat(connection: InferenceConnection? = nil, thinking: String? = nil, tools: [String]? = nil, conversationID: String? = nil) async throws {
     let id = conversationID ?? selectedConversationID
     guard canConfigureDeviceChat(id) else { throw DeviceExecutionError.unavailable("Finish or stop this run before changing its settings.") }
     let workspaceID = selectedExecutionWorkspaceID, agentID = providerID
@@ -151,7 +148,6 @@ extension MobileModel {
       if let connection, let selected { record.connectionID = connection.id; record.connection = connection; record.modelJSON = try selected.descriptorJSON() }
       if let thinking { record.thinkingLevel = thinking }
       if selected?.supportedThinkingLevels.contains(record.thinkingLevel ?? "off") != true { record.thinkingLevel = deviceAgentDefaults.thinking(for: selected) }
-      if let permission { record.permissionMode = permission }
       if let tools { record.enabledTools = tools }
       executionRecords[id] = record
       do { try persistExecutionConfiguration() } catch { executionRecords[id] = previous; throw error }
@@ -161,7 +157,6 @@ extension MobileModel {
       if let connection { draftDeviceSettings.connection = connection }
       if let thinking { draftDeviceSettings.thinkingLevel = thinking }
       if selected?.supportedThinkingLevels.contains(draftDeviceSettings.thinkingLevel ?? "") != true { draftDeviceSettings.thinkingLevel = deviceAgentDefaults.thinking(for: selected) }
-      if let permission { draftDeviceSettings.permissionMode = permission }
       if let tools { draftDeviceSettings.enabledTools = tools }
       do { try persistExecutionConfiguration() } catch { draftDeviceSettings = previous; throw error }
     }
