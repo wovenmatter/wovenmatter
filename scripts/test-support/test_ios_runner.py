@@ -96,22 +96,35 @@ class IOSRunnerTests(unittest.TestCase):
     def test_both_devices_have_separate_result_bundles(self):
         result, calls = self.run_script('--all-devices')
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual([call[:3] for call in calls[:10]], [
-            ['swift', 'test', '--package-path'], ['xcrun', 'simctl', 'create'],
-            ['xcrun', 'simctl', 'boot'], ['xcrun', 'simctl', 'bootstatus'],
-            ['xcrun', '--find', 'simctl'], ['Simulator', '-CurrentDeviceUDID', 'fixture-simulator'],
-            ['xcodebuild', '-project', str(ROOT / 'ios/WovenMatter.xcodeproj')],
-            ['xcrun', 'simctl', 'shutdown'], ['xcrun', 'simctl', 'delete'], ['SimulatorExit']])
-        self.assertIn('-b', calls[3])
-        self.assertIn('-resultBundlePath', calls[6])
-        self.assertNotIn('-only-testing:MobileAppTests', calls[6])
+        # The two devices run at the same time, so their calls interleave.
+        # Each takes the same steps in the same order, once per device.
+        steps = [['xcrun', 'simctl', 'create'], ['xcrun', 'simctl', 'boot'], ['xcrun', 'simctl', 'bootstatus'],
+                 ['xcrun', '--find', 'simctl'], ['Simulator', '-CurrentDeviceUDID', 'fixture-simulator'],
+                 ['xcodebuild', '-project', str(ROOT / 'ios/WovenMatter.xcodeproj')],
+                 ['xcrun', 'simctl', 'shutdown'], ['xcrun', 'simctl', 'delete'], ['SimulatorExit']]
+        kinds = [call[:3] for call in calls]
+        self.assertEqual(kinds[0], ['swift', 'test', '--package-path'])
+        self.assertEqual(kinds.count(['swift', 'test', '--package-path']), 1)
+        for step in steps:
+            self.assertEqual(kinds.count(step), 2, step)
+        # A device never starts a step before both have started the one before it,
+        # except the last three, which each device reaches when its own tests end.
+        first = [kinds.index(step) for step in steps]
+        self.assertEqual(first, sorted(first))
+        for call in calls:
+            if call[:3] == ['xcrun', 'simctl', 'bootstatus']:
+                self.assertIn('-b', call)
+            if call[0] == 'xcodebuild':
+                self.assertIn('-resultBundlePath', call)
+                self.assertNotIn('-only-testing:MobileAppTests', call)
         builds = [call for call in calls if call[0] == 'xcodebuild']
         self.assertEqual(len(builds), 2)
         paths = [call[call.index('-resultBundlePath') + 1] for call in builds]
         self.assertEqual(len(set(paths)), 2)
         creates = [call for call in calls if call[:3] == ['xcrun', 'simctl', 'create']]
-        self.assertIn('com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro', creates[0])
-        self.assertIn('com.apple.CoreSimulator.SimDeviceType.iPad-Pro-11-inch-M4-8GB', creates[1])
+        types = {value for call in creates for value in call if value.startswith('com.apple.CoreSimulator.SimDeviceType.')}
+        self.assertEqual(types, {'com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro',
+                                 'com.apple.CoreSimulator.SimDeviceType.iPad-Pro-11-inch-M4-8GB'})
 
 
 if __name__ == '__main__':
