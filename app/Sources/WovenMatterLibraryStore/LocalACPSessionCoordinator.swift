@@ -1008,17 +1008,6 @@ public actor LocalACPSessionCoordinator {
         }
     }
 
-    // Called only after typed, fenced recovery confirms this exact native
-    // session is idle and its durable runs have been reconciled.
-    private func confirmRecoveredStop(
-        conversationID: String, nativeSessionID: String, remoteWorkspaceID: UUID?
-    ) {
-        guard let failed = failedStopSessionIDs[conversationID],
-              failed.nativeSessionID == nativeSessionID,
-              failed.remoteWorkspaceID == remoteWorkspaceID else { return }
-        failedStopSessionIDs.removeValue(forKey: conversationID)
-    }
-
     @discardableResult
     public func sendActiveInput(
         conversationID: String,

@@ -329,36 +329,6 @@ struct LocalBackendSupervisor {
     }
 }
 
-/// A failed restart must restore the prior mode and execution owner. Dependencies
-/// are injected so failure paths can be tested without changing login jobs.
-@MainActor
-enum LocalExecutionTransition {
-    static func perform(prepare: () async throws -> Void,
-                        commit: () throws -> Void,
-                        relaunch: () throws -> Void,
-                        rollback: () throws -> Void,
-                        recover: () async throws -> Void) async throws {
-        var committed = false
-        do {
-            try await prepare()
-            try commit()
-            committed = true
-            try relaunch()
-        } catch {
-            let original = error
-            var failures: [String] = []
-            if committed {
-                do { try rollback() } catch { failures.append(error.localizedDescription) }
-            }
-            do { try await recover() } catch { failures.append(error.localizedDescription) }
-            if failures.isEmpty { throw original }
-            throw NSError(domain: "BackgroundExecution", code: 3, userInfo: [
-                NSLocalizedDescriptionKey: original.localizedDescription + " Recovery failed: " + failures.joined(separator: "; ")
-            ])
-        }
-    }
-}
-
 /// Captured once at startup; a running process keeps its ownership role.
 /// Isolated test hosts and the backend share the execution lease name.
 enum LocalExecutionRole: String {

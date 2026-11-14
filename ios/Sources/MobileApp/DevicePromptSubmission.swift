@@ -12,13 +12,6 @@ extension MobileModel {
   /// acceptance separately from run completion; the SDK's stable request ID makes
   /// a crash around submit recoverable without a duplicate turn. Delivery never
   /// changes the user's open chat or draft.
-  func submitDevicePrompt(sessionID: String, requestID: String, text: String) async throws -> MobileToolSubmission {
-    try Task.checkCancellation()
-    guard let store, executionRecords[sessionID]?.quickChatVersion == 1, executionRecords[sessionID]?.isTrashed != true else { throw WorkspaceToolError.notFound("This chat is not a Quick Chat on this device.") }
-    let job = try await store.enqueueToolSubmission(id: requestID, sessionID: sessionID, text: text)
-    if job.state == "queued" { try await startDeviceToolSubmission(job) }
-    return await store.toolSubmission(requestID: requestID) ?? job
-  }
   private func startDeviceToolSubmission(_ job: MobileToolSubmission) async throws {
     try Task.checkCancellation()
     guard let store, let record = executionRecords[job.sessionID], record.quickChatVersion == 1, record.isTrashed != true else { throw WorkspaceToolError.notFound("The Quick Chat is no longer available.") }

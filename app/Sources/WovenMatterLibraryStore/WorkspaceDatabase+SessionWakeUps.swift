@@ -120,10 +120,6 @@ extension WorkspaceDatabase {
     }
   }
 
-  public func removeSessionWakeUps(callerID: String) async throws {
-    try await write { try $0.toolsExecuteUnlocked("DELETE FROM member_session_wakeups WHERE caller_id=?", [callerID]) }
-  }
-
   /// Whether a calling conversation still exists here.
   public func sessionWakeUpCallerExists(_ id: String) async throws -> Bool {
     try await read { !(try $0.historyRowsUnlocked("SELECT 1 FROM conversations WHERE id=? AND deleted_at IS NULL", values: [id])).isEmpty }

@@ -8,7 +8,6 @@ extension MobileModel {
   static var deviceToolGroups: [WorkspaceToolGroup] { QuickChatCapabilities.groups }
   static func deviceToolSelectionID(_ group: WorkspaceToolGroup) -> String { "woven_" + group.rawValue }
   static var deviceToolAccessOptions: [SessionSettingOption] { QuickChatCapabilities.options }
-  static func migratedDeviceToolSelection(_ selection: [String]?) -> [String]? { MobileToolSupport.migratedMCPSelection(selection) }
   static func deviceToolEnabled(_ name: String, selection: [String]?) -> Bool { QuickChatCapabilities.enabled(name, selection: selection) }
   static var deviceMCPTools: [[String: Any]] {
     WovenMCPCatalog.tools.filter { QuickChatCapabilities.toolNames.contains($0.name) }.compactMap { definition in
@@ -73,5 +72,4 @@ extension MobileModel {
     } catch { response = MobileToolSupport.response(error: error, requestID: id) }
     return String(decoding: try JSONEncoder().encode(WovenMCPCatalog.result(response)), as: UTF8.self)
   }
-  func deviceTokenUsage(_ runtime: PiDurableRuntime) async throws -> Int64? { try await runtime.tokenUsage() }
 }

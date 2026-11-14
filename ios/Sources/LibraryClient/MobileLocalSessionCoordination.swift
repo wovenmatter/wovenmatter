@@ -35,19 +35,4 @@ extension MobileStore {
     }
     return relation
   }
-  public func changeLocalSessionCoordination(callerID: String, targetID: String, localExecutionIDs: Set<String>, epoch: String,
-    enabled: Bool?, requestID: String) throws -> JSONValue {
-    try Task.checkCancellation()
-    guard localExecutionIDs.contains(callerID), localExecutionIDs.contains(targetID) else { throw WorkspaceToolError.invalid("Both sessions must execute on this device.") }
-    let arguments = [targetID, epoch, enabled.map(String.init) ?? "release"], key = callerID + ":" + requestID
-    if let receipt = state.toolReceipts?[key] { guard receipt.arguments == arguments else { throw WorkspaceToolError.invalid("Request ID reused.") }; return receipt.response.result ?? .null }
-    guard var relation = state.localToolCoordinations?[targetID], relation.coordinatorID == callerID, relation.epoch == epoch else { throw WorkspaceToolError.accessRequired(targetID) }
-    let result: JSONValue = .object(["id": .string(targetID), "epoch": .string(epoch), "released": .bool(enabled == nil)])
-    try transaction { next in
-      if let enabled { relation.notifications = enabled; next.localToolCoordinations?[targetID] = relation }
-      else { next.localToolCoordinations?.removeValue(forKey: targetID) }
-      var receipts = next.toolReceipts ?? [:]; receipts[key] = .init(requestID: requestID, sessionID: callerID, arguments: arguments, response: .init(result: result)); next.toolReceipts = receipts
-    }
-    return result
-  }
 }

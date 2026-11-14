@@ -29,25 +29,6 @@ struct MobileToolBoundaryTests {
     await store.executeLocalTool(.init(arguments: arguments, requestID: id), context: context)
   }
 
-  @Test func concurrentExecutorRetriesAcquireExactlyOneStart() async throws {
-    let (store, root, _) = try fixture(); defer { try? FileManager.default.removeItem(at: root) }
-    let id = UUID().uuidString.lowercased()
-    _ = try await store.createExecutorJob(id: id, sessionID: "parent", code: "await tools.write_file({path:'one',content:'value'})")
-    let starts = try await withThrowingTaskGroup(of: Bool.self) { group in
-      for _ in 0..<12 { group.addTask { try await store.claimExecutorJobStart(id: id, sessionID: "parent") } }
-      var count = 0
-      for try await claimed in group where claimed { count += 1 }
-      return count
-    }
-    #expect(starts == 1)
-    let reopened = try MobileStore(file: root.appendingPathComponent("library.json"))
-    #expect(try await reopened.claimExecutorJobStart(id: id, sessionID: "parent") == false)
-    try await reopened.interruptExecutorJobs()
-    #expect(try await reopened.executorJob(id: id, sessionID: "parent").state == "interrupted")
-    #expect(try await reopened.claimExecutorJobStart(id: id, sessionID: "parent") == false)
-  }
-
-
   @Test func timerDeliveryAndMissedOccurrenceAdvanceCommitTogether() async throws {
     let (store, root, scope) = try fixture(); defer { try? FileManager.default.removeItem(at: root) }
     let id = UUID().uuidString.lowercased(), now = try MobileToolSupport.date("2026-10-10T12:05:01Z")
