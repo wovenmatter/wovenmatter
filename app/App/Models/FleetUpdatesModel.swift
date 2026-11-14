@@ -405,6 +405,8 @@ final class FleetUpdatesModel {
             await perform(step)
         }
         for harness in harnessTargets(for: request) {
+            // A Linux download that couldn't be checked was reported before the review.
+            if case .workspace = harness.location, case .runtime = harness.kind, previews[harness.id] == nil { continue }
             currentItem = harness.id
             current = "Updating \(harness.name) on \(workspaceName(harness.location))…"
             if let failure = await update(harness, preview: previews[harness.id]) {
@@ -447,13 +449,7 @@ final class FleetUpdatesModel {
                 }
             }
         case .thisMacApp:
-            let thisMac = model.bots.thisMachine?.id
-            return plan.filter { step in
-                switch step {
-                case .engine(let id, _), .bots(let id, _): id == thisMac
-                default: false
-                }
-            } + [.thisMacApp]
+            return [.thisMacApp]
         case .device(let machineID):
             var steps = plan.filter { step in
                 switch step {
