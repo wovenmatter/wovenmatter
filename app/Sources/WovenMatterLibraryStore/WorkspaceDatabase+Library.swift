@@ -29,7 +29,7 @@ extension WorkspaceDatabaseConnection {
           conversation_id TEXT NOT NULL, kind TEXT NOT NULL,title TEXT NOT NULL,source TEXT NOT NULL,
           content_hash TEXT,mime_type TEXT,size_bytes INTEGER,storage TEXT NOT NULL,error TEXT,
           retry_at TEXT, UNIQUE(message_id,source));
-        CREATE INDEX IF NOT EXISTS library_items_message ON library_items(message_id);
+        -- Lookups by message use the UNIQUE(message_id,source) index.
         CREATE INDEX IF NOT EXISTS library_items_conversation ON library_items(conversation_id);
         CREATE INDEX IF NOT EXISTS library_items_pending ON library_items(storage,retry_at);
         CREATE TABLE IF NOT EXISTS library_locations(

@@ -719,14 +719,6 @@ final class UsageStore {
         ON usage_events(timestamp, event_id);
       CREATE INDEX IF NOT EXISTS usage_events_source
         ON usage_events(source_id, timestamp);
-      CREATE INDEX IF NOT EXISTS usage_events_model
-        ON usage_events(model_family, timestamp);
-      CREATE INDEX IF NOT EXISTS usage_events_route
-        ON usage_events(billing_route, timestamp);
-      CREATE INDEX IF NOT EXISTS usage_events_harness
-        ON usage_events(harness, timestamp);
-      CREATE INDEX IF NOT EXISTS usage_events_dedupe
-        ON usage_events(dedupe_key) WHERE dedupe_key IS NOT NULL;
       CREATE TABLE IF NOT EXISTS usage_metadata (
         key TEXT PRIMARY KEY,
         value TEXT NOT NULL

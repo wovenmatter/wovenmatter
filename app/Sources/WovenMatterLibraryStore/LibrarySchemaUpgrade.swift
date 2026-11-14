@@ -150,6 +150,9 @@ extension WorkspaceDatabaseConnection {
     "usage_events_model_idx", "usage_events_route_idx", "usage_events_source_idx",
     // Indexes over columns the conversion renames or moves.
     "bot_conversation_entries_conversation", "calendar_items_due", "calendar_runs_event",
+    // Indexes no query uses: a prefix of library_items' UNIQUE(message_id,source)
+    // index, and usage filters that only read by time and source.
+    "library_items_message", "usage_events_harness", "usage_events_model", "usage_events_route", "usage_events_dedupe",
   ]
 
   /// Columns renamed in place, by their table's current name.
