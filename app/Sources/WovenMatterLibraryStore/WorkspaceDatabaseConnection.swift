@@ -91,8 +91,9 @@ final class WorkspaceDatabaseConnection {
       if converted, (try? execute("VACUUM")) != nil { try? execute("PRAGMA wal_checkpoint(TRUNCATE)") }
       else { try? withLock { try reclaimFreeSpaceUnlocked() } }
       // Planner statistics for the tables that have grown, within SQLite's
-      // own bound for a connection that stays open.
-      try? execute("PRAGMA optimize = 0x10002")
+      // own bound for a connection that stays open. SQLite before 3.46 has
+      // no such bound, so there statistics come only from the close below.
+      if sqlite3_libversion_number() >= 3_046_000 { try? execute("PRAGMA optimize = 0x10002") }
     } catch {
       sqlite3_close(database)
       connection = nil
@@ -115,6 +116,13 @@ final class WorkspaceDatabaseConnection {
     guard sqlite3_prepare_v2(target, "PRAGMA integrity_check", -1, &check, nil) == SQLITE_OK, let check else { throw WorkspaceDatabaseError.corruptRow }
     defer { sqlite3_finalize(check) }
     guard sqlite3_step(check) == SQLITE_ROW, let result = sqlite3_column_text(check, 0), String(cString: result) == "ok" else { throw WorkspaceDatabaseError.corruptRow }
+  }
+
+  /// A consistent copy of this connection's library, WAL included, made
+  /// with SQLite's backup and verified.
+  func copyLibraryUnlocked(to url: URL) throws {
+    try Self.copyMainDatabase(from: connection, to: url, openFailure: "Could not create the library copy.",
+      copyFailure: "Could not copy the library.", incompleteFailure: "The library copy did not complete.")
   }
 
   deinit {

@@ -154,7 +154,8 @@ import WovenMatterCore
     #expect(try await row(library, "SELECT json_extract(payload,'$.row.native_session_id.value') AS value FROM peer_sync_versions WHERE table_name='runs' AND record_key=?", "[\"\(runID)\"]")["value"]?.stringValue == "native-session-1")
     #expect(try await row(library, "SELECT json_extract(payload,'$.row.is_archived.value') AS value FROM peer_sync_versions WHERE table_name='conversations' AND record_key='[\"platform-chat\"]'")["value"]?.stringValue == "1")
     #expect(try await rows(library, "SELECT table_name FROM peer_sync_seeded WHERE table_name LIKE 'dashboard%' OR table_name LIKE 'desktop%' OR table_name LIKE 'workspace%' OR table_name LIKE 'paired%' OR table_name='profiles'").isEmpty)
-    #expect(try await rows(library, "SELECT name FROM peer_sync_state").isEmpty)
+    // v0.4.2's one-time markers are gone; what remains says what this build reads.
+    #expect(try await rows(library, "SELECT name FROM peer_sync_state").compactMap { $0["name"]?.stringValue } == ["understands"])
 
     // A Linux host's and an iPhone's transcripts are their rows now, and read
     // back exactly as v0.4.2 served them. The legacy tool row the iPhone
@@ -255,9 +256,10 @@ import WovenMatterCore
     _ = try UsageStore(databaseURL: upgraded.databaseURL)
     let library = try await WorkspaceDatabase(url: upgraded.databaseURL)
 
-    let schedule = try await row(library, "SELECT next_fire_at,task_session_id,item_updated_at FROM calendar_schedules WHERE item_id='cal-1'")
+    let schedule = try await row(library, "SELECT next_fire_at,task_session_id,item_definition FROM calendar_schedules WHERE item_id='cal-1'")
     #expect(schedule["next_fire_at"]?.doubleValue == 1767344400.5 && schedule["task_session_id"]?.stringValue == "task-session")
-    #expect(schedule["item_updated_at"]?.stringValue == "2026-01-01T08:00:00.000Z")
+    // The schedule is for the item as it is, so opening it does not reschedule.
+    #expect(schedule["item_definition"]?.stringValue == #"["2026-01-02T09:00:00.000Z",0,0,[],null,null,null,null]"#)
     let item = try await rows(library, "SELECT payload FROM peer_sync_versions WHERE table_name='calendar_items' AND record_key='[\"cal-1\"]'")
     #expect(item.count == 1)
     #expect(item.first?["payload"]?.stringValue?.contains("next_fire_at") == false)
@@ -318,14 +320,16 @@ import WovenMatterCore
     let copy = WorkspaceDatabaseConnection.libraryBackupDirectory(for: upgraded.databaseURL)
       .appending(path: "before-library-version-\(WorkspaceDatabaseConnection.librarySchemaVersion).sqlite")
     do {
-      _ = try UsageStore(databaseURL: upgraded.databaseURL); _ = try UsageStore(databaseURL: fresh.databaseURL)
+      // The usage index is open, as in the app, while the library converts.
+      let usage = try UsageStore(databaseURL: upgraded.databaseURL); _ = try UsageStore(databaseURL: fresh.databaseURL)
       _ = try await WorkspaceDatabase(url: upgraded.databaseURL); _ = try await WorkspaceDatabase(url: fresh.databaseURL)
+      withExtendedLifetime(usage) {}
     }
     // The copy is the library as v0.4.2 left it.
     #expect(try scalar(copy, "PRAGMA user_version") == 0)
     #expect(try scalar(copy, "SELECT count(*) FROM sqlite_master WHERE name='dashboard_conversations'") == 1)
     #expect(try scalar(copy, "SELECT count(*) FROM dashboard_runs") == 5)
-    #expect(try scalar(copy, "PRAGMA quick_check") == 0)
+    #expect(try scalar(copy, "SELECT count(*) FROM pragma_quick_check WHERE quick_check='ok'") == 1)
     // A new library has nothing to copy.
     #expect(!FileManager.default.fileExists(atPath: WorkspaceDatabaseConnection.libraryBackupDirectory(for: fresh.databaseURL).path))
     for library in [upgraded, fresh] { #expect(try scalar(library.databaseURL, "PRAGMA auto_vacuum") == 2) }
@@ -505,8 +509,7 @@ import WovenMatterCore
     return try JSONDecoder().decode(LibraryTranscript.self, from: Data(bytes: bytes, count: Int(sqlite3_column_bytes(statement, 0))))
   }
 
-  /// The first column of `sql`'s first row, read through a plain connection;
-  /// a text result (`quick_check`'s "ok") reads as 0.
+  /// The integer in the first column of `sql`'s first row, read through a plain connection.
   private func scalar(_ url: URL, _ sql: String) throws -> Int {
     var connection: OpaquePointer?
     guard sqlite3_open_v2(url.path, &connection, SQLITE_OPEN_READWRITE, nil) == SQLITE_OK, let connection else { throw WorkspaceDatabaseError.open(url.path) }

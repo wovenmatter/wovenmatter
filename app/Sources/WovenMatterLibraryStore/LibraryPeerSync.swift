@@ -507,6 +507,12 @@ public actor LibraryPeerSync {
     offline(member, error)
   }
 
+  /// Applies waiting records whose bytes have arrived, or that an update
+  /// made readable, each checked against the member it came from.
+  public func materializePending() async throws {
+    try await database.materializePendingPeerRecords(senders: senders())
+  }
+
   /// Every current Mac and Linux member as a sender, by device ID.
   private func senders() async -> [String: PairedLibrarySender] {
     var result: [String: PairedLibrarySender] = [:]

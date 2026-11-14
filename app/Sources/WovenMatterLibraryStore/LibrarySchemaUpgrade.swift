@@ -64,7 +64,9 @@ extension WorkspaceDatabaseConnection {
   ///    version must end with exactly the schema of a new one.
   ///
   /// For a table peers share (`PairedLibraryTables`), a step may add a
-  /// table, or a column that is nullable or has a default, and must leave
+  /// table, or a column that is nullable or has a default (in the step and
+  /// in the declaration a new library is created from: a device applies an
+  /// older build's row by the columns it carries), and must leave
   /// recorded peer versions (`peer_sync_versions`) as they are: devices on
   /// the older release keep such records waiting until they update, and
   /// apply older records by the columns they carry
@@ -129,23 +131,34 @@ extension WorkspaceDatabaseConnection {
 
   /// Copies the library as it is before a step rewrites it
   /// (`Library Backups/before-library-version-N.sqlite`, N being the version
-  /// it reaches). The library is first folded into its main file, which is
-  /// then copied; on a Mac that copy is a clone that takes no time or space
-  /// until the step changes the original. Nothing else writes the library
-  /// during an open. A copy that cannot be made (a full disk on a Linux
-  /// host) does not stop the step, which is one transaction and leaves the
-  /// library as it was if it fails. Copies older than
+  /// it reaches). When the library folds completely into its main file,
+  /// that file is copied while a read transaction here keeps any other
+  /// connection from checkpointing into it; on a Mac that copy is a clone
+  /// that takes no time or space until the step changes the original. When
+  /// another connection keeps it from folding, SQLite's own backup copies
+  /// it page by page instead. A copy that cannot be made (a full disk on a
+  /// Linux host) does not stop the step, which is one transaction and
+  /// leaves the library as it was if it fails. Copies older than
   /// `libraryBackupRetention` are removed on a later open.
   private func backUpLibraryUnlocked(_ file: URL, version: Int) {
     let directory = Self.libraryBackupDirectory(for: file)
     let copy = directory.appending(path: "before-library-version-\(Self.librarySchemaVersion).sqlite")
     guard !FileManager.default.fileExists(atPath: copy.path) else { return }
     do {
-      try executeUnlocked("PRAGMA wal_checkpoint(TRUNCATE)")
       try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
       let partial = directory.appending(path: copy.lastPathComponent + ".partial")
-      try? FileManager.default.removeItem(at: partial)
-      try FileManager.default.copyItem(at: file, to: partial)
+      for suffix in ["", "-wal", "-shm", "-journal"] { try? FileManager.default.removeItem(atPath: partial.path + suffix) }
+      let folded = try historyRowsUnlocked("PRAGMA wal_checkpoint(TRUNCATE)", values: []).first?.objectValue?["busy"]?.intValue == 0
+      if folded {
+        // The read transaction pins this connection to the main file as it
+        // is now: nothing can move later writing into it during the copy.
+        try executeUnlocked("BEGIN")
+        defer { try? executeUnlocked("COMMIT") }
+        _ = try historyRowsUnlocked("SELECT count(*) AS count FROM sqlite_master", values: [])
+        try FileManager.default.copyItem(at: file, to: partial)
+      } else {
+        try copyLibraryUnlocked(to: partial)
+      }
       try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: partial.path)
       try FileManager.default.moveItem(at: partial, to: copy)
     } catch {
@@ -513,8 +526,8 @@ extension WorkspaceDatabaseConnection {
       // become the state of the device that runs it (`calendar_schedules`).
       if tables.contains("calendar_items"), try columns("calendar_items").contains("next_fire_at") {
         try executeUnlocked(Self.calendarSchedulesSQL + """
-          INSERT OR REPLACE INTO calendar_schedules(item_id,next_fire_at,task_session_id,item_updated_at)
-          SELECT id,next_fire_at,task_session_id,updated_at FROM calendar_items;
+          INSERT OR REPLACE INTO calendar_schedules(item_id,next_fire_at,task_session_id,item_definition)
+          SELECT i.id,i.next_fire_at,i.task_session_id,\(Self.calendarDefinitionSQL) FROM calendar_items i;
           """)
         tables.insert("calendar_schedules")
       }

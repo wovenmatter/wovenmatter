@@ -1100,6 +1100,57 @@ extension PairedLibraryTests {
     #expect(try await newer.database.libraryNote(id: id)?.title == "Latest from the older build")
     #expect(try await shade(newer, id) == "blue")
     #expect(try await newer.database.peerSyncQuarantineCount() == 0)
+
+    // Every device arrives at that row, whatever order the versions came in:
+    // one that received the older build's edits first, and the older device
+    // itself once it updates and applies the write it had kept waiting.
+    let other = try await Mac(); defer { other.remove() }
+    try await addShade(other)
+    try await older.send(to: other)
+    #expect(try await shade(other, id) == nil)
+    try await newer.send(to: other)
+    try await newer.send(to: older)
+    try await addShade(older)
+    try await older.database.materializePendingPeerRecords()
+    for mac in [newer, other, older] {
+      #expect(try await mac.database.libraryNote(id: id)?.title == "Latest from the older build")
+      #expect(try await shade(mac, id) == "blue")
+    }
+  }
+
+  /// A record kept for an update is checked against the member that sent it
+  /// when it is finally applied. A Linux host may write an owner row only for
+  /// itself, also by way of a record this build could not read at first; a
+  /// peer that is no longer a member is trusted with nothing it does not serve.
+  @Test func aRecordKeptForAnUpdateIsCheckedAgainstItsSenderWhenApplied() async throws {
+    let linux = UUID().uuidString.lowercased(), victim = UUID().uuidString.lowercased()
+    func held(_ mac: Mac, conversation: String) async throws {
+      let record = PairedLibraryRecord(table: "conversation_owners", key: "[\"\(conversation)\"]", row: [
+        "id": .init(type: "text", value: conversation), "device_id": .init(type: "text", value: victim),
+        "note": .init(type: "text", value: "from a later release")], deleted: false, clock: 5, origin: linux, vector: [linux: 5])
+      let sender = PairedLibrarySender(deviceID: linux, kind: .linux, members: [.init(deviceID: linux, kind: .linux, endpoints: [], revoked: false)])
+      let schema = try await mac.database.pairedLibrarySchema()
+      try await mac.database.receivePairedLibrary(.init(schema: schema, entries: [record], cursor: 0, hasMore: true), from: linux, sender: sender)
+      #expect(try await mac.database.peerSyncWaitingForUpdate() == 1)
+      // The update that makes it readable.
+      try await mac.database.write { connection in
+        try connection.executeUnlocked("ALTER TABLE conversation_owners ADD COLUMN note TEXT")
+        try connection.migratePeerSync()
+      }
+    }
+    func owners(_ mac: Mac, _ conversation: String) async throws -> Int {
+      try await mac.database.read { try $0.historyRowsUnlocked("SELECT 1 AS present FROM conversation_owners WHERE id=?", values: [conversation]).count }
+    }
+    let member = PairedLibrarySender(deviceID: linux, kind: .linux, members: [.init(deviceID: linux, kind: .linux, endpoints: [], revoked: false)])
+    for senders in [[linux: member], [:]] {
+      let mac = try await Mac(); defer { mac.remove() }
+      let conversation = UUID().uuidString.lowercased()
+      try await held(mac, conversation: conversation)
+      try await mac.database.materializePendingPeerRecords(senders: senders)
+      #expect(try await owners(mac, conversation) == 0)
+      #expect(try await mac.database.peerSyncWaitingForUpdate() == 0)
+      #expect(try await mac.database.read { try $0.historyRowsUnlocked("SELECT cursor FROM peer_sync_versions WHERE pending_peer IS NOT NULL", values: []).isEmpty })
+    }
   }
 
   /// A record for a table this build does not have, or whose content needs a
