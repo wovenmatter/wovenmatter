@@ -119,6 +119,32 @@ struct HarnessMaintenanceTests {
         #expect(await operations.calls == [.codex: 1, .claudeCode: 1])
     }
 
+    /// Another Mac's Settings → Updates: the update answers at once with an operation,
+    /// which it follows here until the harness finishes.
+    @Test func anotherMacFollowsAHarnessUpdateHereAsAnOperation() async throws {
+        let fixture = try await FacadeFixture(); defer { fixture.remove() }
+        let operations = HeldHarnessUpdates()
+        fixture.model.runtimeMaintenanceFixture = { try await operations.run($0) }
+        func call(_ method: String, _ path: String) async -> LibraryHTTPResponse {
+            await fixture.model.memberMaintenance(.init(method: method, target: path, headers: [:], body: Data("{}".utf8)), path: path)
+        }
+        let started = await call("POST", "/v1/runtime-maintenance/codex/update")
+        #expect(started.status == 202)
+        let operation = try JSONDecoder().decode(RemoteHarnessOperation.self, from: started.body)
+        #expect(operation.status == "running" && operation.harnessID == .codex)
+        try await eventually { await operations.started == [.codex] }
+        let path = "/v1/operations/" + operation.id.uuidString.lowercased()
+        #expect(try JSONDecoder().decode(RemoteHarnessOperation.self, from: await call("GET", path).body).status == "running")
+        try await operations.finish(.codex)
+        try await eventually {
+            (try? JSONDecoder().decode(RemoteHarnessOperation.self, from: await call("GET", path).body))?.status == "succeeded"
+        }
+        #expect(await call("GET", "/v1/operations/" + UUID().uuidString).status == 404)
+        // Pi Durable only updates (its SDKs); there is no harness to check.
+        #expect(await call("POST", "/v1/runtime-maintenance/default_agent/check").status == 404)
+        #expect(await call("POST", "/v1/runtime-maintenance/unknown/update").status == 404)
+    }
+
     private func eventually(_ condition: () async -> Bool) async throws {
         if try await pollUntil(attempts: 500, interval: .milliseconds(10), { await condition() }) { return }
         Issue.record("Maintenance did not reach the expected state")

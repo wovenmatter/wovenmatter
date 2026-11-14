@@ -37,8 +37,12 @@ extension ApplicationModel {
         if isBackendFrontend {
             return try JSONDecoder().decode(ExecutorVersionsReply.self, from: await callBackend(method: "executor.versions")).versions
         }
-        guard try await libraryStore?.database.toolSettings().executor != nil else { return nil }
-        let value = try await executorClient().call(.object(["operation": .string("versions")]))
+        guard try await libraryStore?.database.toolSettings().executor != nil, !executorRuntime.isSettingUp else { return nil }
+        // Read without `configure`: looking at versions must not start Executor.
+        if executorRuntime.client == nil {
+            executorRuntime.client = ExecutorBrokerClient(directory: try Self.librarySupportDirectory().appending(path: "executor"))
+        }
+        let value = try await executorRuntime.client!.call(.object(["operation": .string("versions")]))
         return try JSONDecoder().decode(ExecutorVersions.self, from: JSONEncoder().encode(value))
     }
 

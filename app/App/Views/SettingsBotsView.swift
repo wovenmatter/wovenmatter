@@ -147,6 +147,7 @@ struct SettingsBotsMachineView: View {
     let onOpenResources: () -> Void
     var onOpenAccounts: (String) -> Void = { _ in }
     @State private var confirmation: BotsConfirmation?
+    @State private var confirmingImageMove: BotMachineSession?
 
     private var machine: BotMachine? { bots.machines.first { $0.id == machineID } }
 
@@ -167,6 +168,15 @@ struct SettingsBotsMachineView: View {
         }
         .task { await bots.refresh() }
         .modifier(BotsConfirmationPresenter(confirmation: $confirmation, bots: bots))
+        .confirmationDialog("Move bots to the new container image?", isPresented: Binding(
+            get: { confirmingImageMove != nil }, set: { if !$0 { confirmingImageMove = nil } }
+        ), titleVisibility: .visible, presenting: confirmingImageMove) { session in
+            Button("Update bots") { Task { await session.updateBots() }; confirmingImageMove = nil }
+            Button("Cancel", role: .cancel) { confirmingImageMove = nil }
+        } message: { session in
+            let count = session.runtimeStatus?.image?.staleBots ?? 0
+            Text("\(count == 1 ? "1 bot moves" : "\(count) bots move") to the current image (\(session.runtimeStatus?.image?.tools ?? "new tools")). Their files in /workspace stay; anything installed elsewhere in the container is replaced. Each bot is snapshotted first and rolled back if the update fails.")
+        }
     }
 
     private func statusSection(_ machine: BotMachine) -> some View {
@@ -182,7 +192,9 @@ struct SettingsBotsMachineView: View {
                         }
                         if let session, session.isConnected {
                             Button(session.updating ? "Updating bots…" : "Update bots") {
-                                Task { await session.updateBots() }
+                                // Moving bots to a new image replaces their containers: ask first.
+                                if (session.runtimeStatus?.image?.staleBots ?? 0) > 0 { confirmingImageMove = session }
+                                else { Task { await session.updateBots() } }
                             }
                             .disabled(session.updating)
                         }
@@ -208,7 +220,7 @@ struct SettingsBotsMachineView: View {
                 SettingsNote([bot, progress.text].compactMap { $0 }.joined(separator: ": "))
             }
             if session?.isConnected == true {
-                SettingsNote("Update bots stops running work, snapshots each bot, updates it, and rolls back on failure.")
+                SettingsNote("Update bots stops running work, snapshots each bot, moves it to the current container image if it is on an older one, updates it, and rolls back on failure.")
             }
         }
     }

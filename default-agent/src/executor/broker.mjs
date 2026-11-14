@@ -460,8 +460,10 @@ export class ExecutorBroker {
   /** Settings → Updates: the runtime this connection runs, and the newest supported release. */
   async versions() {
     let installed = this.runtimeVersion ?? null;
-    const generation = this.server?.runtimeGeneration;
-    if (!installed && this.config?.location === 'local') {
+    // Answered without `configure`, so nothing starts: a stopped local runtime is read from disk.
+    const server = this.server ?? Object.values(this.state.servers).find(value => value.location === 'local');
+    const generation = server?.runtimeGeneration;
+    if (!installed && (this.config?.location ?? server?.location) === 'local') {
       const root = generation && uuid(generation) ? join(this.directory, 'runtime/generations', generation) : join(this.directory, 'runtime');
       installed = JSON.parse(await readFile(join(root, 'node_modules/executor/package.json'), 'utf8').catch(() => '{}')).version ?? null;
     }

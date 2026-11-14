@@ -98,6 +98,8 @@ final class FleetUpdatesModel {
         let id = UUID()
         let request: Request
         let force: Bool
+        /// The work the user agreed to stop, stopped only once the review is confirmed.
+        let stopping: [BusyItem]
         let items: [Item]
         /// Linux harnesses whose download couldn't be checked, already reported.
         let skipped: Set<String>
@@ -130,7 +132,9 @@ final class FleetUpdatesModel {
     @ObservationIgnored private var resumeTask: Task<Void, Never>?
 
     private static let resumeKey = "wovenmatter.updates.resume"
-    private struct Resume: Codable { let scope: FleetUpdateScope; let force: Bool; let fromVersion: String }
+    /// A run waiting for this Mac's update. It resumes only into the release it was
+    /// waiting for, within a day, and always asks again before stopping anything.
+    private struct Resume: Codable { let scope: FleetUpdateScope; let fromVersion: String; let targetVersion: String; let savedAt: Date }
 
     // MARK: Lifecycle
 
@@ -142,8 +146,12 @@ final class FleetUpdatesModel {
         guard let data = defaults.data(forKey: Self.resumeKey),
               let resume = try? JSONDecoder().decode(Resume.self, from: data) else { return }
         defaults.removeObject(forKey: Self.resumeKey)
-        guard resume.fromVersion != thisMacVersion else {
-            notice = "This Mac's update didn't finish, so the rest wasn't updated. Choose Update everything to try again."
+        guard Date().timeIntervalSince(resume.savedAt) < 24 * 3_600 else { return }
+        guard let current = thisMacVersion, current == resume.targetVersion
+                || DeviceUpdatePlan.isNewer(current, than: resume.targetVersion) else {
+            if resume.fromVersion == thisMacVersion {
+                notice = "This Mac's update didn't finish, so the rest wasn't updated. Choose Update everything to try again."
+            }
             return
         }
         notice = "This Mac is updated. Continuing with your other devices and harnesses…"
@@ -154,8 +162,7 @@ final class FleetUpdatesModel {
             await self.checkAll()
             self.notice = nil
             self.resumedAfterUpdate = true
-            if resume.force { await self.proceed(.scope(resume.scope), force: true) }
-            else { self.start(.scope(resume.scope)) }
+            self.start(.scope(resume.scope))
         }
     }
 
@@ -472,20 +479,21 @@ final class FleetUpdatesModel {
         guard let review else { return }
         self.review = nil
         let previews = Dictionary(uniqueKeysWithValues: review.items.map { ($0.id, $0.preview) })
-        Task { await run(review.request, force: review.force, previews: previews, skipped: review.skipped) }
+        Task { await run(review.request, force: review.force, stopping: review.stopping, previews: previews, skipped: review.skipped) }
     }
 
     func cancelReview() { review = nil }
 
-    /// Stops busy work when forced, then either updates this Mac first or reviews the
-    /// downloads and runs the rest.
+    /// Either updates this Mac first, or reviews the downloads and runs the rest. Nothing
+    /// is stopped until the run starts.
     private func proceed(_ request: Request, force: Bool, stopping: [BusyItem] = []) async {
         guard !running else { return }
         running = true
-        if force { await stop(stopping.isEmpty ? busyWork(for: request) : stopping) }
-        if case .scope(let scope) = request, scope.includesApps, thisMacIsBehind, let version = thisMacVersion {
-            // Linux hosts can only receive this Mac's release, so this Mac goes first.
-            if let data = try? JSONEncoder().encode(Resume(scope: scope, force: force, fromVersion: version)) {
+        if case .scope(let scope) = request, scope.includesApps, thisMacIsBehind, let version = thisMacVersion,
+           let target = release?.version {
+            // Linux hosts can only receive this Mac's release, so this Mac goes first. Its
+            // own restart ends its chats; the rest resumes after it, asking again.
+            if let data = try? JSONEncoder().encode(Resume(scope: scope, fromVersion: version, targetVersion: target, savedAt: Date())) {
                 UserDefaults.standard.set(data, forKey: Self.resumeKey)
             }
             DesktopUpdater.shared.checkForUpdates()
@@ -523,14 +531,19 @@ final class FleetUpdatesModel {
         currentItem = nil
         current = nil
         running = false
-        if items.isEmpty { await run(request, force: force, previews: [:], skipped: skipped) }
-        else { review = .init(request: request, force: force, items: items, skipped: skipped) }
+        if items.isEmpty { await run(request, force: force, stopping: stopping, previews: [:], skipped: skipped) }
+        else { review = .init(request: request, force: force, stopping: stopping, items: items, skipped: skipped) }
     }
 
-    private func run(_ request: Request, force: Bool, previews: [String: RemoteInstallerPreview], skipped: Set<String>) async {
+    /// `force` stops only the work the user was shown. Another machine is forced only on
+    /// the retry its own busy answer asked for, never by a choice about this Mac's chats.
+    private func run(_ request: Request, force: Bool, stopping: [BusyItem], previews: [String: RemoteInstallerPreview],
+                     skipped: Set<String>) async {
         guard let model, !running else { return }
         running = true
         defer { running = false; current = nil; currentItem = nil }
+        if force { await stop(stopping) }
+        let forceOtherMacs: Bool = if case .harnesses = request { force } else { false }
         await model.bots.refresh()
         var restartsThisMac = false
         for step in deviceSteps(for: request) {
@@ -543,9 +556,12 @@ final class FleetUpdatesModel {
             if skipped.contains(harness.id) { continue }
             currentItem = harness.id
             current = "Updating \(harness.name) on \(workspaceName(harness.location))…"
-            switch await update(harness, preview: previews[harness.id], force: force) {
+            switch await update(harness, preview: previews[harness.id], force: forceOtherMacs) {
             case nil: break
-            case FleetBusyError.message? where !force: busyElsewhere.append(harness)
+            case FleetBusyError.message? where !forceOtherMacs && isOtherMac(harness.location):
+                busyElsewhere.append(harness)
+            case FleetBusyError.message?:
+                failures.append("\(harness.name) on \(workspaceName(harness.location)): Chats there are using it. Try again when they finish.")
             case let failure?: failures.append("\(harness.name) on \(workspaceName(harness.location)): \(failure)")
             }
         }
@@ -565,6 +581,12 @@ final class FleetUpdatesModel {
             current = "Checking for an update to this Mac…"
             DesktopUpdater.shared.checkForUpdates()
         }
+    }
+
+    /// Another Mac stops its own chats when asked; a Linux host can't be forced.
+    private func isOtherMac(_ location: FleetHarness.Location) -> Bool {
+        guard case .member(let id) = location else { return false }
+        return devices.first { $0.id.lowercased() == id.lowercased() }?.kind == .mac
     }
 
     // MARK: Which steps
@@ -736,7 +758,7 @@ final class FleetUpdatesModel {
             if let session = bots.session(for: machineID) {
                 await session.updateBots()
                 await session.waitForUpdate()
-                if let error = session.progress?.error { failures.append("Bots on \(name): \(error)") }
+                for failure in session.updateFailures { failures.append("Bots on \(name): \(failure)") }
             }
         case .thisMacApp:
             break
@@ -820,9 +842,14 @@ final class FleetUpdatesModel {
             let workspaceID: UUID? = if case .workspace(let id) = harness.location { id } else { nil }
             let command = DefaultAgentSDKCommand(workspaceID: workspaceID, request: .init(action: .update))
             let sdks = model.connections.sdks
+            // A check still running would swallow the request; let it finish first.
+            guard await wait(timeout: .seconds(120), until: { !sdks.state(for: command.key).busy }) else { return "It is still being checked." }
             sdks.request(command, connections: model.connections, remoteWorkspaces: model.remoteWorkspaces)
             guard await wait(timeout: .seconds(900), until: { !sdks.state(for: command.key).busy }) else { return "It did not finish in time." }
-            return sdks.state(for: command.key).error
+            let state = sdks.state(for: command.key)
+            if let error = state.error { return error }
+            guard state.completedAction == .update else { return "It didn't start. Try again." }
+            return state.status?.sdks.contains { $0.updateAvailable } == true ? "It is still out of date." : nil
         case (.workspace(let id), .runtime(let kind)):
             guard let configuration = model.remoteWorkspaces.configuration(id: id) else { return "This workspace is no longer set up here." }
             guard let reviewed = preview else { return "Its download wasn't reviewed." }
