@@ -47,6 +47,10 @@ public actor PairedLibraryFiles {
           file.byteCount >= 0, file.byteCount <= 256 * 1_024 * 1_024 else { throw invalid }
     return root.appending(path: file.store).appending(path: file.hash)
   }
+  /// Whether this build keeps `file`'s store. A newer peer may list a store
+  /// this build does not have; its files are skipped, not fetched, and the
+  /// listing moves on.
+  public func keeps(_ file: PairedLibraryFile) -> Bool { stores.contains(file.store) }
   public func page(after cursor: String) throws -> PairedLibraryFilePage {
     var files: [PairedLibraryFile] = []
     for store in stores {

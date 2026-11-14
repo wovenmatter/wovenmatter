@@ -33,8 +33,8 @@ public struct LibraryPeerNotice: Codable, Sendable {
   public init(deviceID: String, cursor: Int64) { self.deviceID = deviceID; self.cursor = cursor }
 }
 
-/// Reply to an exchange whose shared schema differs: both versions, so every
-/// device can say which part needs updating.
+/// Reply to an exchange in another format (`PairedLibraryFormat.exchange`):
+/// both versions, so every device can say which part needs updating.
 public struct LibraryPeerUpdateRequired: Codable, Sendable, Equatable {
   public let code: String
   public let message: String
@@ -64,6 +64,9 @@ public struct LibrarySyncStatus: Codable, Equatable, Sendable {
   public let peers: [LibraryPeerStatus]
   public let conflicts: Int
   public let quarantined: Int
+  /// Changes from a newer Woven Matter that this device keeps, relays and
+  /// applies once it updates. Absent from a build before it.
+  public var waitingForUpdate: Int?
   public var updateRequired: Bool { peers.contains { $0.state == .updateRequired } }
 }
 
@@ -111,8 +114,10 @@ private extension URL {
 ///   is caught up once.
 /// - A slow presence check (60 s, backing off for offline peers) replaces
 ///   constant polling.
-/// - Every request is a signed member request; peers must share the exact
-///   shared-table schema, and a mismatch is reported as "update required".
+/// - Every request is a signed member request. Peers must share the exchange
+///   format (`PairedLibraryFormat`); a mismatch is reported as "update
+///   required". Additions a newer peer has wait here until this device
+///   updates, and everything else keeps synchronizing.
 public actor LibraryPeerSync {
   /// Optional per-exchange side channel (see `LibraryPeerExchange.attachment`).
   /// `incoming` runs before the page is applied and may throw to refuse it.
@@ -293,7 +298,8 @@ public actor LibraryPeerSync {
                  schema: (try? await database.pairedLibrarySchema()) ?? "",
                  peers: result,
                  conflicts: (try? await database.peerSyncConflicts().count) ?? 0,
-                 quarantined: (try? await database.peerSyncQuarantineCount()) ?? 0)
+                 quarantined: (try? await database.peerSyncQuarantineCount()) ?? 0,
+                 waitingForUpdate: try? await database.peerSyncWaitingForUpdate())
   }
 
   /// Mac and Linux members other than this device. Phones use the mobile API.
@@ -426,7 +432,7 @@ public actor LibraryPeerSync {
         update(member) { $0.version = reply.version }
         if !page.hasMore && !reply.page.hasMore { break }
       }
-      try? await database.materializePendingPeerRecords()
+      try? await database.materializePendingPeerRecords(senders: senders())
       if forceFiles || received || (nextFiles[member.deviceID] ?? .distantPast) <= Date() {
         do {
           // A manifest longer than one bounded turn continues on the next exchange.
@@ -450,7 +456,7 @@ public actor LibraryPeerSync {
       let response = try await send(member, path: "v1/peers/files", body: JSONEncoder().encode(cursor))
       guard response.status == 200 else { throw LibraryAPIError(code: "peer_file", message: "The peer did not list its files.") }
       let page = try JSONDecoder().decode(PairedLibraryFilePage.self, from: response.body)
-      for file in page.files {
+      for file in page.files where await files.keeps(file) {
         while let offset = try await files.nextOffset(file) {
           guard chunks < 64, !Task.isCancelled else { return false }
           guard await directory.member(member.deviceID) != nil else { return true }
@@ -463,9 +469,9 @@ public actor LibraryPeerSync {
       }
       cursor = page.hasMore ? page.cursor : ""
       try await database.savePeerSyncFileCursor(cursor, peer: member.deviceID)
-      if !page.hasMore { try await database.materializePendingPeerRecords(); return true }
+      if !page.hasMore { try await database.materializePendingPeerRecords(senders: senders()); return true }
     }
-    try await database.materializePendingPeerRecords()
+    try await database.materializePendingPeerRecords(senders: senders())
     return false
   }
 
@@ -499,6 +505,15 @@ public actor LibraryPeerSync {
     let error = (try? JSONDecoder().decode(LibraryAPIError.self, from: response.body))
       ?? LibraryAPIError(code: "peer_sync", message: "The peer refused synchronization (HTTP \(response.status)).")
     offline(member, error)
+  }
+
+  /// Every current Mac and Linux member as a sender, by device ID.
+  private func senders() async -> [String: PairedLibrarySender] {
+    var result: [String: PairedLibrarySender] = [:]
+    for member in (try? await peers()) ?? [] {
+      if let sender = try? await sender(member) { result[sender.deviceID] = sender }
+    }
+    return result
   }
 
   private func sender(_ member: LibraryMember) async throws -> PairedLibrarySender {
@@ -568,8 +583,8 @@ public actor LibraryPeerSync {
         guard exchange.deviceID == member.deviceID, exchange.after >= 0 else {
           return .error("wrong_peer", "This exchange names another device.", status: 403)
         }
-        let schema = try await database.pairedLibrarySchema()
-        guard exchange.page.schema == schema else {
+        guard exchange.page.format == PairedLibraryFormat.exchange else {
+          let schema = try await database.pairedLibrarySchema()
           update(resolved) { $0.state = .updateRequired; $0.version = exchange.version; $0.lastContact = Date()
             $0.error = "\(resolved.name) runs Woven Matter \(exchange.version); this device runs \(self.configuration.version). Update everything to synchronize." }
           return try .json(LibraryPeerUpdateRequired(code: "update_required",

@@ -567,7 +567,7 @@ extension PairedLibraryTests {
     let base = try #require(try await journal(a.database).last { $0.key == "[\"\(shared)\"]" && $0.table == "notes" })
     // A concurrent version that would win, but carries an invalid integer.
     let origin = UUID().uuidString.lowercased(), clock: Int64 = 50_000_000
-    var row = base.row; row["revision"] = .init(type: "integer", value: "not-a-number"); row["title"] = .init(type: "text", value: "Malformed")
+    var row = base.row; row["position"] = .init(type: "integer", value: "not-a-number"); row["title"] = .init(type: "text", value: "Malformed")
     let bad = PairedLibraryRecord(table: "notes", key: base.key, row: row, deleted: false, clock: clock, origin: origin, vector: [origin: clock])
     let conflictsBefore = try await b.database.peerSyncConflicts().count
     try await deliver([bad, good], to: b.database, from: a.id)
@@ -931,10 +931,11 @@ extension PairedLibraryTests {
   }
 }
 
-/// The shared schema is what every peer must agree on before rows move. It is
-/// derived from column names and declared types, never physical order, so a
-/// library migrated over many releases and a freshly created one (a Linux
-/// host's) agree.
+/// Peers agree on the exchange format (`PairedLibraryFormat`), and each
+/// keeps what a newer one adds until it updates. The schema hash peers report
+/// is derived from column names and declared types, never physical order, so
+/// a library migrated over many releases and a freshly created one (a Linux
+/// host's) report the same.
 extension PairedLibraryTests {
   private func exchange(from sender: WorkspaceDatabase, _ senderID: String, to receiver: WorkspaceDatabase) async throws {
     var cursor = try await receiver.peerSyncCursors(senderID).pulled
@@ -947,23 +948,173 @@ extension PairedLibraryTests {
     Issue.record("Peer replay did not finish")
   }
 
-  @Test func aTrulyDifferentSchemaStillMismatches() async throws {
-    let a = try await Mac(), extra = try await Mac(), retyped = try await Mac()
-    defer { a.remove(); extra.remove(); retyped.remove() }
-    try await a.note(UUID().uuidString.lowercased(), title: "Shared")
-    try await extra.database.write { try $0.executeUnlocked("ALTER TABLE notes ADD COLUMN shade TEXT") }
-    try await retyped.database.write { connection in
-      try connection.executeUnlocked("""
-        DROP TABLE mac_routes;
-        CREATE TABLE mac_routes(device_id TEXT PRIMARY KEY,library_id TEXT NOT NULL,endpoint TEXT NOT NULL,name BLOB NOT NULL);
-        """)
+  /// Adds a shared column the way a later release would: the column, then
+  /// the capture triggers rebuilt for it.
+  private func addShade(_ mac: Mac) async throws {
+    try await mac.database.write { connection in
+      try connection.executeUnlocked("ALTER TABLE notes ADD COLUMN shade TEXT")
+      try connection.migratePeerSync()
     }
-    let schema = try await a.database.pairedLibrarySchema()
-    #expect(try await extra.database.pairedLibrarySchema() != schema)
-    #expect(try await retyped.database.pairedLibrarySchema() != schema)
+  }
+  private func shade(_ mac: Mac, _ id: String) async throws -> String? {
+    try await mac.database.read {
+      try $0.historyRowsUnlocked("SELECT shade FROM notes WHERE id=?", values: [id]).first?.objectValue?["shade"]?.stringValue
+    }
+  }
+  private func setShade(_ mac: Mac, _ id: String, _ value: String) async throws {
+    try await mac.database.write { try $0.toolsExecuteUnlocked("UPDATE notes SET shade=? WHERE id=?", [value, id]) }
+  }
+
+  /// Peers agree on the exchange format, not on an identical schema. A page
+  /// in another format, or from a build before the format, is refused whole:
+  /// nothing applies and the cursor stays, so the exchange resumes after the
+  /// update.
+  @Test func aPageInAnotherExchangeFormatIsRefusedWhole() async throws {
+    let a = try await Mac(), b = try await Mac(); defer { a.remove(); b.remove() }
+    let id = UUID().uuidString.lowercased()
+    try await a.note(id, title: "Shared")
     let page = try await a.database.pairedLibraryPage(after: 0)
-    await #expect(throws: LibraryAPIError.self) { try await extra.database.receivePairedLibrary(page, from: a.id) }
-    await #expect(throws: LibraryAPIError.self) { try await retyped.database.receivePairedLibrary(page, from: a.id) }
+    #expect(page.format == PairedLibraryFormat.exchange)
+    for format in [nil, PairedLibraryFormat.exchange + 1] {
+      let other = PairedLibraryPage(format: format, schema: page.schema, entries: page.entries, cursor: page.cursor, hasMore: page.hasMore)
+      do {
+        try await b.database.receivePairedLibrary(other, from: a.id)
+        Issue.record("A page in format \(String(describing: format)) was accepted")
+      } catch let error as LibraryAPIError { #expect(error.code == "update_required") }
+    }
+    #expect(try await b.database.libraryNote(id: id) == nil)
+    #expect(try await b.database.peerSyncCursors(a.id).pulled == 0)
+    // A build before the format sent no `format` at all.
+    let old = try JSONDecoder().decode(PairedLibraryPage.self, from: Data(#"{"schema":"x","entries":[],"cursor":0,"hasMore":false}"#.utf8))
+    #expect(old.format == nil)
+    try await b.database.receivePairedLibrary(page, from: a.id)
+    #expect(try await b.database.libraryNote(id: id)?.title == "Shared")
+  }
+
+  /// A later release adds a shared column. A device that has not updated
+  /// keeps each record carrying it exactly as received, relays it to devices
+  /// that have, keeps synchronizing everything else, and applies it once it
+  /// updates. Nothing is rejected, and the new column's value is never cut off.
+  @Test func aNewerPeersColumnWaitsIsRelayedAndAppliesAfterThisDeviceUpdates() async throws {
+    let newer = try await Mac(), older = try await Mac(), other = try await Mac()
+    defer { newer.remove(); older.remove(); other.remove() }
+    try await addShade(newer); try await addShade(other)
+    #expect(try await newer.database.pairedLibrarySchema() != older.database.pairedLibrarySchema())
+    let id = UUID().uuidString.lowercased()
+    try await newer.note(id, title: "Shaded")
+    try await setShade(newer, id, "blue")
+    var settings = try await newer.database.toolSettings(); settings.maximumManagedSessions = 5
+    try await newer.database.saveToolSettings(settings)
+
+    try await newer.send(to: older)
+    // The note waits; a table whose shape both know applied in the same pages.
+    #expect(try await older.database.libraryNote(id: id) == nil)
+    #expect(try await older.database.toolSettings().maximumManagedSessions == 5)
+    #expect(try await older.database.peerSyncWaitingForUpdate() == 1)
+    #expect(try await older.database.peerSyncQuarantineCount() == 0)
+    #expect(try await older.database.peerSyncCursors(newer.id).pulled == newer.database.peerSyncHead())
+    // Retrying changes nothing while this build still lacks the column.
+    try await older.database.materializePendingPeerRecords()
+    #expect(try await older.database.peerSyncWaitingForUpdate() == 1)
+
+    // Relayed through the device that cannot read it, the column survives.
+    try await older.send(to: other)
+    #expect(try await other.database.libraryNote(id: id)?.title == "Shaded")
+    #expect(try await shade(other, id) == "blue")
+
+    // The update arrives: the waiting record applies.
+    try await addShade(older)
+    try await older.database.materializePendingPeerRecords()
+    #expect(try await older.database.libraryNote(id: id)?.title == "Shaded")
+    #expect(try await shade(older, id) == "blue")
+    #expect(try await older.database.peerSyncWaitingForUpdate() == 0)
+  }
+
+  /// A row a newer build keeps rewriting waits as its latest version only.
+  @Test func supersededWaitingVersionsOfARowFromANewerBuildAreNotKept() async throws {
+    let newer = try await Mac(), older = try await Mac(); defer { newer.remove(); older.remove() }
+    try await addShade(newer)
+    let id = UUID().uuidString.lowercased()
+    try await newer.note(id, title: "Shaded")
+    for value in ["blue", "green", "red"] {
+      try await setShade(newer, id, value)
+      try await newer.send(to: older)
+    }
+    #expect(try await older.database.peerSyncWaitingForUpdate() == 1)
+    try await addShade(older)
+    try await older.database.materializePendingPeerRecords()
+    #expect(try await shade(older, id) == "red")
+  }
+
+  /// An edit made here while a newer build's version of the same row waits is
+  /// concurrent with it: both survive once this device updates.
+  @Test func aLocalEditWhileANewerBuildsVersionWaitsKeepsBothVersions() async throws {
+    let newer = try await Mac(), older = try await Mac(); defer { newer.remove(); older.remove() }
+    let id = UUID().uuidString.lowercased()
+    try await newer.note(id, title: "Shared")
+    try await newer.send(to: older); try await older.send(to: newer)
+    try await addShade(newer)
+    try await newer.note(id, title: "Newer edit", revision: newer.database.libraryNote(id: id)?.revision)
+    try await newer.send(to: older)
+    #expect(try await older.database.libraryNote(id: id)?.title == "Shared")
+    try await older.note(id, title: "Older edit", revision: older.database.libraryNote(id: id)?.revision)
+    try await addShade(older)
+    try await older.database.materializePendingPeerRecords()
+    try await older.send(to: newer); try await newer.send(to: older)
+    #expect(try await newer.database.libraryNote(id: id)?.title == older.database.libraryNote(id: id)?.title)
+    for mac in [newer, older] {
+      let names = try await titles(mac)
+      #expect(names.contains("Newer edit") || names.contains("Newer edit (Recovered edit)"))
+      #expect(names.contains("Older edit") || names.contains("Older edit (Recovered edit)"))
+    }
+  }
+
+  /// A device that knows more columns than a record carries applies the ones
+  /// it has: a new row takes the column's default, and an existing row keeps
+  /// the value this device holds.
+  @Test func anOlderPeersRowsApplyAndKeepTheColumnsOnlyThisDeviceKnows() async throws {
+    let newer = try await Mac(), older = try await Mac(); defer { newer.remove(); older.remove() }
+    try await addShade(newer)
+    let id = UUID().uuidString.lowercased()
+    try await older.note(id, title: "From the older build")
+    try await older.send(to: newer)
+    #expect(try await newer.database.libraryNote(id: id)?.title == "From the older build")
+    #expect(try await shade(newer, id) == nil)
+    try await setShade(newer, id, "blue")
+    // The older build has not seen that write; its later edits outrank it.
+    for title in ["Second", "Third", "Latest from the older build"] {
+      try await older.note(id, title: title, revision: older.database.libraryNote(id: id)?.revision)
+    }
+    try await older.send(to: newer)
+    #expect(try await newer.database.libraryNote(id: id)?.title == "Latest from the older build")
+    #expect(try await shade(newer, id) == "blue")
+    #expect(try await newer.database.peerSyncQuarantineCount() == 0)
+  }
+
+  /// A record for a table this build does not have, or whose content needs a
+  /// newer build (`PairedLibraryRecord.needs`), waits and is relayed with
+  /// that marker intact; it is not quarantined.
+  @Test func recordsForAnUnknownTableOrNewerContentWaitAndAreRelayedUnchanged() async throws {
+    let a = try await Mac(), b = try await Mac(); defer { a.remove(); b.remove() }
+    let id = UUID().uuidString.lowercased()
+    try await a.note(id, title: "Shared")
+    let valid = try #require(try await journal(a.database).last { $0.table == "notes" && $0.key == "[\"\(id)\"]" })
+    var row = valid.row; row["title"] = .init(type: "text", value: "Needs a newer build")
+    let content = PairedLibraryRecord(table: valid.table, key: valid.key, row: row, deleted: false, clock: valid.clock + 10,
+      origin: a.id, vector: [a.id: valid.clock + 10], needs: PairedLibraryFormat.content + 1)
+    let table = PairedLibraryRecord(table: "moods", key: "[\"m\"]", row: ["id": .init(type: "text", value: "m")], deleted: false,
+      clock: valid.clock + 11, origin: a.id, vector: [a.id: valid.clock + 11])
+    try await deliver([valid, content, table], to: b.database, from: a.id)
+    #expect(try await b.database.libraryNote(id: id)?.title == "Shared")
+    #expect(try await b.database.peerSyncQuarantineCount() == 0)
+    #expect(try await b.database.peerSyncWaitingForUpdate() == 2)
+    let relayed = try await journal(b.database)
+    #expect(relayed.contains(content) && relayed.contains(table))
+    // The marker survives a page built for the next peer.
+    let page = try await b.database.pairedLibraryPage(after: 0)
+    #expect(page.entries.first { $0.clock == content.clock && $0.origin == a.id }?.needs == PairedLibraryFormat.content + 1)
+    // A record without the marker encodes without it, as every capture does.
+    #expect(!String(decoding: try JSONEncoder().encode(valid), as: UTF8.self).contains("needs"))
   }
 
   /// The registry refresh saves remote workspace configurations every few

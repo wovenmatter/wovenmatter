@@ -225,6 +225,10 @@ final class PairedMacSyncController {
         conflicts = (try? await database.peerSyncConflicts()) ?? conflicts
         if status.quarantined > 0 { errors["quarantine"] = "\(status.quarantined) shared record\(status.quarantined == 1 ? "" : "s") could not be applied. Local data is retained; update Woven Matter on every device." }
         else { errors.removeValue(forKey: "quarantine") }
+        // Additions from a newer version are kept and relayed; they show here once this Mac updates.
+        if let waiting = status.waitingForUpdate, waiting > 0 {
+            errors["waiting"] = "\(waiting) change\(waiting == 1 ? "" : "s") from a newer Woven Matter will appear once this Mac is updated. Nothing is lost."
+        } else { errors.removeValue(forKey: "waiting") }
         for peer in status.peers { if let date = peer.lastSynchronized { lastSynchronized[peer.deviceID] = date } }
     }
 

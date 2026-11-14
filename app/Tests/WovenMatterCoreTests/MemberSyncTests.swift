@@ -384,12 +384,13 @@ struct MemberSyncTests {
     #expect(try await a.database.peerSyncCursors(b.id).pushed == a.database.peerSyncHead())
   }
 
-  @Test func differentSchemasReportUpdateRequired() async throws {
+  @Test func anotherExchangeFormatReportsUpdateRequired() async throws {
     let network = Network()
     let a = try await Member("a.test", kind: .mac, network: network), b = try await Member("b.test", kind: .mac, network: network)
     defer { Task { await a.remove(); await b.remove() } }
     try await a.add(b); try await b.add(a)
-    let page = PairedLibraryPage(schema: "older", entries: [], cursor: 0, hasMore: false)
+    // A build before the exchange format sends none.
+    let page = PairedLibraryPage(format: nil, schema: "older", entries: [], cursor: 0, hasMore: false)
     let body = try JSONEncoder().encode(LibraryPeerExchange(deviceID: b.id, after: 0, page: page, version: "0.9"))
     var headers = try b.identity.signer.headers(method: "POST", target: "/v1/peers/sync", body: body, audience: a.id)
     headers = Dictionary(uniqueKeysWithValues: headers.map { ($0.key.lowercased(), $0.value) })
