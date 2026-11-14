@@ -702,6 +702,17 @@ extension PairedLibraryTests {
     }
   }
 
+  @Test func theOwnerReadsARenameMadeOnAnotherMac() async throws {
+    let a = try await Mac(), b = try await Mac(); defer { a.remove(); b.remove() }
+    let session = try await a.database.createFixtureLocalACPSession(runtimeKind: .codex, title: "Original", ownerDeviceID: UUID())
+    try await a.send(to: b)
+    try await b.database.mutateConversation(id: session, mutation: .rename("Renamed on B"))
+    try await b.send(to: a)
+    // The session the owner runs carries the conversation's title, not the
+    // one its local session row was created with.
+    #expect(try await a.database.localACPSession(conversationID: session).title == "Renamed on B")
+  }
+
   @Test func aChatAdoptedIntoAnotherWorkspaceAcceptsItsNewExecutorsUpdates() async throws {
     let a = try await Mac(), b = try await Mac(); defer { a.remove(); b.remove() }
     let session = try await a.database.createFixtureLocalACPSession(runtimeKind: .codex, title: "Moved to Linux", ownerDeviceID: UUID())

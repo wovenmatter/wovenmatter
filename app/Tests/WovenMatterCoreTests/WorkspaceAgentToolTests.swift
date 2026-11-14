@@ -217,11 +217,7 @@ struct WorkspaceAgentToolTests {
     try await reopened.applyInitialSessionTools(.init(enabled: [.library]), sessionID: target)
     #expect(try await reopened.sessionTools(target) == saved.tools)
     #expect(try await reopened.sessionRelationship(target).createdBy == source)
-    let localTitle = try await reopened.read { connection in
-      try connection.historyRowsUnlocked("SELECT title FROM harness_sessions WHERE conversation_id=?", values: [target])
-        .first?.objectValue?["title"]?.stringValue
-    }
-    #expect(localTitle == saved.title)
+    #expect(try await reopened.localACPSession(conversationID: target).title == saved.title)
     _ = try await reopened.updateConversationTitleIfCurrent(id: target, expectedTitle: saved.title, title: "User renamed")
     _ = try await reopened.moveConversation(id: target, toFolderID: laterFolder)
     try await reopened.setSessionTools(.init(enabled: [.history]), sessionID: target)

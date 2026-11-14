@@ -327,9 +327,11 @@ extension WorkspaceDatabaseConnection {
     conversationID: String
   ) throws -> LocalACPSessionDescriptor {
     try withLock {
+      // The title is the conversation's: a rename on another Mac reaches it
+      // (through `conversation_titles`), never the local session row.
       let statement = try prepareUnlocked("""
         SELECT session.conversation_id, session.runtime_kind,
-          session.title, session.native_session_id, session.model,
+          conversation.title, session.native_session_id, session.model,
           session.thinking, session.remote_workspace_id, session.permission
         FROM harness_sessions AS session
         JOIN conversations AS conversation
