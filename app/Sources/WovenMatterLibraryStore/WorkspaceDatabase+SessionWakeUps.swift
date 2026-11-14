@@ -47,7 +47,7 @@ public struct SessionWakeUpRecord: Equatable, Sendable {
 }
 
 extension WorkspaceDatabaseConnection {
-  /// The event key of a wake-up's delivery row (`workspace_session_deliveries`).
+  /// The event key of a wake-up's delivery row (`session_deliveries`).
   static let wakeUpEventPrefix = "wake-up:"
 
   func migrateSessionWakeUps() throws {
@@ -146,7 +146,7 @@ extension WorkspaceDatabase {
   public func wakeUpRunsInARow(conversationID: String, limit: Int = StreamProtocol.maximumWakeUpsPerRun) async throws -> Int {
     try await read { connection in
       let rows = try connection.historyRowsUnlocked("""
-        SELECT EXISTS(SELECT 1 FROM workspace_session_deliveries d WHERE d.message_id=r.user_message_id
+        SELECT EXISTS(SELECT 1 FROM session_deliveries d WHERE d.message_id=r.user_message_id
           AND d.event_key LIKE '\(WorkspaceDatabaseConnection.wakeUpEventPrefix)%') AS woken
         FROM runs r WHERE r.conversation_id=? ORDER BY r.created_at DESC, r.id DESC LIMIT \(max(1, limit + 1))
         """, values: [conversationID])
@@ -161,14 +161,14 @@ extension WorkspaceDatabase {
                                            text: String, key: String) async throws -> WorkspaceSessionDelivery {
     try await write { connection in
       try connection.transaction {
-        let existing = try connection.historyRowsUnlocked("SELECT 1 FROM workspace_session_deliveries WHERE id=?", values: [id])
+        let existing = try connection.historyRowsUnlocked("SELECT 1 FROM session_deliveries WHERE id=?", values: [id])
         guard existing.isEmpty else { return }
         try connection.toolsExecuteUnlocked("""
-          INSERT INTO workspace_session_deliveries(id,source_id,target_id,content,status,source_agent,source_title,kind,
+          INSERT INTO session_deliveries(id,source_id,target_id,content,status,source_agent,source_title,kind,
             target_title,target_harness,target_model,event_key)
           SELECT ?,?,?,?,'queued',?,?,'notification',coalesce(bt.display_name,t.title,'Bot'),
             coalesce(bt.display_name,d.runtime_kind,t.agent_codename),d.model,?
-          FROM workspace_mcp_callers bt LEFT JOIN conversations t ON t.id=bt.id
+          FROM mcp_callers bt LEFT JOIN conversations t ON t.id=bt.id
           LEFT JOIN harness_sessions d ON d.conversation_id=t.id WHERE bt.id=?
           """, [id, sessionID, callerID, text, harness ?? "wovenmatter", title ?? "Session",
                 WorkspaceDatabaseConnection.wakeUpEventPrefix + id, callerID])

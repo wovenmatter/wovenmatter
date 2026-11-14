@@ -36,7 +36,7 @@ extension WorkspaceDatabaseConnection {
           let condition = operation == "UPDATE" ? "WHEN \(object("old")) IS NOT \(newObject)" : ""
           try executeUnlocked("""
             CREATE TRIGGER IF NOT EXISTS \(table)_history_\(operation.lowercased()) AFTER \(operation) ON \(table) \(condition) BEGIN
-              INSERT INTO workspace_history_events(id,conversation_id,run_id,harness,kind,payload,source_id,native_session_id,native_record_id,content_mode,text_content)
+              INSERT INTO history_events(id,conversation_id,run_id,harness,kind,payload,source_id,native_session_id,native_record_id,content_mode,text_content)
               VALUES(lower(hex(randomblob(16))),\(conversation),(SELECT run_id FROM messages WHERE id=new.message_id),
                 coalesce((SELECT runtime_kind FROM harness_sessions WHERE conversation_id=\(conversation)),'unknown'),
                 '\(kind).snapshot',woven_history_redact(\(newObject)),'woven:\(kind)',\(conversation),new.id,'snapshot',woven_history_redact(new.\(textColumn)));
@@ -66,7 +66,7 @@ extension WorkspaceDatabaseConnection {
         let savedProjection = "CASE WHEN \(incremental) THEN json_set(new.content,'$.content',\(delta)) ELSE new.content END"
         try executeUnlocked("""
           CREATE TRIGGER IF NOT EXISTS run_activities_history_\(suffix) AFTER \(operation) ON run_activities \(condition) BEGIN
-            INSERT INTO workspace_history_events(id,conversation_id,run_id,harness,kind,payload,source_id,native_session_id,native_record_id,content_mode,text_content,projection_json)
+            INSERT INTO history_events(id,conversation_id,run_id,harness,kind,payload,source_id,native_session_id,native_record_id,content_mode,text_content,projection_json)
             VALUES(lower(hex(randomblob(16))),new.conversation_id,new.run_id,
               coalesce((SELECT runtime_kind FROM harness_sessions WHERE conversation_id=new.conversation_id),'unknown'),
               CASE WHEN \(incremental) THEN 'activity.delta' ELSE 'activity.snapshot' END,
@@ -80,7 +80,7 @@ extension WorkspaceDatabaseConnection {
       try executeUnlocked("""
         CREATE TRIGGER IF NOT EXISTS runs_final_activity_history_update AFTER UPDATE ON runs
           WHEN new.status IN ('completed','failed','cancelled','interrupted') AND old.status IS NOT new.status BEGIN
-          INSERT INTO workspace_history_events(id,conversation_id,run_id,harness,kind,payload,source_id,native_session_id,native_record_id,content_mode,text_content,projection_json)
+          INSERT INTO history_events(id,conversation_id,run_id,harness,kind,payload,source_id,native_session_id,native_record_id,content_mode,text_content,projection_json)
           SELECT lower(hex(randomblob(16))),e.conversation_id,e.run_id,
             coalesce((SELECT runtime_kind FROM harness_sessions WHERE conversation_id=e.conversation_id),'unknown'),
             'activity.final',woven_history_redact(e.content),'woven:activity',e.conversation_id,e.id,'snapshot',
@@ -124,7 +124,7 @@ extension WorkspaceDatabaseConnection {
       let identity = try encoder.encode([harness, sourceID, batch.nativeSessionID, record.id,
         record.revision ?? "", record.kind, record.contentMode, payload, projection ?? "", text ?? ""])
       let eventID = "native:" + SHA256.hash(data: identity).hexString
-      if let existing = try historyRowsUnlocked("SELECT conversation_id,run_id,agent_id,source_connection_id FROM workspace_history_events WHERE id=?", values: [eventID]).first?.objectValue {
+      if let existing = try historyRowsUnlocked("SELECT conversation_id,run_id,agent_id,source_connection_id FROM history_events WHERE id=?", values: [eventID]).first?.objectValue {
         if let previous = existing["conversation_id"]?.stringValue, let conversationID, previous != conversationID {
           throw WorkspaceDatabaseError.open("Native archive source belongs to another conversation")
         }
@@ -137,7 +137,7 @@ extension WorkspaceDatabaseConnection {
         if let previous = existing["source_connection_id"]?.stringValue, let sourceConnectionID, previous != sourceConnectionID {
           throw WorkspaceDatabaseError.open("Native archive source belongs to another connection")
         }
-        try toolsExecuteUnlocked("UPDATE workspace_history_events SET conversation_id=coalesce(conversation_id,?),run_id=coalesce(run_id,?),agent_id=coalesce(agent_id,?),source_connection_id=coalesce(source_connection_id,?) WHERE id=?",
+        try toolsExecuteUnlocked("UPDATE history_events SET conversation_id=coalesce(conversation_id,?),run_id=coalesce(run_id,?),agent_id=coalesce(agent_id,?),source_connection_id=coalesce(source_connection_id,?) WHERE id=?",
           [conversationID, mappedRunID, agentID, sourceConnectionID, eventID])
         continue
       }

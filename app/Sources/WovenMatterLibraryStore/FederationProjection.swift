@@ -129,7 +129,7 @@ extension WorkspaceDatabaseConnection {
                            message.createdAt.isEmpty ? now : message.createdAt, now])
         if let source = message.agentSourceID {
           try toolsExecuteUnlocked("""
-            INSERT INTO device_message_provenance(message_id,source_id,source_title,source_agent,kind)
+            INSERT INTO message_provenance(message_id,source_id,source_title,source_agent,kind)
             VALUES (?,?,?,?,?) ON CONFLICT(message_id) DO NOTHING
             """, [message.id, source, message.senderSessionTitle, message.senderHarness, message.senderKind ?? "message"])
         }

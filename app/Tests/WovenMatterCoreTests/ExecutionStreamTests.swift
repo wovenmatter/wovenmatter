@@ -22,7 +22,7 @@ struct ExecutionStreamTests {
     let paired = try await database.createFixtureLocalACPSession(runtimeKind: .codex, title: "Another Mac's", ownerDeviceID: UUID())
     let federated = try await database.createFixtureLocalACPSession(runtimeKind: .codex, title: "A Linux host's", ownerDeviceID: UUID())
     try await database.write { connection in
-      try connection.toolsExecuteUnlocked("INSERT OR REPLACE INTO paired_conversation_owners VALUES(?,?)", [paired, UUID().uuidString.lowercased()])
+      try connection.toolsExecuteUnlocked("INSERT OR REPLACE INTO conversation_owners VALUES(?,?)", [paired, UUID().uuidString.lowercased()])
       try connection.toolsExecuteUnlocked("INSERT INTO execution_conversations(id,workspace_id,conversation) VALUES(?,?,?)",
         [federated, UUID().uuidString.lowercased(), "{}"])
     }
@@ -678,7 +678,7 @@ struct ExecutionStreamTests {
     try await run("INSERT INTO execution_workspaces(id, owner_device_id, revision, deleted, payload) VALUES ('w1', 'o', 1, 0, '{}')")
     let registry = try await database.libraryWakeCursor()
     #expect(registry > before)
-    try await run("INSERT INTO device_saved_artifacts(id, revision, manifest) VALUES ('a1', 1, '{}')")
+    try await run("INSERT INTO saved_artifacts(id, revision, manifest) VALUES ('a1', 1, '{}')")
     #expect(try await database.libraryWakeCursor() > registry)
     let page = try await database.read { try $0.libraryChanges(after: before) }
     #expect(page.cursor == (try await database.libraryWakeCursor()) && page.changes.isEmpty, "wake entries advance a page and carry nothing")

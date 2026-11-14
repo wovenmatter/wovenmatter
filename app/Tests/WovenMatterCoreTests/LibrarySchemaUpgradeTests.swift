@@ -32,8 +32,8 @@ import WovenMatterCore
 
     // One schema. A converted table keeps its physical column order and
     // SQLite's quoting of renamed names, so tables are compared by their
-    // columns and foreign keys; indexes and triggers, which this build
-    // creates, by their SQL.
+    // columns and foreign keys, and virtual tables by their SQL up to that
+    // quoting; indexes and triggers, which this build creates, by their SQL.
     let expected = try await schema(current), actual = try await schema(library)
     #expect(actual.keys.sorted() == expected.keys.sorted())
     for key in expected.keys.sorted() where actual[key] != expected[key] {
@@ -96,8 +96,21 @@ import WovenMatterCore
       UNION ALL SELECT json_extract(payload,'$.table'),payload FROM paired_library_changes
       """)
     let tables = Set(peer.compactMap { $0["table_name"]?.stringValue })
-    #expect(tables.isSuperset(of: ["runs", "conversations", "messages", "agents", "run_activities"]))
-    #expect(tables.allSatisfy { !$0.hasPrefix("dashboard_") && !$0.hasPrefix("desktop_") && $0 != "profiles" })
+    #expect(tables.isSuperset(of: ["runs", "conversations", "messages", "agents", "run_activities", "agent_owners",
+                                   "conversation_owners", "session_tools", "tool_settings", "history_events"]))
+    #expect(tables.allSatisfy { !$0.hasPrefix("dashboard_") && !$0.hasPrefix("desktop_") && !$0.hasPrefix("paired_")
+                                && !$0.hasPrefix("workspace_") && $0 != "profiles" })
+    // A renamed shared table keeps its rows, and its recorded versions name
+    // it in both the key column and the record.
+    let agent = "5711c18c-4ab6-50f2-893f-e3d31837e15b", origin = "5ad85cf8-9a5e-4bc5-b320-5a705c1e5f04"
+    #expect(try await row(library, "SELECT device_id FROM agent_owners WHERE id=?", agent)["device_id"]?.stringValue == origin)
+    let owner = try #require(try await row(library, "SELECT payload FROM paired_library_rows WHERE table_name='agent_owners' AND record_key=?", "[\"\(agent)\"]")["payload"]?.stringValue
+      .flatMap { try? JSONDecoder().decode(PairedLibraryRecord.self, from: Data($0.utf8)) })
+    #expect(owner.table == "agent_owners" && owner.row["device_id"]?.value == origin)
+    #expect(try await rows(library, "SELECT cursor FROM paired_library_changes WHERE json_extract(payload,'$.table')='agent_owners'").count == 2)
+    #expect(try await rows(library, "SELECT table_name FROM paired_library_seeded WHERE table_name IN ('agent_owners','session_tools','history_events')").count == 3)
+    // History search still finds the native chat under its new name.
+    #expect(try await rows(library, "SELECT rowid FROM history_search WHERE history_search MATCH 'files'").isEmpty == false)
     for payload in peer.compactMap({ $0["payload"]?.stringValue }) {
       for column in ["user_id", "governing_plane", "authority_kind", "authority_agent_id", "authority_device_id",
                      "origin_device_id", "desktop_owned", "openclaw_session_key", "gateway_media_ref",
@@ -115,7 +128,7 @@ import WovenMatterCore
     let runID = try #require(run["id"]?.stringValue)
     #expect(try await row(library, "SELECT json_extract(payload,'$.row.native_session_id.value') AS value FROM paired_library_rows WHERE table_name='runs' AND record_key=?", "[\"\(runID)\"]")["value"]?.stringValue == "native-session-1")
     #expect(try await row(library, "SELECT json_extract(payload,'$.row.is_archived.value') AS value FROM paired_library_rows WHERE table_name='conversations' AND record_key='[\"platform-chat\"]'")["value"]?.stringValue == "1")
-    #expect(try await rows(library, "SELECT table_name FROM paired_library_seeded WHERE table_name LIKE 'dashboard%' OR table_name LIKE 'desktop%' OR table_name='profiles'").isEmpty)
+    #expect(try await rows(library, "SELECT table_name FROM paired_library_seeded WHERE table_name LIKE 'dashboard%' OR table_name LIKE 'desktop%' OR table_name LIKE 'workspace%' OR table_name LIKE 'paired%' OR table_name='profiles'").isEmpty)
     #expect(try await rows(library, "SELECT name FROM paired_library_state").isEmpty)
 
     // The converted library keeps working and syncing under its new names.
@@ -130,7 +143,7 @@ import WovenMatterCore
       var result: [String: String] = [:]
       for object in try connection.historyRowsUnlocked("""
         SELECT type,name,sql FROM sqlite_master WHERE sql IS NOT NULL
-          AND name NOT LIKE 'sqlite\\_%' ESCAPE '\\' AND name NOT LIKE 'workspace\\_history\\_search\\_%' ESCAPE '\\'
+          AND name NOT LIKE 'sqlite\\_%' ESCAPE '\\' AND name NOT LIKE 'history\\_search\\_%' ESCAPE '\\'
         """, values: []).compactMap(\.objectValue) {
         guard let type = object["type"]?.stringValue, let name = object["name"]?.stringValue,
               let sql = object["sql"]?.stringValue else { continue }
@@ -141,7 +154,10 @@ import WovenMatterCore
             .map { row in ["table", "from", "to", "on_delete"].map { describe(row.objectValue?[$0]) }.joined(separator: " ") }.sorted()
           result["table " + name] = (columns + keys.map { "references " + $0 }).joined(separator: "\n")
         } else {
-          result[type + " " + name] = sql.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+          // A renamed virtual table keeps its module arguments; only the
+          // quoting of its name differs.
+          let text = sql.hasPrefix("CREATE VIRTUAL") ? sql.replacingOccurrences(of: "\"\(name)\"", with: name) : sql
+          result[type + " " + name] = text.split(whereSeparator: \.isWhitespace).joined(separator: " ")
         }
       }
       return result

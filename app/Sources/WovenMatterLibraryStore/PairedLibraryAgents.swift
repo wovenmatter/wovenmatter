@@ -12,7 +12,7 @@ extension WorkspaceDatabase {
       let own = try connection.libraryIdentityUnlocked().hostDeviceID
       let workspaces = try connection.libraryExecutionWorkspaces()
       var result: [UUID: ExecutionWorkspace] = [:]
-      for row in try connection.historyRowsUnlocked("SELECT a.id,a.execution_location,a.runtime_device_id,p.device_id FROM agents a JOIN paired_agent_owners p ON p.id=a.id WHERE p.device_id<>? AND a.deleted_at IS NULL", values: [own]) {
+      for row in try connection.historyRowsUnlocked("SELECT a.id,a.execution_location,a.runtime_device_id,p.device_id FROM agents a JOIN agent_owners p ON p.id=a.id WHERE p.device_id<>? AND a.deleted_at IS NULL", values: [own]) {
         guard let fields = row.objectValue, let id = fields["id"]?.stringValue.flatMap(UUID.init(uuidString:)),
               let owner = fields["device_id"]?.stringValue else { continue }
         let workspace: ExecutionWorkspace?
@@ -35,7 +35,7 @@ extension WorkspaceDatabase {
         try connection.toolsExecuteUnlocked("INSERT OR IGNORE INTO conversations(id,agent_id,title,created_at,updated_at) VALUES(?,?,'New conversation',?,?)",
           [id, agentID.uuidString.lowercased(), now, now])
         if workspace.kind == .mac {
-          try connection.toolsExecuteUnlocked("INSERT OR IGNORE INTO paired_conversation_owners VALUES(?,?)", [id, workspace.ownerDeviceID])
+          try connection.toolsExecuteUnlocked("INSERT OR IGNORE INTO conversation_owners VALUES(?,?)", [id, workspace.ownerDeviceID])
         }
         let value = LibraryConversation(id: id, title: "New conversation", providerID: "local:" + runtimeKind,
           routeID: "local:" + runtimeKind, runtimeKind: runtimeKind, libraryID: workspace.libraryID, workspaceID: workspace.id)

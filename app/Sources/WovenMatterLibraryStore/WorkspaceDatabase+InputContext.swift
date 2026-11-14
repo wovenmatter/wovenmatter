@@ -10,7 +10,7 @@ extension WorkspaceDatabaseConnection {
       try requireToolSessionUnlocked(conversationID)
       let id = UUID().uuidString.lowercased()
       let permitted = try sessionToolsUnlocked(conversationID).enabled.contains(.notes)
-      try toolsExecuteUnlocked("INSERT INTO workspace_input_contexts(id,conversation_id,note_id,created_at) VALUES(?,?,?,?)",
+      try toolsExecuteUnlocked("INSERT INTO input_contexts(id,conversation_id,note_id,created_at) VALUES(?,?,?,?)",
         [id, conversationID, permitted ? noteID : nil, Self.timestamp(Date())])
       return id
     }
@@ -20,7 +20,7 @@ extension WorkspaceDatabaseConnection {
     try withLock {
       try requireToolUnlocked(.notes, sessionID: callerID)
       guard let id, let row = try historyRowsUnlocked(
-        "SELECT note_id FROM workspace_input_contexts WHERE id=? AND conversation_id=?",
+        "SELECT note_id FROM input_contexts WHERE id=? AND conversation_id=?",
         values: [id, callerID]).first else {
         throw WorkspaceToolError.invalid("The native harness has not supplied a context binding for this message.")
       }

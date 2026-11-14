@@ -444,7 +444,7 @@ extension WovenMCPHostTests {
         _ = try await fixture.database.requestCoordinationAccess(sourceID: caller, targetID: fixture.caller,
             purpose: "Coordinate", requestID: UUID().uuidString)
         try await fixture.database.write { connection in
-            try connection.toolsExecuteUnlocked("DELETE FROM workspace_mcp_bot_machines WHERE machine_id=?", [Self.machine])
+            try connection.toolsExecuteUnlocked("DELETE FROM mcp_bot_machines WHERE machine_id=?", [Self.machine])
         }
         #expect(try await fixture.database.collectCoordinationTurnNotifications().isEmpty)
         #expect(try await fixture.database.sessionRelationship(fixture.caller).coordinatorID == caller)
@@ -455,14 +455,14 @@ extension WovenMCPHostTests {
         // A relationship that arrives through sync names a caller this machine never saw.
         let foreign = WovenMCPCaller.bot(machineID: UUID().uuidString, botID: UUID().uuidString)
         let violations = try await fixture.database.write { connection -> Int in
-            try connection.toolsExecuteUnlocked("UPDATE workspace_session_relationships SET coordinator_id=? WHERE session_id=?", [foreign, fixture.caller])
-            return try connection.historyRowsUnlocked("PRAGMA foreign_key_check(workspace_session_relationships)", values: []).count
+            try connection.toolsExecuteUnlocked("UPDATE session_relationships SET coordinator_id=? WHERE session_id=?", [foreign, fixture.caller])
+            return try connection.historyRowsUnlocked("PRAGMA foreign_key_check(session_relationships)", values: []).count
         }
         #expect(violations == 0)
         #expect(try await fixture.database.collectCoordinationTurnNotifications().isEmpty)
         #expect(try await fixture.database.sessionRelationship(fixture.caller).coordinatorID == foreign)
         try await fixture.database.write { connection in
-            try connection.toolsExecuteUnlocked("UPDATE workspace_session_relationships SET coordinator_id=? WHERE session_id=?", [caller, fixture.caller])
+            try connection.toolsExecuteUnlocked("UPDATE session_relationships SET coordinator_id=? WHERE session_id=?", [caller, fixture.caller])
         }
 
         // A local revocation still retires it.
@@ -489,7 +489,7 @@ extension WovenMCPHostTests {
         #expect(try await fixture.database.recordCoordinationNeedsInput(sessionID: fixture.caller, requestID: "fixture-input", requiresUserApproval: true) == nil)
         await #expect(throws: (any Error).self) { _ = try await fixture.host.deliverBotNotification(delivery) }
         #expect(try await fixture.database.toolDelivery(id: delivery.id)?.status == "queued")
-        try await fixture.database.write { try $0.toolsExecuteUnlocked("UPDATE workspace_session_deliveries SET retry_after=0 WHERE id=?", [delivery.id]) }
+        try await fixture.database.write { try $0.toolsExecuteUnlocked("UPDATE session_deliveries SET retry_after=0 WHERE id=?", [delivery.id]) }
         var attempts = 0
         var accepted = Set<String>()
         var machines = Set<String>()
@@ -500,7 +500,7 @@ extension WovenMCPHostTests {
             if attempts == 1 { throw CancellationError() } // Lost acknowledgement after receiver acceptance.
         }
         await #expect(throws: CancellationError.self) { _ = try await fixture.host.deliverBotNotification(delivery) }
-        try await fixture.database.write { try $0.toolsExecuteUnlocked("UPDATE workspace_session_deliveries SET retry_after=0 WHERE id=?", [delivery.id]) }
+        try await fixture.database.write { try $0.toolsExecuteUnlocked("UPDATE session_deliveries SET retry_after=0 WHERE id=?", [delivery.id]) }
         fixture.host.stop()
         let restored = try WovenMCPHost(database: fixture.database) { _, _ in .init(success: true) }
         restored.botNotificationSink = fixture.host.botNotificationSink
@@ -522,7 +522,7 @@ extension WovenMCPHostTests {
         _ = try? await restored.deliverBotNotification(delivery)
         #expect(try await fixture.database.sessionRelationship(fixture.caller).coordinatorID == nil)
         let creation = try await fixture.database.read { connection in
-            try connection.historyRowsUnlocked("SELECT status FROM workspace_session_creations WHERE id=?", values: [creationID]).first
+            try connection.historyRowsUnlocked("SELECT status FROM session_creations WHERE id=?", values: [creationID]).first
         }
         #expect(creation?.objectValue?["status"] == .string("failed"))
     }

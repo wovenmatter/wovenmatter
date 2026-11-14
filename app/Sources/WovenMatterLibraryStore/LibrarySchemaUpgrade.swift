@@ -11,17 +11,20 @@ import Foundation
 /// tables named `dashboard_*` and `desktop_*`, OpenClaw gateway tables and
 /// columns, and per-row boilerplate (`user_id`, `governing_plane`,
 /// `authority_kind`, `authority_agent_id`, `origin_device_id`,
-/// `desktop_owned`) that every current writer sets to the same value. This
-/// renames the tables and columns that hold current data, drops what nothing
-/// reads any more, and rewrites the paired-sync bookkeeping to the new names,
-/// so paired Macs that update together keep their versions and cursors.
+/// `desktop_owned`) that every current writer sets to the same value. Its
+/// later tables were named for where they came from (`paired_*`, `device_*`,
+/// `workspace_*`) rather than what they hold, and it stored JSON as BLOB.
+/// This renames the tables and columns that hold current data, drops what
+/// nothing reads any more, stores JSON as text, and rewrites the paired-sync
+/// bookkeeping to match, so paired Macs that update together keep their
+/// versions and cursors.
 ///
 /// It runs on open before anything else creates schema. Every trigger is
-/// dropped first and every index it renames is dropped by its old name: the
-/// regular schema creation that follows recreates both under their current
-/// names. Each step checks what is present, so a partly converted or
-/// partly created library converges on the same result, and a current library
-/// is left untouched.
+/// dropped first, and every index of a renamed table and every index in
+/// `droppedLibraryIndexes` is dropped: the regular schema creation that
+/// follows recreates both under their current names. Each step checks what
+/// is present, so a partly converted or partly created library converges on
+/// the same result.
 extension WorkspaceDatabaseConnection {
   static let renamedLibraryTables: [(old: String, new: String)] = [
     ("dashboard_agents", "agents"),
@@ -45,6 +48,43 @@ extension WorkspaceDatabaseConnection {
     ("desktop_activity_index", "activity_summaries"),
     ("desktop_activity_revision", "activity_revision"),
     ("desktop_message_revisions", "message_revisions"),
+    // Named for what they hold: "workspace" is an execution host, and the
+    // paired-sync and Device API prefixes said where a table came from.
+    ("paired_agent_owners", "agent_owners"),
+    ("paired_conversation_owners", "conversation_owners"),
+    ("paired_calendar_owners", "calendar_item_owners"),
+    ("paired_mac_routes", "mac_routes"),
+    ("paired_remote_workspaces", "remote_workspace_configurations"),
+    ("device_message_provenance", "message_provenance"),
+    ("device_saved_artifacts", "saved_artifacts"),
+    ("device_artifact_uploads", "artifact_uploads"),
+    ("device_artifact_chunks", "artifact_chunks"),
+    ("workspace_automation_cancellations", "automation_cancellations"),
+    ("workspace_automation_requests", "automation_requests"),
+    ("workspace_calendar_remote_ownership", "calendar_remote_ownership"),
+    ("workspace_calendar_remote_receipts", "calendar_remote_receipts"),
+    ("workspace_calendar_runs", "calendar_runs"),
+    ("workspace_calendar_sessions", "calendar_task_sessions"),
+    ("workspace_coordination_access_requests", "coordination_access_requests"),
+    ("workspace_coordination_observations", "coordination_observations"),
+    ("workspace_executor_sessions", "session_executor_profiles"),
+    ("workspace_goal_runs", "goal_runs"),
+    ("workspace_goal_usage", "goal_usage"),
+    ("workspace_history_events", "history_events"),
+    ("workspace_history_search", "history_search"),
+    ("workspace_input_contexts", "input_contexts"),
+    ("workspace_mcp_bot_machines", "mcp_bot_machines"),
+    ("workspace_mcp_callers", "mcp_callers"),
+    ("workspace_opencode_input_context", "opencode_input_contexts"),
+    ("workspace_session_creations", "session_creations"),
+    ("workspace_session_deliveries", "session_deliveries"),
+    ("workspace_session_goals", "session_goals"),
+    ("workspace_session_grants", "session_grants"),
+    ("workspace_session_relationships", "session_relationships"),
+    ("workspace_session_timers", "session_timers"),
+    ("workspace_session_tools", "session_tools"),
+    ("workspace_tool_mutations", "tool_mutations"),
+    ("workspace_tool_settings", "tool_settings"),
   ]
 
   /// Tables nothing reads or writes any more.
@@ -141,8 +181,8 @@ extension WorkspaceDatabaseConnection {
   static let jsonTextColumns: [(table: String, columns: [String])] = [
     ("execution_workspaces", ["payload"]), ("execution_journal", ["payload"]),
     ("execution_conversations", ["conversation"]), ("execution_adoptions", ["payload"]),
-    ("execution_receipts", ["payload"]), ("device_saved_artifacts", ["manifest"]),
-    ("device_artifact_uploads", ["manifest"]), ("product_analytics_preference", ["payload"]),
+    ("execution_receipts", ["payload"]), ("saved_artifacts", ["manifest"]),
+    ("artifact_uploads", ["manifest"]), ("product_analytics_preference", ["payload"]),
     ("device_mutation_receipts", ["response"]), ("device_command_receipts", ["response"]),
     ("device_tool_receipts", ["response"]),
   ]
@@ -187,6 +227,7 @@ extension WorkspaceDatabaseConnection {
       }
       for index in Self.droppedLibraryIndexes { try executeUnlocked("DROP INDEX IF EXISTS \(Self.peerQuote(index))") }
 
+      var moved: [String: String] = [:]
       for (old, new) in Self.renamedLibraryTables where tables.contains(old) {
         // A table under its new name only exists if a partial conversion or
         // a fresh creation already made it; it then holds the current state.
@@ -195,17 +236,29 @@ extension WorkspaceDatabaseConnection {
           try dropPeerRecordsUnlocked(old, bookkeeping: bookkeeping)
         } else {
           try executeUnlocked("ALTER TABLE \(Self.peerQuote(old)) RENAME TO \(Self.peerQuote(new))")
-          for table in Self.peerNamedBookkeeping where bookkeeping.contains(table) {
-            try toolsExecuteUnlocked("UPDATE \(table) SET table_name=? WHERE table_name=?", [new, old])
+          for index in try historyRowsUnlocked("SELECT name FROM sqlite_master WHERE type='index' AND tbl_name=? AND sql IS NOT NULL",
+                                               values: [new]).compactMap({ $0.objectValue?["name"]?.stringValue }) {
+            try executeUnlocked("DROP INDEX \(Self.peerQuote(index))")
           }
-          for table in Self.peerPayloadBookkeeping where bookkeeping.contains(table) {
-            try toolsExecuteUnlocked("""
-              UPDATE \(table) SET payload=json_set(payload,'$.table',?)
-              WHERE json_valid(payload) AND json_extract(payload,'$.table')=?
-              """, [new, old])
-          }
+          moved[old] = new
         }
         tables.remove(old); tables.insert(new)
+      }
+      // One pass over each bookkeeping table renames every moved table.
+      if !moved.isEmpty {
+        let map = String(decoding: try JSONEncoder().encode(moved), as: UTF8.self)
+        for table in Self.peerNamedBookkeeping where bookkeeping.contains(table) {
+          try toolsExecuteUnlocked("""
+            UPDATE \(table) SET table_name=(SELECT value FROM json_each(?1) WHERE key=table_name)
+            WHERE table_name IN (SELECT key FROM json_each(?1))
+            """, [map])
+        }
+        for table in Self.peerPayloadBookkeeping where bookkeeping.contains(table) {
+          try toolsExecuteUnlocked("""
+            UPDATE \(table) SET payload=json_set(payload,'$.table',(SELECT value FROM json_each(?1) WHERE key=json_extract(payload,'$.table')))
+            WHERE json_valid(payload) AND json_extract(payload,'$.table') IN (SELECT key FROM json_each(?1))
+            """, [map])
+        }
       }
 
       // v0.4.2 listed only the rows of its operator: the most common user ID

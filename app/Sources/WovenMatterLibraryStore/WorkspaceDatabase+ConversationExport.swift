@@ -45,9 +45,9 @@ extension WorkspaceDatabaseConnection {
       ("attachments", "SELECT * FROM message_attachments WHERE conversation_id=? OR message_id IN (SELECT id FROM messages WHERE conversation_id=?) ORDER BY created_at,rowid", [id,id]),
       ("references", "SELECT * FROM message_references WHERE conversation_id=? OR message_id IN (SELECT id FROM messages WHERE conversation_id=?) ORDER BY created_at,rowid", [id,id]),
       ("activities", "SELECT * FROM run_activities WHERE \(runPredicate) ORDER BY created_at,rowid", [id,id]),
-      ("historyEvents", "SELECT * FROM workspace_history_events WHERE \(runPredicate) ORDER BY sequence", [id,id]),
-      ("goal", "SELECT * FROM workspace_session_goals WHERE session_id=?", [id]),
-      ("deliveries", "SELECT * FROM workspace_session_deliveries WHERE message_id IN (SELECT id FROM messages WHERE conversation_id=?) ORDER BY created_at,rowid", [id]),
+      ("historyEvents", "SELECT * FROM history_events WHERE \(runPredicate) ORDER BY sequence", [id,id]),
+      ("goal", "SELECT * FROM session_goals WHERE session_id=?", [id]),
+      ("deliveries", "SELECT * FROM session_deliveries WHERE message_id IN (SELECT id FROM messages WHERE conversation_id=?) ORDER BY created_at,rowid", [id]),
     ]
     for (name, sql, bindings) in sections {
       try write(",\"\(name)\":[")
@@ -100,7 +100,7 @@ extension WorkspaceDatabaseConnection {
         let export = ConversationRunExport(exportedAt: Self.timestamp(Date()), conversation: conversation,
           content: content, activities: try runActivityRecordsUnlocked(conversationID: id),
           historyEvents: try historyRowsUnlocked("""
-            SELECT * FROM workspace_history_events WHERE conversation_id = ?
+            SELECT * FROM history_events WHERE conversation_id = ?
               OR run_id IN (SELECT id FROM runs WHERE conversation_id = ?)
             ORDER BY sequence
             """, values: [id, id]),

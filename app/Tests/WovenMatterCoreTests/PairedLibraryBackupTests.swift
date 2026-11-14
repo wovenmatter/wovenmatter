@@ -39,8 +39,8 @@ struct PairedLibraryBackupTests {
     #expect(try await Self.backupStarted(fixture.directory))
     let route = PairedMacRoute(deviceID: UUID().uuidString, libraryID: UUID().uuidString,
       endpoint: URL(string: "https://mini.example.ts.net:8443/wovenmatter")!, name: "Mini")
-    try await database.savePairedMacRoute(route)
-    #expect(try await database.pairedMacRoutes().contains(route))
+    try await database.saveMacRoute(route)
+    #expect(try await database.macRoutes().contains(route))
     // A write and a read both finished while the backup was still running.
     #expect(!FileManager.default.fileExists(atPath: file.path))
     try await backup.value

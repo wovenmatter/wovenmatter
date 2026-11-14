@@ -86,7 +86,7 @@ extension WorkspaceDatabaseConnection {
           CREATE TRIGGER IF NOT EXISTS harness_sessions_library_revision_\(operation.lowercased()) AFTER \(operation)\(sessionUpdate) ON harness_sessions
           WHEN EXISTS(SELECT 1 FROM library_items WHERE conversation_id=\(session).conversation_id)
           BEGIN UPDATE library_settings SET value=CAST(value AS INTEGER)+1 WHERE key='revision'; END;
-          CREATE TRIGGER IF NOT EXISTS workspace_session_deliveries_library_revision_\(operation.lowercased()) AFTER \(operation)\(deliveryUpdate) ON workspace_session_deliveries
+          CREATE TRIGGER IF NOT EXISTS session_deliveries_library_revision_\(operation.lowercased()) AFTER \(operation)\(deliveryUpdate) ON session_deliveries
           WHEN EXISTS(SELECT 1 FROM library_items WHERE \(deliveryMatch))
           BEGIN UPDATE library_settings SET value=CAST(value AS INTEGER)+1 WHERE key='revision'; END;
           """)
@@ -271,7 +271,7 @@ extension WorkspaceDatabaseConnection {
     """
   private static let libraryWorkspace = "coalesce(lower(s.remote_workspace_id),'local')"
   private static let librarySender =
-    "CASE WHEN m.role='user' AND NOT EXISTS(SELECT 1 FROM workspace_session_deliveries d WHERE d.message_id=m.id) THEN 'me' ELSE 'agent' END"
+    "CASE WHEN m.role='user' AND NOT EXISTS(SELECT 1 FROM session_deliveries d WHERE d.message_id=m.id) THEN 'me' ELSE 'agent' END"
   private static let libraryProjection = """
     SELECT json_object('id',i.id,'conversationID',c.id,'messageID',m.id,'conversationTitle',c.title,
       'workspaceID',\(libraryWorkspace),'workspaceName',coalesce(l.workspace_name,CASE WHEN s.remote_workspace_id IS NULL THEN 'Local workspace' ELSE 'Remote workspace' END),

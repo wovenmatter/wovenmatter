@@ -16,7 +16,7 @@ extension WorkspaceDatabaseConnection {
         throw WorkspaceToolError.invalid("Invalid pagination.")
       }
       var rows = try historyRowsUnlocked("""
-        SELECT t.rowid AS sequence,t.* FROM workspace_session_timers t
+        SELECT t.rowid AS sequence,t.* FROM session_timers t
         LEFT JOIN conversations c ON c.id=t.session_id
         WHERE \(Self.liveTimerTarget) AND t.session_id=? AND t.rowid>?
         ORDER BY t.rowid LIMIT ?
@@ -46,7 +46,7 @@ extension WorkspaceDatabaseConnection {
   static let liveTimerTarget = "((c.id IS NOT NULL AND c.deleted_at IS NULL) OR t.session_id LIKE 'woven:bot:%')"
 
   private func timersUnlocked(sessionID: String? = nil) throws -> [WorkspaceSessionTimer] {
-    let sql = "SELECT t.* FROM workspace_session_timers t LEFT JOIN conversations c ON c.id=t.session_id WHERE " + Self.liveTimerTarget
+    let sql = "SELECT t.* FROM session_timers t LEFT JOIN conversations c ON c.id=t.session_id WHERE " + Self.liveTimerTarget
       + (sessionID == nil ? "" : " AND t.session_id=?") + " ORDER BY t.next_fire_at,t.id"
     return try historyRowsUnlocked(sql, values: sessionID.map { [$0] } ?? []).map { value in
       let r = value.objectValue ?? [:]
@@ -86,7 +86,7 @@ extension WorkspaceDatabaseConnection {
         operation: creating == true ? "timers.create" : "timers.save", input: timer) {
         // Include timers whose destination was deleted: an upsert must not reuse
         // their identity or silently modify a timer hidden from the active list.
-        let existing = try historyRowsUnlocked("SELECT session_id FROM workspace_session_timers WHERE id=?", values: [timer.id])
+        let existing = try historyRowsUnlocked("SELECT session_id FROM session_timers WHERE id=?", values: [timer.id])
           .first?.objectValue?["session_id"]?.stringValue
         if creating == true, existing != nil { throw WorkspaceToolError.invalid("Timer already exists.") }
         if creating == false, existing == nil { throw WorkspaceToolError.notFound("Timer not found.") }
@@ -97,7 +97,7 @@ extension WorkspaceDatabaseConnection {
           throw WorkspaceToolError.invalid("A timer cannot move to another session.")
         }
         try toolsExecuteUnlocked("""
-          INSERT INTO workspace_session_timers(id,session_id,instruction,next_fire_at,interval_seconds,is_paused,outside_mcp)
+          INSERT INTO session_timers(id,session_id,instruction,next_fire_at,interval_seconds,is_paused,outside_mcp)
           VALUES(?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET instruction=excluded.instruction,
             next_fire_at=excluded.next_fire_at,interval_seconds=excluded.interval_seconds,
             is_paused=excluded.is_paused,outside_mcp=excluded.outside_mcp,pending_delivery_id=NULL
@@ -120,7 +120,7 @@ extension WorkspaceDatabaseConnection {
         }
         if let callerID { try requireTimerAccessUnlocked(sourceID: callerID, targetID: timer.sessionID) }
         if !paused, callerID.map(WovenMCPCaller.isAppWide) != true { try requireToolUnlocked(.timers, sessionID: timer.sessionID) }
-        try toolsExecuteUnlocked("UPDATE workspace_session_timers SET is_paused=?,pending_delivery_id=NULL,outside_mcp=CASE WHEN ? THEN 1 ELSE outside_mcp END WHERE id=?", [paused ? "1" : "0", callerID.map(WovenMCPCaller.isAppWide) == true && !paused ? "1" : "0", id])
+        try toolsExecuteUnlocked("UPDATE session_timers SET is_paused=?,pending_delivery_id=NULL,outside_mcp=CASE WHEN ? THEN 1 ELSE outside_mcp END WHERE id=?", [paused ? "1" : "0", callerID.map(WovenMCPCaller.isAppWide) == true && !paused ? "1" : "0", id])
         return timer.sessionID
       }
       if let callerID { try requireTimerAccessUnlocked(sourceID: callerID, targetID: outcome.result) }
@@ -134,7 +134,7 @@ extension WorkspaceDatabaseConnection {
         operation: "timers.remove", input: id) { () -> String? in
         guard let timer = try timersUnlocked().first(where: { $0.id == id }) else { return nil }
         if let callerID { try requireTimerAccessUnlocked(sourceID: callerID, targetID: timer.sessionID) }
-        try toolsExecuteUnlocked("DELETE FROM workspace_session_timers WHERE id=?", [id])
+        try toolsExecuteUnlocked("DELETE FROM session_timers WHERE id=?", [id])
         return timer.sessionID
       }
       if let callerID, let targetID = outcome.result {
@@ -147,7 +147,7 @@ extension WorkspaceDatabaseConnection {
   /// of the destination's agent-tool selection and subsequent MCP exposure.
   /// Explicit pauses and removals still fence pending occurrences normally.
   func timerExecutionEnabledUnlocked(id: String, sessionID: String) throws -> Bool {
-    let row = try historyRowsUnlocked("SELECT outside_mcp FROM workspace_session_timers WHERE id=?", values: [id]).first
+    let row = try historyRowsUnlocked("SELECT outside_mcp FROM session_timers WHERE id=?", values: [id]).first
     // A paused, revoked or disabled bot skips its timers without stopping the scheduler.
     if WovenMCPCaller.parseBot(sessionID) != nil {
       return (try? sessionToolsUnlocked(sessionID))?.enabled.contains(.timers) ?? false
@@ -165,7 +165,7 @@ extension WorkspaceDatabaseConnection {
         guard try timerExecutionEnabledUnlocked(id: timer.id, sessionID: timer.sessionID) else { continue }
         if timer.pendingDeliveryID == nil {
           timer.pendingDeliveryID = UUID().uuidString.lowercased()
-          try toolsExecuteUnlocked("UPDATE workspace_session_timers SET pending_delivery_id=? WHERE id=?", [timer.pendingDeliveryID, timer.id])
+          try toolsExecuteUnlocked("UPDATE session_timers SET pending_delivery_id=? WHERE id=?", [timer.pendingDeliveryID, timer.id])
         }
         due.append(timer)
       }
@@ -188,15 +188,15 @@ extension WorkspaceDatabaseConnection {
             timer.pendingDeliveryID == deliveryID else { return }
       // A failed preparation or uncertain backend outcome does not consume an
       // occurrence. Keep its identity until accepted, cancelled or edited.
-      guard !(try historyRowsUnlocked("SELECT 1 FROM workspace_session_deliveries WHERE id=? AND status IN ('accepted','cancelled')",
+      guard !(try historyRowsUnlocked("SELECT 1 FROM session_deliveries WHERE id=? AND status IN ('accepted','cancelled')",
         values: [deliveryID])).isEmpty else { return }
       if let interval = timer.intervalSeconds {
         // Coalesce missed firings, including time while the application was closed.
         let skipped = max(1, floor(now.timeIntervalSince(timer.nextFireAt) / interval) + 1)
         let next = timer.nextFireAt.addingTimeInterval(skipped * interval)
-        try toolsExecuteUnlocked("UPDATE workspace_session_timers SET next_fire_at=?,pending_delivery_id=NULL WHERE id=?", [String(next.timeIntervalSince1970), id])
+        try toolsExecuteUnlocked("UPDATE session_timers SET next_fire_at=?,pending_delivery_id=NULL WHERE id=?", [String(next.timeIntervalSince1970), id])
       } else {
-        try toolsExecuteUnlocked("UPDATE workspace_session_timers SET is_paused=1,pending_delivery_id=NULL WHERE id=?", [id])
+        try toolsExecuteUnlocked("UPDATE session_timers SET is_paused=1,pending_delivery_id=NULL WHERE id=?", [id])
       }
     }
   }

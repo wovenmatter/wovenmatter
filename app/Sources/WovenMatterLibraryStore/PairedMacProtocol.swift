@@ -59,13 +59,13 @@ public struct PairedMacJoinReply: Codable, Sendable, Equatable {
   }
 }
 extension WorkspaceDatabase {
-  public func savePairedMacRoute(_ route: PairedMacRoute) async throws {
+  public func saveMacRoute(_ route: PairedMacRoute) async throws {
     try route.validate()
-    try await write { try $0.toolsExecuteUnlocked("INSERT INTO paired_mac_routes VALUES(?,?,?,?) ON CONFLICT(device_id) DO UPDATE SET library_id=excluded.library_id,endpoint=excluded.endpoint,name=excluded.name", [route.deviceID, route.libraryID, route.endpoint.absoluteString, route.name]) }
+    try await write { try $0.toolsExecuteUnlocked("INSERT INTO mac_routes VALUES(?,?,?,?) ON CONFLICT(device_id) DO UPDATE SET library_id=excluded.library_id,endpoint=excluded.endpoint,name=excluded.name", [route.deviceID, route.libraryID, route.endpoint.absoluteString, route.name]) }
   }
-  public func pairedMacRoutes() async throws -> [PairedMacRoute] {
+  public func macRoutes() async throws -> [PairedMacRoute] {
     try await read { connection in
-      try connection.historyRowsUnlocked("SELECT * FROM paired_mac_routes ORDER BY device_id", values: []).map {
+      try connection.historyRowsUnlocked("SELECT * FROM mac_routes ORDER BY device_id", values: []).map {
         let row = $0.objectValue!
         guard let endpoint = URL(string: row["endpoint"]!.stringValue!) else { throw WorkspaceDatabaseError.corruptRow }
         let route = PairedMacRoute(deviceID: row["device_id"]!.stringValue!, libraryID: row["library_id"]!.stringValue!, endpoint: endpoint, name: row["name"]!.stringValue!)

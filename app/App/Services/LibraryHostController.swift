@@ -517,7 +517,7 @@ final class LibraryHostController {
         let expectedGeneration = generation
         defer { registryRefreshInProgress = false }
         let identity = try await database.libraryIdentity()
-        try await database.savePairedRemoteWorkspaces(model.remoteWorkspaces.workspaces)
+        try await database.saveRemoteWorkspaceConfigurations(model.remoteWorkspaces.workspaces)
         let existing = try await database.libraryExecutionWorkspaces()
         let localID = localExecutionWorkspaceID(libraryID: identity.libraryID)
         // Local folders are bound to `device:<device id>`, which is

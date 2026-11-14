@@ -73,11 +73,11 @@ extension WorkspaceDatabaseConnection {
         CREATE TABLE IF NOT EXISTS paired_library_quarantine(id TEXT PRIMARY KEY,peer_id TEXT NOT NULL,payload TEXT NOT NULL,error TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS paired_library_cursors(peer_id TEXT PRIMARY KEY,pulled INTEGER NOT NULL DEFAULT 0,pushed INTEGER NOT NULL DEFAULT 0);
         CREATE TABLE IF NOT EXISTS paired_library_state(name TEXT PRIMARY KEY,value TEXT NOT NULL);
-        CREATE TABLE IF NOT EXISTS paired_mac_routes(device_id TEXT PRIMARY KEY,library_id TEXT NOT NULL,endpoint TEXT NOT NULL,name TEXT NOT NULL);
-        CREATE TABLE IF NOT EXISTS paired_remote_workspaces(id TEXT PRIMARY KEY,owner_device_id TEXT NOT NULL,configuration TEXT NOT NULL,deleted INTEGER NOT NULL DEFAULT 0);
-        CREATE TABLE IF NOT EXISTS paired_agent_owners(id TEXT PRIMARY KEY,device_id TEXT NOT NULL);
-        CREATE TABLE IF NOT EXISTS paired_conversation_owners(id TEXT PRIMARY KEY,device_id TEXT NOT NULL);
-        CREATE TABLE IF NOT EXISTS paired_calendar_owners(id TEXT PRIMARY KEY,device_id TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS mac_routes(device_id TEXT PRIMARY KEY,library_id TEXT NOT NULL,endpoint TEXT NOT NULL,name TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS remote_workspace_configurations(id TEXT PRIMARY KEY,owner_device_id TEXT NOT NULL,configuration TEXT NOT NULL,deleted INTEGER NOT NULL DEFAULT 0);
+        CREATE TABLE IF NOT EXISTS agent_owners(id TEXT PRIMARY KEY,device_id TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS conversation_owners(id TEXT PRIMARY KEY,device_id TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS calendar_item_owners(id TEXT PRIMARY KEY,device_id TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS paired_library_file_cursors(peer_id TEXT PRIMARY KEY,cursor TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS paired_library_pending(id TEXT PRIMARY KEY,payload TEXT NOT NULL,peer_id TEXT NOT NULL,cursor INTEGER NOT NULL);
         CREATE TABLE IF NOT EXISTS paired_library_seeded(table_name TEXT PRIMARY KEY);
@@ -91,16 +91,16 @@ extension WorkspaceDatabaseConnection {
         DROP TRIGGER IF EXISTS conversations_owner_insert;
         CREATE TRIGGER IF NOT EXISTS agents_owner_insert AFTER INSERT ON agents
         WHEN (SELECT applying FROM paired_library_clock WHERE singleton=1)=0 BEGIN
-          INSERT OR IGNORE INTO paired_agent_owners VALUES(NEW.id,(SELECT device_id FROM paired_library_clock WHERE singleton=1));
+          INSERT OR IGNORE INTO agent_owners VALUES(NEW.id,(SELECT device_id FROM paired_library_clock WHERE singleton=1));
         END;
         CREATE TRIGGER conversations_owner_insert AFTER INSERT ON conversations
         WHEN (SELECT applying FROM paired_library_clock WHERE singleton=1)=0
           AND NOT EXISTS(SELECT 1 FROM execution_conversations c WHERE c.id=NEW.id) BEGIN
-          INSERT OR IGNORE INTO paired_conversation_owners VALUES(NEW.id,(SELECT device_id FROM paired_library_clock WHERE singleton=1));
+          INSERT OR IGNORE INTO conversation_owners VALUES(NEW.id,(SELECT device_id FROM paired_library_clock WHERE singleton=1));
         END;
         CREATE TRIGGER IF NOT EXISTS calendar_items_owner_insert AFTER INSERT ON calendar_items
         WHEN (SELECT applying FROM paired_library_clock WHERE singleton=1)=0 BEGIN
-          INSERT OR IGNORE INTO paired_calendar_owners VALUES(NEW.id,(SELECT device_id FROM paired_library_clock WHERE singleton=1));
+          INSERT OR IGNORE INTO calendar_item_owners VALUES(NEW.id,(SELECT device_id FROM paired_library_clock WHERE singleton=1));
         END;
         """)
       // Replaying observed rows must not manufacture fresh native history or
@@ -338,9 +338,9 @@ extension WorkspaceDatabaseConnection {
       let current = try historyRowsUnlocked("SELECT workspace_id FROM execution_conversations WHERE id=?", values: [id])
         .first?.objectValue?["workspace_id"]?.stringValue
       return try current == nil || servesWorkspace(current)
-    case "paired_mac_routes", "paired_remote_workspaces":
+    case "mac_routes", "remote_workspace_configurations":
       return false
-    case "paired_agent_owners", "paired_conversation_owners", "paired_calendar_owners":
+    case "agent_owners", "conversation_owners", "calendar_item_owners":
       guard column("device_id")?.lowercased() == own, let id = column("id") else { return false }
       let current = try historyRowsUnlocked("SELECT device_id FROM \(record.table) WHERE id=?", values: [id]).first?.objectValue?["device_id"]?.stringValue
       return current == nil || current?.lowercased() == own
@@ -422,7 +422,7 @@ extension WorkspaceDatabaseConnection {
         for (origin, tick) in record.vector { vector[origin] = max(vector[origin, default: 0], tick) }
         try toolsExecuteUnlocked("UPDATE paired_library_clock SET tick=MAX(tick,CAST(? AS INTEGER))", [String(record.clock)])
       }
-      try projectPairedConversationOwners(scope)
+      try projectConversationOwners(scope)
       try toolsExecuteUnlocked("UPDATE paired_library_clock SET vector=?,applying=0", [try peerJSON(vector)])
       try reassertLocalRowsUnlocked(tables)
       if let cursor {
@@ -468,7 +468,7 @@ extension WorkspaceDatabaseConnection {
     if next.vector != winner?.vector {
       try materializePeerRecord(next, table: table)
       try toolsExecuteUnlocked("INSERT INTO paired_library_rows VALUES(?,?,?) ON CONFLICT(table_name,record_key) DO UPDATE SET payload=excluded.payload", [next.table, next.key, try peerJSON(next)])
-      for name in ["conversations", "paired_conversation_owners", "execution_conversations"] where next.table == name {
+      for name in ["conversations", "conversation_owners", "execution_conversations"] where next.table == name {
         if let id = next.row["id"]?.value { scope.conversations.insert(id) }
       }
       if table.columns.contains("conversation_id"), let id = next.row["conversation_id"]?.value { scope.conversations.insert(id) }
@@ -491,7 +491,7 @@ extension WorkspaceDatabaseConnection {
             let table = tables[name] else { continue }
       try settleFrontierUnlocked(try frontierMembersUnlocked(table: name, key: key), table: table, scope: &scope)
     }
-    try projectPairedConversationOwners(scope)
+    try projectConversationOwners(scope)
     try executeUnlocked("UPDATE paired_library_clock SET applying=0 WHERE singleton=1")
     try reassertLocalRowsUnlocked(tables)
   }
@@ -610,7 +610,7 @@ extension WorkspaceDatabaseConnection {
   /// veto, so stale routing can still be repaired.
   private func executesNativelyUnlocked(_ conversation: String, local: String) throws -> Bool {
     try historyRowsUnlocked("""
-      SELECT 1 AS owned FROM paired_conversation_owners o WHERE o.id=?1 AND o.device_id=?2
+      SELECT 1 AS owned FROM conversation_owners o WHERE o.id=?1 AND o.device_id=?2
         AND NOT EXISTS(SELECT 1 FROM execution_adoptions a WHERE a.conversation_id=?1)
         AND NOT EXISTS(SELECT 1 FROM retained_execution_history r WHERE r.conversation_id=?1)
         AND NOT EXISTS(SELECT 1 FROM execution_conversations x WHERE x.id=?1 AND NOT EXISTS(
@@ -673,11 +673,11 @@ extension WorkspaceDatabaseConnection {
       try cancelQueuedGoalDeliveryUnlocked(goal)
       goal.status = .paused; goal.evidence = "This conversation was moved to Trash. Resume to continue."
       try saveGoalUnlocked(goal)
-      if reassertGoal { try toolsExecuteUnlocked("INSERT OR IGNORE INTO paired_library_reassert VALUES('workspace_session_goals',?)", [try peerJSON([id])]) }
+      if reassertGoal { try toolsExecuteUnlocked("INSERT OR IGNORE INTO paired_library_reassert VALUES('session_goals',?)", [try peerJSON([id])]) }
     }
-    try toolsExecuteUnlocked("UPDATE workspace_session_timers SET is_paused=1,pending_delivery_id=NULL WHERE session_id=?", [id])
+    try toolsExecuteUnlocked("UPDATE session_timers SET is_paused=1,pending_delivery_id=NULL WHERE session_id=?", [id])
     try toolsExecuteUnlocked("""
-      UPDATE workspace_session_deliveries SET status='cancelled' WHERE (target_id=? OR source_id=?)
+      UPDATE session_deliveries SET status='cancelled' WHERE (target_id=? OR source_id=?)
         AND (status='queued' OR (status='sending' AND transport_started=0))
       """, [id, id])
   }
@@ -703,7 +703,7 @@ extension WorkspaceDatabaseConnection {
     let fields = hardDelete ? table.keys : names
     for (index, name) in fields.enumerated() {
       var value = record.row[name]!
-      if !hardDelete, table.name == "workspace_tool_settings", name == "value" { value = try preservingLocalExposure(value, record: record, table: table) }
+      if !hardDelete, table.name == "tool_settings", name == "value" { value = try preservingLocalExposure(value, record: record, table: table) }
       try bindPeer(value, query, Int32(index + 1))
     }
     // Ownership rows are shared records of their own. An editor is not an
@@ -748,12 +748,12 @@ extension WorkspaceDatabaseConnection {
 
   /// Projects only conversations touched by this receive. Unchanged foreign
   /// transcripts are not rewritten on every bounded synchronization turn.
-  private func projectPairedConversationOwners(_ scope: ProjectionScope) throws {
+  private func projectConversationOwners(_ scope: ProjectionScope) throws {
     guard !scope.conversations.isEmpty || !scope.owners.isEmpty else { return }
     let localID = try libraryIdentityUnlocked().hostDeviceID
     let workspaces = try libraryExecutionWorkspaces()
     let rows = try historyRowsUnlocked("""
-      SELECT id,device_id FROM paired_conversation_owners
+      SELECT id,device_id FROM conversation_owners
       WHERE id IN (SELECT value FROM json_each(?)) OR device_id IN (SELECT value FROM json_each(?))
       """, values: [try peerJSON(scope.conversations.sorted()), try peerJSON(scope.owners.sorted())])
     // A projection onto a Mac workspace is synthetic paired-Mac routing and is

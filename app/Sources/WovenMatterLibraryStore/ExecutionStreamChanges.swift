@@ -38,8 +38,8 @@ extension WorkspaceDatabaseConnection {
     ("messages", .message, "conversation_id", "id"),
     ("runs", .run, "conversation_id", "id"),
     ("run_activities", .runEvent, "conversation_id", "id"),
-    ("workspace_session_goals", .session, "session_id", "session_id"),
-    ("workspace_session_tools", .session, "session_id", "session_id"),
+    ("session_goals", .session, "session_id", "session_id"),
+    ("session_tools", .session, "session_id", "session_id"),
   ]
 
   /// Whether `conversation` (an SQL expression) is a conversation this Mac
@@ -50,7 +50,7 @@ extension WorkspaceDatabaseConnection {
   static func executionStreamIsLocal(_ conversation: String, requireSession: Bool = true) -> String {
     var clauses = [
       "NOT EXISTS (SELECT 1 FROM execution_conversations f WHERE f.id = \(conversation) AND f.deleted = 0)",
-      "NOT EXISTS (SELECT 1 FROM paired_conversation_owners o WHERE o.id = \(conversation) AND o.device_id <> COALESCE((SELECT host_device_id FROM library_identity WHERE singleton = 1), ''))",
+      "NOT EXISTS (SELECT 1 FROM conversation_owners o WHERE o.id = \(conversation) AND o.device_id <> COALESCE((SELECT host_device_id FROM library_identity WHERE singleton = 1), ''))",
     ]
     if requireSession {
       clauses.append("EXISTS (SELECT 1 FROM harness_sessions s WHERE s.conversation_id = \(conversation) AND s.remote_workspace_id IS NULL)")

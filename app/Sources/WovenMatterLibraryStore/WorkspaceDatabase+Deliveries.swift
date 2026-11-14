@@ -35,7 +35,7 @@ extension WorkspaceDatabaseConnection {
       try requireToolSessionUnlocked(targetID)
       if let existing = try deliveryUnlocked(requestID) {
         let storedEventKey = try historyRowsUnlocked(
-          "SELECT event_key FROM workspace_session_deliveries WHERE id=?", values: [requestID])
+          "SELECT event_key FROM session_deliveries WHERE id=?", values: [requestID])
           .first?.objectValue?["event_key"]?.stringValue
         guard existing.sourceID == sourceID, existing.targetID == targetID,
               existing.text == text, existing.kind == kind,
@@ -44,15 +44,15 @@ extension WorkspaceDatabaseConnection {
         }
         return existing
       }
-      if let eventKey, let existing = try historyRowsUnlocked("SELECT id FROM workspace_session_deliveries WHERE event_key=?", values: [eventKey]).first?.objectValue?["id"]?.stringValue,
+      if let eventKey, let existing = try historyRowsUnlocked("SELECT id FROM session_deliveries WHERE event_key=?", values: [eventKey]).first?.objectValue?["id"]?.stringValue,
          let delivery = try deliveryUnlocked(existing) { return delivery }
       try toolsExecuteUnlocked("""
-        INSERT INTO workspace_session_deliveries(id,source_id,target_id,content,status,source_agent,source_title,
+        INSERT INTO session_deliveries(id,source_id,target_id,content,status,source_agent,source_title,
           kind,purpose,target_title,target_harness,target_model,event_key)
         SELECT ?,?,?,?,'queued',coalesce(b.display_name,s.runtime_kind,c.agent_codename,'wovenmatter'),
           coalesce(b.display_name,c.title,'Outside agent'),?,?,coalesce(bt.display_name,t.title,'Bot'),
           coalesce(bt.display_name,d.runtime_kind,t.agent_codename),d.model,?
-        FROM workspace_mcp_callers b JOIN workspace_mcp_callers bt ON bt.id=?
+        FROM mcp_callers b JOIN mcp_callers bt ON bt.id=?
         LEFT JOIN conversations c ON c.id=b.id
         LEFT JOIN conversations t ON t.id=bt.id
         LEFT JOIN harness_sessions s ON s.conversation_id=c.id
@@ -68,14 +68,14 @@ extension WorkspaceDatabaseConnection {
     try transaction {
       let id = try canonicalDeliveryID(id)
       guard let delivery = try deliveryUnlocked(id), delivery.status == "queued" else { return nil }
-      let retryAfter = try historyRowsUnlocked("SELECT retry_after FROM workspace_session_deliveries WHERE id=?", values: [id])
+      let retryAfter = try historyRowsUnlocked("SELECT retry_after FROM session_deliveries WHERE id=?", values: [id])
         .first?.objectValue?["retry_after"]?.doubleValue
       if let retryAfter, retryAfter > now.timeIntervalSince1970 { return nil }
       guard try toolDeliveryAuthorizedUnlocked(delivery) else {
-        try toolsExecuteUnlocked("UPDATE workspace_session_deliveries SET status='cancelled' WHERE id=?", [id])
+        try toolsExecuteUnlocked("UPDATE session_deliveries SET status='cancelled' WHERE id=?", [id])
         return nil
       }
-      try toolsExecuteUnlocked("UPDATE workspace_session_deliveries SET status='sending',transport_started=0,retry_after=NULL WHERE id=? AND status='queued'", [id])
+      try toolsExecuteUnlocked("UPDATE session_deliveries SET status='sending',transport_started=0,retry_after=NULL WHERE id=? AND status='queued'", [id])
       return try deliveryUnlocked(id)
     }
   }
@@ -95,7 +95,7 @@ extension WorkspaceDatabaseConnection {
       try markToolDeliveryTransportStartedUnlocked(id: id)
       if let nativeCommand {
         guard !nativeCommand.isEmpty, nativeCommand.utf8.count <= 256 else { throw WorkspaceToolError.invalid("Invalid native command.") }
-        try toolsExecuteUnlocked("UPDATE workspace_session_deliveries SET native_command=? WHERE id=?", [nativeCommand, id])
+        try toolsExecuteUnlocked("UPDATE session_deliveries SET native_command=? WHERE id=?", [nativeCommand, id])
       }
     }
   }
@@ -103,7 +103,7 @@ extension WorkspaceDatabaseConnection {
   func markToolDeliveryTransportStartedUnlocked(id: String) throws {
     let id = try canonicalDeliveryID(id)
     try validateClaimedToolDeliveryUnlocked(id: id)
-    try toolsExecuteUnlocked("UPDATE workspace_session_deliveries SET transport_started=1 WHERE id=?", [id])
+    try toolsExecuteUnlocked("UPDATE session_deliveries SET transport_started=1 WHERE id=?", [id])
   }
 
   /// A scheduler may retry preparation with the same occurrence identity. Once
@@ -112,15 +112,15 @@ extension WorkspaceDatabaseConnection {
     try transaction {
       let id = try canonicalDeliveryID(id)
       guard let delivery = try deliveryUnlocked(id), delivery.status == "sending" else { return }
-      let submitted = try historyRowsUnlocked("SELECT transport_started FROM workspace_session_deliveries WHERE id=?", values: [id])
+      let submitted = try historyRowsUnlocked("SELECT transport_started FROM session_deliveries WHERE id=?", values: [id])
         .first?.objectValue?["transport_started"]?.intValue != 0
       if !submitted, try !toolDeliveryAuthorizedUnlocked(delivery) {
-        try toolsExecuteUnlocked("UPDATE workspace_session_deliveries SET status='cancelled' WHERE id=?", [id])
+        try toolsExecuteUnlocked("UPDATE session_deliveries SET status='cancelled' WHERE id=?", [id])
         return
       }
       let scheduled = WovenMCPCaller.parseBot(delivery.targetID) != nil || delivery.kind == .timer || delivery.kind == .notification || delivery.kind == .calendar || delivery.kind == .goal
       let status = submitted ? "uncertain" : scheduled ? "queued" : "failed"
-      try toolsExecuteUnlocked("UPDATE workspace_session_deliveries SET status=?,retry_after=? WHERE id=?",
+      try toolsExecuteUnlocked("UPDATE session_deliveries SET status=?,retry_after=? WHERE id=?",
         [status, status == "queued" ? String(now.addingTimeInterval(30).timeIntervalSince1970) : nil, id])
     }
   }
@@ -139,7 +139,7 @@ extension WorkspaceDatabaseConnection {
     // A wake-up's source is a session on another workspace (SessionWakeUps):
     // only its target, the caller that created that session, must still allow it.
     if delivery.kind == .notification,
-       let key = try historyRowsUnlocked("SELECT event_key FROM workspace_session_deliveries WHERE id=?", values: [delivery.id]).first?.objectValue?["event_key"]?.stringValue,
+       let key = try historyRowsUnlocked("SELECT event_key FROM session_deliveries WHERE id=?", values: [delivery.id]).first?.objectValue?["event_key"]?.stringValue,
        key.hasPrefix(Self.wakeUpEventPrefix) {
       if !WovenMCPCaller.isAppWide(delivery.targetID) {
         guard !(try historyRowsUnlocked("SELECT 1 FROM conversations WHERE id=? AND deleted_at IS NULL", values: [delivery.targetID])).isEmpty else { return false }
@@ -157,14 +157,14 @@ extension WorkspaceDatabaseConnection {
     case .message, .created: return source.enabled.contains(.sessions) && (WovenMCPCaller.parseBot(delivery.targetID) == nil || target.enabled.contains(.sessions))
     case .timer:
       guard let timerID = try historyRowsUnlocked(
-        "SELECT id FROM workspace_session_timers WHERE session_id=? AND pending_delivery_id=? AND is_paused=0",
+        "SELECT id FROM session_timers WHERE session_id=? AND pending_delivery_id=? AND is_paused=0",
         values: [delivery.targetID, delivery.id]).first?.objectValue?["id"]?.stringValue else { return false }
       return try timerExecutionEnabledUnlocked(id: timerID, sessionID: delivery.targetID)
     case .notification:
       let relation = try relationshipUnlocked(delivery.sourceID)
-      if let key = try historyRowsUnlocked("SELECT event_key FROM workspace_session_deliveries WHERE id=?", values: [delivery.id]).first?.objectValue?["event_key"]?.stringValue,
+      if let key = try historyRowsUnlocked("SELECT event_key FROM session_deliveries WHERE id=?", values: [delivery.id]).first?.objectValue?["event_key"]?.stringValue,
          key.hasPrefix("coordination:") {
-        let epoch = try historyRowsUnlocked("SELECT coordination_epoch FROM workspace_session_relationships WHERE session_id=?", values: [delivery.sourceID]).first?.objectValue?["coordination_epoch"]?.stringValue ?? ""
+        let epoch = try historyRowsUnlocked("SELECT coordination_epoch FROM session_relationships WHERE session_id=?", values: [delivery.sourceID]).first?.objectValue?["coordination_epoch"]?.stringValue ?? ""
         guard key.hasPrefix("coordination:" + epoch + ":") else { return false }
       }
       return target.enabled.contains(.sessions) && relation.coordinatorID == delivery.targetID && relation.notificationsEnabled
@@ -183,7 +183,7 @@ extension WorkspaceDatabaseConnection {
     try transaction {
       let id = try canonicalDeliveryID(id)
       guard let current = try deliveryUnlocked(id), current.status != "accepted" else { return }
-      try toolsExecuteUnlocked("UPDATE workspace_session_deliveries SET status=?,message_id=coalesce(?,message_id),failure_code=?,failure_reason=? WHERE id=?",
+      try toolsExecuteUnlocked("UPDATE session_deliveries SET status=?,message_id=coalesce(?,message_id),failure_code=?,failure_reason=? WHERE id=?",
         [status, messageID, failureCode, failureReason, id])
     }
   }
@@ -191,9 +191,9 @@ extension WorkspaceDatabaseConnection {
   public func recoverToolDeliveries() throws {
     try transaction {
       try executeUnlocked("""
-        UPDATE workspace_session_deliveries SET status=CASE
+        UPDATE session_deliveries SET status=CASE
           WHEN transport_started=1 THEN 'uncertain'
-          WHEN kind IN ('timer','notification','calendar','goal') OR target_id IN (SELECT id FROM workspace_mcp_callers WHERE machine_id IS NOT NULL) THEN 'queued' ELSE 'failed' END
+          WHEN kind IN ('timer','notification','calendar','goal') OR target_id IN (SELECT id FROM mcp_callers WHERE machine_id IS NOT NULL) THEN 'queued' ELSE 'failed' END
           WHERE status='sending' AND message_id IS NULL
         """)
     }
@@ -205,7 +205,7 @@ extension WorkspaceDatabaseConnection {
 
   public func sessionDeliveries(sessionID: String? = nil, queuedOnly: Bool = false, limit: Int = 200, beforeID: String? = nil, activityOnly: Bool = false, includeCalendar: Bool = true) throws -> [WorkspaceSessionDelivery] {
     try withLock {
-      var sql = "SELECT rowid AS sequence,* FROM workspace_session_deliveries WHERE 1=1"
+      var sql = "SELECT rowid AS sequence,* FROM session_deliveries WHERE 1=1"
       var values: [String?] = []
       if !includeCalendar { sql += " AND kind!='calendar'" }
       if let sessionID {
@@ -243,7 +243,7 @@ extension WorkspaceDatabaseConnection {
         throw WorkspaceToolError.invalid("The delivery cursor is unavailable for this session.")
       }
       return try historyRowsUnlocked("""
-        SELECT rowid AS sequence,* FROM workspace_session_deliveries
+        SELECT rowid AS sequence,* FROM session_deliveries
           WHERE ((source_id=? AND kind IN ('message','created')) OR (target_id=? AND native_command IS NOT NULL))
           AND rowid>=? ORDER BY rowid DESC
         """, values: [sessionID, sessionID, String(sequence)]).map(deliveryFromRow)
@@ -252,7 +252,7 @@ extension WorkspaceDatabaseConnection {
 
   private func deliveryUnlocked(_ id: String) throws -> WorkspaceSessionDelivery? {
     let id = try canonicalDeliveryID(id)
-    return try historyRowsUnlocked("SELECT rowid AS sequence,* FROM workspace_session_deliveries WHERE id=?", values: [id]).first.map(deliveryFromRow)
+    return try historyRowsUnlocked("SELECT rowid AS sequence,* FROM session_deliveries WHERE id=?", values: [id]).first.map(deliveryFromRow)
   }
 
   func canonicalDeliveryID(_ id: String) throws -> String {

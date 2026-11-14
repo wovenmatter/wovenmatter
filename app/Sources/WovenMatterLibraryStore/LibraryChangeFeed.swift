@@ -25,7 +25,7 @@ extension WorkspaceDatabaseConnection {
     ("calendar_published_runs", "calendar", "id"),
     ("dictation_history", "dictation", "id"),
     ("execution_workspaces", "registry", "id"),
-    ("device_saved_artifacts", "artifacts", "id"),
+    ("saved_artifacts", "artifacts", "id"),
   ]
 
   /// Kinds that do not wake a phone: transcripts (the open chat streams, and

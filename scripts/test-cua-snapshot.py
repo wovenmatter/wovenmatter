@@ -120,7 +120,7 @@ def main():
 
     def settings():
         with sqlite3.connect('file:' + str(support / 'workspace.sqlite') + '?mode=ro', uri=True) as db:
-            return json.loads(db.execute('SELECT value FROM workspace_tool_settings WHERE id=1').fetchone()[0])
+            return json.loads(db.execute('SELECT value FROM tool_settings WHERE id=1').fetchone()[0])
 
     defaults_before = settings()
     save()

@@ -122,7 +122,7 @@ extension WorkspaceDatabaseConnection {
   /// The paired Mac that owns this chat when it is not this Mac.
   func pairedForeignOwnerUnlocked(_ id: String) throws -> String? {
     try historyRowsUnlocked("""
-      SELECT o.device_id FROM paired_conversation_owners o JOIN library_identity i ON i.singleton=1
+      SELECT o.device_id FROM conversation_owners o JOIN library_identity i ON i.singleton=1
       WHERE o.id=? AND o.device_id<>i.host_device_id
       """, values: [id]).first?.objectValue?["device_id"]?.stringValue
   }

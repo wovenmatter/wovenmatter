@@ -449,7 +449,7 @@ extension WorkspaceDatabaseConnection {
               WHERE local_session.conversation_id = conversations.id
             ),
             'unread', unread, 'last_message_preview', last_message_preview,
-            'is_scheduled_task', EXISTS(SELECT 1 FROM workspace_calendar_sessions WHERE id=conversations.id),
+            'is_scheduled_task', EXISTS(SELECT 1 FROM calendar_task_sessions WHERE id=conversations.id),
             'imported_at',
               (SELECT imported_at FROM session_imports WHERE conversation_id = conversations.id),
             'last_message_at', last_message_at, 'folder_id', folder_id,

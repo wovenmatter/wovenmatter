@@ -6,23 +6,23 @@ extension WorkspaceDatabaseConnection {
     func migrateGoals() throws {
         try transaction {
             try executeUnlocked("""
-                CREATE TABLE IF NOT EXISTS workspace_session_goals(
+                CREATE TABLE IF NOT EXISTS session_goals(
                   session_id TEXT PRIMARY KEY REFERENCES conversations(id) ON DELETE CASCADE, value TEXT NOT NULL);
-                CREATE TABLE IF NOT EXISTS workspace_goal_runs(
+                CREATE TABLE IF NOT EXISTS goal_runs(
                   goal_id TEXT NOT NULL, run_id TEXT NOT NULL, PRIMARY KEY(goal_id,run_id));
-                CREATE TABLE IF NOT EXISTS workspace_goal_usage(
+                CREATE TABLE IF NOT EXISTS goal_usage(
                   goal_id TEXT NOT NULL, run_id TEXT NOT NULL, tokens INTEGER NOT NULL,
                   PRIMARY KEY(goal_id,run_id));
-                CREATE TRIGGER IF NOT EXISTS workspace_session_goals_cleanup_delete BEFORE DELETE ON workspace_session_goals BEGIN
-                  DELETE FROM workspace_goal_runs WHERE goal_id=json_extract(old.value,'$.id');
-                  DELETE FROM workspace_goal_usage WHERE goal_id=json_extract(old.value,'$.id');
+                CREATE TRIGGER IF NOT EXISTS session_goals_cleanup_delete BEFORE DELETE ON session_goals BEGIN
+                  DELETE FROM goal_runs WHERE goal_id=json_extract(old.value,'$.id');
+                  DELETE FROM goal_usage WHERE goal_id=json_extract(old.value,'$.id');
                 END;
                 """)
         }
     }
 
     func goalUnlocked(_ sessionID: String) throws -> WorkspaceGoal? {
-        guard let json = try historyRowsUnlocked("SELECT value FROM workspace_session_goals WHERE session_id=?", values: [sessionID])
+        guard let json = try historyRowsUnlocked("SELECT value FROM session_goals WHERE session_id=?", values: [sessionID])
             .first?.objectValue?["value"]?.stringValue else { return nil }
         var goal = try JSONDecoder().decode(WorkspaceGoal.self, from: Data(json.utf8))
         goal.completedTurns = try completedTurnsUnlocked(goal.id) ?? goal.completedTurns
@@ -30,17 +30,17 @@ extension WorkspaceDatabaseConnection {
     }
 
     private func completedTurnsUnlocked(_ goalID: String) throws -> Int? {
-        try historyRowsUnlocked("SELECT count(*) AS count FROM workspace_goal_runs g JOIN runs r ON r.id=g.run_id WHERE g.goal_id=? AND r.status='completed'", values: [goalID]).first?.objectValue?["count"]?.intValue
+        try historyRowsUnlocked("SELECT count(*) AS count FROM goal_runs g JOIN runs r ON r.id=g.run_id WHERE g.goal_id=? AND r.status='completed'", values: [goalID]).first?.objectValue?["count"]?.intValue
     }
 
     func saveGoalUnlocked(_ goal: WorkspaceGoal) throws {
-        try toolsExecuteUnlocked("INSERT INTO workspace_session_goals(session_id,value) VALUES(?,?) ON CONFLICT(session_id) DO UPDATE SET value=excluded.value",
+        try toolsExecuteUnlocked("INSERT INTO session_goals(session_id,value) VALUES(?,?) ON CONFLICT(session_id) DO UPDATE SET value=excluded.value",
             [goal.sessionID, try toolsJSON(goal)])
     }
 
     func captureGoalRunsUnlocked(_ goal: inout WorkspaceGoal) throws {
         guard goal.status == .active else { return }
-        try toolsExecuteUnlocked("INSERT OR IGNORE INTO workspace_goal_runs(goal_id,run_id) SELECT ?,id FROM runs WHERE conversation_id=? AND rowid>?", [goal.id, goal.sessionID, String(goal.enrolledRunSequence)])
+        try toolsExecuteUnlocked("INSERT OR IGNORE INTO goal_runs(goal_id,run_id) SELECT ?,id FROM runs WHERE conversation_id=? AND rowid>?", [goal.id, goal.sessionID, String(goal.enrolledRunSequence)])
         goal.enrolledRunSequence = try historyRowsUnlocked("SELECT coalesce(max(rowid),0) AS sequence FROM runs WHERE conversation_id=?", values: [goal.sessionID]).first?.objectValue?["sequence"]?.goalInteger ?? goal.enrolledRunSequence
         // Newly enrolled runs may already be complete. Budget checks in this
         // transaction must include them before reserving another continuation.
@@ -50,7 +50,7 @@ extension WorkspaceDatabaseConnection {
     public func sessionGoals() throws -> [WorkspaceGoal] {
         try withLock {
             try historyRowsUnlocked("""
-                SELECT g.value FROM workspace_session_goals g JOIN conversations c ON c.id=g.session_id
+                SELECT g.value FROM session_goals g JOIN conversations c ON c.id=g.session_id
                 WHERE c.deleted_at IS NULL AND c.is_archived=0 ORDER BY g.session_id
                 """, values: []).compactMap { row in
                     guard let json = row.objectValue?["value"]?.stringValue else { return nil }
@@ -63,7 +63,7 @@ extension WorkspaceDatabaseConnection {
 
     func cancelQueuedGoalDeliveryUnlocked(_ goal: WorkspaceGoal) throws {
         guard let id = goal.pendingDeliveryID else { return }
-        try toolsExecuteUnlocked("UPDATE workspace_session_deliveries SET status='cancelled' WHERE id=? AND (status='queued' OR (status='sending' AND transport_started=0))", [id])
+        try toolsExecuteUnlocked("UPDATE session_deliveries SET status='cancelled' WHERE id=? AND (status='queued' OR (status='sending' AND transport_started=0))", [id])
     }
 
     private func requireGoalExecutionSessionUnlocked(_ sessionID: String) throws {
@@ -107,7 +107,7 @@ extension WorkspaceDatabaseConnection {
                     if goal != nil {
                         // Replacing an achieved goal starts fresh accounting. Deleting
                         // its row also removes the previous run and usage membership.
-                        try toolsExecuteUnlocked("DELETE FROM workspace_session_goals WHERE session_id=?", [sessionID])
+                        try toolsExecuteUnlocked("DELETE FROM session_goals WHERE session_id=?", [sessionID])
                     }
                     // Include an in-flight turn which explicitly created the goal.
                     let rows = try historyRowsUnlocked("SELECT rowid AS sequence,status FROM runs WHERE conversation_id=? ORDER BY rowid DESC LIMIT 1", values: [sessionID])
@@ -133,8 +133,8 @@ extension WorkspaceDatabaseConnection {
                         current.pendingDeliveryID = nil
                         let oldID = current.id
                         current.id = UUID().uuidString.lowercased()
-                        try toolsExecuteUnlocked("UPDATE workspace_goal_runs SET goal_id=? WHERE goal_id=?", [current.id, oldID])
-                        try toolsExecuteUnlocked("UPDATE workspace_goal_usage SET goal_id=? WHERE goal_id=?", [current.id, oldID])
+                        try toolsExecuteUnlocked("UPDATE goal_runs SET goal_id=? WHERE goal_id=?", [current.id, oldID])
+                        try toolsExecuteUnlocked("UPDATE goal_usage SET goal_id=? WHERE goal_id=?", [current.id, oldID])
                         current.objective = objective.trimmingCharacters(in: .whitespacesAndNewlines)
                         current.tokenBudget = tokens; current.turnBudget = turns
                         current.status = .paused; current.evidence = "Goal edited. Resume to continue."
@@ -162,12 +162,12 @@ extension WorkspaceDatabaseConnection {
                         current.observedRunSequence = current.enrolledRunSequence
                         current.status = .active; current.evidence = nil
                         if let pending = current.pendingDeliveryID,
-                           try historyRowsUnlocked("SELECT status FROM workspace_session_deliveries WHERE id=?", values: [pending]).first?.objectValue?["status"]?.stringValue != "uncertain" {
+                           try historyRowsUnlocked("SELECT status FROM session_deliveries WHERE id=?", values: [pending]).first?.objectValue?["status"]?.stringValue != "uncertain" {
                             current.pendingDeliveryID = nil
                         }
                     case .clear:
                         try cancelQueuedGoalDeliveryUnlocked(current)
-                        try toolsExecuteUnlocked("DELETE FROM workspace_session_goals WHERE session_id=?", [sessionID])
+                        try toolsExecuteUnlocked("DELETE FROM session_goals WHERE session_id=?", [sessionID])
                         return Optional<WorkspaceGoal>.none
                     case .complete(_, let evidence), .block(_, let evidence), .checkpoint(_, let evidence):
                         let clean = evidence.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -198,13 +198,13 @@ extension WorkspaceDatabaseConnection {
               let sessionID = run["conversation_id"]?.stringValue, try locallyOwnsConversationUnlocked(sessionID), var goal = try goalUnlocked(sessionID) else { return }
         // Enrollment is by stable run ID: an enrolled run's late usage counts
         // whatever its row sequence; otherwise only runs after the baseline do.
-        let enrolled = try historyRowsUnlocked("SELECT 1 AS enrolled FROM workspace_goal_runs WHERE goal_id=? AND run_id=?", values: [goal.id, runID]).isEmpty == false
+        let enrolled = try historyRowsUnlocked("SELECT 1 AS enrolled FROM goal_runs WHERE goal_id=? AND run_id=?", values: [goal.id, runID]).isEmpty == false
         guard enrolled || (run["sequence"]?.goalInteger ?? 0) > goal.baselineRunSequence else { return }
         try captureGoalRunsUnlocked(&goal)
-        guard try historyRowsUnlocked("SELECT 1 FROM workspace_goal_runs WHERE goal_id=? AND run_id=?", values: [goal.id, runID]).isEmpty == false else { return }
-        let previous = try historyRowsUnlocked("SELECT tokens FROM workspace_goal_usage WHERE goal_id=? AND run_id=?", values: [goal.id, runID]).first?.objectValue?["tokens"]?.goalInteger ?? 0
+        guard try historyRowsUnlocked("SELECT 1 FROM goal_runs WHERE goal_id=? AND run_id=?", values: [goal.id, runID]).isEmpty == false else { return }
+        let previous = try historyRowsUnlocked("SELECT tokens FROM goal_usage WHERE goal_id=? AND run_id=?", values: [goal.id, runID]).first?.objectValue?["tokens"]?.goalInteger ?? 0
         let next = max(previous, tokens)
-        try toolsExecuteUnlocked("INSERT INTO workspace_goal_usage(goal_id,run_id,tokens) VALUES(?,?,?) ON CONFLICT(goal_id,run_id) DO UPDATE SET tokens=excluded.tokens", [goal.id, runID, String(next)])
+        try toolsExecuteUnlocked("INSERT INTO goal_usage(goal_id,run_id,tokens) VALUES(?,?,?) ON CONFLICT(goal_id,run_id) DO UPDATE SET tokens=excluded.tokens", [goal.id, runID, String(next)])
         let total = (goal.tokensUsed ?? 0).addingReportingOverflow(next - previous)
         goal.tokensUsed = total.overflow ? Int64.max : total.partialValue
         try saveGoalUnlocked(goal)
@@ -269,7 +269,7 @@ extension WorkspaceDatabaseConnection {
                     continue
                 }
                 // A previously reserved continuation must yield to newly queued inputs too.
-                let unresolved = try historyRowsUnlocked("SELECT status FROM workspace_session_deliveries WHERE target_id=? AND ((status='uncertain' AND id!=?) OR (status IN ('queued','sending') AND kind!='goal')) ORDER BY CASE WHEN status='uncertain' THEN 0 ELSE 1 END LIMIT 1", values: [goal.sessionID, goal.pendingDeliveryID ?? ""])
+                let unresolved = try historyRowsUnlocked("SELECT status FROM session_deliveries WHERE target_id=? AND ((status='uncertain' AND id!=?) OR (status IN ('queued','sending') AND kind!='goal')) ORDER BY CASE WHEN status='uncertain' THEN 0 ELSE 1 END LIMIT 1", values: [goal.sessionID, goal.pendingDeliveryID ?? ""])
                 if let status = unresolved.first?.objectValue?["status"]?.stringValue {
                     if status == "uncertain" {
                         goal.status = .blocked; goal.evidence = "A previous input has uncertain delivery. Reconcile it before resuming the goal."
@@ -278,7 +278,7 @@ extension WorkspaceDatabaseConnection {
                     continue
                 }
                 if let pending = goal.pendingDeliveryID {
-                    let receipt = try historyRowsUnlocked("SELECT status FROM workspace_session_deliveries WHERE id=?", values: [pending]).first?.objectValue?["status"]?.stringValue
+                    let receipt = try historyRowsUnlocked("SELECT status FROM session_deliveries WHERE id=?", values: [pending]).first?.objectValue?["status"]?.stringValue
                     if receipt == "queued" {
                         if goal.status == .active, let delivery = try toolDelivery(id: pending) { deliveries.append(delivery) }
                         continue
@@ -306,8 +306,8 @@ extension WorkspaceDatabaseConnection {
                 if goal.tokenBudget.map({ (goal.tokensUsed ?? 0) >= $0 }) ?? false || goal.turnBudget.map({ goal.completedTurns >= $0 }) ?? false {
                     goal.status = .budgetLimited; goal.evidence = "The goal budget was reached. Increase or remove it to resume."
                 } else if goal.tokenBudget != nil, try historyRowsUnlocked("""
-                    SELECT 1 FROM workspace_goal_runs g JOIN runs r ON r.id=g.run_id
-                    LEFT JOIN workspace_goal_usage u ON u.goal_id=g.goal_id AND u.run_id=g.run_id
+                    SELECT 1 FROM goal_runs g JOIN runs r ON r.id=g.run_id
+                    LEFT JOIN goal_usage u ON u.goal_id=g.goal_id AND u.run_id=g.run_id
                     WHERE g.goal_id=? AND r.status NOT IN ('queued','accepted','running') AND u.run_id IS NULL LIMIT 1
                     """, values: [goal.id]).isEmpty == false {
                     goal.status = .blocked; goal.evidence = "This runtime did not report token usage for a settled goal turn. Remove the token budget or resolve usage reporting before resuming."
@@ -315,7 +315,7 @@ extension WorkspaceDatabaseConnection {
                 if goal != original { goal.updatedAt = now; try saveGoalUnlocked(goal) }
                 guard goal.status == .active else { continue }
                 // Pending user/tool inputs take precedence over automatic work.
-                guard try historyRowsUnlocked("SELECT 1 FROM workspace_session_deliveries WHERE target_id=? AND (status='uncertain' OR (status IN ('queued','sending') AND kind!='goal')) LIMIT 1", values: [goal.sessionID]).isEmpty else { continue }
+                guard try historyRowsUnlocked("SELECT 1 FROM session_deliveries WHERE target_id=? AND (status='uncertain' OR (status IN ('queued','sending') AND kind!='goal')) LIMIT 1", values: [goal.sessionID]).isEmpty else { continue }
                 let id = UUID().uuidString.lowercased()
                 let delivery = try reserveToolDeliveryUnlocked(sourceID: goal.sessionID, targetID: goal.sessionID,
                     text: goal.continuationPrompt, requestID: id, kind: .goal)

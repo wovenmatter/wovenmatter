@@ -43,7 +43,7 @@ extension WorkspaceDatabaseConnection {
             let workspace = try federationWorkspaceUnlocked(principal.workspaceID), !workspace.deleted,
             workspace.executionDeviceID == principal.executionDeviceID,
             try workspaceMCPPrincipalCurrentUnlocked(principal),
-            try libraryIDsUnlocked("SELECT workspace_id FROM workspace_calendar_remote_ownership WHERE workspace_id=? AND state='remote'",
+            try libraryIDsUnlocked("SELECT workspace_id FROM calendar_remote_ownership WHERE workspace_id=? AND state='remote'",
               bindings: [principal.workspaceID]).isEmpty == false,
             let event = try calendarItemsUnlocked().first(where: { $0.id == incoming.eventID }),
             event.calendar.revision == preparation.eventRevision,

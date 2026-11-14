@@ -450,10 +450,10 @@ extension WorkspaceDatabaseConnection {
     json_object(
       'id', message.id, 'conversation_id', message.conversation_id,
       'client_message_id', message.client_message_id,
-      'sender_kind',COALESCE((SELECT kind FROM workspace_session_deliveries WHERE message_id=message.id),(SELECT kind FROM device_message_provenance WHERE message_id=message.id)),
-      'sender_session_id',COALESCE((SELECT source_id FROM workspace_session_deliveries WHERE message_id=message.id),(SELECT source_id FROM device_message_provenance WHERE message_id=message.id)),
-      'sender_agent',COALESCE((SELECT source_agent FROM workspace_session_deliveries WHERE message_id=message.id),(SELECT source_agent FROM device_message_provenance WHERE message_id=message.id)),
-      'sender_session_title',COALESCE((SELECT source_title FROM workspace_session_deliveries WHERE message_id=message.id),(SELECT source_title FROM device_message_provenance WHERE message_id=message.id),(SELECT title FROM conversations WHERE id=(SELECT source_id FROM device_message_provenance WHERE message_id=message.id))),
+      'sender_kind',COALESCE((SELECT kind FROM session_deliveries WHERE message_id=message.id),(SELECT kind FROM message_provenance WHERE message_id=message.id)),
+      'sender_session_id',COALESCE((SELECT source_id FROM session_deliveries WHERE message_id=message.id),(SELECT source_id FROM message_provenance WHERE message_id=message.id)),
+      'sender_agent',COALESCE((SELECT source_agent FROM session_deliveries WHERE message_id=message.id),(SELECT source_agent FROM message_provenance WHERE message_id=message.id)),
+      'sender_session_title',COALESCE((SELECT source_title FROM session_deliveries WHERE message_id=message.id),(SELECT source_title FROM message_provenance WHERE message_id=message.id),(SELECT title FROM conversations WHERE id=(SELECT source_id FROM message_provenance WHERE message_id=message.id))),
       'run_id', message.run_id, 'role', message.role,
       'content', message.content, 'status', message.status,
       'created_at', message.created_at, 'updated_at', message.updated_at

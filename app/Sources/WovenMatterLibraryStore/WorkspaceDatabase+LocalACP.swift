@@ -663,7 +663,7 @@ extension WorkspaceDatabaseConnection {
         WHERE r.id=? AND r.status='running'
         """, values: [runID]).first?.objectValue else { throw LocalACPSessionDatabaseError.runNotFound }
       if let deliveryID = input.historyDeliveryID {
-        let target = try historyRowsUnlocked("SELECT target_id FROM workspace_session_deliveries WHERE id=?", values: [deliveryID])
+        let target = try historyRowsUnlocked("SELECT target_id FROM session_deliveries WHERE id=?", values: [deliveryID])
           .first?.objectValue?["target_id"]?.stringValue
         guard target == previous["conversation_id"]?.stringValue else {
           throw WorkspaceToolError.invalid("This delivery is not reserved for this session.")
@@ -671,7 +671,7 @@ extension WorkspaceDatabaseConnection {
         try markToolDeliveryTransportStartedUnlocked(id: deliveryID)
       }
       let existingGrants = Set(try historyRowsUnlocked(
-        "SELECT target_id FROM workspace_session_grants WHERE source_id=? AND kind='attachment'",
+        "SELECT target_id FROM session_grants WHERE source_id=? AND kind='attachment'",
         values: [previous["conversation_id"]?.stringValue]).compactMap { $0.objectValue?["target_id"]?.stringValue })
       let newGrants = Set(input.references.filter { $0.kind == .conversation }.map(\.resourceID)).subtracting(existingGrants)
       let identifiers = try beginLocalACPSteeringTurnUnlocked(runID: runID, input: input,
@@ -697,7 +697,7 @@ extension WorkspaceDatabaseConnection {
       try toolsExecuteUnlocked("UPDATE messages SET status=?,updated_at=? WHERE id=?",
         [value("assistant_status"), value("assistant_updated_at"), value("assistant_message_id")])
       if let deliveryID = reservation.deliveryID {
-        try toolsExecuteUnlocked("UPDATE workspace_session_deliveries SET message_id=NULL,status='sending',transport_started=0 WHERE id=? AND message_id=?",
+        try toolsExecuteUnlocked("UPDATE session_deliveries SET message_id=NULL,status='sending',transport_started=0 WHERE id=? AND message_id=?",
           [deliveryID, ids.userMessageID])
       }
       for table in ["message_attachments", "message_references"] {
@@ -706,7 +706,7 @@ extension WorkspaceDatabaseConnection {
       try toolsExecuteUnlocked("DELETE FROM messages WHERE id IN (?,?)", [ids.userMessageID, ids.assistantMessageID])
       for target in reservation.newAttachmentGrants {
         try toolsExecuteUnlocked("""
-          DELETE FROM workspace_session_grants WHERE source_id=? AND target_id=? AND kind='attachment'
+          DELETE FROM session_grants WHERE source_id=? AND target_id=? AND kind='attachment'
             AND NOT EXISTS (SELECT 1 FROM message_references WHERE conversation_id=? AND resource_type='conversation' AND resource_id=?)
           """, [value("conversation_id"), target, value("conversation_id"), target])
       }
@@ -1114,7 +1114,7 @@ extension WorkspaceDatabaseConnection {
       let rows = try historyRowsUnlocked("""
         SELECT r.id AS run_id,json_extract(h.payload,'$.value.requestId') AS request_id
         FROM runs r JOIN harness_sessions s ON s.conversation_id=r.conversation_id
-        JOIN workspace_history_events h ON h.run_id=r.id AND h.conversation_id=r.conversation_id
+        JOIN history_events h ON h.run_id=r.id AND h.conversation_id=r.conversation_id
         WHERE r.conversation_id=? AND r.status='uncertain'
           AND s.runtime_kind='default_agent' AND s.native_session_id=?
           AND h.harness='default_agent' AND h.native_session_id=? AND json_valid(h.payload)
