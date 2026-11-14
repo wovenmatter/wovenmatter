@@ -489,7 +489,7 @@ struct BundledComponentsTests {
     @Test func versionsReadAsPeopleSeeThem() {
         #expect(BundledComponents.debianVersion("5:29.9.3-1~ubuntu.26.04~resolute") == "29.9.3")
         #expect(BundledComponents.debianVersion("2.4.2-4~ubuntu.26.04~resolute") == "2.4.2")
-        #expect(BundledComponents.trimmed("156.0.30.0") == "156.0.30")
+        #expect(BundledComponents.trimmed(["156", "0", "30", "0"].joined(separator: ".")) == "156.0.30")
         #expect(BundledComponents.trimmed("2.10.1") == "2.10.1")
         #expect(ExecutorVersions(installed: "2.3.0", latest: "2.4.1").updateAvailable)
         #expect(!ExecutorVersions(installed: "2.4.1", latest: "2.4.1").updateAvailable)

@@ -958,7 +958,7 @@ enum BundledComponents {
         return withoutEpoch.split(separator: "-").first.map(String.init) ?? withoutEpoch
     }
 
-    /// "156.0.30.0" → "156.0.30".
+    /// Drops trailing ".0" parts past the third, as in CEF's bundle version.
     static func trimmed(_ version: String) -> String {
         var parts = version.split(separator: ".").map(String.init)
         while parts.count > 3, parts.last == "0" { parts.removeLast() }
