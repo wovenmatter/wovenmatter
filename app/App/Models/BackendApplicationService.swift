@@ -322,8 +322,9 @@ final class BackendApplicationService {
             _ = try await conversation(request.conversationID)
             return .init(history: try await model.builtInSubagentHistory(request))
         case let .cancelSession(id):
-            // Keep legacy Stop useful for an older client and scheduled work.
-            // At capacity Stop still reaches native work; future unknown sends fail closed.
+            // The window sends an unfenced Stop when it could not get a dispatch
+            // admission. It still reaches native and scheduled work, even at
+            // capacity; future unknown sends fail closed.
             do { try dispatchAdmissions.prepareLegacyStop(conversationID: id) }
             catch {
                 dispatchAdmissions.refuseFurtherSends(conversationID: id)

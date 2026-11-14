@@ -130,7 +130,7 @@ final class HostRouteStreamTests: XCTestCase {
     let root: URL
   }
 
-  /// A phone in member mode that syncs with Studio, which streams, beside Mini, which does not.
+  /// A phone that syncs with Studio, which streams, beside Mini, which does not.
   @MainActor private func makeFixture() async throws -> Fixture {
     let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     let store = try MobileStore(file: root.appendingPathComponent("library.json"))

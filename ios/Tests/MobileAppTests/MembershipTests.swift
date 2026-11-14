@@ -4,7 +4,7 @@ import LibraryClient
 import WovenMatterShared
 @testable import WovenMatterMobileApp
 
-private actor MemberModeLibrary: OfflineLibraryTransport {
+private actor MembershipLibrary: OfflineLibraryTransport {
   func workspaceIdentity() async throws -> String { "library-a" }
   func snapshot() async throws -> LibrarySnapshot { .init(workspaceID: "library-a", cursor: 1) }
   func changes(after: Int64) async throws -> LibraryChangePage { .init(workspaceID: "library-a", cursor: 1) }
@@ -36,7 +36,7 @@ private final class SignedWorkspaceHTTP: MobileHTTPPerforming, @unchecked Sendab
   }
 }
 
-final class MemberModeTests: XCTestCase {
+final class MembershipTests: XCTestCase {
   /// Every name for this device comes from one noun, so iPad never reads
   /// "iPhone" and a name mid-sentence never reads "this iphone".
   @MainActor func testDeviceIsNamedByItsOwnIdiomAtSentenceStartAndMidSentence() async throws {
@@ -44,7 +44,7 @@ final class MemberModeTests: XCTestCase {
     defer { try? FileManager.default.removeItem(at: root) }
     let store = try MobileStore(file: root.appendingPathComponent("library.json"))
     try await store.bindWorkspace("library-a")
-    let model = MobileModel(store: store, transport: MemberModeLibrary())
+    let model = MobileModel(store: store, transport: MembershipLibrary())
     let noun = UIDevice.current.userInterfaceIdiom == .pad ? "iPad" : "iPhone"
     XCTAssertEqual(model.deviceNoun, noun)
     XCTAssertEqual(model.deviceWorkspaceName, "This " + noun)
@@ -60,14 +60,14 @@ final class MemberModeTests: XCTestCase {
     XCTAssertFalse(notice.contains(other), notice)
   }
 
-  /// In member mode the phone reaches another Mac's workspace with signed
+  /// The phone reaches another Mac's workspace with signed
   /// requests and no execution grant, and "host" is the host it syncs with.
-  @MainActor func testMemberModeReachesWorkspacesWithSignaturesAndTheHostRouteFollowsTheHost() async throws {
+  @MainActor func testThePhoneReachesWorkspacesWithSignaturesAndTheHostRouteFollowsTheHost() async throws {
     let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     defer { try? FileManager.default.removeItem(at: root) }
     let store = try MobileStore(file: root.appendingPathComponent("library.json"))
     try await store.bindWorkspace("library-a")
-    let model = MobileModel(store: store, transport: MemberModeLibrary())
+    let model = MobileModel(store: store, transport: MembershipLibrary())
     await model.reload()
     XCTAssertNil(model.membershipNotice)
     model.credential = .init(endpoint: URL(string: "https://studio.tail1.ts.net/wovenmatter")!, workspaceID: "library-a",
