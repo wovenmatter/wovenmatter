@@ -350,7 +350,7 @@ extension PairedLibraryTests {
     let a = try await Mac(), b = try await Mac(); defer { a.remove(); b.remove() }
     let session = try await a.database.createFixtureLocalACPSession(runtimeKind: .codex, title: "Partially received", ownerDeviceID: UUID())
     let run = try await a.database.beginLocalACPRun(conversationID: session, input: .init(text: "Running elsewhere"))
-    let records = try await journal(a.database).filter { !$0.table.hasPrefix("paired_") }
+    let records = try await journal(a.database).filter { !$0.table.hasSuffix("_owners") }
     try await deliver(records, to: b.database, from: a.id)
     let reopened = try await WorkspaceDatabase(url: b.database.fileURL)
     let before = try await lastChange(reopened)

@@ -320,15 +320,14 @@ extension WorkspaceDatabaseConnection {
         }
       }
       for (table, dropped) in Self.droppedLibraryColumns where tables.contains(table) {
-        let present = try columns(table)
-        for column in dropped where present.contains(column) {
-          try executeUnlocked("ALTER TABLE \(Self.peerQuote(table)) DROP COLUMN \(Self.peerQuote(column))")
-          for name in Self.peerPayloadBookkeeping where bookkeeping.contains(name) {
-            try toolsExecuteUnlocked("""
-              UPDATE \(name) SET payload=json_remove(payload,'$.row.\(column)')
-              WHERE json_valid(payload) AND json_extract(payload,'$.table')=? AND json_type(payload,'$.row.\(column)') IS NOT NULL
-              """, [table])
-          }
+        let present = try columns(table), gone = dropped.filter(present.contains)
+        guard !gone.isEmpty else { continue }
+        for column in gone { try executeUnlocked("ALTER TABLE \(Self.peerQuote(table)) DROP COLUMN \(Self.peerQuote(column))") }
+        // One pass over each bookkeeping table removes all of a table's dropped columns.
+        let paths = gone.map { "'$.row.\($0)'" }.joined(separator: ",")
+        for name in Self.peerPayloadBookkeeping where bookkeeping.contains(name) {
+          let match = Self.peerNamedBookkeeping.contains(name) ? "table_name=?" : "json_valid(payload) AND json_extract(payload,'$.table')=?"
+          try toolsExecuteUnlocked("UPDATE \(name) SET payload=json_remove(payload,\(paths)) WHERE \(match)", [table])
         }
       }
       try storeJSONAsTextUnlocked(tables: tables, bookkeeping: bookkeeping)
