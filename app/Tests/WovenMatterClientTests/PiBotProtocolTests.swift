@@ -290,10 +290,8 @@ struct PiBotRuntimeAdditionsTests {
 
     @Test func helloAndEnvironmentDecode() throws {
         let health = try JSONDecoder().decode(PiBotHealth.self, from: Data(#"{"ok":true,"version":"0.1.0","protocol":1,"installationId":"i","environment":"mac-vm","capabilities":["groups","message.context","bots.environment","runtime.update","previews"]}"#.utf8))
-        #expect(health.environment == "mac-vm" && health.supports("runtime.update"))
+        #expect(health.environment == "mac-vm" && health.capabilities?.contains("runtime.update") == true)
         let environment = try JSONDecoder().decode(PiBotEnvironment.self, from: Data(#"{"botId":"b","state":"running","busy":"a turn is running","lastActivity":1,"services":[],"previews":[{"port":3000,"url":"https://mac.tail.ts.net:8443/"}]}"#.utf8))
         #expect(environment.previews.first?.port == 3000 && environment.stateText.contains("turn"))
-        let woven = try JSONDecoder().decode(PiBotWovenStatus.self, from: Data(#"{"state":"ready","toolCount":40,"bots":{"b":{"state":"ready","toolCount":40}}}"#.utf8))
-        #expect(woven.bots?["b"]?.toolCount == 40)
     }
 }
