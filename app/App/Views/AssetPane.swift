@@ -12,6 +12,7 @@ struct AssetPane: View {
     let newlyCreatedNoteID: String?
     let onNewNoteFocusHandled: (String) -> Void
     let onBack: () -> Void
+    var onOpenSession: ((String) -> Void)?
     @Environment(\.wovenTheme) private var theme
 
     private var notes: [WorkspaceNoteRecord] { model.workspaceOverview?.notes ?? [] }
@@ -75,7 +76,9 @@ struct AssetPane: View {
                         DesktopNotePane(
                             model: model, note: note,
                             focusesTitleOnAppear: note.id == newlyCreatedNoteID,
-                            onInitialFocusHandled: { onNewNoteFocusHandled(note.id) }
+                            onInitialFocusHandled: { onNewNoteFocusHandled(note.id) },
+                            onOpenNote: { assets.openNote($0) },
+                            onOpenSession: onOpenSession
                         ).id(id)
                     } else {
                         ContentUnavailableView("Asset unavailable", systemImage: "doc")

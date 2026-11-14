@@ -20,6 +20,8 @@ enum BackendWorkspaceMutation: Codable, Sendable {
     case preserveRecoveryCopy(NoteJournalEntry)
     case checkpointNote(id: String)
     case restoreNote(id: String, versionID: String, expectedRevision: String)
+    case artifactState(noteID: String, edit: ArtifactStateEdit)
+    case readArtifactState(noteID: String)
 }
 
 extension BackendApplicationService {
@@ -62,9 +64,17 @@ extension BackendApplicationService {
             try await store.database.checkpointNote(id: id)
         case let .restoreNote(id, version, revision):
             result.noteResponse = try await store.database.restoreNoteAssetVersion(noteID: id, versionID: version, expectedRevision: revision)
+        case let .artifactState(noteID, edit):
+            result.artifactStateResult = try await store.database.applyArtifactStateEdit(noteID: noteID, edit: edit)
+            model.scheduleArtifactWorkspaceRefresh()
+            return result
+        case let .readArtifactState(noteID):
+            result.artifactStateSnapshot = try await store.database.artifactStateSnapshot(noteID: noteID)
+            return result
         case let .persistNoteDraft(entry):
             try await store.database.persistNoteDraft(id: entry.noteID, title: entry.title, content: entry.content,
-                                                expectedRevision: entry.expectedRevision, operationID: entry.mutationID)
+                                                expectedRevision: entry.expectedRevision, operationID: entry.mutationID,
+                                                baseContent: entry.baseContent, baseTitle: entry.baseTitle)
         }
         await model.refreshWorkspace()
         return result

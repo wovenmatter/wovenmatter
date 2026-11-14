@@ -75,7 +75,8 @@ because the app restarts. You can also update a single device on its own.
 The iPhone app is a beta available through TestFlight, not yet generally
 available. It pairs by scanning a QR code from **Show a QR code or link** on a
 Mac, and then works with your own Macs and Linux hosts over your own tailnet.
-Its Quick Chat runs Pi Durable on the phone.
+Its Quick Chat runs Pi Durable on the phone. Pages are fully editable on iPhone
+and iPad, by hand or through Quick Chat; see [Pages](../PAGES.md).
 
 To try it, email trey@wovenmatter.com with the email address to add as a
 TestFlight tester.

@@ -8,10 +8,16 @@ struct DesktopNotePane: View {
     let note: WorkspaceNoteRecord
     let focusesTitleOnAppear: Bool
     let onInitialFocusHandled: () -> Void
+    let onOpenNote: (String) -> Void
+    var onOpenSession: ((String) -> Void)?
+    var embedded = false
+    var onEditorFocus: ((NoteEditorController) -> Void)?
     @FocusState private var titleFocused: Bool
     @State private var editorController = NoteEditorController()
+    @State private var activePageEditor: NoteEditorController?
     @State private var dictationEditor = DictationEditor()
     @State private var documentCache = NoteDocumentCache()
+    @State private var canvasViewState = CanvasViewState()
     @State private var showsFormatting = false
     @State private var showsVersionHistory = false
     @State private var showsCharacterCount = false
@@ -80,6 +86,7 @@ struct DesktopNotePane: View {
     var body: some View {
         let currentDocument = self.currentDocument
         VStack(spacing: 0) {
+            if !embedded {
             HStack(spacing: 8) {
                 TextField(
                     currentDocument.kind == .note
@@ -92,7 +99,8 @@ struct DesktopNotePane: View {
                     .tracking(-0.3)
                     .lineLimit(1)
                     .focused($titleFocused)
-                    .accessibilityLabel("Note title")
+                    .accessibilityLabel("\(currentDocument.kind.displayName) title")
+                    .frame(minWidth: currentDocument.kind == .canvas ? 100 : nil)
                     .layoutPriority(1)
                 Spacer()
                 if currentDocument.kind == .note {
@@ -110,6 +118,28 @@ struct DesktopNotePane: View {
                     .buttonStyle(WovenIconButtonStyle())
                     .disabled(!editorController.canRedo)
                     .help("Redo (⇧⌘Z)").accessibilityLabel("Redo")
+                }
+                if currentDocument.kind == .canvas && documentIsEditable {
+                    Button {
+                        if activePageEditor?.canUndo == true { activePageEditor?.undo() }
+                        else { var value = document.wrappedValue; canvasViewState.undo(&value); document.wrappedValue = value }
+                    } label: { Image(systemName: "arrow.uturn.backward").frame(width: 32, height: 32) }
+                    .buttonStyle(WovenIconButtonStyle())
+                    .disabled(activePageEditor?.canUndo != true && canvasViewState.undoStack.isEmpty)
+                    .accessibilityLabel("Undo")
+                    Button {
+                        if activePageEditor?.canRedo == true { activePageEditor?.redo() }
+                        else { var value = document.wrappedValue; canvasViewState.redo(&value); document.wrappedValue = value }
+                    } label: { Image(systemName: "arrow.uturn.forward").frame(width: 32, height: 32) }
+                    .buttonStyle(WovenIconButtonStyle())
+                    .disabled(activePageEditor?.canRedo != true && canvasViewState.redoStack.isEmpty)
+                    .accessibilityLabel("Redo")
+                    Button { showsFormatting.toggle() } label: { Image(systemName: "textformat").frame(width: 32, height: 32) }
+                        .buttonStyle(WovenIconButtonStyle()).help("Format text")
+                        .disabled(activePageEditor == nil || titleFocused)
+                    if let dictation = activePageEditor?.boundDictationEditor {
+                        DictationMicrophone(editor: dictation, usesNoteToolbarStyle: true)
+                    }
                 }
                 Button { showsVersionHistory = true } label: {
                     Image(systemName: "clock.arrow.circlepath").font(.system(size: 14)).frame(width: 32, height: 32)
@@ -149,10 +179,12 @@ struct DesktopNotePane: View {
             .padding(.horizontal, 12)
             .frame(height: 56)
 
-            if showsFormatting && currentDocument.kind == .note && documentIsEditable {
-                NoteFormattingBar(controller: editorController)
-                    .padding(.horizontal, 32)
-                    .padding(.vertical, 6)
+            }
+
+            if showsFormatting && (currentDocument.kind == .note || currentDocument.kind == .canvas) && documentIsEditable {
+                NoteFormattingBar(controller: currentDocument.kind == .canvas ? (activePageEditor ?? editorController) : editorController)
+                    .disabled(currentDocument.kind == .canvas && (activePageEditor == nil || titleFocused))
+                    .padding(.horizontal, 32).padding(.vertical, 6)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
 
@@ -175,17 +207,26 @@ struct DesktopNotePane: View {
                         switch currentDocument.kind {
                         case .note:
                             NoteEditor(document: document, controller: editorController,
-                                dictationEditor: dictationEditor, dictationIdentity: note.id)
+                                dictationEditor: dictationEditor, dictationIdentity: note.id,
+                                sizesToContent: embedded, onFocus: onEditorFocus)
                                 .accessibilityLabel("Note body")
+                        case .canvas:
+                            PageEditor(model: model, document: document, viewState: $canvasViewState,
+                                noteID: note.id, folderID: note.folderID, onOpenAsset: onOpenNote,
+                                onOpenSession: onOpenSession, onFocus: { activePageEditor = $0 }, onSectionFocus: { activePageEditor = nil })
                         case .spreadsheet:
                             SpreadsheetEditor(document: document)
-                                .accessibilityLabel("Spreadsheet")
+                                .accessibilityLabel("Sheet")
                         case .html:
-                            HTMLArtifactView(
-                                html: currentDocument.html,
-                                linkedDataJSON: linkedDataJSON
-                            )
-                            .accessibilityLabel("HTML artifact")
+                            PersistentArtifactView(document: document, linkedDataJSON: linkedDataJSON,
+                                savedState: (try? NoteDocument.editableDocument(from: note.content))?.artifactState ?? [:],
+                                currentState: {
+                                    guard let asset = model.workspaceOverview?.notes.first(where: { $0.id == note.id }) else { return [:] }
+                                    return (try? NoteDocument.editableDocument(from: asset.content))?.artifactState ?? [:]
+                                },
+                                saveState: { model.enqueueArtifactInput(noteID: note.id, edit: $0, after: $1) },
+                                reportUnsaved: { model.setArtifactInputsUnsaved(generation: $0, $1) })
+                            .accessibilityLabel("Artifact")
                         }
                     }
                 }
@@ -211,6 +252,16 @@ struct DesktopNotePane: View {
                     .foregroundStyle(WovenPalette.warning)
                 }
 
+                if let notice = draft.reconciliationNotice {
+                    HStack(alignment: .top, spacing: 8) {
+                        Text(notice)
+                        Spacer(minLength: 4)
+                        Button("Dismiss") { model.dismissNoteReconciliationNotice(noteID: note.id) }
+                            .buttonStyle(.plain).underline()
+                    }
+                    .font(.system(size: 12)).foregroundStyle(WovenPalette.warning)
+                    .padding(.horizontal, currentDocument.kind == .canvas ? 24 : 0)
+                }
                 switch draft.saveState {
                 case .failed(let message):
                     HStack(spacing: 6) {
@@ -239,10 +290,10 @@ struct DesktopNotePane: View {
                 alignment: .leading
             )
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
-            .padding(.horizontal, 32)
-            .padding(.bottom, currentDocument.kind == .note ? 0 : 24)
+            .padding(.horizontal, embedded || currentDocument.kind == .canvas ? 0 : 32)
+            .padding(.bottom, currentDocument.kind == .canvas || currentDocument.kind == .note ? 0 : 24)
 
-            if currentDocument.kind == .note {
+            if !embedded && (currentDocument.kind == .note || currentDocument.kind == .canvas) {
                 let statistics = NoteTextStatistics(document: currentDocument)
                 Button { showsCharacterCount.toggle() } label: {
                     Text(showsCharacterCount
@@ -267,6 +318,7 @@ struct DesktopNotePane: View {
         .disabled(model.noteActionIDs.contains(note.id))
         .background(theme.palette.workspace)
         .disabled(model.noteEditingSuspended)
+        .allowsHitTesting(!model.noteEditingSuspended)
         .sheet(isPresented: $showsVersionHistory) { WorkspaceNoteRecovery(model: model, noteID: note.id) }
         .onAppear {
             model.prepareNoteDraft(note)
@@ -276,6 +328,12 @@ struct DesktopNotePane: View {
             }
         }
         .onChange(of: note) { _, updated in model.prepareNoteDraft(updated) }
+        .onChange(of: draft.conflictComponentRemaps) { _, remaps in
+            if let id = activePageEditor?.selectedBlockID, let copyID = remaps[id] {
+                canvasViewState.selected = [copyID]
+                canvasViewState.revealCardID = copyID
+            }
+        }
         .onChange(of: model.databasesSnapshot) { _, _ in
             guard hasDatabaseLinks else { return }
             Task { await refreshLinkedData() }
@@ -339,7 +397,7 @@ struct DesktopNotePane: View {
                     latest.blocks[index] = .table(data.applying(to: existing))
                     if latest != currentDocument { document.wrappedValue = latest }
                 }
-            case .note:
+            case .note, .canvas:
                 var loaded: [(table: NoteTableBlock, data: DatabaseTabularData)] = []
                 for block in snapshot.blocks {
                     guard case .table(let table) = block,

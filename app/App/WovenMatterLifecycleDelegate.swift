@@ -6,6 +6,13 @@ import CryptoKit
 final class WovenMatterLifecycleDelegate: NSObject, NSApplicationDelegate {
     weak var model: ApplicationModel?
     private var terminating = false
+    var presentNoteSaveFailure: @MainActor () -> Void = {
+        let alert = NSAlert()
+        alert.messageText = "Some writing or Artifact inputs could not be saved"
+        alert.informativeText = "Quit was cancelled. Review the save error and choose Retry saving. Closing an Artifact discards its unsaved input."
+        alert.addButton(withTitle: "Keep editing")
+        alert.runModal()
+    }
     var prepareBrowserTermination: (@MainActor () async -> Bool)?
     /// Shown after the update quit has been cancelled; tests record it instead.
     var presentUpdatePreparationFailure: @MainActor (any Error) -> Void = { error in
@@ -136,7 +143,7 @@ final class WovenMatterLifecycleDelegate: NSObject, NSApplicationDelegate {
                 let flushed = await model.flushNotesBeforeBackendClientQuit()
                 if !flushed { terminating = false; model.resumeNoteEditing() }
                 if flushed { await finishTermination(sender) }
-                else { sender.reply(toApplicationShouldTerminate: false) }
+                else { sender.reply(toApplicationShouldTerminate: false); presentNoteSaveFailure() }
             }
             return .terminateLater
         }
@@ -145,6 +152,7 @@ final class WovenMatterLifecycleDelegate: NSObject, NSApplicationDelegate {
                 terminating = false
                 model.resumeNoteEditing()
                 sender.reply(toApplicationShouldTerminate: false)
+                presentNoteSaveFailure()
                 return
             }
             do {

@@ -39,14 +39,32 @@ period. Original workspace files are not deleted or edited by the Library.
 
 ## Work beside a note
 
-The **New Note** picker offers **Note**, **Spreadsheet**, and **HTML**. Each is
-saved in your Woven Matter library. You can take and organize notes without
-connecting an agent.
+The **New Asset** picker offers **Note**, **Sheet**, **Artifact**, and **Page**.
+Artifacts are interactive HTML artifacts built on live data, including dashboards,
+calculators, and visuals; a data connection is optional. Each asset is saved in
+your Woven Matter library. You can take and organize notes without connecting an
+agent.
 
-Notes, browser pages, and document previews share one tab strip beside the
-chat. Keep up to 4 notes, 8 browser tabs, and 8 document previews open at once.
-Tabs stay open when you switch conversations. Closing a note tab keeps the saved
-note; hiding the asset pane keeps its tabs. Open tabs are not restored after
+An Artifact connected to live data is a **Live Artifact**. It runs inside Woven
+Matter and refreshes through its data links. Choose **Artifact** to create one; Live is
+a description of its data connection, not a separate option in the picker.
+
+Artifacts save inputs from standard HTML controls with a stable `id`, `name`, or
+`data-woven-key`. Custom interfaces use `window.wovenArtifact` to save JSON state.
+Those inputs belong to the original Artifact, including when it is embedded in a
+Page. Closing and reopening it restores saved input. Live-data refreshes update
+the existing interface without discarding an unfinished form. A save conflict
+keeps input visible and offers **Retry saving**.
+
+Pages are flowing documents for work with your agents. Type normally, add tasks
+and tables, nest sections, and embed original Notes, Sheets, Artifacts, or Pages.
+The same Page can be a project workspace, checklist, or reference document.
+[Pages](../PAGES.md) describes component editing and agent collaboration.
+
+Assets, browser pages, and document previews share one tab strip beside the
+chat. Keep up to 4 assets, 8 browser tabs, and 8 document previews open at once.
+Tabs stay open when you switch conversations. Closing an asset tab keeps the saved
+asset; hiding the asset pane keeps its tabs. Open tabs are not restored after
 quitting the app.
 
 With **Notes** enabled in the conversation's **Tools** menu, the agent can find,

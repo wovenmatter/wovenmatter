@@ -23,7 +23,7 @@ in your installed version.
 - [Pi Durable](guide/default-agent.md): the built-in agent, its tools, provider connections, and fallback models.
 - [Connections and dictation](guide/connections-and-dictation.md): shared accounts, web search, local model servers, and on-device dictation.
 - [Executor apps](guide/executor.md): shared app capabilities, approvals, and code mode.
-- [Notes and data](guide/notes-and-data.md): notes, spreadsheets, HTML, the browser, Library, and databases beside your work.
+- [Notes and data](guide/notes-and-data.md): Notes, Sheets, Artifacts, Pages, the browser, Library, and databases beside your work.
 - [Scheduled work and usage](guide/schedules-and-usage.md): scheduled tasks, timers, Calendar, and provider usage.
 
 ### Your devices
@@ -59,6 +59,7 @@ in your installed version.
 - [Mac access and credentials](MAC_ACCESS.md): Permissions & Access, Keychain, and browser credentials.
 - [Runtime installation and updates](RUNTIME_MAINTENANCE.md)
 - [OpenCode integration](opencode-v2/PARITY.md) and [testing](opencode-v2/TESTING.md)
+- [Pages](PAGES.md): components, agent editing, and how concurrent edits merge.
 - [Chat and note menu actions](CHAT_MENU_ACTIONS.md)
 - [Document preview tabs](DOCUMENT_PREVIEWS.md)
 - [Finding and setting up Macs](APPLE_DEVICE_SETUP.md)

@@ -338,7 +338,7 @@ struct WorkspaceView: View {
             }
         }
         .sheet(item: $noteToRename) { note in
-            RenameSheet(heading: "Rename note", placeholder: "Note name", initialTitle: model.noteDraft(for: note).title) { title in
+            RenameSheet(heading: "Rename asset", placeholder: "Asset name", initialTitle: model.noteDraft(for: note).title) { title in
                 try await model.mutateNote(id: note.id, mutation: .rename(title))
             }
         }
@@ -396,6 +396,14 @@ struct WorkspaceView: View {
         }
     }
 
+    /// Reads the stored record's kind, never the draft: typing in any note must
+    /// not invalidate the whole workspace or decode the document again.
+    private var presentsCanvas: Bool {
+        guard destination == .workspace, assets.tabs.isPresented,
+              let note = selectedNote else { return false }
+        return assets.kind(of: note) == .canvas
+    }
+
     private func desktopShell(layout: WorkspaceLayoutState) -> some View {
         let showLeftRailButton = sidebarStyle != .split
             ? !layout.showsLeftRail && singleSidebarSide == .left
@@ -404,7 +412,9 @@ struct WorkspaceView: View {
             ? !layout.showsRightRail && singleSidebarSide == .right
             : !layout.showsRightRail
 
-        return HStack(spacing: WovenMetrics.shellGap) {
+        let presentsCanvas = self.presentsCanvas
+
+        return HStack(spacing: presentsCanvas ? 0 : WovenMetrics.shellGap) {
             if layout.showsLeftRail {
                 railGroup(side: .left, collapsesAdaptivePages: layout.compact)
             }
@@ -421,8 +431,17 @@ struct WorkspaceView: View {
                 railGroup(side: .right, collapsesAdaptivePages: layout.compact)
             }
         }
-        .padding(.horizontal, WovenMetrics.shellInset)
-        .padding(.bottom, WovenMetrics.shellInset)
+        // Only fill the tiny cutouts beneath rounded sidebar bottoms. Keep the
+        // shell and title-bar backgrounds unchanged everywhere else.
+        .background(alignment: .bottom) {
+            if presentsCanvas {
+                theme.palette.themeWhisper
+                    .frame(height: WovenMetrics.windowAlignedSurfaceMinimumRadius)
+                    .allowsHitTesting(false)
+            }
+        }
+        .padding(.horizontal, presentsCanvas ? 0 : WovenMetrics.shellInset)
+        .padding(.bottom, presentsCanvas ? 0 : WovenMetrics.shellInset)
         .animation(reduceMotion ? nil : .snappy(duration: 0.3), value: layout)
     }
 
@@ -609,6 +628,7 @@ struct WorkspaceView: View {
                         onAddPanel: addPanel,
                         onClosePanel: closePanel,
                         onNavigatePanel: navigatePanel,
+                        onOpenBoardSession: selectConversation,
                         onSend: send,
                         onAttachmentAction: handleAttachmentAction,
                         onRemoveAttachment: removeAttachment,
@@ -1402,6 +1422,7 @@ struct WorkspaceSurface: View {
     let onAddPanel: (ChatPanelID) -> Void
     let onClosePanel: (ChatPanelID) -> Void
     let onNavigatePanel: (ChatPanelDirection) -> Bool
+    let onOpenBoardSession: (String) -> Void
     let onSend: (ChatPanelID) -> Void
     let onAttachmentAction: (ChatPanelID, ComposerAttachmentAction) -> Void
     let onRemoveAttachment: (String, ChatPanelID) -> Void
@@ -1474,7 +1495,7 @@ struct WorkspaceSurface: View {
             reservesLeadingRailControlSpace: reservesLeadingRailControlSpace,
             reservesTrailingRailControlSpace: reservesTrailingRailControlSpace,
             newlyCreatedNoteID: newlyCreatedNoteID, onNewNoteFocusHandled: onNewNoteFocusHandled,
-            onBack: { compactPane = .chat }
+            onBack: { compactPane = .chat }, onOpenSession: onOpenBoardSession
         )
     }
 

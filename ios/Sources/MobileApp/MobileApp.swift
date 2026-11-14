@@ -348,9 +348,16 @@ struct FoldersPane: View {
               WorkspaceRow(icon: .squarePen, title: "New Chat") {
                 model.closeFolder(); model.newChat()
               }.accessibilityIdentifier("action-new-chat")
-              WorkspaceRow(icon: .fileText, title: "New Note") {
-                model.closeFolder(); Task { await model.newNote() }
-              }.accessibilityIdentifier("action-new-note")
+              Menu {
+                Section("New Asset") { MobileNewAssetItems { kind in model.closeFolder(); Task { await model.newAsset(kind) } } }
+              } label: {
+                // The same row as New Chat; its choices are the New Asset kinds.
+                HStack(spacing: 14) {
+                  LucideIcon(glyph: .fileText, size: 22).frame(width: 26)
+                  Text("New Asset").font(.body).lineLimit(2).frame(maxWidth: .infinity, alignment: .leading)
+                }.padding(.horizontal, 14).padding(.vertical, 13).frame(minHeight: 48).contentShape(Rectangle())
+                  .foregroundStyle(WovenPalette.foreground)
+              }.accessibilityIdentifier("action-new-asset")
               WorkspaceRow(icon: .folder, title: "All Workspaces") { model.openFolder(nil) }
                 .accessibilityIdentifier("folder-all")
               ForEach(groups.filter(\.isLocal)) { workspace in
@@ -507,7 +514,7 @@ struct FolderContentsPane: View {
       PaneHeader(title: model.selectedFolderScopeTitle) {
         if model.canCreateInFolderScope { Menu {
           Button("New chat", glyph: .squarePen) { model.newChat() }
-          Button("New note", glyph: .fileText) { Task { await model.newNote() } }
+          Menu("New Asset") { MobileNewAssetItems { kind in Task { await model.newAsset(kind) } } }
         } label: { LucideIcon(glyph: .plus, size: 20).frame(width: 44, height: 44) }
           .accessibilityLabel("Add to folder") }
       }

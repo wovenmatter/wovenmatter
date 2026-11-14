@@ -372,6 +372,11 @@ final class ApplicationModel {
     @ObservationIgnored
     lazy var libraryHost = LibraryHostController(model: self)
     private var noteWriteBehind: NoteWriteBehind?
+    @ObservationIgnored var artifactInputWrites: [UUID: Task<ArtifactStateWriteResult, any Error>] = [:]
+    /// Open Artifact documents holding input that failed to save and awaits Retry.
+    @ObservationIgnored var unsavedArtifactGenerations: Set<String> = []
+    @ObservationIgnored var artifactRefreshTask: Task<Void, Never>?
+    @ObservationIgnored var artifactRefreshNeeded = false
     private(set) var noteEditingSuspended = false
     private var libraryStoreStarted = false
     @ObservationIgnored var backendRPCClient: BackendRPCClient?
@@ -517,7 +522,9 @@ final class ApplicationModel {
                     title: entry.title,
                     content: entry.content,
                     expectedRevision: entry.expectedRevision,
-                    operationID: entry.mutationID
+                    operationID: entry.mutationID,
+                    baseContent: entry.baseContent,
+                    baseTitle: entry.baseTitle
                 )
             },
             committedRevision: { [database] entry in
@@ -1914,6 +1921,9 @@ final class ApplicationModel {
     func flushNoteDrafts() async -> Bool {
         guard let noteWriteBehind else { return false }
         do {
+            // Input failures have their own visible recovery UI. Always flush
+            // ordinary writing too, even if an unrelated Artifact has a conflict.
+            _ = await flushArtifactInputs()
             try await noteWriteBehind.flush()
             return true
         } catch {
@@ -1967,9 +1977,14 @@ final class ApplicationModel {
     }
 
     func flushNotesBeforeBackendClientQuit() async -> Bool {
-        guard let writer = noteWriteBehind else { return true }
-        do { try await writer.flushAsync(); return true }
+        let inputsSaved = await flushArtifactInputs()
+        guard let writer = noteWriteBehind else { return inputsSaved }
+        do { try await writer.flushAsync(); return inputsSaved }
         catch { noteMutationError = error.localizedDescription; return false }
+    }
+
+    func dismissNoteReconciliationNotice(noteID: String) {
+        noteDrafts[noteID]?.reconciliationNotice = nil
     }
 
     private func completeNoteWrite(
@@ -1992,6 +2007,7 @@ final class ApplicationModel {
                     draft.sourceRevision = committedRevision
                     draft.sourceContent = entry.content
                     draft.sourceTitle = entry.title
+                    draft.sourceRevisionFromReceipt = true
                 }
             } else if let latest = noteDrafts[entry.noteID] { draft = latest }
             draft.persistedRevision = max(draft.persistedRevision, entry.revision)
@@ -2521,7 +2537,7 @@ final class ApplicationModel {
             try dispatchFence.check()
             guard let revision = response.revision else { throw ApplicationModelError.noteContextUnavailable }
             context = AgentNoteContext(noteID: note.id, title: response.title ?? note.title, folderID: note.folderID,
-                revision: revision, requireCurrentRevision: expectedNoteRevision != nil ? true : nil)
+                revision: revision, artifactKind: response.document?.kind, requireCurrentRevision: expectedNoteRevision != nil ? true : nil)
         }
         let capturedInputID = try await libraryStore.database.captureInputContext(conversationID: conversation.id,
             noteID: normalized.historyDeliveryID == nil ? context?.noteID : nil)

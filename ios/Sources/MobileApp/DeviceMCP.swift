@@ -24,7 +24,8 @@ extension MobileModel {
     let enabled = Set(Self.deviceToolGroups.filter { Self.deviceToolEnabled(Self.deviceToolSelectionID($0), selection: record.enabledTools) })
     return .init(sessionID: conversationID, workspaceID: deviceWorkspaceID,
       folderID: state.conversations[conversationID]?.folderID, enabled: enabled,
-      nativeToolIDs: Self.deviceToolDefinitions.compactMap { $0["name"] as? String }.filter { Self.deviceToolEnabled($0, selection: record.enabledTools) })
+      nativeToolIDs: Self.deviceToolDefinitions.compactMap { $0["name"] as? String }.filter { Self.deviceToolEnabled($0, selection: record.enabledTools) },
+      sessionTitle: state.conversations[conversationID]?.title)
   }
   static func deviceMCPRequestID(_ string: String) -> String {
     if let uuid = UUID(uuidString: string) { return uuid.uuidString.lowercased() }

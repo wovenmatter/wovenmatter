@@ -32,17 +32,19 @@ extension WorkspaceDatabaseConnection {
           throw WorkspaceNoteActionError.invalidTitle
         }
         try checkpointNoteUnlocked(id: id, source: "before-rename", force: true)
-        try toolsExecuteUnlocked("UPDATE notes SET title = ?, updated_at = ? WHERE id = ?",
-          [title, revision, id])
+        // A Page or Artifact also records when its title changed, so replicas merge it.
+        try toolsExecuteUnlocked("UPDATE notes SET title = ?, content = ?, updated_at = ? WHERE id = ?",
+          [title, try syncedNoteContentUnlocked(id: id, content: storedNoteContentUnlocked(id: id), title: title), revision, id])
         try checkpointNoteUnlocked(id: id, source: "rename", force: true)
       case .moveToFolder(let folderID):
         try validateFolderUnlocked(id: folderID)
         try toolsExecuteUnlocked("""
-          UPDATE notes SET folder_id = ?, position = (
+          UPDATE notes SET folder_id = ?, content = ?, position = (
             SELECT COALESCE(MAX(position), -1) + 1 FROM notes
             WHERE folder_id IS ? AND deleted_at IS NULL AND id != ?
           ), updated_at = ? WHERE id = ?
-          """, [folderID, folderID, id, revision, id])
+          """, [folderID, try syncedNoteContentUnlocked(id: id, content: storedNoteContentUnlocked(id: id), folderID: .some(folderID)),
+                folderID, id, revision, id])
       case .moveToTrash:
         // Keep the document, history, links, and pin intact. Only visibility changes.
         try checkpointNoteUnlocked(id: id, source: "before-trash", force: true)

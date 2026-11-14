@@ -455,7 +455,7 @@ extension WorkspaceDatabaseConnection {
     try bind(id, at: 1, to: note)
     guard sqlite3_step(note) == SQLITE_ROW else { return }
     let title = try text(note, column: 0)
-    let content = try text(note, column: 1)
+    let content = NoteSync.strip(try text(note, column: 1))
     let revision = try text(note, column: 2)
     let last = try prepareUnlocked(
       "SELECT title,content,(julianday('now')-julianday(created_at))*86400 FROM note_asset_versions WHERE note_id=? ORDER BY created_at DESC,id DESC LIMIT 1"
@@ -554,9 +554,16 @@ extension WorkspaceDatabaseConnection {
           "SELECT title,content FROM note_asset_versions WHERE id=? AND note_id=?",
           values: [versionID, noteID])
         guard let row = rows.first?.objectValue, let title = row["title"]?.stringValue,
-          let content = row["content"]?.stringValue
+          var content = row["content"]?.stringValue
         else {
           throw WorkspaceDatabaseError.open("This version is no longer retained")
+        }
+        // Restoring an Artifact's code must not rewind what users have entered since,
+        // or versions of saved inputs would run backwards under another open view.
+        if let restored = try? NoteDocument.editableDocument(from: content), restored.kind == .html,
+           let live = try? NoteDocument.editableDocument(from: current.content), live.kind == .html,
+           restored.artifactState != live.artifactState {
+          content = try restored.replacingArtifactState(with: live.artifactState).encoded()
         }
         try checkpointNoteUnlocked(id: noteID, source: "before-restore", force: true)
         let update = try prepareUnlocked(
@@ -564,7 +571,7 @@ extension WorkspaceDatabaseConnection {
         defer { sqlite3_finalize(update) }
         let updatedAt = try nextNoteUpdatedAtUnlocked(id: noteID)
         for (index, value) in [
-          title, content, Self.noteSnippet(content), updatedAt, noteID,
+          title, try syncedNoteContentUnlocked(id: noteID, content: content, title: title), Self.noteSnippet(content), updatedAt, noteID,
         ].enumerated() {
           try bind(value, at: Int32(index + 1), to: update)
         }

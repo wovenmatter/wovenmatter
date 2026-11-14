@@ -38,7 +38,7 @@ struct LibrarySurface: View {
     var body: some View {
         VStack(spacing: 0) {
             header
-            if collection == "Saved Artifacts" {
+            if collection == "Saved Assets" {
                 SavedArtifactsView(model: library.savedArtifacts)
             } else {
                 if let error = library.error ?? library.loadError {
@@ -113,7 +113,7 @@ struct LibrarySurface: View {
                     .menuStyle(.borderlessButton).fixedSize()
                 }
             }
-            WovenSegmentedSelector(options: ["Messages", "Saved Artifacts"], selection: $collection) { $0 }
+            WovenSegmentedSelector(options: ["Messages", "Saved Assets"], selection: $collection) { $0 }
                 .frame(maxWidth: 320)
             if collection == "Messages" {
                 WovenSearchField(text: $selection.search, prompt: "Search Library")

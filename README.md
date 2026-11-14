@@ -38,9 +38,10 @@ app. There is no Woven Matter account and no hosted service in between.
   With it, agents start, message, and check on sessions on any of your
   machines, and work with your notes, calendar, history, library, timers, and
   browser. Bots get their own Woven MCP keys, which you can revoke per bot.
-- **Keep your work beside the chat.** Open notes, spreadsheets, HTML pages,
+- **Keep your work beside the chat.** Open Notes, Sheets, Artifacts, Pages,
   browser tabs, and document previews next to a conversation and work on them
-  with the agent. Notes keep a version history you can restore from.
+  with the agent. Pages are flowing documents you and your agents edit together,
+  on a Mac, iPhone, or iPad. Notes keep a version history you can restore from.
 - **Give agents a browser and your desktop.** Browser Use drives a built-in
   Chromium browser. Computer Use operates Mac apps after you grant access in
   Settings.

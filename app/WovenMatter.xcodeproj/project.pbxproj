@@ -7,6 +7,18 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		283736DA094FD83AE984C8D9 /* PageImageImport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 211AA157217C28EC5ADF4CD3 /* PageImageImport.swift */; };
+		B10A285D13BC530C6796AE09 /* ApplicationModel+ArtifactInputs.swift in Sources */ = {isa = PBXBuildFile; fileRef = BD9E7289D06829ADA99BDB30 /* ApplicationModel+ArtifactInputs.swift */; };
+		3916B578BCC0F3BA0615B21A /* PageAssetEmbed.swift in Sources */ = {isa = PBXBuildFile; fileRef = 515656236774C19232018A70 /* PageAssetEmbed.swift */; };
+		F5858FAB18E67146ADA585EA /* PageComponentMenu.swift in Sources */ = {isa = PBXBuildFile; fileRef = 12AC5ECE47E299F5063607C4 /* PageComponentMenu.swift */; };
+		5CC920A3B60E5B8249C7CA74 /* PageTextFlow.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA75185448532DBDE3FB2D8F /* PageTextFlow.swift */; };
+		8160B2404AAD828F1DCD8795 /* PageEditor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 419B3B76D5F81D1B02AD9059 /* PageEditor.swift */; };
+		962548B00F72E479686D0315 /* PersistentArtifactView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 057F73B2AAF3A87BE19921D5 /* PersistentArtifactView.swift */; };
+		B17579AC9B2D8EA6CEBEE078 /* ArtifactStateSnapshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = CAEA22D7DA825A413BA5615E /* ArtifactStateSnapshot.swift */; };
+		A926FFE23C14F8E1F831EEA8 /* ArtifactStateScript.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEB177F7569AE5E4A5D3E71F /* ArtifactStateScript.swift */; };
+		B1F674635460DD7CD908D3BE /* ApplicationModel+Boards.swift in Sources */ = {isa = PBXBuildFile; fileRef = 58AF79E0D198DB9D0CD834B4 /* ApplicationModel+Boards.swift */; };
+		4E22CDDAA6EDB5EF58AD7284 /* BoardItemInspector.swift in Sources */ = {isa = PBXBuildFile; fileRef = 365A001AABC65B97F0703FEF /* BoardItemInspector.swift */; };
+		CA4A50000000000000000011 /* CanvasViewState.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA4A50000000000000000012 /* CanvasViewState.swift */; };
 		D20900000000000000000001 /* PairedMacSyncController.swift in Sources */ = {isa = PBXBuildFile; fileRef = D20900000000000000000002 /* PairedMacSyncController.swift */; };
 		58D2DD715AC36ACD6DF22BB2 /* LUCIDE_LICENSE.txt in Resources */ = {isa = PBXBuildFile; fileRef = 0AAFD6EAB1F3FB697B1A2D05 /* LUCIDE_LICENSE.txt */; };
 		E02200000000000000000001 /* HarnessSetupModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = E02200000000000000000002; };
@@ -196,6 +208,18 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		211AA157217C28EC5ADF4CD3 /* PageImageImport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "PageImageImport.swift"; sourceTree = "<group>"; };
+		BD9E7289D06829ADA99BDB30 /* ApplicationModel+ArtifactInputs.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ApplicationModel+ArtifactInputs.swift"; sourceTree = "<group>"; };
+		515656236774C19232018A70 /* PageAssetEmbed.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "PageAssetEmbed.swift"; sourceTree = "<group>"; };
+		12AC5ECE47E299F5063607C4 /* PageComponentMenu.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "PageComponentMenu.swift"; sourceTree = "<group>"; };
+		DA75185448532DBDE3FB2D8F /* PageTextFlow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "PageTextFlow.swift"; sourceTree = "<group>"; };
+		419B3B76D5F81D1B02AD9059 /* PageEditor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "PageEditor.swift"; sourceTree = "<group>"; };
+		057F73B2AAF3A87BE19921D5 /* PersistentArtifactView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "PersistentArtifactView.swift"; sourceTree = "<group>"; };
+		CAEA22D7DA825A413BA5615E /* ArtifactStateSnapshot.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ArtifactStateSnapshot.swift"; sourceTree = "<group>"; };
+		EEB177F7569AE5E4A5D3E71F /* ArtifactStateScript.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ArtifactStateScript.swift"; sourceTree = "<group>"; };
+		58AF79E0D198DB9D0CD834B4 /* ApplicationModel+Boards.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ApplicationModel+Boards.swift"; sourceTree = "<group>"; };
+		365A001AABC65B97F0703FEF /* BoardItemInspector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "BoardItemInspector.swift"; sourceTree = "<group>"; };
+		CA4A50000000000000000012 /* CanvasViewState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CanvasViewState.swift; sourceTree = "<group>"; };
 		D20900000000000000000002 /* PairedMacSyncController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairedMacSyncController.swift; sourceTree = "<group>"; };
 		0AAFD6EAB1F3FB697B1A2D05 /* LUCIDE_LICENSE.txt */ = {isa = PBXFileReference; lastKnownFileType = text; path = ../docs/assets/LUCIDE_LICENSE.txt; sourceTree = SOURCE_ROOT; };
 		E02200000000000000000002 /* HarnessSetupModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "App/Models/HarnessSetupModel.swift"; sourceTree = SOURCE_ROOT; };
@@ -494,6 +518,8 @@
 				753DF034EE6D727B6091929D /* BackendLibraryService.swift */,
 				C131C0A00000000000000001 /* ApplicationModel+ConversationActions.swift */,
 				C131C0B00000000000000001 /* ApplicationModel+NoteActions.swift */,
+				58AF79E0D198DB9D0CD834B4 /* ApplicationModel+Boards.swift */,
+				BD9E7289D06829ADA99BDB30 /* ApplicationModel+ArtifactInputs.swift */,
 				B88F25850147F01B163EDF7E /* ApplicationModel+Calendar.swift */,
 				20E807F893654CD4A1F24D40 /* WorkspaceAgentToolsModel.swift */,
 				26006898DCC6474CBE1A1585 /* WorkspaceAgentToolsModel+Goals.swift */,
@@ -533,6 +559,8 @@
 				52C822631EDF91C6FE39C754 /* DesktopNotePane.swift */,
 				45C178F10C928BB5DF700830 /* ConversationComposer.swift */,
 				B5CEADA1DA4AFBF4EFFC2CDC /* CloudConversation.swift */,
+				365A001AABC65B97F0703FEF /* BoardItemInspector.swift */,
+				CA4A50000000000000000012 /* CanvasViewState.swift */,
 				988F5895CCE74B6E9C970200 /* ConversationGoalControls.swift */,
 				890F3602A18AF2215FAC1D3E /* Sidebar.swift */,
 				DC0A00000000000000000002 /* ComposerTextEditor.swift */,
@@ -560,6 +588,14 @@
 				D57100000000000000000002 /* WovenStyle.swift */,
 				DA4C00000000000000000004 /* HTMLArtifactDocument.swift */,
 				DA4C00000000000000000002 /* WovenColors.swift */,
+				211AA157217C28EC5ADF4CD3 /* PageImageImport.swift */,
+				515656236774C19232018A70 /* PageAssetEmbed.swift */,
+				12AC5ECE47E299F5063607C4 /* PageComponentMenu.swift */,
+				DA75185448532DBDE3FB2D8F /* PageTextFlow.swift */,
+				419B3B76D5F81D1B02AD9059 /* PageEditor.swift */,
+				057F73B2AAF3A87BE19921D5 /* PersistentArtifactView.swift */,
+				CAEA22D7DA825A413BA5615E /* ArtifactStateSnapshot.swift */,
+				EEB177F7569AE5E4A5D3E71F /* ArtifactStateScript.swift */,
 				A11C00000000000000000004 /* WorkspaceView.swift */,
 				489A29D04369BF898400D045 /* RootView.swift */,
 				C49C2130B0B0B01A795C7504 /* SettingsView.swift */,
@@ -850,6 +886,8 @@
 				2350EC32F0F50FD3DB4069F3 /* DesktopNotePane.swift in Sources */,
 				FE8DA980F8CFABCB8AAB3893 /* ConversationComposer.swift in Sources */,
 				E8E4FA74C6587F81C8999942 /* CloudConversation.swift in Sources */,
+				4E22CDDAA6EDB5EF58AD7284 /* BoardItemInspector.swift in Sources */,
+				CA4A50000000000000000011 /* CanvasViewState.swift in Sources */,
 				A9682778D5284ABE8DF0D342 /* ConversationGoalControls.swift in Sources */,
 				97B76EB8D620C6E620196AC8 /* Sidebar.swift in Sources */,
 				8443106E4E46FD4C315E128F /* NoteDrafts.swift in Sources */,
@@ -885,6 +923,8 @@
 				281F6DF22C3AE19CCE3FC99D /* BackendLibraryService.swift in Sources */,
 				C131C0A00000000000000002 /* ApplicationModel+ConversationActions.swift in Sources */,
 				C131C0B00000000000000002 /* ApplicationModel+NoteActions.swift in Sources */,
+				B1F674635460DD7CD908D3BE /* ApplicationModel+Boards.swift in Sources */,
+				B10A285D13BC530C6796AE09 /* ApplicationModel+ArtifactInputs.swift in Sources */,
 				A13EC094A3DEA4F302868640 /* ApplicationModel+Calendar.swift in Sources */,
 				5C84BF439B9047118002DD70 /* WorkspaceAgentToolsModel.swift in Sources */,
 				A9AEC3CDE2454B04B05F6AA3 /* WorkspaceAgentToolsModel+Goals.swift in Sources */,
@@ -920,6 +960,14 @@
 				D57100000000000000000001 /* WovenStyle.swift in Sources */,
 				DA4C00000000000000000003 /* HTMLArtifactDocument.swift in Sources */,
 				DA4C00000000000000000001 /* WovenColors.swift in Sources */,
+				283736DA094FD83AE984C8D9 /* PageImageImport.swift in Sources */,
+				3916B578BCC0F3BA0615B21A /* PageAssetEmbed.swift in Sources */,
+				F5858FAB18E67146ADA585EA /* PageComponentMenu.swift in Sources */,
+				5CC920A3B60E5B8249C7CA74 /* PageTextFlow.swift in Sources */,
+				8160B2404AAD828F1DCD8795 /* PageEditor.swift in Sources */,
+				962548B00F72E479686D0315 /* PersistentArtifactView.swift in Sources */,
+				B17579AC9B2D8EA6CEBEE078 /* ArtifactStateSnapshot.swift in Sources */,
+				A926FFE23C14F8E1F831EEA8 /* ArtifactStateScript.swift in Sources */,
 				A11C00000000000000000003 /* WorkspaceView.swift in Sources */,
 				5E64711B441F5A188A2862AC /* RootView.swift in Sources */,
 				E02200000000000000000001 /* HarnessSetupModel.swift in Sources */,

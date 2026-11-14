@@ -73,6 +73,8 @@ struct BackendApplicationResult: Codable, Sendable {
     var accepted: Bool = true
     var entityID: String?
     var noteResponse: NoteEditingResponse?
+    var artifactStateResult: ArtifactStateWriteResult?
+    var artifactStateSnapshot: ArtifactStateSnapshot?
     var conversationID: String?
     var metadata: LocalACPSessionMetadata?
     var selections: SessionSelections?

@@ -4,7 +4,7 @@ Match the existing app and reuse its shared components. Keep this guide current
 when an intentional design change is accepted.
 
 - **macOS menu bar:** keep File, Edit, Appearance, Window, and Help after the app
-  menu. File contains New Chat, New Note, New Browser Tab, Start/Stop Dictation,
+  menu. File contains New Chat, New Asset, New Browser Tab, Start/Stop Dictation,
   and Refresh Workspace. Route creation through the active workspace's existing
   flows. Preserve native Undo/Redo and clipboard commands in Edit; keep theme and
   sidebar layout in Appearance. Do not add a separate View or Workspace menu.
@@ -294,6 +294,30 @@ when an intentional design change is accepted.
   24-point bottom gutter outside the scrolling text, without stacking additional
   editor or footer padding beneath the note. Align the count button's right
   edge with the header controls using the same 12-point side inset.
+- **Assets:** use Notes, Sheets, Artifacts, and Pages in user-facing creation and
+  discovery. Label the creation picker **New Asset** and the Library's general
+  saved-output collection **Saved Assets**. Artifacts are interactive HTML
+  artifacts built on live data; data connections are optional. The Assets sidebar
+  filters these types. Preserve the existing HTML sandbox.
+  Describe an Artifact connected to live data as a **Live Artifact**. Keep
+  **Artifact** as the single creation option; Live is a description of the data
+  connection, not another asset type. These experiences run inside Woven.
+- **Pages:** make the flowing document the primary experience. Reuse the native
+  Notes editor for contiguous text, lists, formatting, tables, and task paragraphs.
+  Use one outer scroll surface; text grows to fit rather than becoming a scroll
+  box per component. Keep editable paragraph positions before, between, and after
+  sections and original assets. Nest sections with quiet indentation and disclosure
+  controls. Nested Pages open the original Page; do not recursively mount editors.
+  Keep component actions compact, and show task/review/session details on demand.
+  Completing a task updates its saved state. Assignment is descriptive and starts
+  no execution. Agent dispatch uses the existing chat admission and permissions.
+  Mark embeds **Original**. Notes, Sheets and Artifacts edit the same library asset
+  wherever it is embedded. Use the original editor and database-link refresh path.
+  Artifact form inputs and custom state persist on that original, with a visible
+  save error and explicit retry after a conflict. Data refresh must not reload the
+  interface or erase input being entered. Preserve normal asset title, version
+  history, and draft recovery controls. Keep the existing sync limitations clear;
+  this is not distributed live editing.
 - **Conversation progress:** use the shared elapsed work header and static semantic
   icons with meaningful live text. Do not show busy spinners in tool-call rows,
   work-group headers, reasoning indicators, or tool-detail loading. Thinking and

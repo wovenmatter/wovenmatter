@@ -16,6 +16,7 @@ final class WorkspaceAssetSession: NSObject, @preconcurrency WMBrowserPageDelega
     private(set) var pageRevision = 0
     private(set) var browserPresentationRevision = 0
     var notice: String?
+    @ObservationIgnored private var noteKinds: [String: (version: String, kind: NoteArtifactKind)] = [:]
     var automationTabs: [JSONValue] {
         tabs.browserIDs.compactMap { id in
             pages[id].map { .object(["tabId": .string(id.uuidString.lowercased()), "url": .string($0.url),
@@ -81,6 +82,16 @@ final class WorkspaceAssetSession: NSObject, @preconcurrency WMBrowserPageDelega
         browserPresentationRevision &+= 1
     }
 
+    /// An asset's kind is fixed when it is created. Decode it once per stored
+    /// version rather than on every view update.
+    func kind(of note: WorkspaceNoteRecord) -> NoteArtifactKind {
+        let version = note.revision ?? note.updatedAt ?? note.content
+        if let cached = noteKinds[note.id], cached.version == version { return cached.kind }
+        let kind = NoteDocument.decode(note.content).kind
+        noteKinds[note.id] = (version, kind)
+        return kind
+    }
+
     func title(for tab: WorkspaceAssetTabs.Tab, notes: [WorkspaceNoteRecord]) -> String {
         switch tab {
         case .document(let id): documents[id]?.lastPathComponent ?? "Document"
@@ -95,7 +106,7 @@ final class WorkspaceAssetSession: NSObject, @preconcurrency WMBrowserPageDelega
         let openNotes = tabs.noteIDs.compactMap { id -> WorkspaceVisibleContext.Note? in
             guard let note = notes.first(where: { $0.id == id }) else { return nil }
             return .init(id: id, title: title(note), revision: note.updatedAt ?? note.createdAt ?? "",
-                         active: tabs.selected == .note(id))
+                         active: tabs.selected == .note(id), kind: kind(of: note))
         }
         let openPages = tabs.browserIDs.compactMap { id -> WorkspaceVisibleContext.Page? in
             guard let page = pages[id] else { return nil }

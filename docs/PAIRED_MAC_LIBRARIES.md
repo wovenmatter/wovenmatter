@@ -80,7 +80,9 @@ then counter and origin ordering choose the same winner on every Mac, whatever
 the arrival order, page boundaries or restarts. An explicit later restore
 supersedes the deletion causally while a concurrent edit stays in the frontier.
 A local write supersedes the frontier it has seen. Losing live note content gets
-a stable, visible **Recovered edit** note; other losing versions remain in
+a stable, visible **Recovered edit** note, except a Page or an Artifact's saved
+inputs: concurrent versions of those merge on every device into the same result
+(see [Pages](PAGES.md)), so nothing needs recovering. Other losing versions remain in
 `peer_sync_conflicts` while they are still concurrent, and a losing library
 item's version stays there with its bytes. Replaying a conflict cannot create
 another copy.

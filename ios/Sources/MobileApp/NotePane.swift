@@ -34,6 +34,8 @@ struct NotePane: View {
   @State private var link = ""
   /// Identity of the empty paragraph offered after a final table until the user writes in it.
   @State private var trailingParagraphID = UUID().uuidString.lowercased()
+  /// Paragraph IDs offered at a Page's empty writing places.
+  @State private var pagePlaceholders = MobilePagePlaceholders()
   init(model: MobileModel, note: LibraryNote) {
     self.model = model; self.note = note
     _title = State(initialValue: model.draftTitles[note.id] ?? note.title)
@@ -42,7 +44,10 @@ struct NotePane: View {
     _conflictsPresented = State(initialValue: model.fixture && MobileModel.uiScenario == "conflict")
   }
   private var document: NoteDocument? { RichDocumentEditing.document(content) }
-  private var editable: Bool { RichDocumentEditing.canEdit(content) && !model.state.uncachedNoteIDs.contains(note.id) }
+  private var isPage: Bool { document?.kind == .canvas }
+  private var editable: Bool {
+    (RichDocumentEditing.canEdit(content) || MobilePageEditing.canEdit(content)) && !model.state.uncachedNoteIDs.contains(note.id)
+  }
   var body: some View {
     VStack(spacing: 0) {
       HStack(spacing: 4) {
@@ -87,7 +92,7 @@ struct NotePane: View {
         } label: {
           Image(systemName: "textformat").font(.title3.weight(.medium)).frame(width: 44, height: 44)
         }.disabled(!editable).accessibilityLabel("Format note").accessibilityIdentifier("note-format")
-        if editable, document?.kind == .note { MobileDictationMicrophone(editor: dictationEditor) }
+        if editable, document?.kind == .note || isPage { MobileDictationMicrophone(editor: dictationEditor) }
         Menu {
           Button(model.canDeleteNoteLocally(note.id) ? "Details, move and delete" : model.isStandalone ? "Details and move" : "Details, move and export") { detailsPresented = true }
             .disabled(!model.online && !model.canEditNoteDetails(note.id))
@@ -95,14 +100,16 @@ struct NotePane: View {
           if model.state.conflicts[note.id] != nil { Button("Review saved conflict", systemImage: "doc.on.doc") { conflictsPresented = true } }
           ShareLink(item: content) { Label("Export original document", systemImage: "square.and.arrow.up") }
         } label: { Image(systemName: "ellipsis").frame(width: 44, height: 44) }.accessibilityLabel("Note actions")
-        Button { Task { await model.newNote() } } label: {
+        Menu {
+          Section("New Asset") { MobileNewAssetItems { kind in Task { await model.newAsset(kind) } } }
+        } label: {
           LucideIcon(glyph: .plus, size: 20).frame(width: 44, height: 44)
-        }.accessibilityLabel("New note").accessibilityIdentifier("action-new-note")
+        }.accessibilityLabel("New Asset").accessibilityIdentifier("action-new-asset")
       }.buttonStyle(WovenIconButtonStyle())
         // Undo, redo, formatting and dictation continue editing the focused paragraph.
         .keepsKeyboard()
         .padding(.horizontal, 12).padding(.top, 8).padding(.bottom, 4)
-      TextField("Untitled note", text: Binding(get: { title }, set: { title = $0; persist() }), axis: .vertical)
+      TextField(isPage ? "Untitled Page" : "Untitled note", text: Binding(get: { title }, set: { title = $0; persist() }), axis: .vertical)
         .font(.title.weight(.semibold)).lineLimit(1...3)
         .accessibilityIdentifier("note-title").disabled(!editable)
         .padding(.horizontal, 20).padding(.top, 8).padding(.bottom, 8)
@@ -114,14 +121,21 @@ struct NotePane: View {
         if model.online { Button("Download document") { Task { await model.openNote(note.id) } }.buttonStyle(WovenPrimaryButtonStyle()).padding() }
       } else if let document {
         if document.kind == .html {
-          Text("HTML asset · read only").font(.caption).foregroundStyle(WovenPalette.mutedForeground)
+          Text("Artifact · read only").font(.caption).foregroundStyle(WovenPalette.mutedForeground)
           if document.databaseLink != nil {
             LinkedArtifactPreview(model: model, note: note, tableID: nil, html: document.html)
-          } else { SafeHTMLPreview(html: document.html) }
+          } else { SafeHTMLPreview(html: document.html, state: document.artifactStateSnapshot) }
+        } else if document.kind == .canvas {
+          MobilePageEditor(model: model, note: note, layout: MobilePageLayout(page: document, placeholders: pagePlaceholders),
+            editable: editable, selectedID: $selectedBlockID, commit: pageChange,
+            focusText: { id in editorController.focus(.init(blockID: id, location: 0), typingRun: nil) }) { row, text, number in
+            textBlock(text, number: number, identity: "page:\(note.id):\(text.id)")
+              .accessibilityIdentifier("page-text-\(text.id)")
+          }
         } else {
           ScrollView {
             LazyVStack(alignment: .leading, spacing: 12) {
-              if document.kind != .note { Text("Spreadsheet · read only").font(.caption).foregroundStyle(WovenPalette.mutedForeground) }
+              if document.kind != .note { Text("Sheet · read only").font(.caption).foregroundStyle(WovenPalette.mutedForeground) }
               else if !editable { Text("Read only · unsupported attributes preserved").font(.caption).foregroundStyle(WovenPalette.mutedForeground) }
               if document.kind == .spreadsheet, document.databaseLink != nil, document.blocks.isEmpty {
                 LinkedArtifactPreview(model: model, note: note, tableID: nil, html: nil)
@@ -130,26 +144,8 @@ struct NotePane: View {
               ForEach(renderedBlocks(document), id: \.id) { block in
                 switch block {
                 case .richText(let text):
-                  HStack(alignment: .top, spacing: 9) {
-                    RichBlockTextView(block: text, listNumber: numbers[text.id], generation: documentGeneration, editable: editable, controller: editorController,
-                      dictationEditor: dictationEditor, dictationIdentity: "note:\(note.id):\(text.id)",
-                      focused: { selectedBlockID = text.id; MobileDictation.shared.activeEditor = dictationEditor },
-                      paragraphBreak: { range, replacement in editParagraphs(text.id, range: range, replacement: replacement) },
-                      deleteAtStart: { mergeBackward(text.id) }) { range, replacement in
-                      do {
-                        let next = try RichDocumentEditing.replacingText(in: try editableContent(text.id), blockID: text.id, range: range, replacement: replacement, attributes: editorController.typingRun)
-                        let after = RichDocumentEditing.Caret(blockID: text.id, location: range.location + replacement.utf16.count)
-                        editorController.expectCaret(NSRange(location: after.location, length: 0))
-                        editorController.recordTextChange(from: content, to: next, blockID: text.id,
-                          before: .init(blockID: text.id, location: NSMaxRange(range)), after: after, apply: adopt)
-                        content = next
-                        documentGeneration += 1
-                        persist()
-                        guard let document = RichDocumentEditing.document(content), let new = document.blocks.first(where: { $0.id == text.id }), case .richText(let result) = new else { return nil }
-                        return (result, documentGeneration)
-                      } catch { model.errorMessage = error.localizedDescription; return nil }
-                    }.accessibilityIdentifier("note-body-editor-\(text.id)")
-                  }
+                  textBlock(text, number: numbers[text.id], identity: "note:\(note.id):\(text.id)")
+                    .accessibilityIdentifier("note-body-editor-\(text.id)")
                 case .table(let table):
                   if table.databaseLink != nil || (document.kind == .spreadsheet && document.databaseLink != nil) {
                     LinkedArtifactPreview(model: model, note: note, tableID: table.databaseLink != nil ? table.id : nil, html: nil)
@@ -191,11 +187,11 @@ struct NotePane: View {
       }.font(.system(size: 11)).foregroundStyle(WovenPalette.mutedForeground)
         .buttonStyle(.plain).padding(.horizontal, 20).padding(.bottom, 4)
     }
-    .onChange(of: note) { _, new in
-      if new == model.state.notes[note.id], model.draftContents[note.id] == nil && model.draftTitles[note.id] == nil {
-        if content != new.content { documentGeneration += 1; editorController.reset() }
-        content = new.content; title = new.title; editorBase = new
-      }
+    .onChange(of: note) { _, new in if new == model.state.notes[note.id] { adoptStoredNote() } }
+    // A change that lands while writing is still saving, such as another device's
+    // edit, a Quick Chat tool edit or a sync merge, is shown once that save lands.
+    .onChange(of: model.draftContents[note.id] == nil && model.draftTitles[note.id] == nil) { _, settled in
+      if settled { adoptStoredNote() }
     }
     .onDisappear { editorController.reset() }
     .alert("Link", isPresented: $showsLinkEditor) {
@@ -210,7 +206,73 @@ struct NotePane: View {
       if let conflict = model.state.conflicts[note.id] { ConflictPane(model: model, id: note.id, conflict: conflict) }
     }
   }
+  /// Shows the stored note once no writing is waiting to save. The stored copy
+  /// then holds everything typed here, so adopting it loses nothing; incoming
+  /// changes fence the local undo history.
+  private func adoptStoredNote() {
+    guard let stored = model.state.notes[note.id], model.draftContents[note.id] == nil, model.draftTitles[note.id] == nil else { return }
+    if content != stored.content { documentGeneration += 1; editorController.reset() }
+    content = stored.content; title = stored.title; editorBase = stored
+  }
   private func persist() { if editable { model.saveNote(id: note.id, title: title, content: content, base: editorBase) } }
+  /// One paragraph in the Notes text editor, for a note or a Page flow.
+  private func textBlock(_ text: NoteRichTextBlock, number: Int?, identity: String) -> RichBlockTextView {
+    RichBlockTextView(block: text, listNumber: number, generation: documentGeneration, editable: editable, controller: editorController,
+      dictationEditor: dictationEditor, dictationIdentity: identity,
+      focused: { selectedBlockID = text.id; MobileDictation.shared.activeEditor = dictationEditor },
+      paragraphBreak: { range, replacement in editParagraphs(text.id, range: range, replacement: replacement) },
+      deleteAtStart: { mergeBackward(text.id) }) { range, replacement in
+      do {
+        let (next, _) = try textEdit(text.id) { base in
+          (try RichDocumentEditing.replacingText(in: base, blockID: text.id, range: range, replacement: replacement, attributes: editorController.typingRun), ())
+        }
+        let after = RichDocumentEditing.Caret(blockID: text.id, location: range.location + replacement.utf16.count)
+        editorController.expectCaret(NSRange(location: after.location, length: 0))
+        editorController.recordTextChange(from: content, to: next, blockID: text.id,
+          before: .init(blockID: text.id, location: NSMaxRange(range)), after: after, apply: adopt)
+        content = next
+        documentGeneration += 1
+        persist()
+        guard let document = RichDocumentEditing.document(content), let new = document.blocks.first(where: { $0.id == text.id }), case .richText(let result) = new else { return nil }
+        return (result, documentGeneration)
+      } catch { model.errorMessage = error.localizedDescription; return nil }
+    }
+  }
+  /// Runs a Notes text operation on the note, or on the Page flow holding `blockID`.
+  /// A Page's paragraphs split from a task continue the task list.
+  private func textEdit<T>(_ blockID: String, continuesTask: Bool = false, _ operation: (String) throws -> (String, T)) throws -> (String, T) {
+    guard isPage else { return try operation(try editableContent(blockID)) }
+    var value: T?
+    let next = try MobilePageEditing.commit(content) { page in
+      guard let flow = MobilePageLayout(page: page, placeholders: pagePlaceholders).flow(containing: blockID) else {
+        throw RichDocumentEditing.Failure.missingBlock
+      }
+      let isTask = page.boardItems?[blockID]?.task != nil
+      let result = try MobilePageEditing.editFlow(&page, flow: flow, operation)
+      value = result.value
+      if continuesTask, isTask {
+        for id in result.created { page.boardItems?[id] = BoardItem(task: BoardTask()) }
+      }
+    }
+    guard let value else { throw RichDocumentEditing.Failure.missingBlock }
+    return (next, value)
+  }
+  /// Applies one Page component change through the document's undo and save.
+  private func pageChange(_ action: String, _ change: (inout NoteDocument) throws -> Void) -> String? {
+    do {
+      let next = try MobilePageEditing.commit(content, change: change)
+      guard next != content else { return nil }
+      editorController.recordChange(from: content, to: next, action: action, apply: adopt)
+      adopt(next)
+      return nil
+    } catch {
+      model.errorMessage = error.localizedDescription
+      return error.localizedDescription
+    }
+  }
+  private func isPageTask(_ blockID: String) -> Bool {
+    isPage && document?.materializedPage().boardItems?[blockID]?.task != nil
+  }
   /// A note that ends in a table, or has no blocks, offers an empty paragraph
   /// after it. It joins the document only once the user writes in it.
   private func renderedBlocks(_ document: NoteDocument) -> [NoteBlock] {
@@ -227,7 +289,7 @@ struct NotePane: View {
   }
   private func setStyle(_ style: NoteParagraphStyle) {
     guard let id = editorController.activeBlockID ?? selectedBlockID ?? document?.blocks.first?.id else { return }
-    change { try RichDocumentEditing.settingStyle(in: try editableContent(id), blockID: id, style: style) }
+    change { try textEdit(id) { (try RichDocumentEditing.settingStyle(in: $0, blockID: id, style: style), ()) }.0 }
   }
   private func format(_ format: RichDocumentEditing.TextFormat) {
     guard let id = editorController.activeBlockID ?? selectedBlockID ?? document?.blocks.first?.id else { return }
@@ -255,25 +317,47 @@ struct NotePane: View {
       editorController.setTypingRun(run)
     } else {
       editorController.clearTypingRun()
-      change { try RichDocumentEditing.formattingText(in: try editableContent(id), blockID: id, range: editorController.selection, format: format) }
+      let selection = editorController.selection
+      change { try textEdit(id) { (try RichDocumentEditing.formattingText(in: $0, blockID: id, range: selection, format: format), ()) }.0 }
     }
   }
   /// Return and multi-line paste create paragraphs; the caret follows into the new block.
   /// Returns whether the whole edit was saved, so dictation reports it exactly once.
   private func editParagraphs(_ blockID: String, range: NSRange, replacement: String) -> Bool {
     do {
-      let base = try editableContent(blockID)
-      let typing = editorController.typingRun ?? RichDocumentEditing.typingFormat(in: base, blockID: blockID, at: range.location)
-      let result = try RichDocumentEditing.editing(base, blockID: blockID, range: range, replacement: replacement, attributes: editorController.typingRun)
-      return applyStructure(result.content, before: .init(blockID: blockID, location: NSMaxRange(range)), caret: result.caret,
-                            typingRun: result.caret.blockID == blockID ? nil : typing, action: "New paragraph")
+      // Return on an empty task returns to ordinary text, as on a Mac.
+      if isPageTask(blockID), range.length == 0, RichDocumentEditing.containsParagraphBreak(replacement),
+         replacement.trimmingCharacters(in: .newlines).isEmpty,
+         document?.materializedPage().blocks.first(where: { $0.id == blockID })?.plainText.isEmpty == true {
+        let next = try MobilePageEditing.commit(content) { $0.boardItems?[blockID]?.task = nil }
+        return applyStructure(next, before: .init(blockID: blockID, location: 0), caret: .init(blockID: blockID, location: 0),
+                              typingRun: nil, action: "End task list")
+      }
+      let typingRun = editorController.typingRun
+      let (next, (caret, typing)) = try textEdit(blockID, continuesTask: true) { base in
+        let typing = typingRun ?? RichDocumentEditing.typingFormat(in: base, blockID: blockID, at: range.location)
+        let result = try RichDocumentEditing.editing(base, blockID: blockID, range: range, replacement: replacement, attributes: typingRun)
+        return (result.content, (result.caret, typing))
+      }
+      return applyStructure(next, before: .init(blockID: blockID, location: NSMaxRange(range)), caret: caret,
+                            typingRun: caret.blockID == blockID ? nil : typing, action: "New paragraph")
     } catch { model.errorMessage = error.localizedDescription; return false }
   }
   private func mergeBackward(_ blockID: String) {
     guard !isOfferedParagraph(blockID) else { return }
     do {
-      guard let result = try RichDocumentEditing.mergingBackward(content, blockID: blockID) else { return }
-      applyStructure(result.content, before: .init(blockID: blockID, location: 0), caret: result.caret, typingRun: nil, action: "Delete")
+      // Delete at the start of a task first returns it to ordinary text, like a list item.
+      if isPageTask(blockID) {
+        let next = try MobilePageEditing.commit(content) { $0.boardItems?[blockID]?.task = nil }
+        applyStructure(next, before: .init(blockID: blockID, location: 0), caret: .init(blockID: blockID, location: 0), typingRun: nil, action: "End task list")
+        return
+      }
+      let (next, caret) = try textEdit(blockID) { base in
+        guard let result = try RichDocumentEditing.mergingBackward(base, blockID: blockID) else { return (base, Optional<RichDocumentEditing.Caret>.none) }
+        return (result.content, result.caret)
+      }
+      guard let caret else { return }
+      applyStructure(next, before: .init(blockID: blockID, location: 0), caret: caret, typingRun: nil, action: "Delete")
     } catch { model.errorMessage = error.localizedDescription }
   }
   @discardableResult
@@ -688,6 +772,7 @@ struct SafeHTMLPreview: UIViewRepresentable {
   @Environment(\.colorScheme) private var colorScheme
   let html: String
   var linkedDataJSON: String? = nil
+  var state: ArtifactStateSnapshot = .empty
   func makeCoordinator() -> Coordinator { Coordinator() }
   func makeUIView(context: Context) -> WKWebView {
     let configuration = WKWebViewConfiguration()
@@ -702,7 +787,7 @@ struct SafeHTMLPreview: UIViewRepresentable {
     // keep their exact HTML and are not reloaded when the theme changes.
     let emptyDark = html.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && colorScheme == .dark
     let body = emptyDark ? String(format: "<style>body{background:#%06X}</style>", WovenColors.darkWorkspace) : html
-    let rendered = MobileArtifactPreview.renderedHTML(html: body, linkedDataJSON: linkedDataJSON)
+    let rendered = MobileArtifactPreview.renderedHTML(html: body, linkedDataJSON: linkedDataJSON, state: state)
     guard context.coordinator.loaded != rendered else { return }
     context.coordinator.loaded = rendered
     view.loadHTMLString(rendered, baseURL: nil)
@@ -715,7 +800,7 @@ struct SafeHTMLPreview: UIViewRepresentable {
   }
 }
 
-private struct LinkedArtifactPreview: View {
+struct LinkedArtifactPreview: View {
   @Environment(\.wovenTheme) private var theme
   @Bindable var model: MobileModel
   let note: LibraryNote
@@ -734,7 +819,8 @@ private struct LinkedArtifactPreview: View {
         else { Button("Refresh") { Task { await load() } }.font(.caption).disabled(!model.online) }
       }.padding(.horizontal, html == nil ? 0 : 20)
       if let error { Text(error).font(.caption).foregroundStyle(WovenPalette.mutedForeground).padding(.horizontal, html == nil ? 0 : 20) }
-      if let html { SafeHTMLPreview(html: html, linkedDataJSON: data?.json) }
+      if let html { SafeHTMLPreview(html: html, linkedDataJSON: data?.json,
+          state: NoteDocument.decode(note.content).artifactStateSnapshot) }
       else if let data {
         ScrollView(.horizontal) {
           LazyVStack(alignment: .leading, spacing: 0) {

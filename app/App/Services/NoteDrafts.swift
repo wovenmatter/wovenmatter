@@ -508,6 +508,7 @@ final class NoteWriteBehind: @unchecked Sendable {
     private func rebasedOverAcknowledgedPredecessor(_ entry: NoteJournalEntry) -> NoteJournalEntry {
         guard let base = entry.expectedRevision,
               let chain = acknowledgedChains[chainKey(entry)],
+              base != chain.revision,
               chain.bases.contains(base) else { return entry }
         return entry.rebased(revision: chain.revision, content: chain.content, title: chain.title)
     }
@@ -542,6 +543,11 @@ struct NoteDraft: Equatable {
     var sourceRevision: String? = nil
     var sourceContent: String? = nil
     var sourceTitle: String? = nil
+    /// A receipt identifies the stored revision, not necessarily the submitted
+    /// bytes: Page merging and Artifact state reconciliation can change them.
+    var sourceRevisionFromReceipt = false
+    var reconciliationNotice: String?
+    var conflictComponentRemaps: [String: String] = [:]
 
     static func initial(for note: WorkspaceNoteRecord) -> NoteDraft {
         NoteDraft(
@@ -575,6 +581,8 @@ struct NoteDraft: Equatable {
     }
 
     mutating func reconcile(with note: WorkspaceNoteRecord) {
+        if sourceRevisionFromReceipt, let expected = sourceRevision.flatMap(UInt64.init),
+           let observed = note.revision.flatMap(UInt64.init), observed < expected { return }
         if editRevision == 0 {
             adopt(note)
         } else if note.title == title, note.content == content {
@@ -586,9 +594,23 @@ struct NoteDraft: Equatable {
             if persistedRevision >= editRevision {
                 editRevision = 0
                 persistedRevision = 0
+                sourceRevisionFromReceipt = false
             }
         } else if persistedRevision < editRevision {
             // A local write is still pending. A refresh cannot supersede it.
+        } else if sourceRevisionFromReceipt {
+            let local = try? NoteDocument.editableDocument(from: content)
+            let stored = try? NoteDocument.editableDocument(from: note.content)
+            conflictComponentRemaps = [:]
+            if let local, let stored, stored.kind == .canvas {
+                conflictComponentRemaps = NoteDocument.pageConflictComponentRemaps(submitted: local, stored: stored)
+                if !conflictComponentRemaps.isEmpty {
+                    reconciliationNotice = "Concurrent edits were retained as separate components and marked for review."
+                }
+            }
+            // The source revision can equal the receipt while its contents
+            // contain merged work. Adopt that canonical row once typing settles.
+            adopt(note)
         } else if (note.revision ?? note.updatedAt) == (sourceRevision ?? sourceUpdatedAt) {
             // A pane can reopen before the post-write snapshot refresh arrives.
             // Keep both the newer draft and its current save result.
@@ -610,6 +632,7 @@ struct NoteDraft: Equatable {
     }
 
     private mutating func adopt(_ note: WorkspaceNoteRecord) {
+        sourceRevisionFromReceipt = false
         title = note.title
         content = note.content
         saveState = .saved

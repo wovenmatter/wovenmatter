@@ -19,8 +19,8 @@ public actor SavedArtifactStore {
     case invalidTransfer, checksumMismatch, capacity
     public var errorDescription: String? {
       switch self {
-      case .invalidTransfer: "The saved artifact transfer is inconsistent. The existing file has been retained."
-      case .checksumMismatch: "The saved artifact did not match its checksum. It has not been opened."
+      case .invalidTransfer: "The saved asset transfer is inconsistent. The existing file has been retained."
+      case .checksumMismatch: "The saved asset did not match its checksum. It has not been opened."
       case .capacity: "This artifact exceeds the local saved-file storage limit."
       }
     }

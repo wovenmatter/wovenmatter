@@ -214,7 +214,7 @@ struct NewArtifactButton: View {
                 LucideIcon(glyph: .fileText, size: 13)
                     .foregroundStyle(WovenPalette.foreground)
                     .frame(width: 15, height: 15)
-                Text("New note")
+                Text("New Asset")
                     .lineLimit(1)
                 Spacer()
             }
@@ -230,7 +230,7 @@ struct NewArtifactButton: View {
         }
         .buttonStyle(RailButtonStyle())
         .scrollAwareHover($hovered, token: hoverID)
-        .accessibilityLabel("Create note or artifact")
+        .accessibilityLabel("Create asset")
     }
 }
 
@@ -715,6 +715,8 @@ struct NoteRow: View {
                     case .spreadsheet:
                         Image(systemName: "tablecells")
                             .font(.system(size: 15, weight: .medium))
+                    case .canvas:
+                        LucideIcon(glyph: .panelsTopLeft, size: 18)
                     case .html:
                         Image(systemName: "chevron.left.forwardslash.chevron.right")
                             .font(.system(size: 14, weight: .medium))
@@ -932,7 +934,7 @@ struct FolderContentCounts: Equatable {
     var notes = 0
     var total: Int { chats + notes }
     var summary: String {
-        "\(chats) \(chats == 1 ? "chat" : "chats") · \(notes) \(notes == 1 ? "note" : "notes")"
+        "\(chats) \(chats == 1 ? "chat" : "chats") · \(notes) \(notes == 1 ? "asset" : "assets")"
     }
 }
 

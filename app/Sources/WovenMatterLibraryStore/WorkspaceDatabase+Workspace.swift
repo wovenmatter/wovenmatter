@@ -463,6 +463,7 @@ extension WorkspaceDatabaseConnection {
           bindings: [],
           as: WorkspaceConversationRecord.self
         )
+      // Editors see the document; synchronization clocks stay in this store.
       let notes: [WorkspaceNoteRecord] = try decodeCanonicalRowsUnlocked(
           """
           SELECT json_object(
@@ -477,7 +478,7 @@ extension WorkspaceDatabaseConnection {
           """,
           bindings: [],
           as: WorkspaceNoteRecord.self
-        )
+        ).map { var note = $0; note.content = NoteSync.strip(note.content); return note }
 
       let statuses = try programStatusSnapshotsUnlocked()
       for index in conversations.indices {
