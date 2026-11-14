@@ -121,7 +121,9 @@ def backup(source, destination):
                 raise ValueError("Snapshot integrity check failed.")
 
 
-def copy_assets(source, target):
+def copy_assets(source, target, content_addressed=False):
+    # A content-addressed file is named by its bytes, so it is copied as is
+    # even when it happens to begin with a SQLite header.
     if not source.exists():
         return
     if source.is_symlink():
@@ -131,11 +133,11 @@ def copy_assets(source, target):
         for child in source.iterdir():
             if child.name.endswith(("-wal", "-shm")):
                 continue
-            copy_assets(child, target / child.name)
+            copy_assets(child, target / child.name, content_addressed)
     elif source.is_file():
         with source.open("rb") as stream:
             is_sqlite = stream.read(16) == b"SQLite format 3\x00"
-        if is_sqlite:
+        if is_sqlite and not content_addressed:
             backup(source, target)
         else:
             shutil.copy2(source, target)
@@ -324,8 +326,9 @@ def snapshot(source, destination):
     temporary = Path(tempfile.mkdtemp(prefix=".snapshot-", dir=destination.parent))
     try:
         backup(source / "workspace.sqlite", temporary / "workspace.sqlite")
-        for name in ("library-files", "message-attachments", "ManagedDatabases"):
-            copy_assets(source / name, temporary / name)
+        for name in ("library-files", "library-chunks", "message-attachments"):
+            copy_assets(source / name, temporary / name, content_addressed=True)
+        copy_assets(source / "ManagedDatabases", temporary / "ManagedDatabases")
         catalog = temporary / "ManagedDatabases/catalog.json"
         if catalog.exists():
             rows = json.loads(catalog.read_text())

@@ -496,9 +496,30 @@ extension WorkspaceDatabaseConnection {
     }
     return .init(table: record.table, key: record.key, row: row, deleted: record.deleted, clock: record.clock, origin: record.origin, vector: record.vector)
   }
+  /// Shared rows whose bytes are a file in the library's chunk store, named
+  /// by the row's `sha256` and `byte_count`. A received version waits until
+  /// the file sync has installed that file, as a large value waits for its
+  /// peer record file; a deletion needs no bytes.
+  static let peerChunkTables: Set<String> = ["artifact_chunks", "execution_native_history_parts"]
+
+  /// Whether the record's chunk file is here; throws for a malformed name.
+  private func peerChunkAvailable(_ record: PairedLibraryRecord) throws -> Bool {
+    guard Self.peerChunkTables.contains(record.table), !record.deleted else { return true }
+    guard let hash = record.row["sha256"], hash.type == "text", let name = hash.value, name.wholeMatch(of: /[0-9a-f]{64}/) != nil,
+          let count = record.row["byte_count"], count.type == "integer", let size = count.value.flatMap(Int64.init),
+          size >= 0, size <= Int64(FederationProtocol.maximumArtifactChunkBytes) else {
+      throw PeerRecordRejected(message: "Invalid shared chunk in " + record.table + ".")
+    }
+    guard let stored = libraryFiles.chunkSize(name) else { return false }
+    // Installed files were hashed against their name; the size is the row's claim.
+    guard stored == size else { throw PeerRecordRejected(message: "A shared chunk does not match its file.") }
+    return true
+  }
+
   /// Returns nil while referenced bytes are unavailable. A corrupt local copy
   /// is discarded so a healthy peer can supply the same content again.
   private func hydratePeerValues(_ record: PairedLibraryRecord) throws -> PairedLibraryRecord? {
+    guard try peerChunkAvailable(record) else { return nil }
     var row = record.row
     for (name, value) in row where value.type.hasPrefix("reference:") {
       guard ["reference:text", "reference:blob"].contains(value.type), let hash = value.value,
@@ -518,7 +539,9 @@ extension WorkspaceDatabaseConnection {
     return .init(table: record.table, key: record.key, row: row, deleted: record.deleted, clock: record.clock, origin: record.origin, vector: record.vector)
   }
   private func pendingReferencesAvailable(_ record: PairedLibraryRecord) -> Bool {
-    record.row.values.allSatisfy { value in
+    // A malformed chunk name is ready: applying it quarantines it.
+    guard (try? peerChunkAvailable(record)) != false else { return false }
+    return record.row.values.allSatisfy { value in
       guard value.type.hasPrefix("reference:") else { return true }
       guard let hash = value.value, hash.wholeMatch(of: /[0-9a-f]{64}/) != nil else { return true }
       return FileManager.default.fileExists(atPath: libraryFiles.supportDirectory.appending(path: "paired-records/" + hash).path)

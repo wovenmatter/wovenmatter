@@ -1,4 +1,9 @@
 import Foundation
+#if canImport(CryptoKit)
+import CryptoKit
+#else
+import Crypto
+#endif
 #if canImport(SQLite3)
 import SQLite3
 #else
@@ -18,12 +23,24 @@ import WovenMatterCore
 /// must give the same schema a fresh library has, keep the data that still
 /// means something, and leave peer bookkeeping on the new names.
 @Suite struct LibrarySchemaUpgradeTests {
+  private static let fixture = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+    .appending(path: "../Fixtures/library-v0.4.2.sql").standardizedFileURL
+  /// A waiting peer chunk's bytes as v0.4.2 kept them: a peer record file of their hex.
+  private static let peerChunk = Data("Peer upload\u{0}\u{1}".utf8)
+  /// The fixture as a v0.4.2 library on disk, with the peer record file its waiting chunk names.
+  private func v042Library() throws -> PersistenceFixture {
+    let library = try PersistenceFixture()
+    try PersistenceSQL(url: library.databaseURL).execute(try String(contentsOf: Self.fixture, encoding: .utf8))
+    let hex = Data(Self.peerChunk.map { String(format: "%02X", $0) }.joined().utf8)
+    let records = library.directory.appending(path: "paired-records")
+    try FileManager.default.createDirectory(at: records, withIntermediateDirectories: true)
+    try hex.write(to: records.appending(path: SHA256.hash(data: hex).hexString))
+    return library
+  }
+
   @Test func aV042LibraryOpensWithTheCurrentSchemaAndKeepsItsData() async throws {
-    let upgraded = try PersistenceFixture(), fresh = try PersistenceFixture()
+    let upgraded = try v042Library(), fresh = try PersistenceFixture()
     defer { upgraded.remove(); fresh.remove() }
-    let fixture = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
-      .appending(path: "../Fixtures/library-v0.4.2.sql").standardizedFileURL
-    try PersistenceSQL(url: upgraded.databaseURL).execute(try String(contentsOf: fixture, encoding: .utf8))
     // What v0.4.2 served for each execution owner's conversation: its whole
     // transcript document, one page of it.
     let linuxChat = "c0ffee00-1111-4222-8333-444455556666", phoneChat = "d0d0d0d0-1111-4222-8333-444455556666"
@@ -168,11 +185,71 @@ import WovenMatterCore
       #expect(record.row["active_run_id"]?.value == "a1a1a1a1-0000-4000-8000-000000000002" && record.row["conversation"]?.type == "text")
     }
 
+    // A saved artifact's chunks and a native history record's parts are files
+    // now; they read back byte for byte, whole and from any offset, and no
+    // row or recorded version holds their bytes.
+    let artifact = "e5e5e5e5-0000-4000-8000-0000000000a1", saved = Data("Saved artifact output: ".utf8) + Data([0, 255, 1, 128, 10])
+    #expect(try await library.librarySavedArtifacts().map(\.id) == [artifact])
+    #expect(try await library.libraryArtifactChunk(id: artifact, offset: 0).data == saved.prefix(12))
+    #expect(try await library.libraryArtifactChunk(id: artifact, offset: 20).data == saved.dropFirst(20))
+    let opened = try await SavedArtifactLibraryService(database: library).openURL(id: artifact, revision: 1)
+    #expect(try Data(contentsOf: opened) == saved)
+    let parts = [Data(#"{"role":"assistant","#.utf8), Data(#""text":"The report is short."}"#.utf8)]
+    for (index, part) in parts.enumerated() {
+      #expect(try await library.libraryNativeHistoryPart(workspaceID: "7c1f0b6e-2a4d-4f8e-9b3a-5d6e7f8a9b0c", recordID: "native-record-1", partIndex: index)?.data == part)
+    }
+    #expect(try await library.libraryNativeRecords(workspaceID: "7c1f0b6e-2a4d-4f8e-9b3a-5d6e7f8a9b0c", format: "pi.message.v1").map(\.data)
+      == [parts[0] + parts[1]])
+    for table in ["artifact_chunks", "execution_native_history_parts"] {
+      #expect(try await rows(library, "SELECT * FROM \(table)").allSatisfy { $0["bytes"] == nil && $0["sha256"]?.stringValue?.count == 64 })
+    }
+    let chunkVersions = try await rows(library, """
+      SELECT payload FROM paired_library_rows WHERE table_name IN ('artifact_chunks','execution_native_history_parts')
+      UNION ALL SELECT payload FROM paired_library_changes WHERE json_extract(payload,'$.table') IN ('artifact_chunks','execution_native_history_parts')
+      UNION ALL SELECT payload FROM paired_library_pending
+      """).compactMap { $0["payload"]?.stringValue.flatMap { try? JSONDecoder().decode(PairedLibraryRecord.self, from: Data($0.utf8)) } }
+    #expect(chunkVersions.count == 9)
+    for record in chunkVersions {
+      #expect(record.row["bytes"] == nil && record.row["sha256"]?.type == "text" && record.row["byte_count"]?.type == "integer")
+    }
+    // The waiting peer chunk names its bytes, which are a file here now, and applies.
+    try await library.materializePendingPeerRecords()
+    #expect(try await row(library, "SELECT sha256,byte_count FROM artifact_chunks WHERE artifact_id='e5e5e5e5-0000-4000-8000-0000000000a2'")
+      == ["sha256": .string(SHA256.hash(data: Self.peerChunk).hexString), "byte_count": .number(Double(Self.peerChunk.count))])
+    #expect(try await rows(library, "SELECT id FROM paired_library_pending").isEmpty)
+
     // The converted library keeps working and syncing under its new names.
     try await library.updateLocalACPSessionID(conversationID: chat, sessionID: "native-session-2")
     let next = try await library.beginLocalACPRun(conversationID: chat, input: .init(text: "Again"))
     #expect(try await row(library, "SELECT native_session_id FROM runs WHERE id=?", next.runID)["native_session_id"]?.stringValue == "native-session-2")
     #expect(try await row(library, "SELECT payload FROM paired_library_changes ORDER BY cursor DESC LIMIT 1")["payload"] != nil)
+  }
+
+  /// Two Macs that convert the same v0.4.2 library record the same chunk and
+  /// part rows and the same versions of them, byte for byte, so neither
+  /// sends the other a new version.
+  @Test func twoMacsConvertChunkBytesIdentically() async throws {
+    let first = try v042Library(), second = try v042Library()
+    defer { first.remove(); second.remove() }
+    func state(_ library: PersistenceFixture) async throws -> [String] {
+      let database = try await WorkspaceDatabase(url: library.databaseURL)
+      return try await database.read { connection in
+        try connection.historyRowsUnlocked("""
+          SELECT 'chunk ' || artifact_id || ' ' || revision || ' ' || offset || ' ' || sha256 || ' ' || byte_count AS line FROM artifact_chunks
+          UNION ALL SELECT 'part ' || workspace_id || ' ' || record_id || ' ' || part_index || ' ' || sha256 || ' ' || byte_count FROM execution_native_history_parts
+          UNION ALL SELECT 'row ' || record_key || ' ' || payload FROM paired_library_rows WHERE table_name IN ('artifact_chunks','execution_native_history_parts')
+          UNION ALL SELECT 'change ' || cursor || ' ' || payload FROM paired_library_changes
+            WHERE json_extract(payload,'$.table') IN ('artifact_chunks','execution_native_history_parts')
+          UNION ALL SELECT 'pending ' || payload FROM paired_library_pending
+          """, values: []).compactMap { $0.objectValue?["line"]?.stringValue }.sorted()
+      }
+    }
+    let one = try await state(first), two = try await state(second)
+    #expect(one.count == 13 && one == two)
+    let files = { (library: PersistenceFixture) in
+      try FileManager.default.contentsOfDirectory(atPath: library.directory.appending(path: "library-chunks").path).sorted()
+    }
+    #expect(try files(first) == files(second))
   }
 
   /// A conversation's transcript document in the file before it is converted.

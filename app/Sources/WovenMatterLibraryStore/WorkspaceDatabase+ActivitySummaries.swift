@@ -208,7 +208,7 @@ extension WorkspaceDatabaseConnection {
     guard count > 0, count <= 65_536, size >= 0,
       size <= LibraryActivityDetails.maximumBytes else { throw LibraryActivityDetails.invalid }
     guard sqlite3_column_int(manifest, 6) == 1 else { throw LibraryActivityDetails.incomplete }
-    let parts = try prepareUnlocked("SELECT part_index,bytes FROM execution_native_history_parts WHERE workspace_id=? AND record_id=? ORDER BY part_index")
+    let parts = try prepareUnlocked("SELECT part_index,sha256,byte_count FROM execution_native_history_parts WHERE workspace_id=? AND record_id=? ORDER BY part_index")
     defer { sqlite3_finalize(parts) }
     try bind(workspaceID, at: 1, to: parts); try bind(recordID, at: 2, to: parts)
     var data = Data(), index = 0
@@ -217,8 +217,9 @@ extension WorkspaceDatabaseConnection {
       if code == SQLITE_DONE { break }
       guard code == SQLITE_ROW else { throw stepError() }
       guard sqlite3_column_int(parts, 0) == index else { throw LibraryActivityDetails.invalid }
-      let bytes = try blob(parts, column: 1)
-      guard bytes.count <= Int(size) - data.count else { throw LibraryActivityDetails.invalid }
+      let count = sqlite3_column_int64(parts, 2)
+      guard count >= 0, count <= size - Int64(data.count) else { throw LibraryActivityDetails.invalid }
+      let bytes = try libraryFiles.chunk(text(parts, column: 1), byteCount: count)
       data.append(bytes); index += 1
     }
     guard index == count, data.count == size,

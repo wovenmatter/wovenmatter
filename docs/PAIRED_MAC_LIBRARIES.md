@@ -91,7 +91,9 @@ page. Process loss or a lost reply therefore retries durable identities. Peers
 relay the original records, rather than inventing a new edit origin. Persistent
 membership, routes, cursors, tombstones and recovery state survive restart.
 
-Large values are content-addressed separately from their row metadata. A receive
+Large values are content-addressed separately from their row metadata. Saved
+artifact chunks and native history parts never carry bytes: their rows name a
+file in `library-chunks/` by SHA-256 and size. A receive
 page can durably queue such a row until its bytes arrive, allowing other writing
 to continue; waiting rows are scanned from a rotating durable position, so
 unavailable bytes never starve ready rows. A waiting row is relayed at once,

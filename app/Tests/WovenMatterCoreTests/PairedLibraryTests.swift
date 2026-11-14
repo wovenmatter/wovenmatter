@@ -159,20 +159,68 @@ extension PairedLibraryTests {
 
   @Test func typedRowsKeepBinaryBytesAndIntegersBeyondJSONDoublePrecision() async throws {
     let a = try await Mac(), b = try await Mac(); defer { a.remove(); b.remove() }
-    let bytes = Data([0, 255, 0, 1, 128]), offset: Int64 = 9_007_199_254_740_993
+    let bytes = Data([0, 255, 0, 1, 128]), size: Int64 = 9_007_199_254_740_993
     try await a.database.write { connection in
-      let query = try connection.prepareUnlocked("INSERT INTO artifact_chunks VALUES('fixture',1,?,?)")
+      let query = try connection.prepareUnlocked("INSERT INTO execution_retained_settlements VALUES('fixture','workspace',?)")
       defer { sqlite3_finalize(query) }
-      sqlite3_bind_int64(query, 1, offset); try connection.bind(bytes, at: 2, to: query); try connection.stepDone(query)
+      try connection.bind(bytes, at: 1, to: query); try connection.stepDone(query)
+      try connection.toolsExecuteUnlocked("""
+        INSERT INTO execution_native_history(workspace_id,record_id,conversation_id,format,part_count,byte_count,sha256)
+        VALUES('workspace','fixture','conversation','fixture',1,CAST(? AS INTEGER),'')
+        """, [String(size)])
     }
     try await a.send(to: b)
     let result = try await b.database.read { connection -> (Int64, Data) in
-      let query = try connection.prepareUnlocked("SELECT offset,bytes FROM artifact_chunks WHERE artifact_id='fixture'")
+      let query = try connection.prepareUnlocked("""
+        SELECT n.byte_count,s.fingerprint FROM execution_native_history n, execution_retained_settlements s
+        WHERE n.record_id='fixture' AND s.event_id='fixture'
+        """)
       defer { sqlite3_finalize(query) }
       guard sqlite3_step(query) == SQLITE_ROW else { throw WorkspaceDatabaseError.corruptRow }
       return (sqlite3_column_int64(query, 0), try connection.blob(query, column: 1))
     }
-    #expect(result.0 == offset && result.1 == bytes)
+    #expect(result.0 == size && result.1 == bytes)
+  }
+
+  /// A chunk's row names its bytes; a receiving Mac applies it once the file
+  /// sync has brought that file, and serves the same bytes.
+  @Test func artifactChunkRowsWaitForTheirFiles() async throws {
+    let a = try await Mac(), b = try await Mac(); defer { a.remove(); b.remove() }
+    let bytes = Data((0..<1_500_000).map { UInt8(truncatingIfNeeded: $0 &* 31) }), id = UUID().uuidString.lowercased()
+    let hash = SHA256.hash(data: bytes).hexString
+    let manifest = LibraryArtifactManifest(id: id, workspaceID: "workspace", title: "Output.bin", mediaType: "application/octet-stream",
+                                           byteCount: Int64(bytes.count), sha256: hash, revision: 1)
+    try await a.database.write { connection in
+      let first = Data(bytes.prefix(FederationProtocol.maximumArtifactChunkBytes))
+      let chunks = [first, Data(bytes.dropFirst(first.count))]
+      var offset: Int64 = 0
+      for chunk in chunks {
+        let hash = try connection.libraryFiles.retainChunk(chunk)
+        try connection.toolsExecuteUnlocked("INSERT INTO artifact_chunks VALUES(?,1,CAST(? AS INTEGER),?,CAST(? AS INTEGER))",
+                                            [id, String(offset), hash, String(chunk.count)])
+        offset += Int64(chunk.count)
+      }
+      try connection.toolsExecuteUnlocked("INSERT INTO saved_artifacts VALUES(?,1,?)", [id, String(decoding: try JSONEncoder().encode(manifest), as: UTF8.self)])
+    }
+    #expect(try await a.database.libraryArtifactChunk(id: id, offset: 1_048_580).data == bytes.dropFirst(1_048_580))
+    for record in try await journal(a.database) where record.table == "artifact_chunks" {
+      #expect(record.row["bytes"] == nil && record.row["sha256"]?.type == "text" && record.row["byte_count"]?.type == "integer")
+    }
+    try await a.send(to: b)
+    let waiting = try await b.database.read {
+      try $0.historyRowsUnlocked("SELECT COUNT(*) AS count FROM paired_library_pending WHERE json_extract(payload,'$.table')='artifact_chunks'", values: [])
+        .first?.objectValue?["count"]?.intValue
+    }
+    #expect(waiting == 2)
+    await #expect(throws: (any Error).self) { try await b.database.libraryArtifactChunk(id: id, offset: 0) }
+    let sender = PairedLibraryFiles(root: a.directory), receiver = PairedLibraryFiles(root: b.directory)
+    for file in try await sender.page(after: "").files where file.store == "library-chunks" {
+      while let offset = try await receiver.nextOffset(file) { try await receiver.receive(sender.chunk(.init(file: file, offset: offset))) }
+    }
+    try await b.database.materializePendingPeerRecords()
+    var received = Data()
+    while received.count < bytes.count { received.append(try await b.database.libraryArtifactChunk(id: id, offset: Int64(received.count)).data) }
+    #expect(received == bytes)
   }
 
   @Test func observedScheduledTasksDoNotRunOnOtherMacs() async throws {

@@ -260,6 +260,7 @@ class DevelopmentBuildTests(unittest.TestCase):
               INSERT INTO workspace_session_timers VALUES('timer',0,'pending');
             """)
             asset = source / "library-files"; asset.mkdir(); (asset / "blob").write_bytes(b"saved output")
+            chunks = source / "library-chunks"; chunks.mkdir(); (chunks / "part").write_bytes(b"SQLite format 3\x00 first chunk")
             target = root / "dev"; dev.snapshot(source, target)
             with sqlite3.connect(target / "workspace.sqlite") as copy:
                 for table in ("mac_routes", "paired_library_clock", "paired_library_changes"):
@@ -294,6 +295,7 @@ class DevelopmentBuildTests(unittest.TestCase):
             self.assertEqual(writer.execute("SELECT status FROM dashboard_runs").fetchone()[0], "running")
             self.assertEqual(writer.execute("SELECT is_paused,pending_delivery_id FROM workspace_session_timers").fetchone(), (0, "pending"))
             self.assertEqual((target / "library-files/blob").read_bytes(), b"saved output")
+            self.assertEqual((target / "library-chunks/part").read_bytes(), b"SQLite format 3\x00 first chunk")
             with self.assertRaises(ValueError): dev.snapshot(source, target)
 
     def test_snapshot_keeps_outside_tool_choices_without_inheriting_network_exposure(self):

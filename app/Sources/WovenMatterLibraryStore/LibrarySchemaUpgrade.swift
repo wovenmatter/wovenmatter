@@ -23,9 +23,10 @@ import WovenMatterCore
 /// `workspace_*`) rather than what they hold, and it stored JSON as BLOB.
 /// This renames the tables and columns that hold current data, drops what
 /// nothing reads any more, stores JSON as text, moves each execution
-/// owner's transcript document into its rows, and rewrites the paired-sync
-/// bookkeeping to match, so paired Macs that update together keep their
-/// versions and cursors.
+/// owner's transcript document into its rows, moves the bytes of saved
+/// artifact chunks and native history parts into files of the chunk store,
+/// and rewrites the paired-sync bookkeeping to match, so paired Macs that
+/// update together keep their versions and cursors.
 ///
 /// It runs on open, before anything else creates schema, for a library whose
 /// `user_version` is 0, and stamps `librarySchemaVersion` in the same
@@ -193,6 +194,8 @@ extension WorkspaceDatabaseConnection {
                         "origin_device_id"]),
     // A whole transcript in one shared row; its rows hold it now.
     ("execution_conversations", ["transcript"]),
+    // Bytes in shared rows; the chunk store holds them, named by `sha256`.
+    ("artifact_chunks", ["bytes"]), ("execution_native_history_parts", ["bytes"]),
   ]
 
   /// Columns added, by their table's current name, with their declarations
@@ -208,9 +211,9 @@ extension WorkspaceDatabaseConnection {
   ]
 
   /// JSON documents stored as BLOB, by their table's current name. They are
-  /// TEXT now, so SQLite's JSON functions read them without a cast. Binary
-  /// columns (hashes, artifact chunks, native history parts) stay BLOB;
-  /// `execution_conversations.transcript` is dropped instead.
+  /// TEXT now, so SQLite's JSON functions read them without a cast. Hashes
+  /// stay BLOB; `execution_conversations.transcript` and the chunk and part
+  /// bytes are dropped instead.
   static let jsonTextColumns: [(table: String, columns: [String])] = [
     ("execution_workspaces", ["payload"]), ("execution_journal", ["payload"]),
     ("execution_conversations", ["conversation"]), ("execution_adoptions", ["payload"]),
@@ -341,6 +344,7 @@ extension WorkspaceDatabaseConnection {
         }
       }
       try addTranscriptColumnsUnlocked(tables: tables, columns: columns, bookkeeping: bookkeeping)
+      try moveChunkBytesToFilesUnlocked(tables: tables, columns: columns, bookkeeping: bookkeeping)
       for (table, dropped) in Self.droppedLibraryColumns where tables.contains(table) {
         let present = try columns(table), gone = dropped.filter(present.contains)
         guard !gone.isEmpty else { continue }
@@ -353,6 +357,12 @@ extension WorkspaceDatabaseConnection {
         }
       }
       try storeJSONAsTextUnlocked(tables: tables, bookkeeping: bookkeeping)
+      // The chunk columns were added nullable; their declaration says NOT NULL.
+      for table in Self.peerChunkTables.sorted() where tables.contains(table) {
+        if try historyRowsUnlocked("SELECT 1 AS present FROM pragma_table_info(?) WHERE name='sha256' AND \"notnull\"=0", values: [table]).isEmpty == false {
+          try rebuildCoreTableUnlocked(table, from: Self.federationTablesSQL)
+        }
+      }
       // v0.4.2 declared `runtime_kind DEFAULT 'openclaw'`; a column default
       // only changes by rebuilding the table, which keeps every row and rowid.
       if tables.contains("agents"), try historyRowsUnlocked(
@@ -503,6 +513,71 @@ extension WorkspaceDatabaseConnection {
     return changed
   }
 
+  /// Writes each saved artifact chunk's and native history part's bytes to
+  /// the chunk store and names them in the row by `sha256` and `byte_count`;
+  /// the dropped-columns pass then removes `bytes`. Every recorded version
+  /// gets the same two values, computed from the bytes it holds itself (or
+  /// the peer record file of their hex it references), so members that
+  /// update record identical versions and nothing is sent as a new one. A
+  /// version whose referenced file is not here yet keeps no bytes and is
+  /// quarantined when it is applied.
+  private func moveChunkBytesToFilesUnlocked(tables: Set<String>, columns: (String) throws -> Set<String>,
+                                             bookkeeping: Set<String>) throws {
+    let moving = try Self.peerChunkTables.sorted().filter { try tables.contains($0) && columns($0).contains("bytes") }
+    guard !moving.isEmpty else { return }
+    for table in moving {
+      let present = try columns(table)
+      for (name, declaration) in [("sha256", "TEXT"), ("byte_count", "INTEGER")] where !present.contains(name) {
+        try executeUnlocked("ALTER TABLE \(table) ADD COLUMN \(name) \(declaration)")
+      }
+      var named: [(rowid: Int64, hash: String, count: Int64)] = []
+      let read = try prepareUnlocked("SELECT rowid,bytes FROM \(table)")
+      defer { sqlite3_finalize(read) }
+      while true {
+        let code = sqlite3_step(read)
+        if code == SQLITE_DONE { break }
+        guard code == SQLITE_ROW else { throw stepError() }
+        let bytes = try blob(read, column: 1)
+        named.append((sqlite3_column_int64(read, 0), try libraryFiles.retainChunk(bytes), Int64(bytes.count)))
+      }
+      let update = try prepareUnlocked("UPDATE \(table) SET sha256=?,byte_count=? WHERE rowid=?")
+      defer { sqlite3_finalize(update) }
+      for row in named {
+        sqlite3_reset(update)
+        try bind(row.hash, at: 1, to: update); sqlite3_bind_int64(update, 2, row.count); sqlite3_bind_int64(update, 3, row.rowid)
+        try stepDone(update)
+      }
+    }
+    let list = String(decoding: try JSONEncoder().encode(moving), as: UTF8.self)
+    let records = libraryFiles.supportDirectory.appending(path: "paired-records")
+    for name in Self.peerPayloadBookkeeping where bookkeeping.contains(name) {
+      let named = Self.peerNamedBookkeeping.contains(name)
+      let table = named ? "table_name" : "json_extract(payload,'$.table')"
+      let rowids = try historyRowsUnlocked("""
+        SELECT rowid AS id FROM \(name) WHERE \(named ? "" : "json_valid(payload) AND ")\(table) IN (SELECT value FROM json_each(?))
+          AND json_type(payload,'$.row.bytes') IS NOT NULL ORDER BY rowid
+        """, values: [list]).compactMap { $0.objectValue?["id"]?.intValue }
+      for rowid in rowids {
+        guard let payload = try historyRowsUnlocked("SELECT payload FROM \(name) WHERE rowid=?", values: [String(rowid)]).first?.objectValue?["payload"]?.stringValue,
+              let record = try? JSONDecoder().decode(PairedLibraryRecord.self, from: Data(payload.utf8)),
+              let value = record.row["bytes"], let stored = value.value else { continue }
+        let hex: String?
+        switch value.type {
+        case "blob": hex = stored
+        case "reference:blob":
+          hex = stored.wholeMatch(of: /[0-9a-f]{64}/) == nil ? nil : try? String(contentsOf: records.appending(path: stored), encoding: .utf8)
+        default: hex = nil
+        }
+        guard let hex, let bytes = Self.bytesFromHex(hex) else { continue }
+        let data = Data(bytes)
+        try toolsExecuteUnlocked("""
+          UPDATE \(name) SET payload=json_set(payload,'$.row.sha256',json_object('type','text','value',?),
+            '$.row.byte_count',json_object('type','integer','value',?)) WHERE rowid=?
+          """, [try libraryFiles.retainChunk(data), String(data.count), String(rowid)])
+      }
+    }
+  }
+
   /// Records the current value of `columns` (null for a row that is gone)
   /// in every recorded version of the table's rows, or of the rows `ids`
   /// names. The table is keyed by `id`.
@@ -524,15 +599,15 @@ extension WorkspaceDatabaseConnection {
     }
   }
 
-  /// Recreates a core table from its current declaration and copies its rows,
-  /// rowids included. Nothing references these tables by foreign key.
-  private func rebuildCoreTableUnlocked(_ table: String) throws {
-    guard let start = Self.coreTablesSQL.range(of: "CREATE TABLE IF NOT EXISTS \(table) ("),
-          let end = Self.coreTablesSQL.range(of: ");", range: start.upperBound..<Self.coreTablesSQL.endIndex) else {
+  /// Recreates a table from its current declaration in `sql` and copies its
+  /// rows, rowids included. Nothing references these tables by foreign key.
+  private func rebuildCoreTableUnlocked(_ table: String, from sql: String = coreTablesSQL) throws {
+    guard let start = sql.range(of: "CREATE TABLE IF NOT EXISTS \(table) ("),
+          let end = sql.range(of: ");", range: start.upperBound..<sql.endIndex) else {
       throw WorkspaceDatabaseError.execute("No current declaration for \(table)")
     }
     let rebuilt = table + "_rebuilt"
-    let declaration = "CREATE TABLE \(rebuilt) (" + Self.coreTablesSQL[start.upperBound..<end.upperBound]
+    let declaration = "CREATE TABLE \(rebuilt) (" + sql[start.upperBound..<end.upperBound]
     try executeUnlocked("DROP TABLE IF EXISTS \(rebuilt);\n" + declaration)
     let present = Set(try historyRowsUnlocked("SELECT name FROM pragma_table_info(?)", values: [table])
       .compactMap { $0.objectValue?["name"]?.stringValue })
@@ -632,6 +707,11 @@ extension WorkspaceDatabaseConnection {
 
   /// The UTF-8 text a hex string of bytes spells, or nil.
   static func utf8FromHex(_ hex: String) -> String? {
+    bytesFromHex(hex).flatMap { String(bytes: $0, encoding: .utf8) }
+  }
+
+  /// The bytes a hex string spells, or nil.
+  static func bytesFromHex(_ hex: String) -> [UInt8]? {
     let digits = Array(hex.utf8)
     guard digits.count.isMultiple(of: 2) else { return nil }
     var bytes = [UInt8](); bytes.reserveCapacity(digits.count / 2)
@@ -647,7 +727,7 @@ extension WorkspaceDatabaseConnection {
       guard let high = nibble(digits[index]), let low = nibble(digits[index + 1]) else { return nil }
       bytes.append(high << 4 | low)
     }
-    return String(bytes: bytes, encoding: .utf8)
+    return bytes
   }
 
   /// Rows the old columns hid or kept read-only stay that way once the

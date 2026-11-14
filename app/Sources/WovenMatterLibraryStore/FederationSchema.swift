@@ -6,8 +6,9 @@ import CSQLite
 #endif
 
 extension WorkspaceDatabaseConnection {
-  func createFederationSchemaUnlocked() throws {
-    try executeUnlocked("""
+  /// The execution projection's tables. Chunk and part rows name their
+  /// bytes in `LibraryFileStore`'s chunk store by `sha256` and `byte_count`.
+  static let federationTablesSQL = """
       CREATE TABLE IF NOT EXISTS library_identity (
         singleton INTEGER PRIMARY KEY CHECK(singleton = 1), host_device_id TEXT NOT NULL, library_id TEXT NOT NULL
       );
@@ -49,7 +50,8 @@ extension WorkspaceDatabaseConnection {
         PRIMARY KEY(workspace_id, record_id)
       );
       CREATE TABLE IF NOT EXISTS execution_native_history_parts (
-        workspace_id TEXT NOT NULL, record_id TEXT NOT NULL, part_index INTEGER NOT NULL, bytes BLOB NOT NULL,
+        workspace_id TEXT NOT NULL, record_id TEXT NOT NULL, part_index INTEGER NOT NULL,
+        sha256 TEXT NOT NULL, byte_count INTEGER NOT NULL,
         PRIMARY KEY(workspace_id, record_id, part_index)
       );
       CREATE TABLE IF NOT EXISTS saved_artifacts (
@@ -61,9 +63,12 @@ extension WorkspaceDatabaseConnection {
       );
       CREATE TABLE IF NOT EXISTS artifact_chunks (
         artifact_id TEXT NOT NULL, revision INTEGER NOT NULL, offset INTEGER NOT NULL,
-        bytes BLOB NOT NULL, PRIMARY KEY(artifact_id, revision, offset)
+        sha256 TEXT NOT NULL, byte_count INTEGER NOT NULL, PRIMARY KEY(artifact_id, revision, offset)
       );
-      """)
+      """
+
+  func createFederationSchemaUnlocked() throws {
+    try executeUnlocked(Self.federationTablesSQL)
     // library_identity holds this replica's device ID (host_device_id), the
     // paired-library clock's origin that ownership records name, and the
     // library's ID (library_id), which every device paired with it names.
