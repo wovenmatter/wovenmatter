@@ -115,16 +115,6 @@ final class LibraryHostController {
     private var availabilityTask: Task<Void, Never>?
     private let retryInterval: Duration
 
-    /// Settings saved before November 2026 used a "companion." prefix. They
-    /// move once, keeping pending revocations, the HTTPS port and this Mac's
-    /// execution workspace ID.
-    nonisolated static func moveLegacyDefaults(in defaults: UserDefaults) {
-        for (key, value) in defaults.dictionaryRepresentation() where key.hasPrefix("companion.") {
-            let current = "library." + key.dropFirst("companion.".count)
-            if defaults.object(forKey: current) == nil { defaults.set(value, forKey: current) }
-            defaults.removeObject(forKey: key)
-        }
-    }
     init(model: ApplicationModel, defaults: UserDefaults = .standard, supportDirectory: URL? = nil,
          retryInterval: Duration = .seconds(15),
          peerStorage: PairedMacDeviceStorage? = nil,
@@ -132,7 +122,6 @@ final class LibraryHostController {
         self.peerStorage = peerStorage ?? .standard
         self.model = model
         self.defaults = defaults
-        Self.moveLegacyDefaults(in: defaults)
         self.supportDirectory = supportDirectory
         self.makeExposure = makeExposure
         self.retryInterval = retryInterval

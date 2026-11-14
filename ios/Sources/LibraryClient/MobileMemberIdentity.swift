@@ -40,7 +40,6 @@ public struct MobileMemberKeyStorage: Sendable {
   private static var service: String { ClientCredentialNamespace.service("com.wovenmatter.wovenmatter.member") }
   private static let account = "member-signing-key"
   public static let keychain = MobileMemberKeyStorage(load: {
-    LegacyKeychainItem.move(from: ClientCredentialNamespace.service("com.wovenmatter.companion.member"), to: service, account: account)
     var result: CFTypeRef?
     let status = SecItemCopyMatching([kSecClass: kSecClassGenericPassword, kSecAttrService: service,
       kSecAttrAccount: account, kSecReturnData: true, kSecMatchLimit: kSecMatchLimitOne] as CFDictionary, &result)
