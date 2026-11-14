@@ -147,33 +147,3 @@ public struct QuickChatWebSearch: Sendable {
     catch { throw QuickChatSearchError.failed(provider.name) }
   }
 }
-
-/// Distinguishes pages the user chose from addresses composed by the model. A page
-/// named in the user's own messages or returned by a search in the same chat is
-/// expected; any other address may carry note contents to an outside server, so
-/// Ask for Approval shows the exact address before the provider fetches it.
-public enum QuickChatWebReadProvenance {
-  public static func isExpected(_ address: String, userMessages: [String], searchResults: Set<String>) -> Bool {
-    guard let target = normalized(address) else { return false }
-    if searchResults.contains(where: { normalized($0) == target }) { return true }
-    return userMessages.contains { message in links(in: message).contains { normalized($0) == target } }
-  }
-  /// URLs returned by `QuickChatWebSearch.search`.
-  public static func resultURLs(_ output: String) -> Set<String> {
-    guard let object = try? JSONSerialization.jsonObject(with: Data(output.utf8)) as? [String: Any],
-      let results = object["results"] as? [[String: Any]] else { return [] }
-    return Set(results.compactMap { $0["url"] as? String })
-  }
-  static func links(in text: String) -> [String] {
-    guard let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue) else { return [] }
-    return detector.matches(in: text, range: NSRange(text.startIndex..., in: text)).compactMap { $0.url?.absoluteString }
-  }
-  /// Scheme and host compare case-insensitively; path, query and fragment must match exactly.
-  static func normalized(_ address: String) -> String? {
-    guard var components = URLComponents(string: address.trimmingCharacters(in: .whitespacesAndNewlines)),
-      let scheme = components.scheme?.lowercased(), ["http", "https"].contains(scheme), let host = components.host?.lowercased() else { return nil }
-    components.scheme = scheme; components.host = host
-    if components.path.isEmpty { components.path = "/" }
-    return components.string
-  }
-}

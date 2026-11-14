@@ -262,7 +262,7 @@ public final class SessionSelectionPreferences {
     let decoded = data.flatMap { try? JSONDecoder().decode(Document.self, from: $0) }
     let document: Document
     if let decoded, decoded.version == 1 {
-      document = decoded
+      document = Self.withoutUnsupportedPermissions(decoded)
     } else {
       document = Document()
     }
@@ -271,7 +271,41 @@ public final class SessionSelectionPreferences {
     return document
   }
 
+  /// Saved defaults and conversation choices from a mode the product no longer
+  /// offers (Ask for approval, read only, plan, …) read as unset, so Full access
+  /// applies. The session coordinator moves such a native session when it starts.
+  private static func withoutUnsupportedPermissions(_ document: Document) -> Document {
+    func supported(_ selections: SessionSelections, harness: String) -> SessionSelections {
+      guard let permission = selections.permission,
+            let runtime = AgentRuntimeKind(rawValue: harness),
+            !runtime.supportsPermission(permission) else { return selections }
+      var result = selections
+      result.permission = nil
+      return result
+    }
+    var result = document
+    result.harnessDefaults = result.harnessDefaults.reduce(into: [:]) { scoped, entry in
+      let value = supported(entry.value, harness: entry.key)
+      scoped[entry.key] = value.isEmpty ? nil : value
+    }
+    result.workspaceDefaults = result.workspaceDefaults.reduce(into: [:]) { workspaces, workspace in
+      let scoped = workspace.value.reduce(into: [String: SessionSelections]()) { harnesses, entry in
+        let value = supported(entry.value, harness: entry.key)
+        harnesses[entry.key] = value.isEmpty ? nil : value
+      }
+      workspaces[workspace.key] = scoped.isEmpty ? nil : scoped
+    }
+    for (id, snapshot) in result.conversations {
+      var updated = snapshot
+      updated.selections = supported(snapshot.selections, harness: snapshot.harness)
+      updated.desiredSelections = supported(snapshot.desiredSelections, harness: snapshot.harness)
+      if updated != snapshot { result.conversations[id] = updated }
+    }
+    return result
+  }
+
   private func write(_ document: Document) {
+    let document = Self.withoutUnsupportedPermissions(document)
     guard let data = try? JSONEncoder().encode(document) else { return }
     userDefaults.set(data, forKey: Self.storageKey)
     cachedData = data

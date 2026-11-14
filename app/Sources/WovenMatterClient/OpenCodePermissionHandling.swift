@@ -11,26 +11,28 @@ public enum OpenCodePermissionHandling {
         return suffix.hasPrefix("/form/")
     }
 
-    public static let options = AgentRuntimeKind.opencode.orderedPermissionOptions(["ask", "allow", "deny"])
+    /// OpenCode's native wildcard effects. Ask and Deny remain recognizable so
+    /// an older session's rule can be replaced, but only Full access is offered.
+    static let nativeEffects = ["ask", "allow", "deny"]
+    public static let options = AgentRuntimeKind.opencode.orderedPermissionOptions(nativeEffects)
     public static let metadata: [String: SessionOptionMetadata] = [
-        "ask": .init(name: "Ask for approval", description: "Use OpenCode’s native ask effect for session actions and resources."),
-        "allow": .init(name: "Full access", description: "Use OpenCode’s native allow effect for session actions and resources. Required input forms remain interactive."),
-        "deny": .init(name: "Deny", description: "Use OpenCode’s native deny effect for session actions and resources.")
+        "allow": .init(name: "Full access", description: "Use OpenCode’s native allow effect for session actions and resources. Required input forms remain interactive.")
     ]
 
     public static func validate(_ value: String) throws -> String {
         guard options.contains(value) else {
-            throw OpenCodeError.message("Choose a native OpenCode allow, ask, or deny policy.")
+            throw OpenCodeError.message("Choose OpenCode’s Full access policy.")
         }
         return value
     }
 
     /// The last wildcard rule defines this projection. Keep arbitrary native
-    /// rules unchanged and unknown rather than claiming an invented mode.
+    /// rules unchanged and unknown rather than claiming an invented mode. An
+    /// older session may still report Ask or Deny here.
     public static func nativeMode(session: OpenCodeValue) -> String? {
         guard let rule = session["permissions"].array.last,
               rule["action"].string == "*", rule["resource"].string == "*",
-              let effect = rule["effect"].string, options.contains(effect) else { return nil }
+              let effect = rule["effect"].string, nativeEffects.contains(effect) else { return nil }
         return effect
     }
 
@@ -43,7 +45,7 @@ public enum OpenCodePermissionHandling {
         return ["permissions": .array(rules)]
     }
     /// Mobile can explicitly answer ordinary permission requests. Keep authentication
-    /// and interactive forms on the Mac; native allow/ask/deny policies stay authoritative.
+    /// and interactive forms on the Mac; the native wildcard policy stays authoritative.
     public static func libraryRequestID(_ request: OpenCodeValue, sessionID: String) -> String? {
         guard request["sessionID"].string == sessionID,
               let id = request["id"].string, id.hasPrefix("per"),

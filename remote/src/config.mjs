@@ -88,46 +88,53 @@ export function runtimeNPMCommand(configuration = runtimeConfiguration, nodeExec
 // user saved a different default; Full root workspaces always use it.
 export const fullAccessPermissions = Object.freeze({ codex: 'agent-full-access', claude_code: 'bypassPermissions', grok_build: 'bypassPermissions', default_agent: 'full', opencode: 'allow' })
 
-const autoApprovePermissions = Object.freeze({ codex: ['agent'], claude_code: ['auto', 'acceptEdits'], grok_build: ['auto', 'acceptEdits'] })
-const askPermissions = Object.freeze({ codex: ['workspace-write'], claude_code: ['default'], grok_build: ['default'], opencode: ['ask'], default_agent: ['ask'] })
+// Each harness's native auto mode, where it has one.
+export const autoPermissions = Object.freeze({ codex: 'agent', claude_code: 'auto', grok_build: 'auto' })
+
+// The only permission modes Woven Matter offers, in presentation order: Full
+// access, then the harness's auto mode (`AgentRuntimeKind.supportedPermissions`).
+// Ask for approval and every other native mode are not offered.
+export function supportedPermissions(runtimeKind) {
+  return [fullAccessPermissions[runtimeKind], autoPermissions[runtimeKind]].filter(Boolean)
+}
+
+// A saved or requested mode Woven no longer offers becomes Full access.
+export function supportedPermission(runtimeKind, permission) {
+  return permission == null || supportedPermissions(runtimeKind).includes(permission) ? permission : fullAccessPermissions[runtimeKind]
+}
 
 // The Mac's names and descriptions for native permission modes
 // (`LocalACPSessionPermissions.nativeMetadata`); a mode it does not rename
 // keeps its native name and description.
 const permissionPresentation = Object.freeze({
-  codex: { 'read-only': ['Read only', "Codex's native read-only sandbox and approval policy.", true],
-    'agent-full-access': ['Full access'] },
-  claude_code: { default: ['Ask for approval'], bypassPermissions: ['Full access'],
-    auto: ['Auto', "Claude's model classifier decides which actions may run automatically."], acceptEdits: ['Auto-accept edits'],
-    plan: ['Plan', 'Plan without executing commands or editing files.', true],
-    dontAsk: ["Don't ask", 'Deny actions requiring permission instead of asking for approval.', true] },
+  claude_code: { auto: ['Auto', "Claude's model classifier decides which actions may run automatically."] },
 })
-function permissionMetadata(runtimeKind, item, choices) {
+// Codex's agent preset is Approve for me only when the adapter also offers
+// workspace-write or marks it as auto review. Older adapters used agent for
+// workspace access, which Woven does not offer.
+function codexAgentReviews(choices) {
+  return choices.some(choice => choice.id === 'workspace-write' || choice.kind === 'auto_review')
+}
+function permissionMetadata(runtimeKind, item) {
   if (runtimeKind === 'codex' && item.id === 'agent') {
-    // Codex's agent preset auto-reviews unsafe actions when the adapter offers it.
-    const reviewed = choices.some(choice => choice.id === 'workspace-write' || choice.kind === 'auto_review')
-    return reviewed ? { ...item, label: 'Approve for me', description: 'Only ask for actions detected as potentially unsafe.' }
-      : { ...item, label: 'Workspace access', description: "Use Codex's workspace access preset with its native approval and sandbox rules." }
+    return { ...item, label: 'Approve for me', description: 'Only ask for actions detected as potentially unsafe.' }
   }
-  const [label, description, fallback] = permissionPresentation[runtimeKind]?.[item.id] ?? []
+  const [label, description] = permissionPresentation[runtimeKind]?.[item.id] ?? []
   const value = { ...item, ...(label ? { label } : {}) }
-  if (description && (!fallback || !item.description)) value.description = description
+  if (description) value.description = description
   return value
 }
 
-// Present native permission modes as Full access first, then the harness's
-// auto-approve modes, then its other modes, with ask-for-approval last. Every
-// Full access mode is labeled "Full access"; the others keep native names
-// unless the Mac names them (`permissionMetadata`). A choice may carry the
-// native `description`; `kind` (the adapter's `_meta.kind`) is dropped.
+// Present only the supported native modes the harness advertises: Full access
+// (always labeled "Full access") first, then its auto mode. A choice may carry
+// the native `description`; `kind` (the adapter's `_meta.kind`) is dropped.
 export function presentPermissionChoices(runtimeKind, choices) {
-  const rank = id => id === fullAccessPermissions[runtimeKind] ? 0
-    : autoApprovePermissions[runtimeKind]?.includes(id) ? 1
-    : askPermissions[runtimeKind]?.includes(id) ? 3 : 2
-  return choices.map((item, index) => ({ item, index }))
-    .sort((a, b) => rank(a.item.id) - rank(b.item.id) || a.index - b.index)
-    .map(({ item }) => {
-      const value = permissionMetadata(runtimeKind, item, choices)
+  const supported = supportedPermissions(runtimeKind)
+  const reviews = runtimeKind !== 'codex' || codexAgentReviews(choices)
+  return choices.filter(item => supported.includes(item.id) && (reviews || item.id !== 'agent'))
+    .sort((a, b) => supported.indexOf(a.id) - supported.indexOf(b.id))
+    .map(item => {
+      const value = permissionMetadata(runtimeKind, item)
       delete value.kind
       if (!value.description) delete value.description
       return item.id === fullAccessPermissions[runtimeKind] ? { ...value, label: 'Full access' } : value
@@ -139,7 +146,11 @@ export function workspacePermission(runtimeKind, requested, configuration = runt
   return fullAccessPermissions[runtimeKind] ?? requested
 }
 
+// A saved permission Woven no longer offers runs as the product's Full access
+// default, which inherits native policy when the adapter does not offer it.
 export function workspaceExecutionConfiguration(value, configuration = runtimeConfiguration) {
+  const supported = supportedPermission(value.runtimeKind, value.permission)
+  if (supported !== value.permission) value = { ...value, permission: supported, usesProductPermissionDefault: true }
   const permission = workspacePermission(value.runtimeKind, value.permission, configuration)
   return configuration.accessMode === 'fullRoot'
     ? { ...value, permission, usesProductPermissionDefault: false } : value

@@ -5,7 +5,7 @@ import { chmodSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { loadRuntimeConfiguration, nonInteractiveSessionEnvironment, runtimeHarnessEnvironment, sessionToolsDirectory, presentPermissionChoices } from '../src/config.mjs'
+import { loadRuntimeConfiguration, nonInteractiveSessionEnvironment, runtimeHarnessEnvironment, sessionToolsDirectory, presentPermissionChoices, supportedPermissions, supportedPermission, workspaceExecutionConfiguration } from '../src/config.mjs'
 
 const tools = resolve(fileURLToPath(new URL('../host/session-tools', import.meta.url)))
 
@@ -87,18 +87,36 @@ test('harness and Pi Durable environments put session tools first and disable in
   }
 })
 
-test('permission choices list Full access first and ask-for-approval last', () => {
+test('permission choices offer only Full access, then the harness auto mode', () => {
   const grok = presentPermissionChoices('grok_build', ['default', 'auto', 'acceptEdits', 'dontAsk', 'bypassPermissions'].map(id => ({ id, label: id })))
-  assert.deepEqual(grok.map(item => item.id), ['bypassPermissions', 'auto', 'acceptEdits', 'dontAsk', 'default'])
+  assert.deepEqual(grok.map(item => item.id), ['bypassPermissions', 'auto'])
   assert.equal(grok[0].label, 'Full access')
   const codex = presentPermissionChoices('codex', [{ id: 'read-only', label: 'Read only' }, { id: 'workspace-write', label: 'Default' }, { id: 'agent', label: 'Auto-review' }, { id: 'agent-full-access', label: 'Bypass' }])
   // The Mac's names: Codex's agent preset auto-reviews when the adapter offers workspace-write.
-  assert.deepEqual(codex.map(item => [item.id, item.label]), [['agent-full-access', 'Full access'], ['agent', 'Approve for me'], ['read-only', 'Read only'], ['workspace-write', 'Default']])
+  assert.deepEqual(codex.map(item => [item.id, item.label]), [['agent-full-access', 'Full access'], ['agent', 'Approve for me']])
   assert.equal(codex[1].description, 'Only ask for actions detected as potentially unsafe.')
-  assert.equal(codex[2].description, "Codex's native read-only sandbox and approval policy.")
-  const workspace = presentPermissionChoices('codex', [{ id: 'agent', label: 'Agent' }, { id: 'read-only', label: 'Read', description: 'Native read only.' }])
-  assert.deepEqual(workspace.map(item => [item.label, item.description]), [['Workspace access', "Use Codex's workspace access preset with its native approval and sandbox rules."], ['Read only', 'Native read only.']])
-  const claude = presentPermissionChoices('claude_code', [{ id: 'default', label: 'Default', description: 'Native ask.' }, { id: 'plan', label: 'Plan Mode' }, { id: 'bypassPermissions', label: 'Bypass' }])
-  assert.deepEqual(claude.map(item => [item.id, item.label, item.description]), [['bypassPermissions', 'Full access', undefined], ['plan', 'Plan', 'Plan without executing commands or editing files.'], ['default', 'Ask for approval', 'Native ask.']])
-  assert.deepEqual(presentPermissionChoices('opencode', ['ask', 'allow', 'deny'].map(id => ({ id, label: id }))).map(item => item.id), ['allow', 'deny', 'ask'])
+  // An older adapter's agent preset is workspace access, which is not offered.
+  const older = presentPermissionChoices('codex', [{ id: 'agent', label: 'Agent' }, { id: 'read-only', label: 'Read' }, { id: 'agent-full-access', label: 'Bypass' }])
+  assert.deepEqual(older.map(item => item.id), ['agent-full-access'])
+  const classified = presentPermissionChoices('codex', [{ id: 'agent', label: 'Agent', kind: 'auto_review' }, { id: 'agent-full-access', label: 'Bypass' }])
+  assert.deepEqual(classified.map(item => [item.id, item.label]), [['agent-full-access', 'Full access'], ['agent', 'Approve for me']])
+  const claude = presentPermissionChoices('claude_code', [{ id: 'default', label: 'Default', description: 'Native ask.' }, { id: 'plan', label: 'Plan Mode' }, { id: 'auto', label: 'Auto' }, { id: 'acceptEdits', label: 'Accept' }, { id: 'bypassPermissions', label: 'Bypass' }])
+  assert.deepEqual(claude.map(item => [item.id, item.label, item.description]), [['bypassPermissions', 'Full access', undefined], ['auto', 'Auto', "Claude's model classifier decides which actions may run automatically."]])
+  assert.deepEqual(presentPermissionChoices('opencode', ['ask', 'allow', 'deny'].map(id => ({ id, label: id }))).map(item => item.id), ['allow'])
+  assert.deepEqual(presentPermissionChoices('default_agent', ['ask', 'full'].map(id => ({ id, label: id }))).map(item => item.id), ['full'])
+})
+
+test('a saved mode Woven no longer offers runs as the Full access default', () => {
+  assert.deepEqual(supportedPermissions('codex'), ['agent-full-access', 'agent'])
+  assert.deepEqual(supportedPermissions('opencode'), ['allow'])
+  for (const [kind, saved, expected] of [['claude_code', 'default', 'bypassPermissions'], ['claude_code', 'plan', 'bypassPermissions'], ['claude_code', 'auto', 'auto'],
+    ['codex', 'read-only', 'agent-full-access'], ['grok_build', 'acceptEdits', 'bypassPermissions'], ['opencode', 'ask', 'allow'], ['default_agent', 'ask', 'full']]) {
+    assert.equal(supportedPermission(kind, saved), expected, `${kind} ${saved}`)
+  }
+  assert.equal(supportedPermission('codex', undefined), undefined)
+  const user = loadRuntimeConfiguration({ HOME: '/home/fixture' })
+  assert.deepEqual(workspaceExecutionConfiguration({ runtimeKind: 'claude_code', permission: 'default', usesProductPermissionDefault: false }, user),
+    { runtimeKind: 'claude_code', permission: 'bypassPermissions', usesProductPermissionDefault: true })
+  assert.deepEqual(workspaceExecutionConfiguration({ runtimeKind: 'claude_code', permission: 'auto', usesProductPermissionDefault: false }, user),
+    { runtimeKind: 'claude_code', permission: 'auto', usesProductPermissionDefault: false })
 })

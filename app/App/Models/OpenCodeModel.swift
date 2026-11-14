@@ -747,6 +747,18 @@ final class OpenCodeModel {
             throw OpenCodeError.message("This chat runs on \(configuration.name). Send it from the chat, which goes through \(configuration.name)'s server.")
         }
         try fence.check()
+        // Ask and Deny are no longer offered. Move an older chat's wildcard
+        // policy to Full access before it runs again.
+        if let effect = snapshots[id].flatMap({ OpenCodePermissionHandling.nativeMode(session: $0.info) }),
+           !AgentRuntimeKind.opencode.supportsPermission(effect),
+           let full = AgentRuntimeKind.opencode.fullAccessPermission {
+            _ = try await coordinator.setSessionPermission(conversationID: id, permission: full)
+            if let canonical = try await store.database.openCodeSnapshot(conversationID: id) {
+                snapshots[id]?.info = canonical.info
+            }
+            sessionPreferences.replaceConfirmedSelections(id: id, selections: nativeSelections(id))
+            try fence.check()
+        }
         if let command = OpenCodeComposerMetadata.invocation(input.text, commands: commands[id] ?? []) {
             return try await coordinator.command(link, name: command.name,
                 input: AgentMessageInput(text: command.arguments, attachments: input.attachments, historyDeliveryID: input.historyDeliveryID, visibleWorkspace: input.visibleWorkspace, mcpContext: input.mcpContext), requiresIdle: requiresIdle, dispatchFence: fence)

@@ -100,18 +100,3 @@ final class QuickChatWebSearchTests: XCTestCase {
     catch { XCTAssertFalse(error.localizedDescription.contains("private-key")) }
   }
 }
-
-final class QuickChatWebReadProvenanceTests: XCTestCase {
-  func testUserSuppliedAndSearchReturnedPagesAreExpectedButComposedAddressesAreNot() {
-    let user = ["Summarize https://Example.org/article?id=4 please", "and also example.com/notes"]
-    let results = QuickChatWebReadProvenance.resultURLs("{\"results\":[{\"title\":\"A\",\"url\":\"https://news.example.net/story\",\"text\":\"t\"}]}")
-    XCTAssertEqual(results, ["https://news.example.net/story"])
-    XCTAssertTrue(QuickChatWebReadProvenance.isExpected("https://example.org/article?id=4", userMessages: user, searchResults: results))
-    XCTAssertTrue(QuickChatWebReadProvenance.isExpected("HTTPS://NEWS.EXAMPLE.NET/story", userMessages: user, searchResults: results))
-    // An injected page can ask the model to append private text; that address was never chosen by the user.
-    XCTAssertFalse(QuickChatWebReadProvenance.isExpected("https://example.org/article?id=4&d=private-note", userMessages: user, searchResults: results))
-    XCTAssertFalse(QuickChatWebReadProvenance.isExpected("https://attacker.example/?d=private-note", userMessages: user, searchResults: results))
-    XCTAssertFalse(QuickChatWebReadProvenance.isExpected("https://news.example.net/story#private-note", userMessages: user, searchResults: results))
-    XCTAssertFalse(QuickChatWebReadProvenance.isExpected("not a url", userMessages: user, searchResults: results))
-  }
-}

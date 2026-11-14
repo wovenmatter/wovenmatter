@@ -560,7 +560,7 @@ createInterface({ input: process.stdin }).on('line', line => {
   assert.equal(options.status, 200)
   const settings = await options.json()
   assert.equal(settings.conversationID, '')
-  assert.deepEqual(settings.permissions.map(item => item.label), ['Full access', 'Read only'])
+  assert.deepEqual(settings.permissions.map(item => item.label), ['Full access'], 'Read only is not offered')
   // An attachment, then a message that names it.
   const image = Buffer.from('fixture image bytes'), digest = createHash('sha256').update(image).digest('hex')
   const upload = await fetch(service.url + '/v1/execution/attachments/' + digest + '?name=photo.png&mimeType=image%2Fpng', { method: 'PUT', headers: { authorization: headers.authorization, 'content-type': 'image/png' }, body: image })

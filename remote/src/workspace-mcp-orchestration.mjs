@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { ordered } from './durable-json.mjs'
-import { fullAccessPermissions } from './config.mjs'
+import { fullAccessPermissions, supportedPermission } from './config.mjs'
 
 const fail=(statusCode,message)=>Object.assign(new Error(message),{statusCode})
 const stamp=()=>new Date().toISOString()
@@ -106,7 +106,7 @@ export function createWorkspaceMCPOrchestration({db,identity,getRecord,command,r
       let intent=previous?.intent?JSON.parse(previous.intent):null
       if(!intent) {
         const kind=input.harness??source.conversation.runtimeKind,defaults=settings().harnessDefaults?.[kind]??{}
-        const permission=defaults.permission??fullAccessPermissions[kind]
+        const permission=supportedPermission(kind,defaults.permission)??fullAccessPermissions[kind]
         const enabled=[...new Set([...(defaults.tools??settings().enabledByDefault),'goals'])]
         intent={id:stableID([scope.conversationID,requestID,'child'].join(':')),runtimeKind:kind,title:input.title,text:input.text,purpose:input.purpose,
           ...(input.folder==='all'?{}:input.folder||source.conversation.folderID?{folderID:input.folder??source.conversation.folderID}:{}),

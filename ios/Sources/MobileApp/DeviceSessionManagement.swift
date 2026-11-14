@@ -24,7 +24,7 @@ extension MobileModel {
     case .session(let id):
       guard let record = executionRecords[id] else { throw DeviceExecutionError.unavailable("This device conversation is unavailable.") }
       let tools = Self.deviceToolAccessOptions
-      return .session(.init(conversationID: id, model: record.connectionID, thinking: record.thinkingLevel ?? "off", permission: (record.permissionMode ?? .defaultMode).rawValue,
+      return .session(.init(conversationID: id, model: record.connectionID, thinking: record.thinkingLevel ?? "off", permission: DevicePermission.id,
         models: inferenceConnections.map { .init(id: $0.id, label: $0.name + " · " + $0.modelID) }, thinkingLevels: ((try? JSONDecoder().decode(InferenceModel.self, from: Data(record.modelJSON.utf8)))?.supportedThinkingLevels ?? []).map { .init(id: $0, label: $0.capitalized) }, permissions: Self.devicePermissionOptions,
         availableTools: tools, enabledTools: tools.filter { Self.deviceToolEnabled($0.id, selection: record.enabledTools) }.map(\.id), canConfigure: !sending && localRunTokens[id] == nil && record.status != "running" && record.status != "stopping" && record.status != "interrupted", goal: record.goalLedger?.goal))
     case .exportConversation(let id, let format):
@@ -81,9 +81,9 @@ extension MobileModel {
           connection = connectionID == record.connectionID ? record.connection ?? inferenceConnections.first { $0.id == connectionID } : inferenceConnections.first { $0.id == connectionID }
           guard connection != nil else { throw InferenceError.invalidConfiguration }
         } else { connection = nil }
-        let mode = permission.flatMap(DevicePermissionMode.init(rawValue:))
-        if permission != nil && mode == nil { throw InferenceError.invalidConfiguration }
-        try await configureDeviceChat(connection: connection, thinking: thinking, permission: mode, conversationID: id)
+        // Full Access is Quick Chat's only permission mode.
+        if let permission, permission != DevicePermission.id { throw InferenceError.invalidConfiguration }
+        try await configureDeviceChat(connection: connection, thinking: thinking, conversationID: id)
       case .sessionTools(let id, let enabled, _):
         try await configureDeviceChat(tools: enabled, conversationID: id)
       default: throw DeviceExecutionError.unavailable("Quick Chat doesn’t support this action.")
