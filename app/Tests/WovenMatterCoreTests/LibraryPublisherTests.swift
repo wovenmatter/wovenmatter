@@ -265,6 +265,91 @@ struct LibraryPublisherTests {
     #expect(PairingPayload.isValidExecutionEndpoint(URL(string: "https://mac.tail.ts.net:8443/wovenmatter")!, linux: false))
   }
 
+  /// Peer sync stores a newer member's rows as they are. An older build skips
+  /// the ones it cannot read: the registry still lists every other workspace,
+  /// and a journal page names the unread record's position and moves past
+  /// it, so a reader never asks for the same page again.
+  @Test func rowsANewerMemberWroteAreSkippedAndTheJournalCursorStillAdvances() async throws {
+    let f = try await Fixture(); defer { f.remove() }
+    func conversation(_ sequence: Int64) -> ExecutionJournalEntry {
+      let id = UUID().uuidString.lowercased()
+      return .init(workspaceID: f.workspace.id, originSequence: sequence, conversationID: id, kind: .conversation,
+        conversation: .init(id: id, title: "Chat \(sequence)", runtimeKind: "default_agent"))
+    }
+    let entries = (1...4).map { conversation(Int64($0)) }
+    _ = try await f.database.ingestExecutionJournal(.init(libraryID: f.identity.libraryID, entries: entries), deviceID: f.workspace.executionDeviceID!)
+    let registry = try await f.database.libraryExecutionWorkspaces().map(\.id)
+    let future = UUID().uuidString.lowercased()
+    var row = try #require(try JSONSerialization.jsonObject(with: JSONEncoder().encode(f.workspace)) as? [String: Any])
+    row["id"] = future; row["kind"] = "visionos"
+    let payload = String(decoding: try JSONSerialization.data(withJSONObject: row), as: UTF8.self)
+    try await f.database.write {
+      try $0.toolsExecuteUnlocked("UPDATE execution_journal SET payload=json_set(payload,'$.kind','forkedConversation') WHERE event_id IN (?,?)",
+                                  [entries[1].eventID, entries[3].eventID])
+      try $0.toolsExecuteUnlocked("INSERT INTO execution_workspaces(id,owner_device_id,revision,deleted,payload) VALUES (?,?,1,0,?)",
+                                  [future, f.identity.hostDeviceID, payload])
+    }
+
+    // The registry and the connections list keep every workspace this build can read.
+    #expect(try await f.database.libraryExecutionWorkspaces().map(\.id) == registry)
+    #expect(try await f.database.libraryConnectionWorkspaces(activeDeviceIDs: []).map(\.id) == registry)
+    // A lookup that decides a write does not take the unread row for a missing one.
+    await #expect(throws: DecodingError.self) { _ = try await f.database.read { try $0.federationWorkspaceUnlocked(future) } }
+    var replacement = f.workspace; replacement.id = future
+    await #expect(throws: DecodingError.self) {
+      _ = try await f.database.registerExecutionWorkspace(.init(workspace: replacement), deviceID: f.identity.hostDeviceID)
+    }
+
+    let page = try await f.database.executionJournal(after: 0)
+    #expect(page.entries.map(\.eventID) == [entries[0].eventID, entries[2].eventID])
+    #expect(page.skipped == [.init(workspaceID: f.workspace.id, originSequence: 2), .init(workspaceID: f.workspace.id, originSequence: 4)])
+    #expect(page.cursor == 4 && !page.hasMore)
+    // One row at a time: a page that holds only an unread record still advances.
+    var cursor: Int64 = 0, read: [Int64] = [], skipped: [Int64] = []
+    for _ in 0..<4 {
+      let next = try await f.database.executionJournal(after: cursor, limit: 1)
+      #expect(next.cursor == cursor + 1 && next.hasMore == (next.cursor < 4))
+      cursor = next.cursor
+      read += next.entries.map(\.originSequence); skipped += (next.skipped ?? []).map(\.originSequence)
+    }
+    #expect(read == [1, 3] && skipped == [2, 4])
+    #expect(try await f.database.executionJournal(after: 4) == .init(libraryID: f.identity.libraryID, cursor: 4))
+  }
+
+  /// Entries are sequenced, so a host that cannot read one must not accept the
+  /// rest: the batch is refused as a whole, as a request that does not match
+  /// the protocol, and the sender keeps it until the host is updated.
+  @Test func journalIngestRefusesABatchWithAKindThisBuildDoesNotKnow() async throws {
+    let f = try await Fixture(); defer { f.remove() }
+    let known = UUID().uuidString.lowercased(), newer = UUID().uuidString.lowercased()
+    let entries = [known, newer].enumerated().map { index, id in
+      ExecutionJournalEntry(workspaceID: f.workspace.id, originSequence: Int64(index + 1), conversationID: id, kind: .conversation,
+        conversation: .init(id: id, title: "Chat", runtimeKind: "default_agent"))
+    }
+    let batch = ExecutionJournalBatch(libraryID: f.identity.libraryID, entries: entries)
+    var body = try #require(try JSONSerialization.jsonObject(with: JSONEncoder().encode(batch)) as? [String: Any])
+    var rows = try #require(body["entries"] as? [[String: Any]])
+    rows[1]["kind"] = "forkedConversation"; body["entries"] = rows
+    let path = "/v1/publisher/journal"
+    let request = LibraryHTTPRequest(method: "POST", target: path, headers: ["x-woven-workspace": f.identity.libraryID],
+                                     body: try JSONSerialization.data(withJSONObject: body))
+    await #expect(throws: DecodingError.self) { _ = try await DevicePublisherAPI.handleLocal(request, path: path, database: f.database) }
+    // Nothing of the batch was taken, not even the entry this build can read.
+    #expect(try await f.database.executionJournal(after: 0).entries.isEmpty)
+    #expect(try await f.database.libraryExecutionOriginCursor(workspaceID: f.workspace.id) == 0)
+    // The same batch is accepted once every entry can be read.
+    #expect(try await DevicePublisherAPI.handleLocal(f.request(path, batch), path: path, database: f.database).status == 200)
+    #expect(try await f.database.libraryExecutionOriginCursor(workspaceID: f.workspace.id) == 2)
+  }
+
+  /// A newer caller may select a tool group this build does not have. The
+  /// name is ignored and the groups both builds know still apply.
+  @Test func anUnknownToolGroupNameIsIgnoredNotRefused() {
+    #expect(WorkspaceToolGroup.selected(["notes", " calendar ", "holograms", ""]) == [.notes, .calendar])
+    #expect(WorkspaceToolGroup.selected(["holograms"]).isEmpty)
+    #expect(WorkspaceToolGroup.selected([]).isEmpty)
+  }
+
   /// A Linux host refuses an adopted transcript of more than 10,000 messages
   /// or activities; a longer chat sends its newest ones, as the byte limit
   /// does, so a retry never repeats a refused shape.

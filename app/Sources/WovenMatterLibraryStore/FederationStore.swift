@@ -17,7 +17,7 @@ extension WorkspaceDatabaseConnection {
   }
   public func libraryExecutionWorkspaces() throws -> [ExecutionWorkspace] {
     try withLock {
-      try federationValuesUnlocked("SELECT payload FROM execution_workspaces ORDER BY id", as: ExecutionWorkspace.self)
+      try federationValuesUnlocked("SELECT payload FROM execution_workspaces ORDER BY id", as: ExecutionWorkspace.self, skippingUnreadable: true)
     }
   }
   public func libraryExecutionOwners() throws -> [String: String] {
@@ -45,6 +45,9 @@ extension WorkspaceDatabaseConnection {
   public func libraryExecutionOriginCursor(workspaceID: String) throws -> Int64 {
     try withLock { try federationScalarUnlocked("SELECT COALESCE(MAX(origin_sequence),0) FROM execution_journal WHERE workspace_id=?", bindings: [workspaceID]) }
   }
+  /// Strict, unlike the registry list: callers take nil as "not registered"
+  /// and may then register or accept a row under this identity, which must
+  /// never replace a newer member's row this build cannot read.
   func federationWorkspaceUnlocked(_ id: String) throws -> ExecutionWorkspace? {
     try federationValuesUnlocked("SELECT payload FROM execution_workspaces WHERE id = ?", bindings: [id], as: ExecutionWorkspace.self).first
   }
@@ -147,20 +150,32 @@ extension WorkspaceDatabaseConnection {
     try transaction {
       let current = try federationJournalCursorUnlocked()
       guard cursor >= 0, cursor <= current else { throw federationError("invalid_cursor", "The library journal cursor is invalid.") }
-      let statement = try prepareUnlocked("SELECT cursor,payload FROM execution_journal WHERE cursor > ? ORDER BY cursor LIMIT ?")
+      let statement = try prepareUnlocked("SELECT cursor,payload,workspace_id,origin_sequence FROM execution_journal WHERE cursor > ? ORDER BY cursor LIMIT ?")
       defer { sqlite3_finalize(statement) }
       sqlite3_bind_int64(statement, 1, cursor); sqlite3_bind_int(statement, 2, Int32(max(1, min(limit, 200))))
       var entries: [ExecutionJournalEntry] = []; var next = cursor; var bytes = 0
+      var skipped: [ExecutionJournalSkip] = []
       while true {
         let code = sqlite3_step(statement)
         if code == SQLITE_DONE { break }
         guard code == SQLITE_ROW else { throw stepError() }
         let payload = try blob(statement, column: 1)
+        guard let entry = try? JSONDecoder().decode(ExecutionJournalEntry.self, from: payload) else {
+          // Peer sync stores a newer member's record as it is. This build
+          // cannot serve it, so the page names its position from the row's
+          // own columns and the cursor moves past it: the reader neither
+          // stalls on this page nor sees an unexplained gap in the sequence.
+          skipped.append(.init(workspaceID: try text(statement, column: 2), originSequence: sqlite3_column_int64(statement, 3)))
+          next = sqlite3_column_int64(statement, 0)
+          continue
+        }
         if !entries.isEmpty && bytes + payload.count > 4 * 1_024 * 1_024 { break }
-        entries.append(try JSONDecoder().decode(ExecutionJournalEntry.self, from: payload))
+        entries.append(entry)
         next = sqlite3_column_int64(statement, 0); bytes += payload.count
       }
-      return try ExecutionJournalPage(libraryID: libraryIDUnlocked(), cursor: next, entries: entries, hasMore: next < current)
+      SkippedValues.report(skipped.count, "unreadable execution journal row(s) a newer member wrote")
+      return try ExecutionJournalPage(libraryID: libraryIDUnlocked(), cursor: next, entries: entries, hasMore: next < current,
+                                      skipped: skipped.isEmpty ? nil : skipped)
     }
   }
   func federationJournalCursorUnlocked() throws -> Int64 {
@@ -219,16 +234,28 @@ extension WorkspaceDatabaseConnection {
     value.isPinned = sqlite3_column_int(statement, 2) != 0; value.updatedAt = try text(statement, column: 3)
     return value
   }
-  func federationValuesUnlocked<Value: Decodable>(_ sql: String, bindings: [String] = [], as type: Value.Type) throws -> [Value] {
+  /// `skippingUnreadable` is for lists read for display or routing: these
+  /// tables are replicated between members, so a newer build's row can sit in
+  /// this database, and one such row must not fail the list for every other
+  /// row. A lookup that decides a write keeps the default and throws.
+  func federationValuesUnlocked<Value: Decodable>(_ sql: String, bindings: [String] = [], as type: Value.Type,
+                                                  skippingUnreadable: Bool = false) throws -> [Value] {
     let statement = try prepareUnlocked(sql); defer { sqlite3_finalize(statement) }
     for (index, value) in bindings.enumerated() { try bind(value, at: Int32(index + 1), to: statement) }
-    var result: [Value] = []
+    var result: [Value] = [], unreadable = 0
     while true {
       let code = sqlite3_step(statement)
-      if code == SQLITE_DONE { return result }
+      if code == SQLITE_DONE { break }
       guard code == SQLITE_ROW else { throw stepError() }
-      result.append(try JSONDecoder().decode(type, from: blob(statement, column: 0)))
+      let payload = try blob(statement, column: 0)
+      do { result.append(try JSONDecoder().decode(type, from: payload)) }
+      catch {
+        guard skippingUnreadable else { throw error }
+        unreadable += 1
+      }
     }
+    if skippingUnreadable { SkippedValues.report(unreadable, "unreadable \(type) row(s) a newer member wrote") }
+    return result
   }
   func federationScalarUnlocked(_ sql: String, bindings: [String] = []) throws -> Int64 {
     let statement = try prepareUnlocked(sql); defer { sqlite3_finalize(statement) }

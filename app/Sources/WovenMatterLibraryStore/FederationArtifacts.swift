@@ -13,7 +13,7 @@ import WovenMatterCore
 
 extension WorkspaceDatabaseConnection {
   public func librarySavedArtifacts() throws -> [LibraryArtifactManifest] {
-    try withLock { try federationValuesUnlocked("SELECT manifest FROM saved_artifacts ORDER BY id", as: LibraryArtifactManifest.self) }
+    try withLock { try federationValuesUnlocked("SELECT manifest FROM saved_artifacts ORDER BY id", as: LibraryArtifactManifest.self, skippingUnreadable: true) }
   }
   public func libraryArtifactTransfer(id: String) throws -> LibraryArtifactTransfer? {
     try withLock { try artifactTransferUnlocked(id: id) }

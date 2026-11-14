@@ -193,6 +193,17 @@ struct LibraryToolFacadeTests {
         #expect(accepted.status == 200)
         let result = try JSONDecoder().decode(JSONValue.self, from: accepted.body)
         #expect(result.objectValue?["result"]?.objectValue?["isError"] == .bool(false))
+        // A newer phone that knows one more tool group keeps the tools of the
+        // groups this Mac knows; the unknown name alone enables nothing.
+        headers["x-woven-enabled-groups"] = "notes,holograms"
+        let newer = try await send("/wovenmatter/mcp")
+        #expect(newer.status == 200)
+        #expect(try JSONDecoder().decode(JSONValue.self, from: newer.body).objectValue?["result"]?.objectValue?["isError"] == .bool(false))
+        headers["x-woven-enabled-groups"] = "holograms"
+        let unknownOnly = try await send("/wovenmatter/mcp")
+        #expect(unknownOnly.status == 200)
+        #expect(try JSONDecoder().decode(JSONValue.self, from: unknownOnly.body).objectValue?["result"]?.objectValue?["isError"] != .bool(false))
+        headers["x-woven-enabled-groups"] = "notes"
         headers["x-woven-conversation-id"] = try await fixture.database.createFixtureLocalACPSession(runtimeKind: .codex, title: "Unrelated Mac chat", ownerDeviceID: UUID())
         #expect(try await send("/mcp").status == 403)
         headers["x-woven-conversation-id"] = caller

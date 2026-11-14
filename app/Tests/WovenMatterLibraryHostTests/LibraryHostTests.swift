@@ -232,6 +232,12 @@ struct LibraryHostTests {
     // A caller without the group is refused by the shared executor's policy check.
     let narrowed = try fixture.mcp(caller, groups: "history", "tools/call", ["name": .string("woven_notes_list"), "arguments": .object([:])])
     #expect(narrowed.objectValue?["error"] != nil)
+    // A newer caller's group this build does not have is ignored: the known
+    // groups still work, and the unknown name grants nothing.
+    let newer = try fixture.mcp(caller, groups: "notes,holograms", "tools/call", ["name": .string("woven_notes_list"), "arguments": .object([:])])
+    #expect(newer.objectValue?["result"]?.objectValue?["structuredContent"]?.objectValue?["success"] == .bool(true), "\(newer)")
+    let unknownOnly = try fixture.mcp(caller, groups: "holograms", "tools/call", ["name": .string("woven_notes_list"), "arguments": .object([:])])
+    #expect(unknownOnly.objectValue?["error"] != nil)
   }
 
   @Test func historyCursorsStayExactThroughJSON() async throws {

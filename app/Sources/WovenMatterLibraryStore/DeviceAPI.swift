@@ -36,11 +36,7 @@ private extension DeviceAPI {
               let rawGroups = request.headers["x-woven-enabled-groups"], rawGroups.utf8.count <= 512 else {
             throw LibraryAPIError(code: "invalid_request", message: "MCP requires a native conversation binding and current tool selection.")
         }
-        let names = rawGroups.split(separator: ",", omittingEmptySubsequences: true).map(String.init)
-        let groups = names.compactMap(WorkspaceToolGroup.init(rawValue:))
-        guard groups.count == names.count else {
-            throw LibraryAPIError(code: "invalid_request", message: "An unknown tool group was selected.")
-        }
+        let groups = WorkspaceToolGroup.selected(rawGroups.split(separator: ",").map(String.init))
         let message: JSONValue
         do { message = try JSONDecoder().decode(JSONValue.self, from: request.body) }
         catch { throw MCPMalformedJSON() }
@@ -52,7 +48,7 @@ private extension DeviceAPI {
         guard (capture?.utf8.count ?? 0) <= 128 else {
             throw LibraryAPIError(code: "invalid_request", message: "The input context is invalid.")
         }
-        return (message, conversationID.lowercased(), Array(Set(groups)), capture)
+        return (message, conversationID.lowercased(), Array(groups), capture)
     }
 
     func mcpTools(groups: [WorkspaceToolGroup]) -> Set<String> {
