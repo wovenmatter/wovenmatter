@@ -633,7 +633,8 @@ before switching releases. **Host updates** then commit in two steps. The new
 service first starts with `WOVENMATTER_LIBRARY=0` for the health check and
 browser selftest, so nothing serves or synchronizes the migrated database
 yet; a failure up to here (migration included) restores the database files
-and the previous release. Restarting with the library host on commits the
+(the library's and the workspace's `execution.sqlite`, which the checked
+service opens and upgrades) and the previous release. Restarting with the library host on commits the
 update: once it may have served peers or phones, restoring the old change
 log, clock and cursors would make peers skip this host's next writes and lose
 acknowledged phone mutations, and the old release cannot be assumed to open

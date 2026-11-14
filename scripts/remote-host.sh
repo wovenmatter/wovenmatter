@@ -35,6 +35,11 @@ DEFAULT_DISK=50*1024**3
 # identity and its /wovenmatter Serve route under ROOT/run/library.
 LIBRARY_STATE=ROOT/'run/library'
 LIBRARY_DATABASE=('workspace.sqlite','workspace.sqlite-wal','workspace.sqlite-shm')
+# The workspace service's execution store (client-execution.mjs). The checked
+# service opens and upgrades it, so an update backs it up and restores it
+# with the library database.
+EXECUTION_STORE=ROOT/'workspace/.wovenmatter/client-execution'
+EXECUTION_DATABASE=('execution.sqlite','execution.sqlite-wal','execution.sqlite-shm')
 
 class Failure(Exception):
     def __init__(self,code,detail,status=69): self.code,self.detail,self.status=code,detail,status
@@ -830,9 +835,16 @@ def install(workspace_id,requested_port,mode,fingerprint,updating=False,roles=No
         # A failure, or any later one, restores the database and the old release.
         progress('library')
         owned_directory(ROOT/'library')
-        library_backup=stage/'library-backup'; library_backup.mkdir(mode=0o700)
+        # With the old service stopped, each database and its -wal/-shm files
+        # are copied as one consistent set. The backup is restored only once it
+        # is complete: a failed copy has changed nothing yet.
+        backup=stage/'library-backup'; backup.mkdir(mode=0o700)
         for name in LIBRARY_DATABASE:
-            if (ROOT/'library'/name).is_file(): shutil.copy2(ROOT/'library'/name,library_backup/name)
+            if (ROOT/'library'/name).is_file(): shutil.copy2(ROOT/'library'/name,backup/name)
+        (backup/'execution').mkdir(mode=0o700)
+        for name in EXECUTION_DATABASE:
+            if (EXECUTION_STORE/name).is_file(): shutil.copy2(EXECUTION_STORE/name,backup/'execution'/name)
+        library_backup=backup
         migrated=run([library,'--data-root',ROOT,'--migrate-only','--harness-catalog',destination/'harnesses/catalog.json'],timeout=900)
         if migrated.returncode or b'"event":"migrated"' not in migrated.stdout:
             fail('library_migration_failed','The library database could not be migrated; the previous version was restored.',70)
@@ -893,6 +905,10 @@ def install(workspace_id,requested_port,mode,fingerprint,updating=False,roles=No
                     if (library_backup/name).is_file(): shutil.copy2(library_backup/name,ROOT/'library'/name)
                     else:
                         with contextlib.suppress(FileNotFoundError): (ROOT/'library'/name).unlink()
+                for name in EXECUTION_DATABASE:
+                    if (library_backup/'execution'/name).is_file(): shutil.copy2(library_backup/'execution'/name,EXECUTION_STORE/name)
+                    else:
+                        with contextlib.suppress(FileNotFoundError): (EXECUTION_STORE/name).unlink()
             for path,target in saved_links.items():
                 if target is not None: atomic_link(path,target)
                 elif path.is_symlink(): path.unlink()
