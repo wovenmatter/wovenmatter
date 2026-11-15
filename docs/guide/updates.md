@@ -13,8 +13,7 @@ updates**, and an **Updates** row that opens the page.
   inside the app and updates with it: the Chromium browser, Playwright, Node, the
   Cua computer-use driver, the bots VM, and the updater.
 - **Bots:** each machine's bots row shows the tools in their containers (Ubuntu,
-  Node, and Playwright with Chromium) and how many bots are still on an older
-  container image.
+  Node, and Playwright with Chromium) and how many bots have an update waiting.
 - **Each other Mac and Linux machine:** its Woven Matter or Woven server version,
   its bots, and a **Harnesses** row with every harness installed there. A device
   that is offline shows the last version it reported. A device running an older
@@ -30,9 +29,12 @@ Anything with a newer version shows **Update available** and its own
   harness.
 - **Update Woven Matter** updates only the apps, the Linux servers, the bots VMs,
   and the bots. A Linux server update also brings its Node, Playwright with
-  Chromium, and Docker Engine. Updating bots moves every bot to the current
-  container image. Its files in `/workspace` stay, each bot is snapshotted
-  first, and a failed update rolls back.
+  Chromium, and Docker Engine. Updating bots brings each bot's Node,
+  Playwright, Chromium, and Ubuntu packages up to date. Each bot keeps its
+  container, files, home folder, browser sign-ins, and everything it installed.
+  Each bot is snapshotted first, and a failed update rolls back. When a release
+  moves bots to a new container image, what they installed comes along; see
+  [what a bot keeps through updates](bots.md#what-a-bot-keeps-through-updates).
 - **Update harnesses** updates only the harnesses, Pi Durable SDKs, and
   Executor.
 

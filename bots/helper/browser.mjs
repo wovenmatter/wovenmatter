@@ -17,6 +17,8 @@ const NAV_TIMEOUT = 45_000;
 const ACTION_TIMEOUT = 15_000;
 
 const require = createRequire(import.meta.url);
+// The toolchain's own Chromium, whatever browser folder the bot's own Playwright versions use.
+if (process.env.WOVEN_PLAYWRIGHT_BROWSERS) process.env.PLAYWRIGHT_BROWSERS_PATH = process.env.WOVEN_PLAYWRIGHT_BROWSERS;
 const { chromium } = require(process.env.WOVEN_PLAYWRIGHT_MODULE ?? "playwright");
 
 let context;

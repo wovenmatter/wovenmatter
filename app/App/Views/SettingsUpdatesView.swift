@@ -29,7 +29,7 @@ struct SettingsUpdatesView: View {
                 SettingsNote("Update everything updates Woven Matter on every device first, then every harness. Update Woven Matter and Update harnesses do one half.")
                 SettingsNote("Linux servers get the server release that comes with this Mac's Woven Matter. When this Mac is behind the newest release, it updates first and restarts, then the update continues with your other devices and harnesses.")
                 SettingsNote("Before a Linux workspace runs a harness installer, you review its download. One review covers every download in the update.")
-                SettingsNote("Update bots moves every bot to the current container image, so Node, Playwright and Chromium inside bots update too. Each bot is snapshotted first and rolled back if it fails.")
+                SettingsNote("Updating bots brings the Node, Playwright, Chromium and Ubuntu packages inside them up to date. Each bot keeps its files, home folder, browser sign-ins and what it installed, and is snapshotted first and rolled back if the update fails.")
                 SettingsNote("If an update would stop chats that are running, or replace bot containers, you're asked first.")
                 SettingsNote("iPhone and iPad update through TestFlight.")
             }
@@ -192,9 +192,9 @@ struct SettingsUpdatesView: View {
         let outdated = updates.botsAreOutdated(machine)
         let busy = updates.running && updates.currentItem == machine.id
         let session = model.bots.session(for: machine.id)
-        let stale = updates.staleBots(machine)
+        let behind = updates.botsToUpdate(machine)
         let detail = [machine.versions.runtime.map { "Runtime \($0)" }, session?.runtimeStatus?.image?.tools,
-                      stale == 0 ? nil : stale == 1 ? "1 bot on an older image" : "\(stale) bots on an older image"]
+                      behind == 0 ? nil : behind == 1 ? "1 bot to update" : "\(behind) bots to update"]
             .compactMap { $0 }.joined(separator: " · ")
         return SettingsRow(title: "Bots", detail: detail.isEmpty ? nil : detail) {
             if busy || machine.updating { ProgressView().controlSize(.small) }

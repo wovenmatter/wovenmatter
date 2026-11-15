@@ -4,7 +4,7 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { DockerEngineAPI } from "./engine-api.ts";
-import { createTar, directoryEntries, type TarEntry } from "./tar.ts";
+import { createTar, directoryEntries, readTar as readTarEntries, type TarEntry } from "./tar.ts";
 
 /** bots/image and bots/helper, from bots/src/environment. */
 export const IMAGE_DIR = fileURLToPath(new URL("../../image/", import.meta.url));
@@ -12,10 +12,23 @@ export const HELPER_DIR = fileURLToPath(new URL("../../helper/", import.meta.url
 export const NODE_MODULES_DIR = fileURLToPath(new URL("../../node_modules/", import.meta.url));
 const SOURCE_ROOT = fileURLToPath(new URL("../../../", import.meta.url));
 
-/** Where the helper volume mounts in every bot container. */
+/** Where each bot reaches its selected helper: a link in its container to a shared directory. */
 export const HELPER_MOUNT = "/opt/woven-bot";
+/** Where each bot reaches its selected toolchain (Node, npm, Playwright, Chromium), likewise. */
+export const TOOLCHAIN_PATH = "/opt/woven-toolchain";
+/** The runtime's shared volume, mounted read-only in every bot: helper/<hash>, toolchain/<hash>. */
+export const SHARED_VOLUME = "woven-bots-shared";
+export const SHARED_MOUNT = "/opt/woven";
+/** Legacy helper volumes (one per helper version, before the shared volume) carry this label. */
 export const HELPER_LABEL = "woven.bots.helper";
+export const SHARED_LABEL = "woven.bots.shared";
 const COMPLETE = ".complete";
+/** Where filler containers mount the shared volume, writable. */
+const FILL = "/fill";
+const TOOLCHAIN_DIR = "toolchain";
+
+export const helperDir = (hash: string) => `${SHARED_MOUNT}/helper/${hash}`;
+export const toolchainDir = (hash: string) => `${SHARED_MOUNT}/toolchain/${hash}`;
 
 /** The packages the in-container env agent imports, copied from the runtime's own install. */
 const HELPER_PACKAGES = [
@@ -26,17 +39,43 @@ const HELPER_PACKAGES = [
 
 const digest = (data: Buffer) => createHash("sha256").update(data).digest("hex").slice(0, 16);
 
+/** A build context's content hash: an image's tag, and its shared directory's name. */
+export const contentHash = digest;
+
 /** `name` without a tag gets the build context's content hash; a tagged name is used as is. */
 export function imageTag(name: string, context: Buffer): string {
   const last = name.slice(name.lastIndexOf("/") + 1);
   return last.includes(":") ? name : `${name}:${digest(context)}`;
 }
 
-export async function imageContext(dir = IMAGE_DIR, sourceRoot = SOURCE_ROOT): Promise<Buffer> {
-  const entries = await directoryEntries(dir);
+/** The toolchain image's name next to the base image's: `repo-toolchain`, keeping any tag. */
+export function toolchainImageName(name: string): string {
+  const slash = name.lastIndexOf("/");
+  const colon = name.indexOf(":", slash + 1);
+  return colon === -1 ? `${name}-toolchain` : `${name.slice(0, colon)}-toolchain${name.slice(colon)}`;
+}
+
+/** The tag part of an image name (`repo:hash`), made safe as a directory name. */
+export function tagHash(tag: string): string {
+  const last = tag.slice(tag.lastIndexOf("/") + 1);
+  const colon = last.indexOf(":");
+  return (colon === -1 ? last : last.slice(colon + 1)).replace(/[^A-Za-z0-9_.-]/g, "_");
+}
+
+/** The base image's context: bots/image without toolchain/, whose changes must not move bots. */
+export async function imageContext(dir = IMAGE_DIR): Promise<Buffer> {
+  const entries = await directoryEntries(dir, {
+    include: (path) => path !== TOOLCHAIN_DIR && !path.startsWith(`${TOOLCHAIN_DIR}/`),
+  });
+  return createTar(entries);
+}
+
+/** The toolchain image's context: bots/image/toolchain plus the npm tooling records it uses. */
+export async function toolchainContext(dir = IMAGE_DIR, sourceRoot = SOURCE_ROOT): Promise<Buffer> {
+  const entries = await directoryEntries(join(dir, TOOLCHAIN_DIR));
   // Signed app resources retain remote/npm-runtime; native host bundles put it
   // at the release root. Include the canonical records in the content hash so
-  // a tooling refresh rebuilds the image without maintaining another copy.
+  // a tooling refresh rebuilds the toolchain without maintaining another copy.
   const graph = existsSync(join(sourceRoot, "remote/npm-runtime")) ? "remote/npm-runtime" : "npm-runtime";
   for (const [source, target] of [
     ["harnesses/prepare-npm.mjs", "harnesses/prepare-npm.mjs"],
@@ -80,13 +119,10 @@ export async function helperArchive(
 export type ImageTools = { readonly base?: string; readonly node?: string; readonly playwright?: string };
 
 export async function imageTools(dir = IMAGE_DIR): Promise<ImageTools> {
-  const text = await readFile(join(dir, "Dockerfile"), "utf8").catch(() => "");
-  const arg = (name: string) => new RegExp(`^ARG ${name}=(\\S+)`, "m").exec(text)?.[1];
-  return { base: /^FROM (\S+)/m.exec(text)?.[1], node: arg("NODE_VERSION"), playwright: arg("PLAYWRIGHT_VERSION") };
-}
-
-export function helperVolumeName(hash: string): string {
-  return `woven-bots-helper-${hash}`;
+  const base = await readFile(join(dir, "Dockerfile"), "utf8").catch(() => "");
+  const tools = await readFile(join(dir, TOOLCHAIN_DIR, "Dockerfile"), "utf8").catch(() => "");
+  const arg = (name: string) => new RegExp(`^ARG ${name}=(\\S+)`, "m").exec(tools)?.[1];
+  return { base: /^FROM (\S+)/m.exec(base)?.[1], node: arg("NODE_VERSION"), playwright: arg("PLAYWRIGHT_VERSION") };
 }
 
 /**
@@ -98,8 +134,9 @@ export async function ensureImage(
   name: string,
   log: (message: string) => void,
   dir = IMAGE_DIR,
+  context?: Buffer,
 ): Promise<string> {
-  const context = await imageContext(dir);
+  context ??= await imageContext(dir);
   const tag = imageTag(name, context);
   if (await engine.imageExists(tag)) return tag;
   // A missing explicitly tagged image is built from the same context under that tag.
@@ -151,20 +188,18 @@ class BuildOutputTail {
 }
 
 /**
- * The read-only helper volume for this runtime install, filled through a short-lived container of
- * the bot image (the archive API needs a container to extract into).
+ * The shared volume's directory for this helper (helper/<hash>), filled through a short-lived
+ * container of the bot image (the archive API needs a container to extract into). Directories are
+ * immutable once complete, so bots running an older one are never disturbed.
  */
-export async function ensureHelperVolume(
+export async function ensureSharedHelper(
   engine: DockerEngineAPI,
   image: string,
   labels: Record<string, string>,
   archive?: { readonly tar: Buffer; readonly hash: string },
 ): Promise<string> {
   const { tar, hash } = archive ?? (await helperArchive());
-  const volume = helperVolumeName(hash);
-  if (!(await engine.volumeExists(volume))) {
-    await engine.createVolume(volume, { ...labels, [HELPER_LABEL]: volume });
-  }
+  await ensureSharedVolume(engine, labels);
   const filler = `woven-bots-helper-fill-${randomUUID().slice(0, 8)}`;
   await engine.createContainer(filler, {
     Image: image,
@@ -173,16 +208,100 @@ export async function ensureHelperVolume(
     Cmd: [],
     Labels: { ...labels, "woven.bots.temporary": "helper" },
     HostConfig: {
-      Mounts: [{ Type: "volume", Source: volume, Target: HELPER_MOUNT }],
+      Mounts: [{ Type: "volume", Source: SHARED_VOLUME, Target: FILL }],
       NetworkMode: "none",
     },
   });
   try {
-    if (!(await engine.pathExists(filler, `${HELPER_MOUNT}/${COMPLETE}`))) {
-      await engine.putArchive(filler, HELPER_MOUNT, tar);
+    if (!(await engine.pathExists(filler, `${FILL}/helper/${hash}/${COMPLETE}`))) {
+      const into = `helper/${hash}`;
+      const entries = readTarEntries(tar).map((entry) => ({ ...entry, path: `${into}/${entry.path}` }));
+      await engine.putArchive(filler, FILL, createTar([{ path: "helper", directory: true }, { path: into, directory: true }, ...entries]));
     }
   } finally {
     await engine.removeContainer(filler).catch(() => {});
   }
-  return volume;
+  return hash;
+}
+
+/**
+ * The shared volume's directory for this toolchain (toolchain/<hash>): its image's
+ * /opt/woven-toolchain, copied in by a short-lived container of that image and renamed into place
+ * whole, with the completion marker inside.
+ */
+export async function ensureSharedToolchain(
+  engine: DockerEngineAPI,
+  image: string,
+  labels: Record<string, string>,
+  hash = tagHash(image),
+): Promise<string> {
+  await ensureSharedVolume(engine, labels);
+  const filler = `woven-bots-toolchain-fill-${randomUUID().slice(0, 8)}`;
+  const dir = `${FILL}/${TOOLCHAIN_DIR}/${hash}`;
+  const stage = `${FILL}/${TOOLCHAIN_DIR}/.stage-${hash}-${randomUUID().slice(0, 8)}`;
+  await engine.createContainer(filler, {
+    Image: image,
+    User: "root",
+    Entrypoint: ["sh", "-c"],
+    Cmd: [
+      `set -e; [ -f ${dir}/${COMPLETE} ] && exit 0; mkdir -p ${stage}; cp -a ${TOOLCHAIN_PATH}/. ${stage}/; ` +
+        `touch ${stage}/${COMPLETE}; rm -rf ${dir}; mv ${stage} ${dir}`,
+    ],
+    Labels: { ...labels, "woven.bots.temporary": "toolchain" },
+    HostConfig: {
+      Mounts: [{ Type: "volume", Source: SHARED_VOLUME, Target: FILL }],
+      NetworkMode: "none",
+    },
+  });
+  try {
+    await engine.startContainer(filler);
+    const code = await engine.waitContainer(filler);
+    if (code !== 0) throw new Error(`copying the bot toolchain ${hash} exited ${code}`);
+  } finally {
+    await engine.removeContainer(filler).catch(() => {});
+  }
+  return hash;
+}
+
+async function ensureSharedVolume(engine: DockerEngineAPI, labels: Record<string, string>): Promise<void> {
+  if (!(await engine.volumeExists(SHARED_VOLUME))) {
+    await engine.createVolume(SHARED_VOLUME, { ...labels, [SHARED_LABEL]: "1" });
+  }
+}
+
+/**
+ * Remove shared directories no bot links to, keeping `keep` (this runtime's current ones), through
+ * a short-lived container of `image`. Returns what was removed (helper/<hash>, toolchain/<hash>).
+ */
+export async function pruneShared(
+  engine: DockerEngineAPI,
+  image: string,
+  labels: Record<string, string>,
+  keep: ReadonlySet<string>,
+): Promise<string[]> {
+  if (!(await engine.volumeExists(SHARED_VOLUME))) return [];
+  const name = `woven-bots-prune-${randomUUID().slice(0, 8)}`;
+  const kept = [...keep].map((entry) => `'${entry.replace(/'/g, "")}'`).join(" ");
+  await engine.createContainer(name, {
+    Image: image,
+    User: "root",
+    Entrypoint: ["sh", "-c"],
+    Cmd: [
+      `cd ${FILL} || exit 0; for d in helper/* ${TOOLCHAIN_DIR}/* ${TOOLCHAIN_DIR}/.stage-*; do [ -e "$d" ] || continue; ` +
+        `keep=0; for k in ${kept}; do [ "$d" = "$k" ] && keep=1; done; ` +
+        `if [ $keep = 0 ]; then rm -rf "$d" && echo "$d"; fi; done`,
+    ],
+    Labels: { ...labels, "woven.bots.temporary": "prune" },
+    HostConfig: {
+      Mounts: [{ Type: "volume", Source: SHARED_VOLUME, Target: FILL }],
+      NetworkMode: "none",
+    },
+  });
+  try {
+    await engine.startContainer(name);
+    await engine.waitContainer(name);
+    return (await engine.containerLogs(name)).split("\n").filter(Boolean);
+  } finally {
+    await engine.removeContainer(name).catch(() => {});
+  }
 }

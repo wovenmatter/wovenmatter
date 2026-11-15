@@ -220,7 +220,14 @@ describe.skipIf(!SOCKET)("bots on a real Docker Engine", () => {
   }, 5 * 60_000);
 
   it("rolls an update back to its snapshot when the health check fails, and updates cleanly otherwise", async () => {
-    await ask(bot, tool("bash", { command: "echo before-update > /workspace/marker; sudo touch /etc/woven-layer" }));
+    await ask(
+      bot,
+      tool("bash", {
+        command:
+          "echo before-update > /workspace/marker; sudo touch /etc/woven-layer; echo home > ~/.woven-home; " +
+          "sudo sh -c 'apt-get update -q >/dev/null && apt-get install -y -q --no-install-recommends sl >/dev/null'; test -x /usr/games/sl && echo apt-installed",
+      }),
+    );
     failHealth = true;
     const [failed] = await runtime.operations.update([bot.id]);
     expect(failed).toMatchObject({ ok: false, rolledBack: true, error: "forced health-check failure" });
@@ -229,13 +236,16 @@ describe.skipIf(!SOCKET)("bots on a real Docker Engine", () => {
     expect(after).toContain("before-update");
     expect(after).toContain("layer-kept");
     failHealth = false;
+    const id = (await engine.inspectContainer(containerName(bot.id)))?.Id;
     const [ok] = await runtime.operations.update([bot.id]);
     expect(ok).toEqual({ botId: bot.id, ok: true });
+    // In place: the same container, with what the bot installed in it.
+    expect((await engine.inspectContainer(containerName(bot.id)))?.Id).toBe(id);
     const services = await ask(bot, tool("keep_running_list", {}));
     expect(services).toContain('"running": true');
   }, 20 * 60_000);
 
-  it("rebuilds from a clean image, keeping storage and bringing the restart list back", async () => {
+  it("rebuilds from a clean image, keeping storage and home, carrying installs and bringing the restart list back", async () => {
     const before = (await engine.inspectContainer(containerName(bot.id)))?.Id;
     await runtime.operations.rebuild(bot.id);
     expect((await engine.inspectContainer(containerName(bot.id)))?.Id).not.toBe(before);
@@ -243,12 +253,17 @@ describe.skipIf(!SOCKET)("bots on a real Docker Engine", () => {
       bot,
       tool("bash", {
         command:
-          "cat /workspace/marker; test -f /etc/woven-layer && echo layer-kept || echo layer-gone; " +
+          "cat /workspace/marker; test -f /etc/woven-layer && echo layer-kept || echo layer-gone; cat ~/.woven-home; " +
+          "test -x /usr/games/sl && echo apt-kept; head -n 1 /workspace/.woven/system/update-report.md; " +
           "for i in $(seq 1 40); do curl -fsS http://127.0.0.1:8000/ >/dev/null && echo served && exit 0; sleep 0.5; done; exit 1",
       }),
     );
     expect(after).toContain("before-update");
-    expect(after).toContain("layer-gone");
+    // The files and packages the bot added to its container came across, and its home stayed.
+    expect(after).toContain("layer-kept");
+    expect(after).toContain("home");
+    expect(after).toContain("apt-kept");
+    expect(after).toContain("# Your container moved to a new image");
     expect(after).toContain("served");
   }, 10 * 60_000);
 });

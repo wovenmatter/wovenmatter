@@ -204,15 +204,20 @@ final class FleetUpdatesModel {
     }
 
     /// Bots on a machine whose runtime is older than the newest one on any machine, or
-    /// with bots still on an older container image.
+    /// with bots on older tools or an older base image.
     func botsAreOutdated(_ machine: BotMachine) -> Bool {
         guard let model else { return false }
-        return model.bots.versionReport.outdated.contains { $0.id == "bots:" + machine.id } || staleBots(machine) > 0
+        return model.bots.versionReport.outdated.contains { $0.id == "bots:" + machine.id } || botsToUpdate(machine) > 0
     }
 
-    /// Bots whose containers came from an older bot image.
+    /// Bots whose containers came from an older base image (they move on their next update).
     func staleBots(_ machine: BotMachine) -> Int {
         model?.bots.session(for: machine.id)?.runtimeStatus?.image?.staleBots ?? 0
+    }
+
+    /// Bots whose next update changes their tools, helper or base image.
+    func botsToUpdate(_ machine: BotMachine) -> Int {
+        model?.bots.session(for: machine.id)?.runtimeStatus?.image?.botsToUpdate ?? 0
     }
 
     private func refreshExecutor() async {
@@ -681,13 +686,13 @@ final class FleetUpdatesModel {
                 add(conversation, "\(title(conversation)) is running on this Mac, which restarts to update.")
             }
         }
-        // Moving bots to a new image replaces their containers; say so first.
+        // Moving bots to a new base image recreates their containers; say what comes along.
         for step in steps {
             guard case .bots(let id, let name) = step,
                   let machine = model.bots.machines.first(where: { $0.id == id }), staleBots(machine) > 0 else { continue }
             let count = staleBots(machine)
             let tools = model.bots.session(for: id)?.runtimeStatus?.image?.tools ?? "the current tools"
-            items.append(.init(id: "image:" + id, text: "\(count == 1 ? "1 bot" : "\(count) bots") on \(name) move to a new container image (\(tools)). Their files in /workspace stay; anything installed elsewhere in the container is replaced."))
+            items.append(.init(id: "image:" + id, text: "\(count == 1 ? "1 bot" : "\(count) bots") on \(name) move to a new container image (\(tools)). Their files, home folders, browser sign-ins, and the packages they installed come along; each bot gets a report of anything that didn't."))
         }
         for step in steps {
             guard case .linuxHost(let id, let name) = step,
@@ -813,8 +818,11 @@ final class FleetUpdatesModel {
         guard let model else { return "Woven Matter isn't ready." }
         switch (harness.location, harness.kind) {
         case (.thisMac, .runtime(let kind)):
+            // An update can't start while a version check for it runs.
+            _ = await wait(timeout: .seconds(60)) { !model.checkingRuntimeKinds.contains(kind) }
             model.updateRuntime(kind)
-            _ = await wait(timeout: .seconds(10)) { model.updatingRuntimeKinds.contains(kind) }
+            guard await wait(timeout: .seconds(10), until: { model.updatingRuntimeKinds.contains(kind) || model.runtimeMaintenanceBusy(kind) })
+            else { return "It didn't start. Try again." }
             guard await wait(timeout: .seconds(900), until: {
                 !model.updatingRuntimeKinds.contains(kind) && !model.runtimeMaintenanceBusy(kind)
             }) else { return "It did not finish in time." }

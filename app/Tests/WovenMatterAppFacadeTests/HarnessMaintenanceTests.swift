@@ -119,6 +119,17 @@ struct HarnessMaintenanceTests {
         #expect(await operations.calls == [.codex: 1, .claudeCode: 1])
     }
 
+    /// The Mac server hands every path another Mac's Settings → Updates calls, the
+    /// operation it follows included, to the signed member-maintenance handler.
+    @Test func theMacServerRoutesEveryPathAnotherMacsUpdatesCall() {
+        for path in ["/v1/runtime-maintenance", "/v1/runtime-maintenance/check", "/v1/runtime-maintenance/codex/update",
+                     "/v1/default-agent/sdks", "/v1/operations/" + UUID().uuidString.lowercased()] {
+            #expect(LibraryHostController.servesMemberMaintenance(path), "\(path)")
+        }
+        #expect(!LibraryHostController.servesMemberMaintenance("/v1/bots/ws"))
+        #expect(!LibraryHostController.servesMemberMaintenance("/v1/library"))
+    }
+
     /// Another Mac's Settings → Updates: the update answers at once with an operation,
     /// which it follows here until the harness finishes.
     @Test func anotherMacFollowsAHarnessUpdateHereAsAnOperation() async throws {

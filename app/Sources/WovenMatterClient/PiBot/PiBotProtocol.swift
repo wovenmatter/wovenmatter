@@ -630,17 +630,25 @@ public struct PiBotRuntimeStatus: Codable, Equatable, Sendable {
     }
 }
 
-/// What every bot container gets from the current image. "Update bots" moves the bots
-/// in `staleBots` to it, so their Node, Playwright and Chromium update.
+/// What every bot container gets: the base image (Ubuntu and its system libraries) and the
+/// shared toolchain (Node, Playwright, Chromium). "Update bots" moves the bots in `staleBots`
+/// to a new base image, carrying what they installed, and updates the toolchain of every bot
+/// in `outdatedBots` in place.
 public struct PiBotImageStatus: Codable, Equatable, Sendable {
     public let tag: String
     public let base: String?
     public let node: String?
     public let playwright: String?
     public let staleBots: Int
-    public init(tag: String, base: String? = nil, node: String? = nil, playwright: String? = nil, staleBots: Int = 0) {
+    /// Bots an update changes at all; an older runtime reports only `staleBots`.
+    public let outdatedBots: Int?
+    public init(tag: String, base: String? = nil, node: String? = nil, playwright: String? = nil, staleBots: Int = 0, outdatedBots: Int? = nil) {
         self.tag = tag; self.base = base; self.node = node; self.playwright = playwright; self.staleBots = staleBots
+        self.outdatedBots = outdatedBots
     }
+
+    /// Bots whose next update changes their tools, base image or helper.
+    public var botsToUpdate: Int { max(outdatedBots ?? staleBots, staleBots) }
 
     /// "Ubuntu 26.04 · Node 26.13.1 · Playwright 1.65.1 with Chromium"
     public var tools: String {

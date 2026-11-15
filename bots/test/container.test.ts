@@ -1,4 +1,5 @@
-import { readFile, writeFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { join } from "node:path";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
@@ -7,10 +8,12 @@ import {
   BotEnvironment,
   containerName,
   IMAGE_LABEL,
+  LAYOUT_LABEL,
   snapshotImage,
   snapshotVolumeName,
   volumeName,
 } from "../src/environment/container.ts";
+import { HELPER_LABEL, SHARED_VOLUME } from "../src/environment/images.ts";
 import { DockerEngineAPI } from "../src/environment/engine-api.ts";
 import { RemoteExecutionEnv } from "../src/environment/remote.ts";
 import { FakeEngine } from "./fake-engine.ts";
@@ -65,7 +68,8 @@ describe("bot containers on the Engine API", () => {
     expect(engine.containers.size).toBe(0);
     const tools = shell();
     must(await tools.writeFile("hello.txt", "hi", ctx));
-    expect(engine.builds).toBe(1);
+    // The base image and the toolchain image.
+    expect(engine.builds).toBe(2);
     const container = engine.containers.get(containerName(BOT));
     expect(container?.running).toBe(true);
     const host = container?.spec.HostConfig as Record<string, unknown>;
@@ -81,9 +85,18 @@ describe("bot containers on the Engine API", () => {
     expect(JSON.stringify(host)).not.toContain("docker.sock");
     expect(host.Mounts).toEqual([
       { Type: "volume", Source: volumeName(BOT), Target: "/workspace" },
-      { Type: "volume", Source: expect.stringMatching(/^woven-bots-helper-/), Target: "/opt/woven-bot", ReadOnly: true },
+      { Type: "volume", Source: SHARED_VOLUME, Target: "/opt/woven", ReadOnly: true },
     ]);
-    expect(container?.labels).toMatchObject({ "woven.bot": BOT, "woven.bots.machine": "machine-1" });
+    expect(container?.labels).toMatchObject({ "woven.bot": BOT, "woven.bots.machine": "machine-1", [LAYOUT_LABEL]: "2" });
+    // Its helper and toolchain are links into the shared volume, both filled and complete.
+    const shared = await env.shared();
+    expect(Object.fromEntries(container?.links ?? [])).toEqual({
+      "/opt/woven-bot": `/opt/woven/helper/${shared.helper}`,
+      "/opt/woven-toolchain": `/opt/woven/toolchain/${shared.toolchain}`,
+    });
+    expect(existsSync(join(engine.volumeDir(SHARED_VOLUME), "helper", shared.helper, ".complete"))).toBe(true);
+    expect(existsSync(join(engine.volumeDir(SHARED_VOLUME), "helper", shared.helper, "agent.mjs"))).toBe(true);
+    expect(existsSync(join(engine.volumeDir(SHARED_VOLUME), "toolchain", shared.toolchain, ".complete"))).toBe(true);
     expect(container?.spec.User).toBe("bot");
     expect(await readFile(join(engine.volumeDir(volumeName(BOT)), "hello.txt"), "utf8")).toBe("hi");
     // No memory cap configured: no limit at all.
@@ -169,13 +182,17 @@ describe("bot containers on the Engine API", () => {
     await expect.poll(async () => (await list())[0]?.running, { timeout: 10_000 }).toBe(true);
   });
 
-  it("updates in place behind a snapshot, and rolls back to it when the health check fails", async () => {
+  it("updates in place behind a snapshot, keeping the container, and rolls back to it when the health check fails", async () => {
     must(await shell().writeFile("state.txt", "before", ctx));
+    const id = engine.containers.get(containerName(BOT))?.id;
     const ok = await env.updateBot(BOT);
     expect(ok).toEqual({ botId: BOT, ok: true });
     expect(engine.images.has(snapshotImage(BOT))).toBe(true);
     expect(engine.volumes.has(snapshotVolumeName(BOT))).toBe(true);
-    expect(engine.containers.get(containerName(BOT))?.image).toBe(snapshotImage(BOT));
+    // The same container: everything the bot installed in it stays, and no commit becomes its base.
+    expect(engine.containers.get(containerName(BOT))?.id).toBe(id);
+    expect(engine.containers.get(containerName(BOT))?.image).toBe(await env.image());
+    expect(engine.temporaries.map((entry) => entry.kind)).not.toContain("capture");
     expect(await readFile(join(engine.volumeDir(snapshotVolumeName(BOT)), "state.txt"), "utf8")).toBe("before");
 
     // The next update fails its health check: storage and container go back to the snapshot.
@@ -190,6 +207,7 @@ describe("bot containers on the Engine API", () => {
     expect(failed).toMatchObject({ botId: BOT, ok: false, rolledBack: true, error: "forced failure" });
     expect(await readFile(join(engine.volumeDir(volumeName(BOT)), "state.txt"), "utf8")).toBe("after");
     expect(engine.containers.get(containerName(BOT))?.running).toBe(true);
+    expect(engine.containers.get(containerName(BOT))?.image).toBe(snapshotImage(BOT));
     // A failing upgrade rolls back too, restoring the storage it snapshotted.
     env.close();
     env = make();
@@ -202,30 +220,116 @@ describe("bot containers on the Engine API", () => {
     expect(await env.updateBot("0b0b0b0b-0000-4000-8000-000000000099")).toMatchObject({ skipped: true });
   });
 
-  it("moves a bot made from an older image to the current one, keeping its storage", async () => {
+  it("moves to a new toolchain in place: relinks, checks Chromium, rebuilds the bot's own packages", async () => {
+    must(await shell().writeFile("keep.txt", "kept", ctx));
+    const container = engine.containers.get(containerName(BOT));
+    if (!container) throw new Error("no container");
+    container.links.set("/opt/woven-toolchain", "/opt/woven/toolchain/older");
+    expect((await env.imageStatus()).outdatedBots).toEqual([BOT]);
+    expect((await env.imageStatus()).staleBots).toEqual([]);
+    // Chromium needs a newer system library first: its dependencies are installed once.
+    engine.chromiumExits = [1, 0];
+    expect(await env.updateBot(BOT)).toEqual({ botId: BOT, ok: true });
+    const after = engine.containers.get(containerName(BOT));
+    expect(after?.id).toBe(container.id);
+    expect(after?.links.get("/opt/woven-toolchain")).toBe(`/opt/woven/toolchain/${(await env.shared()).toolchain}`);
+    const scripts = engine.scripts.map((entry) => entry.script);
+    expect(scripts.some((script) => script.includes("install-deps"))).toBe(true);
+    expect(scripts.some((script) => script.includes("npm rebuild"))).toBe(true);
+    expect((await env.imageStatus()).outdatedBots).toEqual([]);
+    expect(must(await shell().readTextFile("keep.txt", ctx))).toBe("kept");
+
+    // Chromium that never starts rolls the bot back to its previous toolchain.
+    after?.links.set("/opt/woven-toolchain", "/opt/woven/toolchain/older");
+    engine.chromiumExits = [1, 1];
+    const failed = await env.updateBot(BOT);
+    expect(failed).toMatchObject({ ok: false, rolledBack: true, error: expect.stringMatching(/Chromium did not start/) });
+    expect(engine.containers.get(containerName(BOT))?.links.get("/opt/woven-toolchain")).toBe("/opt/woven/toolchain/older");
+  });
+
+  it("moves a bot made from an older base image, carrying its own changes and keeping its storage", async () => {
     must(await shell().writeFile("keep.txt", "kept", ctx));
     const container = engine.containers.get(containerName(BOT));
     if (!container) throw new Error("no container");
     container.labels[IMAGE_LABEL] = "woven-bots-test:older";
+    engine.images.add("woven-bots-test:older");
     const before = await env.imageStatus();
     expect(before.staleBots).toEqual([BOT]);
     expect(before.tools.playwright).toMatch(/^\d+\.\d+/);
+    expect(before.tools.node).toMatch(/^\d+\.\d+/);
     const moved = await env.updateBot(BOT);
     expect(moved).toEqual({ botId: BOT, ok: true, movedToImage: true });
+    // The old base image is the baseline; the snapshot is what the bot's container held.
+    expect(engine.temporaries).toEqual(
+      expect.arrayContaining([
+        { kind: "baseline", image: "woven-bots-test:older" },
+        { kind: "capture", image: snapshotImage(BOT) },
+      ]),
+    );
+    expect(engine.scripts.some((entry) => entry.script.includes("update-report.md"))).toBe(true);
     expect(engine.containers.get(containerName(BOT))?.image).toBe(await env.image());
+    expect(engine.containers.get(containerName(BOT))?.links.size).toBe(2);
     expect(must(await shell().readTextFile("keep.txt", ctx))).toBe("kept");
     expect((await env.imageStatus()).staleBots).toEqual([]);
     // Already on the current image: the next update stays in place behind its snapshot.
     expect(await env.updateBot(BOT)).toEqual({ botId: BOT, ok: true });
   });
 
-  it("rebuilds from a clean image keeping storage, and purges everything", async () => {
+  it("moves a container from before the shared volume, and rolls one back with its old mounts", async () => {
+    must(await shell().writeFile("keep.txt", "kept", ctx));
+    const container = engine.containers.get(containerName(BOT));
+    if (!container) throw new Error("no container");
+    // The old layout: no layout label, a per-version helper volume at /opt/woven-bot, no links.
+    engine.volumes.set("woven-bots-helper-legacy", { [HELPER_LABEL]: "woven-bots-helper-legacy", "woven.bots.machine": "machine-1" });
+    delete container.labels[LAYOUT_LABEL];
+    container.labels[HELPER_LABEL] = "woven-bots-helper-legacy";
+    container.links.clear();
+    (container.spec.HostConfig as { Mounts: unknown[] }).Mounts = [
+      { Type: "volume", Source: volumeName(BOT), Target: "/workspace" },
+      { Type: "volume", Source: "woven-bots-helper-legacy", Target: "/opt/woven-bot", ReadOnly: true },
+    ];
+    expect((await env.imageStatus()).staleBots).toEqual([BOT]);
+    // A failed move restores the old container exactly, old helper volume and all.
+    env.close();
+    env = make({
+      healthCheck: async () => {
+        throw new Error("forced failure");
+      },
+    });
+    expect(await env.updateBot(BOT)).toMatchObject({ ok: false, rolledBack: true });
+    const restored = engine.containers.get(containerName(BOT));
+    expect((restored?.spec.HostConfig as { Mounts: unknown[] }).Mounts).toEqual([
+      { Type: "volume", Source: volumeName(BOT), Target: "/workspace" },
+      { Type: "volume", Source: "woven-bots-helper-legacy", Target: "/opt/woven-bot", ReadOnly: true },
+    ]);
+    expect(restored?.labels[LAYOUT_LABEL]).toBeUndefined();
+    expect(engine.volumes.has("woven-bots-helper-legacy")).toBe(true);
+    // A move that works puts it in the current layout, and the old helper volume can go.
+    env.close();
+    env = make();
+    expect(await env.updateBot(BOT)).toMatchObject({ ok: true, movedToImage: true });
+    expect(engine.containers.get(containerName(BOT))?.labels[LAYOUT_LABEL]).toBe("2");
+    expect(must(await shell().readTextFile("keep.txt", ctx))).toBe("kept");
+    // Pruned once the update finished.
+    await expect.poll(() => engine.volumes.has("woven-bots-helper-legacy")).toBe(false);
+  });
+
+  it("rebuilds from a clean image behind a snapshot, carrying its installs, and purges everything", async () => {
     must(await shell().writeFile("keep.txt", "kept", ctx));
     await env.updateBot(BOT);
+    const id = engine.containers.get(containerName(BOT))?.id;
     await env.rebuild(BOT);
-    const image = engine.containers.get(containerName(BOT))?.image;
-    expect(image).toMatch(/^woven-bots-test:/);
+    const rebuilt = engine.containers.get(containerName(BOT));
+    expect(rebuilt?.id).not.toBe(id);
+    expect(rebuilt?.image).toBe(await env.image());
+    expect(engine.temporaries.map((entry) => entry.kind)).toContain("capture");
+    expect(engine.images.has(snapshotImage(BOT))).toBe(true);
     expect(must(await shell().readTextFile("keep.txt", ctx))).toBe("kept");
+    // A capture that fails leaves the bot as it was.
+    engine.temporaryExit = { capture: 1 };
+    await expect(env.rebuild(BOT)).rejects.toThrow(/rolled back/);
+    expect(must(await shell().readTextFile("keep.txt", ctx))).toBe("kept");
+    engine.temporaryExit = {};
     await env.purge(BOT);
     expect(engine.containers.has(containerName(BOT))).toBe(false);
     expect(engine.volumes.has(volumeName(BOT))).toBe(false);
@@ -233,13 +337,64 @@ describe("bot containers on the Engine API", () => {
     expect(engine.images.has(snapshotImage(BOT))).toBe(false);
   });
 
-  it("prunes this machine's unused helper volumes and keeps the current one", async () => {
+  it("prunes this machine's unused helper volumes and keeps the shared directories bots link to", async () => {
     must(await shell().writeFile("x", "1", ctx));
     engine.volumes.set("woven-bots-helper-old", { "woven.bots.helper": "x", "woven.bots.machine": "machine-1" });
     engine.volumes.set("woven-bots-helper-other", { "woven.bots.helper": "x", "woven.bots.machine": "elsewhere" });
     expect(await env.pruneHelpers()).toEqual(["woven-bots-helper-old"]);
     expect(engine.volumes.has("woven-bots-helper-other")).toBe(true);
-    expect(engine.volumes.has(await env.helper())).toBe(true);
+    expect(engine.volumes.has(SHARED_VOLUME)).toBe(true);
+    // An older toolchain a bot still links to is kept; the prune runs in a container of the base.
+    engine.containers.get(containerName(BOT))?.links.set("/opt/woven-toolchain", "/opt/woven/toolchain/older");
+    engine.temporaries.length = 0;
+    await env.pruneShared();
+    expect(engine.temporaries).toEqual([{ kind: "prune", image: await env.image() }]);
+    const shared = await env.shared();
+    const kept = engine.lastPrune ?? "";
+    for (const dir of ["toolchain/older", `toolchain/${shared.toolchain}`, `helper/${shared.helper}`]) {
+      expect(kept).toContain(`'${dir}'`);
+    }
+  });
+
+  it("prunes nothing when it cannot tell what a bot links to", async () => {
+    must(await shell().writeFile("x", "1", ctx));
+    engine.temporaries.length = 0;
+    engine.statStatus = 500;
+    expect(await env.pruneShared()).toEqual([]);
+    expect(engine.temporaries).toEqual([]);
+    engine.statStatus = undefined;
+  });
+
+  it("restores a stopped container's missing links before starting it", async () => {
+    must(await shell().writeFile("x", "1", ctx));
+    await env.stop(BOT);
+    engine.containers.get(containerName(BOT))?.links.clear();
+    expect(must(await shell().readTextFile("x", ctx))).toBe("1");
+    expect(engine.containers.get(containerName(BOT))?.links.size).toBe(2);
+  });
+
+  it("applies captured changes a move left waiting when the runtime stopped partway", async () => {
+    must(await shell().writeFile("x", "1", ctx));
+    // The runtime stopped after the capture and before the new container applied it.
+    const pending = join(engine.volumeDir(volumeName(BOT)), ".woven/system/carry/.pending");
+    await mkdir(join(pending, ".."), { recursive: true });
+    await writeFile(pending, "");
+    await env.stop(BOT);
+    engine.containers.delete(containerName(BOT));
+    expect(must(await shell().readTextFile("x", ctx))).toBe("1");
+    expect(engine.scripts.some((entry) => entry.script.includes("update-report.md"))).toBe(true);
+    expect(existsSync(pending)).toBe(false);
+
+    // Or after its new container was made: the bot shows an update waiting, and its next start
+    // applies the changes.
+    await writeFile(pending, "");
+    await env.stop(BOT);
+    engine.scripts.length = 0;
+    expect((await env.imageStatus()).outdatedBots).toEqual([BOT]);
+    expect(must(await shell().readTextFile("x", ctx))).toBe("1");
+    expect(engine.scripts.some((entry) => entry.script.includes("update-report.md"))).toBe(true);
+    expect(existsSync(pending)).toBe(false);
+    expect((await env.imageStatus()).outdatedBots).toEqual([]);
   });
 
   it("leaves other machines' containers alone and stops deleted bots' at startup", async () => {

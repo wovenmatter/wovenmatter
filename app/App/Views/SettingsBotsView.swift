@@ -175,7 +175,7 @@ struct SettingsBotsMachineView: View {
             Button("Cancel", role: .cancel) { confirmingImageMove = nil }
         } message: { session in
             let count = session.runtimeStatus?.image?.staleBots ?? 0
-            Text("\(count == 1 ? "1 bot moves" : "\(count) bots move") to the current image (\(session.runtimeStatus?.image?.tools ?? "new tools")). Their files in /workspace stay; anything installed elsewhere in the container is replaced. Each bot is snapshotted first and rolled back if the update fails.")
+            Text("\(count == 1 ? "1 bot moves" : "\(count) bots move") to a new container image (\(session.runtimeStatus?.image?.tools ?? "new tools")). Their files, home folders, browser sign-ins, and the packages they installed come along, and each bot gets a report of anything that didn't. Each bot is snapshotted first and rolled back if the update fails.")
         }
     }
 

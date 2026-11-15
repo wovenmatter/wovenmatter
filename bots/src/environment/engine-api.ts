@@ -1,5 +1,5 @@
 import { EventEmitter } from "node:events";
-import { type IncomingMessage, request as httpRequest } from "node:http";
+import { type IncomingHttpHeaders, type IncomingMessage, request as httpRequest } from "node:http";
 import type { Socket } from "node:net";
 import { PassThrough, type Readable } from "node:stream";
 
@@ -27,7 +27,7 @@ export type RequestOptions = {
   readonly signal?: AbortSignal;
 };
 
-export type EngineResponse = { readonly status: number; readonly body: Buffer };
+export type EngineResponse = { readonly status: number; readonly body: Buffer; readonly headers?: IncomingHttpHeaders };
 
 export type ExecOptions = {
   readonly user?: string;
@@ -198,7 +198,7 @@ export class DockerEngineAPI {
           const chunks: Buffer[] = [];
           response.on("data", (chunk: Buffer) => chunks.push(chunk));
           response.on("end", () =>
-            resolve({ status: response.statusCode ?? 0, body: Buffer.concat(chunks) }),
+            resolve({ status: response.statusCode ?? 0, body: Buffer.concat(chunks), headers: response.headers }),
           );
           response.on("error", reject);
         },
@@ -368,6 +368,37 @@ export class DockerEngineAPI {
     return response.status === 200;
   }
 
+  /**
+   * Where a symbolic link in a (created, running or stopped) container points, from the archive
+   * API's path stat (the resolved absolute path); undefined when the path is missing or not a link.
+   * Any other failure throws, so a caller deciding what is unused can fail closed.
+   */
+  async linkTarget(container: string, path: string): Promise<string | undefined> {
+    const response = await this.request("HEAD", `/containers/${encodeURIComponent(container)}/archive`, { query: { path } });
+    if (response.status === 404) return undefined;
+    if (response.status !== 200) throw new EngineError(`Docker Engine stat ${container}:${path}: HTTP ${response.status}`, response.status);
+    const header = response.headers?.["x-docker-container-path-stat"];
+    if (typeof header !== "string") return undefined;
+    try {
+      const stat = JSON.parse(Buffer.from(header, "base64").toString("utf8")) as { linkTarget?: string };
+      return stat.linkTarget || undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
+  /** A stopped container's output (stdout and stderr, demultiplexed, in order). */
+  async containerLogs(name: string): Promise<string> {
+    const response = await this.request("GET", `/containers/${encodeURIComponent(name)}/logs`, {
+      query: { stdout: true, stderr: true },
+    });
+    if (response.status !== 200) throw new EngineError(`Docker Engine logs ${name}: ${engineMessage(response)}`, response.status);
+    const chunks: Buffer[] = [];
+    const demux = new StreamDemuxer((chunk) => chunks.push(chunk), (chunk) => chunks.push(chunk));
+    demux.push(response.body);
+    return Buffer.concat(chunks).toString("utf8");
+  }
+
   async #createExec(container: string, cmd: readonly string[], options: ExecOptions): Promise<string> {
     const created = await this.json<{ Id: string }>("POST", `/containers/${encodeURIComponent(container)}/exec`, {
       body: {
@@ -477,7 +508,7 @@ export type ContainerInfo = {
   readonly Config: { readonly Image: string; readonly Labels?: Record<string, string> };
   readonly State: { readonly Running: boolean; readonly Status: string };
   readonly HostConfig?: { readonly Memory?: number };
-  readonly Mounts?: readonly { readonly Name?: string; readonly Destination: string }[];
+  readonly Mounts?: readonly { readonly Name?: string; readonly Destination: string; readonly RW?: boolean }[];
 };
 
 export type ContainerSummary = {

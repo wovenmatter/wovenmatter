@@ -27,15 +27,19 @@ export interface BotEnvironmentAdapter {
   lastActivity?(botId: string): number | undefined;
   /** Stop the bot's container now; the next tool call starts it again. */
   stop?(botId: string): Promise<void>;
-  /** Snapshot, update in place, health-check, roll back on failure. */
+  /** Snapshot, update (in place, or moving to a new base image), health-check, roll back on failure. */
   updateBot?(botId: string): Promise<import("./environment/container.ts").UpdateResult>;
-  /** The current bot image's tools, and the bots still on an older image. */
+  /**
+   * The current tools; the bots that move to a new base image on their next update; and every
+   * bot whose next update changes its tools or helper.
+   */
   imageStatus?(): Promise<{
     tag: string;
     tools: import("./environment/images.ts").ImageTools;
     staleBots: string[];
+    outdatedBots?: string[];
   }>;
-  /** Recreate the container from a clean image, keeping storage. */
+  /** Recreate the container from a clean base image, keeping storage and carrying its installs. */
   rebuild?(botId: string): Promise<void>;
   /**
    * Release the bot's runtime (containers) when it is soft-deleted. Keep volumes and other data on

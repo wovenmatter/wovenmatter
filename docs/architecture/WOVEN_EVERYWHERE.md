@@ -1490,12 +1490,41 @@ no stdio relay.
   member, which then proxies to the loopback socket.
 - Each bot's agent loop runs in the runtime on the host, and its tools run
   inside its container through the in-container helper (`bots/helper/`: Pi
-  Bot's env agent plus a supervisor, browser and preview forwarder). The
-  helper is mounted read-only at `/opt/woven-bot` from a content-versioned
-  volume (`woven-bots-helper-<hash>`) that the runtime fills from its own
-  install through the Engine API, so a Mac VM needs no file sharing and
-  runtime updates need no image change. A bot picks up a new helper on
-  Update or Rebuild. Provider keys and
+  Bot's env agent plus a supervisor, browser and preview forwarder).
+- A bot container has three parts:
+  - **Base image** (`bots/image`): Ubuntu, its packages and Chromium's system
+    libraries. It changes rarely.
+  - **Shared volume** (`woven-bots-shared`, read-only at `/opt/woven`): the
+    runtime fills it through the Engine API with content-named directories,
+    `helper/<hash>` from its own install and `toolchain/<hash>` (Node, the
+    private npm, Playwright, Chromium) from the toolchain image
+    (`bots/image/toolchain`). A Mac VM needs no file sharing.
+  - **Storage** (`/workspace`): the bot's files, home folder
+    (`/home/bot` links to `/workspace/.woven/home`), browser profile and
+    restart list.
+- Each container selects its helper and toolchain through links in its own
+  filesystem (`/opt/woven-bot`, `/opt/woven-toolchain`). An Update repoints
+  them while the bot is stopped, upgrades Ubuntu packages, and checks that
+  Chromium starts. The container stays, with everything the bot installed.
+- A new base image, a container from before this layout, or a Rebuild moves the
+  bot to a new container:
+  - The runtime records what the bot changed from its snapshot, compared with
+    the old base image: apt packages, apt sources and keys, files and
+    directories under `/etc`, `/usr/local` and `/opt` that no package owns as
+    installed, crontabs, and global npm and pip packages by name. A container
+    from before the base image was recorded on it (`woven.bots.image`), which
+    is every bot's first move, is compared with the new base image instead;
+    the old in-image toolchain and generated files are left out by name, and
+    package files only count when they differ from what dpkg installed.
+  - A move that stops partway leaves its captured changes pending in storage;
+    the bot's next start or update applies them.
+  - It applies them in the new container, runs the bot's optional
+    `/workspace/.woven/setup.sh`, and writes
+    `/workspace/.woven/system/update-report.md`.
+  - Every update is behind a snapshot (a commit and a storage copy) that is
+    only a rollback point, never the next container's base.
+- Shared directories that neither the runtime nor any container links to are
+  pruned after updates. Provider keys and
   sign-ins never enter a container. The runtime gets provider credentials the
   same way the machine's default agent does
   (`docs/architecture/DEFAULT_AGENT_CREDENTIALS.md`), and bots use the
@@ -2108,10 +2137,13 @@ answers); `PUT /v1/resources`; (optional forwards) `GET /v1/forwards`;
 - Harnesses on other machines are read and updated with the member signature.
   Every Mac serves `GET /v1/runtime-maintenance`, `POST
   /v1/runtime-maintenance/check`, `POST /v1/runtime-maintenance/:id/check|update`
-  and `GET|POST /v1/default-agent/sdks` to signed Mac members, in the shapes a
-  Linux host serves. A Mac's update runs to the end and answers one finished
-  operation; `force: true` stops the chats using its harnesses first, and
-  without it a busy harness answers `runtime_active_stop_conversations_or_server_first`.
+  `GET|POST /v1/default-agent/sdks` and `GET /v1/operations/:id` to signed Mac
+  members, in the shapes a Linux host serves. An update answers at once (202)
+  with a running operation, which the caller polls at `/v1/operations/:id`
+  until it finishes, so nothing waits past the Mac server's 60-second response
+  limit; a check answers with what it has after 15 seconds. `force: true` stops
+  the chats using its harnesses first, and without it a busy harness's
+  operation fails with `runtime_active_stop_conversations_or_server_first`.
   The window asks through bots commands (`memberInventory`,
   `memberInstallerPreview`, `updateMemberHarness`, `updateMemberSDKs`); updates
   run as `updateHarness` jobs in the process that owns execution.

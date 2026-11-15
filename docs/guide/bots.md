@@ -101,8 +101,38 @@ In Settings → Bots, choose the machine under **Where bots run** to open its pa
   **Update server…**. Updating stops running work, saves a snapshot of each bot,
   updates it, and rolls back if something fails.
 
-**Rebuild** recreates a bot's container from a clean image. Its files, restart
-list, browser profile, memory, and conversations stay.
+**Rebuild** recreates a bot's container from a clean image. Its files, home
+folder, restart list, browser profile, memory, and conversations stay. Packages
+it installed are reinstalled.
+
+## What a bot keeps through updates
+
+A bot keeps its work through every update:
+
+- **Its storage**: the files in `/workspace`, and its home folder, with dotfiles,
+  SSH keys, sign-ins to command-line tools, and anything it installed with
+  `npm install -g` or `pip install --user`.
+- **Its browser**: tabs, cookies, and sign-ins.
+- **Its restart list.**
+
+Most updates bring new Node, Playwright, Chromium, or Ubuntu packages. These
+keep the bot's container as it is, so everything else it installed stays too.
+
+Now and then a release moves bots to a new container image, for a new Ubuntu
+release. A move, and **Rebuild**, carries over what the bot set up in its
+container:
+
+- the apt packages it installed, and their package sources
+- the files it added or changed under `/etc`, `/usr/local`, and `/opt`
+- its scheduled jobs
+- packages installed with `sudo npm install -g` or `sudo pip install`
+
+The bot can also keep a setup script, `/workspace/.woven/setup.sh`, for
+anything else, such as a program it built from source. The script runs after
+each move or rebuild. Afterward, the bot finds a report in
+`/workspace/.woven/system/update-report.md` that says what came across and what
+to check. Every update saves a snapshot of each bot first and rolls back if
+something fails.
 
 ## Woven MCP for bots
 
