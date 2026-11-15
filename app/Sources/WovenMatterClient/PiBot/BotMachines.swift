@@ -332,13 +332,8 @@ public struct BotVersionReport: Equatable, Sendable {
                                    expected: thisMacVersion ?? "this Mac's release"))
             }
         }
-        let runtimes = Set(machines.compactMap(\.versions.runtime))
-        if runtimes.count > 1, let newest = runtimes.max(by: { $0.compare($1, options: .numeric) == .orderedAscending }) {
-            for machine in machines where machine.versions.runtime.map({ $0 != newest }) == true {
-                parts.append(.init(id: "bots:" + machine.id, kind: .bots, name: machine.displayName,
-                                   current: machine.versions.runtime, expected: newest))
-            }
-        }
+        // Bots are part of Woven Matter: a machine's bots are on its Woven Matter version, so
+        // they are never compared on a version of their own.
         outdated = parts
         syncStopped = syncErrors.contains { Self.isVersionMismatch($0) }
     }
@@ -348,13 +343,12 @@ public struct BotVersionReport: Equatable, Sendable {
     public var message: String? {
         guard needsUpdate else { return nil }
         if syncStopped {
-            return "Library sync stopped because your devices run different versions. Update everything in Settings → Updates to resume it."
+            return "Library sync stopped because your devices run different versions. Update everything everywhere in Settings → Updates to resume it."
         }
-        // A machine can be behind on its app and its bots; name it once.
         var names: [String] = []
         for part in outdated where !names.contains(part.name) { names.append(part.name) }
         let list = names.count <= 2 ? names.joined(separator: " and ") : names.dropLast().joined(separator: ", ") + " and " + names.last!
-        return "\(list) \(names.count == 1 ? "runs" : "run") a different version. Update everything in Settings → Updates so every device matches."
+        return "\(list) \(names.count == 1 ? "runs" : "run") a different version. Update everything everywhere in Settings → Updates so every device matches."
     }
 
     /// Peer sync rejects a schema mismatch with this wording (`PairedLibraryStore`).

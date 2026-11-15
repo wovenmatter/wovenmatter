@@ -96,7 +96,7 @@ can be offline, and the rest keep working.
   timer, and a host catches up when it comes back online. Conflicting edits
   are kept as conflict copies.
 - Hosts must run matching versions to sync. Settings → Updates shows every
-  device's version and harnesses, and **Update everything** brings them all up
+  device's version and harnesses, and **Update everything everywhere** brings them all up
   to date.
 
 ### Sessions across machines

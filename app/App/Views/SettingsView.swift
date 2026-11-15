@@ -311,7 +311,7 @@ struct SettingsView: View {
             VStack(spacing: 2) {
                 SettingsDestinationRow(
                     title: "General",
-                    detail: "Appearance, conversation titles, and privacy.",
+                    detail: "Version, appearance, conversation titles, and privacy.",
                     icon: { LucideIcon(glyph: .settings, size: 15) },
                     action: { route = .general }
                 )

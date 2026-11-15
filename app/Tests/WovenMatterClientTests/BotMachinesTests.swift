@@ -142,8 +142,9 @@ struct BotMachinesTests {
     @Test func versionReportNamesOutdatedPartsAndStoppedSync() {
         let machines = [machine("this", kind: .thisMac), machine("box", kind: .linux, app: "1.3.0"), machine("mini", kind: .mac, runtime: "0.1.0")]
         let report = BotVersionReport(thisMacVersion: "1.4.0", machines: machines)
-        #expect(report.outdated.map(\.id) == ["box", "bots:mini"])
-        #expect(report.message?.contains("Update everything in Settings → Updates") == true)
+        // Bots have no version of their own: only the Woven Matter versions count.
+        #expect(report.outdated.map(\.id) == ["box"])
+        #expect(report.message?.contains("Update everything everywhere in Settings → Updates") == true)
         let stopped = BotVersionReport(thisMacVersion: "1.4.0", machines: [machine("this", kind: .thisMac)],
                                        syncErrors: ["Update both Macs to the same Woven Matter version before synchronizing."])
         #expect(stopped.syncStopped && stopped.needsUpdate)
@@ -151,7 +152,7 @@ struct BotMachinesTests {
         #expect(!BotVersionReport(thisMacVersion: "1.4.0", machines: [machine("this", kind: .thisMac)]).needsUpdate)
         let both = BotVersionReport(thisMacVersion: "1.4.0",
                                     machines: [machine("this", kind: .thisMac, runtime: "0.2.0"), machine("box", kind: .linux, app: "1.3.0", runtime: "0.1.0")])
-        #expect(both.outdated.map(\.id) == ["box", "bots:box"])
+        #expect(both.outdated.map(\.id) == ["box"])
         #expect(both.message?.hasPrefix("box runs a different version.") == true)
     }
 

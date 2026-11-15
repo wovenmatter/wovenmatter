@@ -2132,9 +2132,12 @@ answers); `PUT /v1/resources`; (optional forwards) `GET /v1/forwards`;
 
 ### Updates
 
-- Settings → Updates offers "Update everything", "Update Woven Matter" and
-  "Update harnesses" across all devices. Each part can also be updated on its
-  own there: this Mac's app, another device, its bots, or one harness.
+- Settings → Updates leads with "Update this Mac" (this Mac's app only), then
+  offers "Update everything everywhere", "Update Woven Matter across your
+  fleet" and "Update harnesses across your fleet". Each part can also be
+  updated on its own there: this Mac's app, another device, its bots, or one
+  harness. Bots have no version of their own; they follow the machine's
+  Woven Matter version. A development build never updates itself.
 - Harnesses on other machines are read and updated with the member signature.
   Every Mac serves `GET /v1/runtime-maintenance`, `POST
   /v1/runtime-maintenance/check`, `POST /v1/runtime-maintenance/:id/check|update`

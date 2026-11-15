@@ -43,9 +43,9 @@ struct SettingsGeneralView: View {
             reservesRailControlSpace: reservesRailControlSpace,
             onBack: onBack
         ) {
+            versionSection
             appearanceSection
             SettingsConversationTitlesSection(model: model, onOpenCodex: onOpenCodex)
-            softwareSection
             ProductAnalyticsSettingsSection(analytics: model.analytics)
         }
         .onChange(of: storedTheme) { _, _ in
@@ -96,26 +96,35 @@ struct SettingsGeneralView: View {
         CodexLogoStyle(rawValue: storedCodexLogoStyle) ?? .defaultStyle
     }
 
-    /// This Mac's version and its own update check, then the page for every device.
-    private var softwareSection: some View {
-        let updater = DesktopUpdater.shared
-        return SettingsSection(title: "Software") {
-            SettingsRow(title: "Woven Matter v\(currentVersion)", detail: updater.errorMessage) {
-                Button("Check for updates") { updater.checkForUpdates() }
+    /// The first row: the version of Woven Matter on this Mac, a check for a newer release, and
+    /// the Updates page (every device and harness).
+    private var versionSection: some View {
+        SettingsSection {
+            SettingsRow(title: versionTitle, detail: versionDetail) {
+                if updates.checking { ProgressView().controlSize(.small) }
+                Button(updates.checking ? "Checking…" : "Check for updates") { Task { await updates.checkAll() } }
                     .buttonStyle(SettingsQuietButtonStyle())
-                    .disabled(!updater.canCheckForUpdates)
+                    .disabled(updates.checking || updates.running)
+                Button("Updates", action: onOpenUpdates)
+                    .buttonStyle(SettingsQuietButtonStyle())
             }
-            SettingsSummaryLink(title: "Updates", detail: "Woven Matter and harnesses on all your devices.",
-                                value: updates.summary,
-                                tone: updates.availableCount > 0 || updates.busyConfirmation != nil || updates.review != nil ? .warning : nil,
-                                action: onOpenUpdates)
         }
         .task { updates.loadIfNeeded() }
     }
 
-    private var currentVersion: String {
-        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
-            ?? "0.0.0"
+    private var versionTitle: String {
+        updates.isDevelopmentBuild ? "Woven Matter development build" : "Woven Matter \(updates.thisMacVersion ?? "")"
+    }
+
+    private var versionDetail: String? {
+        if updates.running { return "Updating…" }
+        if updates.isDevelopmentBuild { return "Built from source, so it doesn't update itself." }
+        if updates.thisMacIsBehind, let latest = updates.release?.version { return "Woven Matter \(latest) is available." }
+        if updates.checkedAt != nil {
+            let others = updates.availableCount
+            return others == 0 ? "Up to date." : "Up to date. Other updates are waiting in Updates."
+        }
+        return nil
     }
 }
 

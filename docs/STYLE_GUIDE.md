@@ -90,16 +90,27 @@ when an intentional design change is accepted.
   Subscriptions & API Keys, Agents, Bots, Woven MCP, Workspaces, Apple Devices,
   Background Server, then Dictation. Subscriptions & API Keys, Permissions &
   Access, Woven MCP, Bots, and Updates return to the page whose link opened them.
-- **Updates:** the one home for versions and updates. A summary row with **Check
-  now**, then **Update everything** (primary), **Update Woven Matter**, and
-  **Update harnesses**. Then one section per device, This Mac first: its Woven
-  Matter or Woven server row with its own **Update**, its bots, and a
-  **Harnesses** summary row listing each harness with its versions and **Update**.
+- **Updates:** the one home for versions and updates.
+  - **The top row:** this Mac's Woven Matter version, with **Check for updates**
+    and, when a newer release is out, **Update this Mac**, the page's one primary
+    button. It updates only the app on this Mac. A development build says
+    "Development build" and never offers it.
+  - **Your other devices:** one line with every device and its version.
+  - **Across your fleet:** three full-width buttons, each on its own line with
+    what it covers: **Update everything everywhere**, **Update Woven Matter
+    across your fleet**, and **Update harnesses across your fleet**.
+  - **One section per device**, This Mac first:
+    - its Woven Matter or Woven server row with its own **Update**
+    - its bots, showing the tools in their containers and never a version of
+      their own (bots are part of Woven Matter)
+    - a **Harnesses** summary row listing each harness with its versions and
+      **Update**
+  - **No update counts:** each row says "Update available" itself.
   Work an update would stop is named in one alert before anything starts; Linux
   harness downloads are reviewed together in one confirmation. Other pages show
   only a "Versions don't match" link here.
-- **General:** Appearance, Conversation titles, Software, and Privacy only. Software
-  shows this Mac's version with **Check for updates** and an Updates summary link. Other
+- **General:** the Woven Matter version row first (no heading), with **Check for
+  updates** and **Updates**, then Appearance, Conversation titles, and Privacy. Other
   settings live on the page for what they affect. Summary rows whose value would be
   unclear before opening (Sidebar sections, Agent icons) show a one-line description
   instead. Conversation titles show the Codex account they use and link to its page.

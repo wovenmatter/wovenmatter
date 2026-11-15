@@ -2,8 +2,9 @@ import SwiftUI
 import WovenMatterClient
 import WovenMatterCore
 
-/// Settings → Updates: Woven Matter and its harnesses on this Mac and every other device,
-/// each with its own Update button, and three buttons that update all of it.
+/// Settings → Updates: this Mac's version with Check for updates and Update this Mac, every
+/// other device's version, three buttons that update across the fleet, then one section per
+/// device (This Mac first) with its app or server, bots, and harnesses, each updatable alone.
 struct SettingsUpdatesView: View {
     @Bindable var model: ApplicationModel
     var reservesRailControlSpace = false
@@ -23,10 +24,11 @@ struct SettingsUpdatesView: View {
             onBack: onBack
         ) {
             overview
+            fleet
             thisMac
             ForEach(updates.devices) { device($0) }
             SettingsHelp {
-                SettingsNote("Update everything updates Woven Matter on every device first, then every harness. Update Woven Matter and Update harnesses do one half.")
+                SettingsNote("Update this Mac updates only the Woven Matter app on this Mac. Update everything everywhere updates Woven Matter on every device first, then every harness.")
                 SettingsNote("Linux servers get the server release that comes with this Mac's Woven Matter. When this Mac is behind the newest release, it updates first and restarts, then the update continues with your other devices and harnesses.")
                 SettingsNote("Before a Linux workspace runs a harness installer, you review its download. One review covers every download in the update.")
                 SettingsNote("Updating bots brings the Node, Playwright, Chromium and Ubuntu packages inside them up to date. Each bot keeps its files, home folder, browser sign-ins and what it installed, and is snapshotted first and rolled back if the update fails.")
@@ -57,52 +59,62 @@ struct SettingsUpdatesView: View {
         }
     }
 
-    // MARK: Overview
+    // MARK: This Mac, then the fleet
 
-    private var headline: String {
-        if updates.checkedAt == nil && updates.checking { return "Checking for updates…" }
-        switch updates.availableCount {
-        case 0: return updates.checkedAt == nil ? "Updates" : "Everything is up to date"
-        case 1: return "1 update available"
-        case let count: return "\(count) updates available"
-        }
+    /// "Woven Matter 0.4.3", or "Development build" for a build from source.
+    private var thisMacProduct: String {
+        updates.isDevelopmentBuild ? "Development build" : "Woven Matter \(updates.thisMacVersion ?? "")".trimmingCharacters(in: .whitespaces)
     }
 
-    private var checkedDetail: String? {
-        var parts: [String] = []
-        if let release = updates.release { parts.append("Woven Matter \(release.version) is the newest release.") }
-        if let checked = updates.checkedAt {
-            parts.append("Checked \(checked.formatted(.relative(presentation: .named))).")
+    private var thisMacDetail: String? {
+        let latest = updates.release?.version
+        if updates.isDevelopmentBuild {
+            return "Built from source, so it doesn't update itself." + (latest.map { " Woven Matter \($0) is the newest release." } ?? "")
         }
-        return parts.isEmpty ? nil : parts.joined(separator: " ")
+        if updates.thisMacIsBehind, let latest { return "Woven Matter \(latest) is available." }
+        if updates.checking { return "Checking for updates…" }
+        if let checked = updates.checkedAt {
+            return "Up to date. Checked \(checked.formatted(.relative(presentation: .named)))."
+        }
+        return nil
     }
 
     private var appsAvailable: Bool {
         updates.thisMacIsBehind || updates.devices.contains { updates.canUpdate($0) || updates.botsAreOutdated($0) }
+            || model.bots.thisMachine.map(updates.botsAreOutdated) == true
     }
 
     private var harnessesAvailable: Bool { updates.allHarnesses.contains(where: \.updateAvailable) }
 
+    /// "Mac mini 0.4.3 · Workstation 0.4.2 (update available) · box (offline)"
+    private var otherDevices: String {
+        updates.devices.map { machine in
+            let version = machine.versions.app.map { " " + $0 } ?? ""
+            if machine.state == .unreachable { return machine.name + version + " (offline)" }
+            return machine.name + version + (updates.deviceIsOutdated(machine) ? " (update available)" : "")
+        }.joined(separator: " · ")
+    }
+
+    /// This Mac's version with Check for updates and, when a release is newer, the page's main
+    /// button: Update this Mac (only its Woven Matter app). Then every other device's version.
     private var overview: some View {
         SettingsSection {
-            SettingsRow(title: headline, detail: checkedDetail) {
+            SettingsRow(title: "This Mac · " + thisMacProduct, detail: thisMacDetail) {
                 if updates.checking { ProgressView().controlSize(.small) }
-                Button(updates.checking ? "Checking…" : "Check now") { Task { await updates.checkAll() } }
+                Button(updates.checking ? "Checking…" : "Check for updates") { Task { await updates.checkAll() } }
                     .buttonStyle(SettingsQuietButtonStyle())
                     .disabled(updates.checking || updates.running)
+                if updates.thisMacIsBehind {
+                    Button("Update this Mac") { updates.start(.thisMacApp) }
+                        .buttonStyle(WovenPrimaryButtonStyle())
+                        .disabled(updates.running)
+                } else if updates.checkedAt != nil, !updates.isDevelopmentBuild {
+                    SettingsStatus("Up to date", tone: .good)
+                }
             }
-            HStack(spacing: 8) {
-                Button(updates.running ? "Updating…" : "Update everything") { updates.start(.scope(.everything)) }
-                    .buttonStyle(WovenPrimaryButtonStyle())
-                    .disabled(!(appsAvailable || harnessesAvailable))
-                Button("Update Woven Matter") { updates.start(.scope(.apps)) }
-                    .buttonStyle(SettingsQuietButtonStyle())
-                    .disabled(!appsAvailable)
-                Button("Update harnesses") { updates.start(.scope(.harnesses)) }
-                    .buttonStyle(SettingsQuietButtonStyle())
-                    .disabled(!harnessesAvailable)
+            if !updates.devices.isEmpty {
+                SettingsRow(title: "Your other devices", detail: otherDevices) { EmptyView() }
             }
-            .disabled(updates.running || updates.review != nil)
             if let current = updates.current {
                 HStack(spacing: 8) {
                     ProgressView().controlSize(.small)
@@ -117,22 +129,48 @@ struct SettingsUpdatesView: View {
         }
     }
 
+    /// Three full-width buttons, each on its own line with what it covers.
+    private var fleet: some View {
+        SettingsSection(title: "Across your fleet") {
+            fleetButton("Update everything everywhere",
+                        detail: "Woven Matter, bots, and harnesses on every device.",
+                        enabled: appsAvailable || harnessesAvailable) { updates.start(.scope(.everything)) }
+            fleetButton("Update Woven Matter across your fleet",
+                        detail: "The app on every Mac and the server on every Linux machine, with their bots.",
+                        enabled: appsAvailable) { updates.start(.scope(.apps)) }
+            fleetButton("Update harnesses across your fleet",
+                        detail: "Codex, Claude Code, Grok Build, OpenCode, Pi Durable SDK, and Executor on every device.",
+                        enabled: harnessesAvailable) { updates.start(.scope(.harnesses)) }
+        }
+    }
+
+    private func fleetButton(_ title: String, detail: String, enabled: Bool, action: @escaping () -> Void) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Button(action: action) {
+                Text(updates.running ? "Updating…" : title).frame(maxWidth: .infinity)
+            }
+            .buttonStyle(SettingsQuietButtonStyle(minimumHeight: 32))
+            .disabled(!enabled || updates.running || updates.review != nil)
+            SettingsNote(detail)
+        }
+    }
+
     // MARK: Devices
 
     private var thisMac: some View {
-        let version = updates.thisMacVersion ?? "unknown"
         let latest = updates.release?.version
         return SettingsSection(title: "This Mac") {
-            SettingsRow(title: "Woven Matter \(version)", detail: updates.thisMacIsBehind ? latest.map { "\($0) is available." } : nil) {
+            SettingsRow(title: thisMacProduct, detail: updates.thisMacIsBehind ? latest.map { "\($0) is available." } : nil) {
                 if updates.thisMacIsBehind {
                     SettingsStatus("Update available", tone: .warning)
                     Button("Update") { updates.start(.thisMacApp) }
                         .buttonStyle(SettingsQuietButtonStyle())
                         .disabled(updates.running)
-                } else if latest != nil {
+                } else if latest != nil, !updates.isDevelopmentBuild {
                     SettingsStatus("Up to date", tone: .good)
                 }
             }
+            // A machine runs bots when its bots runtime answers (its version is never shown).
             if let machine = model.bots.thisMachine, machine.versions.runtime != nil { bots(machine) }
             harnesses(on: .thisMac)
             if !Self.bundled.isEmpty {
@@ -193,7 +231,7 @@ struct SettingsUpdatesView: View {
         let busy = updates.running && updates.currentItem == machine.id
         let session = model.bots.session(for: machine.id)
         let behind = updates.botsToUpdate(machine)
-        let detail = [machine.versions.runtime.map { "Runtime \($0)" }, session?.runtimeStatus?.image?.tools,
+        let detail = [session?.runtimeStatus?.image?.tools,
                       behind == 0 ? nil : behind == 1 ? "1 bot to update" : "\(behind) bots to update"]
             .compactMap { $0 }.joined(separator: " · ")
         return SettingsRow(title: "Bots", detail: detail.isEmpty ? nil : detail) {

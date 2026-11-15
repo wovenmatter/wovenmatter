@@ -150,7 +150,7 @@ final class FleetUpdatesModel {
         guard let current = thisMacVersion, current == resume.targetVersion
                 || DeviceUpdatePlan.isNewer(current, than: resume.targetVersion) else {
             if resume.fromVersion == thisMacVersion {
-                notice = "This Mac's update didn't finish, so the rest wasn't updated. Choose Update everything to try again."
+                notice = "This Mac's update didn't finish, so the rest wasn't updated. Choose Update everything everywhere to try again."
             }
             return
         }
@@ -176,8 +176,12 @@ final class FleetUpdatesModel {
     /// when the newest can't be checked.
     var targetVersion: String? { release?.version ?? thisMacVersion }
 
+    /// A build from source (`scripts/build_and_run.sh`): its version is a placeholder, and it
+    /// never replaces itself with a release.
+    var isDevelopmentBuild: Bool { DevelopmentLaunch.mode != nil }
+
     var thisMacIsBehind: Bool {
-        DeviceUpdatePlan.thisMacIsBehind(thisMacVersion: thisMacVersion, latestVersion: release?.version)
+        !isDevelopmentBuild && DeviceUpdatePlan.thisMacIsBehind(thisMacVersion: thisMacVersion, latestVersion: release?.version)
     }
 
     /// Other Macs and Linux machines, by name.
@@ -203,11 +207,10 @@ final class FleetUpdatesModel {
         return deviceIsOutdated(machine)
     }
 
-    /// Bots on a machine whose runtime is older than the newest one on any machine, or
-    /// with bots on older tools or an older base image.
+    /// Bots on a machine with an update waiting: older tools, helper or base image. (Their
+    /// version is the machine's Woven Matter version; a machine behind is updated as a device.)
     func botsAreOutdated(_ machine: BotMachine) -> Bool {
-        guard let model else { return false }
-        return model.bots.versionReport.outdated.contains { $0.id == "bots:" + machine.id } || botsToUpdate(machine) > 0
+        botsToUpdate(machine) > 0
     }
 
     /// Bots whose containers came from an older base image (they move on their next update).
@@ -319,7 +322,7 @@ final class FleetUpdatesModel {
             + devices.filter(isMember).flatMap { harnesses(on: .member($0.id)) }
     }
 
-    /// How many things have an update, for the summary rows.
+    /// How many things have an update (rows say which; only whether any do is shown).
     var availableCount: Int {
         (thisMacIsBehind ? 1 : 0)
             + devices.filter { deviceIsOutdated($0) || botsAreOutdated($0) }.count
@@ -330,11 +333,8 @@ final class FleetUpdatesModel {
         if running { return "Updating…" }
         if busyConfirmation != nil || review != nil { return "Waiting for you" }
         if checking && checkedAt == nil { return "Checking…" }
-        switch availableCount {
-        case 0: return checkedAt == nil ? "Not checked yet" : "Up to date"
-        case 1: return "1 update available"
-        case let count: return "\(count) updates available"
-        }
+        if availableCount > 0 { return "Updates available" }
+        return checkedAt == nil ? "Not checked yet" : "Up to date"
     }
 
     private static let localKinds: [AgentRuntimeKind] = [.codex, .claudeCode, .grokBuild, .opencode]
@@ -597,6 +597,11 @@ final class FleetUpdatesModel {
     // MARK: Which steps
 
     private func deviceSteps(for request: Request) -> [DeviceUpdatePlan.Step] {
+        let steps = plannedSteps(for: request)
+        return isDevelopmentBuild ? steps.filter { $0 != .thisMacApp } : steps
+    }
+
+    private func plannedSteps(for request: Request) -> [DeviceUpdatePlan.Step] {
         guard let model else { return [] }
         let plan = DeviceUpdatePlan.steps(machines: model.bots.machines, thisMacVersion: thisMacVersion)
         switch request {

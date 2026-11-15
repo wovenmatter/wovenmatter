@@ -30,7 +30,10 @@ final class BotsModel {
     /// Machines that can show bots, this Mac first.
     var botMachines: [BotMachine] { machines.filter { $0.socket != nil } }
     var orderedSessions: [BotMachineSession] { botMachines.compactMap { sessions[$0.id] } }
-    var versionReport: BotVersionReport { .init(thisMacVersion: thisMacVersion, machines: machines, syncErrors: syncErrors) }
+    /// A development build's version is a placeholder, so it compares no devices with its own.
+    var versionReport: BotVersionReport {
+        .init(thisMacVersion: DevelopmentLaunch.mode == nil ? thisMacVersion : nil, machines: machines, syncErrors: syncErrors)
+    }
 
     func session(for machineID: String) -> BotMachineSession? { sessions[machineID] }
 
