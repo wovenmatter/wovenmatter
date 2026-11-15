@@ -942,7 +942,7 @@ export class BotEnvironment implements BotEnvironmentAdapter {
           await this.#runWithStorage(
             botId,
             base,
-            `if [ -f ${CARRY_DIR}/home-migrated ]; then rm -rf ${HOME_DIR}; fi; rm -rf ${CARRY_DIR}`,
+            `if [ -f ${CARRY_DIR}/home-migrated ]; then rm -rf ${HOME_DIR}; fi; rm -rf ${CARRY_DIR} ${WORKSPACE}/.woven-incoming`,
             "discard",
           ).catch(() => {});
         }
