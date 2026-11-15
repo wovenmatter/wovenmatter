@@ -2,7 +2,7 @@ import { readFile } from 'node:fs/promises'
 import { randomUUID } from 'node:crypto'
 import { isDeepStrictEqual } from 'node:util'
 import { supportsOpenCodeVersion } from './opencode-compatibility.mjs'
-import { presentPermissionChoices } from './config.mjs'
+import { presentPermissionChoices, supportedPermissions } from './config.mjs'
 
 const fail = text => Object.assign(new Error(text), {statusCode:409})
 const selection = (id, label = id) => ({id,label})
@@ -55,7 +55,7 @@ export function createNativeClientSessions({workspaceRoot,instances,
         if (modelKey(session?.model)!==modelKey(model)||(session.model.variant??'default')!==(model.variant??'default')) throw fail('OpenCode did not confirm the model selection.')
       }
       if (options.permission) {
-        if (!['ask','allow','deny'].includes(options.permission)) throw fail('Choose an available OpenCode permission policy.')
+        if (!supportedPermissions('opencode').includes(options.permission)) throw fail('Choose OpenCode’s Full access policy.')
         const rules=[...(session.permissions??[])],last=rules.at(-1),rule={action:'*',resource:'*',effect:options.permission}
         if (last?.action==='*'&&last.resource==='*'&&['ask','allow','deny'].includes(last.effect)) rules[rules.length-1]=rule
         else rules.push(rule)
@@ -69,7 +69,7 @@ export function createNativeClientSessions({workspaceRoot,instances,
     return {...emptyTools,model:key,thinking:current?.variant??(variants.length?'default':null),
       permission:last?.action==='*'&&last.resource==='*'&&['ask','allow','deny'].includes(last.effect)?last.effect:null,models:models.map(item=>selection(modelKey(item),item.name??item.id)),
       thinkingLevels:variants.length?[selection('default'),...variants.map(item=>selection(item.id,item.name??item.id))]:[],
-      permissions:presentPermissionChoices('opencode',[selection('ask','Ask for approval'),selection('allow','Full access'),selection('deny','Deny')])}
+      permissions:presentPermissionChoices('opencode',[selection('allow','Full access')])}
   }
   async function options_(call, directory, model) {
     const query='?'+new URLSearchParams({'location[directory]':directory})
@@ -82,7 +82,7 @@ export function createNativeClientSessions({workspaceRoot,instances,
     const variants=choice?.variants??[]
     return {...emptyTools,canConfigure:true,model:key,thinking:variants.length?'default':null,permission:'allow',models:models.map(item=>selection(modelKey(item),item.name??item.id)),
       thinkingLevels:variants.length?[selection('default'),...variants.map(item=>selection(item.id,item.name??item.id))]:[],
-      permissions:presentPermissionChoices('opencode',[selection('ask','Ask for approval'),selection('allow','Full access'),selection('deny','Deny')])}
+      permissions:presentPermissionChoices('opencode',[selection('allow','Full access')])}
   }
   return {async perform(runtimeKind,native,operation,options) {
     if(runtimeKind==='opencode')return openCode(native,operation,options)

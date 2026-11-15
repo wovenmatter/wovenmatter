@@ -75,7 +75,7 @@ struct ChatComposerSettings<Accessory: View, Submission: View>: View {
     local ? MobileModel.deviceToolAccessOptions : settings?.availableTools ?? []
   }
   private var permissionOptions: [SessionSettingOption] { local ? MobileModel.devicePermissionOptions : settings?.permissions ?? [] }
-  private var permissionID: String? { local ? model.deviceChatPermission.rawValue : settings?.permission }
+  private var permissionID: String? { local ? DevicePermission.id : settings?.permission }
   private var permissionLabel: String { permissionOptions.first { $0.id == permissionID }?.label ?? "Permissions" }
   private var enabledTools: [String] { local ? model.deviceChatTools : settings?.enabledTools ?? [] }
   var body: some View {
@@ -136,12 +136,10 @@ struct ChatComposerSettings<Accessory: View, Submission: View>: View {
           popout("Permissions", height: 250) {
             ForEach(permissionOptions) { option in
               selectionRow(option.label, selected: option.id == permissionID) {
-                if local, let mode = DevicePermissionMode(rawValue: option.id) {
-                  Task { await apply { try await model.configureDeviceChat(permission: mode) }; if problem == nil { permissionOpen = false } }
-                } else { configureRemote(permission: option.id) }
+                if local { permissionOpen = false } else { configureRemote(permission: option.id) }
               }
-              if local, let mode = DevicePermissionMode(rawValue: option.id) {
-                Text(mode.detail).font(.caption).foregroundStyle(WovenPalette.mutedForeground).padding(.bottom, 6)
+              if local {
+                Text(DevicePermission.detail).font(.caption).foregroundStyle(WovenPalette.mutedForeground).padding(.bottom, 6)
               }
             }
             if permissionOptions.isEmpty { Text("This agent has not reported permission choices.").font(.callout).foregroundStyle(WovenPalette.mutedForeground) }

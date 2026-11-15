@@ -21,8 +21,12 @@ creation captures them are used. Later default edits apply only to later chats.
 
 New chats start with each harness's Full access mode (Codex agent-full-access,
 Claude Code and Grok Build bypassPermissions, OpenCode allow, Pi Durable full)
-on every workspace unless the user saved a different default; Ask stays
-available but is never the default.
+on every workspace unless the user saved the harness's auto mode as the
+default. Full access and the auto mode (Codex agent, Claude Code and Grok Build
+auto) are the only permission modes offered (`AgentRuntimeKind.supportedPermissions`,
+`supportedPermissions` in `remote/src/config.mjs`). A saved or native mode
+outside them, such as Ask for approval, moves to Full access when the session
+next starts or runs.
 
 The new-chat chooser, sidebar creation actions, requests from the iOS app, and
 agent-created chats use these same creation methods. Agent-created chats use the

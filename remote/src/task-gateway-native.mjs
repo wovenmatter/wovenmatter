@@ -5,6 +5,7 @@ import { isDeepStrictEqual } from 'node:util'
 import { supportsOpenCodeVersion } from './opencode-compatibility.mjs'
 import { createTaskNativeArchive, publishNativePresentation } from './task-native-archive.mjs'
 import { OpenCodeTaskStream } from './opencode-task-stream.mjs'
+import { fullAccessPermissions, supportedPermissions } from './config.mjs'
 
 const before = text => Object.assign(new Error(text), { beforePrompt: true })
 const approval = () => Object.assign(new Error('This task needs approval. Open its session to continue.'), { needsApproval: true })
@@ -24,8 +25,8 @@ export function createNativeTaskExecutor({workspaceRoot, instances, fetchRequest
 }
 
 async function runOpenCode({run,config,cwd,instances,read,fetchRequest,nativeSessionID,signal,publish,bindSession,interactive,mcpConnection}) {
-  const permission=config.permission
-  if(permission && !['ask','allow','deny'].includes(permission))throw before('The saved OpenCode permission is unavailable.')
+  const requested=config.permission
+  if(requested && !supportedPermissions('opencode').includes(requested))throw before('The saved OpenCode permission is unavailable.')
   let accepted=false,sessionID=nativeSessionID,call,archive
   const presentation=new OpenCodeTaskStream(update=>publishNativePresentation(update,publish))
   try {
@@ -50,6 +51,11 @@ async function runOpenCode({run,config,cwd,instances,read,fetchRequest,nativeSes
       await call('PUT','/api/experimental/mcp/'+name+'?'+query,{config:{type:'remote',url:proxy.endpointURL,headers:{Authorization:'Bearer '+proxy.bearerToken},oauth:false,codemode:false}})
     }
     if(config.model||config.thinking){const model=config.model??[session.model?.providerID,session.model?.id].filter(Boolean).join('/'),split=model.indexOf('/');if(split<1)throw before('The saved OpenCode model is invalid.');const selection={providerID:model.slice(0,split),id:model.slice(split+1),...(config.thinking&&config.thinking!=='default'?{variant:config.thinking}:{})};await call('POST',path+'/model',{model:selection});session=(await call('GET',path)).data;if(session.model?.id!==selection.id||session.model?.providerID!==selection.providerID||(session.model?.variant??'default')!==(selection.variant??'default'))throw before('OpenCode did not confirm the saved model and thinking level.')}
+    // Ask and Deny are no longer offered; an older session's wildcard policy
+    // moves to Full access before it runs again.
+    const current = session.permissions?.at(-1)
+    const migrating = current?.action === '*' && current?.resource === '*' && ['ask','deny'].includes(current.effect)
+    const permission = requested ?? (migrating ? fullAccessPermissions.opencode : undefined)
     if (permission) {
       const rules = [...(session.permissions ?? [])]
       const last = rules.at(-1)
