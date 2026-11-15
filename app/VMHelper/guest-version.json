@@ -2,10 +2,10 @@
   "guestVersion": 1,
   "image": {
     "name": "Ubuntu 26.04 LTS (Resolute Raccoon) server cloud image, arm64",
-    "serial": "20261016",
-    "url": "https://cloud-images.ubuntu.com/releases/resolute/release-20261016/ubuntu-26.04-server-cloudimg-arm64.img",
-    "sha256": "8eb876c2ccc4b6ff89e4a65d511815923b285e04503ba465809bf587f763da24",
-    "size": 940373504
+    "serial": "20261108",
+    "url": "https://cloud-images.ubuntu.com/releases/resolute/release-20261108/ubuntu-26.04-server-cloudimg-arm64.img",
+    "sha256": "cf3b8472b84e7de37cdc2d2e9a9bf82b3edf0ab97113a1422eff048f26688e2f",
+    "size": 943232000
   },
   "docker": {
     "repository": "https://download.docker.com/linux/ubuntu",

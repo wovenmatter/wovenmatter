@@ -19,8 +19,9 @@ change, change this document in the same commit.
   before it can host bots.
 - **Full access by default** for every harness everywhere, including sessions
   agents start. Agent-started sessions use the destination workspace's own
-  saved defaults and are never capped by the caller. The UI shows each
-  harness's own mode names, with every full mode shown as "Full access".
+  saved defaults and are never capped by the caller. The only other choice is
+  the harness's auto mode, under its own name; there is no ask-for-approval
+  mode. Every full mode is shown as "Full access".
 - **Nothing waits on a prompt.** Macs grant Keychain and macOS privacy
   permissions once from Settings. Each Mac's permission status reaches every
   device. Password prompts in sessions fail at once with a clear message.

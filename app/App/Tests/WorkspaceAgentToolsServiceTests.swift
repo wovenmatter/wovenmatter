@@ -337,7 +337,7 @@ extension WorkspaceAgentToolsServiceTests {
                     try await database.saveCalendarEvent(id: event.id, draft: draft, creating: false, expectedRevision: event.calendar.revision)
                 }
                 var task = existing ?? WorkspaceCalendarTask(prompt: "", configuration: .init(runtimeKind: .codex,
-                    title: "Review", model: "fixture-model", thinking: "high", permission: "read-only", tools: .init(enabled: [.notes])))
+                    title: "Review", model: "fixture-model", thinking: "high", permission: "agent", tools: .init(enabled: [.notes])))
                 task.prompt = command.options["prompt"] ?? task.prompt
                 if let mode = command.options["session-mode"].flatMap(WorkspaceCalendarTask.SessionMode.init(rawValue:)) { task.sessionMode = mode }
                 return task
@@ -363,7 +363,7 @@ extension WorkspaceAgentToolsServiceTests {
         #expect(try await request("update", ["id": .string(id), "revision": .number(Double(event.calendar.revision)),
             "description": .string("Edited from a session")]).success)
         let updated = try await database.calendarEvent(id: id, callerID: caller)
-        #expect(updated.calendar.task?.configuration.permission == "read-only")
+        #expect(updated.calendar.task?.configuration.permission == "agent")
         #expect(updated.calendar.task?.prompt == "Review changes")
         #expect(updated.calendar.recurrence == event.calendar.recurrence)
         #expect(updated.calendar.editedBy?.sessionID == caller)

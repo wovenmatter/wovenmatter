@@ -992,13 +992,8 @@ private struct ComposerPermissionTitles {
             .split(whereSeparator: \.isWhitespace).joined(separator: " ")
         let labels: (String, String?)
         switch normalized {
-        case "ask before it changes", "ask before changes": labels = ("Ask Before It Changes", "Ask")
-        case "ask approval": labels = ("Ask Approval", "Ask")
-        case "ask for approval": labels = ("Ask for Approval", "Ask")
         case "full access": labels = ("Full Access", "Full")
-        case "auto accept edits": labels = ("Auto Accept Edits", "Auto Accept")
         case "auto": labels = ("Auto", nil)
-        case "don't ask", "don’t ask": labels = ("Don't Ask", nil)
         case "loading permissions…": labels = ("Loading Permissions", "Loading")
         default: labels = (title, nil)
         }

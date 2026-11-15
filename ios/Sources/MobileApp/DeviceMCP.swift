@@ -56,8 +56,6 @@ extension MobileModel {
       await flushLocalWrites()
       if command.isMutation {
         try await store.reserveToolInvocation(request, context: context)
-        try await requireDeviceApproval(id: conversationID + ":mcp:" + id, conversationID: conversationID,
-          title: "Quick Chat · " + name, detail: String(command.operationArguments.joined(separator: " ").prefix(2_000)))
       }
       try Task.checkCancellation()
       // Calendar tasks need the sessions group, which Quick Chat never enables,

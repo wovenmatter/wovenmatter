@@ -28,7 +28,8 @@
   "overrides": {
     "@earendil-works/pi-coding-agent": {
       "undici": ">=8.12.4",
-      "minimatch": ">=11.0.8"
+      "minimatch": ">=11.0.8",
+      "brace-expansion": ">=5.0.13"
     },
     "@earendil-works/pi-ai": {
       "openai": ">=7.57.0",

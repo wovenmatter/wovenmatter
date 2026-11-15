@@ -332,27 +332,25 @@ final class ExecutionRoutingTests: XCTestCase {
     let created = try XCTUnwrap(model.selectedConversationID)
     XCTAssertEqual(model.executionRecords[created]?.status, "ready")
     XCTAssertEqual(model.executionRecords[created]?.thinkingLevel, "medium", "New chats use the middle supported non-Off level")
-    XCTAssertEqual(model.executionRecords[created]?.permissionMode ?? .defaultMode, .full, "A new chat starts in Full Access unless the draft chose otherwise")
-    XCTAssertEqual(model.deviceChatPermission, .full)
     XCTAssertTrue(model.localRuntimes.isEmpty, "Choosing an agent must not start inference")
     XCTAssertEqual(model.state.transcripts[created]?.messages, [])
     let record = DeviceConversationRecord(id: "first", title: "First", connectionID: connection.id, connection: connection, modelJSON: try descriptor.descriptorJSON(), status: "ready", updatedAt: "")
     var other = record; other.id = "second"
     model.executionRecords = [record.id: record, other.id: other]; model.selectedConversationID = record.id
-    try await model.configureDeviceChat(thinking: "high", permission: .full, tools: ["woven_notes_read"])
+    try await model.configureDeviceChat(thinking: "high", tools: ["woven_notes_read"])
     XCTAssertEqual(model.executionRecords[record.id]?.thinkingLevel, "high")
     XCTAssertEqual(model.executionRecords[record.id]?.enabledTools, ["woven_notes_read"])
     XCTAssertEqual(model.executionRecords[other.id], other)
     XCTAssertEqual(model.inferenceConnections, [connection])
     let saved = try JSONDecoder().decode(DeviceExecutionPreferences.self, from: Data(contentsOf: root.appendingPathComponent("execution/preferences.json")))
     XCTAssertEqual(saved.conversations[record.id]?.thinkingLevel, "high")
-    XCTAssertEqual(saved.conversations[record.id]?.permissionMode, .full)
     guard case .session(let settings) = try await model.readDeviceWorkspace(.session(id: record.id)) else { return XCTFail("Missing settings") }
     XCTAssertEqual(settings.permission, "full")
-    XCTAssertEqual(settings.permissions.map(\.id), ["full", "ask"], "Full Access is listed first")
-    let changed = await model.performDeviceAction(.configureSession(id: record.id, model: nil, thinking: nil, permission: "ask"))
-    XCTAssertTrue(changed)
-    XCTAssertEqual(model.executionRecords[record.id]?.permissionMode, .ask)
+    XCTAssertEqual(settings.permissions.map(\.id), ["full"], "Full Access is Quick Chat's only permission mode")
+    let kept = await model.performDeviceAction(.configureSession(id: record.id, model: nil, thinking: nil, permission: "full"))
+    XCTAssertTrue(kept)
+    let refused = await model.performDeviceAction(.configureSession(id: record.id, model: nil, thinking: nil, permission: "ask"))
+    XCTAssertFalse(refused, "Ask for Approval is no longer offered")
     model.executionRecords[record.id]?.status = "running"
     do { try await model.configureDeviceChat(thinking: "low"); XCTFail("An active run must retain its configuration") }
     catch { XCTAssertEqual(model.executionRecords[record.id]?.thinkingLevel, "high") }
@@ -530,18 +528,16 @@ final class ExecutionRoutingTests: XCTestCase {
     return try outcome.get()
   }
 
-  @MainActor func testFullAccessRunsToolsWithoutPromptsAndAskModeStillRequiresApproval() async throws {
+  @MainActor func testQuickChatRunsToolsWithoutApprovalPromptsAndStillAsksQuestions() async throws {
     let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     defer { try? FileManager.default.removeItem(at: root) }
     let model = MobileModel(store: try MobileStore(file: root.appendingPathComponent("library.json")), transport: ExecutionTestLibrary())
     model.executionDirectory = root.appendingPathComponent("execution")
     defer { for id in Array(model.localApprovals.keys) { model.cancelDeviceApproval(id) } }
-    var full = DeviceConversationRecord(id: "full", title: "Full", connectionID: "fixture", modelJSON: "{}", status: "ready", updatedAt: "")
-    full.permissionMode = .full
-    var ask = full; ask.id = "ask"; ask.permissionMode = .ask
-    model.executionRecords = [full.id: full, ask.id: ask]
-    model.selectedConversationID = ask.id
-    let request = try MobileModel.toolJSON(["name": "woven_notes_create", "conversationID": full.id, "arguments": ["title": "Saved", "kind": "note"]])
+    let chat = DeviceConversationRecord(id: "chat", title: "Chat", connectionID: "fixture", modelJSON: "{}", status: "ready", updatedAt: "")
+    model.executionRecords = [chat.id: chat]
+    model.selectedConversationID = chat.id
+    let request = try MobileModel.toolJSON(["name": "woven_notes_create", "conversationID": chat.id, "arguments": ["title": "Saved", "kind": "note"]])
     // Note tools report failures as MCP results rather than throwing.
     func toolResult(_ json: String) throws -> (isError: Bool, text: String) {
       let object = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any])
@@ -550,30 +546,11 @@ final class ExecutionRoutingTests: XCTestCase {
     let written = try toolResult(try await bounded(model, "A Full Access note write") { try await model.performDeviceTool(request) })
     XCTAssertFalse(written.isError, written.text)
     XCTAssertEqual(model.notes.first?.title, "Saved")
-    XCTAssertTrue(model.localPending.isEmpty, "Permission belongs to the tool's owner, not the selected chat")
-    model.selectedConversationID = full.id
-    XCTAssertEqual(model.deviceChatPermission, .full, "An explicit Allow choice is honored")
-    guard case .session(let settings) = try await model.readDeviceWorkspace(.session(id: full.id)) else { return XCTFail("Missing settings") }
+    XCTAssertTrue(model.localPending.isEmpty, "Quick Chat writes without an approval prompt")
+    guard case .session(let settings) = try await model.readDeviceWorkspace(.session(id: chat.id)) else { return XCTFail("Missing settings") }
     XCTAssertEqual(settings.permission, "full")
 
-    // The same write in an Ask chat waits for the user; declining saves nothing.
-    let askRequest = try MobileModel.toolJSON(["name": "woven_notes_create", "conversationID": ask.id, "arguments": ["title": "Declined", "kind": "note"]])
-    let declined = Task { @MainActor in try await model.performDeviceTool(askRequest) }
-    for _ in 0..<500 where model.localPending.isEmpty { try await Task.sleep(for: .milliseconds(10)) }
-    let prompt = try XCTUnwrap(model.localPending.first, "An Ask chat prompts before a note write")
-    XCTAssertEqual(prompt.conversationID, ask.id)
-    await model.respond(prompt, response: .init(optionID: "deny"))
-    let refused = try toolResult(try await bounded(model, "A declined note write") { try await declined.value })
-    XCTAssertTrue(refused.isError, "A declined write is reported to the agent as a failed tool call")
-    XCTAssertEqual(refused.text, "The user declined this tool action.", "Declining is reported as the user's answer, not as cancellation")
-    XCTAssertFalse(model.notes.contains { $0.title == "Declined" }, "Nothing is saved after declining")
-
-    let waiting = Task { try await model.requireDeviceApproval(id: "ask-write", conversationID: ask.id, title: "Write", detail: "File") }
-    for _ in 0..<100 where model.localApprovals["ask-write"] == nil { await Task.yield() }
-    XCTAssertEqual(model.localPending.map(\.id), ["ask-write"], "An explicit Ask choice keeps prompting")
-    waiting.cancel()
-    do { try await bounded(model, "A cancelled approval") { try await waiting.value }; XCTFail("Cancelled approval must not continue") } catch is CancellationError { }
-    let question = Task { try await model.askDeviceQuestion(id: "question", conversationID: full.id, question: "Which file?") }
+    let question = Task { try await model.askDeviceQuestion(id: "question", conversationID: chat.id, question: "Which file?") }
     for _ in 0..<100 where model.localApprovals["question"] == nil { await Task.yield() }
     XCTAssertEqual(model.localPending.map(\.id), ["question"], "Full access must still surface questions")
     question.cancel()
@@ -614,10 +591,10 @@ final class ExecutionRoutingTests: XCTestCase {
     XCTAssertEqual(MobileModel.clockDescription(Date(timeIntervalSince1970: 0), timeZone: TimeZone(identifier: "UTC")!).prefix(25), "Now: 1970-01-01T00:00:00Z")
   }
 
-  /// Full Access is the default, and saved choices never flip on reopen: an explicit
-  /// mode keeps its value, a current chat without one uses Full Access, and a chat from
-  /// an earlier on-device agent (no Quick Chat version) stays retained history whatever its mode.
-  @MainActor func testPermissionModesSurviveReopenAndEarlierChatsStayRetained() async throws {
+  /// Quick Chat has only Full Access: a chat saved with the former Ask for Approval
+  /// mode reopens in Full Access, and a chat from an earlier on-device agent (no
+  /// Quick Chat version) stays retained history.
+  @MainActor func testEarlierAskChatsReopenInFullAccessAndEarlierChatsStayRetained() async throws {
     let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     defer { try? FileManager.default.removeItem(at: root) }
     let store = try MobileStore(file: root.appendingPathComponent("library.json"))
@@ -626,36 +603,36 @@ final class ExecutionRoutingTests: XCTestCase {
     // A complete saved connection, so reopening reaches the retained-history guard
     // itself rather than failing earlier for a missing account. No request is made.
     let connection = InferenceConnection(id: "fixture", name: "Saved", provider: "openai", route: .direct, modelID: "test")
-    func record(_ id: String, _ mode: DevicePermissionMode?) -> DeviceConversationRecord {
-      var value = DeviceConversationRecord(id: id, title: id, connectionID: connection.id, connection: connection, modelJSON: "{}", status: "ready", updatedAt: "")
-      value.permissionMode = mode; return value
+    func record(_ id: String) -> DeviceConversationRecord {
+      DeviceConversationRecord(id: id, title: id, connectionID: connection.id, connection: connection, modelJSON: "{}", status: "ready", updatedAt: "")
     }
-    model.executionRecords = ["full": record("full", .full), "ask": record("ask", .ask), "unset": record("unset", nil), "legacy": record("legacy", .full)]
+    model.executionRecords = ["full": record("full"), "ask": record("ask"), "legacy": record("legacy")]
     try model.persistExecutionConfiguration()
-    // An earlier build wrote no Quick Chat version.
+    // Earlier builds saved a permission mode, and the earliest wrote no Quick Chat version.
     let file = try XCTUnwrap(model.executionDirectory).appendingPathComponent("preferences.json")
     var saved = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any])
     var conversations = try XCTUnwrap(saved["conversations"] as? [String: Any])
-    var legacy = try XCTUnwrap(conversations["legacy"] as? [String: Any]); legacy.removeValue(forKey: "quickChatVersion")
-    conversations["legacy"] = legacy; saved["conversations"] = conversations
+    for (id, mode) in [("full", "full"), ("ask", "ask"), ("legacy", "full")] {
+      var value = try XCTUnwrap(conversations[id] as? [String: Any]); value["permissionMode"] = mode
+      if id == "legacy" { value.removeValue(forKey: "quickChatVersion") }
+      conversations[id] = value
+    }
+    saved["conversations"] = conversations
+    saved["chatSettings"] = ["permissionMode": "ask"]
     try JSONSerialization.data(withJSONObject: saved).write(to: file)
 
     let reopened = MobileModel(store: store, transport: ExecutionTestLibrary())
     reopened.executionDirectory = model.executionDirectory
     try await reopened.loadExecutionConfiguration()
-    XCTAssertEqual(reopened.executionRecords["full"]?.permissionMode, .full)
-    XCTAssertEqual(reopened.executionRecords["ask"]?.permissionMode, .ask)
-    XCTAssertNil(reopened.executionRecords["unset"]?.permissionMode, "Nothing is migrated to an explicit mode")
-    for (id, expected) in [("full", DevicePermissionMode.full), ("ask", .ask), ("unset", .full)] {
-      reopened.selectedConversationID = id
-      XCTAssertEqual(reopened.deviceChatPermission, expected, id)
+    XCTAssertEqual(Set(reopened.executionRecords.keys), ["full", "ask", "legacy"], "A saved Ask mode never drops a chat")
+    for id in ["full", "ask"] {
       guard case .session(let settings) = try await reopened.readDeviceWorkspace(.session(id: id)) else { return XCTFail("Missing settings") }
-      XCTAssertEqual(settings.permission, expected.rawValue, id)
+      XCTAssertEqual(settings.permission, "full", id)
+      XCTAssertEqual(settings.permissions.map(\.id), ["full"], id)
     }
     let retained = try XCTUnwrap(reopened.executionRecords["legacy"])
     XCTAssertEqual(retained.quickChatVersion, 0)
     XCTAssertEqual(retained.status, "retained")
-    XCTAssertEqual(retained.permissionMode, .full, "The earlier chat's saved mode is kept as it was")
     reopened.selectedConversationID = "legacy"
     XCTAssertFalse(reopened.canResumeLocalRun, "Earlier chats are history and never run tools")
     do { _ = try await reopened.deviceRuntime("legacy"); XCTFail("An earlier chat reopened its runtime") }
@@ -663,49 +640,18 @@ final class ExecutionRoutingTests: XCTestCase {
     XCTAssertTrue(reopened.localRuntimes.isEmpty)
   }
 
-  @MainActor func testDraftPermissionPersistsAndInvalidRemoteModeIsRejected() async throws {
+  @MainActor func testOnlyFullAccessIsAcceptedForQuickChat() async throws {
     let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     defer { try? FileManager.default.removeItem(at: root) }
     let store = try MobileStore(file: root.appendingPathComponent("library.json"))
     let model = MobileModel(store: store, transport: ExecutionTestLibrary())
     model.executionDirectory = root.appendingPathComponent("execution")
-    XCTAssertEqual(model.deviceChatPermission, .full, "A new Quick Chat starts with Full Access")
-    try await model.configureDeviceChat(permission: .ask)
-    let reopenedAsk = MobileModel(store: store, transport: ExecutionTestLibrary())
-    reopenedAsk.executionDirectory = model.executionDirectory
-    try await reopenedAsk.loadExecutionConfiguration()
-    XCTAssertEqual(reopenedAsk.deviceChatPermission, .ask, "An explicit draft choice survives reopening")
-    try await model.configureDeviceChat(permission: .full)
-    let reopened = MobileModel(store: store, transport: ExecutionTestLibrary())
-    reopened.executionDirectory = model.executionDirectory
-    try await reopened.loadExecutionConfiguration()
-    XCTAssertEqual(reopened.deviceChatPermission, .full)
+    XCTAssertEqual(MobileModel.devicePermissionOptions.map(\.id), ["full"])
     model.executionRecords["chat"] = .init(id: "chat", title: "Chat", connectionID: "fixture", modelJSON: "{}", status: "ready", updatedAt: "")
-    let changed = await model.performDeviceAction(.configureSession(id: "chat", model: nil, thinking: nil, permission: "unknown"))
-    XCTAssertFalse(changed)
-    XCTAssertNil(model.executionRecords["chat"]?.permissionMode)
-  }
-
-  @MainActor func testCancellingDeviceApprovalRemovesPendingWait() async throws {
-    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-    defer { try? FileManager.default.removeItem(at: root) }
-    let store = try MobileStore(file: root.appendingPathComponent("library.json"))
-    let model = MobileModel(store: store, transport: ExecutionTestLibrary())
-    let waiting = Task {
-      do {
-        try await model.requireDeviceApproval(id: "approval", conversationID: "device-chat", title: "Write", detail: "File")
-        return false
-      } catch is CancellationError { return true }
-      catch { return false }
+    for permission in ["ask", "unknown"] {
+      let changed = await model.performDeviceAction(.configureSession(id: "chat", model: nil, thinking: nil, permission: permission))
+      XCTAssertFalse(changed, permission)
     }
-    for _ in 0..<100 where model.localApprovals["approval"] == nil { await Task.yield() }
-    XCTAssertNotNil(model.localApprovals["approval"])
-    XCTAssertEqual(model.localPending.map(\.id), ["approval"])
-    waiting.cancel()
-    let cancelled = try await bounded(model, "A cancelled approval") { await waiting.value }
-    XCTAssertTrue(cancelled)
-    XCTAssertNil(model.localApprovals["approval"])
-    XCTAssertTrue(model.localPending.isEmpty)
   }
 
   @MainActor func testLateQuestionCancellationDoesNotRemoveReplacementWait() async throws {

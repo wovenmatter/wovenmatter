@@ -29,10 +29,10 @@ struct ACPPermissionLifecycleTests {
     }
     await #expect(throws: (any Error).self) {
       try await fixture.coordinator.updateConfiguration(
-        conversationID: fixture.id, permission: "dontAsk", launch: fixture.launch, workspace: fixture.workspace
+        conversationID: fixture.id, permission: "bypassPermissions", launch: fixture.launch, workspace: fixture.workspace
       )
     }
-    #expect(try await fixture.database.localACPSession(conversationID: fixture.id).permission == "default")
+    #expect(try await fixture.database.localACPSession(conversationID: fixture.id).permission == "bypassPermissions")
     let other = try await fixture.database.createFixtureLocalACPSession(
       runtimeKind: .grokBuild, title: "Independent", ownerDeviceID: UUID()
     )
@@ -77,18 +77,18 @@ struct ACPPermissionLifecycleTests {
       conversationID: other, launch: fixture.launch, workspace: fixture.workspace
     )
     let changed = try await fixture.coordinator.updateConfiguration(
-      conversationID: fixture.id, permission: "dontAsk", launch: fixture.launch, workspace: fixture.workspace
+      conversationID: fixture.id, permission: "auto", launch: fixture.launch, workspace: fixture.workspace
     )
     let drivers = fixture.factory.drivers
     #expect(drivers.count == 3)
     #expect(drivers[0].shutdownCount == 1)
     #expect(drivers[1].shutdownCount == 0)
     #expect(drivers[2].existingSessionID == "native-0")
-    #expect(drivers[2].launchPermission == "dontAsk")
-    #expect(changed.permission == "dontAsk")
+    #expect(drivers[2].launchPermission == "auto")
+    #expect(changed.permission == "auto")
     #expect(try await fixture.database.localACPSession(conversationID: fixture.id).nativeSessionID == "native-0")
-    #expect(try await fixture.database.localACPSession(conversationID: fixture.id).permission == "dontAsk")
-    #expect(try await fixture.database.localACPSession(conversationID: other).permission == "default")
+    #expect(try await fixture.database.localACPSession(conversationID: fixture.id).permission == "auto")
+    #expect(try await fixture.database.localACPSession(conversationID: other).permission == "bypassPermissions")
     await fixture.coordinator.shutdown()
   }
 
@@ -129,28 +129,35 @@ struct ACPPermissionLifecycleTests {
       conversationID: fixture.id,
       model: field == .model ? "obsolete" : "default-model",
       thinking: field == .thinking ? "obsolete" : "low",
-      permission: field == .permission ? "obsolete" : "default"
+      permission: field == .permission ? "obsolete" : "agent-full-access"
     )
-    await #expect(throws: LocalACPClientError.self) {
-      try await fixture.coordinator.configuration(
+    if field == .permission {
+      // A saved mode the product no longer offers runs as Full access.
+      let migrated = try await fixture.coordinator.configuration(
         conversationID: fixture.id, launch: fixture.launch, workspace: fixture.workspace
       )
+      #expect(migrated.permission == "agent-full-access")
+    } else {
+      await #expect(throws: LocalACPClientError.self) {
+        try await fixture.coordinator.configuration(
+          conversationID: fixture.id, launch: fixture.launch, workspace: fixture.workspace
+        )
+      }
+      #expect(!fixture.factory.catalogs.isEmpty)
+      let unchanged = try await fixture.database.localACPSession(conversationID: fixture.id)
+      #expect(field != .model || unchanged.model == "obsolete")
+      #expect(field != .thinking || unchanged.thinking == "obsolete")
     }
-    #expect(!fixture.factory.catalogs.isEmpty)
-    let unchanged = try await fixture.database.localACPSession(conversationID: fixture.id)
-    #expect(field != .model || unchanged.model == "obsolete")
-    #expect(field != .thinking || unchanged.thinking == "obsolete")
-    #expect(field != .permission || unchanged.permission == "obsolete")
     let changed = try await fixture.coordinator.updateConfiguration(
       conversationID: fixture.id,
       model: field == .model ? "selected-model" : nil,
       thinking: field == .thinking ? "high" : nil,
-      permission: field == .permission ? "auto" : nil,
+      permission: field == .permission ? "agent" : nil,
       launch: fixture.launch, workspace: fixture.workspace
     )
     #expect(field != .model || changed.model == "selected-model")
     #expect(field != .thinking || changed.thinking == "high")
-    #expect(field != .permission || changed.permission == "auto")
+    #expect(field != .permission || changed.permission == "agent")
     _ = try await fixture.coordinator.accept(
       conversationID: fixture.id, input: .init(text: "Recovered fixture"), launch: fixture.launch, workspace: fixture.workspace
     )
@@ -162,64 +169,64 @@ struct ACPPermissionLifecycleTests {
 
 
   @Test func failedRestartRetainsPreviousPolicyAndCanReconnectAgain() async throws {
-    let fixture = try await PermissionLifecycleFixture(runtime: .grokBuild, failingLaunchPermission: "dontAsk")
+    let fixture = try await PermissionLifecycleFixture(runtime: .grokBuild, failingLaunchPermission: "auto")
     defer { fixture.cleanUp() }
     _ = try await fixture.coordinator.configuration(
       conversationID: fixture.id, launch: fixture.launch, workspace: fixture.workspace
     )
     await #expect(throws: PermissionFixtureError.self) {
       try await fixture.coordinator.updateConfiguration(
-        conversationID: fixture.id, permission: "dontAsk", launch: fixture.launch, workspace: fixture.workspace
+        conversationID: fixture.id, permission: "auto", launch: fixture.launch, workspace: fixture.workspace
       )
     }
-    #expect(try await fixture.database.localACPSession(conversationID: fixture.id).permission == "default")
+    #expect(try await fixture.database.localACPSession(conversationID: fixture.id).permission == "bypassPermissions")
     #expect(try await fixture.database.localACPSession(conversationID: fixture.id).nativeSessionID == "native-0")
     let recovered = try await fixture.coordinator.configuration(
       conversationID: fixture.id, launch: fixture.launch, workspace: fixture.workspace
     )
-    #expect(recovered.permission == "default")
-    #expect(fixture.factory.drivers.map(\.launchPermission) == [nil, "dontAsk", "default"])
+    #expect(recovered.permission == "bypassPermissions")
+    #expect(fixture.factory.drivers.map(\.launchPermission) == ["bypassPermissions", "auto", "bypassPermissions"])
     #expect(fixture.factory.drivers[1].shutdownCount == 1)
     #expect(fixture.factory.drivers[2].existingSessionID == "native-0")
     await fixture.coordinator.shutdown()
   }
 
   @Test func permissionRestartCannotForkTheNativeSession() async throws {
-    let fixture = try await PermissionLifecycleFixture(runtime: .grokBuild, forkedLaunchPermission: "dontAsk")
+    let fixture = try await PermissionLifecycleFixture(runtime: .grokBuild, forkedLaunchPermission: "auto")
     defer { fixture.cleanUp() }
     _ = try await fixture.coordinator.configuration(
       conversationID: fixture.id, launch: fixture.launch, workspace: fixture.workspace
     )
     await #expect(throws: (any Error).self) {
       try await fixture.coordinator.updateConfiguration(
-        conversationID: fixture.id, permission: "dontAsk", launch: fixture.launch, workspace: fixture.workspace
+        conversationID: fixture.id, permission: "auto", launch: fixture.launch, workspace: fixture.workspace
       )
     }
     #expect(try await fixture.database.localACPSession(conversationID: fixture.id).nativeSessionID == "native-0")
-    #expect(try await fixture.database.localACPSession(conversationID: fixture.id).permission == "default")
+    #expect(try await fixture.database.localACPSession(conversationID: fixture.id).permission == "bypassPermissions")
     #expect(fixture.factory.drivers[1].shutdownCount == 1)
     await fixture.coordinator.shutdown()
   }
 
   @Test func unconfirmedNativePermissionAndObserverDoNotReplaceSavedPolicy() async throws {
-    let fixture = try await PermissionLifecycleFixture(runtime: .codex, unconfirmedPermission: "dontAsk")
+    let fixture = try await PermissionLifecycleFixture(runtime: .codex, unconfirmedPermission: "agent-full-access")
     defer { fixture.cleanUp() }
     _ = try await fixture.coordinator.configuration(
       conversationID: fixture.id, launch: fixture.launch, workspace: fixture.workspace
     )
     let changed = try await fixture.coordinator.updateConfiguration(
-      conversationID: fixture.id, permission: "auto", launch: fixture.launch, workspace: fixture.workspace
+      conversationID: fixture.id, permission: "agent", launch: fixture.launch, workspace: fixture.workspace
     )
-    #expect(changed.permission == "auto")
-    #expect(try await fixture.database.localACPSession(conversationID: fixture.id).permission == "auto")
+    #expect(changed.permission == "agent")
+    #expect(try await fixture.database.localACPSession(conversationID: fixture.id).permission == "agent")
     await #expect(throws: LocalACPClientError.self) {
       try await fixture.coordinator.updateConfiguration(
-        conversationID: fixture.id, permission: "dontAsk", launch: fixture.launch, workspace: fixture.workspace
+        conversationID: fixture.id, permission: "agent-full-access", launch: fixture.launch, workspace: fixture.workspace
       )
     }
     // The fake emits a different native policy before returning a clamped result.
     // Neither that observer nor the rejected setter may persist the requested value.
-    #expect(try await fixture.database.localACPSession(conversationID: fixture.id).permission == "auto")
+    #expect(try await fixture.database.localACPSession(conversationID: fixture.id).permission == "agent")
     #expect(fixture.factory.drivers.count == 1)
     #expect(fixture.factory.drivers[0].shutdownCount == 1)
     await fixture.coordinator.shutdown()
@@ -367,8 +374,10 @@ private final class PermissionLifecycleDriver: @unchecked Sendable {
     current = LocalACPSessionConfiguration(
       model: "default-model", thinking: "low", modelOptions: ["default-model", "selected-model", "no-effort"],
       thinkingOptions: ["low", "high"],
-      permission: launch.runtimeKind == .grokBuild ? launch.requestedPermission ?? "default" : "default",
-      permissionOptions: ["default", "auto", "dontAsk"]
+      permission: launch.runtimeKind == .grokBuild
+        ? launch.requestedPermission ?? launch.runtimeKind.fullAccessPermission
+        : launch.runtimeKind.fullAccessPermission,
+      permissionOptions: launch.runtimeKind.supportedPermissions
     )
   }
 

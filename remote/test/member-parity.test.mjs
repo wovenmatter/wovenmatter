@@ -292,7 +292,7 @@ test('a harness lists its options before a session exists, with permission descr
   assert.equal(options.model, 'large')
   assert.deepEqual(options.thinkingLevels.map(item => item.id), ['low', 'high'])
   assert.equal(options.models[1].description, 'The larger model.')
-  assert.deepEqual(options.permissions.map(item => [item.id, item.label]), [['agent-full-access', 'Full access'], ['agent', 'Approve for me'], ['read-only', 'Read only']])
+  assert.deepEqual(options.permissions.map(item => [item.id, item.label]), [['agent-full-access', 'Full access'], ['agent', 'Approve for me']], 'Read only is not offered')
   assert.equal(options.permissions[1].description, 'Only ask for actions detected as potentially unsafe.')
   assert.deepEqual(fixture.requests().find(item => item.method === 'session/new').params.mcpServers, [])
   await assert.rejects(runtime.sessionOptions({ runtimeKind: 'codex', model: 'missing' }), /available model/)

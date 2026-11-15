@@ -5,7 +5,7 @@ import { applyTaskConfiguration } from './task-gateway-runner.mjs'
 import { clientInteraction, clientInteractionResponse } from './client-interactions.mjs'
 import { createNativeClientSessions } from './client-native-sessions.mjs'
 import { createNativeTaskExecutor } from './task-gateway-native.mjs'
-import { runtimeConfiguration, workspacePermission, workspaceExecutionConfiguration, presentPermissionChoices, fullAccessPermissions } from './config.mjs'
+import { runtimeConfiguration, workspacePermission, workspaceExecutionConfiguration, presentPermissionChoices, fullAccessPermissions, supportedPermissions, supportedPermission } from './config.mjs'
 import { openEphemeralACP, ephemeralSession } from './ephemeral-acp.mjs'
 import { promptBlocks, textWithFiles } from './execution-attachments.mjs'
 
@@ -57,11 +57,18 @@ export function createClientExecutionRuntime({ defaultAgent, durableACP, catalog
   // Full root forces Full access. A new session (`creation`) otherwise gets the
   // requested destination default, or the harness's Full access mode when none
   // was saved; an adapter that does not offer it keeps its native mode.
-  // Reattaching an existing session never changes its permission.
+  // Reattaching an existing session changes its permission only to move it off
+  // a mode Woven no longer offers (Ask for approval, read only, plan, an older
+  // Codex adapter's workspace access, …).
   async function applyWorkspacePolicy(native, runtimeKind, call, creation) {
     const forced = workspacePermission(runtimeKind, undefined, configuration)
-    const requested = creation?.permission
-    const permission = forced ?? (creation ? requested ?? fullAccessPermissions[runtimeKind] : undefined)
+    const projected = runtimeKind === 'grok_build' ? undefined : project(runtimeKind, native.configuration ?? {})
+    const offered = projected?.permissions?.map(choice => choice.id) ?? []
+    const offers = id => id != null && (offered.length ? offered.includes(id) : supportedPermissions(runtimeKind).includes(id))
+    const requested = offers(creation?.permission) ? creation.permission : undefined
+    const current = projected?.permission
+    const unsupported = current != null && !offers(current)
+    const permission = forced ?? (creation ? requested ?? fullAccessPermissions[runtimeKind] : unsupported ? fullAccessPermissions[runtimeKind] : undefined)
     if (!permission || runtimeKind === 'grok_build') return
     await applyTaskConfiguration(async (method, params) => {
       const result = await call(method, params)
@@ -72,7 +79,7 @@ export function createClientExecutionRuntime({ defaultAgent, durableACP, catalog
   // `load` reopens the native session (initialize, session/load) on a
   // channel this server just started, as recovery of a stopped one does.
   async function attach(native,runtimeKind,{load=false}={}) {
-    if (runtimeKind === 'grok_build') native.permission = workspacePermission(runtimeKind, native.permission, configuration)
+    if (runtimeKind === 'grok_build') native.permission = grokPermission(native)
     const mcpConnection=mcpConnections.get(native.channelID??native.sessionID)
     if (channels.has(native.channelID) && !channels.get(native.channelID).stopped) return channels.get(native.channelID)
     channels.delete(native.channelID)
@@ -163,8 +170,8 @@ export function createClientExecutionRuntime({ defaultAgent, durableACP, catalog
     } finally {channel.pending.delete(id)}
   }
   async function create({runtimeKind,conversationID,workspaceID,mcpConnection,nativeWorkingDirectory:requestedDirectory,permission}) {
-    const requestedPermission = permission
-    permission = workspacePermission(runtimeKind, permission, configuration)
+    const requestedPermission = supportedPermission(runtimeKind, permission)
+    permission = workspacePermission(runtimeKind, requestedPermission, configuration)
     if(mcpConnection)mcpConnections.set(conversationID,mcpConnection)
     const nativeWorkingDirectory = requestedDirectory??join(workspaceRoot,'scratch',scratchFolderName(conversationID,'',new Date(),true))
     if(!isAbsolute(nativeWorkingDirectory)||nativeWorkingDirectory.includes('\0'))throw fail('The destination working directory is invalid.')
@@ -228,7 +235,7 @@ export function createClientExecutionRuntime({ defaultAgent, durableACP, catalog
       // native session from the harness's own store on a channel this server
       // owns; a session that cannot be reopened leaves no process behind.
       if(known?.sessionID&&known.sessionID!==native.sessionID)throw fail('The durable channel belongs to a different native session.')
-      const reopened={nativeWorkingDirectory:native.nativeWorkingDirectory,sessionID:native.sessionID,channelID:native.channelID,...(runtimeKind==='grok_build'?{permission:native.permission??'default'}:{})}
+      const reopened={nativeWorkingDirectory:native.nativeWorkingDirectory,sessionID:native.sessionID,channelID:native.channelID,...(runtimeKind==='grok_build'?{permission:grokPermission(native)}:{})}
       try {
         const channel=await attach(reopened,runtimeKind,{load:true})
         await applyWorkspacePolicy(reopened, runtimeKind, (method, params) => rpc(channel, method, params))
@@ -240,10 +247,10 @@ export function createClientExecutionRuntime({ defaultAgent, durableACP, catalog
         throw error
       }
     }
-    const page=await durableACP.handle('POST','/v1/durable-acp/adopt',{channelID:native.channelID,harnessID:runtimeKind,cwd:native.nativeWorkingDirectory??workspaceRoot,permission:native.permission,attachmentProtocol:1,expectedNativeSessionID:native.sessionID})
+    const page=await durableACP.handle('POST','/v1/durable-acp/adopt',{channelID:native.channelID,harnessID:runtimeKind,cwd:native.nativeWorkingDirectory??workspaceRoot,permission:runtimeKind==='grok_build'?grokPermission(native):native.permission,attachmentProtocol:1,expectedNativeSessionID:native.sessionID})
     const actual=page.snapshot.session?.sessionId
     if(actual!==native.sessionID)throw fail('The durable channel belongs to a different native session.')
-    const result={nativeWorkingDirectory:native.nativeWorkingDirectory,sessionID:native.sessionID,channelID:native.channelID,...(runtimeKind==='grok_build'?{permission:native.permission??'default'}:{}),configuration:page.snapshot.session,steeringSupported:page.snapshot.initialized?._meta?.steering?.supported===true}
+    const result={nativeWorkingDirectory:native.nativeWorkingDirectory,sessionID:native.sessionID,channelID:native.channelID,...(runtimeKind==='grok_build'?{permission:grokPermission(native)}:{}),configuration:page.snapshot.session,steeringSupported:page.snapshot.initialized?._meta?.steering?.supported===true}
     const channel = await attach(result,runtimeKind)
     await applyWorkspacePolicy(result, runtimeKind, (method, params) => rpc(channel, method, params))
     return result
@@ -364,21 +371,25 @@ export function createClientExecutionRuntime({ defaultAgent, durableACP, catalog
     native.attachmentToken=opened.result._meta?.attachmentToken;native.epoch=status.epoch;native.configuration=opened.result
   }
   // The Mac's Grok modes (`LocalACPSessionPermissions.grokMetadata`).
-  const grokPermissionChoices=[['default','Ask for approval','Grok asks for approval beyond its built-in read-only and preapproved actions.'],['auto','Auto',"Grok's safety checker decides which actions may run automatically."],
-    ['acceptEdits','Auto-accept edits','Allow file edits; ask before other actions that need approval.'],['dontAsk',"Don't ask",'Grok denies actions that are not already approved instead of asking.'],
+  const grokPermissionChoices=[['auto','Auto',"Grok's safety checker decides which actions may run automatically."],
     ['bypassPermissions','Full access','Allow commands and edits without ordinary approval prompts. Native deny rules, hooks, and administrator policies still apply.']].map(([id,label,description])=>({id,label,description}))
+  // Grok's permission is a process flag. A missing or no-longer-offered mode
+  // starts Grok in Full access rather than its native ask default.
+  function grokPermission(native) {
+    return workspacePermission('grok_build', supportedPermission('grok_build', native.permission) ?? fullAccessPermissions.grok_build, configuration)
+  }
   const selections = options => (options??[]).flatMap(item=>item.value!=null?[{id:String(item.value),label:item.name??String(item.value),
     ...(typeof item.description==='string'&&item.description?{description:item.description}:{}),...(typeof item._meta?.kind==='string'?{kind:item._meta.kind}:{})}]:selections(item.options))
   const withoutKind = values => values.map(({kind,...value})=>value)
   // A native configuration (`session/new`, `session/load`, config updates)
   // as the session settings every client reads.
-  function project(runtimeKind,initial,grokPermission) {
+  function project(runtimeKind,initial,grokSelected) {
     const model=initial.configOptions?.find(item=>item.id==='model'||item.category==='model')
     const thinking=initial.configOptions?.find(item=>['effort','thinking','reasoning_effort'].includes(item.id)||item.category==='thought_level')
     const permission=initial.configOptions?.find(item=>['permission_mode','approval_mode'].includes(item.id)||(item.id==='mode'&&['codex','claude_code'].includes(runtimeKind)))
       ??initial.configOptions?.find(item=>item.id==='mode')
     const modes=(initial.modes?.availableModes??[]).map(mode=>({id:mode.id,label:mode.name??mode.id,...(typeof mode.description==='string'&&mode.description?{description:mode.description}:{})}))
-    return {model:model?.currentValue??initial.models?.currentModelId,thinking:thinking?.currentValue,permission:runtimeKind==='grok_build'?(grokPermission??'default'):permission?.currentValue??initial.modes?.currentModeId,
+    return {model:model?.currentValue??initial.models?.currentModelId,thinking:thinking?.currentValue,permission:runtimeKind==='grok_build'?(grokSelected??fullAccessPermissions.grok_build):permission?.currentValue??initial.modes?.currentModeId,
       models:model?withoutKind(selections(model.options)):(initial.models?.availableModels??[]).map(item=>({id:item.modelId,label:item.name??item.modelId,...(typeof item.description==='string'&&item.description?{description:item.description}:{})})),
       thinkingLevels:withoutKind(selections(thinking?.options)),permissions:presentPermissionChoices(runtimeKind,runtimeKind==='grok_build'?grokPermissionChoices:permission?selections(permission.options):modes),availableTools:[],enabledTools:[],canConfigure:!(runtimeKind==='opencode')}
   }
@@ -387,7 +398,7 @@ export function createClientExecutionRuntime({ defaultAgent, durableACP, catalog
     let initial=native.configuration??{}
     if(runtimeKind==='default_agent'){await ensureBuiltIn(native);initial=native.configuration}
     const commands=channels.get(native.channelID)?.commands
-    return {...project(runtimeKind,initial,native.permission),...(Array.isArray(commands)?{commands:commands.flatMap(item=>typeof item?.name==='string'&&item.name?[{name:item.name,
+    return {...project(runtimeKind,initial,runtimeKind==='grok_build'?grokPermission(native):undefined),...(Array.isArray(commands)?{commands:commands.flatMap(item=>typeof item?.name==='string'&&item.name?[{name:item.name,
       ...(typeof item.description==='string'&&item.description?{detail:item.description}:{}),...(typeof item.input?.hint==='string'&&item.input.hint?{argumentHint:item.input.hint}:{})}]:[])}:{})}
   }
   // A harness's choices before any session exists (the calendar editor, the
@@ -423,7 +434,7 @@ export function createClientExecutionRuntime({ defaultAgent, durableACP, catalog
   }
   async function configure({native,runtimeKind,options}) {
     options = workspaceExecutionConfiguration({ runtimeKind, ...options }, configuration)
-    if(runtimeKind==='grok_build'&&options.permission&&options.permission!==(native.permission??'default'))throw fail('Grok permission is fixed when its process starts. Set the destination default before creating a new session.')
+    if(runtimeKind==='grok_build'&&options.permission&&options.permission!==grokPermission(native))throw fail('Grok permission is fixed when its process starts. Set the destination default before creating a new session.')
     if(runtimeKind==='opencode')return nativeSessions.perform(runtimeKind,native,'configure',options)
     if(runtimeKind==='default_agent')await ensureBuiltIn(native)
     const channel=runtimeKind==='default_agent'?null:await attach(native,runtimeKind)

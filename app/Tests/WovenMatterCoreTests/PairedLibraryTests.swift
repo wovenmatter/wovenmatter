@@ -226,7 +226,7 @@ extension PairedLibraryTests {
   @Test func observedScheduledTasksDoNotRunOnOtherMacs() async throws {
     let a = try await Mac(), b = try await Mac(); defer { a.remove(); b.remove() }
     let start = Date().addingTimeInterval(-30)
-    let task = WorkspaceCalendarTask(prompt: "Fixture", configuration: .init(runtimeKind: .codex, title: "Fixture", model: "fixture", permission: "read-only"))
+    let task = WorkspaceCalendarTask(prompt: "Fixture", configuration: .init(runtimeKind: .codex, title: "Fixture", model: "fixture", permission: "agent"))
     _ = try await a.database.saveCalendarEvent(draft: .init(title: "Owner's task", startsAt: start, timeZoneID: "UTC", task: task), creating: true, now: start)
     try await a.send(to: b)
     #expect(try await b.database.calendarItems().count == 1)
