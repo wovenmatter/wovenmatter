@@ -91,26 +91,30 @@ when an intentional design change is accepted.
   Background Server, then Dictation. Subscriptions & API Keys, Permissions &
   Access, Woven MCP, Bots, and Updates return to the page whose link opened them.
 - **Updates:** the one home for versions and updates.
-  - **The top row:** this Mac's Woven Matter version, with **Check for updates**
-    and, when a newer release is out, **Update this Mac**, the page's one primary
-    button. It updates only the app on this Mac. A development build says
-    "Development build" and never offers it.
-  - **Three rows with a compact Update each:** "Update everything across all
-    of your devices", "Update just the Woven Matter apps across your devices",
-    and "Update just the harnesses across your devices". No full-width
-    buttons, and never "fleet".
-  - **Your devices:** one expandable row per device, named as on the tailnet,
-    this Mac first, then other Macs, then remote workspaces. The row shows its
-    Woven Matter or Woven server version and **Bots** on the one device that
-    runs bots; its **Update** updates everything on that device. Opened, it
-    lists the app or server, its bots, and each harness, each with its own
-    **Update**. Bots never show a version of their own (they are part of
-    Woven Matter).
-  - **Plain copy:** secondary lines say what a button does, briefly.
+  - **The top row:** "This Mac · Woven Matter X" ("Woven Matter development
+    build" in development), always subtitled "This updates the Woven Matter
+    desktop app on this Mac.", with **Check for updates** and, when a newer
+    release is out, **Update this Mac**, the page's one primary button.
+  - **Three rows with a compact Update each:** "Update everything", "Update
+    just Woven Matter", and "Update just the harnesses", each subtitled with
+    what it covers across your devices. No full-width buttons, and never
+    "fleet".
+  - **Your devices:** no subtitle. One expandable row per device, named as on
+    the tailnet, this Mac first, then other Macs, then remote workspaces. The
+    closed row shows only its name, its Woven Matter or Woven server version,
+    **Bots** on the one device that runs bots, and a status; it has no Update
+    button. Opened, it lists "Update everything on this device", "Update just
+    Woven Matter", "Update just the bots" where they run, then each harness,
+    each with its own **Update**. Bots never show a version of their own.
+  - **Updates run side by side:** starting one never disables the others. Only
+    the rows an update covers show "Updating…"; a button whose parts are all
+    already updating waits.
+  - **Plain copy:** subtitles are full sentences saying what the row updates.
+    No "How it works" section; the rows explain themselves.
   - **No update counts:** each row says "Update available" itself.
   Work an update would stop is named in one alert before anything starts; Linux
-  harness downloads are reviewed together in one confirmation. Other pages show
-  only a "Versions don't match" link here.
+  harness downloads are reviewed in one confirmation per update. Other pages
+  show only a "Versions don't match" link here.
 - **General:** the Woven Matter version first (no heading), as one whole-row link
   that highlights on hover and opens Updates, with one line saying updates live
   there. Then Appearance, Conversation titles, and Privacy. Other

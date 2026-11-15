@@ -485,15 +485,27 @@ struct BotsHostTests {
 }
 
 @MainActor
-struct BundledComponentsTests {
+struct UpdatesVersionTests {
     @Test func versionsReadAsPeopleSeeThem() {
-        #expect(BundledComponents.debianVersion("5:29.9.3-1~ubuntu.26.04~resolute") == "29.9.3")
-        #expect(BundledComponents.debianVersion("2.4.2-4~ubuntu.26.04~resolute") == "2.4.2")
-        #expect(BundledComponents.trimmed(["156", "0", "30", "0"].joined(separator: ".")) == "156.0.30")
-        #expect(BundledComponents.trimmed("2.10.1") == "2.10.1")
         #expect(ExecutorVersions(installed: "2.3.0", latest: "2.4.1").updateAvailable)
         #expect(!ExecutorVersions(installed: "2.4.1", latest: "2.4.1").updateAvailable)
         #expect(!ExecutorVersions(installed: nil, latest: "2.4.1").updateAvailable)
+    }
+
+    @Test func onlyADeviceRestartingBlocksOtherUpdatesOnIt() {
+        typealias Part = FleetUpdatesModel.Part
+        let server = Part(kind: .app, key: "app:box", device: "box")
+        let bots = Part(kind: .bots, key: "bots:box", device: "box")
+        let codex = Part(kind: .harness, key: "member-box/codex", device: "box")
+        let claude = Part(kind: .harness, key: "member-box/claude", device: "box")
+        let elsewhere = Part(kind: .harness, key: "member-mini/codex", device: "mini")
+        let here = Part(kind: .harness, key: "this-mac/codex", device: nil)
+        #expect(server.conflicts(with: codex) && codex.conflicts(with: server))
+        #expect(server.conflicts(with: bots))
+        #expect(!codex.conflicts(with: claude))
+        #expect(!bots.conflicts(with: codex))
+        #expect(!server.conflicts(with: elsewhere))
+        #expect(!here.conflicts(with: Part(kind: .harness, key: "this-mac/claude", device: nil)))
     }
 
     @Test func imageToolsReadAsOneLine() {
