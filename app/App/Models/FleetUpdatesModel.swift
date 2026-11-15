@@ -65,8 +65,11 @@ final class FleetUpdatesModel {
     enum Request: Equatable, Sendable {
         case scope(FleetUpdateScope)
         case thisMacApp
-        /// Woven Matter on another device, with its bots.
+        /// Just another device's Woven Matter (or Woven server).
         case device(machineID: String)
+        /// Everything on one device: its Woven Matter (or Woven server), its bots, and its
+        /// harnesses. This Mac's app goes last, since it restarts.
+        case machine(machineID: String)
         /// One machine's bots: a Mac's VM, then the bots and everything in their containers.
         case bots(machineID: String)
         case harness(id: String)
@@ -205,6 +208,31 @@ final class FleetUpdatesModel {
         guard machine.state != .unreachable else { return false }
         if machine.kind == .linux { return !DeviceUpdatePlan.linuxHostIsCurrent(machine, thisMacVersion: thisMacVersion) }
         return deviceIsOutdated(machine)
+    }
+
+    /// Bots run on one machine at a time: the one whose bots are on (not off or unreachable).
+    func hasBots(_ machine: BotMachine) -> Bool {
+        machine.versions.runtime != nil && ![.off, .unreachable].contains(machine.state)
+    }
+
+    /// Where a machine's harnesses are listed: this Mac, a Linux workspace this Mac added, or
+    /// another member device.
+    func harnessLocation(for machine: BotMachine) -> FleetHarness.Location {
+        if machine.kind == .thisMac { return .thisMac }
+        if let workspace = workspace(for: machine) { return .workspace(workspace.id) }
+        return .member(machine.id)
+    }
+
+    /// Anything on this machine has an update: its app or server, its bots, or a harness.
+    func machineHasUpdate(_ machine: BotMachine) -> Bool {
+        let app = machine.kind == .thisMac ? thisMacIsBehind : canUpdate(machine)
+        return app || (hasBots(machine) && botsAreOutdated(machine))
+            || harnesses(on: harnessLocation(for: machine)).contains(where: \.updateAvailable)
+    }
+
+    /// This Mac's name as its other devices know it (its computer name).
+    var thisMacName: String {
+        model?.bots.thisMachine?.name ?? DevelopmentLaunch.deviceName()
     }
 
     /// Bots on a machine with an update waiting: older tools, helper or base image. (Their
@@ -626,11 +654,20 @@ final class FleetUpdatesModel {
             }
         case .thisMacApp:
             return [.thisMacApp]
+        case .machine(let machineID):
+            // Its app or server, then its bots (after an app update their runtime is new too).
+            guard let machine = model.bots.machines.first(where: { $0.id == machineID }) else { return [] }
+            let isThisMac = machine.kind == .thisMac
+            let app = isThisMac ? [] : plannedSteps(for: .device(machineID: machineID))
+            let bots = hasBots(machine) && (!app.isEmpty || botsAreOutdated(machine))
+                ? plannedSteps(for: .bots(machineID: machineID)) : []
+            return app + bots + (isThisMac && thisMacIsBehind ? [.thisMacApp] : [])
         case .device(let machineID):
+            // Just that device's Woven Matter or Woven server; its bots have their own row.
             var steps = plan.filter { step in
                 switch step {
-                case .linuxHost(let id, _), .mac(let id, _), .engine(let id, _), .bots(let id, _): id == machineID
-                case .thisMacApp: false
+                case .linuxHost(let id, _), .mac(let id, _): id == machineID
+                case .engine, .bots, .thisMacApp: false
                 }
             }
             // Another Mac installs the newest release itself, even when this Mac is behind it.
@@ -652,6 +689,9 @@ final class FleetUpdatesModel {
         case .scope(let scope): scope.includesHarnesses ? allHarnesses.filter(\.updateAvailable) : []
         case .harness(let id): allHarnesses.filter { $0.id == id }
         case .harnesses(let ids): allHarnesses.filter { ids.contains($0.id) }
+        case .machine(let machineID):
+            model?.bots.machines.first(where: { $0.id == machineID })
+                .map { harnesses(on: harnessLocation(for: $0)).filter(\.updateAvailable) } ?? []
         case .thisMacApp, .device, .bots: []
         }
     }

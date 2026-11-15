@@ -145,9 +145,10 @@ Each bot gets its own key, so its calls are attributed to it. Under **Bot keys**
 ## Keep versions in step
 
 When your devices run different versions, Settings → Bots shows **Versions
-don't match**, which opens Settings → Updates. There, under **All your
-devices**, **Update** next to **Everything** or **Woven Matter** updates each
-Linux host, other Macs, each Mac's bots VM, and the bots themselves. See
+don't match**, which opens Settings → Updates. There, **Update
+everything across all of your devices** or **Update just the Woven Matter apps
+across your devices** updates each Linux host, other Macs, each Mac's bots VM,
+and the bots themselves. See
 [Updates](updates.md).
 
 Next: [Apple devices](apple-devices.md) or [Remote workspaces](remote-workspaces.md).

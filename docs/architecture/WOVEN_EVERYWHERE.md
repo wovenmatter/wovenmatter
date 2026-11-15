@@ -2133,8 +2133,9 @@ answers); `PUT /v1/resources`; (optional forwards) `GET /v1/forwards`;
 ### Updates
 
 - Settings → Updates leads with "Update this Mac" (this Mac's app only), then
-  "All your devices" rows for Everything, Woven Matter, and Harnesses, each
-  with its own Update. Each part can also be
+  rows that update everything, just the Woven Matter apps, or just the
+  harnesses across all devices, then one expandable row per device whose
+  Update updates everything on it. Each part can also be
   updated on its own there: this Mac's app, another device, its bots, or one
   harness. Bots have no version of their own; they follow the machine's
   Woven Matter version. A development build never updates itself.

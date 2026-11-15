@@ -25,8 +25,7 @@ struct SettingsUpdatesView: View {
         ) {
             overview
             allDevices
-            thisMac
-            ForEach(updates.devices) { device($0) }
+            yourDevices
             SettingsHelp {
                 SettingsNote("Update this Mac updates only the Woven Matter app on this Mac. Updating everything across all your devices updates Woven Matter on every device first, then every harness.")
                 SettingsNote("Linux servers get the server release that comes with this Mac's Woven Matter. When this Mac is behind the newest release, it updates first and restarts, then the update continues with your other devices and harnesses.")
@@ -66,39 +65,25 @@ struct SettingsUpdatesView: View {
         updates.isDevelopmentBuild ? "Development build" : "Woven Matter \(updates.thisMacVersion ?? "")".trimmingCharacters(in: .whitespaces)
     }
 
-    /// What the top row's buttons do, and where things stand.
     private var thisMacDetail: String {
-        if updates.isDevelopmentBuild {
-            return "A development build can't update itself. Check for updates still checks your other devices and harnesses."
-        }
+        if updates.isDevelopmentBuild { return "Development builds don't update here." }
         if updates.thisMacIsBehind, let latest = updates.release?.version {
-            return "Woven Matter \(latest) is available. Update this Mac installs it on this Mac only, then restarts Woven Matter."
+            return "\(latest) is available. Updates just the Woven Matter app on this Mac."
         }
-        if updates.checking { return "Checking for a newer Woven Matter and newer harnesses…" }
-        if let checked = updates.checkedAt {
-            return "Up to date. Checked \(checked.formatted(.relative(presentation: .named)))."
-        }
-        return "Check for updates looks for a newer Woven Matter and newer harnesses on all your devices."
+        if updates.checking { return "Checking for updates…" }
+        if let checked = updates.checkedAt { return "Up to date. Checked \(checked.formatted(.relative(presentation: .named)))." }
+        return "Updates just the Woven Matter app on this Mac."
     }
 
     private var appsAvailable: Bool {
-        updates.thisMacIsBehind || updates.devices.contains { updates.canUpdate($0) || updates.botsAreOutdated($0) }
-            || model.bots.thisMachine.map(updates.botsAreOutdated) == true
+        updates.thisMacIsBehind || updates.devices.contains { updates.canUpdate($0) || (updates.hasBots($0) && updates.botsAreOutdated($0)) }
+            || model.bots.thisMachine.map { updates.hasBots($0) && updates.botsAreOutdated($0) } == true
     }
 
     private var harnessesAvailable: Bool { updates.allHarnesses.contains(where: \.updateAvailable) }
 
-    /// "Mac mini 0.4.3 · Workstation 0.4.2 (update available) · box (offline)"
-    private var otherDevices: String {
-        updates.devices.map { machine in
-            let version = machine.versions.app.map { " " + $0 } ?? ""
-            if machine.state == .unreachable { return machine.name + version + " (offline)" }
-            return machine.name + version + (updates.deviceIsOutdated(machine) ? " (update available)" : "")
-        }.joined(separator: " · ")
-    }
-
-    /// This Mac's version with Check for updates and, when a release is newer, the page's one
-    /// primary button: Update this Mac (only its Woven Matter app). Then every other device.
+    /// This Mac's version, Check for updates and, when a release is newer, the page's one
+    /// primary button: Update this Mac (only its Woven Matter app).
     private var overview: some View {
         SettingsSection {
             SettingsRow(title: "This Mac · " + thisMacProduct, detail: thisMacDetail) {
@@ -111,9 +96,6 @@ struct SettingsUpdatesView: View {
                         .buttonStyle(WovenPrimaryButtonStyle())
                         .disabled(updates.running)
                 }
-            }
-            if !updates.devices.isEmpty {
-                SettingsRow(title: "Your other devices", detail: otherDevices) { EmptyView() }
             }
             if let current = updates.current {
                 HStack(spacing: 8) {
@@ -129,119 +111,147 @@ struct SettingsUpdatesView: View {
         }
     }
 
-    /// Update one kind of thing on every device at once.
+    /// One kind of thing on every device at once.
     private var allDevices: some View {
-        SettingsSection(title: "All your devices", detail: "Update one kind of thing on every device at once. Anything already up to date is skipped.") {
-            allDevicesRow("Everything",
-                          detail: "Woven Matter, bots, and harnesses across all your devices. Devices update first, then harnesses.",
-                          available: appsAvailable || harnessesAvailable, accessibility: "Update everything across all your devices") {
+        SettingsSection {
+            allDevicesRow("Update everything across all of your devices", available: appsAvailable || harnessesAvailable) {
                 updates.start(.scope(.everything))
             }
-            allDevicesRow("Woven Matter",
-                          detail: "The app on each Mac and the server on each Linux machine, with their bots. If this Mac is behind, it updates first.",
-                          available: appsAvailable, accessibility: "Update Woven Matter across all your devices") {
+            allDevicesRow("Update just the Woven Matter apps across your devices", available: appsAvailable) {
                 updates.start(.scope(.apps))
             }
-            allDevicesRow("Harnesses",
-                          detail: "Codex, Claude Code, Grok Build, OpenCode, the Pi Durable SDK, and Executor across all your devices.",
-                          available: harnessesAvailable, accessibility: "Update harnesses across all your devices") {
+            allDevicesRow("Update just the harnesses across your devices", available: harnessesAvailable) {
                 updates.start(.scope(.harnesses))
             }
         }
     }
 
-    private func allDevicesRow(_ title: String, detail: String, available: Bool, accessibility: String,
-                               action: @escaping () -> Void) -> some View {
-        SettingsRow(title: title, detail: detail) {
-            if updates.checkedAt != nil || available {
-                SettingsStatus(available ? "Update available" : "Up to date", tone: available ? .warning : .good)
-            }
+    private func allDevicesRow(_ title: String, available: Bool, action: @escaping () -> Void) -> some View {
+        SettingsRow(title: title) {
+            if !available, updates.checkedAt != nil { SettingsStatus("Up to date", tone: .good) }
             Button(updates.running ? "Updating…" : "Update", action: action)
                 .buttonStyle(SettingsQuietButtonStyle())
                 .disabled(!available || updates.running || updates.review != nil)
-                .accessibilityLabel(accessibility)
+                .accessibilityLabel(title)
         }
     }
 
-    // MARK: Devices
+    // MARK: Your devices
 
-    private var thisMac: some View {
-        let latest = updates.release?.version
-        let detail = updates.isDevelopmentBuild ? "A development build doesn't update itself. Everything under Included with Woven Matter comes with it."
-            : updates.thisMacIsBehind ? latest.map { "\($0) is available. Update installs it on this Mac and restarts Woven Matter." }
-            : "The app on this Mac. Everything under Included with Woven Matter updates with it."
-        return SettingsSection(title: "This Mac", detail: "Woven Matter on this Mac, its bots, and the harnesses installed here.") {
-            SettingsRow(title: thisMacProduct, detail: detail) {
-                if updates.thisMacIsBehind {
-                    SettingsStatus("Update available", tone: .warning)
-                    Button("Update") { updates.start(.thisMacApp) }
-                        .buttonStyle(SettingsQuietButtonStyle())
-                        .disabled(updates.running)
-                } else if latest != nil, !updates.isDevelopmentBuild {
-                    SettingsStatus("Up to date", tone: .good)
-                }
+    /// This Mac, then other Macs, then remote workspaces (Linux machines).
+    private var deviceList: [BotMachine] {
+        let others = updates.devices.sorted { ($0.kind == .linux ? 1 : 0) < ($1.kind == .linux ? 1 : 0) }
+        return (model.bots.thisMachine.map { [$0] } ?? []) + others
+    }
+
+    private var yourDevices: some View {
+        SettingsSection(title: "Your devices", detail: "Update on a device updates everything on it. Open a device to update one part.") {
+            if model.bots.thisMachine == nil { thisMacOnly }
+            ForEach(deviceList) { deviceRow($0) }
+        }
+    }
+
+    /// Before the bots host has reported this Mac: its app and harnesses still show.
+    private var thisMacOnly: some View {
+        SettingsDisclosureRow(updates.thisMacName, detail: "This Mac · " + thisMacProduct) {
+            if updates.thisMacIsBehind || updates.harnesses(on: .thisMac).contains(where: \.updateAvailable) {
+                SettingsStatus("Update available", tone: .warning)
             }
-            // A machine runs bots when its bots runtime answers (its version is never shown).
-            if let machine = model.bots.thisMachine, machine.versions.runtime != nil { bots(machine) }
-            harnesses(on: .thisMac)
+        } content: {
+            thisMacAppRow
+            harnessRows(.thisMac)
+            includedRow
+        }
+    }
+
+    private func deviceSummary(_ machine: BotMachine) -> String {
+        let kind = machine.kind == .thisMac ? "This Mac" : machine.kind == .linux ? "Remote workspace" : "Mac"
+        let product = machine.kind == .thisMac ? thisMacProduct
+            : (machine.kind == .linux ? "Woven server" : "Woven Matter") + (machine.versions.app.map { " " + $0 } ?? "")
+        return [kind, product, updates.hasBots(machine) ? "Bots" : nil,
+                machine.state == .unreachable ? "Offline" : nil].compactMap { $0 }.joined(separator: " · ")
+    }
+
+    private func deviceRow(_ machine: BotMachine) -> some View {
+        let name = machine.kind == .thisMac ? updates.thisMacName : machine.name
+        let hasUpdate = machine.state != .unreachable && updates.machineHasUpdate(machine)
+        return SettingsDisclosureRow(name, detail: deviceSummary(machine)) {
+            if updates.running && updates.currentItem == machine.id { ProgressView().controlSize(.small) }
+            if machine.state == .unreachable {
+                SettingsStatus("Offline", tone: .neutral)
+            } else if hasUpdate {
+                SettingsStatus("Update available", tone: .warning)
+                Button("Update") { updates.start(.machine(machineID: machine.id)) }
+                    .buttonStyle(SettingsQuietButtonStyle())
+                    .disabled(updates.running)
+                    .accessibilityLabel("Update everything on \(name)")
+            } else {
+                SettingsStatus("Up to date", tone: .good)
+            }
+        } content: {
+            if machine.kind == .thisMac { thisMacAppRow } else { appRow(machine) }
+            if updates.hasBots(machine) { bots(machine) }
+            if machine.kind == .linux, let tools = Self.linuxServerTools {
+                SettingsNote((updates.deviceIsOutdated(machine) ? "Updating the server brings " : "With the server: ") + tools + ".")
+            }
+            if machine.kind == .thisMac {
+                harnessRows(.thisMac)
+                includedRow
+            } else if let workspace = updates.workspace(for: machine) {
+                harnessRows(.workspace(workspace.id))
+            } else {
+                memberHarnesses(machine)
+            }
+        }
+    }
+
+    private var thisMacAppRow: some View {
+        SettingsRow(title: thisMacProduct, detail: updates.isDevelopmentBuild ? "Development builds don't update here."
+                    : "Updates just the Woven Matter app on this Mac.") {
+            if updates.thisMacIsBehind {
+                SettingsStatus("Update available", tone: .warning)
+                Button("Update") { updates.start(.thisMacApp) }
+                    .buttonStyle(SettingsQuietButtonStyle())
+                    .disabled(updates.running)
+                    .accessibilityLabel("Update Woven Matter on this Mac")
+            } else if updates.release != nil, !updates.isDevelopmentBuild {
+                SettingsStatus("Up to date", tone: .good)
+            }
+        }
+    }
+
+    private var includedRow: some View {
+        Group {
             if !Self.bundled.isEmpty {
-                SettingsSummaryRow("Included with Woven Matter", detail: "Ships inside the app and updates with it.", value: nil) {
+                SettingsSummaryRow("Included with Woven Matter", detail: "Ships inside the app and updates with it.") {
                     ForEach(Self.bundled) { SettingsValueRow(label: $0.name, value: $0.version) }
                 }
             }
         }
     }
 
-    private func device(_ machine: BotMachine) -> some View {
-        let system = machine.kind == .linux ? "Linux" : "Mac"
+    /// Another device's Woven Matter or Woven server, alone.
+    private func appRow(_ machine: BotMachine) -> some View {
         let product = machine.kind == .linux ? "Woven server" : "Woven Matter"
         let version = machine.versions.app ?? (machine.kind == .linux ? "an older release" : "unknown version")
-        let about = machine.kind == .linux ? "The Woven server on this Linux machine, its bots, and its harnesses."
-            : "Woven Matter on this Mac, its bots, and the harnesses installed there."
-        return SettingsSection(title: machine.name, detail: about) {
+        let about = machine.kind == .linux ? "Updates just the Woven server on \(machine.name)." : "Updates just the Woven Matter app on \(machine.name)."
+        let detail = machine.kind == .linux && updates.deviceIsOutdated(machine) && !updates.canUpdate(machine)
+            ? "Update this Mac first. Its Woven Matter brings this server's update." : about
+        return SettingsRow(title: "\(product) \(version)", detail: detail) {
             if machine.state == .unreachable {
-                SettingsRow(title: "\(product) \(machine.versions.app ?? "")".trimmingCharacters(in: .whitespaces),
-                            detail: system + " · " + (machine.message ?? "Not reachable right now.") + " It shows the last version it reported.") {
-                    SettingsStatus("Offline", tone: .neutral)
+                SettingsStatus("Offline", tone: .neutral)
+            } else if updates.deviceIsOutdated(machine) {
+                SettingsStatus("Update available", tone: .warning)
+                if updates.canUpdate(machine) {
+                    Button("Update") { updates.start(.device(machineID: machine.id)) }
+                        .buttonStyle(SettingsQuietButtonStyle())
+                        .disabled(updates.running)
+                        .accessibilityLabel("Update \(product) on \(machine.name)")
                 }
             } else {
-                SettingsRow(title: "\(product) \(version)", detail: deviceDetail(machine, system: system)) {
-                    if updates.running && updates.currentItem == machine.id { ProgressView().controlSize(.small) }
-                    if updates.deviceIsOutdated(machine) {
-                        SettingsStatus("Update available", tone: .warning)
-                        if updates.canUpdate(machine) {
-                            Button("Update") { updates.start(.device(machineID: machine.id)) }
-                                .buttonStyle(SettingsQuietButtonStyle())
-                                .disabled(updates.running)
-                                .accessibilityLabel("Update \(machine.name)")
-                        }
-                    } else {
-                        SettingsStatus("Up to date", tone: .good)
-                    }
-                }
-                if machine.versions.runtime != nil { bots(machine) }
-                if machine.kind == .linux, let tools = Self.linuxServerTools {
-                    SettingsNote((updates.deviceIsOutdated(machine) ? "Updating the server brings " : "With the server: ") + tools + ".")
-                }
-                if let workspace = updates.workspace(for: machine) {
-                    harnesses(on: .workspace(workspace.id))
-                } else {
-                    memberHarnesses(machine)
-                }
+                SettingsStatus("Up to date", tone: .good)
             }
         }
-    }
-
-    private func deviceDetail(_ machine: BotMachine, system: String) -> String {
-        if machine.kind == .linux, updates.deviceIsOutdated(machine), !updates.canUpdate(machine) {
-            return system + " · Update this Mac first. Its Woven Matter brings this server's update."
-        }
-        if updates.deviceIsOutdated(machine), let target = updates.targetVersion {
-            return system + (machine.kind == .linux
-                ? " · \(target) is available. Update installs this Mac's server release there."
-                : " · \(target) is available. Update installs it on \(machine.name) over Tailscale.")
-        }
-        return system + " · Up to date with " + (machine.kind == .linux ? "this Mac's server release." : "the newest release.")
     }
 
     private func bots(_ machine: BotMachine) -> some View {
@@ -250,16 +260,18 @@ struct SettingsUpdatesView: View {
         let session = model.bots.session(for: machine.id)
         let behind = updates.botsToUpdate(machine)
         let tools = session?.runtimeStatus?.image?.tools
-        let state = behind == 0 ? "Updating refreshes each bot's tools and Ubuntu packages."
-            : (behind == 1 ? "1 bot has" : "\(behind) bots have") + " newer tools waiting."
-        let detail = [tools, state + " Bots keep their files and sign-ins."].compactMap { $0 }.joined(separator: " · ")
+        let waiting = behind == 0 ? nil : behind == 1 ? "1 bot has newer tools waiting." : "\(behind) bots have newer tools waiting."
+        let detail = [tools, waiting ?? "Updates just the bots here. They keep their files and sign-ins."]
+            .compactMap { $0 }.joined(separator: " · ")
         return SettingsRow(title: "Bots", detail: detail) {
             if busy || machine.updating { ProgressView().controlSize(.small) }
             SettingsStatus(outdated ? "Update available" : "Up to date", tone: outdated ? .warning : .good)
-            Button("Update") { updates.start(.bots(machineID: machine.id)) }
-                .buttonStyle(SettingsQuietButtonStyle())
-                .disabled(updates.running || machine.updating || machine.state != .ready)
-                .help("Updates the bots VM, then each bot and the tools in its container.")
+            if outdated {
+                Button("Update") { updates.start(.bots(machineID: machine.id)) }
+                    .buttonStyle(SettingsQuietButtonStyle())
+                    .disabled(updates.running || machine.updating || machine.state != .ready)
+                    .accessibilityLabel("Update just the bots on \(machine.kind == .thisMac ? "this Mac" : machine.name)")
+            }
         }
     }
 
@@ -278,19 +290,15 @@ struct SettingsUpdatesView: View {
                 SettingsStatus("Checking", tone: .neutral)
             }
         } else {
-            harnesses(on: .member(machine.id))
+            harnessRows(.member(machine.id))
         }
     }
 
-    private func harnesses(on location: FleetHarness.Location) -> some View {
+    /// Each harness on a device, with its versions and its own Update.
+    @ViewBuilder private func harnessRows(_ location: FleetHarness.Location) -> some View {
         let rows = updates.harnesses(on: location)
-        let outdated = rows.filter(\.updateAvailable).count
-        let value = rows.isEmpty ? "None installed" : outdated == 0 ? "Up to date" : "Update available"
-        return SettingsSummaryRow("Harnesses", detail: "The agents chats run on here. Open to see each version and update one on its own.",
-                                  value: value, tone: rows.isEmpty ? nil : outdated > 0 ? .warning : .good) {
-            if rows.isEmpty { SettingsEmpty("No harnesses are installed here yet.") }
-            ForEach(rows) { harness($0) }
-        }
+        if rows.isEmpty { SettingsNote("No harnesses are installed here yet.") }
+        ForEach(rows) { harness($0) }
     }
 
     private func harness(_ harness: FleetHarness) -> some View {

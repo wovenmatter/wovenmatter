@@ -95,18 +95,18 @@ when an intentional design change is accepted.
     and, when a newer release is out, **Update this Mac**, the page's one primary
     button. It updates only the app on this Mac. A development build says
     "Development build" and never offers it.
-  - **Your other devices:** one line with every device and its version.
-  - **All your devices:** three rows, **Everything**, **Woven Matter**, and
-    **Harnesses**, each with a line saying what it covers and a compact
-    **Update**. No full-width buttons; say "all your devices", not "fleet".
-  - **Every row says what it is and what its button does** in its secondary
-    line.
-  - **One section per device**, This Mac first:
-    - its Woven Matter or Woven server row with its own **Update**
-    - its bots, showing the tools in their containers and never a version of
-      their own (bots are part of Woven Matter)
-    - a **Harnesses** summary row listing each harness with its versions and
-      **Update**
+  - **Three rows with a compact Update each:** "Update everything across all
+    of your devices", "Update just the Woven Matter apps across your devices",
+    and "Update just the harnesses across your devices". No full-width
+    buttons, and never "fleet".
+  - **Your devices:** one expandable row per device, named as on the tailnet,
+    this Mac first, then other Macs, then remote workspaces. The row shows its
+    Woven Matter or Woven server version and **Bots** on the one device that
+    runs bots; its **Update** updates everything on that device. Opened, it
+    lists the app or server, its bots, and each harness, each with its own
+    **Update**. Bots never show a version of their own (they are part of
+    Woven Matter).
+  - **Plain copy:** secondary lines say what a button does, briefly.
   - **No update counts:** each row says "Update available" itself.
   Work an update would stop is named in one alert before anything starts; Linux
   harness downloads are reviewed together in one confirmation. Other pages show

@@ -9,32 +9,32 @@ click it to open the page.
 
 - **The top row:** this Mac's Woven Matter version and **Check for updates**,
   which looks up the newest release and every harness's newest version. When a
-  newer release is out, **Update this Mac** updates the Woven Matter app on this
-  Mac, and only that.
-- **Your other devices:** every other device and the version it runs.
-- **All your devices:** the three rows described below.
-- **This Mac:** its Woven Matter version, its bots, and a **Harnesses** row that
-  opens to list Pi Durable SDK, Codex, Claude Code, Grok Build, OpenCode, and
-  Executor with their versions. **Included with Woven Matter** lists what ships
-  inside the app and updates with it: the Chromium browser, Playwright, Node, the
-  Cua computer-use driver, the bots VM, and the updater.
-- **Bots:** each machine's bots row shows the tools in their containers (Ubuntu,
-  Node, and Playwright with Chromium) and how many bots have an update waiting.
-  Bots are part of Woven Matter, so they have no version of their own.
-- **Each other Mac and Linux machine:** its Woven Matter or Woven server version,
-  its bots, and a **Harnesses** row with every harness installed there. A device
-  that is offline shows the last version it reported. A device running an older
-  Woven Matter shows its harnesses once it's updated.
+  newer release is out, **Update this Mac** updates just the Woven Matter app
+  on this Mac.
+- **Three rows for all your devices at once,** described below.
+- **Your devices:** each device by its name on your tailnet, this Mac first,
+  then your other Macs, then your remote workspaces. Each shows its Woven
+  Matter or Woven server version, and **Bots** on the device that runs your
+  bots. **Update** on a device updates everything on it. Open a device to see
+  and update one part:
+  - its Woven Matter or Woven server
+  - its bots, showing the tools in their containers (Ubuntu, Node, and
+    Playwright with Chromium). Bots are part of Woven Matter, so they have no
+    version of their own.
+  - each harness (Pi Durable SDK, Codex, Claude Code, Grok Build, OpenCode,
+    and Executor) with its versions
+  - on this Mac, **Included with Woven Matter**: what ships inside the app and
+    updates with it (the Chromium browser, Playwright, Node, the Cua
+    computer-use driver, the bots VM, and the updater)
 
-Anything with a newer version shows **Update available** and its own
-**Update** button.
+  A device that is offline shows the last version it reported. A device running
+  an older Woven Matter shows its harnesses once it's updated.
 
 ## Update all your devices at once
 
-Under **All your devices**, each row has its own **Update**:
-
-- **Everything** updates Woven Matter on every device, then every harness.
-- **Woven Matter** updates only the apps, the Linux servers, the bots VMs,
+- **Update everything across all of your devices** updates Woven Matter on every device, then every
+  harness.
+- **Update just the Woven Matter apps across your devices** updates only the apps, the Linux servers, the bots VMs,
   and the bots. A Linux server update also brings its Node, Playwright with
   Chromium, and Docker Engine. Updating bots brings each bot's Node,
   Playwright, Chromium, and Ubuntu packages up to date. Each bot keeps its
@@ -42,7 +42,8 @@ Under **All your devices**, each row has its own **Update**:
   Each bot is snapshotted first, and a failed update rolls back. When a release
   moves bots to a new container image, what they installed comes along; see
   [what a bot keeps through updates](bots.md#what-a-bot-keeps-through-updates).
-- **Harnesses** updates only the harnesses, Pi Durable SDKs, and Executor.
+- **Update just the harnesses across your devices** updates only the
+  harnesses, Pi Durable SDKs, and Executor.
 
 Devices update one at a time: Linux servers, then your other Macs, then each
 machine's bots. A Linux server gets the server release that comes with this
