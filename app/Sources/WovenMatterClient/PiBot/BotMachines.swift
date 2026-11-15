@@ -343,12 +343,12 @@ public struct BotVersionReport: Equatable, Sendable {
     public var message: String? {
         guard needsUpdate else { return nil }
         if syncStopped {
-            return "Library sync stopped because your devices run different versions. Update everything everywhere in Settings → Updates to resume it."
+            return "Library sync stopped because your devices run different versions. Update everything in Settings → Updates to resume it."
         }
         var names: [String] = []
         for part in outdated where !names.contains(part.name) { names.append(part.name) }
         let list = names.count <= 2 ? names.joined(separator: " and ") : names.dropLast().joined(separator: ", ") + " and " + names.last!
-        return "\(list) \(names.count == 1 ? "runs" : "run") a different version. Update everything everywhere in Settings → Updates so every device matches."
+        return "\(list) \(names.count == 1 ? "runs" : "run") a different version. Update everything in Settings → Updates so every device matches."
     }
 
     /// Peer sync rejects a schema mismatch with this wording (`PairedLibraryStore`).

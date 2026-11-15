@@ -96,9 +96,11 @@ when an intentional design change is accepted.
     button. It updates only the app on this Mac. A development build says
     "Development build" and never offers it.
   - **Your other devices:** one line with every device and its version.
-  - **Across your fleet:** three full-width buttons, each on its own line with
-    what it covers: **Update everything everywhere**, **Update Woven Matter
-    across your fleet**, and **Update harnesses across your fleet**.
+  - **All your devices:** three rows, **Everything**, **Woven Matter**, and
+    **Harnesses**, each with a line saying what it covers and a compact
+    **Update**. No full-width buttons; say "all your devices", not "fleet".
+  - **Every row says what it is and what its button does** in its secondary
+    line.
   - **One section per device**, This Mac first:
     - its Woven Matter or Woven server row with its own **Update**
     - its bots, showing the tools in their containers and never a version of
@@ -109,8 +111,9 @@ when an intentional design change is accepted.
   Work an update would stop is named in one alert before anything starts; Linux
   harness downloads are reviewed together in one confirmation. Other pages show
   only a "Versions don't match" link here.
-- **General:** the Woven Matter version row first (no heading), with **Check for
-  updates** and **Updates**, then Appearance, Conversation titles, and Privacy. Other
+- **General:** the Woven Matter version first (no heading), as one whole-row link
+  that highlights on hover and opens Updates, with one line saying updates live
+  there. Then Appearance, Conversation titles, and Privacy. Other
   settings live on the page for what they affect. Summary rows whose value would be
   unclear before opening (Sidebar sections, Agent icons) show a one-line description
   instead. Conversation titles show the Codex account they use and link to its page.

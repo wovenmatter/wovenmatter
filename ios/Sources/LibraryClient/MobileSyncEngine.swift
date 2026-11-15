@@ -225,7 +225,7 @@ public actor MobileSyncEngine {
     let names = status.peers.filter { $0.state == "updateRequired" }.map(\.name)
     guard !names.isEmpty else { return nil }
     return names.sorted().joined(separator: ", ") + (names.count == 1 ? " runs" : " run")
-      + " a different version of Woven Matter. On a Mac, open Settings → Updates and choose Update everything everywhere."
+      + " a different version of Woven Matter. On a Mac, open Settings → Updates and update everything."
   }
   private func synchronizeLibrary() async throws {
     var errors: [any Error] = []

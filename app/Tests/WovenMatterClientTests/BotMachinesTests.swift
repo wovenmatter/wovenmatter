@@ -144,7 +144,7 @@ struct BotMachinesTests {
         let report = BotVersionReport(thisMacVersion: "1.4.0", machines: machines)
         // Bots have no version of their own: only the Woven Matter versions count.
         #expect(report.outdated.map(\.id) == ["box"])
-        #expect(report.message?.contains("Update everything everywhere in Settings → Updates") == true)
+        #expect(report.message?.contains("Update everything in Settings → Updates") == true)
         let stopped = BotVersionReport(thisMacVersion: "1.4.0", machines: [machine("this", kind: .thisMac)],
                                        syncErrors: ["Update both Macs to the same Woven Matter version before synchronizing."])
         #expect(stopped.syncStopped && stopped.needsUpdate)

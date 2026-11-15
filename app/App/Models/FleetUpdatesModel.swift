@@ -150,7 +150,7 @@ final class FleetUpdatesModel {
         guard let current = thisMacVersion, current == resume.targetVersion
                 || DeviceUpdatePlan.isNewer(current, than: resume.targetVersion) else {
             if resume.fromVersion == thisMacVersion {
-                notice = "This Mac's update didn't finish, so the rest wasn't updated. Choose Update everything everywhere to try again."
+                notice = "This Mac's update didn't finish, so the rest wasn't updated. Update everything in Settings → Updates to try again."
             }
             return
         }

@@ -96,35 +96,20 @@ struct SettingsGeneralView: View {
         CodexLogoStyle(rawValue: storedCodexLogoStyle) ?? .defaultStyle
     }
 
-    /// The first row: the version of Woven Matter on this Mac, a check for a newer release, and
-    /// the Updates page (every device and harness).
+    /// The first row: this Mac's Woven Matter version. The whole row opens Settings → Updates,
+    /// where this Mac and every other device are updated.
     private var versionSection: some View {
         SettingsSection {
-            SettingsRow(title: versionTitle, detail: versionDetail) {
-                if updates.checking { ProgressView().controlSize(.small) }
-                Button(updates.checking ? "Checking…" : "Check for updates") { Task { await updates.checkAll() } }
-                    .buttonStyle(SettingsQuietButtonStyle())
-                    .disabled(updates.checking || updates.running)
-                Button("Updates", action: onOpenUpdates)
-                    .buttonStyle(SettingsQuietButtonStyle())
-            }
+            SettingsDestinationRow(
+                title: updates.isDevelopmentBuild ? "Woven Matter development build" : "Woven Matter \(updates.thisMacVersion ?? "")",
+                detail: "Open Updates to update this Mac, your other devices, and their harnesses.",
+                status: updates.running ? "Updating…" : updates.availableCount > 0 ? "Update available" : nil,
+                statusTone: updates.running ? .neutral : .warning,
+                icon: { LucideIcon(glyph: .rocket, size: 15) },
+                action: onOpenUpdates
+            )
         }
         .task { updates.loadIfNeeded() }
-    }
-
-    private var versionTitle: String {
-        updates.isDevelopmentBuild ? "Woven Matter development build" : "Woven Matter \(updates.thisMacVersion ?? "")"
-    }
-
-    private var versionDetail: String? {
-        if updates.running { return "Updating…" }
-        if updates.isDevelopmentBuild { return "Built from source, so it doesn't update itself." }
-        if updates.thisMacIsBehind, let latest = updates.release?.version { return "Woven Matter \(latest) is available." }
-        if updates.checkedAt != nil {
-            let others = updates.availableCount
-            return others == 0 ? "Up to date." : "Up to date. Other updates are waiting in Updates."
-        }
-        return nil
     }
 }
 
