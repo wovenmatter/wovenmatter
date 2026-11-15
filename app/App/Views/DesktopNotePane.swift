@@ -227,16 +227,8 @@ struct DesktopNotePane: View {
                     .disabled(isRefreshingLinkedData)
                 }
                 if currentDocument.kind == .canvas && documentIsEditable {
-                    let inserter = PageComponentInserter(model: model, document: document, viewState: $canvasViewState, folderID: note.folderID)
-                    Menu {
-                        inserter.menu { inserter.cursorPosition }
-                    } label: {
-                        Image(systemName: "plus").font(.system(size: 14))
-                    }
-                    .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
-                    .frame(width: 32, height: 32)
-                    .foregroundStyle(WovenPalette.mutedForeground)
-                    .help("Add component").accessibilityLabel("Add component")
+                    PageAddComponentButton(inserter: PageComponentInserter(model: model, document: document,
+                        viewState: $canvasViewState, folderID: note.folderID))
                 }
                 if currentDocument.kind != .html && documentIsEditable {
                     Button {

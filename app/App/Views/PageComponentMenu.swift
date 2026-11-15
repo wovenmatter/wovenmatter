@@ -137,28 +137,24 @@ struct PageComponentMenu: View {
 
     var cursorPosition: PagePosition { viewState.insertionPosition(in: document.materializedPage()) }
 
-    @ViewBuilder func menu(position: @escaping () -> PagePosition) -> some View {
-        Button("Text") { add(kind: .text, position: position()) }
-        Button("Task") { add(kind: .task, position: position()) }
-        Button("Section") { add(kind: .section, position: position()) }
-        Button("Table") { add(kind: .table, position: position()) }
-        Divider()
-        Button("Existing asset…") { viewState.assetPickerPosition = position() }
-        Button("Image…") { importImage(position: position()) }.disabled(viewState.importingImage)
-        ForEach(NoteArtifactKind.allCases, id: \.self) { kind in
-            Button("New \(kind.displayName)") { createAsset(kind, position: position()) }
-        }
+    func menu(position: @escaping () -> PagePosition) -> some View {
+        PageMenuEntries(entries: addEntries(position: position))
+    }
+
+    /// Text, task, section, table, an existing asset or image, or a new asset.
+    func addEntries(position: @escaping () -> PagePosition) -> [PageMenuEntry] {
+        var entries: [PageMenuEntry] = [("Text", PageComponentKind.text), ("Task", .task), ("Section", .section), ("Table", .table)]
+            .map { title, kind in .button(title) { add(kind: kind, position: position()) } }
+        entries += [.divider, .button("Existing asset…") { viewState.assetPickerPosition = position() },
+            .button("Image…", enabled: !viewState.importingImage) { importImage(position: position()) }]
+        entries += NoteArtifactKind.allCases.map { kind in .button("New \(kind.displayName)") { createAsset(kind, position: position()) } }
+        return entries
     }
 
     /// The same choices for a native text view's context menu, followed by
     /// the selected component's actions.
     func menuItems(position: @escaping () -> PagePosition) -> [NSMenuItem] {
-        var simple: [PageMenuEntry] = [("Text", PageComponentKind.text), ("Task", .task), ("Section", .section), ("Table", .table)]
-            .map { title, kind in .button(title) { add(kind: kind, position: position()) } }
-        simple += [.divider, .button("Existing asset…") { viewState.assetPickerPosition = position() },
-            .button("Image…", enabled: !viewState.importingImage) { importImage(position: position()) }]
-        simple += NoteArtifactKind.allCases.map { kind in .button("New \(kind.displayName)") { createAsset(kind, position: position()) } }
-        var items = [PageMenuEntry.submenu("Add component", simple).menuItem]
+        var items = [PageMenuEntry.submenu("Add component", addEntries(position: position)).menuItem]
         if let id = viewState.selected.first {
             let actions = PageComponentActions(document: $document, viewState: $viewState, componentID: id).entries
             if !actions.isEmpty { items.append(PageMenuEntry.submenu("Component actions", actions).menuItem) }
@@ -204,4 +200,42 @@ final class ClosureMenuItem: NSMenuItem {
     }
     required init(coder: NSCoder) { fatalError("init(coder:) is not supported") }
     @objc private func run() { handler() }
+}
+
+/// The toolbar's Add component button. It is an ordinary toolbar icon button
+/// that opens the add menu below itself at the cursor's position.
+struct PageAddComponentButton: View {
+    let inserter: PageComponentInserter
+    @State private var anchor = MenuAnchorHolder()
+
+    var body: some View {
+        Button {
+            anchor.popUp(inserter.addEntries { inserter.cursorPosition }.map(\.menuItem))
+        } label: {
+            Image(systemName: "plus").font(.system(size: 14)).frame(width: 32, height: 32)
+        }
+        .buttonStyle(WovenIconButtonStyle())
+        .background(MenuAnchor(holder: anchor))
+        .help("Add component").accessibilityLabel("Add component")
+    }
+}
+
+@MainActor final class MenuAnchorHolder {
+    weak var view: NSView?
+    func popUp(_ items: [NSMenuItem]) {
+        guard let view else { return }
+        let menu = NSMenu()
+        for item in items { menu.addItem(item) }
+        menu.popUp(positioning: nil, at: NSPoint(x: 0, y: view.isFlipped ? view.bounds.height + 4 : -4), in: view)
+    }
+}
+
+private struct MenuAnchor: NSViewRepresentable {
+    let holder: MenuAnchorHolder
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView()
+        holder.view = view
+        return view
+    }
+    func updateNSView(_ view: NSView, context: Context) { holder.view = view }
 }

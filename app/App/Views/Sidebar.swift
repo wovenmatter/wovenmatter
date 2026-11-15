@@ -1590,7 +1590,7 @@ struct NewNoteDrawer: View {
         } content: {
             VStack(alignment: .leading, spacing: 10) {
                 // Each kind uses the same icon as its asset rows.
-                artifactButton("Note", detail: "Rich text you write, format and dictate", icon: .fileText, kind: .note)
+                artifactButton("Note", detail: "A simple text document for your notes", icon: .fileText, kind: .note)
                 artifactButton("Page", detail: "A fluid document for your work with agents", icon: .panelsTopLeft, kind: .canvas)
                 artifactButton("Sheet", detail: "Rows and columns for data and calculations", systemImage: "tablecells", kind: .spreadsheet)
                 artifactButton("Artifact", detail: "Interactive apps your agent builds on live data",
