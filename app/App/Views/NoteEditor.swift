@@ -508,6 +508,8 @@ struct NoteEditor: NSViewRepresentable {
     var onFocus: ((NoteEditorController) -> Void)?
     var onSynchronize: (() -> Void)?
     var sharedUndoManager: UndoManager?
+    /// Items placed first in the text view's right-click menu.
+    var contextMenuItems: (() -> [NSMenuItem])?
 
     func makeCoordinator() -> Coordinator { Coordinator(parent: self) }
 
@@ -522,6 +524,7 @@ struct NoteEditor: NSViewRepresentable {
 
         let textView = NoteTextView(usingTextLayoutManager: true)
         textView.sharedUndoManager = sharedUndoManager
+        textView.contextMenuItems = contextMenuItems
         textView.delegate = context.coordinator
         textView.drawsBackground = false
         textView.isRichText = true
@@ -576,6 +579,7 @@ struct NoteEditor: NSViewRepresentable {
         }
         guard let textView = scrollView.documentView as? NSTextView else { return }
         textView.isEditable = isEnabled
+        (textView as? NoteTextView)?.contextMenuItems = contextMenuItems
         dictationEditor?.bind(textView, identity: dictationIdentity)
         controller.bind(textView: textView, document: document) { updated in
             context.coordinator.emit(updated)
@@ -932,6 +936,7 @@ private final class NoteTextView: NSTextView {
     var sharedUndoManager: UndoManager?
     var showsPageTasks = false
     var onToggleTask: ((String) -> Void)?
+    var contextMenuItems: (() -> [NSMenuItem])?
     private var taskRegions: [(String, NSRect)] = []
     private var taskElements: [PageTaskAccessibilityElement] = []
     // Each note owns its editing history; the window's title fields and other
@@ -956,6 +961,23 @@ private final class NoteTextView: NSTextView {
             copy.addAttribute(.noteDatabaseValueID, value: identity, range: range)
         }
         super.insertText(copy, replacementRange: replacementRange)
+    }
+
+    override func menu(for event: NSEvent) -> NSMenu? {
+        let menu = super.menu(for: event)
+        guard let contextMenuItems, isEditable else { return menu }
+        // Additions land at the clicked place unless it is inside the selection.
+        let index = characterIndexForInsertion(at: convert(event.locationInWindow, from: nil))
+        if window?.firstResponder !== self { window?.makeFirstResponder(self) }
+        if !NSLocationInRange(index, selectedRange()) || selectedRange().length == 0 {
+            setSelectedRange(NSRange(location: index, length: 0))
+        }
+        let items = contextMenuItems()
+        guard !items.isEmpty else { return menu }
+        let result = menu ?? NSMenu()
+        result.insertItem(.separator(), at: 0)
+        for item in items.reversed() { result.insertItem(item, at: 0) }
+        return result
     }
 
     @objc func undo(_ sender: Any?) {

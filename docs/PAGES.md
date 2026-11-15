@@ -15,10 +15,13 @@ ordinary typing, undo, and dictation. Contiguous text grows inside one outer
 scrolling document. Text positions before, between, and after embedded components
 let you keep writing without creating text cards.
 
-Use **Add component** for text, a task, section, table, existing asset, or a new
-Note, Sheet, Artifact, or Page. A section nests text and other components. The
-section's plus adds inside it. **Component actions** moves components up/down,
-into a section, or out of it. Moving a section moves its contents together.
+A new Page is an empty document: click anywhere and type. The toolbar's plus
+(**Add component**) inserts text, a task, section, table, existing asset, or a new
+Note, Page, Sheet, or Artifact after the paragraph holding the cursor. Right-click
+anywhere in the Page for the same **Add component** menu and the clicked
+component's **Component actions**. A section nests text and other components, and
+its plus adds inside it. **Component actions** moves components up/down, into a
+section, or out of it. Moving a section moves its contents together.
 Nested Pages link to their original document and open in the normal asset tab.
 
 Type in task paragraphs and click their checkbox to complete or reopen them.

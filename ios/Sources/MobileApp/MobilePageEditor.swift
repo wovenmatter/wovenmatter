@@ -59,11 +59,6 @@ struct MobilePageEditor<TextRow: View>: View {
       ScrollView {
         LazyVStack(alignment: .leading, spacing: 6) {
           if !editable { Text("Page · read only · linked data").font(.caption).foregroundStyle(WovenPalette.mutedForeground) }
-          TextField("Add a description…", text: Binding(get: { page.boardPurpose ?? "" }, set: { value in
-            _ = commit("Description") { try $0.applyPageEdit(.init(action: .setPurpose, purpose: value)) }
-          }), axis: .vertical)
-            .font(.callout).foregroundStyle(WovenPalette.mutedForeground).lineLimit(1...4)
-            .disabled(!editable).accessibilityIdentifier("page-purpose").padding(.bottom, 6)
           ForEach(layout.rows.filter(visible)) { row in
             rowView(row).padding(.leading, CGFloat(row.depth) * 16)
           }
@@ -239,8 +234,8 @@ struct MobileNewAssetItems: View {
   let create: (NoteArtifactKind) -> Void
   var body: some View {
     Button("Note", glyph: .fileText) { create(.note) }.accessibilityIdentifier("action-new-note")
+    Button("Page", glyph: .panelsTopLeft) { create(.canvas) }.accessibilityIdentifier("action-new-page")
     Button("Sheet", systemImage: "tablecells") { create(.spreadsheet) }.accessibilityIdentifier("action-new-sheet")
     Button("Artifact", systemImage: "chevron.left.forwardslash.chevron.right") { create(.html) }.accessibilityIdentifier("action-new-artifact")
-    Button("Page", glyph: .panelsTopLeft) { create(.canvas) }.accessibilityIdentifier("action-new-page")
   }
 }

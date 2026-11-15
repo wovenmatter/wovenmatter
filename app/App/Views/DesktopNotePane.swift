@@ -19,6 +19,9 @@ struct DesktopNotePane: View {
     @State private var documentCache = NoteDocumentCache()
     @State private var canvasViewState = CanvasViewState()
     @State private var showsFormatting = false
+    @State private var sheetHistory = SheetUndoHistory()
+    @State private var artifactHistory = ArtifactCodeHistory()
+    @State private var sheetDictation = DictationEditor()
     @State private var showsVersionHistory = false
     @State private var showsCharacterCount = false
     @State private var linkedDataJSON: String?
@@ -45,6 +48,88 @@ struct DesktopNotePane: View {
                 model.updateNoteDraft(note: note, content: content)
             }
         )
+    }
+
+    /// The Sheet's document, recording each local edit for undo.
+    private var sheetDocument: Binding<NoteDocument> {
+        Binding(get: { document.wrappedValue }, set: { updated in
+            let before = document.wrappedValue
+            document.wrappedValue = updated
+            sheetHistory.recordLocal(from: before, to: document.wrappedValue)
+        })
+    }
+
+    private var artifactCode: String? { currentDocument.kind == .html ? currentDocument.html : nil }
+
+    private func canUndo(_ kind: NoteArtifactKind) -> Bool {
+        switch kind {
+        case .note: editorController.canUndo
+        case .canvas: activePageEditor?.canUndo == true || !canvasViewState.undoStack.isEmpty
+        case .spreadsheet: sheetHistory.canUndo
+        case .html: artifactHistory.canUndo
+        }
+    }
+
+    private func canRedo(_ kind: NoteArtifactKind) -> Bool {
+        switch kind {
+        case .note: editorController.canRedo
+        case .canvas: activePageEditor?.canRedo == true || !canvasViewState.redoStack.isEmpty
+        case .spreadsheet: sheetHistory.canRedo
+        case .html: artifactHistory.canRedo
+        }
+    }
+
+    private func undo(_ kind: NoteArtifactKind) {
+        switch kind {
+        case .note: editorController.undo()
+        case .canvas:
+            if activePageEditor?.canUndo == true { activePageEditor?.undo() }
+            else { var value = document.wrappedValue; canvasViewState.undo(&value); document.wrappedValue = value }
+        case .spreadsheet: if let value = sheetHistory.undo(current: document.wrappedValue) { document.wrappedValue = value }
+        case .html: restoreArtifactCode(artifactHistory.undo(current: currentDocument.html))
+        }
+    }
+
+    private func redo(_ kind: NoteArtifactKind) {
+        switch kind {
+        case .note: editorController.redo()
+        case .canvas:
+            if activePageEditor?.canRedo == true { activePageEditor?.redo() }
+            else { var value = document.wrappedValue; canvasViewState.redo(&value); document.wrappedValue = value }
+        case .spreadsheet: if let value = sheetHistory.redo(current: document.wrappedValue) { document.wrappedValue = value }
+        case .html: restoreArtifactCode(artifactHistory.redo(current: currentDocument.html))
+        }
+    }
+
+    /// Restores earlier Artifact code. Saved inputs are kept: the store merges
+    /// them separately from the code.
+    private func restoreArtifactCode(_ html: String?) {
+        guard let html else { return }
+        var value = document.wrappedValue
+        value.html = html
+        document.wrappedValue = value
+    }
+
+    private func bindSheetDictation() {
+        if let window = NSApp.keyWindow, let field = window.firstResponder as? NSTextView, field.isFieldEditor {
+            sheetDictation.bind(field, identity: "sheet:\(note.id)")
+        } else {
+            sheetDictation.unbind()
+        }
+    }
+
+    /// Starts Page dictation at the end of the text when no text has the cursor yet.
+    private func startPageDictation() {
+        canvasViewState.focusEndRequest += 1
+        Task { @MainActor in
+            for _ in 0..<20 {
+                if let dictation = activePageEditor?.boundDictationEditor {
+                    DictationModel.shared.toggle(editor: dictation)
+                    return
+                }
+                try? await Task.sleep(for: .milliseconds(25))
+            }
+        }
     }
 
     private var documentIsEditable: Bool {
@@ -103,43 +188,21 @@ struct DesktopNotePane: View {
                     .frame(minWidth: currentDocument.kind == .canvas ? 100 : nil)
                     .layoutPriority(1)
                 Spacer()
-                if currentDocument.kind == .note {
-                    Button { editorController.undo() } label: {
+                if documentIsEditable {
+                    Button { undo(currentDocument.kind) } label: {
                         Image(systemName: "arrow.uturn.backward")
                             .font(.system(size: 14)).frame(width: 32, height: 32)
                     }
                     .buttonStyle(WovenIconButtonStyle())
-                    .disabled(!editorController.canUndo)
-                    .help("Undo (⌘Z)").accessibilityLabel("Undo")
-                    Button { editorController.redo() } label: {
+                    .disabled(!canUndo(currentDocument.kind))
+                    .help(currentDocument.kind == .html ? "Undo the last code change" : "Undo (⌘Z)").accessibilityLabel("Undo")
+                    Button { redo(currentDocument.kind) } label: {
                         Image(systemName: "arrow.uturn.forward")
                             .font(.system(size: 14)).frame(width: 32, height: 32)
                     }
                     .buttonStyle(WovenIconButtonStyle())
-                    .disabled(!editorController.canRedo)
-                    .help("Redo (⇧⌘Z)").accessibilityLabel("Redo")
-                }
-                if currentDocument.kind == .canvas && documentIsEditable {
-                    Button {
-                        if activePageEditor?.canUndo == true { activePageEditor?.undo() }
-                        else { var value = document.wrappedValue; canvasViewState.undo(&value); document.wrappedValue = value }
-                    } label: { Image(systemName: "arrow.uturn.backward").frame(width: 32, height: 32) }
-                    .buttonStyle(WovenIconButtonStyle())
-                    .disabled(activePageEditor?.canUndo != true && canvasViewState.undoStack.isEmpty)
-                    .accessibilityLabel("Undo")
-                    Button {
-                        if activePageEditor?.canRedo == true { activePageEditor?.redo() }
-                        else { var value = document.wrappedValue; canvasViewState.redo(&value); document.wrappedValue = value }
-                    } label: { Image(systemName: "arrow.uturn.forward").frame(width: 32, height: 32) }
-                    .buttonStyle(WovenIconButtonStyle())
-                    .disabled(activePageEditor?.canRedo != true && canvasViewState.redoStack.isEmpty)
-                    .accessibilityLabel("Redo")
-                    Button { showsFormatting.toggle() } label: { Image(systemName: "textformat").frame(width: 32, height: 32) }
-                        .buttonStyle(WovenIconButtonStyle()).help("Format text")
-                        .disabled(activePageEditor == nil || titleFocused)
-                    if let dictation = activePageEditor?.boundDictationEditor {
-                        DictationMicrophone(editor: dictation, usesNoteToolbarStyle: true)
-                    }
+                    .disabled(!canRedo(currentDocument.kind))
+                    .help(currentDocument.kind == .html ? "Redo the code change" : "Redo (⇧⌘Z)").accessibilityLabel("Redo")
                 }
                 Button { showsVersionHistory = true } label: {
                     Image(systemName: "clock.arrow.circlepath").font(.system(size: 14)).frame(width: 32, height: 32)
@@ -163,17 +226,49 @@ struct DesktopNotePane: View {
                     .help("Refresh linked data")
                     .disabled(isRefreshingLinkedData)
                 }
-                if currentDocument.kind == .note {
+                if currentDocument.kind == .canvas && documentIsEditable {
+                    let inserter = PageComponentInserter(model: model, document: document, viewState: $canvasViewState, folderID: note.folderID)
+                    Menu {
+                        inserter.menu { inserter.cursorPosition }
+                    } label: {
+                        Image(systemName: "plus").font(.system(size: 14))
+                    }
+                    .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
+                    .frame(width: 32, height: 32)
+                    .foregroundStyle(WovenPalette.mutedForeground)
+                    .help("Add component").accessibilityLabel("Add component")
+                }
+                if currentDocument.kind != .html && documentIsEditable {
                     Button {
                         showsFormatting.toggle()
+                        // Formatting applies to Page text; start in it when none is active.
+                        if currentDocument.kind == .canvas, showsFormatting, activePageEditor == nil { canvasViewState.focusEndRequest += 1 }
                     } label: {
                         Image(systemName: "textformat")
                             .font(.system(size: 14, weight: .medium))
                             .frame(width: 32, height: 32)
                     }
                     .buttonStyle(WovenIconButtonStyle())
-                    .help("Format note")
-                    DictationMicrophone(editor: dictationEditor, usesNoteToolbarStyle: true)
+                    .help("Format \(currentDocument.kind.displayName.lowercased())")
+                    .accessibilityLabel("Format \(currentDocument.kind.displayName.lowercased())")
+                    switch currentDocument.kind {
+                    case .note:
+                        DictationMicrophone(editor: dictationEditor, usesNoteToolbarStyle: true)
+                    case .canvas:
+                        if let dictation = activePageEditor?.boundDictationEditor {
+                            DictationMicrophone(editor: dictation, usesNoteToolbarStyle: true)
+                        } else {
+                            Button { startPageDictation() } label: {
+                                Image(systemName: "mic").font(.system(size: 14)).frame(width: 32, height: 32)
+                            }
+                            .buttonStyle(WovenIconButtonStyle()).help("Dictate on this Mac").accessibilityLabel("Start dictation")
+                        }
+                    case .spreadsheet:
+                        // Dictation goes into the cell being edited when recording stops.
+                        DictationMicrophone(editor: sheetDictation, onActivate: bindSheetDictation, usesNoteToolbarStyle: true)
+                    case .html:
+                        EmptyView()
+                    }
                 }
             }
             .padding(.horizontal, 12)
@@ -184,6 +279,11 @@ struct DesktopNotePane: View {
             if showsFormatting && (currentDocument.kind == .note || currentDocument.kind == .canvas) && documentIsEditable {
                 NoteFormattingBar(controller: currentDocument.kind == .canvas ? (activePageEditor ?? editorController) : editorController)
                     .disabled(currentDocument.kind == .canvas && (activePageEditor == nil || titleFocused))
+                    .padding(.horizontal, 32).padding(.vertical, 6)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            if showsFormatting && currentDocument.kind == .spreadsheet && documentIsEditable {
+                SpreadsheetFormattingBar(document: sheetDocument)
                     .padding(.horizontal, 32).padding(.vertical, 6)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
@@ -215,7 +315,7 @@ struct DesktopNotePane: View {
                                 noteID: note.id, folderID: note.folderID, onOpenAsset: onOpenNote,
                                 onOpenSession: onOpenSession, onFocus: { activePageEditor = $0 }, onSectionFocus: { activePageEditor = nil })
                         case .spreadsheet:
-                            SpreadsheetEditor(document: document)
+                            SpreadsheetEditor(document: sheetDocument)
                                 .accessibilityLabel("Sheet")
                         case .html:
                             PersistentArtifactView(document: document, linkedDataJSON: linkedDataJSON,
@@ -328,6 +428,13 @@ struct DesktopNotePane: View {
             }
         }
         .onChange(of: note) { _, updated in model.prepareNoteDraft(updated) }
+        .onChange(of: note.id) { _, _ in
+            sheetHistory = SheetUndoHistory(); artifactHistory = ArtifactCodeHistory(); sheetDictation.unbind()
+        }
+        // Each change to an Artifact's code, usually by an agent, is one undo step.
+        .onChange(of: artifactCode) { old, new in
+            if let old, let new { artifactHistory.observe(old: old, new: new) }
+        }
         .onChange(of: draft.conflictComponentRemaps) { _, remaps in
             if let id = activePageEditor?.selectedBlockID, let copyID = remaps[id] {
                 canvasViewState.selected = [copyID]
@@ -348,7 +455,7 @@ struct DesktopNotePane: View {
             }
             await refreshLinkedData()
         }
-        .onDisappear { Task { _ = await model.flushNoteDrafts() } }
+        .onDisappear { sheetDictation.unbind(); Task { _ = await model.flushNoteDrafts() } }
     }
 
     private func refreshLinkedData() async {
@@ -563,5 +670,80 @@ struct SplitSeparator: View {
     private func commit(_ proposed: Double) {
         let bounds = chatWidthBounds(totalWidth: totalWidth)
         chatWidthPercent = (min(max(proposed, bounds.lowerBound), bounds.upperBound) * 10).rounded() / 10
+    }
+}
+
+/// Sheet undo: each local edit is a step, with typing in quick succession
+/// merged into one. A change from elsewhere clears the history, so undo never
+/// restores an old Sheet over someone else's work.
+@MainActor @Observable final class SheetUndoHistory {
+    private var undoStack: [NoteDocument] = []
+    private var redoStack: [NoteDocument] = []
+    @ObservationIgnored private var current: NoteDocument?
+    @ObservationIgnored private var lastEdit = Date.distantPast
+    var canUndo: Bool { !undoStack.isEmpty }
+    var canRedo: Bool { !redoStack.isEmpty }
+
+    func recordLocal(from before: NoteDocument, to after: NoteDocument, at now: Date = .now) {
+        guard before.normalized() != after.normalized() else { return }
+        // Creating the Sheet's grid when it first opens is not an edit.
+        guard before.blocks.contains(where: { if case .table = $0 { true } else { false } }) else { current = after; return }
+        if !matches(before) { undoStack.removeAll(); redoStack.removeAll() }
+        if undoStack.isEmpty || now.timeIntervalSince(lastEdit) > 1 {
+            undoStack.append(before)
+            if undoStack.count > 50 { undoStack.removeFirst() }
+        }
+        lastEdit = now
+        redoStack.removeAll()
+        current = after
+    }
+
+    func undo(current document: NoteDocument) -> NoteDocument? {
+        guard matches(document) else { undoStack.removeAll(); redoStack.removeAll(); return nil }
+        guard let previous = undoStack.popLast() else { return nil }
+        redoStack.append(document); current = previous; lastEdit = .distantPast
+        return previous
+    }
+
+    func redo(current document: NoteDocument) -> NoteDocument? {
+        guard matches(document) else { undoStack.removeAll(); redoStack.removeAll(); return nil }
+        guard let next = redoStack.popLast() else { return nil }
+        undoStack.append(document); current = next; lastEdit = .distantPast
+        return next
+    }
+
+    private func matches(_ document: NoteDocument) -> Bool {
+        current.map { $0.normalized() == document.normalized() } ?? true
+    }
+}
+
+/// Artifact undo steps through code changes seen while the Artifact is open,
+/// usually an agent's edits. Saved inputs are not part of it.
+@MainActor @Observable final class ArtifactCodeHistory {
+    private var undoStack: [String] = []
+    private var redoStack: [String] = []
+    @ObservationIgnored private var restoring: String?
+    var canUndo: Bool { !undoStack.isEmpty }
+    var canRedo: Bool { !redoStack.isEmpty }
+
+    func observe(old: String, new: String) {
+        guard old != new else { return }
+        if restoring == new { restoring = nil; return }
+        restoring = nil
+        undoStack.append(old)
+        if undoStack.count > 30 { undoStack.removeFirst() }
+        redoStack.removeAll()
+    }
+
+    func undo(current: String) -> String? {
+        guard let previous = undoStack.popLast() else { return nil }
+        redoStack.append(current); restoring = previous
+        return previous
+    }
+
+    func redo(current: String) -> String? {
+        guard let next = redoStack.popLast() else { return nil }
+        undoStack.append(current); restoring = next
+        return next
     }
 }

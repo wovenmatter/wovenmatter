@@ -15,42 +15,21 @@ struct PageEditor: View {
     var onSectionFocus: (() -> Void)?
     @State private var textUndoManager = UndoManager()
     @State private var collapsed = Set<String>()
-    @State private var showsAssets = false
-    @State private var assetInsertionPosition = PagePosition()
-    @State private var importingImage = false
-    @State private var showsSharing = false
     @State private var projectionCache = PageProjectionCache()
 
     private var projection: PageProjection { projectionCache.value(document) }
     private var page: NoteDocument { projection.document }
     private var selectedID: String? { viewState.selected.first }
+    private var inserter: PageComponentInserter {
+        PageComponentInserter(model: model, document: $document, viewState: $viewState, folderID: folderID)
+    }
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack(spacing: 8) {
-                Menu {
-                    addActions(position: insertionPosition)
-                } label: { Label("Add component", systemImage: "plus") }
-                .menuStyle(.borderlessButton).fixedSize()
-                if let id = selectedID, page.blocks.contains(where: { $0.id == id }) {
-                    PageComponentMenu(document: $document, viewState: $viewState, componentID: id)
-                    Button("Details") { viewState.showsInspector.toggle() }
-                        .buttonStyle(WovenQuietButtonStyle())
-                }
-                Spacer(minLength: 4)
-                Button { showsSharing = true } label: { Image(systemName: "info.circle") }
-                    .buttonStyle(WovenIconButtonStyle()).help("Page sharing")
-                    .accessibilityLabel("Page sharing and permissions")
-                    .popover(isPresented: $showsSharing) {
-                        VStack(alignment: .leading, spacing: 10) {
-                            Text("Page sharing").font(.headline)
-                            Text("This Page follows your library’s existing sync. Agents connected to one Mac share revision checks.")
-                            Text("Different Macs sync whole documents. Concurrent edits can create a recovered copy; review it before continuing. Task assignment is a label, not a distributed lock.")
-                            Text("Page content and linked instructions never grant extra tool permissions.")
-                        }.font(.callout).padding(16).frame(width: 310)
-                    }
-                let attention = page.boardItems?.values.filter { $0.review == .needed }.count ?? 0
-                if attention > 0 {
+            let attention = page.boardItems?.values.filter { $0.review == .needed }.count ?? 0
+            if attention > 0 {
+                HStack {
+                    Spacer()
                     Menu {
                         ForEach(page.blocks.filter { page.boardItems?[$0.id]?.review == .needed }, id: \.id) { block in
                             Button(block.plainText.isEmpty ? "Review component" : String(block.plainText.prefix(80))) {
@@ -59,33 +38,33 @@ struct PageEditor: View {
                         }
                     } label: { Label("\(attention) to review", systemImage: "tray") }
                     .menuStyle(.borderlessButton).fixedSize().font(.system(size: 11)).foregroundStyle(.secondary)
-                }
+                }.padding(.horizontal, 24).padding(.vertical, 6)
             }
-            .font(.system(size: 12)).padding(.horizontal, 24).padding(.vertical, 8)
             if let error = viewState.error {
                 HStack {
                     Text(error).font(.system(size: 12)).textSelection(.enabled)
                     Spacer()
                     Button("Dismiss") { viewState.error = nil }.buttonStyle(WovenQuietButtonStyle())
-                }.foregroundStyle(WovenPalette.warning).padding(.horizontal, 24).padding(.bottom, 8)
+                }.foregroundStyle(WovenPalette.warning).padding(.horizontal, 24).padding(.vertical, 8)
             }
             HStack(alignment: .top, spacing: 0) {
                 ScrollViewReader { proxy in
                     ScrollView {
+                        let segments = editorSegments.filter { visible($0) }
                         VStack(alignment: .leading, spacing: 4) {
-                            TextField("Add a description…", text: Binding(get: { page.boardPurpose ?? "" }, set: { value in
-                                commitPage(document: $document, state: $viewState) { $0.boardPurpose = value.isEmpty ? nil : value }
-                            }), axis: .vertical)
-                            .textFieldStyle(.plain).font(.system(size: 14)).foregroundStyle(.secondary)
-                            .padding(.leading, 24).padding(.bottom, 10).onTapGesture { onSectionFocus?() }
-                            ForEach(editorSegments.filter { visible($0) }) { segment in
-                                segmentView(segment)
+                            ForEach(segments) { segment in
+                                segmentView(segment, isLast: segment.id == segments.last?.id)
                                     .padding(.leading, CGFloat(segment.depth) * 20)
                                     .id(segment.id)
                             }
                             legacyConnections
+                            // The rest of the Page is part of its last line: clicking puts
+                            // the cursor there, and right-clicking adds a component.
+                            Color.clear.frame(maxWidth: .infinity, minHeight: 240).contentShape(Rectangle())
+                                .onTapGesture { viewState.focusEndRequest += 1 }
+                                .contextMenu { inserter.menu { .init() } }
                         }
-                        .padding(.horizontal, 24).padding(.top, 8).padding(.bottom, 60)
+                        .padding(.horizontal, 24).padding(.top, 8)
                     }.scrollIndicators(.never)
                     .onChange(of: viewState.revealCardID) { _, id in
                         guard let id else { return }
@@ -109,6 +88,7 @@ struct PageEditor: View {
                             HStack {
                                 Text("Component details").font(.system(size: 13, weight: .semibold))
                                 Spacer()
+                                PageComponentMenu(document: $document, viewState: $viewState, componentID: id)
                                 Button { viewState.showsInspector = false } label: { Image(systemName: "xmark") }
                                     .buttonStyle(WovenIconButtonStyle()).accessibilityLabel("Close component details")
                             }
@@ -124,15 +104,17 @@ struct PageEditor: View {
                 }
             }
         }
-        .sheet(isPresented: $showsAssets) {
+        .sheet(isPresented: Binding(get: { viewState.assetPickerPosition != nil },
+                                    set: { if !$0 { viewState.assetPickerPosition = nil } })) {
             VStack(alignment: .leading, spacing: 16) {
-                HStack { Text("Embed an original asset").font(.headline); Spacer(); Button("Done") { showsAssets = false } }
+                HStack { Text("Embed an original asset").font(.headline); Spacer(); Button("Done") { viewState.assetPickerPosition = nil } }
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 6) {
                         ForEach((model.workspaceOverview?.notes ?? []).filter { $0.id != noteID }, id: \.id) { asset in
                             Button {
-                                add(kind: .asset, assetID: asset.id, position: assetInsertionPosition)
-                                showsAssets = false
+                                let position = viewState.assetPickerPosition ?? .init()
+                                viewState.assetPickerPosition = nil
+                                inserter.add(kind: .asset, assetID: asset.id, position: position)
                             } label: {
                                 HStack {
                                     Text(asset.title.isEmpty ? "Untitled asset" : asset.title)
@@ -150,11 +132,12 @@ struct PageEditor: View {
         }
     }
 
-    @ViewBuilder private func segmentView(_ segment: PageSegment) -> some View {
+    @ViewBuilder private func segmentView(_ segment: PageSegment, isLast: Bool) -> some View {
         switch segment {
         case let .flow(id, parent, after, _, ids):
             PageTextFlow(document: $document, viewState: $viewState,
-                blockIDs: ids, parentID: parent, afterID: after, flowID: id, pageID: noteID, undoManager: textUndoManager, onFocus: onFocus)
+                blockIDs: ids, parentID: parent, afterID: after, flowID: id, pageID: noteID, undoManager: textUndoManager,
+                isLast: isLast, inserter: inserter, onFocus: onFocus)
         case let .section(id, _, _):
             HStack(alignment: .firstTextBaseline, spacing: 5) {
                 Button {
@@ -168,58 +151,32 @@ struct PageEditor: View {
                 .textFieldStyle(.plain).font(.system(size: 19, weight: .semibold))
                 .onTapGesture { viewState.selected = [id]; onSectionFocus?() }
                 Menu {
-                    addActions(position: .init(parentID: id))
+                    inserter.menu { .init(parentID: id) }
                 } label: { Image(systemName: "plus") }
-                .menuStyle(.borderlessButton).fixedSize().accessibilityLabel("Add inside section")
+                .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
+                .accessibilityLabel("Add inside section").help("Add inside section")
                 PageComponentMenu(document: $document, viewState: $viewState, componentID: id)
             }.padding(.top, 14).padding(.bottom, 3)
+            .contextMenu {
+                Menu("Add component") { inserter.menu { .init(parentID: id) } }
+                Menu("Component actions") {
+                    PageMenuEntries(entries: PageComponentActions(document: $document, viewState: $viewState, componentID: id).entries)
+                }
+            }
         case let .asset(id, assetID, _, _):
             PageAssetEmbed(model: model, pageDocument: $document, viewState: $viewState,
                 componentID: id, assetID: assetID, onOpenAsset: onOpenAsset, onFocus: onFocus, onNonTextFocus: onSectionFocus)
                 .id(assetID)
+                .contextMenu {
+                    Menu("Add component") { inserter.menu { .init(parentID: page.pageParentID(for: id), afterID: id) } }
+                    Menu("Component actions") {
+                        PageMenuEntries(entries: PageComponentActions(document: $document, viewState: $viewState, componentID: id).entries)
+                    }
+                }
                 .padding(.vertical, 10)
         }
     }
 
-    private var insertionPosition: PagePosition {
-        guard let id = selectedID else { return .init() }
-        return page.pageComponentKind(for: id) == .section ? .init(parentID: id)
-            : .init(parentID: page.pageParentID(for: id), afterID: id)
-    }
-
-    @ViewBuilder private func addActions(position: PagePosition) -> some View {
-        Button("Text") { add(kind: .text, position: position) }
-        Button("Task") { add(kind: .task, position: position) }
-        Button("Section") { add(kind: .section, position: position) }
-        Button("Table") { add(kind: .table, position: position) }
-        Divider()
-        Button("Existing asset…") { assetInsertionPosition = position; showsAssets = true }
-        Button("Image…") {
-            importingImage = true
-            Task {
-                defer { importingImage = false }
-                do {
-                    if let id = try await PageImageImport.importImage(model: model, folderID: folderID) {
-                        add(kind: .asset, assetID: id, position: position)
-                    }
-                } catch { viewState.error = "The image could not be prepared. Choose a PNG, JPEG, or GIF smaller than 20 MB." }
-            }
-        }.disabled(importingImage)
-        ForEach(NoteArtifactKind.allCases, id: \.self) { kind in
-            Button("New \(kind.displayName)") {
-                Task {
-                    guard let id = await model.createNote(folderID: folderID, kind: kind) else { return }
-                    add(kind: .asset, assetID: id, position: position)
-                }
-            }
-        }
-    }
-
-    private func add(kind: PageComponentKind, assetID: String? = nil, position: PagePosition) {
-        let id = UUID().uuidString.lowercased()
-        update(.init(action: .add, id: id, kind: kind, assetID: assetID, position: position))
-        if viewState.error == nil { viewState.selected = [id]; viewState.revealCardID = id }
-    }
     private func update(_ edit: PageEdit) { commitPage(document: $document, state: $viewState) { try $0.applyPageEdit(edit) } }
     /// Empty paragraph slots let users type before and between embedded objects,
     /// without persisting empty components merely by opening the document.

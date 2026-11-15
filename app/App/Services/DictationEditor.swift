@@ -19,6 +19,10 @@ final class DictationEditor {
         self.textView = textView; self.identity = identity
         Self.editors.setObject(self, forKey: textView)
     }
+    func unbind() {
+        if let textView, Self.editors.object(forKey: textView) === self { Self.editors.removeObject(forKey: textView) }
+        textView = nil
+    }
     static func focused(in window: NSWindow?) -> DictationEditor? {
         guard let textView = window?.firstResponder as? NSTextView,
               let editor = editors.object(forKey: textView), editor.textView === textView else { return nil }

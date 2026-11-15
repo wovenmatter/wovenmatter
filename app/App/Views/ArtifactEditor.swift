@@ -5,75 +5,11 @@ import WovenMatterCore
 struct SpreadsheetEditor: View {
     @Binding var document: NoteDocument
 
-    private var tableIndex: Int? {
-        document.blocks.firstIndex {
-            if case .table = $0 { true } else { false }
-        }
-    }
-
-    private var table: NoteTableBlock {
-        let blocks = document.blocks
-        guard let index = blocks.firstIndex(where: {
-            if case .table = $0 { true } else { false }
-        }), case .table(let table) = blocks[index] else {
-            return NoteTableBlock(rows: 20, columns: 8, headerRow: true)
-        }
-        return table
-    }
+    private var table: NoteTableBlock { document.spreadsheetTable }
 
     var body: some View {
         let table = self.table
         VStack(spacing: 0) {
-            HStack(spacing: 8) {
-                HStack(spacing: 4) {
-                    Button { addRow() } label: {
-                        Image(systemName: "plus")
-                            .font(.system(size: 10, weight: .medium))
-                            .foregroundStyle(.secondary)
-                    }
-                    .accessibilityLabel("Add row")
-                    .help("Add row")
-                    Button { removeRow() } label: {
-                        Image(systemName: "minus")
-                            .font(.system(size: 10, weight: .medium))
-                            .foregroundStyle(.secondary)
-                    }
-                    .accessibilityLabel("Remove last row")
-                    .help("Remove last row")
-                    .disabled(table.rows.count <= 1)
-                    Text("Rows")
-                        .font(.system(size: 11))
-                        .foregroundStyle(.secondary)
-                }
-                HStack(spacing: 4) {
-                    Button { addColumn() } label: {
-                        Image(systemName: "plus")
-                            .font(.system(size: 10, weight: .medium))
-                            .foregroundStyle(.secondary)
-                    }
-                    .accessibilityLabel("Add column")
-                    .help("Add column")
-                    Button { removeColumn() } label: {
-                        Image(systemName: "minus")
-                            .font(.system(size: 10, weight: .medium))
-                            .foregroundStyle(.secondary)
-                    }
-                    .accessibilityLabel("Remove last column")
-                    .help("Remove last column")
-                    .disabled(table.columns.count <= 1)
-                    Text("Columns")
-                        .font(.system(size: 11))
-                        .foregroundStyle(.secondary)
-                }
-                Spacer()
-                Text("\(table.rows.count) rows × \(table.columns.count) columns")
-                    .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
-            }
-            .buttonStyle(.borderless)
-            .padding(.horizontal, 12)
-            .frame(height: 38)
-            Divider()
             ScrollView([.horizontal, .vertical]) {
                 // Cell widths are fixed, so row virtualization preserves the
                 // grid geometry without constructing every off-screen editor.
@@ -144,48 +80,9 @@ struct SpreadsheetEditor: View {
         )
     }
 
-    private func ensureTable() {
-        guard tableIndex == nil else { return }
-        document.blocks = [.table(NoteTableBlock(rows: 20, columns: 8, headerRow: true))]
-    }
+    private func ensureTable() { document.ensureSpreadsheetTable() }
 
-    private func addRow() {
-        mutateTable { $0.rows.append(NoteTableRow(cellCount: $0.columns.count)) }
-    }
-
-    private func removeRow() {
-        mutateTable { table in
-            guard table.rows.count > 1 else { return }
-            table.rows.removeLast()
-            table.headerRowCount = min(table.headerRowCount, table.rows.count)
-        }
-    }
-
-    private func addColumn() {
-        mutateTable { table in
-            table.columns.append(NoteTableColumn())
-            for index in table.rows.indices { table.rows[index].cells.append(NoteTableCell()) }
-        }
-    }
-
-    private func removeColumn() {
-        mutateTable { table in
-            guard table.columns.count > 1 else { return }
-            table.columns.removeLast()
-            for index in table.rows.indices where !table.rows[index].cells.isEmpty {
-                table.rows[index].cells.removeLast()
-            }
-        }
-    }
-
-    private func mutateTable(_ mutation: (inout NoteTableBlock) -> Void) {
-        ensureTable()
-        guard let index = document.blocks.firstIndex(where: {
-            if case .table = $0 { true } else { false }
-        }), case .table(var table) = document.blocks[index] else { return }
-        mutation(&table)
-        document.blocks[index] = .table(table.normalized())
-    }
+    private func mutateTable(_ mutation: (inout NoteTableBlock) -> Void) { document.mutateSpreadsheetTable(mutation) }
 
     private func spreadsheetColumnName(_ index: Int) -> String {
         var value = index
@@ -195,6 +92,77 @@ struct SpreadsheetEditor: View {
             value = value / 26 - 1
         } while value >= 0
         return result
+    }
+}
+
+/// Format Sheet: the grid's size and header row.
+struct SpreadsheetFormattingBar: View {
+    @Binding var document: NoteDocument
+
+    var body: some View {
+        let table = document.spreadsheetTable
+        HStack(spacing: 14) {
+            stepper("Rows", count: table.rows.count,
+                add: { document.mutateSpreadsheetTable { $0.rows.append(NoteTableRow(cellCount: $0.columns.count)) } },
+                remove: {
+                    document.mutateSpreadsheetTable { table in
+                        guard table.rows.count > 1 else { return }
+                        table.rows.removeLast()
+                        table.headerRowCount = min(table.headerRowCount, table.rows.count)
+                    }
+                })
+            stepper("Columns", count: table.columns.count,
+                add: {
+                    document.mutateSpreadsheetTable { table in
+                        table.columns.append(NoteTableColumn())
+                        for index in table.rows.indices { table.rows[index].cells.append(NoteTableCell()) }
+                    }
+                },
+                remove: {
+                    document.mutateSpreadsheetTable { table in
+                        guard table.columns.count > 1 else { return }
+                        table.columns.removeLast()
+                        for index in table.rows.indices where !table.rows[index].cells.isEmpty { table.rows[index].cells.removeLast() }
+                    }
+                })
+            Toggle("Header row", isOn: Binding(get: { table.headerRowCount > 0 }, set: { on in
+                document.mutateSpreadsheetTable { $0.headerRowCount = on ? 1 : 0 }
+            }))
+            .toggleStyle(.checkbox)
+        }
+        .font(.system(size: 12))
+    }
+
+    private func stepper(_ title: String, count: Int, add: @escaping () -> Void, remove: @escaping () -> Void) -> some View {
+        HStack(spacing: 4) {
+            Text("\(title) \(count)").foregroundStyle(WovenPalette.mutedForeground)
+            Button(action: remove) { Image(systemName: "minus").frame(width: 22, height: 22) }
+                .buttonStyle(WovenIconButtonStyle()).disabled(count <= 1)
+                .accessibilityLabel("Remove last \(title.lowercased().dropLast())").help("Remove last \(title.lowercased().dropLast())")
+            Button(action: add) { Image(systemName: "plus").frame(width: 22, height: 22) }
+                .buttonStyle(WovenIconButtonStyle())
+                .accessibilityLabel("Add \(title.lowercased().dropLast())").help("Add \(title.lowercased().dropLast())")
+        }
+    }
+}
+
+extension NoteDocument {
+    var spreadsheetTable: NoteTableBlock {
+        for block in blocks { if case .table(let table) = block { return table } }
+        return NoteTableBlock(rows: 20, columns: 8, headerRow: true)
+    }
+
+    mutating func ensureSpreadsheetTable() {
+        guard !blocks.contains(where: { if case .table = $0 { true } else { false } }) else { return }
+        blocks = [.table(NoteTableBlock(rows: 20, columns: 8, headerRow: true))]
+    }
+
+    mutating func mutateSpreadsheetTable(_ mutation: (inout NoteTableBlock) -> Void) {
+        ensureSpreadsheetTable()
+        guard let index = blocks.firstIndex(where: { if case .table = $0 { true } else { false } }),
+              case .table(var table) = blocks[index] else { return }
+        mutation(&table)
+        blocks[index] = .table(table.normalized())
     }
 }
 

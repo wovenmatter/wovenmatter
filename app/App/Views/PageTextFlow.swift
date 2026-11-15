@@ -10,6 +10,9 @@ struct PageTextFlow: View {
     let flowID: String
     let pageID: String
     let undoManager: UndoManager
+    /// The Page's last text, which takes the cursor when the space below it is clicked.
+    var isLast = false
+    var inserter: PageComponentInserter?
     var onFocus: ((NoteEditorController) -> Void)?
     @State private var controller = NoteEditorController()
     @State private var dictationEditor = DictationEditor()
@@ -20,16 +23,27 @@ struct PageTextFlow: View {
         NoteEditor(document: flowBinding(base: base), controller: controller,
             dictationEditor: dictationEditor, dictationIdentity: "page:\(pageID):\(flowID)",
             sizesToContent: true, editsPageFlow: true, onFocus: { controller in
+                // Add component inserts after the paragraph holding the cursor, or
+                // where this flow sits when it has no text yet.
                 if let id = controller.selectedBlockID, document.blocks.contains(where: { $0.id == id }) {
                     viewState.selected = [id]
-                } else { viewState.selected = Set(parentID.map { [$0] } ?? []) }
+                    viewState.cursor = .init(selection: [id], position: .init(parentID: parentID, afterID: id))
+                } else {
+                    let selection = Set(parentID.map { [$0] } ?? [])
+                    viewState.selected = selection
+                    viewState.cursor = .init(selection: selection, position: .init(parentID: parentID, afterID: afterID, atStart: afterID == nil))
+                }
                 onFocus?(controller)
-            }, onSynchronize: { editContext.base = document.materializedPage() }, sharedUndoManager: undoManager)
+            }, onSynchronize: { editContext.base = document.materializedPage() }, sharedUndoManager: undoManager,
+            contextMenuItems: inserter.map { inserter in { inserter.menuItems { inserter.cursorPosition } } })
             .frame(minHeight: 40)
             .accessibilityLabel("Page document text")
             .accessibilityHint("Use Component actions to change task state or move the selected component.")
             .onAppear { focusRequestedComponent() }
             .onChange(of: viewState.revealCardID) { _, _ in focusRequestedComponent() }
+            .onChange(of: viewState.focusEndRequest) { _, _ in
+                if isLast { controller.focus(atEnd: true) }
+            }
     }
 
     private func liveIDs(in page: NoteDocument) -> [String] {

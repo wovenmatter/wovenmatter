@@ -1589,24 +1589,12 @@ struct NewNoteDrawer: View {
                 .font(.system(size: 18, weight: .semibold))
         } content: {
             VStack(alignment: .leading, spacing: 10) {
-                artifactButton(
-                    "Note",
-                    icon: .fileText,
-                    kind: .note
-                )
                 // Each kind uses the same icon as its asset rows.
-                artifactButton(
-                    "Sheet",
-                    systemImage: "tablecells",
-                    kind: .spreadsheet
-                )
-                artifactButton(
-                    "Artifact",
-                    detail: "Interactive HTML artifacts built on live data",
-                    systemImage: "chevron.left.forwardslash.chevron.right",
-                    kind: .html
-                )
+                artifactButton("Note", detail: "Rich text you write, format and dictate", icon: .fileText, kind: .note)
                 artifactButton("Page", detail: "A fluid document for your work with agents", icon: .panelsTopLeft, kind: .canvas)
+                artifactButton("Sheet", detail: "Rows and columns for data and calculations", systemImage: "tablecells", kind: .spreadsheet)
+                artifactButton("Artifact", detail: "Interactive apps your agent builds on live data",
+                    systemImage: "chevron.left.forwardslash.chevron.right", kind: .html)
             }
             .padding(20)
         }
@@ -1825,7 +1813,7 @@ struct SidebarWorkspacePage: View {
                         }
                         .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
                         .accessibilityLabel("Asset type: \(assetKind.map { $0.displayName + "s" } ?? "All assets")")
-                        .help("Filter by Notes, Sheets, Artifacts, or Pages")
+                        .help("Filter by Notes, Pages, Sheets, or Artifacts")
                     }
                     if onBack != nil {
                         filterMenu(inSearchRow: true)

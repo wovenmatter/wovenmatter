@@ -1,56 +1,111 @@
+import AppKit
 import SwiftUI
 import WovenMatterCore
+
+/// One entry in a Page menu, rendered by SwiftUI menus and AppKit context menus alike.
+indirect enum PageMenuEntry {
+    case button(String, destructive: Bool = false, enabled: Bool = true, action: () -> Void)
+    case divider
+    case submenu(String, [PageMenuEntry])
+
+    @MainActor var menuItem: NSMenuItem {
+        switch self {
+        case let .button(title, _, enabled, action):
+            let item = ClosureMenuItem(title, handler: action)
+            if !enabled { item.action = nil }
+            return item
+        case .divider: return .separator()
+        case let .submenu(title, entries):
+            let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
+            let menu = NSMenu(title: title)
+            for entry in entries { menu.addItem(entry.menuItem) }
+            item.submenu = menu
+            return item
+        }
+    }
+}
+
+struct PageMenuEntries: View {
+    let entries: [PageMenuEntry]
+    var body: some View {
+        ForEach(Array(entries.enumerated()), id: \.offset) { _, entry in
+            switch entry {
+            case let .button(title, destructive, enabled, action):
+                Button(title, role: destructive ? .destructive : nil, action: action).disabled(!enabled)
+            case .divider: Divider()
+            case let .submenu(title, entries): Menu(title) { PageMenuEntries(entries: entries) }
+            }
+        }
+    }
+}
 
 struct PageComponentMenu: View {
     @Binding var document: NoteDocument
     @Binding var viewState: CanvasViewState
     let componentID: String
-    private var page: NoteDocument { document.materializedPage() }
 
     var body: some View {
-        let page = self.page
         Menu {
-            Button("Component details") { viewState.selected = [componentID]; viewState.showsInspector = true }
-            if let task = page.boardItems?[componentID]?.task {
-                Button(task.status == .done ? "Reopen task" : "Complete task") {
-                    apply(.init(action: .update, id: componentID, expectedRevision: page.boardItemRevision(for: componentID),
-                        patch: .init(status: task.status == .done ? .todo : .done)))
-                }
-            }
-            if page.pageComponentKind(for: componentID) != .section {
-              Button(page.boardItems?[componentID]?.task == nil ? "Turn into task" : "Remove task state") {
-                apply(.init(action: .update, id: componentID, expectedRevision: page.boardItemRevision(for: componentID),
-                    patch: page.boardItems?[componentID]?.task == nil ? .init(status: .todo) : .init(clearTask: true)))
-            }
-            }
-            Divider()
-            Button("Move up") { move(direction: -1) }.disabled(siblingIndex == 0)
-            Button("Move down") { move(direction: 1) }.disabled(siblingIndex >= siblings.count - 1)
-            if let parent = page.pageParentID(for: componentID) {
-                Button("Move out of section") { move(to: .init(parentID: page.pageParentID(for: parent), afterID: parent)) }
-            }
-            Menu("Move into section") {
-                let subtree = Set(page.pageSubtreeIDs(of: componentID))
-                ForEach(page.blocks.filter { page.pageNodes?[$0.id]?.isSection == true && !subtree.contains($0.id) }, id: \.id) { block in
-                    Button(block.plainText.isEmpty ? "Untitled section" : block.plainText) { move(to: .init(parentID: block.id)) }
-                }
-                Button("Page root") { move(to: .init()) }
-            }
-            Divider()
-            if page.pageComponentKind(for: componentID) == .section {
-                Button("Remove section, keep content") { remove(.promoteChildren) }
-                Button("Remove section and content", role: .destructive) { remove(.removeSubtree) }
-            } else {
-                Button("Remove component", role: .destructive) { remove(nil) }
-            }
+            PageMenuEntries(entries: PageComponentActions(document: $document, viewState: $viewState, componentID: componentID).entries)
         } label: { Image(systemName: "ellipsis") }
-        .menuStyle(.borderlessButton).fixedSize().accessibilityLabel("Component actions")
+        .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize().accessibilityLabel("Component actions")
+    }
+}
+
+/// Details, task state, moving and removing one component.
+@MainActor struct PageComponentActions {
+    @Binding var document: NoteDocument
+    @Binding var viewState: CanvasViewState
+    let componentID: String
+    private var page: NoteDocument { document.materializedPage() }
+
+    var entries: [PageMenuEntry] {
+        let page = self.page
+        guard page.blocks.contains(where: { $0.id == componentID }) else { return [] }
+        let id = componentID
+        let item = page.boardItems?[id]
+        var result: [PageMenuEntry] = [.button("Component details") { viewState.selected = [id]; viewState.showsInspector = true }]
+        if let task = item?.task {
+            result.append(.button(task.status == .done ? "Reopen task" : "Complete task") {
+                apply(.init(action: .update, id: id, expectedRevision: page.boardItemRevision(for: id),
+                    patch: .init(status: task.status == .done ? .todo : .done)))
+            })
+        }
+        let isSection = page.pageComponentKind(for: id) == .section
+        if !isSection {
+            result.append(.button(item?.task == nil ? "Turn into task" : "Remove task state") {
+                apply(.init(action: .update, id: id, expectedRevision: page.boardItemRevision(for: id),
+                    patch: item?.task == nil ? .init(status: .todo) : .init(clearTask: true)))
+            })
+        }
+        let siblings = page.pageChildren(of: page.pageParentID(for: id))
+        let index = siblings.firstIndex(of: id) ?? 0
+        result.append(.divider)
+        result.append(.button("Move up", enabled: index > 0) { move(direction: -1) })
+        result.append(.button("Move down", enabled: index < siblings.count - 1) { move(direction: 1) })
+        if let parent = page.pageParentID(for: id) {
+            result.append(.button("Move out of section") { move(to: .init(parentID: page.pageParentID(for: parent), afterID: parent)) })
+        }
+        let subtree = Set(page.pageSubtreeIDs(of: id))
+        let sections = page.blocks.filter { page.pageNodes?[$0.id]?.isSection == true && !subtree.contains($0.id) }
+        result.append(.submenu("Move into section", sections.map { block in
+            .button(block.plainText.isEmpty ? "Untitled section" : block.plainText) { move(to: .init(parentID: block.id)) }
+        } + [.button("Page root") { move(to: .init()) }]))
+        result.append(.divider)
+        if isSection {
+            result.append(.button("Remove section, keep content") { remove(.promoteChildren) })
+            result.append(.button("Remove section and content", destructive: true) { remove(.removeSubtree) })
+        } else {
+            result.append(.button("Remove component", destructive: true) { remove(nil) })
+        }
+        return result
     }
 
-    private var siblings: [String] { page.pageChildren(of: page.pageParentID(for: componentID)) }
-    private var siblingIndex: Int { siblings.firstIndex(of: componentID) ?? 0 }
     private func move(direction: Int) {
-        let destination = siblingIndex + direction
+        let page = self.page
+        let siblings = page.pageChildren(of: page.pageParentID(for: componentID))
+        guard let index = siblings.firstIndex(of: componentID) else { return }
+        let destination = index + direction
         guard siblings.indices.contains(destination) else { return }
         let position: PagePosition
         if direction < 0 {
@@ -60,12 +115,93 @@ struct PageComponentMenu: View {
         move(to: position)
     }
     private func move(to position: PagePosition) {
+        let page = self.page
         apply(.init(action: .move, id: componentID, expectedRevision: page.boardItemRevision(for: componentID),
             expectedSubtreeRevision: page.pageSubtreeRevision(for: componentID), position: position))
     }
     private func remove(_ removal: PageEdit.Removal?) {
+        let page = self.page
         apply(.init(action: .remove, id: componentID, expectedRevision: page.boardItemRevision(for: componentID),
             expectedSubtreeRevision: removal == .removeSubtree ? page.pageSubtreeRevision(for: componentID) : nil, removal: removal))
     }
     private func apply(_ edit: PageEdit) { commitPage(document: $document, state: $viewState) { try $0.applyPageEdit(edit) } }
+}
+
+/// Adds Page components from the toolbar's plus, a section's plus, and the
+/// right-click menu, so every entry point offers the same choices.
+@MainActor struct PageComponentInserter {
+    let model: ApplicationModel
+    @Binding var document: NoteDocument
+    @Binding var viewState: CanvasViewState
+    let folderID: String?
+
+    var cursorPosition: PagePosition { viewState.insertionPosition(in: document.materializedPage()) }
+
+    @ViewBuilder func menu(position: @escaping () -> PagePosition) -> some View {
+        Button("Text") { add(kind: .text, position: position()) }
+        Button("Task") { add(kind: .task, position: position()) }
+        Button("Section") { add(kind: .section, position: position()) }
+        Button("Table") { add(kind: .table, position: position()) }
+        Divider()
+        Button("Existing asset…") { viewState.assetPickerPosition = position() }
+        Button("Image…") { importImage(position: position()) }.disabled(viewState.importingImage)
+        ForEach(NoteArtifactKind.allCases, id: \.self) { kind in
+            Button("New \(kind.displayName)") { createAsset(kind, position: position()) }
+        }
+    }
+
+    /// The same choices for a native text view's context menu, followed by
+    /// the selected component's actions.
+    func menuItems(position: @escaping () -> PagePosition) -> [NSMenuItem] {
+        var simple: [PageMenuEntry] = [("Text", PageComponentKind.text), ("Task", .task), ("Section", .section), ("Table", .table)]
+            .map { title, kind in .button(title) { add(kind: kind, position: position()) } }
+        simple += [.divider, .button("Existing asset…") { viewState.assetPickerPosition = position() },
+            .button("Image…", enabled: !viewState.importingImage) { importImage(position: position()) }]
+        simple += NoteArtifactKind.allCases.map { kind in .button("New \(kind.displayName)") { createAsset(kind, position: position()) } }
+        var items = [PageMenuEntry.submenu("Add component", simple).menuItem]
+        if let id = viewState.selected.first {
+            let actions = PageComponentActions(document: $document, viewState: $viewState, componentID: id).entries
+            if !actions.isEmpty { items.append(PageMenuEntry.submenu("Component actions", actions).menuItem) }
+        }
+        return items
+    }
+
+    func add(kind: PageComponentKind, assetID: String? = nil, position: PagePosition) {
+        let id = UUID().uuidString.lowercased()
+        commitPage(document: $document, state: $viewState) {
+            try $0.applyPageEdit(.init(action: .add, id: id, kind: kind, assetID: assetID, position: position))
+        }
+        if viewState.error == nil { viewState.selected = [id]; viewState.revealCardID = id }
+    }
+
+    private func importImage(position: PagePosition) {
+        viewState.importingImage = true
+        Task {
+            defer { viewState.importingImage = false }
+            do {
+                if let id = try await PageImageImport.importImage(model: model, folderID: folderID) {
+                    add(kind: .asset, assetID: id, position: position)
+                }
+            } catch { viewState.error = "The image could not be prepared. Choose a PNG, JPEG, or GIF smaller than 20 MB." }
+        }
+    }
+
+    private func createAsset(_ kind: NoteArtifactKind, position: PagePosition) {
+        Task {
+            guard let id = await model.createNote(folderID: folderID, kind: kind) else { return }
+            add(kind: .asset, assetID: id, position: position)
+        }
+    }
+}
+
+/// A menu item that runs a closure, for adding SwiftUI actions to AppKit menus.
+final class ClosureMenuItem: NSMenuItem {
+    private let handler: () -> Void
+    init(_ title: String, handler: @escaping () -> Void) {
+        self.handler = handler
+        super.init(title: title, action: #selector(run), keyEquivalent: "")
+        target = self
+    }
+    required init(coder: NSCoder) { fatalError("init(coder:) is not supported") }
+    @objc private func run() { handler() }
 }

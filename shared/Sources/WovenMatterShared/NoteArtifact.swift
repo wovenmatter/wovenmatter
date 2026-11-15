@@ -22,11 +22,12 @@ public struct DatabaseArtifactLink: Codable, Equatable, Sendable {
   }
 }
 
+/// Cases are in the order New Asset offers them.
 public enum NoteArtifactKind: String, Codable, CaseIterable, Sendable {
   case note
+  case canvas
   case spreadsheet
   case html
-  case canvas
 
   public var displayName: String {
     switch self {

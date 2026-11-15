@@ -287,7 +287,11 @@ when an intentional design change is accepted.
   Preserve colored harness logos, webpages, and authored HTML; do not inject recoloring
   or inversion into their content.
 - **Notes:** keep the header controls in this order from left to right: Undo,
-  Redo, Version history, Database, Format note, Microphone. Use the same compact
+  Redo, Version history, Database, Format note, Microphone. Pages use Undo, Redo,
+  Version history, Database, Add component (a plus), Format page, Microphone.
+  Sheets use Undo, Redo, Version history, Database, Format sheet, Microphone.
+  Artifacts, which agents edit, use Undo, Redo, Version history, Database; their
+  Undo and Redo step through code changes. Use the same compact
   icon button style and frames for the microphone and adjacent controls, without
   a divider. The note-body count sits at the bottom right, starts with words, and
   switches between words and characters when clicked. Keep it in one compact
@@ -296,8 +300,9 @@ when an intentional design change is accepted.
   edge with the header controls using the same 12-point side inset.
 - **Assets:** use Notes, Sheets, Artifacts, and Pages in user-facing creation and
   discovery. Label the creation picker **New Asset** and the Library's general
-  saved-output collection **Saved Assets**. Artifacts are interactive HTML
-  artifacts built on live data; data connections are optional. The Assets sidebar
+  saved-output collection **Saved Assets**. New Asset lists Note, Page, Sheet,
+  Artifact, each with a one-line description. Artifacts are interactive apps your
+  agent builds, usually on live data; data connections are optional. The Assets sidebar
   filters these types. Preserve the existing HTML sandbox.
   Describe an Artifact connected to live data as a **Live Artifact**. Keep
   **Artifact** as the single creation option; Live is a description of the data

@@ -1,6 +1,11 @@
 import Foundation
 import WovenMatterCore
 
+struct PageCursor: Equatable {
+    var selection: Set<String>
+    var position: PagePosition
+}
+
 /// Page view state: the selected component, the details panel, and the component undo
 /// history that incoming work fences.
 struct CanvasViewState {
@@ -8,10 +13,31 @@ struct CanvasViewState {
     var error: String?
     var showsInspector = false
     var revealCardID: String?
+    /// Where the text cursor last was, for Add component. It applies only while
+    /// the selection it was recorded with is still the selection.
+    var cursor: PageCursor?
+    /// Set while the Existing asset picker is open: where the chosen asset goes.
+    var assetPickerPosition: PagePosition?
+    var importingImage = false
+    /// Incremented to place the cursor at the end of the Page's last text.
+    var focusEndRequest = 0
     var undoStack: [NoteDocument] = []
     var redoStack: [NoteDocument] = []
     private var pendingLocalDocument: NoteDocument?
     private var lastKnownDocument: NoteDocument?
+
+    /// Where Add component inserts: at the cursor, else after the selected
+    /// component (inside it for a section), else at the end of the Page.
+    func insertionPosition(in page: NoteDocument) -> PagePosition {
+        let ids = Set(page.blocks.map(\.id))
+        func exists(_ id: String?) -> Bool { id.map(ids.contains) ?? true }
+        if let cursor, cursor.selection == selected, exists(cursor.position.parentID), exists(cursor.position.afterID) {
+            return cursor.position
+        }
+        guard let id = selected.first, ids.contains(id) else { return .init() }
+        return page.pageComponentKind(for: id) == .section ? .init(parentID: id)
+            : .init(parentID: page.pageParentID(for: id), afterID: id)
+    }
 
     @discardableResult mutating func observe(_ old: NoteDocument, _ new: NoteDocument) -> Bool {
         selected.formIntersection(Set(new.blocks.map(\.id)))

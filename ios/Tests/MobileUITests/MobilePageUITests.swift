@@ -56,7 +56,8 @@ extension MobileUITests {
     let intro = pageText("page-intro", in: app)
     XCTAssertTrue(intro.waitForExistence(timeout: 10))
     XCTAssertFalse(app.staticTexts["Page · read only · edit on your Mac"].exists)
-    XCTAssertTrue(app.descendants(matching: .any)["page-purpose"].firstMatch.exists)
+    // A Page opens as plain writing space, with no description field above it.
+    XCTAssertFalse(app.descendants(matching: .any)["page-purpose"].firstMatch.exists)
     append(" Leave Friday.", to: intro)
     XCTAssertEqual(intro.value as? String, "Plan the weekend trip. Leave Friday.")
     // Saved Page writing keeps its undo history.
