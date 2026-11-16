@@ -52,6 +52,68 @@ test('cloud/public/insecure origins and shell injection are rejected', () => {
   assert.throws(() => validateConfiguration({ ...config, host: 'host; printf secret' }));
 });
 
+test('job results retain lifted binary content, legacy inline values and the response bound', async t => {
+  const file = { type: 'resource', resource: { uri: 'file:///report.pdf', mimeType: 'application/pdf', blob: 'JVBERi0xLjc=' } };
+  const image = { type: 'image', mimeType: 'image/png', data: 'aW1hZ2U=' };
+  const audio = { type: 'audio', mimeType: 'audio/wav', data: 'YXVkaW8=' };
+  const text = { type: 'resource', resource: { uri: 'file:///readme.txt', text: 'unchanged' } };
+  const reference = { type: 'resource', resource: { uri: file.resource.uri, mimeType: file.resource.mimeType }, contentIndex: 1 };
+  const { broker, scope } = await fixture(t, async () => ({
+    structuredContent: { status: 'completed', execution: { value: { file: reference, repeated: [reference], image: { type: 'image', mimeType: image.mimeType, contentIndex: 2 }, audio: { type: 'audio', mimeType: audio.mimeType, contentIndex: 3 }, text, inline: file, ordinary: { contentIndex: 1 } } } },
+    content: [{ type: 'text', text: 'structured result' }, file, image, audio],
+  }));
+  const id = randomUUID();
+  await broker.start({ id, session: 'conversation-a', code: 'media', scope });
+  const job = broker.jobs.get(id);
+  await broker.advance(job, { action: 'accept' });
+  for (const end = Date.now() + 2000; job.busy && Date.now() < end;) await new Promise(resolve => setImmediate(resolve));
+  assert.equal(job.status, 'completed');
+  const value = broker.publicJob(job).result.execution.value;
+  assert.deepEqual(value.file, { ...reference, ...file });
+  assert.deepEqual(value.repeated[0], value.file);
+  assert.deepEqual(value.image, { ...image, contentIndex: 2 });
+  assert.deepEqual(value.audio, { ...audio, contentIndex: 3 });
+  assert.deepEqual(value.text, text); assert.deepEqual(value.inline, file);
+  assert.deepEqual(value.ordinary, { contentIndex: 1 });
+  value.file.resource.blob = 'x'.repeat(900001);
+  assert.match(broker.publicJob(job).error, /exceeds the response limit/);
+});
+
+test('invalid lifted content interrupts once without returning placeholders or replaying', async t => {
+  for (const contentIndex of [-1, 1.5, 9, 0]) {
+    let dispatched = 0;
+    const { broker, scope } = await fixture(t, async () => {
+      dispatched++;
+      return { structuredContent: { execution: { value: { type: 'resource', resource: { uri: 'file:///expected.pdf' }, contentIndex } } },
+        content: [{ type: 'resource', resource: { uri: 'file:///different.pdf', blob: 'Ynl0ZXM=' } }] };
+    });
+    const id = randomUUID(), request = { id, session: 'conversation-a', code: 'file', scope };
+    await broker.start(request);
+    const job = broker.jobs.get(id);
+    await broker.advance(job, { action: 'accept' });
+    for (const end = Date.now() + 2000; job.busy && Date.now() < end;) await new Promise(resolve => setImmediate(resolve));
+    assert.equal(job.status, 'interrupted'); assert.equal(job.result, undefined);
+    assert.equal((await broker.start(request)).status, 'interrupted');
+    await broker.advance(job, { action: 'accept' });
+    assert.equal(dispatched, 1);
+  }
+});
+
+test('repeated binary references cannot expand past the job response limit', async t => {
+  const reference = { type: 'image', mimeType: 'image/png', contentIndex: 0 };
+  const { broker, scope } = await fixture(t, async () => ({
+    structuredContent: { execution: { value: [reference, reference, reference] } },
+    content: [{ type: 'image', mimeType: 'image/png', data: 'a'.repeat(400000) }],
+  }));
+  const id = randomUUID();
+  await broker.start({ id, session: 'conversation-a', code: 'large media', scope });
+  const job = broker.jobs.get(id);
+  await broker.advance(job, { action: 'accept' });
+  for (const end = Date.now() + 2000; job.busy && Date.now() < end;) await new Promise(resolve => setImmediate(resolve));
+  assert.equal(job.status, 'interrupted');
+  assert.equal(broker.publicJob(job).result, undefined);
+});
+
 test('remote Executor SSH is pinned to one online Tailscale peer', () => {
   const status = { BackendState: 'Running', Peer: {
     first: { HostName: 'workstation', DNSName: 'workstation.example.ts.net.', Online: true, Expired: false, TailscaleIPs: ['fd7a:115c:a1e0::2'] },

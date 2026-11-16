@@ -64,7 +64,7 @@
       "arguments": [],
       "cliCommand": "claude",
       "adapterPackage": "@agentclientprotocol/claude-agent-acp",
-      "minimumAdapterVersion": "0.107.0",
+      "minimumAdapterVersion": "0.107.3",
       "install": {
         "kind": "official-script",
         "source": "https://claude.ai/install.sh",
