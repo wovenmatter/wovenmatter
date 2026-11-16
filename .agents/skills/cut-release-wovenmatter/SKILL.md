@@ -18,11 +18,14 @@ A release runs in four steps, all on this Mac; GitHub only signs and notarizes.
 2. **Go-ahead.** Wait for Trey. He merges the PR and says go, or you work through
    the findings together first.
 3. **Build and describe, in parallel.** Run `scripts/cut-release.sh build X.Y.Z`
-   in the background. It makes a fresh worktree of current `origin/main`, builds
-   the Linux library binaries in Docker on the workstation, compiles the
-   production Release app here (ad-hoc signed; a Debug app is never a
-   distribution artifact) and checks it. It uploads nothing. Meanwhile draft the
-   release description and go over it with Trey.
+   in the background. It makes a fresh worktree of current `origin/main`, then
+   builds the Linux library binaries in Docker on the workstation while it
+   compiles the production Release app here (ad-hoc signed; a Debug app is never
+   a distribution artifact), puts the library into the app and checks it. It
+   uploads nothing. Meanwhile draft the release description and go over it with
+   Trey. Never wait on a step that does not depend on another: run independent
+   work at the same time, and ship the moment both the build and the approval
+   are done.
 4. **Ship.** Once the build passed and Trey approved the exact description, run
    `scripts/cut-release.sh ship X.Y.Z`. It uploads that build to the private
    draft and pushes the annotated `vX.Y.Z` tag. The tag starts
@@ -77,7 +80,8 @@ Write the release description from the material changes since the previous
 public release. Inspect the complete commit/PR range and underlying changes;
 do not simply repeat commit titles. Use this structure for every release:
 
-1. A short opening explanation led by major user-facing capabilities. Put
+1. A short opening explanation led by major user-facing capabilities. It
+   begins "Woven Matter vX.Y.Z", with the `v`, matching the release title. Put
    individual bug fixes in **Improvements and fixes**, rather than the headline.
 2. The README-style download badge directly below the opening paragraph.
 3. **New capabilities** — bullet points describing major new features.
@@ -85,7 +89,8 @@ do not simply repeat commit titles. Use this structure for every release:
    and meaningful fixes.
 5. A **Full changelog** link comparing the previous release tag with the new tag.
 6. **How to update** — the final section, using this exact copy:
-   "Go to Settings > General to check for and install the update."
+   "Go to Settings > Updates to check for and install the update."
+   (Through v0.4.4 it read "Settings > General": earlier apps had no Updates page.)
 
 Use the same badge image, label, and Apple logo as the README, but link directly
 to this release's DMG, never `/releases/latest`. For version `X.Y.Z`:

@@ -39,6 +39,32 @@ refuse_existing() {
   fi
 }
 
+# Builds the packed Linux library binaries into $1.
+linux_library() {
+  local output="$1"
+  mkdir -p "$output"
+  if [ "$linux_host" = local ]; then
+    scripts/build-linux-library.sh --docker --output "$output"
+  else
+    local remote_dir
+    remote_dir="$(ssh "$linux_host" mktemp -d)"
+    git archive HEAD | ssh "$linux_host" "tar -x -C '$remote_dir'"
+    ssh "$linux_host" "cd '$remote_dir' && scripts/build-linux-library.sh --docker --output '$remote_dir/out'"
+    ssh "$linux_host" "tar -C '$remote_dir/out' -c ." | tar -x -C "$output"
+    # Docker leaves root-owned output behind.
+    ssh "$linux_host" "sudo rm -rf '$remote_dir'"
+  fi
+  scripts/verify-linux-library.sh "$output"
+}
+
+compile_app() {
+  WOVENMATTER_SIGNING_IDENTITY=- WOVENMATTER_RELEASE_ALLOW_UNTAGGED=1 \
+  WOVENMATTER_RELEASE_WORK_DIR="$1" WOVENMATTER_RELEASE_OUTPUT_DIR="$1/dist" \
+  WOVENMATTER_COMPILER_CACHE="$HOME/Library/Caches/WovenMatter/ReleaseCompiler" \
+  WOVENMATTER_PACKAGE_CACHE="$HOME/Library/Caches/WovenMatter/SourcePackages" \
+    scripts/build-release.sh "$version" compile
+}
+
 build() {
   step 'Checking GitHub access'
   "$repo_root/scripts/check-release-access.sh"
@@ -55,28 +81,30 @@ build() {
   build_number="$(git rev-list --count HEAD)"
   echo "Building $tag (build $build_number) from $revision."
 
-  step "Building Linux library binaries on $linux_host"
-  if [ "$linux_host" = local ]; then
-    scripts/build-linux-library.sh --docker
-  else
-    local remote_dir
-    remote_dir="$(ssh "$linux_host" mktemp -d)"
-    git archive HEAD | ssh "$linux_host" "tar -x -C '$remote_dir'"
-    ssh "$linux_host" "cd '$remote_dir' && scripts/build-linux-library.sh --docker --output '$remote_dir/out'"
-    mkdir -p remote/host/library
-    ssh "$linux_host" "tar -C '$remote_dir/out' -c ." | tar -x -C remote/host/library
-    # Docker leaves root-owned output behind.
-    ssh "$linux_host" "sudo rm -rf '$remote_dir'"
+  # The app only carries the Linux library as a verbatim resource, so build the
+  # library on the Linux host while the app compiles here, then copy it into the
+  # finished app and reseal it (ad hoc; the release workflow re-signs it).
+  step "Building Linux library binaries on $linux_host while compiling the Release app"
+  linux_library "$work/linux-library" > "$work/linux-library.log" 2>&1 &
+  local linux_pid=$!
+  if ! compile_app "$work/build"; then
+    kill "$linux_pid" 2>/dev/null || true
+    exit 1
   fi
-  scripts/verify-linux-library.sh
-
-  step 'Compiling the Release app'
-  WOVENMATTER_SIGNING_IDENTITY=- WOVENMATTER_RELEASE_ALLOW_UNTAGGED=1 \
-  WOVENMATTER_RELEASE_WORK_DIR="$work/build" WOVENMATTER_RELEASE_OUTPUT_DIR="$work/dist" \
-  WOVENMATTER_COMPILER_CACHE="$HOME/Library/Caches/WovenMatter/ReleaseCompiler" \
-  WOVENMATTER_PACKAGE_CACHE="$HOME/Library/Caches/WovenMatter/SourcePackages" \
-    scripts/build-release.sh "$version" compile
+  step 'App compiled; waiting for the Linux library'
+  if ! wait "$linux_pid"; then
+    tail -40 "$work/linux-library.log" >&2
+    echo 'The Linux library build failed.' >&2
+    exit 1
+  fi
+  tail -3 "$work/linux-library.log"
   local app="$work/build/DerivedData/Build/Products/Release/Woven Matter.app"
+  local bundled="$app/Contents/Resources/remote/host/library"
+  rm -rf "$bundled"
+  mkdir -p "$bundled"
+  cp -R "$work/linux-library/." "$bundled/"
+  scripts/verify-linux-library.sh "$bundled"
+  codesign --force --sign - --preserve-metadata=identifier,entitlements "$app"
 
   step 'Checking the app'
   python3 scripts/validate-release-metadata.py verify "$version" "$build_number" "$revision" \

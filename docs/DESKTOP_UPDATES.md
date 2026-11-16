@@ -62,11 +62,13 @@ Reference: [publishing](https://sparkle-project.org/documentation/publishing/).
 
 `scripts/release-check.py` reports outdated dependencies and known
 vulnerabilities first. `scripts/cut-release.sh build X.Y.Z` then makes a fresh
-worktree of current `origin/main` on a maintainer Mac, builds the Linux library
-binaries in Docker on the workstation (or another host in
-`WOVENMATTER_LINUX_BUILD_HOST`, or `local`), compiles the production Release app
-with an ad-hoc signature and the release version, build number and source
-revision, and runs the native app checks. `scripts/cut-release.sh ship X.Y.Z`
+worktree of current `origin/main` on a maintainer Mac. At the same time it builds
+the Linux library binaries in Docker on the workstation (or another host in
+`WOVENMATTER_LINUX_BUILD_HOST`, or `local`) and compiles the production Release
+app here with an ad-hoc signature and the release version, build number and
+source revision. The app carries the library only as a verbatim resource, so the
+script copies it into `Contents/Resources/remote/host/library`, reseals the app
+ad hoc and runs the native app checks. `scripts/cut-release.sh ship X.Y.Z`
 uploads that zipped app and a small manifest (version, build, commit, SHA-256) to
 the private draft, then pushes the `vX.Y.Z` tag.
 
