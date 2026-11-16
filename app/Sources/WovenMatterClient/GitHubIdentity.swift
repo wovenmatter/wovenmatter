@@ -311,8 +311,22 @@ public enum GitHubGitFiles {
 
     """
 
-    /// Each Dev profile keeps its own copy, as it keeps its own Keychain items.
+    /// XCTest and swift-testing hosts: they never touch the user's real GitHub folder or socket.
+    static let isTestProcess: Bool = {
+        let environment = ProcessInfo.processInfo.environment
+        if environment["XCTestBundlePath"] != nil || environment["XCTestSessionIdentifier"] != nil
+            || environment.keys.contains("XCTestConfigurationFilePath") { return true }
+        // `swift test` runs bundles in xctest or swiftpm-testing-helper without those variables.
+        if ["xctest", "swiftpm-testing-helper"].contains(ProcessInfo.processInfo.processName) { return true }
+        return Bundle.main.bundleIdentifier?.hasPrefix("com.apple.dt.xctest") == true
+    }()
+
+    /// Each Dev profile keeps its own copy, as it keeps its own Keychain items. Tests use a
+    /// private temporary folder.
     public static var defaultDirectory: URL {
+        if isTestProcess {
+            return FileManager.default.temporaryDirectory.appending(path: "woven-github-tests-\(ProcessInfo.processInfo.processIdentifier)", directoryHint: .isDirectory)
+        }
         let namespace = WovenMatterKeychainService.current
         let name = namespace == "Woven Matter.desktop" ? "GitHub" : "GitHub " + namespace.dropFirst("Woven Matter.".count)
         return LocalACPManagedRuntimePaths.applicationSupportDirectory.appending(path: name, directoryHint: .isDirectory)
