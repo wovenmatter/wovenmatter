@@ -26,7 +26,7 @@ COPY chromium-packages.txt /tmp/chromium-packages.txt
 RUN apt-get update \
  && apt-get upgrade -y \
  && apt-get install -y --no-install-recommends \
-      ca-certificates curl wget gnupg git openssh-client sudo tini \
+      ca-certificates curl wget gnupg git openssh-client sudo tini libatomic1 \
       build-essential pkg-config python3 python3-pip python3-venv python-is-python3 \
       unzip zip xz-utils jq ripgrep less procps file \
       $(grep -v '^#' /tmp/chromium-packages.txt) \

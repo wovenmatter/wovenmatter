@@ -31,7 +31,7 @@ struct SettingsUpdatesView: View {
             await model.bots.refresh()
         }
         .alert(busyTitle, isPresented: Binding(
-            get: { updates.busyConfirmation != nil }, set: { if !$0 { updates.cancelBusy(shownBusy) } }
+            get: { updates.busyConfirmation != nil }, set: { if !$0, let shownBusy { updates.cancelBusy(shownBusy) } }
         ), presenting: updates.busyConfirmation) { confirmation in
             Button("Update now", role: .destructive) { updates.confirmBusy() }
             Button("Cancel", role: .cancel) { updates.cancelBusy(confirmation.id) }
@@ -39,7 +39,7 @@ struct SettingsUpdatesView: View {
             Text(confirmation.items.map(\.text).joined(separator: "\n\n"))
         }
         .confirmationDialog(reviewTitle, isPresented: Binding(
-            get: { updates.review != nil }, set: { if !$0 { updates.cancelReview(shownReview) } }
+            get: { updates.review != nil }, set: { if !$0, let shownReview { updates.cancelReview(shownReview) } }
         ), titleVisibility: .visible, presenting: updates.review) { review in
             Button("Update") { updates.confirmReview() }
             Button("Cancel", role: .cancel) { updates.cancelReview(review.id) }
@@ -88,10 +88,10 @@ struct SettingsUpdatesView: View {
                         .disabled(!updates.canStart(.thisMacApp))
                 }
             }
-            ForEach(updates.progress, id: \.self) { line in
+            ForEach(updates.progress) { line in
                 HStack(spacing: 8) {
                     ProgressView().controlSize(.small)
-                    SettingsNote(line)
+                    SettingsNote(line.text)
                 }
             }
             if let notice = updates.notice { SettingsNote(notice) }
@@ -119,7 +119,7 @@ struct SettingsUpdatesView: View {
     private func updateRow(_ title: String, detail: String, request: FleetUpdatesModel.Request, available: Bool,
                            accessibility: String? = nil) -> some View {
         let canStart = updates.canStart(request)
-        let updating = available && !canStart && updates.running
+        let updating = updates.isUpdating(request)
         return SettingsRow(title: title, detail: detail) {
             if updating {
                 ProgressView().controlSize(.small)
@@ -292,7 +292,7 @@ struct SettingsUpdatesView: View {
                     Button("Update") { updates.start(.harness(id: harness.id)) }
                         .buttonStyle(SettingsQuietButtonStyle())
                         .disabled(active || !updates.canStart(.harness(id: harness.id)))
-                        .accessibilityLabel("Update \(harness.name)")
+                        .accessibilityLabel("Update \(harness.name) on \(updates.workspaceName(harness.location))")
                 }
             }
             if let error = harness.error { SettingsError(error) }

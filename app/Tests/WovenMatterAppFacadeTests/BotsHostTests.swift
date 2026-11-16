@@ -504,6 +504,9 @@ struct UpdatesVersionTests {
         #expect(server.conflicts(with: bots))
         #expect(!codex.conflicts(with: claude))
         #expect(!bots.conflicts(with: codex))
+        let vm = Part(kind: .engine, key: "engine:box", device: "box")
+        #expect(vm.conflicts(with: bots) && bots.conflicts(with: vm))
+        #expect(!vm.conflicts(with: codex) && vm.conflicts(with: server))
         #expect(!server.conflicts(with: elsewhere))
         #expect(!here.conflicts(with: Part(kind: .harness, key: "this-mac/claude", device: nil)))
     }

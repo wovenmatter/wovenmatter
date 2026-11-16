@@ -8,11 +8,12 @@
 FROM ubuntu:26.04
 
 RUN apt-get update \
- && apt-get install -y --no-install-recommends ca-certificates curl xz-utils \
+ && apt-get install -y --no-install-recommends ca-certificates curl xz-utils libatomic1 \
  && rm -rf /var/lib/apt/lists/*
 
-# Node from the official archive, checksum-verified. Keep in step with
-# remote/host/runtime-versions.json (dependency maintenance updates both).
+# Node from the official archive, checksum-verified. It links libatomic, which ../Dockerfile
+# installs too. Keep in step with remote/host/runtime-versions.json (dependency maintenance
+# updates both).
 ARG NODE_VERSION=26.13.1
 RUN set -eu; \
     case "$(dpkg --print-architecture)" in \

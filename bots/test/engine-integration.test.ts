@@ -5,15 +5,20 @@
  *
  *   create → tool call in the container → keep_running service and browser → idle stop → wake
  *   (reply first, container after) → service restarted, browser tab and cookie restored →
- *   preview proxied (host API faked) → update with a forced health-check failure rolls back.
+ *   preview proxied (host API faked) → update with a forced health-check failure rolls back →
+ *   rebuild carries installs → a new release's tools relink in place, and its new base image
+ *   moves the bot with its work.
  */
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { createModels } from "@earendil-works/pi-ai/models";
 import { fauxAssistantMessage, fauxProvider, fauxText, fauxToolCall } from "@earendil-works/pi-ai/providers/faux";
+import { appendFile, cp } from "node:fs/promises";
+import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { type BotsRuntime, startRuntime } from "../src/app.ts";
 import type { Bot } from "../src/bots.ts";
 import { type BotEnvironment, containerName } from "../src/environment/container.ts";
+import { IMAGE_DIR } from "../src/environment/images.ts";
 import { DockerEngineAPI } from "../src/environment/engine-api.ts";
 import { tempDir } from "./helpers.ts";
 import { FakeHost, testConfig, testSettings } from "./runtime.ts";
@@ -83,10 +88,9 @@ describe.skipIf(!SOCKET)("bots on a real Docker Engine", () => {
   const host = new FakeHost();
   const log: string[] = [];
 
-  beforeAll(async () => {
-    dir = await tempDir();
-    engine = new DockerEngineAPI(SOCKET ?? "");
-    runtime = await startRuntime(
+  /** Starts the runtime as a release whose bot image lives in `imageDir`. */
+  const start = (imageDir?: string) =>
+    startRuntime(
       testConfig(dir.path, {
         engine: { socket: SOCKET, kind: "mac-vm" },
         image: { tag: IMAGE },
@@ -100,6 +104,7 @@ describe.skipIf(!SOCKET)("bots on a real Docker Engine", () => {
         port: 0,
         log: (line) => log.push(line),
         environment: {
+          ...(imageDir ? { imageDir } : {}),
           idleMs: 6_000,
           sweepMs: 1_000,
           // The real apt upgrade needs the network and minutes; opt in with WOVEN_BOTS_ENGINE_REAL_UPGRADE=1.
@@ -112,6 +117,11 @@ describe.skipIf(!SOCKET)("bots on a real Docker Engine", () => {
         },
       },
     );
+
+  beforeAll(async () => {
+    dir = await tempDir();
+    engine = new DockerEngineAPI(SOCKET ?? "");
+    runtime = await start();
     env = runtime.env as BotEnvironment;
     await runtime.reconciled;
     bot = await runtime.manager.get((await runtime.manager.create("Engine")).id);
@@ -266,4 +276,38 @@ describe.skipIf(!SOCKET)("bots on a real Docker Engine", () => {
     expect(after).toContain("# Your container moved to a new image");
     expect(after).toContain("served");
   }, 10 * 60_000);
+
+  it("takes a new release: new tools relink in place, a new base image moves the bot with its work", async () => {
+    /** Restarts the runtime as a release whose image folder differs by one comment. */
+    const release = async (name: string, file: string) => {
+      const next = join(dir.path, name);
+      await cp(IMAGE_DIR, next, { recursive: true });
+      await appendFile(join(next, file), `\n# ${name}\n`);
+      await runtime.close();
+      runtime = await start(next);
+      env = runtime.env as BotEnvironment;
+      await runtime.reconciled;
+      bot = await runtime.manager.get(bot.id);
+    };
+    const probe = "readlink /opt/woven-toolchain; node --version; cat /workspace/marker; cat ~/.woven-home; test -x /usr/games/sl && echo apt-kept";
+    const before = await ask(bot, tool("bash", { command: probe }));
+    const container = (await engine.inspectContainer(containerName(bot.id)))?.Id;
+
+    // A Node or Playwright change: the same container, its link pointing at the new toolchain.
+    await release("tools-release", "toolchain/Dockerfile");
+    const [tools] = await runtime.operations.update([bot.id]);
+    expect(tools).toEqual({ botId: bot.id, ok: true });
+    expect((await engine.inspectContainer(containerName(bot.id)))?.Id).toBe(container);
+    const relinked = await ask(bot, tool("bash", { command: probe }));
+    expect(relinked.split("\n")[0]).not.toBe(before.split("\n")[0]);
+    for (const kept of ["v26.", "before-update", "home", "apt-kept"]) expect(relinked).toContain(kept);
+
+    // An Ubuntu change: a new container, carrying the bot's installs, files and home.
+    await release("base-release", "Dockerfile");
+    const [moved] = await runtime.operations.update([bot.id]);
+    expect(moved).toEqual({ botId: bot.id, ok: true, movedToImage: true });
+    expect((await engine.inspectContainer(containerName(bot.id)))?.Id).not.toBe(container);
+    const after = await ask(bot, tool("bash", { command: probe + "; head -n 1 /workspace/.woven/system/update-report.md" }));
+    for (const kept of ["v26.", "before-update", "home", "apt-kept", "# Your container moved to a new image"]) expect(after).toContain(kept);
+  }, 30 * 60_000);
 });

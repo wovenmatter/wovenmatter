@@ -117,21 +117,28 @@ final class FleetUpdatesModel {
     private(set) var releaseError: String?
     private(set) var checking = false
     private(set) var checkedAt: Date?
-    /// One thing an update changes: a device's Woven Matter or Woven server, a device's bots
-    /// (and its bots VM), or one harness.
+    /// One thing an update changes: a device's Woven Matter or Woven server, a Mac's bots VM,
+    /// a device's bots, or one harness.
     struct Part: Hashable, Sendable {
-        enum Kind: Hashable, Sendable { case app, bots, harness }
+        enum Kind: Hashable, Sendable { case app, engine, bots, harness }
         let kind: Kind
         let key: String
         /// The device it's on, when another part there can't change at the same time.
         let device: String?
 
         /// A device's app or server restarts it, so nothing else on that device changes
-        /// alongside it.
+        /// alongside it; a bots VM restarts the engine its bots run on.
         func conflicts(with other: Part) -> Bool {
             guard let device, device == other.device, key != other.key else { return false }
-            return kind == .app || other.kind == .app
+            if kind == .app || other.kind == .app { return true }
+            return Set([kind, other.kind]) == [.engine, .bots]
         }
+    }
+
+    /// One running update's progress line.
+    struct ProgressLine: Identifiable, Equatable {
+        let id: UUID
+        let text: String
     }
 
     /// One button's update, running alongside any others.
@@ -143,12 +150,16 @@ final class FleetUpdatesModel {
         var progress: String?
         /// Done except for this Mac's restart, which waits for every other update.
         var waitingToRestart = false
+        /// It continues an update that restarted this Mac into its new release.
+        var resumed = false
     }
 
     private(set) var runs: [UUID: Run] = [:]
     var running: Bool { !runs.isEmpty }
     /// What each running update is doing now.
-    var progress: [String] { runs.values.compactMap(\.progress).sorted() }
+    var progress: [ProgressLine] {
+        runs.compactMap { id, run in run.progress.map { ProgressLine(id: id, text: $0) } }.sorted { $0.text < $1.text }
+    }
     private(set) var failures: [String] = []
     /// What happens next when the run is waiting on something outside it.
     private(set) var notice: String?
@@ -168,7 +179,7 @@ final class FleetUpdatesModel {
     /// Dialogs asked for while another was showing, shown in turn.
     @ObservationIgnored private var queuedPrompts: [Prompt] = []
     /// A Linux workspace prepares one harness download at a time.
-    @ObservationIgnored private var preparingRemoteHarness = false
+    @ObservationIgnored private var remoteHarnessOwner: UUID?
 
     private enum Prompt { case busy(BusyConfirmation), review(DownloadReview) }
 
@@ -572,7 +583,7 @@ final class FleetUpdatesModel {
         isUpdating(machine.kind == .thisMac ? thisMacAppPart : appPart(machine.id))
     }
     var isUpdatingThisMacApp: Bool { isUpdating(thisMacAppPart) }
-    func isUpdatingBots(_ machine: BotMachine) -> Bool { isUpdating(botsPart(machine.id)) }
+    func isUpdatingBots(_ machine: BotMachine) -> Bool { isUpdating(enginePart(machine.id)) || isUpdating(botsPart(machine.id)) }
     func isUpdatingHarness(_ harness: FleetHarness) -> Bool { isUpdating(part(harness)) }
     /// Anything on that device, for its row's progress.
     func isUpdatingAnything(on machine: BotMachine) -> Bool {
@@ -588,22 +599,35 @@ final class FleetUpdatesModel {
         return !pendingParts(for: request).isEmpty
     }
 
+    /// Whether everything a button covers is already updating.
+    func isUpdating(_ request: Request) -> Bool {
+        if case .scope(let scope) = request, scope.includesApps, thisMacIsBehind { return isUpdating(thisMacAppPart) }
+        let all = parts(for: request)
+        return !all.isEmpty && all.allSatisfy(isUpdating)
+    }
+
     /// What a button would update that no running update already covers.
-    func pendingParts(for request: Request) -> [Part] {
+    func pendingParts(for request: Request, resumed: Bool? = nil) -> [Part] {
         let claimed = Set(runs.values.flatMap(\.claimed))
-        let parts = deviceSteps(for: request).map(part) + harnessTargets(for: request).map(part)
+        return parts(for: request, resumed: resumed).filter { !claimed.contains($0.key) }
+    }
+
+    private func parts(for request: Request, resumed: Bool? = nil) -> [Part] {
+        let parts = deviceSteps(for: request, resumed: resumed).map(part) + harnessTargets(for: request).map(part)
         var seen = Set<String>()
-        return parts.filter { !claimed.contains($0.key) && seen.insert($0.key).inserted }
+        return parts.filter { seen.insert($0.key).inserted }
     }
 
     private var thisMacAppPart: Part { .init(kind: .app, key: "app:this-mac", device: nil) }
     private func appPart(_ machineID: String) -> Part { .init(kind: .app, key: "app:" + machineID.lowercased(), device: machineID.lowercased()) }
     private func botsPart(_ machineID: String) -> Part { .init(kind: .bots, key: "bots:" + machineID.lowercased(), device: machineID.lowercased()) }
+    private func enginePart(_ machineID: String) -> Part { .init(kind: .engine, key: "engine:" + machineID.lowercased(), device: machineID.lowercased()) }
 
     private func part(_ step: DeviceUpdatePlan.Step) -> Part {
         switch step {
         case .linuxHost(let id, _), .mac(let id, _): appPart(id)
-        case .engine(let id, _), .bots(let id, _): botsPart(id)
+        case .engine(let id, _): enginePart(id)
+        case .bots(let id, _): botsPart(id)
         case .thisMacApp: thisMacAppPart
         }
     }
@@ -621,19 +645,29 @@ final class FleetUpdatesModel {
     private func say(_ run: UUID, _ text: String?) { runs[run]?.progress = text }
 
     /// Waits until nothing else is changing something that can't change alongside `part`,
-    /// then marks it as this run's. Returns false when the run lost its claim on it.
+    /// then marks it as this run's. Returns false when the run doesn't hold it, or when the
+    /// other update never finished.
     private func begin(_ part: Part, in run: UUID) async -> Bool {
-        guard runs[run]?.claimed.contains(part.key) == true else { return false }
+        guard runs[run]?.claimed.contains(part.key) == true, await waitForConflicts(part, in: run) else { return false }
+        // No suspension between the check and the claim, so two runs can't both pass.
+        runs[run]?.active = part
+        return true
+    }
+
+    /// Waits while another update changes something that can't change alongside `part`.
+    private func waitForConflicts(_ part: Part, in run: UUID) async -> Bool {
         let blocked: @MainActor () -> Bool = { [weak self] in
             guard let self else { return false }
             return self.runs.contains { $0.key != run && $0.value.active.map(part.conflicts) == true }
         }
-        if blocked() {
-            say(run, "Waiting for another update on that device to finish…")
-            _ = await wait(timeout: .seconds(3_600)) { !blocked() }
+        guard blocked() else { return true }
+        let previous = runs[run]?.progress
+        say(run, "Waiting for another update on that device to finish…")
+        guard await wait(timeout: .seconds(3_600), until: { !blocked() }) else {
+            failures.append("Another update on that device didn't finish, so this part was skipped. Try again.")
+            return false
         }
-        // No suspension between the check and the claim, so two runs can't both pass.
-        runs[run]?.active = part
+        say(run, previous)
         return true
     }
 
@@ -642,15 +676,20 @@ final class FleetUpdatesModel {
         runs[run]?.claimed.remove(part.key)
     }
 
-    /// Before this Mac restarts into its update, every other update finishes.
-    private func waitForOtherRuns(_ run: UUID) async {
+    /// Before this Mac restarts into its update, every other update finishes. False when
+    /// they never did, and this Mac isn't restarted.
+    private func waitForOtherRuns(_ run: UUID) async -> Bool {
         runs[run]?.waitingToRestart = true
         let othersDone: @MainActor () -> Bool = { [weak self] in
             self?.runs.allSatisfy { $0.key == run || $0.value.waitingToRestart } ?? true
         }
-        guard !othersDone() else { return }
+        guard !othersDone() else { return true }
         say(run, "Waiting for your other updates to finish before this Mac restarts…")
-        _ = await wait(timeout: .seconds(7_200), until: othersDone)
+        guard await wait(timeout: .seconds(7_200), until: othersDone) else {
+            notice = "Your other updates are still running, so this Mac wasn't updated. Update this Mac when they finish."
+            return false
+        }
+        return true
     }
 
     private func present(_ prompt: Prompt) {
@@ -677,15 +716,20 @@ final class FleetUpdatesModel {
     /// Either updates this Mac first, or reviews the downloads and runs the rest. Nothing
     /// is stopped until the run starts.
     private func proceed(_ request: Request, force: Bool, stopping: [BusyItem] = []) async {
-        let parts = pendingParts(for: request)
+        // Only one update continues a restart into a new release.
+        let resumed = resumedAfterUpdate
+        resumedAfterUpdate = false
+        let parts = pendingParts(for: request, resumed: resumed)
         let id = UUID()
         if case .scope(let scope) = request, scope.includesApps, thisMacIsBehind, let version = thisMacVersion,
            let target = release?.version {
             // Linux hosts can only receive this Mac's release, so this Mac goes first. Its
             // own restart ends its chats; the rest resumes after it, asking again.
+            guard !isUpdating(thisMacAppPart) else { return }
             runs[id] = Run(claimed: Set(parts.map(\.key) + [thisMacAppPart.key]))
-            await waitForOtherRuns(id)
+            let ready = await waitForOtherRuns(id)
             runs[id] = nil
+            guard ready else { return }
             if let data = try? JSONEncoder().encode(Resume(scope: scope, fromVersion: version, targetVersion: target, savedAt: Date())) {
                 UserDefaults.standard.set(data, forKey: Self.resumeKey)
             }
@@ -695,10 +739,12 @@ final class FleetUpdatesModel {
         }
         guard !parts.isEmpty else { return }
         let keys = Set(parts.map(\.key))
-        runs[id] = Run(claimed: keys, progress: "Checking downloads…")
+        runs[id] = Run(claimed: keys, progress: "Checking downloads…", resumed: resumed)
         var items: [DownloadReview.Item] = []
         var skipped: Set<String> = []
+        // A preview asks the device, so it waits for a server restarting there.
         for target in remoteHarnessTargets(for: request) where keys.contains(target.harness.id) {
+            guard await waitForConflicts(part(target.harness), in: id) else { skipped.insert(target.harness.id); continue }
             switch await preview(target) {
             case .success(let preview):
                 items.append(.init(id: target.harness.id, title: "\(target.harness.name) on \(target.configuration.name)", preview: preview))
@@ -710,6 +756,7 @@ final class FleetUpdatesModel {
         // Other machines: a Linux host names its download; a Mac updates from its registries.
         for harness in harnessTargets(for: request) where keys.contains(harness.id) {
             guard case .member(let machineID) = harness.location, case .runtime(let kind) = harness.kind else { continue }
+            guard await waitForConflicts(part(harness), in: id) else { skipped.insert(harness.id); continue }
             do {
                 let reply = try await model!.bots.query(.memberInstallerPreview(machineID: machineID, kind: kind))
                 if let preview = reply.installerPreview {
@@ -735,7 +782,7 @@ final class FleetUpdatesModel {
         let forceOtherMacs: Bool = if case .harnesses = request { force } else { false }
         await model.bots.refresh()
         var restartsThisMac = false
-        for step in deviceSteps(for: request) {
+        for step in deviceSteps(for: request, resumed: runs[id]?.resumed ?? false) {
             let part = part(step)
             if step == .thisMacApp { restartsThisMac = runs[id]?.claimed.contains(part.key) == true; continue }
             guard await begin(part, in: id) else { continue }
@@ -768,11 +815,9 @@ final class FleetUpdatesModel {
         say(id, nil)
         await refreshMembers(checkLatest: false)
         await refreshBotImages()
-        resumedAfterUpdate = false
         await model.bots.refresh()
         // This Mac's app restarts, so it goes after everything else, this update's and others'.
-        if restartsThisMac {
-            await waitForOtherRuns(id)
+        if restartsThisMac, await waitForOtherRuns(id) {
             say(id, "Checking for an update to this Mac…")
             DesktopUpdater.shared.checkForUpdates()
         }
@@ -786,12 +831,14 @@ final class FleetUpdatesModel {
 
     // MARK: Which steps
 
-    private func deviceSteps(for request: Request) -> [DeviceUpdatePlan.Step] {
-        let steps = plannedSteps(for: request)
+    /// `resumed` is whether the update continues this Mac's restart into a new release
+    /// (by default, whether one is waiting to).
+    private func deviceSteps(for request: Request, resumed: Bool? = nil) -> [DeviceUpdatePlan.Step] {
+        let steps = plannedSteps(for: request, resumed: resumed ?? resumedAfterUpdate)
         return isDevelopmentBuild ? steps.filter { $0 != .thisMacApp } : steps
     }
 
-    private func plannedSteps(for request: Request) -> [DeviceUpdatePlan.Step] {
+    private func plannedSteps(for request: Request, resumed: Bool = false) -> [DeviceUpdatePlan.Step] {
         guard let model else { return [] }
         let plan = DeviceUpdatePlan.steps(machines: model.bots.machines, thisMacVersion: thisMacVersion)
         switch request {
@@ -809,7 +856,7 @@ final class FleetUpdatesModel {
             return plan.filter { step in
                 switch step {
                 case .engine(let id, _), .bots(let id, _):
-                    updated.contains(id) || (id == thisMac && resumedAfterUpdate)
+                    updated.contains(id) || (id == thisMac && resumed)
                         || model.bots.machines.first(where: { $0.id == id }).map(botsAreOutdated) == true
                 default: true
                 }
@@ -1090,6 +1137,7 @@ final class FleetUpdatesModel {
     /// The download a Linux workspace would run for this update, without starting it.
     private func preview(_ target: RemoteTarget) async -> Result<RemoteInstallerPreview, any Error> {
         await oneRemoteHarnessAtATime { await self.preparePreview(target) }
+            ?? .failure(FleetUpdateError("Another workspace's download didn't finish preparing. Try again."))
     }
 
     private func preparePreview(_ target: RemoteTarget) async -> Result<RemoteInstallerPreview, any Error> {
@@ -1114,14 +1162,16 @@ final class FleetUpdatesModel {
     /// must match what was reviewed.
     private func updateRemote(_ target: RemoteTarget, reviewed: RemoteInstallerPreview) async -> String? {
         await oneRemoteHarnessAtATime { await self.runRemote(target, reviewed: reviewed) }
+            ?? "Another workspace's download didn't finish preparing. Try again."
     }
 
     /// Linux workspaces prepare one harness download at a time, so their harness updates
     /// take turns; everything else keeps going.
-    private func oneRemoteHarnessAtATime<T>(_ body: @MainActor () async -> T) async -> T {
-        _ = await wait(timeout: .seconds(3_600)) { [weak self] in self?.preparingRemoteHarness != true }
-        preparingRemoteHarness = true
-        defer { preparingRemoteHarness = false }
+    private func oneRemoteHarnessAtATime<T>(_ body: @MainActor () async -> T) async -> T? {
+        guard await wait(timeout: .seconds(3_600), until: { [weak self] in self?.remoteHarnessOwner == nil }) else { return nil }
+        let owner = UUID()
+        remoteHarnessOwner = owner
+        defer { if remoteHarnessOwner == owner { remoteHarnessOwner = nil } }
         return await body()
     }
 

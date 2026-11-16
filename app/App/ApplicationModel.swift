@@ -534,6 +534,8 @@ final class ApplicationModel {
 
     #if APP_FACADE_TESTS
     var runtimeMaintenanceFixture: (@Sendable (AgentRuntimeKind) async throws -> RuntimeInventory)?
+    /// Facade fixtures stand in for a version check.
+    func setRuntimeInventoryForTesting(_ inventory: RuntimeInventory) { runtimeInventories[inventory.kind] = inventory }
     /// Facade fixtures launch remote harnesses without tailnet SSH options or MCP bridges.
     var isFacadeFixture = false
 

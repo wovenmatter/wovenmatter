@@ -119,6 +119,43 @@ struct HarnessMaintenanceTests {
         #expect(await operations.calls == [.codex: 1, .claudeCode: 1])
     }
 
+    /// Settings → Updates: starting one harness's update leaves every other one startable,
+    /// both run at once, and a button covering only parts already updating waits.
+    @Test func updatesStartedFromSettingsRunSideBySide() async throws {
+        let fixture = try await FacadeFixture(); defer { fixture.remove() }
+        let operations = HeldHarnessUpdates()
+        fixture.model.runtimeMaintenanceFixture = { try await operations.run($0) }
+        for kind in [AgentRuntimeKind.codex, .claudeCode] {
+            fixture.model.setRuntimeInventoryForTesting(try JSONDecoder().decode(RuntimeInventory.self, from: Data("""
+                {"kind":"\(kind.rawValue)","components":[{"name":"CLI","installed":"1.0.0","latest":"2.0.0","required":true,"present":true,"verified":true}]}
+                """.utf8)))
+        }
+        let updates = FleetUpdatesModel()
+        updates.attach(fixture.model)
+        let codex = FleetHarness.Location.thisMac, ids = updates.harnesses(on: codex).map(\.id)
+        let codexID = try #require(ids.first { $0.hasSuffix("/" + AgentRuntimeKind.codex.rawValue) })
+        let claudeID = try #require(ids.first { $0.hasSuffix("/" + AgentRuntimeKind.claudeCode.rawValue) })
+        #expect(updates.canStart(.scope(.harnesses)))
+
+        updates.start(.harness(id: codexID))
+        try await eventually { await operations.started == [.codex] }
+        #expect(!updates.canStart(.harness(id: codexID)))
+        #expect(updates.canStart(.harness(id: claudeID)))
+        #expect(updates.canStart(.scope(.harnesses)) && !updates.isUpdating(.scope(.harnesses)))
+
+        updates.start(.harness(id: claudeID))
+        try await eventually { await operations.started == [.codex, .claudeCode] }
+        #expect(updates.runs.count == 2)
+        #expect(!updates.canStart(.scope(.harnesses)) && updates.isUpdating(.scope(.harnesses)))
+
+        try await operations.finish(.claudeCode)
+        try await eventually { updates.runs.count == 1 }
+        try await operations.finish(.codex)
+        try await eventually { !updates.running }
+        #expect(updates.failures.isEmpty)
+        #expect(await operations.calls == [.codex: 1, .claudeCode: 1])
+    }
+
     /// The Mac server hands every path another Mac's Settings → Updates calls, the
     /// operation it follows included, to the signed member-maintenance handler.
     @Test func theMacServerRoutesEveryPathAnotherMacsUpdatesCall() {
