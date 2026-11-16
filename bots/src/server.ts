@@ -464,12 +464,26 @@ class Connection {
         });
         return { started: true };
       }
-      case "runtime.status":
+      case "runtime.status": {
+        const image = await this.#operations().imageStatus();
         return {
           version: VERSION,
           environment: this.#server.identity.environment,
           bots: (await manager.list()).length,
+          // The tools every bot container gets, the bots an update moves to a new base image, and
+          // the bots an update changes at all.
+          ...(image
+            ? {
+                image: {
+                  tag: image.tag,
+                  ...image.tools,
+                  staleBots: image.staleBots.length,
+                  outdatedBots: (image.outdatedBots ?? image.staleBots).length,
+                },
+              }
+            : {}),
         };
+      }
       case "threads.list": {
         const target = await manager.get(request.botId);
         return { threads: (await target.threads(request.query)).map(thread) };

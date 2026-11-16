@@ -596,7 +596,7 @@ public actor LibraryPeerSync {
         guard exchange.page.format == PairedLibraryFormat.exchange else {
           let schema = try await database.pairedLibrarySchema()
           update(resolved) { $0.state = .updateRequired; $0.version = exchange.version; $0.lastContact = Date()
-            $0.error = "\(resolved.name) runs Woven Matter \(exchange.version); this device runs \(self.configuration.version). Update everything to synchronize." }
+            $0.error = "\(resolved.name) runs Woven Matter \(exchange.version); this device runs \(self.configuration.version). Update everything in Settings → Updates to synchronize." }
           return try .json(LibraryPeerUpdateRequired(code: "update_required",
             message: "Update Woven Matter on every device: this device runs \(configuration.version), \(resolved.name) runs \(exchange.version).",
             version: configuration.version, schema: schema), status: 409)

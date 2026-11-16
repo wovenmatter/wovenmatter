@@ -153,7 +153,7 @@ struct BotsSidebarSection: View {
         case .starting: "Starting bots…"
         case .off: "Bots are off"
         case .unreachable: "\(bots.displayName) is unavailable"
-        case .needsUpdate: "Update everything to use these bots"
+        case .needsUpdate: "Update in Settings → Updates to use these bots"
         case .failed: "Bots could not start"
         }
     }

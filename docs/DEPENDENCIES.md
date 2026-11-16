@@ -27,7 +27,8 @@ for every package update. Three separate mechanisms do that:
 | `default-agent/.node-version` and the Node checksums in `scripts/prepare-default-agent.sh` and `LocalACPManagedRuntime.swift` | One current stable Node release and its official archive SHA-256 values | Maintenance PR, all copies together |
 | `remote/host/runtime-versions.json` | The same Node release's Linux archive SHA-256 values and the lockfile's Playwright version | The same maintenance PR; host bundle tests reject drift |
 | `dockerVersion` and `dockerSHA256` in `remote/host/runtime-versions.json` | The Docker Engine static release (`download.docker.com/linux/static/stable`) that Linux bot engines install, with its x86_64 and aarch64 archive SHA-256 values | Maintenance PR; both checksums together |
-| `bots/image/Dockerfile` (`NODE_VERSION` with its two Linux SHA-256 values, `PLAYWRIGHT_VERSION`) | The bot image's copy of the same Node and Playwright selections; Ubuntu 26.04 packages float and are upgraded at build and by the bots Update | The same maintenance PR, kept equal to `remote/host/runtime-versions.json` |
+| `bots/image/toolchain/Dockerfile` (`NODE_VERSION` with its two Linux SHA-256 values, `PLAYWRIGHT_VERSION`) | The bot toolchain's copy of the same Node and Playwright selections. Bots get it through the runtime's shared volume, so a change updates them in place and never moves them to a new container | The same maintenance PR, kept equal to `remote/host/runtime-versions.json` |
+| `bots/image/Dockerfile` and `bots/image/chromium-packages.txt` | The bot base image: the Ubuntu release, its packages (they float and are upgraded at build and by every bots Update), and Chromium's system libraries from Playwright's Ubuntu list. A change moves bots to a new container, carrying what they installed | Refresh `chromium-packages.txt` from `playwright-core`'s native dependency table when Ubuntu or Chromium's libraries change; an update whose Chromium needs more installs them in the container (`playwright install-deps`) |
 | `remote/npm-runtime/package-lock.json` | Locked security replacements for npm's vendored dependencies, shared by image builds and each native host release's private npm | Dependency maintenance; runtime API and installer tests validate both uses |
 | `harnesses/npm-version.json` | Current private Mac npm archive and registry integrity, with the existing locked `remote/npm-runtime` vendor repairs | Maintenance PR; managed CLI and bundled SDK updater verification |
 | `app/Automation/cua-version.json` | Exact Cua Driver archive/executable digests, source and signing identity | Maintenance PR with desktop acceptance |
@@ -287,9 +288,11 @@ Maintenance checks both for newer releases; recorded does not mean frozen.
   consumer-scoped pi-ai provider and Chord `ws` overrides, and minimum-only
   ranges. Its in-container helper ships the runtime's own locked Pi Durable,
   Chord and Pi telemetry packages (copied from `bots/node_modules` into the
-  helper volume), so they never drift from the runtime. The bot image builds
-  through the Engine API from `bots/image` under a content-hash tag, so a
-  changed recipe gives a new image; existing bots move to it with Rebuild.
+  shared volume), so they never drift from the runtime. The bot base image and
+  toolchain image build through the Engine API from `bots/image` and
+  `bots/image/toolchain` under content-hash tags. A changed toolchain reaches
+  bots in place on their next Update; a changed base image moves them to a new
+  container on their next Update or Rebuild, carrying what they installed.
   `npm test --prefix bots` (type check plus faux-provider suites) validates
   it; `npm run test:engine --prefix bots` with `WOVEN_BOTS_ENGINE_SOCKET` set
   exercises a real engine on request.

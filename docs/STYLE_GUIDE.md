@@ -86,11 +86,38 @@ when an intentional design change is accepted.
 - **Settings navigation:** group Pi Durable, Codex, Claude Code, Grok Build, and
   OpenCode under **Settings → Agents**. Agent pages return to Agents unless
   opened from a remote workspace's page. Spell **OpenCode** as one word throughout
-  the app. Order the main Settings page as General, Permissions & Access,
+  the app. Order the main Settings page as General, Updates, Permissions & Access,
   Subscriptions & API Keys, Agents, Bots, Woven MCP, Workspaces, Apple Devices,
   Background Server, then Dictation. Subscriptions & API Keys, Permissions &
-  Access, Woven MCP, and Bots return to the page whose link opened them.
-- **General:** Appearance, Conversation titles, Software, and Privacy only. Other
+  Access, Woven MCP, Bots, and Updates return to the page whose link opened them.
+- **Updates:** the one home for versions and updates.
+  - **The top row:** "This Mac · Woven Matter X" ("Woven Matter development
+    build" in development), always subtitled "This updates the Woven Matter
+    desktop app on this Mac.", with **Check for updates** and, when a newer
+    release is out, **Update this Mac**, the page's one primary button.
+  - **Three rows with a compact Update each:** "Update everything", "Update
+    just Woven Matter", and "Update just the harnesses", each subtitled with
+    what it covers across your devices. No full-width buttons, and never
+    "fleet".
+  - **Your devices:** no subtitle. One expandable row per device, named as on
+    the tailnet, this Mac first, then other Macs, then remote workspaces. The
+    closed row shows only its name, its Woven Matter or Woven server version,
+    **Bots** on the one device that runs bots, and a status; it has no Update
+    button. Opened, it lists "Update everything on this device", "Update just
+    Woven Matter", "Update just the bots" where they run, then each harness,
+    each with its own **Update**. Bots never show a version of their own.
+  - **Updates run side by side:** starting one never disables the others. Only
+    the rows an update covers show "Updating…"; a button whose parts are all
+    already updating waits.
+  - **Plain copy:** subtitles are full sentences saying what the row updates.
+    No "How it works" section; the rows explain themselves.
+  - **No update counts:** each row says "Update available" itself.
+  Work an update would stop is named in one alert before anything starts; Linux
+  harness downloads are reviewed in one confirmation per update. Other pages
+  show only a "Versions don't match" link here.
+- **General:** the Woven Matter version first (no heading), as one whole-row link
+  that highlights on hover and opens Updates, with one line saying updates live
+  there. Then Appearance, Conversation titles, and Privacy. Other
   settings live on the page for what they affect. Summary rows whose value would be
   unclear before opening (Sidebar sections, Agent icons) show a one-line description
   instead. Conversation titles show the Codex account they use and link to its page.
@@ -103,14 +130,14 @@ when an intentional design change is accepted.
   composer, and Settings sections and rows. A thread sits beside its bot's main channel
   at 760 points and wider. Message actions appear on hover. Bots run on one machine.
   **Settings → Bots** holds one "Run bots on" choice (Off, This Mac, or another Mac or
-  Linux machine), the chosen machine's row, Install on another device, and version
-  notices with "Update everything". Choosing a machine asks first, then turns bots off
+  Linux machine), the chosen machine's row, Install on another device, and a
+  "Versions don't match" link to Settings → Updates. Choosing a machine asks first, then turns bots off
   everywhere else; bots and their files stay where they were made. The machine opens
   its own page: a status row with a Manage menu, then summary links to Profiles, Bots
   and teams, Resources, and that machine's Subscriptions & API Keys. Profiles and bots
   are summary rows that open for editing. Bots' Woven MCP access lives in Settings →
   Woven MCP, with no pause switch; Bots shows it as one summary link. Apple Devices
-  shows only a version status link to Bots. Bots use Subscriptions & API Keys on the
+  shows only a version status link to Updates. Bots use Subscriptions & API Keys on the
   machine they run on; there is no separate bot sign-in.
 - **Harness setup:** use compact rows grouped on the theme-whisper surface for
   both harness installation and Pi Durable setup, with the same typography,

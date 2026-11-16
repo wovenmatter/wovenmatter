@@ -534,6 +534,8 @@ final class ApplicationModel {
 
     #if APP_FACADE_TESTS
     var runtimeMaintenanceFixture: (@Sendable (AgentRuntimeKind) async throws -> RuntimeInventory)?
+    /// Facade fixtures stand in for a version check.
+    func setRuntimeInventoryForTesting(_ inventory: RuntimeInventory) { runtimeInventories[inventory.kind] = inventory }
     /// Facade fixtures launch remote harnesses without tailnet SSH options or MCP bridges.
     var isFacadeFixture = false
 
@@ -4298,6 +4300,9 @@ extension ApplicationModel {
             }
             if request.method == "runtime.snapshot" {
                 return .init(id: request.id, result: try JSONEncoder().encode(backendRuntimeSnapshot()))
+            }
+            if request.method == "executor.versions" {
+                return .init(id: request.id, result: try JSONEncoder().encode(ExecutorVersionsReply(versions: try await executorVersions())))
             }
             if request.method == "remoteWorkspaces.snapshot" {
                 return .init(id: request.id, result: try JSONEncoder().encode(remoteWorkspaces.backendSnapshot()))

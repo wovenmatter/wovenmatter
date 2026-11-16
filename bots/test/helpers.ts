@@ -35,7 +35,8 @@ export function parseTestSettings(input: Record<string, unknown>) {
 
 export async function tempDir(): Promise<{ path: string; cleanup: () => Promise<void> }> {
   const path = await mkdtemp(join(tmpdir(), "pi-bot-test-"));
-  return { path, cleanup: () => rm(path, { recursive: true, force: true }) };
+  // A process that is still exiting can add a file mid-removal; retry rather than fail.
+  return { path, cleanup: () => rm(path, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }) };
 }
 
 type ContextLike = { messages?: readonly { role: string; content: unknown }[] };

@@ -623,8 +623,37 @@ public struct PiBotRuntimeStatus: Codable, Equatable, Sendable {
     public let environment: String?
     /// How many bots this runtime has.
     public let bots: Int?
-    public init(version: String, environment: String? = nil, bots: Int? = nil) {
-        self.version = version; self.environment = environment; self.bots = bots
+    /// The bot container image: its tools, and how many bots are still on an older one.
+    public let image: PiBotImageStatus?
+    public init(version: String, environment: String? = nil, bots: Int? = nil, image: PiBotImageStatus? = nil) {
+        self.version = version; self.environment = environment; self.bots = bots; self.image = image
+    }
+}
+
+/// What every bot container gets: the base image (Ubuntu and its system libraries) and the
+/// shared toolchain (Node, Playwright, Chromium). "Update bots" moves the bots in `staleBots`
+/// to a new base image, carrying what they installed, and updates the toolchain of every bot
+/// in `outdatedBots` in place.
+public struct PiBotImageStatus: Codable, Equatable, Sendable {
+    public let tag: String
+    public let base: String?
+    public let node: String?
+    public let playwright: String?
+    public let staleBots: Int
+    /// Bots an update changes at all; an older runtime reports only `staleBots`.
+    public let outdatedBots: Int?
+    public init(tag: String, base: String? = nil, node: String? = nil, playwright: String? = nil, staleBots: Int = 0, outdatedBots: Int? = nil) {
+        self.tag = tag; self.base = base; self.node = node; self.playwright = playwright; self.staleBots = staleBots
+        self.outdatedBots = outdatedBots
+    }
+
+    /// Bots whose next update changes their tools, base image or helper.
+    public var botsToUpdate: Int { max(outdatedBots ?? staleBots, staleBots) }
+
+    /// "Ubuntu 26.04 · Node 26.13.1 · Playwright 1.65.1 with Chromium"
+    public var tools: String {
+        [base.map { $0.replacingOccurrences(of: "ubuntu:", with: "Ubuntu ") }, node.map { "Node \($0)" },
+         playwright.map { "Playwright \($0) with Chromium" }].compactMap { $0 }.joined(separator: " · ")
     }
 }
 

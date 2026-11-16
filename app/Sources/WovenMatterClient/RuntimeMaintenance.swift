@@ -287,3 +287,20 @@ public enum RuntimeMaintenanceError: LocalizedError {
         }
     }
 }
+
+extension RuntimeInventory {
+    /// This Mac's inventory in the shape a Linux host serves at `/v1/runtime-maintenance`,
+    /// so another Mac's Settings → Updates reads both the same way. Paths stay on this Mac.
+    public func maintenance(operation: RemoteHarnessOperation? = nil, failureCount: Int = 0) -> RemoteRuntimeMaintenance {
+        RemoteRuntimeMaintenance(
+            id: kind, displayName: kind.displayName, installed: isInstalled,
+            components: components.enumerated().map { index, component in
+                RemoteRuntimeComponent(id: index == 0 ? "runtime" : component.name, displayName: component.name, path: nil,
+                                       installedVersion: component.installed, latestVersion: component.latest,
+                                       source: "managed", required: component.required,
+                                       installed: component.present && component.verified)
+            },
+            operation: operation, failureCount: failureCount, notice: limitation,
+            updateAvailable: updateAvailable, versionCheckAvailable: versionCheckAvailable ?? !latestUnavailable)
+    }
+}

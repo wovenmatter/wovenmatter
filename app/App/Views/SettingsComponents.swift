@@ -413,6 +413,67 @@ struct SettingsSummaryRow<Content: View>: View {
     }
 }
 
+/// A `SettingsSummaryRow` with its own controls on the right (an Update for the whole
+/// thing): the title side opens and closes the details, the controls act directly.
+struct SettingsDisclosureRow<Accessory: View, Content: View>: View {
+    let title: String
+    var detail: String? = nil
+    @State private var isExpanded = false
+    @ViewBuilder var accessory: Accessory
+    @ViewBuilder var content: Content
+
+    init(_ title: String, detail: String? = nil, @ViewBuilder accessory: () -> Accessory, @ViewBuilder content: () -> Content) {
+        self.title = title
+        self.detail = detail
+        self.accessory = accessory()
+        self.content = content()
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(alignment: .center, spacing: 16) {
+                Button { isExpanded.toggle() } label: {
+                    HStack(spacing: 8) {
+                        LucideIcon(glyph: .chevronDown, size: 12)
+                            .foregroundStyle(WovenPalette.mutedForeground)
+                            .rotationEffect(.degrees(isExpanded ? 0 : -90))
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(title)
+                                .font(.settingsRow)
+                                .foregroundStyle(WovenPalette.foreground)
+                                .lineLimit(1)
+                            if let detail {
+                                Text(detail)
+                                    .font(.settingsSecondary)
+                                    .foregroundStyle(WovenPalette.mutedForeground)
+                                    .multilineTextAlignment(.leading)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                        }
+                        Spacer(minLength: 8)
+                    }
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, detail == nil ? 0 : 6)
+                    .frame(maxWidth: .infinity, minHeight: SettingsMetrics.rowHeight, alignment: .leading)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(SettingsQuietButtonStyle(horizontalPadding: 0, minimumHeight: SettingsMetrics.rowHeight, idleFill: false))
+                .padding(.leading, -8)
+                .accessibilityLabel(title)
+                .accessibilityValue(isExpanded ? "expanded" : "collapsed")
+                HStack(spacing: 8) { accessory }.layoutPriority(1)
+            }
+            if isExpanded {
+                VStack(alignment: .leading, spacing: 6) { content }
+                    .padding(.leading, 20)
+                    .padding(.top, 2)
+                    .padding(.bottom, 10)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+    }
+}
+
 /// The same row as `SettingsSummaryRow`, opening another page instead of expanding.
 struct SettingsSummaryLink: View {
     let title: String

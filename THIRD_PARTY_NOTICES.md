@@ -211,9 +211,11 @@ package's license and notice files remain in the bundled `node_modules`.
 
 The in-container helper (`bots/helper/`) adapts Pi Bot's environment agent.
 Bot containers are built at run time from `bots/image` on Ubuntu LTS,
-with Chromium, Playwright, Node.js, Python, git, build tools and tini installed
-from their official distributions inside the bot engine; their licenses and
-notices remain in each image under `/usr/share/doc` and the installed packages.
+with Python, git, build tools, tini and Chromium's system libraries, and
+their toolchain from `bots/image/toolchain` (Chromium, Playwright and Node.js),
+installed from their official distributions inside the bot engine; their
+licenses and notices remain in each image under `/usr/share/doc` and in the
+toolchain's installed packages.
 No container image is shipped in the app.
 
 ## Woven VM guest and bot engines

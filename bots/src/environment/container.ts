@@ -1,22 +1,59 @@
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import type { Context } from "@earendil-works/chord/context";
+import { randomUUID } from "node:crypto";
 import { Duplex } from "node:stream";
 import type { BotEnvironmentAdapter, HarnessEnvFactory } from "../env.ts";
 import { type DockerEngineAPI, EngineError, type ExecProcess } from "./engine-api.ts";
 import {
-  ensureHelperVolume,
+  BASELINE,
+  CAPTURE,
+  CARRY_DIR,
+  HOME_DIR,
+  CHROMIUM_DEPS,
+  CHROMIUM_PROBE,
+  PENDING_MARKER,
+  REAPPLY,
+  REBUILD_SYSTEM_PACKAGES,
+  REBUILD_USER_PACKAGES,
+} from "./carry.ts";
+import {
+  contentHash,
   ensureImage,
+  ensureSharedHelper,
+  ensureSharedToolchain,
   HELPER_LABEL,
   HELPER_MOUNT,
   helperArchive,
+  helperDir,
   IMAGE_DIR,
+  imageContext,
+  imageTag,
+  type ImageTools,
+  imageTools,
+  pruneShared,
+  SHARED_MOUNT,
+  SHARED_VOLUME,
+  TOOLCHAIN_PATH,
+  toolchainContext,
+  toolchainDir,
+  toolchainImageName,
 } from "./images.ts";
+import { createTar } from "./tar.ts";
 import { AgentConnection, type AgentProcess, RemoteExecutionEnv } from "./remote.ts";
 
 export const CONTAINER_USER = "bot";
 export const WORKSPACE = "/workspace";
 export const BOT_LABEL = "woven.bot";
+/** The bot image a container was made from (its tag), kept through in-place updates. */
+export const IMAGE_LABEL = "woven.bots.image";
 export const MACHINE_LABEL = "woven.bots.machine";
+/**
+ * The container layout: "2" has the shared volume at /opt/woven, its helper and toolchain links,
+ * and its home folder in storage. A container without it predates that and moves on its next
+ * update.
+ */
+export const LAYOUT_LABEL = "woven.bots.layout";
+export const LAYOUT = "2";
 /** The contract's fixed idle period: a bot stops fully after 15 minutes idle. */
 export const IDLE_STOP_MS = 15 * 60_000;
 const AGENT_COMMAND = ["node", `${HELPER_MOUNT}/agent.mjs`];
@@ -55,8 +92,19 @@ export type UpdateResult = {
   readonly ok: boolean;
   /** Nothing to update: the bot never had a container. */
   readonly skipped?: boolean;
+  /**
+   * It moved to a new base image (a new Ubuntu release or system libraries): its own system
+   * changes were carried across. Node, Playwright and Chromium update without moving.
+   */
+  readonly movedToImage?: boolean;
   readonly rolledBack?: boolean;
   readonly error?: string;
+};
+
+/** What a rollback needs to recreate the old container from its snapshot. */
+type ContainerSpecCopy = {
+  readonly labels: Record<string, string>;
+  readonly mounts: readonly { Type: string; Source: string; Target: string; ReadOnly?: boolean }[];
 };
 
 export type BotEnvironmentOptions = {
@@ -172,7 +220,15 @@ export class BotEnvironment implements BotEnvironmentAdapter {
   readonly #lastUse = new Map<string, number>();
   #idleTimer: NodeJS.Timeout | undefined;
   #image: Promise<string> | undefined;
-  #helper: Promise<string> | undefined;
+  #toolchainImage: Promise<string> | undefined;
+  #currentTag: Promise<string> | undefined;
+  #currentToolchain: Promise<string> | undefined;
+  #shared: Promise<{ readonly helper: string; readonly toolchain: string }> | undefined;
+  #helperHash: Promise<string> | undefined;
+  /** Updates and rebuilds in progress: pruning waits until none is (a rollback needs its mounts). */
+  #changing = 0;
+  /** Volumes an update in progress may restore its old container with; never pruned meanwhile. */
+  readonly #restoring = new Set<string>();
   #closed = false;
 
   constructor(options: BotEnvironmentOptions) {
@@ -252,17 +308,49 @@ export class BotEnvironment implements BotEnvironmentAdapter {
     return this.#image;
   }
 
-  /** This runtime's helper volume (versioned by content). */
-  helper(): Promise<string> {
-    if (!this.#helper) {
+  /** The toolchain image (Node, npm, Playwright, Chromium), built from bots/image/toolchain. */
+  toolchainImage(): Promise<string> {
+    if (!this.#toolchainImage) {
+      const dir = this.#options.imageDir ?? IMAGE_DIR;
       const pending = (async () =>
-        ensureHelperVolume(this.#engine, await this.image(), this.#labels(), await helperArchive()))();
-      this.#helper = pending;
+        ensureImage(this.#engine, toolchainImageName(this.#options.imageName), this.#log, dir, await toolchainContext(dir)))();
+      this.#toolchainImage = pending;
       pending.catch(() => {
-        if (this.#helper === pending) this.#helper = undefined;
+        if (this.#toolchainImage === pending) this.#toolchainImage = undefined;
       });
     }
-    return this.#helper;
+    return this.#toolchainImage;
+  }
+
+  /** This runtime's helper and toolchain in the shared volume (each named by its content hash). */
+  shared(): Promise<{ readonly helper: string; readonly toolchain: string }> {
+    if (!this.#shared) {
+      const pending = (async () => {
+        const [image, toolchain] = await Promise.all([this.image(), this.toolchainImage()]);
+        return {
+          helper: await ensureSharedHelper(this.#engine, image, this.#labels(), await helperArchive()),
+          toolchain: await ensureSharedToolchain(this.#engine, toolchain, this.#labels(), await this.currentToolchain()),
+        };
+      })();
+      this.#shared = pending;
+      pending.catch(() => {
+        if (this.#shared === pending) this.#shared = undefined;
+      });
+    }
+    return this.#shared;
+  }
+
+  /** This runtime's helper (its shared directory's hash). */
+  async helper(): Promise<string> {
+    return (await this.shared()).helper;
+  }
+
+  /** The links that select a helper and toolchain, extracted at the container's root. */
+  #links(shared: { readonly helper: string; readonly toolchain: string }): Buffer {
+    return createTar([
+      { path: HELPER_MOUNT.slice(1), link: helperDir(shared.helper) },
+      { path: TOOLCHAIN_PATH.slice(1), link: toolchainDir(shared.toolchain) },
+    ]);
   }
 
   async state(botId: string): Promise<"missing" | "running" | "stopped"> {
@@ -271,7 +359,56 @@ export class BotEnvironment implements BotEnvironmentAdapter {
     return info.State.Running ? "running" : "stopped";
   }
 
-  async #create(botId: string, image: string, helper: string): Promise<void> {
+  /** The current bot image's tag, without building it. */
+  async currentImageTag(): Promise<string> {
+    this.#currentTag ??= imageContext(this.#options.imageDir ?? IMAGE_DIR).then((context) =>
+      imageTag(this.#options.imageName, context),
+    );
+    return this.#currentTag;
+  }
+
+  /** The current toolchain's shared directory name, without building it. */
+  async currentToolchain(): Promise<string> {
+    const dir = this.#options.imageDir ?? IMAGE_DIR;
+    // Named by content even for an explicitly tagged image, so a changed recipe is never mistaken
+    // for the directory an older one filled.
+    this.#currentToolchain ??= toolchainContext(dir).then(contentHash);
+    return this.#currentToolchain;
+  }
+
+  /**
+   * The current image's tools; the bots that move to a new base image on their next update
+   * (`staleBots`); and every bot whose next update changes something (`outdatedBots`: those, and
+   * the ones on an older toolchain or helper).
+   */
+  async imageStatus(): Promise<{ tag: string; tools: ImageTools; staleBots: string[]; outdatedBots: string[] }> {
+    const tag = await this.currentImageTag();
+    const toolchain = toolchainDir(await this.currentToolchain());
+    this.#helperHash ??= helperArchive().then((archive) => archive.hash);
+    const helper = helperDir(await this.#helperHash);
+    const staleBots: string[] = [];
+    const outdatedBots: string[] = [];
+    for (const container of await this.#engine.listContainers(BOT_LABEL)) {
+      const botId = container.Labels[BOT_LABEL];
+      if (!botId || container.Labels[MACHINE_LABEL] !== this.#options.machineId) continue;
+      if (container.Labels[LAYOUT_LABEL] !== LAYOUT || container.Labels[IMAGE_LABEL] !== tag) {
+        staleBots.push(botId);
+        outdatedBots.push(botId);
+        continue;
+      }
+      const name = containerName(botId);
+      const [tools, runtime, pending] = await Promise.all([
+        this.#engine.linkTarget(name, TOOLCHAIN_PATH).catch(() => undefined),
+        this.#engine.linkTarget(name, HELPER_MOUNT).catch(() => undefined),
+        this.#engine.pathExists(name, PENDING_MARKER).catch(() => false),
+      ]);
+      if (tools !== toolchain || runtime !== helper || pending) outdatedBots.push(botId);
+    }
+    return { tag, tools: await imageTools(this.#options.imageDir ?? IMAGE_DIR), staleBots, outdatedBots };
+  }
+
+  /** A new container of the base image `image`, in the current layout. */
+  async #create(botId: string, image: string): Promise<void> {
     const memory = this.#options.memoryBytes;
     await this.#engine.createContainer(containerName(botId), {
       Image: image,
@@ -279,13 +416,34 @@ export class BotEnvironment implements BotEnvironmentAdapter {
       User: CONTAINER_USER,
       WorkingDir: WORKSPACE,
       Env: [`WOVEN_BOT_ID=${botId}`],
-      Labels: { ...this.#labels(), [BOT_LABEL]: botId, [HELPER_LABEL]: helper },
+      Labels: { ...this.#labels(), [BOT_LABEL]: botId, [IMAGE_LABEL]: image, [LAYOUT_LABEL]: LAYOUT },
       StopTimeout: STOP_SECONDS,
       HostConfig: {
         Mounts: [
           { Type: "volume", Source: volumeName(botId), Target: WORKSPACE },
-          { Type: "volume", Source: helper, Target: HELPER_MOUNT, ReadOnly: true },
+          { Type: "volume", Source: SHARED_VOLUME, Target: SHARED_MOUNT, ReadOnly: true },
         ],
+        RestartPolicy: { Name: "no" },
+        CapDrop: [...DROPPED_CAPABILITIES],
+        ShmSize: SHM_BYTES,
+        ...(memory ? { Memory: memory, MemorySwap: memory } : {}),
+      },
+    });
+  }
+
+  /** The container a rollback restores: the snapshot, with the old container's own mounts and labels. */
+  async #restore(botId: string, previous: ContainerSpecCopy): Promise<void> {
+    const memory = this.#options.memoryBytes;
+    await this.#engine.createContainer(containerName(botId), {
+      Image: snapshotImage(botId),
+      Hostname: `bot-${botId.slice(0, 8)}`,
+      User: CONTAINER_USER,
+      WorkingDir: WORKSPACE,
+      Env: [`WOVEN_BOT_ID=${botId}`],
+      Labels: previous.labels,
+      StopTimeout: STOP_SECONDS,
+      HostConfig: {
+        Mounts: previous.mounts,
         RestartPolicy: { Name: "no" },
         CapDrop: [...DROPPED_CAPABILITIES],
         ShmSize: SHM_BYTES,
@@ -324,19 +482,65 @@ export class BotEnvironment implements BotEnvironmentAdapter {
     // restart list and saved tabs back. Only a missing container is created.
     let info = await this.#inspectWhenAvailable(name);
     if (!info) {
-      const [image, helper] = [await this.image(), await this.helper()];
+      const [image, shared] = [await this.image(), await this.shared()];
       if (!(await this.#engine.volumeExists(volumeName(botId)))) {
         await this.#engine.createVolume(volumeName(botId), { ...this.#labels(), [BOT_LABEL]: botId });
       }
-      await this.#create(botId, image, helper);
+      await this.#create(botId, image);
+      try {
+        await this.#engine.putArchive(name, "/", this.#links(shared));
+      } catch (error) {
+        // A container without its links could never start: leave none behind.
+        await this.#engine.removeContainer(name).catch(() => {});
+        throw error;
+      }
       this.#log(`bot ${botId}: created container ${name}`);
       info = await this.#engine.inspectContainer(name);
+      if (!info?.State.Running) await this.#engine.startContainer(name);
+      // A move that stopped partway left its captured changes waiting: apply them now.
+      await this.#resumePending(botId);
+      this.#log(`bot ${botId}: started container ${name}`);
+      this.touch(botId);
+      return;
     }
-    if (!info?.State.Running) {
+    if (!info.State.Running) {
+      const labels = info.Config.Labels ?? {};
+      await this.#healLinks(botId, labels);
       await this.#engine.startContainer(name);
+      // A move that stopped after its new container was made: apply what it captured, then start
+      // again so the restart list comes back with it.
+      if (labels[LAYOUT_LABEL] === LAYOUT && (await this.#resumePending(botId))) {
+        await this.#engine.stopContainer(name, STOP_SECONDS);
+        await this.#engine.startContainer(name);
+      }
       this.#log(`bot ${botId}: started container ${name}`);
     }
     this.touch(botId);
+  }
+
+  /**
+   * A current-layout container whose links are missing (interrupted while they were written)
+   * gets the current ones, so it can start.
+   */
+  async #healLinks(botId: string, labels: Record<string, string>): Promise<void> {
+    if (labels[LAYOUT_LABEL] !== LAYOUT) return;
+    const name = containerName(botId);
+    const [runtime, tools] = await Promise.all([
+      this.#engine.linkTarget(name, HELPER_MOUNT),
+      this.#engine.linkTarget(name, TOOLCHAIN_PATH),
+    ]);
+    if (runtime && tools) return;
+    await this.#engine.putArchive(name, "/", this.#links(await this.shared()));
+    this.#log(`bot ${botId}: restored its helper and toolchain links`);
+  }
+
+  /** Apply captured changes a move left waiting (the runtime stopped before it applied them). */
+  async #resumePending(botId: string): Promise<boolean> {
+    const name = containerName(botId);
+    if (!(await this.#engine.pathExists(name, PENDING_MARKER).catch(() => false))) return false;
+    this.#log(`bot ${botId}: applying the changes carried from its previous container`);
+    await this.#engine.run(name, ["sh", "-c", REAPPLY], { user: "root", timeoutMs: 60 * 60_000 });
+    return true;
   }
 
   touch(botId: string): void {
@@ -472,8 +676,8 @@ export class BotEnvironment implements BotEnvironmentAdapter {
   async reconcile(activeBotIds: readonly string[], deletedBotIds: readonly string[] = []): Promise<void> {
     await this.#engine.ping();
     // Ready before the first tool call needs it, which then waits only for a container start.
-    void this.helper()
-      .then(() => this.pruneHelpers())
+    void this.shared()
+      .then(() => this.#prune())
       .catch((error: unknown) => this.#log(`bot image: ${(error as Error).message}`));
     const active = new Set(activeBotIds);
     const deleted = new Set(deletedBotIds);
@@ -487,15 +691,52 @@ export class BotEnvironment implements BotEnvironmentAdapter {
     }
   }
 
-  /** Remove this machine's older helper volumes that no container uses any more. */
+  /** Prune helper volumes and shared directories, unless an update or rebuild is running. */
+  async #prune(): Promise<void> {
+    if (this.#changing > 0) return;
+    await this.pruneHelpers();
+    await this.pruneShared();
+  }
+
+  /**
+   * Remove this machine's helper volumes from before the shared volume that no container uses any
+   * more (a container that still mounts one keeps it until it moves).
+   */
   async pruneHelpers(): Promise<string[]> {
-    const current = await this.helper();
+    if (this.#changing > 0) return [];
     const removed: string[] = [];
     for (const volume of await this.#engine.listVolumes(HELPER_LABEL)) {
-      if (volume.Name === current || volume.Labels?.[MACHINE_LABEL] !== this.#options.machineId) continue;
+      // An update that started meanwhile may need this volume to roll its bot back.
+      if (this.#changing > 0) break;
+      if (this.#restoring.has(volume.Name)) continue;
+      if (volume.Labels?.[MACHINE_LABEL] !== this.#options.machineId) continue;
       if (await this.#engine.removeVolume(volume.Name).catch(() => false)) removed.push(volume.Name);
     }
     return removed;
+  }
+
+  /** Remove shared helper and toolchain directories that neither this runtime nor any bot uses. */
+  async pruneShared(): Promise<string[]> {
+    if (this.#changing > 0) return [];
+    const shared = await this.shared();
+    const keep = new Set([`helper/${shared.helper}`, `toolchain/${shared.toolchain}`]);
+    try {
+      for (const container of await this.#engine.listContainers(BOT_LABEL)) {
+        // Every container on this engine (any machine's) whose layout uses the shared volume.
+        if (!container.Labels[BOT_LABEL] || container.Labels[LAYOUT_LABEL] !== LAYOUT) continue;
+        for (const path of [HELPER_MOUNT, TOOLCHAIN_PATH]) {
+          const target = await this.#engine.linkTarget(container.Id, path);
+          if (target?.startsWith(`${SHARED_MOUNT}/`)) keep.add(target.slice(SHARED_MOUNT.length + 1));
+        }
+      }
+    } catch (error) {
+      // An unknown link might name a directory a bot runs from: prune nothing.
+      this.#log(`bot image: not pruning shared directories: ${(error as Error).message}`);
+      return [];
+    }
+    // A container being created or updated right now links to the current directories, kept above.
+    if (this.#changing > 0) return [];
+    return pruneShared(this.#engine, await this.image(), this.#labels(), keep);
   }
 
   // --- updates ---------------------------------------------------------------------------------
@@ -507,7 +748,12 @@ export class BotEnvironment implements BotEnvironmentAdapter {
       Image: image,
       User: "root",
       Entrypoint: ["sh", "-c"],
-      Cmd: ["find /dst -mindepth 1 -delete && cp -a /src/. /dst/"],
+      // Into a staging folder first: a copy that fails (a full disk) leaves the destination whole.
+      Cmd: [
+        "set -e; rm -rf /dst/.woven-incoming; mkdir /dst/.woven-incoming; cp -a /src/. /dst/.woven-incoming/; " +
+          "find /dst -mindepth 1 -maxdepth 1 ! -name .woven-incoming -exec rm -rf {} +; " +
+          "find /dst/.woven-incoming -mindepth 1 -maxdepth 1 -exec mv {} /dst/ \\;; rmdir /dst/.woven-incoming",
+      ],
       Labels: { ...this.#labels(), "woven.bots.temporary": "copy" },
       HostConfig: {
         Mounts: [
@@ -545,67 +791,189 @@ export class BotEnvironment implements BotEnvironmentAdapter {
     await this.#options.healthCheck?.(botId);
   }
 
+  /** Run `script` as root in a short-lived container of `image`, with the bot's storage. */
+  async #runWithStorage(botId: string, image: string, script: string, kind: string): Promise<void> {
+    const name = `woven-bots-${kind}-${randomUUID().slice(0, 8)}`;
+    await this.#engine.createContainer(name, {
+      Image: image,
+      User: "root",
+      Entrypoint: ["sh", "-c"],
+      Cmd: [script],
+      // A snapshot's labels say it is a bot; this container is not one.
+      Labels: { ...this.#labels(), [BOT_LABEL]: "", "woven.bots.temporary": kind },
+      HostConfig: {
+        Mounts: [{ Type: "volume", Source: volumeName(botId), Target: WORKSPACE }],
+        NetworkMode: "none",
+      },
+    });
+    try {
+      await this.#engine.startContainer(name);
+      const code = await this.#engine.waitContainer(name);
+      if (code !== 0) throw new Error(`${kind} exited ${code}`);
+    } finally {
+      await this.#engine.removeContainer(name).catch(() => {});
+    }
+  }
+
   /**
-   * Update one bot in place: snapshot it (container commit + a copy of its storage, replacing the
-   * previous snapshot), recreate it from that commit with the current helper, run the upgrade,
-   * health-check it, and roll back to the snapshot on any failure.
+   * Record what the bot changed in its old container (from its snapshot) in its storage, against
+   * the base image that container came from (or, when that image is gone, the new one).
+   */
+  async #capture(botId: string, previousBase: string, base: string): Promise<void> {
+    const baseline =
+      previousBase !== "unknown" && (await this.#engine.imageExists(previousBase).catch(() => false)) ? previousBase : base;
+    await this.#runWithStorage(botId, baseline, BASELINE, "baseline");
+    await this.#runWithStorage(botId, snapshotImage(botId), CAPTURE, "capture");
+  }
+
+  /** Chromium starts with the bot's toolchain; installing its system libraries once if not. */
+  async #checkChromium(botId: string): Promise<void> {
+    const name = containerName(botId);
+    const probe = () => this.#engine.run(name, ["sh", "-c", CHROMIUM_PROBE], { user: CONTAINER_USER, timeoutMs: 120_000 });
+    if ((await probe()).code === 0) return;
+    this.#log(`bot ${botId}: Chromium did not start; installing its system libraries`);
+    const deps = await this.#engine.run(name, ["sh", "-c", CHROMIUM_DEPS], { user: "root", timeoutMs: 20 * 60_000 });
+    const again = deps.code === 0 ? await probe() : deps;
+    if (again.code !== 0) {
+      throw new Error(`Chromium did not start: ${again.stderr.trim().split("\n").slice(-2).join(" ").slice(0, 300) || `exit ${again.code}`}`);
+    }
+  }
+
+  /**
+   * Update one bot behind a snapshot (a container commit and a copy of its storage, replacing the
+   * previous one), rolling back to it on any failure.
+   *
+   * - **In place** (same base image): its links move to the current helper and toolchain (Node,
+   *   npm, Playwright, Chromium) and its Ubuntu packages are upgraded. The container stays, with
+   *   everything the bot installed in it.
+   * - **Moving** (a new base image, a container from before the current layout, or a rebuild):
+   *   what the bot changed in its container is recorded in its storage from the snapshot, the
+   *   container is recreated from the base image, and those changes are applied there. Storage,
+   *   home folder and browser profile stay as they are.
    */
   updateBot(botId: string): Promise<UpdateResult> {
-    return this.#locked(botId, async () => {
-      const name = containerName(botId);
-      const info = await this.#engine.inspectContainer(name);
-      if (!info) return { botId, ok: true, skipped: true };
-      const previousHelper = info.Config.Labels?.[HELPER_LABEL] ?? (await this.helper());
+    return this.#locked(botId, () => this.#update(botId, false));
+  }
+
+  async #update(botId: string, rebuild: boolean): Promise<UpdateResult> {
+    const name = containerName(botId);
+    const info = await this.#engine.inspectContainer(name);
+    if (!info) return { botId, ok: true, skipped: true };
+    this.#changing += 1;
+    try {
+      const labels = info.Config.Labels ?? {};
+      const previous: ContainerSpecCopy = {
+        labels,
+        mounts: (info.Mounts ?? []).map((mount) => ({
+          Type: "volume",
+          Source: mount.Name ?? "",
+          Target: mount.Destination,
+          ...(mount.RW === false ? { ReadOnly: true } : {}),
+        })),
+      };
+      for (const mount of previous.mounts) this.#restoring.add(mount.Source);
+      const previousBase = labels[IMAGE_LABEL] ?? "unknown";
       const wasRunning = info.State.Running;
-      const baseImage = await this.image();
+      const base = await this.image();
+      const shared = await this.shared();
+      const moving = rebuild || labels[LAYOUT_LABEL] !== LAYOUT || previousBase !== base;
+      const previousToolchain = moving ? undefined : await this.#engine.linkTarget(name, TOOLCHAIN_PATH).catch(() => undefined);
       this.#connections.get(botId)?.close();
       await this.#engine.stopContainer(name, STOP_SECONDS);
-      // Snapshot: only the last one is kept.
+      // Snapshot: only the last one is kept. It is a rollback point, never a base for the update.
       await this.#engine.removeImage(snapshotImage(botId));
       await this.#engine.commitContainer(name, SNAPSHOT_REPO, botId);
       if (!(await this.#engine.volumeExists(snapshotVolumeName(botId)))) {
         await this.#engine.createVolume(snapshotVolumeName(botId), { ...this.#labels(), [BOT_LABEL]: botId });
       }
-      await this.#copyVolume(volumeName(botId), snapshotVolumeName(botId), baseImage);
+      await this.#copyVolume(volumeName(botId), snapshotVolumeName(botId), base);
       this.#log(`bot ${botId}: snapshot taken`);
       try {
-        const helper = await this.helper();
-        await this.#engine.removeContainer(name);
-        await this.#create(botId, snapshotImage(botId), helper);
+        if (moving) {
+          await this.#capture(botId, previousBase, base);
+          await this.#engine.removeContainer(name);
+          await this.#create(botId, base);
+        }
+        await this.#engine.putArchive(name, "/", this.#links(shared));
         await this.#engine.startContainer(name);
         const upgrade = this.#options.upgradeCommand ?? DEFAULT_UPGRADE;
         const upgraded = await this.#engine.run(name, upgrade, { user: "root", timeoutMs: 30 * 60_000 });
         if (upgraded.code !== 0) {
           throw new Error(`upgrade failed (exit ${upgraded.code}): ${upgraded.stderr.trim().split("\n").slice(-3).join(" ").slice(0, 300)}`);
         }
+        // A move applies what it captured (the capture left it pending); an earlier move that
+        // stopped partway resumes here.
+        if (await this.#resumePending(botId)) {
+          // Its restart list comes back with everything it relies on installed.
+          await this.#engine.stopContainer(name, STOP_SECONDS);
+          await this.#engine.startContainer(name);
+        }
+        if (moving || previousToolchain !== toolchainDir(shared.toolchain)) {
+          await this.#checkChromium(botId);
+          if (!moving) {
+            await this.#engine.run(name, ["sh", "-c", REBUILD_SYSTEM_PACKAGES], { user: "root", timeoutMs: 30 * 60_000 });
+            await this.#engine.run(name, ["sh", "-c", REBUILD_USER_PACKAGES], { user: CONTAINER_USER, timeoutMs: 30 * 60_000 });
+          }
+        }
         await this.#healthCheck(botId);
         this.touch(botId);
-        this.#log(`bot ${botId}: updated`);
-        void this.pruneHelpers().catch(() => {});
-        return { botId, ok: true };
+        this.#log(
+          rebuild
+            ? `bot ${botId}: rebuilt from ${base}`
+            : moving
+              ? `bot ${botId}: updated and moved to ${base}`
+              : `bot ${botId}: updated`,
+        );
+        return moving && !rebuild ? { botId, ok: true, movedToImage: true } : { botId, ok: true };
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        this.#log(`bot ${botId}: update failed, rolling back: ${message}`);
+        this.#log(`bot ${botId}: ${rebuild ? "rebuild" : "update"} failed, rolling back: ${message}`);
         this.#connections.get(botId)?.close();
         await this.#engine.removeContainer(name);
-        await this.#copyVolume(snapshotVolumeName(botId), volumeName(botId), baseImage);
-        await this.#create(botId, snapshotImage(botId), previousHelper);
+        // The container comes back even when its storage cannot (the copy leaves it whole).
+        let storage: string | undefined;
+        try {
+          await this.#copyVolume(snapshotVolumeName(botId), volumeName(botId), base);
+        } catch (copyError) {
+          storage = copyError instanceof Error ? copyError.message : String(copyError);
+          this.#log(`bot ${botId}: restoring its storage failed; it keeps its current files: ${storage}`);
+          // What this attempt added to storage must not outlive it: a home folder copied in for
+          // the old container (which still uses its own) would be taken as current next time.
+          await this.#runWithStorage(
+            botId,
+            base,
+            `if [ -f ${CARRY_DIR}/home-migrated ]; then rm -rf ${HOME_DIR}; fi; rm -rf ${CARRY_DIR} ${WORKSPACE}/.woven-incoming`,
+            "discard",
+          ).catch(() => {});
+        }
+        await this.#restore(botId, previous);
         if (wasRunning) {
           await this.#engine.startContainer(name);
           this.touch(botId);
         }
-        return { botId, ok: false, rolledBack: true, error: message };
+        return {
+          botId,
+          ok: false,
+          rolledBack: true,
+          error: storage ? `${message} (its storage could not be restored and kept its current files: ${storage})` : message,
+        };
       }
-    });
+    } finally {
+      for (const mount of info.Mounts ?? []) if (mount.Name) this.#restoring.delete(mount.Name);
+      this.#changing -= 1;
+      if (this.#changing === 0) void this.#prune().catch(() => {});
+    }
   }
 
-  /** Recreate a bot from a clean image, keeping its storage (and its restart list in it). */
+  /**
+   * Recreate a bot from a clean base image, behind a snapshot, keeping its storage, home folder
+   * and browser profile, and carrying over what it installed in its container (as a move does).
+   */
   rebuild(botId: string): Promise<void> {
     return this.#locked(botId, async () => {
-      this.#connections.get(botId)?.close();
-      await this.#engine.removeContainer(containerName(botId));
-      await this.#ensureUnlocked(botId);
-      this.#log(`bot ${botId}: rebuilt from ${await this.image()}`);
+      const result = await this.#update(botId, true);
+      if (result.skipped) await this.#ensureUnlocked(botId);
+      else if (!result.ok) throw new Error(`rebuild failed and was rolled back: ${result.error ?? "unknown error"}`);
     });
   }
 

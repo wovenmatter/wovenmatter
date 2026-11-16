@@ -310,6 +310,13 @@ public struct RemoteRuntimeComponent: Codable, Equatable, Identifiable, Sendable
 
     public let required: Bool
     public let installed: Bool
+
+    public init(id: String, displayName: String, path: String?, installedVersion: String?, latestVersion: String?,
+                updateTargetVersion: String? = nil, source: String? = nil, required: Bool, installed: Bool) {
+        self.id = id; self.displayName = displayName; self.path = path; self.installedVersion = installedVersion
+        self.latestVersion = latestVersion; self.updateTargetVersion = updateTargetVersion; self.source = source
+        self.required = required; self.installed = installed
+    }
 }
 
 public struct RemoteRuntimeMaintenance: Codable, Equatable, Identifiable, Sendable {
@@ -325,6 +332,16 @@ public struct RemoteRuntimeMaintenance: Codable, Equatable, Identifiable, Sendab
     public let versionCheckAvailable: Bool?
     public var source: String? = nil
     public var path: String? = nil
+
+    public init(id: AgentRuntimeKind, displayName: String, installed: Bool, components: [RemoteRuntimeComponent],
+                operation: RemoteHarnessOperation? = nil, failureCount: Int = 0, diagnosticPrompt: String? = nil,
+                notice: String? = nil, updateAvailable: Bool, versionCheckAvailable: Bool? = nil,
+                source: String? = nil, path: String? = nil) {
+        self.id = id; self.displayName = displayName; self.installed = installed; self.components = components
+        self.operation = operation; self.failureCount = failureCount; self.diagnosticPrompt = diagnosticPrompt
+        self.notice = notice; self.updateAvailable = updateAvailable; self.versionCheckAvailable = versionCheckAvailable
+        self.source = source; self.path = path
+    }
 }
 
 public struct RemoteHarnessSetupMethod: Codable, Equatable, Identifiable, Sendable {
@@ -380,6 +397,12 @@ public struct RemoteHarnessOperation: Codable, Equatable, Identifiable, Sendable
     public let error: String?
     public let startedAt: String
     public let finishedAt: String?
+
+    public init(id: UUID, harnessID: AgentRuntimeKind, action: String, status: String, output: String = "",
+                error: String? = nil, startedAt: String, finishedAt: String? = nil) {
+        self.id = id; self.harnessID = harnessID; self.action = action; self.status = status; self.output = output
+        self.error = error; self.startedAt = startedAt; self.finishedAt = finishedAt
+    }
 }
 
 public enum RemoteWorkspaceLifecycleAction: String, Sendable {

@@ -1,11 +1,12 @@
 import { type ChildProcess, execFile, spawn } from "node:child_process";
-import { rmSync } from "node:fs";
-import { mkdir, rm } from "node:fs/promises";
+import { existsSync, rmSync } from "node:fs";
+import { mkdir, rm, symlink, writeFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { Socket } from "node:net";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
+import { readTar } from "../src/environment/tar.ts";
 import { socketDirectory } from "./helpers.ts";
 
 const HELPER = fileURLToPath(new URL("../helper/", import.meta.url));
@@ -22,6 +23,8 @@ type Container = {
   exitCode?: number;
   /** Exec streams into it, dropped by a `crash`. */
   streams: Set<{ socket: Socket; child?: ChildProcess }>;
+  /** Symbolic links written into its own filesystem (path → target), kept by a commit. */
+  links: Map<string, string>;
 };
 
 /**
@@ -46,6 +49,19 @@ export class FakeEngine {
   ps: string | undefined = "    1     0 /usr/bin/tini -- node /opt/woven-bot/supervisor.mjs\n";
   /** Exit code of the update's upgrade command. */
   upgradeExit = 0;
+  /** Exit code of the Chromium launch check (each run takes the next value; then 0). */
+  chromiumExits: number[] = [];
+  /** Short-lived containers that ran (kind and image), and exit codes to give some kinds. */
+  readonly temporaries: { kind: string; image: string }[] = [];
+  temporaryExit: Record<string, number> = {};
+  /** Answer archive stats (HEAD /archive) with this status instead, as a struggling engine might. */
+  statStatus: number | undefined;
+  /** The last prune container's command (it names the directories kept). */
+  lastPrune: string | undefined;
+  /** Every `sh -c` script run in a bot container, with its user. */
+  readonly scripts: { container: string; user?: string; script: string }[] = [];
+  /** Links each image carries (from a commit). */
+  readonly imageLinks = new Map<string, Map<string, string>>();
   builds = 0;
   /** Answer every request 503, as a Mac VM's socket does while the VM boots. */
   unavailable = false;
@@ -82,7 +98,12 @@ export class FakeEngine {
   }
 
   async close(): Promise<void> {
-    for (const container of this.containers.values()) container.supervisor?.kill("SIGKILL");
+    // The whole tree, as a crash does: a browser or service a supervisor started would
+    // otherwise keep writing into the test's folder while it is removed.
+    for (const [name, container] of this.containers) {
+      if (container.running) await this.crash(name);
+      else container.supervisor?.kill("SIGKILL");
+    }
     await new Promise<void>((resolve) => (this.#server ? this.#server.close(() => resolve()) : resolve()));
     if (this.socketDir !== this.root) rmSync(this.socketDir, { recursive: true, force: true });
   }
@@ -239,7 +260,16 @@ export class FakeEngine {
       if (this.containers.has(name)) return this.#json(response, 409, { message: "Conflict" });
       const spec = json();
       const id = `${(this.#next++).toString(16).padStart(8, "0")}${"0".repeat(56)}`;
-      this.containers.set(name, { id, name, spec, running: false, image: spec.Image, labels: spec.Labels ?? {}, streams: new Set() });
+      this.containers.set(name, {
+        id,
+        name,
+        spec,
+        running: false,
+        image: spec.Image,
+        labels: spec.Labels ?? {},
+        streams: new Set(),
+        links: new Map(this.imageLinks.get(spec.Image) ?? []),
+      });
       return this.#json(response, 201, { Id: id });
     }
     if (path === "/containers/json") {
@@ -256,12 +286,14 @@ export class FakeEngine {
       const repo = url.searchParams.get("repo");
       const tag = url.searchParams.get("tag");
       this.images.add(`${repo}:${tag}`);
+      const from = this.containers.get(url.searchParams.get("container") ?? "");
+      this.imageLinks.set(`${repo}:${tag}`, new Map(from?.links ?? []));
       return this.#json(response, 201, { Id: `sha256:${repo}` });
     }
     if ((match = /^\/containers\/([^/]+)(\/.*)?$/.exec(path))) {
       const name = decodeURIComponent(match[1] ?? "");
       const action = match[2] ?? "";
-      const container = this.containers.get(name);
+      const container = this.containers.get(name) ?? [...this.containers.values()].find((entry) => entry.id === name);
       if (!container) return this.#json(response, 404, { message: `No such container: ${name}` });
       if (action === "/json" && method === "GET") {
         return this.#json(response, 200, {
@@ -275,6 +307,9 @@ export class FakeEngine {
             ExitCode: container.exitCode ?? 0,
           },
           HostConfig: container.spec.HostConfig,
+          Mounts: ((container.spec.HostConfig as { Mounts?: { Source: string; Target: string; ReadOnly?: boolean }[] })?.Mounts ?? []).map(
+            (mount) => ({ Type: "volume", Name: mount.Source, Destination: mount.Target, RW: !mount.ReadOnly }),
+          ),
         });
       }
       if (action === "/start") {
@@ -287,7 +322,29 @@ export class FakeEngine {
         await this.#stopContainer(container);
         return this.#json(response, 204);
       }
+      if (action === "/logs") return void response.end();
       if (action === "/wait") {
+        const kind = container.labels["woven.bots.temporary"];
+        if (kind && kind !== "copy") this.temporaries.push({ kind, image: container.image });
+        if (kind === "prune") this.lastPrune = String((container.spec.Cmd as string[])?.[0] ?? "");
+        // A capture leaves its changes pending in the bot's storage; applying them clears that.
+        const storage = this.#mountDir(container, "/workspace");
+        if (kind === "capture" && storage && this.temporaryExit.capture === undefined) {
+          await mkdir(join(storage, ".woven/system/carry"), { recursive: true });
+          await writeFile(join(storage, ".woven/system/carry/.pending"), "");
+        }
+        if (kind === "toolchain") {
+          const target = /\[ -f \/fill\/(toolchain\/[^/ ]+)\/\.complete \]/.exec(String((container.spec.Cmd as string[])?.[0] ?? ""))?.[1];
+          const shared = this.#mountDir(container, "/fill");
+          if (target && shared) {
+            await mkdir(join(shared, target), { recursive: true });
+            await writeFile(join(shared, target, ".complete"), "");
+          }
+        }
+        if (kind && this.temporaryExit[kind] !== undefined) {
+          container.running = false;
+          return this.#json(response, 200, { StatusCode: this.temporaryExit[kind] });
+        }
         // Temporary copy containers: copy the volume contents the way `cp -a` would.
         if (container.labels["woven.bots.temporary"] === "copy") {
           const src = this.#mountDir(container, "/src");
@@ -309,15 +366,39 @@ export class FakeEngine {
         return this.#json(response, 204);
       }
       if (action === "/archive") {
+        const wanted = url.searchParams.get("path") ?? "";
         if (method === "HEAD") {
-          const helper = this.#mountDir(container, "/opt/woven-bot");
-          const wanted = url.searchParams.get("path") ?? "";
-          const exists = helper && wanted.startsWith("/opt/woven-bot/") && this.volumes.has(helper.split("/").pop() ?? "") && this.#filled.has(helper);
-          response.writeHead(exists ? 200 : 404);
+          if (this.statStatus !== undefined) {
+            response.writeHead(this.statStatus);
+            return void response.end();
+          }
+          const link = container.links.get(wanted);
+          if (link !== undefined) {
+            const stat = Buffer.from(JSON.stringify({ name: wanted.split("/").pop(), linkTarget: link })).toString("base64");
+            response.writeHead(200, { "X-Docker-Container-Path-Stat": stat });
+            return void response.end();
+          }
+          const file = this.#resolve(container, wanted);
+          response.writeHead(file && existsSync(file) ? 200 : 404);
           return void response.end();
         }
-        const helper = this.#mountDir(container, url.searchParams.get("path") ?? "");
-        if (helper) this.#filled.add(helper);
+        const entries = readTar(body);
+        if (wanted === "/") {
+          for (const entry of entries) if (entry.link !== undefined) container.links.set(`/${entry.path}`, entry.link);
+          return this.#json(response, 200);
+        }
+        const into = this.#resolve(container, wanted);
+        if (into) {
+          for (const entry of entries) {
+            const target = join(into, entry.path);
+            if (entry.directory) await mkdir(target, { recursive: true });
+            else {
+              await mkdir(join(target, ".."), { recursive: true });
+              if (entry.link !== undefined) await symlink(entry.link, target).catch(() => {});
+              else await writeFile(target, entry.data ?? Buffer.alloc(0));
+            }
+          }
+        }
         return this.#json(response, 200);
       }
       if (action === "/exec") {
@@ -334,7 +415,18 @@ export class FakeEngine {
     return this.#json(response, 404, { message: `fake engine: ${method} ${path}` });
   }
 
-  readonly #filled = new Set<string>();
+  /** A container path on the host: through its links, then into the volume mounted there. */
+  #resolve(container: Container, path: string): string | undefined {
+    let resolved = path;
+    for (const [link, target] of container.links) {
+      if (resolved === link || resolved.startsWith(`${link}/`)) resolved = target + resolved.slice(link.length);
+    }
+    const mounts = ((container.spec.HostConfig as { Mounts?: { Source: string; Target: string }[] })?.Mounts ?? []);
+    const mount = mounts
+      .filter((entry) => resolved === entry.Target || resolved.startsWith(`${entry.Target}/`))
+      .sort((a, b) => b.Target.length - a.Target.length)[0];
+    return mount ? join(this.volumeDir(mount.Source), resolved.slice(mount.Target.length)) : undefined;
+  }
 
   /** What a container command does here. */
   #command(container: Container, cmd: string[]): ChildProcess | number {
@@ -354,7 +446,15 @@ export class FakeEngine {
       if (this.ps === undefined) return 1;
       return spawn("printf", ["%s", this.ps], { stdio: ["pipe", "pipe", "pipe"] });
     }
+    if (first === "sh") this.scripts.push({ container: container.name, script: cmd.at(-1) ?? "" });
     if (first === "sh" && cmd.at(-1)?.includes("node --version")) return 0;
+    if (first === "sh" && cmd.at(-1)?.includes("update-report.md") && cmd.at(-1)?.includes("restored=0")) {
+      if (cwd) rmSync(join(cwd, ".woven/system/carry/.pending"), { force: true });
+      return 0;
+    }
+    if (first === "sh" && cmd.at(-1)?.includes("chromium.launch")) return this.chromiumExits.shift() ?? 0;
+    if (first === "sh" && cmd.at(-1)?.includes("install-deps")) return 0;
+    if (first === "sh" && cmd.at(-1)?.includes("npm rebuild")) return 0;
     if (first === "sh" && cmd.at(-1)?.includes("apt-get")) return this.upgradeExit;
     if (first === "true") return 0;
     return 127;

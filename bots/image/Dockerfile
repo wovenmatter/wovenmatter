@@ -1,65 +1,55 @@
-# Woven bot environment: one container per bot, its own storage volume at /workspace. The
-# runtime builds this through the Docker Engine API with a content-hash tag. The helper (env
-# agent, supervisor, browser and preview forwarder) is not in the image: it is mounted read-only
-# at /opt/woven-bot from the runtime's helper volume, so runtime updates need no image change.
+# Woven bot base image: one container per bot, its own storage volume at /workspace. The
+# runtime builds this through the Docker Engine API with a content-hash tag of this directory
+# (toolchain/ excluded). Only slow-moving parts live here: the Ubuntu release, its packages and
+# Chromium's system libraries. Node, npm, Playwright and Chromium (toolchain/) and the helper (env
+# agent, supervisor, browser and preview forwarder) come from the runtime's shared volume,
+# mounted read-only at /opt/woven, through per-bot links (/opt/woven-toolchain, /opt/woven-bot)
+# that an update repoints in place. So a tool or runtime update keeps the container, and only a
+# change to this file moves bots to a new container.
 # No Docker socket is mounted and no provider credentials ever enter the image or a container.
 FROM ubuntu:26.04
 
 ENV DEBIAN_FRONTEND=noninteractive \
     LANG=C.UTF-8 \
-    PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright \
-    WOVEN_PLAYWRIGHT_MODULE=/usr/local/lib/node_modules/playwright
+    PATH=/home/bot/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+    NPM_CONFIG_PREFIX=/home/bot/.local \
+    NPM_CONFIG_CACHE=/var/cache/bot/npm \
+    XDG_CACHE_HOME=/var/cache/bot \
+    PLAYWRIGHT_BROWSERS_PATH=/var/cache/bot/ms-playwright \
+    WOVEN_PLAYWRIGHT_BROWSERS=/opt/woven-toolchain/browsers \
+    WOVEN_PLAYWRIGHT_MODULE=/opt/woven-toolchain/playwright/lib/node_modules/playwright
 
+# Chromium's runtime libraries and fonts for the toolchain's Playwright build, from Playwright's
+# own Ubuntu 26.04 list (chromium-packages.txt). An update whose Chromium needs more runs
+# `playwright install-deps chromium` in the container, so this list changes only with the base.
+COPY chromium-packages.txt /tmp/chromium-packages.txt
 RUN apt-get update \
  && apt-get upgrade -y \
  && apt-get install -y --no-install-recommends \
-      ca-certificates curl wget gnupg git openssh-client sudo tini \
+      ca-certificates curl wget gnupg git openssh-client sudo tini libatomic1 \
       build-essential pkg-config python3 python3-pip python3-venv python-is-python3 \
       unzip zip xz-utils jq ripgrep less procps file \
- && rm -rf /var/lib/apt/lists/*
+      $(grep -v '^#' /tmp/chromium-packages.txt) \
+ && rm -rf /var/lib/apt/lists/* /tmp/chromium-packages.txt
 
-# Node from the official archive, checksum-verified. Keep in step with
-# remote/host/runtime-versions.json (dependency maintenance updates both).
-ARG NODE_VERSION=26.13.1
-RUN set -eu; \
-    case "$(dpkg --print-architecture)" in \
-      amd64) arch=x64; sum=518674de2b621728a5e4486f5fb3b7d2900bb3cc4aa97969edaa463db99f9778 ;; \
-      arm64) arch=arm64; sum=80a330b35415382878df18d41afbd106ea89bfb3be0087d6608e289a14c5cc7d ;; \
-      *) echo "unsupported architecture" >&2; exit 1 ;; \
-    esac; \
-    curl -fsSLo /tmp/node.tar.gz "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-${arch}.tar.gz"; \
-    echo "${sum}  /tmp/node.tar.gz" | sha256sum -c -; \
-    tar -xzf /tmp/node.tar.gz -C /usr/local --strip-components=1 --no-same-owner; \
-    rm -f /tmp/node.tar.gz; \
-    node --version
-
-# Playwright with Chromium (and its system libraries), usable by the bot user. Keep the version in
-# step with remote/host/runtime-versions.json.
-ARG PLAYWRIGHT_VERSION=1.65.1
-# Node's archive npm is bootstrap-only. Use the same integrity-verified private
-# npm and locked vendor repairs as managed CLI installs and SDK updates.
-# The container's bot user needs read/execute access; ownership stays with root.
-COPY tooling /opt/wovenmatter/tooling-source/
-RUN set -eu; \
-    npm_path="$(node /opt/wovenmatter/tooling-source/harnesses/prepare-npm.mjs '{"prefix":"/opt/wovenmatter/npm","node":"/usr/local/bin/node","bootstrap":["/usr/local/bin/node","/usr/local/lib/node_modules/npm/bin/npm-cli.js"],"securityGraph":"/opt/wovenmatter/tooling-source/npm-runtime"}')"; \
-    chmod -R a+rX /opt/wovenmatter/npm; \
-    ln -sf "$npm_path" /usr/local/bin/npm; \
-    ln -sf "${npm_path%/bin/npm}/lib/node_modules/npm/bin/npx-cli.js" /usr/local/bin/npx; \
-    npm install -g --prefix /usr/local "playwright@${PLAYWRIGHT_VERSION}" --no-audit --no-fund \
- && playwright install --with-deps chromium \
- && chmod -R a+rX /opt/ms-playwright \
- && rm -rf /var/lib/apt/lists/* /root/.npm
-
-# The bot user with passwordless sudo (full root inside its own container); /workspace is its
-# storage volume.
+# The bot user with passwordless sudo (full root inside its own container). Its home is a link
+# into its storage (/workspace/.woven/home), so dotfiles, SSH keys, CLI sign-ins and user-level
+# installs (npm -g and pip --user into ~/.local) outlive every update and move. Caches stay in
+# the container. The toolchain's commands are linked into /usr/local/bin so sudo finds them; root
+# npm installs go to /usr/local (the toolchain's npmrc). The bot's Playwright browser folder is
+# writable (for its own Playwright versions) and links the toolchain's Chromium.
+COPY start.sh /usr/lib/woven-bot/start
 RUN (userdel -r ubuntu 2>/dev/null || true) \
- && useradd -m -s /bin/bash -u 1000 bot \
+ && useradd -M -d /home/bot -s /bin/bash -u 1000 bot \
+ && ln -s /workspace/.woven/home /home/bot \
  && echo 'bot ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/bot \
  && chmod 0440 /etc/sudoers.d/bot \
- && mkdir -p /workspace /opt/woven-bot \
- && chown bot:bot /workspace
+ && chmod 0755 /usr/lib/woven-bot/start \
+ && mkdir -p /workspace /var/cache/bot \
+ && chown bot:bot /workspace /var/cache/bot \
+ && for tool in node npm npx playwright; do ln -s "/opt/woven-toolchain/bin/$tool" "/usr/local/bin/$tool"; done
 
 USER bot
 WORKDIR /workspace
 ENTRYPOINT ["/usr/bin/tini", "--"]
-CMD ["node", "/opt/woven-bot/supervisor.mjs"]
+CMD ["/usr/lib/woven-bot/start"]

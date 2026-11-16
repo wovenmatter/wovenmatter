@@ -141,7 +141,7 @@ struct BotSettingsBots: View {
     }
 
     /// Each bot's container: its state and previews, Stop, and Rebuild, which recreates it
-    /// from a clean image and keeps its storage.
+    /// from a clean image, keeps its storage and carries over what it installed.
     private func containersSection(_ live: [PiBotSummary]) -> some View {
         SettingsSection(title: "Containers", detail: "A stopped bot starts again on its next tool call.") {
             ForEach(live.filter { !$0.isAdmin }) { bot in
@@ -161,7 +161,7 @@ struct BotSettingsBots: View {
                 }
             }
             SettingsHelp {
-                SettingsNote("Rebuild recreates a bot's container from a clean image. Its files, restart list, browser profile, memory, and conversations stay.")
+                SettingsNote("Rebuild recreates a bot's container from a clean image. Its files, home folder, restart list, browser profile, memory, and conversations stay, and the packages it installed are reinstalled.")
             }
         }
         .task(id: "\(state.bots.connection.rawValue):\(state.bots.environmentRevision):\(refreshes)") {
@@ -173,7 +173,7 @@ struct BotSettingsBots: View {
     }
 
     private func rebuild(_ bot: PiBotSummary) {
-        state.confirm("Rebuild \(bot.name) from a clean image?\n\nRunning work stops. Its storage stays.", action: "Rebuild", destructive: false) {
+        state.confirm("Rebuild \(bot.name) from a clean image?\n\nRunning work stops. Its files, home folder, and sign-ins stay, and the packages it installed are reinstalled.", action: "Rebuild", destructive: false) {
             act { client in try await client.rebuildBot(id: bot.id) }
         }
     }
