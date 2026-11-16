@@ -269,6 +269,33 @@ struct BotsHostTests {
         #expect(fixture.recorded.first?.0 == "d3vice-0001" && fixture.recorded.first?.1.entries.count == 1)
     }
 
+    /// Settings → GitHub for one bot's container: the public key while the bot is on, and its
+    /// signing requests answered by this Mac's agent, which checks the bot at every request.
+    @Test func theHostAPIServesTheGitHubSettingAndSigns() async throws {
+        var setup = GitHubBotSetup()
+        var asked: [(String, Data)] = []
+        let fixture = try HostFixture {
+            $0.gitConfiguration = { _ in setup }
+            $0.sshAgent = { botID, message in asked.append((botID, message)); return Data([12, 0, 0, 0, 0]) }
+        }; defer { fixture.remove() }
+        let api = fixture.host.makeHostAPI(machineID: "d3vice-0001")
+        let token = fixture.host.persisted.hostToken
+        #expect(await api.handle(try hostRequest("POST", "/v1/bots-host/git", token: nil, body: ["botID": "b1"])).status == 401)
+        #expect(await api.handle(try hostRequest("POST", "/v1/bots-host/git", token: token, body: [:])).status == 400)
+        let empty = await api.handle(try hostRequest("POST", "/v1/bots-host/git", token: token, body: ["botID": "b1"]))
+        #expect(String(decoding: empty.body, as: UTF8.self).contains("\"publicKey\":null"))
+        setup = .init(publicKey: "ssh-ed25519 AAAA woven-matter", identity: .init(name: "Ada"))
+        let reply = await api.handle(try hostRequest("POST", "/v1/bots-host/git", token: token, body: ["botID": "b1"]))
+        #expect(try JSONDecoder().decode(GitHubBotSetup.self, from: reply.body) == setup)
+
+        #expect(await api.handle(try hostRequest("POST", "/v1/bots-host/ssh-agent", token: nil, body: ["botID": "b1", "message": "Cw=="])).status == 401)
+        #expect(await api.handle(try hostRequest("POST", "/v1/bots-host/ssh-agent", token: token, body: ["botID": "b1", "message": ""])).status == 400)
+        let signed = await api.handle(try hostRequest("POST", "/v1/bots-host/ssh-agent", token: token, body: ["botID": "b1", "message": "Cw=="]))
+        struct Reply: Decodable { let message: String }
+        #expect(try JSONDecoder().decode(Reply.self, from: signed.body).message == Data([12, 0, 0, 0, 0]).base64EncodedString())
+        #expect(asked.map(\.0) == ["b1"] && asked.first?.1 == Data([11]))
+    }
+
     @Test func otherMembersReachTheRuntimeOnlyThroughItsOwnBearer() async throws {
         let fixture = try HostFixture(); defer { fixture.remove() }
         let upgrade = LibraryHTTPRequest(method: "GET", target: "/v1/bots/ws", headers: [

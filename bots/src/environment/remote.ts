@@ -369,11 +369,14 @@ export class RemoteExecutionEnv implements ExecutionEnv {
   readonly id: string;
   cwd: string;
   readonly #connection: AgentConnection;
+  /** Runs before each command (Settings → GitHub files); it never throws. */
+  readonly #beforeExec: (() => Promise<void>) | undefined;
 
-  constructor(id: string, cwd: string, connection: AgentConnection) {
+  constructor(id: string, cwd: string, connection: AgentConnection, beforeExec?: () => Promise<void>) {
     this.id = id;
     this.cwd = cwd;
     this.#connection = connection;
+    this.#beforeExec = beforeExec;
   }
 
   #call<T>(method: string, args: readonly unknown[], context: Context): Promise<T> {
@@ -422,8 +425,11 @@ export class RemoteExecutionEnv implements ExecutionEnv {
     this.#call("createTempDir", [prefix], context);
   createTempFile: ExecutionEnv["createTempFile"] = (options, context) =>
     this.#call("createTempFile", [options], context);
-  exec: ExecutionEnv["exec"] = (command, options, context) =>
-    this.#call("exec", [command, options], context);
+  exec: ExecutionEnv["exec"] = async (command, options, context) => {
+    // Before the agent starts there is nothing to update: its start writes the files itself.
+    if (this.#beforeExec && this.#connection.started) await this.#beforeExec();
+    return this.#call("exec", [command, options], context);
+  };
   /** Temp files live in the agent; the agent process (and container) outlive one env use. */
   cleanup: ExecutionEnv["cleanup"] = async (context) => {
     if (this.#connection.started) await this.#call("cleanup", [], context);

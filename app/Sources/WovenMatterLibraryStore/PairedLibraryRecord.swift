@@ -148,6 +148,8 @@ enum PairedLibraryTables {
     "library_members", "library_member_revocations",
     "bot_conversations", "bot_conversation_entries",
     // The analytics choice and its library-wide ID apply to every device.
-    "product_analytics_preference"
+    "product_analytics_preference",
+    // Settings → GitHub: signed records; the private key only sealed to each Mac.
+    "github_identity", "github_identity_recipients"
   ]
 }

@@ -285,6 +285,34 @@ import WovenMatterCore
     #expect(last > highest)
   }
 
+  /// v0.4.3's library is this build's without Settings → GitHub's two shared
+  /// tables (step 2). Opening one adds them, keeps its rows, and ends with a
+  /// new library's schema.
+  @Test func aV043LibraryGainsTheGitHubTables() async throws {
+    let upgraded = try PersistenceFixture(), fresh = try PersistenceFixture(); defer { upgraded.remove(); fresh.remove() }
+    let current = try await WorkspaceDatabase(url: fresh.databaseURL)
+    _ = try await WorkspaceDatabase(url: upgraded.databaseURL)
+    // That connection may still be finishing its work after opening.
+    try PersistenceSQL(url: upgraded.databaseURL).execute("""
+      PRAGMA busy_timeout=30000;
+      DROP TABLE github_identity; DROP TABLE github_identity_recipients; PRAGMA user_version=1;
+      INSERT INTO conversations(id,title,created_at,updated_at) VALUES('v043-chat','Kept','1','1');
+      """)
+    #expect(try scalar(upgraded.databaseURL, "SELECT count(*) FROM sqlite_master WHERE name LIKE 'github_identity%'") == 0)
+    let library = try await WorkspaceDatabase(url: upgraded.databaseURL)
+    let expected = try await schema(current), actual = try await schema(library)
+    #expect(actual.keys.sorted() == expected.keys.sorted())
+    for key in expected.keys.sorted() where actual[key] != expected[key] {
+      Issue.record("\(key) differs:\nupgraded: \(actual[key] ?? "missing")\nfresh: \(expected[key]!)")
+    }
+    #expect(try await library.pairedLibrarySchema() == current.pairedLibrarySchema())
+    #expect(try await row(library, "PRAGMA user_version")["user_version"]?.intValue == WorkspaceDatabaseConnection.librarySchemaVersion)
+    #expect(try await row(library, "SELECT title FROM conversations WHERE id='v043-chat'")["title"]?.stringValue == "Kept")
+    // Adding tables copies nothing first.
+    let copies = WorkspaceDatabaseConnection.libraryBackupDirectory(for: upgraded.databaseURL)
+    #expect(((try? FileManager.default.contentsOfDirectory(atPath: copies.path)) ?? []).isEmpty)
+  }
+
   /// A library a newer release has changed is refused by everything that
   /// opens the file, and left exactly as it was: an older build must never
   /// run its statements over a schema it does not know.
@@ -408,7 +436,7 @@ import WovenMatterCore
     #expect(try await row(library, "SELECT native_session_id FROM harness_sessions WHERE conversation_id='3b078bf3-4268-4819-96d2-6d282542f205'")["native_session_id"]?.stringValue == "native-session-1")
     #expect(try await row(library, "SELECT json_extract(calendar_json,'$.task.configuration.tools.enabled') AS enabled FROM calendar_items WHERE id=?", schedule)["enabled"]?.stringValue == #"["goals","html","notes","sessions"]"#)
     #expect(try await row(library, "SELECT json_extract(payload,'$.row.calendar_json.value') AS json FROM peer_sync_versions WHERE table_name='calendar_items' AND record_key=json_array(?)", schedule)["json"]?.stringValue?.contains(#""goals""#) == true)
-    #expect(try await row(library, "PRAGMA user_version")["user_version"]?.doubleValue == 1)
+    #expect(try await row(library, "PRAGMA user_version")["user_version"]?.intValue == WorkspaceDatabaseConnection.librarySchemaVersion)
   }
 
   @Test func peerBookkeepingIsCompactedAndKeepsItsCursors() async throws {

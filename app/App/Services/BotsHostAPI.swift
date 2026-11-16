@@ -60,6 +60,10 @@ struct BotsHostAPI: Sendable {
     var removePreview: @MainActor @Sendable (_ botID: String, _ port: Int) async -> Void
     var inferenceCredential: @MainActor @Sendable (_ provider: String) async throws -> CredentialReply
     var recordConversation: @MainActor @Sendable (_ botID: String, _ batch: BotConversationMirror) async throws -> Void
+    /// Settings → GitHub for one bot's container: the public key while the bot is on, and the identity.
+    var gitConfiguration: @MainActor @Sendable (_ botID: String) async throws -> GitHubBotSetup = { _ in GitHubBotSetup() }
+    /// One SSH agent request from the bot's container, answered by this Mac's signing agent.
+    var sshAgent: @MainActor @Sendable (_ botID: String, _ message: Data) async -> Data = { _, _ in Data([5]) }
 
     private struct KeyRequest: Decodable { let botID: String; let botName: String? }
     private struct KeyResponse: Encodable { let endpoint: String; let token: String }
@@ -105,6 +109,20 @@ struct BotsHostAPI: Sendable {
                 let body = try decode(CredentialRequest.self, request)
                 guard Self.providers.contains(body.provider) else { throw BotsHostAPIError.invalid("Unknown provider.") }
                 return try .json(try await inferenceCredential(body.provider))
+            case ("POST", ["git"]):
+                struct GitRequest: Decodable { let botID: String }
+                let body = try decode(GitRequest.self, request)
+                try Self.requireIdentifier(body.botID)
+                return try .json(try await gitConfiguration(body.botID))
+            case ("POST", ["ssh-agent"]):
+                struct AgentRequest: Decodable { let botID: String; let message: String }
+                struct AgentReply: Encodable { let message: String }
+                let body = try decode(AgentRequest.self, request)
+                try Self.requireIdentifier(body.botID)
+                guard let message = Data(base64Encoded: body.message), !message.isEmpty, message.count <= SSHSigningAgent.maximumMessage else {
+                    throw BotsHostAPIError.invalid("Invalid agent request.")
+                }
+                return try .json(AgentReply(message: await sshAgent(body.botID, message).base64EncodedString()))
             case let ("POST", route) where route.count == 3 && route[0] == "conversations" && route[2] == "entries":
                 try Self.requireIdentifier(route[1])
                 let batch = try decode(BotConversationMirror.self, request)

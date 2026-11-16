@@ -39,6 +39,8 @@ import {
   toolchainImageName,
 } from "./images.ts";
 import { createTar } from "./tar.ts";
+import { createInterface } from "node:readline";
+import { CONTAINER_GIT_DIRECTORY, type GitSetup, gitAgentSocket, gitDigest, gitEnvironment, gitFiles, WRITE_GIT_FILES } from "../host/git.ts";
 import { AgentConnection, type AgentProcess, RemoteExecutionEnv } from "./remote.ts";
 
 export const CONTAINER_USER = "bot";
@@ -128,6 +130,12 @@ export type BotEnvironmentOptions = {
   readonly healthCheck?: (botId: string) => Promise<void>;
   /** How long a container start waits for an unavailable engine (tests shorten it). */
   readonly engineWaitMs?: number;
+  /** Settings → GitHub for one bot, from the host (undefined: no answer yet), written into its container. */
+  readonly git?: (botId: string) => Promise<GitSetup | undefined>;
+  /** Where in the container the files go (tests use a host path). */
+  readonly gitDirectory?: string;
+  /** One SSH agent request from a bot's relay, answered by the machine's signing agent. */
+  readonly sshAgent?: (botId: string, message: Buffer) => Promise<Buffer>;
   readonly log?: (message: string) => void;
 };
 
@@ -169,6 +177,8 @@ export function runningWork(psOutput: string): string[] {
       if (under(row.pid, supervisors)) return false;
       if (row.args.includes(`${HELPER_MOUNT}/agent.mjs`)) return false;
       if (row.args.includes(`${HELPER_MOUNT}/forward.mjs`)) return false;
+      // The SSH agent relay waits for git; it is not work of its own.
+      if (row.args.includes(`${HELPER_MOUNT}/ssh-agent.mjs`)) return false;
       if (/^ps -eo /.test(row.args)) return false;
       return true;
     })
@@ -252,7 +262,9 @@ export class BotEnvironment implements BotEnvironmentAdapter {
         target.cwd && (target.cwd === WORKSPACE || target.cwd.startsWith(`${WORKSPACE}/`))
           ? target.cwd
           : WORKSPACE;
-      return new RemoteExecutionEnv(`woven:${containerName(botId)}`, cwd, this.#connection(botId));
+      return new RemoteExecutionEnv(`woven:${containerName(botId)}`, cwd, this.#connection(botId), () =>
+        this.#syncGit(botId),
+      );
     };
   }
 
@@ -266,9 +278,14 @@ export class BotEnvironment implements BotEnvironmentAdapter {
       connection = new AgentConnection(
         async () => {
           await this.ensure(botId);
+          // A new agent may be in a new (or restarted) container: always write before it starts.
+          await this.#syncGit(botId, true);
           return this.#engine.spawn(containerName(botId), AGENT_COMMAND, {
             user: CONTAINER_USER,
             workdir: WORKSPACE,
+            ...(this.#options.git
+              ? { env: Object.entries(gitEnvironment(this.#options.gitDirectory)).map(([key, value]) => `${key}=${value}`) }
+              : {}),
           }) as unknown as AgentProcess;
         },
         this.#log,
@@ -277,6 +294,113 @@ export class BotEnvironment implements BotEnvironmentAdapter {
       this.#connections.set(botId, connection);
     }
     return connection;
+  }
+
+  /** Each bot's SSH agent relay (helper/ssh-agent.mjs) and whether it is listening. */
+  readonly #relays = new Map<string, { readonly process: AgentProcess; readonly ready: Promise<boolean> }>();
+  /** When a bot's relay last failed to start: an older helper has none, so wait before asking again. */
+  readonly #relayFailed = new Map<string, number>();
+
+  /**
+   * The bot's relay, started if needed; true once it listens. git's ssh in the container asks it,
+   * it asks here, and the machine's signing agent answers (the key never enters the container).
+   * A container whose helper predates the relay has none until an update.
+   */
+  #relay(botId: string): Promise<boolean> {
+    const answer = this.#options.sshAgent;
+    if (!answer) return Promise.resolve(false);
+    const current = this.#relays.get(botId);
+    if (current) return current.ready;
+    if (Date.now() - (this.#relayFailed.get(botId) ?? 0) < 60_000) return Promise.resolve(false);
+    let relay: AgentProcess;
+    try {
+      relay = this.#engine.spawn(containerName(botId), ["node", `${HELPER_MOUNT}/ssh-agent.mjs`, gitAgentSocket(this.#options.gitDirectory)], {
+        user: CONTAINER_USER,
+      }) as unknown as AgentProcess;
+    } catch {
+      this.#relayFailed.set(botId, Date.now());
+      return Promise.resolve(false);
+    }
+    let settle: (ready: boolean) => void = () => {};
+    const ready = new Promise<boolean>((resolve) => {
+      settle = resolve;
+    });
+    let listening = false;
+    // Not listening in time: stop it and try again later, rather than keep a relay that may
+    // start listening after its answer was already "no".
+    const timeout = setTimeout(() => {
+      if (listening) return;
+      this.#relayFailed.set(botId, Date.now());
+      settle(false);
+      if (this.#relays.get(botId)?.process === relay) this.#relays.delete(botId);
+      relay.kill();
+    }, 20_000);
+    timeout.unref?.();
+    this.#relays.set(botId, { process: relay, ready });
+    const ended = () => {
+      clearTimeout(timeout);
+      if (!listening) this.#relayFailed.set(botId, Date.now());
+      settle(false);
+      if (this.#relays.get(botId)?.process === relay) this.#relays.delete(botId);
+      // github.conf names a socket nobody answers now: write the files again before the next command.
+      this.#gitWritten.delete(botId);
+    };
+    relay.once("exit", ended);
+    relay.once("error", ended);
+    createInterface({ input: relay.stdout }).on("line", (line) => {
+      let request: { id?: unknown; m?: unknown; ready?: unknown };
+      try {
+        request = JSON.parse(line) as { id?: unknown; m?: unknown; ready?: unknown };
+      } catch {
+        return;
+      }
+      if (request.ready === true) {
+        listening = true;
+        clearTimeout(timeout);
+        this.#relayFailed.delete(botId);
+        settle(true);
+        return;
+      }
+      if (typeof request.id !== "number" || typeof request.m !== "string") return;
+      const id = request.id;
+      answer(botId, Buffer.from(request.m, "base64"))
+        .catch(() => Buffer.from([5]))
+        .then((reply) => relay.stdin.write(`${JSON.stringify({ id, m: reply.toString("base64") })}\n`))
+        .catch(() => {});
+    });
+    return ready;
+  }
+
+  /** The setup digest last written into each running bot's container. */
+  readonly #gitWritten = new Map<string, string>();
+
+  /**
+   * Writes Settings → GitHub into the bot's container when it changed (the host is asked at most
+   * once a minute). Never fails a tool call: a bot without the files just uses its own git setup.
+   */
+  async #syncGit(botId: string, force = false): Promise<void> {
+    if (!this.#options.git) return;
+    if (force) this.#gitWritten.delete(botId);
+    try {
+      const answered = await this.#options.git(botId);
+      if (!answered) return;
+      // github.conf names the relay's socket: without a listening relay (an older helper), the
+      // files keep the user's own SSH settings and HTTPS remotes as they are.
+      const setup = answered.publicKey && !(await this.#relay(botId)) ? { ...answered, publicKey: null } : answered;
+      const digest = gitDigest(setup);
+      if (!force && this.#gitWritten.get(botId) === digest) return;
+      const directory = this.#options.gitDirectory ?? CONTAINER_GIT_DIRECTORY;
+      const input = JSON.stringify({ directory, files: gitFiles(setup, directory) });
+      const result = await this.#engine.run(containerName(botId), WRITE_GIT_FILES, {
+        user: CONTAINER_USER,
+        input,
+        timeoutMs: 20_000,
+      });
+      if (result.code !== 0) throw new Error(result.stderr.trim() || `exit ${result.code}`);
+      this.#gitWritten.set(botId, digest);
+    } catch (error) {
+      this.#log(`bot ${botId}: GitHub settings not written: ${error instanceof Error ? error.message : String(error)}`);
+    }
   }
 
   /** Serialize lifecycle operations per bot. */
@@ -415,7 +539,13 @@ export class BotEnvironment implements BotEnvironmentAdapter {
       Hostname: `bot-${botId.slice(0, 8)}`,
       User: CONTAINER_USER,
       WorkingDir: WORKSPACE,
-      Env: [`WOVEN_BOT_ID=${botId}`],
+      // Settings → GitHub: every process in the container (keep_running services too) finds the files.
+      Env: [
+        `WOVEN_BOT_ID=${botId}`,
+        ...(this.#options.git
+          ? Object.entries(gitEnvironment(this.#options.gitDirectory)).map(([key, value]) => `${key}=${value}`)
+          : []),
+      ],
       Labels: { ...this.#labels(), [BOT_LABEL]: botId, [IMAGE_LABEL]: image, [LAYOUT_LABEL]: LAYOUT },
       StopTimeout: STOP_SECONDS,
       HostConfig: {
@@ -879,6 +1009,7 @@ export class BotEnvironment implements BotEnvironmentAdapter {
       const moving = rebuild || labels[LAYOUT_LABEL] !== LAYOUT || previousBase !== base;
       const previousToolchain = moving ? undefined : await this.#engine.linkTarget(name, TOOLCHAIN_PATH).catch(() => undefined);
       this.#connections.get(botId)?.close();
+      this.#gitWritten.delete(botId);
       await this.#engine.stopContainer(name, STOP_SECONDS);
       // Snapshot: only the last one is kept. It is a rollback point, never a base for the update.
       await this.#engine.removeImage(snapshotImage(botId));
@@ -984,6 +1115,8 @@ export class BotEnvironment implements BotEnvironmentAdapter {
     this.#idleTimer = undefined;
     for (const connection of this.#connections.values()) connection.close();
     this.#connections.clear();
+    for (const relay of this.#relays.values()) relay.process.kill();
+    this.#relays.clear();
   }
 
   async shutdown(): Promise<void> {
