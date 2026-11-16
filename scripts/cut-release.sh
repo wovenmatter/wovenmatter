@@ -39,6 +39,30 @@ refuse_existing() {
   fi
 }
 
+linux_library() {
+  if [ "$linux_host" = local ]; then
+    scripts/build-linux-library.sh --docker
+  else
+    local remote_dir
+    remote_dir="$(ssh "$linux_host" mktemp -d)"
+    git archive HEAD | ssh "$linux_host" "tar -x -C '$remote_dir'"
+    ssh "$linux_host" "cd '$remote_dir' && scripts/build-linux-library.sh --docker --output '$remote_dir/out'"
+    mkdir -p remote/host/library
+    ssh "$linux_host" "tar -C '$remote_dir/out' -c ." | tar -x -C remote/host/library
+    # Docker leaves root-owned output behind.
+    ssh "$linux_host" "sudo rm -rf '$remote_dir'"
+  fi
+  scripts/verify-linux-library.sh
+}
+
+compile_app() {
+  WOVENMATTER_SIGNING_IDENTITY=- WOVENMATTER_RELEASE_ALLOW_UNTAGGED=1 \
+  WOVENMATTER_RELEASE_WORK_DIR="$1" WOVENMATTER_RELEASE_OUTPUT_DIR="$1/dist" \
+  WOVENMATTER_COMPILER_CACHE="$HOME/Library/Caches/WovenMatter/ReleaseCompiler" \
+  WOVENMATTER_PACKAGE_CACHE="$HOME/Library/Caches/WovenMatter/SourcePackages" \
+    scripts/build-release.sh "$version" compile
+}
+
 build() {
   step 'Checking GitHub access'
   "$repo_root/scripts/check-release-access.sh"
@@ -55,27 +79,28 @@ build() {
   build_number="$(git rev-list --count HEAD)"
   echo "Building $tag (build $build_number) from $revision."
 
-  step "Building Linux library binaries on $linux_host"
-  if [ "$linux_host" = local ]; then
-    scripts/build-linux-library.sh --docker
-  else
-    local remote_dir
-    remote_dir="$(ssh "$linux_host" mktemp -d)"
-    git archive HEAD | ssh "$linux_host" "tar -x -C '$remote_dir'"
-    ssh "$linux_host" "cd '$remote_dir' && scripts/build-linux-library.sh --docker --output '$remote_dir/out'"
-    mkdir -p remote/host/library
-    ssh "$linux_host" "tar -C '$remote_dir/out' -c ." | tar -x -C remote/host/library
-    # Docker leaves root-owned output behind.
-    ssh "$linux_host" "sudo rm -rf '$remote_dir'"
+  # Only the app's resource copy needs the Linux library. Build the library and
+  # warm the compiler cache at the same time, then compile the app for real with
+  # fresh intermediates once the library is in place.
+  step "Building Linux library binaries on $linux_host while warming the compiler cache"
+  linux_library > "$work/linux-library.log" 2>&1 &
+  local linux_pid=$!
+  compile_app "$work/warm" > "$work/warm-compile.log" 2>&1 &
+  local warm_pid=$!
+  if ! wait "$linux_pid"; then
+    kill "$warm_pid" 2>/dev/null || true
+    tail -40 "$work/linux-library.log" >&2
+    echo 'The Linux library build failed.' >&2
+    exit 1
   fi
-  scripts/verify-linux-library.sh
+  tail -4 "$work/linux-library.log"
+  step 'Linux library ready; waiting for the warm-up compile'
+  # A failed warm-up only costs speed: the real compile below still runs.
+  wait "$warm_pid" || echo 'The warm-up compile failed; compiling without it.'
+  rm -rf "$work/warm"
 
   step 'Compiling the Release app'
-  WOVENMATTER_SIGNING_IDENTITY=- WOVENMATTER_RELEASE_ALLOW_UNTAGGED=1 \
-  WOVENMATTER_RELEASE_WORK_DIR="$work/build" WOVENMATTER_RELEASE_OUTPUT_DIR="$work/dist" \
-  WOVENMATTER_COMPILER_CACHE="$HOME/Library/Caches/WovenMatter/ReleaseCompiler" \
-  WOVENMATTER_PACKAGE_CACHE="$HOME/Library/Caches/WovenMatter/SourcePackages" \
-    scripts/build-release.sh "$version" compile
+  compile_app "$work/build"
   local app="$work/build/DerivedData/Build/Products/Release/Woven Matter.app"
 
   step 'Checking the app'
