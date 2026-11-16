@@ -66,6 +66,16 @@ try {
   assert.equal((await run(a, 'conversation-a', `return await ${path(apps[0], selected[0])}.read({});`)).result.execution.value.fixture, 'alpha');
   assert.equal((await run(b, 'conversation-b', `return await ${path(apps[1], selected[1])}.read({});`)).result.execution.value.fixture, 'beta');
   check('Broker issues working conversation-bound grants through the public API');
+  const file = { type: 'resource', resource: { uri: 'file:///fixture.pdf', mimeType: 'application/pdf', blob: Buffer.from('%PDF-1.7\nfixture').toString('base64') } };
+  const image = { type: 'image', mimeType: 'image/png', data: 'aW1hZ2U=' };
+  const audio = { type: 'audio', mimeType: 'audio/wav', data: 'YXVkaW8=' };
+  const media = (await run(a, 'conversation-a', `return ${JSON.stringify({ file, again: [file], image, audio })};`)).result.execution.value;
+  for (const [key, expected] of Object.entries({ file, image, audio })) {
+    const { contentIndex, ...actual } = media[key];
+    assert.deepEqual(actual, expected);
+  }
+  assert.deepEqual(media.again[0], media.file);
+  check('Binary files, images and audio survive lifted MCP content and repeated references');
   const blocked = await run(a, 'conversation-a', `const app=${JSON.stringify(apps[1].slug)}; return await tools[app].read({});`);
   assert.equal(blocked.result.execution.ok, false);
   assert.deepEqual((await run(a, 'conversation-a', `return await tools.search({namespace:${JSON.stringify(apps[1].slug)}});`)).result.execution.value.items, []);
