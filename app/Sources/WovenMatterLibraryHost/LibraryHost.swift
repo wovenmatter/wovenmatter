@@ -51,6 +51,8 @@ public final class LibraryHost: @unchecked Sendable {
   private let token: LibraryHostToken
   private let executor: WorkspaceToolExecutor
   public let timers: LibraryHostTimers
+  /// Settings → GitHub: this host's sealed copy of the user's key, for its Woven server.
+  public let github: GitHubIdentitySync
   private let startedAt = Date()
   private let lock = NSLock()
   private var mounts: [(prefix: String, handler: LibraryHTTPResponseHandler)] = []
@@ -74,6 +76,7 @@ public final class LibraryHost: @unchecked Sendable {
     identity = try MemberIdentity.loadOrCreate(file: layout.memberKeyFile, deviceID: library.hostDeviceID, kind: .linux)
     members = MemberDirectory(database: database, identity: identity)
     timers = LibraryHostTimers(database: database, machineID: identity.deviceID)
+    github = GitHubIdentitySync(database: database, directory: members)
     try await members.ensureSelf(name: name ?? ProcessInfo.processInfo.hostName, endpoints: endpoints)
     var configuration = LibraryPeerSync.Configuration(version: "wovenmatter-library " + Self.version)
     configuration.presenceInterval = presenceInterval
@@ -203,6 +206,11 @@ public final class LibraryHost: @unchecked Sendable {
         return try .json(try await members.list())
       case "/v1/sync/status":
         return try .json(await sync.status())
+      case "/v1/github":
+        // Settings → GitHub for the Woven server's signing agent: this host's copy of the key,
+        // its device ID (its place in the access list), the identity and the list.
+        guard request.method == "GET" else { return .error("method_not_allowed", "Use GET.", status: 405) }
+        return try .json(GitHubHostCopy(deviceID: identity.deviceID, configuration: try await github.hostCopy()))
       case "/v1/timers/due":
         guard request.method == "POST" else { return .error("method_not_allowed", "Use POST.", status: 405) }
         return try .json(await timers.due())

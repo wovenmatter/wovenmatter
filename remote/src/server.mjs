@@ -33,6 +33,7 @@ import { createInstallerBearer } from './installer-bearer.mjs'
 import { createExecutionAttachments } from './execution-attachments.mjs'
 import { createTitleGenerator } from './title-generation.mjs'
 import { createDefaultAgentControl } from './default-agent-control.mjs'
+import { createGitHubService, ensureGitHubStaticFiles, githubDirectory } from './github-identity.mjs'
 import { createServer } from 'node:http'
 import { randomUUID, createHash } from 'node:crypto'
 import { readFile, writeFile, mkdir, realpath, rename, rm } from 'node:fs/promises'
@@ -47,6 +48,8 @@ const modulePath = fileURLToPath(import.meta.url)
 const entrypointPath = process.argv[1] ? await realpath(resolve(process.argv[1])).catch(() => null) : null
 const runningAsService = entrypointPath === await realpath(modulePath)
 const { catalogPath, workspaceRoot, managedDataRoot, listenHost, listenPort } = configuration
+// Settings → GitHub: every session environment points at these files, key or not.
+if (runningAsService) ensureGitHubStaticFiles(githubDirectory(configuration))
 const apiToken = runningAsService
   ? validatedAPIToken(configuration.apiToken)
   : configuration.apiToken
@@ -226,9 +229,14 @@ function hostRelease() {
   return { version: configuration.releaseVersion, fingerprint: configuration.serviceFingerprint, librarySchema: ready?.schema ?? null }
 }
 
+// Settings → GitHub (github-identity.mjs): this host's copy of the key, from its library, served
+// to its sessions and bots through the signing agent. Without a library there is no copy.
+const github = library ? createGitHubService({ directory: githubDirectory(configuration),
+  fetchCopy: () => library.client.json('GET', '/v1/github', { timeout: 10_000 }),
+  log: message => process.stderr.write(message + '\n') }) : null
 const bots = nativeLinuxHost ? createBotsService({
   configuration, mcp: clientExecution.mcp, release: hostRelease, defaultAgent, serverPort: () => server.address()?.port ?? listenPort,
-  libraryHost: library, memberIdentity, registry: memberSockets, installerBearer,
+  libraryHost: library, memberIdentity, registry: memberSockets, installerBearer, github,
   // Signed members, or the installer bearer on the SSH tunnel only; device grants open nothing.
   authorizeClient: request => authorizeBotsUpgrade(request, { members, servedTargets, installerBearer }),
 }) : null
@@ -746,6 +754,7 @@ async function libraryReady(ready) {
   clientExecution?.kickPublisher()
   timers?.kick()
   await bots?.drainLibrary().catch(() => {})
+  await github?.start().catch(error => process.stderr.write('The GitHub signing agent could not start: ' + error.message + '\n'))
 }
 
 // The machine's member identity is the library host's (`GET /v1/identity`);

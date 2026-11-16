@@ -4,6 +4,8 @@
  * call is JSON over loopback HTTP; responses are size-bounded and error bodies are never echoed.
  */
 
+import { type GitSetup, validGitSetup } from "./git.ts";
+
 export type HostCredential =
   | { readonly type: "api_key"; readonly key: string }
   /** Access-only OAuth (renewal belongs to the host): ask again once `expires` (epoch ms) passes. */
@@ -65,6 +67,10 @@ export interface HostAPI {
   unpublishPreview(botID: string, port: number): Promise<void>;
   inferenceCredential(provider: string): Promise<InferenceCredentialResponse>;
   mirror(botID: string, batch: MirrorBatch): Promise<void>;
+  /** Settings → GitHub: the public key (while this bot is on) and commit identity. */
+  gitSetup?(botID: string): Promise<GitSetup>;
+  /** One SSH agent request from the bot's container, answered by the machine's signing agent. */
+  sshAgent?(botID: string, message: Buffer): Promise<Buffer>;
 }
 
 const MAX_RESPONSE = 1024 * 1024;
@@ -152,6 +158,15 @@ export class HostClient implements HostAPI {
 
   async mirror(botID: string, batch: MirrorBatch): Promise<void> {
     await this.#call("POST", `/v1/bots-host/conversations/${encodeURIComponent(botID)}/entries`, batch);
+  }
+
+  async gitSetup(botID: string): Promise<GitSetup> {
+    return validGitSetup(await this.#call<unknown>("POST", "/v1/bots-host/git", { botID }));
+  }
+
+  async sshAgent(botID: string, message: Buffer): Promise<Buffer> {
+    const reply = await this.#call<{ message?: unknown }>("POST", "/v1/bots-host/ssh-agent", { botID, message: message.toString("base64") });
+    return typeof reply?.message === "string" && reply.message ? Buffer.from(reply.message, "base64") : Buffer.from([5]);
   }
 }
 

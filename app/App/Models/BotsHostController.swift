@@ -97,6 +97,9 @@ struct BotsHostDependencies {
     var recordConversation: @MainActor (_ machineID: String, _ batch: BotConversationMirror) async throws -> Void
     var deleteConversations: @MainActor (_ machineID: String, _ botID: String) async throws -> Void
     var inferenceCredential: @MainActor (_ provider: String) async throws -> BotsHostAPI.CredentialReply
+    /// Settings → GitHub for one bot's container: its files, and its signing requests.
+    var gitConfiguration: @MainActor (_ botID: String) async throws -> GitHubBotSetup = { _ in GitHubBotSetup() }
+    var sshAgent: @MainActor (_ botID: String, _ message: Data) async -> Data = { _, _ in Data([5]) }
     var remoteMachines: @MainActor (_ thisMacVersion: String?) async -> [BotMachine] = { _ in [] }
     var setRemoteResources: @MainActor (_ machineID: String, _ resources: BotResourceSettings) async throws -> Void = { _, _ in
         throw BotsError.unavailable("That machine is unavailable.")
@@ -510,7 +513,9 @@ final class BotsHostController {
             publishPreview: { botID, port, containerPort in try await previews.publish(botID: botID, port: port, containerPort: containerPort) },
             removePreview: { botID, port in await previews.remove(botID: botID, port: port) },
             inferenceCredential: { provider in try await dependencies.inferenceCredential(provider) },
-            recordConversation: { _, batch in try await dependencies.recordConversation(machineID, batch) })
+            recordConversation: { _, batch in try await dependencies.recordConversation(machineID, batch) },
+            gitConfiguration: { botID in try await dependencies.gitConfiguration(botID) },
+            sshAgent: { botID, message in await dependencies.sshAgent(botID, message) })
     }
 
     // MARK: Delivery to bots
