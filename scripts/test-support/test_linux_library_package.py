@@ -44,12 +44,14 @@ class LinuxLibraryPackage(unittest.TestCase):
         installer = (ROOT / 'scripts/remote-host.sh').read_text()
         self.assertIn("'wovenmatter-library.gz'", installer)
         self.assertIn("'wovenmatter-library.sha256'", installer)
-        workflow = (ROOT / '.github/workflows/release.yml').read_text()
-        build = workflow.index('scripts/build-linux-library.sh --docker')
-        download = workflow.index('actions/download-artifact@')
-        self.assertLess(build, download)
-        self.assertLess(download, workflow.index('scripts/build-release.sh "$VERSION" compile'))
-        self.assertIn('needs: linux-library', workflow)
+        # cut-release.sh builds and verifies the library, then puts it into the
+        # compiled app before the app is checked and uploaded.
+        release = (ROOT / 'scripts/cut-release.sh').read_text()
+        build = release.index('scripts/build-linux-library.sh --docker')
+        bundled = release.index('/Contents/Resources/remote/host/library"')
+        self.assertLess(build, bundled)
+        self.assertLess(bundled, release.index('scripts/verify-linux-library.sh "$bundled"'))
+        self.assertLess(bundled, release.index('scripts/validate-native-app.sh "$app"'))
 
 
 if __name__ == '__main__':
