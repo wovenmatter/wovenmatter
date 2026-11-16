@@ -53,6 +53,10 @@ Maintenance checks both for newer releases; recorded does not mean frozen.
   in CI, and the bots install, egress and uninstall checks on a Linux host
   before release. Installed hosts pick up a new selection on update; the
   engine restarts only when its binaries or configuration changed.
+  The static Linux host selection is Docker 29.10.0. The Mac VM keeps
+  Docker 29.9.3 because Docker's signed Resolute APT indexes do not yet publish
+  29.10.0 for either architecture. Maintenance checks that publication boundary
+  independently; a static archive cannot replace the VM's managed APT packages.
 - **Node** runs the signed Built-in agent and managed adapter tools.
   Launch reuses the recorded installed runtime without a metadata lookup; a
   first installation may download its checksummed archive. Select the newest
@@ -119,6 +123,11 @@ Maintenance checks both for newer releases; recorded does not mean frozen.
   Executor also selects only the ncurses, acl, and util-linux source repairs it
   needs; do not install the workspace browser-library repairs into that smaller
   image without a runtime dependency.
+  Current V2 releases lift binary resources, images and audio into separate MCP
+  content blocks. The broker restores their references before crossing its JSON
+  job boundary, retaining the existing response-size limit. Invalid references
+  interrupt the job without replaying it. Broker regressions and the real
+  provider-free Executor fixture cover inline and lifted results.
   npm also vendors minimatch 10.2.5, affected by GHSA-g3hv-75wg-m249. The
   same graph replaces minimatch with 11.0.8 and its locked dependency closure.
   Mac, native Linux and all container paths copy and verify every graph module,
@@ -328,17 +337,17 @@ an older configured channel. OpenCode and Executor retain the documented v2 API 
 maintenance must review a newer stable API major and implement its migration.
 
 `harnesses/catalog.json` records tested connector and engine minimums separately:
-Codex ACP 2.6.0 with Codex 0.169.0, and Claude ACP 0.107.0 with Claude SDK 0.3.325
+Codex ACP 2.6.0 with Codex 0.169.0, and Claude ACP 0.107.3 with Claude SDK 0.3.325
 (native Claude Code 2.1.325). The standalone Codex and Claude sign-in CLIs use their
 official current stable release channels. Codex ACP's `^0.166.0` engine range
 otherwise keeps its chat engine behind; its `~2.4.0` ACP TypeScript SDK range
-also excludes the current 2.7.0. Claude ACP 0.107.0 pins SDK 0.3.323;
-the consumer-scoped override still selects SDK 0.3.325 independently so engine-only
-updates remain eligible while the connector pin lags. Transcript-write loss
+also excludes the current 2.7.0. Claude ACP 0.107.3 now pins SDK 0.3.325;
+the consumer-scoped override remains so engine-only updates stay eligible when
+a later stable engine publication moves ahead of that pin. Transcript-write loss
 invalidates the native resume marker and refuses tool dispatch/continuation commits;
 config-only write loss leaves a valid response intact. Provider-free persistence
-fixtures verify canonical replay after recovery. Claude's connector selects protocol SDK
-2.6.0 directly; its consumer-scoped override selects 2.7.0 independently. The
+fixtures verify canonical replay after recovery. Claude's connector now selects protocol SDK
+2.7.0 directly; its consumer-scoped override retains independent SDK updates. The
 catalog's independent ACP SDK floor is 2.7.0. Mac and native Linux/container
 explicit updates resolve its newest nondeprecated stable
 publication independently, retain the vendor manifests, and verify the exact
