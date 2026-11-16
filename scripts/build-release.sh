@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-usage='usage: build-release.sh VERSION [all|compile|seal|notarize-app|package|notarize-dmg|feed]'
+usage='usage: build-release.sh VERSION [all|compile|import|seal|notarize-app|package|notarize-dmg|feed]'
 [ "$#" -le 2 ] || { printf '%s\n' "$usage" >&2; exit 64; }
 version="${1:?$usage}"
 requested="${2-all}"
@@ -10,7 +10,7 @@ phases=(compile seal notarize-app package notarize-dmg feed)
   || { printf '%s\n' 'Version must be X.Y.Z.' >&2; exit 64; }
 # Exactly one known phase name; anything else must never exit successfully.
 case "$requested" in
-  all|compile|seal|notarize-app|package|notarize-dmg|feed) ;;
+  all|compile|import|seal|notarize-app|package|notarize-dmg|feed) ;;
   *) printf '%s\n' "$usage" >&2; exit 64 ;;
 esac
 [ "$(uname -s)" = Darwin ] \
@@ -35,7 +35,12 @@ build_number="${WOVENMATTER_BUILD_NUMBER:-$(git rev-list --count HEAD)}"
 [[ "$build_number" =~ ^[1-9][0-9]*$ ]] \
   || { printf '%s\n' 'WOVENMATTER_BUILD_NUMBER must be a positive integer.' >&2; exit 64; }
 
-if ! security find-identity -p codesigning -v \
+# "-" is an ad-hoc compile for a Mac without the Developer ID key; the release
+# workflow imports that app and re-signs it. Every other phase needs the key.
+if [ "$signing_identity" = - ]; then
+  [ "$requested" = compile ] \
+    || { printf '%s\n' 'Only the compile phase may use an ad-hoc identity.' >&2; exit 64; }
+elif ! security find-identity -p codesigning -v \
   | grep -F "Developer ID Application:" >/dev/null; then
   printf '%s\n' 'A Developer ID Application identity is required.' >&2
   exit 69
@@ -93,6 +98,10 @@ on_exit() {
 trap on_exit EXIT
 
 compile_release() {
+  local signing=(CODE_SIGN_IDENTITY="$signing_identity" OTHER_CODE_SIGN_FLAGS="--timestamp" DEVELOPMENT_TEAM="$team_id")
+  if [ "$signing_identity" = - ]; then
+    signing=(CODE_SIGN_IDENTITY=- OTHER_CODE_SIGN_FLAGS="--timestamp=none")
+  fi
   xcodebuild -showBuildTimingSummary -onlyUsePackageVersionsFromResolvedFile \
   -project app/WovenMatter.xcodeproj \
   -scheme WovenMatter \
@@ -104,9 +113,7 @@ compile_release() {
   ONLY_ACTIVE_ARCH=YES \
   CODE_SIGN_INJECT_BASE_ENTITLEMENTS=NO \
   CODE_SIGN_STYLE=Manual \
-  CODE_SIGN_IDENTITY="$signing_identity" \
-  OTHER_CODE_SIGN_FLAGS="--timestamp" \
-  DEVELOPMENT_TEAM="$team_id" \
+  "${signing[@]}" \
   MARKETING_VERSION="$version" \
   CURRENT_PROJECT_VERSION="$build_number" \
   WOVENMATTER_SOURCE_REVISION="$revision" \
@@ -115,7 +122,8 @@ compile_release() {
 }
 
 phase_compile() {
-  team_id="${WOVENMATTER_TEAM_ID:?WOVENMATTER_TEAM_ID is required}"
+  team_id=''
+  if [ "$signing_identity" != - ]; then team_id="${WOVENMATTER_TEAM_ID:?WOVENMATTER_TEAM_ID is required}"; fi
   release_status 'Compiling production Release app'
   if [ -n "${WOVENMATTER_COMPILER_CACHE:-}" ]; then
     if ! compile_release COMPILATION_CACHE_ENABLE_CACHING=YES \
@@ -132,9 +140,23 @@ phase_compile() {
   fi
 }
 
+# The release workflow's first phase: the app compiled ad hoc on a maintainer
+# Mac (scripts/cut-release.sh), unpacked where compile would have left it.
+phase_import() {
+  local input="${WOVENMATTER_RELEASE_INPUT:?WOVENMATTER_RELEASE_INPUT is required}"
+  release_status 'Importing the app compiled for this release'
+  mkdir -p "$(dirname "$app")"
+  ditto -x -k "$input" "$(dirname "$app")"
+  test -d "$app" || { printf 'The release input does not contain %s.\n' "$(basename "$app")" >&2; exit 65; }
+  python3 scripts/validate-release-metadata.py verify "$version" "$build_number" "$revision" \
+    --plist "$app/Contents/Info.plist"
+}
+
 phase_seal() {
-  release_status 'Signing nested updater helpers and sealing the app'
+  release_status 'Signing nested code with Developer ID and sealing the app'
+  python3 scripts/resign-release-app.py "$app" "$signing_identity"
   scripts/sign-release-updater.sh "$app" "$signing_identity"
+  python3 scripts/resign-release-app.py --check-entitlements "$app"
   release_status 'Validating bundled resources and code signatures'
   python3 scripts/validate-release-metadata.py verify "$version" "$build_number" "$revision" \
     --plist "$app/Contents/Info.plist"
@@ -221,7 +243,7 @@ phase_feed() {
 
 run_phase() {
   local name="$1" previous="$2"
-  if [ "$name" = compile ]; then
+  if [ "$name" = compile ] || [ "$name" = import ]; then
     # A clean build always starts from fresh intermediates.
     rm -rf "$release_root"
     mkdir -p "$derived_data" "$package_cache" "$output_dir"
@@ -229,8 +251,12 @@ run_phase() {
   else
     # Later phases consume only the work of the immediately preceding phase,
     # completed in this work directory for this exact version, build and source.
+    local last=''
+    if [ -f "$state" ]; then last="$(tail -n 1 "$state")"; fi
+    # seal follows either a local compile or an imported compile.
+    if [ "$last" = import ] && [ "$previous" = compile ]; then last=compile; fi
     if [ ! -f "$state" ] || [ "$(head -n 1 "$state")" != "$identity" ] \
-      || [ "$(tail -n 1 "$state")" != "$previous" ]; then
+      || [ "$last" != "$previous" ]; then
       printf 'Release phase %s requires completed phase %s for %s.\n' "$name" "$previous" "$identity" >&2
       exit 65
     fi
@@ -243,6 +269,10 @@ run_phase() {
   current_phase=''
 }
 
+if [ "$requested" = import ]; then
+  run_phase import ''
+  exit 0
+fi
 previous=''
 for name in "${phases[@]}"; do
   if [ "$requested" = all ] || [ "$requested" = "$name" ]; then

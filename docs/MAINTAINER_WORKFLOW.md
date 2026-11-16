@@ -29,9 +29,7 @@ Run **Manual validation** (`validation.yml`) explicitly on the desired branch:
 For example, `gh workflow run validation.yml --ref BRANCH -f scope=desktop`
 requests desktop validation. Platform validation runs without provider or
 signing credentials; it does not install, release or publish an app. Build
-intermediates use toolchain/dependency-specific caches. Release dependency/compiler
-warming is also manual through **Prepare release dependencies** on main; releases
-can build from a cache miss.
+intermediates use toolchain/dependency-specific caches.
 
 The embedded Python smoke uses the production WebKit executor with no visible
 web view. Its inactive scheduling policy must keep the worker running until
@@ -104,10 +102,12 @@ still fails, stop and report it. Never initiate login, device authorization,
 browser authentication, account switching, or credential recovery. Publication
 authorization does not authorize those actions.
 
-Release from clean, current `origin/main`. PR CI and explicit platform runs validate source;
-release preparation never runs local suites, an unsigned Debug build, or another
-CI cycle. The release workflow builds and verifies a fresh production Release app
-without dispatching source validation or looking for removed main CI runs.
+Releases follow the release skill: `scripts/release-check.py` and a dependency
+PR if anything is outdated, then `scripts/cut-release.sh build X.Y.Z` (fresh
+worktree of `origin/main`, Linux library and production Release app built on the
+maintainer's own machines) and `scripts/cut-release.sh ship X.Y.Z` (upload and
+tag). The release workflow only signs, notarizes and packages that app.
+Release preparation runs no CI cycle.
 Immutable tags, signing, notarization,
 artifact verification, and exact approved release-copy gates still apply.
 
@@ -122,7 +122,7 @@ private draft. For version `X.Y.Z`, the identities are:
 The draft contains the disk image, its checksum file, and `latest-mac.json`.
 `scripts/publish-release.sh` verifies the draft before publishing; its default
 invocation and `--verify-only` leave the draft private. See
-[Desktop updates](DESKTOP_UPDATES.md#release-performance-and-cache-trust).
+[Desktop updates](DESKTOP_UPDATES.md#release-pipeline).
 GitHub Releases is the canonical binary distribution channel.
 
 The production app uses `latest-mac.json` to discover updates and can install a

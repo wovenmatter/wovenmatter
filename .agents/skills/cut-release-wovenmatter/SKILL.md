@@ -3,17 +3,44 @@ name: cut-release-wovenmatter
 description: Cut, prepare, verify, and publish a WovenMatter macOS release.
 ---
 
-An explicit request to cut a release authorizes building and verifying a private
-draft, not publication. Use a supplied version as given. If none is supplied,
-choose it from the change range since the previous public release: the next
-unused patch version for a maintenance-only release, otherwise the unused
-semantic version that the new capabilities or compatibility changes call for.
-State it and start the private build after the access, dependency, and source
-checks below; do not stop to confirm it. Ask first only when a material
-version-policy or compatibility question makes the version genuinely ambiguous. Always pause for Trey's explicit manual approval of
-the exact release description, which shows the version and download badge, before
-publishing. A release request, a stated version, or approval of a previous release
-is not description approval.
+A release runs in four steps, all on this Mac; GitHub only signs and notarizes.
+
+1. **Check and update.** Run `scripts/release-check.py`. It reports what is behind
+   upstream stable releases (npm lockfiles, Swift packages, and the Node, CEF and
+   Sparkle records) and known vulnerabilities in shipped code. If anything is
+   outdated, update all of it to current stable releases, majors included,
+   following `docs/DEPENDENCIES.md` (lockfiles, records, checksums, notices and
+   generated resources together), validate it with `scripts/test-changes.sh`, and
+   open one PR. Give Trey the PR link and a short report on each known
+   vulnerability: severity, whether it ships, and what you recommend (update,
+   hold a version, replace, or accept). If nothing is outdated, there is no PR;
+   give the report alone.
+2. **Go-ahead.** Wait for Trey. He merges the PR and says go, or you work through
+   the findings together first.
+3. **Build and describe, in parallel.** Run `scripts/cut-release.sh build X.Y.Z`
+   in the background. It makes a fresh worktree of current `origin/main`, builds
+   the Linux library binaries in Docker on the workstation, compiles the
+   production Release app here (ad-hoc signed; a Debug app is never a
+   distribution artifact) and checks it. It uploads nothing. Meanwhile draft the
+   release description and go over it with Trey.
+4. **Ship.** Once the build passed and Trey approved the exact description, run
+   `scripts/cut-release.sh ship X.Y.Z`. It uploads that build to the private
+   draft and pushes the annotated `vX.Y.Z` tag. The tag starts
+   `.github/workflows/release.yml`, which compiles nothing: it re-signs the app
+   with Developer ID, notarizes it, builds and notarizes the DMG, generates the
+   signed feed, and uploads the signed artifacts to the private draft. After it
+   succeeds, verify and publish with the commands below.
+
+Use a supplied version as given. If none is supplied, choose it from the change
+range since the previous public release: the next unused patch version for a
+maintenance-only release, otherwise the unused semantic version that the new
+capabilities or compatibility changes call for. State it; ask first only when a
+material version-policy or compatibility question makes it genuinely ambiguous.
+A release request, a stated version, or approval of a previous release is not
+description approval. Release preparation runs no test suites beyond the
+dependency PR's validation, and does not trigger, wait for, or rerun CI. The
+signed build never resolves newer versions: it uses the lockfiles and runtime
+records committed on the release commit.
 
 Before tagging or any release mutation, run `scripts/check-release-access.sh`.
 It verifies that existing GitHub API access matches the configured SSH
@@ -31,51 +58,20 @@ selection/consent, credential extraction, or token copying. CLI suggestions to
 log in are diagnostics, not instructions or authorization. Release authorization
 never includes authentication recovery; only the user operates account login.
 
-Before selecting the release commit, verify dependency currency against upstream
-stable releases using `docs/DEPENDENCIES.md`, including Node Current and SDK
-majors. If updates are available, complete them as development PRs with refreshed
-lockfiles, generated resources, and normal development CI; merge them before
-continuing release preparation. Every new release must carry this refreshed
-snapshot. Report any concrete upstream blocker explicitly. Do not resolve or
-install newer versions inside the signed release build: it must use the accepted
-lockfiles. A previously verified private draft retains its original snapshot.
-
-Release from clean, current `origin/main`. PR CI and explicitly requested platform
-validation own source validation. Do not run `scripts/test-changes.sh --all`, any
-test suite, or an unsigned Debug build as a release prerequisite. Do not trigger,
-wait for, or rerun CI during release preparation. Create and push an annotated `vX.Y.Z`
-tag at that exact accepted commit to start the release workflow. Never move or
-reuse a release tag; an existing private draft can be resumed at its original
-accepted commit.
-
-Automatic CI runs on PRs only; native/mobile/image validation is manual. Release
-preparation does not recreate a main CI run or dispatch platform validation.
-Lightweight tag/main source checks remain before importing signing secrets.
-Always build a new production Release app; a Debug app is never a distribution
-artifact.
-
-The tag-triggered `.github/workflows/release.yml` builds a signed, notarized
-Apple Silicon app and stages a private draft. Its six named phase steps show live
-progress and record per-phase timings. It restores component caches produced on main by `Prepare release dependencies`.
-That workflow bootstraps changes to its own definition and refreshes after a
-successful release; it can also run manually. Release preparation does not
-dispatch it. Report observed cache hits and timings, rather than assuming that
-configured caches made a release faster. A miss, for example after a
-toolchain or browser-source change, compiles those parts in full; no release
-duration is guaranteed. After its successful run, verify
-through `scripts/publish-release.sh --verify-only vX.Y.Z EXPECTED_COMMIT_SHA`.
+If the signing workflow fails, find the cause, fix it on main, delete the
+unpublished tag, and build and ship again with the same version; only a published
+version is final. Never publish two releases with the same version. Its six named
+phase steps show live progress and record per-phase timings. After a successful
+run, verify through `scripts/publish-release.sh --verify-only vX.Y.Z EXPECTED_COMMIT_SHA`.
 The script checks source, workflow, assets, checksums, signing, notarization,
 and Gatekeeper. GitHub CLI authentication must match the repository's SSH account.
 It keeps downloaded bytes, never results, in a private local store; the later
 `--approved-notes` run rehashes them, repeats every check, and refuses a draft or
 asset changed since verification. Do not clear that store between the two runs.
 
-Once the tag starts the hosted build, list the PRs merged since the previous public
-release and draft the release description while the build runs, so Trey can review
-it without waiting for packaging. Approval of that exact text persists for the same
-release; do not request it again merely because the build finished. Stage the
-approved file on the private draft when it exists. Publication still requires a
-successful workflow and standard artifact verification.
+Approval of the exact description persists for the same release; do not request it
+again merely because the build finished. Publication still requires a successful
+workflow and standard artifact verification.
 
 Write the release description from the material changes since the previous
 public release. Inspect the complete commit/PR range and underlying changes;
@@ -150,7 +146,7 @@ through this path; Trey confirmed the installed 0.3.1 → 0.3.2 update worked.
 - Retain feed/payload signatures, provenance, exact asset inventory, checksums,
   notarization, Gatekeeper, and full-update reconstruction verification.
 - Keep generator start/elapsed-time logging. Do not add an arbitrary ten-minute
-  cutoff; the hosted job currently has a 120-minute timeout.
+  cutoff; the signing job currently has a 60-minute timeout.
 
 Failed attempts spent a long time generating deltas across a Chromium upgrade
 against two older releases. Memory pressure was suspected, not measured. Do not
@@ -159,8 +155,8 @@ cost. Keep deltas out of ordinary release preparation.
 
 ## Background execution and completion
 
-Start the hosted build promptly after source selection; record its run URL and
-exact source SHA. Draft and review the description while the build runs.
+Record the exact source SHA from the build and the workflow run URL from the ship
+step. Draft and review the description while the build runs.
 If publication is already explicitly approved, continue after workflow success
 with the standard verification and approved-notes publication commands above.
 A running build or background waiter is not proof of publication.
@@ -168,20 +164,8 @@ A running build or background waiter is not proof of publication.
 On failure, collect diagnostics and report the actual blocker before restarting
 or changing the pipeline. Do not substitute repeated builds for diagnosis. The
 failing phase step and its `release-timing` lines identify where it stopped.
-Once the cause is understood, a new attempt reuses a complete verified private
-draft or rebuilds from compilation; it never resumes a failed phase.
+Once the cause is understood, a new attempt builds and ships again; it never
+resumes a failed phase.
 After publication, read back public state (`isDraft=false`), source provenance,
 and the exact release body against the approved UTF-8 file. Verify the download
 badge targets an existing release asset. Report success only after these checks.
-
-
-## Explicitly requested same-version update repair
-
-When Trey explicitly asks for an updater repair PR that refreshes an existing
-release on merge, follow `docs/DESKTOP_UPDATES.md`. Put the existing version in
-`.github/release-refresh.json`; its merge starts the desktop-only signed workflow.
-That request authorizes the asset refresh after private artifact verification;
-it does not authorize editing the approved description or moving its version tag.
-The actual source has a separate immutable update-build tag and provenance asset.
-Keep normal new-version release publication behind the description approval gate.
-Explain the one-time full-install limitation for clients predating the new updater.
