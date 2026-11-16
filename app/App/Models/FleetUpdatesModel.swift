@@ -145,6 +145,9 @@ final class FleetUpdatesModel {
     struct Run: Sendable {
         /// What it still has to update; another button skips these. Each goes as it finishes.
         var claimed: Set<String>
+        /// What it already updated. Other buttons skip these too until it ends and the
+        /// versions it reports are read again.
+        var done: Set<String> = []
         /// The part it's changing now.
         var active: Part?
         var progress: String?
@@ -158,7 +161,8 @@ final class FleetUpdatesModel {
     var running: Bool { !runs.isEmpty }
     /// What each running update is doing now.
     var progress: [ProgressLine] {
-        runs.compactMap { id, run in run.progress.map { ProgressLine(id: id, text: $0) } }.sorted { $0.text < $1.text }
+        runs.compactMap { id, run in run.progress.map { ProgressLine(id: id, text: $0) } }
+            .sorted { ($0.text, $0.id.uuidString) < ($1.text, $1.id.uuidString) }
     }
     private(set) var failures: [String] = []
     /// What happens next when the run is waiting on something outside it.
@@ -463,9 +467,10 @@ final class FleetUpdatesModel {
     }
 
     /// Asks every other machine for its harnesses, all at once.
-    func refreshMembers(checkLatest: Bool, onlyMissing: Bool = false) async {
+    func refreshMembers(checkLatest: Bool, onlyMissing: Bool = false, only: Set<String>? = nil) async {
         guard let model else { return }
         let machines = devices.filter(isMember).map { $0.id.lowercased() }
+            .filter { only?.contains($0) ?? true }
             .filter { !onlyMissing || memberInventories[$0] == nil }
             .filter { !loadingMembers.contains($0) }
         loadingMembers.formUnion(machines)
@@ -558,7 +563,9 @@ final class FleetUpdatesModel {
     }
 
     func cancelBusy(_ id: UUID? = nil) {
-        guard id == nil || busyConfirmation?.id == id else { return }
+        guard let confirmation = busyConfirmation, id == nil || confirmation.id == id else { return }
+        // A resumed update the user cancelled doesn't carry over to a later one.
+        if case .scope(let scope) = confirmation.request, scope.includesApps { resumedAfterUpdate = false }
         busyConfirmation = nil
     }
 
@@ -599,17 +606,20 @@ final class FleetUpdatesModel {
         return !pendingParts(for: request).isEmpty
     }
 
-    /// Whether everything a button covers is already updating.
+    /// Whether everything a button covers is already updating, or was updated by an update
+    /// still running.
     func isUpdating(_ request: Request) -> Bool {
         if case .scope(let scope) = request, scope.includesApps, thisMacIsBehind { return isUpdating(thisMacAppPart) }
-        let all = parts(for: request)
-        return !all.isEmpty && all.allSatisfy(isUpdating)
+        let all = parts(for: request), covered = coveredKeys
+        return !all.isEmpty && all.allSatisfy { covered.contains($0.key) }
     }
+
+    private var coveredKeys: Set<String> { Set(runs.values.flatMap { $0.claimed.union($0.done) }) }
 
     /// What a button would update that no running update already covers.
     func pendingParts(for request: Request, resumed: Bool? = nil) -> [Part] {
-        let claimed = Set(runs.values.flatMap(\.claimed))
-        return parts(for: request, resumed: resumed).filter { !claimed.contains($0.key) }
+        let covered = coveredKeys
+        return parts(for: request, resumed: resumed).filter { !covered.contains($0.key) }
     }
 
     private func parts(for request: Request, resumed: Bool? = nil) -> [Part] {
@@ -656,6 +666,7 @@ final class FleetUpdatesModel {
 
     /// Waits while another update changes something that can't change alongside `part`.
     private func waitForConflicts(_ part: Part, in run: UUID) async -> Bool {
+        let name = part.device.flatMap { device in devices.first { $0.id.lowercased() == device }?.name } ?? "that device"
         let blocked: @MainActor () -> Bool = { [weak self] in
             guard let self else { return false }
             return self.runs.contains { $0.key != run && $0.value.active.map(part.conflicts) == true }
@@ -664,16 +675,24 @@ final class FleetUpdatesModel {
         let previous = runs[run]?.progress
         say(run, "Waiting for another update on that device to finish…")
         guard await wait(timeout: .seconds(3_600), until: { !blocked() }) else {
-            failures.append("Another update on that device didn't finish, so this part was skipped. Try again.")
+            failures.append("\(name): another update there didn't finish, so this one was skipped. Try again.")
             return false
         }
         say(run, previous)
         return true
     }
 
-    private func finish(_ part: Part, in run: UUID) {
+    /// `updated`: it succeeded, and what it reports may lag until the run reads it again.
+    private func finish(_ part: Part, in run: UUID, updated: Bool = false) {
         runs[run]?.active = nil
-        runs[run]?.claimed.remove(part.key)
+        if runs[run]?.claimed.remove(part.key) != nil, updated { runs[run]?.done.insert(part.key) }
+    }
+
+    /// Holds `part` while a preview asks its device, so a restart there waits for it.
+    private func holdForPreview(_ part: Part, in run: UUID) async -> Bool {
+        guard await waitForConflicts(part, in: run) else { return false }
+        runs[run]?.active = part
+        return true
     }
 
     /// Before this Mac restarts into its update, every other update finishes. False when
@@ -717,8 +736,11 @@ final class FleetUpdatesModel {
     /// is stopped until the run starts.
     private func proceed(_ request: Request, force: Bool, stopping: [BusyItem] = []) async {
         // Only one update continues a restart into a new release.
-        let resumed = resumedAfterUpdate
-        resumedAfterUpdate = false
+        var resumed = false
+        if case .scope(let scope) = request, scope.includesApps {
+            resumed = resumedAfterUpdate
+            resumedAfterUpdate = false
+        }
         let parts = pendingParts(for: request, resumed: resumed)
         let id = UUID()
         if case .scope(let scope) = request, scope.includesApps, thisMacIsBehind, let version = thisMacVersion,
@@ -744,8 +766,10 @@ final class FleetUpdatesModel {
         var skipped: Set<String> = []
         // A preview asks the device, so it waits for a server restarting there.
         for target in remoteHarnessTargets(for: request) where keys.contains(target.harness.id) {
-            guard await waitForConflicts(part(target.harness), in: id) else { skipped.insert(target.harness.id); continue }
-            switch await preview(target) {
+            guard await holdForPreview(part(target.harness), in: id) else { skipped.insert(target.harness.id); continue }
+            let previewed = await preview(target)
+            runs[id]?.active = nil
+            switch previewed {
             case .success(let preview):
                 items.append(.init(id: target.harness.id, title: "\(target.harness.name) on \(target.configuration.name)", preview: preview))
             case .failure(let error):
@@ -756,7 +780,8 @@ final class FleetUpdatesModel {
         // Other machines: a Linux host names its download; a Mac updates from its registries.
         for harness in harnessTargets(for: request) where keys.contains(harness.id) {
             guard case .member(let machineID) = harness.location, case .runtime(let kind) = harness.kind else { continue }
-            guard await waitForConflicts(part(harness), in: id) else { skipped.insert(harness.id); continue }
+            guard await holdForPreview(part(harness), in: id) else { skipped.insert(harness.id); continue }
+            defer { runs[id]?.active = nil }
             do {
                 let reply = try await model!.bots.query(.memberInstallerPreview(machineID: machineID, kind: kind))
                 if let preview = reply.installerPreview {
@@ -796,8 +821,12 @@ final class FleetUpdatesModel {
             if skipped.contains(harness.id) { finish(part, in: id); continue }
             guard await begin(part, in: id) else { continue }
             say(id, "Updating \(harness.name) on \(workspaceName(harness.location))…")
-            defer { finish(part, in: id) }
-            switch await update(harness, preview: previews[harness.id], force: forceOtherMacs, run: id) {
+            let failure = await update(harness, preview: previews[harness.id], force: forceOtherMacs, run: id)
+            if failure == nil, case .member(let machineID) = harness.location {
+                await refreshMembers(checkLatest: false, only: [machineID.lowercased()])
+            }
+            finish(part, in: id, updated: failure == nil)
+            switch failure {
             case nil: break
             case FleetBusyError.message? where !forceOtherMacs && isOtherMac(harness.location):
                 busyElsewhere.append(harness)
