@@ -812,6 +812,8 @@ final class FleetUpdatesModel {
             if step == .thisMacApp { restartsThisMac = runs[id]?.claimed.contains(part.key) == true; continue }
             guard await begin(part, in: id) else { continue }
             await perform(step, run: id)
+            // Read its new version before letting go, so its own button doesn't run it again.
+            await model.bots.refresh()
             finish(part, in: id)
         }
         var busyElsewhere: [FleetHarness] = []
