@@ -30,8 +30,8 @@
   Use `--ci` for CI-only changes. Automatic PR CI is one portable Linux check;
   native/mobile/image workflows run only when explicitly requested.
   PR CI and explicitly requested platform validation own source validation.
-  Release preparation never runs test suites or reruns CI. Releases are built on
-  this Mac with `scripts/cut-release.sh`; GitHub only signs and notarizes them.
+  Release preparation never reruns CI. Releases are built on this Mac with
+  `scripts/cut-release.sh build` and `ship`; GitHub only signs and notarizes them.
   Follow the release skill.
   Tests must not consume provider services.
 - Keep one-off audit reports, generated coverage inventories, and review evidence
@@ -70,6 +70,8 @@ Follow [the dependency policy](docs/DEPENDENCIES.md).
 - Installed apps update SDKs through explicit Settings actions at or above the
   bundled minimum version; agent CLIs follow the documented API requirements.
   Bundled signed or offline components reach users only through app delivery.
-- Releases do not require a dependency refresh; Trey runs dependency maintenance
-  separately. Release builds consume the lockfiles and runtime records committed
-  on the release commit without resolving fresh versions.
+- When cutting a release, first run `scripts/release-check.py` on this Mac, never
+  on GitHub. Update anything outdated in one development PR and report known
+  vulnerabilities, as the release skill describes. Release builds consume the
+  lockfiles and runtime records committed on the release commit without
+  resolving fresh versions.

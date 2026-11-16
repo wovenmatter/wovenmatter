@@ -446,9 +446,11 @@ validation stays on `macos-26`.
 
 ## Releases
 
-Dependency maintenance runs separately from releases. Cutting a release does not
-require a dependency refresh or a currency check; it ships whatever selections
-are committed on the release commit.
+Scheduled maintenance keeps dependencies current. Cutting a release starts with
+`scripts/release-check.py` on a maintainer Mac, never on GitHub: anything still
+behind is updated in one development PR, and known vulnerabilities in shipped
+code are reported for a decision before the build. The release ships the
+selections committed on its release commit.
 
 The lockfile is the exact snapshot that release ships. For example,
 `>=1.3.0` permits 2.0.0; after maintenance selects and validates 2.0.0, the updated

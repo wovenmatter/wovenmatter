@@ -60,13 +60,15 @@ Reference: [publishing](https://sparkle-project.org/documentation/publishing/).
 
 ## Release pipeline
 
-`scripts/cut-release.sh X.Y.Z` runs on a maintainer Mac from a clean checkout of
-current `origin/main`. It builds the Linux library binaries in Docker on the
-workstation (or another host in `WOVENMATTER_LINUX_BUILD_HOST`, or `local`),
-compiles the production Release app here with an ad-hoc signature and the
-release version, build number and source revision, and runs the native app
-checks. It uploads the zipped app and a small manifest (version, build, commit,
-SHA-256) to the private draft, then pushes the `vX.Y.Z` tag.
+`scripts/release-check.py` reports outdated dependencies and known
+vulnerabilities first. `scripts/cut-release.sh build X.Y.Z` then makes a fresh
+worktree of current `origin/main` on a maintainer Mac, builds the Linux library
+binaries in Docker on the workstation (or another host in
+`WOVENMATTER_LINUX_BUILD_HOST`, or `local`), compiles the production Release app
+with an ad-hoc signature and the release version, build number and source
+revision, and runs the native app checks. `scripts/cut-release.sh ship X.Y.Z`
+uploads that zipped app and a small manifest (version, build, commit, SHA-256) to
+the private draft, then pushes the `vX.Y.Z` tag.
 
 The tag starts `.github/workflows/release.yml`. It compiles nothing: it downloads
 the app, checks the manifest against the tag, and runs six visible phases:

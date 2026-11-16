@@ -102,11 +102,12 @@ still fails, stop and report it. Never initiate login, device authorization,
 browser authentication, account switching, or credential recovery. Publication
 authorization does not authorize those actions.
 
-Release from clean, current `origin/main` with `scripts/cut-release.sh X.Y.Z`. It
-builds the Linux library and the production Release app on the maintainer's own
-machines, uploads the app to the private draft, and pushes the tag; the release
-workflow only signs, notarizes and packages that app. Test on your own machines
-before cutting; release preparation runs no test suites and no CI cycle.
+Releases follow the release skill: `scripts/release-check.py` and a dependency
+PR if anything is outdated, then `scripts/cut-release.sh build X.Y.Z` (fresh
+worktree of `origin/main`, Linux library and production Release app built on the
+maintainer's own machines) and `scripts/cut-release.sh ship X.Y.Z` (upload and
+tag). The release workflow only signs, notarizes and packages that app.
+Release preparation runs no CI cycle.
 Immutable tags, signing, notarization,
 artifact verification, and exact approved release-copy gates still apply.
 

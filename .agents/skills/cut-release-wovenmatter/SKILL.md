@@ -3,17 +3,44 @@ name: cut-release-wovenmatter
 description: Cut, prepare, verify, and publish a WovenMatter macOS release.
 ---
 
-An explicit request to cut a release authorizes building and verifying a private
-draft, not publication. Use a supplied version as given. If none is supplied,
-choose it from the change range since the previous public release: the next
-unused patch version for a maintenance-only release, otherwise the unused
-semantic version that the new capabilities or compatibility changes call for.
-State it and start the private build after the access and source
-checks below; do not stop to confirm it. Ask first only when a material
-version-policy or compatibility question makes the version genuinely ambiguous. Always pause for Trey's explicit manual approval of
-the exact release description, which shows the version and download badge, before
-publishing. A release request, a stated version, or approval of a previous release
-is not description approval.
+A release runs in four steps, all on this Mac; GitHub only signs and notarizes.
+
+1. **Check and update.** Run `scripts/release-check.py`. It reports what is behind
+   upstream stable releases (npm lockfiles, Swift packages, and the Node, CEF and
+   Sparkle records) and known vulnerabilities in shipped code. If anything is
+   outdated, update all of it to current stable releases, majors included,
+   following `docs/DEPENDENCIES.md` (lockfiles, records, checksums, notices and
+   generated resources together), validate it with `scripts/test-changes.sh`, and
+   open one PR. Give Trey the PR link and a short report on each known
+   vulnerability: severity, whether it ships, and what you recommend (update,
+   hold a version, replace, or accept). If nothing is outdated, there is no PR;
+   give the report alone.
+2. **Go-ahead.** Wait for Trey. He merges the PR and says go, or you work through
+   the findings together first.
+3. **Build and describe, in parallel.** Run `scripts/cut-release.sh build X.Y.Z`
+   in the background. It makes a fresh worktree of current `origin/main`, builds
+   the Linux library binaries in Docker on the workstation, compiles the
+   production Release app here (ad-hoc signed; a Debug app is never a
+   distribution artifact) and checks it. It uploads nothing. Meanwhile draft the
+   release description and go over it with Trey.
+4. **Ship.** Once the build passed and Trey approved the exact description, run
+   `scripts/cut-release.sh ship X.Y.Z`. It uploads that build to the private
+   draft and pushes the annotated `vX.Y.Z` tag. The tag starts
+   `.github/workflows/release.yml`, which compiles nothing: it re-signs the app
+   with Developer ID, notarizes it, builds and notarizes the DMG, generates the
+   signed feed, and uploads the signed artifacts to the private draft. After it
+   succeeds, verify and publish with the commands below.
+
+Use a supplied version as given. If none is supplied, choose it from the change
+range since the previous public release: the next unused patch version for a
+maintenance-only release, otherwise the unused semantic version that the new
+capabilities or compatibility changes call for. State it; ask first only when a
+material version-policy or compatibility question makes it genuinely ambiguous.
+A release request, a stated version, or approval of a previous release is not
+description approval. Release preparation runs no test suites beyond the
+dependency PR's validation, and does not trigger, wait for, or rerun CI. The
+signed build never resolves newer versions: it uses the lockfiles and runtime
+records committed on the release commit.
 
 Before tagging or any release mutation, run `scripts/check-release-access.sh`.
 It verifies that existing GitHub API access matches the configured SSH
@@ -31,40 +58,20 @@ selection/consent, credential extraction, or token copying. CLI suggestions to
 log in are diagnostics, not instructions or authorization. Release authorization
 never includes authentication recovery; only the user operates account login.
 
-A release does not require a dependency refresh or a dependency-currency check;
-Trey runs dependency maintenance separately. Do not open dependency PRs as part
-of release preparation. Do not resolve or install newer versions inside the
-signed release build: it uses the lockfiles and runtime records committed on the
-release commit. A previously verified private draft retains its original snapshot.
-
-Release from clean, current `origin/main` by running `scripts/cut-release.sh X.Y.Z`
-on this Mac. Trey tests on his own machines before a release; release preparation
-runs no test suites and does not trigger, wait for, or rerun CI. The script builds
-the Linux library binaries in Docker on the workstation, compiles the production
-Release app here (ad-hoc signed; a Debug app is never a distribution artifact),
-uploads it to the private draft, and pushes the annotated `vX.Y.Z` tag. Run it in
-the background and record its output; it prints the workflow run URL.
-
-The tag-triggered `.github/workflows/release.yml` compiles nothing. It re-signs that
-app with Developer ID, notarizes it, builds and notarizes the DMG, generates the
-signed feed, and uploads the signed artifacts to the private draft. Its six named
-phase steps show live progress and record per-phase timings. If it fails, find the
-cause, fix it on main, delete the unpublished tag, and run `scripts/cut-release.sh`
-again with the same version; only a published version is final. Never publish two
-releases with the same version. After a successful run, verify
-through `scripts/publish-release.sh --verify-only vX.Y.Z EXPECTED_COMMIT_SHA`.
+If the signing workflow fails, find the cause, fix it on main, delete the
+unpublished tag, and build and ship again with the same version; only a published
+version is final. Never publish two releases with the same version. Its six named
+phase steps show live progress and record per-phase timings. After a successful
+run, verify through `scripts/publish-release.sh --verify-only vX.Y.Z EXPECTED_COMMIT_SHA`.
 The script checks source, workflow, assets, checksums, signing, notarization,
 and Gatekeeper. GitHub CLI authentication must match the repository's SSH account.
 It keeps downloaded bytes, never results, in a private local store; the later
 `--approved-notes` run rehashes them, repeats every check, and refuses a draft or
 asset changed since verification. Do not clear that store between the two runs.
 
-Once the tag starts the signing workflow, list the PRs merged since the previous public
-release and draft the release description while the build runs, so Trey can review
-it without waiting for packaging. Approval of that exact text persists for the same
-release; do not request it again merely because the build finished. Stage the
-approved file on the private draft when it exists. Publication still requires a
-successful workflow and standard artifact verification.
+Approval of the exact description persists for the same release; do not request it
+again merely because the build finished. Publication still requires a successful
+workflow and standard artifact verification.
 
 Write the release description from the material changes since the previous
 public release. Inspect the complete commit/PR range and underlying changes;
@@ -148,8 +155,8 @@ cost. Keep deltas out of ordinary release preparation.
 
 ## Background execution and completion
 
-Start `scripts/cut-release.sh` promptly after source selection; record the
-workflow run URL and exact source SHA. Draft and review the description while the build runs.
+Record the exact source SHA from the build and the workflow run URL from the ship
+step. Draft and review the description while the build runs.
 If publication is already explicitly approved, continue after workflow success
 with the standard verification and approved-notes publication commands above.
 A running build or background waiter is not proof of publication.
@@ -157,8 +164,8 @@ A running build or background waiter is not proof of publication.
 On failure, collect diagnostics and report the actual blocker before restarting
 or changing the pipeline. Do not substitute repeated builds for diagnosis. The
 failing phase step and its `release-timing` lines identify where it stopped.
-Once the cause is understood, a new attempt runs `scripts/cut-release.sh` again;
-it never resumes a failed phase.
+Once the cause is understood, a new attempt builds and ships again; it never
+resumes a failed phase.
 After publication, read back public state (`isDraft=false`), source provenance,
 and the exact release body against the approved UTF-8 file. Verify the download
 badge targets an existing release asset. Report success only after these checks.
