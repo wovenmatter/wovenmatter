@@ -98,7 +98,12 @@ export class FakeEngine {
   }
 
   async close(): Promise<void> {
-    for (const container of this.containers.values()) container.supervisor?.kill("SIGKILL");
+    // The whole tree, as a crash does: a browser or service a supervisor started would
+    // otherwise keep writing into the test's folder while it is removed.
+    for (const [name, container] of this.containers) {
+      if (container.running) await this.crash(name);
+      else container.supervisor?.kill("SIGKILL");
+    }
     await new Promise<void>((resolve) => (this.#server ? this.#server.close(() => resolve()) : resolve()));
     if (this.socketDir !== this.root) rmSync(this.socketDir, { recursive: true, force: true });
   }
