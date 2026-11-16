@@ -26,7 +26,7 @@ def scopes(paths):
                                           r'scripts/build-ios-embedded-runtime\.mjs$)'),
         # ios/Config/ holds the TestFlight Info.plist, privacy manifest and export options.
         scripts=infrastructure or changed(r'^(scripts/|remote/|app/Updater/|ios/Config/|'
-                                         r'\.github/workflows/|\.github/release-refresh\.json$)'),
+                                         r'\.github/workflows/)'),
         bots=infrastructure or changed(r'^bots/'),
     )
 

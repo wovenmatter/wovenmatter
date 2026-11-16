@@ -24,6 +24,7 @@ elif name == 'xcrun' and args[:2] == ['notarytool', 'submit']:
 elif name == 'ditto':
     target = pathlib.Path(args[-1])
     if args[0] == '-c': target.write_bytes(b'zip')
+    elif args[0] == '-x': (target / 'Woven Matter.app').mkdir(parents=True)
     else: target.mkdir(parents=True)
 elif name in ('create-release-dmg.sh',): pathlib.Path(args[1]).write_bytes(b'dmg')
 '''
@@ -40,7 +41,7 @@ with tempfile.TemporaryDirectory() as directory:
         (stubs / name).chmod(0o755)
     for name in ('sign-release-updater.sh', 'validate-native-app.sh', 'create-release-dmg.sh',
                  'generate-release-manifest.sh', 'generate-update-feed.sh',
-                 'validate-release-metadata.py', 'validate-release-code.py'):
+                 'validate-release-metadata.py', 'validate-release-code.py', 'resign-release-app.py'):
         (repo / 'scripts' / name).write_text(TOOL)
         (repo / 'scripts' / name).chmod(0o755)
     git = ['git', '-C', str(repo), '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid']
@@ -139,7 +140,24 @@ with tempfile.TemporaryDirectory() as directory:
     for invalid in ('everything', 'compile seal', 'Compile', '', ' compile', ['compile', 'seal'], ['all', 'extra']):
         recorded, _ = phase(invalid, 64)
         assert not ran(recorded, 'xcodebuild'), invalid
+    # A Mac without the Developer ID key compiles ad hoc, without the team ID;
+    # nothing else may run ad hoc.
+    recorded, _ = phase('compile', WOVENMATTER_SIGNING_IDENTITY='-', WOVENMATTER_TEAM_ID='')
+    assert not ran(recorded, 'security')
+    assert any('CODE_SIGN_IDENTITY=-' in a for n, a in recorded if n == 'xcodebuild')
+    recorded, _ = phase('seal', 64, WOVENMATTER_SIGNING_IDENTITY='-')
+    assert not ran(recorded, 'codesign') and not ran(recorded, 'resign-release-app.py')
+
+    # The release workflow imports that app, re-signs it with Developer ID and continues.
+    recorded, _ = phase('import', 1)
+    assert not ran(recorded, 'ditto')
+    recorded, _ = phase('import', WOVENMATTER_RELEASE_INPUT=str(temp / 'input.zip'))
+    assert ran(recorded, 'ditto', '-x', '-k') and ran(recorded, 'validate-release-metadata.py', 'verify')
+    recorded, _ = phase('seal')
+    assert ran(recorded, 'resign-release-app.py') and ran(recorded, 'sign-release-updater.sh')
+    phase('notarize-app')
+
     phase('all')
     assert [r['phase'] for r in timings()] == PHASES
-print('Release phases: ordered steps, per-phase timings, no repeated or out-of-order phases, notarization '
+print('Release phases: ad-hoc compile and imported app, ordered steps, per-phase timings, no repeated or out-of-order phases, notarization '
       'rejection invalidates work, cached-compile retry, source/tag/clean binding passed.')

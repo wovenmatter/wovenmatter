@@ -322,7 +322,7 @@ These checks catch missing APIs, but cannot guarantee that every future upstream
 behavior remains compatible; integration fixes and release validation remain
 part of maintenance.
 
-Every app release carries the refreshed SDK snapshot. When the bundled source
+Every app release carries the SDK snapshot committed on its release commit. When the bundled source
 or dependency graph changes, its fingerprint supersedes SDK generations from
 the previous app, so new launches use the release's bundled SDKs without
 requiring a separate Settings update.
@@ -434,38 +434,33 @@ updates affected integration code before acceptance.
 
 Read-only CI and analytics helpers follow their upstream default branch
 (`@main`). Workflows holding write tokens or signing material pin the exact
-current release commit, with a comment naming the reason: `release.yml`,
-`refresh-release.yml`, and `pr-author.yml`. The maintenance agent reviews those
+current release commit, with a comment naming the reason: `release.yml` and
+`pr-author.yml`. The maintenance agent reviews those
 SHAs against current released versions. There is no blanket SHA requirement.
-Linux jobs use `ubuntu-latest`. Desktop builds (release, release caches,
-desktop validation) use the `xcode-27` image with `DEVELOPER_DIR` set to
+Linux jobs use `ubuntu-latest`. Desktop jobs (release signing, desktop
+validation) use the `xcode-27` image with `DEVELOPER_DIR` set to
 Xcode 27.2, the toolchain the app is developed with; `macos-26` stops at Xcode
 26.6, which crashes compiling the app. The `xcode-27` image is a GitHub preview:
 move to its GA label, and to newer Xcode releases, during maintenance. iOS
 validation stays on `macos-26`.
 
-## Before every new release
+## Releases
 
-Refresh dependencies in development before selecting the release commit, even
-when separately scheduled maintenance normally keeps them current. Compare
-upstream stable releases with the declared packages and Node/native runtime
-records; update stale selections, lockfiles, checksums, notices, and generated
-resources together. Validate the changes in development CI and merge them before
-tagging. Document any concrete upstream blocker instead of silently retaining
-an older selection.
+Dependency maintenance runs separately from releases. Cutting a release does not
+require a dependency refresh or a currency check; it ships whatever selections
+are committed on the release commit.
 
-The lockfile is the exact snapshot selected for that release. For example,
+The lockfile is the exact snapshot that release ships. For example,
 `>=1.3.0` permits 2.0.0; after maintenance selects and validates 2.0.0, the updated
 lockfile makes both CI and the release build install 2.0.0. `npm ci` does not
 contact the registry to select newer versions during packaging. This keeps the
-shipped graph identical to the tested graph. Reusing an old lockfile without
-refreshing it before releases would fail the currency policy.
+shipped graph identical to the tested graph.
 
 ## Delivery
 
 Merging source changes updates nothing that is already installed. Node, CEF,
 Sparkle, Cua Driver, and the bundled SDK snapshot reach installed Mac apps only
-in a signed app or refresh build (`.github/release-refresh.json`). iOS bundled
+in a signed app release. iOS bundled
 JavaScript, Python, and their provenance require an App Store build. Remote
 workspaces and Executor pick up a new image definition when the user explicitly
 updates or reinstalls them. Release, publication, and deployment keep their

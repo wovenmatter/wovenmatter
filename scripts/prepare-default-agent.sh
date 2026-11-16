@@ -87,6 +87,6 @@ rsync -a --delete "${private_npm%/bin/npm}/lib/node_modules/npm/" "$output/lib/n
 cp "$npm_provenance" "$output/lib/npm/woven-provenance.json"
 if [ "${CODE_SIGNING_ALLOWED:-NO}" = YES ] && [ -n "${EXPANDED_CODE_SIGN_IDENTITY:-}" ]; then
   timestamp=--timestamp=none
-  if [ "${CONFIGURATION:-Debug}" = Release ]; then timestamp=--timestamp; fi
+  if [ "${CONFIGURATION:-Debug}" = Release ] && [ "$EXPANDED_CODE_SIGN_IDENTITY" != - ]; then timestamp=--timestamp; fi
   codesign --force --sign "$EXPANDED_CODE_SIGN_IDENTITY" --options runtime "$timestamp" --entitlements "$repo_root/default-agent/node-entitlements.plist" "$output/bin/node"
 fi
