@@ -73,10 +73,30 @@ struct RootView: View {
                     .controlSize(.small)
                     .tint(WovenPalette.primaryForeground)
             }
-            Text("Opening workspace…")
+            Text(model.startupProgress?.title ?? "Opening workspace…")
                 .font(.system(size: 15, weight: .medium))
                 .foregroundStyle(WovenPalette.foreground)
                 .padding(.top, 16)
+            if let progress = model.startupProgress {
+                Text(progress.detail)
+                    .font(.system(size: 12.5))
+                    .foregroundStyle(WovenPalette.mutedForeground)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: 440)
+                    .padding(.top, 4)
+                if let fraction = progress.fraction {
+                    ProgressView(value: fraction)
+                        .progressViewStyle(.linear)
+                        .tint(WovenPalette.primaryFill)
+                        .frame(width: 280)
+                        .animation(.linear(duration: 0.25), value: fraction)
+                        .padding(.top, 16)
+                    Text(fraction.formatted(.percent.precision(.fractionLength(0))))
+                        .font(.system(size: 11.5).monospacedDigit())
+                        .foregroundStyle(WovenPalette.mutedForeground)
+                        .padding(.top, 6)
+                }
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(theme.palette.workspace)
