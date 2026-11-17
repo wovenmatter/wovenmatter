@@ -340,6 +340,39 @@ import WovenMatterCore
     #expect(try scalar(fixture.databaseURL, "SELECT count(*) FROM sqlite_master") == objects)
   }
 
+  /// Opening a library that needs a rewriting upgrade publishes how far it
+  /// is (the background service reports it while a window waits), stage by
+  /// stage and only ever forward, and clears it once the library is open.
+  /// A current library publishes nothing.
+  @Test func anUpgradePublishesItsProgressUntilTheLibraryIsOpen() async throws {
+    let upgraded = try v042Library(), fresh = try PersistenceFixture(); defer { upgraded.remove(); fresh.remove() }
+    final class Seen: @unchecked Sendable {
+      let lock = NSLock(); var values: [LibraryUpgradeProgress?] = []
+      func add(_ value: LibraryUpgradeProgress?) { lock.withLock { values.append(value) } }
+      var all: [LibraryUpgradeProgress?] { lock.withLock { values } }
+    }
+    let seen = Seen(), freshSeen = Seen()
+    LibraryUpgradeMonitor.observe(upgraded.databaseURL) { seen.add($0) }
+    LibraryUpgradeMonitor.observe(fresh.databaseURL) { freshSeen.add($0) }
+    defer { LibraryUpgradeMonitor.observe(upgraded.databaseURL, nil); LibraryUpgradeMonitor.observe(fresh.databaseURL, nil) }
+    do { _ = try await WorkspaceDatabase(url: upgraded.databaseURL); _ = try await WorkspaceDatabase(url: fresh.databaseURL) }
+
+    let values = seen.all
+    #expect(values.last == .some(nil))
+    let reported = values.compactMap { $0 }
+    var stages: [LibraryUpgradeProgress.Stage] = []
+    for value in reported where stages.last != value.stage { stages.append(value.stage) }
+    #expect(stages == [.backingUp, .converting, .compacting])
+    #expect(zip(reported, reported.dropFirst()).allSatisfy { $0.fraction <= $1.fraction })
+    #expect(reported.allSatisfy { (0...1).contains($0.fraction) && $0.libraryBytes > 0 })
+    #expect(LibraryUpgradeMonitor.progress(for: upgraded.databaseURL) == nil)
+
+    // Neither a new library nor the converted one when it opens again.
+    do { _ = try await WorkspaceDatabase(url: upgraded.databaseURL) }
+    #expect(freshSeen.all.isEmpty)
+    #expect(seen.all.count == values.count)
+  }
+
   /// A step that rewrites data copies the library first, and the copy is
   /// removed once it is old enough. New and converted libraries both give
   /// freed pages back without a VACUUM.

@@ -438,18 +438,34 @@ enum WovenMatterBackendProcess {
                       userInfo: [NSLocalizedDescriptionKey: "The background service is still stopping. Try again shortly."])
     }
 
+    /// What one readiness check found.
+    enum Readiness: Equatable {
+        case ready
+        /// Not ready, and reporting long startup work such as a library
+        /// upgrade (`BackendStartupProgress`).
+        case working
+        case notReady
+    }
+
     /// Startup and recovery share one bounded readiness barrier. An owner that
     /// is still starting keeps its lease; waiting for that lease to disappear
-    /// would turn a slow start into a failed recovery.
+    /// would turn a slow start into a failed recovery. An owner that reports
+    /// long startup work is waited for as long as it reports it: the timeout
+    /// counts only time without such a report, so a library upgrade that
+    /// takes minutes is not a failure while a silent owner still is.
     static func ensureReady(timeout: TimeInterval = 60,
-                            check: () async throws -> Bool,
+                            check: () async throws -> Readiness,
                             ownerIsPresent: () throws -> Bool,
                             launch: () async throws -> Void) async throws {
-        let deadline = ContinuousClock.now.advanced(by: .seconds(timeout))
+        var deadline = ContinuousClock.now.advanced(by: .seconds(timeout))
         var launched = false
         repeat {
             try Task.checkCancellation()
-            if try await check() { return }
+            switch try await check() {
+            case .ready: return
+            case .working: deadline = ContinuousClock.now.advanced(by: .seconds(timeout))
+            case .notReady: break
+            }
             if !launched, try !ownerIsPresent() {
                 try await launch()
                 launched = true

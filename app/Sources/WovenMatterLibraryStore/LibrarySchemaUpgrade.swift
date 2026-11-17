@@ -110,8 +110,11 @@ extension WorkspaceDatabaseConnection {
     guard !pending.isEmpty, try historyRowsUnlocked("""
       SELECT 1 AS present FROM sqlite_master WHERE type='table' AND name IN ('conversations','dashboard_conversations') LIMIT 1
       """, values: []).isEmpty == false else { return false }
+    upgradeReporter = LibraryUpgradeReporter(file: file)
     if pending.contains(where: \.rewritesData) { backUpLibraryUnlocked(file, version: version) }
+    upgradeReporter?.reach(.converting, 0, next: 0.02)
     for step in pending { try step.apply(self) }
+    upgradeReporter?.reach(.converting, 0.30, next: 0.35, after: "schema steps")
     return true
   }
 
@@ -179,6 +182,15 @@ extension WorkspaceDatabaseConnection {
             now.timeIntervalSince(written) > libraryBackupRetention else { continue }
       try? FileManager.default.removeItem(at: copy)
     }
+  }
+
+  /// The bytes the library's pages hold, without its free pages: about
+  /// what a VACUUM writes.
+  func usedBytesUnlocked() throws -> Int64 {
+    func number(_ pragma: String) throws -> Int64 {
+      Int64(try historyRowsUnlocked("PRAGMA \(pragma)", values: []).first?.objectValue?[pragma]?.intValue ?? 0)
+    }
+    return try (number("page_count") - number("freelist_count")) * number("page_size")
   }
 
   /// Returns the pages deletions freed to the file system once they are
@@ -434,6 +446,7 @@ extension WorkspaceDatabaseConnection {
       // first: one entry per version that still matters, not every version
       // ever recorded.
       try compactPeerBookkeepingUnlocked(tables: &tables)
+      upgradeReporter?.reach(.converting, 0.02, next: 0.12, after: "peer bookkeeping")
       let bookkeeping = tables.intersection(Self.peerNamedBookkeeping)
       for index in Self.droppedLibraryIndexes { try executeUnlocked("DROP INDEX IF EXISTS \(Self.peerQuote(index))") }
 
@@ -502,6 +515,7 @@ extension WorkspaceDatabaseConnection {
       }
 
       try settleLegacyRowsUnlocked(tables: tables, columns: columns, operatorID: operatorID, bookkeeping: bookkeeping)
+      upgradeReporter?.reach(.converting, 0.12, next: 0.13, after: "legacy rows")
       // Markers of the one-time peer-sync upgrades v0.4.2 libraries already ran.
       if tables.contains("peer_sync_state") {
         try executeUnlocked("""
@@ -525,7 +539,9 @@ extension WorkspaceDatabaseConnection {
         }
       }
       try addTranscriptColumnsUnlocked(tables: tables, columns: columns, bookkeeping: bookkeeping)
+      upgradeReporter?.reach(.converting, 0.13, next: 0.14, after: "transcripts")
       try moveChunkBytesToFilesUnlocked(tables: tables, columns: columns, bookkeeping: bookkeeping)
+      upgradeReporter?.reach(.converting, 0.14, next: 0.20, after: "chunk files")
       // When a calendar item's task next fires, and the session it reuses,
       // become the state of the device that runs it (`calendar_schedules`).
       if tables.contains("calendar_items"), try columns("calendar_items").contains("next_fire_at") {
@@ -546,7 +562,9 @@ extension WorkspaceDatabaseConnection {
         }
       }
       try storeJSONAsTextUnlocked(tables: tables, bookkeeping: bookkeeping)
+      upgradeReporter?.reach(.converting, 0.20, next: 0.21, after: "JSON as text")
       try repairOldRowsUnlocked(tables: tables, bookkeeping: bookkeeping)
+      upgradeReporter?.reach(.converting, 0.21, next: 0.22, after: "old rows")
       // Libraries from before v0.4.0 added `library_id` as a nullable column.
       if tables.contains("library_identity"), try historyRowsUnlocked(
         "SELECT 1 AS present FROM pragma_table_info('library_identity') WHERE name='library_id' AND \"notnull\"=0", values: []).isEmpty == false {
@@ -575,8 +593,10 @@ extension WorkspaceDatabaseConnection {
       // Runs take a local order that is never renumbered (`runs.ordinal`);
       // each keeps its rowid as it, so the fences goals hold stay right.
       if tables.contains("runs"), !(try columns("runs")).contains("ordinal") { try rebuildCoreTableUnlocked("runs") }
+      upgradeReporter?.reach(.converting, 0.22, next: 0.23, after: "table rebuilds")
       // Last, once every recorded row has its final columns.
       try reducePeerTombstonesUnlocked(bookkeeping: bookkeeping)
+      upgradeReporter?.reach(.converting, 0.23, next: 0.30, after: "tombstones")
       try executeUnlocked("PRAGMA user_version=1")
     }
     try executeUnlocked("PRAGMA foreign_keys=ON")

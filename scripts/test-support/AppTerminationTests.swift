@@ -299,13 +299,13 @@ private struct AppTerminationTests {
         // on for lease release. This used to fail recovery after 10 seconds.
         try await WovenMatterBackendProcess.ensureReady(check: {
             checks += 1
-            return checks == 3
+            return checks == 3 ? .ready : .notReady
         }, ownerIsPresent: { true }, launch: { launches += 1 })
         precondition(checks == 3 && launches == 0)
         checks = 0
         try await WovenMatterBackendProcess.ensureReady(check: {
             checks += 1
-            return checks == 3
+            return checks == 3 ? .ready : .notReady
         }, ownerIsPresent: { false }, launch: { launches += 1 })
         precondition(checks == 3 && launches == 1)
         checks = 0
@@ -313,12 +313,12 @@ private struct AppTerminationTests {
         // An owner that exits while starting permits exactly one launch.
         try await WovenMatterBackendProcess.ensureReady(check: {
             checks += 1
-            return checks == 4
+            return checks == 4 ? .ready : .notReady
         }, ownerIsPresent: { checks < 2 }, launch: { launches += 1 })
         precondition(launches == 1)
         do {
             try await WovenMatterBackendProcess.ensureReady(timeout: 0.05,
-                check: { false }, ownerIsPresent: { true }, launch: { preconditionFailure("Replaced live owner") })
+                check: { .notReady }, ownerIsPresent: { true }, launch: { preconditionFailure("Replaced live owner") })
             preconditionFailure("Readiness wait did not time out")
         } catch { precondition((error as NSError).domain == "BackgroundExecution") }
         do {

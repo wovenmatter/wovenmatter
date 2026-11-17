@@ -78,6 +78,9 @@ final class ApplicationModel {
     }
 
     private(set) var state: State = .starting
+    /// Long work the background service reports while this window waits for
+    /// it to start, such as the one-time library upgrade after an update.
+    private(set) var startupProgress: BackendStartupProgress?
     private(set) var localCLIAgents: [WorkspaceAgent] = []
     private(set) var remoteWorkspaceAgents: [WorkspaceAgent] = []
     let executorRuntime = ExecutorRuntime()
@@ -4208,6 +4211,18 @@ extension ApplicationModel {
         return nil
     }
 
+    /// The library upgrade this service's open is running, while it starts.
+    var backendStartupProgress: BackendStartupProgress? {
+        guard state == .starting, let support = try? Self.librarySupportDirectory(),
+              let upgrade = LibraryUpgradeMonitor.progress(for: support.appending(path: "workspace.sqlite")) else { return nil }
+        return BackendStartupProgress(libraryUpgrade: upgrade)
+    }
+
+    /// Shows what the background service reports while this window waits.
+    func showStartupProgress(_ progress: BackendStartupProgress?) {
+        if startupProgress != progress { startupProgress = progress }
+    }
+
     var readyForBackendClients: Bool {
         !backendStopping && state == .ready
     }
@@ -4475,14 +4490,18 @@ extension ApplicationModel {
                 return try await self.callBackend(method: method, payload: payload)
             }
             var ready = false
-            let readyDeadline = Date().addingTimeInterval(60)
+            // As in `ensureReady`: reported startup work keeps the window waiting.
+            var readyDeadline = Date().addingTimeInterval(60)
             var startupMessage: String?
+            defer { showStartupProgress(nil) }
             while Date() < readyDeadline {
                 try Task.checkCancellation()
                 if let data = try? await client.call(method: "application.readiness", timeout: 0.5),
                    let status = try? JSONDecoder().decode(BackendApplicationReadiness.self, from: data) {
                     if let error = status.startupError { throw BackendRPCError.remote(error) }
                     startupMessage = status.startupMessage
+                    showStartupProgress(status.ready ? nil : status.startupProgress)
+                    if !status.ready, status.startupProgress != nil { readyDeadline = Date().addingTimeInterval(60) }
                     if status.ready {
                         guard status.protocolVersion == 1, status.capabilities.contains("session.dispatch-epochs") else { throw AgentDispatchAdmissionError.invalid }
                         guard status.capabilities.contains(BackendApplicationReadiness.windowStreamCapability) else {
@@ -4678,19 +4697,22 @@ extension ApplicationModel {
             if self.backendStopRequestedForLifecycle {
                 try await WovenMatterBackendProcess.waitForExecutionOwnerToExit(leaseURL: lease)
             }
+            defer { self.showStartupProgress(nil) }
             try await WovenMatterBackendProcess.ensureReady(check: {
                 let data: Data
                 do { data = try await client.call(method: "application.readiness", timeout: 0.5) }
-                catch BackendRPCError.unavailable { return false }
-                catch BackendRPCError.timedOut { return false }
+                catch BackendRPCError.unavailable { return .notReady }
+                catch BackendRPCError.timedOut { return .notReady }
                 let status = try JSONDecoder().decode(BackendApplicationReadiness.self, from: data)
+                self.showStartupProgress(status.ready ? nil : status.startupProgress)
                 if let error = status.startupError { throw BackendRPCError.remote(error) }
                 guard status.protocolVersion == 1, status.completeClientRouting,
                       status.capabilities.contains("session.dispatch-epochs"),
                       status.capabilities.contains(BackendApplicationReadiness.windowStreamCapability) else {
                     throw BackendRPCError.remote("The background service is incompatible with this app. Restart Woven Matter after finishing current work.")
                 }
-                return status.ready
+                if status.ready { return .ready }
+                return status.startupProgress == nil ? .notReady : .working
             }, ownerIsPresent: {
                 try WovenMatterBackendProcess.executionOwnerIsPresent(leaseURL: lease)
             }, launch: {
