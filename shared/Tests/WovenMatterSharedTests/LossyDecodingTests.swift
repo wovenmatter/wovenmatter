@@ -130,6 +130,18 @@ struct LossyDecodingTests {
     #expect(try object(page).keys.sorted() == ["cursor", "entries", "hasMore", "libraryID"])
   }
 
+  @Test("a usage sample without an account decodes, and an older build still finds the key")
+  func usageSampleAccountIsAPlaceholder() throws {
+    let sample = try decode(LibraryUsageSample.self, #"""
+      {"id":"u","timestamp":0,"provider":"Codex","model":"m","sessionID":"s","inputTokens":1,"outputTokens":2,
+       "cacheTokens":0,"totalTokens":3,"requests":1}
+      """#)
+    #expect(sample.totalTokens == 3)
+    let sent = LibraryUsageSample(id: "u", timestamp: Date(timeIntervalSince1970: 0), provider: "Codex", model: "m",
+      workspace: nil, sessionID: "s", inputTokens: 1, outputTokens: 2, cacheTokens: 0, totalTokens: 3, requests: 1, costUSD: nil)
+    #expect(try object(sent)["account"] as? String == "")
+  }
+
   @Test("what a device must not lose is still refused whole")
   func writesStayStrict() throws {
     // A sender keeps a batch the host cannot read and retries after the host updates.

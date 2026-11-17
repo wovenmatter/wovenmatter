@@ -318,7 +318,6 @@ public struct UsageSample: Codable, Equatable, Identifiable, Sendable {
   public let provider: ProviderKind
   public let timestamp: Date
   public let sessionID: String
-  public let accountLabel: String
   public let model: String
   public let canonicalModel: String
   public let modelFamily: String
@@ -357,7 +356,6 @@ public struct UsageSample: Codable, Equatable, Identifiable, Sendable {
     provider: ProviderKind,
     timestamp: Date,
     sessionID: String,
-    accountLabel: String,
     model: String,
     billingProvider: String? = nil,
     billingRoute: String? = nil,
@@ -380,7 +378,6 @@ public struct UsageSample: Codable, Equatable, Identifiable, Sendable {
     self.provider = provider
     self.timestamp = timestamp
     self.sessionID = sessionID
-    self.accountLabel = accountLabel
     self.model = model
     canonicalModel = identity.canonicalName
     modelFamily = identity.family
@@ -389,7 +386,7 @@ public struct UsageSample: Codable, Equatable, Identifiable, Sendable {
     self.billingProvider = billingProvider?.trimmingCharacters(in: .whitespacesAndNewlines)
       .nilIfEmpty ?? provider.displayName
     self.billingRoute = billingRoute?.trimmingCharacters(in: .whitespacesAndNewlines)
-      .nilIfEmpty ?? accountLabel
+      .nilIfEmpty ?? "Unknown"
     self.reasoningLevel = reasoningLevel
     self.harness = harness
     self.application = application
@@ -506,7 +503,6 @@ extension UsageAnalyticsSnapshot {
       let model: String
       let billingProvider: String
       let billingRoute: String
-      let accountLabel: String
       let reasoningLevel: String?
       let harness: String
       let application: String
@@ -525,7 +521,6 @@ extension UsageAnalyticsSnapshot {
         model: sample.model,
         billingProvider: sample.billingProvider,
         billingRoute: sample.billingRoute,
-        accountLabel: sample.accountLabel,
         reasoningLevel: sample.reasoningLevel,
         harness: sample.harness,
         application: sample.application,
@@ -539,10 +534,12 @@ extension UsageAnalyticsSnapshot {
       guard let latest = group.max(by: { $0.timestamp < $1.timestamp }) else { return nil }
       let isDeviceReport = key.sourceID == UsageDeviceSource.sourceID(deviceID: latest.usageDeviceID)
       if group.count == 1, !stableIDs || isDeviceReport { return latest }
+      // "Unknown" stands where the account label was, so the hourly IDs devices
+      // have already reported stay the same and retained hours are not counted twice.
       let eventID = stableIDs
         ? [
           String(key.period.timeIntervalSince1970), key.sessionID, key.provider.rawValue, key.model,
-          key.billingProvider, key.billingRoute, key.accountLabel, key.reasoningLevel ?? "", key.harness,
+          key.billingProvider, key.billingRoute, "Unknown", key.reasoningLevel ?? "", key.harness,
           key.application, key.agent ?? "", key.workspace ?? "", key.hasCost ? "cost" : "",
         ].joined(separator: "\u{1F}")
         : latest.sourceEventID
@@ -552,7 +549,6 @@ extension UsageAnalyticsSnapshot {
         provider: latest.provider,
         timestamp: latest.timestamp,
         sessionID: latest.sessionID,
-        accountLabel: latest.accountLabel,
         model: latest.model,
         billingProvider: latest.billingProvider,
         billingRoute: latest.billingRoute,
@@ -621,7 +617,6 @@ public struct UsageModelRollup: Equatable, Identifiable, Sendable {
   public let sessions: Int
   public let canonicalModels: [String]
   public let billingRoutes: [UsageBreakdownRow]
-  public let accounts: [UsageBreakdownRow]
   public let harnesses: [UsageBreakdownRow]
 
   public var id: String { family }
@@ -644,7 +639,6 @@ public struct UsageModelRollup: Equatable, Identifiable, Sendable {
     sessions = Set(samples.map { "\($0.sourceID):\($0.sessionID)" }).count
     canonicalModels = Array(Set(samples.map(\.canonicalModel))).sorted()
     billingRoutes = Self.rows(samples, by: { $0.billingRoute })
-    accounts = Self.rows(samples, by: { $0.accountLabel })
     harnesses = Self.rows(samples, by: { $0.harness })
   }
 

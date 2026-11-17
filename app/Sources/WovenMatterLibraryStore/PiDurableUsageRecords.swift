@@ -59,7 +59,6 @@ enum PiDurableUsageRecords {
         provider: route.provider,
         timestamp: Date(timeIntervalSince1970: milliseconds / 1_000),
         sessionID: session.id,
-        accountLabel: "Unknown",
         model: model,
         billingProvider: route.billingProvider,
         billingRoute: route.billingRoute,
@@ -83,7 +82,7 @@ enum PiDurableUsageRecords {
     let identity = "\(sample.sessionID):\(milliseconds):\(sample.model):\(sample.tokens.totalTokens)"
     return UsageSample(
       id: "pi-durable:" + identity, provider: sample.provider, timestamp: sample.timestamp,
-      sessionID: sample.sessionID, accountLabel: sample.accountLabel, model: sample.model,
+      sessionID: sample.sessionID, model: sample.model,
       billingProvider: sample.billingProvider, billingRoute: sample.billingRoute,
       reasoningLevel: sample.reasoningLevel, harness: harness, application: "Woven Matter",
       workspace: sample.workspace, tokens: sample.tokens, costUSD: sample.costUSD,

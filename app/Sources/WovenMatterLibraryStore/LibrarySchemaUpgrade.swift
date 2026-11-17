@@ -81,6 +81,18 @@ extension WorkspaceDatabaseConnection {
     .init(version: 2, rewritesData: false) { connection in
       try connection.libraryStepUnlocked(2) { try connection.executeUnlocked(WorkspaceDatabaseConnection.gitHubIdentityTablesSQL) }
     },
+    // v0.4.4 to usage rows without an account label, which was never collected
+    // reliably. The usage index drops the column itself when it opens the file
+    // first (`UsageStore.migrate`); the step records the version, so an older
+    // build, which still writes the column, leaves the library alone. No copy:
+    // the column held only placeholders.
+    .init(version: 3, rewritesData: false) { connection in
+      try connection.libraryStepUnlocked(3) {
+        let present = try connection.historyRowsUnlocked(
+          "SELECT 1 AS present FROM pragma_table_info('usage_events') WHERE name='account_label'", values: [])
+        if !present.isEmpty { try connection.executeUnlocked("ALTER TABLE usage_events DROP COLUMN account_label") }
+      }
+    },
   ]
 
   /// `PRAGMA user_version` of the current schema: the last step. A library
@@ -104,7 +116,8 @@ extension WorkspaceDatabaseConnection {
   /// Runs each step an existing library at `version` still lacks. A file
   /// with no library yet (new, or holding only the usage index) has
   /// nothing to convert: the regular creation makes it current and stamps
-  /// it. Returns whether any step ran.
+  /// it. Returns whether a step that rewrites data ran: only that leaves
+  /// enough free space behind to be worth a VACUUM.
   func upgradeLibraryUnlocked(from version: Int, file: URL) throws -> Bool {
     let pending = Self.librarySchemaSteps.filter { $0.version > version }
     guard !pending.isEmpty, try historyRowsUnlocked("""
@@ -115,7 +128,7 @@ extension WorkspaceDatabaseConnection {
     upgradeReporter?.reach(.converting, 0, next: 0.02)
     for step in pending { try step.apply(self) }
     upgradeReporter?.reach(.converting, 0.30, next: 0.35, after: "schema steps")
-    return true
+    return pending.contains(where: \.rewritesData)
   }
 
   /// A step's transaction: foreign keys off while tables are rebuilt, the

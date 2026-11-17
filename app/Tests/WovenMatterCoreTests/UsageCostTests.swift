@@ -28,7 +28,6 @@ struct UsageCostTests {
       provider: provider,
       timestamp: Date(timeIntervalSince1970: 1_800_000_000),
       sessionID: provider.rawValue,
-      accountLabel: provider.displayName,
       model: "test-model",
       harness: "Test",
       application: "Test",

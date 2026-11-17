@@ -1011,9 +1011,6 @@ public actor LocalUsageService {
         provider: .openRouter,
         timestamp: first.timestamp,
         sessionID: first.sessionID,
-        accountLabel: Set(aggregates.map(\.accountLabel)).count == 1
-          ? first.accountLabel
-          : "Unknown",
         model: first.model,
         billingProvider: Set(aggregates.map(\.billingProvider)).count == 1
           ? first.billingProvider
