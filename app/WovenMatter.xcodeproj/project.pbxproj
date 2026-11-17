@@ -19,7 +19,6 @@
 		A926FFE23C14F8E1F831EEA8 /* ArtifactStateScript.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEB177F7569AE5E4A5D3E71F /* ArtifactStateScript.swift */; };
 		B1F674635460DD7CD908D3BE /* ApplicationModel+Boards.swift in Sources */ = {isa = PBXBuildFile; fileRef = 58AF79E0D198DB9D0CD834B4 /* ApplicationModel+Boards.swift */; };
 		0E1ADB1319A938265C1450DF /* ApplicationModel+PageTasks.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8AA0CBF9D84F8D0C44EA2C7C /* ApplicationModel+PageTasks.swift */; };
-		4E22CDDAA6EDB5EF58AD7284 /* BoardItemInspector.swift in Sources */ = {isa = PBXBuildFile; fileRef = 365A001AABC65B97F0703FEF /* BoardItemInspector.swift */; };
 		CA4A50000000000000000011 /* CanvasViewState.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA4A50000000000000000012 /* CanvasViewState.swift */; };
 		D20900000000000000000001 /* PairedMacSyncController.swift in Sources */ = {isa = PBXBuildFile; fileRef = D20900000000000000000002 /* PairedMacSyncController.swift */; };
 		58D2DD715AC36ACD6DF22BB2 /* LUCIDE_LICENSE.txt in Resources */ = {isa = PBXBuildFile; fileRef = 0AAFD6EAB1F3FB697B1A2D05 /* LUCIDE_LICENSE.txt */; };
@@ -222,7 +221,6 @@
 		EEB177F7569AE5E4A5D3E71F /* ArtifactStateScript.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ArtifactStateScript.swift"; sourceTree = "<group>"; };
 		58AF79E0D198DB9D0CD834B4 /* ApplicationModel+Boards.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ApplicationModel+Boards.swift"; sourceTree = "<group>"; };
 		8AA0CBF9D84F8D0C44EA2C7C /* ApplicationModel+PageTasks.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ApplicationModel+PageTasks.swift"; sourceTree = "<group>"; };
-		365A001AABC65B97F0703FEF /* BoardItemInspector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "BoardItemInspector.swift"; sourceTree = "<group>"; };
 		CA4A50000000000000000012 /* CanvasViewState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CanvasViewState.swift; sourceTree = "<group>"; };
 		D20900000000000000000002 /* PairedMacSyncController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairedMacSyncController.swift; sourceTree = "<group>"; };
 		0AAFD6EAB1F3FB697B1A2D05 /* LUCIDE_LICENSE.txt */ = {isa = PBXFileReference; lastKnownFileType = text; path = ../docs/assets/LUCIDE_LICENSE.txt; sourceTree = SOURCE_ROOT; };
@@ -564,7 +562,6 @@
 				52C822631EDF91C6FE39C754 /* DesktopNotePane.swift */,
 				45C178F10C928BB5DF700830 /* ConversationComposer.swift */,
 				B5CEADA1DA4AFBF4EFFC2CDC /* CloudConversation.swift */,
-				365A001AABC65B97F0703FEF /* BoardItemInspector.swift */,
 				CA4A50000000000000000012 /* CanvasViewState.swift */,
 				988F5895CCE74B6E9C970200 /* ConversationGoalControls.swift */,
 				890F3602A18AF2215FAC1D3E /* Sidebar.swift */,
@@ -892,7 +889,6 @@
 				2350EC32F0F50FD3DB4069F3 /* DesktopNotePane.swift in Sources */,
 				FE8DA980F8CFABCB8AAB3893 /* ConversationComposer.swift in Sources */,
 				E8E4FA74C6587F81C8999942 /* CloudConversation.swift in Sources */,
-				4E22CDDAA6EDB5EF58AD7284 /* BoardItemInspector.swift in Sources */,
 				CA4A50000000000000000011 /* CanvasViewState.swift in Sources */,
 				A9682778D5284ABE8DF0D342 /* ConversationGoalControls.swift in Sources */,
 				97B76EB8D620C6E620196AC8 /* Sidebar.swift in Sources */,

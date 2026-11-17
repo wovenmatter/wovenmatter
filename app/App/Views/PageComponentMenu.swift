@@ -52,7 +52,7 @@ struct PageComponentMenu: View {
     }
 }
 
-/// Details, task state, moving and removing one component.
+/// Review, task state, moving and removing one component.
 @MainActor struct PageComponentActions {
     @Binding var document: NoteDocument
     @Binding var viewState: CanvasViewState
@@ -64,12 +64,11 @@ struct PageComponentMenu: View {
         guard page.blocks.contains(where: { $0.id == componentID }) else { return [] }
         let id = componentID
         let item = page.boardItems?[id]
-        var result: [PageMenuEntry] = [.button("Component details") { viewState.selected = [id]; viewState.showsInspector = true }]
-        if let task = item?.task {
-            result.append(.button(task.status == .done ? "Reopen task" : "Complete task") {
-                apply(.init(action: .update, id: id, expectedRevision: page.boardItemRevision(for: id),
-                    patch: .init(status: task.status == .done ? .todo : .done)))
-            })
+        var result: [PageMenuEntry] = []
+        // An agent can ask the person to look at a component it added or changed.
+        if item?.review == .needed {
+            result.append(.button("Mark reviewed") { setReview(.approved) })
+            result.append(.button("Dismiss review") { setReview(.dismissed) })
         }
         let isSection = page.pageComponentKind(for: id) == .section
         if !isSection {
@@ -123,6 +122,13 @@ struct PageComponentMenu: View {
         let page = self.page
         apply(.init(action: .remove, id: componentID, expectedRevision: page.boardItemRevision(for: componentID),
             expectedSubtreeRevision: removal == .removeSubtree ? page.pageSubtreeRevision(for: componentID) : nil, removal: removal))
+    }
+    private func setReview(_ review: BoardReviewState) {
+        commitPage(document: $document, state: $viewState) { page in
+            guard var item = page.boardItems?[componentID] else { return }
+            item.review = review
+            page.boardItems?[componentID] = item
+        }
     }
     private func apply(_ edit: PageEdit) { commitPage(document: $document, state: $viewState) { try $0.applyPageEdit(edit) } }
 }

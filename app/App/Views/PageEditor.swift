@@ -19,7 +19,6 @@ struct PageEditor: View {
 
     private var projection: PageProjection { projectionCache.value(document) }
     private var page: NoteDocument { projection.document }
-    private var selectedID: String? { viewState.selected.first }
     private var inserter: PageComponentInserter {
         PageComponentInserter(model: model, document: $document, viewState: $viewState, folderID: folderID)
     }
@@ -33,7 +32,7 @@ struct PageEditor: View {
                     Menu {
                         ForEach(page.blocks.filter { page.boardItems?[$0.id]?.review == .needed }, id: \.id) { block in
                             Button(block.plainText.isEmpty ? "Review component" : String(block.plainText.prefix(80))) {
-                                viewState.selected = [block.id]; viewState.revealCardID = block.id; viewState.showsInspector = true
+                                viewState.selected = [block.id]; viewState.revealCardID = block.id
                             }
                         }
                     } label: { Label("\(attention) to review", systemImage: "tray") }
@@ -81,27 +80,6 @@ struct PageEditor: View {
                         if case .task = segment { return }
                         DispatchQueue.main.async { if viewState.revealCardID == id { viewState.revealCardID = nil } }
                     }
-                }
-                if viewState.showsInspector, let id = selectedID, page.blocks.contains(where: { $0.id == id }) {
-                    Divider()
-                    ScrollView {
-                        VStack(alignment: .leading, spacing: 12) {
-                            HStack {
-                                Text("Component details").font(.system(size: 13, weight: .semibold))
-                                Spacer()
-                                PageComponentMenu(document: $document, viewState: $viewState, componentID: id)
-                                Button { viewState.showsInspector = false } label: { Image(systemName: "xmark") }
-                                    .buttonStyle(WovenIconButtonStyle()).accessibilityLabel("Close component details")
-                            }
-                            BoardItemInspector(document: $document, viewState: $viewState, itemID: id,
-                                conversations: model.workspaceOverview?.conversations ?? [],
-                                onSend: { id, chat in try await model.sendBoardItem(boardID: noteID, itemID: id, to: chat) },
-                                onOpenSession: onOpenSession)
-                            // Each component's details start from its own values.
-                            .id(id)
-                        }.padding(16)
-                    }.frame(width: 270).scrollIndicators(.never)
-                        .simultaneousGesture(TapGesture().onEnded { onSectionFocus?() })
                 }
             }
         }

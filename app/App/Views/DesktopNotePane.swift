@@ -310,7 +310,7 @@ struct DesktopNotePane: View {
                             SpreadsheetEditor(document: sheetDocument)
                                 .accessibilityLabel("Sheet")
                         case .html where currentDocument.html.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty:
-                            AppBuildPrompt(model: model, note: note, onOpenSession: onOpenSession)
+                            AppBuildPrompt()
                         case .html:
                             PersistentArtifactView(document: document, linkedDataJSON: linkedDataJSON,
                                 savedState: (try? NoteDocument.editableDocument(from: note.content))?.artifactState ?? [:],

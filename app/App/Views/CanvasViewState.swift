@@ -11,7 +11,6 @@ struct PageCursor: Equatable {
 struct CanvasViewState {
     var selected = Set<String>()
     var error: String?
-    var showsInspector = false
     var revealCardID: String?
     /// Where the text cursor last was, for Add component. It applies only while
     /// the selection it was recorded with is still the selection.

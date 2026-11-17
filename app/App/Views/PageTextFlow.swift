@@ -79,7 +79,7 @@ struct PageTextFlow: View {
                     if let changed = updated.boardItems?[block.id] {
                         if var item = local.boardItems?[block.id] {
                             // Text editing only starts, ends or checks off a task. Details
-                            // belong to Component details, so restored text attributes
+                            // belong to task fields, so restored text attributes
                             // (such as from undo) cannot revert them.
                             if let task = changed.task {
                                 if item.task == nil { item.task = task } else { item.task?.status = task.status }

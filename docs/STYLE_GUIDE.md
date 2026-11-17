@@ -308,7 +308,8 @@ when an intentional design change is accepted.
   connected to live data as a **Live App**. Keep **App** as the single creation
   option; Live is a description of the data connection, not another type. These
   experiences run inside Woven. An empty App shows **Ask an agent to build this**
-  with a request field, the shared agent picker and Send.
+  and points to the open chat, which builds it like any other edit; it has no
+  message box of its own.
 - **Pages:** make the flowing document the primary experience. Reuse the native
   Notes editor for contiguous text, lists, formatting and tables. Use one outer
   scroll surface; text grows to fit rather than becoming a scroll box per
@@ -319,14 +320,15 @@ when an intentional design change is accepted.
   or App; typing is how text is added, so there is no Text entry. List only image
   sources available on the device. Grow tables directly: hover buttons at the
   right and bottom edges and right-click insert and delete.
-  Show a task as a quiet bordered row: checkbox, title, an **Add details** line,
-  assignee chips with each one's state (Not sent, Sending…, Sent, Working,
-  Stopping…, Stopped, Didn't send), **Assign**, and the status (To do, In progress,
-  Needs you, Done). Assigning never sends; a primary **Send** appears while someone
-  waits to be sent, so the person can check who will get the task. The assign
-  picker lists Me, then agents grouped by the place they run, then bots, with only
-  ready ones enabled. Show an agent's **Result** under the task and credit tasks
-  agents added. Agent dispatch uses the existing chat admission and permissions.
+  Show a task as one full-width line: a status circle, the title, the status
+  label, the **Assign** dropdown and the component's ⋯ menu. **Instructions**
+  appear beneath while the task is selected or once written. The status circle and
+  label are set by whoever has the task (In progress, Needs input, Done), never a
+  control, except a small status menu when it is assigned to the person; show what
+  the assignee wrote below the line. Assigning never sends; a primary **Send**
+  appears while someone waits to be sent. The Assign dropdown lists who has the
+  task with their actions, then Me, agents by workspace as the sidebar names them,
+  then bots. A Mac Page has no component details panel. Agent dispatch uses the existing chat admission and permissions.
   Mark embeds **Original**. Notes, Sheets and Apps edit the same library artifact
   wherever it is embedded. Use the original editor and database-link refresh path.
   App form inputs and custom state persist on that original, with a visible

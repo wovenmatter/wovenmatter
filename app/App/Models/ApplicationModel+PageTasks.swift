@@ -103,9 +103,9 @@ extension ApplicationModel {
             var lines = ["You are assigned a task on the Page “\(pageTitle.isEmpty ? "Untitled Page" : pageTitle)”.", "",
                          "Task: \(chatTitle)"]
             let details = details.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !details.isEmpty { lines += ["", details] }
+            if !details.isEmpty { lines += ["", "Instructions:", details] }
             lines += ["", "Page ID: \(pageID). Task component ID: \(componentID).",
-                      "Read the Page with woven_pages_read for context. While you work, set the task's status to doing. Write your result in the task's outcome, then set status done, or blocked if you need the person. If more work is needed, add follow-up tasks right after this one with woven_pages_add_component."]
+                      "Read the Page with woven_pages_read for context. When you start, set the task's status to doing. When you finish, write what you did in the task's outcome and set status done. If you need more input from the person, write what you need in the outcome and set status blocked. If more work is needed, add follow-up tasks right after this one with woven_pages_add_component."]
             return lines.joined(separator: "\n")
         }
     }
@@ -209,8 +209,8 @@ extension ApplicationModel {
 
     // MARK: Who a task can be assigned to
 
-    /// The person, this Mac's agents, other Macs' and Linux workspaces' agents,
-    /// then bots. An agent starts in the Page's folder when its workspace owns it.
+    /// The person, then agents by workspace as the sidebar lists them (Local
+    /// workspace, then remote workspaces), then bots. An agent starts in the Page's folder when its workspace owns it.
     func pageAssignTargets(pageFolderID: String?) async -> [PageAssignTarget] {
         let folders = workspaceOverview?.folders ?? []
         let pageFolder = pageFolderID.flatMap { id in folders.first { $0.id == id } }
@@ -224,11 +224,11 @@ extension ApplicationModel {
         var localOwner = own?.folderOwnerID
         if localOwner == nil { localOwner = try? await executionWorkspaceIdentity(workspaceID: nil) }
         if let own {
-            let place = own.name
+            let place = "Local workspace"
             for definition in orderedLocalACPRuntimeDefinitions {
                 let runtime = definition.runtimeKind
                 let ready = canStartCanonicalLocalSession(runtime)
-                targets.append(.init(id: "\(own.id):\(runtime.rawValue)", group: .place("\(place) (this Mac)"),
+                targets.append(.init(id: "\(own.id):\(runtime.rawValue)", group: .place(place),
                     assignee: BoardTaskAssignee(kind: .agent, name: definition.displayName, place: place, workspaceID: own.id,
                                                 runtime: runtime.rawValue, folderID: folder(for: localOwner)),
                     ready: ready, detail: ready ? nil : "Not set up", folderOwner: localOwner))
@@ -260,51 +260,5 @@ extension ApplicationModel {
             }
         }
         return targets
-    }
-
-    /// Starts a new chat with one agent or bot right away and sends it `text`.
-    /// Returns what the chat callback opens: a conversation ID, or a bot thread link.
-    func startAgentChat(_ assignee: BoardTaskAssignee, title: String, text: String) async throws -> String {
-        struct Failure: LocalizedError { let errorDescription: String? }
-        switch assignee.kind {
-        case .user:
-            throw Failure(errorDescription: "Choose an agent or a bot.")
-        case .bot:
-            guard let machine = assignee.machineID, let bot = assignee.botID,
-                  let client = bots.session(for: machine)?.connectedClient else {
-                throw Failure(errorDescription: "\(assignee.name) can't be reached right now.")
-            }
-            let thread = try await client.startThread(botID: bot, text: text, deliveryID: UUID().uuidString.lowercased())
-            return BotTarget(machineID: machine, botID: bot, conversationID: thread).pageTaskLink
-        case .agent:
-            guard let workspaceID = assignee.workspaceID, let runtime = assignee.runtime.flatMap(AgentRuntimeKind.init(rawValue:)) else {
-                throw Failure(errorDescription: "Choose an agent.")
-            }
-            let requested = UUID()
-            let own = try? await agentToolWorkspaces().own
-            let created: String?
-            if workspaceID == own?.id {
-                created = await createLocalACPSession(runtimeKind: runtime, requestedConversationID: requested,
-                                                      initialTitle: title, folderID: assignee.folderID)
-            } else if let uuid = UUID(uuidString: workspaceID), let target = remoteWorkspaces.readyChatTargets.first(where: {
-                $0.configuration.id == uuid && $0.harness.id == runtime }) {
-                created = await createRemoteACPSession(target: target, requestedConversationID: requested,
-                                                       initialTitle: title, folderID: assignee.folderID)
-            } else if let peer = remoteWorkspaceAgents.first(where: {
-                peerAgentWorkspaces[$0.id]?.id == workspaceID && $0.runtimeKind == runtime }) {
-                created = try await createPairedMacSession(agentID: peer.id, conversationID: requested, folderID: assignee.folderID)
-            } else {
-                throw Failure(errorDescription: "\(assignee.name) on \(assignee.place ?? "that workspace") isn't available.")
-            }
-            guard let created else { throw Failure(errorDescription: localRunError ?? "The chat could not be started.") }
-            await refreshWorkspace()
-            guard let conversation = workspaceOverview?.conversations.first(where: { $0.id == created }) else {
-                throw Failure(errorDescription: "The new chat is not available yet.")
-            }
-            guard await sendAgentMessage(conversation: conversation, input: AgentMessageInput(text: text)) else {
-                throw Failure(errorDescription: conversationError(for: created) ?? "The message could not be sent.")
-            }
-            return created
-        }
     }
 }

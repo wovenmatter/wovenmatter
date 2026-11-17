@@ -37,7 +37,7 @@ public extension BoardTaskStatus {
     switch self {
     case .todo: "To do"
     case .doing: "In progress"
-    case .blocked: "Needs you"
+    case .blocked: "Needs input"
     case .done: "Done"
     case .canceled: "Canceled"
     }

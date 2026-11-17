@@ -85,10 +85,10 @@ struct MobilePageComponentDetails: View {
               Text(status.mobileTitle).tag(status)
             }
           }.accessibilityIdentifier("page-details-state")
-          TextField("Details", text: Binding(get: { item.task?.details ?? "" }, set: { value in
-            update("Details") { $0.task?.details = value }
+          TextField("Task instructions", text: Binding(get: { item.task?.details ?? "" }, set: { value in
+            update("Instructions") { $0.task?.details = value }
           }), axis: .vertical).lineLimit(2...6)
-            .accessibilityLabel("Task details").accessibilityIdentifier("page-details-details")
+            .accessibilityLabel("Task instructions").accessibilityIdentifier("page-details-details")
           ForEach(task.assignees) { assignee in Text(assignee.mobileSummary).font(.callout) }
           caption("Assign agents and bots to this task on your Mac. They write their results back here.")
           TextField("Outcome, findings, or next steps", text: Binding(get: { item.task?.outcome ?? "" }, set: { value in

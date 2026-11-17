@@ -396,14 +396,6 @@ struct WorkspaceView: View {
         }
     }
 
-    /// Reads the stored record's kind, never the draft: typing in any note must
-    /// not invalidate the whole workspace or decode the document again.
-    private var presentsCanvas: Bool {
-        guard destination == .workspace, assets.tabs.isPresented,
-              let note = selectedNote else { return false }
-        return assets.kind(of: note) == .canvas
-    }
-
     private func desktopShell(layout: WorkspaceLayoutState) -> some View {
         let showLeftRailButton = sidebarStyle != .split
             ? !layout.showsLeftRail && singleSidebarSide == .left
@@ -412,9 +404,7 @@ struct WorkspaceView: View {
             ? !layout.showsRightRail && singleSidebarSide == .right
             : !layout.showsRightRail
 
-        let presentsCanvas = self.presentsCanvas
-
-        return HStack(spacing: presentsCanvas ? 0 : WovenMetrics.shellGap) {
+        return HStack(spacing: WovenMetrics.shellGap) {
             if layout.showsLeftRail {
                 railGroup(side: .left, collapsesAdaptivePages: layout.compact)
             }
@@ -431,17 +421,9 @@ struct WorkspaceView: View {
                 railGroup(side: .right, collapsesAdaptivePages: layout.compact)
             }
         }
-        // Only fill the tiny cutouts beneath rounded sidebar bottoms. Keep the
-        // shell and title-bar backgrounds unchanged everywhere else.
-        .background(alignment: .bottom) {
-            if presentsCanvas {
-                theme.palette.themeWhisper
-                    .frame(height: WovenMetrics.windowAlignedSurfaceMinimumRadius)
-                    .allowsHitTesting(false)
-            }
-        }
-        .padding(.horizontal, presentsCanvas ? 0 : WovenMetrics.shellInset)
-        .padding(.bottom, presentsCanvas ? 0 : WovenMetrics.shellInset)
+        // A Page is a document like any other artifact, inside the same shell.
+        .padding(.horizontal, WovenMetrics.shellInset)
+        .padding(.bottom, WovenMetrics.shellInset)
         .animation(reduceMotion ? nil : .snappy(duration: 0.3), value: layout)
     }
 

@@ -86,7 +86,7 @@ import WovenMatterCore
         #expect(saved().boardItems?["task"]?.task?.status == .todo)
     }
 
-    /// Typing in Component details changes only task metadata. The flow keeps
+    /// Typing in task fields changes only task metadata. The flow keeps
     /// its text and history, and its stored metadata follows the new details.
     @Test func detailsOnlyChangesRefreshTaskMetadataInPlace() {
         let original = NoteDocument(kind: .canvas, blocks: [.richText(.init(id: "task", text: "Pack"))],

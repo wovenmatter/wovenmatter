@@ -10,9 +10,9 @@ import WovenMatterCore
             assignee: BoardTaskAssignee(id: "a", kind: .agent, name: "Codex", workspaceID: "w", runtime: "codex"))
         #expect(work.chatTitle == "Write the launch email")
         #expect(work.prompt.contains("Page “Launch”"))
-        #expect(work.prompt.contains("Task: Write the launch email\n\nKeep it short."))
+        #expect(work.prompt.contains("Task: Write the launch email\n\nInstructions:\nKeep it short."))
         #expect(work.prompt.contains("Page ID: page-1. Task component ID: task-1."))
-        #expect(work.prompt.contains("status done, or blocked if you need the person"))
+        #expect(work.prompt.contains("If you need more input from the person, write what you need in the outcome and set status blocked."))
         let untitled = ApplicationModel.PageTaskWork(pageID: "p", pageTitle: "", componentID: "c", title: " ", details: "",
             assignee: BoardTaskAssignee(kind: .user))
         #expect(untitled.chatTitle == "Task" && untitled.prompt.contains("“Untitled Page”"))

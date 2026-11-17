@@ -621,7 +621,7 @@ struct NoteEditor: NSViewRepresentable {
 
         func apply(_ document: NoteDocument, to textView: NSTextView) {
             if parent.editsPageFlow, document != lastDocument, Self.flowText(lastDocument) == Self.flowText(document) {
-                // Only Component details changed. The text is unchanged, so keep
+                // Only task fields changed. The text is unchanged, so keep
                 // its undo history and refresh the stored task metadata in place.
                 applying = true
                 synchronizePageAttributes(document, in: textView)
@@ -661,7 +661,7 @@ struct NoteEditor: NSViewRepresentable {
         }
 
         /// What a Page flow shows: its blocks and each task's checkbox. Other
-        /// fields belong to Component details and never change the text.
+        /// fields belong to the task and never change the text.
         private static func flowText(_ document: NoteDocument) -> NoteDocument {
             var value = document
             let items = (document.boardItems ?? [:])

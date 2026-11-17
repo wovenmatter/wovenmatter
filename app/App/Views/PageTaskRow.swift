@@ -2,9 +2,10 @@ import SwiftUI
 import WovenMatterClient
 import WovenMatterCore
 
-/// A task on a Page: what it asks for, who it is assigned to, where each of them
-/// stands, and what they reported. Assigning picks a real agent in a real place,
-/// a bot, or the person; Send starts each agent's or bot's own chat.
+/// A task on a Page is one line: a title, optional instructions, and who it
+/// is assigned to. Assigning never sends; Send starts each agent's or bot's own
+/// chat. Whoever works on it sets its status, and writes back what they need or
+/// what they did below it.
 struct PageTaskRow: View {
     @Environment(\.wovenTheme) private var theme
     @Bindable var model: ApplicationModel
@@ -13,188 +14,113 @@ struct PageTaskRow: View {
     let componentID: String
     let pageFolderID: String?
     var onOpenSession: ((String) -> Void)?
-    @State private var assigning = false
-    @FocusState private var titleFocused: Bool
+    @FocusState private var focus: Field?
+    enum Field { case title, instructions }
 
     private var page: NoteDocument { document.materializedPage() }
     private var item: BoardItem? { page.boardItems?[componentID] }
     private var task: BoardTask { item?.task ?? BoardTask() }
-    private var waiting: [BoardTaskAssignee] { task.assignees.filter { $0.state == .assigned && $0.kind != .user } }
+    private var assignees: [BoardTaskAssignee] { task.assignees }
+    /// Agents and bots that are assigned but not sent yet.
+    private var waiting: [BoardTaskAssignee] { assignees.filter { $0.state == .assigned && $0.kind != .user } }
+    private var assignedToMe: Bool { assignees.contains { $0.kind == .user && $0.state != .stopped } }
+    private var selected: Bool { viewState.selected.first == componentID }
+    private var showsInstructions: Bool { focus != nil || selected || !task.details.isEmpty }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: 2) {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
-                Button { setStatus(task.status == .done ? .todo : .done) } label: {
-                    Image(systemName: task.status == .done ? "checkmark.circle.fill" : "circle")
-                        .font(.system(size: 15))
-                        .foregroundStyle(task.status == .done ? WovenPalette.success : WovenPalette.mutedForeground)
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel(task.status == .done ? "Reopen task" : "Complete task")
+                statusIcon
                 TextField("Task", text: textBinding, axis: .vertical)
                     .textFieldStyle(.plain).font(.system(size: 14, weight: .medium))
                     .strikethrough(task.status == .done, color: WovenPalette.mutedForeground)
-                    .focused($titleFocused)
-                Spacer(minLength: 8)
-                statusMenu
+                    .focused($focus, equals: .title)
+                    .onSubmit { focus = .instructions }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .layoutPriority(1)
+                statusLabel
+                PageAssignMenu(model: model, pageFolderID: pageFolderID, assignees: assignees,
+                               chatLink: chatLink, onAssign: assign, onChange: change, onRemove: remove,
+                               onOpenSession: onOpenSession)
+                if !waiting.isEmpty {
+                    Button(action: sendWaiting) {
+                        Label("Send", systemImage: "paperplane").font(.system(size: 11.5, weight: .semibold))
+                    }
+                    .buttonStyle(WovenPrimaryButtonStyle())
+                    .fixedSize()
+                    .help(waiting.count == 1 ? "Send this task to \(waiting[0].name)" : "Send this task to \(waiting.count) assignees")
+                }
                 PageComponentMenu(document: $document, viewState: $viewState, componentID: componentID)
             }
-            TextField("Add details", text: detailsBinding, axis: .vertical)
-                .textFieldStyle(.plain).font(.system(size: 12.5)).foregroundStyle(WovenPalette.mutedForeground)
-                .padding(.leading, 23)
-                .accessibilityLabel("Task details")
-            assigneeRow.padding(.leading, 23)
-            if !task.outcome.isEmpty {
-                VStack(alignment: .leading, spacing: 3) {
-                    Text("Result").font(.system(size: 11, weight: .semibold)).foregroundStyle(WovenPalette.mutedForeground)
-                    Text(task.outcome).font(.system(size: 12.5)).textSelection(.enabled)
-                }
-                .padding(8).frame(maxWidth: .infinity, alignment: .leading)
-                .background(RoundedRectangle(cornerRadius: 7).fill(theme.palette.workspace))
-                .padding(.leading, 23)
-            }
-            if let added = item?.createdBy, added.kind != .user, let label = added.label, !label.isEmpty {
-                Text("Added by \(label)").font(.system(size: 11)).foregroundStyle(WovenPalette.mutedForeground)
+            if showsInstructions {
+                TextField("Instructions (optional)", text: detailsBinding, axis: .vertical)
+                    .textFieldStyle(.plain).font(.system(size: 12.5)).foregroundStyle(WovenPalette.mutedForeground)
+                    .focused($focus, equals: .instructions)
                     .padding(.leading, 23)
+                    .accessibilityLabel("Task instructions")
+            }
+            if !task.outcome.isEmpty {
+                Text(task.outcome)
+                    .font(.system(size: 12.5))
+                    .foregroundStyle(task.status == .blocked ? WovenPalette.warning : WovenPalette.foreground)
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.leading, 23).padding(.top, 2)
             }
         }
-        .padding(.horizontal, 12).padding(.vertical, 10)
-        .background(RoundedRectangle(cornerRadius: 10).fill(WovenPalette.background))
-        .overlay(RoundedRectangle(cornerRadius: 10).stroke(theme.palette.border, lineWidth: 1))
-        .padding(.vertical, 4)
+        .padding(.horizontal, 8).padding(.vertical, 6)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: 8).fill(selected ? theme.palette.workspace : Color.clear))
         .onAppear(perform: focusIfRequested)
         .onChange(of: viewState.revealCardID) { _, _ in focusIfRequested() }
     }
 
-    // MARK: Parts
+    // MARK: Status
 
-    private var statusMenu: some View {
-        Menu {
-            ForEach(BoardTaskStatus.current, id: \.self) { status in
-                Button { setStatus(status) } label: {
-                    if status == task.status { Label(status.displayName, systemImage: "checkmark") } else { Text(status.displayName) }
+    /// Shows where the task stands. It is set by whoever it is assigned to,
+    /// so it is never a control here.
+    private var statusIcon: some View {
+        let (name, color): (String, Color) = switch task.status {
+        case .done: ("checkmark.circle.fill", WovenPalette.success)
+        case .doing: ("circle.lefthalf.filled", WovenPalette.primary)
+        case .blocked: ("exclamationmark.circle.fill", WovenPalette.warning)
+        default: ("circle", WovenPalette.mutedForeground)
+        }
+        return Image(systemName: name).font(.system(size: 15)).foregroundStyle(color)
+            .accessibilityLabel(task.status.displayName)
+    }
+
+    /// Sending problems first, then the status the assignee set. When the task
+    /// is assigned to the person, they set it here.
+    @ViewBuilder private var statusLabel: some View {
+        if let failed = assignees.first(where: { $0.state == .failed }) {
+            Text("Didn't send").font(.system(size: 11.5, weight: .medium)).foregroundStyle(WovenPalette.danger)
+                .fixedSize().help(failed.message ?? "The task could not be sent to \(failed.name).")
+        } else if assignees.contains(where: { $0.state == .sending || $0.state == .stopping }) {
+            Text(assignees.contains { $0.state == .sending } ? "Sending…" : "Stopping…")
+                .font(.system(size: 11.5)).foregroundStyle(WovenPalette.mutedForeground).fixedSize()
+        } else if assignedToMe {
+            Menu {
+                ForEach([BoardTaskStatus.todo, .doing, .done], id: \.self) { status in
+                    Button { setStatus(status) } label: {
+                        if status == task.status { Label(status.displayName, systemImage: "checkmark") } else { Text(status.displayName) }
+                    }
                 }
-            }
-        } label: {
-            Text(task.status.displayName).font(.system(size: 11.5, weight: .medium))
-                .foregroundStyle(task.status == .blocked ? WovenPalette.warning : WovenPalette.mutedForeground)
-        }
-        .menuStyle(.borderlessButton).fixedSize().accessibilityLabel("Task status: \(task.status.displayName)")
-    }
-
-    private var assigneeRow: some View {
-        HStack(spacing: 6) {
-            ForEach(task.assignees) { assignee in assigneeChip(assignee) }
-            Button { assigning = true } label: {
-                Label(task.assignees.isEmpty ? "Assign" : "Add", systemImage: "person.crop.circle.badge.plus")
-                    .font(.system(size: 11.5, weight: .medium))
-            }
-            .buttonStyle(WovenQuietButtonStyle())
-            .help(task.assignees.isEmpty ? "Assign this task" : "Add someone else to this task")
-            .popover(isPresented: $assigning, arrowEdge: .bottom) {
-                PageAssignPicker(model: model, pageFolderID: pageFolderID) { assignee in
-                    assigning = false
-                    apply(.init(action: .assign, id: componentID, assignee: assignee))
-                }
-            }
-            Spacer(minLength: 0)
-            if !waiting.isEmpty {
-                Button(action: sendWaiting) {
-                    Label("Send", systemImage: "paperplane").font(.system(size: 11.5, weight: .semibold))
-                }
-                .buttonStyle(WovenPrimaryButtonStyle())
-                .help(waiting.count == 1 ? "Send this task to \(waiting[0].name)" : "Send this task to \(waiting.count) assignees")
-            }
+            } label: { statusText }
+            .menuStyle(.borderlessButton).fixedSize().accessibilityLabel("Task status: \(task.status.displayName)")
+        } else if task.status != .todo || assignees.contains(where: { $0.state == .sent }) {
+            statusText.fixedSize()
         }
     }
 
-    private func assigneeChip(_ assignee: BoardTaskAssignee) -> some View {
-        Menu {
-            if let chat = chatLink(assignee) { Button("Open chat") { onOpenSession?(chat) } }
-            if assignee.kind == .agent, assignee.state == .assigned { folderMenu(assignee) }
-            if assignee.state == .failed { Button("Send again") { setState(assignee, .sending) } }
-            if assignee.isActive { Button("Stop") { apply(.init(action: .stopAssignee, id: componentID, assigneeID: assignee.id)) } }
-            if assignee.state == .assigned || assignee.state == .failed {
-                Button("Unassign", role: .destructive) { apply(.init(action: .stopAssignee, id: componentID, assigneeID: assignee.id)) }
-            }
-            if let message = assignee.message { Divider(); Text(message) }
-            if let by = assignee.assignedBy, by.kind != .user, let label = by.label { Text("Assigned by \(label)") }
-        } label: {
-            HStack(spacing: 5) {
-                chipIcon(assignee)
-                Text(chipTitle(assignee)).lineLimit(1)
-                Text(stateLabel(assignee)).foregroundStyle(stateColor(assignee))
-            }
-            .font(.system(size: 11.5))
-        }
-        .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
-        .padding(.horizontal, 7).padding(.vertical, 3)
-        .background(Capsule().fill(theme.palette.workspace))
-        .help(assignee.message ?? chipTitle(assignee))
-        .accessibilityLabel("\(chipTitle(assignee)), \(stateLabel(assignee))")
-    }
-
-    @ViewBuilder private func chipIcon(_ assignee: BoardTaskAssignee) -> some View {
-        switch assignee.kind {
-        case .agent:
-            if let runtime = assignee.runtime.flatMap(AgentRuntimeKind.init(rawValue:)) {
-                HarnessLogoIcon(logo: HarnessLogo(runtimeKind: runtime), size: 12)
-            } else { Image(systemName: "cpu") }
-        case .bot: Image(systemName: "bubble.left.and.bubble.right")
-        case .user: Image(systemName: "person")
-        }
-    }
-
-    private func folderMenu(_ assignee: BoardTaskAssignee) -> some View {
-        let folders = PageAssignTarget.folders(for: assignee.workspaceID, owner: nil, in: model)
-        return Menu("Folder") {
-            Button { setFolder(assignee, nil) } label: { check("No folder", assignee.folderID == nil) }
-            ForEach(folders) { folder in
-                Button { setFolder(assignee, folder.id) } label: { check(folder.name, assignee.folderID == folder.id) }
-            }
-        }
-    }
-
-    private func check(_ title: String, _ on: Bool) -> some View {
-        Group { if on { Label(title, systemImage: "checkmark") } else { Text(title) } }
-    }
-
-    // MARK: Labels
-
-    private func chipTitle(_ assignee: BoardTaskAssignee) -> String {
-        switch assignee.kind {
-        case .user: return "Me"
-        case .bot: return assignee.name
-        case .agent:
-            var parts = [assignee.name]
-            if let place = assignee.place, !place.isEmpty { parts.append(place) }
-            if let folder = assignee.folderID, let name = model.workspaceOverview?.folders.first(where: { $0.id == folder })?.name {
-                parts.append(name)
-            }
-            return parts.joined(separator: " · ")
-        }
-    }
-
-    private func stateLabel(_ assignee: BoardTaskAssignee) -> String {
-        if assignee.kind == .user { return assignee.state == .stopped ? "Unassigned" : "" }
-        switch assignee.state {
-        case .assigned: return "Not sent"
-        case .sending: return "Sending…"
-        case .sent:
-            if let chat = assignee.conversationID, model.localRunningConversationIDs.contains(chat) { return "Working" }
-            return task.status == .done ? "Done" : "Sent"
-        case .stopping: return "Stopping…"
-        case .stopped: return "Stopped"
-        case .failed: return "Didn't send"
-        }
-    }
-
-    private func stateColor(_ assignee: BoardTaskAssignee) -> Color {
-        switch assignee.state {
-        case .failed: WovenPalette.danger
-        case .sent: WovenPalette.success
+    private var statusText: some View {
+        let color: Color = switch task.status {
+        case .done: WovenPalette.success
+        case .blocked: WovenPalette.warning
         default: WovenPalette.mutedForeground
         }
+        let sentOnly = task.status == .todo && !assignedToMe
+        return Text(sentOnly ? "Sent" : task.status.displayName).font(.system(size: 11.5, weight: .medium)).foregroundStyle(color)
     }
 
     /// An agent's chat, or a bot's thread, once it exists.
@@ -230,17 +156,18 @@ struct PageTaskRow: View {
         apply(.init(action: .update, id: componentID, expectedRevision: page.boardItemRevision(for: componentID), patch: .init(status: status)))
     }
 
-    private func setState(_ assignee: BoardTaskAssignee, _ state: BoardTaskAssignee.State) {
-        var updated = assignee
-        updated.state = state; updated.message = nil
-        apply(.init(action: .updateAssignee, id: componentID, assignee: updated))
-        if state == .sending { Task { _ = await model.flushNoteDrafts() } }
+    private func assign(_ assignee: BoardTaskAssignee) { apply(.init(action: .assign, id: componentID, assignee: assignee)) }
+
+    private func change(_ assignee: BoardTaskAssignee) {
+        apply(.init(action: .updateAssignee, id: componentID, assignee: assignee))
+        // The background process sends or stops it once the Page is saved.
+        if assignee.state == .sending { Task { _ = await model.flushNoteDrafts() } }
     }
 
-    private func setFolder(_ assignee: BoardTaskAssignee, _ folderID: String?) {
-        var updated = assignee
-        updated.folderID = folderID
-        apply(.init(action: .updateAssignee, id: componentID, assignee: updated))
+    /// Unassigns someone not sent yet, or stops someone working on it.
+    private func remove(_ assignee: BoardTaskAssignee) {
+        apply(.init(action: .stopAssignee, id: componentID, assigneeID: assignee.id))
+        if assignee.isActive { Task { _ = await model.flushNoteDrafts() } }
     }
 
     private func sendWaiting() {
@@ -249,7 +176,6 @@ struct PageTaskRow: View {
             updated.state = .sending
             apply(.init(action: .updateAssignee, id: componentID, assignee: updated))
         }
-        // The background process sends it once the Page is saved.
         Task { _ = await model.flushNoteDrafts() }
     }
 
@@ -260,13 +186,146 @@ struct PageTaskRow: View {
     private func focusIfRequested() {
         guard viewState.revealCardID == componentID else { return }
         DispatchQueue.main.async {
-            titleFocused = true
+            focus = .title
             if viewState.revealCardID == componentID { viewState.revealCardID = nil }
         }
     }
 }
 
-/// Someone a task can be assigned to, as the assign picker lists them.
+/// The task's Assign dropdown: who it is assigned to, with what each can do,
+/// then everyone it can be assigned to, by workspace and then bots.
+struct PageAssignMenu: View {
+    @Bindable var model: ApplicationModel
+    let pageFolderID: String?
+    let assignees: [BoardTaskAssignee]
+    let chatLink: (BoardTaskAssignee) -> String?
+    let onAssign: (BoardTaskAssignee) -> Void
+    let onChange: (BoardTaskAssignee) -> Void
+    let onRemove: (BoardTaskAssignee) -> Void
+    var onOpenSession: ((String) -> Void)?
+    @State private var targets: [PageAssignTarget] = []
+
+    private var listed: [BoardTaskAssignee] { assignees.filter { $0.state != .stopped || $0.kind != .user } }
+
+    var body: some View {
+        Menu {
+            if !listed.isEmpty {
+                Section("Assigned") {
+                    ForEach(listed) { assignee in
+                        Menu(title(assignee)) { actions(assignee) }
+                    }
+                }
+            }
+            let groups = groupTitles
+            ForEach(groups, id: \.self) { group in
+                Section(group) {
+                    ForEach(targets.filter { $0.group.title == group }) { target in
+                        Button(target.detail.map { "\(name(target.assignee)) — \($0)" } ?? name(target.assignee)) {
+                            onAssign(target.assignee)
+                        }
+                        .disabled(!target.ready || assignees.contains { $0.isActive && $0.isSameTarget(as: target.assignee) })
+                    }
+                }
+            }
+            if targets.count <= 1 {
+                Text("Set up agents in Settings, or turn on Bots, to assign tasks to them.")
+            }
+        } label: { label }
+        .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
+        .padding(.horizontal, 7).padding(.vertical, 3)
+        .background(Capsule().fill(WovenPalette.muted))
+        .help(listed.isEmpty ? "Assign this task" : "Assigned to \(listed.map(\.name).joined(separator: ", "))")
+        .task(id: model.workspaceListRevision) {
+            targets = await model.pageAssignTargets(pageFolderID: pageFolderID)
+        }
+    }
+
+    private var label: some View {
+        let active = listed.filter { $0.state != .stopped }
+        return HStack(spacing: 5) {
+            if let first = active.first { PageAssigneeIcon(assignee: first, size: 12) } else {
+                Image(systemName: "person.crop.circle.badge.plus")
+            }
+            Text(active.isEmpty ? "Assign" : active.count == 1 ? name(active[0]) : "\(name(active[0])) +\(active.count - 1)")
+                .lineLimit(1)
+            Image(systemName: "chevron.down").font(.system(size: 8, weight: .semibold))
+        }
+        .font(.system(size: 11.5, weight: .medium))
+        .frame(maxWidth: 180)
+    }
+
+    private var groupTitles: [String] {
+        var seen: [String] = []
+        for target in targets where !seen.contains(target.group.title) { seen.append(target.group.title) }
+        return seen
+    }
+
+    private func name(_ assignee: BoardTaskAssignee) -> String { assignee.kind == .user ? "Me" : assignee.name }
+
+    private func title(_ assignee: BoardTaskAssignee) -> String {
+        var parts = [name(assignee)]
+        if assignee.kind != .user, let place = assignee.place, !place.isEmpty { parts.append(place) }
+        let state: String? = switch assignee.state {
+        case .assigned: assignee.kind == .user ? nil : "not sent"
+        case .sending: "sending"
+        case .stopping: "stopping"
+        case .stopped: "stopped"
+        case .failed: "didn't send"
+        case .sent: nil
+        }
+        return parts.joined(separator: " · ") + (state.map { " (\($0))" } ?? "")
+    }
+
+    @ViewBuilder private func actions(_ assignee: BoardTaskAssignee) -> some View {
+        if let chat = chatLink(assignee) { Button(assignee.kind == .bot ? "Open thread" : "Open chat") { onOpenSession?(chat) } }
+        if assignee.kind == .agent, assignee.state == .assigned {
+            let folders = PageAssignTarget.folders(for: assignee.workspaceID, owner: nil, in: model)
+            Menu("Start in folder") {
+                Button { setFolder(assignee, nil) } label: { check("No folder", assignee.folderID == nil) }
+                ForEach(folders) { folder in
+                    Button { setFolder(assignee, folder.id) } label: { check(folder.name, assignee.folderID == folder.id) }
+                }
+            }
+        }
+        if assignee.state == .failed {
+            Button("Send again") { var updated = assignee; updated.state = .sending; updated.message = nil; onChange(updated) }
+        }
+        if assignee.isActive && assignee.kind != .user { Button("Stop") { onRemove(assignee) } }
+        if assignee.state == .assigned || assignee.state == .failed || (assignee.kind == .user && assignee.state != .stopped) {
+            Button("Unassign", role: .destructive) { onRemove(assignee) }
+        }
+        if let message = assignee.message { Divider(); Text(message) }
+        if let by = assignee.assignedBy, by.kind != .user, let label = by.label { Text("Assigned by \(label)") }
+    }
+
+    private func setFolder(_ assignee: BoardTaskAssignee, _ folderID: String?) {
+        var updated = assignee
+        updated.folderID = folderID
+        onChange(updated)
+    }
+
+    private func check(_ title: String, _ on: Bool) -> some View {
+        Group { if on { Label(title, systemImage: "checkmark") } else { Text(title) } }
+    }
+}
+
+struct PageAssigneeIcon: View {
+    let assignee: BoardTaskAssignee
+    var size: CGFloat = 12
+
+    var body: some View {
+        switch assignee.kind {
+        case .agent:
+            if let runtime = assignee.runtime.flatMap(AgentRuntimeKind.init(rawValue:)) {
+                HarnessLogoIcon(logo: HarnessLogo(runtimeKind: runtime), size: size)
+            } else { Image(systemName: "cpu") }
+        case .bot: Image(systemName: "bubble.left.and.bubble.right")
+        case .user: Image(systemName: "person")
+        }
+    }
+}
+
+/// Someone a task can be assigned to, as the Assign dropdown lists them.
 struct PageAssignTarget: Identifiable, Equatable {
     enum Group: Equatable { case me, place(String), bots }
     let id: String
@@ -283,89 +342,6 @@ struct PageAssignTarget: Identifiable, Equatable {
         let owners = [owner, workspaceID, model.executionWorkspaceRegistry.first { $0.id == workspaceID }?.folderOwnerID]
             .compactMap { $0 }.map(PairedWorkspaceSidebarModel.canonicalID)
         return folders.filter { folder in folder.executionWorkspaceID.map { owners.contains(PairedWorkspaceSidebarModel.canonicalID($0)) } ?? false }
-    }
-}
-
-struct PageAssignPicker: View {
-    @Bindable var model: ApplicationModel
-    let pageFolderID: String?
-    var includesPerson = true
-    let onPick: (BoardTaskAssignee) -> Void
-    @State private var search = ""
-    @State private var targets: [PageAssignTarget] = []
-    @State private var loaded = false
-
-    private var shown: [PageAssignTarget] {
-        let terms = search.split(separator: " ").map(String.init)
-        guard !terms.isEmpty else { return targets }
-        return targets.filter { target in
-            let text = [target.assignee.name, target.assignee.place ?? "", target.detail ?? ""].joined(separator: " ")
-            return terms.allSatisfy { text.localizedStandardContains($0) }
-        }
-    }
-
-    private var groups: [PageAssignTarget.Group] {
-        var seen: [PageAssignTarget.Group] = []
-        for target in shown where !seen.contains(target.group) { seen.append(target.group) }
-        return seen
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            WovenSearchField(text: $search, prompt: "Search agents and bots")
-            ScrollView {
-                VStack(alignment: .leading, spacing: 2) {
-                    ForEach(groups, id: \.title) { group in
-                        if group != .me {
-                            Text(group.title).font(.system(size: 11, weight: .semibold)).foregroundStyle(WovenPalette.mutedForeground)
-                                .padding(.top, 8).padding(.horizontal, 6)
-                        }
-                        ForEach(shown.filter { $0.group == group }) { target in
-                            Button { onPick(target.assignee) } label: {
-                                HStack(spacing: 8) {
-                                    icon(target.assignee)
-                                    Text(target.assignee.kind == .user ? "Me" : target.assignee.name)
-                                    Spacer()
-                                    if let detail = target.detail {
-                                        Text(detail).font(.system(size: 11)).foregroundStyle(WovenPalette.mutedForeground)
-                                    }
-                                }.frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
-                            }
-                            .buttonStyle(WovenQuietButtonStyle())
-                            .disabled(!target.ready)
-                        }
-                    }
-                    if loaded, shown.count <= (includesPerson ? 1 : 0) {
-                        Text("Set up agents in Settings, or turn on Bots, to assign tasks to them.")
-                            .font(.system(size: 11.5)).foregroundStyle(WovenPalette.mutedForeground).padding(6)
-                    }
-                }
-            }
-            .frame(maxHeight: 360)
-            if let folder = pageFolderID.flatMap({ id in model.workspaceOverview?.folders.first { $0.id == id } }) {
-                Divider()
-                Text("Agents on the folder's workspace start in \(folder.name). Change the folder on the assignee before sending.")
-                    .font(.system(size: 11)).foregroundStyle(WovenPalette.mutedForeground)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-        }
-        .padding(12)
-        .frame(width: 320)
-        .task {
-            targets = await model.pageAssignTargets(pageFolderID: pageFolderID).filter { includesPerson || $0.group != .me }
-            loaded = true
-        }
-    }
-
-    @ViewBuilder private func icon(_ assignee: BoardTaskAssignee) -> some View {
-        switch assignee.kind {
-        case .agent:
-            if let runtime = assignee.runtime.flatMap(AgentRuntimeKind.init(rawValue:)) {
-                HarnessLogoIcon(logo: HarnessLogo(runtimeKind: runtime), size: 14)
-            } else { Image(systemName: "cpu") }
-        case .bot: Image(systemName: "bubble.left.and.bubble.right")
-        case .user: Image(systemName: "person")
-        }
     }
 }
 
@@ -393,78 +369,19 @@ extension BotTarget {
     }
 }
 
-/// An App with no code yet: describe it, choose an agent, and send. The agent
-/// builds it in place and can connect it to live data.
+/// An App with no code yet. It is built from the chat beside it, like any
+/// other edit: the open App is shared with whichever agent the chat uses.
 struct AppBuildPrompt: View {
-    @Environment(\.wovenTheme) private var theme
-    @Bindable var model: ApplicationModel
-    let note: WorkspaceNoteRecord
-    var onOpenSession: ((String) -> Void)?
-    @State private var request = ""
-    @State private var agent: BoardTaskAssignee?
-    @State private var choosing = false
-    @State private var sending = false
-    @State private var status: String?
-
     var body: some View {
-        VStack(spacing: 14) {
+        VStack(spacing: 10) {
             Image(systemName: "sparkles").font(.system(size: 22)).foregroundStyle(WovenPalette.mutedForeground)
             Text("Ask an agent to build this").font(.system(size: 17, weight: .semibold))
-            Text("Describe the app. An agent builds it here, and can connect it to live data.")
-                .font(.system(size: 12.5)).foregroundStyle(WovenPalette.mutedForeground).multilineTextAlignment(.center)
-            TextField("What should this App do?", text: $request, axis: .vertical)
-                .textFieldStyle(.plain).lineLimit(3...8).font(.system(size: 13))
-                .padding(10)
-                .background(RoundedRectangle(cornerRadius: 8).fill(WovenPalette.background))
-                .overlay(RoundedRectangle(cornerRadius: 8).stroke(theme.palette.border, lineWidth: 1))
-            HStack {
-                Button { choosing = true } label: {
-                    Label(agent.map(label) ?? "Choose an agent", systemImage: "person.crop.circle.badge.plus")
-                }
-                .buttonStyle(WovenQuietButtonStyle())
-                .popover(isPresented: $choosing, arrowEdge: .bottom) {
-                    PageAssignPicker(model: model, pageFolderID: note.folderID, includesPerson: false) { picked in
-                        agent = picked; choosing = false
-                    }
-                }
-                Spacer()
-                Button(action: send) { Label("Send", systemImage: "paperplane") }
-                    .buttonStyle(WovenPrimaryButtonStyle())
-                    .disabled(sending || agent == nil || request.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-            }
-            if let status {
-                Text(status).font(.system(size: 11.5)).foregroundStyle(WovenPalette.mutedForeground)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
+            Text("Describe the app in the chat. The agent you have open builds it here and can connect it to live data. To use another agent, choose it in the chat.")
+                .font(.system(size: 12.5)).foregroundStyle(WovenPalette.mutedForeground)
+                .multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
         }
-        .frame(maxWidth: 460)
+        .frame(maxWidth: 420)
         .padding(24)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
-
-    private func label(_ assignee: BoardTaskAssignee) -> String {
-        [assignee.name, assignee.place].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · ")
-    }
-
-    private func send() {
-        guard let agent else { return }
-        sending = true; status = "Sending to \(label(agent))…"
-        let title = note.title.isEmpty ? "Untitled App" : note.title
-        let text = """
-        Build the App “\(title)” in Woven Matter (artifact ID \(note.id)).
-
-        \(request.trimmingCharacters(in: .whitespacesAndNewlines))
-
-        Read it with woven_notes_read, then write its HTML with woven_notes_set_html using that revision. If it needs live data, connect a database with woven_notes_link.
-        """
-        Task {
-            defer { sending = false }
-            do {
-                let chat = try await model.startAgentChat(agent, title: "Build \(title)", text: text)
-                status = "Sent to \(label(agent)). It builds the App here."
-                request = ""
-                onOpenSession?(chat)
-            } catch { status = error.localizedDescription }
-        }
     }
 }

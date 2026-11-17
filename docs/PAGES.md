@@ -38,27 +38,33 @@ to fit beside its writing; a Page holds about 1 MB in all.
 
 ## Tasks
 
-A task is its own line on the Page: a checkbox, its title, an **Add details**
-line, its assignees, and its status (**To do**, **In progress**, **Needs you**,
-**Done**). **Assign** lists who can take it, only those set up now:
+A task is one line on the Page: its title, optional **Instructions** beneath it,
+and who it is assigned to. **Assign** is a dropdown of who can take it:
 
 - **Me**: the task is yours. Nothing is sent.
-- **Agents in real places**: each harness on this Mac, on other Macs, and on Linux
-  workspaces, grouped by where it runs.
+- **Agents by workspace**: **Local workspace**, then each remote workspace, as the
+  sidebar lists them. Agents not set up yet are shown but can't be picked.
 - **Bots**: each bot on each machine with bots turned on.
 
 Assigning an agent or bot does not send anything yet. The task shows who you
 picked and a **Send** button, so you can check it before work starts. Send starts a
 new chat with that agent in the Page's folder when the agent's workspace owns the
-folder; change the folder on the assignee before sending. A bot gets a new thread
-of its own, forked from its main channel. The first message is the task, its
-details, and how to report back on the Page.
+folder; change the folder in the assignee's menu before sending. A bot gets a new
+thread of its own, forked from its main channel. The first message is the task,
+its instructions, and how to report back on the Page.
 
-A task can have several assignees, added at any time; each gets its own chat or
-thread. An assignee's menu opens its chat, stops it (an agent's chat stops; a bot
-is told the task is no longer needed), or unassigns one not yet sent. Stopped
-assignees stay listed. Agents report back on the Page: they set the status, write
-the **Result**, and add follow-up tasks beside it, labeled with who added them.
+The status belongs to whoever has the task, so it is not a control on the line.
+An agent or bot marks it **In progress** when it starts and **Done** when it
+finishes, or **Needs input**, writing what it needs below the task. A finished
+agent writes what it did there too. The circle beside the title fills in as the
+status changes and is checked once the task is done. When the task is assigned to
+you, the status is a small menu: **To do**, **In progress**, **Done**.
+
+A task can have several assignees, added at any time from the same dropdown; each
+gets its own chat or thread. The dropdown lists who has the task, and each one's
+menu opens its chat, stops it (an agent's chat stops; a bot is told the task is no
+longer needed), or unassigns one not yet sent. Stopped assignees stay listed.
+Agents can also add follow-up tasks beside it.
 
 Exactly one place sends each agent its task, so a chat never starts twice: the
 Mac whose agent it is starts it on itself, and a Linux workspace's agent is
@@ -67,9 +73,9 @@ whichever Mac sends it. A Mac that is asleep sends its agents' tasks when it
 wakes. Assigning on iPhone and iPad is not available yet; they show each task's
 assignees and where they stand.
 
-**Component details** holds status, outcome, review, instructions, change summary
-and chat links. The review menu finds components needing attention. Sections
-contain tasks rather than being tasks.
+Each component's **⋯** menu moves or removes it, and marks a component an agent
+flagged for review as reviewed. The review menu above the Page finds components
+needing attention. Sections contain tasks rather than being tasks.
 
 Content, nesting, task fields and original-artifact edits save through the
 existing draft journal and library. Closing a Page does not delete it. Normal
@@ -92,9 +98,10 @@ Apps are interactive HTML apps agents build, optionally on live data: dashboards
 calculators, visualizations, planners, and other custom interfaces. A data link
 is optional. **App** is the single creation option. **Live App** describes one
 connected to changing data; it runs inside Woven rather than requiring a public
-website. An App with no code yet shows **Ask an agent to build this**: describe it,
-choose an agent or bot from the same list tasks use, and Send starts that chat
-with what you asked for.
+website. An App with no code yet shows **Ask an agent to build this**. It is built like any
+other edit: describe it in the chat, and the agent open there builds it in place,
+since open artifacts are shared when you send. Choose another agent in the chat to
+use that one instead.
 
 Native data links deliver query results as `window.wovenMatterData`. A refresh
 updates the existing interface and dispatches `wovenmatterdatachange` once; it
@@ -177,10 +184,7 @@ agent or a bot sends the task at once, with no approval step; the assignee shows
 who assigned it. Agents find workspaces and harnesses with
 `woven_sessions_harnesses`.
 
-**Send to chat** in Component details sends a component to an existing chat, using
-that chat's agent, settings, and ordinary admission path. Its link is saved before dispatch. A saved link does not prove that a run
-was accepted or finished; inspect the chat after an uncertain handoff. Completing
-a run does not automatically complete a task. Page text, instructions and linked
+Completing a run does not automatically complete a task. Page text, instructions and linked
 content remain project data and never grant additional authority.
 
 ## Compatibility and collaboration
@@ -225,7 +229,7 @@ local Page replica.
 
 Pages are fully editable on iPhone and iPad, paired or standalone. Create one from
 **New Artifact → Page** and use the same components as on a Mac: text with the Notes
-editor's formatting, undo and dictation; tasks with checkboxes, details and their
+editor's formatting, undo and dictation; tasks with their instructions and
 assignees; nested, collapsible sections; tables; images; embedded originals that
 open in their own pane;
 **Add component**, **Component actions**, **Component details** and **Send to
