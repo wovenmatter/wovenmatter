@@ -101,10 +101,10 @@ struct NotePane: View {
           ShareLink(item: content) { Label("Export original document", systemImage: "square.and.arrow.up") }
         } label: { Image(systemName: "ellipsis").frame(width: 44, height: 44) }.accessibilityLabel("Note actions")
         Menu {
-          Section("New Asset") { MobileNewAssetItems { kind in Task { await model.newAsset(kind) } } }
+          Section("New Artifact") { MobileNewAssetItems { kind in Task { await model.newAsset(kind) } } }
         } label: {
           LucideIcon(glyph: .plus, size: 20).frame(width: 44, height: 44)
-        }.accessibilityLabel("New Asset").accessibilityIdentifier("action-new-asset")
+        }.accessibilityLabel("New Artifact").accessibilityIdentifier("action-new-asset")
       }.buttonStyle(WovenIconButtonStyle())
         // Undo, redo, formatting and dictation continue editing the focused paragraph.
         .keepsKeyboard()
@@ -121,7 +121,7 @@ struct NotePane: View {
         if model.online { Button("Download document") { Task { await model.openNote(note.id) } }.buttonStyle(WovenPrimaryButtonStyle()).padding() }
       } else if let document {
         if document.kind == .html {
-          Text("Artifact · read only").font(.caption).foregroundStyle(WovenPalette.mutedForeground)
+          Text("App · read only").font(.caption).foregroundStyle(WovenPalette.mutedForeground)
           if document.databaseLink != nil {
             LinkedArtifactPreview(model: model, note: note, tableID: nil, html: document.html)
           } else { SafeHTMLPreview(html: document.html, state: document.artifactStateSnapshot) }

@@ -214,7 +214,7 @@ struct NewArtifactButton: View {
                 LucideIcon(glyph: .fileText, size: 13)
                     .foregroundStyle(WovenPalette.foreground)
                     .frame(width: 15, height: 15)
-                Text("New Asset")
+                Text("New Artifact")
                     .lineLimit(1)
                 Spacer()
             }
@@ -230,7 +230,7 @@ struct NewArtifactButton: View {
         }
         .buttonStyle(RailButtonStyle())
         .scrollAwareHover($hovered, token: hoverID)
-        .accessibilityLabel("Create asset")
+        .accessibilityLabel("Create artifact")
     }
 }
 

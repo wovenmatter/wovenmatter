@@ -141,13 +141,18 @@ struct PageComponentMenu: View {
         PageMenuEntries(entries: addEntries(position: position))
     }
 
-    /// Text, task, section, table, an existing asset or image, or a new asset.
+    /// Task, section, table, an existing artifact or image, or a new Note, Sheet or App.
+    /// Text needs no entry: typing on the Page writes text. A Page never holds a Page.
     func addEntries(position: @escaping () -> PagePosition) -> [PageMenuEntry] {
-        var entries: [PageMenuEntry] = [("Text", PageComponentKind.text), ("Task", .task), ("Section", .section), ("Table", .table)]
+        var entries: [PageMenuEntry] = [("Task", PageComponentKind.task), ("Section", .section), ("Table", .table)]
             .map { title, kind in .button(title) { add(kind: kind, position: position()) } }
-        entries += [.divider, .button("Existing asset…") { viewState.assetPickerPosition = position() },
-            .button("Image…", enabled: !viewState.importingImage) { importImage(position: position()) }]
-        entries += NoteArtifactKind.allCases.map { kind in .button("New \(kind.displayName)") { createAsset(kind, position: position()) } }
+        entries += [.divider, .button("Existing artifact…") { viewState.assetPickerPosition = position() },
+            .submenu("Image", PageImageImport.sources(model: model).map { source in
+                .button(source.menuTitle, enabled: !viewState.importingImage) { importImage(source, position: position()) }
+            })]
+        entries += NoteArtifactKind.allCases.filter { $0 != .canvas }.map { kind in
+            .button("New \(kind.displayName)") { createAsset(kind, position: position()) }
+        }
         return entries
     }
 
@@ -170,16 +175,25 @@ struct PageComponentMenu: View {
         if viewState.error == nil { viewState.selected = [id]; viewState.revealCardID = id }
     }
 
-    private func importImage(position: PagePosition) {
+    private func importImage(_ source: PageImageImport.Source, position: PagePosition) {
+        if source == .photos { viewState.photoPickerPosition = position; return }
+        if source == .library { viewState.libraryImagePickerPosition = position; return }
         viewState.importingImage = true
         Task {
             defer { viewState.importingImage = false }
             do {
-                if let id = try await PageImageImport.importImage(model: model, folderID: folderID) {
-                    add(kind: .asset, assetID: id, position: position)
-                }
-            } catch { viewState.error = "The image could not be prepared. Choose a PNG, JPEG, or GIF smaller than 20 MB." }
+                if let image = try await PageImageImport.chooseFile() { addImage(image, position: position) }
+            } catch { viewState.error = PageImageImport.failure(error) }
         }
+    }
+
+    /// Stores the image in the Page itself.
+    func addImage(_ image: PageImage, position: PagePosition) {
+        let id = UUID().uuidString.lowercased()
+        commitPage(document: $document, state: $viewState) {
+            try $0.applyPageEdit(.init(action: .add, id: id, kind: .image, position: position, image: image))
+        }
+        if viewState.error == nil { viewState.selected = [id] }
     }
 
     private func createAsset(_ kind: NoteArtifactKind, position: PagePosition) {

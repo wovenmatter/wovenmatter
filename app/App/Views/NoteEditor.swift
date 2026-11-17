@@ -525,6 +525,7 @@ struct NoteEditor: NSViewRepresentable {
         let textView = NoteTextView(usingTextLayoutManager: true)
         textView.sharedUndoManager = sharedUndoManager
         textView.contextMenuItems = contextMenuItems
+        textView.tableActions = isEnabled ? NoteTableActions(controller: controller) : nil
         textView.delegate = context.coordinator
         textView.drawsBackground = false
         textView.isRichText = true
@@ -580,6 +581,7 @@ struct NoteEditor: NSViewRepresentable {
         guard let textView = scrollView.documentView as? NSTextView else { return }
         textView.isEditable = isEnabled
         (textView as? NoteTextView)?.contextMenuItems = contextMenuItems
+        (textView as? NoteTextView)?.tableActions = isEnabled ? NoteTableActions(controller: controller) : nil
         dictationEditor?.bind(textView, identity: dictationIdentity)
         controller.bind(textView: textView, document: document) { updated in
             context.coordinator.emit(updated)
@@ -932,6 +934,23 @@ private final class NoteDocumentScrollView: NSScrollView {
     }
 }
 
+/// Table changes a note's text view offers in its menu and at a table's edges.
+struct NoteTableActions {
+    var addRow: () -> Void
+    var addColumn: () -> Void
+    var removeRow: () -> Void
+    var removeColumn: () -> Void
+    var deleteTable: () -> Void
+
+    @MainActor init(controller: NoteEditorController) {
+        addRow = { [weak controller] in controller?.addTableRow() }
+        addColumn = { [weak controller] in controller?.addTableColumn() }
+        removeRow = { [weak controller] in controller?.removeTableRow() }
+        removeColumn = { [weak controller] in controller?.removeTableColumn() }
+        deleteTable = { [weak controller] in controller?.deleteTable() }
+    }
+}
+
 private final class NoteTextView: NSTextView {
     var sharedUndoManager: UndoManager?
     var showsPageTasks = false
@@ -965,20 +984,108 @@ private final class NoteTextView: NSTextView {
 
     override func menu(for event: NSEvent) -> NSMenu? {
         let menu = super.menu(for: event)
-        guard let contextMenuItems, isEditable else { return menu }
+        guard isEditable, contextMenuItems != nil || tableActions != nil else { return menu }
         // Additions land at the clicked place unless it is inside the selection.
         let index = characterIndexForInsertion(at: convert(event.locationInWindow, from: nil))
         if window?.firstResponder !== self { window?.makeFirstResponder(self) }
         if !NSLocationInRange(index, selectedRange()) || selectedRange().length == 0 {
             setSelectedRange(NSRange(location: index, length: 0))
         }
-        let items = contextMenuItems()
+        var items = contextMenuItems?() ?? []
+        if let tableActions, let storage = textStorage, storage.length > 0,
+           storage.attribute(.noteTableID, at: min(selectedRange().location, storage.length - 1), effectiveRange: nil) != nil {
+            items = [ClosureMenuItem("Insert Row Below", handler: tableActions.addRow),
+                     ClosureMenuItem("Insert Column Right", handler: tableActions.addColumn),
+                     ClosureMenuItem("Delete Row", handler: tableActions.removeRow),
+                     ClosureMenuItem("Delete Column", handler: tableActions.removeColumn),
+                     ClosureMenuItem("Delete Table", handler: tableActions.deleteTable),
+                     .separator()] + items
+        }
         guard !items.isEmpty else { return menu }
         let result = menu ?? NSMenu()
         result.insertItem(.separator(), at: 0)
         for item in items.reversed() { result.insertItem(item, at: 0) }
         return result
     }
+
+    // MARK: Growing a table from its edges
+
+    /// The editor's table changes, which act on the table holding the selection.
+    var tableActions: NoteTableActions?
+    private lazy var addColumnButton = tableEdgeButton("Add column", action: #selector(addColumnAtEdge))
+    private lazy var addRowButton = tableEdgeButton("Add row", action: #selector(addRowAtEdge))
+    private var hoveredTableEnd: Int?
+
+    private func tableEdgeButton(_ label: String, action: Selector) -> NSButton {
+        let button = NSButton(image: NSImage(systemSymbolName: "plus.circle.fill", accessibilityDescription: label) ?? NSImage(),
+                              target: self, action: action)
+        button.isBordered = false
+        button.contentTintColor = .secondaryLabelColor
+        button.toolTip = label
+        button.setAccessibilityLabel(label)
+        button.frame = NSRect(x: 0, y: 0, width: 18, height: 18)
+        button.isHidden = true
+        addSubview(button)
+        return button
+    }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        guard !trackingAreas.contains(where: { $0.userInfo?["noteTables"] != nil }) else { return }
+        addTrackingArea(NSTrackingArea(rect: .zero, options: [.mouseMoved, .mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect],
+                                       owner: self, userInfo: ["noteTables": true]))
+    }
+
+    override func mouseMoved(with event: NSEvent) {
+        super.mouseMoved(with: event)
+        showTableEdges(near: convert(event.locationInWindow, from: nil))
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        super.mouseExited(with: event)
+        showTableEdges(near: nil)
+    }
+
+    /// Shows the edge buttons of the table under the pointer: one beside its
+    /// right edge for a column, one under its bottom edge for a row.
+    private func showTableEdges(near point: NSPoint?) {
+        guard isEditable, tableActions != nil, let point, let storage = textStorage, let window, storage.length > 0 else {
+            addColumnButton.isHidden = true; addRowButton.isHidden = true; hoveredTableEnd = nil
+            return
+        }
+        var found: (rect: NSRect, end: Int)?
+        storage.enumerateAttribute(.noteTableID, in: NSRange(location: 0, length: storage.length)) { value, range, stop in
+            guard value != nil, range.length > 0 else { return }
+            func line(_ location: Int) -> NSRect {
+                convert(window.convertFromScreen(firstRect(forCharacterRange: NSRange(location: location, length: 0), actualRange: nil)), from: nil)
+            }
+            let first = line(range.location), last = line(NSMaxRange(range) - 1)
+            let left = textContainerOrigin.x
+            let right = left + (textContainer?.size.width ?? bounds.width)
+            let rect = NSRect(x: left, y: min(first.minY, last.minY) - 8, width: right - left,
+                              height: max(first.maxY, last.maxY) - min(first.minY, last.minY) + 16)
+            if rect.insetBy(dx: -28, dy: -24).contains(point) { found = (rect, NSMaxRange(range) - 1); stop.pointee = true }
+        }
+        guard let found else {
+            addColumnButton.isHidden = true; addRowButton.isHidden = true; hoveredTableEnd = nil
+            return
+        }
+        hoveredTableEnd = found.end
+        addColumnButton.setFrameOrigin(NSPoint(x: min(found.rect.maxX + 3, bounds.width - 19), y: found.rect.midY - 9))
+        addRowButton.setFrameOrigin(NSPoint(x: found.rect.minX, y: found.rect.maxY - 9))
+        addColumnButton.isHidden = false; addRowButton.isHidden = false
+    }
+
+    /// Edge buttons add after the last row or column.
+    private func selectTableEnd() -> Bool {
+        guard let end = hoveredTableEnd, let storage = textStorage, end < storage.length else { return false }
+        window?.makeFirstResponder(self)
+        setSelectedRange(NSRange(location: end, length: 0))
+        return true
+    }
+
+    @objc private func addColumnAtEdge() { if selectTableEnd() { tableActions?.addColumn() } }
+    @objc private func addRowAtEdge() { if selectTableEnd() { tableActions?.addRow() } }
 
     @objc func undo(_ sender: Any?) {
         guard isEditable, let manager = undoManager, manager.canUndo else { return }

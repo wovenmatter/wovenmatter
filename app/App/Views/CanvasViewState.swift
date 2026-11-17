@@ -19,6 +19,9 @@ struct CanvasViewState {
     /// Set while the Existing asset picker is open: where the chosen asset goes.
     var assetPickerPosition: PagePosition?
     var importingImage = false
+    /// Where an image chosen from Photos or the library goes while its picker is open.
+    var photoPickerPosition: PagePosition?
+    var libraryImagePickerPosition: PagePosition?
     /// Incremented to place the cursor at the end of the Page's last text.
     var focusEndRequest = 0
     var undoStack: [NoteDocument] = []

@@ -8,6 +8,7 @@ struct PageAssetEmbed: View {
     let componentID: String
     let assetID: String
     let onOpenAsset: (String) -> Void
+    var onOpenSession: ((String) -> Void)?
     var onFocus: ((NoteEditorController) -> Void)?
     var onNonTextFocus: (() -> Void)?
     @State private var documentCache = NoteDocumentCache()
@@ -33,7 +34,7 @@ struct PageAssetEmbed: View {
                     } label: { Image(systemName: task.status == .done ? "checkmark.circle.fill" : "circle") }
                     .buttonStyle(.plain).accessibilityLabel(task.status == .done ? "Reopen task" : "Complete task")
                 }
-                Text(asset?.title.isEmpty == false ? asset!.title : "Original asset")
+                Text(asset?.title.isEmpty == false ? asset!.title : "Original artifact")
                     .font(.system(size: 13, weight: .medium)).lineLimit(1)
                 Label("Original", systemImage: "link").font(.system(size: 10)).foregroundStyle(.secondary)
                 Spacer()
@@ -50,10 +51,10 @@ struct PageAssetEmbed: View {
                             }
                         }
                     } label: { Image(systemName: "arrow.up.and.down") }
-                    .menuStyle(.borderlessButton).fixedSize().accessibilityLabel("Embedded asset height")
+                    .menuStyle(.borderlessButton).fixedSize().accessibilityLabel("Embedded artifact height")
                 }
                 Button { onOpenAsset(assetID) } label: { Image(systemName: "arrow.up.right.square") }
-                    .buttonStyle(WovenIconButtonStyle()).accessibilityLabel("Open original asset").disabled(asset == nil)
+                    .buttonStyle(WovenIconButtonStyle()).accessibilityLabel("Open original artifact").disabled(asset == nil)
                 PageComponentMenu(document: $pageDocument, viewState: $viewState, componentID: componentID)
             }.contentShape(Rectangle()).onTapGesture { viewState.selected = [componentID] }
             if let asset, let source {
@@ -64,7 +65,7 @@ struct PageAssetEmbed: View {
                     }.buttonStyle(WovenQuietButtonStyle())
                 } else {
                     DesktopNotePane(model: model, note: asset, focusesTitleOnAppear: false,
-                        onInitialFocusHandled: {}, onOpenNote: onOpenAsset, embedded: true,
+                        onInitialFocusHandled: {}, onOpenNote: onOpenAsset, onOpenSession: onOpenSession, embedded: true,
                         onEditorFocus: { viewState.selected = [componentID]; onFocus?($0) })
                         // An Artifact's web view and saved-input generation belong
                         // to one asset, even when another has identical HTML.
@@ -77,7 +78,7 @@ struct PageAssetEmbed: View {
                         })
                 }
             } else {
-                Text("The original asset is unavailable. Its reference is retained.")
+                Text("The original artifact is unavailable. Its reference is retained.")
                     .font(.system(size: 12)).foregroundStyle(.secondary)
             }
         }

@@ -139,6 +139,16 @@ private extension NoteDocument {
       if let title = canvas?[id]?.title { value["title"] = .string(title) }
     case .table:
       value["table"] = .object(["id": .string(id), "text": .string(block.plainText)])
+    case .image:
+      // The bytes stay on the Page; a read describes the image.
+      if let image = canvas?[id]?.image {
+        var described: [String: JSONValue] = ["mediaType": .string(image.mediaType),
+          "bytes": .number(Double(image.bytes?.count ?? 0))]
+        if let alt = image.alt { described["alt"] = .string(alt) }
+        if let width = image.width { described["width"] = .number(Double(width)) }
+        if let height = image.height { described["height"] = .number(Double(height)) }
+        value["image"] = .object(described)
+      }
     case .text, .task:
       value["text"] = .string(block.plainText)
       if case .richText(let text) = block, text.style != .paragraph { value["style"] = .string(text.style.rawValue) }
@@ -150,7 +160,10 @@ private extension NoteDocument {
     if let time = item.createdAt { value["createdAt"] = .string(time) }
     if let actor = item.updatedBy { value["updatedBy"] = try WovenMCPCatalog.json(actor) }
     if let time = item.updatedAt { value["updatedAt"] = .string(time) }
-    if includeLayout, let placement = canvas?[id] { value["legacyPlacement"] = try WovenMCPCatalog.json(placement) }
+    if includeLayout, var placement = canvas?[id], placement.image == nil || placement.assetID != nil || placement.title != nil {
+      placement.image = nil
+      value["legacyPlacement"] = try WovenMCPCatalog.json(placement)
+    }
     return .object(value)
   }
 }

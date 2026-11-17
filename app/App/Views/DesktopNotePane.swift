@@ -309,6 +309,8 @@ struct DesktopNotePane: View {
                         case .spreadsheet:
                             SpreadsheetEditor(document: sheetDocument)
                                 .accessibilityLabel("Sheet")
+                        case .html where currentDocument.html.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty:
+                            AppBuildPrompt(model: model, note: note, onOpenSession: onOpenSession)
                         case .html:
                             PersistentArtifactView(document: document, linkedDataJSON: linkedDataJSON,
                                 savedState: (try? NoteDocument.editableDocument(from: note.content))?.artifactState ?? [:],
@@ -318,7 +320,7 @@ struct DesktopNotePane: View {
                                 },
                                 saveState: { model.enqueueArtifactInput(noteID: note.id, edit: $0, after: $1) },
                                 reportUnsaved: { model.setArtifactInputsUnsaved(generation: $0, $1) })
-                            .accessibilityLabel("Artifact")
+                            .accessibilityLabel("App")
                         }
                     }
                 }
@@ -639,7 +641,7 @@ struct SplitSeparator: View {
             .focusable()
             .focusEffectDisabled()
             .accessibilityElement(children: .ignore)
-            .accessibilityLabel("Resize chat and asset panes")
+            .accessibilityLabel("Resize chat and artifact panes")
             .accessibilityValue("Chat \(chatWidthPercent, specifier: "%.1f") percent")
             .accessibilityAdjustableAction { direction in
                 switch direction {

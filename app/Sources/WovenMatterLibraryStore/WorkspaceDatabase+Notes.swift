@@ -635,6 +635,23 @@ extension WorkspaceDatabaseConnection {
     return Int(sqlite3_column_int64(statement, 0))
   }
 
+  /// Pages with a task assignee waiting to be sent or stopped. A cheap text match
+  /// finds them; callers decode and check each one.
+  public func pagesAwaitingTaskDispatch() throws -> [(id: String, title: String, content: String)] {
+    try withLock {
+      let statement = try prepareUnlocked("""
+        SELECT id, title, content FROM notes
+        WHERE deleted_at IS NULL AND (instr(content, '"state":"sending"') > 0 OR instr(content, '"state":"stopping"') > 0)
+        """)
+      defer { sqlite3_finalize(statement) }
+      var rows: [(id: String, title: String, content: String)] = []
+      while sqlite3_step(statement) == SQLITE_ROW {
+        rows.append((try text(statement, column: 0), try text(statement, column: 1), NoteSync.strip(try text(statement, column: 2))))
+      }
+      return rows
+    }
+  }
+
   func noteForEditingUnlocked(
     id: String
   ) throws -> (title: String, content: String, revision: String) {
@@ -746,6 +763,10 @@ extension WorkspaceDatabase {
 
   public func readNoteForEditing(id: String, callerConversationID: String? = nil) async throws -> NoteEditingResponse {
     try await read { try $0.readNoteForEditing(id: id, callerConversationID: callerConversationID) }
+  }
+
+  public func pagesAwaitingTaskDispatch() async throws -> [(id: String, title: String, content: String)] {
+    try await read { try $0.pagesAwaitingTaskDispatch() }
   }
 
   public func applyNoteEdits(_ request: NoteEditingRequest, callerConversationID: String? = nil,

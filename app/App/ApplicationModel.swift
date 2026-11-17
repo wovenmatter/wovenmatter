@@ -223,6 +223,9 @@ final class ApplicationModel {
     var agentTools: WorkspaceAgentToolsModel?
     let workspaceAssets: WorkspaceAssetSession
     let bots = BotsModel()
+    /// Page task assignees being sent or stopped by this process right now.
+    @ObservationIgnored var pageTaskInFlight: Set<String> = []
+    @ObservationIgnored var pageTaskDispatchTask: Task<Void, Never>?
     var pendingBotsSettings = false
     /// With `pendingBotsSettings`: open this bot machine's Profiles page instead of the Bots list.
     var pendingBotProfilesMachine: String?

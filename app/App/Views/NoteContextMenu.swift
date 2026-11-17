@@ -30,9 +30,9 @@ struct NoteContextMenu: ViewModifier {
                         }
                     }
                     Divider()
-                    Button("Export asset") { onAction(note, .export(.standard)) }
+                    Button("Export artifact") { onAction(note, .export(.standard)) }
                     Button("Export document") { onAction(note, .export(.document)) }
-                        .help("Save the complete Note, Sheet, Artifact, or Page as JSON.")
+                        .help("Save the complete Note, Page, Sheet, or App as JSON.")
                     Divider()
                     Button("Move to Trash", role: .destructive) { onAction(note, .moveToTrash) }
                 }
@@ -50,7 +50,7 @@ enum NoteExport {
     static func save(_ export: WorkspaceNoteExport) async throws -> Bool {
         try await StagedExport.save(
             url: export.url,
-            panelTitle: "Export asset",
+            panelTitle: "Export artifact",
             suggestedFilename: export.suggestedFilename,
             contentType: UTType(filenameExtension: export.fileExtension) ?? .data
         )

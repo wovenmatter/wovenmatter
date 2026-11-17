@@ -212,7 +212,8 @@ private struct PageMerger {
     if let l = localContent.task, let r = remoteContent.task {
       let b = baseContent.task ?? BoardTask()
       merged.task = BoardTask(status: choose(b.status, l.status, r.status), assignee: choose(b.assignee, l.assignee, r.assignee),
-                              outcome: choose(b.outcome, l.outcome, r.outcome))
+                              outcome: choose(b.outcome, l.outcome, r.outcome), details: choose(b.details, l.details, r.details),
+                              assignees: BoardTask.mergeAssignees(base: b.assignees, local: l.assignees, remote: r.assignees))
     } else {
       merged.task = pick(\.task)
     }

@@ -17,7 +17,7 @@ struct PersistentArtifactView: View {
         VStack(spacing: 0) {
             if document.databaseLink != nil {
                 HStack {
-                    Text("Live Artifact").font(.system(size: 11, weight: .medium))
+                    Text("Live App").font(.system(size: 11, weight: .medium))
                     Spacer()
                 }
                 .foregroundStyle(WovenPalette.mutedForeground)

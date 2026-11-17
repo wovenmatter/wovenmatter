@@ -1,18 +1,6 @@
 import SwiftUI
 import WovenMatterCore
 
-extension BoardTaskStatus {
-    var boardTitle: String {
-        switch self {
-        case .todo: "To do"
-        case .doing: "In progress"
-        case .blocked: "Blocked"
-        case .done: "Done"
-        case .canceled: "Canceled"
-        }
-    }
-}
-
 struct BoardItemInspector: View {
     @Binding var document: NoteDocument
     @Binding var viewState: CanvasViewState
@@ -35,14 +23,11 @@ struct BoardItemInspector: View {
                 Picker("State", selection: Binding(get: { item.task?.status ?? .todo }, set: { status in
                     update { $0.task?.status = status }
                 })) {
-                    ForEach([BoardTaskStatus.todo, .doing, .blocked, .done, .canceled], id: \.self) { status in
-                        Text(status.boardTitle).tag(status)
+                    ForEach(BoardTaskStatus.current + (task.status == .canceled ? [.canceled] : []), id: \.self) { status in
+                        Text(status.displayName).tag(status)
                     }
                 }.pickerStyle(.menu)
-                TextField("Assignee or agent", text: Binding(get: { item.task?.assignee ?? "" }, set: { value in
-                    update { $0.task?.assignee = value }
-                })).quietTextInput().accessibilityLabel("Task assignee")
-                Text("Assignment is a label. Use Send to chat to request work.")
+                Text("Assign agents, bots or yourself on the task itself. Each one sent the task gets its own chat.")
                     .font(.caption).foregroundStyle(.secondary)
                 TextField("Outcome, findings, or next steps", text: Binding(get: { item.task?.outcome ?? "" }, set: { value in
                     update { $0.task?.outcome = value }

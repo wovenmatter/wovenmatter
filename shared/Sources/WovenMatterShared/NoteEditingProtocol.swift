@@ -737,6 +737,7 @@ public enum NoteEditError: Error, Equatable, LocalizedError {
   case boardLinkedAssetText(String)
   case boardItemNotText(String)
   case boardSessionLimit(String)
+  case pageAssigneeMissing(String)
   case boardConflictingPatch(String)
   case boardCardIDChanged(String)
   case pageTargetMissing(String)
@@ -758,9 +759,10 @@ public enum NoteEditError: Error, Equatable, LocalizedError {
       current.isEmpty ? "Page component \(id) was removed since it was read."
         : "Page component \(id) changed since it was read. Read it again and apply your intended change to the current item."
     case .boardItemExists(let id): "A Page component already exists with ID \(id)."
-    case .boardLinkedAssetText(let id): "Page component \(id) shows a linked original. Edit the original asset, not the component."
+    case .boardLinkedAssetText(let id): "Page component \(id) shows a linked original. Edit the original artifact, not the component."
     case .boardItemNotText(let id): "Page component \(id) is a table. Use the table tools to change it."
     case .boardSessionLimit(let id): "Page component \(id) already links \(BoardItem.maximumSessions) sessions."
+    case .pageAssigneeMissing(let id): "Page task \(id) has no such assignee. Read the Page for its current assignees."
     case .boardConflictingPatch(let message): message
     case .boardCardIDChanged(let id): "A Page component keeps its ID. Replace the content of \(id) without changing its ID."
     case .blockNotFound(let id): "Note block not found: \(id)"

@@ -159,7 +159,7 @@ struct ArtifactStateTests {
       var copy = artifact()
       try copy.applyArtifactStateEdits([set("app:field", .object([String(repeating: "f", count: ArtifactStateLimits.maximumObjectKeyBytes + 1): .null]))], at: time)
     }
-    #expect(throws: ArtifactStateError.invalidEdit("Setting Artifact state requires a value.")) {
+    #expect(throws: ArtifactStateError.invalidEdit("Setting App state requires a value.")) {
       var copy = artifact()
       try copy.applyArtifactStateEdits([.init(action: .set, key: "app:x")], at: time)
     }

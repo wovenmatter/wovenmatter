@@ -7,7 +7,7 @@ struct WovenMCPTests {
   private let requestID = "11111111-1111-4111-8111-111111111111"
 
   @Test func pageToolsShareTheNotesGroupAndMapToItsCommands() throws {
-    let expected = ["list", "create", "read", "update", "add_component", "update_component", "move_component", "remove_component", "link_session", "unlink_session"].map { "woven_pages_" + $0 }
+    let expected = ["list", "create", "read", "update", "add_component", "update_component", "move_component", "remove_component", "link_session", "unlink_session", "assign", "stop_assignee"].map { "woven_pages_" + $0 }
     let tools = WovenMCPCatalog.tools.filter { $0.name.hasPrefix("woven_pages_") }
     #expect(Set(tools.map(\.name)) == Set(expected))
     #expect(tools.allSatisfy { $0.group == .notes })

@@ -90,13 +90,13 @@ extension MobileUITests {
     XCTAssertEqual(createdText.value as? String, "Pack snacks")
     XCTAssertLessThan(pageText("page-task", in: app).frame.minY, createdText.frame.minY)
 
-    // Component details: assignment is a label on the task.
+    // Component details: what the task asks for shows under it.
     componentAction("Component details", for: "page-task", in: app)
-    let assignee = app.textFields["page-details-assignee"]
-    XCTAssertTrue(assignee.waitForExistence(timeout: 5))
-    assignee.tap(); assignee.typeText("Jordan")
+    let details = app.textFields["page-details-details"].exists ? app.textFields["page-details-details"] : app.textViews["page-details-details"]
+    XCTAssertTrue(details.waitForExistence(timeout: 5))
+    details.tap(); details.typeText("Window seats")
     app.buttons["page-details-done"].tap()
-    XCTAssertTrue(app.staticTexts["Jordan"].waitForExistence(timeout: 5), "The task shows its assignee")
+    XCTAssertTrue(app.staticTexts["Window seats"].waitForExistence(timeout: 5), "The task shows its details")
 
     waitUntilSaved(app)
     relaunch(app)
@@ -104,7 +104,7 @@ extension MobileUITests {
     XCTAssertEqual(app.switches["page-task-toggle-page-task"].value as? String, "1")
     XCTAssertEqual(pageText(createdID, in: app).value as? String, "Pack snacks")
     XCTAssertTrue(app.switches["page-task-toggle-\(createdID)"].exists)
-    XCTAssertTrue(app.staticTexts["Jordan"].exists)
+    XCTAssertTrue(app.staticTexts["Window seats"].exists)
   }
 
   @MainActor func testPageSectionsTablesAndOriginalsPersist() {

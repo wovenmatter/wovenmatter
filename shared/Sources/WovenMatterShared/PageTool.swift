@@ -54,6 +54,10 @@ public enum PageTool {
       guard let uuid = UUID(uuidString: sessionID) else { throw WorkspaceToolError.invalid("sessionID must be a conversation UUID.") }
       operations = [.page(.init(action: command.action == "page-link-session" ? .linkSession : .unlinkSession,
                                 id: try command.required("id"), sessionID: uuid.uuidString.lowercased()))]
+    case "page-assign":
+      operations = [.page(.init(action: .assign, id: try command.required("id"), assignee: try assignee(command, requestID: requestID)))]
+    case "page-stop-assignee":
+      operations = [.page(.init(action: .stopAssignee, id: try command.required("id"), assigneeID: try command.required("assignee")))]
     default:
       throw WorkspaceToolError.invalid("Unsupported Page operation: \(command.action).")
     }
@@ -134,7 +138,7 @@ public enum PageTool {
     guard !added.isEmpty else { return }
     guard !added.contains(pageID) else { throw WorkspaceToolError.invalid("A Page cannot link to itself.") }
     if let missing = try missingAsset(added) {
-      throw WorkspaceToolError.notFound("The linked asset \(missing) is not available. Create it first, then link its ID.")
+      throw WorkspaceToolError.notFound("The linked artifact \(missing) is not available. Create it first, then link its ID.")
     }
   }
 
@@ -223,12 +227,39 @@ public enum PageTool {
     let review: BoardReviewState? = try choice(command, "review")
     return BoardItemPatch(title: try bounded("title", "A title", 1_024), text: try bounded("text", "Component text", 256 * 1_024),
                           role: role, status: status,
-                          assignee: try bounded("assignee", "An assignee", 1_024),
                           outcome: try bounded("outcome", "An outcome", BoardTask.maximumOutcomeBytes),
+                          details: try bounded("details", "Task details", BoardTask.maximumDetailsBytes),
                           clearTask: command.options["clear-task"] != nil ? true : nil,
                           review: review,
                           clearReview: command.options["clear-review"] != nil ? true : nil,
                           lastChange: try bounded("last-change", "lastChange", BoardItem.maximumLastChangeBytes))
+  }
+
+  /// An agent's assignment goes out at once; assigning the person only marks the task theirs.
+  private static func assignee(_ command: WovenMatterToolCommand, requestID: String) throws -> BoardTaskAssignee {
+    let kind: BoardTaskAssignee.Kind = try choice(command, "assignee-kind") ?? .agent
+    func value(_ key: String) throws -> String? {
+      guard let raw = command.options[key]?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty else { return nil }
+      guard raw.utf8.count <= BoardTaskAssignee.maximumTextBytes else { throw WorkspaceToolError.invalid("\(key) is too long.") }
+      return raw
+    }
+    let id = String(requestID.prefix(BoardTaskAssignee.maximumTextBytes))
+    switch kind {
+    case .user:
+      return BoardTaskAssignee(id: id, kind: .user)
+    case .agent:
+      guard let workspace = try value("workspace")?.lowercased(), let harness = try value("harness") else {
+        throw WorkspaceToolError.invalid("Assigning an agent needs workspace and harness. List them with woven_sessions_harnesses.")
+      }
+      return BoardTaskAssignee(id: id, kind: .agent, name: try value("name") ?? BoardTaskAssignee.runtimeName(harness),
+                               place: try value("place"), workspaceID: workspace, runtime: harness,
+                               folderID: try value("folder").flatMap { ["all", "ungrouped"].contains($0) ? nil : $0 }, state: .sending)
+    case .bot:
+      guard let bot = try value("bot-id"), let machine = try value("machine-id") else {
+        throw WorkspaceToolError.invalid("Assigning a bot needs botID and machineID.")
+      }
+      return BoardTaskAssignee(id: id, kind: .bot, name: try value("name") ?? "Bot", botID: bot, machineID: machine, state: .sending)
+    }
   }
 
   private static func decode<T: Decodable>(_ type: T.Type, command: WovenMatterToolCommand, label: String) throws -> T {

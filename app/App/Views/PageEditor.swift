@@ -2,7 +2,7 @@ import SwiftUI
 import WovenMatterCore
 
 /// A Page is a document. Rich text stays in ordinary contiguous Notes editors;
-/// sections and original assets provide the boundaries between those flows.
+/// sections, tasks, images and embedded artifacts provide the boundaries between those flows.
 struct PageEditor: View {
     @Bindable var model: ApplicationModel
     @Binding var document: NoteDocument
@@ -75,9 +75,10 @@ struct PageEditor: View {
                         var parent = page.pageParentID(for: id)
                         while let id = parent { collapsed.remove(id); parent = page.pageParentID(for: id) }
                         withAnimation { proxy.scrollTo(segment.id, anchor: .center) }
-                        // A text flow clears the request after focusing its text.
+                        // A text flow or task clears the request after focusing its text.
                         // Sections and embeds have nothing more to do.
                         if case .flow = segment { return }
+                        if case .task = segment { return }
                         DispatchQueue.main.async { if viewState.revealCardID == id { viewState.revealCardID = nil } }
                     }
                 }
@@ -107,17 +108,20 @@ struct PageEditor: View {
         .sheet(isPresented: Binding(get: { viewState.assetPickerPosition != nil },
                                     set: { if !$0 { viewState.assetPickerPosition = nil } })) {
             VStack(alignment: .leading, spacing: 16) {
-                HStack { Text("Embed an original asset").font(.headline); Spacer(); Button("Done") { viewState.assetPickerPosition = nil } }
+                HStack { Text("Embed an artifact").font(.headline); Spacer(); Button("Done") { viewState.assetPickerPosition = nil } }
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 6) {
-                        ForEach((model.workspaceOverview?.notes ?? []).filter { $0.id != noteID }, id: \.id) { asset in
+                        // A Page holds Notes, Sheets and Apps; never another Page.
+                        ForEach((model.workspaceOverview?.notes ?? []).filter {
+                            $0.id != noteID && NoteDocument.decode($0.content).kind != .canvas
+                        }, id: \.id) { asset in
                             Button {
                                 let position = viewState.assetPickerPosition ?? .init()
                                 viewState.assetPickerPosition = nil
                                 inserter.add(kind: .asset, assetID: asset.id, position: position)
                             } label: {
                                 HStack {
-                                    Text(asset.title.isEmpty ? "Untitled asset" : asset.title)
+                                    Text(asset.title.isEmpty ? "Untitled artifact" : asset.title)
                                     Spacer()
                                     Text(NoteDocument.decode(asset.content).kind.displayName).foregroundStyle(.secondary)
                                 }.frame(maxWidth: .infinity, alignment: .leading)
@@ -127,6 +131,7 @@ struct PageEditor: View {
                 }
             }.padding(24).frame(width: 480, height: 420)
         }
+        .modifier(PageImagePickers(model: model, viewState: $viewState, inserter: inserter))
         .onChange(of: document) { old, new in
             if viewState.observe(old, new) { textUndoManager.removeAllActions() }
         }
@@ -163,9 +168,20 @@ struct PageEditor: View {
                     PageMenuEntries(entries: PageComponentActions(document: $document, viewState: $viewState, componentID: id).entries)
                 }
             }
+        case let .task(id, _, _):
+            PageTaskRow(model: model, document: $document, viewState: $viewState, componentID: id,
+                        pageFolderID: folderID, onOpenSession: onOpenSession)
+                .simultaneousGesture(TapGesture().onEnded { viewState.selected = [id]; onSectionFocus?() })
+                .contextMenu { componentContextMenu(id) }
+        case let .image(id, _, _):
+            PageImageView(image: page.canvas?[id]?.image)
+                .onTapGesture { viewState.selected = [id]; onSectionFocus?() }
+                .contextMenu { componentContextMenu(id) }
+                .padding(.vertical, 6)
         case let .asset(id, assetID, _, _):
             PageAssetEmbed(model: model, pageDocument: $document, viewState: $viewState,
-                componentID: id, assetID: assetID, onOpenAsset: onOpenAsset, onFocus: onFocus, onNonTextFocus: onSectionFocus)
+                componentID: id, assetID: assetID, onOpenAsset: onOpenAsset, onOpenSession: onOpenSession, onFocus: onFocus,
+                onNonTextFocus: onSectionFocus)
                 .id(assetID)
                 .contextMenu {
                     Menu("Add component") { inserter.menu { .init(parentID: page.pageParentID(for: id), afterID: id) } }
@@ -174,6 +190,13 @@ struct PageEditor: View {
                     }
                 }
                 .padding(.vertical, 10)
+        }
+    }
+
+    @ViewBuilder private func componentContextMenu(_ id: String) -> some View {
+        Menu("Add component") { inserter.menu { .init(parentID: page.pageParentID(for: id), afterID: id) } }
+        Menu("Component actions") {
+            PageMenuEntries(entries: PageComponentActions(document: $document, viewState: $viewState, componentID: id).entries)
         }
     }
 

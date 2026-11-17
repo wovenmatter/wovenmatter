@@ -349,12 +349,12 @@ struct FoldersPane: View {
                 model.closeFolder(); model.newChat()
               }.accessibilityIdentifier("action-new-chat")
               Menu {
-                Section("New Asset") { MobileNewAssetItems { kind in model.closeFolder(); Task { await model.newAsset(kind) } } }
+                Section("New Artifact") { MobileNewAssetItems { kind in model.closeFolder(); Task { await model.newAsset(kind) } } }
               } label: {
                 // The same row as New Chat; its choices are the New Asset kinds.
                 HStack(spacing: 14) {
                   LucideIcon(glyph: .fileText, size: 22).frame(width: 26)
-                  Text("New Asset").font(.body).lineLimit(2).frame(maxWidth: .infinity, alignment: .leading)
+                  Text("New Artifact").font(.body).lineLimit(2).frame(maxWidth: .infinity, alignment: .leading)
                 }.padding(.horizontal, 14).padding(.vertical, 13).frame(minHeight: 48).contentShape(Rectangle())
                   .foregroundStyle(WovenPalette.foreground)
               }.accessibilityIdentifier("action-new-asset")
@@ -514,7 +514,7 @@ struct FolderContentsPane: View {
       PaneHeader(title: model.selectedFolderScopeTitle) {
         if model.canCreateInFolderScope { Menu {
           Button("New chat", glyph: .squarePen) { model.newChat() }
-          Menu("New Asset") { MobileNewAssetItems { kind in Task { await model.newAsset(kind) } } }
+          Menu("New Artifact") { MobileNewAssetItems { kind in Task { await model.newAsset(kind) } } }
         } label: { LucideIcon(glyph: .plus, size: 20).frame(width: 44, height: 44) }
           .accessibilityLabel("Add to folder") }
       }
@@ -534,7 +534,7 @@ struct FolderContentsPane: View {
             }
           }
           if !notes.isEmpty {
-            GroupLabel(text: "Notes & assets")
+            GroupLabel(text: "Artifacts")
             ForEach(notes) { note in
               WorkspaceRow(icon: MobileNoteIcon(content: note.content), title: note.title, detail: model.state.uncachedNoteIDs.contains(note.id) ? "Online" : nil) { Task { await model.openNote(note.id) } }
             }

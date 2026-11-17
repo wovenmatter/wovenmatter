@@ -22,20 +22,25 @@ public enum PageSegment: Equatable, Identifiable, Sendable {
   case flow(id: String, parentID: String?, afterID: String?, depth: Int, blockIDs: [String])
   case section(id: String, parentID: String?, depth: Int)
   case asset(id: String, assetID: String, parentID: String?, depth: Int)
+  /// A task shows its assignees and results, so it stands on its own between flows.
+  case task(id: String, parentID: String?, depth: Int)
+  case image(id: String, parentID: String?, depth: Int)
 
   public var id: String {
     switch self {
-    case .flow(let id, _, _, _, _), .section(let id, _, _), .asset(let id, _, _, _): id
+    case .flow(let id, _, _, _, _), .section(let id, _, _), .asset(let id, _, _, _), .task(let id, _, _), .image(let id, _, _): id
     }
   }
   public var depth: Int {
     switch self {
-    case .flow(_, _, _, let depth, _), .section(_, _, let depth), .asset(_, _, _, let depth): depth
+    case .flow(_, _, _, let depth, _), .section(_, _, let depth), .asset(_, _, _, let depth), .task(_, _, let depth),
+         .image(_, _, let depth): depth
     }
   }
   public var parentID: String? {
     switch self {
-    case .flow(_, let parentID, _, _, _), .section(_, let parentID, _), .asset(_, _, let parentID, _): parentID
+    case .flow(_, let parentID, _, _, _), .section(_, let parentID, _), .asset(_, _, let parentID, _), .task(_, let parentID, _),
+         .image(_, let parentID, _): parentID
     }
   }
 
@@ -48,7 +53,7 @@ public enum PageSegment: Equatable, Identifiable, Sendable {
   }
 }
 
-public enum PageComponentKind: String, Codable, CaseIterable, Sendable { case text, task, section, table, asset }
+public enum PageComponentKind: String, Codable, CaseIterable, Sendable { case text, task, section, table, asset, image }
 
 /// A place among a parent's children. With neither `afterID` nor `atStart` the
 /// component goes at the end of the parent, which is what adding usually means.
@@ -116,6 +121,7 @@ public extension NoteDocument {
   var pageSegments: [PageSegment] {
     let document = materializedPage()
     let children = document.pageChildMap()
+    let tables = Set(document.blocks.compactMap { block -> String? in if case .table = block { block.id } else { nil } })
     var segments: [PageSegment] = []
     func emit(parentID: String?, depth: Int) {
       var flow: [String] = []
@@ -136,6 +142,14 @@ public extension NoteDocument {
         } else if let assetID = document.canvas?[id]?.assetID {
           flush()
           segments.append(.asset(id: id, assetID: assetID, parentID: parentID, depth: depth))
+          afterID = id; endsWithFlow = false
+        } else if document.canvas?[id]?.image != nil {
+          flush()
+          segments.append(.image(id: id, parentID: parentID, depth: depth))
+          afterID = id; endsWithFlow = false
+        } else if document.boardItems?[id]?.task != nil, !tables.contains(id) {
+          flush()
+          segments.append(.task(id: id, parentID: parentID, depth: depth))
           afterID = id; endsWithFlow = false
         } else {
           flow.append(id); endsWithFlow = true
@@ -260,7 +274,7 @@ public extension NoteDocument {
             document.blocks[index..<(index + old.count)].map(\.id) == old else { throw NoteEditError.pagePositionInvalid(first) }
       for id in old {
         guard document.pageParentID(for: id) == parentID, document.pageNodes?[id]?.isSection != true,
-              document.canvas?[id]?.assetID == nil else { throw NoteEditError.pagePositionInvalid(id) }
+              document.canvas?[id]?.assetID == nil, document.canvas?[id]?.image == nil else { throw NoteEditError.pagePositionInvalid(id) }
       }
       start = index
     } else {
@@ -338,6 +352,7 @@ extension NoteDocument {
   func pageComponentKind(block: NoteBlock) -> PageComponentKind {
     if pageNodes?[block.id]?.isSection == true { return .section }
     if canvas?[block.id]?.assetID != nil { return .asset }
+    if canvas?[block.id]?.image != nil { return .image }
     if case .table = block { return .table }
     return boardItems?[block.id]?.task != nil ? .task : .text
   }

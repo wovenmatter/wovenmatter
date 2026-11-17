@@ -5,7 +5,15 @@ import Foundation
 /// a component's revision, and removing one never deletes a linked original.
 public struct PageEdit: Codable, Equatable, Sendable {
   /// `requirePage` changes nothing: it fails a batch of generic operations on any other asset.
-  public enum Action: String, Codable, Sendable { case requirePage, setPurpose, add, update, move, remove, linkSession, unlinkSession }
+  public enum Action: String, Codable, Sendable {
+    case requirePage, setPurpose, add, update, move, remove, linkSession, unlinkSession
+    /// Adds `assignee` to a task, making the component a task when it is not one.
+    case assign
+    /// Replaces the assignee with `assignee`'s ID, for example after its chat started.
+    case updateAssignee
+    /// Unassigns `assigneeID` before it is sent, or asks for its chat to stop.
+    case stopAssignee
+  }
   public enum Removal: String, Codable, Sendable { case promoteChildren, removeSubtree }
 
   public var action: Action
@@ -29,13 +37,19 @@ public struct PageEdit: Codable, Equatable, Sendable {
   /// `setPurpose` only; an empty value clears the purpose.
   public var purpose: String?
   public var sessionID: String?
+  /// `add` only: the image an image component holds.
+  public var image: PageImage?
+  public var assignee: BoardTaskAssignee?
+  public var assigneeID: String?
 
   public init(action: Action, id: String? = nil, expectedRevision: String? = nil, expectedSubtreeRevision: String? = nil,
               kind: PageComponentKind? = nil, block: NoteBlock? = nil, patch: BoardItemPatch? = nil, assetID: String? = nil,
-              position: PagePosition? = nil, removal: Removal? = nil, purpose: String? = nil, sessionID: String? = nil) {
+              position: PagePosition? = nil, removal: Removal? = nil, purpose: String? = nil, sessionID: String? = nil,
+              image: PageImage? = nil, assignee: BoardTaskAssignee? = nil, assigneeID: String? = nil) {
     self.action = action; self.id = id; self.expectedRevision = expectedRevision
     self.expectedSubtreeRevision = expectedSubtreeRevision; self.kind = kind; self.block = block; self.patch = patch
     self.assetID = assetID; self.position = position; self.removal = removal; self.purpose = purpose; self.sessionID = sessionID
+    self.image = image; self.assignee = assignee; self.assigneeID = assigneeID
   }
 }
 
@@ -73,6 +87,36 @@ public extension NoteDocument {
       let id = try document.requirePageComponent(edit, revisionRequired: false)
       guard let sessionID = edit.sessionID else { throw NoteDocumentSafetyError.unsupportedFormat }
       document.boardItems?[id]?.sessions.removeAll { $0 == sessionID }
+    case .assign:
+      try document.assignPageTask(edit)
+    case .updateAssignee:
+      let id = try document.requirePageComponent(edit, revisionRequired: false)
+      guard let assignee = edit.assignee, var task = document.boardItems?[id]?.task,
+            let index = task.assignees.firstIndex(where: { $0.id == assignee.id }) else { throw NoteEditError.pageAssigneeMissing(id) }
+      var updated = assignee
+      let previous = task.assignees[index]
+      updated.assignedBy = previous.assignedBy; updated.assignedAt = previous.assignedAt
+      task.assignees[index] = updated
+      // Starting work moves a waiting task along and links the chat it happens in.
+      if updated.state == .sent, previous.state != .sent {
+        if task.status == .todo { task.status = .doing }
+        if updated.kind == .agent, let chat = updated.conversationID, UUID(uuidString: chat) != nil,
+           var item = document.boardItems?[id], !item.sessions.contains(chat), item.sessions.count < BoardItem.maximumSessions {
+          item.sessions.append(chat)
+          document.boardItems?[id] = item
+        }
+      }
+      document.boardItems?[id]?.task = task
+    case .stopAssignee:
+      let id = try document.requirePageComponent(edit, revisionRequired: false)
+      guard let assigneeID = edit.assigneeID, var task = document.boardItems?[id]?.task,
+            let index = task.assignees.firstIndex(where: { $0.id == assigneeID }) else { throw NoteEditError.pageAssigneeMissing(id) }
+      switch task.assignees[index].state {
+      case .assigned, .failed: task.assignees.remove(at: index)
+      case .sending, .sent: task.assignees[index].state = .stopping
+      case .stopping, .stopped: break
+      }
+      document.boardItems?[id]?.task = task
     }
     try document.validateEditableShape()
     self = document
@@ -80,15 +124,41 @@ public extension NoteDocument {
 }
 
 private extension NoteDocument {
+  /// Idempotent: the same assignee, or one already working on the task from the same
+  /// place, is not added twice.
+  mutating func assignPageTask(_ edit: PageEdit) throws {
+    let id = try requirePageComponent(edit, revisionRequired: false)
+    guard let assignee = edit.assignee else { throw NoteDocumentSafetyError.unsupportedFormat }
+    guard pageComponentKind(for: id) == .text || pageComponentKind(for: id) == .task else {
+      throw NoteEditError.boardConflictingPatch("Only a task can be assigned. Add a task component, then assign it.")
+    }
+    var item = boardItems?[id] ?? BoardItem()
+    var task = item.task ?? BoardTask()
+    let working = task.assignees.contains { $0.id == assignee.id
+      || ($0.isSameTarget(as: assignee) && ($0.isActive || $0.state == .assigned)) }
+    if !working {
+      guard task.assignees.count < BoardTask.maximumAssignees else { throw NoteEditError.boardConflictingPatch("A task has at most \(BoardTask.maximumAssignees) assignees.") }
+      task.assignees.append(assignee)
+    }
+    item.task = task
+    if boardItems == nil { boardItems = [:] }
+    boardItems?[id] = item
+  }
+
   mutating func addPageComponent(_ edit: PageEdit) throws {
     guard let id = edit.id, !id.isEmpty, id.utf8.count <= 1024 else { throw NoteDocumentSafetyError.unsupportedFormat }
     guard !blocks.contains(where: { $0.id == id }) else { throw NoteEditError.boardItemExists(id) }
     let requested: PageComponentKind
     if let kind = edit.kind { requested = kind }
     else if edit.assetID != nil { requested = .asset }
+    else if edit.image != nil { requested = .image }
     else if case .table? = edit.block { requested = .table }
     else { requested = .text }
     if requested != .asset, edit.assetID != nil { throw NoteEditError.boardConflictingPatch("Only an asset component links an original.") }
+    if requested != .image, edit.image != nil { throw NoteEditError.boardConflictingPatch("Only an image component holds an image.") }
+    if requested == .image, edit.patch?.changesTask == true {
+      throw NoteEditError.boardConflictingPatch("An image is not a task. Add a task beside it.")
+    }
     let position = edit.position ?? PagePosition()
     let index = try pageInsertionIndex(position)
     let block: NoteBlock
@@ -99,6 +169,14 @@ private extension NoteDocument {
       block = .richText(NoteRichTextBlock(id: id))
       var placement = CanvasCardPlacement(x: 0, y: 0, assetID: assetID)
       placement.title = edit.patch?.title.flatMap { $0.isEmpty ? nil : $0 }
+      if canvas == nil { canvas = [:] }
+      canvas?[id] = placement
+    case .image:
+      guard let image = edit.image else { throw NoteDocumentSafetyError.unsupportedFormat }
+      guard edit.patch?.text == nil, edit.patch?.title == nil, edit.block == nil else { throw NoteEditError.boardItemNotText(id) }
+      block = .richText(NoteRichTextBlock(id: id))
+      var placement = CanvasCardPlacement(x: 0, y: 0)
+      placement.image = image
       if canvas == nil { canvas = [:] }
       canvas?[id] = placement
     case .section:
@@ -137,6 +215,9 @@ private extension NoteDocument {
     guard let index = blocks.firstIndex(where: { $0.id == id }) else { throw NoteEditError.blockNotFound(id) }
     let isSection = pageNodes?[id]?.isSection == true, isAsset = canvas?[id]?.assetID != nil
     let patch = edit.patch
+    if canvas?[id]?.image != nil, edit.block != nil || patch?.text != nil || patch?.title != nil || patch?.changesTask == true {
+      throw NoteEditError.boardItemNotText(id)
+    }
     if let supplied = edit.block {
       guard !isAsset else { throw NoteEditError.boardLinkedAssetText(id) }
       guard supplied.id == id else { throw NoteEditError.boardCardIDChanged(id) }
@@ -239,7 +320,7 @@ private extension NoteDocument {
   }
 
   func applyPageMetadata(_ patch: BoardItemPatch?, to item: inout BoardItem, id: String, isSection: Bool) throws {
-    if isSection, patch?.status != nil || patch?.assignee != nil || patch?.outcome != nil {
+    if isSection, patch?.changesTask == true {
       throw NoteEditError.boardConflictingPatch("A section is not a task. Add a task component inside it.")
     }
     try applyBoardPatch(patch, to: &item)

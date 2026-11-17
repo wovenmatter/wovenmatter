@@ -338,7 +338,7 @@ struct WorkspaceView: View {
             }
         }
         .sheet(item: $noteToRename) { note in
-            RenameSheet(heading: "Rename asset", placeholder: "Asset name", initialTitle: model.noteDraft(for: note).title) { title in
+            RenameSheet(heading: "Rename artifact", placeholder: "Artifact name", initialTitle: model.noteDraft(for: note).title) { title in
                 try await model.mutateNote(id: note.id, mutation: .rename(title))
             }
         }
@@ -628,7 +628,10 @@ struct WorkspaceView: View {
                         onAddPanel: addPanel,
                         onClosePanel: closePanel,
                         onNavigatePanel: navigatePanel,
-                        onOpenBoardSession: selectConversation,
+                        onOpenBoardSession: { id in
+                            // A Page task's bot thread opens beside the chats.
+                            if let bot = BotTarget(pageTaskLink: id) { selectBot(bot) } else { selectConversation(id) }
+                        },
                         onSend: send,
                         onAttachmentAction: handleAttachmentAction,
                         onRemoveAttachment: removeAttachment,
@@ -703,8 +706,8 @@ struct WorkspaceView: View {
                         Image(systemName: "rectangle.on.rectangle").font(.system(size: 16)).frame(width: 32, height: 32)
                     }
                     .buttonStyle(WovenIconButtonStyle())
-                    .help(assets.tabs.selected == nil ? "Open browser" : "Show assets")
-                    .accessibilityLabel(assets.tabs.selected == nil ? "Open browser" : "Show assets")
+                    .help(assets.tabs.selected == nil ? "Open browser" : "Show artifacts")
+                    .accessibilityLabel(assets.tabs.selected == nil ? "Open browser" : "Show artifacts")
                 }
                 if showRightRailButton {
                     RevealRailButton(side: .right,
@@ -1254,7 +1257,7 @@ struct WorkspaceView: View {
                 let notesSaved = capturedWorkspace?.notes.isEmpty != false ? true : await model.flushNoteDrafts()
                 guard notesSaved else {
                     submittingConversationIDs.remove(conversationID)
-                    showNotice("Save the open assets before sending. Your draft is preserved.")
+                    showNotice("Save the open artifacts before sending. Your draft is preserved.")
                     return
                 }
                 let accepted = await model.sendAgentMessage(
@@ -1511,7 +1514,7 @@ struct WorkspaceSurface: View {
         _ = assets.pageRevision
         var labels: [String] = []
         let count = assets.tabs.noteIDs.count
-        if count > 0 { labels.append("\(count) open asset\(count == 1 ? "" : "s")") }
+        if count > 0 { labels.append("\(count) open artifact\(count == 1 ? "" : "s")") }
         let pageCount = assets.tabs.browserIDs.compactMap { assets.pages[$0] }
             .filter { $0.url.hasPrefix("https://") || $0.url.hasPrefix("http://") }.count
         if pageCount > 0 { labels.append("\(pageCount) browser URL\(pageCount == 1 ? "" : "s")") }
@@ -1587,7 +1590,7 @@ struct WorkspaceSurface: View {
         Button {
             compactPane = .note
         } label: {
-            Label("Assets", systemImage: "rectangle.on.rectangle")
+            Label("Artifacts", systemImage: "rectangle.on.rectangle")
                 .font(.system(size: 12, weight: .medium))
                 .padding(.horizontal, 10)
                 .frame(height: 32)

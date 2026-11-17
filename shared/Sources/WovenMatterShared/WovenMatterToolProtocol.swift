@@ -105,7 +105,7 @@ public struct WovenMatterToolCommand: Sendable {
     guard !args.isEmpty else { throw WorkspaceToolError.invalid("Choose a Woven tool operation.") }
     let domain = args.removeFirst()
     if domain == "context" {
-      guard args.isEmpty else { throw WorkspaceToolError.invalid("Context does not accept caller-selected assets or messages.") }
+      guard args.isEmpty else { throw WorkspaceToolError.invalid("Context does not accept caller-selected artifacts or messages.") }
       self.group = nil; self.action = "context"; self.positional = []; self.options = [:]
       self.operationArguments = arguments
       return
@@ -117,7 +117,7 @@ public struct WovenMatterToolCommand: Sendable {
     guard !args.isEmpty else { throw WorkspaceToolError.invalid("Choose a \(domain) operation.") }
     self.action = (domain == "databases" ? "database-" : domain == "pages" ? "page-" : "") + args.removeFirst()
     let allowedActions: [WorkspaceToolGroup: Set<String>] = [
-      .notes: ["database-list", "database-create", "database-query", "database-execute", "page-list", "page-create", "page-read", "page-update", "page-add-component", "page-update-component", "page-move-component", "page-remove-component", "page-link-session", "page-unlink-session", "artifact-state", "artifact-state-edit", "list", "folders", "create", "read", "append", "insert", "replace-block", "delete-block", "format", "set-title", "table", "set-html", "link", "unlink", "apply", "versions", "version", "restore"],
+      .notes: ["database-list", "database-create", "database-query", "database-execute", "page-list", "page-create", "page-read", "page-update", "page-add-component", "page-update-component", "page-move-component", "page-remove-component", "page-link-session", "page-unlink-session", "page-assign", "page-stop-assignee", "artifact-state", "artifact-state-edit", "list", "folders", "create", "read", "append", "insert", "replace-block", "delete-block", "format", "set-title", "table", "set-html", "link", "unlink", "apply", "versions", "version", "restore"],
       .history: ["search", "conversations", "conversation", "message", "runs", "trace", "events", "event"],
       .sessions: ["list", "status", "wait", "create", "send", "stop", "respond", "manage", "release", "notifications", "receipts", "folders", "harnesses"],
       .goals: ["get", "set", "pause", "resume", "clear", "complete", "block", "checkpoint"],
@@ -128,7 +128,7 @@ public struct WovenMatterToolCommand: Sendable {
     ]
     guard allowedActions[group]?.contains(action) == true else { throw WorkspaceToolError.invalid("Unknown \(domain) command '\(action)'.") }
     let booleanFlags: Set<String> = ["all-workspace", "independent", "no-notify", "cancelled", "paused", "all-day", "timed", "no-repeat", "regular-event", "json", "header", "clear-task", "clear-review", "needs-review", "include-layout", "at-start"]
-    let valueFlags: Set<String> = ["id", "session", "conversation", "note-id", "folder", "workspace", "directory", "harness", "model", "thinking", "title", "text", "purpose", "request-id", "search", "run", "kind", "sender", "since", "until", "after", "before", "limit", "offset", "characters", "sort", "epoch", "at", "every", "starts-at", "ends-at", "description", "prompt", "time-zone", "repeat-unit", "repeat-interval", "session-mode", "occurrence", "enabled", "revision", "version", "html", "style", "block-id", "table-id", "row", "column", "rows", "columns", "source-id", "native-session-id", "native-record-id", "native-conversation-id", "database-id", "path", "query", "code", "objective", "evidence", "token-budget", "turn-budget", "interaction", "option-id", "answers", "component-revision", "subtree-revision", "parent-id", "after-id", "removal", "status", "role", "assignee", "outcome", "review", "last-change", "asset-id", "changed-since", "timeout-seconds"]
+    let valueFlags: Set<String> = ["id", "details", "assignee-kind", "bot-id", "machine-id", "name", "place", "session", "conversation", "note-id", "folder", "workspace", "directory", "harness", "model", "thinking", "title", "text", "purpose", "request-id", "search", "run", "kind", "sender", "since", "until", "after", "before", "limit", "offset", "characters", "sort", "epoch", "at", "every", "starts-at", "ends-at", "description", "prompt", "time-zone", "repeat-unit", "repeat-interval", "session-mode", "occurrence", "enabled", "revision", "version", "html", "style", "block-id", "table-id", "row", "column", "rows", "columns", "source-id", "native-session-id", "native-record-id", "native-conversation-id", "database-id", "path", "query", "code", "objective", "evidence", "token-budget", "turn-budget", "interaction", "option-id", "answers", "component-revision", "subtree-revision", "parent-id", "after-id", "removal", "status", "role", "assignee", "outcome", "review", "last-change", "asset-id", "changed-since", "timeout-seconds"]
     var positional: [String] = [], options: [String: String] = [:]
     var operationArguments = Array(arguments.prefix(2))
     while !args.isEmpty {
@@ -176,8 +176,10 @@ public struct WovenMatterToolCommand: Sendable {
     case (.notes, "page-create"): allowed = ["title", "purpose", "folder"] + request; maximumPositionals = 0
     case (.notes, "page-read"): allowed = ["note-id", "status", "role", "needs-review", "changed-since", "include-layout", "offset", "limit"]; maximumPositionals = 0
     case (.notes, "page-update"): allowed = ["note-id", "title", "purpose"] + revision + request; maximumPositionals = 0
-    case (.notes, "page-add-component"): allowed = ["note-id", "kind", "parent-id", "after-id", "at-start", "title", "text", "asset-id", "json", "role", "status", "assignee", "outcome", "review", "last-change"] + request; maximumPositionals = 0
-    case (.notes, "page-update-component"): allowed = ["note-id", "id", "component-revision", "title", "text", "json", "role", "status", "assignee", "outcome", "clear-task", "review", "clear-review", "last-change"] + request; maximumPositionals = 0
+    case (.notes, "page-add-component"): allowed = ["note-id", "kind", "parent-id", "after-id", "at-start", "title", "text", "asset-id", "json", "role", "status", "details", "outcome", "review", "last-change"] + request; maximumPositionals = 0
+    case (.notes, "page-update-component"): allowed = ["note-id", "id", "component-revision", "title", "text", "json", "role", "status", "details", "outcome", "clear-task", "review", "clear-review", "last-change"] + request; maximumPositionals = 0
+    case (.notes, "page-assign"): allowed = ["note-id", "id", "assignee-kind", "workspace", "harness", "folder", "bot-id", "machine-id", "name", "place"] + request; maximumPositionals = 0
+    case (.notes, "page-stop-assignee"): allowed = ["note-id", "id", "assignee"] + request; maximumPositionals = 0
     case (.notes, "page-move-component"): allowed = ["note-id", "id", "parent-id", "after-id", "at-start", "component-revision", "subtree-revision"] + request; maximumPositionals = 0
     case (.notes, "page-remove-component"): allowed = ["note-id", "id", "component-revision", "subtree-revision", "removal"] + request; maximumPositionals = 0
     case (.notes, "page-link-session"), (.notes, "page-unlink-session"): allowed = ["note-id", "id", "session"] + request; maximumPositionals = 0

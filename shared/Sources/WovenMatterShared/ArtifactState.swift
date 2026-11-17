@@ -125,16 +125,16 @@ public enum ArtifactStateError: LocalizedError, Equatable, Sendable {
   public var errorDescription: String? {
     switch self {
     case .conflict(let key, let current):
-      "Artifact state key \(key) changed since it was read. Its current version is \(current?.version ?? 0). Read it again and apply your change to the current value."
+      "App state key \(key) changed since it was read. Its current version is \(current?.version ?? 0). Read it again and apply your change to the current value."
     case .invalidKey(let key):
-      "Artifact state key \(key.prefix(80)) is invalid. A key starts with app: or form:, has at most \(ArtifactStateLimits.maximumKeyBytes) bytes and contains no control characters."
+      "App state key \(key.prefix(80)) is invalid. A key starts with app: or form:, has at most \(ArtifactStateLimits.maximumKeyBytes) bytes and contains no control characters."
     case .invalidEdit(let message): message
     case .invalidValue(let message): message
     case .valueTooLarge(let key):
-      "The value of Artifact state key \(key.prefix(80)) exceeds \(ArtifactStateLimits.maximumValueBytes) bytes."
-    case .tooManyKeys: "This Artifact already saves \(ArtifactStateLimits.maximumKeys) keys. Remove one before adding another."
-    case .stateTooLarge: "This Artifact's saved state exceeds \(ArtifactStateLimits.maximumTotalBytes) bytes."
-    case .notArtifact: "Only an Artifact can save state."
+      "The value of App state key \(key.prefix(80)) exceeds \(ArtifactStateLimits.maximumValueBytes) bytes."
+    case .tooManyKeys: "This App already saves \(ArtifactStateLimits.maximumKeys) keys. Remove one before adding another."
+    case .stateTooLarge: "This App's saved state exceeds \(ArtifactStateLimits.maximumTotalBytes) bytes."
+    case .notArtifact: "Only an App can save state."
     }
   }
 
@@ -169,7 +169,7 @@ public extension NoteDocument {
   @discardableResult
   mutating func applyArtifactStateEdits(_ edits: [ArtifactStateEdit], at timestamp: String) throws -> Bool {
     guard kind == .html else { throw ArtifactStateError.notArtifact }
-    guard timestamp.utf8.count <= 64 else { throw ArtifactStateError.invalidEdit("The Artifact state timestamp is invalid.") }
+    guard timestamp.utf8.count <= 64 else { throw ArtifactStateError.invalidEdit("The App state timestamp is invalid.") }
     var state = artifactState ?? [:]
     var changed = false
     for edit in edits {
@@ -180,14 +180,14 @@ public extension NoteDocument {
       }
       switch edit.action {
       case .set:
-        guard let value = edit.value else { throw ArtifactStateError.invalidEdit("Setting Artifact state requires a value.") }
+        guard let value = edit.value else { throw ArtifactStateError.invalidEdit("Setting App state requires a value.") }
         try Self.validateArtifactValue(value, key: edit.key)
         // The outcome already holds, as after a retry whose acknowledgement was lost.
         if current?.value == value { continue }
         try Self.requireArtifactVersion(edit, current: current)
         state[edit.key] = ArtifactStateEntry(value: value, version: (current?.version ?? 0) + 1, updatedAt: timestamp)
       case .remove:
-        guard edit.value == nil else { throw ArtifactStateError.invalidEdit("Removing Artifact state does not take a value.") }
+        guard edit.value == nil else { throw ArtifactStateError.invalidEdit("Removing App state does not take a value.") }
         guard let current, !current.isTombstone else { continue }
         try Self.requireArtifactVersion(edit, current: current)
         state[edit.key] = ArtifactStateEntry(value: nil, version: current.version + 1, updatedAt: timestamp)
@@ -266,26 +266,26 @@ public extension NoteDocument {
     var nodes = 0
     func visit(_ value: JSONValue, depth: Int) throws {
       nodes += 1
-      guard depth <= ArtifactStateLimits.maximumDepth else { throw ArtifactStateError.invalidValue("Artifact state may nest at most \(ArtifactStateLimits.maximumDepth) levels.") }
-      guard nodes <= ArtifactStateLimits.maximumNodes else { throw ArtifactStateError.invalidValue("An Artifact state value may contain at most \(ArtifactStateLimits.maximumNodes) values.") }
+      guard depth <= ArtifactStateLimits.maximumDepth else { throw ArtifactStateError.invalidValue("App state may nest at most \(ArtifactStateLimits.maximumDepth) levels.") }
+      guard nodes <= ArtifactStateLimits.maximumNodes else { throw ArtifactStateError.invalidValue("An App state value may contain at most \(ArtifactStateLimits.maximumNodes) values.") }
       switch value {
       case .object(let fields):
         for (name, child) in fields {
           guard name.utf8.count <= ArtifactStateLimits.maximumObjectKeyBytes else {
-            throw ArtifactStateError.invalidValue("An Artifact state object key exceeds \(ArtifactStateLimits.maximumObjectKeyBytes) bytes.")
+            throw ArtifactStateError.invalidValue("An App state object key exceeds \(ArtifactStateLimits.maximumObjectKeyBytes) bytes.")
           }
           try visit(child, depth: depth + 1)
         }
       case .array(let children):
         for child in children { try visit(child, depth: depth + 1) }
       case .number(let number):
-        guard number.isFinite else { throw ArtifactStateError.invalidValue("Artifact state numbers must be finite.") }
+        guard number.isFinite else { throw ArtifactStateError.invalidValue("App state numbers must be finite.") }
       case .string, .bool, .null:
         break
       }
     }
     try visit(value, depth: 0)
-    guard let bytes = try? JSONEncoder().encode(value) else { throw ArtifactStateError.invalidValue("This Artifact state value is not valid JSON.") }
+    guard let bytes = try? JSONEncoder().encode(value) else { throw ArtifactStateError.invalidValue("This App state value is not valid JSON.") }
     guard bytes.count <= ArtifactStateLimits.maximumValueBytes else { throw ArtifactStateError.valueTooLarge(key) }
   }
 

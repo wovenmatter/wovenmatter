@@ -104,7 +104,9 @@ struct PageModelTests {
     // Projection never writes, and the read's tokens are good for the first write.
     let segments = board.pageSegments
     #expect(board.pageNodes == nil)
-    #expect(segments.first?.id == PageSegment.flowID(parentID: nil, afterID: nil))
+    #expect(segments == first.pageSegments)
+    // The task card stands on its own, as every task on a Page does.
+    #expect(segments.first == .task(id: "b", parentID: nil, depth: 0))
     var written = board
     _ = try written.apply([.page(.init(action: .update, id: "b", expectedRevision: first.boardItemRevision(for: "b"), patch: .init(status: .done)))])
     #expect(written.boardItems?["b"]?.task?.status == .done)
@@ -167,7 +169,8 @@ struct PageModelTests {
       .section(id: "s", parentID: nil, depth: 0),
       .flow(id: PageSegment.flowID(parentID: "s", afterID: nil), parentID: "s", afterID: nil, depth: 1, blockIDs: ["a"]),
       .section(id: "t", parentID: "s", depth: 1),
-      .flow(id: PageSegment.flowID(parentID: "t", afterID: nil), parentID: "t", afterID: nil, depth: 2, blockIDs: ["b"]),
+      .task(id: "b", parentID: "t", depth: 2),
+      .flow(id: PageSegment.flowID(parentID: "t", afterID: "b"), parentID: "t", afterID: "b", depth: 2, blockIDs: []),
       .flow(id: PageSegment.flowID(parentID: "s", afterID: "t"), parentID: "s", afterID: "t", depth: 1, blockIDs: []),
       .flow(id: PageSegment.flowID(parentID: nil, afterID: "s"), parentID: nil, afterID: "s", depth: 0, blockIDs: ["c"]),
       .asset(id: "l", assetID: "original", parentID: nil, depth: 0),
@@ -200,10 +203,18 @@ struct PageModelTests {
     #expect(document.pageSegments == [.flow(id: before!, parentID: nil, afterID: nil, depth: 0, blockIDs: [])])
   }
 
-  @Test func tasksAndTablesStayInTheFlow() throws {
+  @Test func tablesStayInTheFlowAndTasksAndImagesStandApart() throws {
     let table = NoteBlock.table(.init(id: "grid", columns: [.init(id: "c")], rows: [.init(id: "r", cells: [.init(id: "x")])]))
-    let document = page([text("t", "Task"), table, text("p", "After")], items: ["t": .init(task: .init())])
-    #expect(document.pageSegments.count == 1)
+    var picture = CanvasCardPlacement(x: 0, y: 0); picture.image = PageImage(mediaType: "image/png", bytes: Data([1, 2, 3]))
+    let document = page([text("t", "Task"), table, text("p", "After"), text("i")], items: ["t": .init(task: .init())], canvas: ["i": picture])
+    #expect(document.pageSegments == [
+      .task(id: "t", parentID: nil, depth: 0),
+      .flow(id: PageSegment.flowID(parentID: nil, afterID: "t"), parentID: nil, afterID: "t", depth: 0, blockIDs: ["grid", "p"]),
+      .image(id: "i", parentID: nil, depth: 0),
+      .flow(id: PageSegment.flowID(parentID: nil, afterID: "i"), parentID: nil, afterID: "i", depth: 0, blockIDs: []),
+    ])
+    #expect(document.pageComponentKind(for: "i") == .image)
+    #expect(throws: NoteEditError.self) { var copy = document; try copy.spliceFlow(["i"], with: [], parentID: nil) }
     #expect(document.pageComponentKind(for: "t") == .task)
     #expect(document.pageComponentKind(for: "grid") == .table)
     #expect(document.pageComponentKind(for: "p") == .text)
@@ -217,16 +228,16 @@ struct PageModelTests {
 
   @Test func spliceAssignsParentsAndPrunesMetadata() throws {
     var document = sample()
-    document.boardItems?["a"] = .init(task: .init(status: .done))
+    document.boardItems?["a"] = .init(review: .needed)
     document.canvasConnections = [.init(id: "x", from: "a", to: "c")]
     let before = document
     // Paragraphs split: a stays, and a new one inherits the section.
     try document.spliceFlow(["a"], with: [text("a", "Changed"), text("new", "Typed")], parentID: "s")
     #expect(order(document) == ["s", "a", "new", "t", "b", "c", "l"])
     #expect(document.pageParentID(for: "new") == "s")
-    #expect(document.boardItems?["a"]?.task?.status == .done)
+    #expect(document.boardItems?["a"]?.review == .needed)
     #expect(document.canvasConnections?.count == 1)
-    // Removed text takes its task and connections with it, and nothing else.
+    // Removed text takes its metadata and connections with it, and nothing else.
     try document.spliceFlow(["a", "new"], with: [text("new", "Typed")], parentID: "s")
     #expect(document.boardItems?["a"] == nil && document.canvasConnections?.isEmpty == true)
     #expect(document.boardItems?["b"] == before.boardItems?["b"])
@@ -779,5 +790,88 @@ struct PageModelTests {
     let copy = try #require(result.conflictCopyIDs.first)
     #expect(plain(result.document, "grid") == "Theirs")
     #expect(plain(result.document, copy) == "Mine")
+  }
+
+  // MARK: Assignees
+
+  private func agent(_ id: String, state: BoardTaskAssignee.State = .assigned) -> BoardTaskAssignee {
+    BoardTaskAssignee(id: id, kind: .agent, name: "Claude Code", place: "Studio", workspaceID: "w1", runtime: "claude_code", state: state)
+  }
+
+  @Test func assigningIsIdempotentAndStoppingFollowsTheAssigneesState() throws {
+    var document = page([text("t", "Write the email")])
+    try document.applyPageEdit(.init(action: .assign, id: "t", assignee: agent("one")))
+    #expect(document.pageComponentKind(for: "t") == .task)
+    // The same request again, or the same agent in the same place, adds nobody.
+    try document.applyPageEdit(.init(action: .assign, id: "t", assignee: agent("one")))
+    try document.applyPageEdit(.init(action: .assign, id: "t", assignee: agent("two")))
+    #expect(document.boardItems?["t"]?.task?.assignees.map(\.id) == ["one"])
+    let conversation = try #require(document.boardItems?["t"]?.task?.assignees.first?.conversationID)
+    #expect(conversation == BoardTaskAssignee.conversationID(for: "one") && UUID(uuidString: conversation) != nil)
+    var bot = BoardTaskAssignee(id: "bot", kind: .bot, name: "Research", botID: "b", machineID: "m", state: .sending)
+    try document.applyPageEdit(.init(action: .assign, id: "t", assignee: bot))
+    // Not sent yet: stopping unassigns. Working: stopping asks its chat to stop, and it stays listed.
+    try document.applyPageEdit(.init(action: .stopAssignee, id: "t", assigneeID: "one"))
+    #expect(document.boardItems?["t"]?.task?.assignees.map(\.id) == ["bot"])
+    try document.applyPageEdit(.init(action: .stopAssignee, id: "t", assigneeID: "bot"))
+    #expect(document.boardItems?["t"]?.task?.assignees.first?.state == .stopping)
+    bot.state = .stopped; bot.conversationID = "7"
+    try document.applyPageEdit(.init(action: .updateAssignee, id: "t", assignee: bot))
+    #expect(document.boardItems?["t"]?.task?.assignees.first?.conversationID == "7")
+    #expect(throws: NoteEditError.self) { try document.applyPageEdit(.init(action: .stopAssignee, id: "t", assigneeID: "missing")) }
+    try document.validateEditableShape()
+    // A section is not a task, and an image is not one either.
+    var sectioned = page([text("s", "S", style: .heading2)], nodes: ["s": .init(isSection: true)])
+    #expect(throws: NoteEditError.self) { try sectioned.applyPageEdit(.init(action: .assign, id: "s", assignee: agent("x"))) }
+  }
+
+  @Test func assigneesMergeOneByOneAndLaterStatesWin() throws {
+    let base = page([text("t", "Task")], items: ["t": .init(task: .init(assignees: [agent("a", state: .sending)]))])
+    var local = base, remote = base
+    local.boardItems?["t"]?.task?.assignees.append(agent("b"))
+    local.boardItems?["t"]?.task?.status = .done
+    remote.boardItems?["t"]?.task?.assignees[0].state = .sent
+    remote.boardItems?["t"]?.task?.outcome = "Drafted"
+    let merged = try NoteDocument.mergePage(base: base, local: local, remote: remote)
+    #expect(merged.conflictCopyIDs.isEmpty)
+    let task = try #require(merged.document.boardItems?["t"]?.task)
+    #expect(task.assignees.map(\.id) == ["a", "b"] && task.assignees[0].state == .sent)
+    #expect(task.status == .done && task.outcome == "Drafted")
+    // Both changed one assignee: the later state stays.
+    var stopping = base, sent = base
+    stopping.boardItems?["t"]?.task?.assignees[0].state = .stopping
+    sent.boardItems?["t"]?.task?.assignees[0].state = .sent
+    let raced = try NoteDocument.mergePage(base: base, local: stopping, remote: sent)
+    #expect(raced.document.boardItems?["t"]?.task?.assignees.first?.state == .stopping)
+  }
+
+  @Test func whoAssignedSomeoneIsStampedOnce() throws {
+    let old = page([text("t", "Task")], items: ["t": .init(task: .init())])
+    var new = old
+    new.boardItems?["t"]?.task?.assignees = [agent("a")]
+    let session = BoardActor(kind: .session, sessionID: "s1", label: "Planner")
+    new.stampBoardChanges(from: old, actor: session, at: "2026-11-17T10:00:00Z")
+    #expect(new.boardItems?["t"]?.task?.assignees.first?.assignedBy == session)
+    var later = new
+    later.boardItems?["t"]?.task?.status = .done
+    later.stampBoardChanges(from: new, actor: BoardActor(kind: .user), at: "2026-11-17T11:00:00Z")
+    #expect(later.boardItems?["t"]?.task?.assignees.first?.assignedBy == session)
+    #expect(later.boardItems?["t"]?.task?.assignees.first?.assignedAt == "2026-11-17T10:00:00Z")
+  }
+
+  @Test func anImageIsAddedWholeAndDescribedWithoutItsBytes() throws {
+    var document = page([])
+    let image = PageImage(mediaType: "image/png", bytes: Data(repeating: 7, count: 32), alt: "Sketch", width: 4, height: 2)
+    try document.applyPageEdit(.init(action: .add, id: "i", kind: .image, image: image))
+    #expect(document.canvas?["i"]?.image == image)
+    #expect(throws: NoteEditError.self) {
+      try document.applyPageEdit(.init(action: .update, id: "i", expectedRevision: document.boardItemRevision(for: "i"), patch: .init(text: "x")))
+    }
+    let value = try document.pageComponentValue(id: "i")
+    #expect(value.objectValue?["kind"]?.stringValue == "image")
+    #expect(value.objectValue?["image"]?.objectValue?["bytes"]?.doubleValue == 32)
+    var tooLarge = page([])
+    let large = PageImage(mediaType: "image/png", bytes: Data(repeating: 1, count: PageImage.maximumBytes + 10))
+    #expect(throws: (any Error).self) { try tooLarge.applyPageEdit(.init(action: .add, id: "big", kind: .image, image: large)) }
   }
 }

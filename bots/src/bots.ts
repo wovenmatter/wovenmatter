@@ -229,6 +229,19 @@ export class Bot {
   }
 
   /**
+   * A new thread for a piece of work, such as a task assigned from a Woven Page. It forks the
+   * main channel at its newest entry, so the bot keeps what it knows. An empty main channel has
+   * nothing to fork; it returns undefined and the work goes to the main channel itself.
+   */
+  async startThread(): Promise<ThreadRecord | undefined> {
+    const main = await this.main();
+    const page = await main.entries({ order: "descending" }, 1, undefined, ctx);
+    const newest = page.items[0]?.id;
+    if (newest === undefined) return undefined;
+    return this.fork({ entryId: newest });
+  }
+
+  /**
    * Startup reconciliation, run before scheduling resumes. The Pi Durable store is the source of
    * truth, as in Woven Matter: a fork's parent edge is committed with the fork itself, so a crash
    * between `fork()` and the registry write leaves an ownerless fork that only the registry lacks.

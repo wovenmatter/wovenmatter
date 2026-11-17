@@ -147,6 +147,13 @@ struct MobilePageEditor<TextRow: View>: View {
       }.padding(.top, 10)
         .simultaneousGesture(TapGesture().onEnded { selectedID = row.id })
         .accessibilityElement(children: .contain).accessibilityIdentifier("page-component-\(row.id)")
+    case .image:
+      HStack(alignment: .top, spacing: 4) {
+        MobilePageImage(image: page.canvas?[row.id]?.image)
+        if editable { componentMenu(row.id) }
+      }.padding(.vertical, 6)
+        .simultaneousGesture(TapGesture().onEnded { selectedID = row.id })
+        .accessibilityElement(children: .contain).accessibilityIdentifier("page-component-\(row.id)")
     case .asset(let assetID):
       MobilePageEmbed(model: model, page: page, componentID: row.id, assetID: assetID, editable: editable,
         onToggleTask: { toggleTask(row.id) }) { componentMenu(row.id) }
@@ -163,13 +170,13 @@ struct MobilePageEditor<TextRow: View>: View {
   }
 
   @ViewBuilder private func addActions(_ position: PagePosition) -> some View {
-    Button("Text", glyph: .fileText) { add(.text, at: position) }
     Button("Task", systemImage: "checkmark.circle") { add(.task, at: position) }
     Button("Section", systemImage: "list.bullet.indent") { add(.section, at: position) }
     Button("Table", systemImage: "tablecells") { add(.table, at: position) }
     Divider()
-    Button("Existing asset…", systemImage: "link") { insertion = .init(position: position) }
-    ForEach(NoteArtifactKind.allCases, id: \.self) { kind in
+    Button("Existing artifact…", systemImage: "link") { insertion = .init(position: position) }
+    // A Page holds Notes, Sheets and Apps, never another Page.
+    ForEach(NoteArtifactKind.allCases.filter { $0 != .canvas }, id: \.self) { kind in
       Button("New \(kind.displayName)") {
         Task {
           guard let assetID = await model.createAsset(kind, folderID: note.folderID) else { return }
@@ -229,13 +236,13 @@ struct MobilePageEditor<TextRow: View>: View {
   }
 }
 
-/// The New Asset choices, in the Mac's order and wording.
+/// The New Artifact choices, in the Mac's order and wording.
 struct MobileNewAssetItems: View {
   let create: (NoteArtifactKind) -> Void
   var body: some View {
     Button("Note", glyph: .fileText) { create(.note) }.accessibilityIdentifier("action-new-note")
     Button("Page", glyph: .panelsTopLeft) { create(.canvas) }.accessibilityIdentifier("action-new-page")
     Button("Sheet", systemImage: "tablecells") { create(.spreadsheet) }.accessibilityIdentifier("action-new-sheet")
-    Button("Artifact", systemImage: "chevron.left.forwardslash.chevron.right") { create(.html) }.accessibilityIdentifier("action-new-artifact")
+    Button("App", systemImage: "chevron.left.forwardslash.chevron.right") { create(.html) }.accessibilityIdentifier("action-new-artifact")
   }
 }

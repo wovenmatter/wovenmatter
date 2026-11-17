@@ -55,14 +55,14 @@ struct AssetPane: View {
                 }.scrollIndicators(.never)
                 control("New browser tab", symbol: "plus") { assets.openBrowser() }
                 if !compact {
-                    control(noteOnLeft ? "Move assets right" : "Move assets left",
+                    control(noteOnLeft ? "Move artifacts right" : "Move artifacts left",
                             symbol: noteOnLeft ? "arrow.right" : "arrow.left") { noteOnLeft.toggle() }
-                    control(focused ? "Restore chat and assets" : "Focus assets",
+                    control(focused ? "Restore chat and artifacts" : "Focus artifacts",
                             symbol: focused ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right") {
                         focused.toggle()
                     }
                 }
-                control("Hide assets", symbol: "rectangle.righthalf.inset.filled") { assets.tabs.hide() }
+                control("Hide artifacts", symbol: "rectangle.righthalf.inset.filled") { assets.tabs.hide() }
             }
             .padding(.leading, reservesLeadingRailControlSpace ? 56 : 10)
             .padding(.trailing, reservesTrailingRailControlSpace ? 56 : 10)
@@ -81,7 +81,7 @@ struct AssetPane: View {
                             onOpenSession: onOpenSession
                         ).id(id)
                     } else {
-                        ContentUnavailableView("Asset unavailable", systemImage: "doc")
+                        ContentUnavailableView("Artifact unavailable", systemImage: "doc")
                     }
                 case .browser(let id):
                     if let page = assets.pages[id] {

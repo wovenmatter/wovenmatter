@@ -293,6 +293,16 @@ public actor PiBotClient {
         _ = try await call("message.send", fields)
     }
 
+    /// Sends `text` as the first message of a new thread and returns the thread's
+    /// number, or nil when a retry of `deliveryID` was already accepted.
+    public func startThread(botID: String, text: String, context: String? = nil, deliveryID: String) async throws -> Int? {
+        var fields: [String: JSONValue] = ["botId": .string(botID), "text": .string(text), "newThread": .bool(true),
+                                           "deliveryId": .string(deliveryID)]
+        if let context { fields["context"] = .string(context) }
+        struct Started: Decodable { let conversationId: Int?; let duplicate: Bool? }
+        return try decode(try await call("message.send", fields), as: Started.self).conversationId
+    }
+
     // MARK: Conversations
 
     public func openConversation(botID: String, conversationID: Int?) async throws -> PiBotConversationSnapshot {

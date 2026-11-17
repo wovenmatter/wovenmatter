@@ -45,9 +45,9 @@ enum ArtifactInputError: LocalizedError {
     case invalidMessage, unavailable, saveFailed
     var errorDescription: String? {
         switch self {
-        case .invalidMessage: "This Artifact sent an invalid input-state request."
-        case .unavailable: "This Artifact is no longer available for editing."
-        case .saveFailed: "Artifact inputs could not be saved. Keep this view open and retry, or recover the document draft."
+        case .invalidMessage: "This App sent an invalid input-state request."
+        case .unavailable: "This App is no longer available for editing."
+        case .saveFailed: "App inputs could not be saved. Keep this view open and retry, or recover the document draft."
         }
     }
 }

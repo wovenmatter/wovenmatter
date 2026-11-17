@@ -1,12 +1,14 @@
-# Pages and Artifacts
+# Pages and Apps
 
-Pages are flowing documents for work with your agents. Create one from **New
-Asset → Page**, give it a title, and type normally. The same document can become
-a checklist, project workspace, research reference, or another structure you
-shape as you work. There are no project or checklist modes.
+Pages are flowing documents you and your agents work in together. Create one from
+**New Artifact → Page**, give it a title, and type normally. The same Page can
+become a plan, a checklist, a project workspace, a research reference, or
+whatever you and your agents make of it. There are no project or checklist modes.
 
-The asset family is **Notes, Sheets, Artifacts, Pages**. **Saved Assets** is the
-Library's broader collection of saved outputs.
+**Artifacts** are everything you create in a workspace: **Notes** (rich text),
+**Pages** (free-flowing, with tasks and embedded artifacts), **Sheets**
+(spreadsheets) and **Apps** (interactive apps agents build, optionally on live
+data). **Saved Artifacts** is the Library's broader collection of saved outputs.
 
 ## Writing and nesting
 
@@ -16,46 +18,83 @@ scrolling document. Text positions before, between, and after embedded component
 let you keep writing without creating text cards.
 
 A new Page is an empty document: click anywhere and type. The toolbar's plus
-(**Add component**) inserts text, a task, section, table, existing asset, or a new
-Note, Page, Sheet, or Artifact after the paragraph holding the cursor. Right-click
-anywhere in the Page for the same **Add component** menu and the clicked
-component's **Component actions**. A section nests text and other components, and
-its plus adds inside it. **Component actions** moves components up/down, into a
-section, or out of it. Moving a section moves its contents together.
-Nested Pages link to their original document and open in the normal asset tab.
+(**Add component**) inserts a task, section, table, existing artifact, image, or a
+new Note, Sheet, or App after the paragraph holding the cursor. Text needs no entry:
+typing on the Page writes text. Right-click anywhere in the Page for the same
+**Add component** menu and the clicked component's **Component actions**. A section
+nests text and other components, and its plus adds inside it. **Component actions**
+moves components up/down, into a section, or out of it. Moving a section moves its
+contents together. A Page holds Notes, Sheets and Apps, never another Page.
 
-Type in task paragraphs and click their checkbox to complete or reopen them.
-Enter continues a task list; Enter on an empty task returns to ordinary text.
-**Component details** holds state, assignment, outcome, review, instructions,
-change summary, and chat links. Assignment is a label; it starts no work.
-Outcomes leave useful context for the next participant. The review menu finds
-components needing attention. Sections contain tasks rather than being tasks.
+A table starts with three rows and three columns. Hover over it for a **+** beside
+its right edge (add a column) and one under it (add a row); right-click a cell to
+insert or delete a row or column, or delete the table. Notes tables work the same
+way.
 
-Content, nesting, task fields and original-asset edits save through the existing
-draft journal and library. Closing a Page does not delete it. Normal asset
+**Image** adds a PNG, JPEG, GIF or HEIC picture from the library's saved images,
+from Files, or from Photos when this Mac has a Photos library; only sources with
+something to offer are listed. The image is stored in the Page itself, scaled down
+to fit beside its writing; a Page holds about 1 MB in all.
+
+## Tasks
+
+A task is its own line on the Page: a checkbox, its title, an **Add details**
+line, its assignees, and its status (**To do**, **In progress**, **Needs you**,
+**Done**). **Assign** lists who can take it, only those set up now:
+
+- **Me**: the task is yours. Nothing is sent.
+- **Agents in real places**: each harness on this Mac, on other Macs, and on Linux
+  workspaces, grouped by where it runs.
+- **Bots**: each bot on each machine with bots turned on.
+
+Assigning an agent or bot does not send anything yet. The task shows who you
+picked and a **Send** button, so you can check it before work starts. Send starts a
+new chat with that agent in the Page's folder when the agent's workspace owns the
+folder; change the folder on the assignee before sending. A bot gets a new thread
+of its own, forked from its main channel. The first message is the task, its
+details, and how to report back on the Page.
+
+A task can have several assignees, added at any time; each gets its own chat or
+thread. An assignee's menu opens its chat, stops it (an agent's chat stops; a bot
+is told the task is no longer needed), or unassigns one not yet sent. Stopped
+assignees stay listed. Agents report back on the Page: they set the status, write
+the **Result**, and add follow-up tasks beside it, labeled with who added them.
+
+Exactly one place sends each agent its task, so a chat never starts twice: the
+Mac whose agent it is starts it on itself, and a Linux workspace's agent is
+started by the Mac that added that workspace. A bot accepts one delivery once,
+whichever Mac sends it. A Mac that is asleep sends its agents' tasks when it
+wakes. Assigning on iPhone and iPad is not available yet; they show each task's
+assignees and where they stand.
+
+**Component details** holds status, outcome, review, instructions, change summary
+and chat links. The review menu finds components needing attention. Sections
+contain tasks rather than being tasks.
+
+Content, nesting, task fields and original-artifact edits save through the
+existing draft journal and library. Closing a Page does not delete it. Normal
 version history and conflict recovery remain available. Collapse state and text
 selection are view state, not document content.
 
-## Original assets
+## Embedded artifacts
 
-An **Original** label means the embed refers to an independent library asset by
-stable ID. Inline Note/Sheet editing and Artifact input update that original.
+An **Original** label means the embed refers to an independent library artifact
+by stable ID. Inline Note/Sheet editing and App input update that original.
 Opening it uses its normal tab. Removing an embed never deletes its original.
 Missing or deleted originals retain their references and show an unavailable
 state. Workspace filesystem paths are not copied into the Page or made shared
-merely by mentioning them.
+merely by mentioning them. Embedded artifacts reuse the normal editor and
+database-link refresh path.
 
-Embedded assets reuse the normal editor and database-link refresh path. A nested
-Page is a link rather than a recursively mounted editor, avoiding cycles and
-keeping each Page's history and save boundary understandable.
+## Apps and Live Apps
 
-## Artifacts and Live Artifacts
-
-Artifacts are interactive HTML artifacts built on live data: dashboards,
+Apps are interactive HTML apps agents build, optionally on live data: dashboards,
 calculators, visualizations, planners, and other custom interfaces. A data link
-is optional. **Artifact** remains the single creation option. **Live Artifact**
-describes one connected to changing data; it runs inside Woven rather than
-requiring a public website.
+is optional. **App** is the single creation option. **Live App** describes one
+connected to changing data; it runs inside Woven rather than requiring a public
+website. An App with no code yet shows **Ask an agent to build this**: describe it,
+choose an agent or bot from the same list tasks use, and Send starts that chat
+with what you asked for.
 
 Native data links deliver query results as `window.wovenMatterData`. A refresh
 updates the existing interface and dispatches `wovenmatterdatachange` once; it
@@ -82,22 +121,22 @@ The API also provides `getAll`, `remove`, `subscribe`, and `retry`. Subscribers
 and `wovenartifactchange` run only when a custom state value actually changes,
 not for an acknowledgement or a form control. State is JSON;
 saved null and a removed key are different. Keep existing control identities and
-custom state keys stable when revising an Artifact. Each save promise resolves
-after the host acknowledges durable storage. The original Artifact's document
+custom state keys stable when revising an App. Each save promise resolves
+after the host acknowledges durable storage. The original App's document
 owns its state, including when embedded in one or several Pages.
 
 Each state write compares the version of its key. Different keys can be updated
-independently. An open Artifact follows newer versions it observes, so the next
+independently. An open App follows newer versions it observes, so the next
 edit after another participant's change applies to that version, while a delayed
 update cannot move a key backward. A stale same-key edit produces a visible save
 error and retains the entered value. **Retry saving** deliberately reapplies
 pending inputs against current versions. A failed save must not be presented as
 durable. State is bounded to 256 live keys, 64 KiB per value, and 256 KiB overall;
-oversized values fail without truncating existing data. Restoring an Artifact's
+oversized values fail without truncating existing data. Restoring an App's
 code version preserves its latest saved input state.
 
-The bridge can save only JSON belonging to that original Artifact. It cannot
-select another asset, run SQL, invoke an agent, access files, or use the network.
+The bridge can save only JSON belonging to that original App. It cannot
+select another artifact, run SQL, invoke an agent, access files, or use the network.
 Network access and external navigation remain blocked in the saved-HTML
 renderer. This state API does not add general database mutation. Chat visual
 replies remain a separate feature with their existing rendering policy.
@@ -115,12 +154,14 @@ component updates.
 | `woven_pages_create` | Create a Page with a title and optional purpose/folder. |
 | `woven_pages_read` | Read components in order, with nesting and revisions. |
 | `woven_pages_update` | Update title/purpose with a document revision. |
-| `woven_pages_add_component` | Add text, task, section, table, or original link. |
+| `woven_pages_add_component` | Add text, task, section, table, or embedded artifact. |
 | `woven_pages_update_component` | Patch only supplied component fields. |
 | `woven_pages_move_component` | Move a component and its nested contents. |
 | `woven_pages_remove_component` | Remove a component, explicitly handling children. |
+| `woven_pages_assign` | Assign a task to an agent in a place, a bot, or the person; agents and bots are sent it at once. |
+| `woven_pages_stop_assignee` | Unassign someone, or stop the chat working on the task. |
 | `woven_pages_link_session` / `unlink_session` | Associate a chat without treating it as execution. |
-| `woven_notes_artifact_state` | Read an Artifact's saved values and key versions. |
+| `woven_notes_artifact_state` | Read an App's saved values and key versions. |
 | `woven_notes_artifact_state_edit` | Make bounded, revision-checked state edits. |
 
 Use stable `pageID` and `componentID` values. `woven_notes_apply` refuses Page
@@ -128,11 +169,16 @@ component operations, so every component change goes through these tools. Reads 
 `parentID`, depth, kind, task/review metadata, and section `subtreeRevision`.
 Focused writes use these revision tokens; stale writes return current state for
 reconciliation. Reusing a successful request ID with the same arguments replays
-its receipt; different arguments need a new ID. Edit an original at its asset ID,
-not by replacing the embed's text.
+its receipt; different arguments need a new ID. Edit an original at its artifact
+ID, not by replacing the embed's text.
 
-**Send to chat** uses that existing chat's agent, settings, and ordinary admission
-path. Its link is saved before dispatch. A saved link does not prove that a run
+Agents can do everything on a Page a person can. An agent that assigns another
+agent or a bot sends the task at once, with no approval step; the assignee shows
+who assigned it. Agents find workspaces and harnesses with
+`woven_sessions_harnesses`.
+
+**Send to chat** in Component details sends a component to an existing chat, using
+that chat's agent, settings, and ordinary admission path. Its link is saved before dispatch. A saved link does not prove that a run
 was accepted or finished; inspect the chat after an uncertain handoff. Completing
 a run does not automatically complete a task. Page text, instructions and linked
 content remain project data and never grant additional authority.
@@ -152,18 +198,18 @@ autosave merges independent component changes where possible. Conflicting edits
 are retained for review instead of silently replacing another participant's
 work. Incoming changes fence local undo history.
 
-Pages and Artifacts merge wherever they sync: between paired Macs, Linux library
+Pages and Apps merge wherever they sync: between paired Macs, Linux library
 hosts, and iPhones and iPads. Changes to
 different components all stay, as do moves, title and purpose changes made
 alongside them. When two writers changed the same component while apart, one
 version keeps its place and the other sits next to it, marked for review, the
 same on every machine. A removal stands unless the other side changed that
-component; then the change stays. An Artifact's saved inputs merge key by key;
+component; then the change stays. An App's saved inputs merge key by key;
 when both changed one key, the higher version stands. Only two different
-concurrent versions of an Artifact's code still leave a **(Recovered edit)**
+concurrent versions of an App's code still leave a **(Recovered edit)**
 copy, as Notes and Sheets do.
 
-Between Macs and Linux hosts, each host records with every Page and Artifact
+Between Macs and Linux hosts, each host records with every Page and App
 write which machine last changed each component, its placement and its
 metadata, and when in that machine's synchronization order. Together with the
 causal vector every synchronized version carries, that tells each machine which
@@ -178,9 +224,10 @@ local Page replica.
 ## iPhone and iPad
 
 Pages are fully editable on iPhone and iPad, paired or standalone. Create one from
-**New Asset → Page** and use the same components as on a Mac: text with the Notes
-editor's formatting, undo and dictation; tasks with checkboxes; nested,
-collapsible sections; tables; embedded originals that open in their own pane;
+**New Artifact → Page** and use the same components as on a Mac: text with the Notes
+editor's formatting, undo and dictation; tasks with checkboxes, details and their
+assignees; nested, collapsible sections; tables; images; embedded originals that
+open in their own pane;
 **Add component**, **Component actions**, **Component details** and **Send to
 chat**. A Page with linked data stays a read-only flowing document on every client,
 because its linked tables come from the library host.
@@ -194,13 +241,13 @@ components both stay. When both sides changed the same component, the Mac's
 version keeps its place and the device's version sits next to it, marked for
 review. Nothing waits for you to choose a version.
 
-A read-only Artifact preview restores saved inputs and custom state, and disables
+A read-only App preview restores saved inputs and custom state, and disables
 the controls whose values would be saved. Buttons, opted-out controls, and controls
 without a stable identity stay usable for that view; nothing they do is saved, and
 `wovenArtifact.set` and `remove` reject.
 
 Quick Chat on iPhone and iPad runs its tools against the device's own library
-copy, and the write path depends on the asset:
+copy, and the write path depends on the artifact:
 
 - **Pages:** the `woven_pages_*` tools and note edits of a Page apply on the device
   with the same rules, component and subtree revisions, request-ID replay and
@@ -208,10 +255,10 @@ copy, and the write path depends on the asset:
   other Quick Chat change. The device is one serialized writer, so component
   revisions protect concurrent chats there. Across devices, its changes merge on
   sync as described above.
-- **Artifact state:** `woven_notes_artifact_state_edit` changes the device's copy
+- **App state:** `woven_notes_artifact_state_edit` changes the device's copy
   and queues it through the note sync. Key versions are checked against that copy;
   a concurrent change on the library host merges key by key when the device syncs.
-  An Artifact with linked data cannot be edited on the device.
+  An App with linked data cannot be edited on the device.
 
 Focused fixtures cover model persistence, conflict handling, native editing, MCP
 and the state bridge without providers. A local fixture is not proof of real

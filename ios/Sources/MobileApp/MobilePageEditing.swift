@@ -103,7 +103,7 @@ struct MobilePageFlow: Equatable {
 
 /// One line of the phone's Page layout, in reading order.
 struct MobilePageRow: Identifiable, Equatable {
-  enum Kind: Equatable { case text(placeholder: Bool), table, section, asset(String) }
+  enum Kind: Equatable { case text(placeholder: Bool), table, section, asset(String), image }
   var id: String
   var kind: Kind
   var parentID: String?
@@ -160,6 +160,17 @@ struct MobilePageLayout {
         rows.append(.init(id: id, kind: .section, parentID: parentID, depth: depth))
       case let .asset(id, assetID, parentID, depth):
         rows.append(.init(id: id, kind: .asset(assetID), parentID: parentID, depth: depth))
+      case let .task(id, parentID, depth):
+        // A task's line edits as a flow of its own, so it keeps the phone's text editing.
+        let siblings = page.pageChildren(of: parentID)
+        let index = siblings.firstIndex(of: id) ?? 0
+        let flowID = "task/" + id
+        flows[flowID] = MobilePageFlow(id: flowID, parentID: parentID, afterID: index > 0 ? siblings[index - 1] : nil,
+                                       depth: depth, blockIDs: [id])
+        rows.append(.init(id: id, kind: .text(placeholder: false), parentID: parentID, depth: depth, flowID: flowID))
+        flowOfRow[id] = flowID
+      case let .image(id, parentID, depth):
+        rows.append(.init(id: id, kind: .image, parentID: parentID, depth: depth))
       }
     }
     self.rows = rows; self.flows = flows; self.flowOfRow = flowOfRow; listNumbers = numbers
@@ -190,15 +201,7 @@ struct MobilePageLayout {
 }
 
 extension BoardTaskStatus {
-  var mobileTitle: String {
-    switch self {
-    case .todo: "To do"
-    case .doing: "In progress"
-    case .blocked: "Blocked"
-    case .done: "Done"
-    case .canceled: "Canceled"
-    }
-  }
+  var mobileTitle: String { displayName }
 }
 
 extension BoardItem {
@@ -207,5 +210,6 @@ extension BoardItem {
     if review == .needed || role == .instructions || lastChange?.isEmpty == false { return true }
     guard let task else { return false }
     return ![.todo, .done].contains(task.status) || !task.assignee.isEmpty || !task.outcome.isEmpty
+      || !task.details.isEmpty || !task.assignees.isEmpty
   }
 }

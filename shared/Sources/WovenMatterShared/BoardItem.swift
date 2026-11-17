@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 
 public enum BoardItemRole: String, Codable, CaseIterable, Sendable { case content, instructions }
@@ -29,22 +30,183 @@ public struct BoardActor: Codable, Equatable, Sendable {
   }
 }
 
+public extension BoardTaskStatus {
+  /// What people see. `blocked` means the task waits on the person; `canceled`
+  /// is read from older Boards only, since a task nobody needs is removed.
+  var displayName: String {
+    switch self {
+    case .todo: "To do"
+    case .doing: "In progress"
+    case .blocked: "Needs you"
+    case .done: "Done"
+    case .canceled: "Canceled"
+    }
+  }
+  /// The statuses people and agents choose from.
+  static let current: [BoardTaskStatus] = [.todo, .doing, .blocked, .done]
+}
+
+/// Someone a task is assigned to: the person, an agent on one workspace, or a bot.
+/// An agent or bot gets its own new chat or thread when the task is sent. The IDs
+/// it is sent to are fixed when it is assigned, so sending twice from two places
+/// reaches the same chat instead of starting another.
+public struct BoardTaskAssignee: Codable, Equatable, Identifiable, Sendable {
+  public static let maximumTextBytes = 1_024
+  public enum Kind: String, Codable, CaseIterable, Sendable { case user, agent, bot }
+  /// `assigned` waits for Send. `sending` asks a host to start the chat; `stopping`
+  /// asks it to stop that chat or tell the bot it is no longer needed.
+  public enum State: String, Codable, CaseIterable, Sendable {
+    case assigned, sending, sent, stopping, stopped, failed
+    /// Later states win when two writers changed one assignee at once.
+    var rank: Int {
+      switch self {
+      case .assigned: 0
+      case .sending: 1
+      case .failed: 2
+      case .sent: 3
+      case .stopping: 4
+      case .stopped: 5
+      }
+    }
+  }
+  public var id: String
+  public var kind: Kind
+  /// The agent's or bot's name, such as Claude Code. Empty for the person.
+  public var name: String
+  /// Where the agent runs, such as a Mac's name. Display only.
+  public var place: String?
+  public var workspaceID: String?
+  /// The agent runtime, such as `claude_code`.
+  public var runtime: String?
+  /// The folder the new chat starts in.
+  public var folderID: String?
+  public var botID: String?
+  /// The bot's machine, which routes its threads.
+  public var machineID: String?
+  /// The chat this agent works in, fixed when it is assigned. A bot's thread
+  /// number is known once the bot starts it.
+  public var conversationID: String?
+  public var state: State
+  /// Why the last send or stop failed.
+  public var message: String?
+  public var assignedBy: BoardActor?
+  public var assignedAt: String?
+
+  public init(id: String = UUID().uuidString.lowercased(), kind: Kind, name: String = "", place: String? = nil,
+              workspaceID: String? = nil, runtime: String? = nil, folderID: String? = nil, botID: String? = nil,
+              machineID: String? = nil, conversationID: String? = nil, state: State = .assigned, message: String? = nil,
+              assignedBy: BoardActor? = nil, assignedAt: String? = nil) {
+    self.id = id; self.kind = kind; self.name = name; self.place = place; self.workspaceID = workspaceID
+    self.runtime = runtime; self.folderID = folderID; self.botID = botID; self.machineID = machineID
+    self.conversationID = conversationID ?? (kind == .agent ? Self.conversationID(for: id) : nil)
+    self.state = state; self.message = message; self.assignedBy = assignedBy; self.assignedAt = assignedAt
+  }
+
+  /// The same agent in the same place, or the same bot; two of these are one assignment.
+  public func isSameTarget(as other: BoardTaskAssignee) -> Bool {
+    kind == other.kind && workspaceID == other.workspaceID && runtime == other.runtime
+      && botID == other.botID && (kind != .user || other.kind == .user)
+  }
+
+  /// Still working on the task, or about to.
+  public var isActive: Bool { state == .sending || state == .sent }
+
+  /// The name people know an agent runtime by.
+  public static func runtimeName(_ runtime: String) -> String {
+    switch runtime {
+    case "default_agent": "Pi Durable"
+    case "codex": "Codex"
+    case "claude_code": "Claude Code"
+    case "grok_build": "Grok Build"
+    case "opencode": "OpenCode"
+    default: runtime
+    }
+  }
+
+  /// A conversation UUID that every host derives the same way from one assignment.
+  public static func conversationID(for assigneeID: String) -> String {
+    var bytes = Array(SHA256.hash(data: Data("woven-page-task-v1\u{0}\(assigneeID)".utf8)).prefix(16))
+    bytes[6] = (bytes[6] & 0x0f) | 0x50; bytes[8] = (bytes[8] & 0x3f) | 0x80
+    return UUID(uuid: (bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
+                       bytes[8], bytes[9], bytes[10], bytes[11], bytes[12], bytes[13], bytes[14], bytes[15])).uuidString.lowercased()
+  }
+
+  var isValid: Bool {
+    let texts = [id, name, place, workspaceID, runtime, folderID, botID, machineID, conversationID, message, assignedAt]
+    return !id.isEmpty && texts.allSatisfy { ($0?.utf8.count ?? 0) <= Self.maximumTextBytes }
+      && (assignedBy?.isValid ?? true)
+      && (kind != .agent || (workspaceID?.isEmpty == false && runtime?.isEmpty == false && conversationID?.isEmpty == false))
+      && (kind != .bot || (botID?.isEmpty == false && machineID?.isEmpty == false))
+  }
+}
+
 public struct BoardTask: Codable, Equatable, Sendable {
   public static let maximumOutcomeBytes = 16 * 1_024
+  public static let maximumDetailsBytes = 16 * 1_024
+  public static let maximumAssignees = 16
   public var status: BoardTaskStatus
+  /// A free-text label from older Boards. New assignments use `assignees`.
   public var assignee: String
   public var outcome: String
-  public init(status: BoardTaskStatus = .todo, assignee: String = "", outcome: String = "") {
-    self.status = status; self.assignee = assignee; self.outcome = outcome
+  /// What the task asks for, beyond its title. Sent with the task.
+  public var details: String
+  public var assignees: [BoardTaskAssignee]
+  public init(status: BoardTaskStatus = .todo, assignee: String = "", outcome: String = "", details: String = "",
+              assignees: [BoardTaskAssignee] = []) {
+    self.status = status; self.assignee = assignee; self.outcome = outcome; self.details = details; self.assignees = assignees
   }
-  private enum CodingKeys: String, CodingKey { case status, assignee, outcome }
+  private enum CodingKeys: String, CodingKey { case status, assignee, outcome, details, assignees }
   public init(from decoder: any Decoder) throws {
     let values = try decoder.container(keyedBy: CodingKeys.self)
     status = try values.decodeIfPresent(BoardTaskStatus.self, forKey: .status) ?? .todo
     assignee = try values.decodeIfPresent(String.self, forKey: .assignee) ?? ""
     outcome = try values.decodeIfPresent(String.self, forKey: .outcome) ?? ""
+    details = try values.decodeIfPresent(String.self, forKey: .details) ?? ""
+    assignees = try values.decodeIfPresent([BoardTaskAssignee].self, forKey: .assignees) ?? []
   }
-  var isValid: Bool { assignee.utf8.count <= 1024 && outcome.utf8.count <= Self.maximumOutcomeBytes }
+  /// Older readers and fingerprints keep their encoding while a task has no details or assignees.
+  public func encode(to encoder: any Encoder) throws {
+    var values = encoder.container(keyedBy: CodingKeys.self)
+    try values.encode(status, forKey: .status)
+    try values.encode(assignee, forKey: .assignee)
+    try values.encode(outcome, forKey: .outcome)
+    if !details.isEmpty { try values.encode(details, forKey: .details) }
+    if !assignees.isEmpty { try values.encode(assignees, forKey: .assignees) }
+  }
+  var isValid: Bool {
+    assignee.utf8.count <= 1024 && outcome.utf8.count <= Self.maximumOutcomeBytes
+      && details.utf8.count <= Self.maximumDetailsBytes && assignees.count <= Self.maximumAssignees
+      && Set(assignees.map(\.id)).count == assignees.count && assignees.allSatisfy(\.isValid)
+  }
+
+  /// Combines two writers' assignees. Each assignee merges on its own: one side's
+  /// additions and removals both stay, and a later state wins over an earlier one.
+  static func mergeAssignees(base: [BoardTaskAssignee], local: [BoardTaskAssignee], remote: [BoardTaskAssignee]) -> [BoardTaskAssignee] {
+    let b = Dictionary(base.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+    let l = Dictionary(local.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+    let r = Dictionary(remote.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+    var result: [BoardTaskAssignee] = []
+    var seen = Set<String>()
+    for id in (remote + local).map(\.id) where seen.insert(id).inserted {
+      switch (l[id], r[id]) {
+      case let (local?, remote?):
+        if local == remote || local == b[id] { result.append(remote) }
+        else if remote == b[id] { result.append(local) }
+        else {
+          var merged = remote
+          if local.state.rank > remote.state.rank { merged.state = local.state; merged.message = local.message }
+          result.append(merged)
+        }
+      case let (local?, nil):
+        // Removed remotely: gone unless this side changed it since.
+        if b[id] == nil || b[id] != local { result.append(local) }
+      case let (nil, remote?):
+        if b[id] == nil || b[id] != remote { result.append(remote) }
+      case (nil, nil): break
+      }
+    }
+    return Array(result.prefix(maximumAssignees))
+  }
 }
 
 /// Collaboration metadata for one Board card, keyed by its stable block ID. The
@@ -107,17 +269,25 @@ public struct BoardItemPatch: Codable, Equatable, Sendable {
   public var status: BoardTaskStatus?
   public var assignee: String?
   public var outcome: String?
+  public var details: String?
+  /// Replaces the task's assignees. Hosts check who may change which assignee.
+  public var assignees: [BoardTaskAssignee]?
   public var clearTask: Bool?
   public var review: BoardReviewState?
   public var clearReview: Bool?
   public var lastChange: String?
   public init(title: String? = nil, text: String? = nil, role: BoardItemRole? = nil, status: BoardTaskStatus? = nil,
-              assignee: String? = nil, outcome: String? = nil, clearTask: Bool? = nil, review: BoardReviewState? = nil,
+              assignee: String? = nil, outcome: String? = nil, details: String? = nil, assignees: [BoardTaskAssignee]? = nil,
+              clearTask: Bool? = nil, review: BoardReviewState? = nil,
               clearReview: Bool? = nil, lastChange: String? = nil) {
     self.title = title; self.text = text; self.role = role; self.status = status
-    self.assignee = assignee; self.outcome = outcome; self.clearTask = clearTask
+    self.assignee = assignee; self.outcome = outcome; self.details = details; self.assignees = assignees; self.clearTask = clearTask
     self.review = review; self.clearReview = clearReview; self.lastChange = lastChange
   }
+}
+
+extension BoardItemPatch {
+  var changesTask: Bool { status != nil || assignee != nil || outcome != nil || details != nil || assignees != nil }
 }
 
 public extension NoteDocument {
@@ -163,6 +333,18 @@ public extension NoteDocument {
       if !isNew, !continuing, item.lastChange == previous?.lastChange { item.lastChange = nil }
       if isNew { item.createdBy = actor; item.createdAt = timestamp }
       item.updatedBy = actor; item.updatedAt = timestamp
+      // Who assigned someone is stamped once, by the writer that added them.
+      if var task = item.task {
+        let earlier = Dictionary((previous?.task?.assignees ?? []).map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        for index in task.assignees.indices {
+          if let old = earlier[task.assignees[index].id] {
+            task.assignees[index].assignedBy = old.assignedBy; task.assignees[index].assignedAt = old.assignedAt
+          } else {
+            task.assignees[index].assignedBy = actor; task.assignees[index].assignedAt = timestamp
+          }
+        }
+        item.task = task
+      }
       items[id] = item
     }
     boardItems = items.isEmpty && boardItems == nil ? nil : items
@@ -171,7 +353,7 @@ public extension NoteDocument {
   internal func applyBoardPatch(_ patch: BoardItemPatch?, to item: inout BoardItem) throws {
     guard let patch else { return }
     if let role = patch.role { item.role = role }
-    let changesTask = patch.status != nil || patch.assignee != nil || patch.outcome != nil
+    let changesTask = patch.changesTask
     if patch.clearTask == true {
       guard !changesTask else { throw NoteEditError.boardConflictingPatch("clearTask cannot be combined with task fields.") }
       item.task = nil
@@ -180,6 +362,8 @@ public extension NoteDocument {
       if let status = patch.status { task.status = status }
       if let assignee = patch.assignee { task.assignee = assignee }
       if let outcome = patch.outcome { task.outcome = outcome }
+      if let details = patch.details { task.details = details }
+      if let assignees = patch.assignees { task.assignees = assignees }
       item.task = task
     }
     if patch.clearReview == true {

@@ -81,13 +81,16 @@ struct MobilePageComponentDetails: View {
           Picker("State", selection: Binding(get: { item.task?.status ?? .todo }, set: { status in
             update("Task state") { $0.task?.status = status }
           })) {
-            ForEach(BoardTaskStatus.allCases, id: \.self) { status in Text(status.mobileTitle).tag(status) }
+            ForEach(BoardTaskStatus.current + (task.status == .canceled ? [.canceled] : []), id: \.self) { status in
+              Text(status.mobileTitle).tag(status)
+            }
           }.accessibilityIdentifier("page-details-state")
-          TextField("Assignee or agent", text: Binding(get: { item.task?.assignee ?? "" }, set: { value in
-            update("Assignee") { $0.task?.assignee = value }
-          })).textInputAutocapitalization(.words)
-            .accessibilityLabel("Task assignee").accessibilityIdentifier("page-details-assignee")
-          caption("Assignment is a label. Use Send to chat to request work.")
+          TextField("Details", text: Binding(get: { item.task?.details ?? "" }, set: { value in
+            update("Details") { $0.task?.details = value }
+          }), axis: .vertical).lineLimit(2...6)
+            .accessibilityLabel("Task details").accessibilityIdentifier("page-details-details")
+          ForEach(task.assignees) { assignee in Text(assignee.mobileSummary).font(.callout) }
+          caption("Assign agents and bots to this task on your Mac. They write their results back here.")
           TextField("Outcome, findings, or next steps", text: Binding(get: { item.task?.outcome ?? "" }, set: { value in
             update("Outcome") { $0.task?.outcome = value }
           }), axis: .vertical).lineLimit(3...7)

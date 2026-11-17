@@ -26,6 +26,7 @@ extension ApplicationModel {
             return try await self.controlBots(command)
         }
         bots.startRefreshing()
+        startPageTaskDispatch()
     }
 
     /// Called once agent tools exist, since bot keys and deliveries live there.

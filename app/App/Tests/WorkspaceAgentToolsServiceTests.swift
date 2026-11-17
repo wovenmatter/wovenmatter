@@ -331,7 +331,7 @@ extension WorkspaceAgentToolsServiceTests {
         // Both read, then both write. Different components do not conflict.
         let snapshot = try #require(try await database.readNoteForEditing(id: page).document)
         let revision = snapshot.boardItemRevision(for: addID), otherRevision = snapshot.boardItemRevision(for: otherID)
-        let claim = await model.handle(.init(arguments: ["pages", "update-component", "--note-id", page, "--id", addID, "--component-revision", revision, "--status", "doing", "--assignee", "First", "--last-change", "Claimed"]), callerID: first)
+        let claim = await model.handle(.init(arguments: ["pages", "update-component", "--note-id", page, "--id", addID, "--component-revision", revision, "--status", "doing", "--details", "First", "--last-change", "Claimed"]), callerID: first)
         #expect(claim.success)
         #expect(claim.result?.objectValue?["componentRevision"]?.stringValue != revision)
         let independent = await model.handle(.init(arguments: ["pages", "update-component", "--note-id", page, "--id", otherID, "--component-revision", otherRevision, "--review", "needed"]), callerID: second)
@@ -339,12 +339,12 @@ extension WorkspaceAgentToolsServiceTests {
 
         // The same component conflicts, changes nothing, and reports what is current.
         let before = try await database.readNoteForEditing(id: page)
-        let stale = await model.handle(.init(arguments: ["pages", "update-component", "--note-id", page, "--id", addID, "--component-revision", revision, "--assignee", "Second"]), callerID: second)
+        let stale = await model.handle(.init(arguments: ["pages", "update-component", "--note-id", page, "--id", addID, "--component-revision", revision, "--details", "Second"]), callerID: second)
         #expect(!stale.success)
         #expect(stale.code == "revision_conflict")
         let current = try #require(before.document?.boardItemRevision(for: addID))
         #expect(stale.result?.objectValue?["currentComponentRevision"]?.stringValue == current)
-        #expect(stale.result?.objectValue?["component"]?.objectValue?["task"]?.objectValue?["assignee"]?.stringValue == "First")
+        #expect(stale.result?.objectValue?["component"]?.objectValue?["task"]?.objectValue?["details"]?.stringValue == "First")
         #expect(stale.error?.contains(current) == true)
         #expect(try await database.readNoteForEditing(id: page).revision == before.revision)
 
@@ -355,7 +355,7 @@ extension WorkspaceAgentToolsServiceTests {
         #expect(saved.boardItems?[addID]?.updatedBy?.sessionID == first)
         #expect(saved.boardItems?[addID]?.updatedBy?.label == "First worker")
         #expect(saved.boardItems?[otherID]?.updatedBy?.sessionID == second)
-        #expect(saved.boardItems?[addID]?.task == BoardTask(status: .doing, assignee: "First"))
+        #expect(saved.boardItems?[addID]?.task == BoardTask(status: .doing, details: "First"))
 
         // Filtered discovery and reads.
         let listed = await model.handle(.init(arguments: ["pages", "list", "--search", "Launch"]), callerID: second)
@@ -410,6 +410,19 @@ extension WorkspaceAgentToolsServiceTests {
         #expect(denied.code == "tool_disabled")
         let deniedWrite = await model.handle(.init(arguments: addArguments, requestID: addID), callerID: second)
         #expect(!deniedWrite.success)
+        // An agent can assign the task to another agent. It goes out at once, credited to the assigner.
+        let assignID = UUID().uuidString.lowercased()
+        let assignArguments = ["pages", "assign", "--note-id", page, "--id", addID, "--workspace", "W1", "--harness", "codex"]
+        #expect(await model.handle(.init(arguments: assignArguments, requestID: assignID), callerID: first).success)
+        #expect(await model.handle(.init(arguments: assignArguments, requestID: assignID), callerID: first).success)
+        let assigned = try #require(try await database.readNoteForEditing(id: page).document?.boardItems?[addID]?.task?.assignees)
+        #expect(assigned.count == 1 && assigned[0].state == .sending && assigned[0].workspaceID == "w1" && assigned[0].name == "Codex")
+        #expect(assigned[0].assignedBy?.sessionID == first)
+        #expect(!(await model.handle(.init(arguments: ["pages", "assign", "--note-id", page, "--id", addID, "--harness", "codex"]), callerID: first).success))
+        let stopped = await model.handle(.init(arguments: ["pages", "stop-assignee", "--note-id", page, "--id", addID, "--assignee", assigned[0].id]), callerID: first)
+        #expect(stopped.success)
+        #expect(try await database.readNoteForEditing(id: page).document?.boardItems?[addID]?.task?.assignees.first?.state == .stopping)
+
     }
 
     @Test func pageToolsRefuseOtherAssetsAndStayReplayable() async throws {

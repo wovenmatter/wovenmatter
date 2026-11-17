@@ -134,6 +134,46 @@ describe("websocket server", () => {
     }
   });
 
+  it("starts a new thread for a message, once per delivery", async () => {
+    const client = await openClient(wsUrl);
+    try {
+      const { bot } = await client.request<{ bot: { id: string } }>("bots.create", {
+        name: "Tasks",
+      });
+      const main = await client.request<ConversationSnapshot>("conversation.open", {
+        botId: bot.id,
+      });
+      // An empty main channel has nothing to fork, so the work starts there.
+      const first = await client.request<{ conversationId: number }>("message.send", {
+        botId: bot.id,
+        newThread: true,
+        text: "hello",
+      });
+      expect(first.conversationId).toBe(main.conversationId);
+      await client.waitFor(isFinalEntry(main.conversationId, "echo: hello (n1)"));
+      const task = { botId: bot.id, newThread: true, text: "do the task", deliveryId: "task-1" };
+      const started = await client.request<{ conversationId: number }>("message.send", task);
+      expect(started.conversationId).not.toBe(main.conversationId);
+      // A retry of the same delivery starts nothing more.
+      expect(await client.request("message.send", task)).toEqual({ duplicate: true });
+      const { threads } = await client.request<{ threads: { conversationId: number }[] }>(
+        "threads.list",
+        { botId: bot.id },
+      );
+      expect(threads.map((thread) => thread.conversationId)).toEqual([started.conversationId]);
+      await expect(
+        client.request("message.send", {
+          botId: bot.id,
+          conversationId: main.conversationId,
+          newThread: true,
+          text: "both",
+        }),
+      ).rejects.toThrow(/newThread/);
+    } finally {
+      client.close();
+    }
+  });
+
   it("streams replies, reloads history, and forks threads", async () => {
     const client = await openClient(wsUrl);
     await client.waitFor((message) => message.type === "hello");

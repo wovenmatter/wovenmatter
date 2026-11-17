@@ -36,10 +36,14 @@ struct MobilePageItemSummary: View {
     VStack(alignment: .leading, spacing: 3) {
       HStack(spacing: 10) {
         if let statusLabel { Text(statusLabel) }
-        if let assignee = item.task?.assignee, !assignee.isEmpty { Label(assignee, glyph: .userRound) }
+        if let assignee = item.task?.assignee, !assignee.isEmpty, item.task?.assignees.isEmpty != false { Label(assignee, glyph: .userRound) }
         if item.role == .instructions { Label("Reference instructions", systemImage: "book.closed") }
         if item.review == .needed { Label("Needs review", systemImage: "tray") }
       }.foregroundStyle(WovenPalette.mutedForeground)
+      if let details = item.task?.details, !details.isEmpty { Text(details).textSelection(.enabled) }
+      ForEach(item.task?.assignees ?? []) { assignee in
+        Label(assignee.mobileSummary, glyph: .userRound).foregroundStyle(WovenPalette.mutedForeground)
+      }
       if let outcome = item.task?.outcome, !outcome.isEmpty { Text(outcome).textSelection(.enabled) }
       if let change = item.lastChange, !change.isEmpty {
         Text(change).foregroundStyle(WovenPalette.mutedForeground).textSelection(.enabled)
@@ -270,7 +274,7 @@ struct MobilePageEmbed<Actions: View>: View {
   private var asset: LibraryNote? { model.state.deletedNotes.contains(assetID) ? nil : model.state.notes[assetID] }
   private var cached: Bool { !model.state.uncachedNoteIDs.contains(assetID) }
   private var title: String {
-    [asset?.title, page.canvasPlacement(for: componentID).title].compactMap { $0 }.first { !$0.isEmpty } ?? "Original asset"
+    [asset?.title, page.canvasPlacement(for: componentID).title].compactMap { $0 }.first { !$0.isEmpty } ?? "Original artifact"
   }
   var body: some View {
     let item = page.boardItems?[componentID]
@@ -289,7 +293,7 @@ struct MobilePageEmbed<Actions: View>: View {
         Spacer(minLength: 4)
         Button { open() } label: { LucideIcon(glyph: .externalLink, size: 17).frame(width: 36, height: 44) }
           .buttonStyle(.plain).disabled(asset == nil)
-          .accessibilityLabel("Open original asset").accessibilityIdentifier("page-open-original-\(componentID)")
+          .accessibilityLabel("Open original artifact").accessibilityIdentifier("page-open-original-\(componentID)")
         actions
       }
       if let asset {
@@ -297,7 +301,7 @@ struct MobilePageEmbed<Actions: View>: View {
           Text("Not saved on this device yet. Open it to download the original.").font(.caption).foregroundStyle(WovenPalette.mutedForeground)
         } else if let source { preview(asset, source) }
       } else {
-        Text("The original asset is unavailable. Its reference is retained.").font(.caption).foregroundStyle(WovenPalette.mutedForeground)
+        Text("The original artifact is unavailable. Its reference is retained.").font(.caption).foregroundStyle(WovenPalette.mutedForeground)
           .accessibilityIdentifier("page-original-unavailable-\(componentID)")
       }
       if let item, item.hasMobileSummary || item.task?.status == .doing { MobilePageItemSummary(item: item, showsPlainStatus: false) }
@@ -348,23 +352,53 @@ struct MobilePageAssetPicker: View {
   var body: some View {
     NavigationStack {
       VStack(spacing: 8) {
-        WovenSearchField(text: $search, prompt: "Search assets").padding(.horizontal, 20)
+        WovenSearchField(text: $search, prompt: "Search artifacts").padding(.horizontal, 20)
         ScrollView {
           LazyVStack(spacing: 2) {
             ForEach(assets) { asset in
-              WorkspaceRow(icon: MobileNoteIcon(content: asset.content), title: asset.title.isEmpty ? "Untitled asset" : asset.title,
+              WorkspaceRow(icon: MobileNoteIcon(content: asset.content), title: asset.title.isEmpty ? "Untitled artifact" : asset.title,
                 detail: RichDocumentEditing.document(asset.content)?.kind.displayName) {
                 choose(asset.id); dismiss()
               }.accessibilityIdentifier("page-asset-\(asset.id)")
             }
             if assets.isEmpty {
-              Text("No other assets on this device.").font(.callout).foregroundStyle(WovenPalette.mutedForeground).padding(20)
+              Text("No other artifacts on this device.").font(.callout).foregroundStyle(WovenPalette.mutedForeground).padding(20)
             }
           }.padding(.horizontal, 12)
         }.scrollIndicators(.never)
       }.padding(.top, 8)
-        .navigationTitle("Embed an original asset").navigationBarTitleDisplayMode(.inline)
+        .navigationTitle("Embed an artifact").navigationBarTitleDisplayMode(.inline)
         .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } } }
+    }
+  }
+}
+
+extension BoardTaskAssignee {
+  /// Who, where, and where they stand, as a phone's task line names them.
+  var mobileSummary: String {
+    let who = kind == .user ? "Me" : [name, place].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · ")
+    let state: String? = switch state {
+    case .assigned: kind == .user ? nil : "Not sent"
+    case .sending: "Sending…"
+    case .sent: "Sent"
+    case .stopping: "Stopping…"
+    case .stopped: "Stopped"
+    case .failed: "Didn't send"
+    }
+    return [who, state].compactMap { $0 }.joined(separator: " · ")
+  }
+}
+
+/// An image stored in the Page.
+struct MobilePageImage: View {
+  let image: PageImage?
+  var body: some View {
+    if let image, let bytes = image.bytes, let picture = UIImage(data: bytes) {
+      Image(uiImage: picture).resizable().aspectRatio(contentMode: .fit)
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .accessibilityLabel(image.alt ?? "Image")
+    } else {
+      Label("This image can't be shown.", systemImage: "photo").font(.caption).foregroundStyle(WovenPalette.mutedForeground)
     }
   }
 }

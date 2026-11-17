@@ -193,7 +193,7 @@ extension MobileStore {
     let id = request.noteID
     guard var note = state.notes[id], !state.deletedNotes.contains(id) else { throw WorkspaceToolError.notFound("This Page is not available on this device.") }
     guard !state.uncachedNoteIDs.contains(id) else { throw WorkspaceToolError.notFound("This Page is not saved on this device. Download it from your library first.") }
-    guard (note.kind ?? NoteDocument.decode(note.content).kind) == .canvas else { throw WorkspaceToolError.invalid("This asset is not a Page. Use the woven_notes tools.") }
+    guard (note.kind ?? NoteDocument.decode(note.content).kind) == .canvas else { throw WorkspaceToolError.invalid("This artifact is not a Page. Use the woven_notes tools.") }
     guard state.conflicts[id] == nil else { throw WorkspaceToolError.revisionConflict("Resolve this Page's sync conflict before editing it.") }
     let revision = try MobileToolSupport.fingerprint(note)
     let componentID = command.action == "page-add-component" ? requestID : command.options["id"]
@@ -211,7 +211,7 @@ extension MobileStore {
     } catch let error where PageTool.conflictComponent(error) != nil {
       return try conflict(PageTool.conflictComponent(error)!)
     } catch NoteEditError.artifactKindMismatch {
-      throw WorkspaceToolError.invalid("This asset is not a Page. Use the woven_notes tools.")
+      throw WorkspaceToolError.invalid("This artifact is not a Page. Use the woven_notes tools.")
     } catch RemoteNoteEditError.operationNotAllowed {
       throw WorkspaceToolError.invalid("This component is not valid for a Page. Check its size, table shape and links.")
     }
@@ -253,7 +253,7 @@ extension MobileStore {
       let id = try command.required("note-id")
       guard let note = state.notes[id], !state.deletedNotes.contains(id) else { throw WorkspaceToolError.notFound("This Page is not available on this device.") }
       guard !state.uncachedNoteIDs.contains(id) else { throw WorkspaceToolError.notFound("This Page is not saved on this device. Download it from your library first.") }
-      guard let current = document(note) else { throw WorkspaceToolError.invalid("This asset is not a Page. Use woven_notes_read.") }
+      guard let current = document(note) else { throw WorkspaceToolError.invalid("This artifact is not a Page. Use woven_notes_read.") }
       let filter = try BoardReadFilter(command: command)
       let assets = try assetSummaries(current.boardAssetIDs(filter: filter), state: state)
       return try current.pageReadValue(id: id, title: note.title, revision: try MobileToolSupport.fingerprint(note), filter: filter, assets: assets)
