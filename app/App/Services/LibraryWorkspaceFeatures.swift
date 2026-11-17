@@ -62,7 +62,7 @@ extension DeviceCommandService {
             let samples = try await model.recordedUsageSamples(from: from, to: to, limit: 201, offset: offset)
             return .usage(samples: samples.prefix(200).map { sample in
                 .init(id: sample.sourceID + ":" + sample.id, timestamp: sample.timestamp, provider: sample.provider.displayName,
-                    model: sample.canonicalModel, account: sample.accountLabel, workspace: sample.workspace, sessionID: sample.sessionID,
+                    model: sample.canonicalModel, workspace: sample.workspace, sessionID: sample.sessionID,
                     inputTokens: sample.tokens.inputTokens, outputTokens: sample.tokens.outputTokens,
                     cacheTokens: sample.tokens.cachedInputTokens, totalTokens: sample.tokens.totalTokens,
                     requests: sample.requestCount, costUSD: sample.directCostUSD)

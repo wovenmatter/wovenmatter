@@ -51,7 +51,6 @@ struct UsageAnalyticsFilters: Equatable {
             sample.modelFamily,
             sample.billingProvider,
             sample.billingRoute,
-            sample.accountLabel,
             sample.reasoningLevel,
             sample.harness,
             sample.application,
@@ -92,7 +91,6 @@ struct UsageSessionRow: Identifiable {
     let id: String
     let modelFamily: String
     let billingRoute: String
-    let accountLabel: String
     let reasoningLevel: String?
     let harness: String
     let application: String
@@ -106,7 +104,7 @@ struct UsageSessionRow: Identifiable {
     /// Attribution in reading order, with repeated values left out.
     var attribution: String {
         var parts: [String] = []
-        for part in [deviceName, harness, application, billingRoute, accountLabel, reasoningLevel].compactMap({ $0 })
+        for part in [deviceName, harness, application, billingRoute, reasoningLevel].compactMap({ $0 })
         where !part.isEmpty && !parts.contains(part) && part != "Unknown" {
             parts.append(part)
         }
@@ -125,7 +123,6 @@ struct UsageSessionRow: Identifiable {
                 id: id,
                 modelFamily: latest.modelFamily,
                 billingRoute: latest.billingRoute,
-                accountLabel: latest.accountLabel,
                 reasoningLevel: latest.reasoningLevel,
                 harness: latest.harness,
                 application: latest.application,
@@ -1044,7 +1041,6 @@ private struct UsageModelDetail: View {
             }
             dimension("Subscriptions and billing routes", rows: rollup.billingRoutes)
             dimension("Harnesses and applications", rows: rollup.harnesses)
-            dimension("Accounts", rows: rollup.accounts)
         }
     }
 

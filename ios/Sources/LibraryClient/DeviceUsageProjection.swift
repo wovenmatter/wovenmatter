@@ -52,7 +52,7 @@ public enum DeviceUsageProjection {
         }
         if usage["totalTokens"] != nil { total = try count("totalTokens") }
         samples.append(.init(id: "\(key):\(index)", timestamp: date, provider: message["provider"] as? String ?? "Unknown provider",
-          model: message["model"] as? String ?? "Unknown model", account: "", workspace: "This device", sessionID: value.conversation,
+          model: message["model"] as? String ?? "Unknown model", workspace: "This device", sessionID: value.conversation,
           inputTokens: input, outputTokens: output, cacheTokens: read, totalTokens: total, requests: 1, costUSD: nil))
       }
     }

@@ -86,7 +86,7 @@ struct UsageImportAtomicityTests {
   private var interval: DateInterval { DateInterval(start: now.addingTimeInterval(-1), end: now.addingTimeInterval(1)) }
 
   private func sample(_ id: String) -> UsageSample {
-    UsageSample(id: id, provider: .codex, timestamp: now, sessionID: "session", accountLabel: "fixture",
+    UsageSample(id: id, provider: .codex, timestamp: now, sessionID: "session", 
       model: "gpt-5.4", harness: "Codex", application: "test", tokens: UsageTokenCounts(inputTokens: 3))
   }
 

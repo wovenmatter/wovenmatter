@@ -205,7 +205,6 @@ private func usageSample(
     provider: provider,
     timestamp: timestamp,
     sessionID: provider.rawValue,
-    accountLabel: provider.displayName,
     model: "fixture-model",
     harness: "Fixture",
     application: "Fixture",

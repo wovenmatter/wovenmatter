@@ -313,6 +313,43 @@ import WovenMatterCore
     #expect(((try? FileManager.default.contentsOfDirectory(atPath: copies.path)) ?? []).isEmpty)
   }
 
+  /// v0.4.4's usage rows carry an account label (step 3 drops it). Whichever
+  /// opens the file first, the usage index or the library, the column goes,
+  /// rows stay, and the library ends with a new library's schema.
+  @Test(arguments: [true, false])
+  func aV044LibraryLosesTheUsageAccountLabel(usageIndexFirst: Bool) async throws {
+    let upgraded = try PersistenceFixture(), fresh = try PersistenceFixture(); defer { upgraded.remove(); fresh.remove() }
+    _ = try UsageStore(databaseURL: fresh.databaseURL)
+    let current = try await WorkspaceDatabase(url: fresh.databaseURL)
+    _ = try UsageStore(databaseURL: upgraded.databaseURL)
+    _ = try await WorkspaceDatabase(url: upgraded.databaseURL)
+    try PersistenceSQL(url: upgraded.databaseURL).execute("""
+      PRAGMA busy_timeout=30000;
+      ALTER TABLE usage_events ADD COLUMN account_label TEXT NOT NULL DEFAULT 'Unknown';
+      PRAGMA user_version=2;
+      INSERT INTO usage_sources(source_id,source_name,source_location,provider,fingerprint,imported_at)
+        VALUES('v044','Fixture','Fixture','codex','f',1);
+      INSERT INTO usage_events(event_id,source_id,source_event_id,provider,billing_provider,billing_route,account_label,
+        model_raw,model_canonical,model_family,model_publisher,model_identity_confidence,timestamp,session_id,harness,
+        application,input_tokens,cached_input_tokens,cache_creation_tokens,output_tokens,reasoning_tokens,
+        attribution_confidence,granularity,imported_at)
+        VALUES('v044:e','v044','e','codex','OpenAI','Codex subscription','Unknown','m','m','m','OpenAI','exact',1,'s',
+        'Codex','Codex',5,0,0,0,0,'exact','modelCall',1);
+      """)
+    if usageIndexFirst { _ = try UsageStore(databaseURL: upgraded.databaseURL) }
+    let library = try await WorkspaceDatabase(url: upgraded.databaseURL)
+    let usage = try UsageStore(databaseURL: upgraded.databaseURL)
+    let expected = try await schema(current), actual = try await schema(library)
+    #expect(actual.keys.sorted() == expected.keys.sorted())
+    for key in expected.keys.sorted() where actual[key] != expected[key] {
+      Issue.record("\(key) differs:\nupgraded: \(actual[key] ?? "missing")\nfresh: \(expected[key]!)")
+    }
+    #expect(try await row(library, "PRAGMA user_version")["user_version"]?.intValue == WorkspaceDatabaseConnection.librarySchemaVersion)
+    let kept = try usage.samples(in: DateInterval(start: .distantPast, end: .distantFuture))
+    #expect(kept.map(\.id) == ["v044:e"])
+    #expect(kept.first?.billingRoute == "Codex subscription" && kept.first?.tokens.inputTokens == 5)
+  }
+
   /// A library a newer release has changed is refused by everything that
   /// opens the file, and left exactly as it was: an older build must never
   /// run its statements over a schema it does not know.

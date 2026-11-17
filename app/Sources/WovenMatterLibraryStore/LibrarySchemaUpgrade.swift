@@ -81,6 +81,18 @@ extension WorkspaceDatabaseConnection {
     .init(version: 2, rewritesData: false) { connection in
       try connection.libraryStepUnlocked(2) { try connection.executeUnlocked(WorkspaceDatabaseConnection.gitHubIdentityTablesSQL) }
     },
+    // v0.4.4 to usage rows without an account label, which was never collected
+    // reliably. The usage index drops the column itself when it opens the file
+    // first (`UsageStore.migrate`); the step records the version, so an older
+    // build, which still writes the column, leaves the library alone. No copy:
+    // the column held only placeholders.
+    .init(version: 3, rewritesData: false) { connection in
+      try connection.libraryStepUnlocked(3) {
+        let present = try connection.historyRowsUnlocked(
+          "SELECT 1 AS present FROM pragma_table_info('usage_events') WHERE name='account_label'", values: [])
+        if !present.isEmpty { try connection.executeUnlocked("ALTER TABLE usage_events DROP COLUMN account_label") }
+      }
+    },
   ]
 
   /// `PRAGMA user_version` of the current schema: the last step. A library

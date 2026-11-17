@@ -16,7 +16,7 @@ struct UsageRefreshOwnershipTests {
     let source = UsageIngestionSource(id: "wovenmatter:local", displayName: "Fixture",
       kind: .wovenMatter, location: "Fixture", installationID: "fixture")
     let event = UsageIngestionEvent(id: "seed", sequence: advancedCursor, timestamp: now,
-      provider: .codex, accountLabel: "Fixture", model: "fixture", harness: "Codex",
+      provider: .codex, model: "fixture", harness: "Codex",
       application: "Fixture", sessionID: "seed", tokens: .init(inputTokens: 1))
     try await store.write { try $0.ingest(page: .init(source: source, events: [event],
       nextCursor: String(advancedCursor), hasMore: false, generatedAt: now),

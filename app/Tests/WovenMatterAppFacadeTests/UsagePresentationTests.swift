@@ -149,7 +149,6 @@ struct UsagePresentationTests {
       provider: .codex,
       timestamp: Self.now,
       sessionID: "session",
-      accountLabel: "Account",
       model: "model",
       billingRoute: "API key",
       harness: "Codex",
@@ -168,7 +167,7 @@ struct UsagePresentationTests {
   func deviceFilter() {
     let local = sample(.codex, daysAgo: 0, tokens: 1)
     let remote = UsageSample(
-      id: "remote", provider: .codex, timestamp: Self.now, sessionID: "s", accountLabel: "A", model: "m",
+      id: "remote", provider: .codex, timestamp: Self.now, sessionID: "s", model: "m",
       harness: "h", application: "a", tokens: UsageTokenCounts(inputTokens: 1),
       sourceID: UsageDeviceSource.sourceID(deviceID: "host-1")
     )
@@ -235,7 +234,6 @@ struct UsagePresentationTests {
       provider: provider,
       timestamp: Self.now.addingTimeInterval(-Double(daysAgo) * 86_400),
       sessionID: "session",
-      accountLabel: "Account",
       model: "model",
       harness: provider.displayName,
       application: "Test",

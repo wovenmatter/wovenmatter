@@ -164,7 +164,7 @@ struct UsageEverySourceTests {
   private func sample(_ id: String, harness: String, session: String, minutesAgo: Double, tokens: Int64,
                       source: String, provider: ProviderKind = .codex) -> UsageSample {
     UsageSample(id: id, provider: provider, timestamp: Self.now.addingTimeInterval(-minutesAgo * 60), sessionID: session,
-                accountLabel: "a", model: "gpt-5.5", harness: harness, application: "app",
+                model: "gpt-5.5", harness: harness, application: "app",
                 tokens: UsageTokenCounts(inputTokens: tokens), sourceID: source)
   }
 

@@ -48,7 +48,6 @@ actor UsageRunRecorder {
       sequence: sequence,
       timestamp: observation.timestamp,
       provider: route.provider,
-      accountLabel: "Unknown",
       billingProvider: route.billingProvider,
       billingRoute: route.billingRoute,
       model: observation.model ?? "Unknown model",
