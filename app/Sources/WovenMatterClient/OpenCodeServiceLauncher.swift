@@ -25,26 +25,55 @@ public enum OpenCodeServiceLauncher {
         return connection
     }
 
+    /// OpenCode 2 from its official installer (https://opencode.ai/v2/install), which puts
+    /// it in ~/.opencode/bin where the terminal, OpenCode's desktop app and Woven Matter all
+    /// find the same install.
     public static var installDefinition: LocalACPRuntimeDefinition {
-        LocalACPRuntimeDefinition(runtimeKind: .opencode, displayName: "OpenCode v2", commandName: "opencode", alternativeCommandNames: ["opencode2"],
+        let catalog = LocalACPRuntimeCatalog.definition(for: .opencode)
+        return LocalACPRuntimeDefinition(runtimeKind: .opencode, displayName: "OpenCode v2", commandName: "opencode", alternativeCommandNames: ["opencode2"],
             arguments: [], underlyingCLIName: nil,
-            cliInstallerSource: URL(string: "https://registry.npmjs.org/@opencode%2fcli"),
-            cliInstallerInterpreter: nil, cliNpmPackageSpec: "@opencode/cli@2",
+            cliInstallerSource: catalog?.cliInstallerSource ?? URL(string: "https://opencode.ai/v2/install"),
+            cliInstallerInterpreter: catalog?.cliInstallerInterpreter ?? "bash",
+            cliInstallerArguments: catalog?.cliInstallerArguments ?? [],
+            updateArguments: catalog?.updateArguments ?? ["upgrade"],
             adapterPackage: nil, adapterDescription: "Local OpenCode v2 service")
     }
 
-    public static func install(using installer: LocalACPRuntimeInstaller = LocalACPRuntimeInstaller(),
-                               fetch: @escaping RuntimeMaintenance.Fetch = RuntimeMaintenance.fetchMetadata) async throws -> URL {
-        let definition = installDefinition
-        let preview = try await installer.prepareCLIInstall(definition, fetch: fetch)
-        let executable = try await installer.install(definition, component: .cli, expectedPackageSpec: preview.packageSpec)
+    /// Runs the official installer and checks that the `opencode` it leaves is OpenCode 2.
+    public static func install(using installer: LocalACPRuntimeInstaller = LocalACPRuntimeInstaller()) async throws -> URL {
+        let executable = try await installer.install(installDefinition, component: .cli)
         let result = try await Task.detached {
             try LocalACPProcessRunner.run(executableURL: executable, arguments: ["--version"])
         }.value
         guard result.succeeded, OpenCodeConnection.supportsVersion(normalizedVersion(result.stdout)) else {
-            throw OpenCodeError.message("The downloaded OpenCode version could not be verified. Try Download again.")
+            throw OpenCodeError.message("The installed OpenCode isn't OpenCode 2. Try installing again.")
         }
         return executable
+    }
+
+    /// The OpenCode 1 version that installing OpenCode 2 would replace: OpenCode 1 is
+    /// installed and no OpenCode 2 is. Both use the `opencode` command, and the official
+    /// installer writes the same file, so this is asked about first.
+    public static func versionOneToReplace(resolver: LocalACPRuntimeResolver = LocalACPRuntimeResolver(),
+                                           native: URL? = LocalACPRuntimeResolver.nativeLocation(named: "opencode"),
+                                           probe: RuntimeMaintenance.Probe = RuntimeMaintenance.probeVersion) -> String? {
+        let candidates = (installDefinition.commandNames.compactMap { resolver.executable(named: $0) }
+            + [native].compactMap { $0 }.filter { FileManager.default.isExecutableFile(atPath: $0.path) })
+            .map(\.standardizedFileURL).uniqued()
+        let versions = candidates.compactMap { probe($0).map(normalizedVersion) }
+        guard !versions.contains(where: OpenCodeConnection.supportsVersion) else { return nil }
+        return versions.first { $0.split(separator: ".").first == "1" }
+    }
+
+    /// What the person agrees to before OpenCode 2 replaces OpenCode 1.
+    public static func replacementNotice(replacing version: String, on place: String = "this Mac") -> String {
+        "Woven Matter works with OpenCode 2. Its official installer replaces the opencode command from OpenCode \(version) on \(place). OpenCode's settings and data are kept."
+    }
+
+    /// `opencode upgrade`, then a restart so the shared service runs the new version.
+    public static func upgrade(executable: URL, registration: URL = OpenCodeConnection.registrationURL()) async throws {
+        try await RuntimeMaintenance.runVendorUpdate(.opencode, executable: executable)
+        try await runService("restart", executable: executable, registration: registration)
     }
 
     public static func stop(registration: URL = OpenCodeConnection.registrationURL()) async throws {
@@ -114,27 +143,33 @@ public enum OpenCodeServiceLauncher {
         guard !probe.isRunning, probe.terminationStatus == 0 else { throw OpenCodeError.message("Could not verify the selected OpenCode executable.") }
         let version = normalizedVersion(String(decoding: try Data(contentsOf: output).prefix(4096), as: UTF8.self))
         guard OpenCodeConnection.supportsVersion(version) else { throw OpenCodeError.incompatible(version) }
-        let process = Process()
-        process.executableURL = executable
-        process.arguments = ["serve", "--service"]
-        process.standardInput = FileHandle.nullDevice
-        process.standardOutput = FileHandle.nullDevice
-        process.standardError = FileHandle.nullDevice
+        try await runService("start", executable: executable, registration: registration)
+    }
+
+    /// The arguments for one `opencode service` action.
+    public static func serviceArguments(_ action: String) -> [String] { ["service", action] }
+
+    /// Starts or restarts OpenCode's shared background service with OpenCode's own
+    /// `opencode service` command, so OpenCode owns it rather than Woven Matter: it keeps
+    /// running when Woven Matter quits, and the terminal and desktop app use the same one.
+    static func runService(_ action: String, executable: URL, registration: URL) async throws {
         var environment = ProcessInfo.processInfo.environment
         environment["XDG_STATE_HOME"] = registration.deletingLastPathComponent().deletingLastPathComponent().path
-        // OpenCode runs session tools in this service process.
+        // OpenCode runs session tools in the service process, which inherits this environment.
         WovenSessionEnvironment.apply(to: &environment)
-        process.environment = environment
-        // This process intentionally outlives Woven Matter and is never registered
-        // with LocalACPClient's process cleanup or panel lifecycle.
-        try process.run()
+        let previous = try? OpenCodeConnection.discover(file: registration)
+        let result = try await Task.detached(priority: .userInitiated) {
+            try LocalACPProcessRunner.run(executableURL: executable, arguments: serviceArguments(action),
+                environment: environment, currentDirectoryURL: FileManager.default.homeDirectoryForCurrentUser, timeout: 60)
+        }.value
+        guard result.succeeded else {
+            throw OpenCodeError.message("OpenCode could not \(action) its shared service. Check opencode service status.")
+        }
         for _ in 0..<120 {
             try Task.checkCancellation()
             if let endpoint = try? OpenCodeConnection.discover(file: registration),
+               action != "restart" || endpoint != previous,
                (try? await OpenCodeHTTPClient(connection: endpoint).health()) != nil { return }
-            if !process.isRunning && process.terminationStatus != 0 {
-                throw OpenCodeError.message("OpenCode could not start its shared service. Check opencode service status.")
-            }
             try await Task.sleep(for: .milliseconds(250))
         }
         throw OpenCodeError.message("OpenCode service startup is still pending. Refresh discovery; Woven Matter has not stopped the service.")

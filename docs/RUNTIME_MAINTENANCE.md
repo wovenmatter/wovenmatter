@@ -30,27 +30,49 @@ command output, account data, paths, or credentials.
 
 ## Components and updates
 
-| Runtime | Actual local architecture | Release source and action |
-| --- | --- | --- |
-| Codex | `codex-acp`, bundled `@openai/codex`, standalone `codex` for sign-in; inherited `CODEX_PATH` overrides are reported | Newest official npm adapter release; official Codex installer for outdated sign-in CLI. The adapter minimum in the harness catalog is a compatibility floor, never an installation fallback. No `CODEX_PATH` is set. |
-| Claude Code | `claude-agent-acp`, bundled `@anthropic-ai/claude-agent-sdk` and its platform-native Claude engine (legacy `cli.js` also supported), standalone `claude` sign-in CLI; inherited executable override is reported | Official npm adapter release; `claude update` for an outdated standalone CLI. |
-| OpenCode | `opencode` (with `opencode2` fallback) and separately running standard v2 service | Newest stable `@opencode/cli` 2.x release; each install/update resolves a fresh compatible release even if upstream `latest` advances to a new major. Minor and patch updates are independently supported. Registered service version is shown separately and is not a live-health assertion. Existing service is not restarted. |
-| Grok Build | `grok … agent stdio` | Official stable release endpoint used by installer; `grok update`. |
+Each harness on this Mac is the person's own native CLI, in the place its vendor's
+official installer puts it, so the terminal and Woven Matter run the same CLI with
+the same sign-ins, skills and sessions. Woven Matter finds that install before any
+other copy on the search path.
+
+| Harness | Native CLI (official installer) | Woven Matter connects through | Update |
+| --- | --- | --- | --- |
+| Codex | `~/.local/bin/codex` ([installer](https://chatgpt.com/codex/install.sh)) | `codex-acp`, with `CODEX_PATH` set to the native CLI. The CLI must be at least the catalog's engine minimum. | `codex update` |
+| Claude Code | `~/.local/bin/claude` ([installer](https://claude.ai/install.sh)) | `claude-agent-acp` and its Claude Agent SDK library, with `CLAUDE_CODE_EXECUTABLE` set to the native CLI | `claude update` |
+| Grok Build | `~/.grok/bin/grok` ([installer](https://x.ai/cli/install.sh)) | Grok's own ACP (`grok … agent stdio`) | `grok update` |
+| OpenCode | v2 only, `~/.opencode/bin/opencode` ([installer](https://opencode.ai/v2/install)) | OpenCode's shared background service | `opencode upgrade`, then `opencode service restart` |
 
 ## Local installation
 
-Managed npm installs are staged in `Node Tools/Installations/<UUID>` and verified
-before an atomic launcher symlink replacement in `Node Tools/bin`. Old generations
-are retained so running adapters retain their dependency trees; automatic garbage
-collection is deliberately absent. Existing flat managed installs remain readable.
+**Install** runs the vendor's official installer for a CLI that isn't on this Mac,
+downloaded from the fixed HTTPS address in `harnesses/catalog.json`, with no review
+step and never through npm. An existing CLI is kept. Codex and Claude Code then get
+their ACP adapter, which is Woven Matter's own: it installs with Woven Matter's npm
+into `Node Tools/Installations/<UUID>`, is verified, and replaces the launcher
+symlink in `Node Tools/bin` atomically. Old generations are retained so running
+adapters keep their dependency trees.
+
+OpenCode 2's installer writes the same `opencode` command OpenCode 1 uses. When
+OpenCode 1 is installed and OpenCode 2 isn't, Woven Matter asks before installing
+(**Replace OpenCode 1?**); OpenCode's settings and data are kept. Woven Matter
+starts OpenCode's shared service with `opencode service start`, so OpenCode owns it:
+the `opencode` command, OpenCode's desktop app and Woven Matter use the same server,
+and it keeps running when Woven Matter quits.
+
+**Update** runs each vendor's own update command (above) in the person's login shell
+with no window, so it updates the install their terminal uses however it was
+installed. Each command has a two-minute limit. Afterwards Woven Matter reads the
+versions again: the CLI must have moved to a newer version (a vendor's native channel
+can trail the newest registry publication, so it needn't reach it), and the adapter
+and its libraries must reach their targets. An update that changed nothing reports
+that it finished without updating. Nothing updates automatically.
+
 Subprocesses have a bounded duration and their own process group, so a timed-out
 shell's children cannot continue an installation after retry becomes available.
-Different local harnesses can update concurrently. Each harness keeps its own
-progress, failure, and installation lock; duplicate operations on the same
-harness are rejected. Shared Node bootstrap is coalesced, while npm packages use
-separate staging directories and atomic launcher promotion. New local message
-sends and maintenance actions are mutually gated during a local runtime
-operation. No operation cancels an active turn.
+Different harnesses update at the same time, in Settings → Updates and here. Each
+harness keeps its own progress, failure, and installation lock; duplicate operations
+on the same harness are rejected. New local message sends and maintenance actions are
+mutually gated during a local runtime operation. No operation cancels an active turn.
 
 ## Remote installation
 
@@ -62,31 +84,56 @@ must include these endpoints before the controls are available.
 Local package presence never verifies a remote
 installation or a linked gateway's runtime.
 
-On first inventory, runtimes without saved preferences retain their previous
-availability only after all required components verify. Missing runtimes become
-disabled and remain so after later installation until explicitly enabled. Saved
-Disable/Hide choices survive service restarts; unreadable preferences fail closed.
+Each harness on a host is the host user's own native CLI, so someone who opens a
+terminal there uses the same CLI, sign-ins, skills and sessions as Woven:
 
-Remote adapter inventories show upstream bundled-package versions separately
-from the compatible update target resolved using the adapter's dependency range.
-Updates refresh that dependency within the declared range and verify the result;
-unknown compatibility does not produce an update claim.
+| Harness | Native CLI (official installer) | Woven connects through | Update |
+| --- | --- | --- | --- |
+| Codex | `~/.local/bin/codex` ([installer](https://chatgpt.com/codex/install.sh)) | `codex-acp`, with `CODEX_PATH` set to the native CLI | `codex update` |
+| Claude Code | `~/.local/bin/claude` ([installer](https://claude.ai/install.sh)) | `claude-agent-acp`, with `CLAUDE_CODE_EXECUTABLE` set to the native CLI | `claude update` |
+| Grok Build | `~/.grok/bin/grok` ([installer](https://x.ai/cli/install.sh)) | Grok's own ACP (`grok agent stdio`) | `grok update` |
+| OpenCode | v2 only, `~/.opencode/bin/opencode` ([installer](https://opencode.ai/v2/install)) | OpenCode's shared background service | `opencode upgrade`, then `opencode service restart` |
 
-Remote maintenance takes an exclusive lock on the host. Remote conversation processes
-and managed OpenCode servers hold shared locks for their lifetime, so an
-update cannot replace their runtime while they are using it. A busy workspace requires
-the user to finish conversations or stop its server before retrying maintenance.
-Installer timeouts terminate the process group before permitting another attempt.
+A missing CLI is installed by downloading its vendor's official installer from that
+fixed HTTPS address and running it, with no review step and never through npm.
+The installers may add their folder to the user's shell startup files, as they do
+for anyone; Woven's harness PATH already includes those folders. When the CLI is
+present and only its ACP adapter is missing, only the adapter is installed. The
+adapters are Woven's own: they install with the host's npm into
+`~/.local/share/wovenmatter/acp-adapters` and are updated there when a newer one is
+published. A CLI in the user's home is reported with `source: "native"` and is
+updated with its vendor's command; one outside it (a distribution package) is
+`system` and is left alone; Woven's adapters are `managed`.
+
+An update runs the vendor's command in the background with the harness environment,
+stops it after three minutes, and succeeds only when every component that was behind
+reaches the checked version. An updater that exits 0 without changing the version is
+reported as a failed update. Each harness has its own maintenance lock
+(`runtime-operation-<id>.lock`), so different harnesses install and update side by
+side. Active Woven sessions on a harness block its maintenance until they finish.
+
+OpenCode v1 and v2 share the `opencode` command, and the official v2 installer
+replaces v1's. When a host has OpenCode v1 and no v2, its inventory reports
+`openCodeV1: { path, version }` and an install fails with
+`opencode_v1_replacement_confirmation_required` until the app sends
+`replaceOpenCodeV1: true` after the user agrees. Their data is kept.
+
+`GET /v1/harnesses/<id>/install-preview` remains for older apps: it describes the
+official installer with `sha256` and `packageSpec` set to `null`. Install and update
+take `{ "confirmed": true }`; `sourceSHA256` and `packageSpec` are ignored.
 
 ## Service controls
 
-OpenCode settings open the selected workspace's server and model settings. Each
-remote workspace owns a distinct v2 service state directory and conversation
-association; the app routes requests and event streams to the host's member
-proxy, which accepts requests signed with the Mac's device key over the
-tailnet. The service's Basic credential stays on the remote host; no public
-OpenCode listener or remote browser credential URL is created. Local
-OpenCode retains its existing registered service and explicit lifecycle controls.
+OpenCode settings open the selected workspace's server and model settings. On a host,
+Woven uses OpenCode's one shared background service for the host user, the same one
+`opencode` in a terminal and the desktop app use: it starts it with
+`opencode service start`, stops it with `opencode service stop`, restarts it onto a
+new release after an upgrade, and finds it through OpenCode's own
+`~/.local/state/opencode/service.json`. The service keeps running when Woven stops.
+The app routes requests and event streams to the host's member proxy, which accepts
+requests signed with the Mac's device key over the tailnet. The service's Basic
+credential stays on the remote host; no public OpenCode listener or remote browser
+credential URL is created.
 
 ## Upstream reference snapshot — September 11, 2026
 

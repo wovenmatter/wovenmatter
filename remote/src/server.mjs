@@ -80,7 +80,8 @@ const instances = createWorkspaceInstances({
   isEnabled: async id => await maintenance.isInstalled(id),
 })
 const maintenance = createRuntimeMaintenance({
-  catalog, workspaceRoot, configuration, environment: harnessEnvironment, verifiedInstaller,
+  catalog, workspaceRoot, configuration, environment: harnessEnvironment, officialInstaller,
+  restartOpenCodeService: () => instances.restartIfRunning(),
   hasActiveRuntime: async id => await instances.hasActiveRuntime(id)
     || taskGateway?.hasActiveRuntime(id) || clientExecution?.hasActiveRuntime(id) || durableACP.hasActiveRuntime(id)
     || [...authenticationSessions.values()].some(s => s.harness.id === id && s.state === 'waiting_for_user'),
@@ -1234,35 +1235,21 @@ function commandSucceeded(command, timeoutMilliseconds) {
   })
 }
 
+// Older desktop apps still ask for a preview before installing. Installs now run
+// the vendor's official installer without a review step, so this only describes it.
 async function installerPreview(harness) {
-  const adapter = await maintenance.hostAdapterPreview(harness)
-  if (adapter) return adapter
-  if (harness.install.kind === 'npm-global') return maintenance.npmPreview(harness)
-  const installer = await downloadInstaller(harness)
-  return {
-    harnessID: harness.id,
-    source: harness.install.source,
-    sha256: installer.sha256,
-    bytes: installer.data.length,
-    command: harness.install.command,
-    verification: 'sha256-redownload',
-  }
+  return maintenance.installPreview(harness)
 }
 
-async function verifiedInstaller(harness, expectedSHA256) {
-  const installer = await downloadInstaller(harness)
-  if (installer.sha256 !== expectedSHA256.toLowerCase()) {
-    throw httpError(409, 'installer_digest_changed')
-  }
+// Downloads the vendor's official installer for one run, from the vendor's own
+// HTTPS address (fixed in the catalog or runtime-maintenance.mjs).
+async function officialInstaller(harness, source) {
+  const installer = await downloadInstallerSource(source)
   const directory = resolve(workspaceRoot, '.wovenmatter/installers')
-  await mkdir(directory, { recursive: true })
+  await mkdir(directory, { recursive: true, mode: 0o700 })
   const path = resolve(directory, `${harness.id}-${installer.sha256}.sh`)
   await writeFile(path, installer.data, { mode: 0o700 })
-  return { ...installer, path }
-}
-
-async function downloadInstaller(harness) {
-  return downloadInstallerSource(harness.install.source)
+  return path
 }
 
 export async function downloadInstallerSource(source, options = {}) {

@@ -142,18 +142,20 @@ The browser itself remains a non-root sandboxed process in both modes.
 
 ## Existing tools and accounts
 
-Inspection discovers binaries in standard user paths, mise/asdf shims, nvm
-installations and system locations without sourcing login shells. Managed
-user paths take precedence. Pre-existing binaries are reported as installed
-on the host and are not overwritten or updated by Woven maintenance. Woven
-records ownership only for components it installs itself.
+Inspection discovers binaries in standard user paths, the vendors' native install
+folders (`~/.local/bin`, `~/.grok/bin`, `~/.opencode/bin`), mise/asdf shims, nvm
+installations and system locations without sourcing login shells. Woven uses the
+CLIs already there: a harness CLI in the user's home is their native install, which
+Woven updates with the vendor's own command, so a terminal on the host and Woven
+share one CLI with the same sign-ins, skills and sessions. CLIs outside the home are
+reported as system installs and are not updated.
 
-An existing sign-in CLI plus a missing ACP adapter needs only the adapter;
-Woven does not rerun the CLI installer. Missing tools can be installed during
-setup or later from Settings. Sign-in uses the existing authentication relay,
-and the user completes any required authentication. Install/update guards
-restore changed shell startup files and reject installation; recursive checks
-detect changes to existing harness configuration without reporting its contents.
+An existing CLI plus a missing ACP adapter needs only the adapter; Woven does not
+rerun the CLI installer. Missing tools are installed with the vendor's official
+installer during setup or later from Settings (see
+[runtime maintenance](../RUNTIME_MAINTENANCE.md#remote-installation)). Sign-in uses
+the existing authentication relay, and the user completes any required
+authentication.
 
 ## Browser and profiles
 

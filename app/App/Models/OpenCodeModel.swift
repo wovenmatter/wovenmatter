@@ -55,8 +55,9 @@ final class OpenCodeModel {
     var canRestoreAutomatically: Bool { !serverStopped && !quitting }
     private var quitting = false
     private var connectionGeneration = UUID()
-    var startServerOnLaunch: Bool { didSet { if !applyingBackendSnapshot { if isBackendProjection { perform { _ = try await self.backendCommand(.serverPreferences(self.startServerOnLaunch, self.stopServerOnQuit)) } } else { defaults.set(startServerOnLaunch, forKey: preference("start-on-launch")) } } } }
-    var stopServerOnQuit: Bool { didSet { if !applyingBackendSnapshot { if isBackendProjection { perform { _ = try await self.backendCommand(.serverPreferences(self.startServerOnLaunch, self.stopServerOnQuit)) } } else { defaults.set(stopServerOnQuit, forKey: preference("stop-on-quit")) } } } }
+    /// OpenCode's shared service belongs to OpenCode, which the terminal and its desktop app
+    /// use too, so Woven Matter may start it but never stops it when quitting.
+    var startServerOnLaunch: Bool { didSet { if !applyingBackendSnapshot { if isBackendProjection { perform { _ = try await self.backendCommand(.serverPreferences(self.startServerOnLaunch)) } } else { defaults.set(startServerOnLaunch, forKey: preference("start-on-launch")) } } } }
     var isInstalled: Bool {
         if isBackendProjection { return projectedInstalled }
         if let configuration = remoteConfiguration {
@@ -119,7 +120,6 @@ final class OpenCodeModel {
             "wovenmatter.opencode." + (remoteConfiguration.map { "remote." + $0.id.uuidString.lowercased() + "." } ?? "") + suffix
         }
         startServerOnLaunch = defaults.object(forKey: preference("start-on-launch")) as? Bool ?? true
-        stopServerOnQuit = defaults.bool(forKey: preference("stop-on-quit"))
         isEnabled = defaults.bool(forKey: preference("local-connected"))
         hiddenModels = Set(defaults.stringArray(forKey: preference("hidden-models")) ?? [])
         self.store = store; self.ownerDeviceID = ownerDeviceID; self.defaults = defaults
@@ -283,8 +283,28 @@ final class OpenCodeModel {
         } catch {
             installationFailures += 1
             installationInventory = await RuntimeMaintenance.inspect(.opencode, checkLatest: false, selectedOpenCode: executable)
-            throw RuntimeMaintenanceError.verification
+            throw error
         }
+    }
+
+    /// `opencode upgrade`, then OpenCode restarts its shared service on the new version and
+    /// Woven Matter reconnects to it.
+    func upgrade() async throws {
+        guard !isBackendProjection, !isRemote else { throw OpenCodeError.message("Update OpenCode from Settings → Updates.") }
+        if executable == nil { await resolveExecutable() }
+        guard let executable else { throw RuntimeMaintenanceError.verification }
+        guard !isInstalling, !isConnecting, !isControllingServer,
+              !snapshots.values.contains(where: \.active) else { throw RuntimeMaintenanceError.busy }
+        let reconnect = isReady || isEnabled
+        isInstalling = true
+        do {
+            await coordinator.disconnect(connectionID: connectionID)
+            isReady = false
+            try await OpenCodeServiceLauncher.upgrade(executable: executable, registration: registration)
+            installationInventory = await RuntimeMaintenance.inspect(.opencode, checkLatest: true, selectedOpenCode: executable)
+            isInstalling = false
+        } catch { isInstalling = false; throw error }
+        if reconnect { try await connectLocal() }
     }
 
     func stopServer() async throws {
@@ -318,13 +338,6 @@ final class OpenCodeModel {
         serverStopped = true
         await coordinator.shutdown()
         isReady = false
-        if stopServerOnQuit {
-            if let configuration = remoteConfiguration {
-                guard remoteWorkspaces?.isRuntimeInstalled(.opencode, in: configuration) == true else { return }
-                guard let remoteWorkspaces else { throw OpenCodeError.message("The remote workspace is unavailable.") }
-                try await remoteWorkspaces.stopOpenCode(for: configuration)
-            } else { try await OpenCodeServiceLauncher.stop(registration: registration) }
-        }
     }
 
     func suspendConnection() async {
@@ -799,7 +812,6 @@ extension OpenCodeModel {
         var controlling: Bool
         var stopped: Bool
         var startOnLaunch: Bool
-        var stopOnQuit: Bool
         var updating: Set<String>
         var hidden: Set<String>
         var settingsModels: [OpenCodeValue]
@@ -814,7 +826,7 @@ extension OpenCodeModel {
             error: error, installed: isInstalled, registration: hasServerRegistration, canConnect: canConnect,
             enabled: isEnabled, ready: isReady, connecting: isConnecting, busy: busy, installing: isInstalling,
             installationFailures: installationFailures, inventory: installationInventory, controlling: isControllingServer,
-            stopped: serverStopped, startOnLaunch: startServerOnLaunch, stopOnQuit: stopServerOnQuit,
+            stopped: serverStopped, startOnLaunch: startServerOnLaunch,
             updating: updatingSessions, hidden: hiddenModels, settingsModels: includeSettingsCatalog ? settingsModels : [],
             settingsCatalogIncluded: includeSettingsCatalog, catalogIncluded: includeSettingsCatalog || catalogSessionID != nil,
             defaultModels: defaultModels.filter { $0.key == catalogSessionID },
@@ -833,7 +845,7 @@ extension OpenCodeModel {
         isConnecting = value.connecting; busy = value.busy; isInstalling = value.installing
         installationFailures = value.installationFailures; installationInventory = value.inventory
         isControllingServer = value.controlling; serverStopped = value.stopped
-        startServerOnLaunch = value.startOnLaunch; stopServerOnQuit = value.stopOnQuit
+        startServerOnLaunch = value.startOnLaunch
         updatingSessions = value.updating; hiddenModels = value.hidden; if value.settingsCatalogIncluded, settingsModels != value.settingsModels { settingsModels = value.settingsModels }
         if value.catalogIncluded {
             for (id, entry) in value.defaultModels where defaultModels[id] != entry { defaultModels[id] = entry }

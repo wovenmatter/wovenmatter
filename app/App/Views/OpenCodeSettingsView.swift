@@ -10,18 +10,30 @@ struct OpenCodeSettingsSection: View {
     @State private var modelSearch = ""
     @State private var loadingModels = false
     @State private var modelsError: String?
+    /// The OpenCode 1 version an install would replace, while asking.
+    @State private var replacingVersion: String?
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             SettingsRow(title: model.workspaceName, detail: model.remoteConfiguration?.hostName) {
                 SettingsStatus(model.isConnecting ? "Connecting…" : model.isReady ? "Ready" : "Not connected", tone: model.isReady ? .good : .warning)
-                Button(model.isRemote || model.isInstalled ? "Connect" : model.isInstalling ? "Downloading…" : "Download") {
-                    model.perform {
-                        if model.isInstalled { try await model.connectLocal() }
-                        else { try await model.download() }
+                Button(model.isRemote || model.isInstalled ? "Connect" : model.isInstalling ? "Installing…" : "Install") {
+                    if model.isRemote || model.isInstalled { model.perform { try await model.connectLocal() }; return }
+                    Task {
+                        // OpenCode 2 replaces OpenCode 1's command, so that asks first.
+                        let replacing = await Task.detached(priority: .userInitiated) { OpenCodeServiceLauncher.versionOneToReplace() }.value
+                        if let replacing { replacingVersion = replacing } else { model.perform { try await model.download() } }
                     }
                 }
                 .buttonStyle(SettingsQuietButtonStyle())
                 .disabled(model.isConnecting || model.isReady || model.isInstalling || model.isControllingServer || (model.isRemote && !model.canConnect))
+                .confirmationDialog("Replace OpenCode 1?", isPresented: Binding(
+                    get: { replacingVersion != nil }, set: { if !$0 { replacingVersion = nil } }
+                ), titleVisibility: .visible) {
+                    Button("Install OpenCode 2") { replacingVersion = nil; model.perform { try await model.download() } }
+                    Button("Cancel", role: .cancel) { replacingVersion = nil }
+                } message: {
+                    Text(OpenCodeServiceLauncher.replacementNotice(replacing: replacingVersion ?? "1"))
+                }
             }
             HStack(spacing: 8) {
                 Button("Manage models") { showingModels.toggle() }
@@ -48,10 +60,9 @@ struct OpenCodeSettingsSection: View {
                 if model.isControllingServer { ProgressView().controlSize(.small) }
             }
             .buttonStyle(SettingsQuietButtonStyle())
-            SettingsSummaryRow("Server lifecycle", value: lifecycleSummary) {
+            SettingsSummaryRow("Server lifecycle", value: model.startServerOnLaunch ? "Starts with Woven Matter" : "Manual") {
                 Toggle("Start when Woven Matter launches", isOn: $model.startServerOnLaunch)
-                Toggle("Stop when Woven Matter quits", isOn: $model.stopServerOnQuit)
-                SettingsNote("Stopping the server disconnects all its clients.")
+                SettingsNote("This is OpenCode's own background server, shared with the opencode command and OpenCode's desktop app. It keeps running when Woven Matter quits. Stopping it disconnects all its clients.")
             }
             if !model.isRemote {
                 SettingsSummaryRow("Shared sessions") { OpenCodeSessionLibrary(model: model) }
@@ -60,15 +71,6 @@ struct OpenCodeSettingsSection: View {
             if !model.canConnect {
                 SettingsNote(model.isRemote ? "Install OpenCode in this remote workspace to connect." : "Install OpenCode v2 to connect.")
             }
-        }
-    }
-
-    private var lifecycleSummary: String {
-        switch (model.startServerOnLaunch, model.stopServerOnQuit) {
-        case (true, true): "Follows Woven Matter"
-        case (true, false): "Starts with Woven Matter"
-        case (false, true): "Stops with Woven Matter"
-        case (false, false): "Manual"
         }
     }
 

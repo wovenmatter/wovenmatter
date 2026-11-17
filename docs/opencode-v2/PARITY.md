@@ -23,9 +23,8 @@ Other harness integrations keep their own transports.
 ## Local service contract
 
 Woven Matter supports the OpenCode **2.x** release family, including future minor
-and patch updates, rather than one exact release. Install/update resolves the
-current `@opencode/cli` **latest** release for each operation. V1 remains
-unsupported. An explicit Stop can authenticate an older v2 beta through its legacy
+and patch updates, rather than one exact release. Install runs OpenCode's official
+v2 installer and Update runs `opencode upgrade`. V1 remains unsupported. An explicit Stop can authenticate an older v2 beta through its legacy
 identity endpoint so users can stop it before upgrading; session connections and
 new starts require the stable v2 contract. The stable API contract was checked against the published `@opencode/client`
 and [upstream source](https://github.com/anomalyco/opencode); this is

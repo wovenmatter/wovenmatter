@@ -17,6 +17,12 @@
         "interpreter": "sh",
         "arguments": []
       },
+      "update": {
+        "command": "codex update",
+        "arguments": [
+          "update"
+        ]
+      },
       "authentication": {
         "statusCommands": [
           "codex login status"
@@ -72,6 +78,12 @@
         "interpreter": "bash",
         "arguments": [
           "latest"
+        ]
+      },
+      "update": {
+        "command": "claude update",
+        "arguments": [
+          "update"
         ]
       },
       "authentication": {
@@ -133,6 +145,12 @@
         "interpreter": "bash",
         "arguments": []
       },
+      "update": {
+        "command": "grok update",
+        "arguments": [
+          "update"
+        ]
+      },
       "authentication": {
         "statusCommands": [
           "grok models 2>/dev/null | grep -q '^You are logged in'"
@@ -168,11 +186,17 @@
       "arguments": [],
       "cliCommand": "opencode",
       "install": {
-        "kind": "npm-global",
-        "package": "@opencode/cli@2",
-        "source": "https://registry.npmjs.org/@opencode/cli",
-        "arguments": [],
-        "command": "npm install -g @opencode/cli@2"
+        "kind": "official-script",
+        "source": "https://opencode.ai/v2/install",
+        "command": "curl -fsSL https://opencode.ai/v2/install | bash",
+        "interpreter": "bash",
+        "arguments": []
+      },
+      "update": {
+        "command": "opencode upgrade",
+        "arguments": [
+          "upgrade"
+        ]
       },
       "authentication": {
         "statusCommands": [],

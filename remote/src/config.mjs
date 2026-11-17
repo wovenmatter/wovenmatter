@@ -71,11 +71,43 @@ export function nonInteractiveSessionEnvironment(environment = process.env, conf
     DEBIAN_FRONTEND: 'noninteractive' }
 }
 
+// Woven's own ACP adapters (codex-acp, claude-agent-acp). They only connect the
+// person's native CLI to Woven, so they live in Woven's folder, not on the
+// person's PATH in a terminal.
+export function acpAdapterPrefix(configuration = runtimeConfiguration) {
+  return resolve(configuration.home, '.local/share/wovenmatter/acp-adapters')
+}
+
+// Where each vendor's official installer puts its CLI: Claude and Codex in
+// ~/.local/bin, Grok in ~/.grok/bin, OpenCode v2 in ~/.opencode/bin.
+export function nativeCLIDirectories(configuration = runtimeConfiguration) {
+  return ['.local/bin', '.grok/bin', '.opencode/bin'].map(path => resolve(configuration.home, path))
+}
+
+function executableOnPath(name, paths) {
+  for (const directory of paths) {
+    if (!directory.startsWith('/')) continue
+    const candidate = resolve(directory, name)
+    if (existsSync(candidate)) return candidate
+  }
+  return null
+}
+
 export function runtimeHarnessEnvironment(environment = process.env, configuration = loadRuntimeConfiguration(environment)) {
-  const paths = [resolve(configuration.home, '.local/bin'), resolve(configuration.home, '.npm-global/bin')]
+  const paths = [resolve(acpAdapterPrefix(configuration), 'bin'), ...nativeCLIDirectories(configuration),
+    resolve(configuration.home, '.npm-global/bin')]
   if (configuration.harnessPath) paths.push(configuration.harnessPath)
   paths.push(environment.PATH ?? '')
-  return nonInteractiveSessionEnvironment({ ...environment, HOME: configuration.home, PATH: paths.join(':'), WOVENMATTER_WORKSPACE: configuration.workspaceRoot }, configuration)
+  const search = paths.join(':').split(':').filter(Boolean)
+  // The ACP adapters drive the person's own CLI, so chats here share its logins,
+  // skills and sessions with that CLI in a terminal. An explicit setting wins.
+  const native = {}
+  for (const [key, name] of [['CODEX_PATH', 'codex'], ['CLAUDE_CODE_EXECUTABLE', 'claude']]) {
+    if (environment[key]) continue
+    const path = executableOnPath(name, search)
+    if (path) native[key] = path
+  }
+  return nonInteractiveSessionEnvironment({ ...environment, ...native, HOME: configuration.home, PATH: paths.join(':'), WOVENMATTER_WORKSPACE: configuration.workspaceRoot }, configuration)
 }
 
 // This is the release's patched npm, not Node's stock bundled npm or a user

@@ -575,7 +575,7 @@ struct SettingsLocalRuntimeInstallButton: View {
         .buttonStyle(SettingsQuietButtonStyle())
         .disabled(inventory == nil || model.runtimeMaintenanceBusy(runtimeKind) || model.checkingRuntimeInventory
             || !model.installingLocalACPRuntimeKinds.isEmpty
-            || model.preparedLocalACPRuntimeInstall != nil
+            || model.pendingRuntimeInstall != nil
             || model.localRuntimeMaintenanceHasActiveConversation)
         .accessibilityLabel("Install " + runtimeKind.displayName)
     }
@@ -619,12 +619,6 @@ struct SettingsRemoteRuntimeUpdateButton: View {
         model.runtimeMaintenance[configuration.id]?.first { $0.id == harness.id }
     }
 
-    private var preparedUpdateMatches: Bool {
-        guard let prepared = model.preparedHarnessAction else { return false }
-        return prepared.configuration.id == configuration.id
-            && prepared.harness.id == harness.id && prepared.action == "update"
-    }
-
     var body: some View {
         let checking = model.checkingRuntimeIDs[configuration.id]?.contains(harness.id) == true
         let running = runtime?.operation?.status == "running"
@@ -632,13 +626,14 @@ struct SettingsRemoteRuntimeUpdateButton: View {
         let checkUnavailable = unavailable
             || model.runtimeCheckErrors[configuration.id]?[harness.id] != nil
             || runtime?.versionCheckAvailable == false
-        let busy = model.busyWorkspaceIDs.contains(configuration.id) || running || checking
+        let busy = model.busyWorkspaceIDs.contains(configuration.id) || model.isMaintaining(harness.id, in: configuration.id)
+            || running || checking
         let label = updateButtonTitle(checking: checking, running: running, checkUnavailable: checkUnavailable)
         Button(label) {
             if let runtime, runtime.installed,
                runtime.updateAvailable || (runtime.failureCount > 0 && runtime.operation?.action == "update"),
                !checkUnavailable {
-                model.prepareHarnessAction("update", harness: harness, configuration: configuration)
+                model.runHarnessMaintenance("update", harness: harness, configuration: configuration)
             } else {
                 model.checkRuntimeUpdates(harness.id, configuration: configuration)
             }
@@ -646,29 +641,6 @@ struct SettingsRemoteRuntimeUpdateButton: View {
         .buttonStyle(SettingsQuietButtonStyle())
         .disabled(busy)
         .accessibilityLabel(label + " for " + harness.displayName)
-        .confirmationDialog(
-            "Confirm harness update?",
-            isPresented: Binding(
-                get: { preparedUpdateMatches },
-                set: { if !$0 { cancelMatchingUpdate() } }
-            ),
-            titleVisibility: .visible
-        ) {
-            Button("Confirm Update") {
-                model.confirmPreparedHarnessAction(
-                    workspaceID: configuration.id, harnessID: harness.id, action: "update"
-                )
-            }
-            Button("Cancel", role: .cancel) { cancelMatchingUpdate() }
-        } message: {
-            if preparedUpdateMatches, let prepared = model.preparedHarnessAction {
-                if let sha256 = prepared.preview.sha256 {
-                    Text("Source: \(prepared.preview.source)\nSHA-256: \(sha256)\nThe service will download the source again and refuse to run it if this digest changes.")
-                } else {
-                    Text("Source: \(prepared.preview.source)\nPackage-manager integrity verification applies.\nCommand: \(prepared.preview.command)")
-                }
-            }
-        }
     }
 
     private func updateButtonTitle(checking: Bool, running: Bool, checkUnavailable: Bool) -> String {
@@ -682,11 +654,6 @@ struct SettingsRemoteRuntimeUpdateButton: View {
         return "Check for updates"
     }
 
-    private func cancelMatchingUpdate() {
-        model.cancelPreparedHarnessAction(
-            workspaceID: configuration.id, harnessID: harness.id, action: "update"
-        )
-    }
 }
 
 struct SettingsRuntimeMaintenanceErrorView: View {

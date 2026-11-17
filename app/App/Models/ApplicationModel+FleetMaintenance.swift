@@ -125,8 +125,8 @@ extension ApplicationModel {
         await waitForRuntime(timeout: .seconds(10)) { self.updatingRuntimeKinds.contains(kind) }
         guard updatingRuntimeKinds.contains(kind) || runtimeMaintenanceBusy(kind) else { return "It didn't start. Try again." }
         await waitForRuntime(timeout: .seconds(900)) { !self.updatingRuntimeKinds.contains(kind) && !self.runtimeMaintenanceBusy(kind) }
+        // The update checked that the CLI moved to a newer version.
         if failedRuntimeUpdateKinds.contains(kind) { return runtimeFailureDetails[kind] ?? "The update failed." }
-        if runtimeInventories[kind]?.updateAvailable == true { return "It is still out of date." }
         return nil
     }
 

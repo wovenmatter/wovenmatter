@@ -20,6 +20,12 @@ public struct HarnessDefinition: Codable, Equatable, Identifiable, Sendable {
     public let package: String?
   }
 
+  /// The vendor's own update command for an installed CLI, run in the person's login shell.
+  public struct Update: Codable, Equatable, Sendable {
+    public let command: String
+    public let arguments: [String]
+  }
+
   public struct Authentication: Codable, Equatable, Sendable {
     public struct Discovery: Codable, Equatable, Sendable {
       public let displayName: String
@@ -55,6 +61,7 @@ public struct HarnessDefinition: Codable, Equatable, Identifiable, Sendable {
   public let minimumProtocolSDKVersion: String?
   public let transportCheckCommand: String?
   public let install: Installation
+  public let update: Update?
   public let authentication: Authentication
   public let capabilities: [String]
 }

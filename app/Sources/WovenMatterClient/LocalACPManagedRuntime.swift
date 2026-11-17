@@ -669,20 +669,25 @@ public struct LocalACPRuntimeInstaller: Sendable {
                 executableName: definition.commandName
             )
         }
+        // The vendor's official installer, from the address in Woven Matter's catalog, runs as
+        // published. A caller that showed someone a particular download (another Mac asking
+        // this one) passes its digest, and a changed download is refused.
         let source = try cliInstallerSource(for: definition)
-        guard let expectedSourceSHA256,
-              expectedSourceSHA256.count == 64,
-              expectedSourceSHA256.allSatisfy({ $0.isHexDigit })
-        else { throw LocalACPRuntimeInstallError.confirmationRequired }
+        if let expectedSourceSHA256 {
+            guard expectedSourceSHA256.count == 64, expectedSourceSHA256.allSatisfy({ $0.isHexDigit })
+            else { throw LocalACPRuntimeInstallError.confirmationRequired }
+        }
         guard let interpreter = definition.cliInstallerInterpreter,
               ["sh", "bash"].contains(interpreter)
         else { throw LocalACPRuntimeInstallError.unsafeInterpreter }
         let file = temporaryInstallerURL(for: definition)
         defer { try? FileManager.default.removeItem(at: file) }
         _ = try await fetchInstaller(source, to: file)
-        let actualSHA256 = try LocalACPManagedNodeRuntime.sha256Hex(fileAt: file)
-        guard actualSHA256 == expectedSourceSHA256.lowercased() else {
-            throw LocalACPRuntimeInstallError.sourceDigestChanged
+        if let expectedSourceSHA256 {
+            let actualSHA256 = try LocalACPManagedNodeRuntime.sha256Hex(fileAt: file)
+            guard actualSHA256 == expectedSourceSHA256.lowercased() else {
+                throw LocalACPRuntimeInstallError.sourceDigestChanged
+            }
         }
         // The native channel pointer can lag a stable npm publication. Pass the
         // independently resolved release to the unchanged official installer.
@@ -995,13 +1000,18 @@ public enum LocalACPManagedNodeError: LocalizedError, Sendable {
     }
 }
 
-struct LocalACPProcessResult: Sendable {
-    let terminationStatus: Int32
-    let stdout: String
+public struct LocalACPProcessResult: Sendable {
+    public let terminationStatus: Int32
+    public let stdout: String
 
-    var succeeded: Bool { terminationStatus == 0 }
+    public init(terminationStatus: Int32, stdout: String) {
+        self.terminationStatus = terminationStatus
+        self.stdout = stdout
+    }
 
-    var combinedOutput: String {
+    public var succeeded: Bool { terminationStatus == 0 }
+
+    public var combinedOutput: String {
         stdout.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }

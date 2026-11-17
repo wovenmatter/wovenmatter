@@ -179,7 +179,8 @@ def apparmor_restriction():
     except (OSError,ValueError): return None
 
 def harness_path():
-    candidates=[HOME/'.local/bin',HOME/'.npm-global/bin',HOME/'.bun/bin',HOME/'.cargo/bin',
+    # Woven's ACP adapters, then where each vendor's official installer puts its CLI.
+    candidates=[ROOT/'acp-adapters/bin',HOME/'.local/bin',HOME/'.grok/bin',HOME/'.opencode/bin',HOME/'.npm-global/bin',HOME/'.bun/bin',HOME/'.cargo/bin',
         HOME/'.local/share/mise/shims',HOME/'.asdf/shims',HOME/'.nvm/current/bin',Path('/usr/local/bin')]
     # nvm usually has no current symlink. Include installed versions in newest
     # order; do not run its shell function or source any login/startup files.
@@ -190,8 +191,8 @@ def harness_path():
 
 def inventory(paths):
     result=[]
-    try: ownership=json.loads((ROOT/'workspace/.wovenmatter/runtime-preferences.json').read_text())
-    except (OSError,ValueError): ownership={}
+    def inside_home(found):
+        return any(str(p)==str(HOME) or str(p).startswith(str(HOME)+'/') for p in (Path(found),Path(found).resolve()))
     specs=[('codex','codex','codex-acp',['codex','login','status']),
            ('claude_code','claude','claude-agent-acp',['claude','auth','status','--json']),
            ('grok_build','grok','grok',['grok','models']),('opencode','opencode','opencode',None)]
@@ -200,10 +201,10 @@ def inventory(paths):
         components=[]
         for label,command in [('cli',cli),('adapter',adapter)]:
             found=shutil.which(command,path=path)
-            component='signin' if label=='cli' and cli!=adapter else 'runtime'
-            owned=ownership.get(identity,{}).get('managedComponents',{}).get(component,{})
-            managed=bool(found and owned.get('path')==found and owned.get('target')==str(Path(found).resolve()))
-            components.append({'id':label,'path':found,'source':'missing' if not found else 'managed' if managed else 'system'})
+            # A CLI in the user's home is their native install, updated with its vendor's
+            # own command; an adapter there is Woven's. Anything else belongs to the system.
+            source='missing' if not found else ('managed' if label=='adapter' and cli!=adapter else 'native') if inside_home(found) else 'system'
+            components.append({'id':label,'path':found,'source':source})
         status=None
         if components[0]['path'] and status_args:
             checked=run([components[0]['path'],*status_args[1:]],timeout=10,env={**os.environ,'PATH':path})

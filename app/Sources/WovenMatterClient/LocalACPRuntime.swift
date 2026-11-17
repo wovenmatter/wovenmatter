@@ -12,6 +12,8 @@ public struct LocalACPRuntimeDefinition: Equatable, Identifiable, Sendable {
     public let cliInstallerInterpreter: String?
     public let cliInstallerArguments: [String]
     public let cliNpmPackageSpec: String?
+    /// Arguments to the CLI's own update command (`claude update`, `opencode upgrade`).
+    public let updateArguments: [String]
     public let adapterPackage: String?
     public let minimumAdapterVersion: String?
     public let minimumEngineVersion: String?
@@ -34,6 +36,7 @@ public struct LocalACPRuntimeDefinition: Equatable, Identifiable, Sendable {
         cliInstallerInterpreter: String?,
         cliInstallerArguments: [String] = [],
         cliNpmPackageSpec: String? = nil,
+        updateArguments: [String] = [],
         adapterPackage: String?,
         minimumAdapterVersion: String? = nil,
         minimumEngineVersion: String? = nil,
@@ -50,6 +53,7 @@ public struct LocalACPRuntimeDefinition: Equatable, Identifiable, Sendable {
         self.cliInstallerInterpreter = cliInstallerInterpreter
         self.cliInstallerArguments = cliInstallerArguments
         self.cliNpmPackageSpec = cliNpmPackageSpec
+        self.updateArguments = updateArguments
         self.adapterPackage = adapterPackage
         self.minimumAdapterVersion = minimumAdapterVersion
         self.minimumEngineVersion = minimumEngineVersion
@@ -79,6 +83,7 @@ public enum LocalACPRuntimeCatalog {
                 cliNpmPackageSpec: harness.install.kind == "npm-global"
                     ? harness.install.package
                     : nil,
+                updateArguments: harness.update?.arguments ?? [],
                 adapterPackage: harness.adapterPackage,
                 minimumAdapterVersion: harness.minimumAdapterVersion,
                 minimumEngineVersion: harness.minimumEngineVersion,
@@ -250,19 +255,40 @@ public enum LocalACPRuntimeVerifier {
 
 public struct LocalACPRuntimeResolver: Sendable {
     private let searchDirectories: @Sendable () -> [String]
+    /// Where a vendor's official installer puts its CLI. The person's one native install
+    /// is used before anything else on the search path, so Woven Matter and their terminal
+    /// run the same CLI with the same sign-ins, skills and sessions.
+    private let nativeExecutable: @Sendable (String) -> URL?
 
     public init() {
         searchDirectories = Self.executableSearchDirectories
+        nativeExecutable = Self.nativeExecutable(named:)
     }
 
-    init(executableSearchDirectories: [String]) {
+    init(executableSearchDirectories: [String], nativeExecutable: @escaping @Sendable (String) -> URL? = { _ in nil }) {
         searchDirectories = { executableSearchDirectories }
+        self.nativeExecutable = nativeExecutable
     }
 
     /// Reuses one search-path discovery within a refresh. Create a new snapshot
     /// for each refresh so subsequent installs and PATH changes remain visible.
     public func snapshottingExecutableSearchDirectories() -> Self {
-        Self(executableSearchDirectories: searchDirectories())
+        Self(executableSearchDirectories: searchDirectories(), nativeExecutable: nativeExecutable)
+    }
+
+    /// Each official installer's location: Claude Code and Codex in ~/.local/bin, Grok in
+    /// ~/.grok/bin, OpenCode in ~/.opencode/bin.
+    public static func nativeLocation(named name: String, home: URL = FileManager.default.homeDirectoryForCurrentUser) -> URL? {
+        switch name {
+        case "claude", "codex": home.appending(path: ".local/bin/" + name)
+        case "grok": home.appending(path: ".grok/bin/grok")
+        case "opencode", "opencode2": home.appending(path: ".opencode/bin/" + name)
+        default: nil
+        }
+    }
+
+    static func nativeExecutable(named name: String) -> URL? {
+        nativeLocation(named: name).flatMap { FileManager.default.isExecutableFile(atPath: $0.path) ? $0 : nil }
     }
 
     public func resolve(
@@ -431,7 +457,7 @@ public struct LocalACPRuntimeResolver: Sendable {
             return FileManager.default.isExecutableFile(atPath: candidate.path)
                 ? candidate : nil
         }
-        return resolveExecutable(
+        return nativeExecutable(named: name) ?? resolveExecutable(
             named: name,
             searchDirectories: executableSearchDirectories()
         )
@@ -444,7 +470,7 @@ public struct LocalACPRuntimeResolver: Sendable {
     }
 
     private func resolveExecutable(named name: String) -> URL? {
-        Self.resolveExecutable(
+        nativeExecutable(name) ?? Self.resolveExecutable(
             named: name,
             searchDirectories: searchDirectories()
         )
@@ -475,7 +501,21 @@ public struct LocalACPRuntimeResolver: Sendable {
         ).filter { !$0.isEmpty }.uniqued()
         var environment: [String: String] = [:]
         environment["PATH"] = directories.joined(separator: ":")
+        // The ACP adapters drive the person's own CLI, not the copy bundled inside them.
+        if let underlyingCLI, let key = Self.adapterCLIEnvironmentKey(definition.runtimeKind) {
+            environment[key] = underlyingCLI.path
+        }
         return environment
+    }
+
+    /// codex-acp starts `codex app-server` from CODEX_PATH; claude-agent-acp runs the Claude
+    /// Code named by CLAUDE_CODE_EXECUTABLE.
+    public static func adapterCLIEnvironmentKey(_ kind: AgentRuntimeKind) -> String? {
+        switch kind {
+        case .codex: "CODEX_PATH"
+        case .claudeCode: "CLAUDE_CODE_EXECUTABLE"
+        default: nil
+        }
     }
 
     static func executableSearchDirectories() -> [String] {

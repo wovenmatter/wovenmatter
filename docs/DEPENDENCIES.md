@@ -331,8 +331,10 @@ requiring a separate Settings update.
 The fingerprint includes JavaScript helpers in nested source directories, so
 broker-only fixes also supersede stale generations without deleting them.
 
-Agent CLIs, ACP connectors, and connector-owned engines are checked independently.
-An up-to-date connector does not establish that its engine or sign-in CLI is current.
+Agent CLIs and ACP connectors are checked independently. The CLIs are the person's
+own native installs: Woven Matter installs a missing one with its vendor's official
+installer and updates it with the vendor's own command, so it records no CLI
+selection. An up-to-date connector does not establish that the CLI is current.
 Settings selects the newest nondeprecated stable publication for each component;
 a stale npm dist-tag cannot hide a newer stable version. Claude's native installer
 and updater receive the newest nondeprecated stable CLI version explicitly,
@@ -343,8 +345,9 @@ maintenance must review a newer stable API major and implement its migration.
 
 `harnesses/catalog.json` records tested connector and engine minimums separately:
 Codex ACP 2.7.0 with Codex 0.169.0, and Claude ACP 0.107.3 with Claude SDK 0.3.326
-(native Claude Code 2.1.326). The standalone Codex and Claude sign-in CLIs use their
-official current stable release channels. Codex ACP's `^0.166.0` engine range
+(native Claude Code 2.1.326). The adapters drive the native Codex and Claude CLIs
+(`CODEX_PATH`, `CLAUDE_CODE_EXECUTABLE`), which follow their vendors' stable channels;
+a native Codex older than the engine minimum reads as needing its update. Codex ACP's `^0.166.0` engine range
 otherwise keeps its chat engine behind; its `~2.6.0` ACP TypeScript SDK range
 also excludes the current 2.7.0. Claude ACP 0.107.3 pins SDK 0.3.325;
 the consumer-scoped override remains so engine-only updates stay eligible when

@@ -14,7 +14,6 @@ struct SettingsUpdatesView: View {
 
     var body: some View {
         let shownBusy = updates.busyConfirmation?.id
-        let shownReview = updates.review?.id
         SettingsPage(
             title: "Updates",
             detail: "Woven Matter and its harnesses on this Mac and your other devices.",
@@ -37,15 +36,6 @@ struct SettingsUpdatesView: View {
             Button("Cancel", role: .cancel) { updates.cancelBusy(confirmation.id) }
         } message: { confirmation in
             Text(confirmation.items.map(\.text).joined(separator: "\n\n"))
-        }
-        .confirmationDialog(reviewTitle, isPresented: Binding(
-            get: { updates.review != nil }, set: { if !$0, let shownReview { updates.cancelReview(shownReview) } }
-        ), titleVisibility: .visible, presenting: updates.review) { review in
-            Button("Update") { updates.confirmReview() }
-            Button("Cancel", role: .cancel) { updates.cancelReview(review.id) }
-        } message: { review in
-            Text(review.items.map(Self.describe).joined(separator: "\n\n")
-                 + "\n\nEach host downloads its source again and refuses to run it if it changed.")
         }
     }
 
@@ -80,8 +70,8 @@ struct SettingsUpdatesView: View {
                 }
                 Button(updates.checking ? "Checking…" : "Check for updates") { Task { await updates.checkAll() } }
                     .buttonStyle(SettingsQuietButtonStyle())
-                    // A check mid-update would report versions that are about to change.
-                    .disabled(updates.checking || updates.running)
+                    // Usable while updates run: each check skips whatever is updating right now.
+                    .disabled(updates.checking)
                 if updates.thisMacIsBehind {
                     Button("Update this Mac") { updates.start(.thisMacApp) }
                         .buttonStyle(WovenPrimaryButtonStyle())
@@ -302,19 +292,6 @@ struct SettingsUpdatesView: View {
     // MARK: Dialogs
 
     private var busyTitle: String { "Before you update" }
-
-    private var reviewTitle: String {
-        let count = updates.review?.items.count ?? 0
-        return count == 1 ? "Review this download?" : "Review \(count) downloads?"
-    }
-
-    private static func describe(_ item: FleetUpdatesModel.DownloadReview.Item) -> String {
-        var lines = [item.title, "Source: \(item.preview.source)"]
-        if let sha256 = item.preview.sha256 { lines.append("SHA-256: \(sha256)") }
-        else if let package = item.preview.packageSpec { lines.append("Package: \(package)") }
-        else { lines.append("Command: \(item.preview.command)") }
-        return lines.joined(separator: "\n")
-    }
 }
 
 /// Elsewhere in Settings, mismatched versions are one line that opens Settings → Updates.

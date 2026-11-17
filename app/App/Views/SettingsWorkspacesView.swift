@@ -262,7 +262,7 @@ struct SettingsWorkspacesView: View {
     var body: some View {
         workspaceConfirmations
         .confirmationDialog(
-            "Confirm harness \(model.preparedHarnessAction?.action ?? "change")?",
+            "Replace OpenCode 1?",
             isPresented: Binding(
                 get: { setupWorkspace == nil && model.preparedHarnessAction?.action != nil && model.preparedHarnessAction?.action != "update" },
                 set: {
@@ -278,7 +278,7 @@ struct SettingsWorkspacesView: View {
             ),
             titleVisibility: .visible
         ) {
-            Button("Confirm \(model.preparedHarnessAction?.action.capitalized ?? "Change")") {
+            Button("Install OpenCode 2") {
                 if let prepared = model.preparedHarnessAction,
                    prepared.action != "update" {
                     model.confirmPreparedHarnessAction(
@@ -299,12 +299,12 @@ struct SettingsWorkspacesView: View {
                 }
             }
         } message: {
+            // Installs and updates run without review; the one question left is OpenCode 2
+            // replacing OpenCode 1's command on a host.
             if let prepared = model.preparedHarnessAction {
-                if let sha256 = prepared.preview.sha256 {
-                    Text("Source: \(prepared.preview.source)\nSHA-256: \(sha256)\nThe service will download the source again and refuse to run it if this digest changes.")
-                } else {
-                    Text("Source: \(prepared.preview.source)\nPackage-manager integrity verification applies.\nCommand: \(prepared.preview.command)")
-                }
+                let version = model.runtimeMaintenance[prepared.configuration.id]?
+                    .first(where: { $0.id == .opencode })?.openCodeV1?.version ?? "1"
+                Text(OpenCodeServiceLauncher.replacementNotice(replacing: version, on: prepared.configuration.name))
             }
         }
     }

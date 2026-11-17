@@ -682,7 +682,7 @@ test('authorization input reports acceptance only after the write completes', as
   input.destroy()
 })
 
-test('installation never replaces a system CLI and fails unless actual components verify', async (context) => {
+test('installation never replaces an OpenCode v1 the person installed without asking, and never uses npm', async (context) => {
   const fixture = await temporaryFixture(context, 'wovenmatter-install-')
   const home = resolve(fixture, 'home')
   const workspace = resolve(fixture, 'workspace')
@@ -723,6 +723,6 @@ test('installation never replaces a system CLI and fails unless actual component
     (value) => value.status !== 'running'
   )
   assert.equal(operation.status, 'failed')
-  assert.match(operation.error, /could not be verified/)
+  assert.equal(operation.error, 'opencode_v1_replacement_confirmation_required')
   await assert.rejects(readFile(npmArguments, 'utf8'), { code: 'ENOENT' })
 })

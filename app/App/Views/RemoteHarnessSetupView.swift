@@ -154,7 +154,7 @@ struct RemoteHarnessSetupView: View {
             installQueue.removeFirst(); requestedStage = nil; advanceInstall()
         } else if requestedStage == nil {
             requestedStage = "install"
-            model.prepareHarnessAction("install", harness: harness, configuration: workspace)
+            model.runHarnessMaintenance("install", harness: harness, configuration: workspace)
         } else {
             notice = "\(kind.displayName) could not finish setup. Review its status below, then retry."
             installQueue = []; requestedStage = nil

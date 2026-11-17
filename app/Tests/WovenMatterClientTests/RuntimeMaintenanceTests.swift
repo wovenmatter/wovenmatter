@@ -11,12 +11,12 @@ struct RuntimeMaintenanceTests {
         let inventory = RuntimeInventory(kind: .claudeCode, components: [
             RuntimeComponent(name: "claude-agent-acp", executable: URL(fileURLWithPath: "/private/bin/claude-agent-acp"),
                              installed: "0.9.0", latest: "0.10.0", package: "@agentclientprotocol/claude-agent-acp", required: true, present: true),
-            RuntimeComponent(name: "claude (sign-in CLI)", executable: nil, installed: "2.1.0", latest: "2.1.0", package: nil,
+            RuntimeComponent(name: "claude CLI", executable: nil, installed: "2.1.0", latest: "2.1.0", package: nil,
                              required: false, present: true),
         ], limitation: nil)
         let row = inventory.maintenance()
         #expect(row.id == .claudeCode && row.displayName == "Claude Code" && row.installed && row.updateAvailable)
-        #expect(row.components.map(\.id) == ["runtime", "claude (sign-in CLI)"])
+        #expect(row.components.map(\.id) == ["runtime", "cli"])
         #expect(row.components[0].availableUpdateVersion == "0.10.0" && row.components[1].availableUpdateVersion == nil)
         // Paths stay on the Mac that has them.
         #expect(row.components.allSatisfy { $0.path == nil })
@@ -24,53 +24,69 @@ struct RuntimeMaintenanceTests {
         #expect(decoded == row)
     }
 
+    /// Codex chats run the person's own `codex` through codex-acp, so the inventory lists the
+    /// adapter, its ACP library and the native CLI, never a Codex bundled in the adapter, and
+    /// the CLI has to be at least the engine version the adapter speaks to.
     @Test(arguments: [false, true])
-    func codexInventoryFindsTheEngineBesideTheLaunchedAdapter(legacyAdapter: Bool) async throws {
-        let minimum = try #require(LocalACPRuntimeCatalog.definition(for: .codex)?.minimumAdapterVersion)
-        let adapterVersion = legacyAdapter ? "1.13.1" : minimum
+    func codexInventoryUsesTheNativeCLI(cliTooOld: Bool) async throws {
+        let definition = try #require(LocalACPRuntimeCatalog.definition(for: .codex))
+        let adapterVersion = try #require(definition.minimumAdapterVersion)
+        let cliVersion = cliTooOld ? "0.154.0" : try #require(definition.minimumEngineVersion)
         let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
         let adapter = root.appending(path: "lib/node_modules/@agentclientprotocol/codex-acp")
         let sdk = adapter.appending(path: "node_modules/@agentclientprotocol/sdk")
         try FileManager.default.createDirectory(at: sdk, withIntermediateDirectories: true)
-        try Data(#"{"name":"@agentclientprotocol/sdk","version":"2.1.0"}"#.utf8).write(to: sdk.appending(path: "package.json"))
-        let engine = adapter.appending(path: "node_modules/@openai/codex")
-        try FileManager.default.createDirectory(at: root.appending(path: "bin"), withIntermediateDirectories: true)
         try FileManager.default.createDirectory(at: adapter.appending(path: "dist"), withIntermediateDirectories: true)
-        try FileManager.default.createDirectory(at: engine.appending(path: "bin"), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: root.appending(path: "bin"), withIntermediateDirectories: true)
+        try Data(#"{"name":"@agentclientprotocol/sdk","version":"2.1.0"}"#.utf8).write(to: sdk.appending(path: "package.json"))
         try JSONSerialization.data(withJSONObject: ["name": "@agentclientprotocol/codex-acp", "version": adapterVersion])
             .write(to: adapter.appending(path: "package.json"))
-        try Data(#"{"name":"@openai/codex","version":"0.148.0"}"#.utf8).write(to: engine.appending(path: "package.json"))
-        try Data("#!/bin/sh\necho 0.148.0\n".utf8).write(to: engine.appending(path: "bin/codex.js"))
-        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: engine.appending(path: "bin/codex.js").path)
         let script = adapter.appending(path: "dist/index.js")
         try Data("#!/bin/sh\necho \(adapterVersion)\n".utf8).write(to: script)
         try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: script.path)
         try FileManager.default.createSymbolicLink(at: root.appending(path: "bin/codex-acp"), withDestinationURL: script)
         let cli = root.appending(path: "bin/codex")
-        try Data("#!/bin/sh\necho 0.154.0\n".utf8).write(to: cli)
+        try Data("#!/bin/sh\necho \(cliVersion)\n".utf8).write(to: cli)
         try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: cli.path)
         let resolver = LocalACPRuntimeResolver(executableSearchDirectories: [root.appending(path: "bin").path])
         let inventory = await RuntimeMaintenance.inspect(.codex, checkLatest: true, resolver: resolver,
             fetch: { _ in Data(#"{"version":"99.0.0","bin":{"cli":"bin.js"}}"#.utf8) })
-        #expect(inventory.isInstalled == !legacyAdapter)
+        #expect(inventory.components.map(\.name) == ["codex-acp", "Bundled ACP SDK", "codex CLI"])
+        #expect(inventory.isInstalled == !cliTooOld)
         #expect(inventory.components[0].installed == adapterVersion)
-        #expect(inventory.components[1].installed == "0.148.0")
-        #expect(inventory.components[1].latest == "99.0.0")
-        #expect(inventory.components[1].outdated)
-        #expect(inventory.components.first { $0.name == "codex (sign-in CLI)" }?.installed == "0.154.0")
-        let protocolSDK = try #require(inventory.components.first { $0.package == "@agentclientprotocol/sdk" })
-        #expect(protocolSDK.installed == "2.1.0")
-        #expect(protocolSDK.outdated)
-        #expect(inventory.outdated)
-        try FileManager.default.removeItem(at: engine.appending(path: "bin/codex.js"))
-        let broken = await RuntimeMaintenance.inspect(.codex, checkLatest: false, resolver: resolver)
-        #expect(!broken.isInstalled)
-        #expect(broken.components[1].present == false)
-        let diagnostic = RuntimeMaintenance.diagnostic(inventory: broken, kind: .codex, attempts: 2, failure: "Verification failed")
-        #expect(diagnostic.contains("0.148.0"))
-        #expect(diagnostic.contains("0.154.0"))
+        let native = try #require(inventory.components.first { $0.name == RuntimeMaintenance.cliComponentName("codex") })
+        #expect(native.installed == cliVersion && native.latest == "99.0.0" && native.outdated)
+        #expect(native.executable?.lastPathComponent == "codex")
+        #expect(inventory.components.first { $0.package == "@agentclientprotocol/sdk" }?.outdated == true)
+        // Offline, a CLI too old for the adapter still reads as needing its update.
+        let offline = await RuntimeMaintenance.inspect(.codex, checkLatest: false, resolver: resolver)
+        let offlineCLI = try #require(offline.components.last)
+        #expect(offlineCLI.outdated == cliTooOld)
+        let diagnostic = RuntimeMaintenance.diagnostic(inventory: offline, kind: .codex, attempts: 2, failure: "Verification failed")
+        #expect(diagnostic.contains(cliVersion))
         #expect(!diagnostic.contains(root.path))
+    }
+
+    /// `claude update` follows Claude Code's native channel, which can trail npm, so its CLI
+    /// is compared with that channel and doesn't show an update it can't install.
+    @Test func claudeCLIComparesWithItsNativeChannel() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root.appending(path: "bin"), withIntermediateDirectories: true)
+        for name in ["claude-agent-acp", "claude"] {
+            let file = root.appending(path: "bin/" + name)
+            try Data("#!/bin/sh\n".utf8).write(to: file)
+            try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: file.path)
+        }
+        let inventory = await RuntimeMaintenance.inspect(.claudeCode, checkLatest: true,
+            resolver: LocalACPRuntimeResolver(executableSearchDirectories: [root.appending(path: "bin").path]),
+            fetch: { url in
+                if url == RuntimeMaintenance.claudeCodeNativeChannel { return Data("2.1.326\n".utf8) }
+                return try JSONSerialization.data(withJSONObject: ["versions": ["2.1.327": ["bin": ["claude": "cli.js"]]]])
+            }, probe: { _ in "2.1.326 (Claude Code)" })
+        let cli = try #require(inventory.components.first { $0.name == RuntimeMaintenance.cliComponentName("claude") })
+        #expect(cli.installed == "2.1.326" && cli.latest == "2.1.326" && !cli.outdated)
     }
 
     @Test func sdkOnlyUpdateIsVisibleWhenConnectorAndEngineAreCurrent() async throws {

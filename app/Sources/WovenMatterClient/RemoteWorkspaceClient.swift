@@ -332,6 +332,8 @@ public struct RemoteRuntimeMaintenance: Codable, Equatable, Identifiable, Sendab
     public let versionCheckAvailable: Bool?
     public var source: String? = nil
     public var path: String? = nil
+    /// OpenCode 1 on the host, whose `opencode` command installing OpenCode 2 replaces.
+    public var openCodeV1: RemoteOpenCodeVersionOne? = nil
 
     public init(id: AgentRuntimeKind, displayName: String, installed: Bool, components: [RemoteRuntimeComponent],
                 operation: RemoteHarnessOperation? = nil, failureCount: Int = 0, diagnosticPrompt: String? = nil,
@@ -341,6 +343,33 @@ public struct RemoteRuntimeMaintenance: Codable, Equatable, Identifiable, Sendab
         self.operation = operation; self.failureCount = failureCount; self.diagnosticPrompt = diagnosticPrompt
         self.notice = notice; self.updateAvailable = updateAvailable; self.versionCheckAvailable = versionCheckAvailable
         self.source = source; self.path = path
+    }
+}
+
+public struct RemoteOpenCodeVersionOne: Codable, Equatable, Sendable {
+    public let path: String?
+    public let version: String
+}
+
+/// A host's runtime-maintenance failure codes, as the person reads them. Unknown text
+/// (an older host's message) passes through.
+public enum RemoteRuntimeFailure {
+    public static func describe(_ code: String) -> String {
+        switch code {
+        case "update_failed": "Its update command didn't finish successfully."
+        case "update_timed_out": "Its update command took too long and was stopped."
+        case "install_timed_out": "Its installer took too long and was stopped."
+        case "opencode_service_restart_failed": "OpenCode updated, but its background server didn't restart. Restart the OpenCode server there."
+        case "opencode_v1_replacement_confirmation_required": "OpenCode 1 is installed there. Installing OpenCode 2 replaces its opencode command."
+        case "installer_download_failed": "The official installer couldn't be downloaded."
+        case "installer_download_timed_out": "Downloading the official installer took too long."
+        case "native_installer_unavailable": "There's no official installer for this machine."
+        case "native_update_unavailable": "This CLI has no update command to run."
+        case "system_install_update_forbidden": "It was installed with the system's package manager. Update it there."
+        case "runtime_active_or_operation_in_progress", "runtime_lock_unavailable": "Another install, update or chat is using it. Try again when it finishes."
+        case "runtime_preferences_save_failed": "Its settings couldn't be saved."
+        default: code
+        }
     }
 }
 
@@ -1146,9 +1175,11 @@ public struct RemoteWorkspaceServiceClient: Sendable {
     }
 
     public func maintainRuntime(
-        _ id: AgentRuntimeKind, action: String, sourceSHA256: String?, packageSpec: String? = nil
+        _ id: AgentRuntimeKind, action: String, sourceSHA256: String?, packageSpec: String? = nil,
+        replaceOpenCodeV1: Bool = false
     ) async throws -> RemoteHarnessOperation {
         var payload: [String: Any] = ["confirmed": true]
+        if replaceOpenCodeV1 { payload["replaceOpenCodeV1"] = true }
         if let sourceSHA256 { payload["sourceSHA256"] = sourceSHA256 }
         if let packageSpec { payload["packageSpec"] = packageSpec }
         return try await request(

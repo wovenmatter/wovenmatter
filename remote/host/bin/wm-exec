@@ -54,7 +54,7 @@ root=Path(settings['WOVENMATTER_STATE_DIRECTORY']).parent
 # fail at once instead of hanging. The session-tools sudo runs sudo -n, so
 # passwordless Full root still works. Keep in sync with remote/src/config.mjs.
 tools=str(root/'current/host/session-tools')
-paths=[tools,str(home/'.local/bin'),str(home/'.npm-global/bin'),str(root/'current/tooling/bin'),str(root/'node/current/bin')]
+paths=[tools,str(home/'.local/bin'),str(home/'.grok/bin'),str(home/'.opencode/bin'),str(home/'.npm-global/bin'),str(root/'current/tooling/bin'),str(root/'node/current/bin')]
 paths.extend(settings.get('WOVENMATTER_HARNESS_PATH','').split(':'))
 paths.extend(os.environ.get('PATH','/usr/local/bin:/usr/bin:/bin').split(':'))
 env['PATH']=':'.join(dict.fromkeys(p for p in paths if p))

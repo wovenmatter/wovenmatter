@@ -132,11 +132,11 @@ struct RuntimeBoundaryTests {
     }
   }
 
-  @Test("local CLI install requires a reviewed digest and a matching redownload")
+  @Test("local CLI install runs the official installer as published; a digest someone saw must still match")
   func localCLIInstallerDigestBoundary() async throws {
-    let reviewed = Data("#!/bin/sh\nexit 0\n".utf8)
+    let published = Data("#!/bin/sh\nexit 0\n".utf8)
     let changed = Data("#!/bin/sh\nexit 1\n".utf8)
-    let downloads = InstallerDownloads([reviewed, changed])
+    let downloads = InstallerDownloads([published, published, changed])
     let installer = LocalACPRuntimeInstaller(
       installerFetcher: { source, destination, maximumBytes in
         try await downloads.fetch(
@@ -149,19 +149,15 @@ struct RuntimeBoundaryTests {
     )
     let definition = cliDefinition()
 
-    do {
-      _ = try await installer.install(definition, component: .cli)
-      Issue.record("A CLI installer must require explicit digest confirmation")
-    } catch let error as LocalACPRuntimeInstallError {
-      #expect(error == .confirmationRequired)
-    }
-    #expect(await downloads.fetchCount() == 0)
+    // A missing CLI installs with nothing to review.
+    _ = try await installer.install(definition, component: .cli)
+    #expect(await downloads.fetchCount() == 1)
 
+    // Another Mac that showed a download passes its digest; a changed download never runs.
     let preview = try await installer.prepareCLIInstall(definition)
     #expect(preview.source == URL(string: "https://example.com/install.sh"))
-    #expect(preview.bytes == reviewed.count)
+    #expect(preview.bytes == published.count)
     #expect(preview.sha256 == "306c6ca7407560340797866e077e053627ad409277d1b9da58106fce4cf717cb")
-
     do {
       _ = try await installer.install(
         definition,
@@ -172,7 +168,7 @@ struct RuntimeBoundaryTests {
     } catch let error as LocalACPRuntimeInstallError {
       #expect(error == .sourceDigestChanged)
     }
-    #expect(await downloads.fetchCount() == 2)
+    #expect(await downloads.fetchCount() == 3)
   }
 
   @Test("Claude installer receives the newest stable publication despite a stale channel tag")

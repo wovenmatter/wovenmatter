@@ -1,15 +1,47 @@
 import { existsSync } from 'node:fs'
 import { spawn } from 'node:child_process'
-import { readFile, writeFile, mkdir, rename, realpath, lstat, readlink } from 'node:fs/promises'
-import { dirname, resolve } from 'node:path'
+import { readFile, writeFile, mkdir, rename, realpath } from 'node:fs/promises'
+import { dirname, resolve, sep } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
 import { supportsOpenCodeVersion, openCodeCommands } from './opencode-compatibility.mjs'
-import { loadRuntimeConfiguration, runtimeNPMCommand, runtimeNPMInvocation, shellQuote as quote, defaultAgentModule } from './config.mjs'
-import { withInstallerGuard } from './installer-guard.mjs'
+import { loadRuntimeConfiguration, runtimeNPMInvocation, shellQuote as quote, defaultAgentModule, acpAdapterPrefix } from './config.mjs'
 
 const { latestSupportedPackage } = await import(defaultAgentModule('src/package-versions.mjs'))
 const failure = message => Object.assign(new Error(message), { statusCode: 409 })
+
+// Each harness is the person's own native CLI, installed by its vendor's official
+// installer and updated by the vendor's own command, so a terminal on this host
+// uses the same CLI, logins, skills and sessions as Woven. Codex and Claude Code
+// reach Woven through ACP adapters kept in Woven's folder; Grok speaks ACP
+// itself; OpenCode is v2 only and runs as OpenCode's shared background service.
+export const nativeHarnesses = Object.freeze({
+  codex: { installer: { source: 'https://chatgpt.com/codex/install.sh', interpreter: 'sh', arguments: [] }, update: ['update'] },
+  claude_code: { installer: { source: 'https://claude.ai/install.sh', interpreter: 'bash', arguments: ['latest'] }, update: ['update'] },
+  grok_build: { installer: { source: 'https://x.ai/cli/install.sh', interpreter: 'bash', arguments: [] }, update: ['update'] },
+  opencode: { installer: { source: 'https://opencode.ai/v2/install', interpreter: 'bash', arguments: [] }, update: ['upgrade'] },
+})
+
+/** The vendor's official installer: the catalog's when it names one, else the known one. */
+export function nativeInstaller(harness) {
+  const install = harness.install
+  if (install?.kind === 'official-script' && typeof install.source === 'string' && ['sh', 'bash'].includes(install.interpreter)) {
+    return { source: install.source, interpreter: install.interpreter, arguments: install.arguments ?? [] }
+  }
+  const known = nativeHarnesses[harness.id]?.installer
+  if (!known) throw failure('native_installer_unavailable')
+  return known
+}
+
+/** The vendor's own update subcommand: the catalog's `update.arguments` when present. */
+export function nativeUpdateArguments(harness) {
+  const fromCatalog = harness.update?.arguments
+  if (Array.isArray(fromCatalog) && fromCatalog.length && fromCatalog.every(value => typeof value === 'string')) return fromCatalog
+  const known = nativeHarnesses[harness.id]?.update
+  if (!known) throw failure('native_update_unavailable')
+  return known
+}
+
 export const normalizedVersion = value => String(value ?? '').match(/\d+\.\d+\.\d+(?:[-+][a-zA-Z0-9.-]+)?/)?.[0] ?? null
 export function precedes(a, b) {
   if (!a || !b || a === b) return false
@@ -21,28 +53,16 @@ export function precedes(a, b) {
   }
   return false
 }
-export function validatedPackageSpec(harness, supplied) {
-  const selector = harness.install.package
-  const separator = typeof selector === 'string' ? selector.lastIndexOf('@') : -1
-  if (separator <= 0) throw failure('reviewed_package_spec_required')
-  const name = selector.slice(0, separator)
-  const spec = supplied
-  if (typeof spec !== 'string' || !spec.startsWith(name + '@')) throw failure('invalid_package_spec')
-  const version = spec.slice(name.length + 1)
-  if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z]+(?:[.-][0-9A-Za-z]+)*)?(?:\+[0-9A-Za-z]+(?:[.-][0-9A-Za-z]+)*)?$/.test(version)) throw failure('invalid_package_spec')
-  if (harness.id === 'opencode' && !supportsOpenCodeVersion(version)) throw failure('opencode_version_incompatible')
-  return spec
-}
 export function diagnosticCategory(error) {
   const text = String(error ?? '')
-  const allowed = ['runtime_active_stop_conversations_or_server_first', 'active_conversation_check_unavailable', 'runtime_active_or_operation_in_progress', 'runtime_lock_unavailable', 'source_digest_required', 'installer_digest_changed', 'installer_download_failed', 'installer_download_timed_out', 'runtime_preferences_save_failed', 'bundled_dependency_refresh_failed', 'system_install_update_forbidden', 'installer_modified_shell_config', 'installer_modified_harness_config']
+  const allowed = ['runtime_active_stop_conversations_or_server_first', 'runtime_active_or_operation_in_progress', 'runtime_lock_unavailable', 'installer_download_failed', 'installer_download_timed_out', 'runtime_preferences_save_failed', 'system_install_update_forbidden', 'opencode_v1_replacement_confirmation_required', 'opencode_service_restart_failed', 'native_installer_unavailable', 'native_update_unavailable', 'update_timed_out', 'install_timed_out']
   if (allowed.includes(text)) return text
   if (text.startsWith('Installer exited ')) return 'installer_failed'
+  if (text.startsWith('Update exited ')) return 'update_failed'
   if (text === 'Installer finished but required components could not be verified.') return 'installation_verification_failed'
   if (text === 'Update finished but a required component is still behind the checked version.') return 'update_verification_failed'
   return 'runtime_operation_failed'
 }
-const updateTarget = component => component.id === 'bundled' ? component.updateTargetVersion : component.latestVersion
 export function sanitize(value, environment = {}) {
   let result = String(value ?? '').replace(/\x1b\[[0-9;]*[A-Za-z]/g, '')
   for (const [key, secret] of Object.entries(environment)) {
@@ -54,7 +74,7 @@ export function runHost(command, environment, cwd, timeout = 15000) {
   return new Promise(resolvePromise => {
     let output = '', settled = false, timedOut = false
     const child = spawn('/bin/bash', ['-c', command], { env: environment, cwd, detached: true, stdio: ['ignore', 'pipe', 'pipe'] })
-    const done = code => { if (settled) return; settled = true; clearTimeout(timer); resolvePromise({ code: timedOut ? -1 : code, output }) }
+    const done = code => { if (settled) return; settled = true; clearTimeout(timer); resolvePromise({ code: timedOut ? -1 : code, output, timedOut }) }
     const timer = setTimeout(() => { timedOut = true; try { process.kill(-child.pid, 'SIGKILL') } catch {} }, timeout)
     child.stdout.on('data', data => { output = (output + data).slice(-65536) })
     child.stderr.on('data', data => { output = (output + data).slice(-65536) })
@@ -72,193 +92,147 @@ export async function acquireHostLock(path, environment, cwd, shared = false) {
     child.stdout.once('data', () => { acquired = true; clearTimeout(timer); resolvePromise(() => child.stdin.end()) })
   })
 }
+/** One harness's maintenance lock. Different harnesses install and update side by side. */
+export const harnessLockPath = (configuration, harnessID) => resolve(configuration.stateDirectory, `runtime-operation-${harnessID}.lock`)
+
 async function packageAt(path) { try { return JSON.parse(await readFile(resolve(path, 'package.json'), 'utf8')) } catch { return null } }
-async function packageRoot(path, name, dependency = false) {
+async function packageRoot(path, name) {
   let directory = path
   for (let i = 0; i < 16; i++) {
-    const candidate = dependency ? resolve(directory, 'node_modules', name) : directory
-    if ((await packageAt(candidate))?.name === name) return candidate
+    if ((await packageAt(directory))?.name === name) return directory
     if (dirname(directory) === directory) break
     directory = dirname(directory)
   }
   return null
 }
 
-export function createRuntimeMaintenance({ catalog, workspaceRoot, environment, verifiedInstaller, hasActiveRuntime = async () => false, execute = runHost, fetchImplementation = fetch, acquireLock = acquireHostLock, configuration = loadRuntimeConfiguration(environment()) }) {
+// How long the vendor's own update and the official installer may run in the background.
+const updateTimeout = 180_000
+const installTimeout = 300_000
+
+export function createRuntimeMaintenance({ catalog, workspaceRoot, environment, officialInstaller, hasActiveRuntime = async () => false, restartOpenCodeService = async () => {}, execute = runHost, fetchImplementation = fetch, acquireLock = acquireHostLock, configuration = loadRuntimeConfiguration(environment()) }) {
   const states = new Map(), operations = new Map()
-  const npm = runtimeNPMCommand(configuration)
   const statePath = resolve(workspaceRoot, '.wovenmatter/runtime-preferences.json')
+  const adapterPrefix = acpAdapterPrefix(configuration)
   let saveQueue = Promise.resolve(), checks = null
   const loaded = readFile(statePath, 'utf8').then(text => {
     const saved = JSON.parse(text)
-    for (const h of catalog.values()) {
-      states.set(h.id, { failureCount: Number(saved[h.id]?.failureCount) || 0, managedComponents: saved[h.id]?.managedComponents ?? {} })
-    }
+    for (const h of catalog.values()) states.set(h.id, { failureCount: Number(saved[h.id]?.failureCount) || 0 })
   }).catch(() => {})
   async function state(id) { await loaded; if (!states.has(id)) states.set(id, { failureCount: 0 }); return states.get(id) }
   function persist() {
     saveQueue = saveQueue.catch(() => {}).then(async () => {
       await mkdir(dirname(statePath), { recursive: true, mode: 0o700 })
-      const data = Object.fromEntries([...states].map(([id, s]) => [id, { failureCount: s.failureCount,
-        ...(s.managedComponents && Object.keys(s.managedComponents).length ? { managedComponents: s.managedComponents } : {}) }]))
+      const data = Object.fromEntries([...states].map(([id, s]) => [id, { failureCount: s.failureCount }]))
       await writeFile(statePath + '.tmp', JSON.stringify(data), { mode: 0o600 }); await rename(statePath + '.tmp', statePath)
     }); return saveQueue
   }
-  // Keep all installer subprocesses on a cache owned by this workspace user.
   const run = (command, timeout) => execute(command, {
     ...environment(), npm_config_cache: resolve(workspaceRoot, '.wovenmatter/npm-cache'),
   }, workspaceRoot, timeout)
-  async function componentSource(path) {
+  const inside = (path, root) => path === root || path.startsWith(root + sep)
+  // A CLI in the person's home is theirs to update with its vendor's command; one
+  // elsewhere (a distribution package under /usr) belongs to the system.
+  async function componentSource(path, adapter = false) {
     if (!path) return 'missing'
     const target = await realpath(path).catch(() => path)
-    for (const value of states.values()) for (const owned of Object.values(value.managedComponents ?? {})) {
-      if (owned.path === path && owned.target === target) return 'managed'
-    }
-    return 'system'
+    if (adapter) return inside(target, configuration.home) || inside(path, configuration.home) ? 'managed' : 'system'
+    return inside(path, configuration.home) || inside(target, configuration.home) ? 'native' : 'system'
   }
   async function commandPath(command) {
     const found = await run(`command -v ${quote(command)}`)
     return found.code === 0 ? found.output.trim().split('\n')[0] : null
   }
-  async function component(id, name, command, required = true) {
+  async function component(id, name, command, { adapter = false } = {}) {
     const path = await commandPath(command)
     const result = path ? await run(`${quote(path)} --version`) : null
     const version = result?.code === 0 ? normalizedVersion(result.output) : null
-    return { id, displayName: name, path, source: await componentSource(path), installedVersion: version, latestVersion: null, required, installed: Boolean(path && version) }
+    return { id, displayName: name, path, source: await componentSource(path, adapter), installedVersion: version, latestVersion: null, required: true, installed: Boolean(path && version) }
   }
   async function latest(packageName) {
     try {
-      return await latestSupportedPackage(packageName, {
-        major: packageName === '@opencode/cli' ? 2 : undefined,
-        fetchImplementation,
-      })
+      return await latestSupportedPackage(packageName, { major: packageName === '@opencode/cli' ? 2 : undefined, fetchImplementation })
     } catch { return null }
+  }
+  // Release information only: the vendor's own updater does the updating.
+  async function latestCLI(h) {
+    if (h.id === 'grok_build') {
+      try {
+        const response = await fetchImplementation('https://x.ai/cli/stable', { signal: AbortSignal.timeout(10000) })
+        if (response.ok) return normalizedVersion(await response.text())
+      } catch {}
+      return null
+    }
+    const name = { codex: '@openai/codex', claude_code: '@anthropic-ai/claude-code', opencode: '@opencode/cli' }[h.id]
+    return name ? latest(name) : null
+  }
+  /** OpenCode v2, under `opencode` or its `opencode2` alias, and any v1 `opencode` found. */
+  async function openCode(h) {
+    let v1 = null
+    for (const command of [h.command, ...openCodeCommands.filter(value => value !== h.command)]) {
+      const found = await component('runtime', 'OpenCode', command)
+      if (supportsOpenCodeVersion(found.installedVersion)) return { main: found, v1 }
+      if (found.path && found.installedVersion && !v1) v1 = { path: found.path, version: found.installedVersion }
+    }
+    return { main: { id: 'runtime', displayName: 'OpenCode', path: null, source: 'missing', installedVersion: null, latestVersion: null, required: true, installed: false }, v1 }
   }
   async function inventory(h, checkLatest = false) {
     const s = await state(h.id), previous = s.components ?? []
-    let main = await component('runtime', h.command, h.command)
-    if (h.id === 'opencode' && !supportsOpenCodeVersion(main.installedVersion)) {
-      for (const command of openCodeCommands.filter(value => value !== h.command)) {
-        const alias = await component('runtime', command, command)
-        if (supportsOpenCodeVersion(alias.installedVersion)) { main = alias; break }
-      }
+    let cli, adapter = null, openCodeV1 = null
+    if (h.id === 'opencode') {
+      const found = await openCode(h)
+      cli = found.main; openCodeV1 = found.v1
+    } else {
+      cli = await component(h.adapterPackage ? 'cli' : 'runtime', h.cliCommand ?? h.command, h.cliCommand ?? h.command)
     }
-    if (h.minimumAdapterVersion && precedes(main.installedVersion, h.minimumAdapterVersion)) main.installed = false
-    if (h.id === 'opencode' && !supportsOpenCodeVersion(main.installedVersion)) main.installed = false
-    const components = [main]
-    let adapterRoot = null, dependencyName = null, dependencyRange = null
-    if (h.transportCheckCommand && !h.adapterPackage && h.id !== 'opencode') {
-      const probe = main.installed ? await run(h.transportCheckCommand) : null
-      components.push({ id: 'transport', displayName: h.transport + ' transport', path: main.path, source: main.source, installedVersion: main.installedVersion, latestVersion: null, required: true, installed: probe?.code === 0 })
-    }
+    const components = [cli]
     if (h.adapterPackage) {
-      components.push(await component('signin', h.cliCommand + ' (sign-in CLI)', h.cliCommand))
-      const dependency = h.id === 'codex' ? '@openai/codex' : '@anthropic-ai/claude-agent-sdk'
+      adapter = await component('runtime', h.command, h.command, { adapter: true })
+      adapter.displayName = h.command + ' (ACP connection)'
+      // Woven installs the adapter; its own package version is the one that matters.
       let root = null
-      try { root = await packageRoot(dirname(await realpath(main.path)), h.adapterPackage) } catch {}
-      adapterRoot = root; dependencyName = dependency
-      dependencyRange = root ? (await packageAt(root))?.dependencies?.[dependency] : null
-      const dep = root ? await packageRoot(root, dependency, true) : null
-      const object = dep ? await packageAt(dep) : null
-      let engine = dep ? resolve(dep, h.id === 'codex' ? 'bin/codex.js' : 'cli.js') : null
-      if (dep && h.id === 'claude_code') {
-        const native = `@anthropic-ai/claude-agent-sdk-${process.platform}-${process.arch}`
-        if (object?.optionalDependencies?.[native]) { const nativeRoot = await packageRoot(dep, native, true); engine = nativeRoot ? resolve(nativeRoot, 'claude') : null }
-      }
-      const result = engine ? await run(`${quote(engine)} --version`) : null
-      components.push({ id: 'bundled', displayName: 'Bundled ' + dependency, path: engine, source: main.source, installedVersion: normalizedVersion(object?.version), latestVersion: null, required: true, installed: Boolean(object?.version && result?.code === 0 && normalizedVersion(result.output)) })
-      if (h.id === 'claude_code') components.push({ id: 'engine', displayName: 'Bundled Claude Code', path: engine, source: main.source, installedVersion: normalizedVersion(result?.output), latestVersion: null, required: true, installed: result?.code === 0 && Boolean(normalizedVersion(result.output)) })
-      if (h.minimumProtocolSDKVersion) {
-        const sdk = root ? await packageRoot(root, '@agentclientprotocol/sdk', true) : null
-        const version = sdk ? normalizedVersion((await packageAt(sdk))?.version) : null
-        components.push({ id: 'protocol-sdk', displayName: 'Bundled ACP SDK', path: sdk, source: main.source,
-          installedVersion: version, latestVersion: null, required: true, installed: version !== null })
-      }
-      const key = h.id === 'codex' ? 'CODEX_PATH' : 'CLAUDE_CODE_EXECUTABLE'
-      if (environment()[key]) components.push(await component('override', key + ' override', environment()[key]))
+      try { root = adapter.path ? await packageRoot(dirname(await realpath(adapter.path)), h.adapterPackage) : null } catch {}
+      const packaged = root ? normalizedVersion((await packageAt(root))?.version) : null
+      if (packaged) adapter.installedVersion = packaged
+      if (h.minimumAdapterVersion && precedes(adapter.installedVersion, h.minimumAdapterVersion)) adapter.installed = false
+      components.push(adapter)
+    } else if (h.transportCheckCommand && cli.installed) {
+      const probe = await run(h.transportCheckCommand)
+      components.push({ id: 'transport', displayName: h.transport + ' transport', path: cli.path, source: cli.source, installedVersion: cli.installedVersion, latestVersion: null, required: true, installed: probe?.code === 0 })
     }
     if (checkLatest) {
-      const packageName = h.adapterPackage ?? ({ opencode: '@opencode/cli' })[h.id]
-      if (packageName) main.latestVersion = await latest(packageName)
-      else if (h.id === 'grok_build') {
-        try {
-          const response = await fetchImplementation('https://x.ai/cli/stable', { signal: AbortSignal.timeout(10000) })
-          if (response.ok) { const text = await response.text(); main.latestVersion = normalizedVersion(text) }
-        } catch {}
-      }
-      if (h.adapterPackage) {
-        components[1].latestVersion = await latest(h.id === 'codex' ? '@openai/codex' : '@anthropic-ai/claude-code')
-        const bundled = components.find(c => c.id === 'bundled')
-        const sdk = components.find(c => c.id === 'protocol-sdk')
-        if (sdk) sdk.latestVersion = await latest('@agentclientprotocol/sdk')
-        bundled.latestVersion = await latest(dependencyName)
-        bundled.updateTargetVersion = h.minimumEngineVersion ? bundled.latestVersion : null
-        // npm performs the semver selection using the adapter's declared dependency
-        // range. Never override a pinned/ranged adapter dependency with @latest.
-        if (!h.minimumEngineVersion && adapterRoot && typeof dependencyRange === 'string' && /^[0-9v^~<>=|*xX. +\-]+$/.test(dependencyRange)) {
-          const result = await run(`${npm} view ${quote(dependencyName + '@' + dependencyRange)} version --json --registry=https://registry.npmjs.org`, 15000)
-          try { const versions = JSON.parse(result.output); if (result.code === 0) bundled.updateTargetVersion = normalizedVersion(Array.isArray(versions) ? versions.at(-1) : versions) } catch {}
-        }
-      }
-    } else for (const c of components) { const cached = previous.find(p => p.id === c.id); c.latestVersion = cached?.latestVersion ?? null; if (c.id === 'bundled') c.updateTargetVersion = cached?.updateTargetVersion ?? null }
-    if (checkLatest) s.versionCheckAvailable = components.filter(c => ['runtime', 'signin', 'bundled', 'protocol-sdk'].includes(c.id)).every(c => c.latestVersion !== null && (c.id !== 'bundled' || c.updateTargetVersion !== null))
-    for (const c of components) c.updateAvailable = c.source !== 'system' && precedes(c.installedVersion, updateTarget(c))
+      cli.latestVersion = await latestCLI(h)
+      if (adapter) adapter.latestVersion = await latest(h.adapterPackage)
+      s.versionCheckAvailable = components.filter(c => c.id !== 'transport').every(c => c.latestVersion !== null)
+    } else for (const c of components) c.latestVersion = previous.find(p => p.id === c.id)?.latestVersion ?? null
+    for (const c of components) c.updateAvailable = c.id !== 'transport' && c.source !== 'system' && c.source !== 'missing' && precedes(c.installedVersion, c.latestVersion)
     s.components = components
     const storedOperation = operations.get(h.id) ?? null
     const operation = storedOperation && !storedOperation.finishedAt ? { ...storedOperation, status: 'running' } : storedOperation
     const installed = components.every(c => !c.required || c.installed)
     s.installed = installed
-    let notice = h.id === 'opencode' ? 'OpenCode v2 releases can be updated independently.' : h.adapterPackage ? 'Chat uses the adapter and bundled engine shown here; sign-in CLI updates do not update that engine.' : null
-    const bundled = components.find(c => c.id === 'bundled')
-    if (!h.minimumEngineVersion && bundled?.latestVersion && bundled.latestVersion !== bundled.updateTargetVersion) notice += ' The newest bundled dependency may exceed the adapter’s declared compatibility; only compatible dependency updates are offered.'
-    if (checkLatest && (main.latestVersion === null || (bundled && (!bundled.latestVersion || !bundled.updateTargetVersion)))) notice = [notice, 'Latest version information is unavailable.'].filter(Boolean).join(' ')
-    s.notice = checkLatest ? notice : notice ?? s.notice ?? null
-    return { id: h.id, displayName: h.displayName, source: main.source, path: main.path, installed, components, operation, failureCount: s.failureCount, diagnosticPrompt: s.failureCount >= 2 ? `Diagnose ${h.displayName} on this remote workspace host (${process.platform}/${process.arch}). Do not modify other hosts.\n${components.map(c => `${c.displayName}: installed=${c.installedVersion ?? 'unknown'} latest=${c.latestVersion ?? 'unknown'} verified=${c.installed}`).join('\n')}\nFailure: ${diagnosticCategory(operation?.error)}` : null, notice: s.notice, versionCheckAvailable: s.versionCheckAvailable ?? null, updateAvailable: components.some(c => c.updateAvailable) }
+    let notice = h.id === 'opencode'
+      ? (openCodeV1 && !cli.installed ? `OpenCode ${openCodeV1.version} (v1) is installed. Woven supports OpenCode v2; installing it replaces the v1 opencode command.` : null)
+      : h.adapterPackage ? `Chats use this host's ${h.cliCommand} through its ACP connection.` : null
+    if (checkLatest && components.some(c => c.id !== 'transport' && c.latestVersion === null)) notice = [notice, 'Latest version information is unavailable.'].filter(Boolean).join(' ')
+    s.notice = notice
+    return { id: h.id, displayName: h.displayName, source: cli.source, path: cli.path, installed, components, operation,
+      ...(h.id === 'opencode' ? { openCodeV1 } : {}),
+      failureCount: s.failureCount,
+      diagnosticPrompt: s.failureCount >= 2 ? `Diagnose ${h.displayName} on this remote workspace host (${process.platform}/${process.arch}). Do not modify other hosts.\n${components.map(c => `${c.displayName}: installed=${c.installedVersion ?? 'unknown'} latest=${c.latestVersion ?? 'unknown'} verified=${c.installed}`).join('\n')}\nFailure: ${diagnosticCategory(operation?.error)}` : null,
+      notice: s.notice, versionCheckAvailable: s.versionCheckAvailable ?? null, updateAvailable: components.some(c => c.updateAvailable) }
   }
-  async function busy(h, maintainedNames) {
-    if (await hasActiveRuntime(h.id)) return true
-    if (!maintainedNames.length) return false
-    // Conversations run over SSH outside this service. Check the host process list,
-    // without returning command lines (which can contain credentials) to the client.
-    const result = await run('ps -eo pid=,args=')
-    if (result.code !== 0) throw failure('active_conversation_check_unavailable')
-    return result.output.split('\n').some(line => !/ps -eo|\/bin\/bash -c/.test(line) && maintainedNames.some(name => line.split(/\s+/).some(arg => arg === name || arg.endsWith('/' + name) || arg.endsWith('/' + name + '.js'))))
-  }
-  function hostTargets(h, action, before) {
-    const main = before.components.find(c => c.id === 'runtime')
-    const cli = before.components.find(c => c.id === 'signin') ?? main
-    return { main, cli, needsCLI: !cli.path || (action === 'update' && cli.source === 'managed'),
-      needsAdapter: Boolean(h.adapterPackage && (!main.installed || (action === 'update' && main.source === 'managed'))) }
-  }
-  async function hostMaintainedProcesses(h, action, before) {
-    const { cli, needsCLI, needsAdapter } = hostTargets(h, action, before)
-    const names = []
-    if (needsCLI) names.push(...(h.id === 'opencode' ? openCodeCommands : [h.cliCommand ?? h.command]))
-    if (needsAdapter) names.push(h.command)
-    const components = before.components.filter(c => (needsCLI && c.id === cli.id) || (needsAdapter && ['runtime', 'bundled', 'engine'].includes(c.id)))
-    for (const component of components) if (component.path) {
-      names.push(component.path, await realpath(component.path).catch(() => component.path))
-      const link = await readlink(component.path).catch(() => null)
-      if (link) names.push(resolve(dirname(component.path), link))
-    }
-    return [...new Set(names.filter(Boolean))]
-  }
-  async function adapterPackageSpec(h, supplied) {
-    const version = supplied?.startsWith(h.adapterPackage + '@') ? supplied.slice(h.adapterPackage.length + 1) : supplied ? null : await latest(h.adapterPackage)
-    if (!version || !/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/.test(version)) throw failure('invalid_adapter_package_spec')
-    if (precedes(version, h.minimumAdapterVersion)) throw failure('adapter_version_below_minimum')
-    return h.adapterPackage + '@' + version
-  }
-  async function adapterInstallCommand(h, spec) {
-    if (!h.minimumEngineVersion) return `${npm} install --global --prefix "$HOME/.local" ${quote(spec)}`
+  async function adapterInstallCommand(h) {
+    const version = await latest(h.adapterPackage)
+    if (!version || precedes(version, h.minimumAdapterVersion)) throw failure('adapter_version_below_minimum')
     const dependency = h.id === 'codex' ? '@openai/codex' : '@anthropic-ai/claude-agent-sdk'
+    // The adapter keeps a bundled engine as its package requires; chats run the
+    // native CLI through CODEX_PATH / CLAUDE_CODE_EXECUTABLE (config.mjs).
     const engineVersion = await latest(dependency)
     if (!engineVersion || precedes(engineVersion, h.minimumEngineVersion)) throw failure('latest_engine_version_unavailable')
     const installedScript = resolve(configuration.serviceRoot, 'harnesses/install-adapter.mjs')
     const script = existsSync(installedScript) ? installedScript : fileURLToPath(new URL('../../harnesses/install-adapter.mjs', import.meta.url))
-    const selection = { prefix: resolve(configuration.home, '.local'), adapter: h.adapterPackage,
-      adapterVersion: spec.slice(h.adapterPackage.length + 1), engineVersion,
-      npm: runtimeNPMInvocation(configuration) }
+    const selection = { prefix: adapterPrefix, adapter: h.adapterPackage, adapterVersion: version, engineVersion, npm: runtimeNPMInvocation(configuration) }
     if (h.minimumProtocolSDKVersion) {
       const sdk = await latest('@agentclientprotocol/sdk')
       if (!sdk || precedes(sdk, h.minimumProtocolSDKVersion)) throw failure('latest_protocol_sdk_version_unavailable')
@@ -266,95 +240,62 @@ export function createRuntimeMaintenance({ catalog, workspaceRoot, environment, 
     }
     return `${quote(process.execPath)} ${quote(script)} ${quote(JSON.stringify(selection))}`
   }
-  async function protectInstallDestination(command, component) {
-    if (component?.source === 'managed') return
-    const target = resolve(configuration.home, '.local/bin', command)
-    try { await lstat(target) } catch (error) { if (error.code === 'ENOENT') return; throw error }
-    throw failure('unmanaged_install_destination')
-  }
-  async function installerArguments(h) {
-    if (h.id !== 'claude_code') return h.install.arguments ?? []
-    // Native latest/stable channel pointers can lag the published stable CLI.
-    const version = await latest('@anthropic-ai/claude-code')
-    if (!version) throw failure('latest_cli_version_unavailable')
-    return [version]
-  }
-  async function hostInstallation(h, action, body, before) {
-    const commands = [], installedCommands = []
-    const { main, cli, needsCLI, needsAdapter } = hostTargets(h, action, before)
-    if (needsCLI) {
-      await protectInstallDestination(h.cliCommand ?? h.command, cli)
-      if (h.install?.kind === 'npm-global') {
-        const pkg = validatedPackageSpec(h, body.packageSpec ?? (await npmPreview(h)).packageSpec)
-        commands.push(`${npm} install --global --prefix "$HOME/.local" ${quote(pkg)}`)
-      } else {
-        if (typeof body.sourceSHA256 !== 'string') throw failure('source_digest_required')
-        const installer = await verifiedInstaller(h, body.sourceSHA256)
-        commands.push(`${quote(h.install.interpreter)} ${quote(installer.path)} ${(await installerArguments(h)).map(quote).join(' ')}`)
+  /** The steps an action runs, each a background shell command with its own time limit. */
+  async function plan(h, action, body, before) {
+    const steps = []
+    const cli = before.components.find(c => c.id === (h.adapterPackage ? 'cli' : 'runtime'))
+    const adapter = h.adapterPackage ? before.components.find(c => c.id === 'runtime') : null
+    if (action === 'install') {
+      if (!cli.installed) {
+        if (h.id === 'opencode' && before.openCodeV1 && body.replaceOpenCodeV1 !== true) throw failure('opencode_v1_replacement_confirmation_required')
+        const installer = nativeInstaller(h)
+        const file = await officialInstaller(h, installer.source)
+        steps.push({ kind: 'install', command: `${quote(installer.interpreter)} ${quote(file)} ${installer.arguments.map(quote).join(' ')}`.trim(), timeout: installTimeout })
       }
-      installedCommands.push(['signin', h.cliCommand ?? h.command])
-      if (!h.adapterPackage) installedCommands.push(['runtime', h.command])
+      if (adapter && !adapter.installed) steps.push({ kind: 'install', command: await adapterInstallCommand(h), timeout: installTimeout })
+      return steps
     }
-    if (needsAdapter) {
-      await protectInstallDestination(h.command, main)
-      const spec = await adapterPackageSpec(h, body.adapterPackageSpec ?? (body.packageSpec?.startsWith(h.adapterPackage + '@') ? body.packageSpec : undefined))
-      commands.push(await adapterInstallCommand(h, spec))
-      installedCommands.push(['runtime', h.command])
+    // Update: the vendor's own command for the CLI, wherever its installer put it,
+    // and a fresh adapter when a newer one is published.
+    if (cli.installed && cli.source === 'native' && (cli.updateAvailable || !cli.latestVersion)) {
+      steps.push({ kind: 'update', command: [cli.path, ...nativeUpdateArguments(h)].map(quote).join(' '), timeout: updateTimeout })
     }
-    if (!commands.length && action === 'update') throw failure('system_install_update_forbidden')
-    return { command: commands.join(' && '), installedCommands }
-  }
-  async function refreshAdapterDependency(h) {
-    if (h.minimumEngineVersion) return // The immutable consumer graph already verified both releases.
-    // System adapter directories and their bundled engines are never mutated.
-    const path = await commandPath(h.command)
-    if (await componentSource(path) !== 'managed') return
-    let root = null
-    try { root = await packageRoot(dirname(await realpath(path)), h.adapterPackage) } catch {}
-    const dependency = h.id === 'codex' ? '@openai/codex' : '@anthropic-ai/claude-agent-sdk'
-    if (root && (await packageAt(root))?.dependencies?.[dependency]) {
-      const refreshed = await run(`${npm} update --prefix ${quote(root)} --omit=dev --no-save --package-lock=false --registry=https://registry.npmjs.org ${quote(dependency)}`, 300000)
-      if (refreshed.code !== 0) throw failure('bundled_dependency_refresh_failed')
-    }
+    if (adapter?.installed && adapter.updateAvailable) steps.push({ kind: 'update', command: await adapterInstallCommand(h), timeout: installTimeout })
+    if (!steps.length && cli.source === 'system') throw failure('system_install_update_forbidden')
+    return steps
   }
   async function start(h, action, body) {
     if (body.confirmed !== true) throw failure('confirmation_required')
     const s = await state(h.id)
     if (operations.get(h.id) && !operations.get(h.id).finishedAt) return operations.get(h.id)
-    // Reserve synchronously before download/probe awaits to prevent duplicate operations.
+    // Reserve synchronously before awaits to prevent duplicate operations.
     const op = { id: randomUUID(), harnessID: h.id, action, status: 'running', output: '', error: null, startedAt: new Date().toISOString(), finishedAt: null }
     operations.set(h.id, op)
     void (async () => {
       let unlock
       try {
-        unlock = await acquireLock(resolve(configuration.stateDirectory, 'runtime-operation.lock'), environment(), workspaceRoot)
-        if (await busy(h, [])) throw failure('runtime_active_stop_conversations_or_server_first')
+        unlock = await acquireLock(harnessLockPath(configuration, h.id), environment(), workspaceRoot)
+        if (await hasActiveRuntime(h.id)) throw failure('runtime_active_stop_conversations_or_server_first')
         const before = await inventory(h)
-        const maintainedNames = await hostMaintainedProcesses(h, action, before)
-        if (await busy(h, maintainedNames)) throw failure('runtime_active_stop_conversations_or_server_first')
-        const { command, installedCommands } = await hostInstallation(h, action, body, before)
-        if (await busy(h, maintainedNames)) throw failure('runtime_active_stop_conversations_or_server_first')
-        const installation = async () => {
-          if (command) {
-            const result = await run(command, 300000)
-            op.output = sanitize(result.output, environment())
-            if (result.code !== 0) throw failure(`Installer exited ${result.code}. ${op.output}`)
-          }
-          // Record only explicit Woven installations. Existing ~/.local and mise
-          // installations remain system-owned, even when sharing our PATH.
-          for (const [id, name] of installedCommands) {
-            const path = await commandPath(name)
-            if (path) {
-              s.managedComponents ??= {}
-              s.managedComponents[id] = { path, target: await realpath(path).catch(() => path) }
-            }
-          }
-          if (h.adapterPackage && installedCommands.some(([id]) => id === 'runtime')) await refreshAdapterDependency(h)
+        const steps = await plan(h, action, body, before)
+        for (const step of steps) {
+          const result = await run(step.command, step.timeout)
+          op.output = sanitize([op.output, result.output].filter(Boolean).join('\n'), environment())
+          if (result.timedOut) throw failure(step.kind === 'update' ? 'update_timed_out' : 'install_timed_out')
+          if (result.code !== 0) throw failure(`${step.kind === 'update' ? 'Update' : 'Installer'} exited ${result.code}. ${op.output}`)
         }
-        await withInstallerGuard(configuration.home, installation)
         const after = await inventory(h)
         if (!after.installed) throw failure('Installer finished but required components could not be verified.')
-        if (action === 'update' && before.components.some(c => c.source !== 'system' && precedes(c.installedVersion, updateTarget(c)) && precedes(after.components.find(a => a.id === c.id)?.installedVersion, updateTarget(c)))) throw failure('Update finished but a required component is still behind the checked version.')
+        if (action === 'update') {
+          // The updater's exit status isn't proof: each part that was behind must now be current.
+          const behind = before.components.filter(c => c.updateAvailable)
+          if (behind.some(c => precedes(after.components.find(a => a.id === c.id)?.installedVersion, c.latestVersion))) {
+            throw failure('Update finished but a required component is still behind the checked version.')
+          }
+          if (h.id === 'opencode' && steps.length) {
+            try { await restartOpenCodeService() } catch { throw failure('opencode_service_restart_failed') }
+          }
+        }
         op.status = 'succeeded'; s.failureCount = 0
       } catch (error) { op.status = 'failed'; op.error = sanitize(error.message, environment()); s.failureCount += 1 }
       await persist().catch(() => { op.status = 'failed'; op.error = 'runtime_preferences_save_failed' })
@@ -362,36 +303,19 @@ export function createRuntimeMaintenance({ catalog, workspaceRoot, environment, 
     })()
     return op
   }
-  async function npmPreview(h) {
-    let packageSpec = h.install.package
-    if (h.install?.kind === 'npm-global') {
-      const name = packageSpec.slice(0, packageSpec.lastIndexOf('@'))
-      const version = await latest(name)
-      if (!version) throw failure('latest_package_version_unavailable')
-      packageSpec = name + '@' + version
-    }
-    packageSpec = validatedPackageSpec(h, packageSpec)
-    return { harnessID: h.id, source: h.install.source, sha256: null, bytes: null,
-      packageSpec, command: `${npm} install --global --prefix "$HOME/.local" ${quote(packageSpec)}`,
-      verification: 'npm-registry-integrity' }
-  }
   return {
     inventory,
-    npmPreview,
     async location(command) {
       await loaded
       const path = await commandPath(command)
       return { path, source: await componentSource(path) }
     },
-    async hostAdapterPreview(h) {
-      if (!h.adapterPackage) return null
-      const row = await inventory(h)
-      const cli = row.components.find(c => c.id === 'signin')
-      if (!cli?.path) return null
-      const spec = await adapterPackageSpec(h)
-      return { harnessID: h.id, source: 'https://registry.npmjs.org/' + h.adapterPackage,
-        sha256: null, bytes: null, packageSpec: spec,
-        command: await adapterInstallCommand(h, spec), verification: 'npm-registry-integrity' }
+    /** What an install would run, for apps that still show it before installing. */
+    installPreview(h) {
+      const installer = nativeInstaller(h)
+      return { harnessID: h.id, source: installer.source, sha256: null, bytes: null, packageSpec: null,
+        command: `curl -fsSL ${installer.source} | ${installer.interpreter}${installer.arguments.length ? ' -s -- ' + installer.arguments.join(' ') : ''}`,
+        verification: 'official-installer' }
     },
     async recordFailure(h, action, error) {
       const s = await state(h.id)

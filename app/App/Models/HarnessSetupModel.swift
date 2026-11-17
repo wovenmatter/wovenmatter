@@ -53,7 +53,7 @@ final class HarnessSetupModel {
         application.checkingRuntimeInventory || !application.checkingRuntimeKinds.isEmpty
             || !application.installingLocalACPRuntimeKinds.isEmpty
             || application.openCode?.isInstalling == true
-            || application.preparedLocalACPRuntimeInstall != nil
+            || application.pendingRuntimeInstall != nil
     }
 
     func refresh() {
@@ -104,14 +104,14 @@ final class HarnessSetupModel {
 
     func resolveInstaller(install: Bool) {
         guard !resolvingInstaller, let kind = activeInstall,
-              application.preparedLocalACPRuntimeInstall?.definition.runtimeKind == kind else { return }
+              application.pendingRuntimeInstall?.runtimeKind == kind else { return }
         resolvingInstaller = true
         Task {
             defer { resolvingInstaller = false }
             do {
                 try await application.requestSetupRuntimeCommand(install ? .confirmInstall : .cancelInstall)
                 if !install { selected.remove(kind) }
-            } catch { errors[kind] = "Could not confirm the installer. Try again." }
+            } catch { errors[kind] = "Could not start the install. Try again." }
         }
     }
 
@@ -120,19 +120,19 @@ final class HarnessSetupModel {
         closed = true
         work?.cancel()
         work = nil
-        // Leave an already running verified installer to finish; stop the queue.
-        if let kind = activeInstall, kind != .opencode {
+        // Leave an already running installer to finish; stop the queue.
+        if let kind = activeInstall {
             let application = application
             Task {
-                // Preparation may finish after the window closes. Do not leave
-                // its approval blocking every subsequent maintenance action.
+                // The OpenCode 1 check may finish after the window closes. Do not leave
+                // its question blocking every subsequent maintenance action.
                 let deadline = Date().addingTimeInterval(15 * 60)
                 while application.installingLocalACPRuntimeKinds.contains(kind),
-                      application.preparedLocalACPRuntimeInstall == nil, Date() < deadline {
+                      application.pendingRuntimeInstall == nil, Date() < deadline {
                     try? await Task.sleep(for: .milliseconds(200))
                 }
-                if application.preparedLocalACPRuntimeInstall?.definition.runtimeKind == kind {
-                    application.cancelPreparedLocalACPRuntimeInstall()
+                if application.pendingRuntimeInstall?.runtimeKind == kind {
+                    application.cancelPendingRuntimeInstall()
                 }
             }
         }
