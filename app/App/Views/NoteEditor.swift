@@ -1053,18 +1053,21 @@ private final class NoteTextView: NSTextView {
             addColumnButton.isHidden = true; addRowButton.isHidden = true; hoveredTableEnd = nil
             return
         }
+        var tables: [NSRange] = []
+        storage.enumerateAttribute(.noteTableID, in: NSRange(location: 0, length: storage.length)) { value, range, _ in
+            if value != nil, range.length > 0 { tables.append(range) }
+        }
+        func line(_ location: Int) -> NSRect {
+            convert(window.convertFromScreen(firstRect(forCharacterRange: NSRange(location: location, length: 0), actualRange: nil)), from: nil)
+        }
+        let left = textContainerOrigin.x
+        let right = left + (textContainer?.size.width ?? bounds.width)
         var found: (rect: NSRect, end: Int)?
-        storage.enumerateAttribute(.noteTableID, in: NSRange(location: 0, length: storage.length)) { value, range, stop in
-            guard value != nil, range.length > 0 else { return }
-            func line(_ location: Int) -> NSRect {
-                convert(window.convertFromScreen(firstRect(forCharacterRange: NSRange(location: location, length: 0), actualRange: nil)), from: nil)
-            }
+        for range in tables {
             let first = line(range.location), last = line(NSMaxRange(range) - 1)
-            let left = textContainerOrigin.x
-            let right = left + (textContainer?.size.width ?? bounds.width)
             let rect = NSRect(x: left, y: min(first.minY, last.minY) - 8, width: right - left,
                               height: max(first.maxY, last.maxY) - min(first.minY, last.minY) + 16)
-            if rect.insetBy(dx: -28, dy: -24).contains(point) { found = (rect, NSMaxRange(range) - 1); stop.pointee = true }
+            if rect.insetBy(dx: -28, dy: -24).contains(point) { found = (rect, NSMaxRange(range) - 1); break }
         }
         guard let found else {
             addColumnButton.isHidden = true; addRowButton.isHidden = true; hoveredTableEnd = nil
