@@ -92,7 +92,7 @@ Maintenance checks both for newer releases; recorded does not mean frozen.
   reviewed current HTTP dispatcher as Mac tooling, with tuple-header redirect
   credential stripping covered by provider-free fixtures. They apply the
   independently locked security selection in `remote/npm-runtime` (tested undici
-  8.12.4, ip-address 10.7.6 and minimatch 11.0.8), addressing CVE-2026-111997,
+  8.12.4, ip-address 10.7.6 and minimatch 11.0.9), addressing CVE-2026-111997,
   GHSA-xjj6-f33q-929c and the related denial-of-service advisories. npm ignores
   overrides for its bundled dependencies, so this replacement is explicit in the
   install recipe.
@@ -130,7 +130,7 @@ Maintenance checks both for newer releases; recorded does not mean frozen.
   interrupt the job without replaying it. Broker regressions and the real
   provider-free Executor fixture cover inline and lifted results.
   npm also vendors minimatch 10.2.5, affected by GHSA-g3hv-75wg-m249. The
-  same graph replaces minimatch with 11.0.8 and its locked dependency closure.
+  same graph replaces minimatch with 11.0.9 and its locked dependency closure.
   Mac, native Linux and all container paths copy and verify every graph module,
   including scoped dependencies; npm's actual install/ci behavior and bounded
   glob-pattern fixtures validate this major migration. Keep this replacement
@@ -241,8 +241,8 @@ Maintenance checks both for newer releases; recorded does not mean frozen.
   peer validation. Real local WebSocket streaming/cancellation fixtures and the
   Chord/Durable suites validate this selection; review it on each Chord refresh.
   Pi AI 1.5.2 also pins older provider clients. Consumer-scoped minimum-only
-  overrides select the tested OpenAI 7.57.0, Anthropic 1.8.0, Google GenAI 3.3.0,
-  Bedrock Runtime and token providers 3.1169.0, and Smithy Node HTTP handler
+  overrides select the tested OpenAI 7.57.0, Anthropic 1.9.0, Google GenAI 3.4.0,
+  Bedrock Runtime and token providers 3.1170.0, and Smithy Node HTTP handler
   4.14.2 releases without
   changing vendor manifests. Keeping these clients current is required for
   provider API and transport compatibility, including Anthropic's 2026-10-21
@@ -268,8 +268,10 @@ Maintenance checks both for newer releases; recorded does not mean frozen.
   exact versioned paths, streaming tools/usage, and cancellation with GenAI 3.
   Pi Coding Agent 1.5.2 now selects minimatch 11.0.3, which includes the
   GHSA-g3hv-75wg-m249 repair. The consumer-scoped floor advances to the current
-  `>=11.0.8` patch, which bounds compiled pattern cache weight and rejects
-  excessive extglob recursion. Provider-free model-scope matching and
+  `>=11.0.9` patch, which bounds compiled pattern cache weight and rejects
+  excessive extglob recursion. The 11.0.9 patch also preserves expanded-range
+  semantics inside repeating and negated extglobs; provider-free fixtures cover
+  those model/skill selection patterns. Provider-free model-scope matching and
   bounded adversarial-pattern fixtures validate this
   selection; review the override on every refresh and remove it when Pi itself
   selects the current tested release.
@@ -340,11 +342,11 @@ an older configured channel. OpenCode and Executor retain the documented v2 API 
 maintenance must review a newer stable API major and implement its migration.
 
 `harnesses/catalog.json` records tested connector and engine minimums separately:
-Codex ACP 2.6.0 with Codex 0.169.0, and Claude ACP 0.107.3 with Claude SDK 0.3.325
-(native Claude Code 2.1.325). The standalone Codex and Claude sign-in CLIs use their
+Codex ACP 2.7.0 with Codex 0.169.0, and Claude ACP 0.107.3 with Claude SDK 0.3.326
+(native Claude Code 2.1.326). The standalone Codex and Claude sign-in CLIs use their
 official current stable release channels. Codex ACP's `^0.166.0` engine range
-otherwise keeps its chat engine behind; its `~2.4.0` ACP TypeScript SDK range
-also excludes the current 2.7.0. Claude ACP 0.107.3 now pins SDK 0.3.325;
+otherwise keeps its chat engine behind; its `~2.6.0` ACP TypeScript SDK range
+also excludes the current 2.7.0. Claude ACP 0.107.3 pins SDK 0.3.325;
 the consumer-scoped override remains so engine-only updates stay eligible when
 a later stable engine publication moves ahead of that pin. Transcript-write loss
 invalidates the native resume marker and refuses tool dispatch/continuation commits;
@@ -440,8 +442,9 @@ SHAs against current released versions. There is no blanket SHA requirement.
 Linux jobs use `ubuntu-latest`. Desktop jobs (release signing, desktop
 validation) use the `xcode-27` image with `DEVELOPER_DIR` set to
 Xcode 27.2, the toolchain the app is developed with; `macos-26` stops at Xcode
-26.6, which crashes compiling the app. The `xcode-27` image is a GitHub preview:
-move to its GA label, and to newer Xcode releases, during maintenance. iOS
+26.6, which crashes compiling the app. The `xcode-27` label is [generally available](https://github.blog/changelog/2026-10-15-xcode-27-runner-image-generally-available/)
+on Apple Silicon; the preview and GA labels are the same. Review newer stable
+Xcode releases and runner labels during maintenance. iOS
 validation stays on `macos-26`.
 
 ## Releases
