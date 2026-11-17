@@ -3,12 +3,15 @@
 #
 # Never signs in interactively, creates accounts or publishes. Only --upload
 # sends a build to Apple, and only with an App Store Connect API key. Xcode may
-# create or update signing profiles only when that key is supplied.
+# create or update signing profiles only when that key is supplied. --upload and
+# --ios-only-groups also turn off TestFlight testing on Macs and Apple Vision Pro
+# for every beta group, so builds reach only iPhones and iPads.
 set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 project="$root/ios/WovenMatter.xcodeproj"
 export_options="$root/ios/Config/ExportOptions.plist"
 verify="$root/scripts/verify-ios-app.sh"
+ios_only_groups="$root/scripts/testflight-ios-only.py"
 scheme=WovenMatter
 team=3M84Q9NAMN
 product='Woven Matter / com.wovenmatter.wovenmatter'
@@ -18,6 +21,7 @@ usage() {
     '       scripts/prepare-ios-testflight.sh --unsigned-build NEW_OUTPUT_DIRECTORY' \
     '       scripts/prepare-ios-testflight.sh --archive NEW_OUTPUT_DIRECTORY' \
     '       scripts/prepare-ios-testflight.sh --upload NEW_OUTPUT_DIRECTORY' \
+    '       scripts/prepare-ios-testflight.sh --ios-only-groups' \
     '       scripts/prepare-ios-testflight.sh --verify-export EXPORTED_IPA' >&2
   exit 64
 }
@@ -110,6 +114,10 @@ require_key() {
   [[ -z "$problem" ]] || fail 69 "App Store Connect API key: $problem." \
     'Uploads use only an API key, never an interactive sign-in: ios/README.md, "App Store Connect API key".'
 }
+# Every TestFlight group offers builds only on iPhone and iPad (testflight-ios-only.py).
+keep_groups_ios_only() {
+  ASC_KEY_ID="$key_id" ASC_ISSUER_ID="$issuer_id" ASC_KEY_PATH="$key_path" python3 -I "$ios_only_groups"
+}
 new_directory() {
   [[ -n "${1:-}" && ! -e "$1" ]] || fail 64 'Choose a new output directory; existing artifacts are never overwritten.'
   mkdir -p "$1"
@@ -162,6 +170,8 @@ case "${1:-}" in
       '  --unsigned-build DIR  compile and verify an unsigned Release build (no signing assets needed)' \
       '  --archive DIR         archive, export and verify a signed IPA; uploads nothing' \
       '  --upload DIR          the same, then upload the verified IPA with the API key' \
+      '                        and keep every TestFlight group to iPhone and iPad' \
+      '  --ios-only-groups     turn off TestFlight testing on Macs and Apple Vision Pro for every group' \
       '  --verify-export IPA   verify an exported IPA' \
       'Each DIR must be new. Setup steps: ios/README.md, "TestFlight".'
     ;;
@@ -203,8 +213,16 @@ case "${1:-}" in
         --p8-file-path "$key_path" --output-format normal 2>&1 | tee "$output/upload.log"; then
       fail 1 "Upload failed; see $output/upload.log. The verified IPA is kept at $ipa."
     fi
+    step 'Keeping TestFlight groups to iPhone and iPad'
+    keep_groups_ios_only || fail 1 "Uploaded Woven Matter $version ($build), but TestFlight groups may still offer it on Macs or Apple Vision Pro." \
+      'Retry with: scripts/prepare-ios-testflight.sh --ios-only-groups'
     printf '\n'; printf '%s\n' "Uploaded Woven Matter $version ($build)." \
       'App Store Connect processes it before it appears under TestFlight; Apple emails when it is ready.'
+    ;;
+  --ios-only-groups)
+    [[ $# == 1 ]] || usage
+    require_key
+    keep_groups_ios_only
     ;;
   --verify-export)
     [[ $# == 2 ]] || usage
