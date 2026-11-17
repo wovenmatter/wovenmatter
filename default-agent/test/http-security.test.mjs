@@ -82,6 +82,12 @@ test('Pi model globs retain matching semantics and reject amplification patterns
     assert.deepEqual(scope.diagnostics, []);
     assert.equal(minimatch('skills/nested/SKILL.md', 'skills/**/SKILL.md'), true);
     assert.equal(minimatch('skills/private/SKILL.md', 'skills/!(private)/**'), false);
+    // Range compression must preserve the union of expanded patterns inside
+    // repeating/negated extglobs, as used by model and skill selection.
+    assert.equal(minimatch('510', '*({1..100})'), false);
+    assert.equal(minimatch('55', '*({1..100})'), true);
+    assert.equal(minimatch('file-5.txt', 'file-!({1..100}).txt'), true);
+
     // Unbounded extglob recursion can exhaust the stack. Reject a pattern
     // before entering the recursive matcher, while retaining normal extglobs.
     assert.throws(() => minimatch('fixture', '?(a)'.repeat(257) + 'fixture'),
