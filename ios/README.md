@@ -75,13 +75,15 @@ and remaining hardware/provider checks.
 
 `scripts/prepare-ios-testflight.sh` builds, checks and uploads the Release app.
 It never signs in interactively, never creates certificates, accounts or app
-records, and sends nothing to Apple unless you pass `--upload`.
+records, and sends nothing to Apple unless you pass `--upload` or
+`--ios-only-groups`.
 
 ```sh
 scripts/prepare-ios-testflight.sh --plan                 # what is ready; builds nothing
 scripts/prepare-ios-testflight.sh --unsigned-build DIR   # compile and check Release, no signing
 scripts/prepare-ios-testflight.sh --archive DIR          # signed IPA, checked; uploads nothing
 scripts/prepare-ios-testflight.sh --upload DIR           # the same, then uploads it
+scripts/prepare-ios-testflight.sh --ios-only-groups      # TestFlight groups: iPhone and iPad only
 scripts/prepare-ios-testflight.sh --verify-export IPA    # check an exported IPA
 ```
 
@@ -89,6 +91,18 @@ scripts/prepare-ios-testflight.sh --verify-export IPA    # check an exported IPA
 keeps its Xcode logs (`build.log`, `archive.log`, `export.log`, `upload.log`)
 there. `--archive` and `--upload` stop before building if the Apple Distribution
 certificate is missing, and `--upload` also stops if the API key is missing.
+
+**iPhone and iPad only.** Apple offers iPhone apps on Apple silicon Macs and
+Apple Vision Pro unless told otherwise; Woven Matter is for iPhone and iPad
+only. TestFlight decides this per group, and new groups start with Macs and
+Vision Pro on. After every upload, and whenever you run `--ios-only-groups`, the
+script turns both off for every TestFlight group with the API key and lists each
+group. If that step fails after an upload, the build is uploaded; run
+`--ios-only-groups` to retry. The App Store has its own two checkboxes, which
+Apple's API does not expose: in App Store Connect, open the app → Distribution →
+Pricing and Availability and keep **iPhone and iPad Apps on Apple Silicon Macs**
+→ Make this app available, and **Apple Vision Pro** → Make this app available
+on Apple Vision Pro, unchecked.
 
 **Version and build number.** The version is `MARKETING_VERSION` in
 [project.yml](project.yml). You never set a build number: every
@@ -191,8 +205,8 @@ the script cannot do them.
    Team Keys. (The first time, the Account Holder must request access.) Click
    **+**, name it `Woven Matter TestFlight` and give it the **Admin** role. Admin
    lets Xcode create and update the App Store signing profile with the key, as
-   well as upload builds; a narrower role may be enough just to upload, but that
-   has not been tried. Download the `.p8` file; Apple allows this only once. Then,
+   well as upload builds and change TestFlight group settings; a narrower role
+   may be enough just to upload, but that has not been tried. Download the `.p8` file; Apple allows this only once. Then,
    with your key ID in place of `KEYID`:
 
    ```sh
@@ -234,8 +248,10 @@ the script cannot do them.
      --p8-file-path KEY.p8 --output-format normal
    ```
 
-   Apple then processes the build and emails you when it appears under
-   TestFlight in App Store Connect. Later uploads are just step 5 again.
+   It then turns off testing on Macs and Apple Vision Pro for every TestFlight
+   group (see "iPhone and iPad only" above). Apple processes the build and
+   emails you when it appears under TestFlight in App Store Connect. Later
+   uploads are just step 5 again.
 
 ### Internal testing
 
@@ -245,8 +261,12 @@ builds need no Apple review.
 1. In App Store Connect, open the app → TestFlight → Internal Testing → **+**,
    and create a group such as `Team`. Turn on automatic distribution so each new
    build reaches the group.
-2. Add yourself to the group.
-3. On the iPhone or iPad, install **TestFlight** from the App Store and sign in
+2. Run `scripts/prepare-ios-testflight.sh --ios-only-groups` so the new group
+   offers builds only on iPhone and iPad. (The next upload also does this; in
+   App Store Connect it is the group's settings tab → Test iPhone and iPad apps
+   on Apple silicon Macs, and the Apple Vision Pro setting beside it.)
+3. Add yourself to the group.
+4. On the iPhone or iPad, install **TestFlight** from the App Store and sign in
    with the same Apple Account. Open the invitation email, or open TestFlight
    directly, and install Woven Matter. It sits next to Woven Matter Dev.
 
@@ -278,7 +298,8 @@ builds of the same version may not need a full review.
      review. Tapping "Sign in to a model provider to use Quick Chat" in an
      empty chat opens the same Connections page.
 2. TestFlight → External Testing → **+**: create a group and add the build. It is
-   sent to Beta App Review.
+   sent to Beta App Review. Run `scripts/prepare-ios-testflight.sh
+   --ios-only-groups` so the group offers builds only on iPhone and iPad.
 3. After approval, add testers by email, or turn on the group's **public link**
    and share it. You can cap how many people may join through the link.
 
