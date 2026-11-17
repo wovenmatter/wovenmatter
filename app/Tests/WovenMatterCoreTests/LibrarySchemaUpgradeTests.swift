@@ -337,7 +337,17 @@ import WovenMatterCore
         'Codex','Codex',5,0,0,0,0,'exact','modelCall',1);
       """)
     if usageIndexFirst { _ = try UsageStore(databaseURL: upgraded.databaseURL) }
+    // A step that rewrites nothing never compacts the whole library.
+    final class Stages: @unchecked Sendable {
+      let lock = NSLock(); var values: [LibraryUpgradeProgress.Stage] = []
+      func add(_ value: LibraryUpgradeProgress?) { lock.withLock { if let value { values.append(value.stage) } } }
+      var all: [LibraryUpgradeProgress.Stage] { lock.withLock { values } }
+    }
+    let stages = Stages()
+    LibraryUpgradeMonitor.observe(upgraded.databaseURL) { stages.add($0) }
+    defer { LibraryUpgradeMonitor.observe(upgraded.databaseURL, nil) }
     let library = try await WorkspaceDatabase(url: upgraded.databaseURL)
+    #expect(!stages.all.isEmpty && !stages.all.contains(.compacting))
     let usage = try UsageStore(databaseURL: upgraded.databaseURL)
     let expected = try await schema(current), actual = try await schema(library)
     #expect(actual.keys.sorted() == expected.keys.sorted())

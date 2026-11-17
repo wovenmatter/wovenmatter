@@ -116,7 +116,8 @@ extension WorkspaceDatabaseConnection {
   /// Runs each step an existing library at `version` still lacks. A file
   /// with no library yet (new, or holding only the usage index) has
   /// nothing to convert: the regular creation makes it current and stamps
-  /// it. Returns whether any step ran.
+  /// it. Returns whether a step that rewrites data ran: only that leaves
+  /// enough free space behind to be worth a VACUUM.
   func upgradeLibraryUnlocked(from version: Int, file: URL) throws -> Bool {
     let pending = Self.librarySchemaSteps.filter { $0.version > version }
     guard !pending.isEmpty, try historyRowsUnlocked("""
@@ -127,7 +128,7 @@ extension WorkspaceDatabaseConnection {
     upgradeReporter?.reach(.converting, 0, next: 0.02)
     for step in pending { try step.apply(self) }
     upgradeReporter?.reach(.converting, 0.30, next: 0.35, after: "schema steps")
-    return true
+    return pending.contains(where: \.rewritesData)
   }
 
   /// A step's transaction: foreign keys off while tables are rebuilt, the
