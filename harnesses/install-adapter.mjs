@@ -1,13 +1,13 @@
-// Install an ACP adapter as one immutable npm graph in Woven Matter's folder. The adapter
-// drives the person's own native CLI (CODEX_PATH / CLAUDE_CODE_EXECUTABLE), never a copy
-// bundled inside its package, so no engine is selected or checked here. That bundled copy
-// arrives only as npm optional platform packages (@openai/codex-<platform>,
+// Install an ACP adapter exactly as its release publishes it, as one npm graph in its own
+// generation folder in Woven Matter's folder. The adapter drives the person's own native CLI
+// (CODEX_PATH / CLAUDE_CODE_EXECUTABLE), never a copy bundled inside its package. That bundled
+// copy arrives only as npm optional platform packages (@openai/codex-<platform>,
 // @anthropic-ai/claude-agent-sdk-<platform>), each a full CLI build, so they are never installed.
+// Once the new generation is verified and linked, the generation it replaced is deleted.
 import { spawn } from 'node:child_process';
-import { existsSync, realpathSync } from 'node:fs';
-import { createRequire } from 'node:module';
+import { realpathSync } from 'node:fs';
 import { mkdir, mkdtemp, readFile, writeFile, rm, symlink, rename, realpath } from 'node:fs/promises';
-import { resolve, join } from 'node:path';
+import { resolve, join, relative, isAbsolute, sep } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 
@@ -67,38 +67,34 @@ export async function verifyAdapter(executable, adapterVersion, environment) {
   });
 }
 
-/** `cli` is the native CLI the adapter will drive; older callers may still send `engineVersion`, which is ignored. */
-export async function installAdapter({ prefix, adapter, adapterVersion, protocolSDKVersion, npm, cli }) {
+/** The `Installations/<generation>` folder `link` resolves into, if it resolves into one. */
+async function linkedGeneration(prefix, link) {
+  const installations = await realpath(join(prefix, 'Installations'));
+  let target;
+  try { target = await realpath(link); } catch { return null; }
+  const path = relative(installations, target);
+  if (!path || path.startsWith('..') || isAbsolute(path)) return null;
+  return join(installations, path.split(sep)[0]);
+}
+
+/** `cli` is the native CLI the adapter will drive. */
+export async function installAdapter({ prefix, adapter, adapterVersion, npm, cli }) {
   const selection = adapters[adapter];
   if (!selection || !exact(adapterVersion) || !Array.isArray(npm) || !npm.length || npm.some(x => typeof x !== 'string')) throw new Error('Invalid adapter selection.');
   // Without the native CLI an adapter would fall back to the copy bundled inside it.
   if (typeof cli !== 'string' || !cli.startsWith('/')) throw new Error('Adapter installation requires the native CLI it drives.');
-  if (protocolSDKVersion !== undefined && !exact(protocolSDKVersion)) throw new Error('Invalid ACP SDK selection.');
   prefix = resolve(prefix);
   await mkdir(join(prefix, 'Installations'), { recursive: true, mode: 0o700 });
   const generation = await realpath(await mkdtemp(join(prefix, 'Installations', 'adapter-')));
   const temporary = join(prefix, 'bin', '.' + selection.command + '-' + randomUUID());
   let promoted = false;
   try {
-    const dependencies = { [adapter]: adapterVersion };
-    const overrides = {};
-    if (protocolSDKVersion) {
-      dependencies['@agentclientprotocol/sdk'] = protocolSDKVersion;
-      overrides['@agentclientprotocol/sdk'] = '$@agentclientprotocol/sdk';
-    }
     await writeFile(join(generation, 'package.json'), JSON.stringify({ private: true,
-      dependencies, ...(Object.keys(overrides).length ? { overrides: { [adapter]: overrides } } : {}),
-    }, null, 2) + '\n', { mode: 0o600 });
+      dependencies: { [adapter]: adapterVersion } }, null, 2) + '\n', { mode: 0o600 });
     await run(npm[0], [...npm.slice(1), 'install', '--prefix', generation, '--omit=dev', '--omit=optional', '--ignore-scripts', '--no-audit', '--no-fund'], { cwd: generation });
     const modules = join(generation, 'node_modules');
     const adapterManifest = join(modules, adapter, 'package.json');
     if ((await object(adapterManifest)).version !== adapterVersion) throw new Error('Installed adapter graph differs from its selection.');
-    if (protocolSDKVersion) {
-      const name = '@agentclientprotocol/sdk';
-      const selected = createRequire(adapterManifest).resolve.paths(name).map(path => join(path, name, 'package.json')).find(existsSync);
-      if (!selected || await realpath(selected) !== await realpath(join(modules, name, 'package.json'))
-        || (await object(selected)).version !== protocolSDKVersion) throw new Error('Adapter resolves a different ACP SDK graph.');
-    }
     // The provider-free probe inherits no credentials or user configuration; it is pointed
     // only at the native CLI the adapter will drive. Only initialize is sent, never a prompt.
     const probeHome = join(generation, 'verification-home');
@@ -111,13 +107,17 @@ export async function installAdapter({ prefix, adapter, adapterVersion, protocol
     env[selection.cliVariable] = cli;
     const executable = join(modules, '.bin', selection.command);
     await verifyAdapter(executable, adapterVersion, env);
-    await writeFile(join(generation, 'verification.json'), JSON.stringify({ adapter, adapterVersion, cli, protocolSDKVersion, protocolVersion: 1 }) + '\n', { mode: 0o600 });
+    await writeFile(join(generation, 'verification.json'), JSON.stringify({ adapter, adapterVersion, cli, protocolVersion: 1 }) + '\n', { mode: 0o600 });
     await rm(probeHome, { recursive: true, force: true });
     await mkdir(join(prefix, 'bin'), { recursive: true, mode: 0o700 });
+    const link = join(prefix, 'bin', selection.command);
+    const replaced = await linkedGeneration(prefix, link);
     await symlink(executable, temporary);
-    await rename(temporary, join(prefix, 'bin', selection.command));
+    await rename(temporary, link);
     promoted = true;
-    return join(prefix, 'bin', selection.command);
+    // The copy this one replaced goes now, even if a running chat still uses it.
+    if (replaced && replaced !== generation) await rm(replaced, { recursive: true, force: true }).catch(() => {});
+    return link;
   } finally {
     await rm(temporary, { force: true });
     if (!promoted) await rm(generation, { recursive: true, force: true });

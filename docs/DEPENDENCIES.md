@@ -344,46 +344,42 @@ stale npm dist-tag cannot hide a newer stable version. OpenCode and Executor ret
 the documented v2 API boundary; maintenance must review a newer stable API major and
 implement its migration.
 
-`harnesses/catalog.json` records tested connector and CLI minimums separately:
-Codex ACP 2.7.0 with Codex 0.169.0, and Claude ACP 0.107.3 with the Claude Agent SDK
-0.3.326 it pins (native Claude Code 2.1.326). The adapters drive the native Codex and Claude CLIs
-(`CODEX_PATH`, `CLAUDE_CODE_EXECUTABLE`); a native Codex older than the minimum reads
-as needing its update. The CLI copy npm bundles inside each adapter package is never
-selected, checked or used, so `harnesses/install-adapter.mjs` installs the adapter as
-published, with no engine override and without npm optional packages: those carry only
-the adapters' bundled platform CLI builds (`@openai/codex-<platform>`,
-`@anthropic-ai/claude-agent-sdk-<platform>`), and an install requires the native CLI's
-path. The native Claude CLI has no ACP mode: Claude ACP is
-an ACP server built on the Claude Agent SDK, whose `query()` starts the native CLI and
-talks to it over stdio. That SDK is the adapter's own transport, pinned by its release,
-so it moves only with an adapter update and is held to the catalog minimum rather than
-compared with npm or overridden. The Claude Agent SDK is otherwise a direct dependency
-only of the Built-in agent and bots. Transcript-write loss invalidates the native resume
-marker and refuses tool dispatch/continuation commits; config-only write loss leaves a
-valid response intact. Provider-free persistence fixtures verify canonical replay
-after recovery. The catalog's independent ACP SDK floor is 2.7.0: Mac and native
-Linux/container updates resolve its newest nondeprecated stable publication and scope
-an npm override for it to the connector. This core-function exception keeps the
-protocol library current; it does not modify upstream manifests or copy credentials.
-SDK-only updates appear in inventory even when connector and CLI are current. The 2.7
-SDK retains stable v1; its v2 changes remain experimental and do not change Woven
-Matter's wire API.
+`harnesses/catalog.json` sets no minimum versions for connectors, CLIs or SDKs.
+A connector or CLI that is present and runs counts as installed, and an update is
+available when npm (for a connector) or the vendor's channel (for a CLI) has a newer
+version than the installed one. Install and update always take the latest. The
+adapters drive the native Codex and Claude CLIs (`CODEX_PATH`,
+`CLAUDE_CODE_EXECUTABLE`). The CLI copy npm bundles inside each adapter package is
+never selected, checked or used, so `harnesses/install-adapter.mjs` installs the
+adapter exactly as published, with no version overrides and without npm optional
+packages: those carry only the adapters' bundled platform CLI builds
+(`@openai/codex-<platform>`, `@anthropic-ai/claude-agent-sdk-<platform>`), and an
+install requires the native CLI's path. The native Claude CLI has no ACP mode:
+Claude ACP is an ACP server built on the Claude Agent SDK, whose `query()` starts the
+native CLI and talks to it over stdio. The libraries inside a connector, including
+its ACP SDK and Claude ACP's Claude Agent SDK, are the connector's own: they move
+only with a connector update and are not listed or tracked separately. The Claude
+Agent SDK is otherwise a direct dependency only of the Built-in agent and bots.
+Transcript-write loss invalidates the native resume marker and refuses tool
+dispatch/continuation commits; config-only write loss leaves a valid response
+intact. Provider-free persistence fixtures verify canonical replay after recovery.
 
-Each explicit installation/update builds an immutable generation, retains its
-npm lockfile and integrity records, verifies the connector and ACP SDK versions, and
-requires an actual provider-free ACP v1 initialize response, with the adapter pointed
-at the native CLI, before atomically promoting the executable link. Verification uses
-an empty, private configuration with no inherited credentials. Failed candidates are
-removed; existing generations stay intact for running sessions. The Mac and remote
-installers use the same implementation. System-owned remote installations remain
-outside Woven's update ownership.
+Each connector installation or update builds a new generation in
+`Installations/<generation>`, retains its npm lockfile and integrity records,
+verifies the installed connector version, and requires an actual provider-free ACP
+v1 initialize response, with the adapter pointed at the native CLI, before
+atomically repointing the executable link. Verification uses an empty, private
+configuration with no inherited credentials. Once the link moves, the generation it
+pointed to before is deleted at once, even if a running chat still uses it. A failed
+candidate is removed and leaves the working generation and link untouched. The Mac
+and remote installers use the same implementation. System-owned remote
+installations remain outside Woven's update ownership.
 
-Maintenance reviews both upstream connector requirements and current engine/CLI
-releases, updates catalog minimums, and validates the actual selected pairs plus
-host-side session/permission/cancellation interfaces with provider-free fixtures.
-This does not establish authenticated provider acceptance on every platform.
-Both current connectors still offer experimental ACP v2; Woven negotiates stable
-v1 until the stable protocol and implemented session APIs migrate together.
+Maintenance validates the current connector and CLI releases against host-side
+session/permission/cancellation interfaces with provider-free fixtures. This does
+not establish authenticated provider acceptance on every platform. Both current
+connectors still offer experimental ACP v2; Woven negotiates stable v1 until the
+stable protocol and implemented session APIs migrate together.
 
 Updates start only from Settings or explicit workspace actions; there is no
 background updater.

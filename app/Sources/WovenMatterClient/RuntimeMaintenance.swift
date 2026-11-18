@@ -1,8 +1,8 @@
 import Foundation
 import WovenMatterCore
 
-/// Inventory follows the executable selected for launch, including nested SDKs.
-/// A standalone CLI version is never used as the adapter's engine version.
+/// Inventory follows the executable selected for launch: the connector (or the CLI itself,
+/// for a harness without one) and, beside a connector, the native CLI it drives.
 public struct RuntimeComponent: Codable, Equatable, Sendable {
     public let name: String
     public let executable: URL?
@@ -33,7 +33,7 @@ public struct RuntimeInventory: Codable, Equatable, Sendable {
                 + (component.outdated ? " → \(component.latest!)" : "")
         }.joined(separator: " · ")
     }
-    public var latestUnavailable: Bool { components.contains { $0.required && (!$0.name.hasPrefix("Bundled ") || $0.package != nil) && $0.latest == nil } }
+    public var latestUnavailable: Bool { components.contains { $0.required && $0.latest == nil } }
 }
 
 public enum RuntimeMaintenance {
@@ -61,11 +61,8 @@ public enum RuntimeMaintenance {
         let package = definition.adapterPackage ?? npmPackage(kind)
         let installed = executable.flatMap { probe($0) }.flatMap(normalizeVersion)
         let latest = checkLatest ? await latestVersion(kind: kind, package: definition.adapterPackage, fetch: fetch) : nil
-        let minimumSatisfied = definition.minimumAdapterVersion.map { minimum in
-            installed.map { !version($0, precedes: minimum) } ?? false
-        } ?? true
         components.append(RuntimeComponent(name: definition.commandName, executable: executable,
-            installed: installed, latest: latest, package: package, required: true, present: executable != nil, verified: installed != nil && minimumSatisfied && (kind != .opencode || installed.map(OpenCodeConnection.supportsVersion) == true)))
+            installed: installed, latest: latest, package: package, required: true, present: executable != nil, verified: installed != nil && (kind != .opencode || installed.map(OpenCodeConnection.supportsVersion) == true)))
         if kind == .opencode {
             // Registration is a declaration, not proof that a service is live.
             // Enable/connect still verifies authenticated health and process identity.
@@ -74,43 +71,16 @@ public enum RuntimeMaintenance {
                 installed: registered?.version.flatMap(normalizeVersion), latest: nil, package: nil,
                 required: false, present: registered != nil))
         }
-        if let adapter = definition.adapterPackage {
-            let root = executable.flatMap { packageRoot(executable: $0, name: adapter) }
-            // The adapter drives the person's own CLI (CODEX_PATH / CLAUDE_CODE_EXECUTABLE), so
-            // a copy of the CLI bundled inside it isn't reported. Claude's adapter still runs
-            // on the Claude Agent SDK library its release pins; updating the adapter moves it.
-            if kind == .claudeCode {
-                let dependency = "@anthropic-ai/claude-agent-sdk"
-                let bundled = root.flatMap { dependencyRoot(from: $0, name: dependency) }
-                let version = bundled.flatMap { packageVersion(at: $0) }
-                let supported = version.map { installed in
-                    definition.minimumEngineVersion.map { !Self.version(installed, precedes: $0) } ?? true
-                } ?? false
-                components.append(RuntimeComponent(name: "Bundled \(dependency)", executable: nil,
-                    installed: version, latest: nil, package: nil, required: true, present: version != nil, verified: supported))
-            }
-            if let minimum = definition.minimumProtocolSDKVersion {
-                let sdk = root.flatMap { dependencyRoot(from: $0, name: "@agentclientprotocol/sdk") }
-                let installed = sdk.flatMap { packageVersion(at: $0) }
-                components.append(RuntimeComponent(name: "Bundled ACP SDK", executable: nil,
-                    installed: installed, latest: checkLatest ? try? await registryVersion("@agentclientprotocol/sdk", executableRequired: false, fetch: fetch) : minimum,
-                    package: "@agentclientprotocol/sdk", required: true, present: sdk != nil, verified: installed != nil))
-            }
-            if let cliName = definition.underlyingCLIName {
-                let cli = resolver.executable(named: cliName)
-                // Compare with the channel the vendor's own update command follows, which can
-                // trail npm by a release or two.
-                let cliLatest: String? = checkLatest ? await vendorChannelVersion(kind, fetch: fetch) : nil
-                let cliVersion = cli.flatMap(probe).flatMap(normalizeVersion)
-                // codex-acp speaks Codex's app-server protocol, so the CLI must be at least the
-                // engine version the adapter was released against.
-                let cliSupported = kind != .codex || definition.minimumEngineVersion.map { minimum in
-                    cliVersion.map { !version($0, precedes: minimum) } ?? false
-                } ?? true
-                components.append(RuntimeComponent(name: cliComponentName(cliName), executable: cli,
-                    installed: cliVersion, latest: cliLatest ?? (cliSupported ? nil : definition.minimumEngineVersion),
-                    package: nil, required: true, present: cli != nil, verified: cliVersion != nil && cliSupported))
-            }
+        if definition.adapterPackage != nil, let cliName = definition.underlyingCLIName {
+            // The connector drives the person's own CLI (CODEX_PATH / CLAUDE_CODE_EXECUTABLE).
+            // Its latest release is the channel the vendor's own update command follows,
+            // which can trail npm by a release or two.
+            let cli = resolver.executable(named: cliName)
+            let cliLatest: String? = checkLatest ? await vendorChannelVersion(kind, fetch: fetch) : nil
+            let cliVersion = cli.flatMap(probe).flatMap(normalizeVersion)
+            components.append(RuntimeComponent(name: cliComponentName(cliName), executable: cli,
+                installed: cliVersion, latest: cliLatest, package: nil, required: true,
+                present: cli != nil, verified: cliVersion != nil))
         }
         let limitation: String? = switch kind {
         case .codex: "Chat runs your Codex CLI through the codex-acp adapter."
@@ -245,34 +215,6 @@ public enum RuntimeMaintenance {
         if aNumbers.first ?? 0 > 2000 { return false }
         return String(aParts[1]).compare(String(bParts[1]), options: .numeric) == .orderedAscending
     }
-
-    static func packageRoot(executable: URL, name: String) -> URL? {
-        var directory = executable.resolvingSymlinksInPath().deletingLastPathComponent()
-        for _ in 0..<12 {
-            if packageObject(at: directory)?["name"] as? String == name { return directory }
-            let parent = directory.deletingLastPathComponent()
-            if parent == directory { break }; directory = parent
-        }
-        return nil
-    }
-
-    static func dependencyRoot(from root: URL, name: String) -> URL? {
-        var directory = root
-        for _ in 0..<12 {
-            let candidate = directory.appending(path: "node_modules/" + name)
-            if packageObject(at: candidate)?["name"] as? String == name { return candidate }
-            let parent = directory.deletingLastPathComponent()
-            if parent == directory { break }; directory = parent
-        }
-        return nil
-    }
-
-    static func packageObject(at root: URL) -> [String: Any]? {
-        guard let data = try? Data(contentsOf: root.appending(path: "package.json")), data.count < 2 * 1_024 * 1_024 else { return nil }
-        return (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
-    }
-
-    static func packageVersion(at root: URL) -> String? { packageObject(at: root)?["version"] as? String }
 
     /// Diagnostic output is allowlisted: versions and error category, never raw
     /// installer output, environment, credential paths, URLs or account details.
