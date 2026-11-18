@@ -39,6 +39,8 @@ struct SettingsConnectionsView: View {
         .disclosureGroupStyle(SettingsDisclosureGroupStyle())
         .task { if !embedded { agent.changeScope(initialScope) }; agent.loadAccounts() }
         .onDisappear { if !embedded { agent.cancel() } }
+        // A key, label or answer typed for one device is never saved to another.
+        .onChange(of: agent.device) { _, _ in keyDrafts = [:]; keyLabels = [:]; expandedKeyFolds = [:]; answer = "" }
         .onChange(of: agent.signInOutcome) { _, outcome in
             guard focus == .providers, let outcome, outcome.error == nil,
                   outcome.notice?.hasPrefix("Connected.") == true else { return }

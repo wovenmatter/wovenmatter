@@ -149,6 +149,9 @@ final class DefaultAgentSettingsModel {
     private var backendCommandError: String?
 
     private func forward(_ command: BackendConnectionsCommand) -> Bool {
+        var command = command
+        // An account command names the device it was issued for.
+        if command.device == nil, !["device", "devices", "scope"].contains(command.action) { command.device = device }
         guard let request = transport else {
             if LocalExecutionRole.current == .frontend {
                 error = "The background service is not connected."
@@ -256,7 +259,7 @@ final class DefaultAgentSettingsModel {
             return
         }
         if id == device && (SignInDevice.kind(of: id) != .mac || peerRequest != nil) { loadAccounts(); return }
-        peerRequest = nil
+        leavePeer()
         cancel()
         device = id
         accounts = [:]; sharedAccounts = [:]; providers = []; signInOutcome = nil; notice = nil; error = nil
@@ -266,8 +269,8 @@ final class DefaultAgentSettingsModel {
                 error = "That Mac isn't reachable from this Mac right now."; return
             }
             peerRequest = peerTransport(memberID)
-            // That Mac answers with its own settings and accounts.
-            _ = forward(.init(action: "scope", value: "local"))
+            // That Mac answers with its own settings (its device scope) and accounts.
+            _ = forward(.init(action: "scope", value: "global"))
         case .linux:
             if let workspace = SignInDevice.linuxWorkspace(of: id) { scope = workspace.uuidString.lowercased() }
             settings = DefaultAgentSupport.settings
@@ -290,6 +293,17 @@ final class DefaultAgentSettingsModel {
         return forward(command)
     }
     var forwardsToPeer: Bool { backendRequest == nil && peerRequest != nil }
+    /// Stops showing another Mac. A sign-in still running there is cancelled
+    /// there first: dropping the connection alone would leave its helper waiting.
+    private func leavePeer() {
+        guard let peer = peerRequest else { return }
+        if busy || signInProvider != nil || prompt != nil, let body = try? JSONEncoder().encode(BackendConnectionsCommand(action: "cancel")) {
+            Task { _ = try? await peer("connections.command", body) }
+        }
+        peerRequest = nil
+        backendGeneration = UUID()
+        backendPollTask?.cancel()
+    }
     /// Runs a window's command on the selected Mac and waits for its answer.
     func forwardToPeer(_ command: BackendConnectionsCommand) async throws {
         _ = forward(command)
@@ -302,18 +316,21 @@ final class DefaultAgentSettingsModel {
     /// False when the selected device is not a Linux workspace.
     func linuxServerCommand(_ command: BackendConnectionsCommand) async throws -> Bool {
         guard backendRequest == nil, let workspace = linuxTarget else { return false }
-        let routes = try await linuxRoutes(workspace)
         let result: DeviceSignIns
-        switch command.action {
-        case "connectServer":
-            let key = (command.value ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !key.isEmpty else { throw DefaultAgentError.message("Enter the server API key.") }
-            result = try await routes.changeSignIns(.init(action: "connectServer", key: key, url: command.label ?? "", server: command.server))
-        case "removeServer":
-            guard let server = command.server else { return true }
-            result = try await routes.changeSignIns(.init(action: "removeServer", server: server))
-        default: result = try await routes.signIns()
-        }
+        do {
+            let routes = try await linuxRoutes(workspace)
+            switch command.action {
+            case "connectServer":
+                let key = (command.value ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !key.isEmpty else { throw DefaultAgentError.message("Enter the server API key.") }
+                result = try await routes.changeSignIns(.init(action: "connectServer", key: key, url: command.label ?? "", server: command.server))
+            case "removeServer":
+                guard let server = command.server else { return true }
+                result = try await routes.changeSignIns(.init(action: "removeServer", server: server))
+            default: result = try await routes.signIns()
+            }
+        } catch let error as DefaultAgentError { throw error }
+        catch { throw DefaultAgentError.message(linuxMessage(error)) }
         guard linuxTarget == workspace else { return true }
         applyLinux(result)
         return true
@@ -324,6 +341,13 @@ final class DefaultAgentSettingsModel {
         await backendCommandTask?.value
     }
     private var linuxTarget: UUID? { SignInDevice.linuxWorkspace(of: device) }
+    /// A Linux host from before per-device sign-ins has no `v1/sign-ins`.
+    private func linuxMessage(_ error: any Error) -> String {
+        if let error = error as? LibraryAPIError, ["not_found", "http_404"].contains(error.code), let name = selectedDevice?.name {
+            return "Update Woven Matter on \(name) to manage its sign-ins from here."
+        }
+        return error.localizedDescription
+    }
     private func linuxRoutes(_ workspace: UUID) async throws -> any MemberExecutionRoutes {
         guard let memberRoutes else { throw DefaultAgentError.message("Reconnect this workspace to change its sign-ins.") }
         return try await memberRoutes(workspace)
@@ -342,7 +366,7 @@ final class DefaultAgentSettingsModel {
             if let provider = change.provider { invalidateConnection(provider) }
             return true
         } catch {
-            if generation == runID { self.error = error.localizedDescription }
+            if generation == runID { self.error = linuxMessage(error) }
             return false
         }
     }
@@ -432,6 +456,10 @@ final class DefaultAgentSettingsModel {
     var preparePayload: (@MainActor (String) async throws -> DefaultAgentPayload)?
     /// Owns this Mac's renewal and its one sign-in at a time.
     var coordinator = ProviderAccountCoordinator.shared
+    /// False for another Mac's sign-in here (`memberSignInModel`): it never holds
+    /// the coordinator's sign-in lease, so this Mac's own renewal and preparation
+    /// for Pi Durable and bots never wait on it.
+    var holdsSignInLease = true
     /// The settings helper this Mac runs (`main.mjs --control`).
     var helperLaunch: () -> LocalACPRuntimeLaunchConfiguration? = { DefaultAgentSupport.resolution().launchConfiguration }
 
@@ -564,7 +592,7 @@ final class DefaultAgentSettingsModel {
                 guard !Task.isCancelled, generation == runID, device == target else { return }
                 applyLinux(value)
             } catch is CancellationError { }
-            catch { if generation == runID, device == target { self.error = error.localizedDescription } }
+            catch { if generation == runID, device == target { self.error = linuxMessage(error) } }
             return
         }
         do {
@@ -661,6 +689,7 @@ final class DefaultAgentSettingsModel {
             refresh(remote: remote, login: provider, action: "logout")
             return
         }
+        guard ProviderConnectionID(rawValue: provider)?.isSubscription == true else { return }
         let runID = generation, accountScope = keyScope
         busy = true
         defer { if generation == runID { busy = false } }
@@ -739,11 +768,7 @@ final class DefaultAgentSettingsModel {
         // A chat-settings scope is this Mac's or a Linux workspace's, and so are the
         // sign-ins shown with it. Another Mac is only chosen with `selectDevice`.
         let scopeDevice = SignInDevice.id(forScope: scope)
-        if backendRequest == nil, peerRequest != nil {
-            peerRequest = nil
-            backendGeneration = UUID()
-            backendPollTask?.cancel()
-        }
+        if backendRequest == nil { leavePeer() }
         if device != scope && device != scopeDevice { localServers = [] }
         device = scopeDevice
         if transport != nil {
@@ -1100,7 +1125,7 @@ final class DefaultAgentSettingsModel {
                     if let preparePayload { prepared = try await preparePayload(scope) }
                     else { prepared = try await coordinator.prepare(scope) }
                 }
-                if login != nil, workspace == nil {
+                if login != nil, workspace == nil, holdsSignInLease {
                     let lease = try await coordinator.beginSignIn()
                     guard generation == runID, !Task.isCancelled else {
                         coordinator.endSignIn(lease)

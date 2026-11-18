@@ -3495,7 +3495,7 @@ final class ApplicationModel {
 
     var pendingDefaultAgentSettingsScope: String?
     /// Another Mac's view of this Mac's sign-ins, one per member (`memberSignIns`).
-    @ObservationIgnored var memberSignInModels: [String: DefaultAgentSettingsModel] = [:]
+    @ObservationIgnored var memberSignInSessions: [String: MemberSignInSession] = [:]
     var pendingDefaultAgentModelProvider: String?
     var pendingConnectionsScope: String?
     let connections = DefaultAgentSettingsModel()

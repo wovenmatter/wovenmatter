@@ -18,6 +18,76 @@ struct BackendConnectionsCommand: Codable {
     var configuration: DefaultAgentSettings? = nil
     var configurationBase: DefaultAgentSettings? = nil
     var server: LocalModelServer? = nil
+    /// The device the command was issued for (`DefaultAgentSettingsModel.device`).
+    /// The background server runs it only while that device is still selected.
+    var device: String? = nil
+}
+
+extension BackendConnectionsCommand {
+    private static let providers = Set(ProviderConnectionID.allCases.map(\.rawValue))
+    private static func isSubscription(_ id: String?) -> Bool { id.flatMap(ProviderConnectionID.init(rawValue:))?.isSubscription == true }
+    private static func isLocalServer(_ id: String) -> Bool {
+        id.hasPrefix("local-server-") && UUID(uuidString: String(id.dropFirst("local-server-".count))) != nil
+    }
+    private static func invalid() -> DefaultAgentError { .message("Choose a provider connection.") }
+
+    /// Every command names only real provider connections: a caller's provider
+    /// string never becomes another Keychain item.
+    func validated() throws -> Self {
+        if let provider {
+            let catalog = action == "catalog" && (provider.isEmpty || Self.isLocalServer(provider))
+            guard Self.providers.contains(provider) || catalog else { throw Self.invalid() }
+        }
+        switch action {
+        case "saveKey": guard let provider, !Self.isSubscription(provider) else { throw Self.invalid() }
+        case "select", "move", "remove": guard provider != nil else { throw Self.invalid() }
+        case "reconnect", "signOut": guard Self.isSubscription(provider) else { throw Self.invalid() }
+        case "refresh": guard provider == nil || Self.isSubscription(provider) else { throw Self.invalid() }
+        default: break
+        }
+        return self
+    }
+
+    /// What another Mac may ask of this Mac's own sign-ins
+    /// (`/v1/connections/command`): an explicit list of commands, each with only
+    /// the arguments it needs. Device selection, Keychain checks, other devices
+    /// (`remote`) and the helper's internal arguments are never accepted.
+    func forMember() throws -> Self {
+        var command = try validated()
+        let refused = DefaultAgentError.message("Only this Mac's own sign-ins can be changed here.")
+        guard remote == nil else { throw refused }
+        func short(_ value: String?, _ limit: Int) -> Bool { value.map { !$0.isEmpty && $0.count <= limit } ?? false }
+        switch action {
+        case "accounts", "localServers", "cancel", "claude":
+            guard provider == nil, value == nil else { throw refused }
+        case "scope":
+            // That Mac's own chat settings, as its own page shows them.
+            command.value = "global"
+        case "configuration":
+            guard configuration != nil else { throw refused }
+        case "saveKey":
+            guard short(value, 8_192), label.map({ $0.count <= 256 }) ?? true else { throw refused }
+        case "select", "remove", "reconnect":
+            guard short(value, 128) else { throw refused }
+        case "move":
+            guard short(value, 128), let offset, abs(offset) <= ProviderConnectionAccounts.limit else { throw refused }
+        case "signOut": break
+        case "respond":
+            guard short(value, 8_192) else { throw refused }
+        case "refresh":
+            guard value == nil, profile == nil, removingAccount == nil, reconnectingAccount == nil else { throw refused }
+        case "catalog":
+            guard value == nil || value == "refresh" else { throw refused }
+        case "connectServer":
+            guard short(label, 2_048), (value ?? "").count <= 8_192 else { throw refused }
+        case "removeServer":
+            guard server != nil else { throw refused }
+        default: throw refused
+        }
+        command.device = nil
+        command.profile = nil; command.removingAccount = nil; command.reconnectingAccount = nil
+        return command
+    }
 }
 
 // Deliberately excludes credentials, helper output buffers and process handles.
@@ -78,7 +148,17 @@ struct BackendConnectionsSnapshot: Codable, Equatable {
             return try JSONEncoder().encode(model.sdks.state(for: command.key))
         }
         if method == "connections.command" {
-            let c = try JSONDecoder().decode(BackendConnectionsCommand.self, from: payload)
+            let c = try JSONDecoder().decode(BackendConnectionsCommand.self, from: payload).validated()
+            // A window's account command runs on the device it was issued for. Another
+            // window may have chosen a different device since: refuse rather than
+            // change whichever device happens to be selected now.
+            if let issued = c.device, !["device", "devices", "scope"].contains(c.action), issued != model.device {
+                throw DefaultAgentError.message("The selected device changed. Try again.")
+            }
+            // Another Mac that could not be reached: never this Mac's sign-ins instead.
+            if SignInDevice.kind(of: model.device) == .mac, !model.forwardsToPeer, !["device", "devices", "scope"].contains(c.action) {
+                throw DefaultAgentError.message("That Mac isn't reachable from this Mac right now.")
+            }
             // Another Mac's sign-ins: that Mac runs every command but device selection.
             if model.forwardsToPeer, !["device", "devices", "scope"].contains(c.action) {
                 try await model.forwardToPeer(c)
@@ -98,13 +178,8 @@ struct BackendConnectionsSnapshot: Codable, Equatable {
                 }
             case "localServers": break
             case "connectServer":
-                let enteredKey = (c.value ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-                let existingServerID = c.server?.id
-                let savedKey = try await ProviderConnectionStore.shared.perform(invalidatesAccounts: false) {
-                    enteredKey.isEmpty ? try existingServerID.flatMap { try DefaultAgentSupport.key($0) } : enteredKey
-                }
-                guard let savedKey, !savedKey.isEmpty else { throw DefaultAgentError.message("Enter the server API key.") }
-                _ = try await LocalModelServerStore.connect(url: c.label ?? "", key: savedKey, replacing: c.server)
+                // A saved key is reused only for that saved server at its own URL.
+                _ = try await LocalModelServerStore.connect(url: c.label ?? "", key: c.value, replacing: c.server)
             case "removeServer":
                 if let server = c.server { try await LocalModelServerStore.remove(server) }
             case "configuration": if let value = c.configuration { model.applyConfiguration(value, base: c.configurationBase) }

@@ -182,13 +182,23 @@ extension ApplicationModel {
     /// never disturbs what this Mac's windows show. Only this device is reachable:
     /// no relaying to Linux hosts or further Macs.
     func memberSignIns(_ request: LibraryHTTPRequest, path: String, memberID: String) async -> LibraryHTTPResponse {
-        let model = memberSignInModels[memberID] ?? {
-            let value = DefaultAgentSettingsModel()
-            value.changeScope("local")
-            memberSignInModels[memberID] = value
+        let session = memberSignInSessions[memberID] ?? {
+            let value = MemberSignInSession(model: Self.memberSignInModel())
+            memberSignInSessions[memberID] = value
             return value
         }()
-        return await Self.memberSignIns(method: request.method, path: path, body: request.body, model: model)
+        session.touch()
+        return await Self.memberSignIns(method: request.method, path: path, body: request.body, model: session.model)
+    }
+
+    /// A member's own view of this Mac's sign-ins: this Mac's device scope and
+    /// chat settings (as its own page shows them), and a sign-in that never holds
+    /// this Mac's renewal lease, so Pi Durable and bots here keep renewing.
+    static func memberSignInModel() -> DefaultAgentSettingsModel {
+        let value = DefaultAgentSettingsModel()
+        value.holdsSignInLease = false
+        value.changeScope("global")
+        return value
     }
 
     static func memberSignIns(method requestMethod: String, path: String, body: Data, model: DefaultAgentSettingsModel) async -> LibraryHTTPResponse {
@@ -197,11 +207,9 @@ extension ApplicationModel {
             let method: String
             var payload = Data()
             if path == "/v1/connections/command" {
-                var command = try JSONDecoder().decode(BackendConnectionsCommand.self, from: body)
-                guard command.remote == nil, !["device", "devices", "checkKeychain"].contains(command.action) else {
-                    return .error("invalid_request", "Only this Mac's own sign-ins can be changed here.", status: 400)
-                }
-                if command.action == "scope" { command.value = "local" }
+                let command: BackendConnectionsCommand
+                do { command = try JSONDecoder().decode(BackendConnectionsCommand.self, from: body).forMember() }
+                catch { return .error("invalid_request", "Only this Mac's own sign-ins can be changed here.", status: 400) }
                 method = "connections.command"
                 payload = try JSONEncoder().encode(command)
             } else { method = "connections.snapshot" }
@@ -212,6 +220,36 @@ extension ApplicationModel {
             return try .json(snapshot)
         } catch {
             return .error("failed", error.localizedDescription, status: 400)
+        }
+    }
+}
+
+/// One Mac member's sign-in session here. The member polls while a sign-in runs;
+/// when it stops (it left the page, slept, went offline) the sign-in is cancelled
+/// here after `idleLimit`, so its helper never lingers.
+@MainActor final class MemberSignInSession {
+    let model: DefaultAgentSettingsModel
+    private let idleLimit: Duration
+    private let clock = ContinuousClock()
+    private var lastContact: ContinuousClock.Instant
+    private var watchdog: Task<Void, Never>?
+
+    init(model: DefaultAgentSettingsModel, idleLimit: Duration = .seconds(15)) {
+        self.model = model; self.idleLimit = idleLimit; lastContact = clock.now
+    }
+    deinit { watchdog?.cancel() }
+
+    func touch() {
+        lastContact = clock.now
+        guard watchdog == nil else { return }
+        let check = min(idleLimit, .seconds(5))
+        watchdog = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: check)
+                guard let self else { return }
+                guard self.model.busy || self.model.signInProvider != nil else { continue }
+                if self.clock.now - self.lastContact >= self.idleLimit { self.model.cancel() }
+            }
         }
     }
 }

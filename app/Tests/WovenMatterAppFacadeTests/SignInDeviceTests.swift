@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import Security
 import Testing
@@ -11,14 +12,20 @@ import WovenMatterClient
 final class SignInKeychainFixture: @unchecked Sendable {
     private let lock = NSLock()
     private var values: [String: Data] = [:]
+    private var readNames: [String] = []
     private func name(_ query: [String: Any]) -> String {
         "\(query[kSecAttrService as String] as? String ?? "")/\(query[kSecAttrAccount as String] as? String ?? "")"
     }
     var stored: [String: String] { lock.withLock { values.mapValues { String(decoding: $0, as: UTF8.self) } } }
+    /// Every item read, by account name.
+    var reads: [String] { lock.withLock { readNames } }
     var operations: KeychainOperations {
         KeychainOperations(
             copyMatching: { [self] query in
-                lock.withLock { values[name(query)].map { (errSecSuccess, $0 as CFData) } ?? (errSecItemNotFound, nil) }
+                lock.withLock {
+                    readNames.append(query[kSecAttrAccount as String] as? String ?? "")
+                    return values[name(query)].map { (errSecSuccess, $0 as CFData) } ?? (errSecItemNotFound, nil)
+                }
             },
             getInteractionAllowed: { (errSecSuccess, false) },
             setInteractionAllowed: { _ in errSecSuccess },
@@ -85,8 +92,12 @@ actor FakeLinuxSignInHost: MemberExecutionRoutes {
         for (provider, label) in subscriptions { accounts[provider] = [["id": "default", "label": label, "isSelected": true]] }
         return try JSONDecoder().decode(DeviceSignIns.self, from: JSONSerialization.data(withJSONObject: ["accounts": accounts, "servers": []]))
     }
-    func signIns() throws -> DeviceSignIns { try view() }
+    func signIns() throws -> DeviceSignIns {
+        if outdated { throw LibraryAPIError(code: "not_found", message: "not_found") }
+        return try view()
+    }
     func changeSignIns(_ change: DeviceSignInChange) throws -> DeviceSignIns {
+        if outdated { throw LibraryAPIError(code: "not_found", message: "not_found") }
         let provider = change.provider ?? ""
         switch change.action {
         case "saveKey": keys[provider, default: []].append((UUID().uuidString.lowercased(), change.label ?? "API key", change.key ?? ""))
@@ -124,6 +135,9 @@ actor FakeLinuxSignInHost: MemberExecutionRoutes {
         return try defaultAgentControl(id: id)
     }
     func cancelDefaultAgentControl(id: String) {}
+    /// A host that has not updated has no `v1/sign-ins`.
+    private(set) var outdated = false
+    func makeOutdated() { outdated = true }
     func uploadAttachment(_ data: Data, sha256: String, name: String, mimeType: String) throws -> LibraryAttachmentReference { throw LibraryAPIError(code: "unavailable", message: "") }
     func sessionOptions(providerID: String, workingDirectory: String?, model: String?) throws -> SessionSettings { throw LibraryAPIError(code: "unavailable", message: "") }
     func libraryFile(conversationID: String?, path: String) throws -> MemberLibraryFile { throw LibraryAPIError(code: "unavailable", message: "") }
@@ -164,9 +178,255 @@ private func deviceModel(_ keychain: SignInKeychainFixture, helper: FakeSettings
     return model
 }
 
+/// Another Mac's route to `peer`, as this Mac's background server reaches it.
+@MainActor
+private func peerRoute(_ peer: DefaultAgentSettingsModel, keychain: SignInKeychainFixture)
+    -> @MainActor @Sendable (String) -> (String, Data) async throws -> Data {
+    let operations = keychain.operations
+    return { _ in
+        { method, payload in
+            let path = method == "connections.command" ? "/v1/connections/command" : "/v1/connections/snapshot"
+            let response = await KeychainAccess.$testOperations.withValue(operations) {
+                await ApplicationModel.memberSignIns(method: "POST", path: path, body: method == "connections.command" ? payload : Data("{}".utf8), model: peer)
+            }
+            guard response.status == 200 else { throw DefaultAgentError.message(String(decoding: response.body, as: UTF8.self)) }
+            return response.body
+        }
+    }
+}
+
+@MainActor
+private func command(_ value: BackendConnectionsCommand, on model: DefaultAgentSettingsModel, keychain: SignInKeychainFixture) async -> LibraryHTTPResponse {
+    let body = (try? JSONEncoder().encode(value)) ?? Data()
+    return await KeychainAccess.$testOperations.withValue(keychain.operations) {
+        await ApplicationModel.memberSignIns(method: "POST", path: "/v1/connections/command", body: body, model: model)
+    }
+}
+
 @Suite("Per-device sign-ins", .serialized)
 @MainActor
 struct SignInDeviceTests {
+    /// The exploit: another Mac asks this Mac to "reconnect" a local model server
+    /// whose ID is this Mac's ChatGPT sign-in, at the attacker's URL, with no key,
+    /// so the saved key would be sent there as a bearer token.
+    @Test func anotherMacCannotMakeThisMacSendAStoredSecretAnywhere() async throws {
+        let keychain = SignInKeychainFixture(), helper = try FakeSettingsHelper(); defer { helper.remove() }
+        let peer = deviceModel(keychain, helper: helper)
+        var secret = DefaultAgentCredential(type: "oauth"); secret.access = "a"; secret.refresh = "device-refresh-token"; secret.expires = 9000000000000
+        try KeychainAccess.$testOperations.withValue(keychain.operations) {
+            _ = try ProviderConnectionAccounts.addOAuth(secret, provider: "openai-codex")
+            try DefaultAgentSupport.saveKey("vault-key", provider: "encryption-key", scope: "0f0e0d0c-0b0a-4908-8706-050403020100", notify: false)
+        }
+        let before = keychain.stored, readsBefore = keychain.reads.count
+        let attacker = LocalModelServer(id: "oauth.openai-codex", url: "https://attacker.example/v1", models: ["m"])
+        let attempts: [BackendConnectionsCommand] = [
+            .init(action: "connectServer", value: "", label: attacker.url, server: attacker),
+            .init(action: "connectServer", value: nil, label: attacker.url, server: .init(id: "encryption-key", url: attacker.url, models: [])),
+            .init(action: "removeServer", server: attacker),
+            .init(action: "saveKey", provider: "oauth.openai-codex", value: "overwrite"),
+            .init(action: "remove", provider: "encryption-key", value: "x"),
+            .init(action: "select", provider: "../global.oauth.openai-codex", value: "x"),
+            .init(action: "signOut", provider: "encryption-key"),
+            .init(action: "refresh", provider: "openai-codex", value: "probe-server"),
+            .init(action: "refresh", provider: "claude-subscription", profile: "../../elsewhere"),
+            .init(action: "checkKeychain"), .init(action: "devices"), .init(action: "device", value: "local"),
+            .init(action: "inherits", flag: true), .init(action: "unknown"),
+        ]
+        for attempt in attempts {
+            let response = await command(attempt, on: peer, keychain: keychain)
+            #expect(response.status == 400, "\(attempt.action) \(attempt.provider ?? "")")
+        }
+        // Nothing was read that a member can learn, sent anywhere, or changed.
+        #expect(!keychain.reads.dropFirst(readsBefore).contains("global.oauth.openai-codex"))
+        #expect(!keychain.reads.dropFirst(readsBefore).contains { $0.hasSuffix(".encryption-key") })
+        #expect(keychain.stored == before)
+        // The same request from this Mac's own window is refused at the root too.
+        for attempt in attempts.prefix(3) {
+            await #expect(throws: (any Error).self) {
+                _ = try await KeychainAccess.$testOperations.withValue(keychain.operations) {
+                    try await BackendConnectionsService.handle(method: "connections.command", payload: JSONEncoder().encode(attempt), model: peer)
+                }
+            }
+        }
+        #expect(!keychain.reads.dropFirst(readsBefore).contains("global.oauth.openai-codex"))
+        #expect(keychain.stored == before)
+    }
+
+    /// `/v1/connections/*` through this Mac's server authentication: Mac members only.
+    @Test func onlySignedMacMembersReachThisMacsSignIns() async throws {
+        let fixture = try await FacadeFixture(); defer { fixture.remove() }
+        let keychain = SignInKeychainFixture(), helper = try FakeSettingsHelper(); defer { helper.remove() }
+        let host = LibraryHostController(model: fixture.model, defaults: fixture.defaults, supportDirectory: fixture.directory, peerStorage: .memory())
+        let directory = try await host.peerSync.members()
+        try await directory.ensureSelf(name: "This Mac", endpoints: [])
+        let audience = directory.identity.deviceID
+        let mac = MemberIdentity(deviceID: UUID().uuidString.lowercased(), kind: .mac, key: .init())
+        let phone = MemberIdentity(deviceID: UUID().uuidString.lowercased(), kind: .ios, key: .init())
+        let linux = MemberIdentity(deviceID: UUID().uuidString.lowercased(), kind: .linux, key: .init())
+        let stranger = MemberIdentity(deviceID: UUID().uuidString.lowercased(), kind: .mac, key: .init())
+        for member in [mac, phone, linux] {
+            try await directory.add(deviceID: member.deviceID, kind: member.kind, name: member.kind.rawValue, publicKey: member.publicKey, endpoints: [])
+        }
+        let session = MemberSignInSession(model: deviceModel(keychain, helper: helper))
+        fixture.model.memberSignInSessions[mac.deviceID] = session
+        func call(_ signer: MemberIdentity?, _ path: String, body: Data = Data("{}".utf8)) async throws -> LibraryHTTPResponse {
+            var headers: [String: String] = [:]
+            if let signer { headers = try signer.signer.headers(method: "POST", target: path, body: body, audience: audience) }
+            let lowered = Dictionary(uniqueKeysWithValues: headers.map { ($0.key.lowercased(), $0.value) })
+            return await KeychainAccess.$testOperations.withValue(keychain.operations) {
+                await host.memberSignIns(.init(method: "POST", target: path, headers: lowered, body: body), path: path)
+            }
+        }
+        for path in ["/v1/connections/snapshot", "/v1/connections/command"] {
+            let body = path.hasSuffix("command") ? try JSONEncoder().encode(BackendConnectionsCommand(action: "accounts")) : Data("{}".utf8)
+            #expect(try await call(mac, path, body: body).status == 200, "\(path)")
+            for refused in [phone, linux, stranger] {
+                #expect(try await call(refused, path, body: body).status == 401, "\(refused.kind) \(path)")
+            }
+            #expect(try await call(nil, path, body: body).status == 401)
+        }
+        #expect(fixture.model.memberSignInSessions.keys.sorted() == [mac.deviceID])
+        // A member's view is this Mac's own device scope and chat settings, and its
+        // sign-in never holds this Mac's renewal lease.
+        let model = ApplicationModel.memberSignInModel()
+        #expect(model.scope == "global" && !model.inherits && !model.holdsSignInLease)
+        let scoped = await command(.init(action: "scope", value: "local"), on: session.model, keychain: keychain)
+        #expect(try JSONDecoder().decode(BackendConnectionsSnapshot.self, from: scoped.body).scope == "global")
+    }
+
+    /// Leaving another Mac while a sign-in runs there cancels it there.
+    @Test(arguments: ["selectDevice", "changeScope"])
+    func leavingAnotherMacMidSignInCancelsItThere(_ leave: String) async throws {
+        let here = SignInKeychainFixture(), there = SignInKeychainFixture()
+        let localHelper = try FakeSettingsHelper(), peerHelper = try FakeSettingsHelper()
+        defer { localHelper.remove(); peerHelper.remove() }
+        let peer = deviceModel(there, helper: peerHelper)
+        let model = deviceModel(here, helper: localHelper)
+        model.peerTransport = peerRoute(peer, keychain: there)
+        let memberID = UUID().uuidString.lowercased()
+        try await KeychainAccess.$testOperations.withValue(here.operations) {
+            model.selectDevice(SignInDevice.macID(memberID))
+            try await waitUntil(model) { !model.busy }
+            model.signIn("openai-codex")
+            try await waitUntil(model) { model.prompt != nil }
+            #expect(peer.busy && peer.signInProvider == "openai-codex")
+            if leave == "selectDevice" { model.selectDevice(SignInDevice.localID) } else { model.changeScope("global") }
+            try await waitUntil(peer) { !peer.busy && peer.signInProvider == nil }
+        }
+        #expect(!there.stored.keys.contains { $0.hasSuffix("oauth.openai-codex") })
+    }
+
+    /// A member that stops polling (it slept or went offline) has its sign-in cancelled here.
+    @Test func aMemberThatStopsPollingHasItsSignInCancelledHere() async throws {
+        let keychain = SignInKeychainFixture(), helper = try FakeSettingsHelper(); defer { helper.remove() }
+        let session = MemberSignInSession(model: deviceModel(keychain, helper: helper), idleLimit: .milliseconds(300))
+        let peer = session.model
+        try await KeychainAccess.$testOperations.withValue(keychain.operations) {
+            session.touch()
+            #expect(await command(.init(action: "refresh", provider: "openai-codex"), on: peer, keychain: keychain).status == 200)
+            try await waitUntil(peer) { peer.prompt != nil }
+            // While it polls, the sign-in waits for the user.
+            for _ in 0..<4 { session.touch(); try await Task.sleep(for: .milliseconds(150)) }
+            #expect(peer.busy)
+            try await waitUntil(peer, timeout: .seconds(10)) { !peer.busy && peer.signInProvider == nil }
+        }
+    }
+
+    /// A member's sign-in here never holds this Mac's lease: its own sign-ins and
+    /// renewal for Pi Durable and bots go on while one waits.
+    @Test func aMembersSignInNeverBlocksThisMacsOwnRenewal() async throws {
+        let keychain = SignInKeychainFixture(), helper = try FakeSettingsHelper(); defer { helper.remove() }
+        let peer = deviceModel(keychain, helper: helper)
+        peer.holdsSignInLease = false
+        try await KeychainAccess.$testOperations.withValue(keychain.operations) {
+            peer.signIn("openai-codex")
+            try await waitUntil(peer) { peer.prompt != nil }
+            let lease = try await peer.coordinator.beginSignIn()
+            peer.coordinator.endSignIn(lease)
+            peer.coordinator.invalidate()
+            _ = try await peer.coordinator.prepare("global")
+            peer.cancel()
+        }
+    }
+
+    /// A command a window issued for one device never lands on another.
+    @Test func aCommandIssuedForAnotherDeviceIsRefused() async throws {
+        let keychain = SignInKeychainFixture(), helper = try FakeSettingsHelper(); defer { helper.remove() }
+        let backend = deviceModel(keychain, helper: helper)
+        let stale = BackendConnectionsCommand(action: "saveKey", provider: "openai", value: "meant-for-another-mac", device: SignInDevice.macID("other"))
+        await #expect(throws: (any Error).self) {
+            _ = try await KeychainAccess.$testOperations.withValue(keychain.operations) {
+                try await BackendConnectionsService.handle(method: "connections.command", payload: JSONEncoder().encode(stale), model: backend)
+            }
+        }
+        #expect(keychain.stored.isEmpty)
+        // A window names the device each command is for.
+        let window = DefaultAgentSettingsModel()
+        var sent: [BackendConnectionsCommand] = []
+        window.backendRequest = { method, payload in
+            if method == "connections.command" { sent.append(try JSONDecoder().decode(BackendConnectionsCommand.self, from: payload)) }
+            return try await KeychainAccess.$testOperations.withValue(keychain.operations) {
+                try await BackendConnectionsService.handle(method: method, payload: payload, model: backend)
+            }
+        }
+        window.selectDevice(SignInDevice.macID("other"))
+        _ = await window.saveKeyConfirmed("typed-here", provider: "openai")
+        #expect(sent.last?.action == "saveKey" && sent.last?.device == SignInDevice.macID("other"))
+        #expect(keychain.stored.isEmpty)
+    }
+
+    /// A Linux host that has not updated answers with the existing update message.
+    @Test func anOutdatedLinuxHostAsksForAnUpdate() async throws {
+        let keychain = SignInKeychainFixture(), helper = try FakeSettingsHelper(); defer { helper.remove() }
+        let host = FakeLinuxSignInHost(), workspace = UUID()
+        await host.makeOutdated()
+        let model = deviceModel(keychain, helper: helper)
+        model.memberRoutes = { _ in host }
+        model.devices = [.init(id: SignInDevice.linuxID(workspace), kind: .linux, name: "workstation", runsBots: false, workspaceID: workspace.uuidString.lowercased())]
+        try await KeychainAccess.$testOperations.withValue(keychain.operations) {
+            model.selectDevice(SignInDevice.linuxID(workspace))
+            try await waitUntil(model) { model.error != nil }
+            #expect(model.error == "Update Woven Matter on workstation to manage its sign-ins from here.")
+            #expect(!(await model.saveKeyConfirmed("k", provider: "openai")))
+            #expect(model.error == "Update Woven Matter on workstation to manage its sign-ins from here.")
+        }
+    }
+
+    /// A Linux host that has not updated keeps working exactly as before; an
+    /// updated one gets chat settings alone and, once nothing waits for this
+    /// Mac's key there, this Mac's copies for it are removed.
+    @Test func linuxHostsAreConfiguredForTheVaultTheyHave() async throws {
+        let scope = UUID().uuidString.lowercased()
+        defer { DefaultAgentSupport.markLegacyHost(scope, false) }
+        let settings = try DefaultAgentSupport.configurationPayload(workspace: scope)
+        var relayedPayload = DefaultAgentPayload(config: .init(), credentials: ["openai": .init(type: "api_key", key: "workspace-key")], workspace: scope)
+        relayedPayload.unlockKey = "vault-key"
+        let relayed = relayedPayload
+        let legacy: @Sendable (String) async throws -> DefaultAgentPayload = { _ in relayed }
+        let key: @Sendable (String) async throws -> String? = { _ in "vault-key" }
+        // Not updated: what it got before, and this Mac renews what it relays.
+        let old = try await DefaultAgentHostSync.payload(scope: scope, vault: .init(), settingsOnly: settings, legacy: legacy, vaultKey: key)
+        #expect(old.credentials["openai"]?.key == "workspace-key" && old.unlockKey == "vault-key")
+        #expect(DefaultAgentSupport.legacyHostScopes.contains(scope))
+        // Updated, with a vault sealed with this Mac's key waiting: settings and the key once.
+        let pending = try await DefaultAgentHostSync.payload(scope: scope, vault: .init(deviceVault: true, legacyVault: true), settingsOnly: settings, legacy: legacy, vaultKey: key)
+        #expect(pending.credentials.isEmpty && pending.credentialAccounts == nil && pending.unlockKey == "vault-key")
+        #expect(!DefaultAgentSupport.legacyHostScopes.contains(scope))
+        let current = try await DefaultAgentHostSync.payload(scope: scope, vault: .init(deviceVault: true, legacyVault: false), settingsOnly: settings, legacy: legacy, vaultKey: key)
+        #expect(current.credentials.isEmpty && current.unlockKey == nil)
+        // Copies are forgotten only once the host keeps its own vault with nothing waiting.
+        let forgotten = ForgottenScopes()
+        for (json, forgets) in [(#"{"saved":true,"revision":"r","epoch":"e"}"#, false),
+                                (#"{"saved":true,"revision":"r","epoch":"e","deviceVault":true,"legacyVault":true}"#, false),
+                                (#"{"saved":true,"revision":"r","epoch":"e","deviceVault":true,"legacyVault":false}"#, true)] {
+            let receipt = try JSONDecoder().decode(DefaultAgentSyncReceipt.self, from: Data(json.utf8))
+            let before = await forgotten.scopes.count
+            await DefaultAgentHostSync.acknowledged(receipt, scope: scope) { await forgotten.add($0) }
+            #expect(await forgotten.scopes.count == before + (forgets ? 1 : 0), "\(json)")
+        }
+    }
+
+
     @Test func signingInOnThisMacKeepsTheCredentialInItsKeychain() async throws {
         let keychain = SignInKeychainFixture(), helper = try FakeSettingsHelper(); defer { helper.remove() }
         let model = deviceModel(keychain, helper: helper)
@@ -298,4 +558,9 @@ struct SignInDeviceTests {
         let choices = try LocalUsageService.deviceConnectionChoices([.codex, .openRouter], keychain: access)
         #expect(choices.map(\.label) == ["API key · Device"])
     }
+}
+
+private actor ForgottenScopes {
+    var scopes: [String] = []
+    func add(_ scope: String) { scopes.append(scope) }
 }
