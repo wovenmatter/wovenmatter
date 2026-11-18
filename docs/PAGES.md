@@ -100,8 +100,7 @@ is optional. **App** is the single creation option. **Live App** describes one
 connected to changing data; it runs inside Woven rather than requiring a public
 website. An App with no code yet shows **Ask an agent to build this**. It is built like any
 other edit: describe it in the chat, and the agent open there builds it in place,
-since open artifacts are shared when you send. Choose another agent in the chat to
-use that one instead.
+since open artifacts are shared when you send.
 
 Native data links deliver query results as `window.wovenMatterData`. A refresh
 updates the existing interface and dispatches `wovenmatterdatachange` once; it

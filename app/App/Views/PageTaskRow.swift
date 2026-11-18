@@ -374,9 +374,8 @@ extension BotTarget {
 struct AppBuildPrompt: View {
     var body: some View {
         VStack(spacing: 10) {
-            Image(systemName: "sparkles").font(.system(size: 22)).foregroundStyle(WovenPalette.mutedForeground)
             Text("Ask an agent to build this").font(.system(size: 17, weight: .semibold))
-            Text("Describe the app in the chat. The agent you have open builds it here and can connect it to live data. To use another agent, choose it in the chat.")
+            Text("Describe the app in the chat. The agent you have open builds it here and can connect it to live data.")
                 .font(.system(size: 12.5)).foregroundStyle(WovenPalette.mutedForeground)
                 .multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
         }
