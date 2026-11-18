@@ -27,7 +27,10 @@ def scopes(paths):
         # ios/Config/ holds the TestFlight Info.plist, privacy manifest and export options.
         scripts=infrastructure or changed(r'^(scripts/|remote/|app/Updater/|ios/Config/|'
                                          r'\.github/workflows/)'),
-        bots=infrastructure or changed(r'^bots/'),
+        # Bots load Pi Durable's SDK copy, chosen and verified by sdk-management.mjs,
+        # in the layout prune-bots-sdk.py leaves.
+        bots=infrastructure or changed(r'^(bots/|default-agent/(package\.json|package-lock\.json|'
+                                      r'src/sdk-management\.mjs)$|remote/host/prune-bots-sdk\.py$)'),
     )
 
 

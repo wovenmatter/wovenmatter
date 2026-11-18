@@ -92,7 +92,9 @@ run_remote_tests() {
 }
 
 run_bots_tests() {
-  # The bots runtime requires Node 26 (bots/package.json engines).
+  # The bots runtime requires Node 26 (bots/package.json engines). Bots run on Pi
+  # Durable's SDK copy, so their tests load default-agent's installed bundle.
+  scripts/with-pinned-node.sh npm ci --prefix default-agent --ignore-scripts --no-audit --no-fund
   scripts/with-pinned-node.sh npm ci --prefix bots --ignore-scripts --no-audit --no-fund
   scripts/with-pinned-node.sh npm test --prefix bots
   bots_tested=1
