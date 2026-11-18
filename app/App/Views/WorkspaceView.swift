@@ -839,7 +839,7 @@ struct WorkspaceView: View {
 
     /// Subscriptions & API Keys for the device a bot runs on: its bots use that device's sign-ins.
     private func botSignInDevice(_ machineID: String) -> String {
-        SignInDevicePicker.device(forBotMachine: machineID, machines: model.bots.machines, devices: model.connections.devices)
+        SignInDevicePicker.device(forBotMachine: machineID, machines: model.bots.machines, devices: model.signInConnections.devices)
     }
 
     /// Links from a bot open beside it, the same way a chat's browser tabs do.
@@ -1565,7 +1565,7 @@ struct WorkspaceSurface: View {
                 onOpenSettings: onOpenBotSettings,
                 onOpenConnections: {
                     model.pendingConnectionsScope = SignInDevicePicker.device(forBotMachine: target.machineID,
-                        machines: model.bots.machines, devices: model.connections.devices)
+                        machines: model.bots.machines, devices: model.signInConnections.devices)
                 },
                 onOpenProfiles: {
                     model.pendingBotProfilesMachine = target.machineID

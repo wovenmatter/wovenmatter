@@ -135,6 +135,7 @@ actor FakeLinuxSignInHost: MemberExecutionRoutes {
         return try defaultAgentControl(id: id)
     }
     func cancelDefaultAgentControl(id: String) {}
+    func defaultAgentVault() -> DefaultAgentHostVault { .init(deviceVault: true) }
     /// A host that has not updated has no `v1/sign-ins`.
     private(set) var outdated = false
     func makeOutdated() { outdated = true }
@@ -349,28 +350,118 @@ struct SignInDeviceTests {
         #expect(there.stored.contains { $0.key.hasSuffix("/global.oauth.openai-codex") })
     }
 
-    /// Once no window shows a sign-in on another Mac, this Mac's background server
-    /// stops following it and cancels it there.
+    /// Once no window shows a sign-in on another Mac for two minutes, this Mac's
+    /// background server stops following it and cancels it there; a window whose
+    /// timers are stretched while the user is in the browser is not "gone".
     @Test func noWindowLeftStopsFollowingASignInOnAnotherMac() async throws {
-        let limit = DefaultAgentSettingsModel.windowIdleLimit
-        DefaultAgentSettingsModel.windowIdleLimit = .milliseconds(400)
-        defer { DefaultAgentSettingsModel.windowIdleLimit = limit }
+        #expect(DefaultAgentSettingsModel.windowIdleLimit >= .seconds(120))
+        #expect(DefaultAgentSettingsModel.windowIdleLimit >= DefaultAgentSettingsModel.pollRetryLimit)
         let here = SignInKeychainFixture(), there = SignInKeychainFixture()
         let localHelper = try FakeSettingsHelper(), peerHelper = try FakeSettingsHelper()
         defer { localHelper.remove(); peerHelper.remove() }
         let peer = deviceModel(there, helper: peerHelper)
         let model = deviceModel(here, helper: localHelper)
         model.peerTransport = peerRoute(peer, keychain: there)
+        let start = ContinuousClock.now
+        var offset: Duration = .zero
+        model.now = { start + offset }
         try await KeychainAccess.$testOperations.withValue(here.operations) {
             model.selectDevice(SignInDevice.macID(UUID().uuidString.lowercased()))
             try await waitUntil(model) { !model.busy }
             model.noteWindowContact()
             model.signIn("openai-codex")
             try await waitUntil(model) { model.prompt != nil }
+            // A minute and a half without a window poll (the user is in the browser): still signing in.
+            offset = .seconds(90)
+            try await Task.sleep(for: .milliseconds(800))
+            #expect(peer.busy && model.busy && !model.windowsGone)
+            // A window asks again: the clock restarts.
+            model.noteWindowContact(); offset = .seconds(200)
+            try await Task.sleep(for: .milliseconds(500))
+            #expect(peer.busy && !model.windowsGone)
+            // Then no window at all for longer than the limit.
+            offset = .seconds(200) + DefaultAgentSettingsModel.windowIdleLimit + .seconds(1)
             try await waitUntil(peer, timeout: .seconds(10)) { !peer.busy && peer.signInProvider == nil }
             try await waitUntil(model, timeout: .seconds(10)) { !model.busy }
         }
         #expect(!there.stored.keys.contains { $0.hasSuffix("oauth.openai-codex") })
+    }
+
+    /// A window polling a sign-in holds an activity, so App Nap cannot stretch its polling.
+    @Test func aWindowPollingASignInHoldsAnActivity() async throws {
+        let keychain = SignInKeychainFixture(), helper = try FakeSettingsHelper(); defer { helper.remove() }
+        let backend = deviceModel(keychain, helper: helper)
+        let window = DefaultAgentSettingsModel()
+        window.backendRequest = { method, payload in
+            try await KeychainAccess.$testOperations.withValue(keychain.operations) {
+                try await BackendConnectionsService.handle(method: method, payload: payload, model: backend)
+            }
+        }
+        try await KeychainAccess.$testOperations.withValue(keychain.operations) {
+            window.signIn("openai-codex")
+            try await waitUntil(window) { window.prompt != nil }
+            #expect(window.busy && window.holdsPollingActivity)
+            window.cancel()
+            try await waitUntil(window) { !window.busy && !window.holdsPollingActivity }
+        }
+        // The background server's own model holds none.
+        #expect(!backend.holdsPollingActivity)
+    }
+
+    /// The device chosen on Subscriptions & API Keys has its own model, window and
+    /// background server alike: the setup window, Pi Durable pages, chats and task
+    /// defaults read and write this Mac's own model, never see that Mac's values,
+    /// and opening one never drops that Mac or cancels its sign-in.
+    @Test func otherViewsNeverSeeOrDisturbAnotherMacChosenForSigningIn() async throws {
+        let fixture = try await FacadeFixture(); defer { fixture.remove() }
+        let backend = fixture.model
+        let here = SignInKeychainFixture(), there = SignInKeychainFixture()
+        let localHelper = try FakeSettingsHelper(), peerHelper = try FakeSettingsHelper()
+        defer { localHelper.remove(); peerHelper.remove() }
+        let peer = deviceModel(there, helper: peerHelper)
+        let route = peerRoute(peer, keychain: there)
+        backend.signInConnections.peerTransport = { member in
+            let send = route(member)
+            return { method, payload in
+                var snapshot = try JSONDecoder().decode(BackendConnectionsSnapshot.self, from: try await send(method, payload))
+                snapshot.settings.global.defaultModel = "peer-provider/peer-only-model"
+                snapshot.providers = [.init(id: "peer-provider", name: "Peer", connected: true, state: nil, detail: nil, account: nil)]
+                snapshot.catalog = [.init(id: "peer-provider/peer-only-model", name: "Peer only", provider: "peer-provider", providerName: "Peer")]
+                return try JSONEncoder().encode(snapshot)
+            }
+        }
+        func window(_ map: @escaping @Sendable (String) -> String) -> DefaultAgentSettingsModel {
+            let value = DefaultAgentSettingsModel()
+            value.backendRequest = { method, payload in
+                let response = await backend.handleBackendRequest(.init(method: map(method), payload: payload))
+                if let error = response.error { throw DefaultAgentError.message(error) }
+                return response.result ?? Data()
+            }
+            return value
+        }
+        let page = window { ApplicationModel.signInBackendMethod($0) }
+        let setup = window { $0 }
+        let own = DefaultAgentSupport.settings.global.defaultModel
+        try await KeychainAccess.$testOperations.withValue(here.operations) {
+            page.selectDevice(SignInDevice.macID(UUID().uuidString.lowercased()))
+            try await waitUntil(page) { !page.busy && page.configuration.defaultModel == "peer-provider/peer-only-model" }
+            // (A) The setup window's Pi Durable settings are this Mac's.
+            setup.changeScope("global")
+            setup.loadAccounts()
+            try await Task.sleep(for: .milliseconds(300))
+            #expect(setup.device == SignInDevice.localID && backend.connections.device == SignInDevice.localID)
+            #expect(setup.configuration.defaultModel == own && backend.connections.configuration.defaultModel == own)
+            #expect(!setup.providers.contains { $0.id == "peer-provider" } && !setup.catalog.contains { $0.provider == "peer-provider" })
+            // (B) A sign-in running on that Mac survives opening the setup window for a Linux workspace.
+            page.signIn("openai-codex")
+            try await waitUntil(page) { page.prompt != nil }
+            setup.changeScope(UUID().uuidString.lowercased())
+            try await Task.sleep(for: .milliseconds(500))
+            #expect(peer.busy && peer.signInProvider == "openai-codex")
+            #expect(page.device.hasPrefix("mac:") && backend.signInConnections.device.hasPrefix("mac:") && page.busy)
+            page.cancel()
+            try await waitUntil(peer) { !peer.busy }
+        }
     }
 
     /// Leaving Subscriptions & API Keys returns to this Mac, so this Mac's own
@@ -423,6 +514,20 @@ struct SignInDeviceTests {
             #expect(peer.busy)
             try await waitUntil(peer, timeout: .seconds(10)) { !peer.busy && peer.signInProvider == nil }
         }
+    }
+
+    /// A member gone for a while with nothing running is released, with its model and watchdog.
+    @Test func anIdleMemberSessionIsReleased() async throws {
+        let keychain = SignInKeychainFixture(), helper = try FakeSettingsHelper(); defer { helper.remove() }
+        let session = MemberSignInSession(model: deviceModel(keychain, helper: helper), idleLimit: .milliseconds(200), releaseAfter: .milliseconds(300))
+        var released = false
+        session.onRelease = { released = true }
+        session.touch()
+        #expect(session.isWatching)
+        let deadline = ContinuousClock.now + .seconds(5)
+        while !released, ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(50)) }
+        #expect(released && !session.isWatching)
+        #expect(MemberSignInSession.defaultReleaseAfter > MemberSignInSession.defaultIdleLimit)
     }
 
     /// A member's sign-in here never holds this Mac's lease: its own sign-ins and
@@ -486,22 +591,23 @@ struct SignInDeviceTests {
     }
 
     /// No host ever gets this Mac's credentials, whatever it reports: an updated
-    /// one gets chat settings (and its own vault key once, while a vault sealed
-    /// with it waits); one that has not updated gets only its own vault key.
+    /// one gets chat settings and never a key; one that has not updated gets only
+    /// its own vault key.
     @Test func linuxHostsGetNoCredentialsWhateverTheyReport() async throws {
         let scope = UUID().uuidString.lowercased()
         var settings = try DefaultAgentSupport.configurationPayload(workspace: scope)
         settings.credentials = ["openai": .init(type: "api_key", key: "must-not-leave")]
         let key: @Sendable (String) async throws -> String? = { _ in "vault-key" }
         let none: @Sendable (String) async throws -> String? = { _ in nil }
-        let reports: [DefaultAgentHostVault] = [.init(), .init(deviceVault: false), .init(deviceVault: true, legacyVault: true),
-                                                .init(deviceVault: true, legacyVault: false), .init(deviceVault: true)]
+        let reports: [DefaultAgentHostVault] = [.init(), .init(deviceVault: false), .init(deviceVault: true)]
         for report in reports {
             for vaultKey in [key, none] {
                 let plan = try await DefaultAgentHostSync.plan(scope: scope, vault: report, settingsOnly: settings, vaultKey: vaultKey)
                 if let payload = plan.configuration {
                     #expect(payload.credentials.isEmpty && payload.credentialAccounts == nil)
                     #expect(!String(decoding: try payload.data(), as: UTF8.self).contains("must-not-leave"))
+                    // A host that keeps its own vault never gets a key, in any state.
+                    #expect(payload.unlockKey == nil && plan.unlockKey == nil)
                 }
             }
         }
@@ -509,15 +615,10 @@ struct SignInDeviceTests {
         #expect(old.configuration == nil && old.unlockKey == "vault-key")
         let oldWithoutKey = try await DefaultAgentHostSync.plan(scope: scope, vault: .init(), settingsOnly: settings, vaultKey: none)
         #expect(oldWithoutKey.configuration == nil && oldWithoutKey.unlockKey == nil)
-        let pending = try await DefaultAgentHostSync.plan(scope: scope, vault: .init(deviceVault: true, legacyVault: true), settingsOnly: settings, vaultKey: key)
-        #expect(pending.configuration?.unlockKey == "vault-key" && pending.unlockKey == nil)
-        let current = try await DefaultAgentHostSync.plan(scope: scope, vault: .init(deviceVault: true, legacyVault: false), settingsOnly: settings, vaultKey: key)
-        #expect(current.configuration?.unlockKey == nil)
-        // What this Mac kept for the host moves aside only once nothing waits there.
+        // What this Mac kept for the host moves aside once the host keeps its own vault.
         let forgotten = ForgottenScopes()
         for (json, forgets) in [(#"{"saved":true,"revision":"r","epoch":"e"}"#, false),
-                                (#"{"saved":true,"revision":"r","epoch":"e","deviceVault":true,"legacyVault":true}"#, false),
-                                (#"{"saved":true,"revision":"r","epoch":"e","deviceVault":true,"legacyVault":false}"#, true)] {
+                                (#"{"saved":true,"revision":"r","epoch":"e","deviceVault":true}"#, true)] {
             let receipt = try JSONDecoder().decode(DefaultAgentSyncReceipt.self, from: Data(json.utf8))
             let before = await forgotten.scopes.count
             await DefaultAgentHostSync.acknowledged(receipt, scope: scope) { await forgotten.add($0) }

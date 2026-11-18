@@ -305,20 +305,31 @@ public enum ProviderConnectionAccounts {
         guard local.allSatisfy({ entry in stored.contains { $0.credential == entry.credential } }) else { return }
         try deleteItems(provider: provider, scope: "local", keychain: keychain)
     }
-    /// Copies a scope's raw items for one provider to `preservedScope`, unless a copy
-    /// is already there (a re-run never replaces the first copy), and reads them back.
+    /// Copies a scope's raw items for one provider to `preservedScope` and reads them
+    /// back. A copy already there is never replaced: when the items differ from it
+    /// (a sign-in made after an earlier, interrupted run) another copy is kept
+    /// beside it (`premigration.2`, `.3`, …).
     private static func preserve(_ provider: String, from scope: String, keychain: KeychainAccess) throws {
         let items = [provider, "oauth." + provider, "accounts." + provider]
         let marker = "migrated." + provider
-        if try DefaultAgentSupport.key(marker, scope: preservedScope, keychain: keychain) != nil { return }
-        for item in items {
-            guard let value = try DefaultAgentSupport.key(item, scope: scope, keychain: keychain) else { continue }
-            try DefaultAgentSupport.saveKey(value, provider: item, scope: preservedScope, notify: false, keychain: keychain)
-            guard try DefaultAgentSupport.key(item, scope: preservedScope, keychain: keychain) == value else {
-                throw DefaultAgentError.message("Sign-ins could not be verified after moving them.")
+        let current = try items.map { try DefaultAgentSupport.key($0, scope: scope, keychain: keychain) }
+        for index in 1...32 {
+            let destination = index == 1 ? preservedScope : preservedScope + ".\(index)"
+            if try DefaultAgentSupport.key(marker, scope: destination, keychain: keychain) != nil {
+                if try items.map({ try DefaultAgentSupport.key($0, scope: destination, keychain: keychain) }) == current { return }
+                continue
             }
+            for (item, value) in zip(items, current) {
+                guard let value else { continue }
+                try DefaultAgentSupport.saveKey(value, provider: item, scope: destination, notify: false, keychain: keychain)
+                guard try DefaultAgentSupport.key(item, scope: destination, keychain: keychain) == value else {
+                    throw DefaultAgentError.message("Sign-ins could not be verified after moving them.")
+                }
+            }
+            try DefaultAgentSupport.saveKey(scope, provider: marker, scope: destination, notify: false, keychain: keychain)
+            return
         }
-        try DefaultAgentSupport.saveKey(scope, provider: marker, scope: preservedScope, notify: false, keychain: keychain)
+        throw DefaultAgentError.message("Sign-ins could not be verified after moving them.")
     }
     /// Where what this Mac kept for a Linux workspace is moved once that host keeps
     /// its own vault: `premigration.<workspace>`.

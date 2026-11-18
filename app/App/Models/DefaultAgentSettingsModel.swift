@@ -188,26 +188,47 @@ final class DefaultAgentSettingsModel {
     /// after `MemberSignInSession.idleLimit`, comfortably longer.
     static var pollRetryLimit: Duration = .seconds(90)
     /// With another Mac selected, the background server stops following a sign-in
-    /// (and cancels it there) once no window has asked about it for this long.
-    static var windowIdleLimit: Duration = .seconds(10)
+    /// (and cancels it there) once no window has asked about it for this long:
+    /// longer than a covered window's timers can be stretched while the user is in
+    /// the browser, and in line with `pollRetryLimit` and the other Mac's idle limit.
+    static var windowIdleLimit: Duration = .seconds(120)
     private var lastWindowContact: ContinuousClock.Instant?
+    /// The clock the no-window rule reads (tests advance it).
+    var now: () -> ContinuousClock.Instant = { ContinuousClock.now }
     /// A window asked this background server's model about its connections.
-    func noteWindowContact() { lastWindowContact = ContinuousClock.now }
+    func noteWindowContact() { lastWindowContact = now() }
+    /// Whether no window has asked about a sign-in this server follows on another Mac for too long.
+    var windowsGone: Bool {
+        guard forwardsToPeer, let lastWindowContact else { return false }
+        return now() - lastWindowContact > Self.windowIdleLimit
+    }
+    /// Held in a window while it polls a sign-in, so App Nap never stretches its
+    /// polling while the user is in the browser (idle system sleep stays allowed).
+    private var pollingActivity: NSObjectProtocol?
+    var holdsPollingActivity: Bool { pollingActivity != nil }
+    private func holdPollingActivity(_ hold: Bool) {
+        if hold, pollingActivity == nil, backendRequest != nil {
+            pollingActivity = ProcessInfo.processInfo.beginActivity(options: .userInitiatedAllowingIdleSystemSleep, reason: "Signing in")
+        } else if !hold, let activity = pollingActivity {
+            ProcessInfo.processInfo.endActivity(activity)
+            pollingActivity = nil
+        }
+    }
     private func pollBackendIfNeeded() {
         guard busy, let request = transport else { return }
         backendPollTask?.cancel()
         let requestID = backendGeneration
+        holdPollingActivity(true)
         backendPollTask = Task { [weak self] in
             var failingSince: ContinuousClock.Instant?
             var failures = 0
+            defer { Task { @MainActor [weak self] in if self?.busy == false { self?.holdPollingActivity(false) } } }
             while !Task.isCancelled {
                 do {
                     try await Task.sleep(for: .milliseconds(250))
                     guard let self else { return }
                     // No window shows this sign-in any more: stop, and cancel it there.
-                    if self.forwardsToPeer, let last = self.lastWindowContact, ContinuousClock.now - last > Self.windowIdleLimit {
-                        self.cancel(); return
-                    }
+                    if self.windowsGone { self.cancel(); return }
                     let catalogGeneration = self.catalogSnapshotGeneration
                     let data = try await request("connections.snapshot", Data())
                     try Task.checkCancellation()
@@ -251,6 +272,7 @@ final class DefaultAgentSettingsModel {
         signInProvider = value.signInProvider
         signInOutcome = value.signInOutcome
         busy = value.busy; error = value.error; notice = value.notice
+        if !busy { holdPollingActivity(false) }
         signInURL = value.signInURL; signInCode = value.signInCode; prompt = value.prompt; promptID = value.promptID
         promptOptions = value.promptOptions.map { ($0.id, $0.label) }
         // Another Mac's snapshot carries neither; this process keeps its own selection.

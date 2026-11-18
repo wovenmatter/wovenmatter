@@ -452,6 +452,49 @@ extension DefaultAgentCredentialTests {
         }
     }
 
+    /// A run that kept a copy and then failed, followed by a new sign-in on this Mac:
+    /// the next run keeps a copy of that new sign-in too before replacing it.
+    @Test func aSignInMadeBetweenMigrationAttemptsIsCopiedBeforeItIsReplaced() throws {
+        let fixture = DefaultAgentKeychainFixture(), keychain = fixture.access
+        _ = try ProviderConnectionAccounts.addOAuth(oauth("device-grok"), provider: "xai", keychain: keychain)
+        _ = try ProviderConnectionAccounts.addOAuth(oauth("local-grok"), provider: "xai", scope: "local", keychain: keychain)
+        fixture.failing = "global.oauth.xai"
+        #expect(throws: (any Error).self) { try ProviderConnectionAccounts.migrateToDeviceSignIns(keychain: keychain) }
+        fixture.failing = nil
+        #expect(try DefaultAgentSupport.oauth("xai", scope: ProviderConnectionAccounts.preservedScope, keychain: keychain)?.refresh == "device-grok-refresh")
+        // Before the next start, the user signs in to a new Grok account on this Mac.
+        let current = try #require(try ProviderConnectionAccounts.list(provider: "xai", keychain: keychain).first)
+        try ProviderConnectionAccounts.replace(oauth("new-grok"), accountID: current.id, provider: "xai", keychain: keychain)
+        try ProviderConnectionAccounts.migrateToDeviceSignIns(keychain: keychain)
+        #expect(try DefaultAgentSupport.oauth("xai", keychain: keychain)?.refresh == "local-grok-refresh")
+        // Both earlier device sign-ins are kept, each in its own copy.
+        #expect(try DefaultAgentSupport.oauth("xai", scope: ProviderConnectionAccounts.preservedScope, keychain: keychain)?.refresh == "device-grok-refresh")
+        #expect(try DefaultAgentSupport.oauth("xai", scope: ProviderConnectionAccounts.preservedScope + ".2", keychain: keychain)?.refresh == "new-grok-refresh")
+        let once = fixture.stored
+        try ProviderConnectionAccounts.migrateToDeviceSignIns(keychain: keychain)
+        #expect(fixture.stored == once)
+    }
+
+    /// A Keychain that was locked at start: the move to device sign-ins is retried
+    /// (on the next refresh) and completes once it is available.
+    @Test func aMigrationBlockedByALockedKeychainIsRetried() throws {
+        let fixture = DefaultAgentKeychainFixture(), keychain = fixture.access
+        let suite = "wovenmatter.tests.migration." + UUID().uuidString
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        _ = try ProviderConnectionAccounts.addKey("local-key", provider: "openai", scope: "local", keychain: keychain)
+        fixture.failing = "global.accounts.openai"
+        #expect(!DefaultAgentSupport.migrateToDeviceSignInsOnce(defaults: defaults, keychain: keychain))
+        #expect(!defaults.bool(forKey: DefaultAgentSupport.deviceSignInMigrationKey))
+        fixture.failing = nil
+        #expect(DefaultAgentSupport.migrateToDeviceSignInsOnce(defaults: defaults, keychain: keychain))
+        #expect(defaults.bool(forKey: DefaultAgentSupport.deviceSignInMigrationKey))
+        #expect(try DefaultAgentSupport.key("openai", keychain: keychain) == "local-key")
+        let once = fixture.stored
+        #expect(DefaultAgentSupport.migrateToDeviceSignInsOnce(defaults: defaults, keychain: keychain))
+        #expect(fixture.stored == once)
+    }
+
     /// No payload to any host carries this Mac's credentials, account lists or borrowed access.
     @Test func noHostPayloadEverCarriesCredentials() throws {
         let fixture = DefaultAgentKeychainFixture(), keychain = fixture.access

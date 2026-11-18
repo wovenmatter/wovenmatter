@@ -15,7 +15,8 @@ struct SettingsAccountsView: View {
     var onBack: () -> Void
     @State private var connectedProvider: String?
 
-    private var agent: DefaultAgentSettingsModel { model.connections }
+    /// This page's own model: the device chosen here never reaches other views.
+    private var agent: DefaultAgentSettingsModel { model.signInConnections }
     private var deviceBinding: Binding<String> {
         Binding(get: { agent.device }, set: { select($0) })
     }
@@ -36,7 +37,7 @@ struct SettingsAccountsView: View {
             }
             .disabled(agent.busy)
             SettingsSection(title: "Model providers") {
-                SettingsConnectionsView(model: model, focus: .providers, embedded: true, onConnected: accountConnected)
+                SettingsConnectionsView(model: model, connections: agent, focus: .providers, embedded: true, onConnected: accountConnected)
                 if let provider = connectedProvider, SignInDevice.kind(of: agent.device) != .mac {
                     SettingsRow(title: "Account added", detail: "Choose models if you also want to use it for chat.") {
                         Button("Choose chat models") {
@@ -48,7 +49,7 @@ struct SettingsAccountsView: View {
                 }
             }
             SettingsSection(title: "Web search", detail: "Pi Durable uses the selected provider.") {
-                SettingsConnectionsView(model: model, focus: .webSearch, embedded: true)
+                SettingsConnectionsView(model: model, connections: agent, focus: .webSearch, embedded: true)
                 if agent.inherits {
                     SettingsNote("This workspace follows the provider chosen for All workspaces. To choose here, turn off Use shared chat settings on its Pi Durable page.")
                 }

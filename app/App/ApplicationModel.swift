@@ -684,13 +684,16 @@ final class ApplicationModel {
                 guard let self else { throw CancellationError() }
                 return try await self.readLinuxLibraryFile(workspaceID: workspaceID, conversationID: conversationID, path: path, underRoot: underRoot)
             }
-            connections.memberRoutes = { [weak self] workspace in
-                guard let self else { throw CancellationError() }
-                return try await self.linuxMemberRoutes(workspace)
+            for model in [connections, signInConnections] {
+                model.memberRoutes = { [weak self] workspace in
+                    guard let self else { throw CancellationError() }
+                    return try await self.linuxMemberRoutes(workspace)
+                }
             }
-            // Each device keeps its own sign-ins: this Mac reaches the others' servers.
-            connections.deviceDirectory = { [weak self] in await self?.signInDevices() ?? [] }
-            connections.peerTransport = { [weak self] memberID in
+            // Each device keeps its own sign-ins: this Mac reaches the others' servers,
+            // only from Subscriptions & API Keys' own model.
+            signInConnections.deviceDirectory = { [weak self] in await self?.signInDevices() ?? [] }
+            signInConnections.peerTransport = { [weak self] memberID in
                 guard let self else { return { _, _ in throw CancellationError() } }
                 return self.signInPeerTransport(memberID: memberID)
             }
@@ -3499,6 +3502,15 @@ final class ApplicationModel {
     var pendingDefaultAgentModelProvider: String?
     var pendingConnectionsScope: String?
     let connections = DefaultAgentSettingsModel()
+    /// Settings → Subscriptions & API Keys' own model: the device chosen there
+    /// (another Mac, a Linux workspace) lives only here, so Pi Durable pages, the
+    /// setup window, chats and task defaults (`connections`) always read and write
+    /// this Mac's own settings and can neither see nor disturb that choice.
+    let signInConnections = DefaultAgentSettingsModel()
+    /// A window's `signInConnections` requests, as the background server routes them.
+    nonisolated static func signInBackendMethod(_ method: String) -> String {
+        method.hasPrefix("connections.") ? "signins." + method.dropFirst("connections.".count) : method
+    }
     /// Settings → GitHub: the user's GitHub SSH key and commit identity everywhere.
     let github = GitHubSettingsModel()
 
@@ -4325,6 +4337,7 @@ extension ApplicationModel {
             observeBackendUsageState()
             observeBackendOpenCodeState()
             connections.reloadStoredConnectionState()
+            signInConnections.reloadStoredConnectionState()
             observeBackendConnectionsState()
         } catch {
             state = .failed(error.localizedDescription)
@@ -4358,6 +4371,10 @@ extension ApplicationModel {
             }
             if request.method.hasPrefix("github.") {
                 return .init(id: request.id, result: try await github.handle(method: request.method, payload: request.payload))
+            }
+            if request.method == "signins.command" || request.method == "signins.snapshot" {
+                let method = "connections." + request.method.dropFirst("signins.".count)
+                return .init(id: request.id, result: try await BackendConnectionsService.handle(method: method, payload: request.payload, model: signInConnections))
             }
             if request.method.hasPrefix("connections.") {
                 return .init(id: request.id, result: try await BackendConnectionsService.handle(method: request.method, payload: request.payload, model: connections, remoteWorkspaces: remoteWorkspaces))
@@ -4425,7 +4442,7 @@ extension ApplicationModel {
                     return .init(id: request.id, result: try JSONEncoder().encode(
                         BackgroundServerStopResult(confirmationRequired: true, activeWorkCount: activeCount)))
                 }
-                guard backendCommandsInFlight == 0, !connections.busy, !connections.sdks.isBusy,
+                guard backendCommandsInFlight == 0, !connections.busy, !signInConnections.busy, !connections.sdks.isBusy,
                       remoteWorkspaces.busyWorkspaceIDs.isEmpty, remoteWorkspaces.maintainingHarnesses.isEmpty,
                       !remoteWorkspaces.isCreating,
                       installingLocalACPRuntimeKinds.isEmpty, updatingRuntimeKinds.isEmpty,
@@ -4513,7 +4530,7 @@ extension ApplicationModel {
         }
     }
     private func observeBackendConnectionsState() {
-        withObservationTracking { _ = BackendConnectionsSnapshot(connections) } onChange: { [weak self] in
+        withObservationTracking { _ = BackendConnectionsSnapshot(connections); _ = BackendConnectionsSnapshot(signInConnections) } onChange: { [weak self] in
             Task { @MainActor in
                 guard let self, let service = self.backendApplicationService else { return }
                 self.observeBackendConnectionsState()
@@ -4529,6 +4546,14 @@ extension ApplicationModel {
         if snapshot != BackendConnectionsSnapshot(connections) {
             connections.applyBackendSnapshot(snapshot, expectedGeneration: revision,
                 expectedCatalogGeneration: catalogGeneration)
+        }
+        let signInRevision = signInConnections.backendSnapshotGeneration
+        let signInCatalog = signInConnections.catalogSnapshotGeneration
+        let signIns = try JSONDecoder().decode(BackendConnectionsSnapshot.self,
+            from: await callBackend(method: "signins.snapshot"))
+        if signIns != BackendConnectionsSnapshot(signInConnections) {
+            signInConnections.applyBackendSnapshot(signIns, expectedGeneration: signInRevision,
+                expectedCatalogGeneration: signInCatalog)
         }
     }
     private func refreshBackendRemoteState() async throws {
@@ -4557,6 +4582,10 @@ extension ApplicationModel {
             connections.backendRequest = { [weak self] method, payload in
                 guard let self else { throw CancellationError() }
                 return try await self.callBackend(method: method, payload: payload)
+            }
+            signInConnections.backendRequest = { [weak self] method, payload in
+                guard let self else { throw CancellationError() }
+                return try await self.callBackend(method: Self.signInBackendMethod(method), payload: payload)
             }
             github.backendRequest = { [weak self] method, payload in
                 guard let self else { throw CancellationError() }

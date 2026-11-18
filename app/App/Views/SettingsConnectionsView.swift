@@ -23,6 +23,9 @@ enum ConnectionSettingsFocus {
 
 struct SettingsConnectionsView: View {
     @Bindable var model: ApplicationModel
+    /// The model whose device the rows act on: Subscriptions & API Keys passes its
+    /// own (`signInConnections`); elsewhere this Mac's `connections`.
+    var connections: DefaultAgentSettingsModel? = nil
     var initialScope = "global"
     var focus: ConnectionSettingsFocus = .providers
     var embedded = false
@@ -33,7 +36,7 @@ struct SettingsConnectionsView: View {
     @State private var answer = ""
     @Environment(\.wovenTheme) private var theme
     /// Every account action runs on the selected device (`DefaultAgentSettingsModel.device`).
-    private var agent: DefaultAgentSettingsModel { model.connections }
+    private var agent: DefaultAgentSettingsModel { connections ?? model.connections }
     var body: some View {
         focusedContent(focus)
         .disclosureGroupStyle(SettingsDisclosureGroupStyle())

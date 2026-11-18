@@ -171,6 +171,14 @@ struct LinuxMemberPathTests {
             _ = try await client.createSession(workspace: workspace, runtimeKind: .defaultAgent, conversationID: UUID().uuidString.lowercased(), folderID: nil)
         }
         #expect(await fake.configurations.isEmpty)
+
+        // A host that keeps its own vault never gets this Mac's key.
+        await fake.keepOwnVault()
+        let before = await fake.unlocks.count
+        await fake.lockPi()
+        _ = try? await client.createSession(workspace: workspace, runtimeKind: .defaultAgent, conversationID: UUID().uuidString.lowercased(), folderID: nil)
+        #expect(await fake.unlocks.count == before)
+        #expect(await fake.configurations.isEmpty)
     }
 
     @Test func optionsWithoutASessionCarryTheirDescriptions() async throws {
@@ -397,6 +405,10 @@ actor LinuxMemberFake: ExecutionWorkspaceTransport, MemberExecutionRoutes {
 
     init(workspace: ExecutionWorkspace) { self.workspace = workspace }
     func lockPi() { piLocked = true }
+    /// A host that keeps its own vault (`deviceVault`), as an updated host reports.
+    private(set) var reportsDeviceVault = false
+    func keepOwnVault() { reportsDeviceVault = true }
+    func defaultAgentVault() -> DefaultAgentHostVault { .init(deviceVault: reportsDeviceVault ? true : nil) }
     func refuseKeys() { keysRefused = true }
     func refuseNextSendAsLocked() { lockedSend = true }
     func refuseDirectories() { directoriesRefused = true }

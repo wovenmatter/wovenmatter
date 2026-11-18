@@ -184,6 +184,10 @@ extension ApplicationModel {
     func memberSignIns(_ request: LibraryHTTPRequest, path: String, memberID: String) async -> LibraryHTTPResponse {
         let session = memberSignInSessions[memberID] ?? {
             let value = MemberSignInSession(model: Self.memberSignInModel())
+            // A member gone for a while with nothing running is released.
+            value.onRelease = { [weak self, weak value] in
+                if let value, self?.memberSignInSessions[memberID] === value { self?.memberSignInSessions[memberID] = nil }
+            }
             memberSignInSessions[memberID] = value
             return value
         }()
@@ -230,27 +234,43 @@ extension ApplicationModel {
 @MainActor final class MemberSignInSession {
     let model: DefaultAgentSettingsModel
     private let idleLimit: Duration
+    private let releaseAfter: Duration
     private let clock = ContinuousClock()
     private var lastContact: ContinuousClock.Instant
     private var watchdog: Task<Void, Never>?
+    /// Called once the member has been gone `releaseAfter` with nothing running:
+    /// the owner drops this session (and its model).
+    var onRelease: (@MainActor () -> Void)?
 
     /// Longer than a member keeps polling through failures (`pollRetryLimit`).
     static let defaultIdleLimit: Duration = .seconds(120)
-    init(model: DefaultAgentSettingsModel, idleLimit: Duration = MemberSignInSession.defaultIdleLimit) {
-        self.model = model; self.idleLimit = idleLimit; lastContact = clock.now
+    static let defaultReleaseAfter: Duration = .seconds(600)
+    init(model: DefaultAgentSettingsModel, idleLimit: Duration = MemberSignInSession.defaultIdleLimit,
+         releaseAfter: Duration = MemberSignInSession.defaultReleaseAfter) {
+        self.model = model; self.idleLimit = idleLimit; self.releaseAfter = releaseAfter; lastContact = clock.now
     }
     deinit { watchdog?.cancel() }
+
+    var isWatching: Bool { watchdog != nil }
 
     func touch() {
         lastContact = clock.now
         guard watchdog == nil else { return }
-        let check = min(idleLimit, .seconds(5))
+        let check = min(idleLimit, releaseAfter, .seconds(5))
         watchdog = Task { [weak self] in
             while !Task.isCancelled {
                 try? await Task.sleep(for: check)
                 guard let self else { return }
-                guard self.model.busy || self.model.signInProvider != nil else { continue }
-                if self.clock.now - self.lastContact >= self.idleLimit { self.model.cancel() }
+                let idle = self.clock.now - self.lastContact
+                if self.model.busy || self.model.signInProvider != nil {
+                    if idle >= self.idleLimit { self.model.cancel() }
+                    continue
+                }
+                if idle >= self.releaseAfter {
+                    self.watchdog = nil
+                    self.onRelease?()
+                    return
+                }
             }
         }
     }

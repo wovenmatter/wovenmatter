@@ -161,12 +161,17 @@ public enum DefaultAgentSupport {
     public static let deviceSignInMigrationKey = "wovenmatter.sign-ins.device-scope.v1"
     /// Once per installation, at background-server start: see
     /// `ProviderConnectionAccounts.migrateToDeviceSignIns`.
-    public static func migrateToDeviceSignInsOnce(defaults: UserDefaults = .standard) {
-        guard !defaults.bool(forKey: deviceSignInMigrationKey) else { return }
+    /// Also called on every credential refresh (`refreshStored`): after a locked or
+    /// denied Keychain it is retried as soon as the Keychain is available, at the
+    /// cost of one preference read once it has succeeded. Re-running is harmless.
+    @discardableResult
+    public static func migrateToDeviceSignInsOnce(defaults: UserDefaults = .standard, keychain: KeychainAccess = .init()) -> Bool {
+        guard !defaults.bool(forKey: deviceSignInMigrationKey) else { return true }
         do {
-            try ProviderConnectionAccounts.migrateToDeviceSignIns()
+            try ProviderConnectionAccounts.migrateToDeviceSignIns(keychain: keychain)
             defaults.set(true, forKey: deviceSignInMigrationKey)
-        } catch { /* Keychain locked or denied: retried at the next start, with nothing lost. */ }
+            return true
+        } catch { return false /* Retried on the next refresh, with nothing lost. */ }
     }
     public static func migrateLocalOAuth() throws {
         let path = FileManager.default.homeDirectoryForCurrentUser.appending(
