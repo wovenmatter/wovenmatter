@@ -144,27 +144,32 @@ struct LinuxMemberPathTests {
         #expect(try JSONSerialization.jsonObject(with: failed.lines(after: 0)[0]) as? [String: String] == ["error": "Choose an enabled provider."])
     }
 
-    @Test func aLockedPiIsConfiguredWithSettingsOnlyAndRetried() async throws {
+    /// A host from before per-device sign-ins keeps working exactly as before.
+    @Test func aLockedPiIsUnlockedWithThisMacsKeyAndRetried() async throws {
         let fixture = try await FacadeFixture(); defer { fixture.remove() }
         let (workspace, fake) = try await enrolled(fixture)
         await fake.lockPi()
         let client = try #require(fixture.model.federatedExecutionClient)
         let id = UUID().uuidString.lowercased()
         _ = try await client.createSession(workspace: workspace, runtimeKind: .defaultAgent, conversationID: id, folderID: nil)
-        // The host keeps its own sign-ins: no key and no credentials are sent to it.
-        #expect(await fake.unlocks.isEmpty)
-        let configured = try #require(await fake.configurations.last)
-        let payload = try JSONDecoder().decode(DefaultAgentPayload.self, from: configured)
-        #expect(payload.workspace == workspace.id && payload.credentials.isEmpty && payload.unlockKey == nil && payload.credentialAccounts == nil)
+        #expect(await fake.unlocks.map(\.unlockKey) == ["fixture-key"])
+        #expect(await fake.unlocks.map(\.workspace) == [workspace.id])
         #expect(await fake.commands.filter { $0.kind == .createSession }.map(\.providerID) == ["default_agent"])
 
-        // A send refused as locked is configured and sent again as a new command.
+        // A send refused as locked is unlocked and sent again as a new command.
         await fake.refuseNextSendAsLocked()
         let receipt = try await client.send(to: workspace, conversationID: id, text: "Hello")
         #expect(receipt.status == .accepted)
         let sends = await fake.commands.filter { $0.kind == .send }
         #expect(sends.count == 2 && sends[0].commandID != sends[1].commandID && sends.allSatisfy { $0.text == "Hello" })
-        #expect(await fake.configurations.count == 2)
+        #expect(await fake.unlocks.count == 2)
+
+        // A refused key, or none, configures the host as the SSH relay did.
+        await fake.refuseKeys()
+        await fake.lockPi()
+        _ = try await client.createSession(workspace: workspace, runtimeKind: .defaultAgent, conversationID: UUID().uuidString.lowercased(), folderID: nil)
+        let configured = try #require(await fake.configurations.last)
+        #expect(try JSONDecoder().decode(DefaultAgentPayload.self, from: configured).workspace == workspace.id)
     }
 
     @Test func optionsWithoutASessionCarryTheirDescriptions() async throws {
@@ -358,7 +363,7 @@ extension FacadeFixture {
             commandJournalURL: directory.appending(path: "member-commands-\(UUID()).json"),
             makeSignedTransport: { _ in fake })
         client.unlockDefaultAgentHandler = { workspace, routes in
-            try await DefaultAgentHostUnlock.unlock(scope: workspace.id, routes: routes,
+            try await DefaultAgentHostUnlock.unlock(scope: workspace.id, routes: routes, existingKey: { _ in "fixture-key" },
                 prepare: { scope in DefaultAgentPayload(config: .init(), credentials: [:], workspace: scope) })
         }
         model.federatedExecutionClient = client

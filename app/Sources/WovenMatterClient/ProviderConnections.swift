@@ -101,7 +101,13 @@ public enum ProviderConnectionAccounts {
     private static func persist(_ store: Store, provider: String, scope: String, keychain: KeychainAccess) throws {
         try DefaultAgentSupport.saveKey(String(decoding: JSONEncoder().encode(store), as: UTF8.self), provider: "accounts." + provider, scope: scope, notify: false, keychain: keychain)
     }
+    /// Only real provider connections have accounts: a caller's provider string
+    /// never reads or writes another Keychain item (`encryption-key`, `oauth.*`).
+    private static func requireProvider(_ provider: String) throws {
+        guard ProviderConnectionID(rawValue: provider) != nil else { throw DefaultAgentError.message("Choose a provider connection.") }
+    }
     private static func load(_ provider: String, scope: String, keychain: KeychainAccess) throws -> Store {
+        try requireProvider(provider)
         let encoded = try DefaultAgentSupport.key("accounts." + provider, scope: scope, keychain: keychain)
         var store = try encoded.map { try JSONDecoder().decode(Store.self, from: Data($0.utf8)) } ?? Store()
         let current = try canonical(provider, scope: scope, keychain: keychain)
@@ -227,38 +233,90 @@ public enum ProviderConnectionAccounts {
             return ordered.map { .init(id: $0.account.id, label: $0.account.label, credential: $0.credential.type == "oauth" ? $0.credential.borrowing() : $0.credential) }
         }
     }
-    /// One-time move to per-device sign-ins. This Mac's former `local` accounts join
-    /// its device accounts (device accounts stay primary; local ones fill free
-    /// slots, a single-account subscription only when the device has none), then
-    /// the `local` items are deleted. Copies this Mac held for other machines
-    /// (`remoteScopes`, with their vault keys) are deleted: those devices sign in
-    /// themselves. Device accounts are never removed.
-    public static func migrateToDeviceSignIns(remoteScopes: [String], keychain: KeychainAccess = .init()) throws {
+    /// Where a sign-in the move to per-device sign-ins could not merge is kept,
+    /// byte for byte, instead of being deleted.
+    public static let preservedScope = "premigration"
+    /// One-time move to per-device sign-ins. Before it, this Mac used its `local`
+    /// accounts for each provider first and its `global` ones only where it had no
+    /// local account. Now its accounts are one list (`deviceScope`): for each
+    /// provider, the account it used stays primary, its other local accounts follow,
+    /// then the former `global` ones, up to the provider's limit.
+    ///
+    /// Nothing is lost: a `global` account that no longer fits (a second
+    /// subscription, keys over the cap) is first copied to `preservedScope` and
+    /// verified there; `local` items are deleted only after every one of their
+    /// accounts reads back from the device list, and are otherwise left untouched.
+    /// Re-running yields the same lists. Copies this Mac held for Linux hosts are
+    /// not touched here: they are removed once that host reports its own vault.
+    public static func migrateToDeviceSignIns(keychain: KeychainAccess = .init()) throws {
         try DefaultAgentSupport.credentialLock.withLock {
-            let device = deviceScope
             for provider in ProviderConnectionID.allCases.map(\.rawValue) {
-                let local = try load(provider, scope: "local", keychain: keychain).entries
-                guard !local.isEmpty else { continue }
-                let ordered = local.filter { $0.account.isSelected } + local.filter { !$0.account.isSelected }
-                for entry in ordered {
-                    let existing = try load(provider, scope: device, keychain: keychain).entries
-                    let duplicate = existing.contains { $0.credential == entry.credential
-                        || (entry.credential.accountId != nil && $0.credential.accountId == entry.credential.accountId) }
-                    guard !duplicate, existing.count < limit(for: provider) else { continue }
-                    try change(provider: provider, scope: device, keychain: keychain, notify: false) { store in
-                        var account = entry.account
-                        account.isSelected = store.entries.isEmpty
-                        store.entries.append(Entry(account: account, credential: entry.credential))
-                    }
-                }
-                try deleteItems(provider: provider, scope: "local", keychain: keychain)
-            }
-            for scope in Set(remoteScopes) where scope != device && scope != "local" && !scope.isEmpty {
-                for provider in ProviderConnectionID.allCases.map(\.rawValue) { try deleteItems(provider: provider, scope: scope, keychain: keychain) }
-                try DefaultAgentSupport.saveKey("", provider: "encryption-key", scope: scope, notify: false, keychain: keychain)
+                try migrateProvider(provider, keychain: keychain)
             }
         }
         DefaultAgentSupport.changed()
+    }
+    private static func sameAccount(_ a: DefaultAgentCredential, _ b: DefaultAgentCredential) -> Bool {
+        a == b || (a.accountId != nil && a.accountId == b.accountId && a.type == b.type)
+    }
+    private static func migrateProvider(_ provider: String, keychain: KeychainAccess) throws {
+        let device = deviceScope
+        let localStore = try load(provider, scope: "local", keychain: keychain)
+        let local = localStore.entries.filter { $0.account.isSelected } + localStore.entries.filter { !$0.account.isSelected }
+        guard !local.isEmpty else { return }
+        let deviceStore = try load(provider, scope: device, keychain: keychain)
+        let existing = deviceStore.entries.filter { $0.account.isSelected } + deviceStore.entries.filter { !$0.account.isSelected }
+        var merged: [Entry] = []
+        for entry in local + existing where !merged.contains(where: { sameAccount($0.credential, entry.credential) }) {
+            merged.append(entry)
+        }
+        let kept = Array(merged.prefix(limit(for: provider)))
+        let displaced = existing.filter { entry in !kept.contains { sameAccount($0.credential, entry.credential) } }
+        // 1. Keep a verified copy of every device item before any device account is displaced.
+        if !displaced.isEmpty { try preserve(provider, from: device, keychain: keychain) }
+        // 2. The device list: what this Mac used first.
+        let target = kept.enumerated().map { index, entry -> Entry in
+            var value = entry
+            value.account.isSelected = index == 0
+            return value
+        }
+        let unchanged = target.map(\.credential) == existing.map(\.credential)
+            && target.first?.account.id == existing.first?.account.id
+        if !unchanged {
+            try change(provider: provider, scope: device, keychain: keychain, notify: false) { store in store.entries = target }
+        }
+        // 3. Verify, then delete the local items only when all of them are in the device list.
+        let stored = try load(provider, scope: device, keychain: keychain).entries
+        guard stored.count == target.count, target.allSatisfy({ entry in stored.contains { $0.credential == entry.credential } }),
+              stored.first(where: { $0.account.isSelected })?.credential == target.first?.credential else {
+            throw DefaultAgentError.message("Sign-ins could not be verified after moving them.")
+        }
+        guard local.allSatisfy({ entry in stored.contains { sameAccount($0.credential, entry.credential) } }) else { return }
+        try deleteItems(provider: provider, scope: "local", keychain: keychain)
+    }
+    /// Copies a scope's raw items for one provider to `preservedScope`, unless a copy
+    /// is already there (a re-run never replaces the first copy), and reads them back.
+    private static func preserve(_ provider: String, from scope: String, keychain: KeychainAccess) throws {
+        let items = [provider, "oauth." + provider, "accounts." + provider]
+        let marker = "migrated." + provider
+        if try DefaultAgentSupport.key(marker, scope: preservedScope, keychain: keychain) != nil { return }
+        for item in items {
+            guard let value = try DefaultAgentSupport.key(item, scope: scope, keychain: keychain) else { continue }
+            try DefaultAgentSupport.saveKey(value, provider: item, scope: preservedScope, notify: false, keychain: keychain)
+            guard try DefaultAgentSupport.key(item, scope: preservedScope, keychain: keychain) == value else {
+                throw DefaultAgentError.message("Sign-ins could not be verified after moving them.")
+            }
+        }
+        try DefaultAgentSupport.saveKey(scope, provider: marker, scope: preservedScope, notify: false, keychain: keychain)
+    }
+    /// The copies this Mac held for a Linux host before per-device sign-ins (its
+    /// credential items and vault key), once that host keeps its own vault.
+    public static func forgetHostCopies(scope: String, keychain: KeychainAccess = .init()) throws {
+        guard !scope.isEmpty, scope != deviceScope, scope != "local", scope != preservedScope else { return }
+        try DefaultAgentSupport.credentialLock.withLock {
+            for provider in ProviderConnectionID.allCases.map(\.rawValue) { try deleteItems(provider: provider, scope: scope, keychain: keychain) }
+            try DefaultAgentSupport.saveKey("", provider: "encryption-key", scope: scope, notify: false, keychain: keychain)
+        }
     }
     private static func deleteItems(provider: String, scope: String, keychain: KeychainAccess) throws {
         for item in [provider, "oauth." + provider, "accounts." + provider] {

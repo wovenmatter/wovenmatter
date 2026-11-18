@@ -126,6 +126,67 @@ public enum DefaultAgentSupport {
         payload.credentialAccounts = accounts
         return payload
     }
+    // MARK: Linux hosts from before per-device sign-ins
+
+    private static let legacyLock = NSLock()
+    nonisolated(unsafe) private static var legacyScopes: Set<String> = []
+    /// Linux workspaces (lowercased registry IDs) whose host has not updated to
+    /// keep its own sign-ins. Until it does, it keeps working exactly as before:
+    /// this Mac configures it with the copies it held for it and its vault key.
+    public static var legacyHostScopes: Set<String> { legacyLock.withLock { legacyScopes } }
+    public static func markLegacyHost(_ scope: String, _ legacy: Bool) {
+        let changed = legacyLock.withLock {
+            legacy ? legacyScopes.insert(scope).inserted : legacyScopes.remove(scope) != nil
+        }
+        // Prepared payloads for that scope change shape; no notification is needed.
+        if changed { revisionLock.withLock { scopeRevision &+= 1 } }
+    }
+    /// What this Mac sent such a host before per-device sign-ins: that workspace's
+    /// accounts, falling back to this Mac's own, provider by provider.
+    static func legacySnapshot(workspace: String, settings scope: DefaultAgentSettingsScope = settings,
+                               keychain: KeychainAccess = .init(), servers: [LocalModelServer] = LocalModelServerStore.servers) throws -> DefaultAgentPayload {
+        let keyScope = workspace, device = ProviderConnectionAccounts.deviceScope
+        var credentials: [String: DefaultAgentCredential] = [:]
+        for id in ["openai", "openrouter", "opencode-go", "anthropic", "xai-api"] + ProviderConnectionID.searchProviders.map(\.rawValue) {
+            if let key = try key(id, scope: keyScope, keychain: keychain) ?? key(id, scope: device, keychain: keychain), !key.isEmpty {
+                credentials[id] = .init(type: "api_key", key: key)
+            }
+        }
+        for server in servers {
+            if let key = try key(server.id, keychain: keychain), !key.isEmpty { credentials[server.id] = .init(type: "api_key", key: key) }
+        }
+        for id in ["openai-codex", "xai"] {
+            if let value = try oauth(id, scope: keyScope, keychain: keychain) ?? oauth(id, scope: device, keychain: keychain) { credentials[id] = value.borrowing() }
+        }
+        var config = scope.resolved(workspace)
+        config.customServers = servers
+        var payload = DefaultAgentPayload(config: config, credentials: credentials, workspace: workspace)
+        var accounts: [String: [DefaultAgentCredentialAccount]] = [:]
+        for id in ProviderConnectionID.allCases.map(\.rawValue) {
+            var entries = try ProviderConnectionAccounts.borrowedAccounts(provider: id, scope: keyScope, keychain: keychain)
+            if entries.isEmpty { entries = try ProviderConnectionAccounts.borrowedAccounts(provider: id, scope: device, keychain: keychain) }
+            if !entries.isEmpty {
+                accounts[id] = entries
+                payload.credentials[id] = entries[0].credential
+            }
+        }
+        payload.credentialAccounts = accounts
+        return payload
+    }
+    /// The key that host's vault was sealed with, created as before when missing.
+    public static func workspaceKey(_ workspace: String, keychain: KeychainAccess = .init()) throws -> String {
+        credentialLock.lock()
+        defer { credentialLock.unlock() }
+        if let existing = try key("encryption-key", scope: workspace, keychain: keychain) { return existing }
+        var bytes = [UInt8](repeating: 0, count: 32)
+        guard SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes) == errSecSuccess else {
+            throw DefaultAgentError.message("Could not generate the workspace encryption key.")
+        }
+        let value = Data(bytes).base64EncodedString()
+        try saveKey(value, provider: "encryption-key", scope: workspace, notify: false, keychain: keychain)
+        return value
+    }
+
     /// Chat settings for another device's workspace: no credentials. That device
     /// keeps its own sign-ins; only these non-secret settings are synchronized.
     public static func configurationPayload(workspace: String, settings scope: DefaultAgentSettingsScope = settings) throws -> DefaultAgentPayload {
@@ -161,13 +222,12 @@ public enum DefaultAgentSupport {
     public static let deviceSignInMigrationKey = "wovenmatter.sign-ins.device-scope.v1"
     /// Once per installation, at background-server start: see
     /// `ProviderConnectionAccounts.migrateToDeviceSignIns`.
-    public static func migrateToDeviceSignInsOnce(remoteScopes: [String], defaults: UserDefaults = .standard) {
+    public static func migrateToDeviceSignInsOnce(defaults: UserDefaults = .standard) {
         guard !defaults.bool(forKey: deviceSignInMigrationKey) else { return }
-        let scopes = remoteScopes + settings.workspaces.keys.filter { $0 != "local" && $0 != "global" }
         do {
-            try ProviderConnectionAccounts.migrateToDeviceSignIns(remoteScopes: scopes)
+            try ProviderConnectionAccounts.migrateToDeviceSignIns()
             defaults.set(true, forKey: deviceSignInMigrationKey)
-        } catch { /* Keychain locked or denied: retried at the next start. */ }
+        } catch { /* Keychain locked or denied: retried at the next start, with nothing lost. */ }
     }
     public static func migrateLocalOAuth() throws {
         let path = FileManager.default.homeDirectoryForCurrentUser.appending(

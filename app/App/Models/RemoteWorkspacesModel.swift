@@ -136,9 +136,9 @@ final class RemoteWorkspacesModel {
     func startDefaultAgentMaintenance() {
         guard !isBackendProjection else { return }
         guard defaultAgentObservers.isEmpty else { return }
-        // Sign-ins are per device: this Mac's former local accounts become its own,
-        // and copies it held for its Linux workspaces are removed.
-        DefaultAgentSupport.migrateToDeviceSignInsOnce(remoteScopes: workspaces.map { $0.id.uuidString.lowercased() })
+        // Sign-ins are per device: this Mac's former local accounts join its own.
+        // Copies it held for a Linux host go once that host keeps its own vault.
+        DefaultAgentSupport.migrateToDeviceSignInsOnce()
         ProviderAccountCoordinator.shared.start()
         for name in [DefaultAgentSupport.credentialsChanged, DefaultAgentSupport.configurationChanged, Notification.Name("wovenmatter.default-agent.snapshot-ready")] {
             defaultAgentObservers.append(NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
@@ -1321,9 +1321,15 @@ final class RemoteWorkspacesModel {
         if facadeFixtureWorkspaceIDs.contains(configuration.id) { return }
         #endif
         let identity = try requestIdentity(configuration)
-        let payload = try DefaultAgentSupport.configurationPayload(workspace: configuration.id.uuidString.lowercased())
+        let scope = configuration.id.uuidString.lowercased()
+        let settingsOnly = try DefaultAgentSupport.configurationPayload(workspace: scope)
         try requireCurrent(identity)
-        if let ack = defaultAgentAcknowledgments[configuration.id], ack.revision == payload.revision, ack.identity == identity { return }
+        // A host known to keep its own sign-ins gets chat settings alone; one that
+        // has not updated yet gets what it got before.
+        let expected = DefaultAgentSupport.legacyHostScopes.contains(scope)
+            ? try await ProviderAccountCoordinator.shared.prepare(scope).revision : settingsOnly.revision
+        try requireCurrent(identity)
+        if let ack = defaultAgentAcknowledgments[configuration.id], ack.revision == expected, ack.identity == identity { return }
         if defaultAgentSyncTasks[configuration.id] != nil {
             try await waitForDefaultAgentSync(configuration.id)
             return try await ensureDefaultAgent(configuration)
@@ -1331,19 +1337,27 @@ final class RemoteWorkspacesModel {
         let task = Task {
             // Through the host's server with this Mac's signature once it is
             // enrolled; before that (first install) over the installer link.
+            let signed: MemberSignedHTTPClient?
+            if let memberClient { signed = try? await memberClient(configuration) } else { signed = nil }
+            let client = signed == nil ? try await serviceClient(for: configuration) : nil
+            try requireCurrent(identity)
+            let vault: DefaultAgentHostVault
+            if let signed { vault = try await signed.request("v1/default-agent/status", timeout: 60) }
+            else { vault = try await client!.defaultAgentVault() }
+            try requireCurrent(identity)
+            let payload = try await DefaultAgentHostSync.payload(scope: scope, vault: vault, settingsOnly: settingsOnly)
+            try requireCurrent(identity)
             let receipt: DefaultAgentSyncReceipt
-            if let memberClient, let signed = try? await memberClient(configuration) {
-                try requireCurrent(identity)
+            if let signed {
                 receipt = try await signed.request("v1/default-agent/configuration", method: "POST", body: payload.data(), timeout: 120)
             } else {
-                let client = try await serviceClient(for: configuration)
-                try requireCurrent(identity)
-                receipt = try await client.configureDefaultAgent(payload.data())
+                receipt = try await client!.configureDefaultAgent(payload.data())
             }
             try requireCurrent(identity)
             guard receipt.saved, receipt.revision == payload.revision else {
                 throw DefaultAgentError.message("The workspace did not acknowledge the current Pi Durable settings.")
             }
+            await DefaultAgentHostSync.acknowledged(receipt, scope: scope)
             defaultAgentAcknowledgments[configuration.id] = .init(revision: receipt.revision, identity: identity)
         }
         let operationID = UUID()
