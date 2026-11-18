@@ -557,7 +557,8 @@ struct SignInDeviceTests {
         try await KeychainAccess.$testOperations.withValue(keychain.operations) {
             session.touch()
             #expect(await command(.init(action: "refresh", provider: "openai-codex"), on: peer, keychain: keychain).status == 200)
-            try await waitUntil(peer) { peer.prompt != nil }
+            // The member keeps polling while the sign-in starts.
+            try await waitUntil(peer) { session.touch(); return peer.prompt != nil }
             // While it polls, the sign-in waits for the user.
             for _ in 0..<4 { session.touch(); try await Task.sleep(for: .milliseconds(150)) }
             #expect(peer.busy)
