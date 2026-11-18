@@ -19,6 +19,38 @@ public enum RemoteWorkspaceTailnet {
         (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
     }
 
+    /// What each node is called on the tailnet as people read it (`HostName`, such
+    /// as "James's Mac mini"), by its DNS name, and this Mac's (`Self`).
+    public struct HostNames: Sendable, Equatable {
+        public var this: String?
+        public var byDNSName: [String: String] = [:]
+        public init(this: String? = nil, byDNSName: [String: String] = [:]) { self.this = this; self.byDNSName = byDNSName }
+        /// The host name of the node whose DNS name is `host` (`name.tailnet.ts.net`).
+        public func name(forHost host: String?) -> String? {
+            host.flatMap { byDNSName[$0.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "."))] }
+        }
+    }
+    public static func hostNames(status: Data) -> HostNames {
+        guard let root = statusObject(status) else { return .init() }
+        func entry(_ node: [String: Any]?) -> (String, String)? {
+            guard let name = (node?["HostName"] as? String)?.trimmingCharacters(in: .whitespaces), !name.isEmpty,
+                  let dns = (node?["DNSName"] as? String)?.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: ".")) else { return nil }
+            return (dns, name)
+        }
+        var names = HostNames(this: entry(root["Self"] as? [String: Any])?.1)
+        for node in [root["Self"]] + ((root["Peer"] as? [String: Any]) ?? [:]).values.map({ Optional($0) }) {
+            if let (dns, name) = entry(node as? [String: Any]) { names.byDNSName[dns] = name }
+        }
+        return names
+    }
+    /// This Mac's view of the tailnet's host names; empty when Tailscale is unavailable.
+    public static func hostNames() -> HostNames {
+        guard let path = try? executable(),
+              let result = try? RemoteWorkspaceProcess.run(executable: path, arguments: ["status", "--json"], timeLimit: 10),
+              result.status == 0 else { return .init() }
+        return hostNames(status: result.data)
+    }
+
     /// Tailscale answered, but not with its status. Not the same as disconnected.
     public static let statusUnreadable = "Tailscale did not report its status. Check that Tailscale is running and up to date, then try again."
 

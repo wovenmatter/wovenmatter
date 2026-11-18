@@ -11,8 +11,7 @@ import { promptBlocks, textWithFiles } from './execution-attachments.mjs'
 
 const delay = milliseconds => new Promise(resolve => setTimeout(resolve,milliseconds))
 const fail = message => Object.assign(new Error(message), { statusCode: 409 })
-// Pi Durable's vault opens only with a Mac's unlock key. The code lets a
-// caller unlock it (`POST /v1/default-agent/unlock`) and retry.
+// Pi Durable on a host keeps its own vault and is never locked; `locked` is refused.
 const locked = message => Object.assign(new Error(message), { statusCode: 423, code: 'default_agent_locked' })
 const lockedMessage = 'Pi Durable is locked. A Mac unlocks it with its key for this workspace, then retry.'
 const deferred = () => { let resolve,reject; const promise = new Promise((a,b)=>{resolve=a;reject=b}); promise.catch(()=>{}); return {promise,resolve,reject} }
@@ -447,7 +446,6 @@ export function createClientExecutionRuntime({ defaultAgent, durableACP, catalog
   async function providers() {
     const agent=await defaultAgent.status()
     const statuses=await Promise.all([...catalog.values()].map(harnessStatus))
-    // `locked` says a Mac must unlock Pi Durable (`POST /v1/default-agent/unlock`).
     return [{id:'default_agent',runtimeKind:'default_agent',displayName:'Pi Durable',routeName:'This workspace',available:!agent.locked,canStart:!agent.locked,canResume:true,canSteer:true,canStop:true,supportsApprovals:false,supportsQuestions:false,activeInputMode:'steer',...(agent.locked?{locked:true,unavailableReason:lockedMessage}:{})},
       ...statuses.map(status=>({id:status.id,runtimeKind:status.id,displayName:status.displayName,routeName:'This workspace',available:status.state==='ready',canStart:status.state==='ready',canResume:true,canSteer:true,canStop:true,supportsApprovals:true,supportsQuestions:status.id==='claude_code',activeInputMode:'steer'}))]
   }

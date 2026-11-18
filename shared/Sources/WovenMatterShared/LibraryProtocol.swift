@@ -167,8 +167,8 @@ public struct HarnessCapabilities: Codable, Equatable, Identifiable, Sendable {
   public var supportsQuestions: Bool
   public var activeInputMode: String
   public var unavailableReason: String?
-  /// A Linux host's Pi Durable vault is locked: a Mac that holds its key
-  /// unlocks it (`POST v1/default-agent/unlock`) before starting a session.
+  /// A Linux host's Pi Durable vault is locked: only a host from before
+  /// per-device sign-ins reports it, and it needs updating.
   public var locked: Bool?
   public init(id: String, runtimeKind: String, displayName: String, routeName: String = "This Mac", available: Bool, canStart: Bool = true, canResume: Bool = true, canSteer: Bool = false, canStop: Bool = true, supportsApprovals: Bool = true, supportsQuestions: Bool = true, activeInputMode: String = "notNegotiated", unavailableReason: String? = nil, locked: Bool? = nil) {
     self.locked = locked

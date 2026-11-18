@@ -1,9 +1,8 @@
-import { unlink } from 'node:fs/promises';
 import { createInterface } from 'node:readline';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { DefaultAgentError, operationErrorMessage } from './config.mjs';
-import { CredentialVault, deviceVaultEnabled, sharedCredentials } from './vault.mjs';
+import { CredentialVault, deviceVaultEnabled } from './vault.mjs';
 import { deviceConfig } from './device-sign-ins.mjs';
 import { signInStatuses } from './sign-in-status.mjs';
 import { probeServer } from './local-servers.mjs';
@@ -39,7 +38,7 @@ async function invoke(message) {
     // Passive catalog loading and connection status own cancellable children.
     // Other commands retain their existing shutdown behavior; installing a
     // SIGTERM listener for an operation that ignores this signal would strand it.
-    if (!['probe-server', 'reset', 'logout', 'login', 'sign-in-status', 'refresh'].includes(message.action)) {
+    if (!['probe-server', 'logout', 'login', 'sign-in-status', 'refresh'].includes(message.action)) {
       const abort = () => controlController.abort();
       process.once('SIGTERM', abort);
       // EOF is a valid one-shot request boundary for DefaultAgentControl.run.
@@ -52,16 +51,9 @@ async function invoke(message) {
     // A host's own vault: this helper signs in and saves here, and its result
     // never carries the credential back to the device that asked.
     if (deviceVaultEnabled()) {
-      // An older Mac's "Reset credentials" restored the connections it shared;
-      // this device's sign-ins are its own and are never cleared that way.
-      if (message.action === 'reset') throw new DefaultAgentError('Sign-ins on this device are removed one at a time in Settings → Subscriptions & API Keys.');
       vault = new CredentialVault(directory);
       await vault.openDevice();
       payload = { ...message, credentials: {}, credentialAccounts: undefined, config: deviceConfig(message.config, await vault.read()) };
-    } else if (payload.unlockKey) {
-      vault = new CredentialVault(directory);
-      if (message.action === 'reset') await unlink(vault.path).catch(e => { if (e.code !== 'ENOENT') throw e; });
-      await vault.unlock(payload.workspace, payload.unlockKey);
     }
     const e = await engine();
     controlController.signal.throwIfAborted();
@@ -70,10 +62,6 @@ async function invoke(message) {
       return { models: await e.browse(provider, { signal: controlController.signal, force: message.force === true }) };
     }
     if (message.action === 'claude-status') return e.claude.status(message.profile ?? (await e.credentials.read('claude-subscription'))?.accountId, { signal: controlController.signal });
-    if (message.action === 'reset') {
-      await vault.modify(async stored => ({ ...stored, shared: sharedCredentials(payload.credentials) }));
-      return { reset: true };
-    }
     if (message.action === 'logout') {
       if (message.provider === 'claude-subscription') {
         const profile = message.profile ?? (await e.credentials.read('claude-subscription'))?.accountId;

@@ -17,17 +17,11 @@ protocol MemberExecutionRoutes: Sendable {
     func libraryFile(conversationID: String?, path: String) async throws -> MemberLibraryFile
     /// `POST v1/execution/adopt`, with the transcript this Mac already shows.
     func adopt(_ body: Data) async throws
-    /// `POST v1/default-agent/unlock`; false when the host refused the key.
-    func unlockDefaultAgent(workspace: String, unlockKey: String) async throws -> Bool
-    /// `POST v1/default-agent/configuration`, for a host that was never configured.
-    func configureDefaultAgent(_ payload: Data) async throws -> DefaultAgentSyncReceipt
     /// `POST v1/default-agent/control-sessions` and its `GET`, `DELETE` and `answer`.
     func startDefaultAgentControl(_ request: Data) async throws -> DefaultAgentControlSession
     func defaultAgentControl(id: String) async throws -> DefaultAgentControlSession
     func answerDefaultAgentControl(id: String, answerTo: String, answer: String) async throws -> DefaultAgentControlSession
     func cancelDefaultAgentControl(id: String) async throws
-    /// `GET v1/default-agent/status`: whether the host keeps its own sign-ins.
-    func defaultAgentVault() async throws -> DefaultAgentHostVault
     /// `GET v1/sign-ins`: the host's own accounts and local model servers (no secrets).
     func signIns() async throws -> DeviceSignIns
     /// `POST v1/sign-ins`: one change, saved only on the host.
@@ -65,60 +59,6 @@ struct DefaultAgentControlSession: Decodable, Sendable {
         if state == "succeeded" { values.append(.object(["result": result ?? .object([:])])) }
         if state == "failed" { values.append(.object(["error": .string(error ?? "Pi Durable settings did not complete on this workspace.")])) }
         return values.compactMap { try? JSONEncoder().encode($0) }
-    }
-}
-
-/// A host's Pi Durable vault is its own and always open: only a host from before
-/// per-device sign-ins reports itself locked. Such a host, and only such a host
-/// (it does not report `deviceVault`), is unlocked with its own existing vault
-/// key (the Keychain's `encryption-key` for the workspace scope), so it keeps
-/// what it already holds. No credential is ever sent, and no key to a host
-/// that keeps its own vault.
-enum DefaultAgentHostUnlock {
-    /// That host's own vault key: in its workspace scope, or, once this Mac set its
-    /// copies aside, read (not moved back) from `premigration.<workspace>` for a
-    /// host that reports itself old again (rolled back, restored, redeployed).
-    static func hostKey(_ scope: String, keychain: KeychainAccess = .init()) throws -> String? {
-        let key = try DefaultAgentSupport.key("encryption-key", scope: scope, keychain: keychain)
-            ?? DefaultAgentSupport.key("encryption-key", scope: ProviderConnectionAccounts.preservedScope(forHost: scope), keychain: keychain)
-        return key?.isEmpty == false ? key : nil
-    }
-    static func unlock(scope: String, name: String, routes: any MemberExecutionRoutes,
-                       existingKey: @Sendable (String) throws -> String? = { try hostKey($0) }) async throws {
-        guard try await routes.defaultAgentVault().isLegacy else { return }
-        if let key = try existingKey(scope), !key.isEmpty, try await routes.unlockDefaultAgent(workspace: scope, unlockKey: key) { return }
-        throw LibraryAPIError(code: MemberExecutionClient.defaultAgentLocked, message: "Pi Durable is locked on \(name). Open Woven Matter on the Mac that set it up.")
-    }
-}
-
-/// What this Mac sends a Linux host's Pi Durable. Never a provider credential,
-/// an account list or borrowed access, whatever the host reports.
-enum DefaultAgentHostSync {
-    struct Plan {
-        /// Chat settings (`v1/default-agent/configuration`), for a host that keeps its own sign-ins.
-        var configuration: DefaultAgentPayload?
-        /// That host's own vault key (`v1/default-agent/unlock`), only for a host from
-        /// before per-device sign-ins: it stays unlocked with what it holds.
-        var unlockKey: String?
-    }
-    static func plan(scope: String, vault: DefaultAgentHostVault, settingsOnly: DefaultAgentPayload,
-                     vaultKey: @Sendable (String) async throws -> String? = { scope in
-                         try await ProviderConnectionStore.shared.perform(invalidatesAccounts: false) { try DefaultAgentHostUnlock.hostKey(scope) }
-                     }) async throws -> Plan {
-        if vault.isLegacy { return Plan(configuration: nil, unlockKey: try await vaultKey(scope).flatMap { $0.isEmpty ? nil : $0 }) }
-        // A host that keeps its own vault never gets a key.
-        var payload = DefaultAgentPayload(config: settingsOnly.config, credentials: [:], workspace: settingsOnly.workspace)
-        payload.revision = settingsOnly.revision
-        return Plan(configuration: payload, unlockKey: nil)
-    }
-    /// Once the host keeps its own vault, what this Mac kept for that workspace is
-    /// moved aside (never deleted).
-    static func acknowledged(_ receipt: DefaultAgentSyncReceipt, scope: String,
-                             forget: @Sendable (String) async throws -> Void = { scope in
-                                 try await ProviderConnectionStore.shared.perform { try ProviderConnectionAccounts.setAsideHostCopies(scope: scope) }
-                             }) async {
-        guard receipt.deviceVault == true else { return }
-        try? await forget(scope)
     }
 }
 
@@ -189,19 +129,6 @@ extension SignedExecutionWorkspaceTransport: MemberExecutionRoutes {
         let _: JSONValue = try await member("v1/execution/adopt", method: "POST", body: body, timeout: 120)
     }
 
-    func unlockDefaultAgent(workspace: String, unlockKey: String) async throws -> Bool {
-        struct Reply: Decodable { var unlocked: Bool }
-        do {
-            let reply: Reply = try await member("v1/default-agent/unlock", method: "POST",
-                body: JSONSerialization.data(withJSONObject: ["workspace": workspace, "unlockKey": unlockKey], options: [.sortedKeys]))
-            return reply.unlocked
-        } catch let error as LibraryAPIError where error.code == "unlock_refused" { return false }
-    }
-
-    func configureDefaultAgent(_ payload: Data) async throws -> DefaultAgentSyncReceipt {
-        try await member("v1/default-agent/configuration", method: "POST", body: payload, timeout: 120)
-    }
-
     func startDefaultAgentControl(_ request: Data) async throws -> DefaultAgentControlSession {
         try await member("v1/default-agent/control-sessions", method: "POST", body: request)
     }
@@ -217,10 +144,6 @@ extension SignedExecutionWorkspaceTransport: MemberExecutionRoutes {
 
     func cancelDefaultAgentControl(id: String) async throws {
         let _: JSONValue = try await member("v1/default-agent/control-sessions/" + Self.safeID(id), method: "DELETE")
-    }
-
-    func defaultAgentVault() async throws -> DefaultAgentHostVault {
-        try await member("v1/default-agent/status", timeout: 60)
     }
 
     func signIns() async throws -> DeviceSignIns {

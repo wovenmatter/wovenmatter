@@ -42,3 +42,16 @@ test('an update that activates a new SDK copy restarts bots onto it; a no-op or 
   await defaultAgentSDKRequest(request({ action: 'check' }), response, checked, { onActivated });
   assert.equal(restarts, 1);
 });
+
+test('a rejected SDK candidate answers with its readable failure, not internal_error', async () => {
+  class SDKMaintenanceError extends Error {}
+  const response = new EventEmitter();
+  for (const action of ['update', 'check']) {
+    const service = { [action === 'update' ? 'updateSDK' : 'checkSDKUpdates']: async () => { throw new SDKMaintenanceError('SDK installation or verification failed. The previous SDKs were kept.'); } };
+    await assert.rejects(defaultAgentSDKRequest(request({ action }), response, service),
+      error => error.statusCode === 409 && error.message === 'SDK installation or verification failed. The previous SDKs were kept.');
+  }
+  // Anything else still answers as before.
+  await assert.rejects(defaultAgentSDKRequest(request({ action: 'update' }), response, { updateSDK: async () => { throw new Error('/private/path detail'); } }),
+    error => error.statusCode === undefined);
+});

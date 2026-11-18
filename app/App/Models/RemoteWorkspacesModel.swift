@@ -136,9 +136,6 @@ final class RemoteWorkspacesModel {
     func startDefaultAgentMaintenance() {
         guard !isBackendProjection else { return }
         guard defaultAgentObservers.isEmpty else { return }
-        // Sign-ins are per device: this Mac's former local accounts join its own.
-        // Copies it held for a Linux host go once that host keeps its own vault.
-        DefaultAgentSupport.migrateToDeviceSignInsOnce()
         ProviderAccountCoordinator.shared.start()
         for name in [DefaultAgentSupport.credentialsChanged, DefaultAgentSupport.configurationChanged, Notification.Name("wovenmatter.default-agent.snapshot-ready")] {
             defaultAgentObservers.append(NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
@@ -147,15 +144,10 @@ final class RemoteWorkspacesModel {
         }
         defaultAgentObservers.append(NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { [weak self] _ in
             Task { @MainActor in
-                DefaultAgentSupport.DeviceSignInMigrationSchedule.shared.retrySoon()
                 ProviderAccountCoordinator.shared.invalidate()
                 self?.defaultAgentAcknowledgments.removeAll()
                 await self?.synchronizeDefaultAgentSettings()
             }
-        })
-        // Unlocking the Mac can make the Keychain readable again.
-        defaultAgentObservers.append(NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.sessionDidBecomeActiveNotification, object: nil, queue: .main) { _ in
-            DefaultAgentSupport.DeviceSignInMigrationSchedule.shared.retrySoon()
         })
         defaultAgentObservers.append(NotificationCenter.default.addObserver(forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
             Task { @MainActor in await self?.synchronizeDefaultAgentSettings() }
@@ -167,6 +159,7 @@ final class RemoteWorkspacesModel {
         guard !isBackendProjection else { return }
         for workspace in workspaces where tunnels[workspace.id] != nil {
             do { try await ensureDefaultAgent(workspace) }
+            catch let error as DefaultAgentError { signInErrors[workspace.id] = error.localizedDescription }
             catch { signInErrors[workspace.id] = "Pi Durable settings could not synchronize. Reconnect this workspace to retry." }
         }
     }
@@ -1345,22 +1338,12 @@ final class RemoteWorkspacesModel {
             if let signed { vault = try await signed.request("v1/default-agent/status", timeout: 60) }
             else { vault = try await client!.defaultAgentVault() }
             try requireCurrent(identity)
-            // Never a credential: chat settings for a host that keeps its own sign-ins,
-            // or only its own vault key for one that has not updated yet.
-            let plan = try await DefaultAgentHostSync.plan(scope: scope, vault: vault, settingsOnly: settingsOnly)
-            try requireCurrent(identity)
-            guard let payload = plan.configuration else {
-                if let key = plan.unlockKey {
-                    if let signed {
-                        struct Reply: Decodable { var unlocked: Bool }
-                        let _: Reply = try await signed.request("v1/default-agent/unlock", method: "POST",
-                            body: JSONSerialization.data(withJSONObject: ["workspace": scope, "unlockKey": key], options: [.sortedKeys]))
-                    } else { try await client!.unlockDefaultAgent(workspace: scope, unlockKey: key) }
-                    try requireCurrent(identity)
-                }
-                defaultAgentAcknowledgments[configuration.id] = .init(revision: settingsOnly.revision ?? "", identity: identity)
-                return
+            // Chat settings only, and only to a host that keeps its own sign-ins: one
+            // that has not updated is sent nothing.
+            guard vault.deviceVault == true else {
+                throw DefaultAgentError.message(SignInDevice.updateMessage(configuration.name))
             }
+            let payload = settingsOnly
             let receipt: DefaultAgentSyncReceipt
             if let signed {
                 receipt = try await signed.request("v1/default-agent/configuration", method: "POST", body: payload.data(), timeout: 120)
@@ -1371,7 +1354,6 @@ final class RemoteWorkspacesModel {
             guard receipt.saved, receipt.revision == payload.revision else {
                 throw DefaultAgentError.message("The workspace did not acknowledge the current Pi Durable settings.")
             }
-            await DefaultAgentHostSync.acknowledged(receipt, scope: scope)
             defaultAgentAcknowledgments[configuration.id] = .init(revision: receipt.revision, identity: identity)
         }
         let operationID = UUID()

@@ -1303,12 +1303,6 @@ public struct RemoteWorkspaceServiceClient: Sendable {
     public func configureDefaultAgent(_ payload: Data) async throws -> DefaultAgentSyncReceipt {
         try await request(path: "v1/default-agent/configuration", method: "POST", body: payload)
     }
-    /// A host from before per-device sign-ins: its own vault key, nothing else.
-    public func unlockDefaultAgent(workspace: String, unlockKey: String) async throws {
-        struct Reply: Decodable { var unlocked: Bool }
-        let _: Reply = try await request(path: "v1/default-agent/unlock", method: "POST",
-            body: JSONSerialization.data(withJSONObject: ["workspace": workspace, "unlockKey": unlockKey], options: [.sortedKeys]))
-    }
     /// Whether the host keeps its own sign-ins (`GET v1/default-agent/status`).
     public func defaultAgentVault() async throws -> DefaultAgentHostVault {
         try await request(path: "v1/default-agent/status", method: "GET", body: nil)

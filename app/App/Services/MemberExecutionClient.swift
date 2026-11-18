@@ -202,9 +202,8 @@ final class MemberExecutionClient {
     }
 
     /// Creates a session on `workspace` with the caller's choices. A locked Pi
-    /// Durable vault, reported by the provider list or the receipt, is
-    /// unlocked with this Mac's key (`unlockDefaultAgent`) and the creation
-    /// retried once under a new command ID.
+    /// Durable vault, reported by the provider list or the receipt, means the
+    /// host needs updating (`unlockDefaultAgent`).
     func createSession(workspace: ExecutionWorkspace, runtimeKind: AgentRuntimeKind,
                        conversationID: String, folderID: String?, title: String? = nil,
                        sessionOptions: LibrarySessionOptions? = nil) async throws -> LibraryCommandReceipt {
@@ -235,15 +234,10 @@ final class MemberExecutionClient {
 
     nonisolated static let defaultAgentLocked = "default_agent_locked"
 
-    /// Unlocks a host's Pi Durable vault with this Mac's key for it. Set by
-    /// the application model, which holds the Keychain.
-    var unlockDefaultAgentHandler: (@MainActor (ExecutionWorkspace, any MemberExecutionRoutes) async throws -> Void)?
-
+    /// Only a host from before per-device sign-ins locks its Pi Durable vault.
+    /// Nothing is sent to unlock it: it needs updating.
     func unlockDefaultAgent(on workspace: ExecutionWorkspace) async throws {
-        guard let unlockDefaultAgentHandler else {
-            throw LibraryAPIError(code: Self.defaultAgentLocked, message: "Pi Durable is locked on \(workspace.name). Open Woven Matter on the Mac that set it up.")
-        }
-        try await unlockDefaultAgentHandler(workspace, memberRoutes(for: workspace))
+        throw LibraryAPIError(code: Self.defaultAgentLocked, message: SignInDevice.updateMessage(workspace.name))
     }
 
     /// The Linux server's member routes for `workspace`, signed by this Mac.

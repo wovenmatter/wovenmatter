@@ -95,15 +95,12 @@ public struct DefaultAgentSyncReceipt: Decodable, Sendable {
     public let saved: Bool
     public let revision: String
     public let epoch: String
-    /// The host keeps its own sign-ins; absent from a host that has not updated.
-    public var deviceVault: Bool? = nil
 }
-/// What a host's Pi Durable status says about where its sign-ins live.
+/// Whether a host keeps its own sign-ins (`deviceVault` in its Pi Durable status);
+/// a host that does not has not updated and is not configured.
 public struct DefaultAgentHostVault: Decodable, Sendable {
     public var deviceVault: Bool?
     public init(deviceVault: Bool? = nil) { self.deviceVault = deviceVault }
-    /// A host from before per-device sign-ins: it still needs this Mac's copy.
-    public var isLegacy: Bool { deviceVault != true }
 }
 
 /// One Mac owns renewal. Ordinary sends compare cached revisions and deadlines.
@@ -313,8 +310,6 @@ public final class ProviderAccountCoordinator {
         try DefaultAgentSupport.saveRenewedOAuth(renewed, replacing: original, provider: provider, scope: ProviderConnectionAccounts.deviceScope)
     }
     nonisolated public static func refreshStored(_ scopes: [String]) async throws -> [String: DefaultAgentPayload] {
-        // Local-only accounts join this device's list as soon as Keychain allows it.
-        DefaultAgentSupport.migrateToDeviceSignInsOnce()
         try DefaultAgentSupport.migrateLocalOAuth()
         // Only this device's own subscriptions are renewed here.
         let device = ProviderConnectionAccounts.deviceScope

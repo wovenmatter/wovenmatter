@@ -107,11 +107,6 @@ extension ApplicationModel {
             },
             memberRevision: { [weak self] in try? await self?.libraryHost.peerSync.members().list().revision })
         client.onLive = { [weak self] ids in self?.federatedLiveChanged(ids) }
-        // A Linux host's Pi Durable vault opens with this Mac's key for that
-        // workspace (its registry id is the Keychain scope).
-        client.unlockDefaultAgentHandler = { workspace, routes in
-            try await DefaultAgentHostUnlock.unlock(scope: workspace.id, name: workspace.name, routes: routes)
-        }
         federatedExecutionClient = client
         return client
     }

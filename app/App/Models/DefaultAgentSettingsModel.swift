@@ -394,10 +394,12 @@ final class DefaultAgentSettingsModel {
         await backendCommandTask?.value
     }
     private var linuxTarget: UUID? { SignInDevice.linuxWorkspace(of: device) }
+    /// The selected device has not updated to per-device sign-ins (`updateMessage`).
+    var deviceNeedsUpdate: Bool { SignInDevice.isUpdateMessage(error) }
     /// A Linux host from before per-device sign-ins has no `v1/sign-ins`.
     private func linuxMessage(_ error: any Error) -> String {
         if let error = error as? LibraryAPIError, ["not_found", "http_404"].contains(error.code), let name = selectedDevice?.name {
-            return "Update Woven Matter on \(name) to manage its sign-ins from here."
+            return SignInDevice.updateMessage(name)
         }
         return error.localizedDescription
     }
@@ -1435,7 +1437,7 @@ final class DefaultAgentSettingsModel {
             guard generation == runID, !Task.isCancelled else { return }
             if profile != nil || credential != nil, let provider { invalidateConnection(provider) }
             // Local account mutations already publish one notification after committing.
-            if !changesCredentials, result["reset"] as? Bool == true || result["disconnected"] as? Bool == true {
+            if !changesCredentials, result["disconnected"] as? Bool == true {
                 DefaultAgentSupport.changed()
             }
             await loadAccountsAndWait()
@@ -1459,9 +1461,7 @@ final class DefaultAgentSettingsModel {
             error = result["detail"] as? String ?? "Sign-in did not complete. Try again."
         }
         if error != nil { notice = nil }
-        else if result["reset"] as? Bool == true {
-            notice = "Sign-ins on this workspace were reset."
-        } else if result["disconnected"] as? Bool == true {
+        else if result["disconnected"] as? Bool == true {
             notice = "Signed out."
         } else if result["connected"] as? Bool == true {
             notice = "Connected."

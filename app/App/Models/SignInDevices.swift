@@ -13,7 +13,7 @@ struct SignInDevice: Codable, Equatable, Hashable, Identifiable, Sendable {
     /// `local`, `mac:<member device id>` or `linux:<registry workspace id>`.
     var id: String
     var kind: Kind
-    /// The device's Tailnet name.
+    /// What the device is called on the tailnet (its Tailscale host name).
     var name: String
     /// Bots are turned on there; they use this device's sign-ins.
     var runsBots: Bool
@@ -42,6 +42,11 @@ struct SignInDevice: Codable, Equatable, Hashable, Identifiable, Sendable {
     static func id(forBotMachine machineID: String, in devices: [SignInDevice]) -> String? {
         let id = machineID.lowercased()
         return devices.first { $0.memberID?.lowercased() == id || $0.workspaceID == id }?.id
+    }
+    /// What a device that has not updated to per-device sign-ins shows, once.
+    static func updateMessage(_ name: String) -> String { "Update Woven Matter on \(name) to manage its sign-ins from here." }
+    static func isUpdateMessage(_ message: String?) -> Bool {
+        message.map { $0.hasPrefix("Update Woven Matter on ") && $0.hasSuffix(" to manage its sign-ins from here.") } ?? false
     }
     /// The first label of a tailnet address (`name.tailnet.ts.net`), the device's Tailnet name.
     static func tailnetName(_ host: String?) -> String? {
@@ -113,7 +118,9 @@ extension ApplicationModel {
             guard let memberID else { return false }
             return machines.first { $0.id.lowercased() == memberID.lowercased() }?.socket != nil
         }
-        let thisName = SignInDevice.tailnetName(libraryHost.endpoint?.host) ?? DevelopmentLaunch.deviceName()
+        // What each device is called on the tailnet (its host name), else its DNS label.
+        let hosts = await Task.detached { RemoteWorkspaceTailnet.hostNames() }.value
+        let thisName = hosts.this ?? SignInDevice.tailnetName(libraryHost.endpoint?.host) ?? DevelopmentLaunch.deviceName()
         var devices = [SignInDevice(id: SignInDevice.localID, kind: .thisMac, name: thisName,
                                     runsBots: bots.thisMachine?.socket != nil, memberID: bots.thisMachineID)]
         var linux: Set<String> = []
@@ -122,13 +129,14 @@ extension ApplicationModel {
             switch target.workspace.kind {
             case .mac:
                 devices.append(.init(id: SignInDevice.macID(target.audience), kind: .mac,
-                    name: SignInDevice.tailnetName(host) ?? target.workspace.name, runsBots: runsBots(target.audience),
+                    name: hosts.name(forHost: host) ?? SignInDevice.tailnetName(host) ?? target.workspace.name, runsBots: runsBots(target.audience),
                     memberID: target.audience, workspaceID: target.workspace.id))
             case .linux:
                 let configured = remoteWorkspaces.workspaces.first { $0.id.uuidString.lowercased() == target.workspace.id }
                 linux.insert(target.workspace.id)
                 devices.append(.init(id: SignInDevice.linuxID(target.workspace.id), kind: .linux,
-                    name: SignInDevice.tailnetName(host) ?? SignInDevice.tailnetName(configured?.hostName) ?? target.workspace.name,
+                    name: hosts.name(forHost: host) ?? hosts.name(forHost: configured?.hostName) ?? SignInDevice.tailnetName(host)
+                        ?? SignInDevice.tailnetName(configured?.hostName) ?? target.workspace.name,
                     runsBots: runsBots(target.audience), memberID: target.audience, workspaceID: target.workspace.id))
             default: break
             }
@@ -138,7 +146,7 @@ extension ApplicationModel {
             let workspaceID = configuration.id.uuidString.lowercased()
             let machine = machines.first { $0.workspaceID == workspaceID }
             devices.append(.init(id: SignInDevice.linuxID(workspaceID), kind: .linux,
-                name: SignInDevice.tailnetName(configuration.hostName) ?? configuration.name,
+                name: hosts.name(forHost: configuration.hostName) ?? SignInDevice.tailnetName(configuration.hostName) ?? configuration.name,
                 runsBots: machine?.socket != nil, memberID: machine?.id, workspaceID: workspaceID))
         }
         return SignInDevice.ordered(devices)
@@ -161,7 +169,7 @@ extension ApplicationModel {
             } catch let error as MemberSignedHTTPError {
                 if case .http(let status, _, let message) = error {
                     if status == 404 || status == 426 {
-                        throw DefaultAgentError.message("Update Woven Matter on \(target.workspace.name) to manage its sign-ins from here.")
+                        throw DefaultAgentError.message(SignInDevice.updateMessage(target.workspace.name))
                     }
                     throw DefaultAgentError.message(message.isEmpty ? "\(target.workspace.name) did not accept this change." : message)
                 }

@@ -1429,10 +1429,10 @@ no stdio relay.
   reads it from the workspace, caches it and previews it with Quick Look.
 - **Background execution** governs scheduled tasks only. Sessions, their goals
   and timers run with it off.
-- **Pi Durable.** Provider credentials stay in the host's encrypted vault, and
-  its key stays on the Mac that set it up. A locked refusal has code
-  `default_agent_locked`; a Mac unlocks with `POST v1/default-agent/unlock
-  {workspace, unlockKey}` (or `v1/default-agent/configuration`) and retries.
+- **Pi Durable.** The host keeps and renews its own sign-ins in its own
+  encrypted vault (`GET`/`POST v1/sign-ins`); a Mac sends only chat settings
+  (`v1/default-agent/configuration`), and only to a host whose status reports
+  `deviceVault`.
   Settings, sign-in and the model catalog use `POST v1/default-agent/control`
   and `v1/default-agent/control-sessions`, which run the control helper on the
   host.

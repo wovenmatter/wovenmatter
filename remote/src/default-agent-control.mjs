@@ -3,7 +3,7 @@ import { createInterface } from 'node:readline'
 import { randomUUID } from 'node:crypto'
 
 const fail = (statusCode, message) => Object.assign(new Error(message), { statusCode })
-const actions = new Set(['status', 'catalog', 'login', 'logout', 'reset', 'refresh', 'sign-in-status', 'claude-status', 'probe-server'])
+const actions = new Set(['status', 'catalog', 'login', 'logout', 'refresh', 'sign-in-status', 'claude-status', 'probe-server'])
 const maximumOutputBytes = 4 * 1024 * 1024
 
 // Pi Durable's settings actions, on this host, for a Mac that used to run

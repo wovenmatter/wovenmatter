@@ -215,10 +215,6 @@ const clientExecution = runningAsService ? createClientExecution({
   runtime: createClientExecutionRuntime({defaultAgent,durableACP,catalog,workspaceRoot,harnessStatus,instances,
     environment: harness => harness.id === 'codex' ? harnessRuntimeEnvironment(harness) : harnessEnvironment()}),
 }) : null
-// This host keeps its own vault: no Mac's unlock key is ever derived from a
-// device grant's envelope, remembered, or sealed into a new enrollment, and a
-// grant whose envelope is damaged or absent is served like any other.
-if (clientExecution) Object.assign(clientExecution, { unlockMaterial: () => null, rememberUnlockMaterial: () => {} })
 
 // Streams this server opened to other members, refused with 4401 when this
 // member was removed, try again once the member list changes.
@@ -332,10 +328,6 @@ const server = createServer({ maxHeaderSize: 16_384, headersTimeout: 10_000,
     const device = member ? { id: member.deviceID, name: member.name, scopes: ['execution'], memberKind: member.kind, administrator: member.kind === 'mac' }
       : clientExecution?.principal(request.headers.authorization, 'execution')
     if (!administrator && !device) return json(response, 401, { error: 'unauthorized' })
-    if (device && !member) {
-      const material = clientExecution.unlockMaterial(request.headers.authorization)
-      if (material) await defaultAgent.unlockForClient(material)
-    }
     if (bots && await bots.handleClient(request, response, url, { readJSON, json, administrator, device })) return
     if (url.pathname === '/v1/host/installer-bearer' && request.method === 'POST') {
       if (!administrator) return json(response, 403, { error: 'administrator_required' })
@@ -521,20 +513,10 @@ const server = createServer({ maxHeaderSize: 16_384, headersTimeout: 10_000,
     }
     if (url.pathname === '/v1/default-agent/configuration'  && request.method === 'POST') {
       const payload = await readJSON(request)
-      // Chat settings only: this host's vault is its own, so no unlock material is kept.
+      // Chat settings only: this host keeps its own sign-ins.
       return json(response, 200, await defaultAgent.configure(payload))
     }
     if (url.pathname === '/v1/default-agent/status' && request.method === 'GET') return json(response, 200, await defaultAgent.status())
-    // An older Mac's key for this workspace's vault. This host's vault is its
-    // own and always open, so it answers unlocked and the key is not kept.
-    if (url.pathname === '/v1/default-agent/unlock' && request.method === 'POST') {
-      const body = await readJSON(request, 4096)
-      if (typeof body.workspace !== 'string' || typeof body.unlockKey !== 'string' || Object.keys(body).some(key => !['workspace', 'unlockKey'].includes(key))) return json(response, 400, { error: 'invalid_unlock' })
-      try { await defaultAgent.unlockForClient(body) } catch { return json(response, 403, { error: 'unlock_refused' }) }
-      // This host keeps its own vault: a Mac's key is answered, never kept.
-      const status = await defaultAgent.status()
-      return json(response, 200, { unlocked: !status.locked, ...(status.epoch ? { epoch: status.epoch } : {}) })
-    }
     // This host's own sign-ins, for a signed Mac's Settings → Subscriptions &
     // API Keys. A key arrives once in the request and is stored only here.
     if (url.pathname === '/v1/sign-ins' && request.method === 'GET') {
@@ -1471,6 +1453,10 @@ export async function defaultAgentSDKRequest(request, response, service, { onAct
     // The update already committed; a failed bots restart retries on its own.
     if (result?.activated) await Promise.resolve().then(onActivated).catch(() => {})
     return result
+  } catch (error) {
+    // A rejected candidate answers with its readable message, not internal_error.
+    if (error?.constructor?.name === 'SDKMaintenanceError' && !error.statusCode) throw Object.assign(new Error(error.message), { statusCode: 409 })
+    throw error
   } finally {
     clearTimeout(timeout)
     request.removeListener('aborted', abort)

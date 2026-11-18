@@ -4,7 +4,6 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { DefaultAgentEngine } from '../src/engine.mjs';
 import { Credentials } from '../src/credentials.mjs';
 import { SessionMCPContext } from '../src/mcp-context.mjs';
-import { sharedAccounts, sharedCredentials } from '../src/vault.mjs';
 
 async function temporary(t) {
   const directory = await mkdtemp('/tmp/woven-default-agent-test-');
@@ -50,13 +49,6 @@ test('account fallback follows priority without changing another session credent
   assert.deepEqual(used, ['first-secret', 'second-secret']);
   assert.match(events.at(-1)._meta.fallbackReason, /Second/);
   assert.equal((await engine.credentials.read('openai')).key, 'fixture');
-});
-
-test('native profile sharing includes only an identifier, never native credentials', () => {
-  assert.deepEqual(sharedCredentials({ 'claude-subscription': { type: 'native', accountId: 'profile-1', access: 'must-not-share', refresh: 'must-not-share' } }),
-    { 'claude-subscription': { type: 'native', accountId: 'profile-1' } });
-  assert.deepEqual(sharedCredentials({ 'claude-subscription': { type: 'native', accountId: '../outside' } }), {});
-  assert.deepEqual(sharedAccounts({ 'claude-subscription': [{ id: 'fixture', label: 'Invalid', credential: { type: 'native', accountId: '../outside' } }] }), { 'claude-subscription': [] });
 });
 
 test('removing a workspace-owned account does not silently switch an active turn to shared credentials', async () => {

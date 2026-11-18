@@ -177,8 +177,6 @@ struct BackendConnectionsSnapshot: Codable, Equatable {
                 try await ProviderConnectionStore.shared.perform(invalidatesAccounts: false) {
                     try DefaultAgentSupport.checkKeychainAccess()
                 }
-                // The Keychain is readable: a move to device sign-ins it blocked runs next.
-                DefaultAgentSupport.DeviceSignInMigrationSchedule.shared.retrySoon()
             case "localServers": break
             case "connectServer":
                 // A saved key is reused only for that saved server at its own URL.

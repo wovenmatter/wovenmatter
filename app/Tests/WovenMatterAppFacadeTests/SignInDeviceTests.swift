@@ -135,11 +135,6 @@ actor FakeLinuxSignInHost: MemberExecutionRoutes {
         return try defaultAgentControl(id: id)
     }
     func cancelDefaultAgentControl(id: String) {}
-    /// An updated host by default; `reportOld()` makes it report itself old again.
-    private(set) var reportsOld = false
-    func reportOld() { reportsOld = true }
-    func defaultAgentVault() -> DefaultAgentHostVault { .init(deviceVault: reportsOld ? nil : true) }
-    private(set) var unlockKeys: [String] = []
     /// A host that has not updated has no `v1/sign-ins`.
     private(set) var outdated = false
     func makeOutdated() { outdated = true }
@@ -147,8 +142,6 @@ actor FakeLinuxSignInHost: MemberExecutionRoutes {
     func sessionOptions(providerID: String, workingDirectory: String?, model: String?) throws -> SessionSettings { throw LibraryAPIError(code: "unavailable", message: "") }
     func libraryFile(conversationID: String?, path: String) throws -> MemberLibraryFile { throw LibraryAPIError(code: "unavailable", message: "") }
     func adopt(_ body: Data) throws {}
-    func unlockDefaultAgent(workspace: String, unlockKey: String) -> Bool { unlockKeys.append(unlockKey); return true }
-    func configureDefaultAgent(_ payload: Data) throws -> DefaultAgentSyncReceipt { throw LibraryAPIError(code: "unavailable", message: "") }
 }
 
 @MainActor
@@ -435,28 +428,19 @@ struct SignInDeviceTests {
         }
     }
 
-    /// A host this Mac set its copies aside for that reports itself old again
-    /// (rolled back, restored, redeployed) is still unlocked with its own key,
-    /// read from where it was set aside and not moved back.
-    @Test func anOldAgainHostIsUnlockedWithItsKeptKey() async throws {
-        let keychain = SignInKeychainFixture()
-        let scope = UUID().uuidString.lowercased()
-        let host = FakeLinuxSignInHost()
-        try await KeychainAccess.$testOperations.withValue(keychain.operations) {
-            try DefaultAgentSupport.saveKey("host-vault-key", provider: "encryption-key", scope: scope, notify: false)
-            try ProviderConnectionAccounts.setAsideHostCopies(scope: scope)
-            #expect(try DefaultAgentSupport.key("encryption-key", scope: scope) == nil)
-            #expect(try DefaultAgentHostUnlock.hostKey(scope) == "host-vault-key")
-            let settings = try DefaultAgentSupport.configurationPayload(workspace: scope)
-            let plan = try await DefaultAgentHostSync.plan(scope: scope, vault: .init(), settingsOnly: settings)
-            #expect(plan.configuration == nil && plan.unlockKey == "host-vault-key")
-            // An updated host still gets none.
-            #expect(try await DefaultAgentHostSync.plan(scope: scope, vault: .init(deviceVault: true), settingsOnly: settings).configuration?.unlockKey == nil)
-            await host.reportOld()
-            try await DefaultAgentHostUnlock.unlock(scope: scope, name: "workstation", routes: host)
-            #expect(try DefaultAgentSupport.key("encryption-key", scope: scope) == nil)
-        }
-        #expect(await host.unlockKeys == ["host-vault-key"])
+    /// A freshly started background server has no active work in either settings
+    /// model, and a sign-in in progress never holds up a stop: stop cancels it.
+    @Test func stopNeverWaitsOnASignIn() async throws {
+        let fixture = try await FacadeFixture(); defer { fixture.remove() }
+        let model = fixture.model
+        #expect(!model.connections.busy && !model.signInConnections.busy)
+        #expect(!model.backendHasUnfinishedMaintenance)
+        model.signInConnections.busy = true
+        #expect(!model.backendHasUnfinishedMaintenance)
+        model.connections.busy = true
+        #expect(model.backendHasUnfinishedMaintenance)
+        model.connections.busy = false
+        model.signInConnections.busy = false
     }
 
     /// The device chosen on Subscriptions & API Keys has its own model, window and
@@ -638,44 +622,10 @@ struct SignInDeviceTests {
             model.selectDevice(SignInDevice.linuxID(workspace))
             try await waitUntil(model) { model.error != nil }
             #expect(model.error == "Update Woven Matter on workstation to manage its sign-ins from here.")
+            // The page shows it once, under the picker, with no sections below.
+            #expect(model.deviceNeedsUpdate)
             #expect(!(await model.saveKeyConfirmed("k", provider: "openai")))
             #expect(model.error == "Update Woven Matter on workstation to manage its sign-ins from here.")
-        }
-    }
-
-    /// No host ever gets this Mac's credentials, whatever it reports: an updated
-    /// one gets chat settings and never a key; one that has not updated gets only
-    /// its own vault key.
-    @Test func linuxHostsGetNoCredentialsWhateverTheyReport() async throws {
-        let scope = UUID().uuidString.lowercased()
-        var settings = try DefaultAgentSupport.configurationPayload(workspace: scope)
-        settings.credentials = ["openai": .init(type: "api_key", key: "must-not-leave")]
-        let key: @Sendable (String) async throws -> String? = { _ in "vault-key" }
-        let none: @Sendable (String) async throws -> String? = { _ in nil }
-        let reports: [DefaultAgentHostVault] = [.init(), .init(deviceVault: false), .init(deviceVault: true)]
-        for report in reports {
-            for vaultKey in [key, none] {
-                let plan = try await DefaultAgentHostSync.plan(scope: scope, vault: report, settingsOnly: settings, vaultKey: vaultKey)
-                if let payload = plan.configuration {
-                    #expect(payload.credentials.isEmpty && payload.credentialAccounts == nil)
-                    #expect(!String(decoding: try payload.data(), as: UTF8.self).contains("must-not-leave"))
-                    // A host that keeps its own vault never gets a key, in any state.
-                    #expect(payload.unlockKey == nil && plan.unlockKey == nil)
-                }
-            }
-        }
-        let old = try await DefaultAgentHostSync.plan(scope: scope, vault: .init(), settingsOnly: settings, vaultKey: key)
-        #expect(old.configuration == nil && old.unlockKey == "vault-key")
-        let oldWithoutKey = try await DefaultAgentHostSync.plan(scope: scope, vault: .init(), settingsOnly: settings, vaultKey: none)
-        #expect(oldWithoutKey.configuration == nil && oldWithoutKey.unlockKey == nil)
-        // What this Mac kept for the host moves aside once the host keeps its own vault.
-        let forgotten = ForgottenScopes()
-        for (json, forgets) in [(#"{"saved":true,"revision":"r","epoch":"e"}"#, false),
-                                (#"{"saved":true,"revision":"r","epoch":"e","deviceVault":true}"#, true)] {
-            let receipt = try JSONDecoder().decode(DefaultAgentSyncReceipt.self, from: Data(json.utf8))
-            let before = await forgotten.scopes.count
-            await DefaultAgentHostSync.acknowledged(receipt, scope: scope) { await forgotten.add($0) }
-            #expect(await forgotten.scopes.count == before + (forgets ? 1 : 0), "\(json)")
         }
     }
 
@@ -812,10 +762,6 @@ struct SignInDeviceTests {
     }
 }
 
-private actor ForgottenScopes {
-    var scopes: [String] = []
-    func add(_ scope: String) { scopes.append(scope) }
-}
 
 private actor FailureBudget {
     private(set) var remaining = 0

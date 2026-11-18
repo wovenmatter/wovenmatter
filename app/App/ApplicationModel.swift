@@ -2194,7 +2194,6 @@ final class ApplicationModel {
                 try await ProviderConnectionStore.shared.perform(invalidatesAccounts: false) {
                     try DefaultAgentSupport.checkKeychainAccess()
                 }
-                DefaultAgentSupport.DeviceSignInMigrationSchedule.shared.retrySoon()
             }
             keychainAccessReady = true
             credentialAccessStatus = "Saved credentials are accessible. Background checks stay silent."
@@ -4344,7 +4343,8 @@ extension ApplicationModel {
     }
 
     func handleBackendRequest(_ request: BackendRPCRequest) async -> BackendRPCResponse {
-        let isCommand = request.method.hasSuffix(".command")
+        // A sign-in command never holds up a stop: stop cancels it instead.
+        let isCommand = request.method.hasSuffix(".command") && !request.method.hasPrefix("signins.")
         if request.method == "application.readiness", let service = backendApplicationService {
             return await service.handle(request)
         }
@@ -4440,13 +4440,11 @@ extension ApplicationModel {
                     return .init(id: request.id, result: try JSONEncoder().encode(
                         BackgroundServerStopResult(confirmationRequired: true, activeWorkCount: activeCount)))
                 }
-                guard backendCommandsInFlight == 0, !connections.busy, !signInConnections.busy, !connections.sdks.isBusy,
-                      remoteWorkspaces.busyWorkspaceIDs.isEmpty, remoteWorkspaces.maintainingHarnesses.isEmpty,
-                      !remoteWorkspaces.isCreating,
-                      installingLocalACPRuntimeKinds.isEmpty, updatingRuntimeKinds.isEmpty,
-                      !executorRuntime.isSettingUp else {
+                guard !backendHasUnfinishedMaintenance else {
                     throw BackendRPCError.remote("Wait for setup and maintenance operations before stopping the background server.")
                 }
+                // A sign-in on Subscriptions & API Keys is cancelled, never waited on.
+                signInConnections.cancel()
                 // Fence admissions before awaiting cancellation. A new input cannot
                 // enter while confirmed work is being withdrawn and drained.
                 backendStopping = true
@@ -4474,6 +4472,15 @@ extension ApplicationModel {
             guard let service = backendApplicationService else { throw BackendRPCError.remote("The background service is starting.") }
             return await service.handle(request)
         } catch { return .init(id: request.id, error: error.localizedDescription) }
+    }
+
+    /// Setup and maintenance a stop waits for. A sign-in in progress on Subscriptions
+    /// & API Keys (`signInConnections`) is not among them: stop cancels it.
+    var backendHasUnfinishedMaintenance: Bool {
+        backendCommandsInFlight > 0 || connections.busy || connections.sdks.isBusy
+            || !remoteWorkspaces.busyWorkspaceIDs.isEmpty || !remoteWorkspaces.maintainingHarnesses.isEmpty
+            || remoteWorkspaces.isCreating || !installingLocalACPRuntimeKinds.isEmpty || !updatingRuntimeKinds.isEmpty
+            || executorRuntime.isSettingUp
     }
 
     func setProductAnalyticsPreference(_ change: ProductAnalyticsPreferenceChange) async throws -> ProductAnalyticsPreference {

@@ -137,7 +137,6 @@ export function createManagedDefaultAgentService({ cwd, directory, environment =
       const result = await dispatch('configure', payload);
       lastConfiguration = structuredClone(payload); return result;
     },
-    unlockForClient: options => dispatch('unlockForClient', options),
     reloadSignIns: () => dispatch('reloadSignIns'),
     renewSignIns: options => dispatch('renewSignIns', options),
     inferenceCatalog: options => dispatch('inferenceCatalog', options),
