@@ -60,7 +60,7 @@ export const operationFailureCodes = Object.freeze([
   'update_failed', 'installer_failed', 'update_timed_out', 'install_timed_out',
   'update_verification_failed', 'installation_verification_failed',
   'runtime_active_stop_conversations_or_server_first', 'runtime_active_or_operation_in_progress', 'runtime_lock_unavailable',
-  'latest_library_sdk_version_unavailable', 'installer_download_failed', 'installer_download_timed_out', 'invalid_installer_size', 'installer_https_required',
+  'installer_download_failed', 'installer_download_timed_out', 'invalid_installer_size', 'installer_https_required',
   'runtime_preferences_save_failed', 'system_install_update_forbidden',
   'opencode_v1_replacement_confirmation_required', 'opencode_service_restart_failed',
   'native_installer_unavailable', 'native_update_unavailable',
@@ -237,7 +237,9 @@ export function createRuntimeMaintenance({ catalog, workspaceRoot, environment, 
       if (packaged) adapter.installedVersion = packaged
       if (h.minimumAdapterVersion && precedes(adapter.installedVersion, h.minimumAdapterVersion)) adapter.installed = false
       components.push(adapter)
-      for (const [id, name, minimum] of [['protocol-sdk', '@agentclientprotocol/sdk', h.minimumProtocolSDKVersion], ['library-sdk', '@anthropic-ai/claude-agent-sdk', h.id === 'claude_code' ? h.minimumEngineVersion : null]]) {
+      // The ACP protocol SDK is selected by Woven at install. Claude ACP's Claude Agent SDK is
+      // the adapter's own transport to the native CLI: it moves only with an adapter release.
+      for (const [id, name, minimum] of [['protocol-sdk', '@agentclientprotocol/sdk', h.minimumProtocolSDKVersion]]) {
         if (!minimum) continue
         let installed = null
         try {
@@ -283,7 +285,7 @@ export function createRuntimeMaintenance({ catalog, workspaceRoot, environment, 
   async function adapterInstallCommand(h) {
     const version = await latest(h.adapterPackage)
     if (!version || precedes(version, h.minimumAdapterVersion)) throw failure('adapter_version_below_minimum')
-    // Preserve the adapter manifest, selecting its protocol/library SDKs independently.
+    // Preserve the adapter manifest, selecting only its ACP protocol SDK independently.
     // It is checked over ACP against the native CLI it
     // drives (CODEX_PATH / CLAUDE_CODE_EXECUTABLE, config.mjs); the CLI copy npm bundles
     // inside its package is never selected or used. A CLI installed in this same action
@@ -296,11 +298,6 @@ export function createRuntimeMaintenance({ catalog, workspaceRoot, environment, 
       const sdk = await latest('@agentclientprotocol/sdk')
       if (!sdk || precedes(sdk, h.minimumProtocolSDKVersion)) throw failure('latest_protocol_sdk_version_unavailable')
       selection.protocolSDKVersion = sdk
-    }
-    if (h.id === 'claude_code' && h.minimumEngineVersion) {
-      const sdk = await latest('@anthropic-ai/claude-agent-sdk')
-      if (!sdk || precedes(sdk, h.minimumEngineVersion)) throw failure('latest_library_sdk_version_unavailable')
-      selection.librarySDKVersion = sdk
     }
     return `${quote(process.execPath)} ${quote(script)} ${quote(JSON.stringify(selection))}`
   }

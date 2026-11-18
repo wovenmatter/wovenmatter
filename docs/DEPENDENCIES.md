@@ -353,21 +353,17 @@ the documented v2 API boundary; maintenance must review a newer stable API major
 implement its migration.
 
 `harnesses/catalog.json` records tested connector and CLI minimums separately:
-Codex ACP 2.7.0 with Codex 0.169.1, and Claude ACP 0.108.0 with Claude SDK 0.3.327
-(bundled native Claude Code 2.1.327). The adapters drive the native Codex and Claude CLIs
+Codex ACP 2.7.0 with Codex 0.169.1, and Claude ACP 0.108.0 with the Claude Agent SDK
+0.3.326 it pins (native Claude Code 2.1.327). The adapters drive the native Codex and Claude CLIs
 (`CODEX_PATH`, `CLAUDE_CODE_EXECUTABLE`); a native Codex older than the minimum reads
 as needing its update. The CLI copy npm bundles inside each adapter package is never
 selected, checked or used, so `harnesses/install-adapter.mjs` installs the adapter as
-published, without a Codex engine override. Claude ACP 0.108.0 still pins SDK 0.3.326.
-A consumer-scoped override selects the newest nondeprecated stable Claude SDK
-at or above the catalog minimum (tested 0.3.327), preserving vendor manifests.
-Mac and Linux inventory check that actual library separately and allow a
-library-only update even when the connector is current. This core-function
-exception keeps provider APIs current; provider-free ACP initialization, SDK
-loopback and native routing fixtures validate it. Review and remove the override
-when the adapter itself selects the current library. The native Claude CLI
-remains selected through CLAUDE_CODE_EXECUTABLE, independently of the SDK binary.
-Transcript-write loss invalidates the native resume
+published, with no engine override. The native Claude CLI has no ACP mode: Claude ACP is
+an ACP server built on the Claude Agent SDK, whose `query()` starts the native CLI and
+talks to it over stdio. That SDK is the adapter's own transport, pinned by its release,
+so it moves only with an adapter update and is held to the catalog minimum rather than
+compared with npm or overridden. The Claude Agent SDK is otherwise a direct dependency
+only of the Built-in agent and bots. Transcript-write loss invalidates the native resume
 marker and refuses tool dispatch/continuation commits; config-only write loss leaves a
 valid response intact. Provider-free persistence fixtures verify canonical replay
 after recovery. The catalog's independent ACP SDK floor is 2.7.0: Mac and native

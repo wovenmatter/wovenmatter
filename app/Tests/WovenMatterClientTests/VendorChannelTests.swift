@@ -53,8 +53,9 @@ struct VendorChannelTests {
         #expect(cli.installed == "0.169.0" && cli.latest == "0.169.0" && !cli.outdated)
     }
 
-    /// A current adapter can still need a library-only update, independently of its native CLI.
-    @Test func claudesPinnedSDKCanUpdateWithoutANewAdapter() async throws {
+    /// Claude's adapter pins its SDK library; npm publishing a newer SDK is not an update the
+    /// person can apply, so it is held to the catalog's minimum instead.
+    @Test func claudesPinnedSDKIsHeldToTheMinimumNotNpm() async throws {
         let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
         let adapter = root.appending(path: "node_modules/@agentclientprotocol/claude-agent-acp")
@@ -85,8 +86,8 @@ struct VendorChannelTests {
                 return try JSONSerialization.data(withJSONObject: ["versions": [newest: ["bin": ["x": "x.js"]]]])
             }, probe: { url in url.lastPathComponent == "claude" ? "2.1.326 (Claude Code)" : "0.108.0" })
         let row = try #require(inventory.components.first { $0.name == "Bundled @anthropic-ai/claude-agent-sdk" })
-        #expect(row.installed == minimum && row.latest == "0.9.999" && row.verified && row.outdated)
-        #expect(inventory.updateAvailable)
+        #expect(row.installed == minimum && row.latest == nil && row.verified && !row.outdated)
+        #expect(!inventory.updateAvailable)
         #expect(!inventory.latestUnavailable)
         #expect(inventory.isInstalled)
     }

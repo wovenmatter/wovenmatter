@@ -369,8 +369,8 @@ test('an npm-installed CLI that the official installer does not replace fails ve
   assert.equal(result.operation.error, 'installation_verification_failed')
 })
 
-test('a current Claude adapter updates its independently resolved library and ACP SDK without touching the native CLI', async t => {
-  const h = { ...claude, minimumAdapterVersion: '0.108.0', minimumEngineVersion: '0.3.327', minimumProtocolSDKVersion: '2.7.0' };
+test('a current Claude adapter updates its ACP SDK without touching the native CLI or its pinned Claude Agent SDK', async t => {
+  const h = { ...claude, minimumAdapterVersion: '0.108.0', minimumEngineVersion: '0.3.326', minimumProtocolSDKVersion: '2.7.0' };
   const sdk = '@anthropic-ai/claude-agent-sdk', protocol = '@agentclientprotocol/sdk';
   let selected;
   const f = await fixture(t, { catalog: [h], fetchImplementation: async url => {
@@ -382,11 +382,9 @@ test('a current Claude adapter updates its independently resolved library and AC
   }, on: async command => {
     if (!command.includes('install-adapter.mjs')) return null;
     selected = JSON.parse(command.match(/'(\{"prefix".*\})'$/)[1]);
-    assert.equal(selected.librarySDKVersion, '0.3.327');
+    assert.equal(selected.librarySDKVersion, undefined);
     assert.equal(selected.protocolSDKVersion, '2.7.0');
-    for (const [name, version] of [[sdk, selected.librarySDKVersion], [protocol, selected.protocolSDKVersion]]) {
-      await writeFile(resolve(graph, 'node_modules', name, 'package.json'), JSON.stringify({ name, version }));
-    }
+    await writeFile(resolve(graph, 'node_modules', protocol, 'package.json'), JSON.stringify({ name: protocol, version: selected.protocolSDKVersion }));
     return { code: 0, output: '' };
   } });
   const graph = resolve(f.root, 'adapters'), packageRoot = resolve(graph, 'node_modules', h.adapterPackage);
@@ -401,7 +399,8 @@ test('a current Claude adapter updates its independently resolved library and AC
   f.commands.claude = { path: resolve(f.root, '.local/bin/claude'), version: '2.1.327' };
   const before = await f.service.inventory(h, true);
   assert.equal(before.components.find(c => c.id === 'runtime').updateAvailable, false);
-  assert.equal(before.components.find(c => c.id === 'library-sdk').updateAvailable, true);
+  // The adapter's Claude Agent SDK is its transport to the native CLI, not a managed component.
+  assert.equal(before.components.some(c => c.package === sdk), false);
   assert.equal(before.components.find(c => c.id === 'protocol-sdk').updateAvailable, true);
   await f.service.start(h, 'update', { confirmed: true });
   const after = await finished(f.service);
@@ -409,11 +408,11 @@ test('a current Claude adapter updates its independently resolved library and AC
   assert.equal(after.updateAvailable, false);
   assert.equal(selected.cli, f.commands.claude.path);
   assert.equal(f.calls.some(([c]) => c.endsWith("'update'")), false);
-  // A system-owned graph is outside Woven's update authority, even below the SDK floor.
-  await writeFile(resolve(graph, 'node_modules', sdk, 'package.json'), JSON.stringify({ name: sdk, version: '0.3.326' }));
+  // A system-owned graph is outside Woven's update authority, even below the ACP SDK floor.
+  await writeFile(resolve(graph, 'node_modules', protocol, 'package.json'), JSON.stringify({ name: protocol, version: '2.6.0' }));
   const system = createRuntimeMaintenance({ ...f.options, configuration: { ...f.configuration, home: resolve(f.root, 'different-owner') } });
   const systemBefore = await system.inventory(h, true);
-  assert.equal(systemBefore.components.find(c => c.id === 'library-sdk').source, 'system');
+  assert.equal(systemBefore.components.find(c => c.id === 'protocol-sdk').source, 'system');
   const count = f.calls.filter(([c]) => c.includes('install-adapter.mjs')).length;
   await system.start(h, 'update', { confirmed: true });
   const systemAfter = await finished(system);
