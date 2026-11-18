@@ -10,17 +10,19 @@ import { accessFailure, DefaultAgentError, emptyConfig, modelRef, providerNames,
 import { registerLocalServers } from './local-servers.mjs';
 import { ClaudeRuntime, isClaude } from './claude-runtime.mjs';
 import { registerClaudeProviders } from './claude-provider.mjs';
-import { modelOption } from './model-presentation.mjs';
+import { modelOption, speedModelOption } from './model-presentation.mjs';
+import { CodexServiceTiers, claudeSpeeds, speedReference, splitSpeedReference } from './model-speed.mjs';
 import { reportProgramStatus } from './program-status.mjs';
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
 import { AsyncLocalStorage } from 'node:async_hooks';
 
 export class DefaultAgentEngine {
-  constructor({ cwd, directory, config = {}, credentials = {}, credentialAccounts = {}, vault, requestCredentials, claude, catalog }) {
+  constructor({ cwd, directory, config = {}, credentials = {}, credentialAccounts = {}, vault, requestCredentials, claude, catalog, codexTiers }) {
     this.cwd = cwd; this.directory = directory; this.config = validateConfig({ ...emptyConfig, ...config }); this.supplied = credentials; this.credentialAccounts = credentialAccounts; this.vault = vault; this.requestCredentials = requestCredentials; this.sessions = new Map();
     this.databasePath = process.env.WOVEN_DEFAULT_AGENT_DATABASE ?? join(directory, 'workspace.sqlite');
     this.providerCatalog = catalog ?? new ProviderCatalog(directory);
     this.claude = claude ?? new ClaudeRuntime(directory);
+    this.codexTiers = codexTiers ?? new CodexServiceTiers(directory);
     this.programStatusContext = new AsyncLocalStorage();
   }
   async initialize() {
@@ -30,6 +32,7 @@ export class DefaultAgentEngine {
     process.env.AWS_MAX_ATTEMPTS = '1';
     await mkdir(this.directory, { recursive: true, mode: 0o700 });
     await this.claude.loadModels();
+    await this.codexTiers.load();
     this.credentials = await new Credentials(this.supplied, this.vault, this.credentialAccounts).initialize();
     this.runtime = await ModelRuntime.create({ credentials: this.credentials.forModelRuntime(), modelsPath: null, modelsStore: this.providerCatalog, refreshOnCreate: false });
     this.publishProviderModels = installPublicCatalog(this.runtime);
@@ -115,6 +118,7 @@ export class DefaultAgentEngine {
       try {
         const entry = await this.providerCatalog.load(provider, { signal, force });
         this.publishProviderModels(provider, entry.models);
+        if (provider === 'openai-codex') await this.refreshSpeeds(entry.models[0], { signal, force });
       } catch (error) {
         signal?.throwIfAborted();
         if (!saved || force) throw error;
@@ -180,6 +184,7 @@ export class DefaultAgentEngine {
     const visible = this.modelOptions();
     if (!record.selected && visible.length) {
       record.selected = visible[0]?.id;
+      record.speed = undefined;
       this.persistOptions(record);
     }
   }
@@ -194,14 +199,22 @@ export class DefaultAgentEngine {
       const model = record.session.model;
       options.push({ id: modelRef(model), name: model.name, provider: model.provider, providerName: this.providerName(model.provider) });
     }
-    return { availableCommands: [{ name: 'compact', description: 'Compact the conversation using the selected native provider, with Pi fallback for unsupported routes.', input: { hint: 'Optional compaction instructions' } }], configOptions: [{ id: 'model', name: 'Model', category: 'model', type: 'select', currentValue: record.selected,
-      options: options.map(modelOption) },
+    // Speed variants follow their model, so menus group them with it.
+    const selectedSpeed = record.speed && record.session.model ? record.speed : undefined;
+    const modelChoices = options.flatMap(option => {
+      const model = option.id === record.selected && record.session.model ? record.session.model : this.resolveModel(option.id);
+      const speeds = model ? this.speedOptions(model) : [];
+      if (option.id === record.selected && selectedSpeed && !speeds.some(speed => speed.id === selectedSpeed)) speeds.push({ id: selectedSpeed });
+      return [modelOption(option), ...speeds.map(speed => speedModelOption(option, speed))];
+    });
+    return { availableCommands: [{ name: 'compact', description: 'Compact the conversation using the selected native provider, with Pi fallback for unsupported routes.', input: { hint: 'Optional compaction instructions' } }], configOptions: [{ id: 'model', name: 'Model', category: 'model', type: 'select', currentValue: speedReference(record.selected, selectedSpeed),
+      options: modelChoices },
       ...(levels.length > 1 ? [{ id: 'thinking', name: 'Thinking Level', category: 'thought_level', type: 'select', currentValue: thinking,
         options: levels.map(value => ({ value, name: value[0].toUpperCase() + value.slice(1) })) }] : []),
       { id: 'permission_mode', name: 'Permissions', type: 'select', currentValue: 'full', options: [{ value: 'full', name: 'Full access', description: 'Native Durable workspace tools run without approval prompts.' }] }], _meta: { engine: isClaude(record.selected) ? 'claude' : 'pi', ...(reason ? { fallbackReason: reason, fallbackID: crypto.randomUUID() } : {}) } };
   }
   persistOptions(record) {
-    record.saveOptions({ selected: record.selected, selectedModel: record.session.model ? JSON.parse(JSON.stringify(record.session.model)) : null, permission: record.permission, thinking: record.session.thinkingLevel, subagentConcurrency: record.subagentConcurrency,
+    record.saveOptions({ selected: record.selected, selectedModel: record.session.model ? JSON.parse(JSON.stringify(record.session.model)) : null, speed: record.speed ?? null, permission: record.permission, thinking: record.session.thinkingLevel, subagentConcurrency: record.subagentConcurrency,
       ...(record.accountID ? { accountID: record.accountID, accountOwned: record.accountOwned === true, credentialIdentity: record.credentialIdentity ?? null } : {}) });
   }
   async sessionDirectory(value) {
@@ -247,6 +260,7 @@ export class DefaultAgentEngine {
         const agent = await record.conversation.agent(record.nativeContext);
         record.selected = agent.model ? `${agent.model.provider}/${agent.model.modelId}` : options.selected;
         record.session.thinkingLevel = agent.thinkingLevel;
+        record.speed = record.selected === options.selected ? options.speed ?? undefined : undefined;
         record.accountID = options.accountID;
         record.accountOwned = options.accountOwned;
         record.credentialIdentity = options.credentialIdentity ?? undefined;
@@ -260,6 +274,8 @@ export class DefaultAgentEngine {
       const model = await this.ensureModel(selected, options.selectedModel);
       record.selected = selected;
       if (model) await record.session.setModel(model);
+      record.speed = selected === options.selected ? options.speed ?? undefined : undefined;
+      if (model) await this.refreshSpeeds(model, { wait: false });
       this.normalizeSelection(record);
       this.persistOptions(record);
       this.sessions.set(record.session.sessionId, record);
@@ -292,8 +308,20 @@ export class DefaultAgentEngine {
       record.permission = 'full'; this.persistOptions(record); return this.configuration(record);
     }
     if (option !== 'model') throw new DefaultAgentError('Unknown session option.');
+    const { speed } = splitSpeedReference(reference);
+    reference = splitSpeedReference(reference).reference;
+    if (reference === record.selected && record.session.model) {
+      // Changing speed keeps the model, its native context and its account.
+      if (speed && !this.speedOptions(record.session.model).some(entry => entry.id === speed)) throw new DefaultAgentError('This speed is unavailable for the selected model.');
+      record.speed = speed;
+      this.persistOptions(record);
+      await record.configurationQueue;
+      return this.configuration(record);
+    }
     const model = await this.ensureModel(reference);
     if (!model || !this.modelOptions().some(m => m.id === reference)) throw new DefaultAgentError('This model is not enabled in Settings → Agents → Pi Durable.');
+    await this.refreshSpeeds(model, { wait: false });
+    if (speed && !this.speedOptions(model).some(entry => entry.id === speed)) throw new DefaultAgentError('This speed is unavailable for the selected model.');
     const accounts = await this.credentials.candidates(model.provider);
     const account = accounts.find(a => a.credential && (a.credential.type !== 'oauth' || a.credential.expires > Date.now()));
     if (!account && model.provider !== 'claude-subscription') throw new DefaultAgentError(`Connect ${this.providerName(model.provider)} in Settings → Subscriptions & API Keys before choosing this model.`);
@@ -302,9 +330,29 @@ export class DefaultAgentEngine {
       await this.withAccount(model.provider, account ?? accounts[0], select);
     } catch { throw new DefaultAgentError(`This ${this.providerName(model.provider)} connection is unavailable. Check its account in Settings → Subscriptions & API Keys.`); }
     record.selected = reference;
+    record.speed = speed;
     this.persistOptions(record);
     await record.configurationQueue;
     return this.configuration(record);
+  }
+  speedOptions(model) {
+    return model.provider === 'openai-codex' ? this.codexTiers.speeds(model) : claudeSpeeds(this.claude, model);
+  }
+  // ChatGPT tiers belong to the signed-in account. Refresh them in the
+  // background once cached; wait briefly only when none are known yet.
+  async refreshSpeeds(model, { signal, force = false, wait = true } = {}) {
+    if (model?.provider !== 'openai-codex') return;
+    const refresh = async () => {
+      const account = (await this.credentials.candidates(model.provider)).find(entry => entry.credential && (entry.credential.type !== 'oauth' || entry.credential.expires > Date.now()));
+      if (!account) return;
+      const timeout = AbortSignal.timeout(15000);
+      await this.withAccount(model.provider, account, async () => {
+        const resolved = await this.runtime.getAuth(model, { signal: signal ? AbortSignal.any([signal, timeout]) : timeout, allowWait: false });
+        await this.codexTiers.refresh(resolved?.auth, { signal, force });
+      });
+    };
+    const pending = refresh().catch(() => {});
+    if (wait || !this.codexTiers.entry) await Promise.race([pending, new Promise(resolve => setTimeout(resolve, 5000).unref?.())]);
   }
   async prompt(record, text, emit, mcpContext, identity) {
     if (record.busy) throw new DefaultAgentError('This Pi Durable session already has an active turn.');
@@ -386,6 +434,7 @@ export class DefaultAgentEngine {
           let fallbackReason = reason ? `Switched to ${account.label} · ${this.providerName(model.provider)}. ${reason}` : undefined;
           if (previousReference !== reference) {
             record.selected = reference;
+            if (!this.speedOptions(model).some(entry => entry.id === record.speed)) record.speed = undefined;
             fallbackReason = `Switched to ${model.name} · ${this.providerName(model.provider)}. ${reason}`;
           }
           this.persistOptions(record);

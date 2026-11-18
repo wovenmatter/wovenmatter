@@ -10,11 +10,11 @@ import { DefaultAgentEngine } from '../src/engine.mjs';
 import { assistantMessage, emitAssistant } from './fixtures/synthetic-stream.mjs';
 import { fakeClaudeRuntime } from './fixtures/claude-runtime.mjs';
 
-async function fixture(t, { credentials = {}, credentialAccounts = {}, config = {} } = {}) {
+async function fixture(t, { credentials = {}, credentialAccounts = {}, config = {}, models } = {}) {
   const root = await mkdtemp(join(tmpdir(), 'woven-claude-engine-'));
   const claude = fakeClaudeRuntime({
     checks: 0,
-    models: [{ value: 'sonnet', displayName: 'Claude Sonnet', supportedEffortLevels: ['low', 'medium', 'high'] }, { value: 'fixture-other', displayName: 'Other fixture', supportedEffortLevels: [] }],
+    models: models ?? [{ value: 'sonnet', displayName: 'Claude Sonnet', supportedEffortLevels: ['low', 'medium', 'high'] }, { value: 'fixture-other', displayName: 'Other fixture', supportedEffortLevels: [] }],
     async status() { this.checks++; return { connected: true }; },
     environment: async () => ({}),
     // Metadata-only initialization is supported without inference. Synthetic
@@ -44,6 +44,44 @@ function syntheticAssistant(content, beforeRespond) {
     return stream;
   };
 }
+
+test('fast mode is a model selector variant that persists and reaches the native request', async t => {
+  const { engine, root, options } = await fixture(t, { models: [
+    { value: 'sonnet', displayName: 'Claude Sonnet', supportedEffortLevels: ['low', 'medium', 'high'], supportsFastMode: true },
+    { value: 'fixture-other', displayName: 'Other fixture', supportedEffortLevels: [] }],
+    config: { models: ['claude-subscription/sonnet', 'claude-subscription/fixture-other'] } });
+  const opened = await engine.handle('session/new', { cwd: root });
+  const record = engine.sessions.get(opened.sessionId);
+  const menu = configuration => configuration.configOptions.find(option => option.id === 'model');
+  let model = menu(engine.configuration(record));
+  assert.equal(model.currentValue, 'claude-subscription/sonnet');
+  assert.deepEqual(model.options.map(option => option.value), ['claude-subscription/sonnet', 'claude-subscription/sonnet#fast', 'claude-subscription/fixture-other']);
+  assert.equal(model.options[1].name, model.options[0].name);
+  assert.equal(model.options[1]._meta.speed, 'fast');
+  await assert.rejects(engine.select(record, 'claude-subscription/sonnet#ultrafast'), /speed is unavailable/);
+  await assert.rejects(engine.select(record, 'claude-subscription/fixture-other#fast'), /speed is unavailable/);
+  model = menu(await engine.select(record, 'claude-subscription/sonnet#fast'));
+  assert.equal(model.currentValue, 'claude-subscription/sonnet#fast');
+  assert.equal(record.selected, 'claude-subscription/sonnet');
+  const seen = [];
+  record.streamFunction = (selected, context, resolved) => { seen.push(resolved.wovenSpeed); return syntheticAssistant([{ type: 'text', text: 'Fast' }])(selected, context); };
+  await engine.prompt(record, 'Answer quickly', () => {}, undefined, { runID: record.runID, inputID: record.inputID });
+  assert.deepEqual(seen, ['fast']);
+
+  await record.session.dispose();
+  const restarted = await new DefaultAgentEngine(options).initialize();
+  t.after(async () => { for (const value of [...restarted.sessions.values()]) await value.session.dispose(); });
+  const loaded = await restarted.handle('session/load', { sessionId: opened.sessionId });
+  const restored = restarted.sessions.get(loaded.sessionId);
+  assert.equal(menu(restarted.configuration(restored)).currentValue, 'claude-subscription/sonnet#fast');
+  assert.equal(menu(await restarted.select(restored, 'claude-subscription/fixture-other')).currentValue, 'claude-subscription/fixture-other');
+  assert.equal(restored.speed, undefined);
+  assert.equal(menu(await restarted.select(restored, 'claude-subscription/sonnet')).currentValue, 'claude-subscription/sonnet');
+  seen.length = 0;
+  restored.streamFunction = (selected, context, resolved) => { seen.push(resolved.wovenSpeed); return syntheticAssistant([{ type: 'text', text: 'Standard' }])(selected, context); };
+  await restarted.prompt(restored, 'Answer normally', () => {}, undefined, { runID: restored.runID, inputID: restored.inputID });
+  assert.deepEqual(seen, [undefined]);
+});
 
 test('session working directories stay isolated and survive a service restart', async t => {
   const { engine, root, options } = await fixture(t);

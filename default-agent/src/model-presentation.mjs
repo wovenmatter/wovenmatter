@@ -20,6 +20,12 @@ export function modelOption(model) {
   };
 }
 
+// A speed variant presents as its model; clients group it under that model.
+export function speedModelOption(model, speed) {
+  const option = modelOption(model);
+  return { ...option, value: `${model.id}#${speed.id}`, _meta: { ...option._meta, speed: speed.id, ...(speed.name ? { speedName: speed.name } : {}) } };
+}
+
 // Match Claude Code's presentation: use the version reported for this family,
 // without replacing the selectable alias or guessing a version for cold caches.
 export function claudeModelName(model) {

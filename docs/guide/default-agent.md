@@ -95,6 +95,24 @@ the Mac is offline. If borrowed access expires, it waits before the next model
 request until access is supplied again; it does not repeat completed tools.
 Starting a new turn can use your configured fallback instead.
 
+## Fast mode
+
+Subscription models that offer faster inference show it in the composer's
+**Model** popout for that chat:
+
+- **Claude subscription:** a **Fast mode** switch appears for models Claude
+  reports as fast-capable, such as Opus 5.5 and Fable 5.2. Claude decides
+  eligibility and bills fast mode as extra usage on your plan; when Claude does
+  not allow it for your account, responses use standard speed.
+- **ChatGPT subscription:** a **Speed** choice offers **Fast** and, where your
+  plan and model include it, **Ultrafast**; a model with only Fast shows a
+  **Fast mode** switch. Woven Matter reads the tiers your ChatGPT account
+  advertises for each model. Faster tiers can use your plan's included usage
+  faster.
+
+Speed belongs to the chat and is kept when you switch to a model that offers the
+same speed. Subagents and compaction use standard speed.
+
 ## Code mode and Executor
 
 **More → Code mode** in Pi Durable settings defaults to **On**, alongside ordinary
