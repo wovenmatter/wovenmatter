@@ -140,12 +140,102 @@ final class ExecutionRoutingTests: XCTestCase {
     try await model.loadExecutionConfiguration()
     XCTAssertEqual(model.inferenceConnections.map(\.id), ["own"])
     XCTAssertNil(model.draftDeviceSettings.connection)
-    XCTAssertNil(model.selectedInferenceConnection, "Quick Chat asks for a sign-in on this device")
+    // The default that named the hosted connection falls back to this device's own.
+    XCTAssertEqual(model.inferenceConnectionID, "own")
+    XCTAssertEqual(model.selectedInferenceConnection?.id, "own")
+    let reloaded = try JSONDecoder().decode(DeviceExecutionPreferences.self, from: Data(contentsOf: directory.appendingPathComponent("preferences.json")))
+    XCTAssertEqual(reloaded.selectedConnectionID, "own")
+    // A chat bound to the hosted connection keeps it, unusable, until it is given a device connection.
     model.selectedConversationID = record.id
     XCTAssertNil(model.selectedInferenceConnection)
     let stored = await credentials.snapshot()
     XCTAssertEqual(stored, ["own": "own-key"])
   }
+
+  /// With only a hosted connection saved, nothing is left to default to.
+  @MainActor func testHostedDefaultWithoutAnOwnConnectionFallsBackToNone() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let model = MobileModel(store: try MobileStore(file: root.appendingPathComponent("library.json")), transport: ExecutionTestLibrary())
+    let directory = root.appendingPathComponent("execution")
+    model.executionDirectory = directory
+    model.executionCredentialStore = MigrationCredentials([:])
+    let hosted = InferenceConnection(id: "hosted", name: "Mac account", provider: "openai", route: .adapter, baseURL: "https://mac.example.ts.net/wovenmatter", modelID: "m")
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    try JSONEncoder().encode(DeviceExecutionPreferences(connections: [hosted], selectedConnectionID: hosted.id))
+      .write(to: directory.appendingPathComponent("preferences.json"))
+    try await model.loadExecutionConfiguration()
+    XCTAssertTrue(model.inferenceConnections.isEmpty)
+    XCTAssertEqual(model.inferenceConnectionID, "")
+    XCTAssertNil(model.selectedInferenceConnection)
+  }
+
+  /// A Quick Chat that was running, interrupted or stopping on a hosted connection
+  /// at upgrade is stopped on load with its run cleared, so it can be reconfigured or trashed.
+  @MainActor func testHostedChatsMidRunAreStoppedOnLoadAndCanBeTrashed() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let model = MobileModel(store: try MobileStore(file: root.appendingPathComponent("library.json")), transport: ExecutionTestLibrary())
+    let directory = root.appendingPathComponent("execution")
+    model.executionDirectory = directory
+    model.executionCredentialStore = MigrationCredentials(["own": "own-key"])
+    let own = InferenceConnection(id: "own", name: "OpenCode Go", provider: "opencode-go", modelID: "m")
+    let hosted = InferenceConnection(id: "hosted", name: "Mac account", provider: "openai", accountID: "mac-account", route: .adapter,
+      baseURL: "https://mac.example.ts.net/wovenmatter", modelID: "m")
+    var records: [String: DeviceConversationRecord] = [:]
+    for status in ["running", "interrupted", "stopping"] {
+      var record = DeviceConversationRecord(id: UUID().uuidString.lowercased(), title: "Hosted " + status, connectionID: hosted.id, connection: hosted,
+        modelJSON: Self.offlineModelJSON, runID: "run-" + status, submissionID: 3, pendingInput: "Saved input", status: status, updatedAt: "")
+      record.quickChatVersion = 1
+      records[record.id] = record
+    }
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    try JSONEncoder().encode(DeviceExecutionPreferences(connections: [own, hosted], selectedConnectionID: own.id, conversations: records))
+      .write(to: directory.appendingPathComponent("preferences.json"))
+    try await model.loadExecutionConfiguration()
+    XCTAssertTrue(model.localRuntimes.isEmpty, "A runtime opened only to stop is closed")
+    for id in records.keys {
+      let record = try XCTUnwrap(model.executionRecords[id])
+      XCTAssertEqual(record.status, "stopped", record.title)
+      XCTAssertNil(record.runID); XCTAssertNil(record.submissionID); XCTAssertNil(record.pendingInput)
+      model.selectedConversationID = id
+      XCTAssertNil(model.activeRunID)
+      XCTAssertFalse(model.canResumeLocalRun)
+      XCTAssertTrue(model.canConfigureDeviceChat, "A device connection can be chosen for it")
+    }
+    let saved = try JSONDecoder().decode(DeviceExecutionPreferences.self, from: Data(contentsOf: directory.appendingPathComponent("preferences.json")))
+    XCTAssertEqual(Set(saved.conversations.values.map(\.status)), ["stopped"])
+    XCTAssertTrue(saved.conversations.values.allSatisfy { $0.runID == nil })
+    for id in records.keys {
+      let trashed = await model.performDeviceAction(.conversation(id: id, action: "trash", title: nil, folderID: nil))
+      XCTAssertTrue(trashed)
+      XCTAssertEqual(model.executionRecords[id]?.isTrashed, true)
+    }
+  }
+
+  /// Stop works on a chat whose connection is no longer available on this device.
+  @MainActor func testStopFinishesARunWhoseConnectionIsUnavailable() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let model = MobileModel(store: try MobileStore(file: root.appendingPathComponent("library.json")), transport: ExecutionTestLibrary())
+    model.executionDirectory = root.appendingPathComponent("execution")
+    let removed = InferenceConnection(id: "removed", name: "ChatGPT", provider: "openai-codex", modelID: "m")
+    var record = DeviceConversationRecord(id: UUID().uuidString.lowercased(), title: "Interrupted", connectionID: removed.id, connection: removed,
+      modelJSON: Self.offlineModelJSON, runID: "interrupted-run", submissionID: 4, status: "interrupted", updatedAt: "")
+    record.quickChatVersion = 1
+    model.executionRecords[record.id] = record
+    try model.persistExecutionConfiguration()
+    try await model.stopDeviceConversation(record.id)
+    XCTAssertEqual(model.executionRecords[record.id]?.status, "stopped")
+    XCTAssertNil(model.executionRecords[record.id]?.runID)
+    XCTAssertNil(model.localRuntimes[record.id])
+    let trashed = await model.performDeviceAction(.conversation(id: record.id, action: "trash", title: nil, folderID: nil))
+    XCTAssertTrue(trashed)
+  }
+
+  private static let offlineModelJSON = """
+  {"id":"offline-test","name":"Offline test","api":"openai-responses","provider":"controlled","baseUrl":"https://invalid.test","reasoning":false,"input":["text"],"contextWindow":4096,"maxTokens":1024,"cost":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0}}
+  """
 
   @MainActor func testQuickChatRejectsAutonomousToolsEvenWhenSavedGrantsEnabledThem() async throws {
     for name in ["execute_command", "write_file", "read_file", "woven_goals_set", "woven_sessions_create", "woven_executor_execute", "woven_browser_use", "woven_computer_use"] {

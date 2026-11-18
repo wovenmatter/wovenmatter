@@ -55,7 +55,7 @@ final class AgentLauncherTests: XCTestCase {
   /// library host only, so each Mac is listed once, under its own name, with
   /// its own agents, and Quick Chat leads.
   func testMemberMacsEachAppearOnceUnderTheirOwnNames() {
-    let capabilities = ["execution.v1", "history.library.v1", "inference.v1"]
+    let capabilities = ["execution.v1", "history.library.v1"]
     let air = ExecutionWorkspace(id: "0446435c-8e64-440e-b9eb-3c5dadb27e04", libraryID: "air-library",
       ownerDeviceID: "e775f2b2-1e79-4bc2-b723-39b3fab2d9c5", kind: .mac, name: "James’s MacBook Air (Dev) · worktrees-b8e80bfb02",
       endpoint: URL(string: "https://air.example.ts.net/wovenmatter"), capabilities: capabilities)
