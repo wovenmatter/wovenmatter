@@ -169,6 +169,7 @@ struct MobileShell: View {
       if let note = model.selectedNote { NotePane(model: model, note: note).id(note.id) }
       else { EmptyNotePane(model: model) }
     case .library: LibraryPane(model: model)
+    case .bots: BotsPane(model: model)
     case .calendar: CalendarPane(model: model)
     case .scheduledTasks: ScheduledTasksPane(model: model)
     case .databases: DatabasesPane(model: model)
@@ -253,8 +254,8 @@ struct HomePane: View {
           }
           if groups.allSatisfy({ $0.id == "local" }) { noConnectedWorkspaces }
           Divider().padding(.horizontal, 14).padding(.vertical, 18)
-          // Scheduled tasks and databases live on a Mac or Linux workspace.
-          ForEach(model.isStandalone ? [MobileModel.Tab.calendar, .library, .usage] : [MobileModel.Tab.calendar, .scheduledTasks, .library, .databases, .usage], id: \.self) { tab in
+          // Bots, scheduled tasks and databases live on a Mac or Linux workspace.
+          ForEach(model.isStandalone ? [MobileModel.Tab.calendar, .library, .usage] : [MobileModel.Tab.bots, .calendar, .scheduledTasks, .library, .databases, .usage], id: \.self) { tab in
             SettingsNavigationRow(title: tab.rawValue, icon: tab.icon) { destination(tab) }
               .accessibilityIdentifier("open-" + tab.rawValue.lowercased().replacingOccurrences(of: " ", with: "-"))
           }
@@ -313,6 +314,7 @@ struct HomePane: View {
   }
   @ViewBuilder private func destination(_ tab: MobileModel.Tab) -> some View {
     switch tab {
+    case .bots: BotsPane(model: model)
     case .library: LibraryPane(model: model)
     case .calendar: CalendarPane(model: model)
     case .scheduledTasks: ScheduledTasksPane(model: model)

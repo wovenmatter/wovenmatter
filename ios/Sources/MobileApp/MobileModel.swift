@@ -6,7 +6,7 @@ import PiDurableRuntime
 import MobileInference
 
 @MainActor @Observable final class MobileModel {
-  enum Tab: String, CaseIterable { case home = "Home", folders = "Folders", chat = "Chats", note = "Notes", settings = "Settings", calendar = "Calendar", scheduledTasks = "Scheduled tasks", library = "Library", databases = "Databases", usage = "Usage", trash = "Trash"
+  enum Tab: String, CaseIterable { case home = "Home", folders = "Folders", chat = "Chats", note = "Notes", settings = "Settings", bots = "Bots", calendar = "Calendar", scheduledTasks = "Scheduled tasks", library = "Library", databases = "Databases", usage = "Usage", trash = "Trash"
     var icon: LucideGlyph {
       switch self {
       case .home: .house
@@ -14,6 +14,7 @@ import MobileInference
       case .chat: .messageSquare
       case .note: .fileText
       case .settings: .settings
+      case .bots: .bot
       case .library: .libraryBig
       case .calendar: .calendarDays
       case .scheduledTasks: .calendarClock
@@ -24,6 +25,8 @@ import MobileInference
     }
   }
   let analytics = MobileAnalyticsModel()
+  /// Bots on the machine that runs them (Bots page).
+  let bots = MobileBotsModel()
   var tab: Tab = .home
   var state = MobileStoreState()
   var providers: [HarnessCapabilities] = []
@@ -954,6 +957,7 @@ import MobileInference
         await reload()
       }
       let scenario = Self.uiScenario ?? ""
+      if scenario.hasPrefix("bots") { await seedBotsFixture(scenario: scenario) }
       if scenario.hasPrefix("running-tools") {
         let runID = "11111111-1111-4111-8111-111111111111"
         let startedAt = ISO8601DateFormatter().string(from: Date().addingTimeInterval(-8))

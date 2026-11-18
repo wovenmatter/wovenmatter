@@ -138,7 +138,7 @@ final class BotsModel {
 
 /// One machine's bots runtime: its socket, sidebar data and open conversations.
 @MainActor @Observable
-final class BotMachineSession: Identifiable {
+final class BotMachineSession: Identifiable, PiBotConversationHost {
     let machineID: String
     nonisolated var id: String { machineID }
     private(set) var machine: BotMachine
@@ -243,7 +243,7 @@ final class BotMachineSession: Identifiable {
         if conversations.count >= 16 {
             for (other, controller) in conversations where !controller.isAttached { conversations[other] = nil }
         }
-        let controller = BotConversationController(session: self, key: key)
+        let controller = BotConversationController(host: self, key: key)
         conversations[key] = controller
         return controller
     }

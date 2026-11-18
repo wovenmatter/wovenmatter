@@ -1,5 +1,5 @@
-// The native bots client is for the Mac app; Linux library builds skip it.
-#if os(macOS)
+// The bots client runs in the Mac and iPhone apps; Linux library builds skip it.
+#if canImport(Darwin)
 import Foundation
 
 /// One WebSocket to one machine's bots runtime (Pi Bot protocol 1 with Woven's additions),

@@ -993,6 +993,21 @@ hands them to the macOS job, which checks them with
   mobile API, and every other workspace with an
   endpoint (each Mac's own and each Linux workspace) gets a signed direct
   client. No execution grant is issued, stored or presented.
+- **Bots.** The Bots page (`MobileBotsModel`, `BotsPane`) finds the machine
+  that runs bots the way a Mac does: every Mac and Linux workspace in the
+  synced registry with an endpoint, one per serving member
+  (`MobileBotsModel.targets`), gets a signed `GET <endpoint>/v1/bots/status`
+  whose reply must name that member. The machine with `enabled` wins (ready
+  first, Macs before Linux hosts); with none, the page lists each machine and
+  why. The phone then holds one `PiBotClient` socket to
+  `<endpoint>/v1/bots/ws`, signing every upgrade itself
+  (`StreamEndpoint.signedHeaders`), only while the app is in the foreground. It
+  shows the bot list (`PiBotSidebarLayout`), each bot's main conversation and
+  threads with live replies, sends, stops a reply, starts and pins threads.
+  The protocol types, the client and the open-conversation state
+  (`PiBotConversationController`) live in `WovenMatterShared/PiBot`, shared with
+  the Mac. Creating, renaming and configuring bots stays on the Mac. A bots-only
+  Linux host that is not in the registry is not reachable from the phone.
 - **Inference.** A Mac's inference host (`/v1/inference/catalog`,
   `/v1/inference/stream`, `InferenceHost`) accepts signed `ios` and
   `mac` members: the principal is the member's device ID, a named
@@ -2207,6 +2222,8 @@ answers); `PUT /v1/resources`; (optional forwards) `GET /v1/forwards`;
   to its end. A fresh Find devices clears finished installs.
 - The native SwiftUI bot UI and settings come from PR #226, adapted to this
   runtime and to Woven's provider connections.
+- The iPhone and iPad app has its own Bots page for talking to bots (see "iPhone
+  reach"); management stays in Settings → Bots on a Mac.
 
 ### Woven servers and apps
 

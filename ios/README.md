@@ -8,7 +8,9 @@ Every Mac and Linux host keeps a full copy of the Woven Matter library. The phon
 is a signed member with its own offline replica and syncs with whichever Mac or
 Linux host answers; no single Mac is required. On the device, Quick Chat runs Pi
 Durable for notes, web search, simple questions, timers, reminders and calendar
-events; Mac and Linux workspace agents handle everything else. Inference uses provider
+events; Mac and Linux workspace agents handle everything else. The Bots page talks
+to your bots live on whichever Mac or Linux host runs them; creating and setting
+up bots stays on the Mac. Inference uses provider
 connections signed in on that device or an explicitly selected Tailscale host.
 See [Quick Chat](../docs/IOS_CONTINUED_EXECUTION.md).
 
@@ -17,8 +19,8 @@ and adds a web search key in Settings → iPhone Connections, then uses Quick Ch
 notes and folders, calendar, timers and reminders, and dictation on the phone.
 Nothing waits on a host: there are no connection banners or network retries,
 and analytics are not sent. Home offers "Connect your Mac" for workspaces, agents on
-your computers and sync; Mac-only pages (Scheduled tasks, Databases) appear once
-paired. Pairing later uploads everything made on the phone once: notes and
+your computers and sync; pages that need a Mac or Linux host (Bots, Scheduled tasks,
+Databases) appear once paired. Pairing later uploads everything made on the phone once: notes and
 folders, Quick Chat history, calendar events, timer reminders and dictations.
 
 ## Build and validate
@@ -51,7 +53,9 @@ UI-only simulator fixtures use `WOVENMATTER_UI_FIXTURE=1` and a stable
 that mode. Use a separate simulator without fixture variables for real pairing.
 `WOVENMATTER_UI_SCENARIO=standalone` is a fresh install that was never paired
 (`standalone-timer` adds a Quick Chat timer); `testFreshInstallWithoutPairingIsCompleteAndCalm`
-covers it.
+covers it. `WOVENMATTER_UI_SCENARIO=bots` runs a scripted bots runtime on a loopback
+socket (Debug builds only) and `bots-off` shows no computer running bots;
+`testBotsPageOpensABotAndStreamsAReply` covers the first.
 
 ## Source layout
 

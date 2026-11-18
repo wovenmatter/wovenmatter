@@ -713,6 +713,7 @@ extension MobileModel {
     switch phase {
     case .active:
       connectionDidBecomeActive()
+      bots.setForeground(true)
       endExecutionBackgroundTask()
       if !fixture && !isolatedTestHost { startDeviceScheduler() }
     case .inactive:
@@ -721,6 +722,7 @@ extension MobileModel {
     case .background:
       connectionForeground = false
       stopWorkspaceStreams()
+      bots.setForeground(false)
       stopDeviceScheduler()
       beginFallbackExecutionBackgroundTask()
     @unknown default: break

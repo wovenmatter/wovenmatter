@@ -653,6 +653,33 @@ final class MobileUITests: XCTestCase {
   }
 
 
+  /// Bots on the machine that runs them (a scripted runtime on a loopback socket):
+  /// Home opens the Bots page, a bot opens into its conversation, and a sent message
+  /// gets a streamed reply.
+  @MainActor func testBotsPageOpensABotAndStreamsAReply() {
+    let app = launch(tab: "Home", scenario: "bots")
+    let open = app.buttons["open-bots"]
+    XCTAssertTrue(open.waitForExistence(timeout: 5))
+    open.tap()
+    let atlas = app.buttons["bot-atlas"]
+    XCTAssertTrue(atlas.waitForExistence(timeout: 10))
+    XCTAssertTrue(app.buttons["bot-scout"].exists)
+    XCTAssertTrue(app.staticTexts["Running on Studio"].exists)
+    saveScreenshot("bots-page")
+    atlas.tap()
+    XCTAssertTrue(app.staticTexts["Launch post sources"].waitForExistence(timeout: 10))
+    let composer = app.textViews["bot-composer"]
+    XCTAssertTrue(composer.waitForExistence(timeout: 5))
+    composer.tap()
+    composer.typeText("Check the launch checklist")
+    app.buttons["bot-send"].tap()
+    XCTAssertTrue(app.staticTexts["Check the launch checklist"].waitForExistence(timeout: 10))
+    // Replies render as Markdown text views, so match by label or value.
+    let reply = app.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS 'On it.' OR value CONTAINS 'On it.'")).firstMatch
+    XCTAssertTrue(reply.waitForExistence(timeout: 10))
+    saveScreenshot("bot-conversation")
+  }
+
   /// A fresh install that was never paired (an App Review device has no Mac):
   /// Quick Chat leads with its setup prompt, notes and folders work on the
   /// phone, Mac-only pages stay out of the way, and pairing is offered calmly.
@@ -666,6 +693,7 @@ final class MobileUITests: XCTestCase {
     XCTAssertTrue(app.buttons["open-calendar"].exists)
     XCTAssertFalse(app.buttons["open-scheduled-tasks"].exists, "Scheduled tasks run on a Mac or Linux workspace")
     XCTAssertFalse(app.buttons["open-databases"].exists)
+    XCTAssertFalse(app.buttons["open-bots"].exists, "Bots run on a Mac or Linux host")
     XCTAssertFalse(app.staticTexts["workspace-action-error"].exists)
     saveScreenshot("standalone-home")
 
