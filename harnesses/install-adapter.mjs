@@ -1,6 +1,6 @@
 // Install an ACP adapter as one immutable npm graph in Woven Matter's folder. The adapter
 // drives the person's own native CLI (CODEX_PATH / CLAUDE_CODE_EXECUTABLE), never a copy
-// bundled inside its package, so no engine is selected or checked here.
+// bundled inside its package. Claude's library SDK is selected independently of that CLI.
 import { spawn } from 'node:child_process';
 import { existsSync, realpathSync } from 'node:fs';
 import { createRequire } from 'node:module';
@@ -66,11 +66,12 @@ export async function verifyAdapter(executable, adapterVersion, environment) {
 }
 
 /** `cli` is the native CLI the adapter will drive; older callers may still send `engineVersion`, which is ignored. */
-export async function installAdapter({ prefix, adapter, adapterVersion, protocolSDKVersion, npm, cli }) {
+export async function installAdapter({ prefix, adapter, adapterVersion, protocolSDKVersion, librarySDKVersion, npm, cli }) {
   const selection = adapters[adapter];
   if (!selection || !exact(adapterVersion) || !Array.isArray(npm) || !npm.length || npm.some(x => typeof x !== 'string')) throw new Error('Invalid adapter selection.');
   if (cli !== undefined && (typeof cli !== 'string' || !cli.startsWith('/'))) throw new Error('Invalid CLI selection.');
   if (protocolSDKVersion !== undefined && !exact(protocolSDKVersion)) throw new Error('Invalid ACP SDK selection.');
+  if (librarySDKVersion !== undefined && (adapter !== '@agentclientprotocol/claude-agent-acp' || !exact(librarySDKVersion))) throw new Error('Invalid library SDK selection.');
   prefix = resolve(prefix);
   await mkdir(join(prefix, 'Installations'), { recursive: true, mode: 0o700 });
   const generation = await realpath(await mkdtemp(join(prefix, 'Installations', 'adapter-')));
@@ -83,6 +84,10 @@ export async function installAdapter({ prefix, adapter, adapterVersion, protocol
       dependencies['@agentclientprotocol/sdk'] = protocolSDKVersion;
       overrides['@agentclientprotocol/sdk'] = '$@agentclientprotocol/sdk';
     }
+    if (librarySDKVersion) {
+      dependencies['@anthropic-ai/claude-agent-sdk'] = librarySDKVersion;
+      overrides['@anthropic-ai/claude-agent-sdk'] = '$@anthropic-ai/claude-agent-sdk';
+    }
     await writeFile(join(generation, 'package.json'), JSON.stringify({ private: true,
       dependencies, ...(Object.keys(overrides).length ? { overrides: { [adapter]: overrides } } : {}),
     }, null, 2) + '\n', { mode: 0o600 });
@@ -90,11 +95,11 @@ export async function installAdapter({ prefix, adapter, adapterVersion, protocol
     const modules = join(generation, 'node_modules');
     const adapterManifest = join(modules, adapter, 'package.json');
     if ((await object(adapterManifest)).version !== adapterVersion) throw new Error('Installed adapter graph differs from its selection.');
-    if (protocolSDKVersion) {
-      const name = '@agentclientprotocol/sdk';
+    for (const [name, version] of [['@agentclientprotocol/sdk', protocolSDKVersion], ['@anthropic-ai/claude-agent-sdk', librarySDKVersion]]) {
+      if (!version) continue;
       const selected = createRequire(adapterManifest).resolve.paths(name).map(path => join(path, name, 'package.json')).find(existsSync);
       if (!selected || await realpath(selected) !== await realpath(join(modules, name, 'package.json'))
-        || (await object(selected)).version !== protocolSDKVersion) throw new Error('Adapter resolves a different ACP SDK graph.');
+        || (await object(selected)).version !== version) throw new Error('Adapter resolves a different selected SDK graph.');
     }
     // The provider-free probe inherits no credentials or user configuration; it is pointed
     // only at the native CLI the adapter will drive. Only initialize is sent, never a prompt.
@@ -108,7 +113,7 @@ export async function installAdapter({ prefix, adapter, adapterVersion, protocol
     if (cli) env[selection.cliVariable] = cli;
     const executable = join(modules, '.bin', selection.command);
     await verifyAdapter(executable, adapterVersion, env);
-    await writeFile(join(generation, 'verification.json'), JSON.stringify({ adapter, adapterVersion, cli: cli ?? null, protocolSDKVersion, protocolVersion: 1 }) + '\n', { mode: 0o600 });
+    await writeFile(join(generation, 'verification.json'), JSON.stringify({ adapter, adapterVersion, cli: cli ?? null, protocolSDKVersion, librarySDKVersion, protocolVersion: 1 }) + '\n', { mode: 0o600 });
     await rm(probeHome, { recursive: true, force: true });
     await mkdir(join(prefix, 'bin'), { recursive: true, mode: 0o700 });
     await symlink(executable, temporary);
