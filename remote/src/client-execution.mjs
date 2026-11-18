@@ -451,7 +451,6 @@ export function createClientExecution({ directory, runtime, kind = 'linux', name
       const providers = await runtime.providers()
       const route = command.providerID ?? command.routeID ?? command.runtimeKind ?? 'default_agent'
       const provider = providers.find(item => item.id === route)
-      if (provider?.locked) throw Object.assign(fail(423, provider.unavailableReason ?? 'Pi Durable is locked.'), { code: 'default_agent_locked' })
       if (!provider?.available || provider.canStart === false || (command.runtimeKind && command.runtimeKind !== provider.runtimeKind)) throw fail(409, 'The selected agent route is unavailable or does not match its runtime.')
       const selected = provider.runtimeKind
       // The frozen intent of a session an agent creates here
@@ -1148,7 +1147,6 @@ export function createClientExecution({ directory, runtime, kind = 'linux', name
       assertIdentity()
       const provider = (await runtime.providers()).find(item => item.id === providerID || item.runtimeKind === providerID)
       if (!provider) throw fail(404, 'This agent is not on this workspace.')
-      if (provider.locked) throw Object.assign(fail(423, provider.unavailableReason ?? 'Pi Durable is locked.'), { code: 'default_agent_locked' })
       if (provider.available === false) throw fail(409, provider.unavailableReason ?? 'This agent is not ready on this workspace.')
       if (!runtime.sessionOptions) throw fail(501, 'This workspace cannot list options without a session.')
       const directory = workingDirectory ? await existingDirectory(workingDirectory) : undefined

@@ -190,6 +190,8 @@ extension ApplicationModel {
     /// never disturbs what this Mac's windows show. Only this device is reachable:
     /// no relaying to Linux hosts or further Macs.
     func memberSignIns(_ request: LibraryHTTPRequest, path: String, memberID: String) async -> LibraryHTTPResponse {
+        // A stopping background server takes no new sign-in work.
+        guard !backendStopping else { return .error("unavailable", "This Mac is stopping.", status: 503) }
         let session = memberSignInSessions[memberID] ?? {
             let value = MemberSignInSession(model: Self.memberSignInModel())
             // A member gone for a while with nothing running is released.

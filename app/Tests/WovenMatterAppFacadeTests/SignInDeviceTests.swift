@@ -433,6 +433,12 @@ struct SignInDeviceTests {
     @Test func stopNeverWaitsOnASignIn() async throws {
         let fixture = try await FacadeFixture(); defer { fixture.remove() }
         let model = fixture.model
+        // A stopping server takes no new sign-in work from another Mac.
+        model.backendStopping = true
+        let refused = await model.memberSignIns(.init(method: "POST", target: "/v1/connections/snapshot", headers: [:], body: Data("{}".utf8)),
+                                                path: "/v1/connections/snapshot", memberID: UUID().uuidString.lowercased())
+        #expect(refused.status == 503 && model.memberSignInSessions.isEmpty)
+        model.backendStopping = false
         #expect(!model.connections.busy && !model.signInConnections.busy)
         #expect(!model.backendHasUnfinishedMaintenance)
         model.signInConnections.busy = true
@@ -496,6 +502,14 @@ struct SignInDeviceTests {
             #expect(page.device.hasPrefix("mac:") && backend.signInConnections.device.hasPrefix("mac:") && page.busy)
             page.cancel()
             try await waitUntil(peer) { !peer.busy }
+            // A Pi Durable page's model can never be pointed at another device.
+            let before = backend.connections.device
+            setup.selectDevice(SignInDevice.linuxID(UUID()))
+            try await Task.sleep(for: .milliseconds(300))
+            #expect(backend.connections.device == before)
+            let refused = await backend.handleBackendRequest(.init(method: "connections.command",
+                payload: try JSONEncoder().encode(BackendConnectionsCommand(action: "device", value: SignInDevice.linuxID(UUID())))))
+            #expect(refused.error != nil && backend.connections.device == before)
         }
     }
 
@@ -588,6 +602,7 @@ struct SignInDeviceTests {
     @Test func aCommandIssuedForAnotherDeviceIsRefused() async throws {
         let keychain = SignInKeychainFixture(), helper = try FakeSettingsHelper(); defer { helper.remove() }
         let backend = deviceModel(keychain, helper: helper)
+        backend.selectsDevices = true
         let stale = BackendConnectionsCommand(action: "saveKey", provider: "openai", value: "meant-for-another-mac", device: SignInDevice.macID("other"))
         await #expect(throws: (any Error).self) {
             _ = try await KeychainAccess.$testOperations.withValue(keychain.operations) {
@@ -679,7 +694,7 @@ struct SignInDeviceTests {
         let requests = await host.controlRequests.compactMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
         let login = try #require(requests.first { $0["action"] as? String == "login" })
         #expect((login["credentials"] as? [String: Any])?.isEmpty == true)
-        #expect(login["unlockKey"] == nil && login["credentialAccounts"] == nil)
+        #expect(login["credentialAccounts"] == nil)
         #expect(keychain.stored.isEmpty)
         #expect(helper.requests.isEmpty)
     }

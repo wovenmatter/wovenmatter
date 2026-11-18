@@ -79,23 +79,25 @@ let package = Package(
     ),
     .testTarget(
       name: "WovenMatterLibraryHostTests",
-      dependencies: ["WovenMatterLibraryHost", "WovenMatterLibraryStore", "WovenMatterCore", linuxSQLite,
+      dependencies: ["WovenMatterLibraryHost", "WovenMatterLibraryStore", "WovenMatterCore", linuxSQLite, "LinuxTestProcess",
                      // The phone client, for the in-process Mac + Linux + phone reach test.
                      .product(name: "LibraryClient", package: "ios", condition: .when(platforms: [.macOS]))]
     ),
+    // Every test target Linux runs depends on this: its runner ignores SIGPIPE at start.
+    .target(name: "LinuxTestProcess", path: "TestsSupport/LinuxTestProcess"),
     .target(name: "WorkspaceFixtures", dependencies: ["WovenMatterCore", "WovenMatterClient", "WovenMatterLibraryStore", linuxCrypto, linuxSQLite], path: "TestsSupport/WorkspaceFixtures"),
     .testTarget(
       name: "WovenMatterCoreTests",
       dependencies: [
         "WovenMatterCore",
-        "WovenMatterLibraryStore", "WorkspaceFixtures", linuxCrypto, linuxSQLite,
+        "WovenMatterLibraryStore", "WorkspaceFixtures", linuxCrypto, linuxSQLite, "LinuxTestProcess",
         // The window's stream client, for the Unix-socket stream tests.
         .product(name: "LibraryClient", package: "ios", condition: .when(platforms: [.macOS]))
       ]
     ),
     .testTarget(
       name: "WovenMatterClientTests",
-      dependencies: ["WovenMatterClient", linuxCrypto, linuxSQLite]
+      dependencies: ["WovenMatterClient", linuxCrypto, linuxSQLite, "LinuxTestProcess"]
     ),
     // A fail-closed bridge keeps provider-free facade tests independent of CEF.
     // The native Xcode target still compiles and validates the production bridge.

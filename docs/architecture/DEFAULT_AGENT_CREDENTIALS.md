@@ -1,48 +1,37 @@
-# Shared provider credential ownership
+# Provider credential ownership
 
-The Mac `ProviderAccountCoordinator` owns shared OAuth renewal for Pi Durable, Usage, and Dictation. Connections is the shared account-management page.
-App-wide consumers use global accounts; Pi Durable can use workspace
-overrides. Subscription credentials and separately billed API keys stay distinct.
-Local SDK conversation helpers
-receive access-only credentials over private JSON-RPC pipes; refresh helpers
-receive owned credentials through a private control pipe and return replacements.
-The coordinator serializes renewal, persists replacements to Keychain, and only
-then publishes a snapshot. No external harness auth files are read or changed.
+Every device stores and renews its own sign-ins; nothing is copied or relayed
+between devices. Subscription credentials and separately billed API keys stay
+distinct. No external harness auth files are read or changed.
 
-Snapshots carry a stable digest revision. Connected remotes acknowledge the
-revision after encrypting the update. Ordinary sends compare the cached
-revision/deadline and workspace request identity entirely in app memory. Stale
-snapshots and concurrent sends share one renewal/sync task. Launch, activation,
-wake and reconnection trigger checks; the background timer checks the deadline
-without spawning helpers on each tick. Transient failures retain existing
-credentials and retry with a delay. A failed early renewal does not interrupt
-access that is still valid. Explicitly revoked refresh credentials are
-excluded from borrowed exports. An expired access token is never renewed remotely
-unless that workspace owns an independent sign-in.
+On a Mac, sign-ins live in Keychain (the `global` scope). The Mac
+`ProviderAccountCoordinator` owns renewal for Pi Durable, Usage, bots and
+Dictation: it serializes renewal, persists replacements to Keychain, and only
+then publishes a snapshot. Local SDK helpers receive access-only credentials
+over private JSON-RPC pipes; refresh helpers receive owned credentials through
+a private control pipe and return replacements. A failed early renewal does not
+interrupt access that is still valid, and explicitly revoked refresh credentials
+are excluded from borrowed exports.
 
-Each remote process starts sealed. One AES-256-GCM JSON store contains shared
-credentials and independently owned OAuth credentials. A random 256-bit key is
-persisted only in Mac Keychain. Every write uses a new 96-bit nonce, a 128-bit
-authentication tag, and workspace/version associated data. Writes are private,
-atomic and serialized across helper processes. Failed decryption never falls
-back to plaintext. Independent sign-ins take precedence over shared credentials.
+On a Linux host, the sign-in store (`credentials.enc.json`) and its key
+(`credentials.key`) are both files, 0600, in that workspace's Pi Durable folder
+(`.wovenmatter/default-agent`). Anything running as that user can read them: the
+AES-256-GCM encryption is not protection at rest. The host renews its own
+subscriptions. A Mac sends a host chat settings only, and changes the host's
+sign-ins through its signed `v1/sign-ins` route; the key never leaves the host.
+
 Configuration, operation journals and wire histories do not contain credential
 payloads. App-managed OAuth tokens are not launch arguments or tool environment
 variables. Claude API mode supplies its selected API key to the native runtime
-through its process environment, never command arguments. Pi Durable credential IPC is excluded from wire recording.
+through its process environment, never command arguments. Pi Durable credential
+IPC is excluded from wire recording.
 
-A credential update changes the store without replacing SDK sessions. The next
-model/search request reads current credentials. A remote run whose borrowed token
-expires waits between model requests; cancellation still works. Initial turn
-admission can select an explicitly configured fallback. Once output or tools
-have begun, authentication/usage errors never cause a whole-turn replay.
-Cancelling a turn also cancels its credential preparation, so a pending auth
-check cannot start a model request after Stop.
-
-After a service restart, a locked response prompts the SSH bridge to request
-an unlock snapshot from the Mac before retrying admission. Durable operation IDs
-prevent replay of an already accepted run. Workspace request identities fence
-late desktop responses when a destination or credential consent changes.
+A credential update changes the store without replacing SDK sessions; the next
+model or search request reads current credentials. Initial turn admission can
+select an explicitly configured fallback. Once output or tools have begun,
+authentication/usage errors never cause a whole-turn replay. Cancelling a turn
+also cancels its credential preparation, so a pending auth check cannot start a
+model request after Stop.
 
 Read-only status checks are separate from synchronization and login. Pi Durable reports credential presence/expiry, not provider validation. External
 harness status commands have deadlines and bounded captured output; raw output

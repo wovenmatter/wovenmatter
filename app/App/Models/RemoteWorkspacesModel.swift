@@ -137,7 +137,8 @@ final class RemoteWorkspacesModel {
         guard !isBackendProjection else { return }
         guard defaultAgentObservers.isEmpty else { return }
         ProviderAccountCoordinator.shared.start()
-        for name in [DefaultAgentSupport.credentialsChanged, DefaultAgentSupport.configurationChanged, Notification.Name("wovenmatter.default-agent.snapshot-ready")] {
+        // Hosts get chat settings only, so only settings changes are synchronized.
+        for name in [DefaultAgentSupport.configurationChanged] {
             defaultAgentObservers.append(NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
                 Task { @MainActor in await self?.synchronizeDefaultAgentSettings() }
             })
@@ -158,8 +159,7 @@ final class RemoteWorkspacesModel {
     private func synchronizeDefaultAgentSettings() async {
         guard !isBackendProjection else { return }
         for workspace in workspaces where tunnels[workspace.id] != nil {
-            do { try await ensureDefaultAgent(workspace) }
-            catch let error as DefaultAgentError { signInErrors[workspace.id] = error.localizedDescription }
+            do { try await ensureDefaultAgent(workspace); signInErrors[workspace.id] = nil }
             catch { signInErrors[workspace.id] = "Pi Durable settings could not synchronize. Reconnect this workspace to retry." }
         }
     }
@@ -1330,25 +1330,16 @@ final class RemoteWorkspacesModel {
         let task = Task {
             // Through the host's server with this Mac's signature once it is
             // enrolled; before that (first install) over the installer link.
-            let signed: MemberSignedHTTPClient?
-            if let memberClient { signed = try? await memberClient(configuration) } else { signed = nil }
-            let client = signed == nil ? try await serviceClient(for: configuration) : nil
-            try requireCurrent(identity)
-            let vault: DefaultAgentHostVault
-            if let signed { vault = try await signed.request("v1/default-agent/status", timeout: 60) }
-            else { vault = try await client!.defaultAgentVault() }
-            try requireCurrent(identity)
-            // Chat settings only, and only to a host that keeps its own sign-ins: one
-            // that has not updated is sent nothing.
-            guard vault.deviceVault == true else {
-                throw DefaultAgentError.message(SignInDevice.updateMessage(configuration.name))
-            }
+            // Chat settings only: no credentials, keys or account lists.
             let payload = settingsOnly
             let receipt: DefaultAgentSyncReceipt
-            if let signed {
+            if let memberClient, let signed = try? await memberClient(configuration) {
+                try requireCurrent(identity)
                 receipt = try await signed.request("v1/default-agent/configuration", method: "POST", body: payload.data(), timeout: 120)
             } else {
-                receipt = try await client!.configureDefaultAgent(payload.data())
+                let client = try await serviceClient(for: configuration)
+                try requireCurrent(identity)
+                receipt = try await client.configureDefaultAgent(payload.data())
             }
             try requireCurrent(identity)
             guard receipt.saved, receipt.revision == payload.revision else {
@@ -1375,9 +1366,7 @@ final class RemoteWorkspacesModel {
         let identity = try requestIdentity(configuration)
         let client = try await serviceClient(for: configuration)
         try requireCurrent(identity)
-        // Re-send the current encrypted vault configuration even after a service
-        // restart. A cached acknowledgement cannot prove its unlock material is
-        // still in memory when the device-scoped restart grant is created.
+        // Send the current Pi Durable chat settings again, even after a service restart.
         try await synchronizeDefaultAgent(configuration)
         try requireCurrent(identity)
         // Deterministic dedicated port per configured container; the remote script

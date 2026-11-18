@@ -16,7 +16,7 @@ export const emptyConfig = { providers, models: [], defaultModel: null, fallback
 export class DefaultAgentError extends Error {}
 export function operationErrorMessage(error) {
   return error instanceof DefaultAgentError ? error.message
-    : 'Pi Durable could not complete this operation. Check its connections and workspace unlock state in Settings → Subscriptions & API Keys.';
+    : 'Pi Durable could not complete this operation. Check its connections in Settings → Subscriptions & API Keys.';
 }
 
 // Only fixed, app-authored diagnostics cross the provider/native-state boundary.

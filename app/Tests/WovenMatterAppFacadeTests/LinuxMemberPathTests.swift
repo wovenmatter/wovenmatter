@@ -144,19 +144,6 @@ struct LinuxMemberPathTests {
         #expect(try JSONSerialization.jsonObject(with: failed.lines(after: 0)[0]) as? [String: String] == ["error": "Choose an enabled provider."])
     }
 
-    /// Only a host from before per-device sign-ins locks Pi Durable: nothing is
-    /// sent to unlock it, and the chat asks for the host to be updated.
-    @Test func aLockedPiAsksForTheHostToBeUpdated() async throws {
-        let fixture = try await FacadeFixture(); defer { fixture.remove() }
-        let (workspace, fake) = try await enrolled(fixture)
-        await fake.lockPi()
-        let client = try #require(fixture.model.federatedExecutionClient)
-        await #expect(throws: LibraryAPIError(code: MemberExecutionClient.defaultAgentLocked, message: "Update Woven Matter on \(workspace.name) to manage its sign-ins from here.")) {
-            _ = try await client.createSession(workspace: workspace, runtimeKind: .defaultAgent, conversationID: UUID().uuidString.lowercased(), folderID: nil)
-        }
-        #expect(await fake.commands.filter { $0.kind == .createSession }.isEmpty)
-    }
-
     @Test func optionsWithoutASessionCarryTheirDescriptions() async throws {
         let fixture = try await FacadeFixture(); defer { fixture.remove() }
         let (_, fake) = try await enrolled(fixture)
@@ -368,14 +355,12 @@ actor LinuxMemberFake: ExecutionWorkspaceTransport, MemberExecutionRoutes {
     private(set) var fileRequests: [FileRequest] = []
     private(set) var adoptions: [Data] = []
     private var receipts: [String: LibraryCommandReceipt] = [:]
-    private var piLocked = false, lockedSend = false, directoriesRefused = false
+    private var directoriesRefused = false
     private var file = Data(), knowsConversations = true, damaged = false, adoptionsRefused = false
     /// Adoptions fail with this until cleared, as an unreachable or busy host does.
     private var adoptionFailure: (any Error)?
 
     init(workspace: ExecutionWorkspace) { self.workspace = workspace }
-    func lockPi() { piLocked = true }
-    func refuseNextSendAsLocked() { lockedSend = true }
     func refuseDirectories() { directoriesRefused = true }
     func serve(file: Data) { self.file = file }
     func forgetConversations() { knowsConversations = false }
@@ -387,7 +372,7 @@ actor LinuxMemberFake: ExecutionWorkspaceTransport, MemberExecutionRoutes {
     func providers() -> [HarnessCapabilities] {
         [.init(id: "codex", runtimeKind: "codex", displayName: "Codex", routeName: "This workspace", available: true, canSteer: true),
          .init(id: "default_agent", runtimeKind: "default_agent", displayName: "Pi Durable", routeName: "This workspace",
-               available: !piLocked, canStart: !piLocked, canSteer: true, locked: piLocked ? true : nil)]
+               available: true, canSteer: true)]
     }
     func pending() -> [PendingInteraction] { [] }
     func receipt(_ id: String) -> LibraryCommandReceipt? { receipts[id] }
@@ -398,14 +383,9 @@ actor LinuxMemberFake: ExecutionWorkspaceTransport, MemberExecutionRoutes {
     func command(_ command: LibraryCommand) -> LibraryCommandReceipt {
         if let saved = receipts[command.commandID] { return saved }
         commands.append(command)
-        var receipt = LibraryCommandReceipt(commandID: command.commandID, deviceID: command.deviceID,
+        let receipt = LibraryCommandReceipt(commandID: command.commandID, deviceID: command.deviceID,
             status: command.kind == .send ? .accepted : .completed, conversationID: command.conversationID,
             runID: command.kind == .send ? UUID().uuidString.lowercased() : nil, workspaceID: workspace.id)
-        if command.kind == .send, lockedSend {
-            lockedSend = false
-            receipt = .init(commandID: command.commandID, deviceID: command.deviceID, status: .rejected, conversationID: command.conversationID,
-                message: "Pi Durable is locked.", workspaceID: workspace.id, code: "default_agent_locked")
-        }
         receipts[command.commandID] = receipt
         return receipt
     }

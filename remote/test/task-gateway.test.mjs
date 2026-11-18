@@ -218,21 +218,6 @@ test('Ungrouped scheduled chats bind their own scratch folder across recurrence,
   await restored.close()
 })
 
-test('locked Built-in credentials defer before submission and retry after reconnect without consuming occurrence',async t=>{
- let clock=Date.parse('2026-01-02T15:00:00Z'),locked=true,calls=0
- const {directory,gateway}=await fixture(t,{now:()=>clock,execute:async()=>{calls++;if(locked)throw Object.assign(new Error('Waiting for Woven Matter to reconnect and unlock the Built-in agent.'),{beforePrompt:true,deferred:true});return {}}})
- gateway.publish({publicationID:'p1',schedules:[task()],knownRuns:[]});gateway.tick();await settled(gateway)
- assert.equal(gateway.results().entries.length,0)
- assert.match(gateway.status().waitingTasks[0].reason,/unlock/)
- gateway.tick();assert.equal(calls,1)
- const restored=createTaskGateway({directory,now:()=>clock,execute:async()=>{calls++;return {}}})
- assert.equal(restored.results().entries.length,0)
- clock+=61000;locked=false;restored.tick();await settled(restored)
- assert.equal(calls,2);assert.equal(restored.results().entries.length,1)
- assert.equal(restored.results().entries[0].run.status,'accepted')
- assert.equal(restored.status().waitingTasks.length,0)
-})
-
 test('disable drains accepted work and persists disabled across restart',async t=>{
  let stopped=false
  const {directory,gateway}=await fixture(t,{now:()=>Date.parse('2026-01-02T15:00:00Z'),execute:({signal})=>new Promise((done,reject)=>signal.addEventListener('abort',()=>reject(new Error('stopped')))),onDisable:async()=>{stopped=true}})

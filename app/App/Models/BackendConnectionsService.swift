@@ -101,7 +101,6 @@ struct BackendConnectionsSnapshot: Codable, Equatable {
     var resolvedDefaultModelID: String?
     var providers: [DefaultAgentSettingsModel.Provider]
     var searchConfigured: Bool
-    var sharedAccounts: [String: [ProviderConnectionAccounts.Account]]?
     var accounts: [String: [ProviderConnectionAccounts.Account]]
     var signInProvider: String?
     var signInOutcome: DefaultAgentSettingsModel.SignInOutcome?
@@ -122,7 +121,7 @@ struct BackendConnectionsSnapshot: Codable, Equatable {
         scope = model.scope; settings = model.settings; catalog = model.catalog; providers = model.providers
         catalogIncludesAllModels = model.catalogIncludesAllModels
         resolvedDefaultModelID = model.resolvedDefaultModelID
-        searchConfigured = model.searchConfigured; accounts = model.accounts; sharedAccounts = model.sharedAccounts
+        searchConfigured = model.searchConfigured; accounts = model.accounts
         signInProvider = model.signInProvider
         signInOutcome = model.signInOutcome
         busy = model.busy; error = model.error; notice = model.notice
@@ -150,6 +149,10 @@ struct BackendConnectionsSnapshot: Codable, Equatable {
         model.noteWindowContact()
         if method == "connections.command" {
             let c = try JSONDecoder().decode(BackendConnectionsCommand.self, from: payload).validated()
+            // Only Subscriptions & API Keys chooses another device; Pi Durable pages never do.
+            if ["device", "devices"].contains(c.action), !model.selectsDevices {
+                throw DefaultAgentError.message("Choose a device on Subscriptions & API Keys.")
+            }
             // A window's account command runs on the device it was issued for. Another
             // window may have chosen a different device since: refuse rather than
             // change whichever device happens to be selected now.

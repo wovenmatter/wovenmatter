@@ -201,20 +201,13 @@ final class MemberExecutionClient {
         }
     }
 
-    /// Creates a session on `workspace` with the caller's choices. A locked Pi
-    /// Durable vault, reported by the provider list or the receipt, means the
-    /// host needs updating (`unlockDefaultAgent`).
+    /// Creates a session on `workspace` with the caller's choices.
     func createSession(workspace: ExecutionWorkspace, runtimeKind: AgentRuntimeKind,
                        conversationID: String, folderID: String?, title: String? = nil,
                        sessionOptions: LibrarySessionOptions? = nil) async throws -> LibraryCommandReceipt {
         let identity = try await database.libraryIdentity()
-        var unlocked = false
         func provider() async throws -> HarnessCapabilities {
             let providers = try await transport(for: workspace).providers()
-            if !unlocked, providers.contains(where: { $0.runtimeKind == runtimeKind.rawValue && $0.locked == true }) {
-                try await unlockDefaultAgent(on: workspace); unlocked = true
-                return try await provider()
-            }
             guard let provider = providers.first(where: { $0.runtimeKind == runtimeKind.rawValue && $0.available && $0.canStart }) else {
                 throw LibraryAPIError(code: "unavailable", message: "Set up this agent on its workspace before starting a chat.")
             }
@@ -225,19 +218,7 @@ final class MemberExecutionClient {
                   conversationID: conversationID, providerID: provider.id, runtimeKind: runtimeKind.rawValue, folderID: folderID,
                   libraryID: workspace.libraryID, workspaceID: workspace.id, title: title, sessionOptions: sessionOptions)
         }
-        do { return try await submit(command(conversationID, provider: provider()), workspace: workspace) }
-        catch let error as LibraryAPIError where error.code == Self.defaultAgentLocked && !unlocked {
-            try await unlockDefaultAgent(on: workspace); unlocked = true
-            return try await submit(command(UUID().uuidString.lowercased(), provider: provider()), workspace: workspace)
-        }
-    }
-
-    nonisolated static let defaultAgentLocked = "default_agent_locked"
-
-    /// Only a host from before per-device sign-ins locks its Pi Durable vault.
-    /// Nothing is sent to unlock it: it needs updating.
-    func unlockDefaultAgent(on workspace: ExecutionWorkspace) async throws {
-        throw LibraryAPIError(code: Self.defaultAgentLocked, message: SignInDevice.updateMessage(workspace.name))
+        return try await submit(command(conversationID, provider: provider()), workspace: workspace)
     }
 
     /// The Linux server's member routes for `workspace`, signed by this Mac.
@@ -257,7 +238,6 @@ final class MemberExecutionClient {
             throw LibraryAPIError(code: "unavailable", message: "\(runtimeKind.displayName) is not set up on \(workspace.name).")
         }
         let routes = try await memberRoutes(for: workspace)
-        if provider.locked == true { try await unlockDefaultAgent(on: workspace) }
         return try await routes.sessionOptions(providerID: provider.id, workingDirectory: workingDirectory, model: model)
     }
 
@@ -322,11 +302,6 @@ final class MemberExecutionClient {
         let identity = try await database.libraryIdentity()
         let kind: LibraryCommand.Kind = expectedRunID == nil ? .send : .steer
         let attachments = try await uploadAttachments(files, to: workspace)
-        // A Pi Durable run would fail after its send was accepted: unlock first.
-        if capabilities[conversationID]?.runtimeKind == AgentRuntimeKind.defaultAgent.rawValue,
-           try await transport(for: workspace).providers().contains(where: { $0.runtimeKind == AgentRuntimeKind.defaultAgent.rawValue && $0.locked == true }) {
-            try await unlockDefaultAgent(on: workspace)
-        }
         let existing = await commandJournal.commandRecords(workspaceID: workspace.id).first {
             ($0.receipt == nil || $0.receipt?.status == .outcomeUnknown) && $0.command.kind == kind &&
             $0.command.conversationID == conversationID && $0.command.text == text && $0.command.runID == expectedRunID &&
@@ -337,12 +312,7 @@ final class MemberExecutionClient {
                 text: text, noteID: noteID, libraryID: workspace.libraryID, workspaceID: workspace.id,
                 attachments: attachments.isEmpty ? nil : attachments, promptContext: promptContext)
         }
-        do { return try await submit(existing?.command ?? command(), workspace: workspace, beforeDispatch: beforeDispatch) }
-        catch let error as LibraryAPIError where error.code == Self.defaultAgentLocked {
-            // The refusal is final for its command ID; the retry is a new command.
-            try await unlockDefaultAgent(on: workspace)
-            return try await submit(command(), workspace: workspace, beforeDispatch: beforeDispatch)
-        }
+        return try await submit(existing?.command ?? command(), workspace: workspace, beforeDispatch: beforeDispatch)
     }
 
     @discardableResult
@@ -436,7 +406,7 @@ final class MemberExecutionClient {
               receipt.workspaceID == nil || receipt.workspaceID == workspace.id else { throw MobileConnectionError.invalidResponse }
         try await commandJournal.rememberReceipt(receipt, workspaceID: workspace.id)
         guard receipt.status == .accepted || receipt.status == .completed else {
-            // A coded refusal (`default_agent_locked`, `attachment_unavailable`) is one the caller can act on.
+            // A coded refusal (`attachment_unavailable`) is one the caller can act on.
             throw LibraryAPIError(code: receipt.status == .rejected ? receipt.code ?? "execution_unconfirmed" : "execution_unconfirmed",
                 message: receipt.message ?? "The execution workspace has not confirmed this command. Its durable identity has been retained.")
         }

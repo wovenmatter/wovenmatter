@@ -3503,7 +3503,11 @@ final class ApplicationModel {
     /// (another Mac, a Linux workspace) lives only here, so Pi Durable pages, the
     /// setup window, chats and task defaults (`connections`) always read and write
     /// this Mac's own settings and can neither see nor disturb that choice.
-    let signInConnections = DefaultAgentSettingsModel()
+    let signInConnections: DefaultAgentSettingsModel = {
+        let model = DefaultAgentSettingsModel()
+        model.selectsDevices = true
+        return model
+    }()
     /// A window's `signInConnections` requests, as the background server routes them.
     nonisolated static func signInBackendMethod(_ method: String) -> String {
         method.hasPrefix("connections.") ? "signins." + method.dropFirst("connections.".count) : method
@@ -4443,8 +4447,10 @@ extension ApplicationModel {
                 guard !backendHasUnfinishedMaintenance else {
                     throw BackendRPCError.remote("Wait for setup and maintenance operations before stopping the background server.")
                 }
-                // A sign-in on Subscriptions & API Keys is cancelled, never waited on.
+                // A sign-in on Subscriptions & API Keys, or one another Mac runs here,
+                // is cancelled, never waited on.
                 signInConnections.cancel()
+                for session in memberSignInSessions.values { session.model.cancel() }
                 // Fence admissions before awaiting cancellation. A new input cannot
                 // enter while confirmed work is being withdrawn and drained.
                 backendStopping = true

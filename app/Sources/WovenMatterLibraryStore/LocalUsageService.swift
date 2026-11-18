@@ -74,11 +74,11 @@ struct UsageLimitsRequest: Sendable {
   let now: Date
   var selectedConnections: [ProviderKind: UsageConnectionChoice] = [:]
 
-  func collect(sharedCredentials: [String: DefaultAgentCredential] = [:],
+  func collect(deviceCredentials: [String: DefaultAgentCredential] = [:],
                claudeStatus: BuiltInClaudeSignIn.Status? = nil) async -> [UsageLimitAccount] {
     await ProviderLimitCollector.collect(
       enabledProviders: enabledProviders,
-      sharedCredentials: sharedCredentials,
+      deviceCredentials: deviceCredentials,
       selectedConnections: selectedConnections,
       claudeStatus: claudeStatus,
       now: now
@@ -155,7 +155,7 @@ public actor LocalUsageService {
       let claudeStatus = request.allowCredentialAccess && request.enabledProviders.contains(.claude)
         && credentials["claude-subscription"] != nil
         ? try? await BuiltInClaudeSignIn.status(profile: credentials["claude-subscription"]?.accountId) : nil
-      return await request.collect(sharedCredentials: credentials, claudeStatus: claudeStatus)
+      return await request.collect(deviceCredentials: credentials, claudeStatus: claudeStatus)
     }
     databaseURL = usageDatabaseURL ?? homeDirectory.appending(
       path: "Library/Application Support/Woven Matter/workspace.sqlite"

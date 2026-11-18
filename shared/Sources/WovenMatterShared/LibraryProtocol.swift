@@ -167,11 +167,7 @@ public struct HarnessCapabilities: Codable, Equatable, Identifiable, Sendable {
   public var supportsQuestions: Bool
   public var activeInputMode: String
   public var unavailableReason: String?
-  /// A Linux host's Pi Durable vault is locked: only a host from before
-  /// per-device sign-ins reports it, and it needs updating.
-  public var locked: Bool?
-  public init(id: String, runtimeKind: String, displayName: String, routeName: String = "This Mac", available: Bool, canStart: Bool = true, canResume: Bool = true, canSteer: Bool = false, canStop: Bool = true, supportsApprovals: Bool = true, supportsQuestions: Bool = true, activeInputMode: String = "notNegotiated", unavailableReason: String? = nil, locked: Bool? = nil) {
-    self.locked = locked
+  public init(id: String, runtimeKind: String, displayName: String, routeName: String = "This Mac", available: Bool, canStart: Bool = true, canResume: Bool = true, canSteer: Bool = false, canStop: Bool = true, supportsApprovals: Bool = true, supportsQuestions: Bool = true, activeInputMode: String = "notNegotiated", unavailableReason: String? = nil) {
     self.id = id; self.runtimeKind = runtimeKind; self.displayName = displayName; self.routeName = routeName
     self.available = available; self.canStart = canStart; self.canResume = canResume; self.canSteer = canSteer
     self.canStop = canStop; self.supportsApprovals = supportsApprovals; self.supportsQuestions = supportsQuestions

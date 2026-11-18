@@ -5,9 +5,10 @@ import { join } from 'node:path';
 import lockfile from 'proper-lockfile';
 import { readJSON, writePrivateJSON } from './config.mjs';
 
-// A host stores and renews its own sign-ins in this device vault, sealed with
-// its own key beside it in the private directory. Only the Mac's own helper
-// runs without it (its credentials come from Keychain in each request).
+// A host stores and renews its own sign-ins here. The store and its key are
+// both files (0600) in this workspace's Pi Durable folder, readable by anything
+// running as this user: the encryption is not protection at rest. Only the
+// Mac's own helper runs without it (its credentials come from Keychain).
 export const deviceVaultEnabled = (environment = process.env) => environment.WOVEN_DEFAULT_AGENT_DEVICE_VAULT === '1';
 const workspace = 'device';
 const lockOptions = { realpath: false, retries: { retries: 60, minTimeout: 50, maxTimeout: 500 }, stale: 60000 };
@@ -23,8 +24,8 @@ export class CredentialVault {
     await mkdir(this.directory, { recursive: true, mode: 0o700 });
     const release = await lockfile.lock(this.path, lockOptions);
     try {
-      const stored = await readJSON(this.path, null).catch(() => null);
-      if (stored?.workspace !== workspace) await unlink(this.path).catch(missing);
+      const stored = await readStored(this.path);
+      if (stored && stored !== unreadable && stored.workspace !== workspace) await unlink(this.path).catch(missing);
       if (!(await readKey(this.keyPath))) await writeKey(this.keyPath);
       return this;
     } finally { await release(); }
@@ -32,8 +33,8 @@ export class CredentialVault {
   // An unreadable vault or key (a restored or copied workspace) reads as signed out.
   async read() {
     const key = await readKey(this.keyPath);
-    const stored = await readJSON(this.path, null).catch(() => null);
-    if (!key || !stored) return {};
+    const stored = await readStored(this.path);
+    if (!key || !stored || stored === unreadable) { key?.fill(0); return {}; }
     try { return decrypt(stored, key); } catch { return {}; } finally { key.fill(0); }
   }
   // A sign-in made while the vault is unreadable replaces it with a new key.
@@ -42,8 +43,8 @@ export class CredentialVault {
     const release = await lockfile.lock(this.path, lockOptions);
     try {
       let key = await readKey(this.keyPath), current;
-      const stored = await readJSON(this.path, null).catch(() => null);
-      try { current = key ? (stored ? decrypt(stored, key) : {}) : undefined; } catch { current = undefined; }
+      const stored = await readStored(this.path);
+      try { current = key && stored !== unreadable ? (stored ? decrypt(stored, key) : {}) : undefined; } catch { current = undefined; }
       if (current === undefined) { key?.fill(0); key = await writeKey(this.keyPath); current = {}; }
       const next = await fn(current);
       const nonce = randomBytes(12);
@@ -57,11 +58,22 @@ export class CredentialVault {
   }
 }
 
+// Only a missing file is no vault, and only malformed content (or, in
+// `decrypt`, a failed authentication) is an unreadable one. Any other read
+// error (EACCES, EIO, EMFILE…) is thrown: nothing is replaced on a guess.
+const unreadable = Symbol('unreadable');
+async function readStored(path) {
+  try { return await readJSON(path, null); }
+  catch (error) { if (error instanceof SyntaxError) return unreadable; throw error; }
+}
+
 function decrypt(stored, key) {
-  if (stored.version !== 1 || stored.workspace !== workspace) throw new Error('unreadable');
-  const decipher = createDecipheriv('aes-256-gcm', key, Buffer.from(stored.nonce, 'base64'));
+  if (stored?.version !== 1 || stored.workspace !== workspace || typeof stored.nonce !== 'string' || typeof stored.tag !== 'string' || typeof stored.data !== 'string') throw new Error('unreadable');
+  const nonce = Buffer.from(stored.nonce, 'base64'), tag = Buffer.from(stored.tag, 'base64');
+  if (nonce.length !== 12 || tag.length !== 16) throw new Error('unreadable');
+  const decipher = createDecipheriv('aes-256-gcm', key, nonce, { authTagLength: 16 });
   decipher.setAAD(Buffer.from('wovenmatter/default-agent/v1/' + workspace));
-  decipher.setAuthTag(Buffer.from(stored.tag, 'base64'));
+  decipher.setAuthTag(tag);
   return JSON.parse(Buffer.concat([decipher.update(Buffer.from(stored.data, 'base64')), decipher.final()]).toString('utf8'));
 }
 

@@ -231,7 +231,7 @@ installation and each configured host; choosing one workspace limits the list
 to that workspace.
 
 `GET /v1/default-agent/sdks` returns installed package metadata without
-initializing an agent, unlocking credentials, or checking the network. `POST`
+initializing an agent or checking the network. `POST`
 to the same endpoint accepts `{"action":"check","id":"claude"}` for an explicit
 registry check, or `{"action":"update","id":"claude","version":"x.y.z"}` for an
 update. The SDK identifier is `pi` or `claude`; omit it from a check or update

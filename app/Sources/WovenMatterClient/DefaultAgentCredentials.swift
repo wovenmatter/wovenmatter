@@ -49,7 +49,6 @@ public struct DefaultAgentPayload: Codable, Sendable {
     public var credentials: [String: DefaultAgentCredential]
     public var credentialAccounts: [String: [DefaultAgentCredentialAccount]]?
     public var workspace: String
-    public var unlockKey: String?
     public var revision: String?
     public init(config: DefaultAgentSettings, credentials: [String: DefaultAgentCredential], workspace: String) {
         self.config = config
@@ -85,7 +84,6 @@ public struct AgentSignInStatus: Codable, Identifiable, Sendable {
         case "credentials_present": "Credentials present"
         case "sign_in_required": "Sign-in required"
         case "not_installed": "Not installed"
-        case "locked": "Locked"
         case "not_checked": "Not checked"
         default: "Could not check"
         }
@@ -95,12 +93,6 @@ public struct DefaultAgentSyncReceipt: Decodable, Sendable {
     public let saved: Bool
     public let revision: String
     public let epoch: String
-}
-/// Whether a host keeps its own sign-ins (`deviceVault` in its Pi Durable status);
-/// a host that does not has not updated and is not configured.
-public struct DefaultAgentHostVault: Decodable, Sendable {
-    public var deviceVault: Bool?
-    public init(deviceVault: Bool? = nil) { self.deviceVault = deviceVault }
 }
 
 /// One Mac owns renewal. Ordinary sends compare cached revisions and deadlines.

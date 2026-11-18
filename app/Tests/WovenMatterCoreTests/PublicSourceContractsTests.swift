@@ -10,7 +10,7 @@ struct PublicSourceContractsTests {
   func scopedUsageAccountEnablement() async {
     let accounts = await ProviderLimitCollector.collect(
       enabledProviders: [.openCodeGo],
-      sharedCredentials: [:],
+      deviceCredentials: [:],
       now: Date(timeIntervalSince1970: 1_800_000_000)
     )
 

@@ -33,6 +33,39 @@ test('a device vault opens with its own key; anything else in its place, or unre
   assert.deepEqual(await files(directory), ['credentials.enc.json', 'credentials.key']);
 });
 
+for (const target of ['vault', 'key']) {
+  test(`a ${target} file that cannot be read right now fails every change and loses nothing`, async t => {
+    if (process.getuid?.() === 0) return t.skip('root reads any file');
+    const directory = await temporary(t);
+    const vault = await new CredentialVault(directory).openDevice();
+    await changeSignIns(vault, { action: 'saveKey', provider: 'openai', key: 'first-secret' });
+    await changeSignIns(vault, { action: 'saveKey', provider: 'anthropic', key: 'second-secret' });
+    const path = target === 'vault' ? vault.path : vault.keyPath;
+    const before = { vault: await readFile(vault.path), key: await readFile(vault.keyPath) };
+    await chmod(path, 0o000);
+    t.after(() => chmod(path, 0o600).catch(() => {}));
+    await assert.rejects(vault.modify(async value => ({ ...value, accounts: { exa: [] } })), { code: 'EACCES' });
+    await assert.rejects(new CredentialVault(directory).openDevice(), { code: 'EACCES' });
+    await assert.rejects(vault.read(), { code: 'EACCES' });
+    await chmod(path, 0o600);
+    assert.deepEqual(await readFile(vault.path), before.vault);
+    assert.deepEqual(await readFile(vault.keyPath), before.key);
+    const reopened = await new CredentialVault(directory).openDevice();
+    assert.deepEqual(Object.keys((await reopened.read()).accounts).sort(), ['anthropic', 'openai']);
+  });
+}
+
+test('a vault with a wrong nonce or tag length reads as signed out', async t => {
+  const directory = await temporary(t);
+  const vault = await new CredentialVault(directory).openDevice();
+  await changeSignIns(vault, { action: 'saveKey', provider: 'openai', key: 'first-secret' });
+  const stored = JSON.parse(await readFile(vault.path, 'utf8'));
+  for (const change of [{ nonce: Buffer.alloc(8).toString('base64') }, { tag: Buffer.alloc(4).toString('base64') }]) {
+    await writeFile(vault.path, JSON.stringify({ ...stored, ...change }));
+    assert.deepEqual(await vault.read(), {});
+  }
+});
+
 test('the device key is created whole, kept 0600 and never read through a link or from another owner', async t => {
   const directory = await temporary(t);
   const vault = await new CredentialVault(directory).openDevice();

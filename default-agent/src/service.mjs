@@ -124,8 +124,7 @@ export function createDefaultAgentService({ cwd, directory, engineFactory, write
     return { credential: null };
   }
   async function status() {
-    // A Mac tells from `deviceVault` that this host keeps its own sign-ins.
-    return { ...(await (await engine()).status()), locked: false, epoch, deviceVault: true };
+    return { ...(await (await engine()).status()), epoch };
   }
   async function invoke(message) {
     const id = message.operationID;

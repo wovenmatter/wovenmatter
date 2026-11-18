@@ -267,10 +267,9 @@ test('a Linux host keeps its own sign-ins: configuration carries no credentials 
   });
   assert.equal((await request('/v1/default-agent/status', undefined, 'wrong')).status, 401);
   assert.equal((await request('/v1/sign-ins', undefined, 'wrong')).status, 401);
-  // The host opens its own vault and says so.
+  // The host opens its own vault: nothing unlocks it.
   let status = await (await request('/v1/default-agent/status')).json();
-  assert.equal(status.locked, false);
-  assert.equal(status.deviceVault, true);
+  assert.ok(Array.isArray(status.providers));
   // The SSH relay's Pi route is gone; members reach Pi Durable through execution commands.
   assert.equal((await request('/v1/default-agent/rpc', { method: 'initialize' })).status, 404);
   // Chat settings arrive alone; credentials in a request are never stored.

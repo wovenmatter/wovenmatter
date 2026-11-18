@@ -504,8 +504,7 @@ const server = createServer({ maxHeaderSize: 16_384, headersTimeout: 10_000,
         id: h.id, name: h.displayName, executable: await commandLocation(h.cliCommand),
       })));
       const statuses = await signInStatuses(entries, undefined, environment);
-      statuses.unshift(...(agent.locked ? [{ id: 'default_agent', name: 'Pi Durable', state: 'locked', detail: 'Reconnect Woven Matter to unlock stored credentials.' }]
-        : agent.providers.map(p => ({ ...p, name: 'Pi Durable · ' + p.name }))));
+      statuses.unshift(...agent.providers.map(p => ({ ...p, name: 'Pi Durable · ' + p.name })));
       return json(response, 200, { statuses });
     }
     if (url.pathname === '/v1/default-agent/sdks' && ['GET', 'POST'].includes(request.method)) {

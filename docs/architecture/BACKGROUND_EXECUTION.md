@@ -208,9 +208,8 @@ retain their session binding. Stream output is batched while accepted inputs and
 terminal results use durability barriers. Idle relays use long waits, and output
 wakes them immediately.
 
-Built-in credentials keep the existing Mac-unlock boundary. A remote restart can
-wait for reconnection and unlock; the gateway does not persist additional secrets
-remotely. Remote services must be running on their hosts for autonomous execution.
+Built-in credentials are the host's own sign-ins; the gateway persists no
+additional secrets. Remote services must be running on their hosts for autonomous execution.
 A sleeping or powered-off host cannot execute tasks.
 
 ## Verification

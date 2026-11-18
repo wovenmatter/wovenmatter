@@ -273,7 +273,7 @@ final class DefaultAgentSettingsModel {
             catalogIncludesAllModels = value.catalogIncludesAllModels ?? false
             resolvedDefaultModelID = value.resolvedDefaultModelID
         }
-        searchConfigured = value.searchConfigured; accounts = value.accounts; sharedAccounts = value.sharedAccounts ?? [:]
+        searchConfigured = value.searchConfigured; accounts = value.accounts
         signInProvider = value.signInProvider
         signInOutcome = value.signInOutcome
         busy = value.busy; error = value.error; notice = value.notice
@@ -315,7 +315,7 @@ final class DefaultAgentSettingsModel {
         leavePeer()
         cancel()
         device = id
-        accounts = [:]; sharedAccounts = [:]; providers = []; signInOutcome = nil; notice = nil; error = nil
+        accounts = [:]; providers = []; signInOutcome = nil; notice = nil; error = nil
         switch SignInDevice.kind(of: id) {
         case .mac:
             guard let memberID = SignInDevice.memberID(of: id), let peerTransport else {
@@ -427,7 +427,6 @@ final class DefaultAgentSettingsModel {
     }
     private func applyLinux(_ value: DeviceSignIns) {
         accounts = value.providerAccounts
-        sharedAccounts = [:]
         localServers = value.localServers
         searchConfigured = !(accounts[configuration.searchProvider] ?? []).isEmpty
         publishCatalog()
@@ -470,7 +469,7 @@ final class DefaultAgentSettingsModel {
         if let provider = providers.first(where: { $0.id == id }) {
             return provider.connected ? "Credentials present" : "Connect account"
         }
-        guard let saved = effectiveAccounts[id] else { return "Status unchecked" }
+        guard let saved = accounts[id] else { return "Status unchecked" }
         return saved.isEmpty ? "Connect account" : "Credential saved · status unchecked"
     }
     private func invalidateConnection(_ provider: String) {
@@ -479,10 +478,6 @@ final class DefaultAgentSettingsModel {
     var signInProvider: String?
     var signInOutcome: SignInOutcome?
     var accounts: [String: [ProviderConnectionAccounts.Account]] = [:]
-    var sharedAccounts: [String: [ProviderConnectionAccounts.Account]] = [:]
-    var effectiveAccounts: [String: [ProviderConnectionAccounts.Account]] {
-        sharedAccounts.merging(accounts.filter { !$0.value.isEmpty }) { _, owned in owned }
-    }
     /// Whenever nothing runs any more, a window's polling activity is released (one place).
     var busy = false { didSet { if !busy { holdPollingActivity(false) } } }
     var error: String?
@@ -516,6 +511,9 @@ final class DefaultAgentSettingsModel {
     /// the coordinator's sign-in lease, so this Mac's own renewal and preparation
     /// for Pi Durable and bots never wait on it.
     var holdsSignInLease = true
+    /// Only Subscriptions & API Keys' model (`signInConnections`) chooses a device;
+    /// the background server refuses `device`/`devices` for any other.
+    var selectsDevices = false
     /// The settings helper this Mac runs (`main.mjs --control`).
     var helperLaunch: () -> LocalACPRuntimeLaunchConfiguration? = { DefaultAgentSupport.resolution().launchConfiguration }
 
@@ -524,7 +522,7 @@ final class DefaultAgentSettingsModel {
         set {
             let base = configuration
             if base.defaultModel != newValue.defaultModel { resolvedDefaultModelID = nil }
-            if base.searchProvider != newValue.searchProvider { searchConfigured = !(effectiveAccounts[newValue.searchProvider] ?? []).isEmpty }
+            if base.searchProvider != newValue.searchProvider { searchConfigured = !(accounts[newValue.searchProvider] ?? []).isEmpty }
             if transport != nil || LocalExecutionRole.current == .frontend {
                 if scope == "global" { settings.global = newValue } else { settings.workspaces[scope] = newValue }
                 publishCatalog()
@@ -542,7 +540,7 @@ final class DefaultAgentSettingsModel {
             let merged = current.applyingChanges(from: original, to: edited)
             if scope == "global" { value.global = merged } else { value.workspaces[scope] = merged }
         }
-        searchConfigured = !(effectiveAccounts[configuration.searchProvider] ?? []).isEmpty
+        searchConfigured = !(accounts[configuration.searchProvider] ?? []).isEmpty
         publishCatalog()
     }
     var inherits: Bool { scope != "global" && settings.workspaces[scope] == nil }
@@ -551,7 +549,7 @@ final class DefaultAgentSettingsModel {
     /// The Linux workspace an account action targets: the one named, else the selected device.
     private func linuxWorkspace(_ remote: RemoteWorkspaceConfiguration?) -> UUID? { remote?.id ?? linuxTarget }
     var availableModelProviderIDs: Set<String> {
-        var result = Set(effectiveAccounts.filter { !$0.value.isEmpty }.map(\.key))
+        var result = Set(accounts.filter { !$0.value.isEmpty }.map(\.key))
         for provider in providers {
             if provider.connected { result.insert(provider.id) }
             else { result.remove(provider.id) }
@@ -656,9 +654,8 @@ final class DefaultAgentSettingsModel {
             guard !Task.isCancelled, generation == runID, device == target,
                 value.revision == DefaultAgentSupport.revision else { return }
             if accounts != value.accounts { accounts = value.accounts }
-            sharedAccounts = [:]
-            publishCatalog()
-            searchConfigured = !(effectiveAccounts[configuration.searchProvider] ?? []).isEmpty
+                publishCatalog()
+            searchConfigured = !(accounts[configuration.searchProvider] ?? []).isEmpty
         } catch is CancellationError { }
         catch { if generation == runID, device == target { self.error = error.localizedDescription } }
     }
@@ -827,13 +824,13 @@ final class DefaultAgentSettingsModel {
         // Nothing another Mac answered stays once this Mac's settings are shown.
         if backendRequest == nil, peerRequest != nil {
             leavePeer()
-            accounts = [:]; sharedAccounts = [:]; providers = []; searchConfigured = false
+            accounts = [:]; providers = []; searchConfigured = false
             settings = DefaultAgentSupport.settings
         }
         if device != scope && device != scopeDevice { localServers = [] }
         device = scopeDevice
         if transport != nil {
-            if self.scope != scope { catalog = []; providers = []; accounts = [:]; sharedAccounts = [:] }
+            if self.scope != scope { catalog = []; providers = []; accounts = [:] }
             self.scope = scope
             _ = forward(.init(action: "scope", value: scope))
             return
@@ -843,7 +840,7 @@ final class DefaultAgentSettingsModel {
         settings = DefaultAgentSupport.settings
         if scopeDevice == SignInDevice.localID { localServers = LocalModelServerStore.servers }
         self.scope = scope
-        if changedScope { catalog = []; providers = []; accounts = [:]; sharedAccounts = [:] }
+        if changedScope { catalog = []; providers = []; accounts = [:] }
         signInOutcome = nil
         notice = nil
         error = nil

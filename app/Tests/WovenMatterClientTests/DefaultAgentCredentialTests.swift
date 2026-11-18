@@ -300,7 +300,6 @@ extension DefaultAgentCredentialTests {
         #expect(independent.credentials == inherited.credentials)
         #expect(independent.credentialAccounts == inherited.credentialAccounts)
         #expect(independent.credentialAccounts?["openrouter"]?.first?.id == fallback.id)
-        #expect(independent.unlockKey == nil)
     }
 
     @Test func anotherDevicesWorkspaceGetsItsChatSettingsWithoutCredentials() throws {
@@ -308,10 +307,10 @@ extension DefaultAgentCredentialTests {
         settings.global.models = ["openai/shared-model"]
         let payload = try DefaultAgentSupport.configurationPayload(workspace: "fixture-remote", settings: settings)
         #expect(payload.config.models == ["openai/shared-model"])
-        #expect(payload.credentials.isEmpty && payload.credentialAccounts == nil && payload.unlockKey == nil)
+        #expect(payload.credentials.isEmpty && payload.credentialAccounts == nil)
         #expect(payload.revision?.count == 64)
         let body = String(decoding: try payload.data(), as: UTF8.self)
-        #expect(!body.contains("credentialAccounts") && !body.contains("unlockKey"))
+        #expect(!body.contains("credentialAccounts"))
     }
 
     @Test func noHostPayloadEverCarriesCredentials() throws {
@@ -320,7 +319,7 @@ extension DefaultAgentCredentialTests {
         _ = try ProviderConnectionAccounts.addKey("device-key", provider: "anthropic", keychain: keychain)
         _ = try ProviderConnectionAccounts.addKey("workspace-key", provider: "openai", scope: scope, keychain: keychain)
         let payload = try DefaultAgentSupport.configurationPayload(workspace: scope, settings: .init())
-        #expect(payload.credentials.isEmpty && payload.credentialAccounts == nil && payload.unlockKey == nil)
+        #expect(payload.credentials.isEmpty && payload.credentialAccounts == nil)
         let body = String(decoding: try payload.data(), as: UTF8.self)
         #expect(!body.contains("device-key") && !body.contains("workspace-key"))
     }
