@@ -1,4 +1,6 @@
+#if canImport(CryptoKit)
 import CryptoKit
+#endif
 import Foundation
 
 public struct PageMerge: Equatable, Sendable {
