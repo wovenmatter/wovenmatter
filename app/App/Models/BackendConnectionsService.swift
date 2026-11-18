@@ -43,6 +43,9 @@ struct BackendConnectionsSnapshot: Codable, Equatable {
     var prompt: String?
     var promptID: String?
     var promptOptions: [Option]
+    /// The selected device and the device list; absent from another Mac's answer.
+    var device: String?
+    var devices: [SignInDevice]?
 
     @MainActor init(_ model: DefaultAgentSettingsModel) {
         localServers = model.localServers
@@ -56,6 +59,8 @@ struct BackendConnectionsSnapshot: Codable, Equatable {
         signInURL = model.signInURL; signInCode = model.signInCode
         prompt = model.prompt; promptID = model.promptID
         promptOptions = model.promptOptions.map { .init(id: $0.id, label: $0.label) }
+        device = model.device
+        devices = model.devices
     }
 }
 
@@ -74,7 +79,19 @@ struct BackendConnectionsSnapshot: Codable, Equatable {
         }
         if method == "connections.command" {
             let c = try JSONDecoder().decode(BackendConnectionsCommand.self, from: payload)
+            // Another Mac's sign-ins: that Mac runs every command but device selection.
+            if model.forwardsToPeer, !["device", "devices", "scope"].contains(c.action) {
+                try await model.forwardToPeer(c)
+                return try JSONEncoder().encode(BackendConnectionsSnapshot(model))
+            }
+            if ["localServers", "connectServer", "removeServer"].contains(c.action), try await model.linuxServerCommand(c) {
+                return try JSONEncoder().encode(BackendConnectionsSnapshot(model))
+            }
             switch c.action {
+            case "devices": await model.loadDevicesAndWait()
+            case "device":
+                model.selectDevice(c.value ?? SignInDevice.localID)
+                await model.settleForwarded()
             case "checkKeychain":
                 try await ProviderConnectionStore.shared.perform(invalidatesAccounts: false) {
                     try DefaultAgentSupport.checkKeychainAccess()
@@ -100,7 +117,7 @@ struct BackendConnectionsSnapshot: Codable, Equatable {
             case "reconnect": await model.reconnectAccount(c.value ?? "", provider: c.provider ?? "", remote: c.remote)
             case "signOut": await model.signOut(c.provider ?? "", remote: c.remote)
             case "claude": model.signInClaude(remote: c.remote)
-            case "scope": model.changeScope(c.value ?? "global")
+            case "scope": model.changeScope(c.value ?? "global"); await model.settleForwarded()
             case "cancel": model.cancel()
             case "respond": model.respond(c.value ?? "")
             case "catalog":
@@ -111,8 +128,10 @@ struct BackendConnectionsSnapshot: Codable, Equatable {
             default: throw CocoaError(.featureUnsupported)
             }
         } else if method != "connections.snapshot" { throw CocoaError(.featureUnsupported) }
-        let servers = LocalModelServerStore.servers
-        if model.localServers != servers { model.localServers = servers }
+        if model.device == SignInDevice.localID {
+            let servers = LocalModelServerStore.servers
+            if model.localServers != servers { model.localServers = servers }
+        }
         return try JSONEncoder().encode(BackendConnectionsSnapshot(model))
     }
 }

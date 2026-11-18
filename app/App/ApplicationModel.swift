@@ -684,9 +684,15 @@ final class ApplicationModel {
                 guard let self else { throw CancellationError() }
                 return try await self.readLinuxLibraryFile(workspaceID: workspaceID, conversationID: conversationID, path: path, underRoot: underRoot)
             }
-            connections.memberRoutes = { [weak self] configuration in
+            connections.memberRoutes = { [weak self] workspace in
                 guard let self else { throw CancellationError() }
-                return try await self.linuxMemberRoutes(configuration.id)
+                return try await self.linuxMemberRoutes(workspace)
+            }
+            // Each device keeps its own sign-ins: this Mac reaches the others' servers.
+            connections.deviceDirectory = { [weak self] in await self?.signInDevices() ?? [] }
+            connections.peerTransport = { [weak self] memberID in
+                guard let self else { return { _, _ in throw CancellationError() } }
+                return self.signInPeerTransport(memberID: memberID)
             }
             remoteWorkspaces.memberClient = { [weak self] configuration in
                 guard let self, let database = self.libraryStore?.database,
@@ -3488,6 +3494,8 @@ final class ApplicationModel {
     }
 
     var pendingDefaultAgentSettingsScope: String?
+    /// Another Mac's view of this Mac's sign-ins, one per member (`memberSignIns`).
+    @ObservationIgnored var memberSignInModels: [String: DefaultAgentSettingsModel] = [:]
     var pendingDefaultAgentModelProvider: String?
     var pendingConnectionsScope: String?
     let connections = DefaultAgentSettingsModel()

@@ -267,7 +267,7 @@ public final class ProviderAccountCoordinator {
     /// app consumers share this renewal lock, including the ordinary timer.
     /// Never refresh an old account after a concurrent replacement/sign-out.
     public func renewRejectedAccess(provider: String, access: String) async throws -> DefaultAgentCredential? {
-        let current = try await prepare("global").credentials[provider]
+        let current = try await prepare(ProviderConnectionAccounts.deviceScope).credentials[provider]
         guard current?.access == access else { return current }
         guard signInID == nil else { throw DefaultAgentError.message("Finish sign-in in Settings → Subscriptions & API Keys first.") }
         let operation = Task {
@@ -284,7 +284,7 @@ public final class ProviderAccountCoordinator {
             lastError = error.localizedDescription
             throw error
         }
-        return try await prepare("global").credentials[provider]
+        return try await prepare(ProviderConnectionAccounts.deviceScope).credentials[provider]
     }
     nonisolated public static func renewRejectedStored(provider: String, access: String) async throws {
         guard ["openai-codex", "xai"].contains(provider),
@@ -301,54 +301,49 @@ public final class ProviderAccountCoordinator {
             throw DefaultAgentError.message(
                 "This subscription could not be renewed. Reconnect it in Settings → Subscriptions & API Keys.")
         }
-        try DefaultAgentSupport.saveRenewedOAuth(renewed, replacing: original, provider: provider, scope: "global")
+        try DefaultAgentSupport.saveRenewedOAuth(renewed, replacing: original, provider: provider, scope: ProviderConnectionAccounts.deviceScope)
     }
     nonisolated public static func refreshStored(_ scopes: [String]) async throws -> [String: DefaultAgentPayload] {
         try DefaultAgentSupport.migrateLocalOAuth()
-        let settings = DefaultAgentSupport.settings
-        let keyScopes = Set(["global"] + scopes + Array(settings.workspaces.keys))
-        var issues: [String: [String: String]] = [:]
-        for scope in keyScopes {
-            for provider in ["openai-codex", "xai"] {
-                for account in try ProviderConnectionAccounts.list(provider: provider, scope: scope) {
-                    guard let original = try ProviderConnectionAccounts.credential(account.id, provider: provider, scope: scope),
-                        (original.expires ?? 0) <= Date().timeIntervalSince1970 * 1000 + 300000 else { continue }
-                    let result: RefreshResult
-                    do {
-                        let response = try await DefaultAgentControl.run(try JSONEncoder().encode(RefreshRequest(credentials: [provider: original])))
-                        result = try JSONDecoder().decode(RefreshResult.self, from: response)
-                    } catch is CancellationError { throw CancellationError() }
-                    catch { continue } // One unavailable account must not block its healthy backups.
-                    if let error = result.errors[provider] {
-                        issues[scope, default: [:]][provider + "." + account.id] = error
-                        if account.isSelected { issues[scope, default: [:]][provider] = error }
-                    }
-                    if let renewed = result.credentials[provider], renewed != original {
-                        try ProviderConnectionAccounts.saveRenewed(renewed, replacing: original, accountID: account.id, provider: provider, scope: scope)
-                    }
+        // Only this device's own subscriptions are renewed here.
+        let device = ProviderConnectionAccounts.deviceScope
+        var issues: [String: String] = [:]
+        for provider in ["openai-codex", "xai"] {
+            for account in try ProviderConnectionAccounts.list(provider: provider, scope: device) {
+                guard let original = try ProviderConnectionAccounts.credential(account.id, provider: provider, scope: device),
+                    (original.expires ?? 0) <= Date().timeIntervalSince1970 * 1000 + 300000 else { continue }
+                let result: RefreshResult
+                do {
+                    let response = try await DefaultAgentControl.run(try JSONEncoder().encode(RefreshRequest(credentials: [provider: original])))
+                    result = try JSONDecoder().decode(RefreshResult.self, from: response)
+                } catch is CancellationError { throw CancellationError() }
+                catch { continue } // One unavailable account must not block its healthy backups.
+                if let error = result.errors[provider] {
+                    issues[provider + "." + account.id] = error
+                    if account.isSelected { issues[provider] = error }
+                }
+                if let renewed = result.credentials[provider], renewed != original {
+                    try ProviderConnectionAccounts.saveRenewed(renewed, replacing: original, accountID: account.id, provider: provider, scope: device)
                 }
             }
         }
         var result: [String: DefaultAgentPayload] = [:]
         for scope in scopes {
             var value = try DefaultAgentSupport.snapshot(workspace: scope)
-            let keyScope = scope
             for id in ["openai-codex", "xai"] {
-                let owner = try DefaultAgentSupport.oauth(id, scope: keyScope) == nil ? "global" : keyScope
-                if issues[owner]?[id] == "sign_in_required" { value.credentials.removeValue(forKey: id) }
+                if issues[id] == "sign_in_required" { value.credentials.removeValue(forKey: id) }
                 // Keep the rejected slot in the hierarchy so fallback can explain
                 // the switch, but never export its rejected access/refresh tokens.
-                let sanitizedAccounts = value.credentialAccounts?[id]?.map { account in
-                    guard issues[owner]?[id + "." + account.id] == "sign_in_required" else { return account }
+                let sanitized = value.credentialAccounts?[id]?.map { account in
+                    guard issues[id + "." + account.id] == "sign_in_required" else { return account }
                     var unavailable = DefaultAgentCredential(type: "oauth")
                     unavailable.access = ""
                     unavailable.expires = 0
                     unavailable.borrowed = true
                     return DefaultAgentCredentialAccount(id: account.id, label: account.label, credential: unavailable)
                 }
-                value.credentialAccounts?[id] = sanitizedAccounts
+                value.credentialAccounts?[id] = sanitized
             }
-            if scope != "local" && scope != "global" { value.unlockKey = try DefaultAgentSupport.workspaceKey(scope) }
             result[scope] = value
         }
         return result

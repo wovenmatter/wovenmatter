@@ -283,15 +283,16 @@ extension DefaultAgentCredentialTests {
 extension DefaultAgentCredentialTests {
     @Test func chatSettingsInheritanceDoesNotChooseCredentials() throws {
         let keychain = DefaultAgentKeychainFixture().access
-        let shared = try ProviderConnectionAccounts.addKey("shared-key", provider: "openai", label: "Shared", keychain: keychain)
-        let owned = try ProviderConnectionAccounts.addKey("workspace-key", provider: "openai", scope: "local", label: "Local", keychain: keychain)
+        let device = try ProviderConnectionAccounts.addKey("device-key", provider: "openai", label: "Device", keychain: keychain)
+        // A legacy per-workspace account is never read: sign-ins are the device's own.
+        _ = try ProviderConnectionAccounts.addKey("workspace-key", provider: "openai", scope: "local", label: "Local", keychain: keychain)
         let fallback = try ProviderConnectionAccounts.addKey("router-key", provider: "openrouter", label: "Router", keychain: keychain)
         var settings = DefaultAgentSettingsScope()
         settings.global.models = ["openai/shared-model"]
         let inherited = try DefaultAgentSupport.snapshot(workspace: "local", settings: settings, keychain: keychain)
         #expect(inherited.config.models == settings.global.models)
-        #expect(inherited.credentialAccounts?["openai"]?.first?.id == owned.id)
-        #expect(inherited.credentials["openai"]?.key == "workspace-key")
+        #expect(inherited.credentialAccounts?["openai"]?.map(\.id) == [device.id])
+        #expect(inherited.credentials["openai"]?.key == "device-key")
         settings.workspaces["local"] = settings.global
         settings.workspaces["local"]?.models = ["openai/local-model"]
         let independent = try DefaultAgentSupport.snapshot(workspace: "local", settings: settings, keychain: keychain)
@@ -299,12 +300,61 @@ extension DefaultAgentCredentialTests {
         #expect(independent.credentials == inherited.credentials)
         #expect(independent.credentialAccounts == inherited.credentialAccounts)
         #expect(independent.credentialAccounts?["openrouter"]?.first?.id == fallback.id)
-        let remote = try DefaultAgentSupport.snapshot(workspace: "remote-fixture", settings: settings, keychain: keychain)
-        #expect(remote.credentialAccounts?["openai"]?.first?.id == shared.id)
-        try ProviderConnectionAccounts.remove(owned.id, provider: "openai", scope: "local", keychain: keychain)
-        let reverted = try DefaultAgentSupport.snapshot(workspace: "local", settings: settings, keychain: keychain)
-        #expect(reverted.credentialAccounts?["openai"]?.first?.id == shared.id)
-        #expect(reverted.config.models == independent.config.models)
+        #expect(independent.unlockKey == nil)
+    }
+
+    @Test func anotherDevicesWorkspaceGetsItsChatSettingsWithoutCredentials() throws {
+        var settings = DefaultAgentSettingsScope()
+        settings.global.models = ["openai/shared-model"]
+        let payload = try DefaultAgentSupport.configurationPayload(workspace: "fixture-remote", settings: settings)
+        #expect(payload.config.models == ["openai/shared-model"])
+        #expect(payload.credentials.isEmpty && payload.credentialAccounts == nil && payload.unlockKey == nil)
+        #expect(payload.revision?.count == 64)
+        let body = String(decoding: try payload.data(), as: UTF8.self)
+        #expect(!body.contains("credentialAccounts") && !body.contains("unlockKey"))
+    }
+
+    @Test func migrationKeepsThisMacsAccountsAndRemovesCopiesForOtherDevices() throws {
+        let keychain = DefaultAgentKeychainFixture().access
+        let remote = "0f0e0d0c-0b0a-4908-8706-050403020100"
+        // "All workspaces" accounts are this Mac's; "Local workspace" ones join them.
+        let shared = try ProviderConnectionAccounts.addKey("shared-key", provider: "openai", label: "Shared", keychain: keychain)
+        _ = try ProviderConnectionAccounts.addKey("local-key", provider: "openai", scope: "local", label: "Local", keychain: keychain)
+        _ = try ProviderConnectionAccounts.addKey("shared-key", provider: "openai", scope: "local", label: "Duplicate", keychain: keychain)
+        _ = try ProviderConnectionAccounts.addKey("local-search", provider: "exa", scope: "local", keychain: keychain)
+        func oauth(_ id: String) -> DefaultAgentCredential {
+            var value = DefaultAgentCredential(type: "oauth"); value.access = id; value.refresh = id + "-refresh"; value.accountId = id; value.expires = 9000000000000
+            return value
+        }
+        let deviceSubscription = try ProviderConnectionAccounts.addOAuth(oauth("device-chatgpt"), provider: "openai-codex", keychain: keychain)
+        _ = try ProviderConnectionAccounts.addOAuth(oauth("local-chatgpt"), provider: "openai-codex", scope: "local", keychain: keychain)
+        _ = try ProviderConnectionAccounts.addOAuth(oauth("local-grok"), provider: "xai", scope: "local", keychain: keychain)
+        // Copies this Mac held for a Linux workspace, with that workspace's vault key.
+        _ = try ProviderConnectionAccounts.addKey("remote-key", provider: "openai", scope: remote, keychain: keychain)
+        try DefaultAgentSupport.saveKey("vault-key", provider: "encryption-key", scope: remote, notify: false, keychain: keychain)
+
+        try ProviderConnectionAccounts.migrateToDeviceSignIns(remoteScopes: [remote], keychain: keychain)
+
+        let openai = try ProviderConnectionAccounts.list(provider: "openai", keychain: keychain)
+        #expect(openai.map(\.label) == ["Shared", "Local"])
+        #expect(openai.first?.id == shared.id && openai.first?.isSelected == true)
+        #expect(try DefaultAgentSupport.key("openai", keychain: keychain) == "shared-key")
+        #expect(try ProviderConnectionAccounts.list(provider: "exa", keychain: keychain).count == 1)
+        #expect(try DefaultAgentSupport.key("exa", keychain: keychain) == "local-search")
+        // A single subscription slot keeps the device's own; an empty one takes the local one.
+        #expect(try ProviderConnectionAccounts.list(provider: "openai-codex", keychain: keychain).map(\.id) == [deviceSubscription.id])
+        #expect(try DefaultAgentSupport.oauth("xai", keychain: keychain)?.accountId == "local-grok")
+        #expect(try DefaultAgentSupport.oauth("xai", keychain: keychain)?.refresh == "local-grok-refresh")
+        for provider in ["openai", "exa", "openai-codex", "xai"] {
+            #expect(try ProviderConnectionAccounts.list(provider: provider, scope: "local", keychain: keychain).isEmpty)
+            #expect(try DefaultAgentSupport.key("accounts." + provider, scope: "local", keychain: keychain) == nil)
+        }
+        #expect(try ProviderConnectionAccounts.list(provider: "openai", scope: remote, keychain: keychain).isEmpty)
+        #expect(try DefaultAgentSupport.key("openai", scope: remote, keychain: keychain) == nil)
+        #expect(try DefaultAgentSupport.key("encryption-key", scope: remote, keychain: keychain) == nil)
+        // Running it again changes nothing.
+        try ProviderConnectionAccounts.migrateToDeviceSignIns(remoteScopes: [remote], keychain: keychain)
+        #expect(try ProviderConnectionAccounts.list(provider: "openai", keychain: keychain).map(\.label) == ["Shared", "Local"])
     }
 }
 #endif

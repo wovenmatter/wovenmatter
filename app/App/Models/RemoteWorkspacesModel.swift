@@ -136,29 +136,33 @@ final class RemoteWorkspacesModel {
     func startDefaultAgentMaintenance() {
         guard !isBackendProjection else { return }
         guard defaultAgentObservers.isEmpty else { return }
+        // Sign-ins are per device: this Mac's former local accounts become its own,
+        // and copies it held for its Linux workspaces are removed.
+        DefaultAgentSupport.migrateToDeviceSignInsOnce(remoteScopes: workspaces.map { $0.id.uuidString.lowercased() })
         ProviderAccountCoordinator.shared.start()
         for name in [DefaultAgentSupport.credentialsChanged, DefaultAgentSupport.configurationChanged, Notification.Name("wovenmatter.default-agent.snapshot-ready")] {
             defaultAgentObservers.append(NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
-                Task { @MainActor in await self?.relayDefaultAgentCredentials() }
+                Task { @MainActor in await self?.synchronizeDefaultAgentSettings() }
             })
         }
         defaultAgentObservers.append(NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { [weak self] _ in
             Task { @MainActor in
                 ProviderAccountCoordinator.shared.invalidate()
                 self?.defaultAgentAcknowledgments.removeAll()
-                await self?.relayDefaultAgentCredentials()
+                await self?.synchronizeDefaultAgentSettings()
             }
         })
         defaultAgentObservers.append(NotificationCenter.default.addObserver(forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
-            Task { @MainActor in await self?.relayDefaultAgentCredentials() }
+            Task { @MainActor in await self?.synchronizeDefaultAgentSettings() }
         })
     }
-    private func relayDefaultAgentCredentials() async {
+    /// Pi Durable's chat settings for each connected workspace. No credentials:
+    /// every device stores and renews its own sign-ins.
+    private func synchronizeDefaultAgentSettings() async {
         guard !isBackendProjection else { return }
-        _ = try? await ProviderAccountCoordinator.shared.prepare("local")
         for workspace in workspaces where tunnels[workspace.id] != nil {
             do { try await ensureDefaultAgent(workspace) }
-            catch { signInErrors[workspace.id] = "Pi Durable credentials could not synchronize. Reconnect this workspace to retry." }
+            catch { signInErrors[workspace.id] = "Pi Durable settings could not synchronize. Reconnect this workspace to retry." }
         }
     }
     func refreshSignInStatus(_ configuration: RemoteWorkspaceConfiguration) async {
@@ -1317,7 +1321,7 @@ final class RemoteWorkspacesModel {
         if facadeFixtureWorkspaceIDs.contains(configuration.id) { return }
         #endif
         let identity = try requestIdentity(configuration)
-        let payload = try await ProviderAccountCoordinator.shared.prepare(configuration.id.uuidString.lowercased())
+        let payload = try DefaultAgentSupport.configurationPayload(workspace: configuration.id.uuidString.lowercased())
         try requireCurrent(identity)
         if let ack = defaultAgentAcknowledgments[configuration.id], ack.revision == payload.revision, ack.identity == identity { return }
         if defaultAgentSyncTasks[configuration.id] != nil {
@@ -1338,7 +1342,7 @@ final class RemoteWorkspacesModel {
             }
             try requireCurrent(identity)
             guard receipt.saved, receipt.revision == payload.revision else {
-                throw DefaultAgentError.message("The workspace did not acknowledge the current Pi Durable credentials.")
+                throw DefaultAgentError.message("The workspace did not acknowledge the current Pi Durable settings.")
             }
             defaultAgentAcknowledgments[configuration.id] = .init(revision: receipt.revision, identity: identity)
         }

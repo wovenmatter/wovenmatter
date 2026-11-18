@@ -53,19 +53,20 @@ extension DefaultAgentCredential {
 }
 
 extension ProviderAccountCoordinator {
-    /// App-wide consumers always resolve global connections, independently of
-    /// Pi Durable model enablement or a remote workspace's overrides.
+    /// App-wide consumers (usage limits, bots) read this device's own sign-ins.
     public func appCredentials() async throws -> [String: DefaultAgentCredential] {
-        try await prepare("global").credentials
+        try await prepare(ProviderConnectionAccounts.deviceScope).credentials
     }
-
-
 }
 
 /// Account secrets and their ordering live together in Keychain. The canonical
 /// slot remains compatible with Usage, including OpenRouter's
 /// existing shared key. Nothing here writes credentials to preferences or disk.
 public enum ProviderConnectionAccounts {
+    /// This device's sign-ins. Each device stores and renews its own; nothing is
+    /// relayed. The Keychain names keep the historical `global` prefix, so the
+    /// accounts that once were shared "All workspaces" accounts are this Mac's.
+    public static let deviceScope = "global"
     public static let limit = 4
     public static func limit(for provider: String) -> Int {
         ProviderConnectionID(rawValue: provider)?.isSubscription == true ? 1 : limit
@@ -75,6 +76,9 @@ public enum ProviderConnectionAccounts {
         public var label: String
         public let createdAt: Date?
         public var isSelected: Bool
+        public init(id: String, label: String, createdAt: Date? = nil, isSelected: Bool) {
+            self.id = id; self.label = label; self.createdAt = createdAt; self.isSelected = isSelected
+        }
     }
     private struct Entry: Codable {
         var account: Account
@@ -221,6 +225,44 @@ public enum ProviderConnectionAccounts {
             let entries = try load(provider, scope: scope, keychain: keychain).entries
             let ordered = entries.filter { $0.account.isSelected } + entries.filter { !$0.account.isSelected }
             return ordered.map { .init(id: $0.account.id, label: $0.account.label, credential: $0.credential.type == "oauth" ? $0.credential.borrowing() : $0.credential) }
+        }
+    }
+    /// One-time move to per-device sign-ins. This Mac's former `local` accounts join
+    /// its device accounts (device accounts stay primary; local ones fill free
+    /// slots, a single-account subscription only when the device has none), then
+    /// the `local` items are deleted. Copies this Mac held for other machines
+    /// (`remoteScopes`, with their vault keys) are deleted: those devices sign in
+    /// themselves. Device accounts are never removed.
+    public static func migrateToDeviceSignIns(remoteScopes: [String], keychain: KeychainAccess = .init()) throws {
+        try DefaultAgentSupport.credentialLock.withLock {
+            let device = deviceScope
+            for provider in ProviderConnectionID.allCases.map(\.rawValue) {
+                let local = try load(provider, scope: "local", keychain: keychain).entries
+                guard !local.isEmpty else { continue }
+                let ordered = local.filter { $0.account.isSelected } + local.filter { !$0.account.isSelected }
+                for entry in ordered {
+                    let existing = try load(provider, scope: device, keychain: keychain).entries
+                    let duplicate = existing.contains { $0.credential == entry.credential
+                        || (entry.credential.accountId != nil && $0.credential.accountId == entry.credential.accountId) }
+                    guard !duplicate, existing.count < limit(for: provider) else { continue }
+                    try change(provider: provider, scope: device, keychain: keychain, notify: false) { store in
+                        var account = entry.account
+                        account.isSelected = store.entries.isEmpty
+                        store.entries.append(Entry(account: account, credential: entry.credential))
+                    }
+                }
+                try deleteItems(provider: provider, scope: "local", keychain: keychain)
+            }
+            for scope in Set(remoteScopes) where scope != device && scope != "local" && !scope.isEmpty {
+                for provider in ProviderConnectionID.allCases.map(\.rawValue) { try deleteItems(provider: provider, scope: scope, keychain: keychain) }
+                try DefaultAgentSupport.saveKey("", provider: "encryption-key", scope: scope, notify: false, keychain: keychain)
+            }
+        }
+        DefaultAgentSupport.changed()
+    }
+    private static func deleteItems(provider: String, scope: String, keychain: KeychainAccess) throws {
+        for item in [provider, "oauth." + provider, "accounts." + provider] {
+            try DefaultAgentSupport.saveKey("", provider: item, scope: scope, notify: false, keychain: keychain)
         }
     }
     @discardableResult public static func saveRenewed(_ value: DefaultAgentCredential, replacing original: DefaultAgentCredential, accountID: String, provider: String, scope: String, keychain: KeychainAccess = .init()) throws -> Bool {

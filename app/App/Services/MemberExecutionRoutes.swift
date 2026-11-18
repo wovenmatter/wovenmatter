@@ -26,6 +26,10 @@ protocol MemberExecutionRoutes: Sendable {
     func defaultAgentControl(id: String) async throws -> DefaultAgentControlSession
     func answerDefaultAgentControl(id: String, answerTo: String, answer: String) async throws -> DefaultAgentControlSession
     func cancelDefaultAgentControl(id: String) async throws
+    /// `GET v1/sign-ins`: the host's own accounts and local model servers (no secrets).
+    func signIns() async throws -> DeviceSignIns
+    /// `POST v1/sign-ins`: one change, saved only on the host.
+    func changeSignIns(_ change: DeviceSignInChange) async throws -> DeviceSignIns
 }
 
 /// A file an agent wrote on the host, read for Library retention.
@@ -62,22 +66,18 @@ struct DefaultAgentControlSession: Decodable, Sendable {
     }
 }
 
-/// Unlocking a host's Pi Durable vault with this Mac's key for that workspace:
-/// the Keychain's `encryption-key` for the workspace scope, which the SSH
-/// relay handed the host in `woven/credentials`. Without a key, or when the
-/// host refuses it, this Mac configures the host with its own credentials, as
-/// the relay did on a locked host.
+/// A host's Pi Durable vault is its own and always open. A host from before
+/// per-device sign-ins that reports itself locked is configured with this Mac's
+/// chat settings, never with credentials or a key.
 enum DefaultAgentHostUnlock {
     typealias Prepare = @Sendable (String) async throws -> DefaultAgentPayload
 
     static func unlock(scope: String, routes: any MemberExecutionRoutes,
-                       existingKey: @Sendable (String) throws -> String? = { try DefaultAgentSupport.key("encryption-key", scope: $0) },
-                       prepare: Prepare = { try await ProviderAccountCoordinator.shared.prepare($0) }) async throws {
-        if let key = try existingKey(scope), !key.isEmpty, try await routes.unlockDefaultAgent(workspace: scope, unlockKey: key) { return }
+                       prepare: Prepare = { try DefaultAgentSupport.configurationPayload(workspace: $0) }) async throws {
         let payload = try await prepare(scope)
         let receipt = try await routes.configureDefaultAgent(payload.data())
         guard receipt.saved else {
-            throw LibraryAPIError(code: MemberExecutionClient.defaultAgentLocked, message: "The workspace did not accept this Mac's Pi Durable credentials.")
+            throw LibraryAPIError(code: MemberExecutionClient.defaultAgentLocked, message: "The workspace did not accept this Mac's Pi Durable settings.")
         }
     }
 }
@@ -177,5 +177,14 @@ extension SignedExecutionWorkspaceTransport: MemberExecutionRoutes {
 
     func cancelDefaultAgentControl(id: String) async throws {
         let _: JSONValue = try await member("v1/default-agent/control-sessions/" + Self.safeID(id), method: "DELETE")
+    }
+
+    func signIns() async throws -> DeviceSignIns {
+        try await member("v1/sign-ins")
+    }
+
+    func changeSignIns(_ change: DeviceSignInChange) async throws -> DeviceSignIns {
+        // A local model server check can take two 20-second requests on the host.
+        try await member("v1/sign-ins", method: "POST", body: JSONEncoder().encode(change), timeout: 60)
     }
 }

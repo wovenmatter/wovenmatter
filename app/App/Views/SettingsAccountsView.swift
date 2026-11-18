@@ -89,7 +89,7 @@ struct SettingsAccountsView: View {
     private func accountConnected(_ id: String) {
         connectedProvider = id
         agent.loadCatalog(remote: remote, includeAllModels: false)
-        guard scope == "global", let provider = ProviderKind.supportedAccounts.first(where: {
+        guard agent.device == SignInDevice.localID, let provider = ProviderKind.supportedAccounts.first(where: {
             UsageConnectionChoice.connectionTypes(for: $0).contains { $0.0 == id }
         }) else { return }
         Task { await model.enableUsageProvider(provider) }
