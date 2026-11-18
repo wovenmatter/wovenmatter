@@ -172,11 +172,16 @@ final class BotsHostController {
     /// Other machines answer slowly; a status refresh reuses a recent probe.
     @ObservationIgnored private var remoteCache: (at: Date, machines: [BotMachine])?
     @ObservationIgnored private var sdkObserver: (any NSObjectProtocol)?
+    @ObservationIgnored private let sdkNotifications: NotificationCenter
+    /// Set once the server shuts bots down; nothing brings them back up after that.
+    @ObservationIgnored private var shuttingDown = false
     static let remoteCacheLifetime: TimeInterval = 20
 
     init(directory: URL, engine: any BotEngineHost, bundle: BotsRuntimeBundle? = BotsRuntimeBundle.locate(),
-         dependencies: BotsHostDependencies, supervisor: BotsRuntimeSupervisor? = nil) {
+         dependencies: BotsHostDependencies, supervisor: BotsRuntimeSupervisor? = nil,
+         sdkNotifications: NotificationCenter = .default) {
         self.directory = directory
+        self.sdkNotifications = sdkNotifications
         self.engine = engine
         self.bundle = bundle
         self.dependencies = dependencies
@@ -195,25 +200,32 @@ final class BotsHostController {
             self.changed()
         }
         // One update covers Pi Durable and bots: a new SDK copy restarts the runtime onto it.
-        sdkObserver = NotificationCenter.default.addObserver(forName: DefaultAgentSDKControl.sdkActivated, object: nil,
-                                                             queue: .main) { [weak self] _ in
+        sdkObserver = sdkNotifications.addObserver(forName: DefaultAgentSDKControl.sdkActivated, object: nil,
+                                                   queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.piDurableSDKActivated() }
         }
     }
 
     isolated deinit {
-        if let sdkObserver { NotificationCenter.default.removeObserver(sdkObserver) }
+        if let sdkObserver { sdkNotifications.removeObserver(sdkObserver) }
     }
 
     /// Pi Durable's SDK update made a new copy active, and deleted the one bots were running:
     /// a running runtime restarts now (each start resolves the copy afresh). Bots that are
     /// off, or still coming up, pick it up when they start.
     func piDurableSDKActivated() {
-        guard persisted.enabled, let supervisor, supervisor.config != nil else { return }
+        guard persisted.enabled, !shuttingDown, let supervisor, supervisor.config != nil else { return }
         Task { [weak self] in
             await supervisor.stop()
-            self?.bringUp()
+            self?.restartIfStillOn()
         }
+    }
+
+    /// After a restart's stop: bots come back only if they are still on and the server is
+    /// not shutting down (either can change while the runtime stops).
+    private func restartIfStillOn() {
+        guard persisted.enabled, !shuttingDown else { return }
+        bringUp()
     }
 
     var isEnabled: Bool { persisted.enabled }
@@ -226,6 +238,7 @@ final class BotsHostController {
     }
 
     func shutdown() async {
+        shuttingDown = true
         bringUpTask?.cancel()
         await previews.removeAll()
         if let notifier { await notifier.invalidate() }
@@ -236,6 +249,7 @@ final class BotsHostController {
     }
 
     func terminateImmediately() {
+        shuttingDown = true
         supervisor?.terminateImmediately()
         hostServer?.stop(); hostServer = nil
     }
@@ -307,7 +321,7 @@ final class BotsHostController {
             if try await isThisMac(machineID) { try startEngineUpdate() }
             else { try await dependencies.updateRemoteEngine(machineID) }
         case .restartRuntime:
-            if persisted.enabled { await supervisor?.stop(); bringUp() }
+            if persisted.enabled, !shuttingDown { await supervisor?.stop(); restartIfStillOn() }
         case let .updateMemberHarness(machineID, kind, sourceSHA256, packageSpec, force):
             let update = dependencies.updateMemberHarness
             try startJob(.updateHarness, target: machineID.lowercased() + "/" + kind.rawValue, progress: "Starting the update…") { progress in

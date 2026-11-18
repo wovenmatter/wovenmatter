@@ -17,8 +17,11 @@ for path in ['README.md', 'docs/guide/notes-and-data.md', 'app/App/Views/Setting
              'shared/Sources/Protocol.swift', 'integration/Tests/ClientTests.swift',
              'ios/App/Views/ConversationView.swift', 'ios/Sources/LibraryClient/Client.swift']:
     assert active(path) == set(), (path, active(path))
-for path in ['default-agent/src/runtime.mjs', 'default-agent/package-lock.json', 'harnesses/catalog.json']:
+for path in ['default-agent/src/runtime.mjs', 'harnesses/catalog.json']:
     assert active(path) == {'agent', 'service', 'pi'}, (path, active(path))
+for path in ['default-agent/package-lock.json', 'default-agent/src/sdk-management.mjs']:
+    assert active(path) == {'agent', 'service', 'pi', 'bots'}, (path, active(path))
+assert active('remote/host/prune-bots-sdk.py') == {'service', 'scripts', 'bots'}
 for path in ['remote/src/server.mjs', 'remote/Executor.Dockerfile', 'remote/security/build-backports.py',
              'remote/npm-runtime/package-lock.json', 'remote/executor-runtime/package-lock.json']:
     assert active(path) == {'service', 'scripts'}, (path, active(path))

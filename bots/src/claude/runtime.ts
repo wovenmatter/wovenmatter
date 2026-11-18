@@ -113,7 +113,7 @@ export class ClaudeAgentRuntime {
 
   async query(params: Parameters<ClaudeSdkQuery>[0]): Promise<ReturnType<ClaudeSdkQuery>> {
     if (this.options.query) return this.options.query(params);
-    const sdk = await import("@anthropic-ai/claude-agent-sdk");
+    const sdk = await loadClaudeAgentSDK();
     const options = this.options.executable
       ? { ...params.options, pathToClaudeCodeExecutable: this.options.executable }
       : params.options;
@@ -122,4 +122,11 @@ export class ClaudeAgentRuntime {
       options,
     } as unknown as Parameters<typeof sdk.query>[0]) as unknown as ReturnType<ClaudeSdkQuery>;
   }
+}
+
+/** The Claude Agent SDK this process runs Claude subscriptions through (Pi Durable's copy). */
+export async function loadClaudeAgentSDK(): Promise<typeof import("@anthropic-ai/claude-agent-sdk")> {
+  const sdk = await import("@anthropic-ai/claude-agent-sdk");
+  if (typeof sdk.query !== "function") throw new Error("The Claude Agent SDK has no query function.");
+  return sdk;
 }

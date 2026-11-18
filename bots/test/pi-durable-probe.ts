@@ -1,13 +1,14 @@
-// Runs as its own process: `node pi-durable-probe.ts <config.json> app|helper|<specifier>...`.
-// It prepares the process as `cli.ts serve` does, then reports every SDK module it loads (and,
-// for `helper`, the version of each package the in-container helper carries).
+// Runs as its own process: `node pi-durable-probe.ts <config.json> helper|<specifier>...`.
+// It selects and hooks the SDK copy as `cli.ts serve` does (usePiDurableSDK), then reports the
+// SDK modules the given specifiers load (and, for `helper`, the version of each package the
+// in-container helper carries). `sdk-verification.test.ts` starts the real `cli.ts`.
 import { readFileSync } from "node:fs";
 import { registerHooks } from "node:module";
 import { validateRuntimeConfig } from "../src/config.ts";
 import { sdkPackage, usePiDurableSDK } from "../src/pi-durable-sdk.ts";
 
 const [file, ...imports] = process.argv.slice(2);
-if (!file) throw new Error("usage: pi-durable-probe <config.json> app|<specifier>...");
+if (!file) throw new Error("usage: pi-durable-probe <config.json> helper|<specifier>...");
 const config = await usePiDurableSDK(validateRuntimeConfig(JSON.parse(readFileSync(file, "utf8"))), () => {});
 const resolved: string[] = [];
 registerHooks({
@@ -29,7 +30,6 @@ for (const specifier of imports) {
     }
     continue;
   }
-  const module = (await import(specifier === "app" ? "../src/app.ts" : specifier)) as { copy?: unknown };
-  if (specifier !== "app") copies.push(module.copy);
+  copies.push(((await import(specifier)) as { copy?: unknown }).copy);
 }
 process.stdout.write(JSON.stringify({ executable: config.claude?.executable ?? null, resolved, copies, helper }));

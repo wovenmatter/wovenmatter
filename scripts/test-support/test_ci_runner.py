@@ -40,6 +40,9 @@ class CIRunnerTests(unittest.TestCase):
                 reject = 'if [ "${CI_FIXTURE_HOST_FAIL:-0}" = 1 ]; then exit 43; fi\n' if name == 'test-remote-host.sh' else ''
                 script.write_text('#!/bin/sh\n' + log + reject + 'exit 0\n')
                 script.chmod(0o755)
+            pinned = scripts / 'with-pinned-node.sh'
+            pinned.write_text('#!/bin/sh\nexec "$@"\n')
+            pinned.chmod(0o755)
             (root / 'harnesses').mkdir()
             (root / 'harnesses/catalog.json').write_text(json.dumps({
                 'schemaVersion': 4, 'harnesses': [1, 2, 3, 4]}))
@@ -105,6 +108,13 @@ if os.environ.get('CI_FIXTURE_FAIL') == '1' and sys.argv[1:] == ['test', '--pref
         self.assertEqual([call for call in npm if call[0] == 'test'], [
             ['test', '--prefix', 'default-agent'], ['test', '--prefix', 'remote']])
         self.assertIn(['node', 'scripts/build-ios-pi-runtime.mjs', '--check'], calls)
+
+    def test_bots_install_pi_durable_bundle_they_load(self):
+        result, calls = self.run_fixture(['bots/src/app.ts'])
+        self.assertEqual(result.returncode, 0, result.stderr)
+        npm = [call[1:] for call in calls if call[0] == 'npm']
+        self.assertEqual([call[:3] for call in npm], [
+            ['ci', '--prefix', 'default-agent'], ['ci', '--prefix', 'bots'], ['test', '--prefix', 'bots']])
 
     def test_service_failure_cannot_pass_ci(self):
         result, _ = self.run_fixture(['remote/src/server.mjs'], fail=True)

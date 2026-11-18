@@ -40,7 +40,8 @@ jq -e '.schemaVersion == 4 and (.harnesses | length == 4)' harnesses/catalog.jso
 selection="$(python3 scripts/ci-scopes.py < "$changed")"
 printf '%s\n' "$selection"
 enabled() { printf '%s\n' "$selection" | grep -qx "$1=true"; }
-if enabled agent || enabled service || enabled pi; then
+# Bots run on Pi Durable's SDK copy, so their tests load default-agent's bundle too.
+if enabled agent || enabled service || enabled pi || enabled bots; then
   npm ci --prefix default-agent --ignore-scripts --no-audit --no-fund
 fi
 if enabled agent; then

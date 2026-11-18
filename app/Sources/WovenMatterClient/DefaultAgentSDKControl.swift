@@ -53,11 +53,11 @@ public enum DefaultAgentSDKControl {
     }
 
     // Injectable only for local process-lifecycle fixtures. This starts no account/runtime session.
-    static func run(_ request: DefaultAgentSDKRequest, executable: URL,
-                    arguments: [String], timeout: TimeInterval) async throws -> DefaultAgentSDKStatus {
+    static func run(_ request: DefaultAgentSDKRequest, executable: URL, arguments: [String], timeout: TimeInterval,
+                    notifications: NotificationCenter = .default) async throws -> DefaultAgentSDKStatus {
         let status = try await perform(request, executable: executable, arguments: arguments, timeout: timeout)
         if request.action == .update, status.activated == true {
-            NotificationCenter.default.post(name: sdkActivated, object: nil)
+            notifications.post(name: sdkActivated, object: nil)
         }
         return status
     }
