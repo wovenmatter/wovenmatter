@@ -5,16 +5,6 @@ import MobileInference
 import WovenMatterShared
 
 extension MobileModel {
-  /// The host scope an inference connection hosted by workspace `id` uses.
-  /// The host verifies this phone's member signature, so nothing is issued
-  /// and the credential carries no token.
-  func authorizedWorkspaceCredential(_ id: String) async throws -> DirectWorkspaceCredential {
-    guard !fixture, !isolatedTestHost else { throw DeviceExecutionError.unavailable("Use the regular app to reach execution workspaces.") }
-    guard inferenceHostDeviceID(id) != nil, let workspace = executionWorkspaces.first(where: { $0.id == id }), let endpoint = workspace.endpoint else {
-      throw DeviceExecutionError.unavailable("This workspace isn’t reachable from \(deviceWorkspaceInSentence) yet. It is once \(deviceWorkspaceInSentence) syncs with your devices.")
-    }
-    return DirectWorkspaceCredential(endpoint: endpoint, libraryID: workspace.libraryID, workspaceID: workspace.id, deviceID: state.deviceID, token: "")
-  }
   func ensureDeviceWorkspace() async throws {
     guard let store, let libraryID = state.workspaceID, !fixture else { return }
     let journal = await store.journal.snapshot()
@@ -93,9 +83,6 @@ extension MobileModel {
           self.workspaceReadTasks.removeValue(forKey: id)
         }
       }
-      // Hosted inference connections sign for the member that serves their workspace.
-      InferenceMemberSigning.updateHosts(Dictionary(executionWorkspaces.compactMap { workspace in
-        membership?.audience(for: workspace).map { (workspace.id, $0) } }, uniquingKeysWith: { first, _ in first }))
       await reconcileWorkspaceStreams()
       if providerID.isEmpty { providerID = availableExecutionProviders.first { $0.available && $0.canStart }?.id ?? "" }
       await reload()

@@ -202,8 +202,7 @@ change, change this document in the same commit.
   `mac`), `/v1/execution/*` (`mac`, `ios`, `linux`; no execution grant
   needed), `/mcp/workspace` and `/mcp/workspace/prepare` (`linux` only; see
   "Sessions across devices") and `/v1/bots/*` (`mac`, `ios`; signed only, no
-  grant). The inference host takes signed `ios` and `mac` members too
-  ("iPhone reach").
+  grant).
 - Swift clients sign with `MemberSignedHTTPClient(endpoint:signer:audience:)`
   (`app/Sources/WovenMatterClient`): the target is the exact path sent, so a
   Mac endpoint (`https://<mac>.<tailnet>.ts.net:<port>/wovenmatter`, no
@@ -993,17 +992,9 @@ hands them to the macOS job, which checks them with
   mobile API, and every other workspace with an
   endpoint (each Mac's own and each Linux workspace) gets a signed direct
   client. No execution grant is issued, stored or presented.
-- **Inference.** A Mac's inference host (`/v1/inference/catalog`,
-  `/v1/inference/stream`, `InferenceHost`) accepts signed `ios` and
-  `mac` members: the principal is the member's device ID, a named
-  `X-Woven-Workspace` / `X-Woven-Library` / `X-Woven-Device` must match it and
-  this Mac, and removal is checked before credentials are prepared and again
-  before a stream starts. The phone saves hosted connections
-  with `InferenceHostScope.hostDeviceID` (the workspace's `executionDeviceID`)
-  and no credential, and `MobileInferenceService` signs them through
-  `InferenceMemberSigning` (installed with the phone's member key); a
-  connection saved without `hostDeviceID` signs for its workspace's serving
-  member. No inference grant is presented, and the Mac accepts none.
+- **Inference.** Quick Chat uses only the sign-ins and keys saved on that
+  phone; a Mac does not host inference for it. A connection a Mac hosted
+  before v0.4.6 is dropped when the phone loads its preferences.
 - **Analytics.** Only Macs record product analytics (a Linux host answers
   `unsupported`). Each synchronization picks the analytics connection again
   (`MobileLibraryHosts.analyticsTransport`): the current host when it is a

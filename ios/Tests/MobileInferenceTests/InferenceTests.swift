@@ -119,57 +119,24 @@ final class InferenceTests: XCTestCase {
     XCTAssertEqual(inferenceObjects(messages[4]["content"]).filter { $0["type"] as? String == "image_url" }.count, 2)
     XCTAssertEqual(inferenceObjects(messages[5]["content"]).first?["text"] as? String, "Compare these.")
   }
-  func testAdapterPreservesExactAccountScopeAndDoesNotForwardProviderKeys() async throws {
-    let connection = InferenceConnection(id: "adapter", name: "Host", provider: "openai-codex", accountID: "account-b", route: .adapter, baseURL: "https://host.example.ts.net", modelID: "m", hostScope: .init(libraryID: "library", workspaceID: "workspace", deviceID: "phone", protocolVersion: 3, hostDeviceID: "a0000000-0000-4000-8000-00000000000a"))
+  /// A connection a Mac hosted before v0.4.6 still decodes, but it used that
+  /// Mac's sign-in: it is never available and sends nothing.
+  func testLegacyHostedConnectionDecodesButIsNeverUsed() async throws {
+    let saved = """
+    {"id":"adapter","name":"Host","provider":"openai","accountID":"account-b","route":"adapter","baseURL":"https://host.example.ts.net","modelID":"m",
+     "hostScope":{"libraryID":"library","workspaceID":"workspace","deviceID":"phone","protocolVersion":3,"hostDeviceID":"a0000000-0000-4000-8000-00000000000a"}}
+    """
+    let connection = try JSONDecoder().decode(InferenceConnection.self, from: Data(saved.utf8))
+    XCTAssertEqual(connection.route, .adapter)
+    XCTAssertThrowsError(try connection.validate()) { XCTAssertEqual($0 as? InferenceError, .missingCredential) }
+    XCTAssertFalse(InferenceConnectionPolicy.isAvailable(connection, in: [connection]))
     let transport = FixtureTransport([.response(200), .line("{\"type\":\"done\",\"reason\":\"stop\",\"message\":{\"content\":[]}}")])
-    InferenceMemberSigning.install { request, _ in request.setValue("signed", forHTTPHeaderField: "X-Woven-Member-Signature") }
-    defer { InferenceMemberSigning.install(nil) }
     let service = MobileInferenceService(connection: connection, credentials: TestCredentials(), transport: transport, model: model)
-    try await service.stream(requestJSON: "{\"model\":{\"id\":\"m\",\"provider\":\"openai-codex\"},\"context\":{\"messages\":[]},\"scope\":{\"conversationID\":\"c\",\"requestID\":\"c:task\"}}", emit: { _ in })
-    let requests = await transport.requests, request = try XCTUnwrap(requests.first)
-    let body = try XCTUnwrap(try JSONSerialization.jsonObject(with: XCTUnwrap(request.httpBody)) as? InferenceObject)
-    XCTAssertEqual(body["accountID"] as? String, "account-b")
-    XCTAssertEqual(inferenceObject(body["scope"])["requestID"] as? String, "c:task")
-    XCTAssertEqual(request.url?.path, "/v1/inference/stream")
-    XCTAssertNil(body["apiKey"])
-    XCTAssertEqual(request.value(forHTTPHeaderField: "X-Woven-Device"), "phone")
-    XCTAssertEqual(request.value(forHTTPHeaderField: "X-Woven-Library"), "library")
-    XCTAssertEqual(request.value(forHTTPHeaderField: "X-Woven-Protocol"), "3")
-  }
-  /// A host scope that names the host Mac is signed as this device's member:
-  /// no grant is read or sent, and the signature covers the final request.
-  func testSignedAdapterRequestsCarryNoGrant() async throws {
-    struct NoCredentials: InferenceCredentialReading {
-      func read(connectionID: String) async throws -> String? { XCTFail("A signed host request read a grant"); return nil }
-    }
-    final class Signed: @unchecked Sendable { let lock = NSLock(); var calls: [(String, String, Int)] = [] }
-    let signed = Signed()
-    InferenceMemberSigning.install { request, audience in
-      signed.lock.withLock { signed.calls.append((audience, request.url?.path ?? "", request.httpBody?.count ?? 0)) }
-      request.setValue("signed", forHTTPHeaderField: "X-Woven-Member-Signature")
-    }
-    defer { InferenceMemberSigning.install(nil) }
-    let host = "a0000000-0000-4000-8000-00000000000a"
-    let connection = InferenceConnection(id: "adapter", name: "Host", provider: "openai-codex", accountID: "account-b", route: .adapter,
-      baseURL: "https://host.example.ts.net/wovenmatter", modelID: "m",
-      hostScope: .init(libraryID: "library", workspaceID: "workspace", deviceID: "phone", protocolVersion: 3, hostDeviceID: host))
-    XCTAssertTrue(InferenceMemberSigning.signs(connection.hostScope))
-    let transport = FixtureTransport([.response(200), .line("{\"type\":\"done\",\"reason\":\"stop\",\"message\":{\"content\":[]}}")])
-    let service = MobileInferenceService(connection: connection, credentials: NoCredentials(), transport: transport, model: model)
-    try await service.stream(requestJSON: "{\"model\":{\"id\":\"m\",\"provider\":\"openai-codex\"},\"context\":{\"messages\":[]}}", emit: { _ in })
+    do {
+      try await service.stream(requestJSON: "{\"model\":{\"id\":\"m\",\"provider\":\"openai\"},\"context\":{\"messages\":[]}}", emit: { _ in })
+      XCTFail("A hosted connection was used")
+    } catch InferenceError.missingCredential {}
     let requests = await transport.requests
-    let request = try XCTUnwrap(requests.first)
-    XCTAssertNil(request.value(forHTTPHeaderField: "Authorization"))
-    XCTAssertEqual(request.value(forHTTPHeaderField: "X-Woven-Member-Signature"), "signed")
-    let call = try XCTUnwrap(signed.lock.withLock { signed.calls.first })
-    XCTAssertEqual(call.0, host); XCTAssertEqual(call.1, "/wovenmatter/v1/inference/stream")
-    XCTAssertEqual(call.2, request.httpBody?.count, "signed after the body was set")
-    // Without the host's identity nothing is sent: there is no grant to present.
-    var unsigned = connection; unsigned.hostScope?.hostDeviceID = nil
-    XCTAssertFalse(InferenceMemberSigning.signs(unsigned.hostScope))
-    // A connection saved without it signs for its workspace's serving member.
-    InferenceMemberSigning.updateHosts(["workspace": host])
-    defer { InferenceMemberSigning.updateHosts([:]) }
-    XCTAssertTrue(InferenceMemberSigning.signs(unsigned.hostScope))
+    XCTAssertTrue(requests.isEmpty)
   }
 }

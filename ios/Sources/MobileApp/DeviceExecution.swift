@@ -88,19 +88,12 @@ struct InferenceSetupCredential: InferenceCredentialReading {
     try saved.validate()
     try InferenceConnectionPolicy.validateSave(saved, existing: existing)
     try Task.checkCancellation()
-    // A hosted connection is member-signed: it has no credential to store.
-    if saved.route == .adapter {
-      saved.selectedModel = try await resolveModel(saved, "")
-      try Task.checkCancellation()
-      try persist(saved)
-      return saved
-    }
     let previous = existing.first { $0.id == proposed.id }
     let previousSecret = try await credentials.read(connectionID: proposed.id)
     let supplied = secret.trimmingCharacters(in: .whitespacesAndNewlines)
     let sameAuthority = previous.map {
       $0.provider == proposed.provider && $0.route == proposed.route && $0.baseURL == proposed.baseURL &&
-      $0.accountID == proposed.accountID && $0.hostScope == proposed.hostScope
+      $0.accountID == proposed.accountID
     } ?? false
     let credential: String
     if !supplied.isEmpty { credential = supplied }
@@ -340,7 +333,10 @@ extension MobileModel {
     let file = executionDirectory.appendingPathComponent("preferences.json")
     if FileManager.default.fileExists(atPath: file.path) {
       let saved = try JSONDecoder().decode(DeviceExecutionPreferences.self, from: Data(contentsOf: file))
-      inferenceConnections = InferenceConnectionPolicy.retainingSingleSubscriptions(saved.connections, preferredID: saved.chatSettings?.connection?.id ?? saved.selectedConnectionID)
+      // A connection hosted by a Mac (before v0.4.6) used that Mac's sign-in; it is dropped,
+      // and Quick Chat asks for a sign-in on this device.
+      inferenceConnections = InferenceConnectionPolicy.retainingSingleSubscriptions(saved.connections.filter { $0.route == .direct },
+        preferredID: saved.chatSettings?.connection?.id ?? saved.selectedConnectionID)
       inferenceConnectionID = saved.selectedConnectionID
       // v0.4.2 saved the library host's route as "central"; it reads as "host" once.
       executionWorkspaceID = saved.workspaceID == "central" ? "host" : saved.workspaceID; executionRecords = saved.conversations

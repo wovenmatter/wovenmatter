@@ -117,6 +117,36 @@ final class ExecutionRoutingTests: XCTestCase {
     XCTAssertTrue(model.localRuntimes.isEmpty)
   }
 
+  /// A connection a Mac hosted before v0.4.6 used that Mac's sign-in. It is
+  /// dropped on load; this device's own sign-ins and their Keychain items stay.
+  @MainActor func testHostedConnectionsAreDroppedAndDeviceSignInsKept() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let model = MobileModel(store: try MobileStore(file: root.appendingPathComponent("library.json")), transport: ExecutionTestLibrary())
+    let directory = root.appendingPathComponent("execution")
+    model.executionDirectory = directory
+    let credentials = MigrationCredentials(["own": "own-key"])
+    model.executionCredentialStore = credentials
+    let own = InferenceConnection(id: "own", name: "OpenCode Go", provider: "opencode-go", modelID: "m")
+    let hosted = InferenceConnection(id: "hosted", name: "Mac account", provider: "openai", accountID: "mac-account", route: .adapter,
+      baseURL: "https://mac.example.ts.net/wovenmatter", modelID: "m")
+    var record = DeviceConversationRecord(id: UUID().uuidString.lowercased(), title: "Hosted chat", connectionID: hosted.id, connection: hosted,
+      modelJSON: "{}", status: "ready", updatedAt: "")
+    record.quickChatVersion = 1
+    let preferences = DeviceExecutionPreferences(connections: [own, hosted], selectedConnectionID: hosted.id,
+      conversations: [record.id: record], chatSettings: .init(connection: hosted))
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    try JSONEncoder().encode(preferences).write(to: directory.appendingPathComponent("preferences.json"))
+    try await model.loadExecutionConfiguration()
+    XCTAssertEqual(model.inferenceConnections.map(\.id), ["own"])
+    XCTAssertNil(model.draftDeviceSettings.connection)
+    XCTAssertNil(model.selectedInferenceConnection, "Quick Chat asks for a sign-in on this device")
+    model.selectedConversationID = record.id
+    XCTAssertNil(model.selectedInferenceConnection)
+    let stored = await credentials.snapshot()
+    XCTAssertEqual(stored, ["own": "own-key"])
+  }
+
   @MainActor func testQuickChatRejectsAutonomousToolsEvenWhenSavedGrantsEnabledThem() async throws {
     for name in ["execute_command", "write_file", "read_file", "woven_goals_set", "woven_sessions_create", "woven_executor_execute", "woven_browser_use", "woven_computer_use"] {
       XCTAssertFalse(MobileModel.deviceToolEnabled(name, selection: nil))
@@ -740,6 +770,20 @@ final class ExecutionRoutingTests: XCTestCase {
   }
 }
 
+private actor MigrationCredentials: InferenceCredentialUpdating {
+  nonisolated let credentialStoreID = "migration-test"
+  private var values: [String: String]
+  init(_ values: [String: String]) { self.values = values }
+  func read(connectionID: String) -> String? { values[connectionID] }
+  func save(_ secret: String, connectionID: String) { values[connectionID] = secret }
+  func remove(connectionID: String) { values.removeValue(forKey: connectionID) }
+  func compareAndSwap(connectionID: String, expected: String, replacement: String) -> Bool {
+    guard values[connectionID] == expected else { return false }
+    values[connectionID] = replacement; return true
+  }
+  func snapshot() -> [String: String] { values }
+}
+
 private actor InferenceSetupMemoryCredentials: InferenceCredentialWriting {
   private var values: [String: String]
   init(_ values: [String: String] = [:]) { self.values = values }
@@ -762,7 +806,7 @@ final class InferenceSetupTests: XCTestCase {
     let connection = InferenceConnection(name: " OpenCode Go ", provider: "opencode-go", route: .direct, modelID: descriptor.id)
     let saved = try await InferenceConnectionSaveTransaction.save(connection, secret: " \n device-key \t", existing: [], credentials: credentials,
       resolveModel: { candidate, key in
-        XCTAssertEqual(candidate.route, .direct); XCTAssertNil(candidate.hostScope); XCTAssertNil(candidate.baseURL)
+        XCTAssertEqual(candidate.route, .direct); XCTAssertNil(candidate.baseURL)
         XCTAssertEqual(key, "device-key")
         return descriptor
       }) { value in
@@ -830,8 +874,7 @@ final class InferenceSetupTests: XCTestCase {
     for provider in ["openai-codex", "claude-subscription", "xai"] {
       let descriptor = Self.descriptor(provider: provider)
       let current = InferenceConnection(id: "current", name: provider, provider: provider, route: .direct, modelID: descriptor.id)
-      let extra = InferenceConnection(id: "extra", name: provider, provider: provider, route: .adapter,
-        baseURL: "https://fixture.ts.net", modelID: descriptor.id)
+      let extra = InferenceConnection(id: "extra", name: provider, provider: provider, route: .direct, modelID: descriptor.id)
       let credentials = InferenceSetupMemoryCredentials([current.id: "current-secret"])
       do {
         _ = try await InferenceConnectionSaveTransaction.save(extra, secret: "new-secret", existing: [current], credentials: credentials,
@@ -871,7 +914,6 @@ final class InferenceSetupTests: XCTestCase {
     let catalogGeneration = state.beginCatalog(), authenticationGeneration = state.authenticationGeneration
     state.secret = "old-provider-credential"; state.storedCredentialAvailable = true
     state.chooseProvider("opencode-go")
-    XCTAssertEqual(state.mode, .device)
     XCTAssertEqual(state.name, InferenceConnectionSetupState.providerName("opencode-go"))
     XCTAssertEqual(state.secret, ""); XCTAssertFalse(state.storedCredentialAvailable)
     XCTAssertFalse(state.receiveModels([Self.descriptor()], generation: catalogGeneration))
