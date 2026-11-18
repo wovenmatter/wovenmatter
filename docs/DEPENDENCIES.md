@@ -299,8 +299,9 @@ Maintenance checks both for newer releases; recorded does not mean frozen.
   copy of those packages and what only they depend on
   (`remote/host/prune-bots-sdk.py`). One SDK update covers both: the server
   restarts a running bots runtime once a new copy is active. Its in-container
-  helper ships that copy's Pi Durable, Chord and Pi telemetry packages (into
-  the shared volume), which reach existing containers on their next Update. The bot base image and
+  helper ships the packages its imports load from that copy, as Node resolves
+  them there (nested ones included), into the shared volume; they reach
+  existing containers on their next Update. The bot base image and
   toolchain image build through the Engine API from `bots/image` and
   `bots/image/toolchain` under content-hash tags. A changed toolchain reaches
   bots in place on their next Update; a changed base image moves them to a new
@@ -338,7 +339,12 @@ It installs into a new generation, verifies the APIs it uses, and activates it
 atomically. It then deletes the generation it replaced, even if a running
 session still uses it; unrelated packages stay at their installed versions. A
 failed or cancelled candidate is discarded and leaves the working copy active.
-The machine's bots run the same copy and restart onto the update.
+The machine's bots run the same copy and restart onto the update, so where the
+bots runtime is installed the candidate must also pass `bots/src/cli.ts
+verify-sdk`: bots' whole module graph, the Claude Agent SDK and binary, and the
+in-container helper, loaded from the staged copy as bots start. The SDK status
+reports a copy missing a package or its Claude binary as inconsistent, and the
+update reinstalls it.
 These checks catch missing APIs, but cannot guarantee that every future upstream
 behavior remains compatible; integration fixes and release validation remain
 part of maintenance.
