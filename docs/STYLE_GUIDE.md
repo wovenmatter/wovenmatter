@@ -149,8 +149,8 @@ when an intentional design change is accepted.
   local model servers have one home, used by Pi Durable, Usage, and bots. Each
   provider is one summary row showing what is connected. Choose the web search
   provider on its row, beside its key. A new account offers Choose chat models, and
-  connecting one in the shared scope turns on its limit checks. Keep the "Accounts
-  for" selector visible, since saved workspace accounts take priority and must stay
+  connecting one on this Mac turns on its limit checks. Keep the "Sign in on"
+  selector visible: every device keeps its own sign-ins, and each must stay
   reachable. Native harnesses sign in on their own agent pages.
 - **GitHub:** one SSH key and git identity for agents and bots on every
   machine; there is no per-bot, per-workspace or per-harness GitHub key. The SSH
@@ -236,8 +236,8 @@ when an intentional design change is accepted.
   account"), Software, then Defaults for new chats, using the same layout for every harness. Pages have one Applies to
   selector, hidden when there is no remote workspace or local override. Keep Use shared
   chat settings inside Defaults for new chats. Changing chat inheritance must not
-  change credential selection. Workspace Pi Durable accounts take priority per provider,
-  with shared accounts as fallback; show their source and labels. Explain native
+  change credential selection. Pi Durable uses the sign-ins of the device it runs on,
+  managed in Subscriptions & API Keys; show their labels. Explain native
   harness capability differences under How it works: reusable API keys are not the
   same as automatic credential sync, and native subscription sign-ins stay with their
   installation. Never show key/token values or infer names that a harness does not expose.
