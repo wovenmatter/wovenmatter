@@ -183,25 +183,52 @@ final class DefaultAgentSettingsModel {
         }
         return true
     }
+    /// How long a sign-in keeps waiting through failed polls (a Wi-Fi or Tailscale
+    /// reconnect) before it gives up. Another Mac cancels a member's sign-in only
+    /// after `MemberSignInSession.idleLimit`, comfortably longer.
+    static var pollRetryLimit: Duration = .seconds(90)
+    /// With another Mac selected, the background server stops following a sign-in
+    /// (and cancels it there) once no window has asked about it for this long.
+    static var windowIdleLimit: Duration = .seconds(10)
+    private var lastWindowContact: ContinuousClock.Instant?
+    /// A window asked this background server's model about its connections.
+    func noteWindowContact() { lastWindowContact = ContinuousClock.now }
     private func pollBackendIfNeeded() {
         guard busy, let request = transport else { return }
         backendPollTask?.cancel()
         let requestID = backendGeneration
         backendPollTask = Task { [weak self] in
+            var failingSince: ContinuousClock.Instant?
+            var failures = 0
             while !Task.isCancelled {
                 do {
                     try await Task.sleep(for: .milliseconds(250))
                     guard let self else { return }
+                    // No window shows this sign-in any more: stop, and cancel it there.
+                    if self.forwardsToPeer, let last = self.lastWindowContact, ContinuousClock.now - last > Self.windowIdleLimit {
+                        self.cancel(); return
+                    }
                     let catalogGeneration = self.catalogSnapshotGeneration
                     let data = try await request("connections.snapshot", Data())
                     try Task.checkCancellation()
                     guard self.backendGeneration == requestID else { return }
+                    failingSince = nil; failures = 0
                     self.applyBackendSnapshot(try JSONDecoder().decode(BackendConnectionsSnapshot.self, from: data),
                         expectedCatalogGeneration: catalogGeneration)
                     if !self.busy { return }
                 } catch is CancellationError { return }
                 catch {
                     guard let self, self.backendGeneration == requestID else { return }
+                    // A transient failure is retried with backoff for a bounded time.
+                    let now = ContinuousClock.now
+                    let since = failingSince ?? now
+                    failingSince = since
+                    if now - since < Self.pollRetryLimit {
+                        failures += 1
+                        let delay = min(Duration.milliseconds(250) * (1 << min(failures, 5)), .seconds(5))
+                        do { try await Task.sleep(for: delay) } catch { return }
+                        continue
+                    }
                     self.error = error.localizedDescription; self.busy = false; return
                 }
             }
@@ -768,7 +795,12 @@ final class DefaultAgentSettingsModel {
         // A chat-settings scope is this Mac's or a Linux workspace's, and so are the
         // sign-ins shown with it. Another Mac is only chosen with `selectDevice`.
         let scopeDevice = SignInDevice.id(forScope: scope)
-        if backendRequest == nil { leavePeer() }
+        // Nothing another Mac answered stays once this Mac's settings are shown.
+        if backendRequest == nil, peerRequest != nil {
+            leavePeer()
+            accounts = [:]; sharedAccounts = [:]; providers = []; searchConfigured = false
+            settings = DefaultAgentSupport.settings
+        }
         if device != scope && device != scopeDevice { localServers = [] }
         device = scopeDevice
         if transport != nil {

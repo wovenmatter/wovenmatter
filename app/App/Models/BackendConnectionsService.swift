@@ -147,6 +147,7 @@ struct BackendConnectionsSnapshot: Codable, Equatable {
             }
             return try JSONEncoder().encode(model.sdks.state(for: command.key))
         }
+        model.noteWindowContact()
         if method == "connections.command" {
             let c = try JSONDecoder().decode(BackendConnectionsCommand.self, from: payload).validated()
             // A window's account command runs on the device it was issued for. Another

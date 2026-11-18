@@ -66,7 +66,7 @@ struct SettingsAccountsView: View {
             }
         }
         .task(id: initialScope) { select(SignInDevicePicker.device(forPage: initialScope)) }
-        .onDisappear { agent.cancel() }
+        .onDisappear { agent.cancel(); SignInDevicePicker.leave(agent) }
     }
 
     /// A device the list has not loaded yet: a configured workspace's or a bots machine's name.
@@ -141,6 +141,15 @@ enum SignInDevicePicker {
     /// A Linux device this Mac configured, for its model catalog.
     static func remote(_ id: String, in workspaces: [RemoteWorkspaceConfiguration]) -> RemoteWorkspaceConfiguration? {
         SignInDevice.linuxWorkspace(of: id).flatMap { workspace in workspaces.first { $0.id == workspace } }
+    }
+
+    /// Leaving the page returns to this Mac: while another Mac is selected the
+    /// connections model holds that Mac's chat settings and catalog, which this
+    /// Mac's own settings views (Pi Durable, agent defaults) must never show or save.
+    @MainActor static func leave(_ agent: DefaultAgentSettingsModel) {
+        guard SignInDevice.kind(of: agent.device) == .mac else { return }
+        agent.changeScope("global")
+        agent.selectDevice(SignInDevice.localID)
     }
 
     /// Shows `id`'s sign-ins; every account action on the page then runs on that device.

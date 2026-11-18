@@ -234,7 +234,9 @@ extension ApplicationModel {
     private var lastContact: ContinuousClock.Instant
     private var watchdog: Task<Void, Never>?
 
-    init(model: DefaultAgentSettingsModel, idleLimit: Duration = .seconds(15)) {
+    /// Longer than a member keeps polling through failures (`pollRetryLimit`).
+    static let defaultIdleLimit: Duration = .seconds(120)
+    init(model: DefaultAgentSettingsModel, idleLimit: Duration = MemberSignInSession.defaultIdleLimit) {
         self.model = model; self.idleLimit = idleLimit; lastContact = clock.now
     }
     deinit { watchdog?.cancel() }

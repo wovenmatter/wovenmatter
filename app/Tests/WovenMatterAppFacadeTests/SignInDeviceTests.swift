@@ -316,6 +316,99 @@ struct SignInDeviceTests {
         #expect(!there.stored.keys.contains { $0.hasSuffix("oauth.openai-codex") })
     }
 
+    /// A network blip while signing in on another Mac neither ends the sign-in here
+    /// nor lets that Mac give up on it.
+    @Test func aSignInOnAnotherMacSurvivesTransientFailures() async throws {
+        #expect(MemberSignInSession.defaultIdleLimit > DefaultAgentSettingsModel.pollRetryLimit)
+        let here = SignInKeychainFixture(), there = SignInKeychainFixture()
+        let localHelper = try FakeSettingsHelper(), peerHelper = try FakeSettingsHelper()
+        defer { localHelper.remove(); peerHelper.remove() }
+        let peer = deviceModel(there, helper: peerHelper)
+        let model = deviceModel(here, helper: localHelper)
+        let route = peerRoute(peer, keychain: there)
+        let failures = FailureBudget()
+        model.peerTransport = { member in
+            let send = route(member)
+            return { method, payload in
+                if method == "connections.snapshot", await failures.take() { throw DefaultAgentError.message("The network connection was lost.") }
+                return try await send(method, payload)
+            }
+        }
+        try await KeychainAccess.$testOperations.withValue(here.operations) {
+            model.selectDevice(SignInDevice.macID(UUID().uuidString.lowercased()))
+            try await waitUntil(model) { !model.busy }
+            await failures.arm(4)
+            model.signIn("openai-codex")
+            try await waitUntil(model) { model.prompt != nil }
+            #expect(model.error == nil && model.busy)
+            #expect(await failures.remaining == 0)
+            model.respond("pasted-code")
+            try await waitUntil(model) { model.signInOutcome != nil && !model.busy }
+            #expect(model.signInOutcome?.error == nil)
+        }
+        #expect(there.stored.contains { $0.key.hasSuffix("/global.oauth.openai-codex") })
+    }
+
+    /// Once no window shows a sign-in on another Mac, this Mac's background server
+    /// stops following it and cancels it there.
+    @Test func noWindowLeftStopsFollowingASignInOnAnotherMac() async throws {
+        let limit = DefaultAgentSettingsModel.windowIdleLimit
+        DefaultAgentSettingsModel.windowIdleLimit = .milliseconds(400)
+        defer { DefaultAgentSettingsModel.windowIdleLimit = limit }
+        let here = SignInKeychainFixture(), there = SignInKeychainFixture()
+        let localHelper = try FakeSettingsHelper(), peerHelper = try FakeSettingsHelper()
+        defer { localHelper.remove(); peerHelper.remove() }
+        let peer = deviceModel(there, helper: peerHelper)
+        let model = deviceModel(here, helper: localHelper)
+        model.peerTransport = peerRoute(peer, keychain: there)
+        try await KeychainAccess.$testOperations.withValue(here.operations) {
+            model.selectDevice(SignInDevice.macID(UUID().uuidString.lowercased()))
+            try await waitUntil(model) { !model.busy }
+            model.noteWindowContact()
+            model.signIn("openai-codex")
+            try await waitUntil(model) { model.prompt != nil }
+            try await waitUntil(peer, timeout: .seconds(10)) { !peer.busy && peer.signInProvider == nil }
+            try await waitUntil(model, timeout: .seconds(10)) { !model.busy }
+        }
+        #expect(!there.stored.keys.contains { $0.hasSuffix("oauth.openai-codex") })
+    }
+
+    /// Leaving Subscriptions & API Keys returns to this Mac, so this Mac's own
+    /// settings views never show or save another Mac's chat settings or catalog.
+    @Test func leavingThePageReturnsToThisMacsOwnSettings() async throws {
+        let here = SignInKeychainFixture(), there = SignInKeychainFixture()
+        let localHelper = try FakeSettingsHelper(), peerHelper = try FakeSettingsHelper()
+        defer { localHelper.remove(); peerHelper.remove() }
+        let peer = deviceModel(there, helper: peerHelper)
+        let model = deviceModel(here, helper: localHelper)
+        let route = peerRoute(peer, keychain: there)
+        // That Mac's own chat settings, providers and catalog differ from this Mac's.
+        model.peerTransport = { member in
+            let send = route(member)
+            return { method, payload in
+                var snapshot = try JSONDecoder().decode(BackendConnectionsSnapshot.self, from: try await send(method, payload))
+                snapshot.settings.global.defaultModel = "peer-provider/peer-only-model"
+                snapshot.providers = [.init(id: "peer-provider", name: "Peer", connected: true, state: nil, detail: nil, account: nil)]
+                snapshot.catalog = [.init(id: "peer-provider/peer-only-model", name: "Peer only", provider: "peer-provider", providerName: "Peer")]
+                return try JSONEncoder().encode(snapshot)
+            }
+        }
+        let own = DefaultAgentSupport.settings.global.defaultModel
+        try await KeychainAccess.$testOperations.withValue(here.operations) {
+            model.selectDevice(SignInDevice.macID(UUID().uuidString.lowercased()))
+            try await waitUntil(model) { !model.busy && model.configuration.defaultModel == "peer-provider/peer-only-model" }
+            #expect(model.catalog.contains { $0.provider == "peer-provider" })
+            SignInDevicePicker.leave(model)
+            #expect(model.device == SignInDevice.localID)
+            #expect(model.configuration.defaultModel == own)
+            #expect(!model.providers.contains { $0.id == "peer-provider" })
+            #expect(!model.catalog.contains { $0.provider == "peer-provider" })
+            // Nothing later from that Mac replaces them.
+            try await Task.sleep(for: .milliseconds(600))
+            #expect(model.configuration.defaultModel == own && !model.catalog.contains { $0.provider == "peer-provider" })
+        }
+    }
+
     /// A member that stops polling (it slept or went offline) has its sign-in cancelled here.
     @Test func aMemberThatStopsPollingHasItsSignInCancelledHere() async throws {
         let keychain = SignInKeychainFixture(), helper = try FakeSettingsHelper(); defer { helper.remove() }
@@ -392,29 +485,35 @@ struct SignInDeviceTests {
         }
     }
 
-    /// A Linux host that has not updated keeps working exactly as before; an
-    /// updated one gets chat settings alone and, once nothing waits for this
-    /// Mac's key there, this Mac's copies for it are removed.
-    @Test func linuxHostsAreConfiguredForTheVaultTheyHave() async throws {
+    /// No host ever gets this Mac's credentials, whatever it reports: an updated
+    /// one gets chat settings (and its own vault key once, while a vault sealed
+    /// with it waits); one that has not updated gets only its own vault key.
+    @Test func linuxHostsGetNoCredentialsWhateverTheyReport() async throws {
         let scope = UUID().uuidString.lowercased()
-        defer { DefaultAgentSupport.markLegacyHost(scope, false) }
-        let settings = try DefaultAgentSupport.configurationPayload(workspace: scope)
-        var relayedPayload = DefaultAgentPayload(config: .init(), credentials: ["openai": .init(type: "api_key", key: "workspace-key")], workspace: scope)
-        relayedPayload.unlockKey = "vault-key"
-        let relayed = relayedPayload
-        let legacy: @Sendable (String) async throws -> DefaultAgentPayload = { _ in relayed }
+        var settings = try DefaultAgentSupport.configurationPayload(workspace: scope)
+        settings.credentials = ["openai": .init(type: "api_key", key: "must-not-leave")]
         let key: @Sendable (String) async throws -> String? = { _ in "vault-key" }
-        // Not updated: what it got before, and this Mac renews what it relays.
-        let old = try await DefaultAgentHostSync.payload(scope: scope, vault: .init(), settingsOnly: settings, legacy: legacy, vaultKey: key)
-        #expect(old.credentials["openai"]?.key == "workspace-key" && old.unlockKey == "vault-key")
-        #expect(DefaultAgentSupport.legacyHostScopes.contains(scope))
-        // Updated, with a vault sealed with this Mac's key waiting: settings and the key once.
-        let pending = try await DefaultAgentHostSync.payload(scope: scope, vault: .init(deviceVault: true, legacyVault: true), settingsOnly: settings, legacy: legacy, vaultKey: key)
-        #expect(pending.credentials.isEmpty && pending.credentialAccounts == nil && pending.unlockKey == "vault-key")
-        #expect(!DefaultAgentSupport.legacyHostScopes.contains(scope))
-        let current = try await DefaultAgentHostSync.payload(scope: scope, vault: .init(deviceVault: true, legacyVault: false), settingsOnly: settings, legacy: legacy, vaultKey: key)
-        #expect(current.credentials.isEmpty && current.unlockKey == nil)
-        // Copies are forgotten only once the host keeps its own vault with nothing waiting.
+        let none: @Sendable (String) async throws -> String? = { _ in nil }
+        let reports: [DefaultAgentHostVault] = [.init(), .init(deviceVault: false), .init(deviceVault: true, legacyVault: true),
+                                                .init(deviceVault: true, legacyVault: false), .init(deviceVault: true)]
+        for report in reports {
+            for vaultKey in [key, none] {
+                let plan = try await DefaultAgentHostSync.plan(scope: scope, vault: report, settingsOnly: settings, vaultKey: vaultKey)
+                if let payload = plan.configuration {
+                    #expect(payload.credentials.isEmpty && payload.credentialAccounts == nil)
+                    #expect(!String(decoding: try payload.data(), as: UTF8.self).contains("must-not-leave"))
+                }
+            }
+        }
+        let old = try await DefaultAgentHostSync.plan(scope: scope, vault: .init(), settingsOnly: settings, vaultKey: key)
+        #expect(old.configuration == nil && old.unlockKey == "vault-key")
+        let oldWithoutKey = try await DefaultAgentHostSync.plan(scope: scope, vault: .init(), settingsOnly: settings, vaultKey: none)
+        #expect(oldWithoutKey.configuration == nil && oldWithoutKey.unlockKey == nil)
+        let pending = try await DefaultAgentHostSync.plan(scope: scope, vault: .init(deviceVault: true, legacyVault: true), settingsOnly: settings, vaultKey: key)
+        #expect(pending.configuration?.unlockKey == "vault-key" && pending.unlockKey == nil)
+        let current = try await DefaultAgentHostSync.plan(scope: scope, vault: .init(deviceVault: true, legacyVault: false), settingsOnly: settings, vaultKey: key)
+        #expect(current.configuration?.unlockKey == nil)
+        // What this Mac kept for the host moves aside only once nothing waits there.
         let forgotten = ForgottenScopes()
         for (json, forgets) in [(#"{"saved":true,"revision":"r","epoch":"e"}"#, false),
                                 (#"{"saved":true,"revision":"r","epoch":"e","deviceVault":true,"legacyVault":true}"#, false),
@@ -425,7 +524,6 @@ struct SignInDeviceTests {
             #expect(await forgotten.scopes.count == before + (forgets ? 1 : 0), "\(json)")
         }
     }
-
 
     @Test func signingInOnThisMacKeepsTheCredentialInItsKeychain() async throws {
         let keychain = SignInKeychainFixture(), helper = try FakeSettingsHelper(); defer { helper.remove() }
@@ -563,4 +661,10 @@ struct SignInDeviceTests {
 private actor ForgottenScopes {
     var scopes: [String] = []
     func add(_ scope: String) { scopes.append(scope) }
+}
+
+private actor FailureBudget {
+    private(set) var remaining = 0
+    func arm(_ count: Int) { remaining = count }
+    func take() -> Bool { guard remaining > 0 else { return false }; remaining -= 1; return true }
 }
