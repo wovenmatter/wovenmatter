@@ -179,6 +179,8 @@ final class ExecutionRoutingTests: XCTestCase {
     let directory = root.appendingPathComponent("execution")
     model.executionDirectory = directory
     model.executionCredentialStore = MigrationCredentials(["own": "own-key"])
+    // This device's workspace identity is loaded before its chats are adopted.
+    await model.reload()
     let own = InferenceConnection(id: "own", name: "OpenCode Go", provider: "opencode-go", modelID: "m")
     let hosted = InferenceConnection(id: "hosted", name: "Mac account", provider: "openai", accountID: "mac-account", route: .adapter,
       baseURL: "https://mac.example.ts.net/wovenmatter", modelID: "m")
@@ -208,7 +210,7 @@ final class ExecutionRoutingTests: XCTestCase {
     XCTAssertTrue(saved.conversations.values.allSatisfy { $0.runID == nil })
     for id in records.keys {
       let trashed = await model.performDeviceAction(.conversation(id: id, action: "trash", title: nil, folderID: nil))
-      XCTAssertTrue(trashed)
+      XCTAssertTrue(trashed, model.errorMessage ?? "")
       XCTAssertEqual(model.executionRecords[id]?.isTrashed, true)
     }
   }
@@ -219,6 +221,7 @@ final class ExecutionRoutingTests: XCTestCase {
     defer { try? FileManager.default.removeItem(at: root) }
     let model = MobileModel(store: try MobileStore(file: root.appendingPathComponent("library.json")), transport: ExecutionTestLibrary())
     model.executionDirectory = root.appendingPathComponent("execution")
+    await model.reload()
     let removed = InferenceConnection(id: "removed", name: "ChatGPT", provider: "openai-codex", modelID: "m")
     var record = DeviceConversationRecord(id: UUID().uuidString.lowercased(), title: "Interrupted", connectionID: removed.id, connection: removed,
       modelJSON: Self.offlineModelJSON, runID: "interrupted-run", submissionID: 4, status: "interrupted", updatedAt: "")
@@ -230,7 +233,7 @@ final class ExecutionRoutingTests: XCTestCase {
     XCTAssertNil(model.executionRecords[record.id]?.runID)
     XCTAssertNil(model.localRuntimes[record.id])
     let trashed = await model.performDeviceAction(.conversation(id: record.id, action: "trash", title: nil, folderID: nil))
-    XCTAssertTrue(trashed)
+    XCTAssertTrue(trashed, model.errorMessage ?? "")
   }
 
   private static let offlineModelJSON = """
