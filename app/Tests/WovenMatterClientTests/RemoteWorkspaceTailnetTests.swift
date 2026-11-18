@@ -49,7 +49,22 @@ struct RemoteWorkspaceTailnetTests {
         #expect(discovered.map(\.hostName) == ["worker"])
     }
 
-
+    /// What Tailscale's app binary prints, with exit status 0, when it starts as
+    /// the GUI. Tailscale is connected then, so the message must not say to connect it.
+    @Test func outputThatIsNotAStatusIsReportedAsUnreadableRatherThanDisconnectedOrAParsingError() throws {
+        let output = Data("The Tailscale GUI failed to start: The operation couldn’t be completed. (Tailscale.CLIError error 3.)\n".utf8)
+        for data in [output, Data()] {
+            let errors = [#expect(throws: RemoteWorkspaceClientError.self) { try RemoteMachineDiscovery.decodeTailnetMachines(from: data) },
+                          #expect(throws: RemoteWorkspaceClientError.self) {
+                              try RemoteWorkspaceTailnet.sshOptions(destination: "worker", executable: "/tailscale", status: data)
+                          }]
+            for error in errors { #expect(error?.localizedDescription == RemoteWorkspaceTailnet.statusUnreadable) }
+        }
+        let stopped = #expect(throws: RemoteWorkspaceClientError.self) {
+            try RemoteMachineDiscovery.decodeTailnetMachines(from: status([peer], state: "Stopped"))
+        }
+        #expect(stopped?.localizedDescription.contains("Connect Tailscale") == true)
+    }
 
     @Test func manualRemoteSSHRejectsAppleAndOtherNonLinuxPeers() throws {
         for os in ["iOS", "iPadOS", "macOS", "darwin", "windows", "android", "freebsd", "", nil] {

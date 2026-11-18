@@ -1,6 +1,7 @@
 #if os(macOS)
 import Foundation
 import Testing
+import WovenMatterClient
 import WovenMatterCore
 @testable import WovenMatterLibraryStore
 
@@ -20,6 +21,22 @@ struct MacManagementTests {
     @Test func disconnectedTailnetIsAnErrorAndEmptyRunningTailnetIsAValidEmptyResult() throws {
         #expect(throws: (any Error).self) { try TailnetMac.decode(Data(#"{"BackendState":"Stopped"}"#.utf8)) }
         #expect(try TailnetMac.decode(Data(#"{"BackendState":"Running"}"#.utf8)).isEmpty)
+    }
+    /// What Tailscale's app binary prints, with exit status 0, when it starts as the GUI.
+    /// Tailscale is connected then, so the message must not say to connect it.
+    @MainActor @Test func outputThatIsNotAStatusIsReportedAsUnreadableRatherThanDisconnectedOrAParsingError() {
+        let output = Data("The Tailscale GUI failed to start: The operation couldn’t be completed. (Tailscale.CLIError error 3.)\n".utf8)
+        for data in [output, Data()] {
+            let errors = [#expect(throws: LibraryAPIError.self) { try TailnetMac.decode(data) },
+                          #expect(throws: LibraryAPIError.self) { try MacDiscovery.candidates(status: data) },
+                          #expect(throws: LibraryAPIError.self) { try TailscaleServe.occupiedPorts(in: data) }]
+            for error in errors {
+                #expect(error?.code == "tailscale_unavailable")
+                #expect(error?.message == RemoteWorkspaceTailnet.statusUnreadable)
+            }
+        }
+        let stopped = #expect(throws: LibraryAPIError.self) { try TailnetMac.decode(Data(#"{"BackendState":"Stopped"}"#.utf8)) }
+        #expect(stopped?.message.contains("Connect Tailscale") == true)
     }
     @Test func inventoryDoesNotDependOnMagicDNSOrIPv4() throws {
         let input = Data(#"{"BackendState":"Running","Peer":{"ipv6":{"Online":true,"OS":"macOS","HostName":"Studio Mac","TailscaleIPs":["fd7a:115c:a1e0::2"]}}}"#.utf8)
