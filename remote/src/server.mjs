@@ -215,6 +215,10 @@ const clientExecution = runningAsService ? createClientExecution({
   runtime: createClientExecutionRuntime({defaultAgent,durableACP,catalog,workspaceRoot,harnessStatus,instances,
     environment: harness => harness.id === 'codex' ? harnessRuntimeEnvironment(harness) : harnessEnvironment()}),
 }) : null
+// This host keeps its own vault: no Mac's unlock key is ever derived from a
+// device grant's envelope, remembered, or sealed into a new enrollment, and a
+// grant whose envelope is damaged or absent is served like any other.
+if (clientExecution) Object.assign(clientExecution, { unlockMaterial: () => null, rememberUnlockMaterial: () => {} })
 
 // Streams this server opened to other members, refused with 4401 when this
 // member was removed, try again once the member list changes.

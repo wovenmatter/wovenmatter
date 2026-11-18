@@ -55,18 +55,6 @@ test('a device vault opens with its own key and sets a vault sealed with a Mac k
   assert.ok(!(await readFile(vault.path, 'utf8')).includes('device-refresh'));
 });
 
-test('a reset clears this device\'s sign-ins and keeps the vault as it was beside it', async t => {
-  const directory = await temporary(t);
-  const vault = await new CredentialVault(directory).openDevice();
-  await vault.modify(async value => ({ ...value, owned: { xai: { type: 'oauth', access: 'a', refresh: 'before-reset', expires: 1 } } }));
-  const before = await readFile(vault.path, 'utf8');
-  await vault.reset();
-  assert.deepEqual(await vault.read(), {});
-  const kept = (await files(directory)).find(name => /^credentials\.reset-.*\.enc\.json$/.test(name));
-  assert.ok(kept, (await files(directory)).join());
-  assert.equal(await readFile(join(directory, kept), 'utf8'), before);
-});
-
 test('without hard links the key is still created whole and unreadable vaults are still kept', async t => {
   const original = vaultFiles.link;
   t.after(() => { vaultFiles.link = original; });
@@ -90,9 +78,6 @@ test('without hard links the key is still created whole and unreadable vaults ar
   const keptVault = names.find(name => /^credentials\.unreadable-.*\.enc\.json$/.test(name));
   assert.equal(await readFile(join(directory, keptVault), 'utf8'), vaultBefore);
   assert.equal(await readFile(join(directory, names.find(name => /^credentials\.unreadable-.*\.key$/.test(name))), 'utf8'), 'damaged');
-  // A reset keeps its copy too.
-  await (await new CredentialVault(directory).openDevice()).reset();
-  assert.ok((await files(directory)).some(name => /^credentials\.reset-/.test(name)));
 });
 
 test('plain sign-in files from before the vault join it and are removed only once it holds them', async t => {
@@ -289,22 +274,21 @@ test('the control helper on a device signs out there and never returns credentia
   assert.ok(!JSON.stringify(stored).includes('relayed-secret'));
 });
 
-test('a control session reset on a device keeps the vault as it was beside it', async t => {
+test('an older Mac\'s reset never clears a device\'s own sign-ins', async t => {
   const { spawn } = await import('node:child_process');
   const directory = await temporary(t);
   const vault = await new CredentialVault(directory).openDevice();
   await vault.modify(async value => ({ ...value, owned: { 'openai-codex': { type: 'oauth', access: 'a', refresh: 'kept-refresh', expires: Date.now() + 3600_000 } } }));
+  const before = await readFile(vault.path, 'utf8');
   const child = spawn(process.execPath, [fileURLToPath(new URL('../src/main.mjs', import.meta.url)), '--control'], {
     cwd: directory, env: { ...process.env, WOVEN_DEFAULT_AGENT_DIRECTORY: directory, WOVEN_DEFAULT_AGENT_DEVICE_VAULT: '1' }, stdio: ['pipe', 'pipe', 'ignore'] });
   let output = '';
   child.stdout.on('data', chunk => { output += chunk; });
-  child.stdin.write(JSON.stringify({ action: 'reset', workspace: 'device', config: {} }) + '\n');
+  child.stdin.write(JSON.stringify({ action: 'reset', workspace: 'mac-workspace', unlockKey: randomBytes(32).toString('base64'), config: {} }) + '\n');
   await new Promise(resolve => child.once('close', resolve));
-  assert.deepEqual(JSON.parse(output.trim().split('\n').at(-1)), { result: { reset: true } });
-  assert.deepEqual(await vault.read(), {});
-  const kept = (await files(directory)).find(name => /^credentials\.reset-.*\.enc\.json$/.test(name));
-  assert.ok(kept);
-  const copy = new CredentialVault(directory);
-  copy.device = true; copy.workspace = 'device'; copy.path = join(directory, kept);
-  assert.equal((await copy.read()).owned['openai-codex'].refresh, 'kept-refresh');
+  const reply = JSON.parse(output.trim().split('\n').at(-1));
+  assert.match(reply.error, /one at a time/);
+  assert.equal(await readFile(vault.path, 'utf8'), before);
+  assert.equal((await vault.read()).owned['openai-codex'].refresh, 'kept-refresh');
+  assert.ok(!(await files(directory)).some(name => name.includes('reset')));
 });

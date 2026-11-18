@@ -67,16 +67,6 @@ export class CredentialVault {
     if (owned) await unlink(oauthPath).catch(missing);
     if ('credentials' in configuration) await writePrivateJSON(configurationPath, { config: configuration.config });
   }
-  // A control session's `reset`: this device's sign-ins are cleared, and the
-  // vault as it was is kept beside it.
-  async reset() {
-    await mkdir(this.directory, { recursive: true, mode: 0o700 });
-    const release = await lockfile.lock(this.path, lockOptions);
-    try {
-      if (await exists(this.path)) await keepCopy(this.path, 'reset');
-      return await this.modifyLocked(async () => ({}));
-    } finally { await release(); }
-  }
   seal() { this.key?.fill(0); this.key = undefined; this.workspace = undefined; this.device = undefined; }
   async unlock(workspace, encodedKey) {
     if (typeof workspace !== 'string' || !/^[a-z0-9-]{1,64}$/i.test(workspace) || typeof encodedKey !== 'string') throw new Error('Invalid credential unlock request.');

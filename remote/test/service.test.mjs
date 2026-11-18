@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
 import { EventEmitter } from 'node:events'
 import { Writable } from 'node:stream'
-import { createHash, randomBytes, randomUUID } from 'node:crypto'
+import { createCipheriv, createHash, randomBytes, randomUUID } from 'node:crypto'
 import { chmod, mkdir, mkdtemp, readdir, readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import { createServer as createNetServer } from 'node:net'
 import { tmpdir } from 'node:os'
@@ -311,6 +311,45 @@ test('a Linux host keeps its own sign-ins: configuration carries no credentials 
   const listed = await (await request('/v1/sign-ins')).json();
   assert.deepEqual(listed.accounts.openrouter.map(a => a.label), ['Router']);
   assert.equal((await (await request('/v1/default-agent/status')).json()).providers.find(p => p.id === 'openrouter').state, 'credentials_present');
+});
+
+test('an updated host derives, remembers and seals no unlock material from device grants', async context => {
+  const root = await temporaryFixture(context, 'wovenmatter-unlock-material-');
+  const home = resolve(root, 'home'); await mkdir(home);
+  const token = 'unlock-material-token-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+  const service = await startService({ workspace: root, home, catalog: catalogPath, token });
+  context.after(() => stopService(service.child));
+  const request = (path, body, bearer = token) => fetch(service.url + path, {
+    method: body ? 'POST' : 'GET', headers: { Authorization: 'Bearer ' + bearer, 'Content-Type': 'application/json' }, body: body ? JSON.stringify(body) : undefined });
+  const libraryID = randomUUID(), workspaceID = randomUUID(), ownerDeviceID = randomUUID();
+  const enroll = async () => {
+    const deviceID = randomUUID();
+    const grant = await (await request('/v1/execution/devices', { libraryID, workspaceID, deviceID, ownerDeviceID, scopes: ['execution'] })).json();
+    assert.ok(grant.token, JSON.stringify(grant));
+    return { deviceID, token: grant.token };
+  };
+  const { DatabaseSync } = await import('node:sqlite');
+  const db = new DatabaseSync(resolve(root, '.wovenmatter/client-execution/execution.sqlite'));
+  context.after(() => db.close());
+  const body = id => JSON.parse(db.prepare('SELECT body FROM devices WHERE id=?').get(id).body);
+  const setEnvelope = (id, envelope) => db.prepare('UPDATE devices SET body=? WHERE id=?').run(JSON.stringify({ ...body(id), unlockEnvelope: envelope }), id);
+  // A grant enrolled before the update, sealed with a Mac's key the way older hosts did.
+  const old = await enroll(), macKey = randomBytes(32).toString('base64');
+  const iv = randomBytes(12), cipher = createCipheriv('aes-256-gcm', createHash('sha256').update('wovenmatter-client-unlock-v1\0' + old.token).digest(), iv);
+  cipher.setAAD(Buffer.from(JSON.stringify([libraryID, workspaceID, old.deviceID, ['execution']])));
+  const ciphertext = Buffer.concat([cipher.update(JSON.stringify({ workspace: workspaceID, unlockKey: macKey }), 'utf8'), cipher.final()]);
+  setEnvelope(old.deviceID, { iv: iv.toString('base64'), ciphertext: ciphertext.toString('base64'), tag: cipher.getAuthTag().toString('base64') });
+  assert.equal((await request('/v1/execution', undefined, old.token)).status, 200);
+  // An older Mac's unlock is answered and not kept either.
+  assert.equal((await (await request('/v1/default-agent/unlock', { workspace: workspaceID, unlockKey: macKey })).json()).unlocked, true);
+  // A device enrolled afterwards carries no Mac key.
+  const fresh = await enroll();
+  assert.equal('unlockEnvelope' in body(fresh.deviceID), false);
+  assert.ok(!JSON.stringify(db.prepare('SELECT body FROM devices').all()).includes(macKey));
+  // A damaged envelope does not stop a device: nothing here needs unlocking.
+  const damaged = await enroll();
+  setEnvelope(damaged.deviceID, { iv: 'AAAA', ciphertext: 'AAAA', tag: 'AAAA' });
+  assert.equal((await request('/v1/execution', undefined, damaged.token)).status, 200);
 });
 
 async function stopService(child) {

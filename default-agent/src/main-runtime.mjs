@@ -52,10 +52,11 @@ async function invoke(message) {
     // A host's own vault: this helper signs in and saves here, and its result
     // never carries the credential back to the device that asked.
     if (deviceVaultEnabled()) {
+      // An older Mac's "Reset credentials" restored the connections it shared;
+      // this device's sign-ins are its own and are never cleared that way.
+      if (message.action === 'reset') throw new DefaultAgentError('Sign-ins on this device are removed one at a time in Settings → Subscriptions & API Keys.');
       vault = new CredentialVault(directory);
       await vault.openDevice();
-      // A reset keeps the vault as it was beside it.
-      if (message.action === 'reset') await vault.reset();
       payload = { ...message, credentials: {}, credentialAccounts: undefined, config: deviceConfig(message.config, await vault.read()) };
     } else if (payload.unlockKey) {
       vault = new CredentialVault(directory);
@@ -69,7 +70,6 @@ async function invoke(message) {
       return { models: await e.browse(provider, { signal: controlController.signal, force: message.force === true }) };
     }
     if (message.action === 'claude-status') return e.claude.status(message.profile ?? (await e.credentials.read('claude-subscription'))?.accountId, { signal: controlController.signal });
-    if (message.action === 'reset' && deviceVaultEnabled()) return { reset: true };
     if (message.action === 'reset') {
       await vault.modify(async stored => ({ ...stored, shared: sharedCredentials(payload.credentials) }));
       return { reset: true };
