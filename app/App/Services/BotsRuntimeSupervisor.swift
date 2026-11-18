@@ -20,8 +20,9 @@ struct BotsRuntimeConfig: Codable, Equatable, Sendable {
     }
     struct Host: Codable, Equatable, Sendable { var url: String; var token: String }
     struct Machine: Codable, Equatable, Sendable { var deviceID: String; var name: String }
-    /// The default agent's Claude runtime, so `Resources/bots` ships no second copy.
-    struct Claude: Codable, Equatable, Sendable { var executable: String }
+    /// This Mac's Pi Durable: the runtime loads the SDK copy it runs (its active SDK update,
+    /// or the bundled one) and that copy's Claude binary, never one of its own.
+    struct PiDurable: Codable, Equatable, Sendable { var bundle: String; var directory: String }
 
     var dataDir: String
     var listen: Listen
@@ -31,7 +32,7 @@ struct BotsRuntimeConfig: Codable, Equatable, Sendable {
     var limits: Limits
     var host: Host
     var machine: Machine
-    var claude: Claude? = nil
+    var piDurable: PiDurable? = nil
 }
 
 /// Where the bundled runtime lives: `<Resources>/bots` beside the Node the app
@@ -39,9 +40,9 @@ struct BotsRuntimeConfig: Codable, Equatable, Sendable {
 struct BotsRuntimeBundle: Equatable, Sendable {
     let node: URL
     let root: URL
-    /// Anthropic's signed Claude binary in the default agent's dependencies, shared with
-    /// the bots runtime (nil when this build has none, such as a checkout without it).
-    var claudeExecutable: URL? = nil
+    /// Pi Durable as the app bundles it (`<Resources>/default-agent`), whose SDK copy the
+    /// runtime loads (nil when this build has none).
+    var defaultAgent: URL? = nil
     var entry: URL { root.appending(path: "src/cli.ts") }
 
     static func locate() -> BotsRuntimeBundle? {
@@ -51,18 +52,21 @@ struct BotsRuntimeBundle: Equatable, Sendable {
                      URL(fileURLWithPath: FileManager.default.currentDirectoryPath).deletingLastPathComponent()]
             .compactMap { $0?.appending(path: "bots") }
         guard let root = roots.first(where: { FileManager.default.fileExists(atPath: $0.appending(path: "src/cli.ts").path) }) else { return nil }
-        return .init(node: node, root: root, claudeExecutable: DefaultAgentSupport.resources.flatMap(Self.claudeExecutable(defaultAgent:)))
+        return .init(node: node, root: root, defaultAgent: DefaultAgentSupport.resources)
     }
 
-    /// `<default-agent>/node_modules/@anthropic-ai/claude-agent-sdk-darwin-<arch>/claude`, when it is there.
-    static func claudeExecutable(defaultAgent: URL) -> URL? {
-        #if arch(arm64)
-        let architecture = "arm64"
-        #else
-        let architecture = "x64"
-        #endif
-        let binary = defaultAgent.appending(path: "node_modules/@anthropic-ai/claude-agent-sdk-darwin-\(architecture)/claude")
-        return FileManager.default.isExecutableFile(atPath: binary.path) ? binary : nil
+    /// Where Pi Durable keeps its SDK updates on this Mac, as `default-agent/src/sdk-control.mjs`
+    /// and `main.mjs` find it: `WOVEN_DEFAULT_AGENT_DIRECTORY`, else `~/.wovenmatter/default-agent`.
+    /// (Node's home directory is `HOME`, when set.)
+    static func piDurableDirectory(environment: [String: String] = ProcessInfo.processInfo.environment) -> URL {
+        if let path = environment["WOVEN_DEFAULT_AGENT_DIRECTORY"], !path.isEmpty { return URL(fileURLWithPath: path) }
+        let home = environment["HOME"].flatMap { $0.isEmpty ? nil : URL(fileURLWithPath: $0) }
+            ?? FileManager.default.homeDirectoryForCurrentUser
+        return home.appending(path: ".wovenmatter/default-agent")
+    }
+
+    var piDurable: BotsRuntimeConfig.PiDurable? {
+        defaultAgent.map { .init(bundle: $0.path, directory: Self.piDurableDirectory().path) }
     }
 
     /// The package version, which also names the bot image it was tested with.

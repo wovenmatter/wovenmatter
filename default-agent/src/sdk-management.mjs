@@ -278,11 +278,15 @@ export async function updateSDK({ directory, id, version, signal }, { registryFe
     await rename(stage, completed); stage = undefined;
     aborted(signal);
     // Atomic activation is the only mutation visible to new helper processes.
-    // Existing generations are intentionally retained for live conversations.
-    const installed = { ...checked, generation, sdks: checked.sdks.map(sdk => updates.some(value => value.id === sdk.id)
+    // `activated` tells the machine's Woven server to restart bots onto it too.
+    const installed = { ...checked, generation, activated: true, sdks: checked.sdks.map(sdk => updates.some(value => value.id === sdk.id)
       ? { ...sdk, installedVersion: sdk.latestVersion, consistent: true, updateAvailable: false, notice: undefined }
-      : sdk), notice: 'SDK updated. Running turns finish with their current SDK; new turns use the update.' };
+      : sdk), notice: 'SDK updated.' };
     await atomicJSON(p.active, { base: before.base, generation });
+    // The verified update replaces the copy it was installed over: delete that
+    // generation now, even if a running conversation still uses it. The bundled
+    // copy is part of Woven Matter and stays. No other copy is cleaned up here.
+    if (before.root !== bundledRoot) await rm(before.root, { recursive: true, force: true }).catch(() => {});
     // No fallible metadata reads after activation: a late cancellation/error
     // must never claim that the previous generation was kept after this commit.
     return installed;

@@ -244,9 +244,11 @@ before activation; an already activated installation remains installed.
 
 Updates run as the host's service account and persist in its managed data
 directory. They do not modify the separately installed agent CLIs. Package
-installation stages an immutable generation and verifies it before activation.
-Running conversations retain their generation; the service only replaces an
-idle worker. Scheduled tasks hold a runtime lease from session setup through
+installation stages an immutable generation and verifies it before activation,
+then deletes the generation it replaced, even if a running conversation still
+uses it; the service only replaces an idle worker. The host's bots load the
+same copy, so a running bots runtime restarts onto the update, and an
+activating update's response carries `activated: true`. Scheduled tasks hold a runtime lease from session setup through
 completion so an update cannot split their model, permission, and prompt setup
 between workers. Opening SDK settings does not update or start a host.
 

@@ -472,6 +472,8 @@ class HostFixtures(unittest.TestCase):
         self.assertFalse(any('playwright-core/cli.js' in ' '.join(call) for call in self.calls),'a bots-only server installs no host browser')
         self.assertFalse((self.m.ROOT/'browsers/current').exists())
         self.assertTrue(any(call[-1].endswith('--no-fund') and str(self.m.ROOT/'releases') in ' '.join(call) and '/bots' in call[call.index('--prefix')+1] for call in self.calls if 'ci' in call))
+        # Bots load the default agent's SDK copy, so their own is pruned after npm ci.
+        self.assertTrue(any(str(call[-2]).endswith('host/prune-bots-sdk.py') and str(call[-1]).endswith('/bots') for call in self.calls))
         [engine]=self.engine_calls
         self.assertEqual(engine[:4],[str(self.m.ROOT/'releases'/fp/'host/bots-engine.py'),'--instance','wovenmatter','install'])
         self.assertEqual(engine[engine.index('--docker-version')+1],'29.9.3')

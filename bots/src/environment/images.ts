@@ -3,6 +3,7 @@ import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { sdkNodeModules } from "../pi-durable-sdk.ts";
 import type { DockerEngineAPI } from "./engine-api.ts";
 import { createTar, directoryEntries, readTar as readTarEntries, type TarEntry } from "./tar.ts";
 
@@ -30,7 +31,10 @@ const TOOLCHAIN_DIR = "toolchain";
 export const helperDir = (hash: string) => `${SHARED_MOUNT}/helper/${hash}`;
 export const toolchainDir = (hash: string) => `${SHARED_MOUNT}/toolchain/${hash}`;
 
-/** The packages the in-container env agent imports, copied from the runtime's own install. */
+/**
+ * The packages the in-container env agent imports, copied from the Pi Durable SDK copy the
+ * runtime loads (`pi-durable-sdk.ts`), or its own install without one (tests, a checkout).
+ */
 const HELPER_PACKAGES = [
   "@earendil-works/pi-durable",
   "@earendil-works/chord",
@@ -92,7 +96,7 @@ export async function toolchainContext(dir = IMAGE_DIR, sourceRoot = SOURCE_ROOT
 /** The helper's files: its scripts and the runtime packages they import (no maps or typings). */
 export async function helperArchive(
   helperDir = HELPER_DIR,
-  nodeModules = NODE_MODULES_DIR,
+  nodeModules = sdkNodeModules() ?? NODE_MODULES_DIR,
 ): Promise<{ readonly tar: Buffer; readonly hash: string }> {
   const entries: TarEntry[] = await directoryEntries(helperDir, {
     include: (path) => !path.includes("/") && path.endsWith(".mjs"),

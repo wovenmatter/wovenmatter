@@ -21,8 +21,9 @@ click it to open the page.
   - **Update just the bots**, on the device that runs them. The row shows the
     tools in their containers (Ubuntu, Node, and Playwright with Chromium).
     Bots are part of Woven Matter, so they have no version of their own.
-  - each harness (Pi Durable SDK, Codex, Claude Code, Grok Build, OpenCode,
-    and Executor) with its versions and its own **Update**
+  - each harness (Pi Durable and bots, Codex, Claude Code, Grok Build,
+    OpenCode, and Executor) with its versions and its own **Update**. Bots run
+    the SDKs of Pi Durable on their device, so one update covers both.
 
   A device that is offline shows the last version it reported. A device running
   an older Woven Matter shows its harnesses once it's updated.

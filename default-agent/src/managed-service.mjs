@@ -161,9 +161,10 @@ export function createManagedDefaultAgentService({ cwd, directory, environment =
         const installed = await update;
         // Installation already committed. Runtime replacement is a separate
         // phase; a failed restart cannot turn that success into an install error.
+        const activated = installed.activated ? { activated: true } : {};
         try {
           if (worker) await selected(() => {});
-          return await inventory();
+          return { ...await inventory(), ...activated };
         } catch {
           return { ...installed, pendingActivation: true,
             notice: 'SDK installed. The workspace runtime could not restart yet. Reconnect the workspace to retry.' };

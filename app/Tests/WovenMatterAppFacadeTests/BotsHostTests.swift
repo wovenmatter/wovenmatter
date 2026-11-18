@@ -51,13 +51,13 @@ private final class HostFixture {
     let host: BotsHostController
     let supervisor: BotsRuntimeSupervisor
 
-    init(configure: (inout BotsHostDependencies) -> Void = { _ in }) throws {
+    init(defaultAgent: URL? = nil, configure: (inout BotsHostDependencies) -> Void = { _ in }) throws {
         directory = FileManager.default.temporaryDirectory.appending(path: "bots-host-\(UUID().uuidString)")
         let bundleRoot = directory.appending(path: "bundle")
         try FileManager.default.createDirectory(at: bundleRoot.appending(path: "src"), withIntermediateDirectories: true)
         try Data("export {}".utf8).write(to: bundleRoot.appending(path: "src/cli.ts"))
         try Data(#"{"name":"bots","version":"0.3.1"}"#.utf8).write(to: bundleRoot.appending(path: "package.json"))
-        let bundle = BotsRuntimeBundle(node: URL(fileURLWithPath: "/usr/bin/true"), root: bundleRoot)
+        let bundle = BotsRuntimeBundle(node: URL(fileURLWithPath: "/usr/bin/true"), root: bundleRoot, defaultAgent: defaultAgent)
         engine = FakeEngine(socket: directory.appending(path: "docker.sock").path)
         let state = directory.appending(path: "Bots")
         var launches: [[String]] = []
@@ -166,6 +166,34 @@ struct BotsHostTests {
         _ = try await fixture.host.perform(.setEnabled(false))
         #expect(fixture.engine.stopped == 1 && fixture.supervisor.phase == .stopped)
         #expect(await fixture.host.snapshot().machines.first?.state == .off)
+    }
+
+    @Test func botsRunThisMacsPiDurableSDKAndRestartOntoItsUpdate() async throws {
+        let defaultAgent = URL(fileURLWithPath: "/Applications/Woven Matter.app/Contents/Resources/default-agent")
+        let fixture = try HostFixture(defaultAgent: defaultAgent); defer { fixture.remove() }
+        // An update while bots are off restarts nothing; they resolve the copy when they start.
+        NotificationCenter.default.post(name: DefaultAgentSDKControl.sdkActivated, object: nil)
+        _ = try await fixture.host.perform(.setEnabled(true))
+        try await waitFor("runtime") { fixture.supervisor.phase == .running }
+        fixture.sync()
+        #expect(fixture.launches.count == 1)
+        // The runtime is told where Pi Durable is, and takes its Claude binary from that copy.
+        let config = try fixture.config()
+        let piDurable = try #require(config["piDurable"] as? [String: Any])
+        #expect(piDurable["bundle"] as? String == defaultAgent.path)
+        #expect(piDurable["directory"] as? String == BotsRuntimeBundle.piDurableDirectory().path)
+        #expect(config["claude"] == nil)
+
+        NotificationCenter.default.post(name: DefaultAgentSDKControl.sdkActivated, object: nil)
+        try await waitFor("restart") { fixture.sync(); return fixture.launches.count == 2 }
+        try await waitFor("runtime") { fixture.supervisor.phase == .running }
+        _ = try await fixture.host.perform(.setEnabled(false))
+    }
+
+    @Test func piDurablesSDKDirectoryIsTheOneItsHelpersUse() {
+        #expect(BotsRuntimeBundle.piDurableDirectory(environment: ["WOVEN_DEFAULT_AGENT_DIRECTORY": "/w/agent", "HOME": "/h"]).path == "/w/agent")
+        #expect(BotsRuntimeBundle.piDurableDirectory(environment: ["HOME": "/h"]).path == "/h/.wovenmatter/default-agent")
+        #expect(BotsRuntimeBundle(node: URL(fileURLWithPath: "/n"), root: URL(fileURLWithPath: "/b")).piDurable == nil)
     }
 
     @Test func botsMoveBetweenMachinesThroughOneCommand() async throws {

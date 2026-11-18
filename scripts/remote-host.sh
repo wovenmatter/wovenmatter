@@ -785,10 +785,9 @@ def install(workspace_id,requested_port,mode,fingerprint,updating=False,roles=No
         # bots later needs no new install; a bots role requires it.
         if (release/'bots/package-lock.json').is_file():
             run([node_root/'bin/node',npm_cli,'ci','--prefix',release/'bots','--omit=dev','--ignore-scripts','--no-audit','--no-fund'],check=True,timeout=600,env=environment)
-            # Bots run the default agent's Claude binary (runtime config
-            # claude.executable), so their own copy is not kept.
-            for native in (release/'bots/node_modules/@anthropic-ai').glob('claude-agent-sdk-*'):
-                if native.is_dir() and not native.is_symlink(): shutil.rmtree(native)
+            # Bots load the SDK copy the default agent runs, and its Claude
+            # binary (bots/src/pi-durable-sdk.ts), so their own copy is not kept.
+            run([sys.executable,'-I',release/'host/prune-bots-sdk.py',release/'bots'],check=True,timeout=120,env=environment)
         elif roles['bots']: fail('bots_runtime_missing','This release does not include the bots runtime.',78)
         playwright_version=versions['playwrightVersion']
         if not re.fullmatch(r'\d+\.\d+\.\d+',playwright_version): fail('invalid_runtime_record','Invalid pinned Playwright version.',78)

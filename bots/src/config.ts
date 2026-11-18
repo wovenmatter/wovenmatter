@@ -82,12 +82,25 @@ export const runtimeConfigSchema = z.strictObject({
     name: z.string().min(1).max(200),
   }),
   /**
-   * The Claude runtime binary the machine's default agent ships (absolute), so the bots
-   * package carries no second copy. Omitted: the SDK's own platform package, if installed.
+   * This machine's Pi Durable (absolute paths): bots load the SDK copy it runs, with that
+   * copy's Claude binary (`pi-durable-sdk.ts`). The Woven server always sends it.
+   */
+  piDurable: z
+    .strictObject({
+      bundle: z.string().min(1).max(4096).refine(isAbsolute, "must be absolute"),
+      directory: z.string().min(1).max(4096).refine(isAbsolute, "must be absolute"),
+    })
+    .optional(),
+  /**
+   * A Claude runtime binary (absolute), for tests and checkouts without `piDurable`.
+   * Omitted: the SDK's own platform package, if installed.
    */
   claude: z
     .strictObject({ executable: z.string().min(1).max(4096).refine(isAbsolute, "must be absolute") })
     .optional(),
+}).refine((value) => !(value.piDurable && value.claude), {
+  message: "piDurable supplies the Claude binary; omit claude",
+  path: ["claude"],
 });
 
 export type RuntimeConfig = z.infer<typeof runtimeConfigSchema> & {

@@ -71,6 +71,7 @@ const catalog = new Map(catalogDocument.harnesses.map((entry) => [entry.id, entr
 // Pi Durable's tools run in this worker, so it gets the same no-prompt session environment.
 // This host stores and renews its own sign-ins in its device vault; no other
 // device holds its key or relays credentials to it.
+// Pi Durable's SDK workspace too; this machine's bots load the SDK copy it selects.
 const defaultAgentDirectory = resolve(workspaceRoot, '.wovenmatter/default-agent')
 const defaultAgent = createManagedDefaultAgentService({ cwd: workspaceRoot, directory: defaultAgentDirectory, environment: { ...nonInteractiveSessionEnvironment(process.env, configuration), WOVEN_DEFAULT_AGENT_DEVICE_VAULT: '1' } })
 const deviceSignIns = new CredentialVault(defaultAgentDirectory)
@@ -246,7 +247,7 @@ const github = library ? createGitHubService({ directory: githubDirectory(config
   fetchCopy: () => library.client.json('GET', '/v1/github', { timeout: 10_000 }),
   log: message => process.stderr.write(message + '\n') }) : null
 const bots = nativeLinuxHost ? createBotsService({
-  configuration, mcp: clientExecution.mcp, release: hostRelease, defaultAgent, serverPort: () => server.address()?.port ?? listenPort,
+  configuration, mcp: clientExecution.mcp, release: hostRelease, defaultAgent, defaultAgentDirectory, serverPort: () => server.address()?.port ?? listenPort,
   libraryHost: library, memberIdentity, registry: memberSockets, installerBearer, github,
   // Signed members, or the installer bearer on the SSH tunnel only; device grants open nothing.
   authorizeClient: request => authorizeBotsUpgrade(request, { members, servedTargets, installerBearer }),
@@ -526,7 +527,7 @@ const server = createServer({ maxHeaderSize: 16_384, headersTimeout: 10_000,
       return json(response, 200, { statuses });
     }
     if (url.pathname === '/v1/default-agent/sdks' && ['GET', 'POST'].includes(request.method)) {
-      return json(response, 200, await defaultAgentSDKRequest(request, response, defaultAgent))
+      return json(response, 200, await defaultAgentSDKRequest(request, response, defaultAgent, { onActivated: () => bots?.piDurableSDKUpdated() }))
     }
     if (url.pathname === '/v1/default-agent/configuration'  && request.method === 'POST') {
       const payload = await readJSON(request)
@@ -1455,7 +1456,8 @@ async function readJSON(request, maximumBytes = 1_048_576) {
 
 // Status reads package metadata only. Registry access and installation are always
 // explicit requests, and installation belongs to this workspace's service owner.
-export async function defaultAgentSDKRequest(request, response, service) {
+// One update covers Pi Durable and this machine's bots: a new SDK copy restarts them too.
+export async function defaultAgentSDKRequest(request, response, service, { onActivated = async () => {} } = {}) {
   if (request.method === 'GET') return service.sdkStatus()
   const body = await readJSON(request, 4_096)
   if (!body || typeof body !== 'object' || Array.isArray(body)
@@ -1476,9 +1478,11 @@ export async function defaultAgentSDKRequest(request, response, service) {
   if (request.aborted || response.destroyed) abort()
   try {
     controller.signal.throwIfAborted()
-    return body.action === 'check'
-      ? await service.checkSDKUpdates({ id: body.id ?? undefined, signal: controller.signal })
-      : await service.updateSDK({ id: body.id ?? undefined, version: body.version ?? undefined, signal: controller.signal })
+    if (body.action === 'check') return await service.checkSDKUpdates({ id: body.id ?? undefined, signal: controller.signal })
+    const result = await service.updateSDK({ id: body.id ?? undefined, version: body.version ?? undefined, signal: controller.signal })
+    // The update already committed; a failed bots restart retries on its own.
+    if (result?.activated) await Promise.resolve().then(onActivated).catch(() => {})
+    return result
   } finally {
     clearTimeout(timeout)
     request.removeListener('aborted', abort)
