@@ -1,6 +1,8 @@
 // Install an ACP adapter as one immutable npm graph in Woven Matter's folder. The adapter
 // drives the person's own native CLI (CODEX_PATH / CLAUDE_CODE_EXECUTABLE), never a copy
-// bundled inside its package, so no engine is selected or checked here.
+// bundled inside its package, so no engine is selected or checked here. That bundled copy
+// arrives only as npm optional platform packages (@openai/codex-<platform>,
+// @anthropic-ai/claude-agent-sdk-<platform>), each a full CLI build, so they are never installed.
 import { spawn } from 'node:child_process';
 import { existsSync, realpathSync } from 'node:fs';
 import { createRequire } from 'node:module';
@@ -69,7 +71,8 @@ export async function verifyAdapter(executable, adapterVersion, environment) {
 export async function installAdapter({ prefix, adapter, adapterVersion, protocolSDKVersion, npm, cli }) {
   const selection = adapters[adapter];
   if (!selection || !exact(adapterVersion) || !Array.isArray(npm) || !npm.length || npm.some(x => typeof x !== 'string')) throw new Error('Invalid adapter selection.');
-  if (cli !== undefined && (typeof cli !== 'string' || !cli.startsWith('/'))) throw new Error('Invalid CLI selection.');
+  // Without the native CLI an adapter would fall back to the copy bundled inside it.
+  if (typeof cli !== 'string' || !cli.startsWith('/')) throw new Error('Adapter installation requires the native CLI it drives.');
   if (protocolSDKVersion !== undefined && !exact(protocolSDKVersion)) throw new Error('Invalid ACP SDK selection.');
   prefix = resolve(prefix);
   await mkdir(join(prefix, 'Installations'), { recursive: true, mode: 0o700 });
@@ -86,7 +89,7 @@ export async function installAdapter({ prefix, adapter, adapterVersion, protocol
     await writeFile(join(generation, 'package.json'), JSON.stringify({ private: true,
       dependencies, ...(Object.keys(overrides).length ? { overrides: { [adapter]: overrides } } : {}),
     }, null, 2) + '\n', { mode: 0o600 });
-    await run(npm[0], [...npm.slice(1), 'install', '--prefix', generation, '--omit=dev', '--ignore-scripts', '--no-audit', '--no-fund'], { cwd: generation });
+    await run(npm[0], [...npm.slice(1), 'install', '--prefix', generation, '--omit=dev', '--omit=optional', '--ignore-scripts', '--no-audit', '--no-fund'], { cwd: generation });
     const modules = join(generation, 'node_modules');
     const adapterManifest = join(modules, adapter, 'package.json');
     if ((await object(adapterManifest)).version !== adapterVersion) throw new Error('Installed adapter graph differs from its selection.');
@@ -105,10 +108,10 @@ export async function installAdapter({ prefix, adapter, adapterVersion, protocol
       CLAUDE_SECURESTORAGE_CONFIG_DIR: join(probeHome, 'storage'),
       CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1', DISABLE_TELEMETRY: '1', DISABLE_ERROR_REPORTING: '1' };
     for (const key of ['CODEX_HOME', 'XDG_CONFIG_HOME', 'CLAUDE_CONFIG_DIR', 'CLAUDE_SECURESTORAGE_CONFIG_DIR']) await mkdir(env[key], { recursive: true, mode: 0o700 });
-    if (cli) env[selection.cliVariable] = cli;
+    env[selection.cliVariable] = cli;
     const executable = join(modules, '.bin', selection.command);
     await verifyAdapter(executable, adapterVersion, env);
-    await writeFile(join(generation, 'verification.json'), JSON.stringify({ adapter, adapterVersion, cli: cli ?? null, protocolSDKVersion, protocolVersion: 1 }) + '\n', { mode: 0o600 });
+    await writeFile(join(generation, 'verification.json'), JSON.stringify({ adapter, adapterVersion, cli, protocolSDKVersion, protocolVersion: 1 }) + '\n', { mode: 0o600 });
     await rm(probeHome, { recursive: true, force: true });
     await mkdir(join(prefix, 'bin'), { recursive: true, mode: 0o700 });
     await symlink(executable, temporary);

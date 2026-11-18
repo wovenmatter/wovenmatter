@@ -1,4 +1,3 @@
-import { createRequire } from 'node:module'
 import { existsSync, constants as fsConstants } from 'node:fs'
 import { spawn } from 'node:child_process'
 import { readFile, writeFile, mkdir, rename, realpath, access } from 'node:fs/promises'
@@ -237,23 +236,6 @@ export function createRuntimeMaintenance({ catalog, workspaceRoot, environment, 
       if (packaged) adapter.installedVersion = packaged
       if (h.minimumAdapterVersion && precedes(adapter.installedVersion, h.minimumAdapterVersion)) adapter.installed = false
       components.push(adapter)
-      // The ACP protocol SDK is selected by Woven at install. Claude ACP's Claude Agent SDK is
-      // the adapter's own transport to the native CLI: it moves only with an adapter release.
-      for (const [id, name, minimum] of [['protocol-sdk', '@agentclientprotocol/sdk', h.minimumProtocolSDKVersion]]) {
-        if (!minimum) continue
-        let installed = null
-        try {
-          const manifest = resolve(root, 'package.json')
-          const paths = createRequire(manifest).resolve.paths(name)
-          for (const path of paths) {
-            const info = await packageAt(resolve(path, name))
-            if (info) { installed = normalizedVersion(info.version); break }
-          }
-        } catch {}
-        components.push({ id, displayName: name, path: adapter.path, source: adapter.source,
-          installedVersion: installed, latestVersion: null, package: name, required: true,
-          installed: installed !== null && !precedes(installed, minimum) })
-      }
     } else if (h.transportCheckCommand && cli.installed) {
       const probe = await run(h.transportCheckCommand)
       components.push({ id: 'transport', displayName: h.transport + ' transport', path: cli.path, source: cli.source, installedVersion: cli.installedVersion, latestVersion: null, required: true, installed: probe?.code === 0 })
@@ -261,7 +243,6 @@ export function createRuntimeMaintenance({ catalog, workspaceRoot, environment, 
     if (checkLatest) {
       cli.latestVersion = await latestCLI(h)
       if (adapter) adapter.latestVersion = await latest(h.adapterPackage)
-      for (const c of components) if (c.package) c.latestVersion = await latest(c.package)
       s.versionCheckAvailable = components.filter(c => c.id !== 'transport').every(c => c.latestVersion !== null)
     } else for (const c of components) c.latestVersion = previous.find(p => p.id === c.id)?.latestVersion ?? null
     for (const c of components) c.updateAvailable = c.source === 'npm' || (c.id !== 'transport' && c.source !== 'system' && c.source !== 'missing' && precedes(c.installedVersion, c.latestVersion))
@@ -285,8 +266,7 @@ export function createRuntimeMaintenance({ catalog, workspaceRoot, environment, 
   async function adapterInstallCommand(h) {
     const version = await latest(h.adapterPackage)
     if (!version || precedes(version, h.minimumAdapterVersion)) throw failure('adapter_version_below_minimum')
-    // Preserve the adapter manifest, selecting only its ACP protocol SDK independently.
-    // It is checked over ACP against the native CLI it
+    // The adapter installs as published and is checked over ACP against the native CLI it
     // drives (CODEX_PATH / CLAUDE_CODE_EXECUTABLE, config.mjs); the CLI copy npm bundles
     // inside its package is never selected or used. A CLI installed in this same action
     // lands at the official location.
@@ -316,7 +296,7 @@ export function createRuntimeMaintenance({ catalog, workspaceRoot, environment, 
         if (h.id === 'opencode' && before.openCodeV1 && body.replaceOpenCodeV1 !== true) throw failure('opencode_v1_replacement_confirmation_required')
         steps.push(await officialInstall())
       } else if (cli.source === 'npm') steps.push(await officialInstall())
-      if (adapter && adapter.source !== 'system' && (!adapter.installed || before.components.some(c => c.package && !c.installed))) steps.push({ kind: 'install', command: await adapterInstallCommand(h), timeout: installTimeout })
+      if (adapter && !adapter.installed) steps.push({ kind: 'install', command: await adapterInstallCommand(h), timeout: installTimeout })
       return steps
     }
     // Update: the vendor's own command for the CLI, wherever its installer put it,
@@ -326,7 +306,7 @@ export function createRuntimeMaintenance({ catalog, workspaceRoot, environment, 
     else if (cli.installed && cli.source === 'native' && (cli.updateAvailable || !cli.latestVersion)) {
       steps.push({ kind: 'update', command: [cli.path, ...nativeUpdateArguments(h)].map(quote).join(' '), timeout: updateTimeout })
     }
-    if (adapter && adapter.source !== 'system' && (adapter.updateAvailable || before.components.some(c => c.package && (c.updateAvailable || !c.installed)))) steps.push({ kind: 'update', command: await adapterInstallCommand(h), timeout: installTimeout })
+    if (adapter?.installed && adapter.updateAvailable) steps.push({ kind: 'update', command: await adapterInstallCommand(h), timeout: installTimeout })
     if (!steps.length && cli.source === 'system') throw failure('system_install_update_forbidden')
     return steps
   }

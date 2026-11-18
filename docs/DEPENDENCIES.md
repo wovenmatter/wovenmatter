@@ -358,7 +358,10 @@ Codex ACP 2.7.0 with Codex 0.169.1, and Claude ACP 0.108.0 with the Claude Agent
 (`CODEX_PATH`, `CLAUDE_CODE_EXECUTABLE`); a native Codex older than the minimum reads
 as needing its update. The CLI copy npm bundles inside each adapter package is never
 selected, checked or used, so `harnesses/install-adapter.mjs` installs the adapter as
-published, with no engine override. The native Claude CLI has no ACP mode: Claude ACP is
+published, with no engine override and without npm optional packages: those carry only
+the adapters' bundled platform CLI builds (`@openai/codex-<platform>`,
+`@anthropic-ai/claude-agent-sdk-<platform>`), and an install requires the native CLI's
+path. The native Claude CLI has no ACP mode: Claude ACP is
 an ACP server built on the Claude Agent SDK, whose `query()` starts the native CLI and
 talks to it over stdio. That SDK is the adapter's own transport, pinned by its release,
 so it moves only with an adapter update and is held to the catalog minimum rather than

@@ -35,10 +35,13 @@ test('real npm installs the adapter as published, pointed at the native CLI; fai
     metadata.set(name, versions);
   }
   await pack('@agentclientprotocol/sdk', '2.2.0', { 'index.js': 'exports.version = \"2.2.0\";' }, { bin: undefined });
+  // Vendors ship the full CLI build as optional platform packages; Woven never installs them.
+  const bundledBuild = '@openai/codex-fixture-platform';
+  await pack(bundledBuild, '0.165.4', { 'index.js': 'process.exit(9);' }, { bin: undefined });
   await pack(engine, '0.165.4', {
     'index.js': '#!/usr/bin/env node\nconsole.log("codex-cli 0.165.4");',
     'bin/codex.js': '#!/usr/bin/env node\nconsole.log("codex-cli 0.165.4");',
-  });
+  }, { optionalDependencies: { [bundledBuild]: '0.165.4' } });
   const nativeCLI = join(root, 'home/.local/bin/codex');
   const fixture = (version, protocol) => `#!/usr/bin/env node
     const fs = require('node:fs');
@@ -81,6 +84,7 @@ test('real npm installs the adapter as published, pointed at the native CLI; fai
   assert.equal(lock.packages['node_modules/@openai/codex'].version, '0.165.4', 'no engine is selected: the adapter keeps its own dependency');
   assert.equal(lock.packages['node_modules/@agentclientprotocol/codex-acp'].dependencies[engine], '^0.165.0', 'upstream manifest remains intact');
   for (const name of [adapter, engine]) assert.match(lock.packages['node_modules/' + name].integrity, /^sha512-/);
+  await assert.rejects(readFile(join(generation, 'node_modules', bundledBuild, 'package.json')), { code: 'ENOENT' }, 'the bundled CLI build is never installed');
   const verification = JSON.parse(await readFile(join(generation, 'verification.json'), 'utf8'));
   assert.equal(verification.engineVersion, undefined);
   assert.equal(verification.cli, nativeCLI);
@@ -90,6 +94,7 @@ test('real npm installs the adapter as published, pointed at the native CLI; fai
   assert.equal(lock.packages['node_modules/' + adapter].dependencies['@agentclientprotocol/sdk'], '2.1.0');
   assert.match(lock.packages['node_modules/@agentclientprotocol/sdk'].integrity, /^sha512-/);
   await assert.rejects(installAdapter({ ...options, adapterVersion: '2.6.0' }), /ACP v1 verification/);
+  await assert.rejects(installAdapter({ ...options, cli: undefined }), /requires the native CLI/);
   assert.equal(await readlink(executable), target, 'failed candidate must not retire or replace the working graph');
   assert.equal((await readdir(join(prefix, 'Installations'))).length, 1, 'failed generation is removed');
 });
