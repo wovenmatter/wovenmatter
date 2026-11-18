@@ -150,7 +150,7 @@ change, change this document in the same commit.
     otherwise collect requests to replay there): a member list entry
     (`deviceID` beside its `endpoints`; peer sync, Node's Mac delegate, the
     phone's host choice) or, for a workspace (execution, bots, host
-    administration, inference, `/mcp/workspace`), `MemberAudience.serving`
+    administration, `/mcp/workspace`), `MemberAudience.serving`
     (shared Swift; Node `createMemberTransport().audienceFor`): the
     registry's `executionDeviceID` when that is an active member, or a Mac
     workspace's (a Mac's execution device is its member ID). A Linux host
@@ -183,8 +183,8 @@ change, change this document in the same commit.
   The list is cached by `revision`, reloaded every 15 seconds and, at most
   every 2 seconds, when an unknown device signs.
 - On the Linux server (`remote/src/server.mjs`, `member-auth.mjs`), a signed
-  request from any member gets what a device grant had: execution and
-  inference routes, `GET /v1/bots/status|resources` and `GET /v1/bots/ws`. A
+  request from any member gets what a device grant has: execution
+  routes, `GET /v1/bots/status|resources` and `GET /v1/bots/ws`. A
   `mac` member is also an administrator, like the installing Mac's bearer:
   every administrator route, the bots changes and `/v1/host/*`. The bearers
   it still accepts are listed under "Bearers that remain".
@@ -993,8 +993,10 @@ hands them to the macOS job, which checks them with
   endpoint (each Mac's own and each Linux workspace) gets a signed direct
   client. No execution grant is issued, stored or presented.
 - **Inference.** Quick Chat uses only the sign-ins and keys saved on that
-  phone; a Mac does not host inference for it. A connection a Mac hosted
-  before v0.4.6 is dropped when the phone loads its preferences.
+  phone; no Mac or Linux host serves inference for it (a Linux host refuses
+  `/v1/inference/*` with `403 inference_not_served`). A connection a Mac
+  hosted before v0.4.6 is dropped when the phone loads its preferences, and a
+  Quick Chat that was mid-run on one is stopped.
 - **Analytics.** Only Macs record product analytics (a Linux host answers
   `unsupported`). Each synchronization picks the analytics connection again
   (`MobileLibraryHosts.analyticsTransport`): the current host when it is a
@@ -1067,7 +1069,7 @@ whose stream is connected; the iPhone's no-stream fallback is under "Clients".
 - **What moves where.** History moves only by library sync. The live view of a
   session (its transcript as it is written, run state, questions and
   approvals, capabilities) and commands move on the stream. Older history
-  pages, attachments (`GET v1/execution/attachments/<sha256>`), the browser screencast, inference, bots and library sync
+  pages, attachments (`GET v1/execution/attachments/<sha256>`), the browser screencast, bots and library sync
   stay on their signed HTTP routes.
 
 ### Endpoint and authentication
