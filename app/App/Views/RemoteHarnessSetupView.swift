@@ -17,9 +17,17 @@ struct RemoteHarnessSetupView: View {
     @State private var installQueue: [AgentRuntimeKind] = []
     @State private var requestedStage: String?
     @State private var notice: String?
+    @State private var startingInstall = false
     private var model: RemoteWorkspacesModel { application.remoteWorkspaces }
     private var theme: WovenTheme { WovenTheme(rawValue: themeRawValue) ?? .green }
-    private var busy: Bool { model.busyWorkspaceIDs.contains(workspace.id) }
+    private var busy: Bool { model.busyWorkspaceIDs.contains(workspace.id) || installing }
+    /// An install or check is running, or a change that isn't a sign-in holds the workspace.
+    /// The queue moves on when this clears; a person signing in doesn't hold it up.
+    private var installing: Bool {
+        model.maintainingHarnesses[workspace.id]?.isEmpty == false
+            || model.checkingRuntimeIDs[workspace.id]?.isEmpty == false
+            || (model.busyWorkspaceIDs.contains(workspace.id) && model.signingInHarnesses[workspace.id] == nil)
+    }
 
     init(application: ApplicationModel, workspace: RemoteWorkspaceConfiguration, onClose: @escaping () -> Void) {
         self.application = application
@@ -84,7 +92,7 @@ struct RemoteHarnessSetupView: View {
             model.refresh(workspace)
         }
         .onChange(of: selection.selected) { _, _ in savedSelection = selection.ordered.map(\.rawValue).joined(separator: ",") }
-        .onChange(of: busy) { _, busy in if !busy { advanceInstall() } }
+        .onChange(of: installing) { _, installing in if !installing { advanceInstall() } }
     }
 
     private var choices: some View {
@@ -115,7 +123,7 @@ struct RemoteHarnessSetupView: View {
 
     private var accounts: some View {
         VStack(alignment: .leading, spacing: 16) {
-            if !installQueue.isEmpty { SettingsNote("Setting up \(installQueue[0].displayName)… Review its installer to continue.") }
+            if !installQueue.isEmpty { SettingsNote("Installing \(installQueue[0].displayName)…") }
             ForEach(selection.ordered, id: \.self) { kind in
                 DisclosureGroup(isExpanded: Binding(get: { expanded.contains(kind) }, set: { if $0 { expanded.insert(kind) } else { expanded.remove(kind) } })) {
                     if kind == .defaultAgent {
@@ -143,7 +151,7 @@ struct RemoteHarnessSetupView: View {
     }
 
     private func advanceInstall() {
-        guard !busy, model.preparedHarnessAction == nil, let kind = installQueue.first else { return }
+        guard !installing, !startingInstall, model.preparedHarnessAction == nil, let kind = installQueue.first else { return }
         guard let runtime = model.runtimeMaintenance[workspace.id]?.first(where: { $0.id == kind }),
               let harness = model.currentHarnesses(for: workspace).first(where: { $0.id == kind }) else {
             notice = "Connect the workspace and retry to install the selected harnesses."
@@ -154,7 +162,18 @@ struct RemoteHarnessSetupView: View {
             installQueue.removeFirst(); requestedStage = nil; advanceInstall()
         } else if requestedStage == nil {
             requestedStage = "install"
-            model.prepareHarnessAction("install", harness: harness, configuration: workspace)
+            startingInstall = true
+            Task {
+                let refused = await model.startHarnessMaintenance("install", harness: harness, configuration: workspace)
+                startingInstall = false
+                guard installQueue.first == kind, requestedStage == "install" else { return }
+                if let refused {
+                    notice = "\(kind.displayName) didn't start installing. \(refused)"
+                    installQueue = []; requestedStage = nil
+                } else if !installing {
+                    advanceInstall()
+                }
+            }
         } else {
             notice = "\(kind.displayName) could not finish setup. Review its status below, then retry."
             installQueue = []; requestedStage = nil

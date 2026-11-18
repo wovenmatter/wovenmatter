@@ -31,7 +31,7 @@ async function runOpenCode({run,config,cwd,instances,read,fetchRequest,nativeSes
   const presentation=new OpenCodeTaskStream(update=>publishNativePresentation(update,publish))
   try {
     await instances.action('opencode','start')
-    const registration=parseRegistration(await read(instances.registrationPath,'utf8')),origin=new URL(registration.url)
+    const registration=parseRegistration(await read(instances.registrationPath(),'utf8')),origin=new URL(registration.url)
     if(origin.protocol!=='http:'||!['127.0.0.1','localhost','[::1]'].includes(origin.hostname)||origin.username||origin.password||origin.pathname!=='/'||origin.search||origin.hash||typeof registration.password!=='string'||!registration.password)throw before('OpenCode service registration is unavailable.')
     const headers={authorization:`Basic ${Buffer.from('opencode:'+registration.password).toString('base64')}`,'content-type':'application/json'}
     call=async(method,path,body,ignoreAbort=false)=>{const result=await fetchRequest(new URL(path,origin),{method,headers,body:body==null?undefined:JSON.stringify(body),redirect:'error',signal:ignoreAbort?AbortSignal.timeout(5000):AbortSignal.any([signal,AbortSignal.timeout(30000)])});if(!result.ok)throw new Error('OpenCode could not complete the task operation.');if(result.status===204)return {};return result.json()}

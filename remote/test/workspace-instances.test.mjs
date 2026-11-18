@@ -1,6 +1,5 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { EventEmitter } from 'node:events'
 import { createServer } from 'node:http'
 import { Readable, Writable } from 'node:stream'
 import { createWorkspaceInstances } from '../src/workspace-instances.mjs'
@@ -30,36 +29,52 @@ test('reject non-loopback, credentials in URL, malformed PID and incompatible se
   await assert.rejects(incompatible.action('opencode', 'stop'), /version_incompatible/)
 })
 
-test('startup is serialized, version checked, loopback bound and workspace state isolated', async () => {
-  let registered = false, release, ownedChild, unlocks = 0
+test('start uses OpenCode\u2019s shared background service, the one the terminal and desktop app use', async () => {
+  let started = false, release, unlocks = 0
   const gate = new Promise((done) => { release = done })
+  const calls = []
   const instances = fixture({
-    readFile: async () => { if (!registered) throw Object.assign(new Error(), { code: 'ENOENT' }); return JSON.stringify(info) },
-    execFile: async (command, args) => { assert.equal(command, 'opencode'); assert.deepEqual(args, ['--version']); await gate; return { stdout: fixtureVersion } },
-    mkdir: async () => {},
-    acquireLock: async (path, _environment, _cwd, shared) => {
-      assert.equal(path, '/host/home/.wovenmatter/runtime-operation.lock'); assert.equal(shared, true)
-      return () => { unlocks++ }
+    readFile: async (path) => {
+      assert.equal(path, '/host/home/.local/state/opencode/service.json')
+      if (!started) throw Object.assign(new Error(), { code: 'ENOENT' })
+      return JSON.stringify(info)
     },
-    spawn: (command, args, options) => {
-      assert.equal(command, 'opencode')
-      assert.deepEqual(args, ['serve', '--service', '--hostname', '127.0.0.1'])
-      assert.equal(options.env.XDG_STATE_HOME, '/remote/project/.woven-matter/opencode-state')
-      assert.equal(options.cwd, '/remote/project')
-      registered = true
-      ownedChild = Object.assign(new EventEmitter(), { exitCode: null })
-      return ownedChild
+    execFile: async (command, args, options) => {
+      calls.push([command, ...args])
+      if (args[0] === '--version') { await gate; return { stdout: command === 'opencode' ? '1.19.5' : 'opencode v' + fixtureVersion } }
+      assert.deepEqual(args, ['service', 'start'])
+      assert.equal(command, 'opencode2', 'the v2 alias runs when opencode is v1')
+      assert.equal(options.env.XDG_STATE_HOME, undefined, 'no private state directory')
+      started = true
+      return { stdout: '' }
+    },
+    acquireLock: async (path, _environment, _cwd, shared) => {
+      assert.equal(path, '/host/home/.wovenmatter/runtime-operation-opencode.lock'); assert.equal(shared, true)
+      return () => { unlocks++ }
     },
   })
   const first = instances.action('opencode', 'start')
   await assert.rejects(instances.action('opencode', 'start'), /operation_in_progress/)
   release(); await first
+  assert.deepEqual(calls.at(-1), ['opencode2', 'service', 'start'])
+  assert.equal(unlocks, 1, 'the lock is held only while starting; the service outlives Woven')
   const publicStatus = await instances.status('opencode')
+  assert.equal(publicStatus.state, 'running')
   assert.equal(JSON.stringify(publicStatus).includes(info.password), false)
   assert.equal(JSON.stringify(publicStatus).includes(Buffer.from('opencode:' + info.password).toString('base64')), false)
-  assert.equal(unlocks, 0, 'server must hold lock after startup completes')
-  ownedChild.exitCode = 0; ownedChild.emit('close', 0)
-  assert.equal(unlocks, 1)
+  assert.equal(await instances.hasActiveRuntime('opencode'), false, 'a running service does not block an upgrade')
+})
+
+test('an upgrade restarts the running shared service, and leaves a stopped one stopped', async () => {
+  const calls = []
+  const running = fixture({ execFile: async (command, args) => { calls.push(args.join(' ')); return { stdout: args[0] === '--version' ? fixtureVersion : '' } } })
+  await running.restartIfRunning()
+  assert.deepEqual(calls, ['--version', 'service restart'])
+  calls.length = 0
+  const stopped = fixture({ readFile: async () => { throw Object.assign(new Error(), { code: 'ENOENT' }) },
+    execFile: async (command, args) => { calls.push(args.join(' ')); return { stdout: '' } } })
+  await stopped.restartIfRunning()
+  assert.deepEqual(calls, [])
 })
 
 test('streaming proxy uses host Basic auth, strips client bearer and cookies, preserves SSE', async () => {

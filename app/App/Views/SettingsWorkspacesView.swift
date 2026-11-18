@@ -262,7 +262,7 @@ struct SettingsWorkspacesView: View {
     var body: some View {
         workspaceConfirmations
         .confirmationDialog(
-            "Confirm harness \(model.preparedHarnessAction?.action ?? "change")?",
+            "Replace OpenCode 1?",
             isPresented: Binding(
                 get: { setupWorkspace == nil && model.preparedHarnessAction?.action != nil && model.preparedHarnessAction?.action != "update" },
                 set: {
@@ -278,7 +278,7 @@ struct SettingsWorkspacesView: View {
             ),
             titleVisibility: .visible
         ) {
-            Button("Confirm \(model.preparedHarnessAction?.action.capitalized ?? "Change")") {
+            Button("Install OpenCode 2") {
                 if let prepared = model.preparedHarnessAction,
                    prepared.action != "update" {
                     model.confirmPreparedHarnessAction(
@@ -299,12 +299,12 @@ struct SettingsWorkspacesView: View {
                 }
             }
         } message: {
+            // Installs and updates run without review; the one question left is OpenCode 2
+            // replacing OpenCode 1's command on a host.
             if let prepared = model.preparedHarnessAction {
-                if let sha256 = prepared.preview.sha256 {
-                    Text("Source: \(prepared.preview.source)\nSHA-256: \(sha256)\nThe service will download the source again and refuse to run it if this digest changes.")
-                } else {
-                    Text("Source: \(prepared.preview.source)\nPackage-manager integrity verification applies.\nCommand: \(prepared.preview.command)")
-                }
+                let version = model.runtimeMaintenance[prepared.configuration.id]?
+                    .first(where: { $0.id == .opencode })?.openCodeV1?.version ?? "1"
+                Text(OpenCodeServiceLauncher.replacementNotice(replacing: version, on: prepared.configuration.name))
             }
         }
     }
@@ -369,7 +369,13 @@ struct SettingsWorkspacesView: View {
     }
 
     private func statusLabel(_ workspace: RemoteWorkspaceConfiguration) -> String {
-        model.busyWorkspaceIDs.contains(workspace.id) ? "Working" : (model.statuses[workspace.id]?.state.capitalized ?? "Unknown")
+        model.busyWorkspaceIDs.contains(workspace.id) || maintainingHarnesses(workspace)
+            ? "Working" : (model.statuses[workspace.id]?.state.capitalized ?? "Unknown")
+    }
+
+    /// Start, stop, server updates and removal wait for harness installs and updates there.
+    private func maintainingHarnesses(_ workspace: RemoteWorkspaceConfiguration) -> Bool {
+        model.maintainingHarnesses[workspace.id]?.isEmpty == false
     }
 
     private func workspaceRow(
@@ -390,6 +396,7 @@ struct SettingsWorkspacesView: View {
     ) -> some View {
         let status = model.statuses[workspace.id]
         let busy = model.busyWorkspaceIDs.contains(workspace.id)
+        let maintaining = maintainingHarnesses(workspace)
         return SettingsSection {
             SettingsRow(title: "Status") {
                 SettingsStatus(statusLabel(workspace), tone: status?.running == true ? .good : .warning)
@@ -400,18 +407,20 @@ struct SettingsWorkspacesView: View {
                 Menu("Manage") {
                     if let status {
                         Button("Start") { model.lifecycle(.start, configuration: workspace) }
-                            .disabled(status.running)
+                            .disabled(status.running || maintaining)
                         Button("Stop") { model.lifecycle(.stop, configuration: workspace) }
-                            .disabled(!status.running)
+                            .disabled(!status.running || maintaining)
                         Button("Restart") { model.lifecycle(.restart, configuration: workspace) }
-                            .disabled(!status.running)
+                            .disabled(!status.running || maintaining)
                         Divider()
                     }
                     Button("Update server") { model.updateHost(workspace) }
+                        .disabled(maintaining)
                     Button("View browser") { browserWorkspace = workspace }
                     Button("Logs") { model.loadLogs(workspace); logsWorkspace = workspace }
                     Divider()
                     Button("Uninstall…", role: .destructive) { pendingDeletion = workspace }
+                        .disabled(maintaining)
                 }
                 .menuStyle(.button)
                 .fixedSize()
@@ -420,6 +429,9 @@ struct SettingsWorkspacesView: View {
             }
             if status == nil {
                 SettingsEmpty("Reconnect to load this workspace's current status.")
+            }
+            if maintaining {
+                SettingsNote("Harnesses are installing or updating. Stopping, updating or removing this workspace waits until they finish.")
             }
             if let warning = status?.storageWarning, !warning.isEmpty {
                 storageWarning(warning)

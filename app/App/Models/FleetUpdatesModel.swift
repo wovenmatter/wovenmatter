@@ -18,8 +18,8 @@ enum FleetUpdateScope: String, Codable, Sendable {
 }
 
 /// One harness, or a workspace's Pi Durable SDKs, on one device.
-struct FleetHarness: Identifiable, Equatable {
-    enum Location: Hashable {
+struct FleetHarness: Identifiable, Equatable, Sendable {
+    enum Location: Hashable, Sendable {
         case thisMac
         /// A Linux workspace this Mac added.
         case workspace(UUID)
@@ -27,7 +27,7 @@ struct FleetHarness: Identifiable, Equatable {
         /// signature (its device ID).
         case member(String)
     }
-    enum Kind: Hashable {
+    enum Kind: Hashable, Sendable {
         case runtime(AgentRuntimeKind)
         case piDurableSDK
         /// The Executor runtime behind Woven MCP's app tools, wherever it runs.
@@ -85,32 +85,11 @@ final class FleetUpdatesModel {
         let id: String
         let text: String
         var conversationID: String?
-        /// A workspace's OpenCode server, stopped before its OpenCode updates.
-        var openCodeServer: UUID?
     }
     struct BusyConfirmation: Identifiable {
         let id = UUID()
         let request: Request
         let items: [BusyItem]
-    }
-
-    /// Every download a Linux host would run, reviewed once before any of them start.
-    struct DownloadReview: Identifiable {
-        struct Item: Identifiable {
-            let id: String
-            let title: String
-            let preview: RemoteInstallerPreview
-        }
-        let id = UUID()
-        /// The update waiting on this review; it holds its parts meanwhile.
-        let run: UUID
-        let request: Request
-        let force: Bool
-        /// The work the user agreed to stop, stopped only once the review is confirmed.
-        let stopping: [BusyItem]
-        let items: [Item]
-        /// Linux harnesses whose download couldn't be checked, already reported.
-        let skipped: Set<String>
     }
 
     private(set) var release: MacRelease?
@@ -135,9 +114,9 @@ final class FleetUpdatesModel {
         }
     }
 
-    /// One running update's progress line.
+    /// One running update's progress line: its current step, or one harness it's updating.
     struct ProgressLine: Identifiable, Equatable {
-        let id: UUID
+        let id: String
         let text: String
     }
 
@@ -148,9 +127,11 @@ final class FleetUpdatesModel {
         /// What it already updated. Other buttons skip these too until it ends and the
         /// versions it reports are read again.
         var done: Set<String> = []
-        /// The part it's changing now.
-        var active: Part?
+        /// The parts it's changing now. Its harnesses update all at once.
+        var active: Set<Part> = []
         var progress: String?
+        /// What each harness it's updating is doing, by harness ID.
+        var harnessProgress: [String: String] = [:]
         /// Done except for this Mac's restart, which waits for every other update.
         var waitingToRestart = false
         /// It continues an update that restarted this Mac into its new release.
@@ -161,14 +142,16 @@ final class FleetUpdatesModel {
     var running: Bool { !runs.isEmpty }
     /// What each running update is doing now.
     var progress: [ProgressLine] {
-        runs.compactMap { id, run in run.progress.map { ProgressLine(id: id, text: $0) } }
-            .sorted { ($0.text, $0.id.uuidString) < ($1.text, $1.id.uuidString) }
+        runs.flatMap { id, run in
+            (run.progress.map { [ProgressLine(id: id.uuidString, text: $0)] } ?? [])
+                + run.harnessProgress.map { ProgressLine(id: id.uuidString + "/" + $0.key, text: $0.value) }
+        }
+        .sorted { ($0.text, $0.id) < ($1.text, $1.id) }
     }
     private(set) var failures: [String] = []
     /// What happens next when the run is waiting on something outside it.
     private(set) var notice: String?
     var busyConfirmation: BusyConfirmation? { didSet { if busyConfirmation == nil { showNextPrompt() } } }
-    var review: DownloadReview? { didSet { if review == nil { showNextPrompt() } } }
     /// Harnesses on other machines, by device ID.
     private(set) var memberInventories: [String: FleetMemberInventory] = [:]
     private(set) var memberErrors: [String: String] = [:]
@@ -182,10 +165,8 @@ final class FleetUpdatesModel {
     @ObservationIgnored private var resumeTask: Task<Void, Never>?
     /// Dialogs asked for while another was showing, shown in turn.
     @ObservationIgnored private var queuedPrompts: [Prompt] = []
-    /// A Linux workspace prepares one harness download at a time.
-    @ObservationIgnored private var remoteHarnessOwner: UUID?
 
-    private enum Prompt { case busy(BusyConfirmation), review(DownloadReview) }
+    private enum Prompt { case busy(BusyConfirmation) }
 
     private static let resumeKey = "wovenmatter.updates.resume"
     /// A run waiting for this Mac's update. It resumes only into the release it was
@@ -333,10 +314,13 @@ final class FleetUpdatesModel {
         switch location {
         case .thisMac:
             var rows: [FleetHarness] = Self.localKinds.compactMap { kind in
-                guard let inventory = model.runtimeInventories[kind], inventory.isInstalled else { return nil }
+                // Every part is on disk. A part below the version Woven Matter needs still
+                // counts as installed here: it shows as an update, not as missing.
+                guard let inventory = model.runtimeInventories[kind], !inventory.components.isEmpty,
+                      inventory.components.allSatisfy({ !$0.required || $0.present }) else { return nil }
                 let failed = model.failedRuntimeUpdateKinds.contains(kind)
                 return FleetHarness(location: .thisMac, kind: .runtime(kind), name: kind.displayName, versions: inventory.summary,
-                                    updateAvailable: inventory.updateAvailable || failed,
+                                    updateAvailable: inventory.updateAvailable || failed || !inventory.isInstalled,
                                     checking: model.checkingRuntimeKinds.contains(kind),
                                     updating: model.updatingRuntimeKinds.contains(kind),
                                     error: failed ? model.runtimeFailureDetails[kind] ?? "The last update failed." : nil)
@@ -358,7 +342,7 @@ final class FleetUpdatesModel {
                 .filter { $0.installed && $0.source != "system" && $0.id != .defaultAgent }
                 .sorted { $0.id.presentationRank < $1.id.presentationRank }
                 .map { runtime in
-                    let failed = runtime.operation?.status == "failed" ? runtime.operation?.error : nil
+                    let failed = runtime.operation?.status == "failed" ? runtime.operation?.error.map(RemoteRuntimeFailure.describe) : nil
                     return FleetHarness(location: location, kind: .runtime(runtime.id), name: runtime.displayName,
                                         versions: runtime.components.map(Self.componentVersion).joined(separator: " · "),
                                         updateAvailable: runtime.updateAvailable,
@@ -376,7 +360,7 @@ final class FleetUpdatesModel {
                 .sorted { $0.id.presentationRank < $1.id.presentationRank }
                 .map { runtime in
                     let job = job(runtime.id.rawValue)
-                    let failed = runtime.operation?.status == "failed" ? runtime.operation?.error : nil
+                    let failed = runtime.operation?.status == "failed" ? runtime.operation?.error.map(RemoteRuntimeFailure.describe) : nil
                     return FleetHarness(location: location, kind: .runtime(runtime.id), name: runtime.displayName,
                                         versions: runtime.components.map(Self.componentVersion).joined(separator: " · "),
                                         updateAvailable: runtime.updateAvailable, checking: loadingMembers.contains(machineID.lowercased()),
@@ -412,7 +396,7 @@ final class FleetUpdatesModel {
 
     var summary: String {
         if running { return "Updating…" }
-        if busyConfirmation != nil || review != nil { return "Waiting for you" }
+        if busyConfirmation != nil { return "Waiting for you" }
         if checking && checkedAt == nil { return "Checking…" }
         if availableCount > 0 { return "Updates available" }
         return checkedAt == nil ? "Not checked yet" : "Up to date"
@@ -544,7 +528,7 @@ final class FleetUpdatesModel {
 
     /// A button was pressed. Busy work is listed first and stops only when the user says so.
     func start(_ request: Request) {
-        guard review == nil, busyConfirmation == nil, model != nil, canStart(request) else { return }
+        guard busyConfirmation == nil, model != nil, canStart(request) else { return }
         if !running { failures = [] }
         notice = nil
         let busy = busyWork(for: request)
@@ -567,19 +551,6 @@ final class FleetUpdatesModel {
         // A resumed update the user cancelled doesn't carry over to a later one.
         if case .scope(let scope) = confirmation.request, scope.includesApps { resumedAfterUpdate = false }
         busyConfirmation = nil
-    }
-
-    func confirmReview() {
-        guard let review else { return }
-        self.review = nil
-        let previews = Dictionary(uniqueKeysWithValues: review.items.map { ($0.id, $0.preview) })
-        Task { await run(review.run, review.request, force: review.force, stopping: review.stopping, previews: previews, skipped: review.skipped) }
-    }
-
-    func cancelReview(_ id: UUID? = nil) {
-        guard let review, id == nil || review.id == id else { return }
-        runs[review.run] = nil
-        self.review = nil
     }
 
     // MARK: Updates running side by side
@@ -660,7 +631,7 @@ final class FleetUpdatesModel {
     private func begin(_ part: Part, in run: UUID) async -> Bool {
         guard runs[run]?.claimed.contains(part.key) == true, await waitForConflicts(part, in: run) else { return false }
         // No suspension between the check and the claim, so two runs can't both pass.
-        runs[run]?.active = part
+        runs[run]?.active.insert(part)
         return true
     }
 
@@ -669,7 +640,7 @@ final class FleetUpdatesModel {
         let name = part.device.flatMap { device in devices.first { $0.id.lowercased() == device }?.name } ?? "that device"
         let blocked: @MainActor () -> Bool = { [weak self] in
             guard let self else { return false }
-            return self.runs.contains { $0.key != run && $0.value.active.map(part.conflicts) == true }
+            return self.runs.contains { $0.key != run && $0.value.active.contains(where: part.conflicts) }
         }
         guard blocked() else { return true }
         let previous = runs[run]?.progress
@@ -684,15 +655,8 @@ final class FleetUpdatesModel {
 
     /// `updated`: it succeeded, and what it reports may lag until the run reads it again.
     private func finish(_ part: Part, in run: UUID, updated: Bool = false) {
-        runs[run]?.active = nil
+        runs[run]?.active.remove(part)
         if runs[run]?.claimed.remove(part.key) != nil, updated { runs[run]?.done.insert(part.key) }
-    }
-
-    /// Holds `part` while a preview asks its device, so a restart there waits for it.
-    private func holdForPreview(_ part: Part, in run: UUID) async -> Bool {
-        guard await waitForConflicts(part, in: run) else { return false }
-        runs[run]?.active = part
-        return true
     }
 
     /// Before this Mac restarts into its update, every other update finishes. False when
@@ -712,13 +676,12 @@ final class FleetUpdatesModel {
     }
 
     private func present(_ prompt: Prompt) {
-        if busyConfirmation == nil, review == nil { show(prompt) } else { queuedPrompts.append(prompt) }
+        if busyConfirmation == nil { show(prompt) } else { queuedPrompts.append(prompt) }
     }
 
     private func show(_ prompt: Prompt) {
         switch prompt {
         case .busy(let confirmation): busyConfirmation = confirmation
-        case .review(let review): self.review = review
         }
     }
 
@@ -727,13 +690,12 @@ final class FleetUpdatesModel {
         guard !queuedPrompts.isEmpty else { return }
         Task { [weak self] in
             try? await Task.sleep(for: .milliseconds(400))
-            guard let self, self.busyConfirmation == nil, self.review == nil, !self.queuedPrompts.isEmpty else { return }
+            guard let self, self.busyConfirmation == nil, !self.queuedPrompts.isEmpty else { return }
             self.show(self.queuedPrompts.removeFirst())
         }
     }
 
-    /// Either updates this Mac first, or reviews the downloads and runs the rest. Nothing
-    /// is stopped until the run starts.
+    /// Either updates this Mac first, or runs the rest. Nothing is stopped until the run starts.
     private func proceed(_ request: Request, force: Bool, stopping: [BusyItem] = []) async {
         // Only one update continues a restart into a new release.
         var resumed = false
@@ -760,47 +722,13 @@ final class FleetUpdatesModel {
             return
         }
         guard !parts.isEmpty else { return }
-        let keys = Set(parts.map(\.key))
-        runs[id] = Run(claimed: keys, progress: "Checking downloads…", resumed: resumed)
-        var items: [DownloadReview.Item] = []
-        var skipped: Set<String> = []
-        // A preview asks the device, so it waits for a server restarting there.
-        for target in remoteHarnessTargets(for: request) where keys.contains(target.harness.id) {
-            guard await holdForPreview(part(target.harness), in: id) else { skipped.insert(target.harness.id); continue }
-            let previewed = await preview(target)
-            runs[id]?.active = nil
-            switch previewed {
-            case .success(let preview):
-                items.append(.init(id: target.harness.id, title: "\(target.harness.name) on \(target.configuration.name)", preview: preview))
-            case .failure(let error):
-                skipped.insert(target.harness.id)
-                failures.append("\(target.harness.name) on \(target.configuration.name): \(error.localizedDescription)")
-            }
-        }
-        // Other machines: a Linux host names its download; a Mac updates from its registries.
-        for harness in harnessTargets(for: request) where keys.contains(harness.id) {
-            guard case .member(let machineID) = harness.location, case .runtime(let kind) = harness.kind else { continue }
-            guard await holdForPreview(part(harness), in: id) else { skipped.insert(harness.id); continue }
-            defer { runs[id]?.active = nil }
-            do {
-                let reply = try await model!.bots.query(.memberInstallerPreview(machineID: machineID, kind: kind))
-                if let preview = reply.installerPreview {
-                    items.append(.init(id: harness.id, title: "\(harness.name) on \(workspaceName(harness.location))", preview: preview))
-                }
-            } catch {
-                skipped.insert(harness.id)
-                failures.append("\(harness.name) on \(workspaceName(harness.location)): \(error.localizedDescription)")
-            }
-        }
-        say(id, nil)
-        if items.isEmpty { await run(id, request, force: force, stopping: stopping, previews: [:], skipped: skipped) }
-        else { present(.review(.init(run: id, request: request, force: force, stopping: stopping, items: items, skipped: skipped))) }
+        runs[id] = Run(claimed: Set(parts.map(\.key)), resumed: resumed)
+        await run(id, request, force: force, stopping: stopping)
     }
 
     /// `force` stops only the work the user was shown. Another machine is forced only on
     /// the retry its own busy answer asked for, never by a choice about this Mac's chats.
-    private func run(_ id: UUID, _ request: Request, force: Bool, stopping: [BusyItem], previews: [String: RemoteInstallerPreview],
-                     skipped: Set<String>) async {
+    private func run(_ id: UUID, _ request: Request, force: Bool, stopping: [BusyItem]) async {
         guard let model, runs[id] != nil else { return }
         defer { runs[id] = nil }
         if force { await stop(stopping, run: id) }
@@ -816,18 +744,21 @@ final class FleetUpdatesModel {
             await model.bots.refresh()
             finish(part, in: id)
         }
-        var busyElsewhere: [FleetHarness] = []
-        for harness in harnessTargets(for: request) {
-            let part = part(harness)
-            // A download that couldn't be checked was reported before the review.
-            if skipped.contains(harness.id) { finish(part, in: id); continue }
-            guard await begin(part, in: id) else { continue }
-            say(id, "Updating \(harness.name) on \(workspaceName(harness.location))…")
-            let failure = await update(harness, preview: previews[harness.id], force: forceOtherMacs, run: id)
-            if failure == nil, case .member(let machineID) = harness.location {
-                await refreshMembers(checkLatest: false, only: [machineID.lowercased()])
+        // Every harness updates at once, on every device, each with its own progress line,
+        // so one slow update never holds up the rest.
+        say(id, nil)
+        let harnesses = harnessTargets(for: request)
+        var outcomes: [String: String?] = [:]
+        await withTaskGroup(of: (String, String?)?.self) { group in
+            for harness in harnesses {
+                group.addTask { await self.updateOne(harness, force: forceOtherMacs, run: id) }
             }
-            finish(part, in: id, updated: failure == nil)
+            for await outcome in group { if let outcome { outcomes[outcome.0] = outcome.1 } }
+        }
+        var busyElsewhere: [FleetHarness] = []
+        // Failures read in the order the harnesses are listed, not the order they finished.
+        for harness in harnesses {
+            guard let failure = outcomes[harness.id] else { continue }
             switch failure {
             case nil: break
             case FleetBusyError.message? where !forceOtherMacs && isOtherMac(harness.location):
@@ -852,6 +783,21 @@ final class FleetUpdatesModel {
             say(id, "Checking for an update to this Mac…")
             DesktopUpdater.shared.checkForUpdates()
         }
+    }
+
+    /// One harness of a run, alongside the run's others: (its ID, nil on success or why it
+    /// failed), or nil when another update there never finished and it was skipped.
+    private func updateOne(_ harness: FleetHarness, force: Bool, run id: UUID) async -> (String, String?)? {
+        let part = part(harness)
+        guard await begin(part, in: id) else { return nil }
+        runs[id]?.harnessProgress[harness.id] = "Updating \(harness.name) on \(workspaceName(harness.location))…"
+        let failure = await update(harness, force: force, run: id)
+        if failure == nil, case .member(let machineID) = harness.location {
+            await refreshMembers(checkLatest: false, only: [machineID.lowercased()])
+        }
+        runs[id]?.harnessProgress[harness.id] = nil
+        finish(part, in: id, updated: failure == nil)
+        return (harness.id, failure)
     }
 
     /// Another Mac stops its own chats when asked; a Linux host can't be forced.
@@ -997,10 +943,6 @@ final class FleetUpdatesModel {
                 for conversation in running where conversation.remoteWorkspaceID == id && conversation.localRuntimeKind == kind {
                     add(conversation, "\(title(conversation)) is using \(kind.displayName) on \(workspaceName(harness.location)).")
                 }
-                if kind == .opencode, model.remoteWorkspaces.workspaceInstances[id]?[.opencode]?.state == "running" {
-                    items.append(.init(id: "opencode:" + id.uuidString, text: "The OpenCode server on \(workspaceName(harness.location)) is running.",
-                                       openCodeServer: id))
-                }
             case .member:
                 // That machine knows its own chats; it answers busy, and is asked again then.
                 break
@@ -1009,15 +951,13 @@ final class FleetUpdatesModel {
         return items
     }
 
-    /// Stops the listed chats and servers and waits briefly for them to finish stopping.
+    /// Stops the listed chats and waits briefly for them to finish stopping. OpenCode's shared
+    /// server isn't stopped: its update restarts it.
     private func stop(_ items: [BusyItem], run: UUID) async {
         guard let model, !items.isEmpty else { return }
         say(run, "Stopping running work…")
         for item in items {
             if let id = item.conversationID { model.cancelLocalACPPrompt(conversationID: id) }
-            if let id = item.openCodeServer, let configuration = model.remoteWorkspaces.configuration(id: id) {
-                model.remoteWorkspaces.refreshWorkspaceInstance(.opencode, configuration: configuration, action: "stop")
-            }
         }
         let ids = Set(items.compactMap(\.conversationID))
         _ = await wait(timeout: .seconds(30)) { model.localRunningConversationIDs.isDisjoint(with: ids) }
@@ -1096,7 +1036,7 @@ final class FleetUpdatesModel {
     // MARK: Harnesses
 
     /// Updates one harness and waits for it; nil on success.
-    private func update(_ harness: FleetHarness, preview: RemoteInstallerPreview?, force: Bool, run: UUID) async -> String? {
+    private func update(_ harness: FleetHarness, force: Bool, run: UUID) async -> String? {
         guard let model else { return "Woven Matter isn't ready." }
         switch (harness.location, harness.kind) {
         case (.thisMac, .runtime(let kind)):
@@ -1110,11 +1050,12 @@ final class FleetUpdatesModel {
             }) else { return "It did not finish in time." }
             if model.failedRuntimeUpdateKinds.contains(kind) { return model.runtimeFailureDetails[kind] ?? "The update failed." }
             if model.localRuntimeMaintenanceHasActiveConversation { return "A chat is still using it. Try again when it finishes." }
-            return model.runtimeInventories[kind]?.updateAvailable == true ? "It is still out of date." : nil
+            // The update itself checked that the CLI moved to a newer version.
+            return nil
         case (.member(let machineID), .runtime(let kind)):
             return await followMemberJob(machineID: machineID, item: kind.rawValue, run: run,
-                                         .updateMemberHarness(machineID: machineID, kind: kind, sourceSHA256: preview?.sha256,
-                                                              packageSpec: preview?.packageSpec, force: force))
+                                         .updateMemberHarness(machineID: machineID, kind: kind, sourceSHA256: nil,
+                                                              packageSpec: nil, force: force))
         case (_, .executor):
             guard let tools = model.agentTools, let config = tools.settings.executor else { return "Executor isn't set up." }
             do { try await tools.controlExecutor(.setup(config)) }
@@ -1142,8 +1083,7 @@ final class FleetUpdatesModel {
             return state.status?.sdks.contains { $0.updateAvailable } == true ? "It is still out of date." : nil
         case (.workspace(let id), .runtime(let kind)):
             guard let configuration = model.remoteWorkspaces.configuration(id: id) else { return "This workspace is no longer set up here." }
-            guard let reviewed = preview else { return "Its download wasn't reviewed." }
-            return await updateRemote(RemoteTarget(harness: harness, kind: kind, configuration: configuration), reviewed: reviewed)
+            return await updateRemote(RemoteTarget(harness: harness, kind: kind, configuration: configuration))
         }
     }
 
@@ -1158,80 +1098,38 @@ final class FleetUpdatesModel {
         while ContinuousClock.now < deadline {
             guard let job = bots.job(.updateHarness, target: target) else { return "It stopped answering." }
             guard job.running else { return job.error }
-            if let progress = job.progress { say(run, progress + " (\(workspaceName(.member(machineID))))") }
+            if let progress = job.progress { runs[run]?.harnessProgress["member-" + target] = progress + " (\(workspaceName(.member(machineID))))" }
             try? await Task.sleep(for: .seconds(2))
             await bots.refresh()
         }
         return "It did not finish in time."
     }
 
-    /// The download a Linux workspace would run for this update, without starting it.
-    private func preview(_ target: RemoteTarget) async -> Result<RemoteInstallerPreview, any Error> {
-        await oneRemoteHarnessAtATime { await self.preparePreview(target) }
-            ?? .failure(FleetUpdateError("Another workspace's download didn't finish preparing. Try again."))
-    }
-
-    private func preparePreview(_ target: RemoteTarget) async -> Result<RemoteInstallerPreview, any Error> {
-        let remote = model!.remoteWorkspaces
-        guard let harness = remote.currentHarnesses(for: target.configuration).first(where: { $0.id == target.kind }) else {
-            return .failure(FleetUpdateError("It isn't connected right now."))
-        }
-        remote.prepareHarnessAction("update", harness: harness, configuration: target.configuration)
-        let matches: @MainActor @Sendable () -> Bool = {
-            remote.preparedHarnessAction.map {
-                $0.configuration.id == target.configuration.id && $0.harness.id == target.kind && $0.action == "update"
-            } == true
-        }
-        guard await wait(timeout: .seconds(60), until: matches), let prepared = remote.preparedHarnessAction else {
-            return .failure(FleetUpdateError(remote.actionErrors[target.configuration.id]?[target.kind] ?? "Its download couldn't be checked."))
-        }
-        remote.cancelPreparedHarnessAction(workspaceID: target.configuration.id, harnessID: target.kind, action: "update")
-        return .success(prepared.preview)
-    }
-
-    /// Runs a reviewed update on a Linux workspace. The download is prepared again and
-    /// must match what was reviewed.
-    private func updateRemote(_ target: RemoteTarget, reviewed: RemoteInstallerPreview) async -> String? {
-        await oneRemoteHarnessAtATime { await self.runRemote(target, reviewed: reviewed) }
-            ?? "Another workspace's download didn't finish preparing. Try again."
-    }
-
-    /// Linux workspaces prepare one harness download at a time, so their harness updates
-    /// take turns; everything else keeps going.
-    private func oneRemoteHarnessAtATime<T>(_ body: @MainActor () async -> T) async -> T? {
-        guard await wait(timeout: .seconds(3_600), until: { [weak self] in self?.remoteHarnessOwner == nil }) else { return nil }
-        let owner = UUID()
-        remoteHarnessOwner = owner
-        defer { if remoteHarnessOwner == owner { remoteHarnessOwner = nil } }
-        return await body()
-    }
-
-    private func runRemote(_ target: RemoteTarget, reviewed: RemoteInstallerPreview) async -> String? {
+    /// Runs an update on a Linux workspace alongside its other harnesses: its host runs
+    /// the vendor's update command straight away, with nothing to review.
+    private func updateRemote(_ target: RemoteTarget) async -> String? {
         let remote = model!.remoteWorkspaces
         let id = target.configuration.id
         guard let harness = remote.currentHarnesses(for: target.configuration).first(where: { $0.id == target.kind }) else {
             return "It isn't connected right now."
         }
-        remote.prepareHarnessAction("update", harness: harness, configuration: target.configuration)
-        guard await wait(timeout: .seconds(60), until: {
-            remote.preparedHarnessAction.map { $0.configuration.id == id && $0.harness.id == target.kind && $0.action == "update" } == true
-        }), let prepared = remote.preparedHarnessAction else {
-            return remote.actionErrors[id]?[target.kind] ?? "Its download couldn't be checked."
+        // A short change there (a refresh, a check) finishes first; a sign-in to this
+        // harness doesn't, so it is reported straight away.
+        _ = await wait(timeout: .seconds(60)) {
+            remote.harnessMaintenanceBlocker(target.kind, in: id) == nil || remote.signingInHarnesses[id] == target.kind
         }
-        guard prepared.preview.source == reviewed.source, prepared.preview.sha256 == reviewed.sha256,
-              prepared.preview.packageSpec == reviewed.packageSpec else {
-            remote.cancelPreparedHarnessAction(workspaceID: id, harnessID: target.kind, action: "update")
-            return "Its download changed after you reviewed it. Update it again to review the new one."
+        if let refused = await remote.startHarnessMaintenance("update", harness: harness, configuration: target.configuration) {
+            return refused
         }
-        remote.confirmPreparedHarnessAction(workspaceID: id, harnessID: target.kind, action: "update")
-        _ = await wait(timeout: .seconds(15)) { remote.busyWorkspaceIDs.contains(id) }
         guard await wait(timeout: .seconds(1_000), until: {
-            !remote.busyWorkspaceIDs.contains(id)
+            !remote.isMaintaining(target.kind, in: id)
                 && remote.runtimeMaintenance[id]?.first(where: { $0.id == target.kind })?.operation?.status != "running"
         }) else { return "It did not finish in time." }
-        let runtime = remote.runtimeMaintenance[id]?.first { $0.id == target.kind }
-        if runtime?.operation?.status == "failed" { return runtime?.operation?.error ?? "The update failed." }
+        // This run's own error comes first: a failure before the host started anything
+        // leaves the previous run's operation in place.
         if let error = remote.actionErrors[id]?[target.kind] { return error }
+        let runtime = remote.runtimeMaintenance[id]?.first { $0.id == target.kind }
+        if runtime?.operation?.status == "failed" { return runtime?.operation?.error.map(RemoteRuntimeFailure.describe) ?? "The update failed." }
         return runtime?.updateAvailable == true ? "It is still out of date." : nil
     }
 

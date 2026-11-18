@@ -127,15 +127,14 @@ struct HarnessSetupView: View {
             SettingsHarnessSignInPanel(model: model, runtimeKind: kind)
             if let message = model.harnessSignIn.messages[kind] { SettingsNote(message) }
             if let error = setup.errors[kind] ?? model.runtimeFailureDetails[kind] { SettingsError(error) }
-            if setup.activeInstall == kind, let prepared = model.preparedLocalACPRuntimeInstall,
-               prepared.definition.runtimeKind == kind {
+            if setup.activeInstall == kind, let pending = model.pendingRuntimeInstall, pending.runtimeKind == kind {
                 VStack(alignment: .leading, spacing: 8) {
-                    SettingsNote("Download from \(prepared.preview.source.absoluteString). The installer is verified before it runs.")
+                    SettingsNote(OpenCodeServiceLauncher.replacementNotice(replacing: pending.replacingVersion))
                     HStack {
                         Button("Skip this harness") { setup.resolveInstaller(install: false) }
                             .buttonStyle(SettingsQuietButtonStyle())
                         Spacer()
-                        Button("Install \(kind.displayName)") { setup.resolveInstaller(install: true) }
+                        Button("Install OpenCode 2") { setup.resolveInstaller(install: true) }
                             .buttonStyle(WovenPrimaryButtonStyle())
                     }.disabled(setup.resolvingInstaller)
                 }
@@ -146,7 +145,7 @@ struct HarnessSetupView: View {
     private func installationLabel(_ inventory: RuntimeInventory?) -> String {
         guard let inventory else { return "Checking installation…" }
         if inventory.isInstalled {
-            let version = inventory.components.first(where: { $0.name.hasSuffix("(sign-in CLI)") })?.installed
+            let version = inventory.components.first(where: { $0.name.hasSuffix(" CLI") })?.installed
                 ?? inventory.components.first?.installed
             let suffix = inventory.updateAvailable ? " · Update available" : ""
             return (version.map { "Installed · \($0)" } ?? "Installed") + suffix

@@ -1,10 +1,10 @@
-import { readFile, mkdir } from 'node:fs/promises'
+import { readFile } from 'node:fs/promises'
 import { harnessResource } from './harness-resources.mjs'
-import { spawn, execFile } from 'node:child_process'
+import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { request as httpRequest } from 'node:http'
 import { resolve } from 'node:path'
-import { acquireHostLock } from './runtime-maintenance.mjs'
+import { acquireHostLock, harnessLockPath } from './runtime-maintenance.mjs'
 import { supportsOpenCodeVersion, normalizeOpenCodeVersion, openCodeCommands } from './opencode-compatibility.mjs'
 import { loadRuntimeConfiguration } from './config.mjs'
 
@@ -14,23 +14,26 @@ const fail = (statusCode, message) => Object.assign(new Error(message), { status
 const executeFile = promisify(execFile)
 const delay = (ms) => new Promise((done) => setTimeout(done, ms))
 
-// Each service is already bound to exactly one configured remote workspace.
-// The registration and credentials stay on that host, never in API responses.
+// OpenCode v2 runs one shared background service per user, which every OpenCode
+// client on the host uses: `opencode` in a terminal, the desktop app, and Woven.
+// Woven starts, restarts and stops that same service with `opencode service`, and
+// finds it through OpenCode's own registration. Credentials stay on the host.
 export function createWorkspaceInstances(options) {
   const { workspaceRoot } = options
   const environment = options.environment ?? (() => process.env)
-  const launch = options.spawn ?? spawn
   const fetchRequest = options.fetch ?? fetch
   const read = options.readFile ?? readFile
+  const run = options.execFile ?? executeFile
   const signal = options.signal ?? ((pid, value) => process.kill(pid, value))
-  const stateHome = resolve(workspaceRoot, '.woven-matter', 'opencode-state')
-  const registrationPath = resolve(stateHome, 'opencode', 'service.json')
+  const registrationPath = () => {
+    const env = environment()
+    return resolve(env.XDG_STATE_HOME || resolve(env.HOME ?? '', '.local/state'), 'opencode', 'service.json')
+  }
   const isEnabled = options.isEnabled ?? (async () => true)
   const installMCP = options.installMCP ?? installOpenCode
   let mcpInstalled = false
   function prepareMCP() { if (!mcpInstalled) { installMCP(environment()); mcpInstalled = true } }
   let operation = null
-  let launched = null
   let lastError = null
 
   function alive(pid) {
@@ -38,7 +41,7 @@ export function createWorkspaceInstances(options) {
   }
   async function registration() {
     let bytes
-    try { bytes = await read(registrationPath) } catch (error) {
+    try { bytes = await read(registrationPath()) } catch (error) {
       if (error.code === 'ENOENT') return null
       throw fail(503, 'opencode_registration_unavailable')
     }
@@ -83,66 +86,63 @@ export function createWorkspaceInstances(options) {
       return { ...base, state: 'running', version: current.version, lastError: null }
     } catch (error) { return { ...base, state: 'unavailable', lastError: publicError(error) } }
   }
+  /** The OpenCode v2 command: `opencode`, or its `opencode2` alias when `opencode` is v1. */
+  async function command() {
+    let found = false
+    for (const candidate of openCodeCommands) {
+      try {
+        const result = await run(candidate, ['--version'], { env: environment(), timeout: 10000, maxBuffer: 4096 })
+        found = true
+        if (supportsOpenCodeVersion(normalizeOpenCodeVersion(result.stdout))) return candidate
+      } catch { /* An absent primary command may have the alias installed. */ }
+    }
+    throw fail(found ? 409 : 503, found ? 'opencode_version_incompatible' : 'opencode_executable_unavailable')
+  }
+  async function service(verb) {
+    const executable = await command()
+    try { await run(executable, ['service', verb], { cwd: workspaceRoot, env: environment(), timeout: 60000, maxBuffer: 65536 }) }
+    catch { throw fail(503, `opencode_${verb}_failed`) }
+  }
+  async function waitUntilHealthy() {
+    for (let attempt = 0; attempt < 120; attempt++) {
+      try { const info = await registration(); if (info && alive(info.pid)) { await health(info); return } } catch { /* startup registration may be incomplete */ }
+      await delay(250)
+    }
+    // Startup may still be migrating data. Never kill an uncertain service.
+    throw fail(503, 'opencode_start_pending_refresh_before_retry')
+  }
   async function start() {
     if (!await isEnabled('opencode')) throw fail(409, 'runtime_not_installed')
     prepareMCP()
     const existing = await registration()
     if (existing && alive(existing.pid)) { await health(existing); return }
-    if (launched && launched.exitCode === null) throw fail(409, 'opencode_start_pending_refresh_before_retry')
     const hostEnvironment = environment()
     if (!hostEnvironment.HOME) throw fail(503, 'opencode_host_home_unavailable')
-    const releaseLock = await (options.acquireLock ?? acquireHostLock)(resolve(loadRuntimeConfiguration(hostEnvironment).stateDirectory, 'runtime-operation.lock'), hostEnvironment, workspaceRoot, true)
-    let ownedChild = null
-    let released = false
-    const unlock = () => { if (!released) { released = true; releaseLock() } }
+    // Hold OpenCode's maintenance lock only while starting, so an install can't swap the binary underneath.
+    const unlock = await (options.acquireLock ?? acquireHostLock)(harnessLockPath(loadRuntimeConfiguration(hostEnvironment), 'opencode'), hostEnvironment, workspaceRoot, true)
     try {
-      let command, found = false
-      for (const candidate of openCodeCommands) {
-        try {
-          const result = await (options.execFile ?? executeFile)(candidate, ['--version'], { env: environment(), timeout: 10000, maxBuffer: 4096 })
-          found = true
-          if (supportsOpenCodeVersion(normalizeOpenCodeVersion(result.stdout))) { command = candidate; break }
-        } catch { /* An absent primary command may have the npm alias installed. */ }
-      }
-      if (!command) throw fail(found ? 409 : 503, found ? 'opencode_version_incompatible' : 'opencode_executable_unavailable')
-      await (options.mkdir ?? mkdir)(stateHome, { recursive: true, mode: 0o700 })
-      const child = launch(command, ['serve', '--service', '--hostname', '127.0.0.1'], {
-        cwd: workspaceRoot, env: { ...environment(), XDG_STATE_HOME: stateHome }, stdio: 'ignore',
-      })
-      launched = child
-      ownedChild = child
-      child.once('close', unlock)
-      child.once('error', unlock)
-      let spawnFailed = false
-      child.once('error', () => { spawnFailed = true })
-      for (let attempt = 0; attempt < 120; attempt++) {
-        if (spawnFailed || (child.exitCode !== null && child.exitCode !== 0)) throw fail(503, 'opencode_start_failed')
-        try { const info = await registration(); if (info) { await health(info); return } } catch { /* startup registration may be incomplete */ }
-        await delay(250)
-      }
-      // Startup may still be migrating host data. Never kill an uncertain service.
-      throw fail(503, 'opencode_start_pending_refresh_before_retry')
-    } finally {
-      if (!ownedChild || ownedChild.exitCode !== null) unlock()
-    }
+      await service('start')
+      await waitUntilHealthy()
+    } finally { unlock() }
   }
   async function stop() {
     const info = await registration()
-    if (!info) {
-      if (launched && launched.exitCode === null) throw fail(409, 'opencode_start_pending_refresh_before_retry')
-      return
-    }
-    if (!alive(info.pid)) return
+    if (!info || !alive(info.pid)) return
+    // Only an authenticated v2 service is stopped, never an unknown process.
     await health(info, true)
-    const current = await registration()
-    if (!current || current.pid !== info.pid || current.authorization !== info.authorization
-      || String(current.url) !== String(info.url)) throw fail(409, 'opencode_identity_changed')
-    try { signal(info.pid, 'SIGTERM') } catch (error) { if (error.code !== 'ESRCH') throw fail(503, 'opencode_stop_failed') }
+    await service('stop')
     for (let attempt = 0; attempt < 80; attempt++) {
-      if (!alive(info.pid)) { launched = null; return }
+      if (!alive(info.pid)) return
       await delay(125)
     }
     throw fail(503, 'opencode_stop_pending')
+  }
+  /** After an upgrade: restart the shared service onto the new release, if it's running. */
+  async function restartIfRunning() {
+    const info = await registration().catch(() => null)
+    if (!info || !alive(info.pid)) return
+    await service('restart')
+    await waitUntilHealthy()
   }
   async function action(kind, verb) {
     if (kind !== 'opencode') throw fail(404, 'workspace_instance_not_found')
@@ -210,13 +210,12 @@ export function createWorkspaceInstances(options) {
     response.end(JSON.stringify(value))
     return true
   }
+  // A running service doesn't block an upgrade: OpenCode's own `upgrade` swaps the
+  // binary and the service is restarted onto it. Only a start or stop in flight does.
   async function hasActiveRuntime(id) {
-    if (id !== 'opencode') return false
-    if (operation?.kind === 'opencode' || (launched && launched.exitCode === null)) return true
-    try { const info = await registration(); return Boolean(info && alive(info.pid)) }
-    catch { return true } // uncertain identity must block upgrades
+    return id === 'opencode' && operation?.kind === 'opencode'
   }
-  return { handle, hasActiveRuntime, status, action, registrationPath }
+  return { handle, hasActiveRuntime, status, action, restartIfRunning, registrationPath }
 }
 
 function publicError(error) {

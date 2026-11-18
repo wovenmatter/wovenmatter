@@ -332,6 +332,8 @@ public struct RemoteRuntimeMaintenance: Codable, Equatable, Identifiable, Sendab
     public let versionCheckAvailable: Bool?
     public var source: String? = nil
     public var path: String? = nil
+    /// OpenCode 1 on the host, whose `opencode` command installing OpenCode 2 replaces.
+    public var openCodeV1: RemoteOpenCodeVersionOne? = nil
 
     public init(id: AgentRuntimeKind, displayName: String, installed: Bool, components: [RemoteRuntimeComponent],
                 operation: RemoteHarnessOperation? = nil, failureCount: Int = 0, diagnosticPrompt: String? = nil,
@@ -343,6 +345,60 @@ public struct RemoteRuntimeMaintenance: Codable, Equatable, Identifiable, Sendab
         self.source = source; self.path = path
     }
 }
+
+public struct RemoteOpenCodeVersionOne: Codable, Equatable, Sendable {
+    public let path: String?
+    public let version: String
+}
+
+/// A host's runtime-maintenance failure codes, as the person reads them. Unknown text
+/// (an older host's message) passes through; an unknown code reads as a general failure.
+public enum RemoteRuntimeFailure {
+    public static func describe(_ code: String) -> String {
+        if let known = known(code) { return known }
+        guard isCode(code) else { return code }
+        return "It didn't finish (\(code.replacingOccurrences(of: "_", with: " ")))."
+    }
+
+    /// True for a fixed failure code with its own sentence.
+    public static func isKnown(_ code: String) -> Bool { known(code) != nil }
+
+    private static func isCode(_ value: String) -> Bool {
+        !value.isEmpty && value.allSatisfy { $0 == "_" || ($0.isASCII && ($0.isLowercase || $0.isNumber)) }
+    }
+
+    private static func known(_ code: String) -> String? {
+        switch code {
+        case "runtime_active_stop_conversations_or_server_first": "Chats are using it. Stop them or the server there, then try again."
+        case "runtime_maintenance_in_progress": "It's being installed or updated. Try again when that finishes."
+        case "adapter_version_below_minimum": "Its adapter release is older than Woven Matter needs. Try again later."
+        case "latest_engine_version_unavailable": "Its latest version couldn't be checked. Try again later."
+        case "confirmation_required": "This app and the host don't match. Update both, then try again."
+        case "latest_protocol_sdk_version_unavailable": "The latest version of its connection library couldn't be checked. Try again later."
+        case "invalid_installer_size": "The official installer download wasn't the expected size."
+        case "installer_https_required": "The official installer has to come from a secure address."
+        case "runtime_operation_failed": "It didn't finish. Try again."
+        case "installer_failed": "Its installer didn't finish successfully."
+        case "update_verification_failed": "It updated, but a part is still out of date."
+        case "installation_verification_failed": "It installed, but its commands couldn't be found."
+        case "update_failed": "Its update command didn't finish successfully."
+        case "update_timed_out": "Its update command took too long and was stopped."
+        case "install_timed_out": "Its installer took too long and was stopped."
+        case "opencode_service_restart_failed": "OpenCode updated, but its background server didn't restart. Restart the OpenCode server there."
+        case "opencode_v1_replacement_confirmation_required": "OpenCode 1 is installed there. Installing OpenCode 2 replaces its opencode command."
+        case "installer_download_failed": "The official installer couldn't be downloaded."
+        case "installer_download_timed_out": "Downloading the official installer took too long."
+        case "native_installer_unavailable": "There's no official installer for this machine."
+        case "native_update_unavailable": "This CLI has no update command to run."
+        case "system_install_update_forbidden": "It was installed with the system's package manager. Update it there."
+        case "runtime_active_or_operation_in_progress", "runtime_lock_unavailable": "Another install, update or chat is using it. Try again when it finishes."
+        case "runtime_preferences_save_failed": "Its settings couldn't be saved."
+        default: nil
+        }
+    }
+}
+
+private struct RemoteHostFailure: Decodable { let error: String? }
 
 public struct RemoteHarnessSetupMethod: Codable, Equatable, Identifiable, Sendable {
     public let id: String
@@ -1146,9 +1202,11 @@ public struct RemoteWorkspaceServiceClient: Sendable {
     }
 
     public func maintainRuntime(
-        _ id: AgentRuntimeKind, action: String, sourceSHA256: String?, packageSpec: String? = nil
+        _ id: AgentRuntimeKind, action: String, sourceSHA256: String?, packageSpec: String? = nil,
+        replaceOpenCodeV1: Bool = false
     ) async throws -> RemoteHarnessOperation {
         var payload: [String: Any] = ["confirmed": true]
+        if replaceOpenCodeV1 { payload["replaceOpenCodeV1"] = true }
         if let sourceSHA256 { payload["sourceSHA256"] = sourceSHA256 }
         if let packageSpec { payload["packageSpec"] = packageSpec }
         return try await request(
@@ -1339,6 +1397,11 @@ public struct RemoteWorkspaceServiceClient: Sendable {
                 }
                 let detail = (try? JSONDecoder().decode([String: String].self, from: data))?["error"]
                 throw RemoteWorkspaceClientError.invalidResponse(detail ?? "SDK maintenance could not complete in this workspace.")
+            }
+            if path.hasPrefix("v1/harnesses/") || path.hasPrefix("v1/runtime-maintenance/"),
+               let code = (try? JSONDecoder().decode(RemoteHostFailure.self, from: data))?.error,
+               RemoteRuntimeFailure.isKnown(code) {
+                throw RemoteWorkspaceClientError.invalidResponse(RemoteRuntimeFailure.describe(code))
             }
             if path.hasPrefix("v1/harnesses/"), path.hasSuffix("/sign-out") {
                 throw RemoteWorkspaceClientError.invalidResponse(

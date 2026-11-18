@@ -228,7 +228,8 @@ when an intentional design change is accepted.
   signed-in account shows its name or email with **Remove account**; **Sign in**
   shows only when nothing is signed in. There is no "Change sign-in".
   New remote workspaces offer skippable, reopenable setup with only Pi Durable
-  selected by default; additional installations retain installer source review.
+  selected by default. Installs run each vendor's official installer with no review
+  step; the only question is **Replace OpenCode 1?** when OpenCode 2 would replace it.
 - **Chat defaults:** use Defaults for new chats on every harness page. Group
   thinking level and permissions together, with one short explanation.
 - **Agent pages:** one page with no area switcher: the harness's account ("Codex

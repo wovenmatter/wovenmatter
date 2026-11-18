@@ -7,7 +7,7 @@ enum BackendOpenCodeCommand: Codable, Sendable {
     case browserURL
     case restore, resolve, download, stop, restart, suspend
     case connect(Bool)
-    case serverPreferences(Bool, Bool)
+    case serverPreferences(Bool)
     case create(URL, UUID?, String?, String?, Bool, SessionCreationRoot)
     case importable(String?), importSession(OpenCodeValue)
     case sessionCall(String, String, String, OpenCodeValue?)
@@ -48,7 +48,7 @@ struct BackendOpenCodeService {
         case .restart: try await model.restartServer()
         case .suspend: await model.suspendConnection()
         case .connect(let start): try await model.connectLocal(allowStart: start)
-        case .serverPreferences(let start, let stop): model.startServerOnLaunch = start; model.stopServerOnQuit = stop
+        case .serverPreferences(let start): model.startServerOnLaunch = start
         case .create(let workspace, let id, let title, let native, let allowMissingCalendarFolder, let executionRoot):
             result.createdID = try await model.create(workspace: workspace, requestedConversationID: id, title: title, nativeWorkspaceID: native, allowMissingCalendarFolder: allowMissingCalendarFolder, executionRoot: executionRoot)
         case .importable(let cursor):

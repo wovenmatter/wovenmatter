@@ -330,7 +330,7 @@ test('Pi Durable options come from a new Pi session with its own permission desc
 
 test('OpenCode lists its models for a directory without creating a session', async () => {
   const calls = []
-  const sessions = createNativeClientSessions({ workspaceRoot: '/workspace', instances: { action: async () => {}, registrationPath: 'r' },
+  const sessions = createNativeClientSessions({ workspaceRoot: '/workspace', instances: { action: async () => {}, registrationPath: () => 'r' },
     read: async () => JSON.stringify({ url: 'http://127.0.0.1:4000', password: 'p', pid: 7 }),
     fetchRequest: async (url, request) => {
       calls.push(request.method + ' ' + url.pathname)

@@ -89,7 +89,7 @@ struct BackendRemoteWorkspaceService {
         case .performHarness(let id, let kind, let action):
             model.performHarnessAction(action, harness: try harness(kind, workspaceID: id), configuration: try workspace(id))
         case .prepareHarness(let id, let kind, let action):
-            model.prepareHarnessAction(action, harness: try harness(kind, workspaceID: id), configuration: try workspace(id))
+            model.runHarnessMaintenance(action, harness: try harness(kind, workspaceID: id), configuration: try workspace(id))
         case .confirmHarness(let id, let kind, let action): model.confirmPreparedHarnessAction(workspaceID: id, harnessID: kind, action: action)
         case .cancelHarness(let id, let kind, let action): model.cancelPreparedHarnessAction(workspaceID: id, harnessID: kind, action: action)
         case .signIn(let id, let kind, let methodID):

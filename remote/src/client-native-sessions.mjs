@@ -15,7 +15,7 @@ export function createNativeClientSessions({workspaceRoot,instances,
   read = readFile,fetchRequest = fetch}) {
   async function openCode(native, operation, options = {}) {
     await instances.action('opencode','start')
-    const registration = JSON.parse(await read(instances.registrationPath,'utf8'))
+    const registration = JSON.parse(await read(instances.registrationPath(),'utf8'))
     const origin = new URL(registration.url)
     if (origin.protocol !== 'http:' || !['127.0.0.1','localhost','[::1]'].includes(origin.hostname)
       || origin.username || origin.password || origin.pathname !== '/' || origin.search || origin.hash

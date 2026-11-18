@@ -1,481 +1,370 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtemp, rm, mkdir, readFile, writeFile, symlink, realpath } from 'node:fs/promises'
+import { mkdtemp, rm, mkdir, readFile, writeFile, symlink, chmod } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { resolve } from 'node:path'
-import { createRuntimeMaintenance, sanitize } from '../src/runtime-maintenance.mjs'
+import { createRuntimeMaintenance, sanitize, nativeInstaller, nativeUpdateArguments, runHost, claudeCodeNativeChannel, operationFailureCodes } from '../src/runtime-maintenance.mjs'
 import { loadRuntimeConfiguration } from '../src/config.mjs'
 
 const registryMetadata = version => ({ versions: { [version]: {} }, 'dist-tags': { latest: version } })
-const npmInvocation = (command, action) => command.startsWith('npm ' + action) || command.includes("/npm-cli.js' " + action)
+const opencode = { id: 'opencode', displayName: 'OpenCode', command: 'opencode', cliCommand: 'opencode', install: { kind: 'npm-global', package: '@opencode/cli@2' } }
+const claude = { id: 'claude_code', displayName: 'Claude Code', command: 'claude-agent-acp', cliCommand: 'claude', adapterPackage: '@agentclientprotocol/claude-agent-acp',
+  install: { kind: 'official-script', source: 'https://claude.ai/install.sh', interpreter: 'bash', arguments: ['latest'] } }
+const grok = { id: 'grok_build', displayName: 'Grok Build', command: 'grok', cliCommand: 'grok', install: { kind: 'official-script', source: 'https://x.ai/cli/install.sh', interpreter: 'bash', arguments: [] } }
 
-// Records components as earlier Woven installs, the only ones a host may update.
-async function manage(workspaceRoot, harnessID, components) {
-  const managedComponents = {}
-  for (const [id, path] of Object.entries(components)) managedComponents[id] = { path, target: await realpath(path).catch(() => path) }
-  await mkdir(resolve(workspaceRoot, '.wovenmatter'), { recursive: true })
-  await writeFile(resolve(workspaceRoot, '.wovenmatter/runtime-preferences.json'), JSON.stringify({ [harnessID]: { failureCount: 0, managedComponents } }))
+/**
+ * A fake host: `commands` maps a command name to { path, version } (absent when not
+ * installed). `on(command)` may handle installer and updater commands.
+ */
+async function fixture(t, { catalog = [opencode], commands = {}, on = () => null, latest = '2.1.1', ...overrides } = {}) {
+  const root = await mkdtemp(resolve(tmpdir(), 'wm-maintenance-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const calls = [], installers = []
+  const configuration = loadRuntimeConfiguration({ HOME: root, WOVENMATTER_STATE_DIRECTORY: resolve(root, 'run') })
+  const options = {
+    acquireLock: async () => () => {}, catalog: new Map(catalog.map(h => [h.id, h])), workspaceRoot: root, configuration,
+    environment: () => ({ HOME: root, SECRET_TOKEN: 'very-secret-token' }),
+    officialInstaller: async (h, source) => { installers.push([h.id, source]); return resolve(root, `.wovenmatter/installers/${h.id}.sh`) },
+    execute: async (command, env, cwd, timeout) => {
+      assert.equal(cwd, root); assert.equal(env.HOME, root); calls.push([command, timeout])
+      const handled = await on(command, { root, commands })
+      if (handled) return handled
+      const which = command.match(/^command -v '([^']+)'$/)
+      if (which) return commands[which[1]] ? { code: 0, output: commands[which[1]].path } : { code: 1, output: '' }
+      const version = command.match(/^'([^']+)' --version$/)
+      if (version) {
+        const found = Object.values(commands).find(value => value.path === version[1])
+        return found ? { code: 0, output: found.version } : { code: 127, output: '' }
+      }
+      throw Error('Unexpected command: ' + command)
+    },
+    fetchImplementation: async () => ({ ok: true, json: async () => registryMetadata(latest), text: async () => latest }),
+    ...overrides,
+  }
+  return { root, configuration, calls, installers, commands, options, service: createRuntimeMaintenance(options) }
 }
-
-const opencode = {id:'opencode',displayName:'OpenCode',command:'opencode',cliCommand:'opencode',install:{kind:'npm-global',package:'@opencode/cli@2'}}
-async function fixture(t, overrides = {}) {
-  const root = await mkdtemp(resolve(tmpdir(),'wm-maintenance-'))
-  t.after(() => rm(root, {recursive:true,force:true}))
-  let installed = false, executions = 0, requests = 0
-  const calls = []
-  const options = {acquireLock:async()=>()=>{},catalog:new Map([['opencode',opencode]]),workspaceRoot:root,environment:()=>({HOME:root,SECRET_TOKEN:'very-secret-token'}),verifiedInstaller:async()=>{throw Error('unexpected')},
-    execute:async(command,env,cwd)=>{
-      assert.equal(cwd,root); assert.equal(env.HOME,root); assert.equal(env.npm_config_cache, resolve(root, ".wovenmatter/npm-cache")); calls.push(command)
-      if(command==='ps -eo pid=,args=') return {code:0,output:''}
-      if(command.startsWith('command -v')) return {code:installed?0:1,output:root+'/opencode'}
-      if(command.endsWith('--version')) return {code:0,output:'opencode 2.1.0'}
-      if(npmInvocation(command,'install')) { executions++; installed=true; return {code:0,output:'installed'} }
-      throw Error('Unexpected command: '+command)
-    },fetchImplementation:async()=>{requests++;return {ok:true,json:async()=>registryMetadata('2.1.1')}},...overrides}
-  return {root,service:createRuntimeMaintenance(options),options,calls,install:()=>{installed=true},get executions(){return executions},get requests(){return requests}}
-}
-async function finished(service) {
-  for(let i=0;i<100;i++){const value=(await service.list()).runtimes[0];if(value.operation?.status!=='running')return value;await new Promise(r=>setTimeout(r,5))}
+async function finished(service, id) {
+  for (let i = 0; i < 200; i++) {
+    const value = (await service.list()).runtimes.find(row => !id || row.id === id)
+    if (value.operation?.status !== 'running') return value
+    await new Promise(r => setTimeout(r, 5))
+  }
   throw Error('operation timeout')
 }
-test('installation alone controls availability and update checks never install software', async t => {
-  const f = await fixture(t)
+
+test('a missing OpenCode installs with its official v2 installer, never npm or a digest review', async t => {
+  const f = await fixture(t, {
+    on: (command, { root, commands }) => {
+      if (command.startsWith("'bash' ")) { commands.opencode = { path: resolve(root, '.opencode/bin/opencode'), version: 'opencode v2.1.0' }; return { code: 0, output: 'installed' } }
+    },
+  })
   assert.equal(await f.service.isInstalled('opencode'), false)
-  await f.service.check(); assert.equal(f.requests, 0); assert.equal(f.executions, 0)
   await f.service.start(opencode, 'install', { confirmed: true })
   const installed = await finished(f.service)
+  assert.equal(installed.operation.status, 'succeeded')
   assert.equal(installed.installed, true)
-  assert.equal(await f.service.isInstalled('opencode'), true)
+  assert.equal(installed.source, 'native')
+  assert.deepEqual(f.installers, [['opencode', 'https://opencode.ai/v2/install']])
+  const install = f.calls.find(([command]) => command.startsWith("'bash' "))
+  assert.equal(install[0], `'bash' '${resolve(f.root, '.wovenmatter/installers/opencode.sh')}'`)
+  assert.equal(install[1], 600000)
+  assert.equal(f.calls.some(([command]) => /npm/.test(command)), false)
   const calls = f.calls.length
-  await f.service.isInstalled('opencode')
+  assert.equal(await f.service.isInstalled('opencode'), true)
   assert.equal(f.calls.length, calls, 'execution checks reuse verified inventory')
-  const requests = f.requests
-  await f.service.check(); assert.equal(f.requests, requests + 1); assert.equal(f.executions, 1)
+  const preview = f.service.installPreview(opencode)
+  assert.equal(preview.sha256, null); assert.equal(preview.packageSpec, null); assert.equal(preview.verification, 'official-installer')
 })
 
-test('duplicate operations share a reservation and verify actual installed result',async t=>{
-  const f=await fixture(t)
-  const [a,b]=await Promise.all([f.service.start(opencode,'install',{confirmed:true}),f.service.start(opencode,'install',{confirmed:true})])
-  assert.equal(a.id,b.id)
-  assert.equal((await f.service.operation(a.id.toUpperCase())).id, a.id)
-  const value=await finished(f.service)
-  assert.equal(value.operation.status,'succeeded');assert.equal(value.installed,true);assert.equal(f.executions,1)
-})
-test('active host conversation or instance prevents mutation and two failures yield sanitized diagnostics',async t=>{
-  const f=await fixture(t,{hasActiveRuntime:async()=>true})
-  await f.service.start(opencode,'install',{confirmed:true});await finished(f.service)
-  await f.service.start(opencode,'install',{confirmed:true});const value=await finished(f.service)
-  assert.equal(f.executions,0);assert.equal(value.failureCount,2)
-  assert.match(value.diagnosticPrompt,/OpenCode.*remote workspace host/)
-  assert.match(value.diagnosticPrompt,/runtime_active/)
-  assert.equal(sanitize('very-secret-token https://secret.example/?token=x Bearer abc123',{SECRET_TOKEN:'very-secret-token'}),'[redacted] [URL redacted] [redacted]')
-})
-
-test('copyable failure diagnostics use only allowlisted categories, never arbitrary errors or paths', async t => {
-  const f = await fixture(t)
-  const secret = '/home/private-account/project confidential-provider-response unknown-unstructured-secret'
-  await f.service.recordFailure(opencode, 'install-preview', new Error(secret))
-  await f.service.recordFailure(opencode, 'install-preview', new Error('Installer exited 1. ' + secret))
-  const result = (await f.service.list()).runtimes[0]
-  assert.match(result.diagnosticPrompt, /Failure: installer_failed/)
-  assert.doesNotMatch(result.diagnosticPrompt, /private-account|confidential|unknown-unstructured-secret|\/home\//)
-})
-
-test('npm actions reject foreign packages, tags and OpenCode v1; reviewed releases stay fixed for each operation', async t => {
-  const f = await fixture(t)
-  for (const packageSpec of ['@foreign/package@2.1.0', '@opencode/cli@latest', '@opencode/cli@2.1.0;touch /tmp/unsafe']) {
-    await f.service.start(opencode, 'install', { confirmed: true, packageSpec })
-    const value = await finished(f.service)
-    assert.equal(value.operation.status, 'failed')
-    assert.match(value.operation.error, /invalid_package_spec/)
-  }
-  assert.equal(f.executions, 0)
+test('OpenCode v1 is never replaced silently: installing v2 needs the person to agree', async t => {
+  const f = await fixture(t, {
+    commands: { opencode: { path: '/home/fixture/.opencode/bin/opencode', version: '1.19.5' } },
+    on: (command, { commands }) => {
+      if (command.startsWith("'bash' ")) { commands.opencode = { path: commands.opencode.path, version: 'opencode v2.1.0' }; return { code: 0, output: '' } }
+    },
+  })
+  const before = await f.service.inventory(opencode)
+  assert.deepEqual(before.openCodeV1, { path: '/home/fixture/.opencode/bin/opencode', version: '1.19.5' })
+  assert.equal(before.installed, false)
+  assert.match(before.notice, /replaces the v1 opencode command/)
   await f.service.start(opencode, 'install', { confirmed: true })
-  await finished(f.service)
-  assert.ok(f.calls.some(c => c.includes("'@opencode/cli@2.1.1'")))
-  const h = { id: 'opencode', displayName: 'OpenCode', command: 'opencode2', cliCommand: 'opencode2', install: { kind: 'npm-global', package: '@opencode/cli@2' } }
-  const other = await fixture(t, { catalog: new Map([['opencode', h]]), fetchImplementation: async () => ({ ok: true, json: async () => registryMetadata('2.1.0') }) })
-  const preview = await other.service.npmPreview(h)
-  assert.equal(preview.packageSpec, '@opencode/cli@2.1.0')
-  await other.service.start(h, 'install', { confirmed: true, packageSpec: '@opencode/cli@1.18.29' })
-  const failed = await finished(other.service)
-  assert.equal(failed.operation.error, 'opencode_version_incompatible')
-  assert.equal(other.executions, 0)
+  assert.equal((await finished(f.service)).operation.error, 'opencode_v1_replacement_confirmation_required')
+  assert.deepEqual(f.installers, [])
+  await f.service.start(opencode, 'install', { confirmed: true, replaceOpenCodeV1: true })
+  const replaced = await finished(f.service)
+  assert.equal(replaced.operation.status, 'succeeded')
+  assert.equal(replaced.openCodeV1, null)
 })
 
-test('retired hidden and disabled preferences cannot suppress installed harnesses', async t => {
-  const f = await fixture(t)
+test('the OpenCode v2 alias is used when opencode itself is v1', async t => {
+  const f = await fixture(t, { commands: {
+    opencode: { path: '/usr/bin/opencode', version: '1.19.5' },
+    opencode2: { path: '/home/fixture/.npm-global/bin/opencode2', version: 'opencode v2.2.7' },
+  } })
+  const row = await f.service.inventory(opencode)
+  assert.equal(row.installed, true)
+  assert.equal(row.path, '/home/fixture/.npm-global/bin/opencode2')
+})
+
+test('updates run the vendor command where its installer put the CLI, then prove the version moved', async t => {
+  let version = '1.0.77'
+  const f = await fixture(t, { catalog: [grok], latest: '1.0.88', on: (command, { root }) => {
+    if (command === `'${resolve(root, '.grok/bin/grok')}' 'update'`) { version = '1.0.88'; return { code: 0, output: 'Updated' } }
+    if (command === 'grok agent stdio --help') return { code: 0, output: '' }
+  } })
+  f.commands.grok = { path: resolve(f.root, '.grok/bin/grok'), get version() { return 'grok ' + version } }
+  const grokWithTransport = { ...grok, transportCheckCommand: 'grok agent stdio --help' }
+  const service = createRuntimeMaintenance({ ...f.options, catalog: new Map([['grok_build', grokWithTransport]]) })
+  const checked = await service.inventory(grokWithTransport, true)
+  assert.equal(checked.source, 'native')
+  assert.equal(checked.updateAvailable, true)
+  await service.start(grokWithTransport, 'update', { confirmed: true })
+  const updated = await finished(service)
+  assert.equal(updated.operation.status, 'succeeded')
+  const update = f.calls.find(([command]) => command.endsWith("'update'"))
+  assert.equal(update[1], 600000, 'the vendor update has a ten-minute background time limit')
+  assert.deepEqual(f.installers, [], 'an update never reinstalls')
+})
+
+test('an updater that exits 0 without changing the version fails the update', async t => {
+  const f = await fixture(t, { catalog: [grok], latest: '1.0.88', on: command => {
+    if (command.endsWith("'update'")) return { code: 0, output: 'Updated to 1.0.88. Restart Grok to use it.' }
+  } })
+  f.commands.grok = { path: resolve(f.root, '.local/bin/grok'), version: 'grok 1.0.77' }
+  await f.service.inventory(grok, true)
+  await f.service.start(grok, 'update', { confirmed: true })
+  const result = await finished(f.service)
+  assert.equal(result.operation.status, 'failed')
+  assert.equal(result.operation.error, 'update_verification_failed')
+})
+
+test('a stalled updater is stopped at its time limit and reported', async t => {
+  const f = await fixture(t, { catalog: [grok], latest: '1.0.88', on: command => {
+    if (command.endsWith("'update'")) return { code: -1, output: '', timedOut: true }
+  } })
+  f.commands.grok = { path: resolve(f.root, '.grok/bin/grok'), version: 'grok 1.0.77' }
+  await f.service.inventory(grok, true)
+  await f.service.start(grok, 'update', { confirmed: true })
+  assert.equal((await finished(f.service)).operation.error, 'update_timed_out')
+})
+
+test('OpenCode upgrades with its own command and restarts the shared service onto it', async t => {
+  let version = '2.2.7', restarts = 0
+  const f = await fixture(t, { latest: '2.3.0', on: (command, { root }) => {
+    if (command === `'${resolve(root, '.opencode/bin/opencode')}' 'upgrade'`) { version = '2.3.0'; return { code: 0, output: '' } }
+  }, restartOpenCodeService: async () => { restarts++ } })
+  f.commands.opencode = { path: resolve(f.root, '.opencode/bin/opencode'), get version() { return 'opencode v' + version } }
+  const service = createRuntimeMaintenance({ ...f.options, restartOpenCodeService: async () => { restarts++ } })
+  await service.inventory(opencode, true)
+  await service.start(opencode, 'update', { confirmed: true })
+  const result = await finished(service)
+  assert.equal(result.operation.status, 'succeeded')
+  assert.equal(restarts, 1)
+})
+
+test('a CLI outside the home folder belongs to the system and is not updated', async t => {
+  const f = await fixture(t, { latest: '2.3.0', commands: { opencode: { path: '/usr/bin/opencode', version: 'opencode v2.2.7' } } })
+  const checked = await f.service.inventory(opencode, true)
+  assert.equal(checked.source, 'system')
+  assert.equal(checked.updateAvailable, false)
+  await f.service.start(opencode, 'update', { confirmed: true })
+  assert.equal((await finished(f.service)).operation.error, 'system_install_update_forbidden')
+})
+
+test('each harness has its own lock, so different harnesses update side by side', async t => {
+  const locks = [], held = new Set()
+  let overlapped = false, releaseFirst
+  const gate = new Promise(done => { releaseFirst = done })
+  const f = await fixture(t, { catalog: [grok, opencode], latest: '9.9.9', on: async command => {
+    if (command.endsWith("'update'") || command.endsWith("'upgrade'")) {
+      held.add(command); if (held.size === 2) { overlapped = true; releaseFirst() }
+      await gate; return { code: 0, output: '' }
+    }
+  } })
+  f.commands.grok = { path: resolve(f.root, '.grok/bin/grok'), version: 'grok 1.0.0' }
+  f.commands.opencode = { path: resolve(f.root, '.opencode/bin/opencode'), version: 'opencode v2.0.0' }
+  const service = createRuntimeMaintenance({ ...f.options, acquireLock: async path => { locks.push(path); return () => {} } })
+  await service.inventory(grok, true); await service.inventory(opencode, true)
+  await Promise.all([service.start(grok, 'update', { confirmed: true }), service.start(opencode, 'update', { confirmed: true })])
+  await finished(service, 'grok_build'); await finished(service, 'opencode')
+  assert.equal(overlapped, true)
+  assert.deepEqual(locks.sort(), [resolve(f.root, 'run/runtime-operation-grok_build.lock'), resolve(f.root, 'run/runtime-operation-opencode.lock')])
+})
+
+test('Claude Code installs the native CLI and its ACP connection in Woven’s folder', async t => {
+  const f = await fixture(t, { catalog: [claude], latest: '0.200.0', on: (command, { root, commands }) => {
+    if (command.startsWith("'bash' ")) { commands.claude = { path: resolve(root, '.local/bin/claude'), version: '2.1.322 (Claude Code)' }; return { code: 0, output: '' } }
+    if (command.includes('install-adapter.mjs')) {
+      const selection = JSON.parse(command.slice(command.lastIndexOf(" '") + 2, -1))
+      assert.equal(selection.prefix, resolve(root, '.local/share/wovenmatter/acp-adapters'))
+      assert.equal(selection.adapter, '@agentclientprotocol/claude-agent-acp')
+      commands['claude-agent-acp'] = { path: resolve(root, '.local/share/wovenmatter/acp-adapters/bin/claude-agent-acp'), version: '0.200.0' }
+      return { code: 0, output: '' }
+    }
+  } })
+  await f.service.start(claude, 'install', { confirmed: true })
+  const result = await finished(f.service)
+  assert.equal(result.operation.status, 'succeeded')
+  assert.deepEqual(f.installers, [['claude_code', 'https://claude.ai/install.sh']])
+  assert.ok(f.calls.some(([command]) => command.endsWith(`'${resolve(f.root, '.wovenmatter/installers/claude_code.sh')}' 'latest'`)))
+  assert.equal(result.components.find(c => c.id === 'cli').source, 'native')
+  assert.equal(result.components.find(c => c.id === 'runtime').source, 'managed')
+  // An installed CLI is never reinstalled when only the connection is missing.
+  delete f.commands['claude-agent-acp']
+  f.installers.length = 0
+  await f.service.start(claude, 'install', { confirmed: true })
+  assert.equal((await finished(f.service)).operation.status, 'succeeded')
+  assert.deepEqual(f.installers, [])
+})
+
+test('active work blocks changes; two failures give an allowlisted diagnostic', async t => {
+  const f = await fixture(t, { hasActiveRuntime: async () => true })
+  await f.service.start(opencode, 'install', { confirmed: true }); await finished(f.service)
+  await f.service.start(opencode, 'install', { confirmed: true }); const value = await finished(f.service)
+  assert.deepEqual(f.installers, []); assert.equal(value.failureCount, 2)
+  assert.match(value.diagnosticPrompt, /OpenCode.*remote workspace host/)
+  assert.match(value.diagnosticPrompt, /runtime_active/)
+  assert.equal(sanitize('very-secret-token https://secret.example/?token=x Bearer abc123', { SECRET_TOKEN: 'very-secret-token' }), '[redacted] [URL redacted] [redacted]')
+  const secret = '/home/private-account/project confidential-provider-response'
+  await f.service.recordFailure(opencode, 'install', new Error('Installer exited 1. ' + secret))
+  const result = (await f.service.list()).runtimes[0]
+  assert.equal(result.operation.error, 'installer_failed')
+  assert.match(result.diagnosticPrompt, /Failure: installer_failed/)
+  assert.doesNotMatch(result.diagnosticPrompt, /private-account|confidential/)
+})
+
+test('duplicate operations share one reservation', async t => {
+  const f = await fixture(t, { on: (command, { root, commands }) => {
+    if (command.startsWith("'bash' ")) { commands.opencode = { path: resolve(root, '.opencode/bin/opencode'), version: '2.1.0' }; return { code: 0, output: '' } }
+  } })
+  const [a, b] = await Promise.all([f.service.start(opencode, 'install', { confirmed: true }), f.service.start(opencode, 'install', { confirmed: true })])
+  assert.equal(a.id, b.id)
+  assert.equal((await f.service.operation(a.id.toUpperCase())).id, a.id)
+  assert.equal((await finished(f.service)).operation.status, 'succeeded')
+  assert.equal(f.installers.length, 1)
+})
+
+test('older preference files keep their failure counts and nothing else', async t => {
+  const f = await fixture(t, { commands: { opencode: { path: '/home/x/.opencode/bin/opencode', version: '2.1.0' } } })
   await mkdir(resolve(f.root, '.wovenmatter'), { recursive: true })
   await writeFile(resolve(f.root, '.wovenmatter/runtime-preferences.json'), JSON.stringify({
-    opencode: { enabled: false, visible: false, failureCount: 2 },
+    opencode: { enabled: false, visible: false, failureCount: 2, managedComponents: { runtime: { path: '/x', target: '/x' } } },
   }))
-  f.install()
   const service = createRuntimeMaintenance(f.options)
   assert.equal(await service.isInstalled('opencode'), true)
-  const row = (await service.list()).runtimes[0]
-  assert.equal(row.installed, true); assert.equal(row.failureCount, 2)
+  assert.equal((await service.list()).runtimes[0].failureCount, 2)
   await service.recordFailure(opencode, 'install', new Error('fixture'))
-  const saved = JSON.parse(await (await import('node:fs/promises')).readFile(resolve(f.root, '.wovenmatter/runtime-preferences.json'), 'utf8'))
+  const saved = JSON.parse(await readFile(resolve(f.root, '.wovenmatter/runtime-preferences.json'), 'utf8'))
   assert.deepEqual(saved.opencode, { failureCount: 3 })
   await writeFile(resolve(f.root, '.wovenmatter/runtime-preferences.json'), 'corrupt legacy file')
   assert.equal(await createRuntimeMaintenance(f.options).isInstalled('opencode'), true)
   assert.equal(await service.isInstalled('unknown'), false)
 })
 
-test('bundled Codex latest is checked separately and refresh respects adapter range', async t => {
-  const root = await mkdtemp(resolve(tmpdir(), 'wm-codex-refresh-'))
-  t.after(() => rm(root, { recursive: true, force: true }))
-  const adapter = resolve(root, 'node_modules/@agentclientprotocol/codex-acp')
-  const dependency = resolve(root, 'node_modules/@openai/codex')
-  await mkdir(resolve(adapter, 'bin'), { recursive: true })
-  await mkdir(resolve(dependency, 'bin'), { recursive: true })
-  await writeFile(resolve(adapter, 'package.json'), JSON.stringify({ name: '@agentclientprotocol/codex-acp', version: '1.11.0' }))
-  await writeFile(resolve(adapter, 'bin/cli.js'), '')
-  await writeFile(resolve(dependency, 'package.json'), JSON.stringify({ name: '@openai/codex', version: '0.153.1' }))
-  await symlink(resolve(adapter, 'bin/cli.js'), resolve(root, 'codex-acp'))
-  await manage(root, 'codex', { runtime: resolve(root, 'codex-acp'), signin: resolve(root, 'codex') })
-  const h = { id: 'codex', displayName: 'Codex', command: 'codex-acp', cliCommand: 'codex', minimumAdapterVersion: '1.11.0', adapterPackage: '@agentclientprotocol/codex-acp', install: { interpreter: 'sh', arguments: [] } }
-  const calls = [], requests = []
-  let engine = '0.153.1', refresh = true
-  const service = createRuntimeMaintenance({
-    catalog: new Map([['codex', h]]), workspaceRoot: root, environment: () => ({ HOME: root }), acquireLock: async () => () => {},
-    verifiedInstaller: async () => ({ path: resolve(root, 'fixture-installer.sh') }),
-    fetchImplementation: async url => {
-      requests.push(decodeURIComponent(url))
-      return { ok: true, json: async () => registryMetadata(String(url).includes('codex-acp') ? '1.11.0' : '0.154.0') }
-    },
-    execute: async command => {
-      calls.push(command)
-      if (command === 'ps -eo pid=,args=') return { code: 0, output: '' }
-      if (command.startsWith('command -v')) return { code: 0, output: resolve(root, command.includes('codex-acp') ? 'codex-acp' : 'codex') }
-      if (npmInvocation(command, 'view')) return { code: 0, output: JSON.stringify(['0.153.1', '0.153.4']) }
-      if (npmInvocation(command, 'update')) {
-        if (refresh) { engine = '0.153.4'; await writeFile(resolve(dependency, 'package.json'), JSON.stringify({ name: '@openai/codex', version: engine })) }
-        return { code: 0, output: '' }
-      }
-      if (command.endsWith('--version')) return { code: 0, output: command.includes('/bin/codex.js') ? engine : command.includes('codex-acp') ? '1.11.0' : '0.154.0' }
-      return { code: 0, output: '' }
-    },
-  })
-  const installed = await service.inventory(h)
-  assert.equal(installed.installed, true)
-  assert.equal(installed.components.find(c => c.id === 'bundled').installedVersion, '0.153.1')
-  assert.equal(installed.components.find(c => c.id === 'signin').installedVersion, '0.154.0')
-  await writeFile(resolve(adapter, 'package.json'), JSON.stringify({ name: '@agentclientprotocol/codex-acp', version: '1.11.0', dependencies: { '@openai/codex': '~0.153.0' } }))
-  const initial = await service.inventory(h, true)
-  const bundled = initial.components.find(c => c.id === 'bundled')
-  assert.equal(bundled.latestVersion, '0.154.0')
-  assert.equal(bundled.updateTargetVersion, '0.153.4')
-  assert.equal(initial.updateAvailable, true)
-  assert.match(initial.notice, /declared compatibility/)
-  assert.ok(requests.includes('https://registry.npmjs.org/@openai/codex'))
-  assert.ok(calls.some(c => c.includes("'@openai/codex@~0.153.0'")))
-  // A successful installer exit is insufficient if its compatible bundled target is unchanged.
-  refresh = false
-  await service.start(h, 'update', { confirmed: true, sourceSHA256: 'fixture' })
-  assert.equal((await finished(service)).operation.status, 'failed')
-  refresh = true
-  await service.start(h, 'update', { confirmed: true, sourceSHA256: 'fixture' })
-  const result = await finished(service)
-  assert.equal(result.operation.status, 'succeeded')
-  assert.equal(result.components.find(c => c.id === 'bundled').installedVersion, '0.153.4')
-  assert.equal(result.updateAvailable, false, 'upstream outside adapter compatibility does not create another update action')
-  const update = calls.find(c => npmInvocation(c, 'update'))
-  assert.ok(update.includes('/node_modules/@agentclientprotocol/codex-acp\''))
-  assert.match(update, /--no-save --package-lock=false/)
-  assert.doesNotMatch(update, /@latest|CODEX_PATH/)
-  // An unknown declaration reports upstream latest without inventing a compatible update.
-  await writeFile(resolve(adapter, 'package.json'), JSON.stringify({ name: '@agentclientprotocol/codex-acp', version: '1.11.0', dependencies: { '@openai/codex': 'workspace:*' } }))
-  const unknown = await service.inventory(h, true)
-  assert.equal(unknown.components.find(c => c.id === 'bundled').latestVersion, '0.154.0')
-  assert.equal(unknown.components.find(c => c.id === 'bundled').updateTargetVersion, null)
-  assert.equal(unknown.updateAvailable, false)
+test('the native installer and update command come from the catalog when it names them', () => {
+  assert.deepEqual(nativeInstaller(opencode), { source: 'https://opencode.ai/v2/install', interpreter: 'bash', arguments: [] })
+  assert.deepEqual(nativeInstaller(claude), { source: 'https://claude.ai/install.sh', interpreter: 'bash', arguments: ['latest'] })
+  assert.deepEqual(nativeInstaller({ ...opencode, install: { kind: 'official-script', source: 'https://opencode.ai/v2/install', interpreter: 'bash' } }).source, 'https://opencode.ai/v2/install')
+  assert.deepEqual(nativeUpdateArguments(opencode), ['upgrade'])
+  assert.deepEqual(nativeUpdateArguments({ ...grok, update: { arguments: ['update', '--stable'] } }), ['update', '--stable'])
+  assert.deepEqual(nativeUpdateArguments(claude), ['update'])
 })
 
-test('OpenCode latest previews and updates accept newer v2 releases independently', async t => {
-  const root = await mkdtemp(resolve(tmpdir(), 'wm-opencode-update-'))
-  t.after(() => rm(root, { recursive: true, force: true }))
-  const harness = { id: 'opencode', displayName: 'OpenCode', command: 'opencode', cliCommand: 'opencode', install: { kind: 'npm-global', package: '@opencode/cli@2' } }
-  let installed = '2.0.22', latest = '2.1.7'
-  await manage(root, 'opencode', { runtime: '/fixture/opencode' })
-  const service = createRuntimeMaintenance({ catalog: new Map([['opencode', harness]]), workspaceRoot: root,
-    environment: () => ({ HOME: root }), acquireLock: async () => () => {},
-    fetchImplementation: async url => { assert.equal(decodeURIComponent(url), 'https://registry.npmjs.org/@opencode/cli'); return { ok: true, json: async () => registryMetadata(latest) } },
-    execute: async command => {
-      if (command.startsWith('command -v')) return { code: 0, output: '/fixture/opencode' }
-      if (command.endsWith('--version')) return { code: 0, output: installed }
-      if (npmInvocation(command, 'install')) { assert.ok(command.includes('@opencode/cli@2.1.7')); installed = '2.1.7'; return { code: 0, output: '' } }
-      if (command === 'ps -eo pid=,args=') return { code: 0, output: '' }
-      throw Error('Unexpected command: ' + command)
-    },
-  })
-  assert.equal((await service.inventory(harness, true)).updateAvailable, true)
-  const preview = await service.npmPreview(harness)
-  assert.equal(preview.packageSpec, '@opencode/cli@2.1.7')
-  await service.start(harness, 'update', { confirmed: true, packageSpec: preview.packageSpec })
-  assert.equal((await finished(service)).operation.status, 'succeeded')
-  latest = '2.99.0'
-  assert.equal((await service.npmPreview(harness)).packageSpec, '@opencode/cli@2.99.0')
-  latest = '1.18.29'
-  await assert.rejects(service.npmPreview(harness), /latest_package_version_unavailable/)
+test('a host command settles when it exits even if a child it left behind holds its output open', async () => {
+  const started = Date.now()
+  const result = await runHost('sleep 20 & echo started', process.env, tmpdir(), 10_000)
+  assert.equal(result.code, 0)
+  assert.equal(result.timedOut, false)
+  assert.match(result.output, /started/)
+  assert.ok(Date.now() - started < 5000)
 })
 
-test('OpenCode updates refuse active canonical and compatibility-alias processes', async t => {
-  const harness = { id: 'opencode', displayName: 'OpenCode', command: 'opencode', cliCommand: 'opencode', install: { kind: 'npm-global', package: '@opencode/cli@2' } }
-  for (const process of ['opencode', 'opencode2', '/host/bin/opencode2', 'node /host/bin/opencode2.js']) {
-    let installs = 0
-    const f = await fixture(t, { catalog: new Map([['opencode', harness]]),
-      execute: async command => {
-        if (command === 'ps -eo pid=,args=') return { code: 0, output: `1234 ${process} serve --service` }
-        if (command.startsWith('command -v')) return { code: 0, output: '/host/bin/opencode' }
-        if (command.endsWith('--version')) return { code: 0, output: '2.0.22' }
-        if (npmInvocation(command, 'install')) { installs++; return { code: 0, output: '' } }
-        throw Error('Unexpected command: ' + command)
-      },
-    })
-    await manage(f.root, 'opencode', { runtime: '/host/bin/opencode' })
-    const service = createRuntimeMaintenance(f.options)
-    await service.start(harness, 'update', { confirmed: true, packageSpec: '@opencode/cli@2.1.7' })
-    const result = await finished(service)
-    assert.equal(result.operation.error, 'runtime_active_stop_conversations_or_server_first', process)
-    assert.equal(installs, 0, process)
-  }
+test('a host command that runs past its limit is killed and reported as timed out', async () => {
+  const started = Date.now()
+  const result = await runHost('sleep 20', process.env, tmpdir(), 300)
+  assert.equal(result.timedOut, true)
+  assert.equal(result.code, -1)
+  assert.ok(Date.now() - started < 5000)
 })
 
-test('host reuses preexisting local installs as system-owned and refuses their updates', async t => {
-  const f = await fixture(t)
-  f.install()
-  const configuration = loadRuntimeConfiguration({ HOME: f.root })
-  const service = createRuntimeMaintenance({ ...f.options, configuration })
-  const checked = await service.inventory(opencode, true)
-  assert.equal(checked.source, 'system')
-  assert.equal(checked.components[0].source, 'system')
-  assert.equal(checked.updateAvailable, false)
-  assert.equal(checked.components[0].updateAvailable, false)
-  await service.start(opencode, 'update', { confirmed: true, packageSpec: '@opencode/cli@2.1.1' })
-  const result = await finished(service)
-  assert.equal(result.operation.error, 'system_install_update_forbidden')
-  assert.equal(f.executions, 0)
-})
-
-test('host records only Woven installs as managed and uses its configured operation lock', async t => {
-  const f = await fixture(t), locks = []
-  const configuration = loadRuntimeConfiguration({ HOME: f.root, WOVENMATTER_STATE_DIRECTORY: resolve(f.root, 'run') })
-  const service = createRuntimeMaintenance({ ...f.options, configuration, acquireLock: async path => { locks.push(path); return () => {} } })
-  await service.start(opencode, 'install', { confirmed: true, packageSpec: '@opencode/cli@2.1.1' })
-  const result = await finished(service)
-  assert.equal(result.operation.status, 'succeeded')
-  assert.equal(result.source, 'managed')
-  assert.deepEqual(locks, [resolve(f.root, 'run/runtime-operation.lock')])
-  const persisted = JSON.parse(await readFile(resolve(f.root, '.wovenmatter/runtime-preferences.json'), 'utf8'))
-  assert.deepEqual(persisted.opencode.managedComponents.runtime, { path: resolve(f.root, 'opencode'), target: resolve(f.root, 'opencode') })
-  assert.equal((await createRuntimeMaintenance({ ...f.options, configuration }).inventory(opencode)).source, 'managed')
-})
-
-test('host installs a missing adapter alongside an active system CLI and blocks active managed adapter updates', async t => {
-  const root = await mkdtemp(resolve(tmpdir(), 'woven-host-adapter-'))
-  t.after(() => rm(root, { recursive: true, force: true }))
-  const configuration = loadRuntimeConfiguration({ HOME: root })
-  const h = { id: 'codex', displayName: 'Codex', command: 'codex-acp', cliCommand: 'codex', adapterPackage: '@agentclientprotocol/codex-acp', minimumAdapterVersion: '2.3.0', install: { kind: 'official-script' } }
-  const adapter = resolve(root, '.local/lib/node_modules/@agentclientprotocol/codex-acp')
-  const dependency = resolve(adapter, 'node_modules/@openai/codex')
-  const bin = resolve(root, '.local/bin/codex-acp')
-  let installed = false, scripts = 0, activeAdapter = false
-  const calls = []
-  const service = createRuntimeMaintenance({ catalog: new Map([['codex', h]]), workspaceRoot: root, configuration,
-    environment: () => ({ HOME: root }), acquireLock: async () => () => {},
-    verifiedInstaller: async () => { scripts++; throw new Error('system CLI must not be reinstalled') },
-    fetchImplementation: async () => ({ ok: true, json: async () => registryMetadata('2.3.1') }),
-    execute: async command => {
-      calls.push(command)
-      if (command === 'ps -eo pid=,args=') return { code: 0, output: '5471 /usr/bin/codex resume\n' + (activeAdapter ? '6001 node ' + resolve(adapter, 'bin/cli.js') : '') }
-      if (command.startsWith('command -v')) return command.includes("'codex-acp'") ? { code: installed ? 0 : 1, output: installed ? bin : '' } : { code: 0, output: '/usr/bin/codex' }
-      if (command.endsWith('--version')) return { code: 0, output: command.includes('codex-acp') ? '2.3.1' : '0.154.0' }
-      if (npmInvocation(command, 'install')) {
-        assert.equal(command, `'${process.execPath}' '${configuration.serviceRoot}/tooling/lib/node_modules/npm/bin/npm-cli.js' install --global --prefix "$HOME/.local" '@agentclientprotocol/codex-acp@2.3.1'`)
-        await mkdir(resolve(adapter, 'bin'), { recursive: true }); await mkdir(resolve(dependency, 'bin'), { recursive: true }); await mkdir(resolve(root, '.local/bin'), { recursive: true })
-        await writeFile(resolve(adapter, 'package.json'), JSON.stringify({ name: h.adapterPackage, version: '2.3.1' }))
-        await writeFile(resolve(adapter, 'bin/cli.js'), '')
-        await writeFile(resolve(dependency, 'package.json'), JSON.stringify({ name: '@openai/codex', version: '0.154.0' }))
-        await symlink(resolve(adapter, 'bin/cli.js'), bin)
-        installed = true
-        return { code: 0, output: 'adapter installed' }
-      }
-      throw new Error('Unexpected command: ' + command)
-    },
-  })
-  const preview = await service.hostAdapterPreview(h)
-  assert.equal(preview.packageSpec, '@agentclientprotocol/codex-acp@2.3.1')
-  assert.equal(preview.verification, 'npm-registry-integrity')
-  await service.start(h, 'install', { confirmed: true, packageSpec: preview.packageSpec })
-  const result = await finished(service)
-  assert.equal(result.operation.status, 'succeeded')
-  assert.equal(result.components.find(c => c.id === 'runtime').source, 'managed')
-  assert.equal(result.components.find(c => c.id === 'signin').source, 'system')
-  assert.equal(scripts, 0)
-  assert.equal(calls.filter(command => npmInvocation(command, 'install')).length, 1)
-  activeAdapter = true
-  await service.start(h, 'update', { confirmed: true, packageSpec: preview.packageSpec })
-  const blocked = await finished(service)
-  assert.equal(blocked.operation.error, 'runtime_active_stop_conversations_or_server_first')
-  assert.equal(calls.filter(command => npmInvocation(command, 'install')).length, 1)
-})
-
-test('host keeps service-owned active sessions fenced and refuses unmanaged adapter updates', async t => {
-  const active = await fixture(t, { hasActiveRuntime: async () => true })
-  const protectedService = createRuntimeMaintenance({ ...active.options,
-    configuration: loadRuntimeConfiguration({ HOME: active.root }) })
-  await protectedService.start(opencode, 'install', { confirmed: true, packageSpec: '@opencode/cli@2.1.1' })
-  assert.equal((await finished(protectedService)).operation.error, 'runtime_active_stop_conversations_or_server_first')
-  assert.equal(active.executions, 0)
-  const h = { id: 'codex', displayName: 'Codex', command: 'codex-acp', cliCommand: 'codex', adapterPackage: '@agentclientprotocol/codex-acp', minimumAdapterVersion: '2.3.0', install: { kind: 'official-script' } }
-  let installs = 0
-  const other = await fixture(t, { catalog: new Map([['codex', h]]), execute: async command => {
-    if (command.startsWith('command -v')) return { code: 0, output: command.includes('codex-acp') ? '/usr/bin/codex-acp' : '/usr/bin/codex' }
-    if (command.endsWith('--version')) return { code: 0, output: '2.3.1' }
-    if (command === 'ps -eo pid=,args=') return { code: 0, output: '5471 /usr/bin/codex-acp' }
-    if (command.startsWith('npm install')) { installs++; return { code: 0, output: '' } }
-    throw new Error('Unexpected command: ' + command)
+test('Claude Code compares with its native release channel, which can trail npm', async t => {
+  const fetched = []
+  const f = await fixture(t, { catalog: [claude], fetchImplementation: async url => {
+    fetched.push(String(url))
+    return url === claudeCodeNativeChannel
+      ? { ok: true, text: async () => '2.1.326\n' }
+      : { ok: true, json: async () => registryMetadata(String(url).includes('claude-code') ? '2.1.327' : '0.200.0'), text: async () => '' }
   } })
-  const unmanaged = createRuntimeMaintenance({ ...other.options,
-    configuration: loadRuntimeConfiguration({ HOME: other.root }) })
-  await unmanaged.start(h, 'update', { confirmed: true, packageSpec: '@agentclientprotocol/codex-acp@2.3.1' })
-  assert.equal((await finished(unmanaged)).operation.error, 'system_install_update_forbidden')
-  assert.equal(installs, 0)
+  f.commands.claude = { path: resolve(f.root, '.local/bin/claude'), version: '2.1.326 (Claude Code)' }
+  f.commands['claude-agent-acp'] = { path: resolve(f.root, '.local/share/wovenmatter/acp-adapters/bin/claude-agent-acp'), version: '0.200.0' }
+  const checked = await f.service.inventory(claude, true)
+  const cli = checked.components.find(c => c.id === 'cli')
+  assert.equal(cli.latestVersion, '2.1.326')
+  assert.equal(checked.updateAvailable, false)
+  assert.ok(fetched.includes(claudeCodeNativeChannel))
+  assert.equal(fetched.some(url => url.includes('%40anthropic-ai%2Fclaude-code') || url.includes('@anthropic-ai/claude-code')), false)
 })
 
-test('host installer rc writes fail the operation and restore the original shell setup', async t => {
-  const f = await fixture(t)
-  await writeFile(resolve(f.root, '.bashrc'), 'existing configuration\n')
-  const execute = f.options.execute
-  const service = createRuntimeMaintenance({ ...f.options,
-    configuration: loadRuntimeConfiguration({ HOME: f.root }),
-    execute: async (...arguments_) => {
-      const result = await execute(...arguments_)
-      if (npmInvocation(arguments_[0], 'install')) await writeFile(resolve(f.root, '.bashrc'), 'unwanted installer changes\n')
-      return result
-    },
-  })
-  await service.start(opencode, 'install', { confirmed: true, packageSpec: '@opencode/cli@2.1.1' })
-  const result = await finished(service)
-  assert.equal(result.operation.error, 'installer_modified_shell_config')
-  assert.equal(await readFile(resolve(f.root, '.bashrc'), 'utf8'), 'existing configuration\n')
+test('a failed command reports a fixed id; what it printed stays in the sanitized output', async t => {
+  const f = await fixture(t, { catalog: [grok], latest: '1.0.88', on: command => {
+    if (command.endsWith("'update'")) return { code: 3, output: 'network down very-secret-token https://x.ai/cli' }
+  } })
+  f.commands.grok = { path: resolve(f.root, '.grok/bin/grok'), version: 'grok 1.0.77' }
+  await f.service.inventory(grok, true)
+  await f.service.start(grok, 'update', { confirmed: true })
+  const { operation } = await finished(f.service)
+  assert.equal(operation.error, 'update_failed')
+  assert.ok(operationFailureCodes.includes(operation.error))
+  assert.match(operation.output, /network down \[redacted\] \[URL redacted\]/)
+  // A thrown message outside the allowlist never reaches the apps.
+  const odd = await fixture(t, { officialInstaller: async () => { throw new Error('ENOSPC /home/private-account/x') } })
+  await odd.service.start(opencode, 'install', { confirmed: true })
+  assert.equal((await finished(odd.service)).operation.error, 'runtime_operation_failed')
 })
 
-test('reviewed adapters update their engine even when the connector itself is current', async t => {
-  const root = await mkdtemp(resolve(tmpdir(), 'wm-independent-engine-'))
-  t.after(() => rm(root, { recursive: true, force: true }))
-  const adapter = resolve(root, 'node_modules/@agentclientprotocol/codex-acp')
-  const dependency = resolve(root, 'node_modules/@openai/codex')
-  await mkdir(resolve(adapter, 'bin'), { recursive: true }); await mkdir(resolve(dependency, 'bin'), { recursive: true })
-  await writeFile(resolve(adapter, 'package.json'), JSON.stringify({ name: '@agentclientprotocol/codex-acp', version: '2.5.0', dependencies: { '@openai/codex': '^0.165.0' } }))
-  await writeFile(resolve(adapter, 'bin/cli.js'), '')
-  await symlink(resolve(adapter, 'bin/cli.js'), resolve(root, 'codex-acp'))
-  await manage(root, 'codex', { runtime: resolve(root, 'codex-acp') })
-  let engine = '0.165.0', selected
-  await writeFile(resolve(dependency, 'package.json'), JSON.stringify({ name: '@openai/codex', version: engine }))
-  const h = { id: 'codex', displayName: 'Codex', command: 'codex-acp', cliCommand: 'codex', adapterPackage: '@agentclientprotocol/codex-acp', minimumAdapterVersion: '2.5.0', minimumEngineVersion: '0.166.0', install: { interpreter: 'sh', arguments: [] } }
-  const service = createRuntimeMaintenance({ catalog: new Map([['codex', h]]), workspaceRoot: root, environment: () => ({ HOME: root }), acquireLock: async () => () => {},
-    verifiedInstaller: async () => ({ path: resolve(root, 'fixture-installer.sh') }),
-    fetchImplementation: async url => ({ ok: true, json: async () => registryMetadata(String(url).includes('codex-acp') ? '2.5.0' : '0.166.0') }),
-    execute: async command => {
-      if (command === 'ps -eo pid=,args=') return { code: 0, output: '' }
-      if (command.startsWith('command -v')) return { code: 0, output: resolve(root, command.includes('codex-acp') ? 'codex-acp' : 'codex') }
-      if (command.endsWith('--version')) return { code: 0, output: command.includes('/bin/codex.js') ? engine : command.includes('codex-acp') ? '2.5.0' : '0.166.0' }
-      assert.ok(!command.includes('npm view'), 'reviewed engine selection must not fall back to the old upstream range')
-      const match = command.match(/'(\{"prefix":.*\})'$/)
-      if (match) {
-        selected = JSON.parse(match[1]); engine = selected.engineVersion
-        await writeFile(resolve(dependency, 'package.json'), JSON.stringify({ name: '@openai/codex', version: engine }))
-      }
+test('an npm-installed OpenCode is replaced by the official installer, never upgraded through npm', async t => {
+  let restarts = 0
+  const f = await fixture(t, { latest: '2.3.0', restartOpenCodeService: async () => { restarts++ }, on: async (command, { root, commands }) => {
+    if (command.startsWith("'bash' ")) {
+      const official = resolve(root, '.opencode/bin/opencode')
+      await mkdir(resolve(root, '.opencode/bin'), { recursive: true })
+      await writeFile(official, '#!/bin/sh\n'); await chmod(official, 0o700)
+      // The npm copy stays first on this PATH; the official location still wins.
+      commands['opencode-official'] = { path: official, version: 'opencode v2.3.0' }
       return { code: 0, output: '' }
-    },
-  })
-  const before = await service.inventory(h, true)
-  assert.equal(before.components[0].updateAvailable, false)
-  assert.equal(before.components.find(c => c.id === 'bundled').updateTargetVersion, '0.166.0')
+    }
+    if (command.endsWith("'upgrade'")) throw Error('npm-installed OpenCode was upgraded through npm')
+  } })
+  // `npm --prefix ~/.local install -g @opencode/cli@2`, as older Woven hosts did.
+  const packaged = resolve(f.root, '.local/lib/node_modules/@opencode/cli/bin/opencode')
+  await mkdir(resolve(packaged, '..'), { recursive: true }); await writeFile(packaged, '#!/bin/sh\n')
+  await mkdir(resolve(f.root, '.local/bin'), { recursive: true })
+  await symlink(packaged, resolve(f.root, '.local/bin/opencode'))
+  f.commands.opencode = { path: resolve(f.root, '.local/bin/opencode'), version: 'opencode v2.2.7' }
+  const before = await f.service.inventory(opencode, true)
+  assert.equal(before.source, 'npm')
+  assert.equal(before.installed, true)
   assert.equal(before.updateAvailable, true)
-  await service.start(h, 'update', { confirmed: true, sourceSHA256: 'fixture' })
-  const after = await finished(service)
-  assert.equal(after.operation.status, 'succeeded')
-  assert.equal(selected.adapterVersion, '2.5.0'); assert.equal(selected.engineVersion, '0.166.0')
-  assert.equal(after.components.find(c => c.id === 'bundled').installedVersion, '0.166.0')
+  assert.match(before.notice, /installed with npm/)
+  await f.service.start(opencode, 'update', { confirmed: true })
+  const after = await finished(f.service)
+  assert.equal(after.operation.status, 'succeeded', after.operation.error)
+  assert.deepEqual(f.installers, [['opencode', 'https://opencode.ai/v2/install']])
+  assert.equal(after.path, resolve(f.root, '.opencode/bin/opencode'))
+  assert.equal(after.source, 'native')
   assert.equal(after.updateAvailable, false)
+  assert.equal(restarts, 1, 'the shared service moves to the official CLI')
+  assert.equal(f.calls.some(([command]) => /npm|'upgrade'/.test(command)), false)
 })
 
-test('Claude native install uses the newest stable publication when channel tags lag', async t => {
-  for (const available of [true, false]) {
-    const root = await mkdtemp(resolve(tmpdir(), 'wm-claude-channel-'))
-    t.after(() => rm(root, { recursive: true, force: true }))
-    const h = { id: 'claude_code', displayName: 'Claude', command: 'claude', cliCommand: 'claude', install: { kind: 'official-script', interpreter: 'bash', arguments: ['latest'] } }
-    let installed = false, command
-    const service = createRuntimeMaintenance({ catalog: new Map([[h.id, h]]), workspaceRoot: root,
-      configuration: loadRuntimeConfiguration({ HOME: root }),
-      environment: () => ({ HOME: root }), acquireLock: async () => () => {},
-      verifiedInstaller: async () => ({ path: resolve(root, 'fixture.sh') }),
-      fetchImplementation: async () => ({ ok: available, status: 503, json: async () => ({ 'dist-tags': { latest: '2.1.314' }, versions: {
-        '2.1.314': {}, '2.1.316': {}, '2.1.317': { deprecated: 'withdrawn' }, '2.2.0-beta.1': {},
-      } }) }),
-      execute: async value => {
-        if (value === 'ps -eo pid=,args=') return { code: 0, output: '' }
-        if (value.startsWith('command -v')) return { code: installed ? 0 : 1, output: resolve(root, 'claude') }
-        if (value.endsWith('--version')) return { code: 0, output: '2.1.316' }
-        command = value; installed = true; return { code: 0, output: '' }
-      },
-    })
-    await service.start(h, 'install', { confirmed: true, sourceSHA256: 'fixture' })
-    const after = await finished(service)
-    assert.equal(after.operation.status, available ? 'succeeded' : 'failed')
-    if (available) assert.equal(command, `'bash' '${resolve(root, 'fixture.sh')}' '2.1.316'`)
-    else assert.equal(command, undefined, 'unavailable metadata must refuse execution')
-  }
-})
-
-test('reviewed adapters update only the nested ACP SDK when connector and engine are current', async t => {
-  const root = await mkdtemp(resolve(tmpdir(), 'wm-independent-engine-'))
-  t.after(() => rm(root, { recursive: true, force: true }))
-  const adapter = resolve(root, 'node_modules/@agentclientprotocol/codex-acp')
-  const dependency = resolve(root, 'node_modules/@openai/codex')
-  await mkdir(resolve(adapter, 'bin'), { recursive: true }); await mkdir(resolve(dependency, 'bin'), { recursive: true })
-  await writeFile(resolve(adapter, 'package.json'), JSON.stringify({ name: '@agentclientprotocol/codex-acp', version: '2.5.0', dependencies: { '@openai/codex': '^0.165.0' } }))
-  await writeFile(resolve(adapter, 'bin/cli.js'), '')
-  await symlink(resolve(adapter, 'bin/cli.js'), resolve(root, 'codex-acp'))
-  await manage(root, 'codex', { runtime: resolve(root, 'codex-acp') })
-  let engine = '0.166.0', selected, sdk = '2.1.0'
-  const sdkRoot = resolve(root, 'node_modules/@agentclientprotocol/sdk')
-  await mkdir(sdkRoot, { recursive: true })
-  await writeFile(resolve(sdkRoot, 'package.json'), JSON.stringify({ name: '@agentclientprotocol/sdk', version: sdk }))
-  await writeFile(resolve(dependency, 'package.json'), JSON.stringify({ name: '@openai/codex', version: engine }))
-  const h = { id: 'codex', displayName: 'Codex', command: 'codex-acp', cliCommand: 'codex', adapterPackage: '@agentclientprotocol/codex-acp', minimumAdapterVersion: '2.5.0', minimumEngineVersion: '0.166.0', minimumProtocolSDKVersion: '2.2.0', install: { interpreter: 'sh', arguments: [] } }
-  const service = createRuntimeMaintenance({ catalog: new Map([['codex', h]]), workspaceRoot: root, environment: () => ({ HOME: root }), acquireLock: async () => () => {},
-    verifiedInstaller: async () => ({ path: resolve(root, 'fixture-installer.sh') }),
-    fetchImplementation: async url => ({ ok: true, json: async () => ({ 'dist-tags': { latest: '2.1.0' }, versions: String(url).includes('sdk') ? { '2.1.0': {}, '2.2.0': {}, '2.3.0': { deprecated: 'withdrawn' }, '3.0.0-beta.1': {} } : registryMetadata(String(url).includes('codex-acp') ? '2.5.0' : '0.166.0').versions }) }),
-    execute: async command => {
-      if (command === 'ps -eo pid=,args=') return { code: 0, output: '' }
-      if (command.startsWith('command -v')) return { code: 0, output: resolve(root, command.includes('codex-acp') ? 'codex-acp' : 'codex') }
-      if (command.endsWith('--version')) return { code: 0, output: command.includes('/bin/codex.js') ? engine : command.includes('codex-acp') ? '2.5.0' : '0.166.0' }
-      assert.ok(!command.includes('npm view'), 'reviewed engine selection must not fall back to the old upstream range')
-      const match = command.match(/'(\{"prefix":.*\})'$/)
-      if (match) {
-        selected = JSON.parse(match[1]); engine = selected.engineVersion; sdk = selected.protocolSDKVersion
-        await writeFile(resolve(sdkRoot, 'package.json'), JSON.stringify({ name: '@agentclientprotocol/sdk', version: sdk }))
-        await writeFile(resolve(dependency, 'package.json'), JSON.stringify({ name: '@openai/codex', version: engine }))
-      }
-      return { code: 0, output: '' }
-    },
-  })
-  const before = await service.inventory(h, true)
-  assert.equal(before.components[0].updateAvailable, false)
-  assert.equal(before.components.find(c => c.id === 'bundled').updateTargetVersion, '0.166.0')
-  assert.equal(before.components.find(c => c.id === 'bundled').updateAvailable, false)
-  assert.equal(before.components.find(c => c.id === 'protocol-sdk').latestVersion, '2.2.0')
-  assert.equal(before.updateAvailable, true)
-  await service.start(h, 'update', { confirmed: true, sourceSHA256: 'fixture' })
-  const after = await finished(service)
-  assert.equal(after.operation.status, 'succeeded')
-  assert.equal(selected.adapterVersion, '2.5.0'); assert.equal(selected.engineVersion, '0.166.0')
-  assert.equal(after.components.find(c => c.id === 'bundled').installedVersion, '0.166.0')
-  assert.equal(selected.protocolSDKVersion, '2.2.0')
-  assert.equal(after.components.find(c => c.id === 'protocol-sdk').installedVersion, '2.2.0')
-  assert.equal(after.updateAvailable, false)
+test('an npm-installed CLI that the official installer does not replace fails verification', async t => {
+  const f = await fixture(t, { catalog: [grok], on: command => { if (command.startsWith("'bash' ")) return { code: 0, output: '' } } })
+  const packaged = resolve(f.root, '.npm-global/lib/node_modules/@xai/grok/bin/grok')
+  await mkdir(resolve(packaged, '..'), { recursive: true }); await writeFile(packaged, '#!/bin/sh\n')
+  f.commands.grok = { path: packaged, version: 'grok 1.0.77' }
+  assert.equal((await f.service.inventory(grok)).source, 'npm')
+  await f.service.start(grok, 'install', { confirmed: true })
+  const result = await finished(f.service)
+  assert.deepEqual(f.installers, [['grok_build', 'https://x.ai/cli/install.sh']])
+  assert.equal(result.operation.error, 'installation_verification_failed')
 })

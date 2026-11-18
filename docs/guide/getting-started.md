@@ -21,7 +21,8 @@ steps are optional. To open the guide again, choose **Set up harnesses** in
 2. Choose **New folder** in the sidebar to create a blank project or link an
    existing directory on your Mac.
 3. Open **Settings → Agents** and choose a harness. If it is missing, select
-   **Install** and review the installer source before confirming.
+   **Install**. Woven Matter runs the vendor's official installer, so the same CLI
+   works in Terminal.
 4. If the harness is not signed in, choose **Sign in** on its page and finish
    the steps shown there. Installed harnesses appear in the sidebar
    automatically.

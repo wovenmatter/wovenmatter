@@ -71,11 +71,52 @@ export function nonInteractiveSessionEnvironment(environment = process.env, conf
     DEBIAN_FRONTEND: 'noninteractive' }
 }
 
+// Woven's own ACP adapters (codex-acp, claude-agent-acp). They only connect the
+// person's native CLI to Woven, so they live in Woven's folder, not on the
+// person's PATH in a terminal.
+export function acpAdapterPrefix(configuration = runtimeConfiguration) {
+  return resolve(configuration.home, '.local/share/wovenmatter/acp-adapters')
+}
+
+// Where each vendor's official installer puts its CLI: OpenCode v2 in
+// ~/.opencode/bin, Grok in ~/.grok/bin, Claude and Codex in ~/.local/bin. The
+// dedicated folders come first, so an older npm copy in ~/.local/bin (as older
+// Woven hosts installed OpenCode) never shadows the official one.
+const nativeCLIFolders = Object.freeze({ opencode: '.opencode/bin', grok: '.grok/bin', claude: '.local/bin', codex: '.local/bin' })
+export function nativeCLIDirectories(configuration = runtimeConfiguration) {
+  return ['.opencode/bin', '.grok/bin', '.local/bin'].map(path => resolve(configuration.home, path))
+}
+
+/** The official installer's location for one CLI command, or null for other commands. */
+export function nativeCLILocation(command, configuration = runtimeConfiguration) {
+  const folder = Object.hasOwn(nativeCLIFolders, command) ? nativeCLIFolders[command] : null
+  return folder ? resolve(configuration.home, folder, command) : null
+}
+
+function executableOnPath(name, paths) {
+  for (const directory of paths) {
+    if (!directory.startsWith('/')) continue
+    const candidate = resolve(directory, name)
+    if (existsSync(candidate)) return candidate
+  }
+  return null
+}
+
 export function runtimeHarnessEnvironment(environment = process.env, configuration = loadRuntimeConfiguration(environment)) {
-  const paths = [resolve(configuration.home, '.local/bin'), resolve(configuration.home, '.npm-global/bin')]
+  const paths = [resolve(acpAdapterPrefix(configuration), 'bin'), ...nativeCLIDirectories(configuration),
+    resolve(configuration.home, '.npm-global/bin')]
   if (configuration.harnessPath) paths.push(configuration.harnessPath)
   paths.push(environment.PATH ?? '')
-  return nonInteractiveSessionEnvironment({ ...environment, HOME: configuration.home, PATH: paths.join(':'), WOVENMATTER_WORKSPACE: configuration.workspaceRoot }, configuration)
+  const search = paths.join(':').split(':').filter(Boolean)
+  // The ACP adapters drive the person's own CLI, so chats here share its logins,
+  // skills and sessions with that CLI in a terminal. An explicit setting wins.
+  const native = {}
+  for (const [key, name] of [['CODEX_PATH', 'codex'], ['CLAUDE_CODE_EXECUTABLE', 'claude']]) {
+    if (environment[key]) continue
+    const path = executableOnPath(name, search)
+    if (path) native[key] = path
+  }
+  return nonInteractiveSessionEnvironment({ ...environment, ...native, HOME: configuration.home, PATH: paths.join(':'), WOVENMATTER_WORKSPACE: configuration.workspaceRoot }, configuration)
 }
 
 // This is the release's patched npm, not Node's stock bundled npm or a user

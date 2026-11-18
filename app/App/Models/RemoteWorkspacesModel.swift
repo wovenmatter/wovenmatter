@@ -83,6 +83,28 @@ final class RemoteWorkspacesModel {
     private(set) var pendingHarnessSetupIDs: Set<UUID> = []
     private let harnessSetupKey = "wovenmatter.remote-workspaces.pending-harness-setup"
     private(set) var busyWorkspaceIDs: Set<UUID> = []
+    /// Harnesses being installed or updated, by workspace. Several harnesses on one
+    /// workspace install or update at once; the host locks each harness on its own.
+    private(set) var maintainingHarnesses: [UUID: Set<AgentRuntimeKind>] = [:]
+
+    /// The harness each workspace is signing in to. A sign-in holds the workspace like
+    /// other account changes, but other harnesses there can still install or update.
+    private(set) var signingInHarnesses: [UUID: AgentRuntimeKind] = [:]
+
+    func isMaintaining(_ kind: AgentRuntimeKind, in workspaceID: UUID) -> Bool {
+        maintainingHarnesses[workspaceID]?.contains(kind) == true
+    }
+
+    /// Why this harness can't install or update on the workspace right now; nil when it can
+    /// (or already is).
+    func harnessMaintenanceBlocker(_ kind: AgentRuntimeKind, in workspaceID: UUID) -> String? {
+        if signingInHarnesses[workspaceID] == kind { return "Finish signing in first." }
+        if busyWorkspaceIDs.contains(workspaceID), signingInHarnesses[workspaceID] == nil {
+            return "This workspace is busy. Try again when it finishes."
+        }
+        if checkingRuntimeIDs[workspaceID]?.contains(kind) == true { return "It's still being checked. Try again in a moment." }
+        return nil
+    }
     private(set) var isDiscovering = false
     private(set) var isCheckingHost = false
     private(set) var isCreating = false
@@ -198,6 +220,13 @@ final class RemoteWorkspacesModel {
         self.harnesses = [configuration.id: harnesses]
         runtimeMaintenance = [configuration.id: maintenance]
         workspaceRoots[configuration.id] = configuration.workspaceRoot ?? "/fixture/workspace"
+    }
+
+    func setFacadeHarnessActivity(_ id: UUID, maintaining: Set<AgentRuntimeKind>,
+                                  signingIn: AgentRuntimeKind? = nil, busy: Bool = false) {
+        maintainingHarnesses[id] = maintaining.isEmpty ? nil : maintaining
+        signingInHarnesses[id] = signingIn
+        if busy { busyWorkspaceIDs.insert(id) } else { busyWorkspaceIDs.remove(id) }
     }
     #endif
 
@@ -324,7 +353,7 @@ final class RemoteWorkspacesModel {
     }
 
     func runtimeMaintenanceError(_ kind: AgentRuntimeKind, workspaceID: UUID) -> String? {
-        runtimeMaintenance[workspaceID]?.first { $0.id == kind }?.operation?.error
+        runtimeMaintenance[workspaceID]?.first { $0.id == kind }?.operation?.error.map(RemoteRuntimeFailure.describe)
             ?? runtimeCheckErrors[workspaceID]?[kind]
             ?? actionErrors[workspaceID]?[kind]
             ?? runtimeErrors[workspaceID]
@@ -337,7 +366,7 @@ final class RemoteWorkspacesModel {
     func checkRuntimeUpdates(_ kind: AgentRuntimeKind, configuration: RemoteWorkspaceConfiguration) {
         if forwardToBackend(.checkRuntimeUpdates(configuration.id, kind)) { return }
         guard let identity = try? requestIdentity(configuration),
-              !busyWorkspaceIDs.contains(configuration.id),
+              !busyWorkspaceIDs.contains(configuration.id), !isMaintaining(kind, in: configuration.id),
               runtimeMaintenance[configuration.id]?.first(where: { $0.id == kind })?.operation?.status != "running",
               checkingRuntimeIDs[configuration.id]?.contains(kind) != true else { return }
         checkingRuntimeIDs[configuration.id, default: []].insert(kind)
@@ -904,7 +933,7 @@ final class RemoteWorkspacesModel {
         configuration: RemoteWorkspaceConfiguration
     ) {
         if forwardToBackend(.lifecycle(configuration.id, action.rawValue)) { return }
-        performBusy(configuration) {
+        performBusy(configuration, workspaceWide: true) {
             let status = try await self.sshClient.lifecycle(
                 action,
                 configuration: configuration
@@ -916,7 +945,7 @@ final class RemoteWorkspacesModel {
 
     func updateHost(_ configuration: RemoteWorkspaceConfiguration) {
         if forwardToBackend(.updateHost(configuration.id)) { return }
-        performBusy(configuration) {
+        performBusy(configuration, workspaceWide: true) {
             defer { self.progress = nil }
             let status = try await self.sshClient.deployHost(configuration: configuration, update: true) { [weak self] message in
                 Task { @MainActor [weak self] in self?.progress = message }
@@ -930,7 +959,7 @@ final class RemoteWorkspacesModel {
         removePersistentData: Bool
     ) {
         if forwardToBackend(.delete(configuration.id, removePersistentData: removePersistentData)) { return }
-        performBusy(configuration) {
+        performBusy(configuration, workspaceWide: true) {
             self.checkingRuntimeIDs.removeValue(forKey: configuration.id)
             self.actionErrors.removeValue(forKey: configuration.id)
             self.browserFeeds.removeValue(forKey: configuration.id)?.stop()
@@ -964,7 +993,7 @@ final class RemoteWorkspacesModel {
         configuration: RemoteWorkspaceConfiguration
     ) {
         if forwardToBackend(.performHarness(configuration.id, harness.id, action)) { return }
-        performBusy(configuration) {
+        performBusy(configuration, actionErrorRuntimeKind: harness.id) {
             let client = try await self.serviceClient(for: configuration)
             var operation = try await client.perform(
                 harnessID: harness.id,
@@ -982,18 +1011,30 @@ final class RemoteWorkspacesModel {
         }
     }
 
-    func prepareHarnessAction(
+    /// Installs or updates a harness on a Linux workspace with nothing to review: the host
+    /// runs the vendor's official installer or update command straight away. An older host
+    /// still names its download's digest first, which is passed back. The one question is
+    /// OpenCode 1 on the host, whose command OpenCode 2 replaces.
+    func runHarnessMaintenance(
         _ action: String,
         harness: RemoteHarnessStatus,
         configuration: RemoteWorkspaceConfiguration
     ) {
         if forwardToBackend(.prepareHarness(configuration.id, harness.id, action)) { return }
-        guard action == "install" || action == "update",
-              checkingRuntimeIDs[configuration.id]?.contains(harness.id) != true else { return }
-        performBusy(configuration, actionErrorRuntimeKind: harness.id) {
+        guard action == "install" || action == "update" else { return }
+        performHarnessMaintenance(configuration, kind: harness.id) {
             let identity = try self.requestIdentity(configuration)
             let client = try await self.serviceClient(for: configuration)
             try self.requireCurrent(identity)
+            guard action == "install" else {
+                // Updates run the vendor's own update command. An older host still wants
+                // the installer digest, so it is passed along when the host names one.
+                let preview = try? await client.installerPreview(harnessID: harness.id)
+                try self.requireCurrent(identity)
+                try await self.runRuntimeMaintenance(harness.id, action: action, configuration: configuration,
+                                                     sourceSHA256: preview?.sha256, packageSpec: preview?.packageSpec)
+                return
+            }
             let preview: RemoteInstallerPreview
             do {
                 preview = try await client.installerPreview(harnessID: harness.id)
@@ -1002,13 +1043,35 @@ final class RemoteWorkspacesModel {
                 throw error
             }
             try self.requireCurrent(identity)
-            self.preparedHarnessAction = PreparedHarnessAction(
-                action: action,
-                harness: harness,
-                configuration: configuration,
-                preview: preview
-            )
+            if action == "install", harness.id == .opencode,
+               self.runtimeMaintenance[configuration.id]?.first(where: { $0.id == .opencode })?.openCodeV1 != nil {
+                self.preparedHarnessAction = PreparedHarnessAction(action: action, harness: harness,
+                                                                   configuration: configuration, preview: preview)
+                return
+            }
+            try await self.runRuntimeMaintenance(harness.id, action: action, configuration: configuration,
+                                                 sourceSHA256: preview.sha256, packageSpec: preview.packageSpec)
         }
+    }
+
+    /// Starts an install or update and says why it didn't start, so a caller following it
+    /// never mistakes a refused request for one that finished. Nil once it is running,
+    /// already running, or waiting on the OpenCode 1 question.
+    func startHarnessMaintenance(
+        _ action: String,
+        harness: RemoteHarnessStatus,
+        configuration: RemoteWorkspaceConfiguration
+    ) async -> String? {
+        if isBackendProjection {
+            do { _ = try await requestBackend(.prepareHarness(configuration.id, harness.id, action)) }
+            catch { return error.localizedDescription }
+        } else {
+            runHarnessMaintenance(action, harness: harness, configuration: configuration)
+        }
+        if isMaintaining(harness.id, in: configuration.id) { return nil }
+        if let prepared = preparedHarnessAction, prepared.configuration.id == configuration.id,
+           prepared.harness.id == harness.id { return nil }
+        return actionErrors[configuration.id]?[harness.id] ?? "It didn't start. Try again."
     }
 
     func confirmPreparedHarnessAction(
@@ -1022,27 +1085,27 @@ final class RemoteWorkspacesModel {
               harnessID == nil || preparedHarnessAction.harness.id == harnessID,
               action == nil || preparedHarnessAction.action == action else { return }
         self.preparedHarnessAction = nil
-        performBusy(
-            preparedHarnessAction.configuration,
-            actionErrorRuntimeKind: preparedHarnessAction.harness.id
-        ) {
+        performHarnessMaintenance(preparedHarnessAction.configuration, kind: preparedHarnessAction.harness.id) {
             try await self.runRuntimeMaintenance(
                 preparedHarnessAction.harness.id, action: preparedHarnessAction.action,
                 configuration: preparedHarnessAction.configuration,
                 sourceSHA256: preparedHarnessAction.preview.sha256,
-                packageSpec: preparedHarnessAction.preview.packageSpec
+                packageSpec: preparedHarnessAction.preview.packageSpec,
+                replaceOpenCodeV1: preparedHarnessAction.harness.id == .opencode
             )
         }
     }
 
     private func runRuntimeMaintenance(_ kind: AgentRuntimeKind, action: String,
                                        configuration: RemoteWorkspaceConfiguration,
-                                       sourceSHA256: String? = nil, packageSpec: String? = nil) async throws {
+                                       sourceSHA256: String? = nil, packageSpec: String? = nil,
+                                       replaceOpenCodeV1: Bool = false) async throws {
         let identity = try requestIdentity(configuration)
         let client = try await serviceClient(for: configuration)
         try requireCurrent(identity)
         var operation = try await client.maintainRuntime(kind, action: action,
-                                                       sourceSHA256: sourceSHA256, packageSpec: packageSpec)
+                                                       sourceSHA256: sourceSHA256, packageSpec: packageSpec,
+                                                       replaceOpenCodeV1: replaceOpenCodeV1)
         try requireCurrent(identity)
         operations[configuration.id] = operation
         await refreshRuntimeMaintenance(configuration)
@@ -1081,7 +1144,7 @@ final class RemoteWorkspacesModel {
         configuration: RemoteWorkspaceConfiguration
     ) {
         if forwardToBackend(.signIn(configuration.id, harness.id, method.id)) { return }
-        performBusy(configuration) {
+        performBusy(configuration, actionErrorRuntimeKind: harness.id, signingIn: harness.id) {
             let client = try await self.serviceClient(for: configuration)
             var session = try await client.startSignIn(
                 harnessID: harness.id,
@@ -1146,19 +1209,77 @@ final class RemoteWorkspacesModel {
         }
     }
 
+    /// Like `performBusy`, but holds only this harness, so other harnesses on the same
+    /// workspace can install or update alongside it.
+    private func performHarnessMaintenance(
+        _ configuration: RemoteWorkspaceConfiguration,
+        kind: AgentRuntimeKind,
+        operation: @escaping @MainActor () async throws -> Void
+    ) {
+        let identity: RemoteWorkspaceRequestIdentity
+        do { identity = try requestIdentity(configuration) } catch {
+            actionErrors[configuration.id, default: [:]][kind] = error.localizedDescription
+            return
+        }
+        guard !isMaintaining(kind, in: configuration.id) else { return }
+        if let blocker = harnessMaintenanceBlocker(kind, in: configuration.id) {
+            actionErrors[configuration.id, default: [:]][kind] = blocker
+            return
+        }
+        maintainingHarnesses[configuration.id, default: []].insert(kind)
+        errorMessage = nil
+        actionErrors[configuration.id]?.removeValue(forKey: kind)
+        Task {
+            defer {
+                maintainingHarnesses[configuration.id]?.remove(kind)
+                if maintainingHarnesses[configuration.id]?.isEmpty == true { maintainingHarnesses[configuration.id] = nil }
+            }
+            do {
+                try requireCurrent(identity)
+                try await operation()
+            } catch is CancellationError {
+                // Credential or destination changes invalidate this request silently.
+            } catch {
+                guard credentialEpoch == identity.credentialEpoch,
+                      self.configuration(id: configuration.id) == configuration else { return }
+                errorMessage = error.localizedDescription
+                actionErrors[configuration.id, default: [:]][kind] = error.localizedDescription
+            }
+        }
+    }
+
+    /// Holds the whole workspace for one change. `workspaceWide` changes (start, stop,
+    /// server update, removal) wait for every harness install or update there; a change
+    /// to one harness (`actionErrorRuntimeKind`) waits only for that harness.
     private func performBusy(
         _ configuration: RemoteWorkspaceConfiguration,
         actionErrorRuntimeKind: AgentRuntimeKind? = nil,
+        workspaceWide: Bool = false,
+        signingIn: AgentRuntimeKind? = nil,
         operation: @escaping @MainActor () async throws -> Void
     ) {
-        guard let identity = try? requestIdentity(configuration),
-              busyWorkspaceIDs.insert(configuration.id).inserted else { return }
+        guard let identity = try? requestIdentity(configuration) else { return }
+        if workspaceWide, maintainingHarnesses[configuration.id]?.isEmpty == false {
+            errorMessage = "Wait for harness installs and updates to finish."
+            return
+        }
+        if let actionErrorRuntimeKind, isMaintaining(actionErrorRuntimeKind, in: configuration.id) {
+            let message = "Wait for its install or update to finish."
+            errorMessage = message
+            actionErrors[configuration.id, default: [:]][actionErrorRuntimeKind] = message
+            return
+        }
+        guard busyWorkspaceIDs.insert(configuration.id).inserted else { return }
+        if let signingIn { signingInHarnesses[configuration.id] = signingIn }
         errorMessage = nil
         if let actionErrorRuntimeKind {
             actionErrors[configuration.id]?.removeValue(forKey: actionErrorRuntimeKind)
         }
         Task {
-            defer { busyWorkspaceIDs.remove(configuration.id) }
+            defer {
+                busyWorkspaceIDs.remove(configuration.id)
+                if signingIn != nil { signingInHarnesses[configuration.id] = nil }
+            }
             do {
                 try requireCurrent(identity)
                 try await operation()
@@ -1571,6 +1692,9 @@ final class RemoteWorkspacesModel {
     /// `updateHost(_:)` is the same started from the Remote workspaces page.
     func updateHost(_ configuration: RemoteWorkspaceConfiguration, progress: @escaping @MainActor (String) -> Void) async throws {
         guard !isBackendProjection else { throw BackendRPCError.remote("Remote connections are owned by the background service.") }
+        guard maintainingHarnesses[configuration.id]?.isEmpty != false else {
+            throw RemoteWorkspaceClientError.invalidResponse("Wait for harness installs and updates to finish.")
+        }
         guard busyWorkspaceIDs.insert(configuration.id).inserted else {
             throw RemoteWorkspaceClientError.invalidResponse("This host is already busy with another change.")
         }
@@ -1664,6 +1788,8 @@ final class RemoteWorkspacesModel {
         let operations: [UUID: RemoteHarnessOperation]
         let authenticationSessions: [UUID: RemoteHarnessAuthenticationSession]
         let busyWorkspaceIDs: Set<UUID>
+        let maintainingHarnesses: [UUID: Set<AgentRuntimeKind>]
+        var signingInHarnesses: [UUID: AgentRuntimeKind]? = nil
         let signInStatuses: [UUID: [AgentSignInStatus]]
         let checkingSignIn: Set<UUID>
         let signInErrors: [UUID: String]
@@ -1705,6 +1831,8 @@ final class RemoteWorkspacesModel {
             operations: operations,
             authenticationSessions: authenticationSessions,
             busyWorkspaceIDs: busyWorkspaceIDs,
+            maintainingHarnesses: maintainingHarnesses,
+            signingInHarnesses: signingInHarnesses,
             signInStatuses: signInStatuses,
             checkingSignIn: checkingSignIn,
             signInErrors: signInErrors,
@@ -1746,6 +1874,8 @@ final class RemoteWorkspacesModel {
         operations = snapshot.operations
         authenticationSessions = snapshot.authenticationSessions
         busyWorkspaceIDs = snapshot.busyWorkspaceIDs
+        maintainingHarnesses = snapshot.maintainingHarnesses
+        signingInHarnesses = snapshot.signingInHarnesses ?? [:]
         signInStatuses = snapshot.signInStatuses
         checkingSignIn = snapshot.checkingSignIn
         signInErrors = snapshot.signInErrors

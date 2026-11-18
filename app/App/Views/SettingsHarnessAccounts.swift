@@ -131,7 +131,8 @@ struct SettingsRemoteHarnessSoftware: View {
                 let checking = model.checkingRuntimeIDs[workspace.id]?.contains(runtimeKind) == true
                 let running = runtime?.operation?.status == "running"
                 let unavailable = model.isRuntimeInventoryUnavailable(runtimeKind, configuration: workspace)
-                let busy = model.busyWorkspaceIDs.contains(workspace.id) || running || checking
+                let busy = model.harnessMaintenanceBlocker(runtimeKind, in: workspace.id) != nil || model.isMaintaining(runtimeKind, in: workspace.id)
+                    || running || checking
                 SettingsRuntimeSummaryRow(
                     summary: runtime?.components.map(componentVersion).joined(separator: " · ") ?? "Checking installed components…",
                     status: runtime?.installed == true ? "Installed" : runtime == nil ? "Checking" : "Not installed",
@@ -139,7 +140,7 @@ struct SettingsRemoteHarnessSoftware: View {
                 ) {
                     if let runtime, !runtime.installed {
                         Button(running && runtime.operation?.action == "install" ? "Installing…" : (runtime.failureCount > 0 ? "Retry install" : "Install")) {
-                            model.prepareHarnessAction("install", harness: harness, configuration: workspace)
+                            model.runHarnessMaintenance("install", harness: harness, configuration: workspace)
                         }.buttonStyle(SettingsQuietButtonStyle()).disabled(busy || unavailable)
                     } else if runtime?.source != "system" {
                         SettingsRemoteRuntimeUpdateButton(model: model, harness: harness, configuration: workspace)
@@ -173,30 +174,21 @@ struct SettingsRemoteHarnessSoftware: View {
     }
 }
 
-/// Installer review stays attached to the surface that requested the install.
+/// The one install that asks first: OpenCode 2 replaces OpenCode 1's `opencode` command.
 struct HarnessInstallerConfirmation: ViewModifier {
     @Bindable var model: ApplicationModel
     var workspaceID: UUID?
     func body(content: Content) -> some View {
         content
-            .confirmationDialog("Review installer source", isPresented: Binding(
-                get: { workspaceID == nil && model.preparedLocalACPRuntimeInstall != nil },
-                set: { if !$0 { model.cancelPreparedLocalACPRuntimeInstall() } }
+            .confirmationDialog("Replace OpenCode 1?", isPresented: Binding(
+                get: { workspaceID == nil && model.pendingRuntimeInstall != nil },
+                set: { if !$0 { model.cancelPendingRuntimeInstall() } }
             ), titleVisibility: .visible) {
-                Button("Confirm and install") { model.confirmPreparedLocalACPRuntimeInstall() }
-                Button("Cancel", role: .cancel) { model.cancelPreparedLocalACPRuntimeInstall() }
+                Button("Install OpenCode 2") { model.confirmPendingRuntimeInstall() }
+                Button("Cancel", role: .cancel) { model.cancelPendingRuntimeInstall() }
             } message: {
-                if let prepared = model.preparedLocalACPRuntimeInstall {
-                    if let sha256 = prepared.preview.sha256, let bytes = prepared.preview.bytes {
-                        Text("Source: \(prepared.preview.source.absoluteString)\n"
-                            + "SHA-256: \(sha256)\n"
-                            + "Size: \(bytes) bytes\n"
-                            + "Woven Matter will download this source again and refuse to run it if the digest changes.")
-                    } else if let packageSpec = prepared.preview.packageSpec {
-                        Text("Source: \(prepared.preview.source.absoluteString)\n"
-                            + "Package: \(packageSpec)\n"
-                            + "npm registry integrity verification applies to this exact package version.")
-                    }
+                if let pending = model.pendingRuntimeInstall {
+                    Text(OpenCodeServiceLauncher.replacementNotice(replacing: pending.replacingVersion))
                 }
             }
             .modifier(RemoteHarnessInstallerConfirmation(model: model.remoteWorkspaces, workspaceID: workspaceID))
@@ -209,11 +201,11 @@ struct RemoteHarnessInstallerConfirmation: ViewModifier {
     var onCancel: () -> Void = {}
     @State private var confirming = false
     func body(content: Content) -> some View {
-        content.confirmationDialog("Review installer source", isPresented: Binding(
+        content.confirmationDialog("Replace OpenCode 1?", isPresented: Binding(
             get: { !confirming && workspaceID != nil && model.preparedHarnessAction?.configuration.id == workspaceID && model.preparedHarnessAction?.action == "install" },
             set: { if !$0 && !confirming { cancel() } }
         ), titleVisibility: .visible) {
-            Button("Confirm and install") {
+            Button("Install OpenCode 2") {
                 // Backend commands are asynchronous. Dismissing this dialog must
                 // not cancel the setup queue before the confirmation arrives.
                 confirming = true
@@ -221,9 +213,10 @@ struct RemoteHarnessInstallerConfirmation: ViewModifier {
             }
             Button("Cancel", role: .cancel) { cancel() }
         } message: {
-            if let preview = model.preparedHarnessAction?.preview {
-                Text("Source: \(preview.source)\n" + (preview.sha256.map { "SHA-256: \($0)" }
-                    ?? "Package: \(preview.packageSpec ?? "") · Registry integrity verification applies."))
+            if let prepared = model.preparedHarnessAction {
+                let version = model.runtimeMaintenance[prepared.configuration.id]?
+                    .first(where: { $0.id == .opencode })?.openCodeV1?.version ?? "1"
+                Text(OpenCodeServiceLauncher.replacementNotice(replacing: version, on: prepared.configuration.name))
             }
         }
         .onChange(of: model.preparedHarnessAction == nil) { _, cleared in
