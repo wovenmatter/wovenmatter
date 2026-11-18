@@ -91,6 +91,11 @@ public struct WorkspaceToolExecutor: Sendable {
       if group != .history && !(group.isAutomation && command.action == "cancel") {
         try await database.requireTool(group, sessionID: callerID)
       }
+      // Assigning a Page task to an agent or bot starts a chat, and stopping one
+      // ends it, so both also need Sessions. Assigning it to the person does not.
+      if command.action == "page-stop-assignee" || (command.action == "page-assign" && command.options["assignee-kind"] != "user") {
+        try await database.requireTool(.sessions, sessionID: callerID)
+      }
       let result: WovenMatterToolResponse
       if group == .sessions, ["list", "status", "wait", "send", "stop", "respond"].contains(command.action),
          let member = try await handlers.memberSession?(request, command, callerID) { result = member }
@@ -373,11 +378,11 @@ public struct WorkspaceToolExecutor: Sendable {
       } catch WorkspaceNoteMutationError.revisionConflict {
         return await pageConflict(pageID: edit.noteID, componentID: nil, callerID: callerID, requestID: request.requestID, note: note)
       } catch NoteEditError.artifactKindMismatch {
-        throw WorkspaceToolError.invalid("This asset is not a Page. Use the woven_notes tools.")
+        throw WorkspaceToolError.invalid("This artifact is not a Page. Use the woven_notes tools.")
       } catch RemoteNoteEditError.operationNotAllowed {
         // Also thrown for an invalid block on a real Page, which needs its own message.
         guard (try? await readPage(edit.noteID, callerID: callerID, requestID: request.requestID, note: note)) != nil else {
-          throw WorkspaceToolError.invalid("This asset is not a Page. Use the woven_notes tools.")
+          throw WorkspaceToolError.invalid("This artifact is not a Page. Use the woven_notes tools.")
         }
         throw WorkspaceToolError.invalid("This component is not valid for a Page. Check its size, table shape and links.")
       }
@@ -388,7 +393,7 @@ public struct WorkspaceToolExecutor: Sendable {
                         note: WorkspaceToolHandlers.Note) async throws -> (NoteDocument, NoteEditingResponse) {
     let response = try await note(callerID, .init(command: .read, noteID: id), requestID)
     guard let document = response.document, document.kind == .canvas else {
-      throw WorkspaceToolError.invalid("This asset is not a Page. Use woven_notes_read.")
+      throw WorkspaceToolError.invalid("This artifact is not a Page. Use woven_notes_read.")
     }
     return (document, response)
   }

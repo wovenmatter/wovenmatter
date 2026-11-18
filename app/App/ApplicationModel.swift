@@ -231,6 +231,8 @@ final class ApplicationModel {
     /// Page task assignees being sent or stopped by this process right now.
     @ObservationIgnored var pageTaskInFlight: Set<String> = []
     @ObservationIgnored var pageTaskDispatchTask: Task<Void, Never>?
+    /// The library revision the task dispatcher last looked at, and when.
+    @ObservationIgnored var pageTaskScan: (revision: Int64, at: Date)?
     var pendingBotsSettings = false
     /// With `pendingBotsSettings`: open this bot machine's Profiles page instead of the Bots list.
     var pendingBotProfilesMachine: String?

@@ -738,6 +738,7 @@ public enum NoteEditError: Error, Equatable, LocalizedError {
   case boardItemNotText(String)
   case boardSessionLimit(String)
   case pageAssigneeMissing(String)
+  case pageAssigneeChanged(String)
   case boardConflictingPatch(String)
   case boardCardIDChanged(String)
   case pageTargetMissing(String)
@@ -763,6 +764,7 @@ public enum NoteEditError: Error, Equatable, LocalizedError {
     case .boardItemNotText(let id): "Page component \(id) is a table. Use the table tools to change it."
     case .boardSessionLimit(let id): "Page component \(id) already links \(BoardItem.maximumSessions) sessions."
     case .pageAssigneeMissing(let id): "Page task \(id) has no such assignee. Read the Page for its current assignees."
+    case .pageAssigneeChanged(let id): "An assignee of Page task \(id) changed meanwhile. Read the Page for its current assignees."
     case .boardConflictingPatch(let message): message
     case .boardCardIDChanged(let id): "A Page component keeps its ID. Replace the content of \(id) without changing its ID."
     case .blockNotFound(let id): "Note block not found: \(id)"

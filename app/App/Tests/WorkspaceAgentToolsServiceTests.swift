@@ -413,6 +413,11 @@ extension WorkspaceAgentToolsServiceTests {
         // An agent can assign the task to another agent. It goes out at once, credited to the assigner.
         let assignID = UUID().uuidString.lowercased()
         let assignArguments = ["pages", "assign", "--note-id", page, "--id", addID, "--workspace", "W1", "--harness", "codex"]
+        // Assigning an agent starts a chat, so it also needs Sessions.
+        let tools = try await database.sessionTools(first)
+        try await database.setSessionTools(.init(enabled: tools.enabled.subtracting([.sessions])), sessionID: first)
+        #expect(await model.handle(.init(arguments: assignArguments), callerID: first).code == "tool_disabled")
+        try await database.setSessionTools(.init(enabled: tools.enabled.union([.sessions])), sessionID: first)
         #expect(await model.handle(.init(arguments: assignArguments, requestID: assignID), callerID: first).success)
         #expect(await model.handle(.init(arguments: assignArguments, requestID: assignID), callerID: first).success)
         let assigned = try #require(try await database.readNoteForEditing(id: page).document?.boardItems?[addID]?.task?.assignees)

@@ -250,13 +250,16 @@ struct PageAssignMenu: View {
         .frame(maxWidth: 180)
     }
 
-    /// Reloads the list when chats, harness readiness or bot connections change.
+    /// Reloads the list when harness readiness, workspaces, folders or bot
+    /// connections change. Edits to the Page itself never reload it.
     private var refreshKey: String {
         let ready = model.orderedLocalACPRuntimeDefinitions.filter { model.canStartCanonicalLocalSession($0.runtimeKind) }
             .map(\.runtimeKind.rawValue)
         let bots = model.bots.orderedSessions.map { "\($0.machineID):\($0.bots.count):\($0.connectedClient != nil)" }
-        return ([String(model.workspaceListRevision)] + ready + bots + [String(model.remoteWorkspaces.readyChatTargets.count)])
-            .joined(separator: "|")
+        let folders = (model.workspaceOverview?.folders ?? []).map { "\($0.id):\($0.executionWorkspaceID ?? "")" }
+        let places = model.remoteWorkspaces.readyChatTargets.map { "\($0.configuration.id):\($0.harness.id.rawValue)" }
+            + model.remoteWorkspaceAgents.map(\.id.uuidString)
+        return (ready + bots + folders + places).joined(separator: "|")
     }
 
     private var groupTitles: [String] {

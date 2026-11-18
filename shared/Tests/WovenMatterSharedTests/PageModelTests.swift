@@ -845,6 +845,39 @@ struct PageModelTests {
     #expect(raced.document.boardItems?["t"]?.task?.assignees.first?.state == .stopping)
   }
 
+  @Test func aSlowSenderNeverOverwritesANewerStateOrForgetsAThread() throws {
+    var document = page([text("t", "Write the email")])
+    var bot = BoardTaskAssignee(id: "bot", kind: .bot, name: "Research", botID: "b", machineID: "m", state: .sending)
+    try document.applyPageEdit(.init(action: .assign, id: "t", assignee: bot))
+    // The person stops it while the sender is still working from what it read.
+    try document.applyPageEdit(.init(action: .stopAssignee, id: "t", assigneeID: "bot"))
+    var sent = bot
+    sent.state = .sent; sent.conversationID = "7"
+    #expect(throws: NoteEditError.self) {
+      try document.applyPageEdit(.init(action: .updateAssignee, id: "t", assignee: sent, expectedAssigneeState: .sending))
+    }
+    #expect(document.boardItems?["t"]?.task?.assignees.first?.state == .stopping)
+    // A write without a thread number keeps the one already recorded.
+    bot.state = .stopping; bot.conversationID = "7"
+    try document.applyPageEdit(.init(action: .updateAssignee, id: "t", assignee: bot))
+    var stopped = bot
+    stopped.state = .stopped; stopped.conversationID = nil
+    try document.applyPageEdit(.init(action: .updateAssignee, id: "t", assignee: stopped, expectedAssigneeState: .stopping))
+    let assignee = try #require(document.boardItems?["t"]?.task?.assignees.first)
+    #expect(assignee.state == .stopped && assignee.conversationID == "7")
+    // Two replicas: one knows the thread, the other a later state.
+    let research = BoardTaskAssignee(id: "a", kind: .bot, name: "Research", botID: "b", machineID: "m", state: .sending)
+    let base = page([text("t", "Task")], items: ["t": .init(task: .init(assignees: [research]))])
+    var withThread = base, withStop = base
+    withThread.boardItems?["t"]?.task?.assignees[0].state = .sent
+    withThread.boardItems?["t"]?.task?.assignees[0].conversationID = "thread"
+    withStop.boardItems?["t"]?.task?.assignees[0].state = .stopping
+    withStop.boardItems?["t"]?.task?.assignees[0].conversationID = nil
+    let merged = try NoteDocument.mergePage(base: base, local: withThread, remote: withStop)
+    let mergedAssignee = try #require(merged.document.boardItems?["t"]?.task?.assignees.first)
+    #expect(mergedAssignee.state == .stopping && mergedAssignee.conversationID == "thread")
+  }
+
   @Test func whoAssignedSomeoneIsStampedOnce() throws {
     let old = page([text("t", "Task")], items: ["t": .init(task: .init())])
     var new = old

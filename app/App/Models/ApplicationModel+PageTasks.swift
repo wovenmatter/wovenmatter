@@ -31,6 +31,13 @@ extension ApplicationModel {
     /// One pass over Pages whose assignees wait to be sent or stopped.
     func runPageTaskDispatch() async {
         let ownsExecution = LocalExecutionRole.current.ownsExecution
+        // The window process only sends to bots.
+        if !ownsExecution && bots.orderedSessions.isEmpty { return }
+        // Look again only once the library changed, and every 30 seconds to
+        // retry what could not be sent yet, rather than reading every note each pass.
+        let revision = ownsExecution ? ((try? await libraryStore?.database.workspaceRevision()) ?? -1) : workspaceListRevision
+        if let scan = pageTaskScan, scan.revision == revision, Date().timeIntervalSince(scan.at) < 30 { return }
+        pageTaskScan = (revision, Date())
         let pages: [(id: String, title: String, content: String)]
         if ownsExecution {
             guard let database = libraryStore?.database else { return }
@@ -116,38 +123,49 @@ extension ApplicationModel {
             assignee.state = .failed; assignee.message = "This assignment has no chat to start."
             return await writePageAssignee(work, assignee)
         }
-        if assignee.state == .stopping {
-            if workspaceOverview?.conversations.contains(where: { $0.id == conversationID }) == true {
-                _ = try? await beginAgentStop(conversationID: conversationID).value
-            }
-            assignee.state = .stopped; assignee.message = nil
-            return await writePageAssignee(work, assignee)
-        }
         if workspaceOverview?.conversations.contains(where: { $0.id == conversationID }) != true {
             await refreshWorkspace()
         }
-        if workspaceOverview?.conversations.contains(where: { $0.id == conversationID }) != true {
-            let created: String?
+        let exists = workspaceOverview?.conversations.contains(where: { $0.id == conversationID }) == true
+        if assignee.state == .stopping {
+            // A chat that was never started has nothing to stop.
+            if exists {
+                do { _ = try await beginAgentStop(conversationID: conversationID).value } catch {
+                    assignee.message = String(error.localizedDescription.prefix(500))
+                }
+            }
+            assignee.state = .stopped
+            return await writePageAssignee(work, assignee)
+        }
+        var created = false
+        if !exists {
+            let result: String?
             switch route {
             case .thisMac(let runtime):
-                created = await createLocalACPSession(runtimeKind: runtime, requestedConversationID: uuid,
-                                                      initialTitle: work.chatTitle, folderID: assignee.folderID)
+                result = await createLocalACPSession(runtimeKind: runtime, requestedConversationID: uuid,
+                                                     initialTitle: work.chatTitle, folderID: assignee.folderID)
             case .linux(let target):
-                created = await createRemoteACPSession(target: target, requestedConversationID: uuid,
-                                                       initialTitle: work.chatTitle, folderID: assignee.folderID)
+                result = await createRemoteACPSession(target: target, requestedConversationID: uuid,
+                                                      initialTitle: work.chatTitle, folderID: assignee.folderID)
             }
-            guard created == conversationID else {
+            guard result == conversationID else {
                 assignee.state = .failed; assignee.message = localRunError ?? "The chat could not be started."
                 return await writePageAssignee(work, assignee)
             }
+            created = true
             await refreshWorkspace()
         }
         guard let conversation = workspaceOverview?.conversations.first(where: { $0.id == conversationID }) else {
             assignee.state = .failed; assignee.message = "The new chat is not available yet."
             return await writePageAssignee(work, assignee)
         }
-        // A chat that already has messages was sent its task before this pass.
-        if conversation.lastMessageAt == nil {
+        // A chat that already has messages was sent its task by an earlier pass
+        // that stopped before recording it. A chat started just now has none.
+        let alreadySent: Bool
+        if created { alreadySent = false } else {
+            alreadySent = (try? await libraryStore?.database.conversationHasMessages(conversationID)) ?? false
+        }
+        if !alreadySent {
             guard await sendAgentMessage(conversation: conversation, input: AgentMessageInput(text: work.prompt)) else {
                 assignee.state = .failed
                 assignee.message = conversationError(for: conversationID) ?? "The task could not be sent."
@@ -171,7 +189,8 @@ extension ApplicationModel {
                 }
                 assignee.state = .stopped; assignee.message = nil
             } else {
-                // nil: an earlier pass's delivery was already accepted.
+                // nil: an earlier delivery was already accepted. Its thread is
+                // kept by whichever write recorded it.
                 if let thread = try await client.startThread(botID: botID, text: work.prompt, deliveryID: assignee.id) {
                     assignee.conversationID = String(thread)
                 }
@@ -184,17 +203,22 @@ extension ApplicationModel {
         await writePageAssignee(work, assignee)
     }
 
-    /// Records where an assignee stands. The background process writes the
-    /// library directly; the window process edits through its draft, so an
-    /// open Page keeps everything typed into it.
+    /// Records where an assignee stands, only while it is still in the state this
+    /// pass read: a Stop or another Mac's write made meanwhile wins, and the next
+    /// pass acts on it. The background process writes the library directly; the
+    /// window process edits through its draft, so an open Page keeps everything
+    /// typed into it.
     private func writePageAssignee(_ work: PageTaskWork, _ assignee: BoardTaskAssignee) async {
-        let edit = PageEdit(action: .updateAssignee, id: work.componentID, assignee: assignee)
+        let edit = PageEdit(action: .updateAssignee, id: work.componentID, assignee: assignee,
+                            expectedAssigneeState: work.assignee.state)
         if LocalExecutionRole.current.ownsExecution, let database = libraryStore?.database {
             do {
                 let response = try await database.applyNoteEdits(
                     .init(command: .apply, noteID: work.pageID, operations: [.page(edit)]),
                     requestID: UUID().uuidString.lowercased())
                 await adoptNoteEditingResponse(response)
+            } catch NoteEditError.pageAssigneeChanged {
+                return
             } catch { agentTools?.error = error.localizedDescription }
             return
         }
@@ -204,6 +228,8 @@ extension ApplicationModel {
             try document.applyPageEdit(edit)
             updateNoteDraft(note: note, content: try document.encoded())
             _ = await flushNoteDrafts()
+        } catch NoteEditError.pageAssigneeChanged {
+            return
         } catch { agentTools?.error = error.localizedDescription }
     }
 

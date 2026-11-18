@@ -195,6 +195,8 @@ public struct BoardTask: Codable, Equatable, Sendable {
         else {
           var merged = remote
           if local.state.rank > remote.state.rank { merged.state = local.state; merged.message = local.message }
+          // A chat or thread, once known on either side, is never forgotten.
+          if merged.conversationID == nil { merged.conversationID = local.conversationID }
           result.append(merged)
         }
       case let (local?, nil):

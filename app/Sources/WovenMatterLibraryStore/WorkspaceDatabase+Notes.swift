@@ -652,6 +652,11 @@ extension WorkspaceDatabaseConnection {
     }
   }
 
+  /// Whether a chat has any messages, so a Page task is sent to it only once.
+  public func conversationHasMessages(_ conversationID: String) throws -> Bool {
+    try withLock { try transcriptMessageCountUnlocked(conversationID) > 0 }
+  }
+
   func noteForEditingUnlocked(
     id: String
   ) throws -> (title: String, content: String, revision: String) {
@@ -767,6 +772,10 @@ extension WorkspaceDatabase {
 
   public func pagesAwaitingTaskDispatch() async throws -> [(id: String, title: String, content: String)] {
     try await read { try $0.pagesAwaitingTaskDispatch() }
+  }
+
+  public func conversationHasMessages(_ conversationID: String) async throws -> Bool {
+    try await read { try $0.conversationHasMessages(conversationID) }
   }
 
   public func applyNoteEdits(_ request: NoteEditingRequest, callerConversationID: String? = nil,

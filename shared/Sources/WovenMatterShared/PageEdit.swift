@@ -41,15 +41,20 @@ public struct PageEdit: Codable, Equatable, Sendable {
   public var image: PageImage?
   public var assignee: BoardTaskAssignee?
   public var assigneeID: String?
+  /// `updateAssignee` only: applies only while the assignee is still in this
+  /// state, so a slow sender never overwrites a newer change such as Stop.
+  public var expectedAssigneeState: BoardTaskAssignee.State?
 
   public init(action: Action, id: String? = nil, expectedRevision: String? = nil, expectedSubtreeRevision: String? = nil,
               kind: PageComponentKind? = nil, block: NoteBlock? = nil, patch: BoardItemPatch? = nil, assetID: String? = nil,
               position: PagePosition? = nil, removal: Removal? = nil, purpose: String? = nil, sessionID: String? = nil,
-              image: PageImage? = nil, assignee: BoardTaskAssignee? = nil, assigneeID: String? = nil) {
+              image: PageImage? = nil, assignee: BoardTaskAssignee? = nil, assigneeID: String? = nil,
+              expectedAssigneeState: BoardTaskAssignee.State? = nil) {
     self.action = action; self.id = id; self.expectedRevision = expectedRevision
     self.expectedSubtreeRevision = expectedSubtreeRevision; self.kind = kind; self.block = block; self.patch = patch
     self.assetID = assetID; self.position = position; self.removal = removal; self.purpose = purpose; self.sessionID = sessionID
     self.image = image; self.assignee = assignee; self.assigneeID = assigneeID
+    self.expectedAssigneeState = expectedAssigneeState
   }
 }
 
@@ -95,7 +100,10 @@ public extension NoteDocument {
             let index = task.assignees.firstIndex(where: { $0.id == assignee.id }) else { throw NoteEditError.pageAssigneeMissing(id) }
       var updated = assignee
       let previous = task.assignees[index]
+      if let expected = edit.expectedAssigneeState, previous.state != expected { throw NoteEditError.pageAssigneeChanged(id) }
       updated.assignedBy = previous.assignedBy; updated.assignedAt = previous.assignedAt
+      // A chat or thread, once known, is never forgotten.
+      if updated.conversationID == nil { updated.conversationID = previous.conversationID }
       task.assignees[index] = updated
       // Starting work moves a waiting task along and links the chat it happens in.
       if updated.state == .sent, previous.state != .sent {

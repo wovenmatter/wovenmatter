@@ -122,7 +122,9 @@ public enum PageTool {
       let old = document.pageNodes == nil ? current : current.materializedPage()
       try requireNewAssets(old: old, new: document, pageID: pageID, missingAsset: missingAsset)
       document.stampBoardChanges(from: old, actor: actor, at: timestamp)
-      if try document.encoded().utf8.count > NoteDocument.maximumBoardBytes { throw RemoteNoteEditError.operationTooLarge }
+      // A Page over the limit (for example after two replicas merged) may still shrink.
+      let size = try document.encoded().utf8.count
+      if size > NoteDocument.maximumBoardBytes, size >= (try old.encoded().utf8.count) { throw RemoteNoteEditError.operationTooLarge }
     }
     return Edit(title: updatedTitle, document: document, changed: true, forceCheckpoint: forceCheckpoint)
   }
