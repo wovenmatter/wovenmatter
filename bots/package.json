@@ -34,12 +34,12 @@
   },
   "overrides": {
     "@earendil-works/pi-ai": {
-      "openai": ">=7.59.0",
-      "@anthropic-ai/sdk": ">=1.10.0",
+      "openai": ">=7.57.0",
+      "@anthropic-ai/sdk": ">=1.9.0",
       "@google/genai": ">=3.4.0",
-      "@aws-sdk/client-bedrock-runtime": ">=3.1171.0",
+      "@aws-sdk/client-bedrock-runtime": ">=3.1170.0",
       "@smithy/node-http-handler": ">=4.14.2",
-      "@aws-sdk/token-providers": ">=3.1171.0"
+      "@aws-sdk/token-providers": ">=3.1170.0"
     },
     "@earendil-works/chord": {
       "ws": "$ws"

@@ -103,7 +103,7 @@ struct RuntimeMaintenanceTests {
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         }
         for (directory, name, version) in [(adapter, "@agentclientprotocol/codex-acp", "2.7.0"),
-            (engine, "@openai/codex", "0.169.1"), (sdk, "@agentclientprotocol/sdk", "2.6.0")] {
+            (engine, "@openai/codex", "0.169.0"), (sdk, "@agentclientprotocol/sdk", "2.6.0")] {
             try JSONSerialization.data(withJSONObject: ["name": name, "version": version]).write(to: directory.appending(path: "package.json"))
         }
         let script = adapter.appending(path: "index.js")
@@ -119,9 +119,9 @@ struct RuntimeMaintenanceTests {
         let inventory = await RuntimeMaintenance.inspect(.codex, checkLatest: true,
             resolver: LocalACPRuntimeResolver(executableSearchDirectories: [root.appending(path: "bin").path]),
             fetch: { url in
-                let version = url.absoluteString.hasSuffix("%2fsdk") ? "2.7.0" : url.absoluteString.contains("codex-acp") ? "2.7.0" : "0.169.1"
+                let version = url.absoluteString.hasSuffix("%2fsdk") ? "2.7.0" : url.absoluteString.contains("codex-acp") ? "2.7.0" : "0.169.0"
                 return try JSONSerialization.data(withJSONObject: ["versions": [version: ["bin": ["cli": "index.js"]]]])
-            }, probe: { url in url.path.contains("codex-acp") ? "2.7.0" : "0.169.1" })
+            }, probe: { url in url.path.contains("codex-acp") ? "2.7.0" : "0.169.0" })
         #expect(inventory.isInstalled)
         #expect(inventory.components.filter(\.outdated).map(\.name) == ["Bundled ACP SDK"])
         #expect(inventory.updateAvailable)
@@ -135,8 +135,8 @@ struct RuntimeMaintenanceTests {
             fetch: { _ in Data(#"{"versions":{"0.3.312":{},"0.3.314":{}}}"#.utf8) })
         #expect(sdk == "0.3.314")
         #expect(LocalACPRuntimeCatalog.definition(for: .codex)?.minimumAdapterVersion == "2.7.0")
-        #expect(LocalACPRuntimeCatalog.definition(for: .codex)?.minimumEngineVersion == "0.169.1")
-        #expect(LocalACPRuntimeCatalog.definition(for: .claudeCode)?.minimumAdapterVersion == "0.108.0")
+        #expect(LocalACPRuntimeCatalog.definition(for: .codex)?.minimumEngineVersion == "0.169.0")
+        #expect(LocalACPRuntimeCatalog.definition(for: .claudeCode)?.minimumAdapterVersion == "0.107.3")
         #expect(LocalACPRuntimeCatalog.definition(for: .claudeCode)?.minimumEngineVersion == "0.3.326")
         #expect(LocalACPRuntimeCatalog.definition(for: .codex)?.minimumProtocolSDKVersion == "2.7.0")
         #expect(LocalACPRuntimeCatalog.definition(for: .claudeCode)?.minimumProtocolSDKVersion == "2.7.0")
