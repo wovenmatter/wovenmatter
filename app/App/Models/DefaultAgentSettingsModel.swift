@@ -429,7 +429,9 @@ final class DefaultAgentSettingsModel {
     private var activeRemote: RemoteWorkspaceConfiguration?
     private var activeLinux: UUID?
     /// This Mac's credentials for its own helper, from the coordinator that renews them.
-    var preparePayload: @MainActor (String) async throws -> DefaultAgentPayload = { try await ProviderAccountCoordinator.shared.prepare($0) }
+    var preparePayload: (@MainActor (String) async throws -> DefaultAgentPayload)?
+    /// Owns this Mac's renewal and its one sign-in at a time.
+    var coordinator = ProviderAccountCoordinator.shared
     /// The settings helper this Mac runs (`main.mjs --control`).
     var helperLaunch: () -> LocalACPRuntimeLaunchConfiguration? = { DefaultAgentSupport.resolution().launchConfiguration }
 
@@ -816,7 +818,7 @@ final class DefaultAgentSettingsModel {
         finishSignIn()
     }
     private func finishSignIn() {
-        if let signInLease { ProviderAccountCoordinator.shared.endSignIn(signInLease) }
+        if let signInLease { coordinator.endSignIn(signInLease) }
         signInLease = nil
     }
     func respond(_ answer: String) {
@@ -1076,7 +1078,7 @@ final class DefaultAgentSettingsModel {
         catalogRequestKey = catalogKey(remote: remote)
         catalogRequestSDKRevision = sdkRevision(for: catalogRequestKey)
         if !catalogOnly {
-            if login == nil { ProviderAccountCoordinator.shared.invalidate() }
+            if login == nil { coordinator.invalidate() }
             loadAccounts(force: login == nil)
         }
         notice = nil
@@ -1095,12 +1097,13 @@ final class DefaultAgentSettingsModel {
                 } else if let workspace {
                     prepared = try DefaultAgentSupport.configurationPayload(workspace: workspace.uuidString.lowercased())
                 } else {
-                    prepared = try await preparePayload(scope)
+                    if let preparePayload { prepared = try await preparePayload(scope) }
+                    else { prepared = try await coordinator.prepare(scope) }
                 }
                 if login != nil, workspace == nil {
-                    let lease = try await ProviderAccountCoordinator.shared.beginSignIn()
+                    let lease = try await coordinator.beginSignIn()
                     guard generation == runID, !Task.isCancelled else {
-                        ProviderAccountCoordinator.shared.endSignIn(lease)
+                        coordinator.endSignIn(lease)
                         return
                     }
                     signInLease = lease

@@ -133,10 +133,15 @@ actor FakeLinuxSignInHost: MemberExecutionRoutes {
 }
 
 @MainActor
-private func waitUntil(_ timeout: Duration = .seconds(10), _ condition: @MainActor () -> Bool) async throws {
+private func waitUntil(_ model: DefaultAgentSettingsModel, timeout: Duration = .seconds(30), sourceLocation: SourceLocation = #_sourceLocation,
+                       _ condition: @MainActor () -> Bool) async throws {
     let deadline = ContinuousClock.now + timeout
     while !condition() {
-        guard ContinuousClock.now < deadline else { throw CancellationError() }
+        guard ContinuousClock.now < deadline else {
+            Issue.record("Timed out: busy=\(model.busy) error=\(model.error ?? "-") outcome=\(String(describing: model.signInOutcome)) prompt=\(model.prompt ?? "-")",
+                         sourceLocation: sourceLocation)
+            throw CancellationError()
+        }
         try await Task.sleep(for: .milliseconds(20))
     }
 }
@@ -147,6 +152,12 @@ private func deviceModel(_ keychain: SignInKeychainFixture, helper: FakeSettings
     let model = KeychainAccess.$testOperations.withValue(keychain.operations) { DefaultAgentSettingsModel() }
     model.helperLaunch = { helper.launch }
     let operations = keychain.operations
+    // Its own coordinator: no other test's sign-in or renewal can hold this one up.
+    model.coordinator = ProviderAccountCoordinator(refresh: { scopes in
+        try KeychainAccess.$testOperations.withValue(keychain.operations) {
+            Dictionary(uniqueKeysWithValues: try scopes.map { ($0, try DefaultAgentSupport.snapshot(workspace: $0)) })
+        }
+    })
     model.preparePayload = { scope in
         try KeychainAccess.$testOperations.withValue(operations) { try DefaultAgentSupport.snapshot(workspace: scope) }
     }
@@ -162,11 +173,11 @@ struct SignInDeviceTests {
         try await KeychainAccess.$testOperations.withValue(keychain.operations) {
             model.selectDevice(SignInDevice.localID)
             model.signIn("openai-codex")
-            try await waitUntil { model.prompt != nil }
+            try await waitUntil(model) { model.prompt != nil }
             #expect(model.signInURL?.absoluteString == "https://auth.example.test/device")
             #expect(model.signInCode == "WOVEN-1234")
             model.respond("pasted-code")
-            try await waitUntil { model.signInOutcome != nil && !model.busy }
+            try await waitUntil(model) { model.signInOutcome != nil && !model.busy }
             #expect(model.signInOutcome?.error == nil)
             #expect(model.accounts["openai-codex"]?.map(\.label) == ["person@example.test"])
         }
@@ -192,12 +203,12 @@ struct SignInDeviceTests {
             #expect(model.accounts["openai"]?.map(\.label) == ["Work"])
             // A subscription signs in on the workspace; only the link, code and answer pass here.
             model.signIn("openai-codex")
-            try await waitUntil { model.prompt != nil }
+            try await waitUntil(model) { model.prompt != nil }
             #expect(model.signInCode == "HOST-1234")
             model.respond("pasted-host-code")
-            try await waitUntil { model.signInOutcome != nil && !model.busy }
+            try await waitUntil(model) { model.signInOutcome != nil && !model.busy }
             #expect(model.signInOutcome?.error == nil)
-            try await waitUntil { model.accounts["openai-codex"]?.isEmpty == false }
+            try await waitUntil(model) { model.accounts["openai-codex"]?.isEmpty == false }
         }
         #expect(await host.keys["openai"]?.map(\.key) == ["linux-secret"])
         #expect(await host.subscriptions["openai-codex"] != nil)
@@ -235,15 +246,15 @@ struct SignInDeviceTests {
         }
         try await KeychainAccess.$testOperations.withValue(here.operations) {
             model.selectDevice(SignInDevice.macID(memberID))
-            try await waitUntil { !model.busy && !routed.isEmpty }
+            try await waitUntil(model) { !model.busy && !routed.isEmpty }
             #expect(await model.saveKeyConfirmed("peer-secret", provider: "openai", label: "Peer key"))
-            try await waitUntil { model.accounts["openai"]?.map(\.label) == ["Peer key"] }
+            try await waitUntil(model) { model.accounts["openai"]?.map(\.label) == ["Peer key"] }
             model.signIn("openai-codex")
-            try await waitUntil { model.prompt != nil }
+            try await waitUntil(model) { model.prompt != nil }
             #expect(model.signInURL?.absoluteString == "https://auth.example.test/device")
             #expect(model.signInCode == "WOVEN-1234")
             model.respond("pasted-peer-code")
-            try await waitUntil { model.signInOutcome != nil && !model.busy }
+            try await waitUntil(model) { model.signInOutcome != nil && !model.busy }
             #expect(model.signInOutcome?.error == nil)
             #expect(model.device == SignInDevice.macID(memberID))
         }
