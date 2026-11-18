@@ -140,3 +140,35 @@ test('combined update failure preserves both active SDKs', async t => {
   await assert.rejects(updateSDK({ directory: f.directory }, options), /previous SDKs were kept/);
   assert.equal(await readFile(f.active, 'utf8'), before);
 });
+
+test('a verified update becomes active and deletes the generation it replaced, even while it is open', async t => {
+  const f = await fixture(t), installed = await f.generation(); await installed.activate();
+  // A running conversation's open file does not keep its generation.
+  const open = await import('node:fs/promises').then(fs => fs.open(join(installed.root, 'src/main-runtime.mjs')));
+  t.after(() => open.close());
+  const result = await updateSDK({ directory: f.directory, id: 'pi', version: bump(piFloor) }, mockInstaller(bump(piFloor), materializeManifest));
+  assert.equal(result.activated, true);
+  const active = await resolveSDKRuntime({ directory: f.directory });
+  assert.equal(active.generation, result.generation);
+  assert.notEqual(active.generation, installed.id);
+  assert.deepEqual(await readdir(join(f.directory, 'sdk-runtime/generations')), [result.generation]);
+  assert.equal((await sdkStatus({ directory: f.directory })).sdks.find(sdk => sdk.id === 'pi').installedVersion, bump(piFloor));
+  const next = await updateSDK({ directory: f.directory, id: 'pi', version: bump(piFloor, 2, 2) },
+    mockInstaller(bump(piFloor, 2, 2), materializeManifest));
+  assert.deepEqual(await readdir(join(f.directory, 'sdk-runtime/generations')), [next.generation]);
+  // An update over the bundled copy never touches Woven Matter's own files.
+  await rm(f.active);
+  const fresh = await updateSDK({ directory: f.directory, id: 'pi', version: bump(piFloor, 2, 3) },
+    mockInstaller(bump(piFloor, 2, 3), materializeManifest));
+  assert.equal(fresh.activated, true);
+  assert.equal((await readdir(f.bundled.root)).includes('src'), true);
+  // Only the copy it replaced: an orphan from before goes nowhere (no other cleanup).
+  assert.deepEqual((await readdir(join(f.directory, 'sdk-runtime/generations'))).sort(), [next.generation, fresh.generation].sort());
+});
+
+test('an update with nothing to install activates nothing', async t => {
+  const f = await fixture(t), installed = await f.generation(); await installed.activate();
+  const result = await updateSDK({ directory: f.directory, id: 'pi' }, mockInstaller(piFloor, materializeManifest));
+  assert.equal(result.activated, undefined);
+  assert.deepEqual(await readdir(join(f.directory, 'sdk-runtime/generations')), [installed.id]);
+});
