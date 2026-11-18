@@ -279,7 +279,11 @@ test('a Linux host keeps its own sign-ins: configuration carries no credentials 
   const receipt = await (await request('/v1/default-agent/configuration', { workspace: 'fixture-workspace', unlockKey, revision: 'fixture-revision', config: {},
     credentials: { openrouter: { type: 'api_key', key: 'relayed-provider-secret' } } })).json();
   assert.equal(receipt.revision, 'fixture-revision');
+  // A Mac tells this host keeps its own vault; the old one waits, unread, for its key.
+  assert.equal(receipt.deviceVault, true);
+  assert.equal(receipt.legacyVault, true);
   let status = await (await request('/v1/default-agent/status')).json();
+  assert.equal(status.deviceVault, true);
   assert.equal(status.providers.find(p => p.id === 'openrouter').state, 'sign_in_required');
   assert.deepEqual((await (await request('/v1/default-agent/unlock', { workspace: 'fixture-workspace', unlockKey })).json()).unlocked, true);
   // A current Mac sends its chat settings alone.

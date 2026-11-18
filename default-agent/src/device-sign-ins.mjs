@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { searchProviderNames } from './config.mjs';
-import { localServers, probeServer } from './local-servers.mjs';
+import { localServers, probeServer, serverURL } from './local-servers.mjs';
 
 // A host's own sign-ins, kept in its device vault (`CredentialVault.openDevice`):
 // subscriptions it signed in to itself (`owned`, renewed here), API and web
@@ -72,7 +72,17 @@ export async function changeSignIns(vault, request, { probe = probeServer, now =
   const { action } = request;
   let probed;
   if (action === 'connectServer') {
-    try { probed = await probe(request.url, key(request.key)); }
+    // Only the key typed for this server is ever sent to it; a server being
+    // reconnected keeps its address. Both are checked before the probe.
+    const typed = key(request.key);
+    const replacing = request.server?.id;
+    if (replacing !== undefined) {
+      const existing = typeof replacing === 'string' ? ((await vault.read()).servers ?? []).find(server => server.id === replacing) : undefined;
+      if (!existing) throw fail('This server connection changed or was removed. Try again.', 409);
+      let url; try { url = serverURL(request.url); } catch (error) { throw fail(error.message); }
+      if (url !== existing.url) throw fail('Add a new connection to use a different server URL.');
+    }
+    try { probed = await probe(request.url, typed); }
     catch (error) { throw fail(error.message); }
     if (!Array.isArray(probed?.models) || !probed.models.length) throw fail('The server did not return any models.');
   }
@@ -123,8 +133,9 @@ export async function changeSignIns(vault, request, { probe = probeServer, now =
         break;
       }
       case 'removeServer': {
+        // Only a listed server and its own key: never another sign-in.
         const id = request.server?.id;
-        if (typeof id !== 'string') throw fail('Choose a server connection.');
+        if (typeof id !== 'string' || !/^local-server-[a-f0-9-]{36}$/.test(id) || !servers.some(server => server.id === id)) throw fail('Choose a server connection.');
         servers = servers.filter(server => server.id !== id);
         delete owned[id];
         break;

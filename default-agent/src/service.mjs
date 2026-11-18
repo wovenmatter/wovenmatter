@@ -51,8 +51,10 @@ export function createDefaultAgentService({ cwd, directory, engineFactory, write
       if (deviceVault) {
         // Only chat settings arrive from another device. Credentials in an
         // older Mac's payload are ignored: this host keeps its own sign-ins.
+        // A Mac's key for this workspace opens a vault sealed with it once.
         await openDevice();
         config = validateConfig(value.config);
+        if (typeof value.unlockKey === 'string') await vault.importLegacy(value.workspace, value.unlockKey).catch(() => {});
       } else {
         await vault.unlock(value.workspace, value.unlockKey);
         await vault.modify(async stored => ({ ...stored, shared: sharedCredentials(value.credentials), accounts: sharedAccounts(value.credentialAccounts), revision: value.revision }));
@@ -61,13 +63,26 @@ export function createDefaultAgentService({ cwd, directory, engineFactory, write
       await writePrivateJSON(join(directory, 'configuration.json'), { config });
       if (enginePromise) await (await enginePromise).apply({ config: deviceVault ? deviceConfig(config, await vault.read()) : config });
       generation++;
-      return { saved: true, revision: value.revision, epoch, generation };
+      return { saved: true, revision: value.revision, epoch, generation, ...(deviceVault ? { deviceVault: true, legacyVault: await vault.legacyPending() } : {}) };
     });
     configurationQueue = pending.catch(() => {});
     return pending;
   }
   function unlockForClient({ workspace, unlockKey }) {
-    if (deviceVault) return openDevice().then(() => ({ unlocked: true }));
+    if (deviceVault) {
+      const pending = configurationQueue.then(async () => {
+        await openDevice();
+        if ((await vault.importLegacy(workspace, unlockKey)).imported && enginePromise) {
+          const value = await readJSON(join(directory, 'configuration.json'));
+          const current = await enginePromise;
+          await current.apply({ config: deviceConfig(value.config ?? current.config, await vault.read()) });
+          generation++;
+        }
+        return { unlocked: true, deviceVault: true, legacyVault: await vault.legacyPending() };
+      });
+      configurationQueue = pending.catch(() => {});
+      return pending;
+    }
     const pending = configurationQueue.then(async () => {
       const candidate = typeof unlockKey === 'string' ? Buffer.from(unlockKey, 'base64') : Buffer.alloc(0);
       try {
@@ -155,7 +170,9 @@ export function createDefaultAgentService({ cwd, directory, engineFactory, write
   async function status() {
     await openDevice();
     if (!vault.unlocked) return { locked: true, providers: [], models: [], searchConfigured: false };
-    return { ...(await (await engine()).status()), locked: false, epoch };
+    // A Mac tells from `deviceVault` that this host keeps its own sign-ins.
+    const device = deviceVault ? { deviceVault: true, legacyVault: await vault.legacyPending() } : {};
+    return { ...(await (await engine()).status()), locked: false, epoch, ...device };
   }
   async function invoke(message) {
     const id = message.operationID;
