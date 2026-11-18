@@ -35,10 +35,13 @@ test('real npm installs the adapter as published, pointed at the native CLI; fai
     metadata.set(name, versions);
   }
   await pack('@agentclientprotocol/sdk', '2.2.0', { 'index.js': 'exports.version = \"2.2.0\";' }, { bin: undefined });
+  // Vendors ship the full CLI build as optional platform packages; Woven never installs them.
+  const bundledBuild = '@openai/codex-fixture-platform';
+  await pack(bundledBuild, '0.165.4', { 'index.js': 'process.exit(9);' }, { bin: undefined });
   await pack(engine, '0.165.4', {
     'index.js': '#!/usr/bin/env node\nconsole.log("codex-cli 0.165.4");',
     'bin/codex.js': '#!/usr/bin/env node\nconsole.log("codex-cli 0.165.4");',
-  });
+  }, { optionalDependencies: { [bundledBuild]: '0.165.4' } });
   const nativeCLI = join(root, 'home/.local/bin/codex');
   const fixture = (version, protocol) => `#!/usr/bin/env node
     const fs = require('node:fs');
@@ -81,6 +84,7 @@ test('real npm installs the adapter as published, pointed at the native CLI; fai
   assert.equal(lock.packages['node_modules/@openai/codex'].version, '0.165.4', 'no engine is selected: the adapter keeps its own dependency');
   assert.equal(lock.packages['node_modules/@agentclientprotocol/codex-acp'].dependencies[engine], '^0.165.0', 'upstream manifest remains intact');
   for (const name of [adapter, engine]) assert.match(lock.packages['node_modules/' + name].integrity, /^sha512-/);
+  await assert.rejects(readFile(join(generation, 'node_modules', bundledBuild, 'package.json')), { code: 'ENOENT' }, 'the bundled CLI build is never installed');
   const verification = JSON.parse(await readFile(join(generation, 'verification.json'), 'utf8'));
   assert.equal(verification.engineVersion, undefined);
   assert.equal(verification.cli, nativeCLI);
@@ -90,6 +94,7 @@ test('real npm installs the adapter as published, pointed at the native CLI; fai
   assert.equal(lock.packages['node_modules/' + adapter].dependencies['@agentclientprotocol/sdk'], '2.1.0');
   assert.match(lock.packages['node_modules/@agentclientprotocol/sdk'].integrity, /^sha512-/);
   await assert.rejects(installAdapter({ ...options, adapterVersion: '2.6.0' }), /ACP v1 verification/);
+  await assert.rejects(installAdapter({ ...options, cli: undefined }), /requires the native CLI/);
   assert.equal(await readlink(executable), target, 'failed candidate must not retire or replace the working graph');
   assert.equal((await readdir(join(prefix, 'Installations'))).length, 1, 'failed generation is removed');
 });
@@ -107,67 +112,4 @@ test('harness scripts run their entry point when started through a symlinked pat
     assert.ok(failure, `${script} must run and reject missing input instead of exiting silently`);
     assert.match(failure.stderr, message);
   }
-});
-
-test('Claude library-only updates preserve the native CLI, vendor pin and active generation on failure', { timeout: 60000 }, async t => {
-  const root = await mkdtemp(join(tmpdir(), 'woven-claude-library-'));
-  t.after(() => rm(root, { recursive: true, force: true }));
-  const adapter = '@agentclientprotocol/claude-agent-acp', library = '@anthropic-ai/claude-agent-sdk';
-  const archives = new Map(), packages = new Map();
-  const npm = ['npm', '--cache', join(root, 'cache')];
-  const cli = join(root, 'native/claude');
-  async function pack(name, version, source, dependencies = {}) {
-    const dir = join(root, name.replaceAll('/', '-'), version);
-    await mkdir(dir, { recursive: true });
-    const manifest = { name, version, main: 'index.js', dependencies,
-      ...(name === adapter ? { bin: { 'claude-agent-acp': 'index.js' } } : {}) };
-    await writeFile(join(dir, 'package.json'), JSON.stringify(manifest));
-    await writeFile(join(dir, 'index.js'), source);
-    const packed = JSON.parse((await exec(npm[0], [...npm.slice(1), 'pack', '--json', '--ignore-scripts'], { cwd: dir })).stdout);
-    const file = (Array.isArray(packed) ? packed[0] : packed[name]).filename;
-    const bytes = await readFile(join(dir, file));
-    archives.set('/' + file, bytes);
-    const versions = packages.get(name) ?? {};
-    versions[version] = { ...manifest, dist: { tarball: file, integrity: 'sha512-' + createHash('sha512').update(bytes).digest('base64') } };
-    packages.set(name, versions);
-  }
-  for (const version of ['0.3.326', '0.3.327']) await pack(library, version, `exports.version = '${version}';`);
-  await pack(library, '0.3.328', 'throw Error("incompatible library");');
-  await pack(adapter, '0.108.0', `#!/usr/bin/env node
-    const assert = require('node:assert/strict');
-    assert.equal(process.env.CLAUDE_CODE_EXECUTABLE, ${JSON.stringify(cli)});
-    assert.ok(['0.3.326', '0.3.327'].includes(require('${library}').version));
-    require('node:readline').createInterface({ input: process.stdin }).on('line', line => {
-      const request = JSON.parse(line);
-      console.log(JSON.stringify({jsonrpc:'2.0',id:request.id,result:{protocolVersion:1,agentInfo:{version:'0.108.0'}}}));
-    });`, { [library]: '0.3.326' });
-  const server = createServer((request, response) => {
-    const path = decodeURIComponent(request.url);
-    if (archives.has(path)) return response.end(archives.get(path));
-    const versions = structuredClone(packages.get(path.slice(1)));
-    if (!versions) { response.statusCode = 404; return response.end('{}'); }
-    for (const item of Object.values(versions)) item.dist.tarball = `http://127.0.0.1:${server.address().port}/${item.dist.tarball}`;
-    response.setHeader('content-type', 'application/json');
-    response.end(JSON.stringify({ versions }));
-  });
-  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
-  t.after(() => new Promise(resolve => server.close(resolve)));
-  const prefix = join(root, 'installed'), options = { prefix, adapter, adapterVersion: '0.108.0', cli,
-    npm: [...npm, '--registry', `http://127.0.0.1:${server.address().port}`] };
-  const executable = await installAdapter({ ...options, librarySDKVersion: '0.3.326' });
-  const previous = await readlink(executable);
-  await installAdapter({ ...options, librarySDKVersion: '0.3.327' });
-  const current = await readlink(executable);
-  assert.notEqual(current, previous);
-  const generation = join(current, '../../..');
-  const lock = JSON.parse(await readFile(join(generation, 'package-lock.json'), 'utf8'));
-  assert.equal(lock.packages['node_modules/' + adapter].dependencies[library], '0.3.326');
-  assert.equal(lock.packages['node_modules/' + library].version, '0.3.327');
-  assert.match(lock.packages['node_modules/' + library].integrity, /^sha512-/);
-  const verification = JSON.parse(await readFile(join(generation, 'verification.json'), 'utf8'));
-  assert.equal(verification.librarySDKVersion, '0.3.327');
-  assert.equal(verification.cli, cli);
-  await assert.rejects(installAdapter({ ...options, librarySDKVersion: '0.3.328' }), /exited before protocol verification/);
-  assert.equal(await readlink(executable), current);
-  assert.equal((await readdir(join(prefix, 'Installations'))).length, 2);
 });

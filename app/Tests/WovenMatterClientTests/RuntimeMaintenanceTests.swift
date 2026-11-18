@@ -137,7 +137,7 @@ struct RuntimeMaintenanceTests {
         #expect(LocalACPRuntimeCatalog.definition(for: .codex)?.minimumAdapterVersion == "2.7.0")
         #expect(LocalACPRuntimeCatalog.definition(for: .codex)?.minimumEngineVersion == "0.169.1")
         #expect(LocalACPRuntimeCatalog.definition(for: .claudeCode)?.minimumAdapterVersion == "0.108.0")
-        #expect(LocalACPRuntimeCatalog.definition(for: .claudeCode)?.minimumEngineVersion == "0.3.327")
+        #expect(LocalACPRuntimeCatalog.definition(for: .claudeCode)?.minimumEngineVersion == "0.3.326")
         #expect(LocalACPRuntimeCatalog.definition(for: .codex)?.minimumProtocolSDKVersion == "2.7.0")
         #expect(LocalACPRuntimeCatalog.definition(for: .claudeCode)?.minimumProtocolSDKVersion == "2.7.0")
         #expect(LocalACPRuntimeCatalog.definition(for: .claudeCode)?.cliInstallerArguments == ["latest"])

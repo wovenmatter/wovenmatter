@@ -87,7 +87,7 @@ public enum RuntimeMaintenance {
                     definition.minimumEngineVersion.map { !Self.version(installed, precedes: $0) } ?? true
                 } ?? false
                 components.append(RuntimeComponent(name: "Bundled \(dependency)", executable: nil,
-                    installed: version, latest: checkLatest ? try? await registryVersion(dependency, executableRequired: false, fetch: fetch) : definition.minimumEngineVersion, package: dependency, required: true, present: version != nil, verified: supported))
+                    installed: version, latest: nil, package: nil, required: true, present: version != nil, verified: supported))
             }
             if let minimum = definition.minimumProtocolSDKVersion {
                 let sdk = root.flatMap { dependencyRoot(from: $0, name: "@agentclientprotocol/sdk") }
